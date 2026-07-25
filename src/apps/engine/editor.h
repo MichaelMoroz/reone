@@ -59,6 +59,8 @@ public:
     void update(float dt);
     void render();
 
+    bool isEnabled() const { return _enabled; }
+
 private:
     // 2DA List window
     void twoDa();

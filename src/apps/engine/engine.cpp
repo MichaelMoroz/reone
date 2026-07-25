@@ -62,10 +62,31 @@ static void imguiInitWindow(Window &window) {
     ImGui_ImplOpenGL3_Init();
 }
 
+/**
+ * Feed an event to ImGui and report whether ImGui consumed it.
+ *
+ * The two capture flags must be applied per event kind rather than together:
+ * keyboard navigation keeps WantCaptureKeyboard set for as long as an ImGui
+ * window holds focus, so testing both would swallow mouse input across the whole
+ * screen while any editor window is open.
+ */
 static bool imguiHandle(SDL_Event &event) {
     ImGuiIO &io = ImGui::GetIO();
     ImGui_ImplSDL3_ProcessEvent(&event);
-    return io.WantCaptureMouse || io.WantCaptureKeyboard;
+    switch (event.type) {
+    case SDL_EVENT_MOUSE_MOTION:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    case SDL_EVENT_MOUSE_WHEEL:
+        return io.WantCaptureMouse;
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+    case SDL_EVENT_TEXT_INPUT:
+    case SDL_EVENT_TEXT_EDITING:
+        return io.WantCaptureKeyboard;
+    default:
+        return false;
+    }
 }
 
 static void imguiNewFrame() {
@@ -289,6 +310,13 @@ int Engine::run() {
             _game->update(frameTime);
             bool showcur = _game->cursorType() == CursorType::None;
             bool relmouse = _game->relativeMouseMode();
+            if (_editor->isEnabled()) {
+                // The in-game camera grabs the pointer, which would make editor
+                // windows unreachable. Release it for as long as the editor is up.
+                // Cursor visibility is left to ImGui, which drives it every frame
+                // from the cursor imguiNewFrame selects.
+                relmouse = false;
+            }
             showCursor(showcur);
             setRelativeMouseMode(relmouse);
             _profiler->update(frameTime);
