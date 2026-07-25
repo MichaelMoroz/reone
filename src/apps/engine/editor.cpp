@@ -21,6 +21,7 @@
 #include "reone/system/stringutil.h"
 
 #include "imgui.h"
+#include "imgui_internal.h" // DockBuilder, for the default right-hand layout
 #include "imgui_stdlib.h"
 
 namespace reone {
@@ -80,6 +81,7 @@ void Editor::twoDaRes(const resource::ResourceId &res, TwoDaTableContext &contex
         return;
     }
 
+    dockNext();
     ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin(res.resRef.value().c_str(), &context.show, ImGuiWindowFlags_HorizontalScrollbar)) {
         ImGui::End();
@@ -135,6 +137,7 @@ void Editor::twoDaRes(const resource::ResourceId &res, TwoDaTableContext &contex
 }
 
 void Editor::twoDa() {
+    dockNext();
     ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("2DA", &_showTwoDa, ImGuiWindowFlags_MenuBar)) {
         ImGui::End();
@@ -175,6 +178,7 @@ void Editor::twoDa() {
 }
 
 void Editor::imGuiDemo() {
+    dockNext();
     ImGui::ShowDemoWindow(&_showImGuiDemo);
 }
 
@@ -183,26 +187,24 @@ void Editor::update(float dt) {
         return;
     }
 
-    ImGuiIO &io = ImGui::GetIO();
-
-    if (ImGui::Begin("Editor", nullptr, ImGuiWindowFlags_MenuBar)) {
-        if (ImGui::BeginMenuBar()) {
-            if (ImGui::BeginMenu("Tools")) {
-                ImGui::MenuItem("2DA", nullptr, &_showTwoDa);
-                ImGui::EndMenu();
-            }
-
-            if (ImGui::BeginMenu("Debug")) {
-                if (ImGui::MenuItem("ImGui Item Picker")) {
-                    ImGui::DebugStartItemPicker();
-                }
-                ImGui::MenuItem("ImGui Demo", nullptr, &_showImGuiDemo);
-                ImGui::EndMenu();
-            }
-            ImGui::EndMenuBar();
+    // Submitted before the dockspace so the viewport work area excludes it.
+    if (ImGui::BeginMainMenuBar()) {
+        if (ImGui::BeginMenu("Tools")) {
+            ImGui::MenuItem("2DA", nullptr, &_showTwoDa);
+            ImGui::EndMenu();
         }
+
+        if (ImGui::BeginMenu("Debug")) {
+            if (ImGui::MenuItem("ImGui Item Picker")) {
+                ImGui::DebugStartItemPicker();
+            }
+            ImGui::MenuItem("ImGui Demo", nullptr, &_showImGuiDemo);
+            ImGui::EndMenu();
+        }
+        ImGui::EndMainMenuBar();
     }
-    ImGui::End();
+
+    dockSpace();
 
     if (_showTwoDa) {
         twoDa();
@@ -216,6 +218,44 @@ void Editor::update(float dt) {
 
     if (_showImGuiDemo) {
         imGuiDemo();
+    }
+}
+
+void Editor::dockSpace() {
+    const ImGuiViewport *viewport = ImGui::GetMainViewport();
+
+    // PassthruCentralNode leaves the middle of the screen transparent, so the
+    // game keeps rendering behind the docked windows.
+    ImGuiID rootId = ImGui::DockSpaceOverViewport(
+        0,
+        viewport,
+        ImGuiDockNodeFlags_PassthruCentralNode);
+
+    if (_dockLayoutBuilt) {
+        return;
+    }
+    _dockLayoutBuilt = true;
+
+    // A layout restored from imgui.ini is the user's, so adopt its right-hand
+    // node instead of overwriting it. Only a fresh profile gets the default.
+    ImGuiDockNode *existing = ImGui::DockBuilderGetNode(rootId);
+    if (existing && existing->IsSplitNode() && existing->ChildNodes[1]) {
+        _rightDockId = existing->ChildNodes[1]->ID;
+        return;
+    }
+
+    // Split a quarter off the right edge and remember it, so that windows opened
+    // later dock there by default and stack as tabs.
+    ImGui::DockBuilderRemoveNode(rootId);
+    ImGui::DockBuilderAddNode(rootId, ImGuiDockNodeFlags_DockSpace | ImGuiDockNodeFlags_PassthruCentralNode);
+    ImGui::DockBuilderSetNodeSize(rootId, viewport->WorkSize);
+    ImGui::DockBuilderSplitNode(rootId, ImGuiDir_Right, 0.25f, &_rightDockId, nullptr);
+    ImGui::DockBuilderFinish(rootId);
+}
+
+void Editor::dockNext() {
+    if (_rightDockId) {
+        ImGui::SetNextWindowDockID(_rightDockId, ImGuiCond_FirstUseEver);
     }
 }
 

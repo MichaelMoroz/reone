@@ -19,6 +19,8 @@
 
 #include "reone/resource/id.h"
 
+#include "imgui.h" // ImGuiID
+
 #include <map>
 #include <string>
 #include <vector>
@@ -62,6 +64,12 @@ public:
     bool isEnabled() const { return _enabled; }
 
 private:
+    // Full-viewport dockspace, and the right-hand node new windows default into.
+    void dockSpace();
+    void dockNext();
+    ImGuiID _rightDockId {0};
+    bool _dockLayoutBuilt {false};
+
     // 2DA List window
     void twoDa();
     bool _showTwoDa {false};
