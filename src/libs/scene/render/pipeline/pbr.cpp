@@ -169,6 +169,13 @@ void PBRRenderPipeline::initRenderTargets() {
     _targets.cbGBufEyeNormal->clear(_targetSize.x, _targetSize.y, PixelFormat::RGB8);
     _targets.cbGBufEyeNormal->init();
 
+    _targets.cbGBufMotion = std::make_unique<Texture>(
+        "gbuffer_motion",
+        TextureType::TwoDim,
+        getTextureProperties(TextureUsage::ColorBuffer));
+    _targets.cbGBufMotion->clear(_targetSize.x, _targetSize.y, PixelFormat::RG16F);
+    _targets.cbGBufMotion->init();
+
     _targets.dbGBuffer = std::make_shared<Texture>(
         "gbuffer_depth",
         TextureType::TwoDim,
@@ -181,7 +188,8 @@ void PBRRenderPipeline::initRenderTargets() {
         {_targets.cbGBufDiffuse,
          _targets.cbGBufEyeNormal,
          _targets.cbGBufLightmap,
-         _targets.cbGBufSelfIllum},
+         _targets.cbGBufSelfIllum,
+         _targets.cbGBufMotion},
         _targets.dbGBuffer);
     _targets.fbOpaqueGeometry->init();
 
@@ -429,7 +437,7 @@ void PBRRenderPipeline::endPointLightShadowsPass() {
 }
 
 void PBRRenderPipeline::beginOpaqueGeometryPass() {
-    _context.bindDrawFramebuffer(*_targets.fbOpaqueGeometry, {0, 1, 2, 3});
+    _context.bindDrawFramebuffer(*_targets.fbOpaqueGeometry, {0, 1, 2, 3, 4});
     _context.clearColorDepth();
 }
 

@@ -75,7 +75,15 @@ struct GlobalUniforms {
     glm::vec4 shadowLightPosition {0.0f}; /**< W = 0 if light is directional */
     glm::vec4 shadowCascadeFarPlanes {0.0f};
     glm::mat4 shadowLightSpace[kNumShadowLightSpace] {glm::mat4(1.0f)};
+    /**
+     * Unjittered view-projection of this frame and the previous one. Kept
+     * separate from projection/view, which carry TAA jitter when it is enabled,
+     * so that motion vectors never encode the jitter offset.
+     */
+    glm::mat4 viewProjection {1.0f};
+    glm::mat4 prevViewProjection {1.0f};
     glm::vec4 fogColor {0.0f};
+    glm::vec4 jitter {0.0f}; /**< XY = this frame's NDC jitter, ZW = previous frame's */
     float clipNear {kDefaultClipPlaneNear};
     float clipFar {kDefaultClipPlaneFar};
     int numLights {0};
@@ -89,11 +97,14 @@ struct GlobalUniforms {
         projectionInv = glm::mat4(1.0f);
         view = glm::mat4(1.0f);
         viewInv = glm::mat4(1.0f);
+        viewProjection = glm::mat4(1.0f);
+        prevViewProjection = glm::mat4(1.0f);
         cameraPosition = glm::vec4(0.0f);
         worldAmbientColor = glm::vec4(1.0f);
         shadowLightPosition = glm::vec4(0.0f);
         shadowCascadeFarPlanes = glm::vec4(0.0f);
         fogColor = glm::vec4(0.0f);
+        jitter = glm::vec4(0.0f);
         clipNear = kDefaultClipPlaneNear;
         clipFar = kDefaultClipPlaneFar;
         numLights = 0;
@@ -107,6 +118,7 @@ struct GlobalUniforms {
 struct LocalUniforms {
     glm::mat4 model;
     glm::mat4 modelInv;
+    glm::mat4 prevModel; /**< model transform as of the previous rendered frame */
     glm::mat3x4 uv;
     glm::vec4 color;
     glm::vec4 ambientColor;
@@ -125,6 +137,7 @@ struct LocalUniforms {
     void reset() {
         model = glm::mat4(1.0f);
         modelInv = glm::mat4(1.0f);
+        prevModel = glm::mat4(1.0f);
         uv = glm::mat3x4(1.0f);
         color = glm::vec4(1.0f);
         ambientColor = glm::vec4(1.0f);
@@ -140,6 +153,7 @@ struct LocalUniforms {
 
 struct BoneUniforms {
     glm::mat4 bones[kMaxBones] {glm::mat4(1.0f)};
+    glm::mat4 prevBones[kMaxBones] {glm::mat4(1.0f)}; /**< bones as of the previous rendered frame */
 };
 
 struct DanglyUniforms {

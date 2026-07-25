@@ -101,6 +101,26 @@ public:
     const glm::mat4 &absoluteTransform() const { return _absTransform; }
     const glm::mat4 &absoluteTransformInverse() const { return _absTransformInv; }
 
+    /**
+     * Absolute transform as of the end of the previous rendered frame. Used to
+     * produce motion vectors. Equals the current transform until this node has
+     * been rendered at least once.
+     */
+    const glm::mat4 &previousAbsoluteTransform() const { return _prevAbsTransform; }
+
+    /**
+     * Latch the current transform as the previous one, at most once per frame.
+     * Called at the end of SceneGraph::render, so that a node drawn by several
+     * passes within one frame reports the same previous transform to each.
+     */
+    virtual void snapshotPreviousFrame(uint64_t frame) {
+        if (_prevFrame == frame) {
+            return;
+        }
+        _prevAbsTransform = _absTransform;
+        _prevFrame = frame;
+    }
+
     void setLocalTransform(glm::mat4 transform);
 
     // END Transformations
@@ -141,6 +161,8 @@ protected:
     glm::mat4 _localTransform {1.0f};
     glm::mat4 _absTransform {1.0f};
     glm::mat4 _absTransformInv {1.0f};
+    glm::mat4 _prevAbsTransform {1.0f};
+    uint64_t _prevFrame {0}; /**< frame the previous transform was latched on */
 
     // END Transformations
 

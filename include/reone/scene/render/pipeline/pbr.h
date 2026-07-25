@@ -56,6 +56,7 @@ private:
         std::shared_ptr<graphics::Texture> cbGBufLightmap;
         std::shared_ptr<graphics::Texture> cbGBufSelfIllum;
         std::shared_ptr<graphics::Texture> cbGBufEyeNormal;
+        std::shared_ptr<graphics::Texture> cbGBufMotion;
         std::shared_ptr<graphics::Texture> cbDeferredOpaque1;
         std::shared_ptr<graphics::Texture> cbDeferredOpaque2;
         std::shared_ptr<graphics::Texture> cbTransparentGeometry1;

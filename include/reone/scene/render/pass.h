@@ -70,27 +70,43 @@ class IRenderPass {
 public:
     virtual ~IRenderPass() = default;
 
+    /**
+     * The prevTransform/prevBones arguments carry the values this geometry was
+     * drawn with in the previous frame, and exist solely to produce motion
+     * vectors. Callers that have no previous frame to report - newly spawned
+     * geometry, or geometry that was culled last frame - pass the current values,
+     * which yields zero motion.
+     *
+     * Note that dangly and saber meshes deform per-vertex on the GPU and their
+     * previous vertex positions are not tracked, so their motion vectors capture
+     * only the rigid part of the movement.
+     */
     virtual void draw(graphics::Mesh &mesh,
                       graphics::Material &material,
                       const glm::mat4 &transform,
-                      const glm::mat4 &transformInv) = 0;
+                      const glm::mat4 &transformInv,
+                      const glm::mat4 &prevTransform) = 0;
 
     virtual void drawSkinned(graphics::Mesh &mesh,
                              graphics::Material &material,
                              const glm::mat4 &transform,
                              const glm::mat4 &transformInv,
-                             const std::vector<glm::mat4> &bones) = 0;
+                             const glm::mat4 &prevTransform,
+                             const std::vector<glm::mat4> &bones,
+                             const std::vector<glm::mat4> &prevBones) = 0;
 
     virtual void drawDangly(graphics::Mesh &mesh,
                             graphics::Material &material,
                             const glm::mat4 &transform,
                             const glm::mat4 &transformInv,
+                            const glm::mat4 &prevTransform,
                             const std::vector<glm::vec4> &positions) = 0;
 
     virtual void drawSaber(graphics::Mesh &mesh,
                            graphics::Material &material,
                            const glm::mat4 &transform,
                            const glm::mat4 &transformInv,
+                           const glm::mat4 &prevTransform,
                            const glm::vec4 &displacement) = 0;
 
     virtual void drawBillboard(graphics::Texture &texture,

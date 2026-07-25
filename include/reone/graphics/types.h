@@ -172,6 +172,10 @@ struct TextureUnits {
 
     static constexpr int envMapCube = 18;
     static constexpr int shadowMapCube = 19;
+
+    // 2D, continued
+
+    static constexpr int gBufMotion = 20;
 };
 
 // MDL

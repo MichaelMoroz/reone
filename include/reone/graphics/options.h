@@ -35,6 +35,12 @@ struct GraphicsOptions {
     bool ssr {true};
     bool fxaa {true};
     bool sharpen {true};
+    /**
+     * Offset the projection by a sub-pixel jitter each frame. Motion vectors are
+     * produced regardless; this only controls the jitter itself, and is off by
+     * default because nothing resolves it yet.
+     */
+    bool taaJitter {false};
     TextureQuality textureQuality {TextureQuality::High};
     int shadowResolution {2048};
     int anisotropicFiltering {2};

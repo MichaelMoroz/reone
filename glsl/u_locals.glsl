@@ -17,6 +17,7 @@ const int FEATURE_STATIC = 1 << 14;
 layout(std140) uniform Locals {
     mat4 uModel;
     mat4 uModelInv;
+    mat4 uPrevModel;
     mat3 uUV;
     vec4 uColor;
     vec4 uAmbientColor;

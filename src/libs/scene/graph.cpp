@@ -465,11 +465,23 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
     auto cameraNode = this->camera();
     if (cameraNode) {
         auto camera = cameraNode->get().camera();
-        _graphicsSvc.uniforms.setGlobals([this, &camera](auto &globals) {
-            globals.projection = camera->projection();
-            globals.projectionInv = camera->projectionInv();
+        auto jitter = computeJitter();
+        auto viewProjection = camera->projection() * camera->view();
+        _graphicsSvc.uniforms.setGlobals([this, &camera, &jitter, &viewProjection](auto &globals) {
+            if (_graphicsOpt.taaJitter) {
+                // Sub-pixel offset in clip space, applied after the projection so
+                // that it shifts the raster grid without altering the frustum.
+                globals.projection = glm::translate(glm::vec3(jitter, 0.0f)) * camera->projection();
+                globals.projectionInv = glm::inverse(globals.projection);
+            } else {
+                globals.projection = camera->projection();
+                globals.projectionInv = camera->projectionInv();
+            }
             globals.view = camera->view();
             globals.viewInv = camera->viewInv();
+            globals.viewProjection = viewProjection;
+            globals.prevViewProjection = _prevViewProjection;
+            globals.jitter = glm::vec4(jitter, _prevJitter);
             globals.cameraPosition = glm::vec4(camera->position(), 1.0f);
             globals.worldAmbientColor = glm::vec4(ambientLightColor(), 1.0f);
             globals.clipNear = camera->zNear();
@@ -537,7 +549,65 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
         });
     }
 
-    return pipeline.render();
+    auto &output = pipeline.render();
+    snapshotPreviousFrame();
+    return output;
+}
+
+glm::vec2 SceneGraph::computeJitter() const {
+    if (!_graphicsOpt.taaJitter) {
+        return glm::vec2(0.0f);
+    }
+    // Halton(2, 3), the usual low-discrepancy sequence for temporal sampling,
+    // recentred on zero and scaled to one pixel.
+    static constexpr int kJitterPhases = 8;
+    auto halton = [](int index, int base) {
+        float result = 0.0f;
+        float fraction = 1.0f;
+        while (index > 0) {
+            fraction /= base;
+            result += fraction * (index % base);
+            index /= base;
+        }
+        return result;
+    };
+    int phase = static_cast<int>(_frameIndex % kJitterPhases) + 1;
+    glm::vec2 offset {halton(phase, 2) - 0.5f, halton(phase, 3) - 0.5f};
+    return 2.0f * offset / glm::vec2(_graphicsOpt.width, _graphicsOpt.height);
+}
+
+void SceneGraph::snapshotPreviousFrame() {
+    // Latch the camera state of the frame that was just rendered before advancing
+    // the frame counter, so that computeJitter still refers to this frame.
+    _prevJitter = computeJitter();
+    auto cameraNode = this->camera();
+    if (cameraNode) {
+        auto camera = cameraNode->get().camera();
+        _prevViewProjection = camera->projection() * camera->view();
+    }
+
+    ++_frameIndex;
+    for (auto &mesh : _opaqueMeshes) {
+        mesh->snapshotPreviousFrame(_frameIndex);
+    }
+    for (auto &mesh : _transparentMeshes) {
+        mesh->snapshotPreviousFrame(_frameIndex);
+    }
+    for (auto &mesh : _shadowMeshes) {
+        mesh->snapshotPreviousFrame(_frameIndex);
+    }
+    for (auto &[node, leafs] : _opaqueLeafs) {
+        node->snapshotPreviousFrame(_frameIndex);
+        for (auto &leaf : leafs) {
+            leaf->snapshotPreviousFrame(_frameIndex);
+        }
+    }
+    for (auto &[node, leafs] : _transparentLeafs) {
+        node->snapshotPreviousFrame(_frameIndex);
+        for (auto &leaf : leafs) {
+            leaf->snapshotPreviousFrame(_frameIndex);
+        }
+    }
 }
 
 void SceneGraph::renderShadows(IRenderPass &pass) {

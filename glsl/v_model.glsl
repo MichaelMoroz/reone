@@ -20,10 +20,13 @@ out vec3 fragNormalWorld;
 out vec2 fragUV1;
 out vec2 fragUV2;
 out mat3 fragTBN;
+out vec4 fragCurClipPos;
+out vec4 fragPrevClipPos;
 
 void main() {
     vec4 P = vec4(aPosition, 1.0);
     vec4 N = vec4(aNormal, 0.0);
+    vec4 prevP = P;
 
     if (isFeatureEnabled(FEATURE_SKIN)) {
         int i1 = max(0, int(aBoneIndices[0]));
@@ -48,22 +51,33 @@ void main() {
             (uBones[i3] * N) * w3 +
             (uBones[i4] * N) * w4;
 
+        prevP =
+            (uPrevBones[i1] * prevP) * w1 +
+            (uPrevBones[i2] * prevP) * w2 +
+            (uPrevBones[i3] * prevP) * w3 +
+            (uPrevBones[i4] * prevP) * w4;
+
         fragPos = P;
 
     } else if (isFeatureEnabled(FEATURE_DANGLY)) {
         fragPos = uDanglyPositions[gl_VertexID];
+        prevP = fragPos;
 
     } else if (isFeatureEnabled(FEATURE_SABER)) {
         float signum = 2.0 * (gl_VertexID / 88) - 1.0;
         float hdist = ((gl_VertexID % 88) / 4) / 21.0;
         float vdist = (gl_VertexID % 4) / 3.0;
         fragPos = vec4(P.xyz + 0.5 * signum * hdist * vdist * uSaberDisplacement.xyz, 1.0);
+        prevP = fragPos;
 
     } else {
         fragPos = P;
     }
 
     fragPosWorld = uModel * fragPos;
+
+    fragCurClipPos = uViewProjection * fragPosWorld;
+    fragPrevClipPos = uPrevViewProjection * (uPrevModel * prevP);
 
     mat3 normalMatrix = transpose(mat3(uModelInv));
     fragNormalWorld = normalize(normalMatrix * N.xyz);

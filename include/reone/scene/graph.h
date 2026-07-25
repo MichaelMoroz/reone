@@ -319,6 +319,17 @@ private:
 
     // END Leafs
 
+    // Motion vectors
+
+    uint64_t _frameIndex {0};
+    glm::mat4 _prevViewProjection {1.0f};
+    glm::vec2 _prevJitter {0.0f};
+
+    glm::vec2 computeJitter() const;
+    void snapshotPreviousFrame();
+
+    // END Motion vectors
+
     // Lighting
 
     glm::vec3 _ambientLightColor {0.5f};

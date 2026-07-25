@@ -291,7 +291,7 @@ void MeshSceneNode::render(IRenderPass &pass) {
     material.faceCulling = _nodeTextures.diffuse->features().decal ? FaceCullMode::None : FaceCullMode::Back;
     if (_modelNode.isSkinMesh()) {
         const auto &skin = *mesh->skin;
-        auto bones = std::vector<glm::mat4>(kMaxBones, glm::mat4(1.0f));
+        _bones.assign(kMaxBones, glm::mat4(1.0f));
         for (size_t i = 0; i < kMaxBones; ++i) {
             if (i >= skin.boneNodeNumber.size()) {
                 break;
@@ -304,12 +304,15 @@ void MeshSceneNode::render(IRenderPass &pass) {
             if (!bone) {
                 continue;
             }
-            bones[i] = _modelNode.absoluteTransformInverse(); // convert bone transform in model space to bone transform in this model node space
-            bones[i] *= _model.absoluteTransformInverse();    // convert bone transform in world space to bone transform in model space
-            bones[i] *= bone->absoluteTransform();
-            bones[i] *= skin.boneMatrices[skin.boneSerial[i]]; // extract changes to the bone transform in this model node space
+            _bones[i] = _modelNode.absoluteTransformInverse(); // convert bone transform in model space to bone transform in this model node space
+            _bones[i] *= _model.absoluteTransformInverse();    // convert bone transform in world space to bone transform in model space
+            _bones[i] *= bone->absoluteTransform();
+            _bones[i] *= skin.boneMatrices[skin.boneSerial[i]]; // extract changes to the bone transform in this model node space
         }
-        pass.drawSkinned(*mesh->mesh, material, _absTransform, _absTransformInv, std::move(bones));
+        if (_prevBones.size() != _bones.size()) {
+            _prevBones = _bones;
+        }
+        pass.drawSkinned(*mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, _bones, _prevBones);
     } else if (_modelNode.isDanglymesh()) {
         std::vector<glm::vec4> positions;
         positions.reserve(_dangly.vertices.size());
@@ -320,16 +323,26 @@ void MeshSceneNode::render(IRenderPass &pass) {
                         material,
                         _absTransform,
                         _absTransformInv,
+                        _prevAbsTransform,
                         positions);
     } else if (_modelNode.isSaberMesh()) {
         pass.drawSaber(*mesh->mesh,
                        material,
                        _absTransform,
                        _absTransformInv,
+                       _prevAbsTransform,
                        glm::vec4 {_saber.displacement, 0.0f});
     } else {
-        pass.draw(*mesh->mesh, material, _absTransform, _absTransformInv);
+        pass.draw(*mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform);
     }
+}
+
+void MeshSceneNode::snapshotPreviousFrame(uint64_t frame) {
+    if (_prevFrame == frame) {
+        return;
+    }
+    _prevBones = _bones;
+    SceneNode::snapshotPreviousFrame(frame);
 }
 
 void MeshSceneNode::renderShadow(IRenderPass &pass) {
@@ -342,7 +355,7 @@ void MeshSceneNode::renderShadow(IRenderPass &pass) {
                         ? MaterialType::DirLightShadow
                         : MaterialType::PointLightShadow;
     material.color = glm::vec4(1.0f, 1.0f, 1.0f, _alpha);
-    pass.draw(*mesh->mesh, material, _absTransform, _absTransformInv);
+    pass.draw(*mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform);
 }
 
 bool MeshSceneNode::isLightingEnabled() const {

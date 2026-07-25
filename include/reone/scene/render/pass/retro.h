@@ -50,24 +50,29 @@ public:
     void draw(graphics::Mesh &mesh,
               graphics::Material &material,
               const glm::mat4 &transform,
-              const glm::mat4 &transformInv) override;
+              const glm::mat4 &transformInv,
+              const glm::mat4 &prevTransform) override;
 
     void drawSkinned(graphics::Mesh &mesh,
                      graphics::Material &material,
                      const glm::mat4 &transform,
                      const glm::mat4 &transformInv,
-                     const std::vector<glm::mat4> &bones) override;
+                     const glm::mat4 &prevTransform,
+                     const std::vector<glm::mat4> &bones,
+                     const std::vector<glm::mat4> &prevBones) override;
 
     void drawDangly(graphics::Mesh &mesh,
                     graphics::Material &material,
                     const glm::mat4 &transform,
                     const glm::mat4 &transformInv,
+                    const glm::mat4 &prevTransform,
                     const std::vector<glm::vec4> &positions) override;
 
     void drawSaber(graphics::Mesh &mesh,
                    graphics::Material &material,
                    const glm::mat4 &transform,
                    const glm::mat4 &transformInv,
+                   const glm::mat4 &prevTransform,
                    const glm::vec4 &displacement) override;
 
     void drawBillboard(graphics::Texture &texture,

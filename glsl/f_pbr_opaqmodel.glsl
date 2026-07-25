@@ -5,6 +5,7 @@
 #include "i_hash.glsl"
 #include "i_hashedalpha.glsl"
 #include "i_math.glsl"
+#include "i_motion.glsl"
 #include "i_normalmap.glsl"
 
 #include "i_envmap.glsl"
@@ -22,11 +23,14 @@ in vec3 fragNormalWorld;
 in vec2 fragUV1;
 in vec2 fragUV2;
 in mat3 fragTBN;
+in vec4 fragCurClipPos;
+in vec4 fragPrevClipPos;
 
 layout(location = 0) out vec4 fragDiffuseColor;
 layout(location = 1) out vec4 fragEyeNormal;
 layout(location = 2) out vec4 fragLightmapColor;
 layout(location = 3) out vec4 fragSelfIllumColor;
+layout(location = 4) out vec2 fragMotion;
 
 vec3 getNormal(vec2 uv) {
     if (isFeatureEnabled(FEATURE_NORMALMAP)) {
@@ -69,4 +73,5 @@ void main() {
                             : vec4(vec3(1.0), features);
     fragSelfIllumColor = vec4(uSelfIllumColor.rgb, uEnvMapDerivedLayer / 255.0);
     fragEyeNormal = vec4(eyeNormal, 0.0);
+    fragMotion = computeMotion(fragCurClipPos, fragPrevClipPos);
 }

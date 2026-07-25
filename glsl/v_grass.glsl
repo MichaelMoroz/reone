@@ -9,6 +9,8 @@ out vec4 fragPosWorld;
 out vec3 fragNormalWorld;
 out vec2 fragUV1;
 flat out int fragInstanceID;
+out vec4 fragCurClipPos;
+out vec4 fragPrevClipPos;
 
 void main() {
     vec3 clusterToCamera = uGrassClusters[gl_InstanceID].positionVariant.xyz - uCameraPosition.xyz;
@@ -30,6 +32,11 @@ void main() {
                         1.0);
 
     gl_Position = uProjection * uView * fragPosWorld;
+
+    // Grass clusters are static, so the only motion is the camera's. The
+    // billboard's re-orientation towards the camera is deliberately not tracked.
+    fragCurClipPos = uViewProjection * fragPosWorld;
+    fragPrevClipPos = uPrevViewProjection * fragPosWorld;
 
     fragNormalWorld = cross(right, up);
     fragUV1 = aUV1;

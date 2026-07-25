@@ -21,7 +21,10 @@ layout(std140) uniform Globals {
     vec4 uShadowLightPosition;
     vec4 uShadowCascadeFarPlanes;
     mat4 uShadowLightSpace[NUM_SHADOW_LIGHT_SPACE];
+    mat4 uViewProjection;
+    mat4 uPrevViewProjection;
     vec4 uFogColor;
+    vec4 uJitter;
     float uClipNear;
     float uClipFar;
     int uNumLights;

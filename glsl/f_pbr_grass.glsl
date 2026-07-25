@@ -5,6 +5,7 @@
 #include "i_gbuf.glsl"
 #include "i_hash.glsl"
 #include "i_hashedalpha.glsl"
+#include "i_motion.glsl"
 
 uniform sampler2D sMainTex;
 uniform sampler2D sLightmap;
@@ -14,11 +15,14 @@ in vec4 fragPosWorld;
 in vec3 fragNormalWorld;
 in vec2 fragUV1;
 flat in int fragInstanceID;
+in vec4 fragCurClipPos;
+in vec4 fragPrevClipPos;
 
 layout(location = 0) out vec4 fragDiffuseColor;
 layout(location = 1) out vec4 fragEyeNormal;
 layout(location = 2) out vec4 fragLightmapColor;
 layout(location = 3) out vec4 fragSelfIllumColor;
+layout(location = 4) out vec2 fragMotion;
 
 void main() {
     vec2 uv = vec2(0.5) * fragUV1;
@@ -40,4 +44,5 @@ void main() {
 
     fragSelfIllumColor = vec4(0.0);
     fragEyeNormal = vec4(eyeNormal, 0.0);
+    fragMotion = computeMotion(fragCurClipPos, fragPrevClipPos);
 }

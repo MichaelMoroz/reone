@@ -73,7 +73,7 @@ void WalkmeshSceneNode::render(IRenderPass &pass) {
     Material material;
     material.type = MaterialType::Walkmesh;
     material.faceCulling = FaceCullMode::Back;
-    pass.draw(*_mesh, material, _absTransform, _absTransformInv);
+    pass.draw(*_mesh, material, _absTransform, _absTransformInv, _prevAbsTransform);
 }
 
 } // namespace scene

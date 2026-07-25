@@ -64,6 +64,8 @@ public:
     void setAlpha(float alpha) { _alpha = alpha; }
     void setSelfIllumColor(glm::vec3 color) { _selfIllumColor = std::move(color); }
 
+    void snapshotPreviousFrame(uint64_t frame) override;
+
 private:
     struct NodeTextures {
         graphics::Texture *diffuse {nullptr};
@@ -102,6 +104,14 @@ private:
     glm::vec3 _selfIllumColor {0.0f};
 
     float _windTime {0.0f};
+
+    /**
+     * Skinning matrices for this frame and the previous one. Held as members
+     * rather than rebuilt per draw so that the previous set survives into the
+     * next frame, and so the per-frame allocation is avoided.
+     */
+    std::vector<glm::mat4> _bones;
+    std::vector<glm::mat4> _prevBones;
 
     void initTextures();
     void initDanglyMesh();

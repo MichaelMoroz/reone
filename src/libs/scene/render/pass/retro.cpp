@@ -35,12 +35,14 @@ namespace scene {
 void RetroRenderPass::draw(Mesh &mesh,
                            Material &material,
                            const glm::mat4 &transform,
-                           const glm::mat4 &transformInv) {
+                           const glm::mat4 &transformInv,
+                           const glm::mat4 &prevTransform) {
     withMaterialAppliedToContext(material, [&](auto &program) {
-        _uniforms.setLocals([this, &material, &transform, &transformInv](auto &locals) {
+        _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform](auto &locals) {
             locals.reset();
             locals.model = transform;
             locals.modelInv = transformInv;
+            locals.prevModel = prevTransform;
             applyMaterialToLocals(material, locals);
         });
         mesh.draw(_statistic);
@@ -140,17 +142,21 @@ void RetroRenderPass::drawSkinned(Mesh &mesh,
                                   Material &material,
                                   const glm::mat4 &transform,
                                   const glm::mat4 &transformInv,
-                                  const std::vector<glm::mat4> &bones) {
+                                  const glm::mat4 &prevTransform,
+                                  const std::vector<glm::mat4> &bones,
+                                  const std::vector<glm::mat4> &prevBones) {
     withMaterialAppliedToContext(material, [&](auto &program) {
-        _uniforms.setLocals([this, &material, &transform, &transformInv](auto &locals) {
+        _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform](auto &locals) {
             locals.reset();
             locals.featureMask |= UniformsFeatureFlags::skin;
             locals.model = transform;
             locals.modelInv = transformInv;
+            locals.prevModel = prevTransform;
             applyMaterialToLocals(material, locals);
         });
-        _uniforms.setBones([&bones](auto &b) {
+        _uniforms.setBones([&bones, &prevBones](auto &b) {
             std::memcpy(b.bones, &bones[0], kMaxBones * sizeof(glm::mat4));
+            std::memcpy(b.prevBones, &prevBones[0], kMaxBones * sizeof(glm::mat4));
         });
         mesh.draw(_statistic);
     });
@@ -160,13 +166,15 @@ void RetroRenderPass::drawDangly(Mesh &mesh,
                                  Material &material,
                                  const glm::mat4 &transform,
                                  const glm::mat4 &transformInv,
+                                 const glm::mat4 &prevTransform,
                                  const std::vector<glm::vec4> &positions) {
     withMaterialAppliedToContext(material, [&](auto &program) {
-        _uniforms.setLocals([this, &material, &transform, &transformInv](auto &locals) {
+        _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform](auto &locals) {
             locals.reset();
             locals.featureMask |= UniformsFeatureFlags::dangly;
             locals.model = transform;
             locals.modelInv = transformInv;
+            locals.prevModel = prevTransform;
             applyMaterialToLocals(material, locals);
         });
         _uniforms.setDangly([&positions](auto &dangly) {
@@ -181,13 +189,15 @@ void RetroRenderPass::drawSaber(Mesh &mesh,
                                 Material &material,
                                 const glm::mat4 &transform,
                                 const glm::mat4 &transformInv,
+                                const glm::mat4 &prevTransform,
                                 const glm::vec4 &displacement) {
     withMaterialAppliedToContext(material, [&](auto &program) {
-        _uniforms.setLocals([this, &material, &transform, &transformInv](auto &locals) {
+        _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform](auto &locals) {
             locals.reset();
             locals.featureMask |= UniformsFeatureFlags::saber;
             locals.model = transform;
             locals.modelInv = transformInv;
+            locals.prevModel = prevTransform;
             applyMaterialToLocals(material, locals);
         });
         program.setUniform("uSaberDisplacement", displacement);

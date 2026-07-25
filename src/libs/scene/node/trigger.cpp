@@ -113,7 +113,7 @@ void TriggerSceneNode::render(IRenderPass &pass) {
     material.type = MaterialType::Walkmesh;
     material.faceCulling = FaceCullMode::None;
     material.polygonMode = PolygonMode::Line;
-    pass.draw(*_mesh, material, _absTransform, _absTransformInv);
+    pass.draw(*_mesh, material, _absTransform, _absTransformInv, _prevAbsTransform);
 }
 
 bool TriggerSceneNode::isIn(const glm::vec2 &pt) const {
