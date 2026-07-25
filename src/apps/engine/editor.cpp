@@ -24,7 +24,26 @@
 #include "imgui_internal.h" // DockBuilder, for the default right-hand layout
 #include "imgui_stdlib.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace reone {
+
+/**
+ * The ImGui item picker works by calling IM_DEBUG_BREAK on the item you click,
+ * which is __debugbreak on MSVC. Attached to a debugger that is a breakpoint;
+ * without one it raises an unhandled breakpoint exception and kills the process.
+ */
+static bool isDebuggerAttached() {
+#ifdef _WIN32
+    return IsDebuggerPresent();
+#else
+    // No cheap portable check. Leave the tool available and assume a developer
+    // on this platform started the process under a debugger deliberately.
+    return true;
+#endif
+}
 
 // Editor::handle should take priority over ImGui event processing, so it close
 // ImGui when it is in focus.
@@ -195,8 +214,12 @@ void Editor::update(float dt) {
         }
 
         if (ImGui::BeginMenu("Debug")) {
-            if (ImGui::MenuItem("ImGui Item Picker")) {
+            bool debugger = isDebuggerAttached();
+            if (ImGui::MenuItem("ImGui Item Picker", nullptr, false, debugger)) {
                 ImGui::DebugStartItemPicker();
+            }
+            if (!debugger && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("Requires an attached debugger - it breaks into one on the item you pick.");
             }
             ImGui::MenuItem("ImGui Demo", nullptr, &_showImGuiDemo);
             ImGui::EndMenu();
