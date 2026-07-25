@@ -64,6 +64,8 @@ if(BUILD_LAUNCHER OR BUILD_TOOLKIT)
     include(${wxWidgets_USE_FILE})
 endif()
 
+find_package(imgui CONFIG REQUIRED)
+
 set(REONE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
 set(GLAD_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/extern/glad/include)
 include_directories(${Boost_INCLUDE_DIRS} ${SDL3_INCLUDE_DIRS} ${MAD_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/extern/glm ${REONE_INCLUDE_DIR} ${GLAD_INCLUDE_DIR})

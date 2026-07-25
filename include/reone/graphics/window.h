@@ -54,6 +54,13 @@ public:
 
     void setRelativeMouseMode(bool relative);
 
+    /**
+     * Exposed for Dear ImGui, whose SDL and OpenGL backends need the raw
+     * handles. Nothing else should reach for these.
+     */
+    SDL_Window *sdlWindow() { return _window; }
+    SDL_GLContext sdlContext() { return _context; }
+
 private:
     GraphicsOptions &_options;
 
