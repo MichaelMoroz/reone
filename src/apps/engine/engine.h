@@ -36,15 +36,15 @@
 
 namespace reone {
 
+class Editor;
+
 class Engine : boost::noncopyable {
 public:
-    Engine(Options &options) :
-        _options(options) {
-    }
+    // Defined out of line because Editor is an incomplete type here.
+    Engine(Options &options);
+    ~Engine();
 
-    ~Engine() {
-        deinit();
-    }
+    friend class Editor;
 
     void init();
     void deinit();
@@ -82,6 +82,7 @@ private:
     std::unique_ptr<game::Game> _game;
     std::unique_ptr<Profiler> _profiler;
     std::unique_ptr<Console> _console;
+    std::unique_ptr<Editor> _editor;
 
     std::queue<input::Event> _events;
 
