@@ -17,11 +17,14 @@
 
 #pragma once
 
+#include "reone/graphics/framebuffer.h"
+#include "reone/graphics/texture.h"
 #include "reone/resource/id.h"
 
 #include "imgui.h" // ImGuiID
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -69,6 +72,18 @@ private:
     void dockNext();
     ImGuiID _rightDockId {0};
     bool _dockLayoutBuilt {false};
+
+    // Render target viewer
+    void renderTargets();
+    bool _showRenderTargets {false};
+    std::string _rtScene;
+    std::string _rtTarget;
+    int _rtMode {0};
+    float _rtScale {1.0f};
+    bool _rtAutoMode {true};
+    std::shared_ptr<graphics::Texture> _rtPreviewColor;
+    std::unique_ptr<graphics::Framebuffer> _rtPreview;
+    graphics::Texture *_rtSource {nullptr};
 
     // 2DA List window
     void twoDa();

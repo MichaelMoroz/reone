@@ -53,6 +53,7 @@ struct ShaderProgramId {
     static constexpr char postMedianFilter3[] = "post_median_filter3";
     static constexpr char postMedianFilter5[] = "post_median_filter5";
     static constexpr char postSharpen[] = "post_sharpen";
+    static constexpr char postDebugTexture[] = "post_debug_texture";
     static constexpr char text[] = "text";
     static constexpr char textBillboard[] = "textBillboard";
     static constexpr char pbrIrradiance[] = "pbr_irradiance";

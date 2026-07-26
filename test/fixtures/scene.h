@@ -55,6 +55,7 @@ public:
     MOCK_METHOD(std::optional<std::reference_wrapper<ModelSceneNode>>, pickModelRay, (const glm::vec3 &, const glm::vec3 &), (const override));
 
     MOCK_METHOD(const std::string &, name, (), (const override));
+    MOCK_METHOD(IRenderPipeline *, renderPipeline, (), (override));
     MOCK_METHOD(std::optional<std::reference_wrapper<CameraSceneNode>>, camera, (), (override));
 
     MOCK_METHOD(void, setAmbientLightColor, (glm::vec3), (override));
@@ -116,6 +117,7 @@ public:
     MOCK_METHOD(void, inRenderPass, (RenderPassName, std::function<void(IRenderPass &)>), (override));
 
     MOCK_METHOD(graphics::Texture &, render, (), (override));
+    MOCK_METHOD(std::vector<RenderTargetInfo>, targets, (), (const override));
 };
 
 class MockRenderPipelineFactory : public IRenderPipelineFactory, boost::noncopyable {

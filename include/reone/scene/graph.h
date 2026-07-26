@@ -82,6 +82,13 @@ public:
     virtual std::optional<std::reference_wrapper<ModelSceneNode>> pickModelRay(const glm::vec3 &origin, const glm::vec3 &dir) const = 0;
 
     virtual const std::string &name() const = 0;
+
+    /**
+     * Render pipeline backing this scene, for inspection by development tooling.
+     * Null until the scene has been rendered at least once, since the pipeline is
+     * created lazily on the first render.
+     */
+    virtual IRenderPipeline *renderPipeline() = 0;
     virtual std::optional<std::reference_wrapper<CameraSceneNode>> camera() = 0;
 
     virtual void setAmbientLightColor(glm::vec3 color) = 0;
@@ -163,6 +170,10 @@ public:
 
     const std::string &name() const override {
         return _name;
+    }
+
+    IRenderPipeline *renderPipeline() override {
+        return _renderPipeline.get();
     }
 
     std::optional<std::reference_wrapper<CameraSceneNode>> camera() override {

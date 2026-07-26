@@ -294,6 +294,27 @@ void PBRRenderPipeline::initSSAOSamples() {
     });
 }
 
+std::vector<RenderTargetInfo> PBRRenderPipeline::targets() const {
+    std::vector<RenderTargetInfo> result;
+    auto add = [&result](const char *name, RenderTargetKind kind, const std::shared_ptr<Texture> &texture) {
+        if (texture) {
+            result.push_back({name, kind, texture.get()});
+        }
+    };
+    add("G-buffer diffuse", RenderTargetKind::Color, _targets.cbGBufDiffuse);
+    add("G-buffer eye normal", RenderTargetKind::EyeNormal, _targets.cbGBufEyeNormal);
+    add("G-buffer lightmap", RenderTargetKind::Color, _targets.cbGBufLightmap);
+    add("G-buffer self-illum", RenderTargetKind::Color, _targets.cbGBufSelfIllum);
+    add("G-buffer motion", RenderTargetKind::Motion, _targets.cbGBufMotion);
+    add("G-buffer depth", RenderTargetKind::Depth, _targets.dbGBuffer);
+    add("SSAO", RenderTargetKind::Color, _targets.cbSSAO);
+    add("SSR", RenderTargetKind::Color, _targets.cbSSR);
+    add("Deferred opaque 1", RenderTargetKind::Color, _targets.cbDeferredOpaque1);
+    add("Deferred opaque 2", RenderTargetKind::Color, _targets.cbDeferredOpaque2);
+    add("Output", RenderTargetKind::Color, _targets.cbOutput);
+    return result;
+}
+
 Texture &PBRRenderPipeline::render() {
     auto pass = PBRRenderPass {_options,
                                _context,

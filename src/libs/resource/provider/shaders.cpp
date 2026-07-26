@@ -73,6 +73,7 @@ static const std::string kFragPostGaussianBlur9 = "f_pp_gausblur9";
 static const std::string kFragPostMedianFilter3 = "f_pp_medianfilt3";
 static const std::string kFragPostMedianFilter5 = "f_pp_medianfilt5";
 static const std::string kFragPostSharpen = "f_pp_sharpen";
+static const std::string kFragPostDebugTex = "f_pp_debugtex";
 static const std::string kFragText = "f_text";
 static const std::string kFragTexture = "f_texture";
 static const std::string kFragTextureNoPerspective = "f_texnoper";
@@ -127,6 +128,7 @@ void Shaders::init() {
     auto fragPostMedianFilter3 = initShader(ShaderType::Fragment, kFragPostMedianFilter3);
     auto fragPostMedianFilter5 = initShader(ShaderType::Fragment, kFragPostMedianFilter5);
     auto fragPostSharpen = initShader(ShaderType::Fragment, kFragPostSharpen);
+    auto fragPostDebugTex = initShader(ShaderType::Fragment, kFragPostDebugTex);
     auto fragText = initShader(ShaderType::Fragment, kFragText);
     auto fragTexture = initShader(ShaderType::Fragment, kFragTexture);
     auto fragTextureNoPerspective = initShader(ShaderType::Fragment, kFragTextureNoPerspective);
@@ -164,6 +166,7 @@ void Shaders::init() {
     _shaderRegistry.add(ShaderProgramId::postMedianFilter3, initShaderProgram({vertPassthrough, fragPostMedianFilter3}));
     _shaderRegistry.add(ShaderProgramId::postMedianFilter5, initShaderProgram({vertPassthrough, fragPostMedianFilter5}));
     _shaderRegistry.add(ShaderProgramId::postSharpen, initShaderProgram({vertPassthrough, fragPostSharpen}));
+    _shaderRegistry.add(ShaderProgramId::postDebugTexture, initShaderProgram({vertPassthrough, fragPostDebugTex}));
     _shaderRegistry.add(ShaderProgramId::text, initShaderProgram({vertText, fragText}));
     _shaderRegistry.add(ShaderProgramId::textBillboard, initShaderProgram({vertTextBillboard, fragText}));
     _shaderRegistry.add(ShaderProgramId::pbrIrradiance, initShaderProgram({vertMVP, fragIrradiance}));

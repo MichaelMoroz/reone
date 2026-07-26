@@ -50,6 +50,8 @@ public:
 
     graphics::Texture &render() override;
 
+    std::vector<RenderTargetInfo> targets() const override;
+
 private:
     struct RenderTargets {
         std::shared_ptr<graphics::Texture> cbGBufDiffuse;

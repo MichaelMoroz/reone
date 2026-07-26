@@ -17,7 +17,17 @@
 
 #include "editor.h"
 #include "engine.h"
+#include "reone/graphics/context.h"
+#include "reone/graphics/di/services.h"
+#include "reone/graphics/mesh.h"
+#include "reone/graphics/meshregistry.h"
+#include "reone/graphics/shaderprogram.h"
+#include "reone/graphics/shaderregistry.h"
+#include "reone/graphics/textureutil.h"
 #include "reone/resource/resources.h"
+#include "reone/scene/graph.h"
+#include "reone/scene/graphs.h"
+#include "reone/scene/render/pipeline.h"
 #include "reone/system/stringutil.h"
 
 #include "imgui.h"
@@ -182,6 +192,152 @@ void Editor::imGuiDemo() {
     ImGui::ShowDemoWindow(&_showImGuiDemo);
 }
 
+static constexpr int kPreviewWidth = 640;
+static constexpr int kPreviewHeight = 360;
+
+static const char *kDebugModeNames[] {
+    "Color",
+    "Depth (linearised)",
+    "Eye normal",
+    "Motion (biased)",
+    "Motion (flow)"};
+
+static int defaultModeFor(scene::RenderTargetKind kind) {
+    switch (kind) {
+    case scene::RenderTargetKind::Depth:
+        return 1;
+    case scene::RenderTargetKind::EyeNormal:
+        return 2;
+    case scene::RenderTargetKind::Motion:
+        return 4;
+    default:
+        return 0;
+    }
+}
+
+static float defaultScaleFor(scene::RenderTargetKind kind) {
+    // Motion vectors are a fraction of a screen width per frame, so they need
+    // a large multiplier before anything is visible.
+    return kind == scene::RenderTargetKind::Motion ? 50.0f : 1.0f;
+}
+
+void Editor::renderTargets() {
+    dockNext();
+    ImGui::SetNextWindowSize(ImVec2(520, 640), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Render targets", &_showRenderTargets)) {
+        ImGui::End();
+        return;
+    }
+    _rtSource = nullptr;
+
+    auto &graphs = _engine._sceneModule->graphs();
+    auto sceneNames = graphs.sceneNames();
+    if (sceneNames.empty()) {
+        ImGui::TextUnformatted("No scenes registered.");
+        ImGui::End();
+        return;
+    }
+    if (_rtScene.empty() || sceneNames.count(_rtScene) == 0) {
+        _rtScene = *sceneNames.begin();
+    }
+    if (ImGui::BeginCombo("Scene", _rtScene.c_str())) {
+        for (const auto &name : sceneNames) {
+            if (ImGui::Selectable(name.c_str(), name == _rtScene)) {
+                _rtScene = name;
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    auto *pipeline = graphs.get(_rtScene).renderPipeline();
+    if (!pipeline) {
+        ImGui::TextWrapped("This scene has not been rendered yet, so it has no pipeline.");
+        ImGui::End();
+        return;
+    }
+    auto targets = pipeline->targets();
+    if (targets.empty()) {
+        ImGui::TextWrapped("This pipeline exposes no targets.");
+        ImGui::End();
+        return;
+    }
+
+    auto selected = std::find_if(targets.begin(), targets.end(), [this](auto &t) { return t.name == _rtTarget; });
+    if (selected == targets.end()) {
+        selected = targets.begin();
+        _rtTarget = selected->name;
+        _rtAutoMode = true;
+    }
+    if (ImGui::BeginCombo("Target", _rtTarget.c_str())) {
+        for (const auto &target : targets) {
+            if (ImGui::Selectable(target.name.c_str(), target.name == _rtTarget)) {
+                _rtTarget = target.name;
+                _rtAutoMode = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    if (_rtAutoMode) {
+        _rtMode = defaultModeFor(selected->kind);
+        _rtScale = defaultScaleFor(selected->kind);
+        _rtAutoMode = false;
+    }
+    if (ImGui::Combo("Mode", &_rtMode, kDebugModeNames, IM_ARRAYSIZE(kDebugModeNames))) {
+        _rtAutoMode = false;
+    }
+    ImGui::SliderFloat("Scale", &_rtScale, 0.1f, 200.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
+
+    if (selected->kind == scene::RenderTargetKind::Motion) {
+        ImGui::TextWrapped(
+            "Panning should tint the whole frame uniformly, strafing should band "
+            "it by depth, and a moving character should stand out against a still "
+            "background.");
+    }
+
+    _rtSource = selected->texture;
+    if (_rtPreviewColor) {
+        // Flipped vertically: OpenGL's origin is bottom-left, ImGui's is top-left.
+        ImGui::Image(
+            static_cast<ImTextureID>(_rtPreviewColor->nameGL()),
+            ImVec2(kPreviewWidth, kPreviewHeight),
+            ImVec2(0.0f, 1.0f),
+            ImVec2(1.0f, 0.0f));
+    }
+    ImGui::End();
+}
+
+void Editor::render() {
+    if (!_enabled || !_rtSource) {
+        return;
+    }
+    auto &graphicsSvc = _engine._services->graphics;
+
+    if (!_rtPreview) {
+        _rtPreviewColor = std::make_shared<graphics::Texture>(
+            "editor_rt_preview",
+            graphics::TextureType::TwoDim,
+            graphics::getTextureProperties(graphics::TextureUsage::ColorBuffer));
+        _rtPreviewColor->clear(kPreviewWidth, kPreviewHeight, graphics::PixelFormat::RGBA8);
+        _rtPreviewColor->init();
+
+        _rtPreview = std::make_unique<graphics::Framebuffer>();
+        _rtPreview->attachColorDepth(_rtPreviewColor, nullptr);
+        _rtPreview->init();
+    }
+
+    auto &program = graphicsSvc.shaderRegistry.get(graphics::ShaderProgramId::postDebugTexture);
+    graphicsSvc.context.useProgram(program);
+    program.setUniform("uDebugMode", _rtMode);
+    program.setUniform("uDebugScale", _rtScale);
+    graphicsSvc.context.bindDrawFramebuffer(*_rtPreview, {0});
+    graphicsSvc.context.bindTexture(*_rtSource);
+    graphicsSvc.context.withViewport(glm::ivec4(0, 0, kPreviewWidth, kPreviewHeight), [&graphicsSvc]() {
+        graphicsSvc.meshRegistry.get(graphics::MeshName::quadNDC).draw(graphicsSvc.statistic);
+    });
+    graphicsSvc.context.resetDrawFramebuffer();
+}
+
 void Editor::update(float dt) {
     if (!_enabled) {
         return;
@@ -191,6 +347,7 @@ void Editor::update(float dt) {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("Tools")) {
             ImGui::MenuItem("2DA", nullptr, &_showTwoDa);
+            ImGui::MenuItem("Render targets", nullptr, &_showRenderTargets);
             ImGui::EndMenu();
         }
 
@@ -202,6 +359,12 @@ void Editor::update(float dt) {
     }
 
     dockSpace();
+
+    if (_showRenderTargets) {
+        renderTargets();
+    } else {
+        _rtSource = nullptr;
+    }
 
     if (_showTwoDa) {
         twoDa();
@@ -254,9 +417,6 @@ void Editor::dockNext() {
     if (_rightDockId) {
         ImGui::SetNextWindowDockID(_rightDockId, ImGuiCond_FirstUseEver);
     }
-}
-
-void Editor::render() {
 }
 
 } // namespace reone

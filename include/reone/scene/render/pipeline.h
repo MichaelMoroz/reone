@@ -57,6 +57,24 @@ enum class RendererType {
     PBR
 };
 
+/**
+ * How a render target should be interpreted when displayed. Several targets hold
+ * values that are not directly viewable - depth is non-linear, normals are
+ * biased into unit range, motion vectors are small and signed.
+ */
+enum class RenderTargetKind {
+    Color,
+    Depth,
+    EyeNormal,
+    Motion
+};
+
+struct RenderTargetInfo {
+    std::string name;
+    RenderTargetKind kind {RenderTargetKind::Color};
+    graphics::Texture *texture {nullptr};
+};
+
 class IRenderPipeline {
 public:
     virtual ~IRenderPipeline() = default;
@@ -67,6 +85,12 @@ public:
     virtual void inRenderPass(RenderPassName name, std::function<void(IRenderPass &)> block) = 0;
 
     virtual graphics::Texture &render() = 0;
+
+    /**
+     * Intermediate targets, for inspection by development tooling. Empty unless
+     * the pipeline chooses to expose any.
+     */
+    virtual std::vector<RenderTargetInfo> targets() const = 0;
 };
 
 class IRenderPipelineFactory {
@@ -86,6 +110,10 @@ public:
 
     void inRenderPass(RenderPassName name, RenderPassCallback callback) override {
         _passCallbacks[name] = std::move(callback);
+    }
+
+    std::vector<RenderTargetInfo> targets() const override {
+        return {};
     }
 
 protected:
