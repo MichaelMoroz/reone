@@ -66,6 +66,18 @@ endif()
 
 find_package(imgui CONFIG REQUIRED)
 
+# Transpiles slang/ to GLSL and regenerates the uniform layout assertions. Both
+# uses degrade gracefully when it is missing: the transpiled shaders are simply
+# absent from the shader pack, and the assertion header is committed.
+find_program(SLANGC_EXECUTABLE slangc
+    HINTS ${CMAKE_PREFIX_PATH} ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/shader-slang
+    DOC "Slang compiler")
+if(SLANGC_EXECUTABLE)
+    message(STATUS "Found slangc: ${SLANGC_EXECUTABLE}")
+else()
+    message(STATUS "slangc not found - Slang shaders will not be transpiled")
+endif()
+
 set(REONE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
 set(GLAD_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/extern/glad/include)
 include_directories(${Boost_INCLUDE_DIRS} ${SDL3_INCLUDE_DIRS} ${MAD_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/extern/glm ${REONE_INCLUDE_DIR} ${GLAD_INCLUDE_DIR})

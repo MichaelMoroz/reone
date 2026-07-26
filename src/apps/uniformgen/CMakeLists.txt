@@ -19,13 +19,9 @@ add_executable(uniformgen ${UNIFORMGEN_SOURCE_DIR}/main.cpp ${CLANG_FORMAT_PATH}
 set_target_properties(uniformgen PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin)
 target_link_libraries(uniformgen PRIVATE ${Boost_PROGRAM_OPTIONS_LIBRARY} ${Boost_JSON_LIBRARY})
 
-# Regenerating the layout assertions needs slangc, which most builds have no
-# reason to require - the generated header is committed. Opt in when a uniform
-# block changes.
-find_program(SLANGC_EXECUTABLE slangc
-    HINTS ${CMAKE_PREFIX_PATH} ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/shader-slang
-    DOC "Slang compiler, used to regenerate uniform layout assertions")
-
+# SLANGC_EXECUTABLE is located by the top-level CMakeLists. Regenerating the
+# layout assertions is opt-in - the generated header is committed, so only
+# someone changing a uniform block needs to run this.
 if(SLANGC_EXECUTABLE)
     set(UNIFORM_REFLECTION ${CMAKE_BINARY_DIR}/uniforms-reflection.json)
     add_custom_target(uniformlayout

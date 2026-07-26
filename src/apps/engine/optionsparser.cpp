@@ -55,6 +55,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("fxaa", value<bool>()->default_value(options->graphics.fxaa), "enable anti-aliasing")                                  //
         ("sharpen", value<bool>()->default_value(options->graphics.sharpen), "enable image sharpening")                         //
         ("taajitter", value<bool>()->default_value(options->graphics.taaJitter), "enable sub-pixel projection jitter")          //
+        ("slangshaders", value<bool>()->default_value(options->graphics.slangShaders), "use Slang-transpiled shaders")         //
         ("texquality", value<int>()->default_value(static_cast<int>(options->graphics.textureQuality)), "texture quality")      //
         ("shadowres", value<int>()->default_value(glm::log2(options->graphics.shadowResolution) - 10), "shadow map resolution") //
         ("anisofilter", value<int>()->default_value(options->graphics.anisotropicFiltering), "anisotropic filtering")           //
@@ -94,6 +95,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.fxaa = vars["fxaa"].as<bool>();
     options->graphics.sharpen = vars["sharpen"].as<bool>();
     options->graphics.taaJitter = vars["taajitter"].as<bool>();
+    options->graphics.slangShaders = vars["slangshaders"].as<bool>();
     options->graphics.textureQuality = static_cast<TextureQuality>(vars["texquality"].as<int>());
     options->graphics.shadowResolution = 1 << (10 + vars["shadowres"].as<int>());
     options->graphics.anisotropicFiltering = vars["anisofilter"].as<int>();

@@ -74,6 +74,10 @@ static const std::string kFragPostMedianFilter3 = "f_pp_medianfilt3";
 static const std::string kFragPostMedianFilter5 = "f_pp_medianfilt5";
 static const std::string kFragPostSharpen = "f_pp_sharpen";
 static const std::string kFragPostDebugTex = "f_pp_debugtex";
+
+// Transpiled from slang/pbr_opaque_model.slang
+static const std::string kVertSlangModel = "v_slang_model";
+static const std::string kFragSlangPBROpaqueModel = "f_slang_opaqmdl";
 static const std::string kFragText = "f_text";
 static const std::string kFragTexture = "f_texture";
 static const std::string kFragTextureNoPerspective = "f_texnoper";
@@ -147,7 +151,15 @@ void Shaders::init() {
     _shaderRegistry.add(ShaderProgramId::pbrAABB, initShaderProgram({vertAABB, fragPBRAABB}));
     _shaderRegistry.add(ShaderProgramId::pbrCombine, initShaderProgram({vertPassthrough, fragPBRCombine}));
     _shaderRegistry.add(ShaderProgramId::pbrGrass, initShaderProgram({vertGrass, fragPBRGrass}));
-    _shaderRegistry.add(ShaderProgramId::pbrOpaqueModel, initShaderProgram({vertModel, fragPBROpaqueModel}));
+    if (_graphicsOpt.slangShaders) {
+        // Same program, built from the Slang transpiler's output instead. Both
+        // paths exist so the two can be compared in one binary.
+        auto vertSlangModel = initShader(ShaderType::Vertex, kVertSlangModel, SourceFlavor::Slang);
+        auto fragSlangOpaqueModel = initShader(ShaderType::Fragment, kFragSlangPBROpaqueModel, SourceFlavor::Slang);
+        _shaderRegistry.add(ShaderProgramId::pbrOpaqueModel, initShaderProgram({vertSlangModel, fragSlangOpaqueModel}));
+    } else {
+        _shaderRegistry.add(ShaderProgramId::pbrOpaqueModel, initShaderProgram({vertModel, fragPBROpaqueModel}));
+    }
     _shaderRegistry.add(ShaderProgramId::pbrSSAO, initShaderProgram({vertPassthrough, fragPBRSSAO}));
     _shaderRegistry.add(ShaderProgramId::pbrSSR, initShaderProgram({vertPassthrough, fragPBRSSR}));
     _shaderRegistry.add(ShaderProgramId::pbrWalkmesh, initShaderProgram({vertWalkmesh, fragPBRWalkmesh}));
@@ -184,7 +196,7 @@ void Shaders::deinit() {
     _inited = false;
 }
 
-std::shared_ptr<Shader> Shaders::initShader(ShaderType type, std::string resRef) {
+std::shared_ptr<Shader> Shaders::initShader(ShaderType type, std::string resRef, SourceFlavor flavor) {
     debug(
         str(boost::format("Initializing shader: type=%d resRef='%s'") % static_cast<int>(type) % resRef),
         LogChannel::Graphics);
@@ -213,6 +225,14 @@ std::shared_ptr<Shader> Shaders::initShader(ShaderType type, std::string resRef)
             source.append("\n");
         }
         sources.push_front(source.string());
+    }
+
+    if (flavor == SourceFlavor::Slang) {
+        // Transpiled sources carry their own #version and resolve their own
+        // imports, so none of the preamble below applies.
+        auto shader = std::make_unique<Shader>(type, std::move(sources));
+        shader->init();
+        return shader;
     }
 
     // Prepend preprocessor directives

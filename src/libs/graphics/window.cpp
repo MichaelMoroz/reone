@@ -30,8 +30,11 @@ void Window::init() {
     checkThat(!_inited, "Must not be initialized");
     checkMainThread();
 
+    // 4.5 rather than 4.0: Slang-generated GLSL declares layout(binding = N) on
+    // uniform blocks and samplers, which is 4.2 and later, and emits #version 450
+    // regardless of the requested profile.
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     int flags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (_options.fullscreen) {
