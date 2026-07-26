@@ -37,6 +37,7 @@
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/types.h"
 #include "reone/graphics/uniforms.h"
+#include "reone/graphics/font.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/vulkan/gbuffer.h"
 #include "reone/graphics/vulkan/image.h"
@@ -93,6 +94,56 @@ static std::shared_ptr<Mesh> makeCube() {
                       .offUV1(6 * sizeof(float))
                       .build();
     return std::make_shared<Mesh>(std::move(vertices), std::move(layout), std::move(meshFaces));
+}
+
+/**
+ * A font atlas built in code: a 16x16 grid of cells where each cell holds a
+ * filled bar whose height varies with the character code. Enough for the text
+ * path to be exercised - metrics, glyph rects, instanced draws - without a game
+ * install, and distinctive enough that wrong glyph coordinates are obvious.
+ */
+static std::shared_ptr<Font> makeFont(I2DRenderer &renderer2d) {
+    constexpr int kCells = 16;
+    constexpr int kCell = 16;
+    constexpr int kSize = kCells * kCell;
+
+    auto pixels = std::make_shared<ByteBuffer>();
+    pixels->resize(static_cast<size_t>(kSize) * kSize * 4, 0);
+    for (int code = 0; code < kCells * kCells; ++code) {
+        int cx = (code % kCells) * kCell;
+        int cy = (code / kCells) * kCell;
+        // Bar height cycles so adjacent characters differ visibly.
+        int barHeight = 3 + (code % 10);
+        for (int y = kCell - barHeight; y < kCell - 1; ++y) {
+            for (int x = 2; x < kCell - 2; ++x) {
+                size_t i = (static_cast<size_t>(cy + y) * kSize + cx + x) * 4;
+                for (int c = 0; c < 4; ++c) {
+                    (*pixels)[i + c] = static_cast<char>(0xff);
+                }
+            }
+        }
+    }
+
+    Texture::Properties props;
+    auto atlas = std::make_shared<Texture>("probe_font", TextureType::TwoDim, props);
+
+    Texture::Features features;
+    features.numChars = kCells * kCells;
+    features.fontHeight = 0.16f; // Font multiplies by 100 to get pixels.
+    for (int code = 0; code < features.numChars; ++code) {
+        float u = (code % kCells) / static_cast<float>(kCells);
+        float v = (code / kCells) / static_cast<float>(kCells);
+        float s = 1.0f / kCells;
+        // Upper-left has the larger v, matching how the readers store them.
+        features.upperLeftCoords.push_back({u, v + s, 0.0f});
+        features.lowerRightCoords.push_back({u + s, v, 0.0f});
+    }
+    atlas->setFeatures(std::move(features));
+    atlas->setPixels(kSize, kSize, PixelFormat::RGBA8, Texture::Layer {pixels});
+
+    auto font = std::make_shared<Font>(renderer2d);
+    font->load(atlas);
+    return font;
 }
 
 int main(int argc, char **argv) {
@@ -180,6 +231,7 @@ int main(int argc, char **argv) {
         std::unique_ptr<VulkanImage> checker;
         std::shared_ptr<Mesh> cube;
         std::shared_ptr<Texture> sprite;
+        std::shared_ptr<Font> font;
         if (drawTwoD) {
             // A checkerboard as an engine Texture, so the upload path under
             // test is the real one rather than VulkanImage directly.
@@ -198,6 +250,7 @@ int main(int argc, char **argv) {
             sprite = std::make_shared<Texture>("probe_sprite", TextureType::TwoDim,
                                                Texture::Properties());
             sprite->setPixels(kSide, kSide, PixelFormat::RGBA8, Texture::Layer {pixels});
+            font = makeFont(renderer.renderer2d());
         }
         std::unique_ptr<VulkanMesh> vkCube;
         std::unique_ptr<VulkanGBuffer> gbuffer;
@@ -483,6 +536,10 @@ int main(int argc, char **argv) {
                 r2d.withScissor({40, 320, 200, 100}, [&r2d, &sprite]() {
                     r2d.drawImage(*sprite, {40.0f, 320.0f}, {420.0f, 200.0f});
                 });
+                // Font::render forwards to the 2D renderer, so this is the
+                // same call the game makes.
+                font->render("reone vulkan 2d", glm::vec3(40.0f, 460.0f, 0.0f),
+                             glm::vec3(1.0f, 0.9f, 0.5f), TextGravity::RightCenter);
                 r2d.withBlendMode(BlendMode::Additive, [&r2d, &sprite]() {
                     r2d.drawImage(*sprite, {480.0f, 40.0f}, {200.0f, 200.0f},
                                   glm::vec4(0.3f, 0.5f, 1.0f, 1.0f));
