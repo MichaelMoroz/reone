@@ -260,6 +260,7 @@ public:
      * values have to be read back and written into the frame's uniform arena.
      */
     virtual const GlobalUniforms &globals() const = 0;
+    virtual const WalkmeshUniforms &walkmesh() const = 0;
 };
 
 class Uniforms : public IUniforms, boost::noncopyable {
@@ -285,6 +286,7 @@ public:
     void setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block) override;
 
     const GlobalUniforms &globals() const override { return _globals; }
+    const WalkmeshUniforms &walkmesh() const override { return _walkmesh; }
 
 private:
     bool _inited {false};

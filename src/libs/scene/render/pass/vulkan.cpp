@@ -181,6 +181,12 @@ void VulkanRenderPass::drawGeometry(Mesh &mesh,
     std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
     offsets[UniformBlockBindingPoints::globals] = _globalsOffset;
     offsets[UniformBlockBindingPoints::locals] = _ring.push(locals);
+    if (walkmesh) {
+        // Without this the offset stays zero and the shader indexes whatever
+        // happens to sit at the start of the arena, which is the globals block.
+        // The surfaces still draw, in arbitrary colours.
+        offsets[UniformBlockBindingPoints::walkmesh] = walkmeshOffset();
+    }
     for (const auto &extra : extraOffsets) {
         offsets[extra.first] = extra.second;
     }
@@ -193,6 +199,13 @@ void VulkanRenderPass::drawGeometry(Mesh &mesh,
     }
 
     bindAndDraw(pipeline, offsets, bindings, vkMesh, 1);
+}
+
+uint32_t VulkanRenderPass::walkmeshOffset() {
+    if (!_walkmeshOffset) {
+        _walkmeshOffset = _ring.push(_uniforms.walkmesh());
+    }
+    return *_walkmeshOffset;
 }
 
 void VulkanRenderPass::bindAndDraw(

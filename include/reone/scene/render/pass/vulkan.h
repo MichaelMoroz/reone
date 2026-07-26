@@ -61,6 +61,7 @@ public:
                      graphics::VulkanUniformRing &ring,
                      graphics::VulkanDescriptors &descriptors,
                      graphics::VulkanResources &resources,
+                     graphics::IUniforms &uniforms,
                      graphics::IMeshRegistry &meshRegistry,
                      VkCommandBuffer cmd,
                      std::vector<VkFormat> colorFormats,
@@ -72,6 +73,7 @@ public:
         _ring(ring),
         _descriptors(descriptors),
         _resources(resources),
+        _uniforms(uniforms),
         _meshRegistry(meshRegistry),
         _cmd(cmd),
         _colorFormats(std::move(colorFormats)),
@@ -142,6 +144,7 @@ private:
     graphics::VulkanUniformRing &_ring;
     graphics::VulkanDescriptors &_descriptors;
     graphics::VulkanResources &_resources;
+    graphics::IUniforms &_uniforms;
     graphics::IMeshRegistry &_meshRegistry;
 
     VkCommandBuffer _cmd;
@@ -159,6 +162,18 @@ private:
     std::set<std::string> _warned;
 
     void warnOnce(const std::string &what);
+
+    /**
+     * Offset of the walkmesh block in this frame's arena, pushed on first use.
+     *
+     * Cached because the block is set once per frame by the scene graph but
+     * read by every walkmesh draw, and because it cannot be pushed when the
+     * pass is built: the scene graph fills it from inside the pass callback,
+     * after that point.
+     */
+    uint32_t walkmeshOffset();
+
+    std::optional<uint32_t> _walkmeshOffset;
 
     /** Bind pipeline, both descriptor sets and draw. Every path ends here. */
     void bindAndDraw(const graphics::VulkanPipeline &pipeline,
