@@ -533,6 +533,11 @@ main argument for this ordering.
 - ~~Should the 2D batcher be broader than a sprite/text batcher?~~ Answered by
   building it: five operations covered all 16 sites plus the 26 that already
   went through `IRenderPass::drawImage`. Nothing wanted more.
+- **A reference worktree exists** at `C:/Development/reone-ref`, a second
+  checkout with its own build tree, so a comparison build never disturbs the
+  working one. Configure it with the same vcpkg toolchain but only the `engine`
+  target, and copy `reone.cfg` into its `bin` - without it the settings differ
+  and the diff is meaningless.
 - **The scene is not frame-deterministic.** Two runs of the same build, stopped
   at the same frame with a fixed timestep, differ across roughly a third of a
   gameplay frame - sky, foliage and grass. GUI frames are bit-identical, so the

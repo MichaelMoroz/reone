@@ -130,6 +130,19 @@ installed here: `GetConstantBlock` (not `GetConstantBuffer`/`GetConstantBuffers`
   2D layer - HUD, minimap, cursor, main menu - was missing, and the frames still
   looked plausible enough to reason about. Look at the image and confirm the
   parts you care about are in it before diffing.
+- **Match the settings, not just the build.** The engine reads `reone.cfg` from
+  its working directory. A second build tree without one silently runs a
+  different resolution *and* a different pipeline (`pbr=0` vs the default), so
+  92% of the frame differs for reasons that have nothing to do with the change.
+  Copy the cfg into the reference bin.
+- **The mouse cursor is in the capture.** It is drawn wherever the OS pointer
+  happens to be, so it appears in every diff as a few hundred sharp pixels in an
+  arbitrary place. Rule it out before investigating.
+- **Diff by region against the noise floor, not the whole frame.** A whole-frame
+  percentage hides everything. Comparing HUD regions separately, each against
+  two runs of the *same* build, is what exposed a real minimap regression: the
+  minimap is bit-stable run to run, so its 17.6% could not be animation, while
+  everything else in the frame sat at its own noise level.
 - **Know which frames are deterministic.** GUI frames are bit-identical run to
   run. A gameplay frame is not: sky, foliage and grass differ across about a
   third of the image between two runs of the *same* build. Before attributing a
