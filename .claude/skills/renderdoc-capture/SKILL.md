@@ -86,10 +86,16 @@ for n in ["g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_lightmap",
           "g_buffer_self_illum", "g_buffer_depth", "output"]:
     a = np.load(f"out_vk/{n}.npy").astype(np.float64)
     b = np.load(f"out_gl/{n}.npy").astype(np.float64)
-    c = min(a.shape[2], b.shape[2])          # GL eye normal is RGB8, Vulkan RGBA8
+    c = min(a.shape[2], b.shape[2], 3)       # RGB only - see below
     d = np.abs(a[..., :c] - b[..., :c])
     print(f"{n:22s} meanabs={d.mean():8.4f} max={d.max():8.4f}")
 ```
+
+**Compare RGB, not RGBA.** Alpha in `output` is 255 on both backends, so averaging
+it in divides the error by exactly four thirds - every figure quoted during this
+work was 25% under until that was noticed. It is consistent, so trends still
+held, but the absolute number was wrong. `min(..., 3)` also keeps the
+GL-RGB8-vs-Vulkan-RGBA8 mismatch on the normal buffer from mattering.
 
 Values arrive exactly as stored - depth as 32-bit float, motion as float, no
 rounding into bytes - because the point is to find small differences.

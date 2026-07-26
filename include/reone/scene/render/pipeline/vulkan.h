@@ -107,12 +107,34 @@ private:
      */
     std::shared_ptr<graphics::Texture> _outputHandle;
 
+    /**
+     * The other half of the filter chain's ping-pong.
+     *
+     * A filter samples the whole of its source, so it cannot write back into
+     * it: the read and the write would race across the image, not per pixel.
+     * The OpenGL pipeline keeps a spare colour buffer for exactly this and
+     * calls it ping; this is the same thing.
+     */
+    std::unique_ptr<graphics::VulkanImage> _ping;
+
     VkDescriptorSet _resolveSet {VK_NULL_HANDLE};
+    /** Unit 0 pointed at the output and at the ping image respectively. */
+    VkDescriptorSet _outputAsSourceSet {VK_NULL_HANDLE};
+    VkDescriptorSet _pingAsSourceSet {VK_NULL_HANDLE};
 
     void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void postProcessingPass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    void filterChainPass(VkCommandBuffer cmd);
+    /** One full-screen filter, from one image onto the other. */
+    void filterPass(VkCommandBuffer cmd,
+                    uint32_t screenEffectOffset,
+                    graphics::VulkanImage &src,
+                    graphics::VulkanImage &dst,
+                    VkDescriptorSet srcSet,
+                    const char *fragmentEntry,
+                    const char *label);
     void drawOntoOutput(VkCommandBuffer cmd,
                         uint32_t globalsOffset,
                         const std::function<void(IRenderPass &)> &callback,

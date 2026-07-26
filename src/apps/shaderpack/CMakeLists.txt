@@ -43,6 +43,7 @@ set(SPIRV_MODULES
     "pbr_ibl:iblVertex+brdfFragment+irradianceFragment+prefilterFragment"
     "particles:particleVertex+particleFragment"
     "pbr_resolve:resolveVertex+resolveFragment"
+    "postprocess:postVertex+gausBlur9Fragment+gausBlur13Fragment+sharpenFragment+fxaaFragment"
     "vk2d:quadVertex+imageFragment+colorFragment+fullTargetVertex+textVertex+textFragment")
 
 if(SLANGC_EXECUTABLE)

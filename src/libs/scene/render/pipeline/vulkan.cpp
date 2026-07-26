@@ -37,6 +37,10 @@ namespace reone {
 namespace scene {
 
 static constexpr char kResolveModule[] = "pbr_resolve";
+static constexpr char kPostProcessModule[] = "postprocess";
+
+/** Matches the OpenGL pipeline's constant of the same name. */
+static constexpr float kSharpenAmount = 0.25f;
 
 /**
  * Map an OpenGL clip volume onto Vulkan's.
@@ -101,6 +105,9 @@ void VulkanRenderPipeline::init() {
 
     _output = std::make_unique<VulkanImage>(device);
     _output->initColorAttachment(_targetSize, _renderer.swapchain().imageFormat());
+
+    _ping = std::make_unique<VulkanImage>(device);
+    _ping->initColorAttachment(_targetSize, _renderer.swapchain().imageFormat());
 
     glm::ivec2 shadowSize {_options.shadowResolution, _options.shadowResolution};
     _dirShadows = std::make_unique<VulkanImage>(device);
@@ -169,6 +176,13 @@ void VulkanRenderPipeline::init() {
     resolveTextures.push_back({TextureUnits::prefilteredEnvMapArray, &pbr.prefilteredArray()});
     _resolveSet = _renderer.descriptors().createPersistentTextureSet(resolveTextures);
 
+    // The filter chain alternates between these two, so each needs a standing
+    // set with itself at unit 0.
+    _outputAsSourceSet = _renderer.descriptors().createPersistentTextureSet(
+        {{TextureUnits::mainTex, _output.get()}});
+    _pingAsSourceSet = _renderer.descriptors().createPersistentTextureSet(
+        {{TextureUnits::mainTex, _ping.get()}});
+
     // The output is written as an attachment and then sampled by the 2D
     // compositor, so it starts in the layout the first pass expects.
     device.immediateSubmit([this](VkCommandBuffer cmd) {
@@ -178,14 +192,19 @@ void VulkanRenderPipeline::init() {
         barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
         barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.image = _output->handle();
         barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         barrier.subresourceRange.levelCount = 1;
         barrier.subresourceRange.layerCount = 1;
 
+        // The filter chain expects to find the ping image sampleable, since
+        // that is the state every pass leaves it in.
+        std::array<VkImageMemoryBarrier2, 2> barriers {barrier, barrier};
+        barriers[0].image = _output->handle();
+        barriers[1].image = _ping->handle();
+
         VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        dep.imageMemoryBarrierCount = 1;
-        dep.pImageMemoryBarriers = &barrier;
+        dep.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
+        dep.pImageMemoryBarriers = barriers.data();
         vkCmdPipelineBarrier2(cmd, &dep);
     });
 
@@ -526,8 +545,7 @@ void VulkanRenderPipeline::transparencyPass(VkCommandBuffer cmd, uint32_t global
  * Whatever the scene draws over the finished image.
  *
  * Only lens flares at present - billboards blended additively with no depth
- * test. The filter chain the OpenGL pipeline runs under this name, FXAA and
- * sharpening and bloom, is not here yet.
+ * test. The filter chain that runs after this is filterChainPass.
  */
 void VulkanRenderPipeline::postProcessingPass(VkCommandBuffer cmd, uint32_t globalsOffset) {
     auto callback = _passCallbacks.find(RenderPassName::PostProcessing);
@@ -535,6 +553,157 @@ void VulkanRenderPipeline::postProcessingPass(VkCommandBuffer cmd, uint32_t glob
         return;
     }
     drawOntoOutput(cmd, globalsOffset, callback->second, "Post-processing");
+}
+
+/**
+ * Move an image between being sampled and being drawn into.
+ *
+ * The filter chain flips both of its images between the two roles on every
+ * pass, so this is called far more often than the one-way transitions
+ * elsewhere in this file.
+ */
+static void transitionFilterImage(VkCommandBuffer cmd,
+                                  const VulkanImage &image,
+                                  VkImageLayout from,
+                                  VkImageLayout to) {
+    VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    b.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
+                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    b.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                      VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    b.dstStageMask = b.srcStageMask;
+    b.dstAccessMask = b.srcAccessMask;
+    b.oldLayout = from;
+    b.newLayout = to;
+    b.image = image.handle();
+    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    b.subresourceRange.levelCount = 1;
+    b.subresourceRange.layerCount = 1;
+
+    VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dep.imageMemoryBarrierCount = 1;
+    dep.pImageMemoryBarriers = &b;
+    vkCmdPipelineBarrier2(cmd, &dep);
+}
+
+void VulkanRenderPipeline::filterPass(VkCommandBuffer cmd,
+                                      uint32_t screenEffectOffset,
+                                      VulkanImage &src,
+                                      VulkanImage &dst,
+                                      VkDescriptorSet srcSet,
+                                      const char *fragmentEntry,
+                                      const char *label) {
+    VulkanDebugScope scope(_renderer.device(), cmd, label, {0.4f, 0.6f, 0.9f});
+
+    transitionFilterImage(cmd, src, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    transitionFilterImage(cmd, dst, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    attachment.imageView = dst.view();
+    attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    // Every texel is written, so there is nothing to preserve.
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = {static_cast<uint32_t>(_targetSize.x),
+                                   static_cast<uint32_t>(_targetSize.y)};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &attachment;
+
+    VulkanPipelineCache::Key key;
+    key.module = kPostProcessModule;
+    key.vertexEntry = "postVertex";
+    key.fragmentEntry = fragmentEntry;
+    key.colorFormats = {_renderer.swapchain().imageFormat()};
+    auto &pipeline = _renderer.pipelines().get(key);
+
+    // Not flipped: this samples by UV and writes the same UV, so flipping the
+    // viewport here would turn the image over on every pass.
+    VkViewport viewport {0.0f, 0.0f, static_cast<float>(_targetSize.x),
+                         static_cast<float>(_targetSize.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
+                               static_cast<uint32_t>(_targetSize.y)}};
+
+    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::screenEffect] = screenEffectOffset;
+
+    vkCmdBeginRendering(cmd, &rendering);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    auto uniformSet = _renderer.descriptors().uniformSet(_renderer.uniformRing().frame());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                            VulkanDescriptors::kUniformSet, 1, &uniformSet,
+                            static_cast<uint32_t>(offsets.size()), offsets.data());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                            VulkanDescriptors::kTextureSet, 1, &srcSet, 0, nullptr);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+}
+
+/**
+ * Antialias and sharpen the finished image, as the OpenGL pipeline does.
+ *
+ * The result has to end up back in _output either way, because that is what
+ * the frame composites, so a chain with an odd number of filters copies the
+ * ping image back. That mirrors the blit OpenGL does for the same reason.
+ */
+void VulkanRenderPipeline::filterChainPass(VkCommandBuffer cmd) {
+    if (!_options.fxaa && !_options.sharpen) {
+        return;
+    }
+    VulkanDebugScope scope(_renderer.device(), cmd, "Filter chain", {0.3f, 0.5f, 0.8f});
+
+    // Filled here rather than read back from IUniforms: the scene graph never
+    // sets this block, because under OpenGL each filter sets it itself as it
+    // runs.
+    ScreenEffectUniforms screenEffect;
+    screenEffect.screenResolution = glm::vec2(_targetSize);
+    screenEffect.screenResolutionRcp = 1.0f / screenEffect.screenResolution;
+    screenEffect.sharpenAmount = kSharpenAmount;
+    auto offset = _renderer.uniformRing().push(screenEffect);
+
+    if (_options.fxaa && _options.sharpen) {
+        filterPass(cmd, offset, *_output, *_ping, _outputAsSourceSet,
+                   "fxaaFragment", "FXAA");
+        filterPass(cmd, offset, *_ping, *_output, _pingAsSourceSet,
+                   "sharpenFragment", "Sharpen");
+        return;
+    }
+    if (_options.fxaa) {
+        filterPass(cmd, offset, *_output, *_ping, _outputAsSourceSet,
+                   "fxaaFragment", "FXAA");
+    } else {
+        filterPass(cmd, offset, *_output, *_ping, _outputAsSourceSet,
+                   "sharpenFragment", "Sharpen");
+    }
+
+    // Odd chain: the result is in ping, and the frame expects it in output.
+    transitionFilterImage(cmd, *_ping, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    transitionFilterImage(cmd, *_output, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+    VkImageCopy region {};
+    region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.srcSubresource.layerCount = 1;
+    region.dstSubresource = region.srcSubresource;
+    region.extent = {static_cast<uint32_t>(_targetSize.x),
+                     static_cast<uint32_t>(_targetSize.y), 1};
+    vkCmdCopyImage(cmd,
+                   _ping->handle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   _output->handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   1, &region);
+
+    transitionFilterImage(cmd, *_output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    transitionFilterImage(cmd, *_ping, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
 Texture &VulkanRenderPipeline::render() {
@@ -568,6 +737,7 @@ Texture &VulkanRenderPipeline::render() {
     resolvePass(cmd, globalsOffset);
     transparencyPass(cmd, globalsOffset);
     postProcessingPass(cmd, globalsOffset);
+    filterChainPass(cmd);
 
     // Everything that draws into the output has now run, so hand it to the 2D
     // compositor in a layout it can sample.
