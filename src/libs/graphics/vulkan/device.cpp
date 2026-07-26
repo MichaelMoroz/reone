@@ -55,6 +55,15 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
 
     // Selecting against the surface rules out any device that cannot present to
     // this window, which on a laptop with switchable graphics is a real case.
+    // Slang lowers SV_VertexID and SV_InstanceID to VertexIndex/InstanceIndex
+    // adjusted by BaseVertex/BaseInstance, which needs the DrawParameters
+    // capability. This is the same capability OpenGL's SPIR-V path silently
+    // ignored, reading the builtins as zero and collapsing every grass instance
+    // onto one (§9.5). Here it is simply a feature to ask for.
+    VkPhysicalDeviceVulkan11Features features11 {};
+    features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    features11.shaderDrawParameters = VK_TRUE;
+
     VkPhysicalDeviceVulkan13Features features13 {};
     features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     features13.dynamicRendering = VK_TRUE;
@@ -63,6 +72,7 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     auto physicalResult = vkb::PhysicalDeviceSelector(_instance)
                               .set_surface(_surface)
                               .set_minimum_version(1, 3)
+                              .set_required_features_11(features11)
                               .set_required_features_13(features13)
                               .select();
     if (!physicalResult) {
@@ -105,7 +115,26 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     VkPhysicalDeviceProperties props {};
     vkGetPhysicalDeviceProperties(_device.physical_device, &props);
     _deviceName = props.deviceName;
+    _uniformAlignment = props.limits.minUniformBufferOffsetAlignment;
     info("Vulkan device: " + _deviceName);
+
+    VkCommandPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.queueFamilyIndex = _graphicsQueueFamily;
+    if (vkCreateCommandPool(_device.device, &poolInfo, nullptr, &_immediatePool) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: immediate command pool creation failed");
+    }
+    VkCommandBufferAllocateInfo cmdInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cmdInfo.commandPool = _immediatePool;
+    cmdInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cmdInfo.commandBufferCount = 1;
+    if (vkAllocateCommandBuffers(_device.device, &cmdInfo, &_immediateBuffer) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: immediate command buffer allocation failed");
+    }
+    VkFenceCreateInfo fenceInfo {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    if (vkCreateFence(_device.device, &fenceInfo, nullptr, &_immediateFence) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: immediate fence creation failed");
+    }
 
     _inited = true;
 }
@@ -113,6 +142,14 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
 void VulkanDevice::deinit() {
     if (!_inited) {
         return;
+    }
+    if (_immediateFence != VK_NULL_HANDLE) {
+        vkDestroyFence(_device.device, _immediateFence, nullptr);
+        _immediateFence = VK_NULL_HANDLE;
+    }
+    if (_immediatePool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(_device.device, _immediatePool, nullptr);
+        _immediatePool = VK_NULL_HANDLE;
     }
     if (_allocator != VK_NULL_HANDLE) {
         vmaDestroyAllocator(_allocator);
@@ -125,6 +162,30 @@ void VulkanDevice::deinit() {
     }
     vkb::destroy_instance(_instance);
     _inited = false;
+}
+
+void VulkanDevice::immediateSubmit(const std::function<void(VkCommandBuffer)> &block) {
+    vkResetFences(_device.device, 1, &_immediateFence);
+    vkResetCommandBuffer(_immediateBuffer, 0);
+
+    VkCommandBufferBeginInfo beginInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(_immediateBuffer, &beginInfo);
+    block(_immediateBuffer);
+    vkEndCommandBuffer(_immediateBuffer);
+
+    VkCommandBufferSubmitInfo cmdInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    cmdInfo.commandBuffer = _immediateBuffer;
+
+    VkSubmitInfo2 submit {VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.commandBufferInfoCount = 1;
+    submit.pCommandBufferInfos = &cmdInfo;
+    vkQueueSubmit2(_graphicsQueue, 1, &submit, _immediateFence);
+    vkWaitForFences(_device.device, 1, &_immediateFence, VK_TRUE, UINT64_MAX);
+}
+
+VkDeviceSize VulkanDevice::alignUniform(VkDeviceSize size) const {
+    return (size + _uniformAlignment - 1) & ~(_uniformAlignment - 1);
 }
 
 } // namespace graphics

@@ -60,6 +60,16 @@ public:
     VkQueue graphicsQueue() const { return _graphicsQueue; }
     uint32_t graphicsQueueFamily() const { return _graphicsQueueFamily; }
 
+    /**
+     * Record and run @p block on the graphics queue, blocking until it has
+     * finished. For load-time work - staging copies, layout transitions of
+     * freshly created images - where the simplicity is worth the stall.
+     */
+    void immediateSubmit(const std::function<void(VkCommandBuffer)> &block);
+
+    /** Round @p size up to the minimum uniform buffer offset alignment. */
+    VkDeviceSize alignUniform(VkDeviceSize size) const;
+
     const std::string &deviceName() const { return _deviceName; }
 
     /** Access for the pieces that need to build on top of it. */
@@ -77,6 +87,11 @@ private:
     uint32_t _graphicsQueueFamily {0};
 
     std::string _deviceName;
+    VkDeviceSize _uniformAlignment {256};
+
+    VkCommandPool _immediatePool {VK_NULL_HANDLE};
+    VkCommandBuffer _immediateBuffer {VK_NULL_HANDLE};
+    VkFence _immediateFence {VK_NULL_HANDLE};
 };
 
 } // namespace graphics

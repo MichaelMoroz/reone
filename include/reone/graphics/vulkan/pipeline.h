@@ -1,0 +1,75 @@
+/*
+ * Copyright (c) 2020-2026 The reone project contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+#include <volk.h>
+
+namespace reone {
+
+namespace graphics {
+
+class VulkanDevice;
+
+/**
+ * A graphics pipeline and the layout it is built against.
+ *
+ * Vulkan bakes what OpenGL kept as mutable state - blend mode, depth test, cull
+ * mode, the shaders themselves - into an immutable object chosen at draw time.
+ * That is the reason IContext must not be implemented in Vulkan (§1.3 of the
+ * plan): emulating a state machine here means hashing a state vector per draw
+ * to find a pipeline.
+ *
+ * Viewport and scissor are left dynamic, because those genuinely do change per
+ * frame and are cheap to set.
+ */
+class VulkanPipeline : boost::noncopyable {
+public:
+    struct Config {
+        std::vector<uint32_t> spirv;
+        std::string vertexEntry;
+        std::string fragmentEntry;
+        /** Colour attachment format, for dynamic rendering. */
+        VkFormat colorFormat {VK_FORMAT_UNDEFINED};
+        std::vector<VkDescriptorSetLayout> setLayouts;
+    };
+
+    VulkanPipeline(VulkanDevice &device) :
+        _device(device) {
+    }
+
+    ~VulkanPipeline() { deinit(); }
+
+    void init(const Config &config);
+    void deinit();
+
+    VkPipeline handle() const { return _pipeline; }
+    VkPipelineLayout layout() const { return _layout; }
+
+private:
+    VulkanDevice &_device;
+
+    VkPipeline _pipeline {VK_NULL_HANDLE};
+    VkPipelineLayout _layout {VK_NULL_HANDLE};
+};
+
+/** Read a .spv file into the word vector VkShaderModuleCreateInfo wants. */
+std::vector<uint32_t> readSpirV(const std::filesystem::path &path);
+
+} // namespace graphics
+
+} // namespace reone

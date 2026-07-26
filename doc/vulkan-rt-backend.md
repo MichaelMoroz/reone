@@ -796,11 +796,50 @@ telling us anything about the backend.
 
 It is scaffolding and should be deleted once the engine can switch.
 
-### 10.4 Next
+### 10.4 Buffers, the uniform ring, descriptors and a first draw
 
-- Texture and buffer upload through VMA, and the per-frame uniform ring buffer
-  of §3.1.
-- Descriptor set layouts matching the pinned bindings in `slang/uniforms.slang`.
-- A graphics pipeline and one textured mesh, which is what finally puts the
-  Slang shaders on hardware that runs them as intended.
-- Only then the G-buffer and the deferred pipeline.
+`VulkanBuffer` wraps a VMA allocation in the two shapes that matter: host-visible
+and permanently mapped, for data rewritten every frame; and device-local filled
+once through a staging copy, for vertices and indices. `VulkanDevice` grew
+`immediateSubmit` for the load-time work those copies need.
+
+`VulkanUniformRing` is the §3.1 replacement for the OpenGL update model. One
+host-visible arena per frame in flight, bump-allocated, each draw taking its own
+slice addressed by a dynamic offset. Nothing is overwritten within a frame, and
+an arena is only reused once its frame's fence says the GPU has finished with
+it. Exhausting an arena throws rather than wrapping: wrapping would hand out
+storage that draws already recorded this frame still point at, and the
+corruption would read as a shader bug.
+
+`VulkanDescriptors` builds one set per frame from the binding points in
+`uniforms.h`, as `VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC`. The descriptors
+never change - they always cover that frame's whole arena - so only the offsets
+move, and the set count does not track the draw count. Each binding's range is
+its block's actual size rather than `VK_WHOLE_SIZE`, so a shader cannot read
+past its slice into another draw's data.
+
+`VulkanPipeline` builds a graphics pipeline from a Slang SPIR-V module, using
+dynamic rendering so there is no `VkRenderPass` or `VkFramebuffer` to keep in
+step. Viewport and scissor stay dynamic; everything else is baked, which is the
+concrete reason `IContext` must not be implemented here (§1.3).
+
+`slang/vktriangle.slang` exercises the lot: a triangle positioned from
+`SV_VertexID`, coloured from `localUniforms.color` pushed through the ring that
+frame. Verified by capture - the drawn colour is exactly the value pushed, over
+a background of exactly the clear colour, with the validation layers silent.
+
+**`SV_VertexID` works here.** Slang lowers it to `VertexIndex` adjusted by
+`BaseVertex`, which needs the `DrawParameters` capability. That is the same
+capability OpenGL's SPIR-V path silently ignored, reading the builtin as zero
+and collapsing every grass instance onto one (§9.5). On Vulkan the validation
+layers name it immediately and enabling
+`VkPhysicalDeviceVulkan11Features::shaderDrawParameters` is the whole fix. The
+shaders were correct all along; the backend was not.
+
+### 10.5 Next
+
+- Images and samplers: texture upload, layout transitions, a combined
+  image-sampler descriptor set alongside the uniform one.
+- Vertex and index buffers from `Mesh`, and a pipeline with real attributes.
+- The G-buffer and the deferred pipeline.
+- Then the engine can begin to select a backend, and `vulkanprobe` can go.

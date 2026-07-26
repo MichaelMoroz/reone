@@ -21,8 +21,10 @@
 
 #include "../renderer.h"
 
+#include "descriptors.h"
 #include "device.h"
 #include "swapchain.h"
+#include "uniformring.h"
 
 struct SDL_Window;
 
@@ -47,7 +49,9 @@ public:
         _extent(extent),
         _vsync(vsync),
         _validation(validation),
-        _swapchain(_device) {
+        _swapchain(_device),
+        _uniformRing(_device),
+        _descriptors(_device) {
     }
 
     ~VulkanRenderer() { deinit(); }
@@ -64,10 +68,18 @@ public:
     void setClearColor(glm::vec4 color) { _clearColor = color; }
 
     VulkanDevice &device() { return _device; }
+    VulkanUniformRing &uniformRing() { return _uniformRing; }
+    VulkanDescriptors &descriptors() { return _descriptors; }
+
+    /** The uniform descriptor set for the frame being recorded. */
+    VkDescriptorSet uniformSet() const { return _descriptors.uniformSet(_frameIndex); }
     VulkanSwapchain &swapchain() { return _swapchain; }
 
     /** The command buffer being recorded, valid only between begin and end. */
     VkCommandBuffer commandBuffer() const { return _frames[_frameIndex].commandBuffer; }
+
+    /** The image being rendered into this frame, and its view. */
+    VkImageView currentImageView() const { return _swapchain.imageView(_imageIndex); }
 
 private:
     /**
@@ -92,6 +104,8 @@ private:
 
     VulkanDevice _device;
     VulkanSwapchain _swapchain;
+    VulkanUniformRing _uniformRing;
+    VulkanDescriptors _descriptors;
 
     bool _inited {false};
     bool _inFrame {false};

@@ -34,6 +34,8 @@
 #include <boost/program_options.hpp>
 
 #include "reone/graphics/format/tgawriter.h"
+#include "reone/graphics/uniforms.h"
+#include "reone/graphics/vulkan/pipeline.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/system/stream/fileoutput.h"
 #include "reone/system/logger.h"
@@ -47,7 +49,7 @@ int main(int argc, char **argv) {
 
     int width, height, frames;
     bool validation, vsync;
-    std::string capturePath, clearColor;
+    std::string capturePath, clearColor, spirvPath, drawColor;
 
     po::options_description desc("Options");
     desc.add_options()                                                              //
@@ -62,7 +64,11 @@ int main(int argc, char **argv) {
         ("capture", po::value<std::string>(&capturePath)->default_value(""),        //
          "write a TGA of the last frame to this path")                              //
         ("clear", po::value<std::string>(&clearColor)->default_value("0,0,0"),      //
-         "clear colour as comma-separated floats");                                 //
+         "clear colour as comma-separated floats")                                  //
+        ("spirv", po::value<std::string>(&spirvPath)->default_value("spirv/vktriangle.spv"), //
+         "SPIR-V module to draw a test triangle with, if present")                  //
+        ("draw", po::value<std::string>(&drawColor)->default_value("0.9,0.4,0.1"),  //
+         "triangle colour, pushed through the uniform ring");                       //
 
     po::variables_map vars;
     po::store(po::parse_command_line(argc, argv, desc), vars);
@@ -97,8 +103,32 @@ int main(int argc, char **argv) {
                 clear[static_cast<int>(i)] = std::stof(parts[i]);
             }
         }
+        glm::vec4 draw {1.0f};
+        {
+            std::vector<std::string> parts;
+            boost::split(parts, drawColor, boost::is_any_of(","));
+            for (size_t i = 0; i < parts.size() && i < 3; ++i) {
+                draw[static_cast<int>(i)] = std::stof(parts[i]);
+            }
+        }
         renderer.setClearColor(clear);
         renderer.init();
+
+        // The draw is optional so the clear path can still be exercised alone.
+        std::unique_ptr<VulkanPipeline> pipeline;
+        if (!std::filesystem::exists(spirvPath)) {
+            info("No SPIR-V at " + spirvPath + " - clearing only");
+        } else {
+            VulkanPipeline::Config config;
+            config.spirv = readSpirV(spirvPath);
+            config.vertexEntry = "triangleVertex";
+            config.fragmentEntry = "triangleFragment";
+            config.colorFormat = renderer.swapchain().imageFormat();
+            config.setLayouts = {renderer.descriptors().uniformLayout()};
+            pipeline = std::make_unique<VulkanPipeline>(renderer.device());
+            pipeline->init(config);
+            info("Pipeline built from " + spirvPath);
+        }
 
         int frame = 0;
         bool quit = false;
@@ -121,6 +151,53 @@ int main(int argc, char **argv) {
                 continue;
             }
             renderer.beginFrame({w, h});
+
+            if (pipeline) {
+                // A slice of this frame's arena, addressed by dynamic offset.
+                // This is the model §3.1 of the plan calls for, exercised for
+                // real: the colour the shader reads was written here.
+                LocalUniforms locals;
+                locals.reset();
+                locals.color = draw;
+                auto offset = renderer.uniformRing().push(locals);
+
+                // Every binding in the set is dynamic, so every one needs an
+                // offset even though only locals is read.
+                std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+                offsets[UniformBlockBindingPoints::locals] = offset;
+
+                auto cmd = renderer.commandBuffer();
+
+                VkRenderingAttachmentInfo colorAttachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+                colorAttachment.imageView = renderer.currentImageView();
+                colorAttachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                // Load, not clear: beginFrame already cleared, and this proves
+                // the triangle is drawn over it rather than replacing it.
+                colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+                VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+                rendering.renderArea.extent = {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
+                rendering.layerCount = 1;
+                rendering.colorAttachmentCount = 1;
+                rendering.pColorAttachments = &colorAttachment;
+
+                vkCmdBeginRendering(cmd, &rendering);
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->handle());
+
+                VkViewport vp {0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f};
+                VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(w), static_cast<uint32_t>(h)}};
+                vkCmdSetViewport(cmd, 0, 1, &vp);
+                vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+                auto set = renderer.uniformSet();
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        pipeline->layout(), 0, 1, &set,
+                                        static_cast<uint32_t>(offsets.size()), offsets.data());
+                vkCmdDraw(cmd, 3, 1, 0, 0);
+                vkCmdEndRendering(cmd);
+            }
+
             bool last = frames > 0 && frame + 1 >= frames;
             if (last && !capturePath.empty()) {
                 auto shot = renderer.captureFrame();
@@ -135,6 +212,7 @@ int main(int argc, char **argv) {
             }
         }
         info(str(boost::format("Presented %d frames on %s") % frame % renderer.device().deviceName()));
+        info(str(boost::format("Uniform arena peak: %llu bytes") % renderer.uniformRing().peakUsage()));
     } catch (const std::exception &e) {
         error(std::string("Vulkan probe failed: ") + e.what());
         exitCode = 1;

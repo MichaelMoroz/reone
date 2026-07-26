@@ -37,7 +37,8 @@ set(SPIRV_OUT_DIR ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin/spirv)
 set(SPIRV_MODULES
     "pbr_model:staticVertex+skinnedVertex+danglyVertex+saberVertex+opaqueFragment"
     "grass:grassVertex+pbrFragment+retroFragment"
-    "walkmesh:walkmeshVertex+pbrFragment+retroFragment")
+    "walkmesh:walkmeshVertex+pbrFragment+retroFragment"
+    "vktriangle:triangleVertex+triangleFragment")
 
 if(SLANGC_EXECUTABLE)
     set(SPIRV_OUTPUTS)

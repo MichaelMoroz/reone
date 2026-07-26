@@ -17,14 +17,22 @@ set(VULKAN_INCLUDE_DIR ${REONE_INCLUDE_DIR}/reone/graphics/vulkan)
 set(VULKAN_SOURCE_DIR ${CMAKE_SOURCE_DIR}/src/libs/graphics/vulkan)
 
 set(VULKAN_HEADERS
+    ${VULKAN_INCLUDE_DIR}/buffer.h
+    ${VULKAN_INCLUDE_DIR}/descriptors.h
     ${VULKAN_INCLUDE_DIR}/device.h
+    ${VULKAN_INCLUDE_DIR}/pipeline.h
     ${VULKAN_INCLUDE_DIR}/renderer.h
-    ${VULKAN_INCLUDE_DIR}/swapchain.h)
+    ${VULKAN_INCLUDE_DIR}/swapchain.h
+    ${VULKAN_INCLUDE_DIR}/uniformring.h)
 
 set(VULKAN_SOURCES
+    ${VULKAN_SOURCE_DIR}/buffer.cpp
+    ${VULKAN_SOURCE_DIR}/descriptors.cpp
     ${VULKAN_SOURCE_DIR}/device.cpp
+    ${VULKAN_SOURCE_DIR}/pipeline.cpp
     ${VULKAN_SOURCE_DIR}/renderer.cpp
     ${VULKAN_SOURCE_DIR}/swapchain.cpp
+    ${VULKAN_SOURCE_DIR}/uniformring.cpp
     ${VULKAN_SOURCE_DIR}/vma.cpp)
 
 add_library(graphicsvulkan STATIC ${VULKAN_HEADERS} ${VULKAN_SOURCES} ${CLANG_FORMAT_PATH})
