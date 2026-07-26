@@ -56,8 +56,8 @@ public:
     void deinit() override;
 
     void drawImage(Texture &texture,
-                   const glm::ivec2 &position,
-                   const glm::ivec2 &size,
+                   const glm::vec2 &position,
+                   const glm::vec2 &size,
                    const glm::vec4 &color = glm::vec4(1.0f),
                    const glm::mat3x4 &uv = glm::mat3x4(1.0f)) override;
 
@@ -66,8 +66,8 @@ public:
                    const glm::vec4 &color = glm::vec4(1.0f),
                    const glm::mat3x4 &uv = glm::mat3x4(1.0f)) override;
 
-    void drawRect(const glm::ivec2 &position,
-                  const glm::ivec2 &size,
+    void drawRect(const glm::vec2 &position,
+                  const glm::vec2 &size,
                   const glm::vec4 &color) override;
 
     void drawFullTargetImage(Texture &texture,

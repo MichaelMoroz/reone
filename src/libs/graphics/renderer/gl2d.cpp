@@ -29,9 +29,9 @@ namespace reone {
 
 namespace graphics {
 
-static glm::mat4 rectTransform(const glm::ivec2 &position, const glm::ivec2 &size) {
-    auto transform = glm::translate(glm::vec3(position.x, position.y, 0.0f));
-    transform *= glm::scale(glm::vec3(size.x, size.y, 1.0f));
+static glm::mat4 rectTransform(const glm::vec2 &position, const glm::vec2 &size) {
+    auto transform = glm::translate(glm::vec3(position, 0.0f));
+    transform *= glm::scale(glm::vec3(size, 1.0f));
     return transform;
 }
 
@@ -42,8 +42,8 @@ void GL2DRenderer::deinit() {
 }
 
 void GL2DRenderer::drawImage(Texture &texture,
-                             const glm::ivec2 &position,
-                             const glm::ivec2 &size,
+                             const glm::vec2 &position,
+                             const glm::vec2 &size,
                              const glm::vec4 &color,
                              const glm::mat3x4 &uv) {
     drawImage(texture, rectTransform(position, size), color, uv);
@@ -64,8 +64,8 @@ void GL2DRenderer::drawImage(Texture &texture,
     _meshRegistry.get(MeshName::quad).draw(_statistic);
 }
 
-void GL2DRenderer::drawRect(const glm::ivec2 &position,
-                            const glm::ivec2 &size,
+void GL2DRenderer::drawRect(const glm::vec2 &position,
+                            const glm::vec2 &size,
                             const glm::vec4 &color) {
     auto transform = rectTransform(position, size);
     _uniforms.setLocals([&transform, &color](auto &locals) {

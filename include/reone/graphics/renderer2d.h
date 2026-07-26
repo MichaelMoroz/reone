@@ -42,7 +42,10 @@ class Texture;
  * state are baked into a pipeline object and the uniforms are a slice of a
  * per-frame buffer.
  *
- * Positions and sizes are in pixels, y down from the top left.
+ * Positions and sizes are in pixels, y down from the top left. They are
+ * floating point because several callers compute them continuously: the
+ * minimap scrolls under a fixed viewport, and rounding its origin to whole
+ * pixels makes it jump a pixel at a time instead of gliding.
  */
 class I2DRenderer {
 public:
@@ -57,8 +60,8 @@ public:
      * picking a sub-rect out of an atlas.
      */
     virtual void drawImage(Texture &texture,
-                           const glm::ivec2 &position,
-                           const glm::ivec2 &size,
+                           const glm::vec2 &position,
+                           const glm::vec2 &size,
                            const glm::vec4 &color = glm::vec4(1.0f),
                            const glm::mat3x4 &uv = glm::mat3x4(1.0f)) = 0;
 
@@ -73,8 +76,8 @@ public:
                            const glm::mat3x4 &uv = glm::mat3x4(1.0f)) = 0;
 
     /** A solid-colour quad filling a pixel rect. */
-    virtual void drawRect(const glm::ivec2 &position,
-                          const glm::ivec2 &size,
+    virtual void drawRect(const glm::vec2 &position,
+                          const glm::vec2 &size,
                           const glm::vec4 &color) = 0;
 
     /**
