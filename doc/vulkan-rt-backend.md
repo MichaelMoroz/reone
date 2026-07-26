@@ -527,11 +527,13 @@ main argument for this ordering.
    resolve. All of it exercised by `vulkanprobe` with the validation layers on
    and silent. See §10.
 
-   **Not started:** anything that touches game data. `MeshRegistry`, `Texture`
-   and `Material` do not reach this path; the geometry is a synthesised cube and
-   the texture a generated checkerboard. Also missing: a pipeline cache, the
-   lighting the resolve stands in for, shadows, transparency, particles, GUI,
-   text and movie playback.
+   **Structurally complete, not at parity.** Pipelines are cached, engine
+   `Texture`s and `Mesh`es upload through a cache, and the whole 2D vocabulary -
+   sprites, rects, text, blend, scissor - runs through the same `I2DRenderer`
+   the GL backend implements. What is missing is the scene pipeline itself and
+   everything feeding it: shadow, transparency, SSAO, SSR and combine passes,
+   real materials and lighting, the skinned/dangly/saber/particle/grass geometry
+   kinds, movie playback, and engine-side backend selection. See §10.10.
 5. **Acceleration structures and hybrid RT** — compute skinning, BLAS/TLAS, then
    RT shadows/AO/reflections replacing the current SSAO and SSR passes. First
    visible payoff.
@@ -966,7 +968,67 @@ runs one particular way can quietly guarantee the conditions it is meant to
 test. Run the smoke test in every mode it supports, not just the one that
 produces an image.
 
-### 10.10 Next
+### 10.10 Caches, and the 2D renderer
+
+`VulkanPipelineCache` builds pipelines on first use, keyed on shader pair,
+attachment formats, vertex layout, blend, cull and depth - the state Vulkan
+bakes in that OpenGL would have set per draw. `VulkanResources` uploads engine
+`Texture`s and `Mesh`es once each, keyed by address.
+
+`Vulkan2DRenderer` implements `I2DRenderer`, the same interface the GL backend
+implements: sprites, tinted sprites, solid rectangles, full-target images, text,
+and the blend and scissor scopes. No caller changes were needed, which is the
+return on the phase 3 seam. No vertex buffers either - every 2D primitive is a
+quad synthesised from `SV_VertexID`, and text draws one instance per glyph from
+the text uniform block.
+
+Verified by capture, validation silent: a plain sprite, a tinted sprite, an
+additively blended sprite, a solid bar, a scissor-clipped sprite, and a line of
+text as fourteen instanced glyphs.
+
+Two bugs worth carrying forward:
+
+- **A descriptor set bound to a recording command buffer may not be rewritten.**
+  Pointing one shared texture set at a different image per draw invalidated the
+  command buffer - 81 validation errors, all downstream of a single
+  `vkUpdateDescriptorSets`. Texture sets are now allocated per distinct texture
+  from a per-frame pool and recycled when the frame's fence clears. Descriptor
+  indexing removes the problem entirely and is what §5.6 wants anyway, but it
+  changes how every shader declares textures.
+- **`glm::ortho` uses OpenGL's -1..1 depth range.** At z=0 every 2D quad landed
+  at `z_ndc` -1 and Vulkan clipped all of them, so nothing drew at all.
+  `orthoRH_ZO` is the explicit zero-to-one form. `GLM_FORCE_DEPTH_ZERO_TO_ONE`
+  would fix it globally and break the GL backend, so it is not used.
+
+### 10.11 What phase 4 still needs
+
+Phase 4 is defined as parity with the OpenGL PBR pipeline. The backend can now
+do everything *structurally* required - present, allocate, upload, describe,
+cache pipelines, rasterise geometry into a G-buffer, resolve it, and draw the
+whole 2D vocabulary. What it does not have is the pipeline itself and the
+content that feeds it:
+
+1. **The scene pipeline.** `scene/render/pipeline/pbr.cpp` is around 500 lines
+   of pass orchestration plus a dozen shaders: shadow maps, opaque geometry with
+   real materials, transparency and OIT, SSAO, SSR, bloom and the combine pass.
+   None of it exists in Vulkan.
+2. **Real materials and lighting.** The resolve lights from one fixed direction.
+   Light lists, shadow lookups and the PBR BRDF all have to come across, and
+   `Material` has to reach the backend.
+3. **The rest of the geometry kinds.** Skinned, dangly and saber meshes,
+   particles, grass, billboards, walkmeshes - each is an entry point already
+   written in Slang and a pipeline variant not yet built.
+4. **Movie playback**, which uploads a frame per tick.
+5. **Engine hosting.** The engine cannot select a backend. Everything outside
+   the graphics library still calls the GL context directly, so `--backend
+   vulkan` would die in module init. This is what turns the backend from a
+   demonstration into something usable, and it depends on 1-4 existing.
+
+Items 1 and 2 are the bulk. A reasonable order is part of 5 first - enough
+backend selection to host a Vulkan window with the GUI on it, since the 2D
+renderer is finished - then 1, then 2, then 3 and 4.
+
+### 10.12 Next
 
 - Wiring `MeshRegistry`, `Texture` and `Material` through, so game assets rather
   than a synthesised cube go down this path.
