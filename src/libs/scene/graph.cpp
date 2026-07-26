@@ -17,6 +17,8 @@
 
 #include "reone/scene/graph.h"
 
+#include "reone/graphics/backend.h"
+
 #include "reone/audio/di/services.h"
 #include "reone/graphics/camera/perspective.h"
 #include "reone/graphics/context.h"
@@ -455,7 +457,9 @@ void SceneGraph::prepareTransparentLeafs() {
 
 Texture &SceneGraph::render(const glm::ivec2 &dim) {
     if (!_renderPipeline) {
-        auto rendererType = _graphicsOpt.pbr ? RendererType::PBR : RendererType::Retro;
+        auto rendererType = graphics::isVulkanBackend()
+                               ? RendererType::Vulkan
+                               : (_graphicsOpt.pbr ? RendererType::PBR : RendererType::Retro);
         _renderPipeline = _renderPipelineFactory.create(rendererType, dim);
         _renderPipeline->init();
     }

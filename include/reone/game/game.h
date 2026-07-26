@@ -126,6 +126,16 @@ public:
     void update(float frameTime);
     void render();
 
+    /**
+     * Run the scene pipeline and keep its output, without compositing it.
+     *
+     * Split from render() because Vulkan cannot begin a render pass inside
+     * another: the scene's passes must be recorded before the frame's 2D scope
+     * opens, and only the composite belongs inside it. Harmless to call on the
+     * OpenGL path, where render() would have done both.
+     */
+    void renderSceneOffscreen();
+
     void playVideo(const std::string &name);
 
     bool isPaused() const { return _paused; }
@@ -544,6 +554,8 @@ private:
 
     void renderScene();
     void renderGUI();
+
+    graphics::Texture *_sceneOutput {nullptr};
     void renderDeveloperOverlay();
     void renderDeveloperBanner();
     void renderDeveloperTriggerOverlay(const glm::mat4 &projection, const glm::mat4 &view);

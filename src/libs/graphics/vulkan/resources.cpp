@@ -18,6 +18,7 @@
 #include "reone/graphics/vulkan/resources.h"
 
 #include "reone/graphics/texture.h"
+#include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/system/logutil.h"
 
@@ -110,17 +111,61 @@ static std::optional<VkFormat> compressedFormat(PixelFormat format) {
     }
 }
 
+void VulkanResources::registerExternal(const Texture &texture, const VulkanImage &image) {
+    _external[&texture] = &image;
+}
+
+const VulkanImage &VulkanResources::fallbackFor(const Texture &texture,
+                                                const std::string &why) {
+    if (_warned.insert(why).second) {
+        warn("Vulkan: " + why + "; substituting a blank texture", LogChannel::Graphics);
+    }
+    const uint32_t white = 0xffffffff;
+    switch (texture.type()) {
+    case TextureType::CubeMap:
+        if (!_fallbackCube) {
+            _fallbackCube = std::make_unique<VulkanImage>(_device);
+            _fallbackCube->initSampledLayered({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, 6, true, &white);
+        }
+        return *_fallbackCube;
+    case TextureType::TwoDimArray:
+        if (!_fallbackArray) {
+            _fallbackArray = std::make_unique<VulkanImage>(_device);
+            _fallbackArray->initSampledLayered({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, 1, false, &white);
+        }
+        return *_fallbackArray;
+    default:
+        if (!_fallback2D) {
+            _fallback2D = std::make_unique<VulkanImage>(_device);
+            _fallback2D->initSampled2D({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, &white);
+        }
+        return *_fallback2D;
+    }
+}
+
 const VulkanImage &VulkanResources::get(const Texture &texture) {
+    auto external = _external.find(&texture);
+    if (external != _external.end()) {
+        return *external->second;
+    }
     auto existing = _textures.find(&texture);
     if (existing != _textures.end()) {
         return *existing->second;
     }
-    if (!supported(texture.pixelFormat())) {
-        throw std::invalid_argument("Vulkan: cannot upload texture " + texture.name() +
-                                    " in this pixel format");
+    // Cube maps and arrays need their own upload paths and are not built yet;
+    // envmaps and shadow maps are the users. A blank stand-in keeps the frame
+    // rendering and makes the gap visible rather than fatal.
+    if (texture.type() != TextureType::TwoDim) {
+        return fallbackFor(texture, "texture type of " + texture.name() +
+                                        " is not uploadable yet");
     }
-    if (texture.layers().empty() || !texture.layers().front().pixels) {
-        throw std::invalid_argument("Vulkan: texture " + texture.name() + " has no pixels");
+    if (!supported(texture.pixelFormat())) {
+        return fallbackFor(texture, "pixel format of " + texture.name() +
+                                        " is not uploadable yet");
+    }
+    if (texture.layers().empty() || !texture.layers().front().pixels ||
+        texture.layers().front().pixels->empty()) {
+        return fallbackFor(texture, "texture " + texture.name() + " has no pixels");
     }
     auto image = std::make_unique<VulkanImage>(_device);
     if (auto compressed = compressedFormat(texture.pixelFormat())) {
@@ -142,6 +187,17 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
     return *_textures.insert({&texture, std::move(image)}).first->second;
 }
 
+VkBuffer VulkanResources::zeroBuffer() {
+    if (!_zeroBuffer) {
+        // Large enough for the widest attribute any shader declares.
+        std::array<float, 4> zeros {};
+        _zeroBuffer = std::make_unique<VulkanBuffer>(_device);
+        _zeroBuffer->initDeviceLocal(sizeof(zeros), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                     zeros.data());
+    }
+    return _zeroBuffer->handle();
+}
+
 const VulkanMesh &VulkanResources::get(const Mesh &mesh) {
     auto existing = _meshes.find(&mesh);
     if (existing != _meshes.end()) {
@@ -153,6 +209,11 @@ const VulkanMesh &VulkanResources::get(const Mesh &mesh) {
 }
 
 void VulkanResources::deinit() {
+    _zeroBuffer.reset();
+    _fallback2D.reset();
+    _fallbackArray.reset();
+    _fallbackCube.reset();
+    _external.clear();
     _textures.clear();
     _meshes.clear();
 }

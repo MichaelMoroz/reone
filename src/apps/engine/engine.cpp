@@ -220,6 +220,14 @@ void Engine::init() {
     _guiModule->init();
     _gameModule->init();
 
+#ifdef R_ENABLE_VULKAN
+    if (_vulkan) {
+        // The scene library cannot reach the renderer on its own; the engine
+        // owns it and hands it over so a Vulkan pipeline can be built.
+        _sceneModule->renderPipelineFactory().setVulkanRenderer(*_vulkanRenderer);
+    }
+#endif
+
     _services = std::make_unique<ServicesView>(
         _gameModule->services(),
         _movieModule->services(),
@@ -470,8 +478,10 @@ void Engine::captureIfRequested(bool &quit) {
 void Engine::renderVulkanFrame(bool &quit) {
 #ifdef R_ENABLE_VULKAN
     glm::ivec2 extent {_options.graphics.width, _options.graphics.height};
-    info("vk: beginFrame");
+    // Before the frame's rendering scope: the scene pipeline begins render
+    // passes of its own, and one cannot be nested inside another.
     _vulkanRenderer->beginFrame(extent);
+    _game->renderSceneOffscreen();
 
     // One rendering scope for the whole frame. Everything the game draws at
     // this point is 2D; the scene pipeline is not on Vulkan yet.
@@ -505,7 +515,6 @@ void Engine::renderVulkanFrame(bool &quit) {
 
     vkCmdEndRendering(cmd);
 
-    info("vk: endFrame");
     captureIfRequested(quit);
     _vulkanRenderer->endFrame();
 #endif

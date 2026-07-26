@@ -65,16 +65,23 @@ void GraphicsModule::init() {
         *_textureRegistry,
         *_uniforms);
 
+    // Context::init loads the GL entry points, so nothing that touches GL may
+    // run before it. TextureRegistry does not itself - it builds default
+    // Textures, whose init() is backend-aware - but those Textures do, so the
+    // original ordering is preserved rather than hoisting it.
     if (!isVulkanBackend()) {
-        // All four are OpenGL objects that make GL calls on init. Under Vulkan
-        // they stay constructed but uninitialised: the services struct still
-        // has to hand out references, and nothing on the Vulkan path calls
-        // them. Anything that does will fault loudly rather than silently
-        // drawing nothing, which is the behaviour we want while the backend is
-        // incomplete.
         _context->init();
         _meshRegistry->init();
-        _textureRegistry->init();
+    }
+    // Needed on both paths: the resource layer looks these defaults up by name
+    // while loading a module, and a missing one fails the load.
+    _textureRegistry->init();
+    if (!isVulkanBackend()) {
+        // OpenGL uniform buffers. Under Vulkan they stay constructed but
+        // uninitialised, as do Context and MeshRegistry above: the services
+        // struct still hands out references, but nothing on the Vulkan path may
+        // call them, and anything that does faults loudly rather than silently
+        // drawing nothing.
         _uniforms->init();
     }
     renderer().init();

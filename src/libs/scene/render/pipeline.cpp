@@ -25,6 +25,9 @@
 #include "reone/graphics/textureregistry.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/scene/render/pipeline/pbr.h"
+#ifdef R_ENABLE_VULKAN
+#include "reone/scene/render/pipeline/vulkan.h"
+#endif
 #include "reone/scene/render/pipeline/retro.h"
 
 using namespace reone::graphics;
@@ -112,6 +115,14 @@ void RenderPipelineBase::applySharpen(Texture &tex,
 
 std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RendererType type, glm::ivec2 targetSize) {
     switch (type) {
+#ifdef R_ENABLE_VULKAN
+    case RendererType::Vulkan:
+        if (!_vulkanRenderer) {
+            throw std::logic_error("Vulkan renderer was not supplied to the pipeline factory");
+        }
+        return std::make_unique<VulkanRenderPipeline>(
+            std::move(targetSize), _options, *_vulkanRenderer, _uniforms);
+#endif
     case RendererType::Retro:
         return std::make_unique<RetroRenderPipeline>(
             std::move(targetSize),

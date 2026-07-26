@@ -45,6 +45,7 @@ class PBRTextures;
 class ShaderRegistry;
 class TextureRegistry;
 class Uniforms;
+class VulkanRenderer;
 
 struct GraphicsOptions;
 
@@ -54,7 +55,8 @@ namespace scene {
 
 enum class RendererType {
     Retro,
-    PBR
+    PBR,
+    Vulkan
 };
 
 /**
@@ -98,6 +100,12 @@ public:
     virtual ~IRenderPipelineFactory() = default;
 
     virtual std::unique_ptr<IRenderPipeline> create(RendererType type, glm::ivec2 targetSize) = 0;
+
+    /**
+     * Hand the factory the Vulkan renderer, so it can build a Vulkan pipeline.
+     * The scene library cannot reach it otherwise: the engine owns it.
+     */
+    virtual void setVulkanRenderer(graphics::VulkanRenderer &renderer) = 0;
 };
 
 class RenderPipelineBase : public IRenderPipeline, boost::noncopyable {
@@ -186,6 +194,10 @@ public:
 
     std::unique_ptr<IRenderPipeline> create(RendererType type, glm::ivec2 targetSize) override;
 
+    void setVulkanRenderer(graphics::VulkanRenderer &renderer) override {
+        _vulkanRenderer = &renderer;
+    }
+
 private:
     graphics::GraphicsOptions &_options;
     graphics::Context &_context;
@@ -195,6 +207,7 @@ private:
     graphics::IStatistic &_statistic;
     graphics::TextureRegistry &_textureRegistry;
     graphics::Uniforms &_uniforms;
+    graphics::VulkanRenderer *_vulkanRenderer {nullptr};
 };
 
 } // namespace scene

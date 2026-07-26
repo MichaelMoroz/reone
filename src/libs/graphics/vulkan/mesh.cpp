@@ -23,12 +23,20 @@ namespace reone {
 
 namespace graphics {
 
-VkVertexInputBindingDescription VulkanMesh::bindingDescription(const Mesh::VertexLayout &layout) {
-    VkVertexInputBindingDescription binding {};
-    binding.binding = 0;
-    binding.stride = static_cast<uint32_t>(layout.stride);
-    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    return binding;
+std::vector<VkVertexInputBindingDescription> VulkanMesh::bindingDescriptions(
+    const Mesh::VertexLayout &layout) {
+    VkVertexInputBindingDescription mesh {};
+    mesh.binding = 0;
+    mesh.stride = static_cast<uint32_t>(layout.stride);
+    mesh.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    // Stride 0: every vertex reads the same element, which is all zeros.
+    VkVertexInputBindingDescription zeros {};
+    zeros.binding = kZeroBinding;
+    zeros.stride = 0;
+    zeros.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    return {mesh, zeros};
 }
 
 std::vector<VkVertexInputAttributeDescription> VulkanMesh::attributeDescriptions(
@@ -36,14 +44,18 @@ std::vector<VkVertexInputAttributeDescription> VulkanMesh::attributeDescriptions
     std::vector<VkVertexInputAttributeDescription> attributes;
 
     auto add = [&attributes](uint32_t location, VkFormat format, int offset) {
-        if (offset == -1) {
-            return;
-        }
         VkVertexInputAttributeDescription attribute {};
         attribute.location = location;
-        attribute.binding = 0;
         attribute.format = format;
-        attribute.offset = static_cast<uint32_t>(offset);
+        if (offset == -1) {
+            // Not in this mesh: read zeros rather than omit the location, which
+            // would be a pipeline creation error.
+            attribute.binding = kZeroBinding;
+            attribute.offset = 0;
+        } else {
+            attribute.binding = 0;
+            attribute.offset = static_cast<uint32_t>(offset);
+        }
         attributes.push_back(attribute);
     };
 
@@ -58,12 +70,11 @@ std::vector<VkVertexInputAttributeDescription> VulkanMesh::attributeDescriptions
     // One offset covers three consecutive vec3s, in this order. The naming is
     // confusing and matches the GL path: bitangent first, then tangent, then
     // the tangent-space normal.
-    if (layout.offTanSpace != -1) {
-        constexpr int kVec3 = 3 * sizeof(float);
-        add(4, VK_FORMAT_R32G32B32_SFLOAT, layout.offTanSpace);
-        add(5, VK_FORMAT_R32G32B32_SFLOAT, layout.offTanSpace + kVec3);
-        add(6, VK_FORMAT_R32G32B32_SFLOAT, layout.offTanSpace + 2 * kVec3);
-    }
+    constexpr int kVec3 = 3 * sizeof(float);
+    bool hasTanSpace = layout.offTanSpace != -1;
+    add(4, VK_FORMAT_R32G32B32_SFLOAT, hasTanSpace ? layout.offTanSpace : -1);
+    add(5, VK_FORMAT_R32G32B32_SFLOAT, hasTanSpace ? layout.offTanSpace + kVec3 : -1);
+    add(6, VK_FORMAT_R32G32B32_SFLOAT, hasTanSpace ? layout.offTanSpace + 2 * kVec3 : -1);
 
     // Bone indices are floats in the buffer, not integers, as in the GL path.
     add(7, VK_FORMAT_R32G32B32A32_SFLOAT, layout.offBoneIndices);
@@ -105,10 +116,10 @@ void VulkanMesh::deinit() {
     _indexCount = 0;
 }
 
-void VulkanMesh::draw(VkCommandBuffer cmd, int instances) const {
-    VkBuffer buffers[] {_vertexBuffer.handle()};
-    VkDeviceSize offsets[] {0};
-    vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
+void VulkanMesh::draw(VkCommandBuffer cmd, VkBuffer zeros, int instances) const {
+    VkBuffer buffers[] {_vertexBuffer.handle(), zeros};
+    VkDeviceSize offsets[] {0, 0};
+    vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
     vkCmdBindIndexBuffer(cmd, _indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT16);
     vkCmdDrawIndexed(cmd, _indexCount, static_cast<uint32_t>(instances), 0, 0, 0);
 }

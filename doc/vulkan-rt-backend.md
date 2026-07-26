@@ -95,7 +95,21 @@ become null implementations or disappear with the GL backend.
 against `graphics`, not the reverse — so the engine, which links both, builds
 them and injects them with `setRenderers`.
 
-### 2.4 Deliberately skipped under Vulkan
+### 2.4 Two things the scene pipeline had to work around
+
+**Render passes cannot nest.** The scene pipeline begins passes of its own, so
+it has to record before the frame's 2D scope opens. `Game::renderSceneOffscreen`
+splits producing the scene image from compositing it; only the composite belongs
+inside the 2D pass. The same constraint is why the 3D sub-scene behind menu
+panels is still skipped - `Control::render` runs inside the GUI pass.
+
+**A render target crosses the seam as a `Texture &`.** That is what
+`IRenderer::drawSceneOutput` takes, and it has no pixels to upload.
+`VulkanResources::registerExternal` associates the handle with the image, so the
+identity survives without changing the interface or giving `Texture` a
+backend-specific field.
+
+### 2.5 Deliberately skipped under Vulkan
 
 Each has its reason recorded at the site: GLSL compilation (`Shaders::init`),
 movie playback (`Movie::render`), the ImGui editor (built on the GL backend), and
@@ -141,9 +155,14 @@ Shadow maps last, not first. They are the only pass needing layered rendering an
 a different projection per layer, and everything else can be verified without
 them.
 
-1. Opaque geometry into the G-buffer — the pieces exist, they need driving from
-   the scene graph rather than by hand.
-2. The deferred resolve with real lighting (§4.1).
+1. ~~Opaque geometry into the G-buffer.~~ **Done.** `VulkanRenderPipeline` and
+   `VulkanRenderPass` drive the G-buffer from the scene graph, and a warped-into
+   module renders: terrain, props, and skinned characters with their materials.
+   Known wrong: lightmapped surfaces come out black and the sky is blown out,
+   both of which are the placeholder resolve rather than the geometry pass;
+   grass, particles, billboards and AABBs warn once and skip.
+2. The deferred resolve with real lighting (§4.1). **This is now the blocker for
+   everything looking right**, not a refinement.
 3. Transparency and OIT.
 4. SSAO and SSR.
 5. Post-processing: bloom, FXAA, sharpen, combine.

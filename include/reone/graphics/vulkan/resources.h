@@ -55,6 +55,22 @@ public:
     /** Upload @p texture if it has not been seen, and return the image. */
     const VulkanImage &get(const Texture &texture);
 
+    /**
+     * Associate @p texture with an image this cache does not own.
+     *
+     * Render targets cross the backend seam as a `Texture &` - that is what
+     * `IRenderer::drawSceneOutput` takes - but they have no pixels to upload.
+     * Registering the pair lets the identity survive the seam without changing
+     * the interface or giving Texture a backend-specific field.
+     */
+    void registerExternal(const Texture &texture, const VulkanImage &image);
+
+    /**
+     * A small zero-filled buffer, bound at VulkanMesh::kZeroBinding so that
+     * attributes a mesh does not provide read zeros. Shared by every draw.
+     */
+    VkBuffer zeroBuffer();
+
     /** Upload @p mesh if it has not been seen, and return it. */
     const VulkanMesh &get(const Mesh &mesh);
 
@@ -71,6 +87,20 @@ private:
     VulkanDevice &_device;
 
     std::unordered_map<const Texture *, std::unique_ptr<VulkanImage>> _textures;
+    std::unordered_map<const Texture *, const VulkanImage *> _external;
+
+    /**
+     * Stand-ins for textures this cache cannot upload yet - cube maps, arrays,
+     * and anything with no pixel data. One per view shape, because a descriptor
+     * must match how the shader declares the sampler.
+     */
+    std::unique_ptr<VulkanBuffer> _zeroBuffer;
+    std::unique_ptr<VulkanImage> _fallback2D;
+    std::unique_ptr<VulkanImage> _fallbackArray;
+    std::unique_ptr<VulkanImage> _fallbackCube;
+    std::set<std::string> _warned;
+
+    const VulkanImage &fallbackFor(const Texture &texture, const std::string &why);
     std::unordered_map<const Mesh *, std::unique_ptr<VulkanMesh>> _meshes;
 };
 

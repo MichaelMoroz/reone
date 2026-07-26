@@ -50,17 +50,37 @@ public:
     void init(const Mesh &mesh);
     void deinit();
 
-    /** Bind the buffers and issue an indexed draw. */
-    void draw(VkCommandBuffer cmd, int instances = 1) const;
+    /**
+     * Bind the buffers and issue an indexed draw.
+     *
+     * @param zeros the shared stride-0 buffer bound at kZeroBinding
+     */
+    void draw(VkCommandBuffer cmd, VkBuffer zeros, int instances = 1) const;
 
     /**
      * Vertex input state for a pipeline drawing this layout. The returned
-     * attributes reference @p layout only through values, so the caller may
+     * descriptions reference @p layout only through values, so the caller may
      * discard it.
+     *
+     * Two bindings. Binding 0 is the mesh's own interleaved data. Binding 1 has
+     * stride 0 and holds zeros, and every attribute the mesh does not provide
+     * points at it.
+     *
+     * OpenGL gives an attribute the shader declares but the buffer omits a
+     * default value; Vulkan makes the missing attribute an error. The game's
+     * meshes genuinely vary - plenty have no tangent frame or bone weights, and
+     * are drawn by a shader that declares both - so the difference has to be
+     * made up somewhere. A stride-0 binding does it without an extension and
+     * without aliasing one attribute onto another's bytes, which would feed
+     * positions to a shader asking for normals.
      */
-    static VkVertexInputBindingDescription bindingDescription(const Mesh::VertexLayout &layout);
+    static std::vector<VkVertexInputBindingDescription> bindingDescriptions(
+        const Mesh::VertexLayout &layout);
     static std::vector<VkVertexInputAttributeDescription> attributeDescriptions(
         const Mesh::VertexLayout &layout);
+
+    /** Binding index of the zero-filled stride-0 buffer. */
+    static constexpr uint32_t kZeroBinding = 1;
 
     uint32_t indexCount() const { return _indexCount; }
 

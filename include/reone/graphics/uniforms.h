@@ -251,6 +251,15 @@ public:
     virtual void setAABB(const std::function<void(AABBUniforms &)> &block) = 0;
     virtual void setText(const std::function<void(TextUniforms &)> &block) = 0;
     virtual void setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block) = 0;
+
+    /**
+     * The CPU-side mirror, as last set.
+     *
+     * The Vulkan pipeline needs it because the scene graph fills these blocks
+     * through this interface and the OpenGL upload behind it is inert; the
+     * values have to be read back and written into the frame's uniform arena.
+     */
+    virtual const GlobalUniforms &globals() const = 0;
 };
 
 class Uniforms : public IUniforms, boost::noncopyable {
@@ -274,6 +283,8 @@ public:
     void setAABB(const std::function<void(AABBUniforms &)> &block) override;
     void setText(const std::function<void(TextUniforms &)> &block) override;
     void setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block) override;
+
+    const GlobalUniforms &globals() const override { return _globals; }
 
 private:
     bool _inited {false};

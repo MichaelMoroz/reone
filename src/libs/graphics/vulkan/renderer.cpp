@@ -233,10 +233,10 @@ void VulkanRenderer::drawSceneOutput(Texture &output) {
     if (!_inFrame) {
         throw std::logic_error("Renderer: no frame begun");
     }
-    // Nothing produces a Vulkan scene texture yet. Left unimplemented rather
-    // than silently doing nothing, so the first caller finds out here instead
-    // of wondering why the screen is empty.
-    throw std::logic_error("Vulkan: drawSceneOutput not implemented");
+    // The scene pipeline registered its output image against this Texture, so
+    // the 2D path composites it like any other full-target image. Called from
+    // inside the 2D rendering scope, which is where the GUI is drawn.
+    _renderer2d.drawFullTargetImage(output);
 }
 
 std::shared_ptr<Texture> VulkanRenderer::captureFrame() {

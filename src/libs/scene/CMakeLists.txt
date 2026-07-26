@@ -47,6 +47,8 @@ set(SCENE_HEADERS
     ${SCENE_INCLUDE_DIR}/render/pipeline.h
     ${SCENE_INCLUDE_DIR}/render/pipeline/retro.h
     ${SCENE_INCLUDE_DIR}/render/pipeline/pbr.h
+    ${SCENE_INCLUDE_DIR}/render/pass/vulkan.h
+    ${SCENE_INCLUDE_DIR}/render/pipeline/vulkan.h
     ${SCENE_INCLUDE_DIR}/types.h
     ${SCENE_INCLUDE_DIR}/user.h)
 
@@ -77,3 +79,11 @@ add_library(scene STATIC ${SCENE_HEADERS} ${SCENE_SOURCES} ${CLANG_FORMAT_PATH})
 set_target_properties(scene PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/lib)
 set_target_properties(scene PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(scene PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
+
+if(ENABLE_VULKAN)
+    target_sources(scene PRIVATE
+        ${SCENE_SOURCE_DIR}/render/pass/vulkan.cpp
+        ${SCENE_SOURCE_DIR}/render/pipeline/vulkan.cpp)
+    target_link_libraries(scene PUBLIC graphicsvulkan)
+    target_compile_definitions(scene PUBLIC R_ENABLE_VULKAN)
+endif()

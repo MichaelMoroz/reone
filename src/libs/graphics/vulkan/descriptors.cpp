@@ -191,6 +191,7 @@ void VulkanDescriptors::beginFrame(int frame) {
     // Safe because the caller has already waited on this frame's fence.
     vkResetDescriptorPool(_device.handle(), f.pool, 0);
     f.byTexture.clear();
+    f.byBindings.clear();
 }
 
 void VulkanDescriptors::writeTextureSet(VkDescriptorSet set, const VulkanImage *mainTex) {
@@ -261,6 +262,66 @@ VkDescriptorSet VulkanDescriptors::createPersistentTextureSet(
     }
     vkUpdateDescriptorSets(_device.handle(),
                            static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    return set;
+}
+
+void VulkanDescriptors::writeTextureSet(
+    VkDescriptorSet set,
+    const std::vector<std::pair<int, const VulkanImage *>> &bindings) {
+    std::array<VkDescriptorImageInfo, kNumTextures> infos {};
+    std::array<VkWriteDescriptorSet, kNumTextures> writes {};
+    for (int i = 0; i < kNumTextures; ++i) {
+        auto image = _standing[i];
+        for (const auto &binding : bindings) {
+            if (binding.first == i && binding.second) {
+                image = binding.second;
+            }
+        }
+        infos[i].sampler = _sampler;
+        infos[i].imageView = image->view();
+        infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &infos[i];
+    }
+    vkUpdateDescriptorSets(_device.handle(),
+                           static_cast<uint32_t>(writes.size()), writes.data(),
+                           0, nullptr);
+}
+
+VkDescriptorSet VulkanDescriptors::acquireTextureSet(
+    int frame,
+    const std::vector<std::pair<int, const VulkanImage *>> &bindings) {
+    size_t key = bindings.size();
+    for (const auto &binding : bindings) {
+        key ^= (std::hash<const void *> {}(binding.second) ^
+                static_cast<size_t>(binding.first) * 0x9e3779b9u) +
+               (key << 6) + (key >> 2);
+    }
+
+    auto &f = _textureFrames[frame];
+    auto existing = f.byBindings.find(key);
+    if (existing != f.byBindings.end()) {
+        return existing->second;
+    }
+    if (f.byTexture.size() + f.byBindings.size() >= kMaxTextureSetsPerFrame) {
+        throw std::runtime_error("Vulkan: too many distinct texture sets in one frame");
+    }
+
+    VkDescriptorSetAllocateInfo info {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    info.descriptorPool = f.pool;
+    info.descriptorSetCount = 1;
+    info.pSetLayouts = &_textureLayout;
+    VkDescriptorSet set {VK_NULL_HANDLE};
+    if (vkAllocateDescriptorSets(_device.handle(), &info, &set) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: texture descriptor set allocation failed");
+    }
+    writeTextureSet(set, bindings);
+    f.byBindings.insert({key, set});
     return set;
 }
 

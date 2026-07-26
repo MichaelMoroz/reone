@@ -106,6 +106,18 @@ public:
     VkDescriptorSet acquireTextureSet(int frame, const VulkanImage *mainTex);
 
     /**
+     * A texture set with @p bindings applied over the standing ones, valid for
+     * the rest of this frame.
+     *
+     * A material binds several units at once, so keying on one image is not
+     * enough. Sets are cached per distinct combination within a frame, which
+     * means a scene of N materials costs N sets rather than one per draw.
+     */
+    VkDescriptorSet acquireTextureSet(
+        int frame,
+        const std::vector<std::pair<int, const VulkanImage *>> &bindings);
+
+    /**
      * A texture set written once and never recycled, for passes whose textures
      * do not change - the deferred resolve reading the G-buffer, say.
      *
@@ -145,11 +157,15 @@ private:
     struct TextureFrame {
         VkDescriptorPool pool {VK_NULL_HANDLE};
         std::unordered_map<const VulkanImage *, VkDescriptorSet> byTexture;
+        /** Keyed by a hash of the whole binding list, for material sets. */
+        std::unordered_map<size_t, VkDescriptorSet> byBindings;
     };
     std::vector<TextureFrame> _textureFrames;
     VkDescriptorPool _persistentPool {VK_NULL_HANDLE};
 
     void writeTextureSet(VkDescriptorSet set, const VulkanImage *mainTex);
+    void writeTextureSet(VkDescriptorSet set,
+                         const std::vector<std::pair<int, const VulkanImage *>> &bindings);
 };
 
 } // namespace graphics
