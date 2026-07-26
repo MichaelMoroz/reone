@@ -75,6 +75,9 @@ void VulkanRenderPipeline::init() {
     for (int i = 0; i < VulkanGBuffer::Count - 1; ++i) {
         resolveTextures.push_back({i + 1, &_gbuffer->color(i)});
     }
+    // The resolve reconstructs world position from depth, so it samples the
+    // same image the geometry pass wrote.
+    resolveTextures.push_back({TextureUnits::gBufDepth, &_gbuffer->depth()});
     _resolveSet = _renderer.descriptors().createPersistentTextureSet(resolveTextures);
 
     // The output is written as an attachment and then sampled by the 2D
@@ -184,8 +187,11 @@ void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOff
 }
 
 void VulkanRenderPipeline::resolvePass(VkCommandBuffer cmd, uint32_t globalsOffset) {
-    // Attachments become textures.
+    // Attachments become textures. Depth moves to the read-only layout it is
+    // sampled from, which is also what the transparency pass afterwards needs,
+    // so it stays there for the rest of the frame.
     _gbuffer->transitionColor(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    _gbuffer->transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
 
     VkImageMemoryBarrier2 toAttachment {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
     toAttachment.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;

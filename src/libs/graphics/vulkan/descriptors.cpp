@@ -27,6 +27,26 @@ namespace reone {
 
 namespace graphics {
 
+/**
+ * The layout an image is sampled from.
+ *
+ * A depth image cannot sit in SHADER_READ_ONLY_OPTIMAL while it is also serving
+ * as a read-only depth attachment, so it lives in DEPTH_READ_ONLY_OPTIMAL and
+ * the descriptor has to say so. Inferred from the format rather than asked of
+ * the caller, because the caller has no better way to know than this does.
+ */
+static VkImageLayout sampledLayoutFor(const VulkanImage &image) {
+    switch (image.format()) {
+    case VK_FORMAT_D16_UNORM:
+    case VK_FORMAT_D32_SFLOAT:
+    case VK_FORMAT_X8_D24_UNORM_PACK32:
+        return VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
+    default:
+        return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+}
+
+
 // The layout is generated from the binding points rather than written out, so
 // there is one place to change and no chance of the two drifting apart.
 static_assert(TextureUnits::gBufMotion == VulkanDescriptors::kNumTextures - 1,
@@ -201,7 +221,7 @@ void VulkanDescriptors::writeTextureSet(VkDescriptorSet set, const VulkanImage *
         auto image = (i == TextureUnits::mainTex && mainTex) ? mainTex : _standing[i];
         infos[i].sampler = _sampler;
         infos[i].imageView = image->view();
-        infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        infos[i].imageLayout = sampledLayoutFor(*image);
 
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = set;
@@ -251,7 +271,7 @@ VkDescriptorSet VulkanDescriptors::createPersistentTextureSet(
         }
         infos[i].sampler = _sampler;
         infos[i].imageView = image->view();
-        infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        infos[i].imageLayout = sampledLayoutFor(*image);
 
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = set;
@@ -279,7 +299,7 @@ void VulkanDescriptors::writeTextureSet(
         }
         infos[i].sampler = _sampler;
         infos[i].imageView = image->view();
-        infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        infos[i].imageLayout = sampledLayoutFor(*image);
 
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = set;
