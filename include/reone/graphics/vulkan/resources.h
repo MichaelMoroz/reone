@@ -74,6 +74,23 @@ public:
     void registerExternal(const Texture &texture, const VulkanImage &image);
 
     /**
+     * Drop a registration, before the image behind it is destroyed. Without
+     * this the map keeps pointing at freed memory.
+     */
+    void unregisterExternal(const Texture &texture);
+
+    /**
+     * Whether this Texture is a render target this backend produced, rather
+     * than pixels uploaded from an asset.
+     *
+     * The distinction matters to anything that samples it: uploaded rows are in
+     * OpenGL's bottom-up order, a render target's are not.
+     */
+    bool isExternal(const Texture &texture) const {
+        return _external.find(&texture) != _external.end();
+    }
+
+    /**
      * A small zero-filled buffer, bound at VulkanMesh::kZeroBinding so that
      * attributes a mesh does not provide read zeros. Shared by every draw.
      */

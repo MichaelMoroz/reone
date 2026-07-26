@@ -272,6 +272,21 @@ void GUI::render() {
     });
 }
 
+void GUI::renderOffscreen() {
+    if (!_rootControl) {
+        return;
+    }
+    std::queue<std::reference_wrapper<Control>> controls;
+    controls.push(*_rootControl);
+    while (!controls.empty()) {
+        controls.front().get().renderOffscreen();
+        for (auto &child : controls.front().get().children()) {
+            controls.push(child);
+        }
+        controls.pop();
+    }
+}
+
 void GUI::renderBackground() {
     _graphicsSvc.renderer2d.drawImage(
         *_background,

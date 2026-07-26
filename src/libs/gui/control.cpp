@@ -218,29 +218,24 @@ void Control::render(const glm::ivec2 &screenSize,
     if (!_textLines.empty()) {
         renderText(_textLines, offset, size);
     }
-    // The sub-scene is rendered by the GL pipeline, which has no Vulkan
-    // counterpart yet. The control's borders and text still draw.
-    if (!_sceneName.empty() && !isVulkanBackend()) {
-        std::optional<std::reference_wrapper<Texture>> output;
-        _graphicsSvc.context.withBlendMode(BlendMode::None, [this, &output]() {
-            output = _sceneGraphs.get(_sceneName).render({_extent.width, _extent.height});
-        });
-        _graphicsSvc.uniforms.setGlobals([&screenSize](auto &globals) {
-            globals.reset();
-            globals.projection = glm::ortho(
-                0.0f,
-                static_cast<float>(screenSize.x),
-                static_cast<float>(screenSize.y),
-                0.0f, 0.0f, 100.0f);
-            globals.projectionInv = glm::inverse(globals.projection);
-        });
-        _graphicsSvc.context.withDepthTestMode(DepthTestMode::None, [this, &offset, &output]() {
-            _graphicsSvc.renderer2d.drawImage(
-                *output,
-                {_extent.left + offset.x, _extent.top + offset.y},
-                {_extent.width, _extent.height});
-        });
+    if (_sceneOutput) {
+        _graphicsSvc.renderer2d.drawImage(
+            *_sceneOutput,
+            {_extent.left + offset.x, _extent.top + offset.y},
+            {_extent.width, _extent.height});
+        // Good for this frame only. A control that stops being visible, or a
+        // frame where the offscreen phase did not run, must not composite a
+        // target that no longer describes anything.
+        _sceneOutput = nullptr;
     }
+}
+
+void Control::renderOffscreen() {
+    _sceneOutput = nullptr;
+    if (_sceneName.empty() || !_visible) {
+        return;
+    }
+    _sceneOutput = &_sceneGraphs.get(_sceneName).render({_extent.width, _extent.height});
 }
 
 void Control::renderBorder(const Border &border,

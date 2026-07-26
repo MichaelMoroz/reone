@@ -938,25 +938,26 @@ void Game::playMusic(const std::string &resRef) {
 
 void Game::renderSceneOffscreen() {
     _sceneOutput = nullptr;
-    if (!_module || _movie) {
+    if (_movie) {
         return;
     }
-    auto &scene = _services.scene.graphs.get(kSceneMain);
-    _sceneOutput = &scene.render({_options.graphics.width, _options.graphics.height});
+    if (_module) {
+        auto &scene = _services.scene.graphs.get(kSceneMain);
+        _sceneOutput = &scene.render({_options.graphics.width, _options.graphics.height});
+    }
+    // GUI controls host scenes of their own - the model behind the main menu -
+    // and those need producing here too. Deliberately outside the _module
+    // check: the menus that use them run with no module loaded.
+    if (auto gui = getScreenGUI()) {
+        gui->renderOffscreen();
+    }
 }
 
 void Game::renderScene() {
-    if (!_module) {
+    if (!_sceneOutput) {
         return;
     }
-    if (!_sceneOutput) {
-        // Not produced yet this frame - the OpenGL path renders and composites
-        // in one step, which is legal there.
-        renderSceneOffscreen();
-    }
-    if (_sceneOutput) {
-        _services.graphics.renderer.drawSceneOutput(*_sceneOutput);
-    }
+    _services.graphics.renderer.drawSceneOutput(*_sceneOutput);
     // Cleared after compositing so the next frame renders the scene again
     // rather than compositing this frame's target a second time.
     _sceneOutput = nullptr;

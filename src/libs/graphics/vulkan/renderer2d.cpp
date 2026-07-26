@@ -120,6 +120,26 @@ void Vulkan2DRenderer::drawImage(Texture &texture,
     drawImage(texture, transform, color, uv);
 }
 
+/**
+ * Undo the v flip the 2D vertex shader applies unconditionally.
+ *
+ * quadUV in vk2d.slang hands the fragment stage (u, 1 - v), because an uploaded
+ * texture's rows are in OpenGL's bottom-up order. An image this backend
+ * rendered is already the right way up, so that flip has to be cancelled - and
+ * cancelled *before* the caller's own transform, not after, or a caller
+ * selecting a sub-rect gets the mirrored part of the texture instead of the
+ * rect they asked for.
+ *
+ * The shader reads the mat3x4 as three affine columns and multiplies on the
+ * right, so composing F (its own inverse) ahead of `uv` is this.
+ */
+static glm::mat3x4 cancelVFlip(const glm::mat3x4 &uv) {
+    glm::mat3x4 result = uv;
+    result[1] = -uv[1];
+    result[2] = uv[1] + uv[2];
+    return result;
+}
+
 void Vulkan2DRenderer::drawImage(Texture &texture,
                                  const glm::mat4 &transform,
                                  const glm::vec4 &color,
@@ -128,7 +148,7 @@ void Vulkan2DRenderer::drawImage(Texture &texture,
     locals.reset();
     locals.model = transform;
     locals.color = color;
-    locals.uv = uv;
+    locals.uv = _resources.isExternal(texture) ? cancelVFlip(uv) : uv;
     drawQuads("quadVertex", "imageFragment", locals, 0, 1, &texture);
 }
 
@@ -146,7 +166,7 @@ void Vulkan2DRenderer::drawRect(const glm::vec2 &position,
 void Vulkan2DRenderer::drawFullTargetImage(Texture &texture, const glm::mat3x4 &uv) {
     LocalUniforms locals;
     locals.reset();
-    locals.uv = uv;
+    locals.uv = _resources.isExternal(texture) ? cancelVFlip(uv) : uv;
     drawQuads("fullTargetVertex", "imageFragment", locals, 0, 1, &texture);
 }
 

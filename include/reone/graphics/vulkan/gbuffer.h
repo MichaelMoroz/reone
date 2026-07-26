@@ -73,6 +73,15 @@ public:
      */
     void transitionColor(VkCommandBuffer cmd, VkImageLayout to);
 
+    /**
+     * Move the depth attachment to @p to.
+     *
+     * Transparency reads the opaque depth while writing colour elsewhere, which
+     * needs it in a read-only layout; the next frame's geometry pass needs it
+     * writable again. Tracked here for the same reason the colour layout is.
+     */
+    void transitionDepth(VkCommandBuffer cmd, VkImageLayout to);
+
     VkImageLayout colorLayout() const { return _colorLayout; }
 
 private:
@@ -82,6 +91,7 @@ private:
     std::array<std::unique_ptr<VulkanImage>, Count> _color;
     std::unique_ptr<VulkanImage> _depth;
     VkImageLayout _colorLayout {VK_IMAGE_LAYOUT_UNDEFINED};
+    VkImageLayout _depthLayout {VK_IMAGE_LAYOUT_UNDEFINED};
 };
 
 } // namespace graphics

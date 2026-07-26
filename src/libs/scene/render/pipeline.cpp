@@ -121,7 +121,7 @@ std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RendererType type
             throw std::logic_error("Vulkan renderer was not supplied to the pipeline factory");
         }
         return std::make_unique<VulkanRenderPipeline>(
-            std::move(targetSize), _options, *_vulkanRenderer, _uniforms);
+            std::move(targetSize), _options, *_vulkanRenderer, _uniforms, _meshRegistry);
 #endif
     case RendererType::Retro:
         return std::make_unique<RetroRenderPipeline>(

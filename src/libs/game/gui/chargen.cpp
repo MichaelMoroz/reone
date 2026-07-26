@@ -185,6 +185,13 @@ void CharacterGeneration::update(float dt) {
     getSubGUI()->update(dt);
 }
 
+void CharacterGeneration::renderOffscreen() {
+    GameGUI::renderOffscreen();
+    if (auto sub = getSubGUI()) {
+        sub->renderOffscreen();
+    }
+}
+
 void CharacterGeneration::render() {
     GameGUI::render();
     getSubGUI()->render();

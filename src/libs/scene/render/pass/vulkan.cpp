@@ -19,6 +19,7 @@
 
 #include "reone/graphics/material.h"
 #include "reone/graphics/mesh.h"
+#include "reone/graphics/meshregistry.h"
 #include "reone/graphics/options.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
@@ -37,6 +38,11 @@ namespace scene {
 
 static constexpr char kModelModule[] = "pbr_model";
 static constexpr char kOpaqueFragment[] = "opaqueFragment";
+static constexpr char kGrassModule[] = "grass";
+static constexpr char kParticleModule[] = "particles";
+static constexpr char kWalkmeshModule[] = "walkmesh";
+/** Both grass and walkmesh name their G-buffer fragment stage this. */
+static constexpr char kPBRFragment[] = "pbrFragment";
 
 void VulkanRenderPass::warnOnce(const std::string &what) {
     if (_warned.count(what) > 0) {
@@ -140,10 +146,25 @@ void VulkanRenderPass::drawGeometry(Mesh &mesh,
                                     std::optional<glm::vec4> saberDisplacement) {
     const auto &vkMesh = _resources.get(mesh);
 
+    if (_transparency) {
+        // Transparent models still have only a G-buffer shader, which writes
+        // five colour outputs and depth. The transparency pass offers one
+        // attachment and read-only depth, so binding it here is not a
+        // near-miss - it is invalid, and the validation layers say so on every
+        // draw. Skipped until a forward model shader exists; particles and
+        // grass in the same pass are unaffected.
+        warnOnce("transparent models");
+        return;
+    }
+
+    // Walkmeshes are debug geometry with their own tiny shader; everything else
+    // in this pass is a model.
+    bool walkmesh = material.type == MaterialType::Walkmesh;
+
     VulkanPipelineCache::Key key;
-    key.module = kModelModule;
-    key.vertexEntry = vertexEntry;
-    key.fragmentEntry = kOpaqueFragment;
+    key.module = walkmesh ? kWalkmeshModule : kModelModule;
+    key.vertexEntry = walkmesh ? "walkmeshVertex" : vertexEntry;
+    key.fragmentEntry = walkmesh ? kPBRFragment : kOpaqueFragment;
     key.colorFormats = _colorFormats;
     key.depthFormat = _depthFormat;
     key.depthTest = true;
@@ -171,6 +192,15 @@ void VulkanRenderPass::drawGeometry(Mesh &mesh,
         bindings.push_back({entry.first, &_resources.get(entry.second.get())});
     }
 
+    bindAndDraw(pipeline, offsets, bindings, vkMesh, 1);
+}
+
+void VulkanRenderPass::bindAndDraw(
+    const VulkanPipeline &pipeline,
+    const std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> &offsets,
+    const std::vector<std::pair<int, const VulkanImage *>> &textures,
+    const VulkanMesh &mesh,
+    int instances) {
     vkCmdBindPipeline(_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
 
     auto uniformSet = _descriptors.uniformSet(_ring.frame());
@@ -178,11 +208,11 @@ void VulkanRenderPass::drawGeometry(Mesh &mesh,
                             VulkanDescriptors::kUniformSet, 1, &uniformSet,
                             static_cast<uint32_t>(offsets.size()), offsets.data());
 
-    auto textureSet = _descriptors.acquireTextureSet(_ring.frame(), bindings);
+    auto textureSet = _descriptors.acquireTextureSet(_ring.frame(), textures);
     vkCmdBindDescriptorSets(_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
                             VulkanDescriptors::kTextureSet, 1, &textureSet, 0, nullptr);
 
-    vkMesh.draw(_cmd, _resources.zeroBuffer());
+    mesh.draw(_cmd, _resources.zeroBuffer(), instances);
     ++_drawCount;
 }
 
@@ -258,7 +288,61 @@ void VulkanRenderPass::drawParticles(Texture &texture,
                                      bool premultipliedAlpha,
                                      const glm::ivec2 &gridSize,
                                      const std::vector<ParticleInstance> &particles) {
-    warnOnce("particles");
+    if (particles.empty()) {
+        return;
+    }
+    // One instanced billboard per particle, oriented in the vertex shader from
+    // the axes the emitter computed. This runs in the transparency pass, so it
+    // blends onto the already-resolved image rather than writing the G-buffer.
+    const auto &billboard = _resources.get(_meshRegistry.get(MeshName::billboard));
+
+    VulkanPipelineCache::Key key;
+    key.module = kParticleModule;
+    key.vertexEntry = "particleVertex";
+    key.fragmentEntry = "particleFragment";
+    key.colorFormats = _colorFormats;
+    key.depthFormat = _depthFormat;
+    key.depthTest = true;
+    // No depth write: particles are translucent, and one occluding the next
+    // would punch a hole in the puff behind it.
+    key.depthWrite = false;
+    key.blend = BlendMode::Normal;
+    key.cull = faceCulling;
+    key.vertexBindings = VulkanMesh::bindingDescriptions(
+        _meshRegistry.get(MeshName::billboard).vertexLayout());
+    key.vertexAttributes = VulkanMesh::attributeDescriptions(
+        _meshRegistry.get(MeshName::billboard).vertexLayout());
+    auto &pipeline = _pipelines.get(key);
+
+    LocalUniforms locals;
+    locals.reset();
+    if (premultipliedAlpha) {
+        locals.featureMask |= UniformsFeatureFlags::premulalpha;
+    }
+
+    ParticleUniforms particleUniforms;
+    // A zero grid would divide by zero in the shader's frame lookup. Emitters
+    // without an animation grid legitimately report one.
+    particleUniforms.gridSize = glm::max(gridSize, glm::ivec2(1));
+    auto count = std::min(particles.size(), static_cast<size_t>(kMaxParticles));
+    for (size_t i = 0; i < count; ++i) {
+        const auto &particle = particles[i];
+        auto &dst = particleUniforms.particles[i];
+        dst.positionFrame = glm::vec4(particle.position, static_cast<float>(particle.frame));
+        dst.right = glm::vec4(particle.right, 0.0f);
+        dst.up = glm::vec4(particle.up, 0.0f);
+        dst.color = particle.color;
+        dst.size = particle.size;
+    }
+
+    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = _globalsOffset;
+    offsets[UniformBlockBindingPoints::locals] = _ring.push(locals);
+    offsets[UniformBlockBindingPoints::particles] = _ring.push(particleUniforms);
+
+    bindAndDraw(pipeline, offsets,
+                {{TextureUnits::mainTex, &_resources.get(texture)}},
+                billboard, static_cast<int>(count));
 }
 
 void VulkanRenderPass::drawGrass(float radius,
@@ -266,7 +350,58 @@ void VulkanRenderPass::drawGrass(float radius,
                                  Texture &texture,
                                  std::optional<std::reference_wrapper<Texture>> &lightmap,
                                  const std::vector<GrassInstance> &instances) {
-    warnOnce("grass");
+    if (instances.empty()) {
+        return;
+    }
+    // One instanced quad per cluster, billboarded in the vertex shader from the
+    // cluster positions in the uniform block. This is the case SV_InstanceID
+    // broke on OpenGL; see section 14.4 of the plan.
+    const auto &quad = _resources.get(_meshRegistry.get(MeshName::grass));
+
+    VulkanPipelineCache::Key key;
+    key.module = kGrassModule;
+    key.vertexEntry = "grassVertex";
+    key.fragmentEntry = kPBRFragment;
+    key.colorFormats = _colorFormats;
+    key.depthFormat = _depthFormat;
+    key.depthTest = true;
+    key.depthWrite = true;
+    key.cull = FaceCullMode::None;
+    key.vertexBindings = VulkanMesh::bindingDescriptions(
+        _meshRegistry.get(MeshName::grass).vertexLayout());
+    key.vertexAttributes = VulkanMesh::attributeDescriptions(
+        _meshRegistry.get(MeshName::grass).vertexLayout());
+    auto &pipeline = _pipelines.get(key);
+
+    LocalUniforms locals;
+    locals.reset();
+    locals.featureMask |= UniformsFeatureFlags::hashedalphatest;
+    if (lightmap) {
+        locals.featureMask |= UniformsFeatureFlags::lightmap;
+    }
+
+    GrassUniforms grass;
+    grass.radius = radius;
+    grass.quadSize = glm::vec2(quadSize);
+    auto count = std::min(instances.size(), static_cast<size_t>(kMaxGrassClusters));
+    for (size_t i = 0; i < count; ++i) {
+        grass.clusters[i].positionVariant =
+            glm::vec4(instances[i].position, static_cast<float>(instances[i].variant));
+        grass.clusters[i].lightmapUV = instances[i].lightmapUV;
+    }
+
+    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = _globalsOffset;
+    offsets[UniformBlockBindingPoints::locals] = _ring.push(locals);
+    offsets[UniformBlockBindingPoints::grass] = _ring.push(grass);
+
+    std::vector<std::pair<int, const VulkanImage *>> bindings {
+        {TextureUnits::mainTex, &_resources.get(texture)}};
+    if (lightmap) {
+        bindings.push_back({TextureUnits::lightmap, &_resources.get(lightmap->get())});
+    }
+
+    bindAndDraw(pipeline, offsets, bindings, quad, static_cast<int>(count));
 }
 
 void VulkanRenderPass::drawAABB(const std::vector<glm::vec4> &corners) {

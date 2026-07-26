@@ -88,6 +88,10 @@ void GameGUI::update(float dt) {
     }
 }
 
+void GameGUI::renderOffscreen() {
+    _gui->renderOffscreen();
+}
+
 void GameGUI::render() {
     if (_gui) {
         _gui->render();

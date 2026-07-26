@@ -103,6 +103,11 @@ void VulkanRenderPipeline::deinit() {
     if (!_inited) {
         return;
     }
+    // Deregistered before the image goes: the registry holds a raw pointer to
+    // it, keyed on the Texture, and would outlive both.
+    if (_outputHandle) {
+        _renderer.resources().unregisterExternal(*_outputHandle);
+    }
     _output.reset();
     _gbuffer.reset();
     _outputHandle.reset();
@@ -129,7 +134,9 @@ void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOff
     depth.imageView = _gbuffer->depth().view();
     depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    // Kept, not discarded: the transparency pass depth-tests against it so
+    // particles behind a wall stay behind it.
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depth.clearValue.depthStencil.depth = 1.0f;
 
     VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
@@ -152,6 +159,7 @@ void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOff
                                static_cast<uint32_t>(_targetSize.y)}};
 
     _gbuffer->transitionColor(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    _gbuffer->transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 
     vkCmdBeginRendering(cmd, &rendering);
     vkCmdSetViewport(cmd, 0, 1, &viewport);
@@ -163,6 +171,7 @@ void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOff
                           _renderer.uniformRing(),
                           _renderer.descriptors(),
                           _renderer.resources(),
+                          _meshRegistry,
                           cmd,
                           VulkanGBuffer::colorFormats(),
                           VulkanGBuffer::depthFormat());
@@ -234,17 +243,70 @@ void VulkanRenderPipeline::resolvePass(VkCommandBuffer cmd, uint32_t globalsOffs
                             VulkanDescriptors::kTextureSet, 1, &_resolveSet, 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);
+    // Deliberately left as a colour attachment: transparency blends onto it
+    // next, and render() moves it to a sampleable layout once that is done.
+}
 
-    // Back to a sampleable layout for the compositor.
-    VkImageMemoryBarrier2 toRead = toAttachment;
-    toRead.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    toRead.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    toRead.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-    toRead.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-    toRead.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    dep.pImageMemoryBarriers = &toRead;
-    vkCmdPipelineBarrier2(cmd, &dep);
+void VulkanRenderPipeline::transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset) {
+    auto callback = _passCallbacks.find(RenderPassName::TransparentGeometry);
+    if (callback == _passCallbacks.end()) {
+        return;
+    }
+
+    // Forward, not deferred. Transparent surfaces have no single depth to
+    // resolve lighting at, so they blend straight onto the resolved image,
+    // depth-tested against the opaque geometry but writing no depth of their
+    // own - which is also what leaves the emitter's own back-to-front ordering
+    // in charge of how overlapping particles stack.
+    _gbuffer->transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+
+    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    attachment.imageView = _output->view();
+    attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+    VkRenderingAttachmentInfo depth {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depth.imageView = _gbuffer->depth().view();
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+
+    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = {static_cast<uint32_t>(_targetSize.x),
+                                   static_cast<uint32_t>(_targetSize.y)};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &attachment;
+    rendering.pDepthAttachment = &depth;
+
+    // The same flipped viewport the geometry pass uses. Without it transparent
+    // geometry lands mirrored relative to the opaque geometry it sits among.
+    VkViewport viewport {0.0f, static_cast<float>(_targetSize.y),
+                         static_cast<float>(_targetSize.x),
+                         -static_cast<float>(_targetSize.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
+                               static_cast<uint32_t>(_targetSize.y)}};
+
+    vkCmdBeginRendering(cmd, &rendering);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    VulkanRenderPass pass(_options,
+                          _renderer.device(),
+                          _renderer.pipelines(),
+                          _renderer.uniformRing(),
+                          _renderer.descriptors(),
+                          _renderer.resources(),
+                          _meshRegistry,
+                          cmd,
+                          {_renderer.swapchain().imageFormat()},
+                          VulkanGBuffer::depthFormat(),
+                          true);
+    pass.setGlobalsOffset(globalsOffset);
+    callback->second(pass);
+
+    vkCmdEndRendering(cmd);
 }
 
 Texture &VulkanRenderPipeline::render() {
@@ -264,6 +326,26 @@ Texture &VulkanRenderPipeline::render() {
 
     geometryPass(cmd, globalsOffset);
     resolvePass(cmd, globalsOffset);
+    transparencyPass(cmd, globalsOffset);
+
+    // Everything that draws into the output has now run, so hand it to the 2D
+    // compositor in a layout it can sample.
+    VkImageMemoryBarrier2 toRead {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    toRead.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    toRead.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    toRead.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    toRead.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    toRead.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toRead.image = _output->handle();
+    toRead.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    toRead.subresourceRange.levelCount = 1;
+    toRead.subresourceRange.layerCount = 1;
+
+    VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dep.imageMemoryBarrierCount = 1;
+    dep.pImageMemoryBarriers = &toRead;
+    vkCmdPipelineBarrier2(cmd, &dep);
 
     return *_outputHandle;
 }

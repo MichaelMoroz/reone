@@ -40,12 +40,15 @@ void VulkanRenderer::init() {
     _swapchain.init(_extent, _vsync);
     initFrames();
     initImageSemaphores();
-    // 1 MB per frame is a guess, not a measurement. peakUsage() reports what is
-    // actually wanted once there are real draws, and exhausting it throws with
-    // that number rather than corrupting anything.
+    // 16 MB per frame. The original 1 MB was a guess and a Dantooine exterior
+    // overran it: dangly meshes push a 12 KB DanglyUniforms block per draw, and
+    // a stand of trees is a lot of those. Measured peak there is just under
+    // 7 MB, so this leaves better than twice the headroom. peakUsage() is
+    // logged on shutdown, and exhausting the arena throws with the number
+    // rather than corrupting anything.
     _depth = std::make_unique<VulkanImage>(_device);
     _depth->initDepth(_swapchain.extent(), kDepthFormat);
-    _uniformRing.init(kFramesInFlight, 1u << 20);
+    _uniformRing.init(kFramesInFlight, 16u << 20);
     _descriptors.init(kFramesInFlight, _uniformRing);
     _pipelines.init(
         [this](const std::string &name) {
@@ -62,6 +65,8 @@ void VulkanRenderer::deinit() {
     }
     // Nothing may be destroyed while the GPU might still be reading it.
     vkDeviceWaitIdle(_device.handle());
+    info(str(boost::format("Vulkan: peak uniform arena usage %llu bytes") %
+             _uniformRing.peakUsage()));
     _renderer2d.deinit();
     _resources.deinit();
     _pipelines.deinit();
@@ -234,17 +239,10 @@ void VulkanRenderer::drawSceneOutput(Texture &output) {
         throw std::logic_error("Renderer: no frame begun");
     }
     // The scene pipeline registered its output image against this Texture, so
-    // the 2D path composites it like any other full-target image. Called from
-    // inside the 2D rendering scope, which is where the GUI is drawn.
-    //
-    // The uv here cancels the flip the 2D shader applies. That flip exists for
-    // uploaded textures, whose rows OpenGL reads bottom-up and Vulkan top-down;
-    // a render target this backend produced is already the right way up.
-    static const glm::mat3x4 kNoFlip {
-        glm::vec4 {1.0f, 0.0f, 0.0f, 0.0f},
-        glm::vec4 {0.0f, -1.0f, 0.0f, 0.0f},
-        glm::vec4 {0.0f, 1.0f, 0.0f, 0.0f}};
-    _renderer2d.drawFullTargetImage(output, kNoFlip);
+    // the 2D path composites it like any other full-target image, orientation
+    // included. Called from inside the 2D rendering scope, which is where the
+    // GUI is drawn.
+    _renderer2d.drawFullTargetImage(output);
 }
 
 std::shared_ptr<Texture> VulkanRenderer::captureFrame() {

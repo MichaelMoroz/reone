@@ -84,6 +84,7 @@ void VulkanGBuffer::init(glm::ivec2 extent) {
         vkCmdPipelineBarrier2(cmd, &dep);
     });
     _colorLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    _depthLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
 }
 
 void VulkanGBuffer::deinit() {
@@ -93,20 +94,64 @@ void VulkanGBuffer::deinit() {
     _depth.reset();
 }
 
+/**
+ * The stage and access a layout implies.
+ *
+ * Naming them per layout rather than per call site is what keeps a barrier
+ * honest in both directions: the same transition run backwards at the start of
+ * the next frame needs the masks swapped, and hardcoding one direction quietly
+ * under-synchronises the other.
+ */
+static void scopeForLayout(VkImageLayout layout,
+                           VkPipelineStageFlags2 &stage,
+                           VkAccessFlags2 &access) {
+    switch (layout) {
+    case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+        stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        access = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                 VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        break;
+    case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
+        stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        break;
+    case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL:
+        stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        break;
+    case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+        stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        break;
+    default:
+        // UNDEFINED and anything else: nothing to wait on, nothing to flush.
+        stage = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        access = 0;
+        break;
+    }
+}
+
 void VulkanGBuffer::transitionColor(VkCommandBuffer cmd, VkImageLayout to) {
     if (_colorLayout == to) {
         return;
     }
-    auto from = _colorLayout;
+    VkPipelineStageFlags2 srcStage, dstStage;
+    VkAccessFlags2 srcAccess, dstAccess;
+    scopeForLayout(_colorLayout, srcStage, srcAccess);
+    scopeForLayout(to, dstStage, dstAccess);
+
     std::array<VkImageMemoryBarrier2, Count> barriers {};
     for (int i = 0; i < Count; ++i) {
         auto &b = barriers[i];
         b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        b.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        b.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-        b.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-        b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        b.oldLayout = from;
+        b.srcStageMask = srcStage;
+        b.srcAccessMask = srcAccess;
+        b.dstStageMask = dstStage;
+        b.dstAccessMask = dstAccess;
+        b.oldLayout = _colorLayout;
         b.newLayout = to;
         b.image = _color[i]->handle();
         b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -118,6 +163,34 @@ void VulkanGBuffer::transitionColor(VkCommandBuffer cmd, VkImageLayout to) {
     dep.pImageMemoryBarriers = barriers.data();
     vkCmdPipelineBarrier2(cmd, &dep);
     _colorLayout = to;
+}
+
+void VulkanGBuffer::transitionDepth(VkCommandBuffer cmd, VkImageLayout to) {
+    if (_depthLayout == to) {
+        return;
+    }
+    VkPipelineStageFlags2 srcStage, dstStage;
+    VkAccessFlags2 srcAccess, dstAccess;
+    scopeForLayout(_depthLayout, srcStage, srcAccess);
+    scopeForLayout(to, dstStage, dstAccess);
+
+    VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    b.srcStageMask = srcStage;
+    b.srcAccessMask = srcAccess;
+    b.dstStageMask = dstStage;
+    b.dstAccessMask = dstAccess;
+    b.oldLayout = _depthLayout;
+    b.newLayout = to;
+    b.image = _depth->handle();
+    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    b.subresourceRange.levelCount = 1;
+    b.subresourceRange.layerCount = 1;
+
+    VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dep.imageMemoryBarrierCount = 1;
+    dep.pImageMemoryBarriers = &b;
+    vkCmdPipelineBarrier2(cmd, &dep);
+    _depthLayout = to;
 }
 
 } // namespace graphics

@@ -37,6 +37,7 @@ public:
     virtual bool handle(const input::Event &event);
     virtual void update(float dt);
     virtual void render();
+    virtual void renderOffscreen();
 
     void clearSelection() {
         _gui->clearSelection();

@@ -21,6 +21,7 @@
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/shaderregistry.h"
+#include "reone/graphics/renderer2d.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/resource/di/services.h"
 #include "reone/resource/provider/fonts.h"
@@ -234,7 +235,7 @@ void Console::render() {
     if (!_open) {
         return;
     }
-    _graphicsSvc.context.withBlendMode(BlendMode::Normal, [this]() {
+    _graphicsSvc.renderer2d.withBlendMode(BlendMode::Normal, [this]() {
         renderBackground();
         renderLines();
     });
@@ -242,24 +243,10 @@ void Console::render() {
 
 void Console::renderBackground() {
     float height = kVisibleLineCount * _font->height();
-    _graphicsSvc.uniforms.setGlobals([this](auto &globals) {
-        globals.reset();
-        globals.projection = glm::ortho(
-            0.0f, static_cast<float>(_graphicsOpt.width),
-            static_cast<float>(_graphicsOpt.height), 0.0f,
-            0.0f, 100.0f);
-    });
-    auto transform = glm::scale(
-        glm::translate(glm::vec3 {0.0f, _graphicsOpt.height - height, 0.0f}),
-        glm::vec3 {_graphicsOpt.width, height, 1.0f});
-    _graphicsSvc.uniforms.setLocals([this, transform](auto &locals) {
-        locals.reset();
-        locals.model = std::move(transform);
-        locals.color = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-        locals.color.a = 0.5f;
-    });
-    _graphicsSvc.context.useProgram(_graphicsSvc.shaderRegistry.get(ShaderProgramId::mvpColor));
-    _graphicsSvc.meshRegistry.get(MeshName::quad).draw(_graphicsSvc.statistic);
+    _graphicsSvc.renderer2d.drawRect(
+        {0.0f, _graphicsOpt.height - height},
+        {_graphicsOpt.width, height},
+        {0.0f, 0.0f, 0.0f, 0.5f});
 }
 
 void Console::renderLines() {
@@ -292,7 +279,8 @@ void Console::renderLines() {
             break;
         }
         line = string_strip(line);
-        _font->render(line, position, glm::vec3(1.0f), TextGravity::RightCenter);
+        _graphicsSvc.renderer2d.drawText(*_font, line, position, glm::vec3(1.0f),
+                                         TextGravity::RightCenter);
         position.y -= _font->height();
     }
     _buffer.seekSet(cursor);

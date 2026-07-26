@@ -28,6 +28,7 @@ namespace reone {
 
 namespace graphics {
 
+class IMeshRegistry;
 class IUniforms;
 class VulkanRenderer;
 
@@ -53,11 +54,13 @@ public:
     VulkanRenderPipeline(glm::ivec2 targetSize,
                          graphics::GraphicsOptions &options,
                          graphics::VulkanRenderer &renderer,
-                         graphics::IUniforms &uniforms) :
+                         graphics::IUniforms &uniforms,
+                         graphics::IMeshRegistry &meshRegistry) :
         _targetSize(std::move(targetSize)),
         _options(options),
         _renderer(renderer),
-        _uniforms(uniforms) {
+        _uniforms(uniforms),
+        _meshRegistry(meshRegistry) {
     }
 
     ~VulkanRenderPipeline() { deinit(); }
@@ -82,6 +85,7 @@ private:
     graphics::GraphicsOptions &_options;
     graphics::VulkanRenderer &_renderer;
     graphics::IUniforms &_uniforms;
+    graphics::IMeshRegistry &_meshRegistry;
 
     bool _inited {false};
     std::unordered_map<RenderPassName, std::function<void(IRenderPass &)>> _passCallbacks;
@@ -99,6 +103,7 @@ private:
     VkDescriptorSet _resolveSet {VK_NULL_HANDLE};
 
     void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    void transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void resolvePass(VkCommandBuffer cmd, uint32_t globalsOffset);
 };
 

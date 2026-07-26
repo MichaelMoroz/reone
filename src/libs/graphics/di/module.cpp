@@ -71,10 +71,13 @@ void GraphicsModule::init() {
     // original ordering is preserved rather than hoisting it.
     if (!isVulkanBackend()) {
         _context->init();
-        _meshRegistry->init();
     }
-    // Needed on both paths: the resource layer looks these defaults up by name
-    // while loading a module, and a missing one fails the load.
+    // Both of these only build Mesh and Texture objects, whose init() is
+    // backend-aware, and both are needed on either path: the resource layer
+    // looks the default textures up by name while loading a module, and the
+    // grass and billboard quads come from the mesh registry. They stay after
+    // Context::init because that is what loads the GL entry points.
+    _meshRegistry->init();
     _textureRegistry->init();
     if (!isVulkanBackend()) {
         // OpenGL uniform buffers. Under Vulkan they stay constructed but

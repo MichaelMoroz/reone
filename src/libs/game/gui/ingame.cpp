@@ -226,6 +226,13 @@ void InGameMenu::update(float dt) {
     }
 }
 
+void InGameMenu::renderOffscreen() {
+    GameGUI::renderOffscreen();
+    if (auto tab = getActiveTabGUI()) {
+        tab->renderOffscreen();
+    }
+}
+
 void InGameMenu::render() {
     auto tabGui = getActiveTabGUI();
     if (tabGui) {

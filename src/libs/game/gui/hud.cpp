@@ -396,6 +396,17 @@ std::optional<TransitionPortal> HUD::currentTransitionCandidate() const {
     return pickTransitionPortal(module->area()->transitionPresentationPortals(), view);
 }
 
+void HUD::renderOffscreen() {
+    GameGUI::renderOffscreen();
+    _barkBubble->renderOffscreen();
+    if (_areaTransition && _areaTransition->isVisible()) {
+        _areaTransition->renderOffscreen();
+    }
+    if (_statusSummary && _statusSummary->isVisible()) {
+        _statusSummary->renderOffscreen();
+    }
+}
+
 void HUD::render() {
     _gui->render();
 

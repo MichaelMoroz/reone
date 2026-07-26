@@ -73,6 +73,7 @@ public:
     bool handle(const input::Event &event) override;
     void update(float dt) override;
     void render() override;
+    void renderOffscreen() override;
 
     void startQuick();
     void startCustom();

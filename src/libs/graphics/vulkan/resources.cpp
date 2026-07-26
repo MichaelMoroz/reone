@@ -115,6 +115,10 @@ void VulkanResources::registerExternal(const Texture &texture, const VulkanImage
     _external[&texture] = &image;
 }
 
+void VulkanResources::unregisterExternal(const Texture &texture) {
+    _external.erase(&texture);
+}
+
 const VulkanImage &VulkanResources::fallbackFor(const Texture &texture,
                                                 const std::string &why) {
     if (_warned.insert(why).second) {

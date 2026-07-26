@@ -63,6 +63,9 @@ public:
     virtual void update(float dt) = 0;
     virtual void render() = 0;
 
+    /** Render control-owned scenes, before the frame's 2D pass opens. */
+    virtual void renderOffscreen() = 0;
+
     virtual void clearSelection() = 0;
 
     virtual Control &rootControl() = 0;
@@ -106,6 +109,7 @@ public:
     bool handle(const input::Event &event) override;
     void update(float dt) override;
     void render() override;
+    void renderOffscreen() override;
 
     void clearSelection() override;
 

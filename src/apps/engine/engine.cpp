@@ -478,6 +478,9 @@ void Engine::renderGLFrame(bool &quit) {
     }
     _services->graphics.renderer.beginFrame(
         {_options.graphics.width, _options.graphics.height});
+    // Scene targets are produced before anything 2D is drawn, on both backends,
+    // so the two paths agree on when a scene may be rendered.
+    _game->renderSceneOffscreen();
     _game->render();
     _profiler->render();
     _console->render();
@@ -525,6 +528,7 @@ void Engine::renderVulkanFrame(bool &quit) {
     auto &renderer2d = _vulkanRenderer->renderer2d();
     renderer2d.begin(cmd, extent, _vulkanRenderer->swapchain().imageFormat());
     _game->render();
+    _console->render();
     renderer2d.end();
 
     vkCmdEndRendering(cmd);

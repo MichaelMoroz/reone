@@ -19,6 +19,8 @@
 
 #include <volk.h>
 
+#include "reone/graphics/vulkan/descriptors.h"
+#include "reone/graphics/vulkan/mesh.h"
 #include "reone/graphics/vulkan/pipelinecache.h"
 
 #include "../pass.h"
@@ -29,6 +31,7 @@ namespace graphics {
 
 class VulkanDescriptors;
 class VulkanDevice;
+class IMeshRegistry;
 class VulkanResources;
 class VulkanUniformRing;
 
@@ -58,18 +61,22 @@ public:
                      graphics::VulkanUniformRing &ring,
                      graphics::VulkanDescriptors &descriptors,
                      graphics::VulkanResources &resources,
+                     graphics::IMeshRegistry &meshRegistry,
                      VkCommandBuffer cmd,
                      std::vector<VkFormat> colorFormats,
-                     VkFormat depthFormat) :
+                     VkFormat depthFormat,
+                     bool transparency = false) :
         _options(options),
         _device(device),
         _pipelines(pipelines),
         _ring(ring),
         _descriptors(descriptors),
         _resources(resources),
+        _meshRegistry(meshRegistry),
         _cmd(cmd),
         _colorFormats(std::move(colorFormats)),
-        _depthFormat(depthFormat) {
+        _depthFormat(depthFormat),
+        _transparency(transparency) {
     }
 
     void draw(graphics::Mesh &mesh,
@@ -135,10 +142,16 @@ private:
     graphics::VulkanUniformRing &_ring;
     graphics::VulkanDescriptors &_descriptors;
     graphics::VulkanResources &_resources;
+    graphics::IMeshRegistry &_meshRegistry;
 
     VkCommandBuffer _cmd;
     std::vector<VkFormat> _colorFormats;
     VkFormat _depthFormat;
+    /**
+     * True in the forward transparency pass, which has one colour attachment
+     * and read-only depth rather than the G-buffer's five and a writable one.
+     */
+    bool _transparency;
     uint32_t _globalsOffset {0};
     int _drawCount {0};
 
@@ -146,6 +159,13 @@ private:
     std::set<std::string> _warned;
 
     void warnOnce(const std::string &what);
+
+    /** Bind pipeline, both descriptor sets and draw. Every path ends here. */
+    void bindAndDraw(const graphics::VulkanPipeline &pipeline,
+                     const std::array<uint32_t, graphics::VulkanDescriptors::kNumUniformBlocks> &offsets,
+                     const std::vector<std::pair<int, const graphics::VulkanImage *>> &textures,
+                     const graphics::VulkanMesh &mesh,
+                     int instances);
 
     /**
      * The common path: pick the pipeline for @p vertexEntry, fill locals from

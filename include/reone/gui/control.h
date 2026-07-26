@@ -115,6 +115,18 @@ public:
     virtual void update(float dt);
     virtual void render(const glm::ivec2 &screenSize, const glm::ivec2 &offset);
 
+    /**
+     * Render whatever this control owns into its own target, before the frame's
+     * 2D pass opens.
+     *
+     * A control can host a 3D scene - the model turning behind the main menu -
+     * and on a backend with explicit render passes that scene cannot be
+     * rendered from inside render(), because render() itself runs within the
+     * GUI's pass and passes do not nest. It is produced here and only
+     * composited there. Same split as Game::renderSceneOffscreen.
+     */
+    virtual void renderOffscreen();
+
     void updateTransform();
     void updateTextLines();
 
@@ -217,6 +229,8 @@ protected:
     std::shared_ptr<Border> _hilight;
     Text _text;
     std::string _sceneName;
+    /** Produced by renderOffscreen, composited and cleared by render. */
+    graphics::Texture *_sceneOutput {nullptr};
     int _padding {0};
     glm::mat4 _transform {1.0f};
     bool _visible {true};
