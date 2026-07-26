@@ -157,8 +157,7 @@ void Shaders::init() {
     if (hasSource(kVertSlangModel) && hasSource(kFragSlangPBROpaqueModel)) {
         auto vertSlangModel = initShader(ShaderType::Vertex, kVertSlangModel, SourceFlavor::Slang);
         auto fragSlangOpaqueModel = initShader(ShaderType::Fragment, kFragSlangPBROpaqueModel, SourceFlavor::Slang);
-        _shaderRegistry.add(ShaderProgramId::pbrOpaqueModelSlang, initShaderProgram({vertSlangModel, fragSlangOpaqueModel}));
-        _slangShadersAvailable = true;
+        _shaderRegistry.addSlangVariant(ShaderProgramId::pbrOpaqueModel, initShaderProgram({vertSlangModel, fragSlangOpaqueModel}));
     }
     _shaderRegistry.add(ShaderProgramId::pbrSSAO, initShaderProgram({vertPassthrough, fragPBRSSAO}));
     _shaderRegistry.add(ShaderProgramId::pbrSSR, initShaderProgram({vertPassthrough, fragPBRSSR}));

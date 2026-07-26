@@ -61,12 +61,7 @@ void PBRRenderPass::withMaterialAppliedToContext(const Material &material, std::
     if (kMatTypeToProgramId.count(material.type) == 0) {
         throw std::invalid_argument(str(boost::format("Material type %1% is not associated with a shader program") % static_cast<int>(material.type)));
     }
-    auto programId = kMatTypeToProgramId.at(material.type);
-    // Chosen per draw so the transpiled variant can be switched on while running.
-    if (_options.slangShaders && material.type == MaterialType::OpaqueModel) {
-        programId = ShaderProgramId::pbrOpaqueModelSlang;
-    }
-    auto &program = _shaderRegistry.get(programId);
+    auto &program = _shaderRegistry.get(kMatTypeToProgramId.at(material.type));
     _context.useProgram(program);
     for (const auto &[unit, texture] : material.textures) {
         _context.bindTexture(texture, unit);

@@ -34,8 +34,6 @@ struct ShaderProgramId {
     static constexpr char pbrCombine[] = "pbr_combine";
     static constexpr char pbrGrass[] = "pbr_grass";
     static constexpr char pbrOpaqueModel[] = "pbr_opaque_model";
-    /** Same program, transpiled from Slang. Registered only when the transpiled sources are present. */
-    static constexpr char pbrOpaqueModelSlang[] = "pbr_opaque_model_slang";
     static constexpr char pbrSSAO[] = "pbr_ssao";
     static constexpr char pbrSSR[] = "pbr_ssr";
     static constexpr char pbrWalkmesh[] = "pbr_walkmesh";
@@ -79,7 +77,29 @@ public:
         _idToProgram[std::move(programId)] = std::move(program);
     }
 
+    /**
+     * Registers the Slang-transpiled build of a program under the same id. While
+     * the Slang variant is selected, get returns it in place of the original;
+     * programs without one fall back. Keeping the switch here means call sites
+     * need no knowledge of which build they are getting.
+     */
+    void addSlangVariant(std::string programId, std::shared_ptr<ShaderProgram> program) {
+        _idToSlangProgram[std::move(programId)] = std::move(program);
+    }
+
+    void setUseSlangVariants(bool use) { _useSlangVariants = use; }
+    bool useSlangVariants() const { return _useSlangVariants; }
+
+    /** Programs that have a transpiled twin, for reporting. */
+    size_t slangVariantCount() const { return _idToSlangProgram.size(); }
+
     ShaderProgram &get(const std::string &programId) {
+        if (_useSlangVariants) {
+            auto variant = _idToSlangProgram.find(programId);
+            if (variant != _idToSlangProgram.end()) {
+                return *variant->second;
+            }
+        }
         auto program = _idToProgram.find(programId);
         if (program == _idToProgram.end()) {
             throw std::runtime_error("Shader program not found by id: " + programId);
@@ -89,6 +109,8 @@ public:
 
 private:
     std::map<std::string, std::shared_ptr<ShaderProgram>> _idToProgram;
+    std::map<std::string, std::shared_ptr<ShaderProgram>> _idToSlangProgram;
+    bool _useSlangVariants {false};
 };
 
 } // namespace graphics

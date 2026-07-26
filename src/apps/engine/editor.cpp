@@ -352,14 +352,20 @@ void Editor::update(float dt) {
         }
 
         if (ImGui::BeginMenu("Debug")) {
-            bool slangAvailable = _engine._resourceModule->shaders().slangShadersAvailable();
-            auto &graphicsOpt = _engine._options.graphics;
-            if (ImGui::MenuItem("Slang shaders", nullptr, &graphicsOpt.slangShaders, slangAvailable)) {
-                // Both programs are built at startup, so this takes effect on the
-                // next draw - the opaque model program is chosen per draw.
+            auto &shaderRegistry = _engine._graphicsModule->shaderRegistry();
+            size_t variants = shaderRegistry.slangVariantCount();
+            bool useSlang = shaderRegistry.useSlangVariants();
+            if (ImGui::MenuItem("Slang shaders", nullptr, &useSlang, variants > 0)) {
+                // Every variant is built at startup; the registry hands out the
+                // transpiled build from the next draw on.
+                shaderRegistry.setUseSlangVariants(useSlang);
             }
-            if (!slangAvailable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                ImGui::SetTooltip("This build has no transpiled shaders - slangc was not found.");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                if (variants > 0) {
+                    ImGui::SetTooltip("%zu of the shader programs have a transpiled twin.", variants);
+                } else {
+                    ImGui::SetTooltip("This build has no transpiled shaders - slangc was not found.");
+                }
             }
             ImGui::MenuItem("ImGui Demo", nullptr, &_showImGuiDemo);
             ImGui::EndMenu();
