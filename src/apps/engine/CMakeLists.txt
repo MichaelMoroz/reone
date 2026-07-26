@@ -47,4 +47,11 @@ if(ENABLE_VULKAN)
     target_compile_definitions(engine PRIVATE R_ENABLE_VULKAN)
 endif()
 
+# The engine reads its shaders from shaderpack.erf, not from glsl/, so building
+# only this target left edits to the GLSL sitting on disk while the run used
+# whatever was packed last. Building everything picked the change up and
+# building the engine alone did not, which is a difference no measurement
+# should depend on.
+add_dependencies(engine create_shaderpack)
+
 list(APPEND InstallTargets engine)
