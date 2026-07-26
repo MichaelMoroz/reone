@@ -39,7 +39,8 @@ set(SPIRV_MODULES
     "grass:grassVertex+pbrFragment+retroFragment"
     "walkmesh:walkmeshVertex+pbrFragment+retroFragment"
     "vktriangle:triangleVertex+triangleFragment"
-    "vkmesh:meshVertex+meshFragment")
+    "vkmesh:meshVertex+meshFragment"
+    "vkgbuffer:geometryVertex+geometryFragment+resolveVertex+resolveFragment")
 
 if(SLANGC_EXECUTABLE)
     set(SPIRV_OUTPUTS)

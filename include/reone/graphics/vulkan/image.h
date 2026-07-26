@@ -57,6 +57,12 @@ public:
      */
     void initDepth(glm::ivec2 extent, VkFormat format);
 
+    /**
+     * A colour attachment that is also sampled afterwards, which is what every
+     * G-buffer target is.
+     */
+    void initColorAttachment(glm::ivec2 extent, VkFormat format);
+
     void deinit();
 
     VkImage handle() const { return _image; }

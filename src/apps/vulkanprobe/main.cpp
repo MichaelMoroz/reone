@@ -37,6 +37,7 @@
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/types.h"
 #include "reone/graphics/uniforms.h"
+#include "reone/graphics/vulkan/gbuffer.h"
 #include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/vulkan/mesh.h"
 #include "reone/graphics/vulkan/pipeline.h"
@@ -99,7 +100,7 @@ int main(int argc, char **argv) {
     int width, height, frames;
     bool validation, vsync;
     std::string capturePath, clearColor, spirvPath, drawColor;
-    bool drawMesh;
+    bool drawMesh, deferred;
 
     po::options_description desc("Options");
     desc.add_options()                                                              //
@@ -120,7 +121,9 @@ int main(int argc, char **argv) {
         ("draw", po::value<std::string>(&drawColor)->default_value("0.9,0.4,0.1"),  //
          "draw colour, pushed through the uniform ring")                            //
         ("mesh", po::value<bool>(&drawMesh)->default_value(false),                  //
-         "draw a cube with real vertex attributes instead of the triangle");        //
+         "draw a cube with real vertex attributes instead of the triangle")         //
+        ("deferred", po::value<bool>(&deferred)->default_value(false),               //
+         "render the cube through a G-buffer and resolve it");                       //
 
     po::variables_map vars;
     po::store(po::parse_command_line(argc, argv, desc), vars);
@@ -171,7 +174,14 @@ int main(int argc, char **argv) {
         std::unique_ptr<VulkanImage> checker;
         std::shared_ptr<Mesh> cube;
         std::unique_ptr<VulkanMesh> vkCube;
-        if (drawMesh && spirvPath == "spirv/vktriangle.spv") {
+        std::unique_ptr<VulkanGBuffer> gbuffer;
+        std::unique_ptr<VulkanPipeline> resolvePipeline;
+        if (deferred) {
+            drawMesh = true;
+        }
+        if (deferred && spirvPath == "spirv/vktriangle.spv") {
+            spirvPath = "spirv/vkgbuffer.spv";
+        } else if (drawMesh && spirvPath == "spirv/vktriangle.spv") {
             spirvPath = "spirv/vkmesh.spv";
         }
         if (!std::filesystem::exists(spirvPath)) {
@@ -179,16 +189,23 @@ int main(int argc, char **argv) {
         } else {
             VulkanPipeline::Config config;
             config.spirv = readSpirV(spirvPath);
-            config.vertexEntry = drawMesh ? "meshVertex" : "triangleVertex";
-            config.fragmentEntry = drawMesh ? "meshFragment" : "triangleFragment";
+            config.vertexEntry = deferred ? "geometryVertex"
+                                          : (drawMesh ? "meshVertex" : "triangleVertex");
+            config.fragmentEntry = deferred ? "geometryFragment"
+                                            : (drawMesh ? "meshFragment" : "triangleFragment");
             if (drawMesh) {
                 cube = makeCube();
                 config.vertexBindings = {VulkanMesh::bindingDescription(cube->vertexLayout())};
                 config.vertexAttributes = VulkanMesh::attributeDescriptions(cube->vertexLayout());
             }
-            config.colorFormat = renderer.swapchain().imageFormat();
-            if (drawMesh) {
-                config.depthFormat = renderer.depthFormat();
+            if (deferred) {
+                config.colorFormats = VulkanGBuffer::colorFormats();
+                config.depthFormat = VulkanGBuffer::depthFormat();
+            } else {
+                config.colorFormats = {renderer.swapchain().imageFormat()};
+                if (drawMesh) {
+                    config.depthFormat = renderer.depthFormat();
+                }
             }
             config.setLayouts = {renderer.descriptors().uniformLayout(),
                                  renderer.descriptors().textureLayout()};
@@ -208,6 +225,28 @@ int main(int argc, char **argv) {
             checker = std::make_unique<VulkanImage>(renderer.device());
             checker->initSampled2D({kSide, kSide}, VK_FORMAT_R8G8B8A8_UNORM, texels.data());
             renderer.descriptors().setTexture(TextureUnits::mainTex, *checker);
+
+            if (deferred) {
+                gbuffer = std::make_unique<VulkanGBuffer>(renderer.device());
+                gbuffer->init({width, height});
+
+                VulkanPipeline::Config resolveConfig;
+                resolveConfig.spirv = config.spirv;
+                resolveConfig.vertexEntry = "resolveVertex";
+                resolveConfig.fragmentEntry = "resolveFragment";
+                resolveConfig.colorFormats = {renderer.swapchain().imageFormat()};
+                resolveConfig.setLayouts = config.setLayouts;
+                resolvePipeline = std::make_unique<VulkanPipeline>(renderer.device());
+                resolvePipeline->init(resolveConfig);
+
+                // The resolve samples the G-buffer, so its attachments occupy
+                // texture units 1..4 alongside the diffuse map at 0.
+                for (int i = 0; i < VulkanGBuffer::Count - 1; ++i) {
+                    renderer.descriptors().setTexture(i + 1, gbuffer->color(i));
+                }
+                info("G-buffer: 5 attachments at " +
+                     std::to_string(width) + "x" + std::to_string(height));
+            }
 
             if (drawMesh) {
                 vkCube = std::make_unique<VulkanMesh>(renderer.device());
@@ -272,6 +311,18 @@ int main(int argc, char **argv) {
 
                 auto cmd = renderer.commandBuffer();
 
+                std::array<VkRenderingAttachmentInfo, VulkanGBuffer::Count> gbufAttachments {};
+                if (deferred) {
+                    for (int i = 0; i < VulkanGBuffer::Count; ++i) {
+                        auto &a = gbufAttachments[i];
+                        a.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                        a.imageView = gbuffer->color(i).view();
+                        a.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                        a.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                        a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                    }
+                }
+
                 VkRenderingAttachmentInfo colorAttachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
                 colorAttachment.imageView = renderer.currentImageView();
                 colorAttachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -294,6 +345,13 @@ int main(int argc, char **argv) {
                 rendering.pColorAttachments = &colorAttachment;
                 if (drawMesh) {
                     rendering.pDepthAttachment = &depthAttachment;
+                }
+                if (deferred) {
+                    // The geometry pass writes the G-buffer instead of the
+                    // swapchain, with its own depth.
+                    depthAttachment.imageView = gbuffer->depth().view();
+                    rendering.colorAttachmentCount = VulkanGBuffer::Count;
+                    rendering.pColorAttachments = gbufAttachments.data();
                 }
 
                 vkCmdBeginRendering(cmd, &rendering);
@@ -320,6 +378,42 @@ int main(int argc, char **argv) {
                     vkCmdDraw(cmd, 3, 1, 0, 0);
                 }
                 vkCmdEndRendering(cmd);
+
+                if (deferred) {
+                    // Attachments become textures. Without this barrier the
+                    // resolve may sample them before the writes have landed.
+                    gbuffer->transitionColor(cmd,
+                                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+                    VkRenderingInfo resolveRendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+                    resolveRendering.renderArea.extent = {static_cast<uint32_t>(w),
+                                                          static_cast<uint32_t>(h)};
+                    resolveRendering.layerCount = 1;
+                    resolveRendering.colorAttachmentCount = 1;
+                    resolveRendering.pColorAttachments = &colorAttachment;
+
+                    vkCmdBeginRendering(cmd, &resolveRendering);
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                      resolvePipeline->handle());
+                    vkCmdSetViewport(cmd, 0, 1, &vp);
+                    vkCmdSetScissor(cmd, 0, 1, &scissor);
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            resolvePipeline->layout(),
+                                            VulkanDescriptors::kUniformSet, 1, &uniformSet,
+                                            static_cast<uint32_t>(offsets.size()), offsets.data());
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            resolvePipeline->layout(),
+                                            VulkanDescriptors::kTextureSet, 1, &textureSet,
+                                            0, nullptr);
+                    vkCmdDraw(cmd, 3, 1, 0, 0);
+                    vkCmdEndRendering(cmd);
+
+                    // Back to attachment layout for the next frame's clear.
+                    gbuffer->transitionColor(cmd,
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                }
             }
 
             bool last = frames > 0 && frame + 1 >= frames;

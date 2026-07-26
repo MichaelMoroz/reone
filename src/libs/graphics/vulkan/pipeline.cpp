@@ -99,14 +99,19 @@ void VulkanPipeline::init(const Config &config) {
         VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    VkPipelineColorBlendAttachmentState blendAttachment {};
-    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    // One blend state per attachment is mandatory, even when they are all the
+    // same: a count mismatch here is a validation error, not a default.
+    std::vector<VkPipelineColorBlendAttachmentState> blendAttachments(
+        config.colorFormats.size());
+    for (auto &attachment : blendAttachments) {
+        attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                    VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    }
 
     VkPipelineColorBlendStateCreateInfo blend {
         VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    blend.attachmentCount = 1;
-    blend.pAttachments = &blendAttachment;
+    blend.attachmentCount = static_cast<uint32_t>(blendAttachments.size());
+    blend.pAttachments = blendAttachments.data();
 
     VkPipelineDepthStencilStateCreateInfo depthStencil {
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
@@ -126,10 +131,9 @@ void VulkanPipeline::init(const Config &config) {
 
     // Dynamic rendering: no VkRenderPass and no VkFramebuffer, just the formats
     // the pipeline will write. Fewer objects to keep in step as passes change.
-    auto colorFormat = config.colorFormat;
     VkPipelineRenderingCreateInfo rendering {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachmentFormats = &colorFormat;
+    rendering.colorAttachmentCount = static_cast<uint32_t>(config.colorFormats.size());
+    rendering.pColorAttachmentFormats = config.colorFormats.data();
     rendering.depthAttachmentFormat = config.depthFormat;
 
     VkGraphicsPipelineCreateInfo pipelineInfo {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};

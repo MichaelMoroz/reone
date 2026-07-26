@@ -900,9 +900,39 @@ silent. The uniform arena peaks at 2816 bytes for two blocks per frame across
 two frames in flight, which says the 1 MB guess is generous by three orders of
 magnitude and can be revisited when there are real draw counts.
 
-### 10.8 Next
+### 10.8 The G-buffer and a deferred resolve
 
-- The G-buffer: several colour attachments, and the deferred resolve.
+`VulkanGBuffer` owns five colour attachments and a depth attachment, in the same
+order and to the same formats as `fbOpaqueGeometry` in the OpenGL PBR pipeline -
+diffuse, eye normal, lightmap, self-illumination, motion - so the two can
+eventually be compared attachment by attachment. One deviation: eye normals are
+RGBA8 rather than RGB8, because three-component render targets are not
+universally supported and the fourth channel is free here.
+
+`slang/vkgbuffer.slang` has both halves. The geometry pass writes the five
+targets from one fragment shader; the resolve reads them back and lights once
+per pixel. Normals are packed to 0..1 on the way in and unpacked on the way out,
+since the target is unorm and normals are signed.
+
+A frame is now: clear, geometry pass into the G-buffer, barrier flipping all
+five attachments from colour-attachment to shader-read, resolve into the
+swapchain, barrier back. Verified by capture with validation silent, and the
+per-face shading in the result confirms the normal target genuinely round-trips
+rather than the diffuse target being copied through.
+
+Two things Vulkan does not do for you, both caught by validation:
+
+- **Dynamic rendering does not transition attachments.** Images are created
+  `UNDEFINED`, so the first frame begins a pass declaring a layout the images
+  are not in. They need one explicit transition at creation; the per-frame cycle
+  takes over after that.
+- **One blend state per attachment is mandatory**, even when they are identical.
+  A count mismatch against `colorAttachmentCount` is an error, not a default.
+
+### 10.9 Next
+
 - Wiring `MeshRegistry`, `Texture` and `Material` through, so game assets rather
   than a synthesised cube go down this path.
+- A pipeline cache, since every material and pass combination is now its own
+  pipeline object.
 - Then the engine can begin to select a backend, and `vulkanprobe` can go.

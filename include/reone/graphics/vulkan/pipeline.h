@@ -43,8 +43,11 @@ public:
         std::vector<uint32_t> spirv;
         std::string vertexEntry;
         std::string fragmentEntry;
-        /** Colour attachment format, for dynamic rendering. */
-        VkFormat colorFormat {VK_FORMAT_UNDEFINED};
+        /**
+         * Colour attachment formats, in attachment order, for dynamic
+         * rendering. One entry for a normal pass, several for a G-buffer.
+         */
+        std::vector<VkFormat> colorFormats;
         /** UNDEFINED disables depth testing and writing. */
         VkFormat depthFormat {VK_FORMAT_UNDEFINED};
         std::vector<VkDescriptorSetLayout> setLayouts;
