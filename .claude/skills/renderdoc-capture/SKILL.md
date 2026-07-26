@@ -174,8 +174,46 @@ installed here: `GetConstantBlock` (not `GetConstantBuffer`/`GetConstantBuffers`
 `uniformBuffers` - it uses a descriptor store. When a name fails, dump
 `[x for x in dir(obj) if not x.startswith('_')]` and look.
 
+## Validating one pass: measure what it does to its own frame
+
+Comparing a backend's final image against the other backend cannot tell you
+whether a single pass is correct, because the pass inherits whatever difference
+came before it. Measure the pass against **its own** input instead, on both
+backends, and compare the two magnitudes:
+
+```
+for each backend: render with the pass off and on, diff those two
+```
+
+This is what caught a broken FXAA port. Cross-backend, FXAA "on" differed by
+3.27 against 0.91 with it off, which is ambiguous - a high-pass filter
+amplifying an existing difference looks the same. Within each backend the
+answer was immediate:
+
+```
+             changed its own frame by    pixels touched
+  opengl     0.5140                      9.29%
+  vulkan     2.6313                      10.79%
+```
+
+The same *share* of pixels touched, so edge detection agreed; five times the
+magnitude, so the blend distance was wrong. That localised it to the span
+length in a few minutes, where the cross-backend number had been argued about
+for an hour. Two ratios worth computing separately: how many pixels a pass
+touches, and how far it moves them.
+
 ## Traps that cost real time here
 
+- **Channel order is not uniform across targets.** The Vulkan `output` image
+  carries the swapchain format, `B8G8R8A8_UNORM`, while every G-buffer target
+  is RGBA. `--dumptargets` now swizzles the output to RGBA on the way out so
+  every `.npy` is one order, but if a new target is added in a BGRA format,
+  add it to `isBGRA` in `dumpTargets` too. Comparing BGR against RGB once
+  turned a real 0.91 difference into an apparent 11.67 and produced a
+  confident report of a colour cast that did not exist - blue ground where
+  OpenGL had brown was entirely the analysis, not the renderer. If a diff
+  suggests a *hue* shift rather than a brightness one, test
+  `np.abs(a[..., ::-1] - b)` before believing it.
 - **Two build trees, and the one you want is not the default.** `cmake --build
   build --config Release` writes `build/bin`; `--config Debug` writes
   `build/debug/bin`. Every capture harness path in this file assumes
