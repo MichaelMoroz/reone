@@ -631,3 +631,29 @@ Three ways out:
 
 Option 2 is the most promising: it keeps one shader source, needs no engine
 change, and the intermediate GLSL is already known to be correct.
+
+### 9.6 Decision: stop running Slang on OpenGL
+
+Every obstacle to running the rewritten shaders on OpenGL has been a mismatch
+between what Slang emits and what OpenGL accepts - cross-stage identifier naming
+in transpiled GLSL (9.4), Vulkan-only builtins in GLSL, and Vulkan-only builtins
+in SPIR-V that OpenGL silently reads as zero (9.5). The shaders themselves have
+been correct Vulkan throughout. Each workaround is deleted when the OpenGL
+backend is.
+
+So the Slang shaders now target Vulkan only, and the OpenGL backend goes back to
+its hand-written GLSL, unchanged and frozen. It stops being something to fight
+and returns to being the reference the Vulkan output is compared against.
+
+The comparison survives the move: the capture harness screenshots whatever
+backend is running, so GL against Vulkan is the same A/B as before.
+
+What carries forward unchanged: the uniform blocks and their layout assertions,
+every Slang shader written so far, the capture harness, and the RenderDoc
+workflow. What is removed: the SPIR-V loading path in the OpenGL backend, the
+--slangshaders toggle, and the shader registry's variant selection.
+
+The cost is that nothing renders until a good deal of phase 4 exists, which was
+the original argument for doing shaders on OpenGL first. That argument has
+weakened now the shaders are written and known to be Vulkan-shaped - what would
+have been guesswork no longer is.
