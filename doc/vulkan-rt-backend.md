@@ -527,13 +527,13 @@ main argument for this ordering.
    resolve. All of it exercised by `vulkanprobe` with the validation layers on
    and silent. See §10.
 
-   **Structurally complete, not at parity.** Pipelines are cached, engine
-   `Texture`s and `Mesh`es upload through a cache, and the whole 2D vocabulary -
-   sprites, rects, text, blend, scissor - runs through the same `I2DRenderer`
-   the GL backend implements. What is missing is the scene pipeline itself and
-   everything feeding it: shadow, transparency, SSAO, SSR and combine passes,
-   real materials and lighting, the skinned/dangly/saber/particle/grass geometry
-   kinds, movie playback, and engine-side backend selection. See §10.10.
+   **The shipping shaders run; the pass chain does not exist yet.** All four
+   `pbr_model` geometry variants and instanced grass render into the Vulkan
+   G-buffer, pipelines are cached, engine `Texture`s and `Mesh`es upload through
+   a cache, and the whole 2D vocabulary runs through the same `I2DRenderer` the
+   GL backend implements. Still missing: shadow, transparency, SSAO, SSR and
+   combine passes, real lighting and materials, particles and billboards, movie
+   playback, and engine-side backend selection. See §10.12.
 5. **Acceleration structures and hybrid RT** — compute skinning, BLAS/TLAS, then
    RT shadows/AO/reflections replacing the current SSAO and SSR passes. First
    visible payoff.
@@ -1000,7 +1000,39 @@ Two bugs worth carrying forward:
   `orthoRH_ZO` is the explicit zero-to-one form. `GLM_FORCE_DEPTH_ZERO_TO_ONE`
   would fix it globally and break the GL backend, so it is not used.
 
-### 10.11 What phase 4 still needs
+### 10.11 The shipping shaders, running
+
+`pbr_model.slang` renders on Vulkan: `staticVertex`, `skinnedVertex`,
+`danglyVertex` and `saberVertex`, all four feeding `opaqueFragment` into the
+G-buffer, four pipelines from one module differing only in the vertex stage.
+Its `GBufferOutput` already matched `VulkanGBuffer`'s attachment order, so
+nothing had to be adapted. `grass.slang` renders too - 256 instanced clusters
+spread across a grid.
+
+**The grass case is the one that started this.** Slang lowers `SV_InstanceID` to
+`InstanceIndex` minus `BaseInstance`; OpenGL's SPIR-V path read both as zero,
+every instance landed on cluster 0, and the field vanished. Finding that took a
+RenderDoc investigation. On Vulkan the same shader, unchanged, simply works.
+
+Four general lessons came out of getting there:
+
+- **A descriptor's image view type must match the shader's declaration.** The
+  texture set is one descriptor type throughout, but `Sampler2DArray` and
+  `SamplerCube` units need array and cube views; a 2D view is an error, not a
+  coercion. There is now a default of each shape, chosen per unit.
+- **Image layout belongs to the object, not the caller.** `VulkanGBuffer` tracks
+  its own, because whether the attachments are readable depends on what the
+  previous frame did and the caller is the party least able to know.
+- **A pass that samples fixed images wants its own persistent set.** Putting the
+  G-buffer into the standing bindings made the geometry pass bind descriptors
+  pointing at images that were colour attachments at that moment.
+- **Empty uniform blocks hide failures.** Three of the four model variants draw
+  fine with zeroed blocks; `danglyVertex` takes its position wholly from
+  `DanglyUniforms` and silently vanishes. Skinning needs full weight on bone
+  zero for the same reason. A variant that renders nothing is not necessarily a
+  broken pipeline.
+
+### 10.12 What phase 4 still needs
 
 Phase 4 is defined as parity with the OpenGL PBR pipeline. The backend can now
 do everything *structurally* required - present, allocate, upload, describe,
@@ -1008,25 +1040,25 @@ cache pipelines, rasterise geometry into a G-buffer, resolve it, and draw the
 whole 2D vocabulary. What it does not have is the pipeline itself and the
 content that feeds it:
 
-1. **The scene pipeline.** `scene/render/pipeline/pbr.cpp` is around 500 lines
-   of pass orchestration plus a dozen shaders: shadow maps, opaque geometry with
-   real materials, transparency and OIT, SSAO, SSR, bloom and the combine pass.
-   None of it exists in Vulkan.
-2. **Real materials and lighting.** The resolve lights from one fixed direction.
-   Light lists, shadow lookups and the PBR BRDF all have to come across, and
-   `Material` has to reach the backend.
-3. **The rest of the geometry kinds.** Skinned, dangly and saber meshes,
-   particles, grass, billboards, walkmeshes - each is an entry point already
-   written in Slang and a pipeline variant not yet built.
+1. **The pass chain.** `scene/render/pipeline/pbr.cpp` is around 500 lines of
+   orchestration over shadow maps, transparency and OIT, SSAO, SSR, bloom and
+   the combine pass. The opaque geometry pass and a stand-in resolve exist in
+   Vulkan; none of the rest does.
+2. **Real lighting.** The resolve lights from one fixed direction.
+   `f_pbr_combine.glsl` - light lists, shadow lookups, the PBR BRDF, fog - has
+   to be ported, and `Material` has to reach the backend so the feature mask
+   means something.
+3. **Remaining geometry kinds.** Particles, billboards and walkmeshes. The four
+   model variants and grass are done.
 4. **Movie playback**, which uploads a frame per tick.
 5. **Engine hosting.** The engine cannot select a backend. Everything outside
    the graphics library still calls the GL context directly, so `--backend
    vulkan` would die in module init. This is what turns the backend from a
-   demonstration into something usable, and it depends on 1-4 existing.
+   demonstration into something usable.
 
-Items 1 and 2 are the bulk. A reasonable order is part of 5 first - enough
-backend selection to host a Vulkan window with the GUI on it, since the 2D
-renderer is finished - then 1, then 2, then 3 and 4.
+Items 1 and 2 are the bulk. Item 5 is what makes any of it visible in the game,
+and the 2D renderer being finished means a Vulkan window hosting the GUI is
+reachable before the scene pipeline is.
 
 ### 10.12 Next
 
