@@ -325,8 +325,11 @@ int Engine::run() {
         if (quit) {
             break;
         }
-        bool focus = _window->isInFocus();
-        if (!focus) {
+        // Idle while the window is in the background, but never during a
+        // capture: the run is not being watched, it is being measured, and
+        // stalling on focus makes the result depend on what else the desktop
+        // was doing.
+        if (!_window->isInFocus() && !isCaptureRun()) {
             std::this_thread::sleep_for(std::chrono::milliseconds {100});
             continue;
         }
@@ -616,6 +619,14 @@ void Engine::processEvents(bool &quit) {
         }
         auto event = eventFromSDLEvent(sdlEvent);
         if (!event) {
+            continue;
+        }
+        if (isCaptureRun()) {
+            // Dropped rather than handled. A single mouse move over the window
+            // turns the camera, and from then on frame 900 is a different
+            // frame - which is most of why two runs of the same build did not
+            // match. Console commands still arrive, through the commands file
+            // rather than through here.
             continue;
         }
         if (_profiler->handle(*event)) {

@@ -124,6 +124,17 @@ public:
 
     bool handle(const input::Event &event);
     void update(float frameTime);
+
+    /**
+     * Milliseconds of simulated time since the game started.
+     *
+     * Advances by the frame delta rather than by the wall clock, so anything
+     * measured against it behaves the same at any frame rate and repeats
+     * exactly on a capture run. Creature path caching is measured against it;
+     * on the wall clock, how often a path was recomputed depended on how fast
+     * the machine happened to be running.
+     */
+    uint32_t simulatedMillis() const { return static_cast<uint32_t>(_simulatedTime * 1000.0f); }
     void render();
 
     /**
@@ -569,6 +580,8 @@ private:
     void renderGUI();
 
     graphics::Texture *_sceneOutput {nullptr};
+    /** Accumulated frame deltas; see simulatedMillis. */
+    float _simulatedTime {0.0f};
     std::function<void()> _presentFrame;
     void renderDeveloperOverlay();
     void renderDeveloperBanner();

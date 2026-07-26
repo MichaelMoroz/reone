@@ -28,6 +28,20 @@ namespace reone {
 void seedRandom(uint32_t seed);
 
 /**
+ * Draw from a stream reserved for rendering, not the shared one.
+ *
+ * SSAO kernels and noise textures are built from random numbers, but they are
+ * a property of the renderer rather than of the game. Drawing them from the
+ * shared generator advanced it by however many values that backend happened to
+ * want - the OpenGL pipeline builds an SSAO kernel and the Vulkan one does
+ * not - which left the two backends at different points in the sequence before
+ * the first frame. Everything downstream that draws from it, particles and
+ * grass among them, then differed for reasons that had nothing to do with
+ * rendering. Comparing one backend against the other requires them separate.
+ */
+float renderRandomFloat(float min, float max);
+
+/**
  * @param min lower bound (inclusive)
  * @param max upper bound (inclusive)
  */

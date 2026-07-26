@@ -77,7 +77,7 @@ public:
     SceneNodeType type() const { return _type; }
     SceneNode *parent() { return _parent; }
     const SceneNode *parent() const { return _parent; }
-    const std::unordered_set<SceneNode *> &children() const { return _children; }
+    const std::vector<SceneNode *> &children() const { return _children; }
     const graphics::AABB &aabb() const { return _aabb; }
     IUser *user() { return _user; }
     const IUser *user() const { return _user; }
@@ -133,7 +133,18 @@ protected:
     resource::ResourceServices &_resourceSvc;
 
     SceneNode *_parent {nullptr};
-    std::unordered_set<SceneNode *> _children;
+    /**
+     * Insertion-ordered, deliberately.
+     *
+     * This was an unordered_set keyed on the pointer. Pointer values differ
+     * between processes, so its iteration order did too, and that order decides
+     * the order children are updated and drawn in. Emitters draw from the one
+     * shared random generator as they spawn particles, so a reordering handed
+     * each emitter a different part of the sequence, and transparent geometry
+     * is composited in traversal order. Two runs of the same build rendered
+     * differently, which made A/B comparison between backends unreliable.
+     */
+    std::vector<SceneNode *> _children;
 
     graphics::AABB _aabb;
 

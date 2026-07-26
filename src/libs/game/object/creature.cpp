@@ -885,7 +885,11 @@ bool Creature::navigateTo(const glm::vec3 &dest, bool run, float distance, float
 
     bool updPath = true;
     if (_path) {
-        uint32_t now = _services.system.clock.millis();
+        // Simulated, not wall-clock. On the wall clock the cache expired after
+        // a real second however many frames that took, so how often a path was
+        // recomputed - and therefore where a creature ended up by frame N -
+        // depended on machine speed. Two capture runs never quite matched.
+        uint32_t now = _game.simulatedMillis();
         if (_path->destination == dest || now - _path->timeFound <= kKeepPathDuration) {
             advanceOnPath(run, dt);
             updPath = false;
@@ -938,7 +942,7 @@ void Creature::advanceOnPath(bool run, float dt) {
 
 void Creature::updatePath(const glm::vec3 &dest) {
     std::vector<glm::vec3> points(_game.module()->area()->pathfinder().findPath(_position, dest));
-    uint32_t now = _services.system.clock.millis();
+    uint32_t now = _game.simulatedMillis();
     setPath(dest, std::move(points), now);
 }
 

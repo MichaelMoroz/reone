@@ -379,6 +379,7 @@ bool Game::handle(const input::Event &event) {
 
 void Game::update(float frameTime) {
     float dt = frameTime * _gameSpeed;
+    _simulatedTime += dt;
     if (_movie) {
         updateMovie(dt);
         return;

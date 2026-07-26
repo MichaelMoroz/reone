@@ -286,7 +286,8 @@ void PBRRenderPipeline::initSSAOSamples() {
         for (int i = 0; i < kNumSSAOSamples; ++i) {
             float scale = i / static_cast<float>(kNumSSAOSamples);
             scale = glm::mix(0.1f, 1.0f, scale * scale);
-            auto sample = glm::vec3(randomFloat(-1.0f, 1.0f), randomFloat(-1.0f, 1.0f), randomFloat(0.0f, 1.0f));
+            auto sample = glm::vec3(renderRandomFloat(-1.0f, 1.0f), renderRandomFloat(-1.0f, 1.0f),
+                                    renderRandomFloat(0.0f, 1.0f));
             sample = glm::normalize(sample);
             sample *= scale;
             screenEffect.ssaoSamples[i] = glm::vec4(std::move(sample), 0.0f);

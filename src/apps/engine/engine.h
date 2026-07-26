@@ -111,6 +111,15 @@ private:
     void renderFrame(bool &quit);
     void renderGLFrame(bool &quit);
     void renderVulkanFrame(bool &quit);
+    /**
+     * Whether this run exists to produce a comparable frame, rather than to be
+     * played. Such a run has to see exactly the same sequence of frames every
+     * time and on either backend, which costs it live input and focus handling.
+     */
+    bool isCaptureRun() const {
+        return !_options.capturePath.empty() || !_options.dumpTargetsPath.empty();
+    }
+
     void captureIfRequested(bool &quit);
     void dumpTargetsIfRequested();
 

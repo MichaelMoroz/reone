@@ -217,15 +217,13 @@ void EmitterSceneNode::spawnLightningParticles() {
     segments[_lightningSubDiv].second = emitterSpaceRefPos;
 
     // Return all particles to pool
-    for (auto it = _children.begin(); it != _children.end();) {
-        auto child = *it;
-        if ((*it)->type() == SceneNodeType::Particle) {
-            _particlePool.push_back(static_cast<ParticleSceneNode *>(child));
-            it = _children.erase(it);
-        } else {
-            ++it;
-        }
+    auto firstParticle = std::stable_partition(
+        _children.begin(), _children.end(),
+        [](auto *child) { return child->type() != SceneNodeType::Particle; });
+    for (auto it = firstParticle; it != _children.end(); ++it) {
+        _particlePool.push_back(static_cast<ParticleSceneNode *>(*it));
     }
+    _children.erase(firstParticle, _children.end());
 
     for (auto &segment : segments) {
         // Take particle from the pool, if available

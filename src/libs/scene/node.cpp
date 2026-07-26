@@ -24,7 +24,7 @@ namespace scene {
 void SceneNode::addChild(SceneNode &node) {
     node._parent = this;
     node.computeAbsoluteTransforms();
-    _children.insert(&node);
+    _children.push_back(&node);
 }
 
 void SceneNode::computeAbsoluteTransforms() {
@@ -43,7 +43,7 @@ void SceneNode::computeAbsoluteTransforms() {
 }
 
 void SceneNode::removeChild(SceneNode &node) {
-    auto maybeChild = _children.find(&node);
+    auto maybeChild = std::find(_children.begin(), _children.end(), &node);
     if (maybeChild == _children.end()) {
         return;
     }

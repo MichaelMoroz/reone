@@ -88,13 +88,23 @@ void GrassSceneNode::update(float dt) {
         }
         outOfDistance.insert(faceIdx);
     }
-    for (auto &faceIdx : outOfDistance) {
-        auto &clusters = _materializedClusters.find(faceIdx)->second;
-        for (auto &cluster : clusters) {
-            _children.erase(cluster);
-            _clusterPool.push(cluster);
+    if (!outOfDistance.empty()) {
+        // Collected first, then removed in one sweep. Children are held in
+        // insertion order now, so erasing them one at a time would be
+        // quadratic in the number of clusters on screen.
+        std::unordered_set<SceneNode *> returning;
+        for (auto &faceIdx : outOfDistance) {
+            auto &clusters = _materializedClusters.find(faceIdx)->second;
+            for (auto &cluster : clusters) {
+                returning.insert(cluster);
+                _clusterPool.push(cluster);
+            }
+            _materializedClusters.erase(faceIdx);
         }
-        _materializedClusters.erase(faceIdx);
+        _children.erase(
+            std::remove_if(_children.begin(), _children.end(),
+                           [&returning](auto *child) { return returning.count(child) > 0; }),
+            _children.end());
     }
 
     // Cannot materialize any more grass clusters
