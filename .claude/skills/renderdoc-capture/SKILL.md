@@ -170,6 +170,27 @@ installed here: `GetConstantBlock` (not `GetConstantBuffer`/`GetConstantBuffers`
 
 ## Traps that cost real time here
 
+- **Two build trees, and the one you want is not the default.** `cmake --build
+  build --config Release` writes `build/bin`; `--config Debug` writes
+  `build/debug/bin`. Every capture harness path in this file assumes
+  `build/bin`, so building Debug and then running `build/bin/engine.exe` runs
+  whatever was there before - silently, with a plausible-looking result. Five
+  consecutive runs during this work "proved" a crash had been fixed and that an
+  entire code path never executed; all five were a binary from before the patch
+  was applied. **Check `ls -la build/bin/engine.exe` against the clock** before
+  believing any run that contradicts what you expected.
+- **A segfault with no validation errors is usually teardown, not rendering.**
+  Look at whether the screenshot was written first: if it was, the frame is
+  fine and the fault is on the way out. Bisect it by logging between the steps
+  of `VulkanRenderer::deinit` - but note the log is buffered, so the last line
+  printed is a hint, not the answer.
+  **Then run the Debug build, which links a checked VMA** and asserts
+  "Some allocations were not freed before destruction of this memory block!"
+  That names the bug class immediately. The cause here was a `unique_ptr<VulkanImage>`
+  member added to `init()` but not released in `deinit()`: the member destructor
+  then ran after `VulkanDevice::deinit` had already destroyed the allocator.
+  Any object owning a VMA allocation and outliving the device must be reset in
+  an explicit `deinit`, never left to its destructor.
 - **Stale shader modules.** Building *any* named target - `--target engine`,
   `--target vulkanprobe` - skips the SPIR-V transpile. This has now cost two
   separate investigations: three debugging probes against a module older than
