@@ -43,6 +43,7 @@
 #include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/vulkan/mesh.h"
 #include "reone/graphics/vulkan/pipeline.h"
+#include "reone/graphics/vulkan/pipelinecache.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/system/stream/fileoutput.h"
 #include "reone/system/logger.h"
@@ -107,7 +108,9 @@ static std::shared_ptr<Mesh> makeCube(bool fullLayout = false) {
         vertex.bitangent = glm::vec3(0.0f, 1.0f, 0.0f);
         vertex.tanSpaceNormal = glm::vec3(0.0f, 0.0f, 1.0f);
         vertex.boneIndices = glm::ivec4(0);
-        vertex.boneWeights = glm::vec4(0.0f);
+        // Full weight on bone 0, which is identity, so skinning is a no-op
+        // rather than collapsing every vertex onto the origin.
+        vertex.boneWeights = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
         vertex.material = 0;
     }
     auto full = Mesh::VertexLayoutBuilder()
@@ -180,7 +183,7 @@ int main(int argc, char **argv) {
     int width, height, frames;
     bool validation, vsync;
     std::string capturePath, clearColor, spirvPath, drawColor;
-    bool drawMesh, deferred, drawTwoD, realPbr;
+    bool drawMesh, deferred, drawTwoD, realPbr, allVariants;
 
     po::options_description desc("Options");
     desc.add_options()                                                              //
@@ -207,7 +210,9 @@ int main(int argc, char **argv) {
         ("twod", po::value<bool>(&drawTwoD)->default_value(false),                   //
          "draw sprites and rectangles through the 2D renderer")                      //
         ("pbr", po::value<bool>(&realPbr)->default_value(false),                     //
-         "render through the real pbr_model shader into the G-buffer");              //
+         "render through the real pbr_model shader into the G-buffer")               //
+        ("variants", po::value<bool>(&allVariants)->default_value(false),             //
+         "draw every pbr_model geometry entry point, one cube each");                 //
 
     po::variables_map vars;
     po::store(po::parse_command_line(argc, argv, desc), vars);
@@ -286,6 +291,9 @@ int main(int argc, char **argv) {
         std::unique_ptr<VulkanGBuffer> gbuffer;
         VkDescriptorSet resolveSet {VK_NULL_HANDLE};
         std::unique_ptr<VulkanPipeline> resolvePipeline;
+        if (allVariants) {
+            realPbr = true;
+        }
         if (realPbr) {
             deferred = true;
         }
@@ -425,7 +433,7 @@ int main(int argc, char **argv) {
                     // silhouette that could be a flat quad.
                     float angle = glm::radians(35.0f) + frame * 0.01f;
                     locals.model = glm::rotate(glm::mat4(1.0f), angle, glm::vec3(0.3f, 1.0f, 0.1f));
-                    auto view = glm::lookAt(glm::vec3(0.0f, 0.0f, 6.0f),
+                    auto view = glm::lookAt(glm::vec3(0.0f, 0.0f, allVariants ? 14.0f : 6.0f),
                                             glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
                     auto proj = glm::perspective(glm::radians(45.0f),
                                                  w / static_cast<float>(h), 0.1f, 100.0f);
@@ -518,7 +526,65 @@ int main(int argc, char **argv) {
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         pipeline->layout(), VulkanDescriptors::kTextureSet,
                                         1, &textureSet, 0, nullptr);
-                if (vkCube) {
+                if (vkCube && allVariants) {
+                    // Every geometry entry point in the shipping model shader.
+                    // Each is a separate pipeline; the cache builds them once.
+                    static const char *kEntries[] {
+                        "staticVertex", "skinnedVertex", "danglyVertex", "saberVertex"};
+                    VulkanPipelineCache::Key key;
+                    key.module = "pbr_model";
+                    key.fragmentEntry = "opaqueFragment";
+                    key.colorFormats = VulkanGBuffer::colorFormats();
+                    key.depthFormat = VulkanGBuffer::depthFormat();
+                    key.depthTest = true;
+                    key.depthWrite = true;
+                    key.vertexBindings = {VulkanMesh::bindingDescription(cube->vertexLayout())};
+                    key.vertexAttributes = VulkanMesh::attributeDescriptions(cube->vertexLayout());
+
+                    for (int v = 0; v < 4; ++v) {
+                        key.vertexEntry = kEntries[v];
+                        auto &variant = renderer.pipelines().get(key);
+
+                        LocalUniforms vlocals = locals;
+                        vlocals.model = glm::translate(
+                                            glm::vec3(-4.5f + v * 3.0f, 0.0f, 0.0f)) *
+                                        locals.model;
+                        vlocals.modelInv = glm::inverse(vlocals.model);
+                        vlocals.prevModel = vlocals.model;
+
+                        std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> voff = offsets;
+                        voff[UniformBlockBindingPoints::locals] =
+                            renderer.uniformRing().push(vlocals);
+                        // Identity bones and no dangly displacement: enough for
+                        // the variants to run without a scene behind them.
+                        voff[UniformBlockBindingPoints::bones] =
+                            renderer.uniformRing().push(BoneUniforms {});
+                        // danglyVertex takes its position wholly from this
+                        // block, ignoring the vertex buffer, so a zeroed block
+                        // collapses the mesh onto the origin. Feed it the
+                        // cube's own vertices; a real dangly mesh gets these
+                        // from CPU-side deformation.
+                        DanglyUniforms dangly;
+                        for (int i = 0; i < cube->vertexCount() &&
+                                        i < kMaxDanglyVertices; ++i) {
+                            const auto &pos = cube->vertexCoords()[i];
+                            dangly.positions[i] = glm::vec4(pos, 1.0f);
+                        }
+                        voff[UniformBlockBindingPoints::dangly] =
+                            renderer.uniformRing().push(dangly);
+
+                        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, variant.handle());
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                variant.layout(),
+                                                VulkanDescriptors::kUniformSet, 1, &uniformSet,
+                                                static_cast<uint32_t>(voff.size()), voff.data());
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                variant.layout(),
+                                                VulkanDescriptors::kTextureSet, 1, &textureSet,
+                                                0, nullptr);
+                        vkCube->draw(cmd);
+                    }
+                } else if (vkCube) {
                     vkCube->draw(cmd);
                 } else {
                     vkCmdDraw(cmd, 3, 1, 0, 0);
