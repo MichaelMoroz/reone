@@ -24,6 +24,9 @@
 #include "descriptors.h"
 #include "device.h"
 #include "swapchain.h"
+#include "pipelinecache.h"
+#include "renderer2d.h"
+#include "resources.h"
 #include "uniformring.h"
 
 struct SDL_Window;
@@ -54,7 +57,10 @@ public:
         _validation(validation),
         _swapchain(_device),
         _uniformRing(_device),
-        _descriptors(_device) {
+        _descriptors(_device),
+        _pipelines(_device),
+        _resources(_device),
+        _renderer2d(_device, _pipelines, _uniformRing, _descriptors, _resources) {
     }
 
     ~VulkanRenderer() { deinit(); }
@@ -73,6 +79,15 @@ public:
     VulkanDevice &device() { return _device; }
     VulkanUniformRing &uniformRing() { return _uniformRing; }
     VulkanDescriptors &descriptors() { return _descriptors; }
+    VulkanPipelineCache &pipelines() { return _pipelines; }
+    VulkanResources &resources() { return _resources; }
+    Vulkan2DRenderer &renderer2d() { return _renderer2d; }
+
+    /**
+     * Where SPIR-V modules are loaded from. Set before init; the pipeline cache
+     * reads modules by name from here on first use.
+     */
+    void setShaderDir(std::filesystem::path dir) { _shaderDir = std::move(dir); }
 
     /** The uniform descriptor set for the frame being recorded. */
     VkDescriptorSet uniformSet() const { return _descriptors.uniformSet(_frameIndex); }
@@ -114,6 +129,10 @@ private:
     std::unique_ptr<VulkanImage> _depth;
     VulkanUniformRing _uniformRing;
     VulkanDescriptors _descriptors;
+    VulkanPipelineCache _pipelines;
+    VulkanResources _resources;
+    Vulkan2DRenderer _renderer2d;
+    std::filesystem::path _shaderDir {"spirv"};
 
     bool _inited {false};
     bool _inFrame {false};

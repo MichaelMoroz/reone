@@ -72,6 +72,9 @@ public:
         return push(&value, sizeof(T));
     }
 
+    /** The frame beginFrame was last called with. */
+    int frame() const { return _frame; }
+
     VkBuffer buffer(int frame) const { return _arenas[frame]->handle(); }
     VkBuffer currentBuffer() const { return _arenas[_frame]->handle(); }
 

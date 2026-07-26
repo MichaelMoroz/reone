@@ -19,6 +19,7 @@
 
 #include "reone/graphics/texture.h"
 #include "reone/graphics/vulkan/image.h"
+#include "reone/graphics/vulkan/pipeline.h"
 #include "reone/system/logutil.h"
 
 namespace reone {
@@ -46,6 +47,12 @@ void VulkanRenderer::init() {
     _depth->initDepth(_swapchain.extent(), kDepthFormat);
     _uniformRing.init(kFramesInFlight, 1u << 20);
     _descriptors.init(kFramesInFlight, _uniformRing);
+    _pipelines.init(
+        [this](const std::string &name) {
+            return readSpirV(_shaderDir / (name + ".spv"));
+        },
+        {_descriptors.uniformLayout(), _descriptors.textureLayout()});
+    _renderer2d.init();
     _inited = true;
 }
 
@@ -55,6 +62,9 @@ void VulkanRenderer::deinit() {
     }
     // Nothing may be destroyed while the GPU might still be reading it.
     vkDeviceWaitIdle(_device.handle());
+    _renderer2d.deinit();
+    _resources.deinit();
+    _pipelines.deinit();
     _descriptors.deinit();
     _uniformRing.deinit();
     _depth.reset();
@@ -196,6 +206,7 @@ void VulkanRenderer::beginFrame(glm::ivec2 extent) {
     // Safe now, and only now: the fence above says the GPU has finished every
     // draw that was reading this arena.
     _uniformRing.beginFrame(_frameIndex);
+    _descriptors.beginFrame(_frameIndex);
 
     VkCommandBufferBeginInfo beginInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;

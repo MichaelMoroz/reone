@@ -37,6 +37,7 @@
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/types.h"
 #include "reone/graphics/uniforms.h"
+#include "reone/graphics/texture.h"
 #include "reone/graphics/vulkan/gbuffer.h"
 #include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/vulkan/mesh.h"
@@ -100,7 +101,7 @@ int main(int argc, char **argv) {
     int width, height, frames;
     bool validation, vsync;
     std::string capturePath, clearColor, spirvPath, drawColor;
-    bool drawMesh, deferred;
+    bool drawMesh, deferred, drawTwoD;
 
     po::options_description desc("Options");
     desc.add_options()                                                              //
@@ -123,7 +124,9 @@ int main(int argc, char **argv) {
         ("mesh", po::value<bool>(&drawMesh)->default_value(false),                  //
          "draw a cube with real vertex attributes instead of the triangle")         //
         ("deferred", po::value<bool>(&deferred)->default_value(false),               //
-         "render the cube through a G-buffer and resolve it");                       //
+         "render the cube through a G-buffer and resolve it")                        //
+        ("twod", po::value<bool>(&drawTwoD)->default_value(false),                   //
+         "draw sprites and rectangles through the 2D renderer");                     //
 
     po::variables_map vars;
     po::store(po::parse_command_line(argc, argv, desc), vars);
@@ -170,9 +173,32 @@ int main(int argc, char **argv) {
         renderer.init();
 
         // The draw is optional so the clear path can still be exercised alone.
+        // --twod exercises the 2D renderer on its own; the 3D test draw would
+        // simply cover it.
+        bool draw3D = !drawTwoD || drawMesh || deferred;
         std::unique_ptr<VulkanPipeline> pipeline;
         std::unique_ptr<VulkanImage> checker;
         std::shared_ptr<Mesh> cube;
+        std::shared_ptr<Texture> sprite;
+        if (drawTwoD) {
+            // A checkerboard as an engine Texture, so the upload path under
+            // test is the real one rather than VulkanImage directly.
+            constexpr int kSide = 8;
+            auto pixels = std::make_shared<ByteBuffer>();
+            pixels->resize(kSide * kSide * 4);
+            for (int y = 0; y < kSide; ++y) {
+                for (int x = 0; x < kSide; ++x) {
+                    auto v = static_cast<char>(((x + y) % 2) ? 0xff : 0x50);
+                    for (int c = 0; c < 3; ++c) {
+                        (*pixels)[(y * kSide + x) * 4 + c] = v;
+                    }
+                    (*pixels)[(y * kSide + x) * 4 + 3] = static_cast<char>(0xff);
+                }
+            }
+            sprite = std::make_shared<Texture>("probe_sprite", TextureType::TwoDim,
+                                               Texture::Properties());
+            sprite->setPixels(kSide, kSide, PixelFormat::RGBA8, Texture::Layer {pixels});
+        }
         std::unique_ptr<VulkanMesh> vkCube;
         std::unique_ptr<VulkanGBuffer> gbuffer;
         std::unique_ptr<VulkanPipeline> resolvePipeline;
@@ -184,7 +210,9 @@ int main(int argc, char **argv) {
         } else if (drawMesh && spirvPath == "spirv/vktriangle.spv") {
             spirvPath = "spirv/vkmesh.spv";
         }
-        if (!std::filesystem::exists(spirvPath)) {
+        if (!draw3D) {
+            info("2D only");
+        } else if (!std::filesystem::exists(spirvPath)) {
             info("No SPIR-V at " + spirvPath + " - clearing only");
         } else {
             VulkanPipeline::Config config;
@@ -262,6 +290,7 @@ int main(int argc, char **argv) {
         }
 
         int frame = 0;
+        int twoDDraws = 0;
         bool quit = false;
         while (!quit) {
             SDL_Event event;
@@ -372,7 +401,8 @@ int main(int argc, char **argv) {
                                         1, &uniformSet,
                                         static_cast<uint32_t>(offsets.size()), offsets.data());
 
-                auto textureSet = renderer.descriptors().textureSet();
+                auto textureSet = renderer.descriptors().acquireTextureSet(
+                    renderer.uniformRing().frame(), nullptr);
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         pipeline->layout(), VulkanDescriptors::kTextureSet,
                                         1, &textureSet, 0, nullptr);
@@ -420,6 +450,48 @@ int main(int argc, char **argv) {
                 }
             }
 
+            if (drawTwoD) {
+                auto cmd = renderer.commandBuffer();
+                VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+                attachment.imageView = renderer.currentImageView();
+                attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+                VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+                rendering.renderArea.extent = {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
+                rendering.layerCount = 1;
+                rendering.colorAttachmentCount = 1;
+                rendering.pColorAttachments = &attachment;
+
+                VkViewport vp2 {0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f};
+                VkRect2D sc2 {{0, 0}, {static_cast<uint32_t>(w), static_cast<uint32_t>(h)}};
+
+                vkCmdBeginRendering(cmd, &rendering);
+                vkCmdSetViewport(cmd, 0, 1, &vp2);
+                vkCmdSetScissor(cmd, 0, 1, &sc2);
+
+                auto &r2d = renderer.renderer2d();
+                r2d.begin(cmd, {w, h}, renderer.swapchain().imageFormat());
+                // Opaque sprite, tinted sprite, a solid bar, and a scissored
+                // sprite - the four things every GUI element is made of.
+                r2d.drawImage(*sprite, {40.0f, 40.0f}, {200.0f, 200.0f});
+                r2d.drawImage(*sprite, {260.0f, 40.0f}, {200.0f, 200.0f},
+                              glm::vec4(1.0f, 0.4f, 0.2f, 1.0f));
+                r2d.drawRect({40.0f, 260.0f}, {420.0f, 40.0f},
+                             glm::vec4(0.2f, 0.8f, 0.4f, 1.0f));
+                r2d.withScissor({40, 320, 200, 100}, [&r2d, &sprite]() {
+                    r2d.drawImage(*sprite, {40.0f, 320.0f}, {420.0f, 200.0f});
+                });
+                r2d.withBlendMode(BlendMode::Additive, [&r2d, &sprite]() {
+                    r2d.drawImage(*sprite, {480.0f, 40.0f}, {200.0f, 200.0f},
+                                  glm::vec4(0.3f, 0.5f, 1.0f, 1.0f));
+                });
+                r2d.end();
+                vkCmdEndRendering(cmd);
+                twoDDraws = r2d.drawCount();
+            }
+
             bool last = frames > 0 && frame + 1 >= frames;
             if (last && !capturePath.empty()) {
                 auto shot = renderer.captureFrame();
@@ -440,6 +512,10 @@ int main(int argc, char **argv) {
 
         info(str(boost::format("Presented %d frames on %s") % frame % renderer.device().deviceName()));
         info(str(boost::format("Uniform arena peak: %llu bytes") % renderer.uniformRing().peakUsage()));
+        info(str(boost::format("Pipelines built: %d") % renderer.pipelines().size()));
+        if (drawTwoD) {
+            info(str(boost::format("2D draws per frame: %d") % twoDDraws));
+        }
     } catch (const std::exception &e) {
         error(std::string("Vulkan probe failed: ") + e.what());
         exitCode = 1;

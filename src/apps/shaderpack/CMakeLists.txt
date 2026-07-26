@@ -40,7 +40,8 @@ set(SPIRV_MODULES
     "walkmesh:walkmeshVertex+pbrFragment+retroFragment"
     "vktriangle:triangleVertex+triangleFragment"
     "vkmesh:meshVertex+meshFragment"
-    "vkgbuffer:geometryVertex+geometryFragment+resolveVertex+resolveFragment")
+    "vkgbuffer:geometryVertex+geometryFragment+resolveVertex+resolveFragment"
+    "vk2d:quadVertex+imageFragment+colorFragment+fullTargetVertex+textVertex+textFragment")
 
 if(SLANGC_EXECUTABLE)
     set(SPIRV_OUTPUTS)

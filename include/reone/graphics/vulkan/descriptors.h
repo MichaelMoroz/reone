@@ -57,6 +57,9 @@ public:
     static constexpr int kUniformSet = 0;
     static constexpr int kTextureSet = 1;
 
+    /** Distinct textures one frame may draw with before the pool is exhausted. */
+    static constexpr uint32_t kMaxTextureSetsPerFrame = 1024;
+
     VulkanDescriptors(VulkanDevice &device) :
         _device(device) {
     }
@@ -70,14 +73,34 @@ public:
     VkDescriptorSet uniformSet(int frame) const { return _uniformSets[frame]; }
 
     VkDescriptorSetLayout textureLayout() const { return _textureLayout; }
-    VkDescriptorSet textureSet() const { return _textureSet; }
 
     /**
-     * Point a texture unit at @p image. Every unit starts on a 1x1 white
-     * default, because a set may not be bound with any descriptor left
-     * unwritten and a shader is free to sample a unit no material filled in.
+     * Point a texture unit at @p image for every set acquired from now on.
+     *
+     * For bindings that change rarely - G-buffer attachments, the BRDF table -
+     * rather than per draw. Takes effect on the next acquireTextureSet, so it
+     * is safe to call between frames but not mid-recording.
      */
     void setTexture(int unit, const VulkanImage &image);
+
+    /** Release @p frame's texture sets for reuse. Call once per frame. */
+    void beginFrame(int frame);
+
+    /**
+     * A texture set with @p mainTex at unit 0 and the standing bindings
+     * elsewhere, valid for the rest of this frame.
+     *
+     * A set that is already bound to a recording command buffer may not be
+     * written, so a draw that needs different textures needs a different set.
+     * Sets are therefore handed out per distinct texture and recycled per
+     * frame. Repeated draws with the same texture share one.
+     *
+     * This is the placeholder for descriptor indexing. §5.6 wants one bindless
+     * array indexed per draw, which removes the whole problem, but that changes
+     * how every shader declares its textures and is not worth doing before the
+     * path tracer needs it.
+     */
+    VkDescriptorSet acquireTextureSet(int frame, const VulkanImage *mainTex);
 
 private:
     VulkanDevice &_device;
@@ -87,9 +110,19 @@ private:
     std::vector<VkDescriptorSet> _uniformSets;
 
     VkDescriptorSetLayout _textureLayout {VK_NULL_HANDLE};
-    VkDescriptorSet _textureSet {VK_NULL_HANDLE};
     VkSampler _sampler {VK_NULL_HANDLE};
     std::unique_ptr<VulkanImage> _defaultTexture;
+
+    /** What every acquired set gets, before the per-draw main texture. */
+    std::array<const VulkanImage *, kNumTextures> _standing {};
+
+    struct TextureFrame {
+        VkDescriptorPool pool {VK_NULL_HANDLE};
+        std::unordered_map<const VulkanImage *, VkDescriptorSet> byTexture;
+    };
+    std::vector<TextureFrame> _textureFrames;
+
+    void writeTextureSet(VkDescriptorSet set, const VulkanImage *mainTex);
 };
 
 } // namespace graphics

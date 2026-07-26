@@ -96,16 +96,14 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
         throw std::runtime_error("Vulkan: texture descriptor set layout creation failed");
     }
 
-    std::array<VkDescriptorPoolSize, 2> poolSizes {};
-    poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    poolSizes[0].descriptorCount = kNumUniformBlocks * framesInFlight;
-    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = kNumTextures;
+    VkDescriptorPoolSize poolSize {};
+    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    poolSize.descriptorCount = kNumUniformBlocks * framesInFlight;
 
     VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    poolInfo.maxSets = static_cast<uint32_t>(framesInFlight) + 1;
-    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-    poolInfo.pPoolSizes = poolSizes.data();
+    poolInfo.maxSets = static_cast<uint32_t>(framesInFlight);
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
     if (vkCreateDescriptorPool(_device.handle(), &poolInfo, nullptr, &_pool) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: descriptor pool creation failed");
     }
@@ -154,38 +152,93 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
         throw std::runtime_error("Vulkan: sampler creation failed");
     }
 
-    VkDescriptorSetAllocateInfo textureAllocInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    textureAllocInfo.descriptorPool = _pool;
-    textureAllocInfo.descriptorSetCount = 1;
-    textureAllocInfo.pSetLayouts = &_textureLayout;
-    if (vkAllocateDescriptorSets(_device.handle(), &textureAllocInfo, &_textureSet) != VK_SUCCESS) {
-        throw std::runtime_error("Vulkan: texture descriptor set allocation failed");
-    }
-
     const uint32_t white = 0xffffffff;
     _defaultTexture = std::make_unique<VulkanImage>(_device);
     _defaultTexture->initSampled2D({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, &white);
-    for (int i = 0; i < kNumTextures; ++i) {
-        setTexture(i, *_defaultTexture);
+    _standing.fill(_defaultTexture.get());
+
+    // One pool per frame in flight, reset wholesale rather than freeing sets
+    // individually. kMaxTextureSetsPerFrame caps how many distinct textures one
+    // frame may draw with; exceeding it throws rather than corrupting.
+    _textureFrames.resize(framesInFlight);
+    for (auto &frame : _textureFrames) {
+        VkDescriptorPoolSize size {};
+        size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        size.descriptorCount = kNumTextures * kMaxTextureSetsPerFrame;
+
+        VkDescriptorPoolCreateInfo info {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        info.maxSets = kMaxTextureSetsPerFrame;
+        info.poolSizeCount = 1;
+        info.pPoolSizes = &size;
+        if (vkCreateDescriptorPool(_device.handle(), &info, nullptr, &frame.pool) != VK_SUCCESS) {
+            throw std::runtime_error("Vulkan: texture descriptor pool creation failed");
+        }
     }
 }
 
 void VulkanDescriptors::setTexture(int unit, const VulkanImage &image) {
-    VkDescriptorImageInfo imageInfo {};
-    imageInfo.sampler = _sampler;
-    imageInfo.imageView = image.view();
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    _standing[unit] = &image;
+}
 
-    VkWriteDescriptorSet write {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    write.dstSet = _textureSet;
-    write.dstBinding = static_cast<uint32_t>(unit);
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.pImageInfo = &imageInfo;
-    vkUpdateDescriptorSets(_device.handle(), 1, &write, 0, nullptr);
+void VulkanDescriptors::beginFrame(int frame) {
+    auto &f = _textureFrames[frame];
+    // Safe because the caller has already waited on this frame's fence.
+    vkResetDescriptorPool(_device.handle(), f.pool, 0);
+    f.byTexture.clear();
+}
+
+void VulkanDescriptors::writeTextureSet(VkDescriptorSet set, const VulkanImage *mainTex) {
+    std::array<VkDescriptorImageInfo, kNumTextures> infos {};
+    std::array<VkWriteDescriptorSet, kNumTextures> writes {};
+    for (int i = 0; i < kNumTextures; ++i) {
+        auto image = (i == TextureUnits::mainTex && mainTex) ? mainTex : _standing[i];
+        infos[i].sampler = _sampler;
+        infos[i].imageView = image->view();
+        infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &infos[i];
+    }
+    vkUpdateDescriptorSets(_device.handle(),
+                           static_cast<uint32_t>(writes.size()), writes.data(),
+                           0, nullptr);
+}
+
+VkDescriptorSet VulkanDescriptors::acquireTextureSet(int frame, const VulkanImage *mainTex) {
+    auto &f = _textureFrames[frame];
+    auto key = mainTex ? mainTex : _defaultTexture.get();
+    auto existing = f.byTexture.find(key);
+    if (existing != f.byTexture.end()) {
+        return existing->second;
+    }
+    if (f.byTexture.size() >= kMaxTextureSetsPerFrame) {
+        throw std::runtime_error("Vulkan: too many distinct textures in one frame");
+    }
+
+    VkDescriptorSetAllocateInfo info {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    info.descriptorPool = f.pool;
+    info.descriptorSetCount = 1;
+    info.pSetLayouts = &_textureLayout;
+    VkDescriptorSet set {VK_NULL_HANDLE};
+    if (vkAllocateDescriptorSets(_device.handle(), &info, &set) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: texture descriptor set allocation failed");
+    }
+    writeTextureSet(set, mainTex);
+    f.byTexture.insert({key, set});
+    return set;
 }
 
 void VulkanDescriptors::deinit() {
+    for (auto &frame : _textureFrames) {
+        if (frame.pool != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(_device.handle(), frame.pool, nullptr);
+        }
+    }
+    _textureFrames.clear();
     _defaultTexture.reset();
     if (_sampler != VK_NULL_HANDLE) {
         vkDestroySampler(_device.handle(), _sampler, nullptr);
@@ -200,7 +253,6 @@ void VulkanDescriptors::deinit() {
         vkDestroyDescriptorPool(_device.handle(), _pool, nullptr);
         _pool = VK_NULL_HANDLE;
         _uniformSets.clear();
-        _textureSet = VK_NULL_HANDLE;
     }
     if (_uniformLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(_device.handle(), _uniformLayout, nullptr);
