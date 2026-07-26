@@ -63,6 +63,20 @@ public:
      */
     void initColorAttachment(glm::ivec2 extent, VkFormat format);
 
+    /**
+     * A sampled array or cube image, filled with @p data repeated per layer.
+     *
+     * A descriptor's view type has to match how the shader declares the
+     * sampler: binding a 2D view where the shader says Sampler2DArray is a
+     * validation error, not a coercion. The texture set therefore needs a
+     * default of each shape, not one default.
+     */
+    void initSampledLayered(glm::ivec2 extent,
+                            VkFormat format,
+                            int layers,
+                            bool cube,
+                            const void *data);
+
     void deinit();
 
     VkImage handle() const { return _image; }

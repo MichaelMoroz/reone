@@ -83,6 +83,7 @@ void VulkanGBuffer::init(glm::ivec2 extent) {
         dep.pImageMemoryBarriers = barriers.data();
         vkCmdPipelineBarrier2(cmd, &dep);
     });
+    _colorLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 }
 
 void VulkanGBuffer::deinit() {
@@ -92,9 +93,11 @@ void VulkanGBuffer::deinit() {
     _depth.reset();
 }
 
-void VulkanGBuffer::transitionColor(VkCommandBuffer cmd,
-                                    VkImageLayout from,
-                                    VkImageLayout to) const {
+void VulkanGBuffer::transitionColor(VkCommandBuffer cmd, VkImageLayout to) {
+    if (_colorLayout == to) {
+        return;
+    }
+    auto from = _colorLayout;
     std::array<VkImageMemoryBarrier2, Count> barriers {};
     for (int i = 0; i < Count; ++i) {
         auto &b = barriers[i];
@@ -114,6 +117,7 @@ void VulkanGBuffer::transitionColor(VkCommandBuffer cmd,
     dep.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
     dep.pImageMemoryBarriers = barriers.data();
     vkCmdPipelineBarrier2(cmd, &dep);
+    _colorLayout = to;
 }
 
 } // namespace graphics

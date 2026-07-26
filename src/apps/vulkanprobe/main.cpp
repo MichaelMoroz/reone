@@ -56,7 +56,7 @@ using namespace reone::graphics;
  * vertex data plus a VertexLayout describing it. Each face gets its own four
  * vertices so the normals are flat.
  */
-static std::shared_ptr<Mesh> makeCube() {
+static std::shared_ptr<Mesh> makeCube(bool fullLayout = false) {
     struct Face {
         glm::vec3 normal;
         glm::vec3 corners[4];
@@ -86,14 +86,42 @@ static std::shared_ptr<Mesh> makeCube() {
         meshFaces.push_back(Mesh::Face({base, static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 3)}));
     }
 
-    // position, normal, uv1: 8 floats, in that order.
-    auto layout = Mesh::VertexLayoutBuilder()
-                      .stride(8 * sizeof(float))
-                      .offPosition(0)
-                      .offNormals(3 * sizeof(float))
-                      .offUV1(6 * sizeof(float))
-                      .build();
-    return std::make_shared<Mesh>(std::move(vertices), std::move(layout), std::move(meshFaces));
+    if (!fullLayout) {
+        // position, normal, uv1: 8 floats, in that order.
+        auto layout = Mesh::VertexLayoutBuilder()
+                          .stride(8 * sizeof(float))
+                          .offPosition(0)
+                          .offNormals(3 * sizeof(float))
+                          .offUV1(6 * sizeof(float))
+                          .build();
+        return std::make_shared<Mesh>(std::move(vertices), std::move(layout),
+                                      std::move(meshFaces));
+    }
+
+    // The real model shader declares every attribute, and a vertex input the
+    // pipeline does not supply is an error rather than a default. So the full
+    // layout the engine's models use: 28 floats.
+    for (auto &vertex : vertices) {
+        vertex.uv2 = *vertex.uv1;
+        vertex.tangent = glm::vec3(1.0f, 0.0f, 0.0f);
+        vertex.bitangent = glm::vec3(0.0f, 1.0f, 0.0f);
+        vertex.tanSpaceNormal = glm::vec3(0.0f, 0.0f, 1.0f);
+        vertex.boneIndices = glm::ivec4(0);
+        vertex.boneWeights = glm::vec4(0.0f);
+        vertex.material = 0;
+    }
+    auto full = Mesh::VertexLayoutBuilder()
+                    .stride(28 * sizeof(float))
+                    .offPosition(0)
+                    .offNormals(3 * sizeof(float))
+                    .offUV1(6 * sizeof(float))
+                    .offUV2(8 * sizeof(float))
+                    .offTanSpace(10 * sizeof(float))
+                    .offBoneIndices(19 * sizeof(float))
+                    .offBoneWeights(23 * sizeof(float))
+                    .offMaterial(27 * sizeof(float))
+                    .build();
+    return std::make_shared<Mesh>(std::move(vertices), std::move(full), std::move(meshFaces));
 }
 
 /**
@@ -152,7 +180,7 @@ int main(int argc, char **argv) {
     int width, height, frames;
     bool validation, vsync;
     std::string capturePath, clearColor, spirvPath, drawColor;
-    bool drawMesh, deferred, drawTwoD;
+    bool drawMesh, deferred, drawTwoD, realPbr;
 
     po::options_description desc("Options");
     desc.add_options()                                                              //
@@ -177,7 +205,9 @@ int main(int argc, char **argv) {
         ("deferred", po::value<bool>(&deferred)->default_value(false),               //
          "render the cube through a G-buffer and resolve it")                        //
         ("twod", po::value<bool>(&drawTwoD)->default_value(false),                   //
-         "draw sprites and rectangles through the 2D renderer");                     //
+         "draw sprites and rectangles through the 2D renderer")                      //
+        ("pbr", po::value<bool>(&realPbr)->default_value(false),                     //
+         "render through the real pbr_model shader into the G-buffer");              //
 
     po::variables_map vars;
     po::store(po::parse_command_line(argc, argv, desc), vars);
@@ -254,11 +284,17 @@ int main(int argc, char **argv) {
         }
         std::unique_ptr<VulkanMesh> vkCube;
         std::unique_ptr<VulkanGBuffer> gbuffer;
+        VkDescriptorSet resolveSet {VK_NULL_HANDLE};
         std::unique_ptr<VulkanPipeline> resolvePipeline;
+        if (realPbr) {
+            deferred = true;
+        }
         if (deferred) {
             drawMesh = true;
         }
-        if (deferred && spirvPath == "spirv/vktriangle.spv") {
+        if (realPbr && spirvPath == "spirv/vktriangle.spv") {
+            spirvPath = "spirv/pbr_model.spv";
+        } else if (deferred && spirvPath == "spirv/vktriangle.spv") {
             spirvPath = "spirv/vkgbuffer.spv";
         } else if (drawMesh && spirvPath == "spirv/vktriangle.spv") {
             spirvPath = "spirv/vkmesh.spv";
@@ -270,12 +306,17 @@ int main(int argc, char **argv) {
         } else {
             VulkanPipeline::Config config;
             config.spirv = readSpirV(spirvPath);
-            config.vertexEntry = deferred ? "geometryVertex"
-                                          : (drawMesh ? "meshVertex" : "triangleVertex");
-            config.fragmentEntry = deferred ? "geometryFragment"
-                                            : (drawMesh ? "meshFragment" : "triangleFragment");
+            if (realPbr) {
+                config.vertexEntry = "staticVertex";
+                config.fragmentEntry = "opaqueFragment";
+            } else {
+                config.vertexEntry = deferred ? "geometryVertex"
+                                              : (drawMesh ? "meshVertex" : "triangleVertex");
+                config.fragmentEntry = deferred ? "geometryFragment"
+                                                : (drawMesh ? "meshFragment" : "triangleFragment");
+            }
             if (drawMesh) {
-                cube = makeCube();
+                cube = makeCube(realPbr);
                 config.vertexBindings = {VulkanMesh::bindingDescription(cube->vertexLayout())};
                 config.vertexAttributes = VulkanMesh::attributeDescriptions(cube->vertexLayout());
             }
@@ -316,7 +357,7 @@ int main(int argc, char **argv) {
                 gbuffer->init({width, height});
 
                 VulkanPipeline::Config resolveConfig;
-                resolveConfig.spirv = config.spirv;
+                resolveConfig.spirv = realPbr ? readSpirV("spirv/vkgbuffer.spv") : config.spirv;
                 resolveConfig.vertexEntry = "resolveVertex";
                 resolveConfig.fragmentEntry = "resolveFragment";
                 resolveConfig.colorFormats = {renderer.swapchain().imageFormat()};
@@ -324,11 +365,15 @@ int main(int argc, char **argv) {
                 resolvePipeline = std::make_unique<VulkanPipeline>(renderer.device());
                 resolvePipeline->init(resolveConfig);
 
-                // The resolve samples the G-buffer, so its attachments occupy
-                // texture units 1..4 alongside the diffuse map at 0.
+                // The resolve samples the G-buffer at units 1..4. It gets its
+                // own set: putting these in the standing bindings would make
+                // the geometry pass bind descriptors pointing at images that
+                // are colour attachments at that moment.
+                std::vector<std::pair<int, const VulkanImage *>> resolveTextures;
                 for (int i = 0; i < VulkanGBuffer::Count - 1; ++i) {
-                    renderer.descriptors().setTexture(i + 1, gbuffer->color(i));
+                    resolveTextures.push_back({i + 1, &gbuffer->color(i)});
                 }
+                resolveSet = renderer.descriptors().createPersistentTextureSet(resolveTextures);
                 info("G-buffer: 5 attachments at " +
                      std::to_string(width) + "x" + std::to_string(height));
             }
@@ -387,6 +432,20 @@ int main(int argc, char **argv) {
                     // Vulkan clip space has y down relative to OpenGL's.
                     proj[1][1] *= -1.0f;
                     globals.viewProjection = proj * view;
+                    globals.view = view;
+                    globals.viewInv = glm::inverse(view);
+                    globals.projection = proj;
+                    globals.projectionInv = glm::inverse(proj);
+                    globals.cameraPosition = glm::vec4(0.0f, 0.0f, 6.0f, 1.0f);
+                    if (realPbr) {
+                        // No feature bits: plain diffuse from the main texture,
+                        // world normal straight from the vertex, no lightmap.
+                        locals.featureMask = 0;
+                        locals.modelInv = glm::inverse(locals.model);
+                        locals.prevModel = locals.model;
+                        locals.selfIllumColor = glm::vec4(0.0f);
+                        globals.prevViewProjection = globals.viewProjection;
+                    }
                 }
 
                 // Every binding in the set is dynamic, so every one needs an
@@ -469,9 +528,7 @@ int main(int argc, char **argv) {
                 if (deferred) {
                     // Attachments become textures. Without this barrier the
                     // resolve may sample them before the writes have landed.
-                    gbuffer->transitionColor(cmd,
-                                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    gbuffer->transitionColor(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
                     VkRenderingInfo resolveRendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
                     resolveRendering.renderArea.extent = {static_cast<uint32_t>(w),
@@ -491,15 +548,13 @@ int main(int argc, char **argv) {
                                             static_cast<uint32_t>(offsets.size()), offsets.data());
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                             resolvePipeline->layout(),
-                                            VulkanDescriptors::kTextureSet, 1, &textureSet,
+                                            VulkanDescriptors::kTextureSet, 1, &resolveSet,
                                             0, nullptr);
                     vkCmdDraw(cmd, 3, 1, 0, 0);
                     vkCmdEndRendering(cmd);
 
                     // Back to attachment layout for the next frame's clear.
-                    gbuffer->transitionColor(cmd,
-                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                    gbuffer->transitionColor(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
                 }
             }
 

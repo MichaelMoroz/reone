@@ -64,11 +64,16 @@ public:
     const VulkanImage &depth() const { return *_depth; }
 
     /**
-     * Move every colour attachment between layouts in one barrier. The pass
-     * writes them as attachments and the resolve reads them as textures, so
-     * they change layout twice a frame together.
+     * Move every colour attachment to @p to in one barrier.
+     *
+     * The layout they are already in is tracked here rather than passed in.
+     * Callers got it wrong - a barrier whose oldLayout does not match the
+     * actual layout is a validation error, and the caller is the party least
+     * able to know, since the answer depends on what the previous frame did.
      */
-    void transitionColor(VkCommandBuffer cmd, VkImageLayout from, VkImageLayout to) const;
+    void transitionColor(VkCommandBuffer cmd, VkImageLayout to);
+
+    VkImageLayout colorLayout() const { return _colorLayout; }
 
 private:
     VulkanDevice &_device;
@@ -76,6 +81,7 @@ private:
     glm::ivec2 _extent {0};
     std::array<std::unique_ptr<VulkanImage>, Count> _color;
     std::unique_ptr<VulkanImage> _depth;
+    VkImageLayout _colorLayout {VK_IMAGE_LAYOUT_UNDEFINED};
 };
 
 } // namespace graphics

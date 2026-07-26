@@ -60,6 +60,9 @@ public:
     /** Distinct textures one frame may draw with before the pool is exhausted. */
     static constexpr uint32_t kMaxTextureSetsPerFrame = 1024;
 
+    /** Passes with fixed textures: the resolve, and later the post chain. */
+    static constexpr uint32_t kMaxPersistentTextureSets = 32;
+
     VulkanDescriptors(VulkanDevice &device) :
         _device(device) {
     }
@@ -102,6 +105,18 @@ public:
      */
     VkDescriptorSet acquireTextureSet(int frame, const VulkanImage *mainTex);
 
+    /**
+     * A texture set written once and never recycled, for passes whose textures
+     * do not change - the deferred resolve reading the G-buffer, say.
+     *
+     * Kept apart from the per-frame sets deliberately. Putting the G-buffer
+     * into the standing bindings would mean the geometry pass also binds a
+     * descriptor pointing at images that are colour attachments at that moment,
+     * which is a layout mismatch the validation layers reject.
+     */
+    VkDescriptorSet createPersistentTextureSet(
+        const std::vector<std::pair<int, const VulkanImage *>> &bindings);
+
 private:
     VulkanDevice &_device;
 
@@ -111,7 +126,18 @@ private:
 
     VkDescriptorSetLayout _textureLayout {VK_NULL_HANDLE};
     VkSampler _sampler {VK_NULL_HANDLE};
-    std::unique_ptr<VulkanImage> _defaultTexture;
+    /**
+     * One default per view shape. A unit declared Sampler2DArray in the shader
+     * must be bound with an array view even when nothing has filled it in.
+     */
+    std::unique_ptr<VulkanImage> _default2D;
+    std::unique_ptr<VulkanImage> _defaultArray;
+    std::unique_ptr<VulkanImage> _defaultCube;
+
+    static const VulkanImage *defaultFor(int unit,
+                                         const VulkanImage *twoD,
+                                         const VulkanImage *array,
+                                         const VulkanImage *cube);
 
     /** What every acquired set gets, before the per-draw main texture. */
     std::array<const VulkanImage *, kNumTextures> _standing {};
@@ -121,6 +147,7 @@ private:
         std::unordered_map<const VulkanImage *, VkDescriptorSet> byTexture;
     };
     std::vector<TextureFrame> _textureFrames;
+    VkDescriptorPool _persistentPool {VK_NULL_HANDLE};
 
     void writeTextureSet(VkDescriptorSet set, const VulkanImage *mainTex);
 };

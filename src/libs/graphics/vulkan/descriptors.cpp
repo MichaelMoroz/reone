@@ -153,9 +153,15 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
     }
 
     const uint32_t white = 0xffffffff;
-    _defaultTexture = std::make_unique<VulkanImage>(_device);
-    _defaultTexture->initSampled2D({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, &white);
-    _standing.fill(_defaultTexture.get());
+    _default2D = std::make_unique<VulkanImage>(_device);
+    _default2D->initSampled2D({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, &white);
+    _defaultArray = std::make_unique<VulkanImage>(_device);
+    _defaultArray->initSampledLayered({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, 1, false, &white);
+    _defaultCube = std::make_unique<VulkanImage>(_device);
+    _defaultCube->initSampledLayered({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, 6, true, &white);
+    for (int i = 0; i < kNumTextures; ++i) {
+        _standing[i] = defaultFor(i, _default2D.get(), _defaultArray.get(), _defaultCube.get());
+    }
 
     // One pool per frame in flight, reset wholesale rather than freeing sets
     // individually. kMaxTextureSetsPerFrame caps how many distinct textures one
@@ -208,9 +214,59 @@ void VulkanDescriptors::writeTextureSet(VkDescriptorSet set, const VulkanImage *
                            0, nullptr);
 }
 
+VkDescriptorSet VulkanDescriptors::createPersistentTextureSet(
+    const std::vector<std::pair<int, const VulkanImage *>> &bindings) {
+    if (_persistentPool == VK_NULL_HANDLE) {
+        VkDescriptorPoolSize size {};
+        size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        size.descriptorCount = kNumTextures * kMaxPersistentTextureSets;
+
+        VkDescriptorPoolCreateInfo info {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        info.maxSets = kMaxPersistentTextureSets;
+        info.poolSizeCount = 1;
+        info.pPoolSizes = &size;
+        if (vkCreateDescriptorPool(_device.handle(), &info, nullptr, &_persistentPool) != VK_SUCCESS) {
+            throw std::runtime_error("Vulkan: persistent texture pool creation failed");
+        }
+    }
+
+    VkDescriptorSetAllocateInfo info {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    info.descriptorPool = _persistentPool;
+    info.descriptorSetCount = 1;
+    info.pSetLayouts = &_textureLayout;
+    VkDescriptorSet set {VK_NULL_HANDLE};
+    if (vkAllocateDescriptorSets(_device.handle(), &info, &set) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: persistent texture set allocation failed");
+    }
+
+    std::array<VkDescriptorImageInfo, kNumTextures> infos {};
+    std::array<VkWriteDescriptorSet, kNumTextures> writes {};
+    for (int i = 0; i < kNumTextures; ++i) {
+        auto image = defaultFor(i, _default2D.get(), _defaultArray.get(), _defaultCube.get());
+        for (const auto &[unit, override] : bindings) {
+            if (unit == i) {
+                image = override;
+            }
+        }
+        infos[i].sampler = _sampler;
+        infos[i].imageView = image->view();
+        infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &infos[i];
+    }
+    vkUpdateDescriptorSets(_device.handle(),
+                           static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    return set;
+}
+
 VkDescriptorSet VulkanDescriptors::acquireTextureSet(int frame, const VulkanImage *mainTex) {
     auto &f = _textureFrames[frame];
-    auto key = mainTex ? mainTex : _defaultTexture.get();
+    auto key = mainTex ? mainTex : _default2D.get();
     auto existing = f.byTexture.find(key);
     if (existing != f.byTexture.end()) {
         return existing->second;
@@ -232,14 +288,38 @@ VkDescriptorSet VulkanDescriptors::acquireTextureSet(int frame, const VulkanImag
     return set;
 }
 
+const VulkanImage *VulkanDescriptors::defaultFor(int unit,
+                                                 const VulkanImage *twoD,
+                                                 const VulkanImage *array,
+                                                 const VulkanImage *cube) {
+    switch (unit) {
+    case TextureUnits::bumpMapArray:
+    case TextureUnits::shadowMapArray:
+    case TextureUnits::irradianceMapArray:
+    case TextureUnits::prefilteredEnvMapArray:
+        return array;
+    case TextureUnits::envMapCube:
+    case TextureUnits::shadowMapCube:
+        return cube;
+    default:
+        return twoD;
+    }
+}
+
 void VulkanDescriptors::deinit() {
+    if (_persistentPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(_device.handle(), _persistentPool, nullptr);
+        _persistentPool = VK_NULL_HANDLE;
+    }
     for (auto &frame : _textureFrames) {
         if (frame.pool != VK_NULL_HANDLE) {
             vkDestroyDescriptorPool(_device.handle(), frame.pool, nullptr);
         }
     }
     _textureFrames.clear();
-    _defaultTexture.reset();
+    _default2D.reset();
+    _defaultArray.reset();
+    _defaultCube.reset();
     if (_sampler != VK_NULL_HANDLE) {
         vkDestroySampler(_device.handle(), _sampler, nullptr);
         _sampler = VK_NULL_HANDLE;
