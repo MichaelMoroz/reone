@@ -1,6 +1,6 @@
 ---
 name: renderdoc-capture
-description: Capture and inspect a reone frame with RenderDoc, unattended. Use when a shader renders wrongly and you need to see what the GPU actually received - bound buffers, uniform contents, draw parameters - rather than guessing. Also covers the automated screenshot A/B harness. Triggers on: shader renders wrong, geometry missing, RenderDoc, frame capture, uniform buffer contents, compare shader builds.
+description: Compare two reone builds or backends empirically, and inspect what the GPU actually received. Covers the deterministic screenshot harness, numeric render-target dumps for localising a difference to a pass, and scripted RenderDoc capture. Use when a shader renders wrongly, when OpenGL and Vulkan disagree, or when you need bound buffers and uniform contents rather than a guess. Triggers on: shader renders wrong, geometry missing, compare backends, GL vs Vulkan, A/B, frame capture, RenderDoc, uniform buffer contents, G-buffer.
 ---
 
 # Capturing and inspecting a reone frame
@@ -25,14 +25,33 @@ engine.exe --game "<GAME_DIR>" --slangshaders=1 \
 - `--capture <path>` writes a TGA on frame `--captureframe`, then exits.
 - **Capture the earliest frame that looks settled.** Frame 2 already renders a
   complete scene in danm14ab; there is no need to wait.
-- A capture run uses a **fixed 1/60 timestep** so that two runs see the same
-  sequence of frames. Without it the same frame number lands on different
-  animation state every run and the diff is meaningless. Two runs at the same
-  `--captureframe` are bit-identical; if they are not, something is genuinely
-  nondeterministic and that is the bug, not the harness.
+### Capture runs are deterministic, and that is load-bearing
 
-Run it twice with `--slangshaders=0` and `=1`, then diff. TGA here is BGR and
-bottom-up:
+Two runs at the same `--captureframe` produce **byte-identical** images, in the
+menu and in gameplay, on either backend. If they do not, something is genuinely
+nondeterministic and that is the bug, not the harness.
+
+Four things buy that, and all four key off the same predicate
+(`Engine::isCaptureRun`, true when `--capture` or `--dumptargets` is given):
+
+- **Fixed 1/60 timestep.** Wall-clock timing lands the same frame number on
+  different animation state every run.
+- **Input is dropped, not dispatched.** One mouse move over the window turns the
+  camera and every later frame differs. This really happens: a measurement
+  during this work was silently contaminated by someone moving the camera.
+- **Focus is ignored.** The loop normally idles when the window is in the
+  background; a capture is being measured, not watched.
+- **The shared generator is seeded to 0.**
+
+A consequence worth knowing before it looks like a bug: **a capture run does not
+play at real speed.** The simulation advances a sixtieth of a second per frame
+however long the frame actually took, so it looks fast on a light scene and slow
+on a heavy one. That is exactly what makes frame N the same simulated moment
+every time, and it does not affect what is captured.
+
+Run it twice with whatever you are comparing - `--backend gl` against
+`--backend vulkan`, or `--slangshaders=0` against `=1` - then diff. TGA here is
+BGR and bottom-up:
 
 ```python
 from PIL import Image, ImageChops
@@ -50,7 +69,46 @@ def load(p):
 Amplify the difference (`v*10`) before viewing it, then read the PNG directly -
 the difference image localises the fault far better than the two frames do.
 
+## Render target dumps, for localising a difference to a pass
+
+A screenshot is the end of a long chain, so when two backends disagree it says
+nothing about where. `--dumptargets <dir>` writes every target the scene
+pipeline exposes as a `.npy`, on the same frame as the screenshot:
+
+```
+engine.exe --backend vulkan --pbr 1 --dumptargets out_vk --captureframe 900 ...
+engine.exe --backend gl     --pbr 1 --dumptargets out_gl --captureframe 900 ...
+```
+
+```python
+import numpy as np
+for n in ["g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_lightmap",
+          "g_buffer_self_illum", "g_buffer_depth", "output"]:
+    a = np.load(f"out_vk/{n}.npy").astype(np.float64)
+    b = np.load(f"out_gl/{n}.npy").astype(np.float64)
+    c = min(a.shape[2], b.shape[2])          # GL eye normal is RGB8, Vulkan RGBA8
+    d = np.abs(a[..., :c] - b[..., :c])
+    print(f"{n:22s} meanabs={d.mean():8.4f} max={d.max():8.4f}")
+```
+
+Values arrive exactly as stored - depth as 32-bit float, motion as float, no
+rounding into bytes - because the point is to find small differences.
+
+This is what settled where the OpenGL/Vulkan gap actually was: motion
+bit-identical, depth and lightmap effectively so, diffuse and normals within a
+couple of levels of 255, and `output` differing by 17%. The geometry pass was right and
+the whole discrepancy was in the resolve. Reason about a screenshot only after
+the dumps say which pass to look at.
+
+`--dumptargets` works with or without `--capture`. Only the OpenGL **PBR**
+pipeline exposes targets; the retro pipeline exposes none and dumps nothing.
+
 ## RenderDoc, scripted
+
+Vulkan captures are labelled: each pass is its own region (shadows, opaque
+geometry, deferred resolve, transparent geometry, post-processing, 2D), and
+images and pipelines are named, so a draw reads
+`pbr_model:skinnedVertex/opaqueFragment` rather than a handle.
 
 `renderdoccmd capture` has no option to capture a chosen frame, and triggering by
 keypress does not suit an unattended run. The engine therefore calls RenderDoc's
@@ -141,20 +199,37 @@ installed here: `GetConstantBlock` (not `GetConstantBuffer`/`GetConstantBuffers`
   different resolution *and* a different pipeline (`pbr=0` vs the default), so
   92% of the frame differs for reasons that have nothing to do with the change.
   Copy the cfg into the reference bin.
-- **The mouse cursor is in the capture.** It is drawn wherever the OS pointer
-  happens to be, so it appears in every diff as a few hundred sharp pixels in an
-  arbitrary place. Rule it out before investigating.
-- **Diff by region against the noise floor, not the whole frame.** A whole-frame
-  percentage hides everything. Comparing HUD regions separately, each against
-  two runs of the *same* build, is what exposed a real minimap regression: the
-  minimap is bit-stable run to run, so its 17.6% could not be animation, while
-  everything else in the frame sat at its own noise level.
-- **Know which frames are deterministic.** GUI frames are bit-identical run to
-  run. A gameplay frame is not: about a third of the image differs between two
-  runs of the *same* build. Before attributing a scene diff to a change, run the
-  same build twice and compare that noise floor first.
-- **Beware bimodal noise.** The scene variance is not a smooth distribution:
-  two runs either agree to within 1% or differ across 33%. A single pair of runs
-  therefore "proves" whatever you were hoping for about half the time. Disabling
-  SSAO looked like a clean fix on the first try and reversed on the second.
-  Repeat any A/B that changes a conclusion.
+- **The mouse cursor is in the capture.** It is drawn at whatever position the
+  game holds. Input is dropped during a capture, so it no longer wanders
+  mid-run, but it is still in the image and still worth ruling out before
+  investigating a handful of sharp pixels.
+- **Diff by region, not by whole-frame percentage.** A single number over the
+  whole frame hides everything. Comparing regions separately is what exposed a
+  real minimap regression while the rest of the frame moved for unrelated
+  reasons. This mattered more when runs were noisy; it still matters, because a
+  large uniform difference in the sky will drown a small wrong one on a
+  character.
+- **Compare the same renderer.** `reone.cfg` here has `pbr=0`, so plain
+  `--backend gl` runs the *retro* pipeline while Vulkan always runs PBR
+  deferred - two different renderers, not two backends. Every comparison in one
+  whole session was made this way before a zero-target dump gave it away. Pass
+  `--pbr 1` explicitly on both sides.
+- **Graphics warnings are off by default.** `--logch 9` enables the Graphics
+  channel alongside Global. Missing textures, unsupported formats and
+  unimplemented render-pass stubs all announce themselves there and nowhere
+  else; without it a backend silently substitutes a blank texture and the frame
+  merely looks wrong.
+- **Nondeterminism, if it returns.** It was an `unordered_set` keyed on a node
+  pointer: pointer values differ per process, so iteration order did, which
+  reordered emitter updates against the one shared random generator and
+  reordered transparent compositing. The tell was *bimodal* difference - two
+  clusters rather than a continuum - and the experiment that found it was
+  capturing the **main menu**, which was also affected despite having no module,
+  no AI and no scripts. If frames stop matching, look for order that depends on
+  an address before looking at anything else.
+- **Keep renderer randomness out of the shared stream.** SSAO kernels and noise
+  textures draw from `renderRandomFloat`, not `randomFloat`, because the OpenGL
+  pipeline builds an SSAO kernel and the Vulkan one does not. When they shared a
+  generator the two backends began every comparison at different points in the
+  sequence, and particles and grass then differed for reasons unrelated to
+  rendering - about a third of the measured gap.
