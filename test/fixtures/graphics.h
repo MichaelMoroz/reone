@@ -25,6 +25,7 @@
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/pbrtextures.h"
 #include "reone/graphics/renderer.h"
+#include "reone/graphics/renderer2d.h"
 #include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/statistic.h"
 #include "reone/graphics/textureregistry.h"
@@ -107,6 +108,19 @@ public:
     MOCK_METHOD(void, endFrame, (), (override));
 };
 
+class Mock2DRenderer : public I2DRenderer, boost::noncopyable {
+public:
+    MOCK_METHOD(void, init, (), (override));
+    MOCK_METHOD(void, deinit, (), (override));
+    MOCK_METHOD(void, drawImage, (Texture &, const glm::ivec2 &, const glm::ivec2 &, const glm::vec4 &, const glm::mat3x4 &), (override));
+    MOCK_METHOD(void, drawImage, (Texture &, const glm::mat4 &, const glm::vec4 &, const glm::mat3x4 &), (override));
+    MOCK_METHOD(void, drawRect, (const glm::ivec2 &, const glm::ivec2 &, const glm::vec4 &), (override));
+    MOCK_METHOD(void, drawFullTargetImage, (Texture &, const glm::mat3x4 &), (override));
+    MOCK_METHOD(void, drawText, (Font &, std::string_view, const glm::vec3 &, const glm::vec3 &, TextGravity), (override));
+    MOCK_METHOD(void, withBlendMode, (BlendMode, const std::function<void()> &), (override));
+    MOCK_METHOD(void, withScissor, (const glm::ivec4 &, const std::function<void()> &), (override));
+};
+
 class MockShaderRegistry : public IShaderRegistry, boost::noncopyable {
 public:
     MOCK_METHOD(ShaderProgram &, get, (const std::string &), (override));
@@ -146,6 +160,7 @@ public:
         _meshRegistry = std::make_unique<MockMeshRegistry>();
         _pbrTextures = std::make_unique<MockPBRTextures>();
         _renderer = std::make_unique<MockRenderer>();
+        _renderer2d = std::make_unique<Mock2DRenderer>();
         _shaderRegistry = std::make_unique<MockShaderRegistry>();
         _statistic = std::make_unique<MockStatistic>();
         _textureRegistry = std::make_unique<MockTextureRegistry>();
@@ -156,6 +171,7 @@ public:
             *_meshRegistry,
             *_pbrTextures,
             *_renderer,
+            *_renderer2d,
             *_shaderRegistry,
             *_statistic,
             *_textureRegistry,
@@ -179,6 +195,7 @@ private:
     std::unique_ptr<MockMeshRegistry> _meshRegistry;
     std::unique_ptr<MockPBRTextures> _pbrTextures;
     std::unique_ptr<MockRenderer> _renderer;
+    std::unique_ptr<Mock2DRenderer> _renderer2d;
     std::unique_ptr<MockShaderRegistry> _shaderRegistry;
     std::unique_ptr<MockStatistic> _statistic;
     std::unique_ptr<MockTextureRegistry> _textureRegistry;

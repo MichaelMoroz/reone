@@ -18,6 +18,7 @@
 #include "reone/gui/control/imagebutton.h"
 
 #include "reone/graphics/context.h"
+#include "reone/graphics/renderer2d.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
@@ -53,8 +54,7 @@ void ImageButton::render(
     const std::vector<std::string> &text,
     const std::string &iconText,
     const std::shared_ptr<Texture> &iconTexture,
-    const std::shared_ptr<Texture> &iconFrame,
-    IRenderPass &pass) {
+    const std::shared_ptr<Texture> &iconFrame) {
 
     if (!_visible)
         return;
@@ -65,15 +65,15 @@ void ImageButton::render(
     glm::ivec2 size(_extent.width - _extent.height, _extent.height);
 
     if (_selected && _hilight) {
-        renderBorder(*_hilight, borderOffset, size, pass);
+        renderBorder(*_hilight, borderOffset, size);
     } else if (_border) {
-        renderBorder(*_border, borderOffset, size, pass);
+        renderBorder(*_border, borderOffset, size);
     }
 
-    renderIcon(offset, iconText, iconTexture, iconFrame, pass);
+    renderIcon(offset, iconText, iconTexture, iconFrame);
 
     if (!text.empty()) {
-        renderText(text, borderOffset, size, pass);
+        renderText(text, borderOffset, size);
     }
 }
 
@@ -81,8 +81,7 @@ void ImageButton::renderIcon(
     const glm::ivec2 &offset,
     const std::string &iconText,
     const std::shared_ptr<Texture> &iconTexture,
-    const std::shared_ptr<Texture> &iconFrame,
-    IRenderPass &pass) {
+    const std::shared_ptr<Texture> &iconFrame) {
 
     if (!iconFrame && !iconTexture)
         return;
@@ -95,7 +94,7 @@ void ImageButton::renderIcon(
     }
 
     if (iconFrame) {
-        pass.drawImage(
+        _graphicsSvc.renderer2d.drawImage(
             *iconFrame,
             {offset.x + _extent.left, offset.y + _extent.top},
             {_extent.height, _extent.height},
@@ -103,7 +102,7 @@ void ImageButton::renderIcon(
     }
 
     if (iconTexture) {
-        pass.drawImage(
+        _graphicsSvc.renderer2d.drawImage(
             *iconTexture,
             {offset.x + _extent.left, offset.y + _extent.top},
             {_extent.height, _extent.height});

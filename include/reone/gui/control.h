@@ -44,7 +44,6 @@ class Texture;
 
 namespace scene {
 
-class IRenderPass;
 class ISceneGraphs;
 
 } // namespace scene
@@ -114,7 +113,7 @@ public:
 
     virtual void load(const resource::generated::GUI_BASECONTROL &gui, bool protoItem = false);
     virtual void update(float dt);
-    virtual void render(const glm::ivec2 &screenSize, const glm::ivec2 &offset, scene::IRenderPass &pass);
+    virtual void render(const glm::ivec2 &screenSize, const glm::ivec2 &offset);
 
     void updateTransform();
     void updateTextLines();
@@ -262,13 +261,11 @@ protected:
 
     void renderBorder(const Border &border,
                       const glm::ivec2 &offset,
-                      const glm::ivec2 &size,
-                      scene::IRenderPass &pass);
+                      const glm::ivec2 &size);
 
     void renderText(const std::vector<std::string> &lines,
                     const glm::ivec2 &offset,
-                    const glm::ivec2 &size,
-                    scene::IRenderPass &pass);
+                    const glm::ivec2 &size);
 
     virtual const glm::vec3 &getBorderColor() const;
 

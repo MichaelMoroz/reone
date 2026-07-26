@@ -20,6 +20,7 @@
 #include "reone/game/di/services.h"
 #include "reone/game/game.h"
 #include "reone/graphics/context.h"
+#include "reone/graphics/renderer2d.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/shaderregistry.h"
@@ -78,7 +79,7 @@ void Map::render(Mode mode, const glm::vec4 &bounds) {
     if (!_areaTexture) {
         return;
     }
-    _services.graphics.context.withBlendMode(BlendMode::Normal, [this, &mode, &bounds]() {
+    _services.graphics.renderer2d.withBlendMode(BlendMode::Normal, [this, &mode, &bounds]() {
         renderArea(mode, bounds);
         renderNotes(mode, bounds);
         renderPartyLeader(mode, bounds);
@@ -91,8 +92,6 @@ void Map::renderArea(Mode mode, const glm::vec4 &bounds) {
         if (!partyLeader) {
             return;
         }
-        _services.graphics.context.bindTexture(*_areaTexture);
-
         glm::vec2 worldPos(partyLeader->position());
         glm::vec2 mapPos(getMapPosition(worldPos));
 
@@ -100,35 +99,20 @@ void Map::renderArea(Mode mode, const glm::vec4 &bounds) {
         topLeft.x = bounds[0] + 0.5f * bounds[2] - mapPos.x * 440.0f / static_cast<float>(_areaTexture->width()) * _areaTexture->width();
         topLeft.y = bounds[1] + 0.5f * bounds[3] - mapPos.y * _areaTexture->height();
 
-        glm::mat4 transform(1.0f);
-        transform = glm::translate(transform, topLeft);
-        transform = glm::scale(transform, glm::vec3(_areaTexture->width(), _areaTexture->height(), 1.0f));
-
-        _services.graphics.uniforms.setLocals([transform](auto &locals) {
-            locals.reset();
-            locals.model = std::move(transform);
-        });
-        _services.graphics.context.useProgram(_services.graphics.shaderRegistry.get(ShaderProgramId::mvpTexture));
-
         int height = _game.options().graphics.height;
         glm::ivec4 scissorBounds(bounds[0], height - (bounds[1] + bounds[3]), bounds[2], bounds[3]);
-        _services.graphics.context.withScissorTest(scissorBounds, [&]() {
-            _services.graphics.meshRegistry.get(MeshName::quad).draw(_services.graphics.statistic);
+        _services.graphics.renderer2d.withScissor(scissorBounds, [this, &topLeft]() {
+            _services.graphics.renderer2d.drawImage(
+                *_areaTexture,
+                topLeft,
+                {_areaTexture->width(), _areaTexture->height()});
         });
 
     } else {
-        _services.graphics.context.bindTexture(*_areaTexture);
-
-        glm::mat4 transform(1.0f);
-        transform = glm::translate(transform, glm::vec3(bounds[0], bounds[1], 0.0f));
-        transform = glm::scale(transform, glm::vec3(bounds[2], bounds[3], 1.0f));
-
-        _services.graphics.uniforms.setLocals([transform](auto &locals) {
-            locals.reset();
-            locals.model = std::move(transform);
-        });
-        _services.graphics.context.useProgram(_services.graphics.shaderRegistry.get(ShaderProgramId::mvpTexture));
-        _services.graphics.meshRegistry.get(MeshName::quad).draw(_services.graphics.statistic);
+        _services.graphics.renderer2d.drawImage(
+            *_areaTexture,
+            {bounds[0], bounds[1]},
+            {bounds[2], bounds[3]});
     }
 }
 
@@ -136,8 +120,6 @@ void Map::renderNotes(Mode mode, const glm::vec4 &bounds) {
     if (mode != Mode::Default) {
         return;
     }
-    _services.graphics.context.bindTexture(*_noteTexture);
-
     for (auto &object : _game.module()->area()->getObjectsByType(ObjectType::Waypoint)) {
         auto waypoint = std::static_pointer_cast<Waypoint>(object);
         if (!waypoint->isMapNoteEnabled() || waypoint->mapNote().empty())
@@ -154,20 +136,14 @@ void Map::renderNotes(Mode mode, const glm::vec4 &bounds) {
         bool selected = waypoint == _selectedNote;
         float noteSize = (selected ? kSelectedMapNoteScale : 1.0f) * kMapNoteSize;
 
-        glm::mat4 transform(1.0f);
-        transform = glm::translate(transform, glm::vec3(notePos.x - 0.5f * noteSize, notePos.y - 0.5f * noteSize, 0.0f));
-        transform = glm::scale(transform, glm::vec3(noteSize, noteSize, 1.0f));
-
         auto guiColorHilight = _game.isTSL() ? kTSLGUIColorHilight : kGUIColorHilight;
         auto guiColorBase = _game.isTSL() ? kTSLGUIColorBase : kGUIColorBase;
 
-        _services.graphics.uniforms.setLocals([&](auto &locals) {
-            locals.reset();
-            locals.model = std::move(transform);
-            locals.color = glm::vec4(selected ? guiColorHilight : guiColorBase, 1.0f);
-        });
-        _services.graphics.context.useProgram(_services.graphics.shaderRegistry.get(ShaderProgramId::mvpTexture));
-        _services.graphics.meshRegistry.get(MeshName::quad).draw(_services.graphics.statistic);
+        _services.graphics.renderer2d.drawImage(
+            *_noteTexture,
+            {notePos.x - 0.5f * noteSize, notePos.y - 0.5f * noteSize},
+            {noteSize, noteSize},
+            glm::vec4(selected ? guiColorHilight : guiColorBase, 1.0f));
     }
 }
 
@@ -203,8 +179,6 @@ void Map::renderPartyLeader(Mode mode, const glm::vec4 &bounds) {
     if (!partyLeader) {
         return;
     }
-    _services.graphics.context.bindTexture(*_arrowTexture);
-
     glm::vec3 arrowPos(0.0f);
 
     if (mode == Mode::Default) {
@@ -243,12 +217,7 @@ void Map::renderPartyLeader(Mode mode, const glm::vec4 &bounds) {
     transform = glm::translate(transform, glm::vec3(-0.5f * kArrowSize, -0.5f * kArrowSize, 0.0f));
     transform = glm::scale(transform, glm::vec3(kArrowSize, kArrowSize, 1.0f));
 
-    _services.graphics.uniforms.setLocals([this, transform](auto &locals) {
-        locals.reset();
-        locals.model = std::move(transform);
-    });
-    _services.graphics.context.useProgram(_services.graphics.shaderRegistry.get(ShaderProgramId::mvpTexture));
-    _services.graphics.meshRegistry.get(MeshName::quad).draw(_services.graphics.statistic);
+    _services.graphics.renderer2d.drawImage(*_arrowTexture, transform);
 }
 
 } // namespace game

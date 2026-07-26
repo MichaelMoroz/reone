@@ -55,6 +55,8 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/renderbuffer.h
     ${GRAPHICS_INCLUDE_DIR}/renderer.h
     ${GRAPHICS_INCLUDE_DIR}/renderer/gl.h
+    ${GRAPHICS_INCLUDE_DIR}/renderer/gl2d.h
+    ${GRAPHICS_INCLUDE_DIR}/renderer2d.h
     ${GRAPHICS_INCLUDE_DIR}/shader.h
     ${GRAPHICS_INCLUDE_DIR}/shaderprogram.h
     ${GRAPHICS_INCLUDE_DIR}/shaderregistry.h
@@ -78,6 +80,7 @@ set(GRAPHICS_SOURCES
     ${GRAPHICS_SOURCE_DIR}/camera.cpp
     ${GRAPHICS_SOURCE_DIR}/context.cpp
     ${GRAPHICS_SOURCE_DIR}/renderer/gl.cpp
+    ${GRAPHICS_SOURCE_DIR}/renderer/gl2d.cpp
     ${GRAPHICS_SOURCE_DIR}/cursor.cpp
     ${GRAPHICS_SOURCE_DIR}/di/module.cpp
     ${GRAPHICS_SOURCE_DIR}/dxtutil.cpp

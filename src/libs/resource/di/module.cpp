@@ -35,21 +35,8 @@ void ResourceModule::init() {
     _models = std::make_unique<Models>(*_textures, *_resources, _graphics.statistic());
     _walkmeshes = std::make_unique<Walkmeshes>(*_resources);
     _lips = std::make_unique<Lips>(*_resources);
-    _fonts = std::make_unique<Fonts>(
-        _graphics.context(),
-        _graphics.meshRegistry(),
-        _graphics.shaderRegistry(),
-        _graphics.statistic(),
-        *_textures,
-        _graphics.uniforms());
-    _cursors = std::make_unique<Cursors>(
-        _graphics.context(),
-        _graphics.meshRegistry(),
-        _graphics.shaderRegistry(),
-        *_textures,
-        _graphics.uniforms(),
-        _graphics.statistic(),
-        *_resources);
+    _fonts = std::make_unique<Fonts>(_graphics.renderer2d(), *_textures);
+    _cursors = std::make_unique<Cursors>(_graphics.renderer2d(), *_textures, *_resources);
     _audioClips = std::make_unique<AudioClips>(*_resources);
     _movies = std::make_unique<Movies>(_gamePath, _graphics.services(), _audio.mixer());
     _scripts = std::make_unique<Scripts>(*_resources);

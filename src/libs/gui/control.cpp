@@ -18,6 +18,7 @@
 #include "reone/gui/control.h"
 
 #include "reone/graphics/context.h"
+#include "reone/graphics/renderer2d.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/renderbuffer.h"
@@ -201,19 +202,18 @@ void Control::update(float dt) {
 }
 
 void Control::render(const glm::ivec2 &screenSize,
-                     const glm::ivec2 &offset,
-                     IRenderPass &pass) {
+                     const glm::ivec2 &offset) {
     if (!_visible) {
         return;
     }
     glm::ivec2 size(_extent.width, _extent.height);
     if (_selected && _hilight) {
-        renderBorder(*_hilight, offset, size, pass);
+        renderBorder(*_hilight, offset, size);
     } else if (_border) {
-        renderBorder(*_border, offset, size, pass);
+        renderBorder(*_border, offset, size);
     }
     if (!_textLines.empty()) {
-        renderText(_textLines, offset, size, pass);
+        renderText(_textLines, offset, size);
     }
     if (!_sceneName.empty()) {
         std::optional<std::reference_wrapper<Texture>> output;
@@ -229,8 +229,8 @@ void Control::render(const glm::ivec2 &screenSize,
                 0.0f, 0.0f, 100.0f);
             globals.projectionInv = glm::inverse(globals.projection);
         });
-        _graphicsSvc.context.withDepthTestMode(DepthTestMode::None, [this, &offset, &pass, &output]() {
-            pass.drawImage(
+        _graphicsSvc.context.withDepthTestMode(DepthTestMode::None, [this, &offset, &output]() {
+            _graphicsSvc.renderer2d.drawImage(
                 *output,
                 {_extent.left + offset.x, _extent.top + offset.y},
                 {_extent.width, _extent.height});
@@ -240,8 +240,7 @@ void Control::render(const glm::ivec2 &screenSize,
 
 void Control::renderBorder(const Border &border,
                            const glm::ivec2 &offset,
-                           const glm::ivec2 &size,
-                           IRenderPass &pass) {
+                           const glm::ivec2 &size) {
     _graphicsSvc.context.useProgram(_graphicsSvc.shaderRegistry.get(ShaderProgramId::mvpTexture));
 
     glm::vec3 color(getBorderColor());
@@ -259,7 +258,7 @@ void Control::renderBorder(const Border &border,
                             ? BlendMode::Additive
                             : BlendMode::Normal;
         _graphicsSvc.context.withBlendMode(blending, [&]() {
-            pass.drawImage(
+            _graphicsSvc.renderer2d.drawImage(
                 *border.fill,
                 {_extent.left + border.dimension + offset.x, _extent.top + border.dimension + offset.y},
                 {size.x - 2 * border.dimension, size.y - 2 * border.dimension},
@@ -281,7 +280,7 @@ void Control::renderBorder(const Border &border,
                 glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
                 glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
                 glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
-            pass.drawImage(
+            _graphicsSvc.renderer2d.drawImage(
                 *border.edge,
                 {x, y},
                 {border.dimension, height},
@@ -293,7 +292,7 @@ void Control::renderBorder(const Border &border,
                 glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
                 glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
                 glm::vec4(0.0f, 0.0f, 0.0f, 0.0f));
-            pass.drawImage(
+            _graphicsSvc.renderer2d.drawImage(
                 *border.edge,
                 {x + size.x - border.dimension, y},
                 {border.dimension, height},
@@ -306,7 +305,7 @@ void Control::renderBorder(const Border &border,
             int y = _extent.top + offset.y;
 
             // Top edge
-            pass.drawImage(
+            _graphicsSvc.renderer2d.drawImage(
                 *border.edge,
                 {x, y},
                 {width, border.dimension},
@@ -317,7 +316,7 @@ void Control::renderBorder(const Border &border,
                 glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
                 glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
                 glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
-            pass.drawImage(
+            _graphicsSvc.renderer2d.drawImage(
                 *border.edge,
                 {x, y + size.y - border.dimension},
                 {width, border.dimension},
@@ -331,7 +330,7 @@ void Control::renderBorder(const Border &border,
         int y = _extent.top + offset.y;
 
         // Top left corner
-        pass.drawImage(
+        _graphicsSvc.renderer2d.drawImage(
             *border.corner,
             {x, y},
             {border.dimension, border.dimension},
@@ -342,7 +341,7 @@ void Control::renderBorder(const Border &border,
             glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
             glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
             glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
-        pass.drawImage(
+        _graphicsSvc.renderer2d.drawImage(
             *border.corner,
             {x, y + size.y - border.dimension},
             {border.dimension, border.dimension},
@@ -354,7 +353,7 @@ void Control::renderBorder(const Border &border,
             glm::vec4(-1.0f, 0.0f, 0.0f, 0.0f),
             glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
             glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
-        pass.drawImage(
+        _graphicsSvc.renderer2d.drawImage(
             *border.corner,
             {x + size.x - border.dimension, y},
             {border.dimension, border.dimension},
@@ -366,7 +365,7 @@ void Control::renderBorder(const Border &border,
             glm::vec4(-1.0f, 0.0f, 0.0f, 0.0f),
             glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
             glm::vec4(1.0f, 1.0f, 0.0f, 0.0f));
-        pass.drawImage(
+        _graphicsSvc.renderer2d.drawImage(
             *border.corner,
             {x + size.x - border.dimension, y + size.y - border.dimension},
             {border.dimension, border.dimension},
@@ -384,8 +383,7 @@ const glm::vec3 &Control::getBorderColor() const {
 
 void Control::renderText(const std::vector<std::string> &lines,
                          const glm::ivec2 &offset,
-                         const glm::ivec2 &size,
-                         IRenderPass &pass) {
+                         const glm::ivec2 &size) {
     glm::ivec2 position;
     TextGravity gravity;
     getTextPosition(position, static_cast<int>(lines.size()), size, gravity);

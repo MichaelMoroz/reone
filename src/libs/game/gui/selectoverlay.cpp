@@ -18,6 +18,7 @@
 #include "reone/game/gui/selectoverlay.h"
 
 #include "reone/graphics/context.h"
+#include "reone/graphics/renderer2d.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/font.h"
 #include "reone/graphics/mesh.h"
@@ -292,7 +293,7 @@ void SelectionOverlay::update() {
 }
 
 void SelectionOverlay::render() {
-    _services.graphics.context.withBlendMode(BlendMode::Normal, [this]() {
+    _services.graphics.renderer2d.withBlendMode(BlendMode::Normal, [this]() {
         if (_hilightedObject) {
             renderReticle(_hilightedHostile ? _hostileReticle : _friendlyReticle, _hilightedScreenCoords);
         }
@@ -306,22 +307,14 @@ void SelectionOverlay::render() {
 }
 
 void SelectionOverlay::renderReticle(std::shared_ptr<Texture> texture, const glm::vec3 &screenCoords) {
-    _services.graphics.context.bindTexture(*texture);
-
     const GraphicsOptions &opts = _game.options().graphics;
     int width = texture->width();
     int height = texture->height();
 
-    glm::mat4 transform(1.0f);
-    transform = glm::translate(transform, glm::vec3((opts.width * screenCoords.x) - width / 2, (opts.height * (1.0f - screenCoords.y)) - height / 2, 0.0f));
-    transform = glm::scale(transform, glm::vec3(width, height, 1.0f));
-
-    _services.graphics.uniforms.setLocals([this, transform](auto &locals) {
-        locals.reset();
-        locals.model = std::move(transform);
-    });
-    _services.graphics.context.useProgram(_services.graphics.shaderRegistry.get(ShaderProgramId::mvpTexture));
-    _services.graphics.meshRegistry.get(MeshName::quad).draw(_services.graphics.statistic);
+    glm::ivec2 position(
+        (opts.width * screenCoords.x) - width / 2,
+        (opts.height * (1.0f - screenCoords.y)) - height / 2);
+    _services.graphics.renderer2d.drawImage(*texture, position, {width, height});
 }
 
 void SelectionOverlay::renderTitleBar() {
@@ -337,18 +330,10 @@ void SelectionOverlay::renderTitleBar() {
         if (_hasActions) {
             y -= kActionHeight + 2 * kActionBarMargin;
         }
-        glm::mat4 transform(1.0f);
-        transform = glm::translate(transform, glm::vec3(x, y, 0.0f));
-        transform = glm::scale(transform, glm::vec3(kTitleBarWidth, barHeight, 1.0f));
-
-        _services.graphics.uniforms.setLocals([this, transform](auto &locals) {
-            locals.reset();
-            locals.model = std::move(transform);
-            locals.color = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-            locals.color.a = 0.5f;
-        });
-        _services.graphics.context.useProgram(_services.graphics.shaderRegistry.get(ShaderProgramId::mvpColor));
-        _services.graphics.meshRegistry.get(MeshName::quad).draw(_services.graphics.statistic);
+        _services.graphics.renderer2d.drawRect(
+            {x, y},
+            {kTitleBarWidth, barHeight},
+            glm::vec4(0.0f, 0.0f, 0.0f, 0.5f));
     }
     {
         float x = opts.width * _selectedScreenCoords.x;
@@ -370,17 +355,10 @@ void SelectionOverlay::renderHealthBar() {
     if (_hasActions) {
         y -= kActionHeight + 2 * kActionBarMargin;
     }
-    glm::mat4 transform(1.0f);
-    transform = glm::translate(transform, glm::vec3(x, y, 0.0f));
-    transform = glm::scale(transform, glm::vec3(w, kHealthBarHeight, 1.0f));
-
-    _services.graphics.uniforms.setLocals([this, transform](auto &locals) {
-        locals.reset();
-        locals.model = std::move(transform);
-        locals.color = glm::vec4(getColorFromSelectedObject(), 1.0f);
-    });
-    _services.graphics.context.useProgram(_services.graphics.shaderRegistry.get(ShaderProgramId::mvpColor));
-    _services.graphics.meshRegistry.get(MeshName::quad).draw(_services.graphics.statistic);
+    _services.graphics.renderer2d.drawRect(
+        {x, y},
+        {w, kHealthBarHeight},
+        glm::vec4(getColorFromSelectedObject(), 1.0f));
 }
 
 void SelectionOverlay::renderActionBar() {
@@ -403,21 +381,13 @@ void SelectionOverlay::renderActionFrame(int index) {
     } else {
         frameTexture = _friendlyScroll;
     }
-    _services.graphics.context.bindTexture(*frameTexture);
-
     float frameX, frameY;
     getActionScreenCoords(index, frameX, frameY);
 
-    glm::mat4 transform(1.0f);
-    transform = glm::translate(transform, glm::vec3(frameX, frameY, 0.0f));
-    transform = glm::scale(transform, glm::vec3(kActionWidth, kActionHeight, 1.0f));
-
-    _services.graphics.uniforms.setLocals([this, transform](auto &locals) {
-        locals.reset();
-        locals.model = std::move(transform);
-    });
-    _services.graphics.context.useProgram(_services.graphics.shaderRegistry.get(ShaderProgramId::mvpTexture));
-    _services.graphics.meshRegistry.get(MeshName::quad).draw(_services.graphics.statistic);
+    _services.graphics.renderer2d.drawImage(
+        *frameTexture,
+        {frameX, frameY},
+        {kActionWidth, kActionHeight});
 }
 
 void SelectionOverlay::renderActionArrows(int index) {
@@ -432,29 +402,22 @@ void SelectionOverlay::renderActionArrow(int index, bool previous) {
     bool hilighted = index == _selectedActionSlot &&
                      _hilightedActionBand == (previous ? ActionBand::Previous : ActionBand::Next);
     auto texture = hilighted ? _hilightedActionArrow : _actionArrow;
-    _services.graphics.context.bindTexture(*texture);
 
     float frameX, frameY;
     getActionScreenCoords(index, frameX, frameY);
 
-    glm::mat4 transform(1.0f);
-    transform = glm::translate(
-        transform,
-        glm::vec3(frameX, previous ? frameY : frameY + kActionArrowHeight + kActionWidth, 0.0f));
-    transform = glm::scale(transform, glm::vec3(kActionWidth, kActionArrowHeight, 1.0f));
-
-    _services.graphics.uniforms.setLocals([transform, previous](auto &locals) {
-        locals.reset();
-        locals.model = transform;
-        if (!previous) {
-            locals.uv = glm::mat3x4(
-                glm::vec4(-1.0f, 0.0f, 0.0f, 0.0f),
-                glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
-                glm::vec4(1.0f, 1.0f, 0.0f, 0.0f));
-        }
-    });
-    _services.graphics.context.useProgram(_services.graphics.shaderRegistry.get(ShaderProgramId::mvpTexture));
-    _services.graphics.meshRegistry.get(MeshName::quad).draw(_services.graphics.statistic);
+    // The "next" arrow is the "previous" one turned around.
+    auto uv = previous ? glm::mat3x4(1.0f)
+                       : glm::mat3x4(
+                             glm::vec4(-1.0f, 0.0f, 0.0f, 0.0f),
+                             glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
+                             glm::vec4(1.0f, 1.0f, 0.0f, 0.0f));
+    _services.graphics.renderer2d.drawImage(
+        *texture,
+        {frameX, previous ? frameY : frameY + kActionArrowHeight + kActionWidth},
+        {kActionWidth, kActionArrowHeight},
+        glm::vec4(1.0f),
+        uv);
 }
 
 bool SelectionOverlay::getActionScreenCoords(int index, float &x, float &y) const {

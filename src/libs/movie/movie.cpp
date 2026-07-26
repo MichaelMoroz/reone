@@ -20,6 +20,7 @@
 #include "reone/audio/di/services.h"
 #include "reone/audio/mixer.h"
 #include "reone/graphics/context.h"
+#include "reone/graphics/renderer2d.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
@@ -93,15 +94,12 @@ void Movie::render() {
         _graphicsSvc.context.bindTexture(*_texture);
         _texture->setPixels(_width, _height, PixelFormat::RGB8, Texture::Layer {frame.pixels}, true);
     }
-    _graphicsSvc.uniforms.setLocals([](auto &locals) {
-        locals.reset();
-        locals.uv = glm::mat3x4(
-            glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
-            glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
-            glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
-    });
-    _graphicsSvc.context.useProgram(_graphicsSvc.shaderRegistry.get(ShaderProgramId::ndcTexture));
-    _graphicsSvc.meshRegistry.get(MeshName::quadNDC).draw(_graphicsSvc.statistic);
+    // ffmpeg hands over rows top-down; the quad expects them the other way up.
+    auto uv = glm::mat3x4(
+        glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
+        glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
+        glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
+    _graphicsSvc.renderer2d.drawFullTargetImage(*_texture, uv);
 }
 
 } // namespace movie

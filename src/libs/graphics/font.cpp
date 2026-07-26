@@ -17,12 +17,8 @@
 
 #include "reone/graphics/font.h"
 
-#include "reone/graphics/context.h"
-#include "reone/graphics/mesh.h"
-#include "reone/graphics/meshregistry.h"
-#include "reone/graphics/shaderregistry.h"
+#include "reone/graphics/renderer2d.h"
 #include "reone/graphics/texture.h"
-#include "reone/graphics/uniforms.h"
 
 namespace reone {
 
@@ -52,31 +48,10 @@ void Font::load(std::shared_ptr<Texture> texture) {
 }
 
 void Font::render(std::string_view text, const glm::vec3 &position, const glm::vec3 &color, TextGravity gravity) {
-    if (text.empty()) {
-        return;
-    }
-
-    _context.useProgram(_shaderRegistry.get(ShaderProgramId::text));
-    _context.bindTexture(*_texture);
-
-    _uniforms.setLocals([this, &color](auto &locals) {
-        locals.reset();
-        locals.color = glm::vec4(color, 1.0f);
-    });
-
-    int numBlocks = static_cast<int>(text.size()) / kMaxTextChars;
-    if (text.size() % kMaxTextChars > 0) {
-        ++numBlocks;
-    }
-    glm::vec3 textOffset(getTextOffset(text, gravity), 0.0f);
-    for (int i = 0; i < numBlocks; ++i) {
-        int numChars = glm::min(kMaxTextChars, static_cast<int>(text.size()) - i * kMaxTextChars);
-        std::string_view line = text.substr(i * kMaxTextChars, numChars);
-        renderLine(line, position, textOffset);
-    }
+    _renderer2d.drawText(*this, text, position, color, gravity);
 }
 
-glm::vec2 Font::getTextOffset(std::string_view text, TextGravity gravity) const {
+glm::vec2 Font::textOffset(std::string_view text, TextGravity gravity) const {
     float w = measure(text);
 
     switch (gravity) {
@@ -98,7 +73,7 @@ glm::vec2 Font::getTextOffset(std::string_view text, TextGravity gravity) const 
     default:
         return glm::vec2(-0.5f * w, -0.5f * _height);
     }
-};
+}
 
 float Font::measure(std::string_view text) const {
     float w = 0.0f;
@@ -106,30 +81,6 @@ float Font::measure(std::string_view text) const {
         w += _glyphs[reinterpret_cast<const unsigned char &>(glyph)].size.x;
     }
     return w;
-}
-
-void Font::renderLine(std::string_view line, const glm::vec3 &position, glm::vec3 &textOffset) {
-    if (line.empty()) {
-        return;
-    }
-
-    _uniforms.setText([this, &line, &position, &textOffset](auto &uniforms) {
-        for (int j = 0; j < line.size(); ++j) {
-            const Glyph &glyph = _glyphs[static_cast<unsigned char>(line[j])];
-
-            glm::vec4 posScale;
-            posScale[0] = position.x + textOffset.x;
-            posScale[1] = position.y + textOffset.y;
-            posScale[2] = glyph.size.x;
-            posScale[3] = glyph.size.y;
-
-            uniforms.chars[j].posScale = std::move(posScale);
-            uniforms.chars[j].uv = glm::vec4(glyph.ul.x, glyph.lr.y, glyph.lr.x - glyph.ul.x, glyph.ul.y - glyph.lr.y);
-
-            textOffset.x += glyph.size.x;
-        }
-    });
-    _meshRegistry.get(MeshName::quad).drawInstanced(line.size(), _statistic);
 }
 
 } // namespace graphics

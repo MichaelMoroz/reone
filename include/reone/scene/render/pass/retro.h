@@ -95,11 +95,6 @@ public:
 
     void drawAABB(const std::vector<glm::vec4> &corners) override;
 
-    void drawImage(graphics::Texture &texture,
-                   const glm::ivec2 &position,
-                   const glm::ivec2 &scale,
-                   glm::vec4 color,
-                   glm::mat3x4 uv) override;
 
 private:
     graphics::GraphicsOptions &_options;

@@ -17,6 +17,9 @@
 
 #include "reone/gui/control/iconchain.h"
 
+#include "reone/graphics/di/services.h"
+#include "reone/graphics/renderer2d.h"
+
 #include "reone/scene/render/pass.h"
 
 using namespace reone::scene;
@@ -130,13 +133,12 @@ void IconChain::update(float dt) {
 }
 
 void IconChain::render(const glm::ivec2 &screenSize,
-                       const glm::ivec2 &offset,
-                       IRenderPass &pass) {
+                       const glm::ivec2 &offset) {
     if (!_visible) {
         return;
     }
 
-    Control::render(screenSize, offset, pass);
+    Control::render(screenSize, offset);
 
     for (auto &item : _items) {
         if (!hasValidPosition(item)) {
@@ -149,7 +151,7 @@ void IconChain::render(const glm::ivec2 &screenSize,
         }
 
         if (_cellStyle.backgroundTexture) {
-            pass.drawImage(
+            _graphicsSvc.renderer2d.drawImage(
                 *_cellStyle.backgroundTexture,
                 {offset.x + itemExtent.left, offset.y + itemExtent.top},
                 {itemExtent.width, itemExtent.height},
@@ -158,7 +160,7 @@ void IconChain::render(const glm::ivec2 &screenSize,
     }
 
     for (auto &link : _links) {
-        renderLink(link, offset, pass);
+        renderLink(link, offset);
     }
 
     for (size_t i = 0; i < _items.size(); ++i) {
@@ -175,15 +177,15 @@ void IconChain::render(const glm::ivec2 &screenSize,
         bool focused = static_cast<int>(i) == _focusedItemIndex;
         if (item.iconTexture) {
             Extent iconExtent(getItemIconExtent(itemExtent));
-            pass.drawImage(
+            _graphicsSvc.renderer2d.drawImage(
                 *item.iconTexture,
                 {offset.x + iconExtent.left, offset.y + iconExtent.top},
                 {iconExtent.width, iconExtent.height},
                 getItemIconColor(item));
         }
 
-        renderItemBorder(item, focused, itemExtent, offset, pass);
-        renderFocusedBorder(item, focused, itemExtent, offset, pass);
+        renderItemBorder(item, focused, itemExtent, offset);
+        renderFocusedBorder(item, focused, itemExtent, offset);
     }
 }
 
@@ -373,8 +375,7 @@ float IconChain::getFocusedBorderPulseFactor() const {
 
 void IconChain::renderLink(
     const Link &link,
-    const glm::ivec2 &offset,
-    IRenderPass &pass) const {
+    const glm::ivec2 &offset) const {
 
     if (!_cellStyle.linkTexture) {
         return;
@@ -408,7 +409,7 @@ void IconChain::renderLink(
     int gapWidth = targetExtent.left - sourceRight;
     int linkLeft = sourceRight + (gapWidth - linkSize.x) / 2;
     int linkTop = sourceExtent.top + (sourceExtent.height - linkSize.y) / 2;
-    pass.drawImage(
+    _graphicsSvc.renderer2d.drawImage(
         *_cellStyle.linkTexture,
         {offset.x + linkLeft, offset.y + linkTop},
         linkSize);
@@ -466,8 +467,7 @@ void IconChain::renderItemBorder(
     const Item &item,
     bool focused,
     const Extent &extent,
-    const glm::ivec2 &offset,
-    IRenderPass &pass) {
+    const glm::ivec2 &offset) {
 
     if (_cellStyle.onlyDrawItemBorderWhenBright && !isItemBright(item)) {
         return;
@@ -485,11 +485,11 @@ void IconChain::renderItemBorder(
     setBorderColorOverride(getItemBorderColor(item, focused));
     setUseBorderColorOverride(true);
     if (_cellStyle.drawItemBorderFill || !border->fill) {
-        renderBorder(*border, offset, {extent.width, extent.height}, pass);
+        renderBorder(*border, offset, {extent.width, extent.height});
     } else {
         Border borderWithoutFill(*border);
         borderWithoutFill.fill.reset();
-        renderBorder(borderWithoutFill, offset, {extent.width, extent.height}, pass);
+        renderBorder(borderWithoutFill, offset, {extent.width, extent.height});
     }
     setUseBorderColorOverride(false);
     _extent = originalExtent;
@@ -499,8 +499,7 @@ void IconChain::renderFocusedBorder(
     const Item &item,
     bool focused,
     const Extent &extent,
-    const glm::ivec2 &offset,
-    IRenderPass &pass) {
+    const glm::ivec2 &offset) {
 
     auto maybeColor = getFocusedBorderColor(item, focused);
     if (!maybeColor) {
@@ -517,11 +516,11 @@ void IconChain::renderFocusedBorder(
     setBorderColorOverride(*maybeColor * getFocusedBorderPulseFactor());
     setUseBorderColorOverride(true);
     if (_cellStyle.drawItemBorderFill || !border->fill) {
-        renderBorder(*border, offset, {extent.width, extent.height}, pass);
+        renderBorder(*border, offset, {extent.width, extent.height});
     } else {
         Border borderWithoutFill(*border);
         borderWithoutFill.fill.reset();
-        renderBorder(borderWithoutFill, offset, {extent.width, extent.height}, pass);
+        renderBorder(borderWithoutFill, offset, {extent.width, extent.height});
     }
     setUseBorderColorOverride(false);
     _extent = originalExtent;

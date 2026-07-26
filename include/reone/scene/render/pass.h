@@ -128,12 +128,6 @@ public:
                            const std::vector<GrassInstance> &instances) = 0;
 
     virtual void drawAABB(const std::vector<glm::vec4> &corners) = 0;
-
-    virtual void drawImage(graphics::Texture &texture,
-                           const glm::ivec2 &position,
-                           const glm::ivec2 &scale,
-                           glm::vec4 color = glm::vec4(1.0f),
-                           glm::mat3x4 uv = glm::mat3x4(1.0f)) = 0;
 };
 
 } // namespace scene

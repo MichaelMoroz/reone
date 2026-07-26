@@ -22,7 +22,8 @@
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/texture.h"
-#include "reone/graphics/uniforms.h"
+#include "reone/graphics/renderer2d.h"
+#include "reone/graphics/texture.h"
 
 namespace reone {
 
@@ -30,19 +31,8 @@ namespace graphics {
 
 void Cursor::render() {
     std::shared_ptr<Texture> texture(_pressed ? _down : _up);
-    _context.bindTexture(*texture);
-
-    glm::mat4 transform(1.0f);
-    transform = glm::translate(transform, glm::vec3(static_cast<float>(_position.x), static_cast<float>(_position.y), 0.0f));
-    transform = glm::scale(transform, glm::vec3(texture->width(), texture->height(), 1.0f));
-
-    _uniforms.setLocals([this, transform](auto &locals) {
-        locals.reset();
-        locals.model = std::move(transform);
-    });
-    _context.useProgram(_shaderRegistry.get(ShaderProgramId::mvpTexture));
-    _context.withBlendMode(BlendMode::Normal, [this]() {
-        _meshRegistry.get(MeshName::quad).draw(_statistic);
+    _renderer2d.withBlendMode(BlendMode::Normal, [this, &texture]() {
+        _renderer2d.drawImage(*texture, _position, {texture->width(), texture->height()});
     });
 }
 

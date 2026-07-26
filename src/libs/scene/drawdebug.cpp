@@ -223,9 +223,26 @@ static void renderText(const Text &text, const std::string &str, const DrawConte
         locals.model = glm::scale(locals.model, glm::vec3(scale, -scale, 1.0f));
     });
 
-    glm::vec3 zeroPosition(0.0f);
-    glm::vec3 zeroOffset(0.0f);
-    ctx.font->renderLine(str, zeroPosition, zeroOffset);
+    // Billboarded text is a scene-space draw with its own program, not a 2D
+    // one, so it fills the glyph block itself rather than going through the 2D
+    // renderer. Longer strings are truncated: the block is a fixed size and a
+    // debug label is not worth a second draw.
+    int numChars = glm::min(static_cast<int>(str.size()), kMaxTextChars);
+    const auto &glyphs = ctx.font->glyphs();
+    float offsetX = 0.0f;
+    ctx.services.uniforms.setText([&](TextUniforms &uniforms) {
+        for (int i = 0; i < numChars; ++i) {
+            const auto &glyph = glyphs[static_cast<unsigned char>(str[i])];
+            uniforms.chars[i].posScale = glm::vec4(offsetX, 0.0f, glyph.size.x, glyph.size.y);
+            uniforms.chars[i].uv = glm::vec4(
+                glyph.ul.x,
+                glyph.lr.y,
+                glyph.lr.x - glyph.ul.x,
+                glyph.ul.y - glyph.lr.y);
+            offsetX += glyph.size.x;
+        }
+    });
+    ctx.services.meshRegistry.get(MeshName::quad).drawInstanced(numChars, ctx.services.statistic);
 }
 
 static void renderPoint(const Point &point, const DrawContext &ctx, IRenderPass &pass) {

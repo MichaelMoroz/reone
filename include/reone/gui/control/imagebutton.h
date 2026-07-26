@@ -47,8 +47,7 @@ public:
         const std::vector<std::string> &text,
         const std::string &iconText,
         const std::shared_ptr<graphics::Texture> &iconTexture,
-        const std::shared_ptr<graphics::Texture> &iconFrame,
-        scene::IRenderPass &pass);
+        const std::shared_ptr<graphics::Texture> &iconFrame);
 
 private:
     std::shared_ptr<graphics::Texture> _iconFrame;
@@ -58,8 +57,7 @@ private:
         const glm::ivec2 &offset,
         const std::string &iconText,
         const std::shared_ptr<graphics::Texture> &iconTexture,
-        const std::shared_ptr<graphics::Texture> &iconFrame,
-        scene::IRenderPass &pass);
+        const std::shared_ptr<graphics::Texture> &iconFrame);
 };
 
 } // namespace gui

@@ -68,7 +68,7 @@ public:
     bool handleMouseMotion(int x, int y) override;
     bool handleMouseWheel(int x, int y) override;
     bool handleClick(int x, int y, int clicks = 1) override;
-    void render(const glm::ivec2 &screenSize, const glm::ivec2 &offset, scene::IRenderPass &pass) override;
+    void render(const glm::ivec2 &screenSize, const glm::ivec2 &offset) override;
     void stretch(float x, float y, int mask) override;
 
     void changeProtoItemType(ControlType type);
@@ -125,8 +125,7 @@ private:
     void renderItemWithButtonProtoIcon(
         const glm::ivec2 &screenSize,
         const glm::ivec2 &offset,
-        const Item &item,
-        scene::IRenderPass &pass);
+        const Item &item);
 };
 
 } // namespace gui

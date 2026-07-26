@@ -21,6 +21,7 @@
 #include "../meshregistry.h"
 #include "../pbrtextures.h"
 #include "../renderer/gl.h"
+#include "../renderer/gl2d.h"
 #include "../shaderregistry.h"
 #include "../statistic.h"
 #include "../textureregistry.h"
@@ -52,6 +53,7 @@ public:
     MeshRegistry &meshRegistry() { return *_meshRegistry; }
     PBRTextures &pbrTextures() { return *_pbrTextures; }
     IRenderer &renderer() { return *_renderer; }
+    I2DRenderer &renderer2d() { return *_renderer2d; }
     ShaderRegistry &shaderRegistry() { return *_shaderRegistry; }
     Statistic &statistic() { return *_statistic; }
     TextureRegistry &textureRegistry() { return *_textureRegistry; }
@@ -67,6 +69,7 @@ private:
     std::unique_ptr<MeshRegistry> _meshRegistry;
     std::unique_ptr<PBRTextures> _pbrTextures;
     std::unique_ptr<GLRenderer> _renderer;
+    std::unique_ptr<GL2DRenderer> _renderer2d;
     std::unique_ptr<ShaderRegistry> _shaderRegistry;
     std::unique_ptr<Statistic> _statistic;
     std::unique_ptr<TextureRegistry> _textureRegistry;

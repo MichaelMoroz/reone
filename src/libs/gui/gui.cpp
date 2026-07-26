@@ -18,6 +18,7 @@
 #include "reone/gui/gui.h"
 
 #include "reone/graphics/context.h"
+#include "reone/graphics/renderer2d.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/shaderregistry.h"
@@ -39,8 +40,6 @@
 #include "reone/resource/provider/gffs.h"
 #include "reone/resource/provider/textures.h"
 #include "reone/resource/resources.h"
-#include "reone/scene/render/pass/pbr.h"
-#include "reone/scene/render/pass/retro.h"
 #include "reone/system/exception/validation.h"
 #include "reone/system/logutil.h"
 
@@ -252,28 +251,9 @@ void GUI::update(float dt) {
 }
 
 void GUI::render() {
-    _graphicsSvc.context.withBlendMode(BlendMode::Normal, [this]() {
-        auto retroPass = RetroRenderPass(
-            _options,
-            _graphicsSvc.context,
-            _graphicsSvc.shaderRegistry,
-            _graphicsSvc.statistic,
-            _graphicsSvc.meshRegistry,
-            _graphicsSvc.textureRegistry,
-            _graphicsSvc.uniforms);
-        auto pbrPass = PBRRenderPass(
-            _options,
-            _graphicsSvc.context,
-            _graphicsSvc.shaderRegistry,
-            _graphicsSvc.statistic,
-            _graphicsSvc.meshRegistry,
-            _graphicsSvc.pbrTextures,
-            _graphicsSvc.textureRegistry,
-            _graphicsSvc.uniforms);
-        auto &pass = _options.pbr ? static_cast<IRenderPass &>(pbrPass)
-                                  : static_cast<IRenderPass &>(retroPass);
+    _graphicsSvc.renderer2d.withBlendMode(BlendMode::Normal, [this]() {
         if (_background) {
-            renderBackground(pass);
+            renderBackground();
         }
         if (!_rootControl) {
             return;
@@ -283,7 +263,7 @@ void GUI::render() {
         while (!controls.empty()) {
             auto &[controlWrapper, offset] = controls.front();
             auto &control = controlWrapper.get();
-            control.render({_options.width, _options.height}, offset, pass);
+            control.render({_options.width, _options.height}, offset);
             for (auto &child : control.children()) {
                 controls.push({child, _controlOffset});
             }
@@ -292,8 +272,8 @@ void GUI::render() {
     });
 }
 
-void GUI::renderBackground(IRenderPass &pass) {
-    pass.drawImage(
+void GUI::renderBackground() {
+    _graphicsSvc.renderer2d.drawImage(
         *_background,
         {0, 0},
         {_options.width, _options.height});

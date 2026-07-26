@@ -18,6 +18,8 @@
 #include "reone/gui/control/progressbar.h"
 
 #include "reone/graphics/context.h"
+#include "reone/graphics/di/services.h"
+#include "reone/graphics/renderer2d.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/renderbuffer.h"
@@ -46,13 +48,12 @@ void ProgressBar::load(const resource::generated::GUI_BASECONTROL &gui, bool pro
 }
 
 void ProgressBar::render(const glm::ivec2 &screenSize,
-                         const glm::ivec2 &offset,
-                         scene::IRenderPass &pass) {
+                         const glm::ivec2 &offset) {
     if (_value == 0 || !_progress.fill) {
         return;
     }
     float w = _extent.width * _value / 100.0f;
-    pass.drawImage(
+    _graphicsSvc.renderer2d.drawImage(
         *_progress.fill,
         {_extent.left + offset.x, _extent.top + offset.y},
         {w, _extent.height});

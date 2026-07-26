@@ -124,3 +124,14 @@ installed here: `GetConstantBlock` (not `GetConstantBuffer`/`GetConstantBuffers`
 - **Confirm the flag works.** A comparison flag that silently stopped being
   applied made two builds look identical for the wrong reason. Log the active
   state at startup and check it in the capture log.
+- **Check the screenshot contains what you think.** `glReadPixels` samples
+  whatever is bound as `GL_READ_FRAMEBUFFER`. Until this was fixed, every
+  capture read an offscreen scene target: the 3D scene appeared but the entire
+  2D layer - HUD, minimap, cursor, main menu - was missing, and the frames still
+  looked plausible enough to reason about. Look at the image and confirm the
+  parts you care about are in it before diffing.
+- **Know which frames are deterministic.** GUI frames are bit-identical run to
+  run. A gameplay frame is not: sky, foliage and grass differ across about a
+  third of the image between two runs of the *same* build. Before attributing a
+  scene diff to a change, run the same build twice and compare that noise floor
+  first.

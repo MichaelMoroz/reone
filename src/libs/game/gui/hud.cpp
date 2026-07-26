@@ -19,6 +19,7 @@
 
 #include "reone/audio/mixer.h"
 #include "reone/graphics/context.h"
+#include "reone/graphics/renderer2d.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/shaderregistry.h"
@@ -451,17 +452,10 @@ void HUD::renderHealth(int memberIndex) {
     float w = 5.0f;
     float h = glm::clamp(member->currentHitPoints() / static_cast<float>(member->hitPoints()), 0.0f, 1.0f) * extent.height;
 
-    glm::mat4 transform(1.0f);
-    transform = glm::translate(transform, glm::vec3(_gui->controlOffset().x + extent.left + extent.width - 14.0f, _gui->controlOffset().y + extent.top + extent.height - h, 0.0f));
-    transform = glm::scale(transform, glm::vec3(w, h, 1.0f));
-
-    _services.graphics.uniforms.setLocals([this, transform](auto &locals) {
-        locals.reset();
-        locals.model = std::move(transform);
-        locals.color = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
-    });
-    _services.graphics.context.useProgram(_services.graphics.shaderRegistry.get(ShaderProgramId::mvpColor));
-    _services.graphics.meshRegistry.get(MeshName::quad).draw(_services.graphics.statistic);
+    glm::ivec2 position(
+        _gui->controlOffset().x + extent.left + extent.width - 14.0f,
+        _gui->controlOffset().y + extent.top + extent.height - h);
+    _services.graphics.renderer2d.drawRect(position, {w, h}, glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));
 }
 
 void HUD::toggleCombat(bool enabled) {

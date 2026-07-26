@@ -25,6 +25,7 @@ class IContext;
 class IMeshRegistry;
 class IPBRTextures;
 class IRenderer;
+class I2DRenderer;
 class IShaderRegistry;
 class IStatistic;
 class ITextureRegistry;
@@ -35,6 +36,7 @@ struct GraphicsServices {
     IMeshRegistry &meshRegistry;
     IPBRTextures &pbrTextures;
     IRenderer &renderer;
+    I2DRenderer &renderer2d;
     IShaderRegistry &shaderRegistry;
     IStatistic &statistic;
     ITextureRegistry &textureRegistry;
@@ -45,6 +47,7 @@ struct GraphicsServices {
         IMeshRegistry &meshRegistry,
         IPBRTextures &pbrTextures,
         IRenderer &renderer,
+        I2DRenderer &renderer2d,
         IShaderRegistry &shaderRegistry,
         IStatistic &statistic,
         ITextureRegistry &textureRegistry,
@@ -53,6 +56,7 @@ struct GraphicsServices {
         meshRegistry(meshRegistry),
         pbrTextures(pbrTextures),
         renderer(renderer),
+        renderer2d(renderer2d),
         shaderRegistry(shaderRegistry),
         statistic(statistic),
         textureRegistry(textureRegistry),

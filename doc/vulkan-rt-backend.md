@@ -197,6 +197,28 @@ So **16 sites** need the shared abstraction. That is the only place both backend
 genuinely need a common API, and it defines the scope of the narrow RHI worth
 building: **a 2D sprite/text batcher**, nothing more.
 
+**Done.** `include/reone/graphics/renderer2d.h` defines `I2DRenderer`;
+`renderer/gl2d.h` implements it. Five operations cover every site: `drawImage`
+by rect or by transform, `drawRect`, `drawFullTargetImage`, `drawText`, with
+`withBlendMode` and `withScissor` as scopes. The transform overload exists for
+exactly one caller - the minimap arrow, which rotates - and the full-target one
+for movie frames.
+
+Three consequences went further than the site count suggested:
+
+- **`Font` no longer draws.** It keeps the atlas and the metrics and exposes its
+  glyphs; submitting them is the renderer's business. It dropped five graphics
+  services for one, and so did `Fonts` and `Cursors`.
+- **`IRenderPass::drawImage` is gone.** It was the *only* member the whole GUI
+  layer used - 26 calls, no others - so `IRenderPass` left the GUI entirely,
+  along with the `pass` parameter threaded through every control's `render`.
+  `IRenderPass` is now purely a scene-geometry pass, which is what it should
+  always have been.
+- **Billboarded debug text** in `scene/drawdebug.cpp` used `Font::renderLine`
+  but is a world-space draw with its own program, so it now fills the glyph
+  block itself. It also silently truncates past `kMaxTextChars` rather than
+  overrunning the block, which the old path did not check.
+
 Also in scope, and easy to forget:
 
 - **Text** — `src/libs/graphics/font.cpp:59-132`, instanced quads.
@@ -491,8 +513,9 @@ main argument for this ordering.
 2. **std140 layout validation** (§4.3). An hour, no new dependency, and it closes
    a live silent-corruption hazard on code already committed.
 3. **`IRenderer` seam** — move presentation out of `game.cpp` and the toolkit;
-   add the 2D batcher abstraction covering the 16 sites in §3.
-   **Presentation done** (§2.2); the 2D batcher is not started.
+   add the 2D batcher abstraction covering the 16 sites in §3. **Done** —
+   presentation in §2.2, the 2D renderer in §3. Nothing outside the graphics
+   library names a shader program or a quad mesh any more.
 4. **Vulkan raster backend** to PBR parity. Unglamorous but mandatory: swapchain,
    descriptor management, GUI, text, movie playback, and the uniform update model
    in §3.1. **Slang enters here**, targeting SPIR-V (§4).
@@ -507,8 +530,15 @@ main argument for this ordering.
 
 ## 8. Open questions
 
-- Should the 2D batcher be broader than a sprite/text batcher? Current scope is
-  16 call sites; anything wider needs justification.
+- ~~Should the 2D batcher be broader than a sprite/text batcher?~~ Answered by
+  building it: five operations covered all 16 sites plus the 26 that already
+  went through `IRenderPass::drawImage`. Nothing wanted more.
+- **The scene is not frame-deterministic.** Two runs of the same build, stopped
+  at the same frame with a fixed timestep, differ across roughly a third of a
+  gameplay frame - sky, foliage and grass. GUI frames are bit-identical, so the
+  harness is trustworthy for 2D but currently proves nothing about the 3D scene
+  beyond eyeballing. This has to be tracked down before GL-and-Vulkan parity can
+  be checked automatically, which is the whole point of having the harness.
 - Denoiser choice (NRD vs hand-rolled SVGF/ReSTIR) — defer until phase 5 gives
   real ray-traced input to evaluate against.
 - Whether the accepted baked-in-lighting artifact (§5.3) is tolerable in practice,

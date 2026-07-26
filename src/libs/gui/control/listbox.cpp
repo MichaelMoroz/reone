@@ -17,6 +17,9 @@
 
 #include "reone/gui/control/listbox.h"
 
+#include "reone/graphics/di/services.h"
+#include "reone/graphics/renderer2d.h"
+
 #include "reone/graphics/font.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/renderbuffer.h"
@@ -207,12 +210,11 @@ bool ListBox::handleClick(int x, int y, int clicks) {
 }
 
 void ListBox::render(const glm::ivec2 &screenSize,
-                     const glm::ivec2 &offset,
-                     IRenderPass &pass) {
+                     const glm::ivec2 &offset) {
     if (!_visible)
         return;
 
-    Control::render(screenSize, offset, pass);
+    Control::render(screenSize, offset);
 
     if (!_protoItem)
         return;
@@ -232,12 +234,12 @@ void ListBox::render(const glm::ivec2 &screenSize,
 
         auto imageButton = std::dynamic_pointer_cast<ImageButton>(_protoItem);
         if (imageButton) {
-            imageButton->render(itemOffset, item._textLines, item.iconText, item.iconTexture, item.iconFrame, pass);
+            imageButton->render(itemOffset, item._textLines, item.iconText, item.iconTexture, item.iconFrame);
         } else if (shouldRenderItemIconsForButtonProto()) {
-            renderItemWithButtonProtoIcon(screenSize, itemOffset, item, pass);
+            renderItemWithButtonProtoIcon(screenSize, itemOffset, item);
         } else {
             _protoItem->setTextLines(item._textLines);
-            _protoItem->render(screenSize, itemOffset, pass);
+            _protoItem->render(screenSize, itemOffset);
         }
 
         if (_protoMatchContent) {
@@ -254,7 +256,7 @@ void ListBox::render(const glm::ivec2 &screenSize,
         state.offset = _itemOffset;
         auto &scrollBar = static_cast<ScrollBar &>(*_scrollBar);
         scrollBar.setScrollState(std::move(state));
-        scrollBar.render(screenSize, offset, pass);
+        scrollBar.render(screenSize, offset);
     }
 }
 
@@ -363,8 +365,7 @@ bool ListBox::shouldRenderItemIconsForButtonProto() const {
 void ListBox::renderItemWithButtonProtoIcon(
     const glm::ivec2 &screenSize,
     const glm::ivec2 &offset,
-    const Item &item,
-    IRenderPass &pass) {
+    const Item &item) {
 
     Control::Extent originalExtent(_protoItem->extent());
     int itemIconWidth = originalExtent.height;
@@ -379,7 +380,7 @@ void ListBox::renderItemWithButtonProtoIcon(
     _protoItem->setTextLines(item._textLines);
     _protoItem->setBorderColorOverride(kInvalidItemBorderColor);
     _protoItem->setUseBorderColorOverride(item.invalid);
-    _protoItem->render(screenSize, offset, pass);
+    _protoItem->render(screenSize, offset);
     _protoItem->setUseBorderColorOverride(false);
     _protoItem->setExtent(originalExtent);
 
@@ -394,10 +395,10 @@ void ListBox::renderItemWithButtonProtoIcon(
         if (item.invalid) {
             frameColor = kInvalidItemBorderColor;
         }
-        pass.drawImage(*item.iconFrame, iconPosition, iconSize, glm::vec4(frameColor, 1.0f));
+        _graphicsSvc.renderer2d.drawImage(*item.iconFrame, iconPosition, iconSize, glm::vec4(frameColor, 1.0f));
     }
     if (item.iconTexture) {
-        pass.drawImage(*item.iconTexture, iconPosition, iconSize);
+        _graphicsSvc.renderer2d.drawImage(*item.iconTexture, iconPosition, iconSize);
     }
     if (!item.iconText.empty() && _protoItem->text().font) {
         glm::vec3 position(0.0f);

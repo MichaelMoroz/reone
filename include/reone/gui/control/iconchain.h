@@ -100,7 +100,7 @@ public:
     bool handleMouseWheel(int x, int y) override;
     bool handleClick(int x, int y, int clicks = 1) override;
     void update(float dt) override;
-    void render(const glm::ivec2 &screenSize, const glm::ivec2 &offset, scene::IRenderPass &pass) override;
+    void render(const glm::ivec2 &screenSize, const glm::ivec2 &offset) override;
     void setSelected(bool selected) override;
 
     void setColumnCount(int count);
@@ -162,20 +162,17 @@ private:
     float getFocusedBorderPulseFactor() const;
     void renderLink(
         const Link &link,
-        const glm::ivec2 &offset,
-        scene::IRenderPass &pass) const;
+        const glm::ivec2 &offset) const;
     void renderItemBorder(
         const Item &item,
         bool focused,
         const Extent &extent,
-        const glm::ivec2 &offset,
-        scene::IRenderPass &pass);
+        const glm::ivec2 &offset);
     void renderFocusedBorder(
         const Item &item,
         bool focused,
         const Extent &extent,
-        const glm::ivec2 &offset,
-        scene::IRenderPass &pass);
+        const glm::ivec2 &offset);
 };
 
 } // namespace gui
