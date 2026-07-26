@@ -117,6 +117,33 @@ LauncherFrame::LauncherFrame() :
 
     // END Window Scale
 
+    // Backend
+
+    auto labelBackend = new wxStaticText(this, wxID_ANY, "Graphics Backend", wxDefaultPosition, wxDefaultSize);
+
+    wxArrayString backendChoices;
+    backendChoices.Add("OpenGL");
+#ifdef R_ENABLE_VULKAN
+    backendChoices.Add("Vulkan");
+#endif
+
+    _choiceBackend = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, backendChoices);
+    _choiceBackend->SetSelection(_config.backend == "vulkan" ? 1 : 0);
+    if (backendChoices.GetCount() < 2) {
+        // Built without the Vulkan backend, so there is nothing to choose
+        // between. Shown rather than hidden, so it is clear which one is in use.
+        _choiceBackend->Disable();
+    }
+    _choiceBackend->Bind(wxEVT_COMMAND_CHOICE_SELECTED, [this](const wxCommandEvent &evt) {
+        UpdateBackendDependentControls(_choiceBackend->GetStringSelection() == "Vulkan");
+    });
+
+    auto backendSizer = new wxBoxSizer(wxVERTICAL);
+    backendSizer->Add(labelBackend, wxSizerFlags(0).Expand());
+    backendSizer->Add(_choiceBackend, wxSizerFlags(0).Expand());
+
+    // END Backend
+
     // Renderer
 
     auto labelRenderer = new wxStaticText(this, wxID_ANY, "Renderer", wxDefaultPosition, wxDefaultSize);
@@ -128,16 +155,11 @@ LauncherFrame::LauncherFrame() :
     _choiceRenderer = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, rendererChoices);
     _choiceRenderer->SetSelection(_config.pbr ? 1 : 0);
     _choiceRenderer->Bind(wxEVT_COMMAND_CHOICE_SELECTED, [this](const wxCommandEvent &evt) {
-        auto selection = evt.GetSelection();
-        if (selection == 1) {
-            // PBR
-            _checkBoxSSAO->Enable();
-            _checkBoxSSR->Enable();
-        } else {
-            // Retro
-            _checkBoxSSAO->Disable();
-            _checkBoxSSR->Disable();
-        }
+        // Deliberately routed through the same place the backend uses: SSAO and
+        // SSR need both a PBR renderer and a backend that has a post-processing
+        // chain, and two handlers each enabling on their own condition would
+        // undo each other.
+        UpdateBackendDependentControls(_choiceBackend->GetStringSelection() == "Vulkan");
     });
 
     auto rendererSizer = new wxBoxSizer(wxVERTICAL);
@@ -228,10 +250,6 @@ LauncherFrame::LauncherFrame() :
     _checkBoxSSR = new wxCheckBox(this, wxID_ANY, "Enable SSR", wxDefaultPosition, wxDefaultSize);
     _checkBoxSSR->SetValue(_config.ssr);
 
-    if (!_config.pbr) {
-        _checkBoxSSAO->Disable();
-        _checkBoxSSR->Disable();
-    }
 
     _checkBoxFXAA = new wxCheckBox(this, wxID_ANY, "Enable FXAA", wxDefaultPosition, wxDefaultSize);
     _checkBoxFXAA->SetValue(_config.fxaa);
@@ -239,9 +257,12 @@ LauncherFrame::LauncherFrame() :
     _checkBoxSharpen = new wxCheckBox(this, wxID_ANY, "Enable Image Sharpening", wxDefaultPosition, wxDefaultSize);
     _checkBoxSharpen->SetValue(_config.sharpen);
 
+    UpdateBackendDependentControls(_config.backend == "vulkan");
+
     auto graphicsSizer = new wxStaticBoxSizer(wxVERTICAL, this, "Graphics");
     graphicsSizer->Add(resSizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(winScaleSizer, wxSizerFlags(0).Expand());
+    graphicsSizer->Add(backendSizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(rendererSizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(textureQualitySizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(shadowResSizer, wxSizerFlags(0).Expand());
@@ -351,11 +372,26 @@ LauncherFrame::LauncherFrame() :
     Bind(wxEVT_BUTTON, &LauncherFrame::OnSaveConfig, this, WindowID::saveConfig);
 }
 
+void LauncherFrame::UpdateBackendDependentControls(bool vulkan) {
+    // The Vulkan pipeline is geometry, resolve and transparency; it has no
+    // post-processing chain, so these are ignored rather than merely
+    // unsupported. Greyed out instead of hidden, so their saved values are
+    // still visible and still written back.
+    _checkBoxFXAA->Enable(!vulkan);
+    _checkBoxSharpen->Enable(!vulkan);
+
+    // SSAO and SSR additionally need the PBR renderer.
+    bool pbr = _choiceRenderer->GetStringSelection() == "PBR";
+    _checkBoxSSAO->Enable(!vulkan && pbr);
+    _checkBoxSSR->Enable(!vulkan && pbr);
+}
+
 void LauncherFrame::LoadConfiguration() {
     options_description options;
     options.add_options()                                                 //
         ("game", value<std::string>()->default_value(_config.gameDir))    //
         ("dev", value<bool>()->default_value(_config.devMode))            //
+        ("backend", value<std::string>()->default_value(_config.backend)) //
         ("width", value<int>()->default_value(_config.width))             //
         ("height", value<int>()->default_value(_config.height))           //
         ("winscale", value<int>()->default_value(_config.winscale))       //
@@ -388,6 +424,7 @@ void LauncherFrame::LoadConfiguration() {
 
     _config.gameDir = vars["game"].as<std::string>();
     _config.devMode = vars["dev"].as<bool>();
+    _config.backend = vars["backend"].as<std::string>();
     _config.width = vars["width"].as<int>();
     _config.height = vars["height"].as<int>();
     _config.winscale = vars["winscale"].as<int>();
@@ -428,6 +465,7 @@ void LauncherFrame::SaveConfiguration() {
     static std::set<std::string> recognized {
         "game=",
         "dev=",
+        "backend=",
         "width=",
         "height=",
         "winscale=",
@@ -495,6 +533,7 @@ void LauncherFrame::SaveConfiguration() {
 
     _config.gameDir = _textCtrlGameDir->GetValue();
     _config.devMode = _checkBoxDev->IsChecked();
+    _config.backend = _choiceBackend->GetStringSelection() == "Vulkan" ? "vulkan" : "gl";
     _config.width = stoi(tokens[0]);
     _config.height = stoi(tokens[1]);
     _config.winscale = winScale;
@@ -536,6 +575,7 @@ void LauncherFrame::SaveConfiguration() {
     std::ofstream config(kConfigFilename);
     config << "game=" << _config.gameDir << std::endl;
     config << "dev=" << (_config.devMode ? 1 : 0) << std::endl;
+    config << "backend=" << _config.backend << std::endl;
     config << "width=" << _config.width << std::endl;
     config << "height=" << _config.height << std::endl;
     config << "winscale=" << _config.winscale << std::endl;
