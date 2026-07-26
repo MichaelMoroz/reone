@@ -125,11 +125,16 @@ const VulkanImage &VulkanResources::fallbackFor(const Texture &texture,
         warn("Vulkan: " + why + "; substituting a blank texture", LogChannel::Graphics);
     }
     const uint32_t white = 0xffffffff;
+    // Black, not white. A cube map is sampled as incoming radiance, so a white
+    // stand-in does not read as "missing" - it reads as a surface lit from
+    // every direction at full strength. Black contributes nothing, which is
+    // what a texture that is not there should do.
+    const uint32_t black = 0xff000000;
     switch (texture.type()) {
     case TextureType::CubeMap:
         if (!_fallbackCube) {
             _fallbackCube = std::make_unique<VulkanImage>(_device);
-            _fallbackCube->initSampledLayered({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, 6, true, &white);
+            _fallbackCube->initSampledLayered({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, 6, true, &black);
         }
         return *_fallbackCube;
     case TextureType::TwoDimArray:
@@ -198,10 +203,38 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
                                   static_cast<VkDeviceSize>(widened.back().size())});
             }
         }
-        // A cube map short of faces would build a view Vulkan rejects.
-        if (cube && layers.size() < kNumCubeFaces) {
+        // Exactly six, not at least six: a CUBE view represents six layers, and
+        // more than that needs a CUBE_ARRAY view instead.
+        if (cube && layers.size() != kNumCubeFaces) {
             return fallbackFor(texture, "cube map " + texture.name() +
-                                            " has fewer than six faces");
+                                            " does not have exactly six faces");
+        }
+        // A layer with no pixels is left out of the copy, and an image region
+        // that was never written keeps whatever the allocation happened to
+        // hold. Fill it rather than sampling undefined memory.
+        //
+        // The size comes from a sibling layer rather than from the extent: for
+        // a block-compressed format there is no per-texel size, so width times
+        // height times four would be neither the right length nor decodable.
+        VkDeviceSize layerSize = 0;
+        for (const auto &layer : layers) {
+            if (layer.second > 0) {
+                layerSize = layer.second;
+                break;
+            }
+        }
+        if (layerSize == 0) {
+            return fallbackFor(texture, "texture " + texture.name() + " has no pixels");
+        }
+        std::vector<uint8_t> blank;
+        for (auto &layer : layers) {
+            if (layer.first) {
+                continue;
+            }
+            if (blank.empty()) {
+                blank.assign(static_cast<size_t>(layerSize), 0);
+            }
+            layer = {blank.data(), layerSize};
         }
         image->initSampledLayers({texture.width(), texture.height()},
                                  compressed ? *compressed : VK_FORMAT_R8G8B8A8_UNORM,
