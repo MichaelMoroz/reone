@@ -948,7 +948,25 @@ Two things Vulkan does not do for you, both caught by validation:
 - **One blend state per attachment is mandatory**, even when they are identical.
   A count mismatch against `colorAttachmentCount` is an error, not a default.
 
-### 10.9 Next
+### 10.9 A teardown bug that a passing test was hiding
+
+Running the probe without `--capture` reported ten validation errors at exit:
+pipelines and images destroyed while the GPU might still have been reading them.
+Every earlier run had used `--capture`, whose readback calls `vkQueueWaitIdle`
+on the final frame and so happened to leave the device idle before teardown. The
+bug was there the whole time; the verification path was masking it.
+
+`VulkanDevice::waitIdle()` now exists and the probe calls it after the loop,
+before anything it owns goes out of scope. Worth keeping in mind generally: the
+probe's resources are destroyed before the renderer's, so anything the host
+allocates has to outlive the GPU's use of it by an explicit wait.
+
+The wider lesson is about the harness rather than Vulkan. A check that always
+runs one particular way can quietly guarantee the conditions it is meant to
+test. Run the smoke test in every mode it supports, not just the one that
+produces an image.
+
+### 10.10 Next
 
 - Wiring `MeshRegistry`, `Texture` and `Material` through, so game assets rather
   than a synthesised cube go down this path.

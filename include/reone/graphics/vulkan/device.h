@@ -67,6 +67,13 @@ public:
      */
     void immediateSubmit(const std::function<void(VkCommandBuffer)> &block);
 
+    /**
+     * Block until the device has finished everything. Required before
+     * destroying anything the GPU might still be reading, which in practice
+     * means before any teardown that is not the renderer's own.
+     */
+    void waitIdle() const { vkDeviceWaitIdle(_device.device); }
+
     /** Round @p size up to the minimum uniform buffer offset alignment. */
     VkDeviceSize alignUniform(VkDeviceSize size) const;
 

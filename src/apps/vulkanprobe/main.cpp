@@ -429,6 +429,11 @@ int main(int argc, char **argv) {
                 quit = true;
             }
         }
+        // Everything below this scope is destroyed before the renderer, so the
+        // GPU has to be finished with it first. Runs that used --capture hid
+        // this, because the capture path already waits on the queue.
+        renderer.device().waitIdle();
+
         info(str(boost::format("Presented %d frames on %s") % frame % renderer.device().deviceName()));
         info(str(boost::format("Uniform arena peak: %llu bytes") % renderer.uniformRing().peakUsage()));
     } catch (const std::exception &e) {
