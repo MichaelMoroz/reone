@@ -201,10 +201,14 @@ int main(int argc, char **argv) {
             if (deferred) {
                 config.colorFormats = VulkanGBuffer::colorFormats();
                 config.depthFormat = VulkanGBuffer::depthFormat();
+                config.depthTest = true;
+                config.depthWrite = true;
             } else {
                 config.colorFormats = {renderer.swapchain().imageFormat()};
                 if (drawMesh) {
                     config.depthFormat = renderer.depthFormat();
+                    config.depthTest = true;
+                    config.depthWrite = true;
                 }
             }
             config.setLayouts = {renderer.descriptors().uniformLayout(),

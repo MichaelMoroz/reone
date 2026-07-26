@@ -19,6 +19,8 @@
 
 #include <volk.h>
 
+#include "reone/graphics/types.h"
+
 namespace reone {
 
 namespace graphics {
@@ -48,8 +50,15 @@ public:
          * rendering. One entry for a normal pass, several for a G-buffer.
          */
         std::vector<VkFormat> colorFormats;
-        /** UNDEFINED disables depth testing and writing. */
+        /** UNDEFINED means no depth attachment. */
         VkFormat depthFormat {VK_FORMAT_UNDEFINED};
+
+        // State OpenGL would have set per draw. In Vulkan it is baked in, which
+        // is why these belong to the pipeline's identity rather than to a call.
+        BlendMode blend {BlendMode::None};
+        FaceCullMode cull {FaceCullMode::None};
+        bool depthTest {false};
+        bool depthWrite {false};
         std::vector<VkDescriptorSetLayout> setLayouts;
 
         /**

@@ -91,7 +91,17 @@ void VulkanPipeline::init(const Config &config) {
     VkPipelineRasterizationStateCreateInfo raster {
         VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     raster.polygonMode = VK_POLYGON_MODE_FILL;
-    raster.cullMode = VK_CULL_MODE_NONE;
+    switch (config.cull) {
+    case FaceCullMode::Front:
+        raster.cullMode = VK_CULL_MODE_FRONT_BIT;
+        break;
+    case FaceCullMode::Back:
+        raster.cullMode = VK_CULL_MODE_BACK_BIT;
+        break;
+    default:
+        raster.cullMode = VK_CULL_MODE_NONE;
+        break;
+    }
     raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     raster.lineWidth = 1.0f;
 
@@ -106,6 +116,29 @@ void VulkanPipeline::init(const Config &config) {
     for (auto &attachment : blendAttachments) {
         attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        switch (config.blend) {
+        case BlendMode::Normal:
+            attachment.blendEnable = VK_TRUE;
+            attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            attachment.colorBlendOp = VK_BLEND_OP_ADD;
+            attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+            break;
+        case BlendMode::Additive:
+            attachment.blendEnable = VK_TRUE;
+            attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            attachment.colorBlendOp = VK_BLEND_OP_ADD;
+            attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+            break;
+        default:
+            attachment.blendEnable = VK_FALSE;
+            break;
+        }
     }
 
     VkPipelineColorBlendStateCreateInfo blend {
@@ -116,8 +149,8 @@ void VulkanPipeline::init(const Config &config) {
     VkPipelineDepthStencilStateCreateInfo depthStencil {
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     if (config.depthFormat != VK_FORMAT_UNDEFINED) {
-        depthStencil.depthTestEnable = VK_TRUE;
-        depthStencil.depthWriteEnable = VK_TRUE;
+        depthStencil.depthTestEnable = config.depthTest ? VK_TRUE : VK_FALSE;
+        depthStencil.depthWriteEnable = config.depthWrite ? VK_TRUE : VK_FALSE;
         depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
         depthStencil.maxDepthBounds = 1.0f;
     }
