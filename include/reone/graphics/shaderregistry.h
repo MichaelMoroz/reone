@@ -34,6 +34,8 @@ struct ShaderProgramId {
     static constexpr char pbrCombine[] = "pbr_combine";
     static constexpr char pbrGrass[] = "pbr_grass";
     static constexpr char pbrOpaqueModel[] = "pbr_opaque_model";
+    /** Same program, transpiled from Slang. Registered only when the transpiled sources are present. */
+    static constexpr char pbrOpaqueModelSlang[] = "pbr_opaque_model_slang";
     static constexpr char pbrSSAO[] = "pbr_ssao";
     static constexpr char pbrSSR[] = "pbr_ssr";
     static constexpr char pbrWalkmesh[] = "pbr_walkmesh";

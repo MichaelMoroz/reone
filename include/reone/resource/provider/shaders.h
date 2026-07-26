@@ -51,6 +51,9 @@ public:
         _resources(resources) {
     }
 
+    /** Whether the Slang-transpiled programs were present in this build. */
+    bool slangShadersAvailable() const { return _slangShadersAvailable; }
+
     ~Shaders() {
         deinit();
     }
@@ -80,6 +83,10 @@ private:
     std::shared_ptr<graphics::Shader> initShader(graphics::ShaderType type,
                                                  std::string resRef,
                                                  SourceFlavor flavor = SourceFlavor::Glsl);
+
+    bool hasSource(const std::string &resRef) const;
+
+    bool _slangShadersAvailable {false};
     std::shared_ptr<graphics::ShaderProgram> initShaderProgram(std::vector<std::shared_ptr<graphics::Shader>> shaders);
 };
 

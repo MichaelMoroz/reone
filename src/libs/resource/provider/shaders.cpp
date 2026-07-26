@@ -151,14 +151,14 @@ void Shaders::init() {
     _shaderRegistry.add(ShaderProgramId::pbrAABB, initShaderProgram({vertAABB, fragPBRAABB}));
     _shaderRegistry.add(ShaderProgramId::pbrCombine, initShaderProgram({vertPassthrough, fragPBRCombine}));
     _shaderRegistry.add(ShaderProgramId::pbrGrass, initShaderProgram({vertGrass, fragPBRGrass}));
-    if (_graphicsOpt.slangShaders) {
-        // Same program, built from the Slang transpiler's output instead. Both
-        // paths exist so the two can be compared in one binary.
+    _shaderRegistry.add(ShaderProgramId::pbrOpaqueModel, initShaderProgram({vertModel, fragPBROpaqueModel}));
+    // The transpiled twin is built alongside so the two can be switched between
+    // at runtime. Absent when the build had no slangc.
+    if (hasSource(kVertSlangModel) && hasSource(kFragSlangPBROpaqueModel)) {
         auto vertSlangModel = initShader(ShaderType::Vertex, kVertSlangModel, SourceFlavor::Slang);
         auto fragSlangOpaqueModel = initShader(ShaderType::Fragment, kFragSlangPBROpaqueModel, SourceFlavor::Slang);
-        _shaderRegistry.add(ShaderProgramId::pbrOpaqueModel, initShaderProgram({vertSlangModel, fragSlangOpaqueModel}));
-    } else {
-        _shaderRegistry.add(ShaderProgramId::pbrOpaqueModel, initShaderProgram({vertModel, fragPBROpaqueModel}));
+        _shaderRegistry.add(ShaderProgramId::pbrOpaqueModelSlang, initShaderProgram({vertSlangModel, fragSlangOpaqueModel}));
+        _slangShadersAvailable = true;
     }
     _shaderRegistry.add(ShaderProgramId::pbrSSAO, initShaderProgram({vertPassthrough, fragPBRSSAO}));
     _shaderRegistry.add(ShaderProgramId::pbrSSR, initShaderProgram({vertPassthrough, fragPBRSSR}));
@@ -194,6 +194,10 @@ void Shaders::deinit() {
         return;
     }
     _inited = false;
+}
+
+bool Shaders::hasSource(const std::string &resRef) const {
+    return static_cast<bool>(_resources.find(ResourceId(resRef, ResType::Glsl)));
 }
 
 std::shared_ptr<Shader> Shaders::initShader(ShaderType type, std::string resRef, SourceFlavor flavor) {
