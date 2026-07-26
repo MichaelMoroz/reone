@@ -242,20 +242,51 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
         debug("Vulkan: uploaded texture " + texture.name(), LogChannel::Graphics);
         return *_textures.insert({&texture, std::move(image)}).first->second;
     }
+    const auto &layer = texture.layers().front();
+    std::vector<VulkanImage::Subresource> subresources;
+    // Kept alive until the upload has copied out of them.
+    std::vector<std::vector<uint8_t>> widened;
     if (auto compressed = compressedFormat(texture.pixelFormat())) {
-        const auto &pixels = *texture.layers().front().pixels;
-        image->initSampled2DSized({texture.width(), texture.height()},
-                                  *compressed,
-                                  pixels.data(),
-                                  static_cast<VkDeviceSize>(pixels.size()));
+        subresources.push_back({layer.pixels->data(),
+                                static_cast<VkDeviceSize>(layer.pixels->size()), 0, 0});
+        uint32_t mip = 1;
+        for (const auto &level : layer.mips) {
+            // Stop at the first gap rather than skipping it: the chain has to
+            // be contiguous, or the level count would claim levels that were
+            // never written and sampling one would read whatever was there.
+            if (!level || level->empty()) {
+                break;
+            }
+            subresources.push_back({level->data(),
+                                    static_cast<VkDeviceSize>(level->size()), 0, mip});
+            ++mip;
+        }
+        image->initSampledChain({texture.width(), texture.height()}, *compressed,
+                                false, 1, static_cast<uint32_t>(subresources.size()),
+                                subresources);
     } else {
-        auto widened = widenToRGBA(*texture.layers().front().pixels,
-                                   texture.pixelFormat(),
-                                   texture.width(),
-                                   texture.height());
-        image->initSampled2D({texture.width(), texture.height()},
-                             VK_FORMAT_R8G8B8A8_UNORM,
-                             widened.data());
+        widened.reserve(1 + layer.mips.size());
+        widened.push_back(widenToRGBA(*layer.pixels, texture.pixelFormat(),
+                                      texture.width(), texture.height()));
+        subresources.push_back({widened.back().data(),
+                                static_cast<VkDeviceSize>(widened.back().size()), 0, 0});
+        uint32_t mip = 1;
+        for (const auto &level : layer.mips) {
+            if (!level || level->empty()) {
+                break;
+            }
+            widened.push_back(widenToRGBA(*level, texture.pixelFormat(),
+                                          std::max(1, texture.width() >> mip),
+                                          std::max(1, texture.height() >> mip)));
+            subresources.push_back({widened.back().data(),
+                                    static_cast<VkDeviceSize>(widened.back().size()),
+                                    0, mip});
+            ++mip;
+        }
+        image->initSampledChain({texture.width(), texture.height()},
+                                VK_FORMAT_R8G8B8A8_UNORM,
+                                false, 1, static_cast<uint32_t>(subresources.size()),
+                                subresources);
     }
     debug("Vulkan: uploaded texture " + texture.name(), LogChannel::Graphics);
     return *_textures.insert({&texture, std::move(image)}).first->second;

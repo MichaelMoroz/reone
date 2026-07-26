@@ -109,6 +109,20 @@ public:
 
     struct Layer {
         std::shared_ptr<ByteBuffer> pixels;
+
+        /**
+         * Levels 1 and beyond, when the file shipped them; empty otherwise.
+         *
+         * Kept beside the base level rather than folded into a single list of
+         * levels, because almost everything that touches a Layer wants level
+         * zero and nothing else - a screenshot, a movie frame, a decompressed
+         * grid. Those keep working untouched, and a backend that can use the
+         * chain asks for it.
+         *
+         * No dimensions are stored: level i is max(1, width >> i) by
+         * max(1, height >> i), which both backends can work out.
+         */
+        std::vector<std::shared_ptr<ByteBuffer>> mips;
     };
 
     Texture(std::string name,
@@ -194,8 +208,14 @@ private:
     void configureCubeMap();
 
     void refresh2D();
+    /** One mip level of a 2D texture, compressed or not. */
+    void uploadLevel2D(int level, int width, int height,
+                       const void *pixelsData, size_t pixelsSize);
     void refresh2DArray();
     void refreshCubeMap();
+    /** One mip level of one cube face. */
+    void uploadLevelCubeFace(int face, int level, int width, int height,
+                             const void *pixelsData, size_t pixelsSize);
     void refreshCubeMapArray();
 
     uint32_t getTargetGL() const;

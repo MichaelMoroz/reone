@@ -218,7 +218,14 @@ void Texture::refresh() {
     }
     if (isMipmapFilter(_properties.minFilter)) {
         auto target = getTargetGL();
-        glGenerateMipmap(target);
+        // Only when the file did not ship a chain. An authored chain is better
+        // than a generated one for a block-compressed texture, which has to be
+        // decompressed and recompressed to generate, and it is the same data
+        // Vulkan uploads - which is the point.
+        bool haveMips = !_layers.empty() && !_layers.front().mips.empty();
+        if (!haveMips) {
+            glGenerateMipmap(target);
+        }
         if (_properties.anisotropy > 1.0f) {
             glTexParameterf(target, GL_TEXTURE_MAX_ANISOTROPY_EXT, _properties.anisotropy);
         }
@@ -236,23 +243,40 @@ void Texture::refresh2D() {
         pixelsData = nullptr;
         pixelsSize = 0;
     }
+    uploadLevel2D(0, _width, _height, pixelsData, pixelsSize);
+
+    if (_layers.empty()) {
+        return;
+    }
+    int level = 1;
+    for (const auto &mip : _layers.front().mips) {
+        int w = std::max(1, _width >> level);
+        int h = std::max(1, _height >> level);
+        uploadLevel2D(level, w, h, mip ? mip->data() : nullptr,
+                      mip ? mip->size() : 0);
+        ++level;
+    }
+}
+
+void Texture::uploadLevel2D(int level, int width, int height,
+                            const void *pixelsData, size_t pixelsSize) {
     switch (_pixelFormat) {
     case PixelFormat::DXT1:
     case PixelFormat::DXT5:
         glCompressedTexImage2D(
             GL_TEXTURE_2D,
-            0,
+            level,
             getInternalPixelFormatGL(_pixelFormat),
-            _width, _height,
+            width, height,
             0,
             pixelsSize, pixelsData);
         break;
     default:
         glTexImage2D(
             GL_TEXTURE_2D,
-            0,
+            level,
             getInternalPixelFormatGL(_pixelFormat),
-            _width, _height,
+            width, height,
             0,
             getPixelFormatGL(_pixelFormat),
             getPixelTypeGL(_pixelFormat),
@@ -289,40 +313,54 @@ void Texture::refresh2DArray() {
 }
 
 void Texture::refreshCubeMap() {
-    const void *pixelsData;
-    size_t pixelsSize;
     for (int i = 0; i < kNumCubeFaces; ++i) {
+        const void *pixelsData = nullptr;
+        size_t pixelsSize = 0;
         if (_layers.size() > i && _layers[i].pixels) {
             auto &pixels = _layers[i].pixels;
             pixelsData = pixels->data();
             pixelsSize = pixels->size();
-        } else {
-            pixelsData = nullptr;
-            pixelsSize = 0;
         }
-        switch (_pixelFormat) {
-        case PixelFormat::DXT1:
-        case PixelFormat::DXT5:
-            glCompressedTexImage2D(
-                GL_TEXTURE_CUBE_MAP_POSITIVE_X + i,
-                0,
-                getInternalPixelFormatGL(_pixelFormat),
-                _width, _height,
-                0,
-                pixelsSize, pixelsData);
-            break;
-        default:
-            glTexImage2D(
-                GL_TEXTURE_CUBE_MAP_POSITIVE_X + i,
-                0,
-                getInternalPixelFormatGL(_pixelFormat),
-                _width, _height,
-                0,
-                getPixelFormatGL(_pixelFormat),
-                getPixelTypeGL(_pixelFormat),
-                pixelsData);
-            break;
+        uploadLevelCubeFace(i, 0, _width, _height, pixelsData, pixelsSize);
+
+        if (_layers.size() <= i) {
+            continue;
         }
+        int level = 1;
+        for (const auto &mip : _layers[i].mips) {
+            int w = std::max(1, _width >> level);
+            int h = std::max(1, _height >> level);
+            uploadLevelCubeFace(i, level, w, h, mip ? mip->data() : nullptr,
+                                mip ? mip->size() : 0);
+            ++level;
+        }
+    }
+}
+
+void Texture::uploadLevelCubeFace(int face, int level, int width, int height,
+                                  const void *pixelsData, size_t pixelsSize) {
+    switch (_pixelFormat) {
+    case PixelFormat::DXT1:
+    case PixelFormat::DXT5:
+        glCompressedTexImage2D(
+            GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
+            level,
+            getInternalPixelFormatGL(_pixelFormat),
+            width, height,
+            0,
+            pixelsSize, pixelsData);
+        break;
+    default:
+        glTexImage2D(
+            GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
+            level,
+            getInternalPixelFormatGL(_pixelFormat),
+            width, height,
+            0,
+            getPixelFormatGL(_pixelFormat),
+            getPixelTypeGL(_pixelFormat),
+            pixelsData);
+        break;
     }
 }
 

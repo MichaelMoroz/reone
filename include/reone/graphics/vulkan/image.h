@@ -64,6 +64,34 @@ public:
                             const void *data,
                             VkDeviceSize size);
 
+    /** One (layer, mip) of an uploaded texture, with its bytes. */
+    struct Subresource {
+        const void *data {nullptr};
+        VkDeviceSize size {0};
+        uint32_t layer {0};
+        uint32_t mip {0};
+    };
+
+    /**
+     * Create a sampled image with a full mip chain and fill every level.
+     *
+     * The general form of initSampled2DSized and initSampledLayers, and the
+     * one the asset path uses. Mip levels cannot be generated here the way
+     * OpenGL generates them with glGenerateMipmap: vkCmdBlitImage does not
+     * accept block-compressed formats, and most of the game's textures are
+     * BC1 or BC3. So the levels arrive already built, read from the TPC.
+     *
+     * Level i is max(1, extent >> i); sizes come from the caller because a
+     * compressed level's length is a function of its block count, not its
+     * texel count. Leaves the image in SHADER_READ_ONLY_OPTIMAL.
+     */
+    void initSampledChain(glm::ivec2 extent,
+                          VkFormat format,
+                          bool cube,
+                          uint32_t layerCount,
+                          uint32_t mipCount,
+                          const std::vector<Subresource> &subresources);
+
     /**
      * A depth attachment. Left in UNDEFINED: dynamic rendering transitions it
      * on first use, and its contents never need to survive a frame.

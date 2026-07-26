@@ -69,14 +69,22 @@ void TpcReader::loadLayers() {
     for (int i = 0; i < _numLayers; ++i) {
         auto pixels = std::make_shared<ByteBuffer>(_tpc.readBytes(_dataSize));
 
-        // Ignore mip maps
+        // These used to be skipped, and both backends built their own chain
+        // from the base level instead. That is wasteful for the DXT textures
+        // that make up most of the game - generating mips for a compressed
+        // format means decompressing and recompressing - and it left Vulkan,
+        // which cannot blit a block-compressed image at all, with no chain and
+        // visibly aliased terrain.
+        std::vector<std::shared_ptr<ByteBuffer>> mips;
+        mips.reserve(std::max(0, _numMipMaps - 1));
         for (int j = 1; j < _numMipMaps; ++j) {
             int w, h;
             getMipMapSize(j, w, h);
-            _tpc.skipBytes(getMipMapDataSize(w, h));
+            mips.push_back(std::make_shared<ByteBuffer>(
+                _tpc.readBytes(getMipMapDataSize(w, h))));
         }
 
-        _layers.push_back(Texture::Layer {std::move(pixels)});
+        _layers.push_back(Texture::Layer {std::move(pixels), std::move(mips)});
     }
 }
 
