@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2023 The reone project contributors
+ * Copyright (c) 2020-2026 The reone project contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -62,6 +62,10 @@ std::shared_ptr<Texture> GLRenderer::captureFrame() {
     if (!_inFrame) {
         throw std::logic_error("Renderer: no frame begun");
     }
+    // The read framebuffer is still whatever the last blit in the pipeline left
+    // bound, and that is what glReadPixels would sample. The frame is the
+    // default framebuffer, so say so.
+    _context.resetReadFramebuffer();
     return _context.captureScreen(_extent.x, _extent.y);
 }
 
