@@ -183,7 +183,7 @@ int main(int argc, char **argv) {
     int width, height, frames;
     bool validation, vsync;
     std::string capturePath, clearColor, spirvPath, drawColor;
-    bool drawMesh, deferred, drawTwoD, realPbr, allVariants;
+    bool drawMesh, deferred, drawTwoD, realPbr, allVariants, drawGrass;
 
     po::options_description desc("Options");
     desc.add_options()                                                              //
@@ -212,7 +212,9 @@ int main(int argc, char **argv) {
         ("pbr", po::value<bool>(&realPbr)->default_value(false),                     //
          "render through the real pbr_model shader into the G-buffer")               //
         ("variants", po::value<bool>(&allVariants)->default_value(false),             //
-         "draw every pbr_model geometry entry point, one cube each");                 //
+         "draw every pbr_model geometry entry point, one cube each")                  //
+        ("grass", po::value<bool>(&drawGrass)->default_value(false),                  //
+         "draw instanced grass, the case SV_InstanceID broke on OpenGL");             //
 
     po::variables_map vars;
     po::store(po::parse_command_line(argc, argv, desc), vars);
@@ -291,6 +293,9 @@ int main(int argc, char **argv) {
         std::unique_ptr<VulkanGBuffer> gbuffer;
         VkDescriptorSet resolveSet {VK_NULL_HANDLE};
         std::unique_ptr<VulkanPipeline> resolvePipeline;
+        if (drawGrass) {
+            realPbr = true;
+        }
         if (allVariants) {
             realPbr = true;
         }
@@ -323,8 +328,48 @@ int main(int argc, char **argv) {
                 config.fragmentEntry = deferred ? "geometryFragment"
                                                 : (drawMesh ? "meshFragment" : "triangleFragment");
             }
-            if (drawMesh) {
+            if (drawGrass) {
+                // Grass draws one instanced quad per cluster. The shader
+                // billboards it from the cluster position, so the mesh is a
+                // unit quad and everything else comes from the uniform block.
+                std::vector<Mesh::Vertex> quadVerts;
+                const glm::vec2 corners[4] {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+                const glm::vec2 quadUVs[4] {{0, 1}, {1, 1}, {1, 0}, {0, 0}};
+                for (int i = 0; i < 4; ++i) {
+                    quadVerts.push_back(Mesh::VertexBuilder()
+                                            .position({corners[i], 0.0f})
+                                            .normal({0.0f, 0.0f, 1.0f})
+                                            .uv1(quadUVs[i])
+                                            .uv2(quadUVs[i])
+                                            .tangent({1.0f, 0.0f, 0.0f})
+                                            .bitangent({0.0f, 1.0f, 0.0f})
+                                            .tanSpaceNormal({0.0f, 0.0f, 1.0f})
+                                            .boneIndices(glm::ivec4(0))
+                                            .boneWeights({1.0f, 0.0f, 0.0f, 0.0f})
+                                            .material(0)
+                                            .build());
+                }
+                std::vector<Mesh::Face> quadFaces {
+                    Mesh::Face({0, 1, 2}), Mesh::Face({0, 2, 3})};
+                auto quadLayout = Mesh::VertexLayoutBuilder()
+                                      .stride(28 * sizeof(float))
+                                      .offPosition(0)
+                                      .offNormals(3 * sizeof(float))
+                                      .offUV1(6 * sizeof(float))
+                                      .offUV2(8 * sizeof(float))
+                                      .offTanSpace(10 * sizeof(float))
+                                      .offBoneIndices(19 * sizeof(float))
+                                      .offBoneWeights(23 * sizeof(float))
+                                      .offMaterial(27 * sizeof(float))
+                                      .build();
+                cube = std::make_shared<Mesh>(std::move(quadVerts), std::move(quadLayout),
+                                              std::move(quadFaces));
+            } else if (drawMesh) {
                 cube = makeCube(realPbr);
+            }
+            if (cube) {
+                // Whatever mesh was chosen, the pipeline must describe its
+                // layout: an input the pipeline does not supply is an error.
                 config.vertexBindings = {VulkanMesh::bindingDescription(cube->vertexLayout())};
                 config.vertexAttributes = VulkanMesh::attributeDescriptions(cube->vertexLayout());
             }
@@ -397,6 +442,7 @@ int main(int argc, char **argv) {
 
         int frame = 0;
         int twoDDraws = 0;
+        int grassInstances = 0;
         bool quit = false;
         while (!quit) {
             SDL_Event event;
@@ -433,8 +479,12 @@ int main(int argc, char **argv) {
                     // silhouette that could be a flat quad.
                     float angle = glm::radians(35.0f) + frame * 0.01f;
                     locals.model = glm::rotate(glm::mat4(1.0f), angle, glm::vec3(0.3f, 1.0f, 0.1f));
-                    auto view = glm::lookAt(glm::vec3(0.0f, 0.0f, allVariants ? 14.0f : 6.0f),
-                                            glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+                    auto eye = drawGrass ? glm::vec3(0.0f, 2.0f, 12.0f)
+                                         : glm::vec3(0.0f, 0.0f, allVariants ? 14.0f : 6.0f);
+                    auto view = glm::lookAt(eye,
+                                            drawGrass ? glm::vec3(0.0f, -1.0f, 0.0f)
+                                                      : glm::vec3(0.0f),
+                                            glm::vec3(0.0f, 1.0f, 0.0f));
                     auto proj = glm::perspective(glm::radians(45.0f),
                                                  w / static_cast<float>(h), 0.1f, 100.0f);
                     // Vulkan clip space has y down relative to OpenGL's.
@@ -526,7 +576,59 @@ int main(int argc, char **argv) {
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         pipeline->layout(), VulkanDescriptors::kTextureSet,
                                         1, &textureSet, 0, nullptr);
-                if (vkCube && allVariants) {
+                if (vkCube && drawGrass) {
+                    VulkanPipelineCache::Key key;
+                    key.module = "grass";
+                    key.vertexEntry = "grassVertex";
+                    key.fragmentEntry = "pbrFragment";
+                    key.colorFormats = VulkanGBuffer::colorFormats();
+                    key.depthFormat = VulkanGBuffer::depthFormat();
+                    key.depthTest = true;
+                    key.depthWrite = true;
+                    key.vertexBindings = {VulkanMesh::bindingDescription(cube->vertexLayout())};
+                    key.vertexAttributes = VulkanMesh::attributeDescriptions(cube->vertexLayout());
+                    auto &grassPipeline = renderer.pipelines().get(key);
+
+                    // A grid of clusters. If SV_InstanceID works, this is a
+                    // field; if it reads zero, as it did under OpenGL, every
+                    // quad lands on cluster 0 and there is one billboard.
+                    GrassUniforms grass;
+                    grass.quadSize = glm::vec2(0.6f);
+                    grass.radius = 40.0f;
+                    int side = 16;
+                    int count = side * side;
+                    for (int i = 0; i < count && i < kMaxGrassClusters; ++i) {
+                        float gx = (i % side) - side * 0.5f;
+                        float gz = (i / side) - side * 0.5f;
+                        grass.clusters[i].positionVariant =
+                            glm::vec4(gx * 0.7f, -1.5f, gz * 0.7f, 0.0f);
+                        grass.clusters[i].lightmapUV = glm::vec4(0.0f);
+                    }
+
+                    LocalUniforms glocals = locals;
+                    glocals.model = glm::mat4(1.0f);
+                    glocals.modelInv = glm::mat4(1.0f);
+                    glocals.prevModel = glm::mat4(1.0f);
+
+                    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> goff = offsets;
+                    goff[UniformBlockBindingPoints::locals] =
+                        renderer.uniformRing().push(glocals);
+                    goff[UniformBlockBindingPoints::grass] =
+                        renderer.uniformRing().push(grass);
+
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                      grassPipeline.handle());
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            grassPipeline.layout(),
+                                            VulkanDescriptors::kUniformSet, 1, &uniformSet,
+                                            static_cast<uint32_t>(goff.size()), goff.data());
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            grassPipeline.layout(),
+                                            VulkanDescriptors::kTextureSet, 1, &textureSet,
+                                            0, nullptr);
+                    vkCube->draw(cmd, count);
+                    grassInstances = count;
+                } else if (vkCube && allVariants) {
                     // Every geometry entry point in the shipping model shader.
                     // Each is a separate pipeline; the cache builds them once.
                     static const char *kEntries[] {
@@ -691,6 +793,9 @@ int main(int argc, char **argv) {
         info(str(boost::format("Presented %d frames on %s") % frame % renderer.device().deviceName()));
         info(str(boost::format("Uniform arena peak: %llu bytes") % renderer.uniformRing().peakUsage()));
         info(str(boost::format("Pipelines built: %d") % renderer.pipelines().size()));
+        if (drawGrass) {
+            info(str(boost::format("Grass instances: %d") % grassInstances));
+        }
         if (drawTwoD) {
             info(str(boost::format("2D draws per frame: %d") % twoDDraws));
         }
