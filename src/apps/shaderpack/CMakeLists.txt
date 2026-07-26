@@ -30,13 +30,17 @@ set(SLANG_GENERATED_DIR ${CMAKE_BINARY_DIR}/slang-glsl)
 
 # Each entry is <slang source>:<entry point>:<stage>:<output resref>
 set(SLANG_SHADERS
-    "pbr_opaque_model:vertexMain:vertex:v_slang_model"
-    "pbr_opaque_model:fragmentMain:fragment:f_slang_opaqmdl"
     "pbr_model:staticVertex:vertex:v_sl_mdl_static"
     "pbr_model:skinnedVertex:vertex:v_sl_mdl_skin"
     "pbr_model:danglyVertex:vertex:v_sl_mdl_dangly"
     "pbr_model:saberVertex:vertex:v_sl_mdl_saber"
-    "pbr_model:opaqueFragment:fragment:f_sl_mdl_opaque")
+    "pbr_model:opaqueFragment:fragment:f_sl_mdl_opaque"
+    "grass:grassVertex:vertex:v_sl_grass"
+    "grass:pbrFragment:fragment:f_sl_grass_pbr"
+    "grass:retroFragment:fragment:f_sl_grass_rtr"
+    "walkmesh:walkmeshVertex:vertex:v_sl_walkmesh"
+    "walkmesh:pbrFragment:fragment:f_sl_walkm_pbr"
+    "walkmesh:retroFragment:fragment:f_sl_walkm_rtr")
 
 if(SLANGC_EXECUTABLE)
     set(SLANG_OUTPUTS)

@@ -558,3 +558,41 @@ shader entirely, into the material buffer described in §5.6, computed once when
 the material is built rather than per fragment. The shader-side split is written
 now so that the move is a change of where `SurfaceParams` comes from, not a
 rewrite of everything that uses it.
+
+### 9.4 Cross-stage uniform block naming
+
+Slang emits only the uniform blocks a given entry point references, and
+disambiguates identifiers across whatever it emitted. Two stages of one program
+that touch different sets of blocks therefore get different member names for the
+blocks they share, and OpenGL links interface block members by name.
+
+Concretely, for the grass program:
+
+| Stage | Blocks emitted | `GlobalUniformsLight` |
+| --- | --- | --- |
+| vertex | Grass, Globals | `vec4 color_0;` |
+| fragment | Grass, **Locals**, Globals | `vec4 color_1;` |
+
+The fragment reads `localUniforms.featureMask` through `isFeatureEnabled`, so
+`LocalUniforms::color` takes the unsuffixed name and the light's colour is pushed
+to `_1`. Linking fails with "struct fields mismatch between shaders".
+
+The opaque model program is unaffected only by luck - both of its stages happen to
+reference Locals.
+
+Compiling every entry point of a program in one slangc invocation would fix it,
+but GLSL is a single-entry-point target and slangc rejects multiple `-o` options
+for it. Three ways out:
+
+1. **Make member names globally unique**, so disambiguation never applies. The
+   collisions are all in the structs nested inside blocks - `color` appears in
+   `GlobalUniformsLight`, `LocalUniforms` and `ParticleUniformsParticle`, `radius`
+   in `GlobalUniformsLight` and `GrassUniforms`. Renaming those means renaming the
+   C++ members too, since the layout assertions map the two by identity.
+2. **Force every stage to reference every block**, which is brittle and relies on
+   the optimiser not removing the reference.
+3. **Rewrite the identifiers after transpiling**, which is fragile.
+
+The first is the only principled option, and it is one more reason the transitional
+Slang-to-GLSL path costs more than Slang-to-SPIR-V will: SPIR-V binds by number
+and has no cross-stage name matching at all.

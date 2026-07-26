@@ -76,15 +76,18 @@ static const std::string kFragPostSharpen = "f_pp_sharpen";
 static const std::string kFragPostDebugTex = "f_pp_debugtex";
 
 // Transpiled from slang/pbr_opaque_model.slang
-static const std::string kVertSlangModel = "v_slang_model";
-static const std::string kFragSlangPBROpaqueModel = "f_slang_opaqmdl";
-
 // Rewritten opaque model, specialised by geometry path
 static const std::string kVertModelStatic = "v_sl_mdl_static";
 static const std::string kVertModelSkinned = "v_sl_mdl_skin";
 static const std::string kVertModelDangly = "v_sl_mdl_dangly";
 static const std::string kVertModelSaber = "v_sl_mdl_saber";
 static const std::string kFragModelOpaque = "f_sl_mdl_opaque";
+static const std::string kVertSlGrass = "v_sl_grass";
+static const std::string kFragSlGrassPBR = "f_sl_grass_pbr";
+static const std::string kFragSlGrassRetro = "f_sl_grass_rtr";
+static const std::string kVertSlWalkmesh = "v_sl_walkmesh";
+static const std::string kFragSlWalkmeshPBR = "f_sl_walkm_pbr";
+static const std::string kFragSlWalkmeshRetro = "f_sl_walkm_rtr";
 static const std::string kFragText = "f_text";
 static const std::string kFragTexture = "f_texture";
 static const std::string kFragTextureNoPerspective = "f_texnoper";
@@ -179,6 +182,23 @@ void Shaders::init() {
         addVariant(ShaderProgramId::pbrModelSkinned, kVertModelSkinned);
         addVariant(ShaderProgramId::pbrModelDangly, kVertModelDangly);
         addVariant(ShaderProgramId::pbrModelSaber, kVertModelSaber);
+    }
+    // Not registered yet: the grass and walkmesh stages emit different sets of
+    // uniform blocks, which shifts Slang's identifier suffixes and breaks linking.
+    // See doc/vulkan-rt-backend.md section 9.4.
+    if (false && hasSource(kVertSlGrass)) {
+        auto vert = initShader(ShaderType::Vertex, kVertSlGrass, SourceFlavor::Slang);
+        auto fragPBR = initShader(ShaderType::Fragment, kFragSlGrassPBR, SourceFlavor::Slang);
+        auto fragRetro = initShader(ShaderType::Fragment, kFragSlGrassRetro, SourceFlavor::Slang);
+        _shaderRegistry.addSlangVariant(ShaderProgramId::pbrGrass, initShaderProgram({vert, fragPBR}));
+        _shaderRegistry.addSlangVariant(ShaderProgramId::retroGrass, initShaderProgram({vert, fragRetro}));
+    }
+    if (false && hasSource(kVertSlWalkmesh)) {
+        auto vert = initShader(ShaderType::Vertex, kVertSlWalkmesh, SourceFlavor::Slang);
+        auto fragPBR = initShader(ShaderType::Fragment, kFragSlWalkmeshPBR, SourceFlavor::Slang);
+        auto fragRetro = initShader(ShaderType::Fragment, kFragSlWalkmeshRetro, SourceFlavor::Slang);
+        _shaderRegistry.addSlangVariant(ShaderProgramId::pbrWalkmesh, initShaderProgram({vert, fragPBR}));
+        _shaderRegistry.addSlangVariant(ShaderProgramId::retroWalkmesh, initShaderProgram({vert, fragRetro}));
     }
     _shaderRegistry.add(ShaderProgramId::pbrSSAO, initShaderProgram({vertPassthrough, fragPBRSSAO}));
     _shaderRegistry.add(ShaderProgramId::pbrSSR, initShaderProgram({vertPassthrough, fragPBRSSR}));

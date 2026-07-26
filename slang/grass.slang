@@ -1,0 +1,138 @@
+// Grass, for both the PBR and retro pipelines. Rewritten from glsl/v_grass,
+// f_pbr_grass and f_rtr_grass against the architecture in section 9.
+//
+// One vertex stage feeds two fragment stages, so all three share the varyings
+// struct declared here - the coupling is within this file rather than across the
+// shader tree.
+
+import uniforms;
+import lib.gbuf;
+import lib.hashedalpha;
+import lib.motion;
+import lib.surface;
+
+[[vk::binding(0)]] Sampler2D sMainTex;
+[[vk::binding(1)]] Sampler2D sLightmap;
+
+struct Varyings {
+    float4 position : SV_Position;
+    float4 objectPos : TEXCOORD0;
+    float4 worldPos : TEXCOORD1;
+    float3 worldNormal : TEXCOORD2;
+    float2 uv1 : TEXCOORD3;
+    nointerpolation int instanceId : TEXCOORD4;
+    float4 curClipPos : TEXCOORD5;
+    float4 prevClipPos : TEXCOORD6;
+};
+
+[shader("vertex")]
+Varyings grassVertex(
+    [[vk::location(0)]] float3 position: POSITION,
+    [[vk::location(2)]] float2 uv1: TEXCOORD0,
+    uint instanceId: SV_InstanceID) {
+    Varyings output;
+
+    float3 clusterToCamera = grassUniforms.clusters[instanceId].positionVariant.xyz -
+                             globalUniforms.cameraPosition.xyz;
+    float A = asin(smoothstep(0.5 * grassUniforms.radius, grassUniforms.radius, length(clusterToCamera)));
+
+    // Rotation about X. Written as rows, which is how Slang's constructor fills a
+    // matrix; the original lists the same values as GLSL columns.
+    float4x4 pitch = float4x4(
+        float4(1.0, 0.0, 0.0, 0.0),
+        float4(0.0, cos(A), -sin(A), 0.0),
+        float4(0.0, sin(A), cos(A), 0.0),
+        float4(0.0, 0.0, 0.0, 1.0));
+
+    // The original takes the first two rows of pitch * uView as the billboard
+    // axes, spelled as one component from each column.
+    float4x4 M = mul(pitch, globalUniforms.view);
+    float3 right = M[0].xyz;
+    float3 up = M[1].xyz;
+
+    output.objectPos = float4(position, 1.0);
+    output.worldPos = float4(
+        grassUniforms.clusters[instanceId].positionVariant.xyz +
+            right * position.x * grassUniforms.quadSize.x +
+            up * position.y * grassUniforms.quadSize.y,
+        1.0);
+
+    // Clusters are static, so only the camera contributes motion. The billboard
+    // turning to face it is deliberately not tracked.
+    output.curClipPos = mul(globalUniforms.viewProjection, output.worldPos);
+    output.prevClipPos = mul(globalUniforms.prevViewProjection, output.worldPos);
+
+    output.worldNormal = cross(right, up);
+    output.uv1 = uv1;
+    output.instanceId = int(instanceId);
+    output.position = mul(globalUniforms.projection, mul(globalUniforms.view, output.worldPos));
+    return output;
+}
+
+/** Grass sheets pack four variants into one texture, chosen per cluster. */
+float2 variantUV(Varyings input) {
+    int variant = int(grassUniforms.clusters[input.instanceId].positionVariant[3]);
+    float2 uv = 0.5 * input.uv1;
+    uv.y += 0.5 * (variant / 2);
+    uv.x += 0.5 * (variant % 2);
+    return uv;
+}
+
+SurfaceParams sampleSurface(Varyings input) {
+    SurfaceParams surface = defaultSurface();
+    float4 mainTexSample = sMainTex.Sample(variantUV(input));
+    surface.albedo = mainTexSample.rgb;
+    surface.alpha = mainTexSample.a;
+    surface.normal = normalize(input.worldNormal);
+    if (isFeatureEnabled(kFeatureLightmap)) {
+        surface.lightmap = sLightmap.Sample(grassUniforms.clusters[input.instanceId].lightmapUV).rgb;
+        surface.hasLightmap = true;
+    }
+    return surface;
+}
+
+struct GBufferOutput {
+    float4 diffuseColor : SV_Target0;
+    float4 eyeNormal : SV_Target1;
+    float4 lightmapColor : SV_Target2;
+    float4 selfIllumColor : SV_Target3;
+    float2 motion : SV_Target4;
+};
+
+[shader("fragment")]
+GBufferOutput pbrFragment(Varyings input) {
+    SurfaceParams surface = sampleSurface(input);
+    if (hashedAlphaTestFails(surface.alpha, input.objectPos.xyz)) {
+        discard;
+    }
+
+    float features = packGeometryFeatures(false, false, false);
+    float3 eyeNormal = mul(surface.normal, (float3x3)globalUniforms.viewInv);
+    eyeNormal = 0.5 * eyeNormal + 0.5;
+
+    GBufferOutput output;
+    output.diffuseColor = float4(surface.albedo, surface.alpha);
+    output.lightmapColor = float4(surface.lightmap, features);
+    output.selfIllumColor = float4(0.0);
+    output.eyeNormal = float4(eyeNormal, 0.0);
+    output.motion = computeMotion(input.curClipPos, input.prevClipPos);
+    return output;
+}
+
+struct RetroOutput {
+    float4 color : SV_Target0;
+    float4 hilights : SV_Target1;
+};
+
+[shader("fragment")]
+RetroOutput retroFragment(Varyings input) {
+    SurfaceParams surface = sampleSurface(input);
+    if (hashedAlphaTestFails(surface.alpha, input.objectPos.xyz)) {
+        discard;
+    }
+
+    RetroOutput output;
+    output.color = float4(surface.albedo * surface.lightmap, 1.0);
+    output.hilights = float4(0.0);
+    return output;
+}
