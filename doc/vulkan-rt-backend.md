@@ -126,6 +126,27 @@ Replace with an `IRenderer` that owns the swapchain and presentation, so the
 backend decides what a frame output is. The same change is needed at
 `src/apps/toolkit/viewmodel/resource/model.cpp:113`.
 
+**Done.** `include/reone/graphics/renderer.h` defines the interface;
+`renderer/gl.h` implements it over the default framebuffer. A frame is
+`beginFrame(extent)` / drawing / `endFrame()`, with `drawSceneOutput(Texture &)`
+as the hand-off from a pipeline, which produces a texture, to the backend, which
+decides how that texture becomes visible. Both call sites above now go through
+it, as does the engine's frame loop and the screenshot path.
+
+Two details are load-bearing for Vulkan:
+
+- **`captureFrame()` must precede `endFrame()`.** In GL that is only a
+  convention; in Vulkan the contents of a presented swapchain image are
+  undefined, and the readback has to be recorded before the present.
+- **`beginFrame` pushes the viewport rather than assuming it.** Dear ImGui calls
+  `glViewport` directly, behind the context's back, so nothing may rely on
+  leftover state from the previous frame.
+
+The renderer takes an optional `Window`. Null means it does not own presentation
+and must not swap — the toolkit draws into a canvas wxWidgets presents itself.
+That distinction disappears with the GL backend, but until then it is what keeps
+one interface serving both hosts.
+
 ### 2.3 Fate of the OpenGL backend
 
 Two live backends is a real, ongoing cost. It taxes every interface decision:
@@ -471,6 +492,7 @@ main argument for this ordering.
    a live silent-corruption hazard on code already committed.
 3. **`IRenderer` seam** — move presentation out of `game.cpp` and the toolkit;
    add the 2D batcher abstraction covering the 16 sites in §3.
+   **Presentation done** (§2.2); the 2D batcher is not started.
 4. **Vulkan raster backend** to PBR parity. Unglamorous but mandatory: swapchain,
    descriptor management, GUI, text, movie playback, and the uniform update model
    in §3.1. **Slang enters here**, targeting SPIR-V (§4).

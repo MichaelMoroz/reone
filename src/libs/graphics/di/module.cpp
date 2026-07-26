@@ -34,11 +34,19 @@ void GraphicsModule::init() {
         *_shaderRegistry,
         *_statistic,
         *_uniforms);
+    _renderer = std::make_unique<GLRenderer>(
+        *_context,
+        *_meshRegistry,
+        *_shaderRegistry,
+        *_statistic,
+        *_uniforms,
+        _window);
 
     _services = std::make_unique<GraphicsServices>(
         *_context,
         *_meshRegistry,
         *_pbrTextures,
+        *_renderer,
         *_shaderRegistry,
         *_statistic,
         *_textureRegistry,
@@ -48,11 +56,13 @@ void GraphicsModule::init() {
     _meshRegistry->init();
     _textureRegistry->init();
     _uniforms->init();
+    _renderer->init();
 }
 
 void GraphicsModule::deinit() {
     _services.reset();
 
+    _renderer.reset();
     _pbrTextures.reset();
     _uniforms.reset();
     _meshRegistry.reset();

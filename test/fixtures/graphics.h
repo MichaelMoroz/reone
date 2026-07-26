@@ -24,6 +24,7 @@
 #include "reone/graphics/framebuffer.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/pbrtextures.h"
+#include "reone/graphics/renderer.h"
 #include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/statistic.h"
 #include "reone/graphics/textureregistry.h"
@@ -96,6 +97,16 @@ public:
     MOCK_METHOD(std::optional<int>, findEnvMapDerivedLayer, (const std::string &), (override));
 };
 
+class MockRenderer : public IRenderer, boost::noncopyable {
+public:
+    MOCK_METHOD(void, init, (), (override));
+    MOCK_METHOD(void, deinit, (), (override));
+    MOCK_METHOD(void, beginFrame, (glm::ivec2), (override));
+    MOCK_METHOD(void, drawSceneOutput, (Texture &), (override));
+    MOCK_METHOD(std::shared_ptr<Texture>, captureFrame, (), (override));
+    MOCK_METHOD(void, endFrame, (), (override));
+};
+
 class MockShaderRegistry : public IShaderRegistry, boost::noncopyable {
 public:
     MOCK_METHOD(ShaderProgram &, get, (const std::string &), (override));
@@ -134,6 +145,7 @@ public:
         _context = std::make_unique<MockContext>();
         _meshRegistry = std::make_unique<MockMeshRegistry>();
         _pbrTextures = std::make_unique<MockPBRTextures>();
+        _renderer = std::make_unique<MockRenderer>();
         _shaderRegistry = std::make_unique<MockShaderRegistry>();
         _statistic = std::make_unique<MockStatistic>();
         _textureRegistry = std::make_unique<MockTextureRegistry>();
@@ -143,6 +155,7 @@ public:
             *_context,
             *_meshRegistry,
             *_pbrTextures,
+            *_renderer,
             *_shaderRegistry,
             *_statistic,
             *_textureRegistry,
@@ -165,6 +178,7 @@ private:
     std::unique_ptr<MockContext> _context;
     std::unique_ptr<MockMeshRegistry> _meshRegistry;
     std::unique_ptr<MockPBRTextures> _pbrTextures;
+    std::unique_ptr<MockRenderer> _renderer;
     std::unique_ptr<MockShaderRegistry> _shaderRegistry;
     std::unique_ptr<MockStatistic> _statistic;
     std::unique_ptr<MockTextureRegistry> _textureRegistry;

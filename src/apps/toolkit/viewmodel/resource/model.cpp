@@ -111,13 +111,11 @@ void ModelResourceViewModel::render3D(int w, int h) {
 
     auto &scene = _sceneSvc.graphs().get(kSceneMain);
     auto &output = scene.render(glm::ivec2(w, h));
-    _graphicsModule.uniforms().setLocals(std::bind(&LocalUniforms::reset, std::placeholders::_1));
-    _graphicsModule.context().useProgram(_graphicsModule.shaderRegistry().get(ShaderProgramId::ndcTexture));
-    _graphicsModule.context().bindTexture(output);
-    _graphicsModule.context().withViewport(glm::ivec4(0, 0, w, h), [this, &output]() {
-        _graphicsModule.context().clearColorDepth();
-        _graphicsModule.meshRegistry().get(MeshName::quadNDC).draw(_graphicsModule.statistic());
-    });
+    auto &renderer = _graphicsModule.renderer();
+    // No presentation here: wxWidgets owns the canvas and swaps it.
+    renderer.beginFrame(glm::ivec2(w, h));
+    renderer.drawSceneOutput(output);
+    renderer.endFrame();
 }
 
 void ModelResourceViewModel::playAnimation(std::string anim, std::shared_ptr<graphics::LipAnimation> lipAnim) {

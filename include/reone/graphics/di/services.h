@@ -24,6 +24,7 @@ namespace graphics {
 class IContext;
 class IMeshRegistry;
 class IPBRTextures;
+class IRenderer;
 class IShaderRegistry;
 class IStatistic;
 class ITextureRegistry;
@@ -33,6 +34,7 @@ struct GraphicsServices {
     IContext &context;
     IMeshRegistry &meshRegistry;
     IPBRTextures &pbrTextures;
+    IRenderer &renderer;
     IShaderRegistry &shaderRegistry;
     IStatistic &statistic;
     ITextureRegistry &textureRegistry;
@@ -42,6 +44,7 @@ struct GraphicsServices {
         IContext &context,
         IMeshRegistry &meshRegistry,
         IPBRTextures &pbrTextures,
+        IRenderer &renderer,
         IShaderRegistry &shaderRegistry,
         IStatistic &statistic,
         ITextureRegistry &textureRegistry,
@@ -49,6 +52,7 @@ struct GraphicsServices {
         context(context),
         meshRegistry(meshRegistry),
         pbrTextures(pbrTextures),
+        renderer(renderer),
         shaderRegistry(shaderRegistry),
         statistic(statistic),
         textureRegistry(textureRegistry),

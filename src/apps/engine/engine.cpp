@@ -149,7 +149,7 @@ void Engine::init() {
     _clock->init();
 
     _systemModule = std::make_unique<SystemModule>(*_clock);
-    _graphicsModule = std::make_unique<GraphicsModule>(_options.graphics);
+    _graphicsModule = std::make_unique<GraphicsModule>(_options.graphics, _window.get());
     _audioModule = std::make_unique<AudioModule>(_options.audio);
     _movieModule = std::make_unique<MovieModule>();
     _scriptModule = std::make_unique<ScriptModule>();
@@ -345,14 +345,15 @@ int Engine::run() {
             if (_options.graphics.pbr) {
                 _services->graphics.pbrTextures.refresh();
             }
-            _services->graphics.context.clearColorDepth();
+            _services->graphics.renderer.beginFrame(
+                {_options.graphics.width, _options.graphics.height});
             _game->render();
             _profiler->render();
             _console->render();
             _editor->render();
             imguiRender();
             captureIfRequested(quit);
-            _window->swap();
+            _services->graphics.renderer.endFrame();
         });
         _profiler->measure(kMainThreadName, kProfilerRenderAudioTimeIndex, [this]() {
             _services->audio.mixer.render();
@@ -412,9 +413,8 @@ void Engine::captureIfRequested(bool &quit) {
         }
         return;
     }
-    // Read before the swap, while the finished frame is still the back buffer.
-    auto screenshot = _services->graphics.context.captureScreen(
-        _options.graphics.width, _options.graphics.height);
+    // Read before endFrame, while the finished frame is still readable.
+    auto screenshot = _services->graphics.renderer.captureFrame();
     auto stream = FileOutputStream(_options.capturePath);
     TgaWriter(screenshot).save(stream);
     info("Wrote screenshot: " + _options.capturePath);

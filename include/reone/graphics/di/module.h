@@ -20,6 +20,7 @@
 #include "../context.h"
 #include "../meshregistry.h"
 #include "../pbrtextures.h"
+#include "../renderer/gl.h"
 #include "../shaderregistry.h"
 #include "../statistic.h"
 #include "../textureregistry.h"
@@ -33,8 +34,13 @@ namespace graphics {
 
 class GraphicsModule : boost::noncopyable {
 public:
-    GraphicsModule(GraphicsOptions &options) :
-        _options(options) {
+    /**
+     * @param window presents finished frames. Null in hosts that own
+     *               presentation themselves, such as the wxWidgets toolkit.
+     */
+    GraphicsModule(GraphicsOptions &options, Window *window = nullptr) :
+        _options(options),
+        _window(window) {
     }
 
     ~GraphicsModule() { deinit(); }
@@ -45,6 +51,7 @@ public:
     Context &context() { return *_context; }
     MeshRegistry &meshRegistry() { return *_meshRegistry; }
     PBRTextures &pbrTextures() { return *_pbrTextures; }
+    IRenderer &renderer() { return *_renderer; }
     ShaderRegistry &shaderRegistry() { return *_shaderRegistry; }
     Statistic &statistic() { return *_statistic; }
     TextureRegistry &textureRegistry() { return *_textureRegistry; }
@@ -54,10 +61,12 @@ public:
 
 private:
     GraphicsOptions &_options;
+    Window *_window;
 
     std::unique_ptr<Context> _context;
     std::unique_ptr<MeshRegistry> _meshRegistry;
     std::unique_ptr<PBRTextures> _pbrTextures;
+    std::unique_ptr<GLRenderer> _renderer;
     std::unique_ptr<ShaderRegistry> _shaderRegistry;
     std::unique_ptr<Statistic> _statistic;
     std::unique_ptr<TextureRegistry> _textureRegistry;

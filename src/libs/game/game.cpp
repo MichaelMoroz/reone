@@ -48,6 +48,7 @@
 #include "reone/graphics/model.h"
 #include "reone/graphics/modelnode.h"
 #include "reone/graphics/renderbuffer.h"
+#include "reone/graphics/renderer.h"
 #include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/gui/gui.h"
@@ -936,10 +937,7 @@ void Game::renderScene() {
     }
     auto &scene = _services.scene.graphs.get(kSceneMain);
     auto &output = scene.render({_options.graphics.width, _options.graphics.height});
-    _services.graphics.uniforms.setLocals(std::bind(&LocalUniforms::reset, std::placeholders::_1));
-    _services.graphics.context.useProgram(_services.graphics.shaderRegistry.get(ShaderProgramId::ndcTexture));
-    _services.graphics.context.bindTexture(output);
-    _services.graphics.meshRegistry.get(MeshName::quadNDC).draw(_services.graphics.statistic);
+    _services.graphics.renderer.drawSceneOutput(output);
 }
 
 void Game::toggleInGameCameraType() {
