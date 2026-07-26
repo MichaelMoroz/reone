@@ -519,7 +519,19 @@ main argument for this ordering.
 4. **Vulkan raster backend** to PBR parity. Unglamorous but mandatory: swapchain,
    descriptor management, GUI, text, movie playback, and the uniform update model
    in §3.1. **Slang enters here**, targeting SPIR-V (§4).
-   **Started** — see §10.
+
+   **In progress — the spine exists, nothing is connected to the game yet.**
+   Device, swapchain, frames in flight, presentation, screenshot readback,
+   buffers, the uniform ring of §3.1, both descriptor sets, pipelines, images and
+   samplers, `Mesh` upload, depth, and a five-attachment G-buffer with a deferred
+   resolve. All of it exercised by `vulkanprobe` with the validation layers on
+   and silent. See §10.
+
+   **Not started:** anything that touches game data. `MeshRegistry`, `Texture`
+   and `Material` do not reach this path; the geometry is a synthesised cube and
+   the texture a generated checkerboard. Also missing: a pipeline cache, the
+   lighting the resolve stands in for, shadows, transparency, particles, GUI,
+   text and movie playback.
 5. **Acceleration structures and hybrid RT** — compute skinning, BLAS/TLAS, then
    RT shadows/AO/reflections replacing the current SSAO and SSR passes. First
    visible payoff.
@@ -746,6 +758,13 @@ have been guesswork no longer is.
 ---
 
 ## 10. Vulkan backend progress
+
+**Status:** the backend can open a window, build a device, upload geometry and
+textures, and render a depth-tested, textured mesh through a G-buffer and a
+deferred resolve, validation-clean. It is driven by `vulkanprobe`, not by the
+engine: no game asset has been through it, and the engine still runs entirely on
+OpenGL. The sections below are in the order the work happened, and record the
+traps as much as the results.
 
 ### 10.1 Standing up the device
 
