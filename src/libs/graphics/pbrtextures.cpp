@@ -115,10 +115,18 @@ void PBRTextures::initIrradianceMapArray() {
 }
 
 void PBRTextures::initPrefilteredEnvMapArray() {
+    // Each mip holds the environment convolved to one roughness, and the
+    // resolve picks between them with textureLod. That needs a mipmap
+    // minification filter: with the plain Linear a colour buffer would get,
+    // OpenGL only ever reads the base level and every roughness comes back as
+    // the mirror reflection in mip 0.
+    auto properties = getTextureProperties(TextureUsage::ColorBuffer);
+    properties.minFilter = Texture::Filtering::LinearMipmapLinear;
+
     _prefilteredEnvMapArray = std::make_shared<Texture>(
         "pbr_prefiltered_env_map_array",
         TextureType::CubeMapArray,
-        getTextureProperties(TextureUsage::ColorBuffer));
+        properties);
     _prefilteredEnvMapArray->clear(
         kPrefilteredTextureSize,
         kPrefilteredTextureSize,
@@ -192,7 +200,11 @@ void PBRTextures::refreshPrefilteredEnvMap(const EnvMapDerivedRequest &request, 
                     globals.view = kCubeMapViews[i];
                 });
                 float roughness = mip / static_cast<float>(kNumPrefilteredMipMaps - 1);
-                shader.setUniform("uRoughness", mip);
+                // uRoughness is a float. Passing the int mip picked the int
+                // overload, so this was glUniform1i against a float uniform -
+                // GL_INVALID_OPERATION, silently swallowed, and the uniform
+                // kept its default of zero for every mip.
+                shader.setUniform("uRoughness", roughness);
                 _context.clearColorDepth();
                 _meshRegistry.get(MeshName::cubemap).draw(_statistic);
             }
@@ -200,9 +212,13 @@ void PBRTextures::refreshPrefilteredEnvMap(const EnvMapDerivedRequest &request, 
     }
     _context.resetDrawFramebuffer();
 
-    glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, _prefilteredEnvMapArray->nameGL());
-    glGenerateMipmap(GL_TEXTURE_CUBE_MAP_ARRAY);
-    glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, 0);
+    // No glGenerateMipmap here. It used to run over this array once the loop
+    // above had finished, which regenerates every level from level 0 and so
+    // threw away the five convolutions that were the point of the loop. The
+    // chain is allocated once by Texture::init, from the mipmap minification
+    // filter this array asks for, and the loop writes the levels the resolve
+    // reads. Levels past kNumPrefilteredMipMaps are never sampled: the resolve
+    // clamps its LOD to MAX_REFLECTION_LOD.
 }
 
 } // namespace graphics
