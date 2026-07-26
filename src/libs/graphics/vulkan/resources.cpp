@@ -156,10 +156,9 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
     if (existing != _textures.end()) {
         return *existing->second;
     }
-    // Cube maps and arrays need their own upload paths and are not built yet;
-    // envmaps and shadow maps are the users. A blank stand-in keeps the frame
-    // rendering and makes the gap visible rather than fatal.
-    if (texture.type() != TextureType::TwoDim) {
+    // Cube map arrays - the irradiance and prefiltered environment maps the GL
+    // resolve samples - still have no upload path. Everything else does.
+    if (texture.type() == TextureType::CubeMapArray) {
         return fallbackFor(texture, "texture type of " + texture.name() +
                                         " is not uploadable yet");
     }
@@ -172,6 +171,44 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
         return fallbackFor(texture, "texture " + texture.name() + " has no pixels");
     }
     auto image = std::make_unique<VulkanImage>(_device);
+    if (texture.type() != TextureType::TwoDim) {
+        // A cube map is six faces in the order Vulkan and OpenGL agree on, an
+        // array however many frames it has. Either way the layers are already
+        // laid out one per Texture::Layer.
+        bool cube = texture.type() == TextureType::CubeMap;
+        auto compressed = compressedFormat(texture.pixelFormat());
+        std::vector<std::vector<uint8_t>> widened;
+        std::vector<std::pair<const void *, VkDeviceSize>> layers;
+        layers.reserve(texture.layers().size());
+        if (!compressed) {
+            widened.reserve(texture.layers().size());
+        }
+        for (const auto &layer : texture.layers()) {
+            if (!layer.pixels || layer.pixels->empty()) {
+                layers.push_back({nullptr, 0});
+                continue;
+            }
+            if (compressed) {
+                layers.push_back({layer.pixels->data(),
+                                  static_cast<VkDeviceSize>(layer.pixels->size())});
+            } else {
+                widened.push_back(widenToRGBA(*layer.pixels, texture.pixelFormat(),
+                                              texture.width(), texture.height()));
+                layers.push_back({widened.back().data(),
+                                  static_cast<VkDeviceSize>(widened.back().size())});
+            }
+        }
+        // A cube map short of faces would build a view Vulkan rejects.
+        if (cube && layers.size() < kNumCubeFaces) {
+            return fallbackFor(texture, "cube map " + texture.name() +
+                                            " has fewer than six faces");
+        }
+        image->initSampledLayers({texture.width(), texture.height()},
+                                 compressed ? *compressed : VK_FORMAT_R8G8B8A8_UNORM,
+                                 cube, layers);
+        debug("Vulkan: uploaded texture " + texture.name(), LogChannel::Graphics);
+        return *_textures.insert({&texture, std::move(image)}).first->second;
+    }
     if (auto compressed = compressedFormat(texture.pixelFormat())) {
         const auto &pixels = *texture.layers().front().pixels;
         image->initSampled2DSized({texture.width(), texture.height()},

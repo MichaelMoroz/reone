@@ -226,6 +226,129 @@ void VulkanImage::initSampledLayered(glm::ivec2 extent,
     });
 }
 
+void VulkanImage::initSampledLayers(
+    glm::ivec2 extent,
+    VkFormat format,
+    bool cube,
+    const std::vector<std::pair<const void *, VkDeviceSize>> &layers) {
+    if (layers.empty()) {
+        throw std::invalid_argument("Vulkan: a layered image needs at least one layer");
+    }
+    _extent = extent;
+    _format = format;
+
+    auto layerCount = static_cast<uint32_t>(layers.size());
+
+    VkImageCreateInfo imageInfo {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = format;
+    imageInfo.extent = {static_cast<uint32_t>(extent.x), static_cast<uint32_t>(extent.y), 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = layerCount;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (cube) {
+        imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    }
+
+    VmaAllocationCreateInfo allocInfo {};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+    if (vmaCreateImage(_device.allocator(), &imageInfo, &allocInfo,
+                       &_image, &_allocation, nullptr) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: layered image allocation failed");
+    }
+
+    VkImageViewCreateInfo viewInfo {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = _image;
+    viewInfo.viewType = cube ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.layerCount = layerCount;
+    if (vkCreateImageView(_device.handle(), &viewInfo, nullptr, &_view) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: layered image view creation failed");
+    }
+
+    // One staging buffer for the lot, with a copy region per layer pointing at
+    // its own offset. Layers are packed back to back at their natural size,
+    // which for a block-compressed face is not width * height * texel size.
+    VkDeviceSize total = 0;
+    std::vector<VkDeviceSize> offsets;
+    offsets.reserve(layers.size());
+    for (const auto &layer : layers) {
+        offsets.push_back(total);
+        total += layer.second;
+    }
+    if (total == 0) {
+        return;
+    }
+
+    VulkanBuffer staging(_device);
+    staging.initHostVisible(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    auto *mapped = static_cast<uint8_t *>(staging.mapped());
+    for (size_t i = 0; i < layers.size(); ++i) {
+        if (layers[i].first && layers[i].second > 0) {
+            std::memcpy(mapped + offsets[i], layers[i].first,
+                        static_cast<size_t>(layers[i].second));
+        }
+    }
+
+    std::vector<VkBufferImageCopy> regions;
+    regions.reserve(layers.size());
+    for (size_t i = 0; i < layers.size(); ++i) {
+        if (!layers[i].first || layers[i].second == 0) {
+            continue;
+        }
+        VkBufferImageCopy region {};
+        region.bufferOffset = offsets[i];
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.baseArrayLayer = static_cast<uint32_t>(i);
+        region.imageSubresource.layerCount = 1;
+        region.imageExtent = {static_cast<uint32_t>(extent.x),
+                              static_cast<uint32_t>(extent.y), 1};
+        regions.push_back(region);
+    }
+
+    auto image = _image;
+    auto src = staging.handle();
+    _device.immediateSubmit([image, src, layerCount, &regions](VkCommandBuffer cmd) {
+        auto barrier = [&](VkImageLayout from, VkImageLayout to,
+                           VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+                           VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
+            VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            b.srcStageMask = srcStage;
+            b.srcAccessMask = srcAccess;
+            b.dstStageMask = dstStage;
+            b.dstAccessMask = dstAccess;
+            b.oldLayout = from;
+            b.newLayout = to;
+            b.image = image;
+            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            b.subresourceRange.levelCount = 1;
+            b.subresourceRange.layerCount = layerCount;
+
+            VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            dep.imageMemoryBarrierCount = 1;
+            dep.pImageMemoryBarriers = &b;
+            vkCmdPipelineBarrier2(cmd, &dep);
+        };
+
+        barrier(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        if (!regions.empty()) {
+            vkCmdCopyBufferToImage(cmd, src, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   static_cast<uint32_t>(regions.size()), regions.data());
+        }
+        barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    });
+}
+
 void VulkanImage::initColorAttachment(glm::ivec2 extent, VkFormat format) {
     _extent = extent;
     _format = format;
@@ -273,7 +396,10 @@ void VulkanImage::initDepth(glm::ivec2 extent, VkFormat format) {
     imageInfo.arrayLayers = 1;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    // Sampled as well as written: the deferred resolve reconstructs world
+    // position from depth, so the same image is read back as a texture.
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                      VK_IMAGE_USAGE_SAMPLED_BIT;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VmaAllocationCreateInfo allocInfo {};

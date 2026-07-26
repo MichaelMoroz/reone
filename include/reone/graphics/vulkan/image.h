@@ -90,6 +90,19 @@ public:
                             bool cube,
                             const void *data);
 
+    /**
+     * A sampled array or cube image, each layer filled from its own pixels.
+     *
+     * The layer count comes from the data rather than being asked for
+     * separately: a cube map is six faces in the order Vulkan and OpenGL agree
+     * on, +X -X +Y -Y +Z -Z, and an array is however many frames it has. Sizes
+     * are per layer because block-compressed data has no per-texel size.
+     */
+    void initSampledLayers(glm::ivec2 extent,
+                           VkFormat format,
+                           bool cube,
+                           const std::vector<std::pair<const void *, VkDeviceSize>> &layers);
+
     void deinit();
 
     VkImage handle() const { return _image; }
