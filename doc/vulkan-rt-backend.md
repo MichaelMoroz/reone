@@ -1,6 +1,7 @@
 # Vulkan RT backend — architecture plan
 
-Status: **design proposal, nothing implemented**. Written 2026-07-25.
+Status: **phase 1 landed, the rest is proposal.** Written 2026-07-25, revised
+2026-07-26 after the Slang spike (§4.1).
 
 Goal: a second rendering backend built on Vulkan with hardware ray tracing, Slang
 shaders, and FSR upscaling, with real-time path tracing as the final target.
@@ -182,24 +183,137 @@ Also in scope, and easy to forget:
   per-frame via `bindTexture` + `setPixels`.
 - **Cursor**, minimap, action bar, profiler overlay.
 
+### 3.1 The uniform update model
+
+Not incidental plumbing: this is a rewrite of how every `IRenderPass::draw*`
+submits data, and it is more tightly coupled to the compute-skinning work in
+§5.1 than it first appears.
+
+Today `Uniforms` (`src/libs/graphics/uniforms.cpp`) owns nine `UniformBuffer`s
+bound to fixed indices from `UniformBlockBindingPoints`. Each setter mutates a
+CPU-side mirror struct and re-uploads the **whole block**:
+
+```cpp
+void Uniforms::setGlobals(const std::function<void(GlobalUniforms &)> &block) {
+    block(_globals);
+    _context.bindUniformBuffer(*_ubGlobals, UniformBlockBindingPoints::globals);
+    _ubGlobals->setData(&_globals, sizeof(GlobalUniforms)); // glBufferSubData
+}
+```
+
+Three properties of that do not survive the move:
+
+- **Per-draw whole-buffer overwrite.** `setLocals` runs on every draw, and
+  `BoneUniforms` is 3 KB per skinned draw since previous-frame bones were added.
+  Overwriting a buffer that queued draws still reference is legal in OpenGL only
+  because the driver renames behind the caller. Under recorded command buffers it
+  is simply invalid, and has to become bump-allocated slices of a per-frame buffer
+  addressed by dynamic offset.
+- **Binding uniform blocks by name.** `bindUniformBlock("Globals", 0)` has no
+  Vulkan equivalent, and fails silently on a miss (see §4.1).
+- **Loose uniforms.** Seven live call sites set uniforms outside any block:
+  `uSaberDisplacement` (pass/pbr.cpp:213, retro.cpp:203), `uCorners`
+  (pbr.cpp:327, retro.cpp:296, drawdebug.cpp ×2), `uEnvMapDerivedLayer`
+  (pbr.cpp:74), `uRoughness` (pbrtextures.cpp:195). Vulkan has no loose uniforms.
+  The small scalars belong in push constants; the per-draw values belong in the
+  per-draw record. A `saber` binding point already exists at index 4, declared and
+  unused, so the intent predates this document.
+
+Target shape for the raster path: descriptor sets grouped by update frequency -
+per frame, per pass, per material, per draw - with the per-draw set addressed by
+dynamic offset into a ring buffer.
+
+**Do not over-invest here.** A path tracer does not bind per draw at all (§5.6),
+so most of a beautiful per-draw binding scheme is superseded in phase 6. Design
+the material representation once, GPU-resident and index-addressed, and let the
+raster path index into it too.
+
 ---
 
-## 4. Shaders — adopt Slang, ahead of Vulkan
+## 4. Shaders — Slang, at phase 4, targeting SPIR-V only
 
-Slang targets both SPIR-V and GLSL, so one source tree can feed both backends
-during the transition. It also:
+This section originally proposed migrating the existing GLSL to Slang *ahead* of
+Vulkan, on the theory that one source tree could feed both backends. A spike
+against slangc 2026.7.1 showed that does not hold for this engine. Revised
+position: **Slang enters with the Vulkan backend and targets SPIR-V, its
+first-class output. The frozen GL backend keeps its hand-written GLSL until it is
+deleted.**
 
-- replaces the regex `#include` preprocessor with a real module system;
-- provides reflection, which removes the bind-uniform-blocks-by-name scheme;
-- has first-class raytracing entry points (`[shader("raygeneration")]`,
+Slang is still the right choice when it arrives:
+
+- a real module system in place of the regex `#include` preprocessor
+  (`src/libs/resource/provider/shaders.cpp:197`);
+- reflection, which generates the binding tables and the std140 layout contract
+  rather than leaving them hand-maintained (§4.2);
+- first-class raytracing entry points (`[shader("raygeneration")]`,
   `[shader("closesthit")]`, `[shader("anyhit")]`);
-- supports generics, which matters for a material system shared between raster
-  and path tracing.
+- generics, which matter for a material system shared between raster and path
+  tracing.
 
-Plan: extend `shaderpack` to emit SPIR-V into a separate `shaderpack_vk.erf` at
-build time; keep runtime Slang compilation behind `--dev` for iteration.
+### 4.1 Why not Slang → GLSL
 
-This step is independently valuable and can land before any Vulkan code exists.
+Verified by compiling representative shaders with `slangc -target glsl`:
+
+**Works.** `[[vk::location(N)]]` emits exactly `layout(location = N)`, preserving
+the engine's vertex layouts including deliberately skipped slots. `noperspective`
+survives. Varying names are mangled but match by location across stages, so that
+is harmless.
+
+**Does not work.**
+
+| Emitted | Consequence |
+| --- | --- |
+| `block_SLANG_ParameterGroup_ScreenEffect_0` | `bindUniformBlock("ScreenEffect", ...)` misses - and returns silently, so the result is garbage uniforms with no error |
+| `sMainTex_0` | `setUniform("sMainTex", unit)` misses |
+| Loose uniforms gathered into a `GlobalParams` block | `uSaberDisplacement`, `uCorners`, `uEnvMapDerivedLayer` stop being settable by name |
+| `#version 450`, regardless of `-profile glsl_400` | collides with the `#version 400 core` the shader provider prepends |
+| `layout(binding = N)` on blocks and samplers | GLSL 420+ only. The engine creates a **GL 4.0 core** context (`window.cpp:33-35`) |
+
+Reflection (§4.2) answers the naming rows - the host can bind from reflection
+data instead of names. It does not answer the GL version floor. Adopting Slang on
+the GL path therefore means raising the context to 4.5 and migrating the binding
+model, on a backend §2.3 has already committed to retiring. The payoff would die
+with the backend.
+
+Also note `-matrix-layout-column-major` emits GLSL `layout(row_major)`, and the
+row-major flag emits `column_major`. Slang's convention is transposed relative to
+GLSL's. Whichever target is used, this must be validated numerically against a
+known transform rather than reasoned about.
+
+### 4.2 Reflection is the real prize
+
+`slangc -reflection-json` reports source-level names, assigned binding indices,
+and the complete std140 offset table:
+
+```
+ScreenEffect  kind=constantBuffer  binding=descriptorTableSlot index=1
+sMainTex      kind=resource        binding=descriptorTableSlot index=2
+uProjection      offset=0     size=64
+uSSAOSamples     offset=192   size=1024
+uSharpenAmount   offset=1268  size=4
+```
+
+Those offsets match `ScreenEffectUniforms` in `include/reone/graphics/uniforms.h`
+byte for byte.
+
+That matters because the contract between the nine `layout(std140)` blocks in
+`glsl/u_*.glsl` and the fourteen C++ structs in `uniforms.h` is currently
+maintained **by hand and checked by nothing**. Four of those structs are held in
+place by hand-written `alignas(16)` derived from std140's struct alignment rule.
+A mismatch renders garbage silently. Reflection makes that contract machine
+checkable, and in the Vulkan backend it also generates descriptor set layouts.
+
+### 4.3 Closing the std140 hazard before then
+
+The desync hazard is present today and does not need Slang to address. OpenGL
+already knows the true layout of every linked program: `glGetUniformIndices` plus
+`glGetActiveUniformsiv` with `GL_UNIFORM_OFFSET`, `GL_UNIFORM_ARRAY_STRIDE` and
+`GL_UNIFORM_MATRIX_STRIDE` yield the driver's offsets, which can be compared
+against `offsetof` in a debug-build validation pass after link.
+
+That is roughly an hour of work, needs no new dependency, and validates what the
+driver actually did rather than what a tool predicts. Preferred over pulling
+Slang forward purely to catch layout drift.
 
 ---
 
@@ -207,27 +321,45 @@ This step is independently valuable and can land before any Vulkan code exists.
 
 These are the real work — more so than the Vulkan plumbing.
 
-### 5.1 Skinning must move to compute
+### 5.1 Anything the vertex shader synthesises must become real geometry
 
-Bones are applied in the vertex shader today (`glsl/u_bones.glsl`, `drawSkinned`
-at `pass.h:78`). Ray tracing needs world-space vertices in memory to build and
-refit a BLAS. The same applies to dangly meshes (`u_dangly.glsl`, `drawDangly`)
-and sabers (`u_saber.glsl`).
+Ray tracing cannot see vertex shaders. Whatever the raster path computes on the
+fly has to physically exist in a BLAS, which makes three current features the
+same problem wearing different names:
 
-Plan: compute skinning writes to an output buffer, then BLAS refit per frame per
-skinned model.
+| Feature | Synthesised by | Driven by |
+| --- | --- | --- |
+| Skinning | `u_bones.glsl`, `drawSkinned` | `BoneUniforms` |
+| Dangly meshes | `u_dangly.glsl`, `drawDangly` | `DanglyUniforms` |
+| Lightsaber blades | `u_saber.glsl`, `drawSaber` | loose `uSaberDisplacement` |
 
-### 5.2 Motion vectors do not exist
+Plan: a compute pass consumes those inputs and writes deformed world-space
+vertices to a buffer, followed by a per-frame BLAS refit for each affected model.
+
+Note the coupling with §3.1: all three inputs arrive today through the per-draw
+uniform path, and two of them are among the loose uniforms that Vulkan cannot
+express. On the path-traced side they stop being shader inputs altogether - the
+compute pass consumes them and the closest-hit shader reads plain geometry - so
+they should not be carefully ported into a per-draw binding scheme that phase 6
+then discards.
+
+### 5.2 Motion vectors — done, conventions unsettled
 
 FSR and any temporal denoiser require per-pixel motion vectors, depth, and a
-jittered projection. There is no previous-frame view/projection in
-`GlobalUniforms` (`uniforms.h:67`) and no previous model matrix in
-`LocalUniforms` (`uniforms.h:107`). Confirmed: no prev-frame state anywhere in
-the scene node hierarchy.
+jittered projection. None of that existed; phase 1 added it. `GlobalUniforms`
+carries unjittered current and previous view-projection plus the jitter offset,
+`LocalUniforms` a previous model matrix, `BoneUniforms` a previous bone set, and
+`SceneNode` latches its previous absolute transform once per frame. The PBR
+G-buffer writes an RG16F motion target from all four opaque-pass shaders.
 
-Needs: per-node previous transforms, previous bone matrices for skinned meshes,
-and a jitter sequence. Self-contained, and can be validated in the existing GL
-PBR pipeline before Vulkan exists.
+Two things remain open, both recorded in §8: the sign and axis conventions were
+chosen arbitrarily because nothing consumes the buffer yet, and the values have
+been eyeballed but never numerically verified.
+
+Note the deliberate limits. Dangly and saber meshes deform per-vertex with no
+previous vertex positions tracked, so their vectors capture rigid motion only,
+and grass billboards ignore their camera-facing re-orientation. §5.1 removes both
+limitations as a side effect of moving deformation into compute.
 
 ### 5.3 Lighting model — treat all albedo maps as albedo
 
@@ -262,6 +394,28 @@ so expect a heuristic mapping layer.
 - Alpha-tested foliage (`glsl/i_hashedalpha.glsl`, grass) needs any-hit shaders.
 - Particles and emitters are best left rasterized and composited, not traced.
 - `IStatistic` needs GPU timestamp queries added.
+
+### 5.6 The scene has to be GPU-resident
+
+A path tracer has no draws, so there is nothing to bind per draw. A ray may hit
+any surface, which means the whole scene must be addressable before tracing
+starts:
+
+- one global vertex/index buffer with meshes suballocated into it;
+- one material buffer, indexed by instance;
+- **bindless textures** - a descriptor-indexed array sampled by index taken from
+  the hit record;
+- TLAS instances carrying that material index.
+
+This is the endpoint the per-draw uniform work in §3.1 should be aimed at rather
+than away from: the material representation wants to be designed once,
+GPU-resident and index-addressed, with the raster path indexing into the same
+buffer instead of binding a per-material descriptor set.
+
+`SceneGraph::refresh()` already flattens the node tree into typed arrays every
+frame, which is the natural hook for building TLAS instances. One caveat: those
+arrays are rebuilt and reordered per frame, so a BLAS instance cache needs a
+stable per-instance identity that does not exist yet.
 
 ---
 
@@ -311,13 +465,15 @@ main argument for this ordering.
    transform once per frame at the end of `SceneGraph::render`. The PBR G-buffer
    gained an RG16F motion target at attachment 4, written by all four opaque-pass
    shaders. Jitter is behind `--taajitter`, off by default until something
-   resolves it. Nothing consumes the motion target yet.
-2. **Slang migration** of the existing GLSL, still targeting GL. Leaves one
-   shader source tree for both backends.
+   resolves it. Nothing consumes the motion target yet, though the render target
+   viewer added to the ImGui editor can display it.
+2. **std140 layout validation** (§4.3). An hour, no new dependency, and it closes
+   a live silent-corruption hazard on code already committed.
 3. **`IRenderer` seam** — move presentation out of `game.cpp` and the toolkit;
    add the 2D batcher abstraction covering the 16 sites in §3.
 4. **Vulkan raster backend** to PBR parity. Unglamorous but mandatory: swapchain,
-   descriptor management, GUI, text, movie playback.
+   descriptor management, GUI, text, movie playback, and the uniform update model
+   in §3.1. **Slang enters here**, targeting SPIR-V (§4).
 5. **Acceleration structures and hybrid RT** — compute skinning, BLAS/TLAS, then
    RT shadows/AO/reflections replacing the current SSAO and SSR passes. First
    visible payoff.
@@ -335,3 +491,12 @@ main argument for this ordering.
   real ray-traced input to evaluate against.
 - Whether the accepted baked-in-lighting artifact (§5.3) is tolerable in practice,
   or whether a de-lighting pass becomes necessary after seeing phase 6 output.
+- Motion vector conventions are unsettled. `i_motion.glsl` currently emits
+  `0.5 * (cur - prev)` in UV units, y-up: the vector points where the surface
+  went. Temporal resolves generally want the reprojection vector, `prev - cur`,
+  y-down. Nothing reads the buffer yet, so neither is wrong - but both should be
+  fixed deliberately when FSR arrives rather than discovered then.
+- Whether the motion vectors are numerically correct is still unverified. They
+  have been eyeballed through the render target viewer and look plausible; a
+  known-rotation test against expected pixel displacement would settle it.
+- Stable per-instance identity across frames, for a BLAS cache (§5.6).
