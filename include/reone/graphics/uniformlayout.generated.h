@@ -70,6 +70,10 @@ static_assert(sizeof(BoneUniforms) == 3072, "BoneUniforms is not the size std140
 static_assert(offsetof(DanglyUniforms, positions) == 0, "DanglyUniforms::positions moved; shader layout disagrees");
 static_assert(sizeof(DanglyUniforms) == 12288, "DanglyUniforms is not the size std140 expects");
 
+// AABBUniforms
+static_assert(offsetof(AABBUniforms, corners) == 0, "AABBUniforms::corners moved; shader layout disagrees");
+static_assert(sizeof(AABBUniforms) == 128, "AABBUniforms is not the size std140 expects");
+
 // ParticleUniforms
 static_assert(offsetof(ParticleUniforms, gridSize) == 0, "ParticleUniforms::gridSize moved; shader layout disagrees");
 static_assert(offsetof(ParticleUniforms, particles) == 16, "ParticleUniforms::particles moved; shader layout disagrees");

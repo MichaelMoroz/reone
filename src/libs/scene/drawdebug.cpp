@@ -200,7 +200,9 @@ static void renderTriangle(const Triangle &tri, const DrawContext &ctx, IRenderP
 
     std::vector<glm::vec4> corners = {glm::vec4(tri.v[0], 1.0f), glm::vec4(tri.v[1], 1.0f),
                                       glm::vec4(tri.v[2], 1.0f), glm::vec4(tri.v[0], 1.0f)};
-    program.setUniform("uCorners", corners);
+    ctx.services.uniforms.setAABB([&corners](auto &aabb) {
+        std::memcpy(aabb.corners, &corners[0], std::min<size_t>(8, corners.size()) * sizeof(glm::vec4));
+    });
     ctx.services.uniforms.setLocals([&](LocalUniforms &locals) {
         locals.reset();
         locals.color = tri.color;
@@ -257,7 +259,9 @@ static void renderBox(const Box &box, const DrawContext &ctx, IRenderPass &pass)
         glm::vec4(box.max.x, box.max.y, box.min.z, 1.0f),
         glm::vec4(box.max.x, box.max.y, box.max.z, 1.0f),
     };
-    program.setUniform("uCorners", corners);
+    ctx.services.uniforms.setAABB([&corners](auto &aabb) {
+        std::memcpy(aabb.corners, &corners[0], std::min<size_t>(8, corners.size()) * sizeof(glm::vec4));
+    });
     ctx.services.uniforms.setLocals([&](LocalUniforms &locals) {
         locals.reset();
         locals.color = box.color;

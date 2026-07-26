@@ -292,6 +292,7 @@ std::shared_ptr<ShaderProgram> Shaders::initShaderProgram(std::vector<std::share
     program->bindUniformBlock("Particles", UniformBlockBindingPoints::particles);
     program->bindUniformBlock("Grass", UniformBlockBindingPoints::grass);
     program->bindUniformBlock("Walkmesh", UniformBlockBindingPoints::walkmesh);
+    program->bindUniformBlock("AABB", UniformBlockBindingPoints::aabb);
     program->bindUniformBlock("Text", UniformBlockBindingPoints::text);
     program->bindUniformBlock("ScreenEffect", UniformBlockBindingPoints::screenEffect);
 

@@ -29,7 +29,7 @@ struct UniformBlockBindingPoints {
     static constexpr int locals = 1;
     static constexpr int bones = 2;
     static constexpr int dangly = 3;
-    static constexpr int saber = 4;
+    static constexpr int aabb = 4;
     static constexpr int particles = 5;
     static constexpr int grass = 6;
     static constexpr int walkmesh = 7;
@@ -208,6 +208,10 @@ struct TextUniforms {
     TextUniformsCharacter chars[kMaxTextChars];
 };
 
+struct AABBUniforms {
+    glm::vec4 corners[8] {glm::vec4(0.0f)};
+};
+
 struct WalkmeshUniforms {
     glm::vec4 materials[kMaxWalkmeshMaterials] {glm::vec4(1.0f)};
 };
@@ -244,6 +248,7 @@ public:
     virtual void setParticles(const std::function<void(ParticleUniforms &)> &block) = 0;
     virtual void setGrass(const std::function<void(GrassUniforms &)> &block) = 0;
     virtual void setWalkmesh(const std::function<void(WalkmeshUniforms &)> &block) = 0;
+    virtual void setAABB(const std::function<void(AABBUniforms &)> &block) = 0;
     virtual void setText(const std::function<void(TextUniforms &)> &block) = 0;
     virtual void setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block) = 0;
 };
@@ -266,6 +271,7 @@ public:
     void setParticles(const std::function<void(ParticleUniforms &)> &block) override;
     void setGrass(const std::function<void(GrassUniforms &)> &block) override;
     void setWalkmesh(const std::function<void(WalkmeshUniforms &)> &block) override;
+    void setAABB(const std::function<void(AABBUniforms &)> &block) override;
     void setText(const std::function<void(TextUniforms &)> &block) override;
     void setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block) override;
 
@@ -283,6 +289,7 @@ private:
     ParticleUniforms _particles;
     GrassUniforms _grass;
     WalkmeshUniforms _walkmesh;
+    AABBUniforms _aabb;
     TextUniforms _text;
     ScreenEffectUniforms _screenEffect;
 
@@ -297,6 +304,7 @@ private:
     std::shared_ptr<UniformBuffer> _ubParticles;
     std::shared_ptr<UniformBuffer> _ubGrass;
     std::shared_ptr<UniformBuffer> _ubWalkmesh;
+    std::shared_ptr<UniformBuffer> _ubAABB;
     std::shared_ptr<UniformBuffer> _ubText;
     std::shared_ptr<UniformBuffer> _ubScreenEffect;
 

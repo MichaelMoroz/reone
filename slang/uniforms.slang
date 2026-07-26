@@ -121,6 +121,10 @@ struct TextUniforms {
     TextUniformsCharacter chars[kMaxTextChars];
 };
 
+struct AABBUniforms {
+    float4 corners[8];
+};
+
 struct WalkmeshUniforms {
     float4 materials[kMaxWalkmeshMaterials];
 };
@@ -154,6 +158,7 @@ struct ScreenEffectUniforms {
 [[vk::binding(1)]] ConstantBuffer<LocalUniforms> localUniforms;
 [[vk::binding(2)]] ConstantBuffer<BoneUniforms> boneUniforms;
 [[vk::binding(3)]] ConstantBuffer<DanglyUniforms> danglyUniforms;
+[[vk::binding(4)]] ConstantBuffer<AABBUniforms> aabbUniforms;
 [[vk::binding(5)]] ConstantBuffer<ParticleUniforms> particleUniforms;
 [[vk::binding(6)]] ConstantBuffer<GrassUniforms> grassUniforms;
 [[vk::binding(7)]] ConstantBuffer<WalkmeshUniforms> walkmeshUniforms;

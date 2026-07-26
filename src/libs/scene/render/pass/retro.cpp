@@ -293,7 +293,9 @@ void RetroRenderPass::drawGrass(float radius,
 void RetroRenderPass::drawAABB(const std::vector<glm::vec4> &corners) {
     auto &program = _shaderRegistry.get(ShaderProgramId::retroAABB);
     _context.useProgram(program);
-    program.setUniform("uCorners", corners);
+    _uniforms.setAABB([&corners](auto &aabb) {
+        std::memcpy(aabb.corners, &corners[0], std::min<size_t>(8, corners.size()) * sizeof(glm::vec4));
+    });
     _context.withDepthMask(false, [this]() {
         _context.withPolygonMode(PolygonMode::Line, [this]() {
             _meshRegistry.get(MeshName::aabb).draw(_statistic);

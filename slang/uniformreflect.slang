@@ -21,5 +21,6 @@ void main() {
         grassUniforms.clusters[0].lightmapUV.x +
         textUniforms.chars[0].uv.x +
         walkmeshUniforms.materials[0].x +
+        aabbUniforms.corners[0].x +
         screenEffectUniforms.projection[0][0];
 }

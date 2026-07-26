@@ -40,6 +40,7 @@ void Uniforms::init() {
     static ParticleUniforms defaultParticles;
     static GrassUniforms defaultGrass;
     static WalkmeshUniforms defaultWalkmesh;
+    static AABBUniforms defaultAABB;
     static TextUniforms defaultText;
     static ScreenEffectUniforms defaultScreenEffect;
 
@@ -50,6 +51,7 @@ void Uniforms::init() {
     _ubParticles = initBuffer(&defaultParticles, sizeof(ParticleUniforms));
     _ubGrass = initBuffer(&defaultGrass, sizeof(GrassUniforms));
     _ubWalkmesh = initBuffer(&defaultWalkmesh, sizeof(WalkmeshUniforms));
+    _ubAABB = initBuffer(&defaultAABB, sizeof(AABBUniforms));
     _ubText = initBuffer(&defaultText, sizeof(TextUniforms));
     _ubScreenEffect = initBuffer(&defaultScreenEffect, sizeof(ScreenEffectUniforms));
 
@@ -60,6 +62,7 @@ void Uniforms::init() {
     _context.bindUniformBuffer(*_ubParticles, UniformBlockBindingPoints::particles);
     _context.bindUniformBuffer(*_ubGrass, UniformBlockBindingPoints::grass);
     _context.bindUniformBuffer(*_ubWalkmesh, UniformBlockBindingPoints::walkmesh);
+    _context.bindUniformBuffer(*_ubAABB, UniformBlockBindingPoints::aabb);
     _context.bindUniformBuffer(*_ubText, UniformBlockBindingPoints::text);
     _context.bindUniformBuffer(*_ubScreenEffect, UniformBlockBindingPoints::screenEffect);
 
@@ -78,6 +81,7 @@ void Uniforms::deinit() {
     _ubParticles.reset();
     _ubGrass.reset();
     _ubWalkmesh.reset();
+    _ubAABB.reset();
     _ubText.reset();
     _ubScreenEffect.reset();
 
@@ -124,6 +128,12 @@ void Uniforms::setWalkmesh(const std::function<void(WalkmeshUniforms &)> &block)
     block(_walkmesh);
     _context.bindUniformBuffer(*_ubWalkmesh, UniformBlockBindingPoints::walkmesh);
     _ubWalkmesh->setData(&_walkmesh, sizeof(WalkmeshUniforms));
+}
+
+void Uniforms::setAABB(const std::function<void(AABBUniforms &)> &block) {
+    block(_aabb);
+    _context.bindUniformBuffer(*_ubAABB, UniformBlockBindingPoints::aabb);
+    _ubAABB->setData(&_aabb, sizeof(AABBUniforms));
 }
 
 void Uniforms::setText(const std::function<void(TextUniforms &)> &block) {
