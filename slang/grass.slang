@@ -11,8 +11,8 @@ import lib.hashedalpha;
 import lib.motion;
 import lib.surface;
 
-[[vk::binding(0)]] Sampler2D sMainTex;
-[[vk::binding(1)]] Sampler2D sLightmap;
+[[vk::binding(0, 1)]] Sampler2D sMainTex;
+[[vk::binding(1, 1)]] Sampler2D sLightmap;
 
 struct Varyings {
     float4 position : SV_Position;

@@ -19,6 +19,8 @@
 
 #include <volk.h>
 
+#include "image.h"
+
 namespace reone {
 
 namespace graphics {
@@ -44,11 +46,22 @@ public:
     /** Must match the number of blocks in uniforms.h and uniforms.slang. */
     static constexpr int kNumUniformBlocks = 10;
 
+    /** Must cover every unit in TextureUnits. */
+    static constexpr int kNumTextures = 21;
+
+    /**
+     * Uniform blocks and textures both start numbering at zero, so they cannot
+     * share a set. Uniforms are set 0 and textures set 1, which the shaders
+     * spell as [[vk::binding(n, 1)]].
+     */
+    static constexpr int kUniformSet = 0;
+    static constexpr int kTextureSet = 1;
+
     VulkanDescriptors(VulkanDevice &device) :
         _device(device) {
     }
 
-    ~VulkanDescriptors() { deinit(); }
+    ~VulkanDescriptors();
 
     void init(int framesInFlight, VulkanUniformRing &ring);
     void deinit();
@@ -56,12 +69,27 @@ public:
     VkDescriptorSetLayout uniformLayout() const { return _uniformLayout; }
     VkDescriptorSet uniformSet(int frame) const { return _uniformSets[frame]; }
 
+    VkDescriptorSetLayout textureLayout() const { return _textureLayout; }
+    VkDescriptorSet textureSet() const { return _textureSet; }
+
+    /**
+     * Point a texture unit at @p image. Every unit starts on a 1x1 white
+     * default, because a set may not be bound with any descriptor left
+     * unwritten and a shader is free to sample a unit no material filled in.
+     */
+    void setTexture(int unit, const VulkanImage &image);
+
 private:
     VulkanDevice &_device;
 
     VkDescriptorPool _pool {VK_NULL_HANDLE};
     VkDescriptorSetLayout _uniformLayout {VK_NULL_HANDLE};
     std::vector<VkDescriptorSet> _uniformSets;
+
+    VkDescriptorSetLayout _textureLayout {VK_NULL_HANDLE};
+    VkDescriptorSet _textureSet {VK_NULL_HANDLE};
+    VkSampler _sampler {VK_NULL_HANDLE};
+    std::unique_ptr<VulkanImage> _defaultTexture;
 };
 
 } // namespace graphics

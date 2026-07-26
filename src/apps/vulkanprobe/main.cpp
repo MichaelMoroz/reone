@@ -34,7 +34,9 @@
 #include <boost/program_options.hpp>
 
 #include "reone/graphics/format/tgawriter.h"
+#include "reone/graphics/types.h"
 #include "reone/graphics/uniforms.h"
+#include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/vulkan/pipeline.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/system/stream/fileoutput.h"
@@ -116,6 +118,7 @@ int main(int argc, char **argv) {
 
         // The draw is optional so the clear path can still be exercised alone.
         std::unique_ptr<VulkanPipeline> pipeline;
+        std::unique_ptr<VulkanImage> checker;
         if (!std::filesystem::exists(spirvPath)) {
             info("No SPIR-V at " + spirvPath + " - clearing only");
         } else {
@@ -124,10 +127,24 @@ int main(int argc, char **argv) {
             config.vertexEntry = "triangleVertex";
             config.fragmentEntry = "triangleFragment";
             config.colorFormat = renderer.swapchain().imageFormat();
-            config.setLayouts = {renderer.descriptors().uniformLayout()};
+            config.setLayouts = {renderer.descriptors().uniformLayout(),
+                                 renderer.descriptors().textureLayout()};
             pipeline = std::make_unique<VulkanPipeline>(renderer.device());
             pipeline->init(config);
             info("Pipeline built from " + spirvPath);
+
+            // A checkerboard, so a wrong sampler or a wrong layout shows up as
+            // an obviously wrong image rather than a plausible flat colour.
+            constexpr int kSide = 8;
+            std::vector<uint32_t> texels(kSide * kSide);
+            for (int y = 0; y < kSide; ++y) {
+                for (int x = 0; x < kSide; ++x) {
+                    texels[y * kSide + x] = ((x + y) % 2) ? 0xffffffff : 0xff404040;
+                }
+            }
+            checker = std::make_unique<VulkanImage>(renderer.device());
+            checker->initSampled2D({kSide, kSide}, VK_FORMAT_R8G8B8A8_UNORM, texels.data());
+            renderer.descriptors().setTexture(TextureUnits::mainTex, *checker);
         }
 
         int frame = 0;
@@ -190,10 +207,16 @@ int main(int argc, char **argv) {
                 vkCmdSetViewport(cmd, 0, 1, &vp);
                 vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-                auto set = renderer.uniformSet();
+                auto uniformSet = renderer.uniformSet();
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        pipeline->layout(), 0, 1, &set,
+                                        pipeline->layout(), VulkanDescriptors::kUniformSet,
+                                        1, &uniformSet,
                                         static_cast<uint32_t>(offsets.size()), offsets.data());
+
+                auto textureSet = renderer.descriptors().textureSet();
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        pipeline->layout(), VulkanDescriptors::kTextureSet,
+                                        1, &textureSet, 0, nullptr);
                 vkCmdDraw(cmd, 3, 1, 0, 0);
                 vkCmdEndRendering(cmd);
             }

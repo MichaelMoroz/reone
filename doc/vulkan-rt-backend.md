@@ -836,10 +836,44 @@ layers name it immediately and enabling
 `VkPhysicalDeviceVulkan11Features::shaderDrawParameters` is the whole fix. The
 shaders were correct all along; the backend was not.
 
-### 10.5 Next
+### 10.5 Images, samplers, and two descriptor sets
 
-- Images and samplers: texture upload, layout transitions, a combined
-  image-sampler descriptor set alongside the uniform one.
+`VulkanImage` allocates a sampled 2D image and fills it through a staging
+buffer. Upload is three steps rather than one, because an image has a layout:
+transition to a transfer target, copy, transition to shader-read.
+
+**Uniform blocks and textures cannot share a descriptor set.** Both number from
+zero - `globalUniforms` is binding 0 and so is `sMainTex` - so they collide as
+written. Uniforms are now set 0 and textures set 1, which the shaders spell as
+`[[vk::binding(n, 1)]]`. `common.slang`, `grass.slang` and `pbr_model.slang`
+were updated to match; verified by disassembling the SPIR-V rather than by
+reading the source.
+
+The texture set has one binding per `TextureUnits` entry, all
+`COMBINED_IMAGE_SAMPLER`, all defaulted to a 1x1 white image at init. A set may
+not be bound with any descriptor left unwritten, and a shader is free to sample
+a unit no material filled in, so a default is not optional.
+
+Verified by capture: an 8x8 checkerboard sampled across the triangle, tiled
+twice by the repeat address mode and filtered smoothly, over the clear colour,
+validation silent.
+
+### 10.6 The stale shader trap, again
+
+Building a specific target - `--target vulkanprobe` - does not run
+`transpile_spirv`. The probe therefore ran against a module compiled before the
+texture sample was added, sampled the default white texture, and produced a
+result that looked like a descriptor bug. Disassembling the module showed
+`sMainTex` was not in it at all.
+
+This is the same trap already written up in the RenderDoc skill, which cost
+three debugging probes the first time. The lesson it recorded - "always build
+the default target" - is easy to lose the moment building one target is faster.
+When a shader change appears not to take effect, disassemble the module and look
+for the thing you just added before suspecting anything else.
+
+### 10.7 Next
+
 - Vertex and index buffers from `Mesh`, and a pipeline with real attributes.
 - The G-buffer and the deferred pipeline.
 - Then the engine can begin to select a backend, and `vulkanprobe` can go.

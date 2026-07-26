@@ -17,8 +17,10 @@
 
 #include "reone/graphics/vulkan/descriptors.h"
 
+#include "reone/graphics/types.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/device.h"
+#include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/vulkan/uniformring.h"
 
 namespace reone {
@@ -27,6 +29,9 @@ namespace graphics {
 
 // The layout is generated from the binding points rather than written out, so
 // there is one place to change and no chance of the two drifting apart.
+static_assert(TextureUnits::gBufMotion == VulkanDescriptors::kNumTextures - 1,
+              "kNumTextures must cover every unit in TextureUnits");
+
 static_assert(UniformBlockBindingPoints::screenEffect ==
                   VulkanDescriptors::kNumUniformBlocks - 1,
               "kNumUniformBlocks must cover every binding point in uniforms.h");
@@ -52,6 +57,10 @@ static constexpr VkDeviceSize kBlockSizes[VulkanDescriptors::kNumUniformBlocks] 
     sizeof(ScreenEffectUniforms) // 9 screenEffect
 };
 
+VulkanDescriptors::~VulkanDescriptors() {
+    deinit();
+}
+
 void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
     std::array<VkDescriptorSetLayoutBinding, kNumUniformBlocks> bindings {};
     for (int i = 0; i < kNumUniformBlocks; ++i) {
@@ -71,14 +80,32 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
         throw std::runtime_error("Vulkan: descriptor set layout creation failed");
     }
 
-    VkDescriptorPoolSize poolSize {};
-    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    poolSize.descriptorCount = kNumUniformBlocks * framesInFlight;
+    std::array<VkDescriptorSetLayoutBinding, kNumTextures> textureBindings {};
+    for (int i = 0; i < kNumTextures; ++i) {
+        textureBindings[i].binding = i;
+        textureBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        textureBindings[i].descriptorCount = 1;
+        // Fragment only for now. Vertex-stage sampling exists in the shadow and
+        // displacement paths and can be widened when those arrive.
+        textureBindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo textureLayoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    textureLayoutInfo.bindingCount = static_cast<uint32_t>(textureBindings.size());
+    textureLayoutInfo.pBindings = textureBindings.data();
+    if (vkCreateDescriptorSetLayout(_device.handle(), &textureLayoutInfo, nullptr, &_textureLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: texture descriptor set layout creation failed");
+    }
+
+    std::array<VkDescriptorPoolSize, 2> poolSizes {};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    poolSizes[0].descriptorCount = kNumUniformBlocks * framesInFlight;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[1].descriptorCount = kNumTextures;
 
     VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    poolInfo.maxSets = static_cast<uint32_t>(framesInFlight);
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = static_cast<uint32_t>(framesInFlight) + 1;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
     if (vkCreateDescriptorPool(_device.handle(), &poolInfo, nullptr, &_pool) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: descriptor pool creation failed");
     }
@@ -114,14 +141,66 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
                                static_cast<uint32_t>(writes.size()), writes.data(),
                                0, nullptr);
     }
+
+    VkSamplerCreateInfo samplerInfo {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+    if (vkCreateSampler(_device.handle(), &samplerInfo, nullptr, &_sampler) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: sampler creation failed");
+    }
+
+    VkDescriptorSetAllocateInfo textureAllocInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    textureAllocInfo.descriptorPool = _pool;
+    textureAllocInfo.descriptorSetCount = 1;
+    textureAllocInfo.pSetLayouts = &_textureLayout;
+    if (vkAllocateDescriptorSets(_device.handle(), &textureAllocInfo, &_textureSet) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: texture descriptor set allocation failed");
+    }
+
+    const uint32_t white = 0xffffffff;
+    _defaultTexture = std::make_unique<VulkanImage>(_device);
+    _defaultTexture->initSampled2D({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, &white);
+    for (int i = 0; i < kNumTextures; ++i) {
+        setTexture(i, *_defaultTexture);
+    }
+}
+
+void VulkanDescriptors::setTexture(int unit, const VulkanImage &image) {
+    VkDescriptorImageInfo imageInfo {};
+    imageInfo.sampler = _sampler;
+    imageInfo.imageView = image.view();
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = _textureSet;
+    write.dstBinding = static_cast<uint32_t>(unit);
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(_device.handle(), 1, &write, 0, nullptr);
 }
 
 void VulkanDescriptors::deinit() {
+    _defaultTexture.reset();
+    if (_sampler != VK_NULL_HANDLE) {
+        vkDestroySampler(_device.handle(), _sampler, nullptr);
+        _sampler = VK_NULL_HANDLE;
+    }
+    if (_textureLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(_device.handle(), _textureLayout, nullptr);
+        _textureLayout = VK_NULL_HANDLE;
+    }
     if (_pool != VK_NULL_HANDLE) {
         // Frees the sets with it.
         vkDestroyDescriptorPool(_device.handle(), _pool, nullptr);
         _pool = VK_NULL_HANDLE;
         _uniformSets.clear();
+        _textureSet = VK_NULL_HANDLE;
     }
     if (_uniformLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(_device.handle(), _uniformLayout, nullptr);

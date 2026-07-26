@@ -112,10 +112,16 @@ installed here: `GetConstantBlock` (not `GetConstantBuffer`/`GetConstantBuffers`
 
 ## Traps that cost real time here
 
-- **Stale shader modules.** `cmake --build . --target engine` does not run the
-  SPIR-V transpile. Three debugging probes ran against a module older than the
-  edit being tested and produced meaningless answers. Always build the default
-  target, and check `slang/x.slang` is older than `build/bin/spirv/x.spv`.
+- **Stale shader modules.** Building *any* named target - `--target engine`,
+  `--target vulkanprobe` - skips the SPIR-V transpile. This has now cost two
+  separate investigations: three debugging probes against a module older than
+  the edit, and later a texture that sampled as flat white because the sample
+  was not in the compiled module at all. Build the default target, or the
+  `transpile_spirv` target explicitly.
+  **When a shader edit seems not to take effect, disassemble the module first**
+  (`spirv-dis x.spv | grep Decorate`) and confirm the thing you just wrote is
+  actually in there. It is a five-second check that beats an hour of suspecting
+  descriptors.
 - **Probing the G-buffer.** Writing a marker colour to `SV_Target0` in a
   deferred pass does not put that colour on screen - it goes through lighting.
   Write to the self-illumination target instead, which is added directly.

@@ -14,10 +14,10 @@ import lib.hashedalpha;
 import lib.motion;
 import lib.surface;
 
-[[vk::binding(0)]] Sampler2D sMainTex;
-[[vk::binding(1)]] Sampler2D sLightmap;
-[[vk::binding(3)]] Sampler2D sNormalMap;
-[[vk::binding(14)]] Sampler2DArray sBumpMapArray;
+[[vk::binding(0, 1)]] Sampler2D sMainTex;
+[[vk::binding(1, 1)]] Sampler2D sLightmap;
+[[vk::binding(3, 1)]] Sampler2D sNormalMap;
+[[vk::binding(14, 1)]] Sampler2DArray sBumpMapArray;
 
 struct VertexInput {
     [[vk::location(0)]] float3 position : POSITION;

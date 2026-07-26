@@ -6,7 +6,7 @@
 
 import uniforms;
 
-[[vk::binding(0)]] Sampler2D sMainTex;
+[[vk::binding(0, 1)]] Sampler2D sMainTex;
 
 /** glm::mat3x4 held as three float4 columns; the original is vec2(uUV * vec3(uv, 1)). */
 float2 applyUVTransform(float2 uv) {

@@ -20,6 +20,7 @@ set(VULKAN_HEADERS
     ${VULKAN_INCLUDE_DIR}/buffer.h
     ${VULKAN_INCLUDE_DIR}/descriptors.h
     ${VULKAN_INCLUDE_DIR}/device.h
+    ${VULKAN_INCLUDE_DIR}/image.h
     ${VULKAN_INCLUDE_DIR}/pipeline.h
     ${VULKAN_INCLUDE_DIR}/renderer.h
     ${VULKAN_INCLUDE_DIR}/swapchain.h
@@ -29,6 +30,7 @@ set(VULKAN_SOURCES
     ${VULKAN_SOURCE_DIR}/buffer.cpp
     ${VULKAN_SOURCE_DIR}/descriptors.cpp
     ${VULKAN_SOURCE_DIR}/device.cpp
+    ${VULKAN_SOURCE_DIR}/image.cpp
     ${VULKAN_SOURCE_DIR}/pipeline.cpp
     ${VULKAN_SOURCE_DIR}/renderer.cpp
     ${VULKAN_SOURCE_DIR}/swapchain.cpp
