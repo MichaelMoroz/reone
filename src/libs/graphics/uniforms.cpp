@@ -19,6 +19,11 @@
 
 #include "reone/graphics/context.h"
 
+// Compiles the generated std140 assertions. Included here rather than from the
+// header so that the check runs exactly once, in the translation unit that owns
+// the uploads.
+#include "reone/graphics/uniformlayout.generated.h"
+
 namespace reone {
 
 namespace graphics {

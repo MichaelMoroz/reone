@@ -115,7 +115,14 @@ struct GlobalUniforms {
     }
 };
 
-struct LocalUniforms {
+/**
+ * alignas(16) so that sizeof matches the std140 block size. glm's types are not
+ * 16-byte aligned by default, and without this the struct ends at 324 bytes
+ * against a 336-byte block - leaving the uniform buffer smaller than the block
+ * the shader declares. The other blocks get the same alignment implicitly, from
+ * an alignas(16) member.
+ */
+struct alignas(16) LocalUniforms {
     glm::mat4 model;
     glm::mat4 modelInv;
     glm::mat4 prevModel; /**< model transform as of the previous rendered frame */
@@ -197,7 +204,8 @@ struct WalkmeshUniforms {
     glm::vec4 materials[kMaxWalkmeshMaterials] {glm::vec4(1.0f)};
 };
 
-struct ScreenEffectUniforms {
+/** alignas(16) for the same reason as LocalUniforms. */
+struct alignas(16) ScreenEffectUniforms {
     glm::mat4 projection {1.0f};
     glm::mat4 projectionInv {1.0f};
     glm::mat4 screenProjection {1.0f};
