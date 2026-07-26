@@ -35,6 +35,21 @@ namespace scene {
 
 static constexpr char kResolveModule[] = "pbr_resolve";
 
+/**
+ * Map an OpenGL clip volume onto Vulkan's.
+ *
+ * The scene graph builds its matrices for OpenGL, where clip z runs -1..1.
+ * Vulkan clips at 0..1, so half the depth range would be discarded. This
+ * rescales z without touching x or y - the y difference is handled by the
+ * viewport instead, which leaves triangle winding alone.
+ */
+static glm::mat4 glToVulkanClip(const glm::mat4 &m) {
+    glm::mat4 correction {1.0f};
+    correction[2][2] = 0.5f;
+    correction[3][2] = 0.5f;
+    return correction * m;
+}
+
 void VulkanRenderPipeline::init() {
     if (_inited) {
         return;
@@ -125,8 +140,14 @@ void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOff
     rendering.pColorAttachments = attachments.data();
     rendering.pDepthAttachment = &depth;
 
-    VkViewport viewport {0.0f, 0.0f, static_cast<float>(_targetSize.x),
-                         static_cast<float>(_targetSize.y), 0.0f, 1.0f};
+    // Negative height flips clip y, which is what makes an OpenGL projection
+    // rasterise the same way here. Doing it in the viewport rather than in the
+    // matrix leaves triangle winding untouched, so front faces stay front -
+    // getting this wrong inverts face culling while still looking upright,
+    // because the composite used to flip it back.
+    VkViewport viewport {0.0f, static_cast<float>(_targetSize.y),
+                         static_cast<float>(_targetSize.x),
+                         -static_cast<float>(_targetSize.y), 0.0f, 1.0f};
     VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
                                static_cast<uint32_t>(_targetSize.y)}};
 
@@ -232,7 +253,14 @@ Texture &VulkanRenderPipeline::render() {
     // The scene graph filled GlobalUniforms through the GL Uniforms object,
     // which is inert under Vulkan, so the values are read back from its CPU
     // mirror and pushed into this frame's arena instead.
-    auto globalsOffset = _renderer.uniformRing().push(_uniforms.globals());
+    // The matrices arrive in OpenGL convention; only the depth range needs
+    // rewriting here. See glToVulkanClip and the flipped viewport below.
+    auto globals = _uniforms.globals();
+    globals.projection = glToVulkanClip(globals.projection);
+    globals.projectionInv = glm::inverse(globals.projection);
+    globals.viewProjection = glToVulkanClip(globals.viewProjection);
+    globals.prevViewProjection = glToVulkanClip(globals.prevViewProjection);
+    auto globalsOffset = _renderer.uniformRing().push(globals);
 
     geometryPass(cmd, globalsOffset);
     resolvePass(cmd, globalsOffset);

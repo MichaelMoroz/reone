@@ -236,7 +236,15 @@ void VulkanRenderer::drawSceneOutput(Texture &output) {
     // The scene pipeline registered its output image against this Texture, so
     // the 2D path composites it like any other full-target image. Called from
     // inside the 2D rendering scope, which is where the GUI is drawn.
-    _renderer2d.drawFullTargetImage(output);
+    //
+    // The uv here cancels the flip the 2D shader applies. That flip exists for
+    // uploaded textures, whose rows OpenGL reads bottom-up and Vulkan top-down;
+    // a render target this backend produced is already the right way up.
+    static const glm::mat3x4 kNoFlip {
+        glm::vec4 {1.0f, 0.0f, 0.0f, 0.0f},
+        glm::vec4 {0.0f, -1.0f, 0.0f, 0.0f},
+        glm::vec4 {0.0f, 1.0f, 0.0f, 0.0f}};
+    _renderer2d.drawFullTargetImage(output, kNoFlip);
 }
 
 std::shared_ptr<Texture> VulkanRenderer::captureFrame() {
