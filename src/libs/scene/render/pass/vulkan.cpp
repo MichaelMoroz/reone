@@ -38,6 +38,7 @@ namespace scene {
 
 static constexpr char kModelModule[] = "pbr_model";
 static constexpr char kOpaqueFragment[] = "opaqueFragment";
+static constexpr char kTransparentFragment[] = "transparentFragment";
 static constexpr char kGrassModule[] = "grass";
 static constexpr char kParticleModule[] = "particles";
 static constexpr char kWalkmeshModule[] = "walkmesh";
@@ -146,17 +147,6 @@ void VulkanRenderPass::drawGeometry(Mesh &mesh,
                                     std::optional<glm::vec4> saberDisplacement) {
     const auto &vkMesh = _resources.get(mesh);
 
-    if (_transparency) {
-        // Transparent models still have only a G-buffer shader, which writes
-        // five colour outputs and depth. The transparency pass offers one
-        // attachment and read-only depth, so binding it here is not a
-        // near-miss - it is invalid, and the validation layers say so on every
-        // draw. Skipped until a forward model shader exists; particles and
-        // grass in the same pass are unaffected.
-        warnOnce("transparent models");
-        return;
-    }
-
     // Walkmeshes are debug geometry with their own tiny shader; everything else
     // in this pass is a model.
     bool walkmesh = material.type == MaterialType::Walkmesh;
@@ -164,11 +154,18 @@ void VulkanRenderPass::drawGeometry(Mesh &mesh,
     VulkanPipelineCache::Key key;
     key.module = walkmesh ? kWalkmeshModule : kModelModule;
     key.vertexEntry = walkmesh ? "walkmeshVertex" : vertexEntry;
-    key.fragmentEntry = walkmesh ? kPBRFragment : kOpaqueFragment;
+    key.fragmentEntry = walkmesh ? kPBRFragment
+                                 : (_transparency ? kTransparentFragment : kOpaqueFragment);
     key.colorFormats = _colorFormats;
     key.depthFormat = _depthFormat;
     key.depthTest = true;
-    key.depthWrite = true;
+    // Transparent surfaces are shaded forward and blended onto the resolved
+    // image, and must not write depth: one would otherwise hide the surface
+    // behind it instead of showing through to it.
+    key.depthWrite = !_transparency;
+    if (_transparency) {
+        key.blend = material.blending.value_or(BlendMode::Normal);
+    }
     key.cull = material.faceCulling.value_or(FaceCullMode::Back);
     key.vertexBindings = VulkanMesh::bindingDescriptions(mesh.vertexLayout());
     key.vertexAttributes = VulkanMesh::attributeDescriptions(mesh.vertexLayout());

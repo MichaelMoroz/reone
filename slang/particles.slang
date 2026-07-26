@@ -8,13 +8,9 @@
 // what decides how overlapping puffs of smoke stack up.
 
 import uniforms;
+import lib.math;
 
 [[vk::binding(0, 1)]] Sampler2D sMainTex;
-
-/** Perceived brightness, the same weights as glsl/i_luma. */
-float rgbToLuma(float3 rgb) {
-    return dot(rgb, float3(0.299, 0.587, 0.114));
-}
 
 struct Varyings {
     float4 position : SV_Position;

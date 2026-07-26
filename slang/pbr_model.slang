@@ -9,6 +9,7 @@
 
 import uniforms;
 import lib.geometry;
+import lib.math;
 import lib.gbuf;
 import lib.hashedalpha;
 import lib.motion;
@@ -16,7 +17,9 @@ import lib.surface;
 
 [[vk::binding(0, 1)]] Sampler2D sMainTex;
 [[vk::binding(1, 1)]] Sampler2D sLightmap;
+[[vk::binding(2, 1)]] Sampler2D sEnvMap;
 [[vk::binding(3, 1)]] Sampler2D sNormalMap;
+[[vk::binding(18, 1)]] SamplerCube sEnvMapCube;
 [[vk::binding(14, 1)]] Sampler2DArray sBumpMapArray;
 
 struct VertexInput {
@@ -155,6 +158,80 @@ SurfaceParams sampleSurface(Varyings input, float2 uv) {
 
     surface.emissive = localUniforms.selfIllumColor.rgb;
     return surface;
+}
+
+/**
+ * Reflection from either shape of environment map, ported from i_envmap.glsl.
+ *
+ * A cube map is sampled by direction. A sphere map is the same reflection
+ * flattened to equirectangular uv - note the negated direction, which is what
+ * makes the two agree.
+ */
+float4 sampleEnvMap(float3 R) {
+    if (isFeatureEnabled(kFeatureEnvMapCube)) {
+        return sEnvMapCube.Sample(R);
+    }
+    float3 d = normalize(-R);
+    float2 uv = float2(0.5 + atan2(d.x, d.z) / (2.0 * kPi),
+                       0.5 - asin(d.y) / kPi);
+    return sEnvMap.Sample(uv);
+}
+
+/**
+ * Transparent models, ported from glsl/f_oit_model.glsl.
+ *
+ * Forward rather than deferred: a transparent surface has no single depth at
+ * which to resolve lighting, so it is shaded here and blended straight onto the
+ * resolved image. It also emits one colour rather than the weighted-colour and
+ * coverage pair the OpenGL pipeline's order-independent transparency wanted -
+ * the same trade the particle path makes, and reversing it is a separate job.
+ *
+ * There is no PBR lighting here in either backend. Transparent surfaces take
+ * their light from the lightmap alone, or none at all.
+ */
+[shader("fragment")]
+float4 transparentFragment(Varyings input) {
+    float2 uv = transformedUV(input.uv1);
+    SurfaceParams surface = sampleSurface(input, uv);
+
+    float3 diffuseColor = surface.albedo;
+    float diffuseAlpha = surface.alpha;
+    if (isFeatureEnabled(kFeaturePremulAlpha)) {
+        // Colour already multiplied by coverage, with no usable alpha channel.
+        diffuseAlpha = rgbToLuma(diffuseColor);
+        diffuseColor *= 1.0 / max(0.0001, diffuseAlpha);
+    }
+
+    // An environment-mapped surface takes its opacity from the material alone:
+    // the texture's alpha is what lets the reflection through, so folding it in
+    // here as well would make the surface vanish where it should be shiniest.
+    float objectAlpha = localUniforms.color.a;
+    if (!isFeatureEnabled(kFeatureEnvMap)) {
+        objectAlpha *= diffuseAlpha;
+    }
+    if (objectAlpha == 0.0) {
+        discard;
+    }
+
+    float3 lighting = float3(1.0);
+    if (isFeatureEnabled(kFeatureLightmap)) {
+        lighting = surface.lightmap;
+        if (isFeatureEnabled(kFeatureWater)) {
+            // Water is barely lightmapped; mostly it carries its own colour.
+            lighting = lerp(float3(1.0), lighting, 0.2);
+        }
+    }
+
+    float3 color = lighting * localUniforms.color.rgb * diffuseColor;
+    if (isFeatureEnabled(kFeatureEnvMap)) {
+        float3 I = normalize(input.worldPos.xyz - globalUniforms.cameraPosition.xyz);
+        float3 R = reflect(I, surface.normal);
+        color += sampleEnvMap(R).rgb * (1.0 - diffuseAlpha);
+    }
+    if (isFeatureEnabled(kFeatureWater)) {
+        color *= localUniforms.waterAlpha;
+    }
+    return float4(color, objectAlpha);
 }
 
 [shader("fragment")]
