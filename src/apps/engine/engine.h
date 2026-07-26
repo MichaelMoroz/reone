@@ -88,10 +88,14 @@ private:
 
     uint64_t _ticks {0};
 
+    float _captureElapsed {0.0f};
+    bool _captured {false};
+
     bool _showCursor {true};
     bool _relativeMouseMode {false};
 
     void processEvents(bool &quit);
+    void captureIfRequested(bool &quit);
 
     void showCursor(bool show);
     void setRelativeMouseMode(bool relative);

@@ -40,6 +40,12 @@ struct Options {
      * Execute console commands from a file at startup.
      */
     std::string commandsFile;
+    /**
+     * Write a screenshot to this path after captureDelay seconds and exit. Lets
+     * two builds be rendered and compared without a human in the loop.
+     */
+    std::string capturePath;
+    float captureDelay {5.0f};
 
     std::unique_ptr<game::OptionsView> toView() {
         return std::make_unique<game::OptionsView>(game, graphics, audio);

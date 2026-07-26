@@ -23,7 +23,9 @@
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl3.h"
 
+#include "reone/graphics/format/tgawriter.h"
 #include "reone/graphics/window.h"
+#include "reone/system/stream/fileoutput.h"
 #include "reone/resource/exception/notfound.h"
 #include "reone/resource/gameprobe.h"
 
@@ -322,7 +324,7 @@ int Engine::run() {
             _profiler->update(frameTime);
             _editor->update(frameTime);
         });
-        _profiler->measure(kMainThreadName, kProfilerRenderGraphicsTimeIndex, [this]() {
+        _profiler->measure(kMainThreadName, kProfilerRenderGraphicsTimeIndex, [this, &quit]() {
             _services->graphics.statistic.resetDrawCalls();
             if (_options.graphics.pbr) {
                 _services->graphics.pbrTextures.refresh();
@@ -333,6 +335,7 @@ int Engine::run() {
             _console->render();
             _editor->render();
             imguiRender();
+            captureIfRequested(quit);
             _window->swap();
         });
         _profiler->measure(kMainThreadName, kProfilerRenderAudioTimeIndex, [this]() {
@@ -341,6 +344,24 @@ int Engine::run() {
     }
 
     return 0;
+}
+
+void Engine::captureIfRequested(bool &quit) {
+    if (_options.capturePath.empty() || _captured) {
+        return;
+    }
+    _captureElapsed += 1.0f / 60.0f;
+    if (_captureElapsed < _options.captureDelay) {
+        return;
+    }
+    // Read before the swap, while the finished frame is still the back buffer.
+    auto screenshot = _services->graphics.context.captureScreen(
+        _options.graphics.width, _options.graphics.height);
+    auto stream = FileOutputStream(_options.capturePath);
+    TgaWriter(screenshot).save(stream);
+    info("Wrote screenshot: " + _options.capturePath);
+    _captured = true;
+    quit = true;
 }
 
 void Engine::processEvents(bool &quit) {

@@ -222,6 +222,13 @@ void Shaders::init() {
     _shaderRegistry.add(ShaderProgramId::pbrPrefilter, initShaderProgram({vertMVP, fragPBRPrefilter}));
     _shaderRegistry.add(ShaderProgramId::profiler, initShaderProgram({vertMVP, fragProfiler}));
 
+    // Honour the startup option. Without this the registry stays on the
+    // hand-written shaders regardless, and --slangshaders=1 silently does nothing.
+    _shaderRegistry.setUseSlangVariants(_graphicsOpt.slangShaders);
+    debug(str(boost::format("Shader variants: %d Slang programs, active=%d") %
+              _shaderRegistry.slangVariantCount() % static_cast<int>(_graphicsOpt.slangShaders)),
+          LogChannel::Graphics);
+
     _inited = true;
 }
 

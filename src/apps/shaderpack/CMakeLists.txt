@@ -73,5 +73,5 @@ add_custom_target(create_shaderpack ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_STAGE_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/glsl ${SHADER_STAGE_DIR}
     COMMAND shaderpack ${SHADER_STAGE_DIR} ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin
-    DEPENDS shaderpack
+    DEPENDS shaderpack transpile_spirv
     COMMENT "Packing shaders")

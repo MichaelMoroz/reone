@@ -42,6 +42,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
     descCommon.add_options()                                                                                                    //
         ("game", value<std::string>(), "path to game directory")                                                                //
         ("commands-file", value<std::string>()->default_value(""), "execute console commands from a file at startup")           //
+        ("capture", value<std::string>()->default_value(""), "write a screenshot to this path and exit")                        //
+        ("capturedelay", value<float>()->default_value(5.0f), "seconds to wait before capturing")                               //
         ("dev", value<bool>()->default_value(options->game.developer), "enable developer mode")                                 //
         ("width", value<int>()->default_value(options->graphics.width), "render width")                                         //
         ("height", value<int>()->default_value(options->graphics.height), "render height")                                      //
@@ -83,6 +85,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
 
     options->game.path = vars.count("game") > 0 ? std::filesystem::path(vars["game"].as<std::string>()) : std::filesystem::current_path();
     options->game.developer = vars["dev"].as<bool>();
+    options->capturePath = vars["capture"].as<std::string>();
+    options->captureDelay = vars["capturedelay"].as<float>();
     options->graphics.width = vars["width"].as<int>();
     options->graphics.height = vars["height"].as<int>();
     options->graphics.winScale = vars["winscale"].as<int>();
