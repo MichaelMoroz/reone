@@ -90,6 +90,12 @@ add_compile_definitions(GLM_ENABLE_EXPERIMENTAL)
 
 if(MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+
+    # The Visual Studio generator compiles a project's sources one at a time.
+    # Fanning them across cores dominates every other build-time knob here,
+    # because the work is concentrated in a few large libraries rather than
+    # spread over many projects MSBuild could run in parallel.
+    add_compile_options(/MP)
 endif()
 
 # END Dependencies
