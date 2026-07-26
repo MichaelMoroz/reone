@@ -17,6 +17,8 @@
 
 #include "reone/graphics/vulkan/pbrtextures.h"
 
+#include "reone/graphics/textureutil.h"
+
 #include "reone/graphics/texture.h"
 #include "reone/graphics/types.h"
 #include "reone/graphics/uniforms.h"
@@ -94,6 +96,22 @@ void VulkanPBRTextures::init() {
         toShaderRead(*_irradiance);
         toShaderRead(*_prefiltered);
     });
+
+    // The BRDF table is indexed by NdotV and roughness, both of which reach the
+    // edge of their domain - a grazing angle sits at NdotV zero and roughness
+    // clamps to one. Sampled with the global repeating sampler those wrap round
+    // to the opposite edge, which is exactly where a metallic surface reads.
+    auto &samplers = _resources.samplers();
+    auto clamped = getTextureProperties(TextureUsage::ColorBuffer);
+    _brdf->setSampler(samplers.get(clamped));
+    _irradiance->setSampler(samplers.get(clamped));
+
+    // The prefiltered map is the exception: roughness selects a mip, so it
+    // needs the chain that ColorBuffer's non-mipmapped filter would clamp away.
+    auto prefilteredProps = clamped;
+    prefilteredProps.minFilter = Texture::Filtering::LinearMipmapLinear;
+    _prefiltered->setSampler(samplers.get(prefilteredProps));
+
 
     _inited = true;
 }

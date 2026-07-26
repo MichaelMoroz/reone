@@ -60,6 +60,20 @@ public:
     static VkFormat depthFormat() { return VK_FORMAT_D32_SFLOAT; }
 
     glm::ivec2 extent() const { return _extent; }
+    /**
+     * Assign the samplers these targets are read through.
+     *
+     * Filtering is per-texture in OpenGL and per-sampler in Vulkan, so images
+     * the renderer creates itself have to be told, or they fall back to the
+     * global sampler - which repeats, and filters depth.
+     */
+    void setSamplers(VkSampler color, VkSampler depth) {
+        for (auto &image : _color) {
+            image->setSampler(color);
+        }
+        _depth->setSampler(depth);
+    }
+
     const VulkanImage &color(int attachment) const { return *_color[attachment]; }
     const VulkanImage &depth() const { return *_depth; }
 

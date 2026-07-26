@@ -114,8 +114,8 @@ void VulkanRenderPipeline::init() {
     // no mip filtering. Left on the default sampler they would repeat, so a tap
     // just past one screen edge would read the opposite edge - which FXAA does
     // at every border pixel, and sharpen and the blurs do too.
-    auto filterSampler = _renderer.resources().samplers().get(
-        getTextureProperties(TextureUsage::ColorBuffer));
+    auto &samplers = _renderer.resources().samplers();
+    auto filterSampler = samplers.get(getTextureProperties(TextureUsage::ColorBuffer));
     _output->setSampler(filterSampler);
     _ping->setSampler(filterSampler);
 
@@ -162,6 +162,16 @@ void VulkanRenderPipeline::init() {
         transitionShadowMap(cmd, *_pointShadows, _pointShadowLayout,
                             VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
     });
+
+    // Everything the resolve samples needs the filtering its OpenGL counterpart
+    // has, or it silently gets the global sampler - linear and repeating. For a
+    // shadow map that means depth is interpolated before being compared, and a
+    // lookup just outside a cascade reads the opposite edge instead of the
+    // white border that means "not occluded".
+    auto depthSampler = samplers.get(getTextureProperties(TextureUsage::DepthBuffer));
+    _gbuffer->setSamplers(filterSampler, depthSampler);
+    _dirShadows->setSampler(depthSampler);
+    _pointShadows->setSampler(depthSampler);
 
     // The output crosses the seam as a Texture. It has no pixels and is never
     // uploaded; the resource cache maps it straight back to the image.
