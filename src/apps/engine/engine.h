@@ -88,7 +88,7 @@ private:
 
     uint64_t _ticks {0};
 
-    float _captureElapsed {0.0f};
+    int _frameIndex {0};
     bool _captured {false};
     bool _renderdocTriggered {false};
 

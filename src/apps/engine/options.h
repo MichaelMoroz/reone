@@ -41,11 +41,16 @@ struct Options {
      */
     std::string commandsFile;
     /**
-     * Write a screenshot to this path after captureDelay seconds and exit. Lets
-     * two builds be rendered and compared without a human in the loop.
+     * Write a screenshot to this path on frame captureFrame and exit. Lets two
+     * builds be rendered and compared without a human in the loop.
+     *
+     * Counted in frames rather than seconds because animations advance per frame:
+     * two runs stopped at the same wall-clock time differ by whatever idle
+     * animation, foliage movement and glow have done in between, which shows up
+     * in the diff as though it were a rendering difference.
      */
     std::string capturePath;
-    float captureDelay {5.0f};
+    int captureFrame {3};
     /** Trigger a RenderDoc frame capture alongside the screenshot. */
     bool renderdoc {false};
 

@@ -275,7 +275,10 @@ void Engine::deinit() {
 
 int Engine::run() {
     auto &clock = _services->system.clock;
-    _ticks = clock.millis();
+    // micros, to match the read below: seeding from millis made the first
+    // frameTime the whole time since the clock started, which advanced every
+    // animation in the scene by seconds before a single frame was drawn.
+    _ticks = clock.micros();
 
     bool quit = false;
     while (!quit) {
@@ -291,6 +294,13 @@ int Engine::run() {
         uint64_t ticks = clock.micros();
         auto frameTime = (ticks - _ticks) / 10e5f;
         _ticks = ticks;
+        if (!_options.capturePath.empty()) {
+            // A capture run exists to be compared against another one, which
+            // only works if both see the same sequence of frames. Wall-clock
+            // timing does not give that: the same frame number lands on
+            // different animation state every run.
+            frameTime = 1.0f / 60.0f;
+        }
         _profiler->measure(kMainThreadName, kProfilerInputTimeIndex, [this, &quit]() {
             while (!_events.empty()) {
                 auto event = _events.front();
@@ -385,12 +395,12 @@ void Engine::captureIfRequested(bool &quit) {
     if (_options.capturePath.empty() || _captured) {
         return;
     }
-    _captureElapsed += 1.0f / 60.0f;
-    if (_captureElapsed < _options.captureDelay) {
+    ++_frameIndex;
+    if (_frameIndex < _options.captureFrame) {
         // Ask RenderDoc for the frame before the one we screenshot, so the
         // capture holds a complete frame rather than one cut short by the exit.
         if (_options.renderdoc && !_renderdocTriggered &&
-            _captureElapsed >= _options.captureDelay - 1.0f / 60.0f) {
+            _frameIndex + 1 >= _options.captureFrame) {
             if (auto api = renderdocApi()) {
                 api->TriggerCapture();
                 info("RenderDoc capture triggered");
