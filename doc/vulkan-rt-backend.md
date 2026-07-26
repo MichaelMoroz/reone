@@ -1,1122 +1,597 @@
-# Vulkan RT backend — architecture plan
+# Vulkan, ray tracing and path tracing — the plan
 
-Status: **phase 1 landed, the rest is proposal.** Written 2026-07-25, revised
-2026-07-26 after the Slang spike (§4.1).
+Goal: run reone entirely on Vulkan, reach parity with the OpenGL renderer, then
+go past it — hardware ray tracing, real-time path tracing, FSR upscaling, and a
+material model that can feed a physically based BSDF.
 
-Goal: a second rendering backend built on Vulkan with hardware ray tracing, Slang
-shaders, and FSR upscaling, with real-time path tracing as the final target.
+**Status, 2026-07-26.** The engine runs on Vulkan as far as the main menu:
+`engine --backend vulkan` renders it correctly, matching the OpenGL frame except
+for the 3D model behind the panel. The backend has a device, swapchain, memory,
+descriptors, a pipeline cache, resource upload, a complete 2D renderer, and a
+G-buffer with a deferred resolve. The shipping model and grass shaders have been
+shown to render through it. What does not exist is the scene pipeline — so
+nothing in the game world draws on Vulkan yet.
+
+This document is the whole road, not just the next step. Part I is what stands
+today, Part II is parity, Part III is what parity is *for*, and Part IV is
+reference material: conventions that must hold, and traps already paid for once.
 
 ---
 
-## 1. Current state of the graphics stack
+# Part I — Where things stand
 
-### 1.1 Two kinds of code live in `src/libs/graphics`
+## 1. What runs today
 
-**API-agnostic (roughly three quarters of the library, unaffected by this work):**
-format readers (`mdlmdxreader`, `tpcreader`, `tgareader`, `bwmreader`,
-`txireader`, `lipreader`), `model`, `modelnode`, `animation`, `keyframetrack`,
-`walkmesh`, `aabb`, `camera`, `pixelutil`, `dxtutil`, `textureutil`, `font`,
-`textutil`.
+`src/libs/graphics/vulkan/` (14 translation units):
 
-**OpenGL-concrete — 9 files, ~150 call sites:**
-
-| File | `gl*` call sites |
+| Piece | What it does |
 | --- | --- |
-| `src/libs/graphics/context.cpp` | 50 |
-| `src/libs/graphics/mesh.cpp` | 36 |
-| `src/libs/graphics/texture.cpp` | 24 |
-| `src/libs/graphics/shaderprogram.cpp` | 10 |
-| `src/libs/graphics/uniformbuffer.cpp` | 8 |
-| `src/libs/graphics/framebuffer.cpp` | 8 |
-| `src/libs/graphics/shader.cpp` | 6 |
-| `src/libs/graphics/renderbuffer.cpp` | 5 |
-| `src/libs/graphics/pbrtextures.cpp` | 3 |
+| `device` | instance, surface, physical/logical device, queues, VMA allocator, immediate submit |
+| `swapchain` | the images presented from, rebuilt on resize |
+| `renderer` | `IRenderer`: acquire, record, submit, present, two frames in flight, readback |
+| `renderer2d` | `I2DRenderer`: sprites, rects, text, full-target images, blend and scissor |
+| `buffer` / `image` | VMA allocations in the shapes that matter, with layout transitions |
+| `uniformring` | the per-frame bump allocator that replaces GL's whole-block overwrite |
+| `descriptors` | uniform set (dynamic offsets) and texture set (per-frame, per-texture) |
+| `pipeline` / `pipelinecache` | pipelines built on first use, keyed on their full state |
+| `mesh` | `Mesh` uploaded to device-local vertex and index buffers |
+| `gbuffer` | five colour attachments plus depth, matching the GL layout |
+| `resources` | engine `Texture` and `Mesh` uploaded once each, keyed by address |
 
-Exactly one leak outside the library: `src/libs/scene/render/pipeline/retro.cpp`
-includes glad directly.
+Shaders in `slang/`: `uniforms` (the ten blocks), `pbr_model` (four geometry
+entry points plus the opaque fragment), `grass`, `walkmesh`, `vk2d` (the 2D
+vocabulary), `common`, and six shared modules under `slang/lib/`.
 
-GL handles are already fenced into explicit `// OpenGL … // END OpenGL` blocks
-(`texture.h:167-172`, `mesh.h:277-283`). The surrounding classes hold only CPU
-data — pixel layers, vertex layout, faces, AABB — and are portable as-is.
+Verified by capture with the validation layers silent: the main menu; a textured,
+depth-tested mesh; a five-attachment G-buffer and deferred resolve; all four
+`pbr_model` geometry variants; 256 instanced grass clusters.
 
-### 1.2 Seams that already exist and are worth keeping
+**Not built:** the scene pipeline and every pass in it. That is the whole of
+Part II.
 
-- **`GraphicsServices`** (`include/reone/graphics/di/services.h:32`) is
-  interface-only: `IContext`, `IMeshRegistry`, `IPBRTextures`,
-  `IShaderRegistry`, `IStatistic`, `ITextureRegistry`, `IUniforms`. Downstream
-  code already consumes abstractions.
-- **`IRenderPipeline` / `IRenderPipelineFactory` / `RendererType{Retro,PBR}`**
-  (`include/reone/scene/render/pipeline.h:55-77`), selected at
-  `src/libs/scene/graph.cpp:458`. A proven frame-graph swap point — it already
-  hosts two complete renderers.
-- **`IRenderPass`** (`include/reone/scene/render/pass.h:69`). Critically,
-  submission is *already deferred*: `SceneGraph::render()` registers callbacks
-  via `inRenderPass(name, callback)` and the pipeline invokes them inside its own
-  passes. That is the right shape for command-buffer recording.
+## 2. The architecture as built
 
-### 1.3 The seam that is the wrong abstraction
+### 2.1 Backend selection
 
-`IContext` (`include/reone/graphics/context.h:45`) is an OpenGL state machine
-wearing an interface: `pushDepthMask`, `popPolygonMode`, `blitFramebuffer`,
-`bindTexture(unit)`, `withFaceCullMode`. None of that survives translation to
-Vulkan, where state is baked into pipeline objects.
+`graphics/backend.h` holds the choice process-wide. Deliberately not threaded
+through constructors: the two backends cannot share a window, so it is settled
+once before anything graphical exists, and the objects that need to ask —
+`Texture`, `Mesh` — are built deep inside resource providers that have no other
+reason to know a backend exists.
 
-**Do not implement `IContext` in Vulkan.** Doing so leads to a per-draw
-pipeline-state-object hash lookup emulating a state machine, which is the
-classic failed port.
+`--backend vulkan` sets it before the window is created. `Window` then asks for
+`SDL_WINDOW_VULKAN` and creates no GL context.
 
-### 1.4 Other relevant facts
+### 2.2 The two seams
 
-- **Shaders**: GLSL `#version 400 core`. `#include` is resolved by a hand-rolled
-  regex at `src/libs/resource/provider/shaders.cpp:197`. `R_SSAO` / `R_SSR` are
-  injected as defines. The `shaderpack` app packs `glsl/` into `shaderpack.erf`
-  via the `create_shaderpack` custom target.
-- **Uniforms**: 10 fixed UBO binding points
-  (`include/reone/graphics/uniforms.h:27-37`); uniform blocks are bound *by name*
-  (`shaderprogram.h:35`).
-- **Window**: SDL3 with a hardcoded `SDL_GLContext` (`window.h:63`). Backend
-  choice must therefore happen before window creation.
-- **Toolkit** uses `wxGLCanvas` (`src/apps/toolkit/view/resource/modelpanel.cpp`)
-  and calls `scene.render()` at
-  `src/apps/toolkit/viewmodel/resource/model.cpp:113`.
-- **`IStatistic`** (`statistic.h:24`) counts draw calls only. There is no GPU
-  timing of any kind.
-- **No previous-frame transform state exists anywhere** in `SceneNode` or
-  `uniforms.h`.
+Everything outside the graphics library talks to the backend through exactly two
+interfaces, each with two implementations:
 
----
+- **`IRenderer`** owns the frame: `beginFrame` / drawing / `endFrame`, plus
+  `drawSceneOutput` and `captureFrame`.
+- **`I2DRenderer`** owns everything drawn in screen space.
 
-## 2. Approach: Vulkan as a parallel backend
+This is what makes a second backend possible at all, and it paid off as intended:
+adding `Vulkan2DRenderer` required no caller changes anywhere.
 
-The Vulkan backend is a **sibling static library selected at startup**. The
-existing OpenGL renderer is not refactored, ported, or wrapped in a new
-abstraction layer. The shared surface between backends is the asset layer, scene
-graph, animation, and material data — all of which are already API-neutral.
+**`IContext` is not one of the seams and must never be implemented in Vulkan.**
+It is an OpenGL state machine wearing an interface — `pushDepthMask`,
+`popPolygonMode`, `bindTexture(unit)`. Implementing it means a per-draw
+pipeline-state hash emulating a state machine, which is the classic failed port.
+State belongs in `VulkanPipelineCache::Key`.
 
-This works here for a specific reason that does not hold in most codebases:
-`SceneGraph` hands the pipeline a *description* of the frame (a globals UBO plus
-per-pass callbacks) rather than a stream of GL calls. A path-traced pipeline can
-ignore `IRenderPass` almost entirely and walk the scene graph to build a TLAS
-instead.
+### 2.3 GL services under Vulkan
 
-### 2.1 Layout
+`Context`, `MeshRegistry`, `TextureRegistry` and `Uniforms` are constructed but
+never initialised. They still hand out references through `GraphicsServices`, but
+nothing on the Vulkan path may call them, and anything that does faults
+immediately rather than silently drawing nothing.
 
-```
-src/libs/graphics/          unchanged — GL backend plus all asset/format code
-src/libs/graphics/vulkan/   NEW static library: device, swapchain, memory,
-                            descriptors, acceleration structures, path tracer,
-                            FSR integration
-src/libs/scene/render/      gains pipeline/pathtraced.{h,cpp}
-```
+That is the right trade while the backend is incomplete: it is exactly how five
+leftover GL calls on the 2D path were found. Once parity is reached they should
+become null implementations or disappear with the GL backend.
 
-### 2.2 The one seam that must move
+`GraphicsModule` cannot construct the Vulkan renderers — `graphicsvulkan` links
+against `graphics`, not the reverse — so the engine, which links both, builds
+them and injects them with `setRenderers`.
 
-Today the frame output crosses the boundary as a GL texture handle and is
-presented with GL (`src/libs/game/game.cpp:938-942`):
+### 2.4 Deliberately skipped under Vulkan
 
-```cpp
-auto &output = scene.render({w, h});
-_services.graphics.uniforms.setLocals(...);
-_services.graphics.context.useProgram(shaderRegistry.get(ShaderProgramId::ndcTexture));
-_services.graphics.context.bindTexture(output);
-_services.graphics.meshRegistry.get(MeshName::quadNDC).draw(statistic);
-```
-
-Replace with an `IRenderer` that owns the swapchain and presentation, so the
-backend decides what a frame output is. The same change is needed at
-`src/apps/toolkit/viewmodel/resource/model.cpp:113`.
-
-**Done.** `include/reone/graphics/renderer.h` defines the interface;
-`renderer/gl.h` implements it over the default framebuffer. A frame is
-`beginFrame(extent)` / drawing / `endFrame()`, with `drawSceneOutput(Texture &)`
-as the hand-off from a pipeline, which produces a texture, to the backend, which
-decides how that texture becomes visible. Both call sites above now go through
-it, as does the engine's frame loop and the screenshot path.
-
-Two details are load-bearing for Vulkan:
-
-- **`captureFrame()` must precede `endFrame()`.** In GL that is only a
-  convention; in Vulkan the contents of a presented swapchain image are
-  undefined, and the readback has to be recorded before the present.
-- **`beginFrame` pushes the viewport rather than assuming it.** Dear ImGui calls
-  `glViewport` directly, behind the context's back, so nothing may rely on
-  leftover state from the previous frame.
-
-The renderer takes an optional `Window`. Null means it does not own presentation
-and must not swap — the toolkit draws into a canvas wxWidgets presents itself.
-That distinction disappears with the GL backend, but until then it is what keeps
-one interface serving both hosts.
-
-### 2.3 Fate of the OpenGL backend
-
-Two live backends is a real, ongoing cost. It taxes every interface decision:
-`IRenderer` and the 2D batcher must be genuinely backend-neutral rather than
-quietly Vulkan-shaped, and every scene-graph or material change has to be
-verified against a GL path nobody is actively developing.
-
-**Decision: freeze GL as maintenance-only, then retire it.**
-
-- Effective immediately, the GL backend receives no new features. It only ever
-  needs to do what the toolkit already does — model viewing. Game-side GUI paths
-  in GL stay working but are not extended.
-- The toolkit stays on `wxGLCanvas` for now, because wxWidgets 3.3 has no Vulkan
-  canvas and writing `VkSurfaceKHR`-from-`HWND` glue (plus X11/Wayland) before
-  any RT payoff is the wrong order of work.
-- **Retirement path (phase 7, optional):** the toolkit is a model viewer and does
-  not need a swapchain or high framerate. Render Vulkan offscreen, read back, and
-  blit into a plain `wxPanel`. This needs no platform-specific surface code at
-  all, and once it works the GL backend can be deleted outright.
+Each has its reason recorded at the site: GLSL compilation (`Shaders::init`),
+movie playback (`Movie::render`), the ImGui editor (built on the GL backend), and
+the 3D sub-scene behind menu panels (`Control::render`).
 
 ---
 
-## 3. The porting tax
+# Part II — Parity
 
-A Vulkan backend cannot be "just the 3D renderer" — GL and Vulkan cannot share a
-window. Everything the game draws must come along.
+The target is the OpenGL PBR pipeline: everything the game draws today, drawn the
+same way. This is the bulk of the remaining work, and nothing in Part III can
+start without most of it.
 
-Direct `context.*` call counts by directory: scene 172 (replaced wholesale by the
-new pipeline, so not a concern), game 27, engine 6, gui 5.
+## 3. The scene pipeline
 
-The immediate-mode 2D idiom (`context.useProgram(...)` followed by
-`meshRegistry.get(quad).draw(...)`) appears at **19 sites**:
+`src/libs/scene/render/pipeline/pbr.cpp` is roughly 500 lines of orchestration
+over six named passes: `DirLightShadowsPass`, `PointLightShadows`,
+`OpaqueGeometry`, `TransparentGeometry`, `PostProcessing` and `Debug`. None
+exists in Vulkan.
 
-| Location | Sites |
-| --- | --- |
-| `src/libs/game/gui/selectoverlay.cpp` | 5 |
-| `src/libs/game/gui/map.cpp` | 4 |
-| `src/libs/game/game.cpp` | 2 |
-| `src/libs/game/gui/actionslot.cpp` | 1 |
-| `src/libs/game/gui/hud.cpp` | 1 |
-| `src/libs/gui/control.cpp` | 1 |
-| `src/libs/movie/movie.cpp` | 1 |
-| `src/libs/graphics/cursor.cpp` | 1 |
-| `src/libs/graphics/font.cpp` | 1 |
-| `src/libs/graphics/pbrtextures.cpp` | 3 (internal IBL precompute — moves with the backend) |
+### 3.1 What to build
 
-So **16 sites** need the shared abstraction. That is the only place both backends
-genuinely need a common API, and it defines the scope of the narrow RHI worth
-building: **a 2D sprite/text batcher**, nothing more.
+A `VulkanRenderPipeline` implementing the same interface the GL pipelines do, so
+`SceneGraph::render` does not care which is behind it. It needs:
 
-**Done.** `include/reone/graphics/renderer2d.h` defines `I2DRenderer`;
-`renderer/gl2d.h` implements it. Five operations cover every site: `drawImage`
-by rect or by transform, `drawRect`, `drawFullTargetImage`, `drawText`, with
-`withBlendMode` and `withScissor` as scopes. The transform overload exists for
-exactly one caller - the minimap arrow, which rotates - and the full-target one
-for movie frames.
+1. **Render targets.** The GL pipeline holds around a dozen: G-buffer, ping/pong
+   at full and half resolution, SSAO, SSR, shadow maps, output. `VulkanImage`
+   covers colour attachments and depth already; what is missing is a target set
+   that owns them, sizes them together and rebuilds on resize —
+   `VulkanGBuffer` generalised.
+2. **A pass abstraction.** Dynamic rendering means no `VkRenderPass` objects, so
+   a pass is a small record: attachments, load/store ops, pipeline key, and the
+   barrier needed before it. Worth making explicit rather than open-coding
+   `vkCmdBeginRendering` a dozen times, because the barriers between passes are
+   where the bugs live.
+3. **Barrier discipline.** Every target written as an attachment and then sampled
+   changes layout twice a frame. `VulkanGBuffer` tracks its own layout because
+   callers got it wrong; the generalised version must do the same.
 
-Three consequences went further than the site count suggested:
+### 3.2 Order of work
 
-- **`Font` no longer draws.** It keeps the atlas and the metrics and exposes its
-  glyphs; submitting them is the renderer's business. It dropped five graphics
-  services for one, and so did `Fonts` and `Cursors`.
-- **`IRenderPass::drawImage` is gone.** It was the *only* member the whole GUI
-  layer used - 26 calls, no others - so `IRenderPass` left the GUI entirely,
-  along with the `pass` parameter threaded through every control's `render`.
-  `IRenderPass` is now purely a scene-geometry pass, which is what it should
-  always have been.
-- **Billboarded debug text** in `scene/drawdebug.cpp` used `Font::renderLine`
-  but is a world-space draw with its own program, so it now fills the glyph
-  block itself. It also silently truncates past `kMaxTextChars` rather than
-  overrunning the block, which the old path did not check.
+Shadow maps last, not first. They are the only pass needing layered rendering and
+a different projection per layer, and everything else can be verified without
+them.
 
-Also in scope, and easy to forget:
+1. Opaque geometry into the G-buffer — the pieces exist, they need driving from
+   the scene graph rather than by hand.
+2. The deferred resolve with real lighting (§4.1).
+3. Transparency and OIT.
+4. SSAO and SSR.
+5. Post-processing: bloom, FXAA, sharpen, combine.
+6. Shadows, directional then point.
+7. Debug: AABBs, walkmeshes, the draw-debug overlay.
 
-- **Text** — `src/libs/graphics/font.cpp:59-132`, instanced quads.
-- **Movie playback** — `src/libs/movie/movie.cpp:93-103` uploads ffmpeg frames
-  per-frame via `bindTexture` + `setPixels`.
-- **Cursor**, minimap, action bar, profiler overlay.
+Each step is independently verifiable against the GL frame with the existing
+capture harness, which is the reason for this order.
 
-### 3.1 The uniform update model
+## 4. Materials and lighting
 
-Not incidental plumbing: this is a rewrite of how every `IRenderPass::draw*`
-submits data, and it is more tightly coupled to the compute-skinning work in
-§5.1 than it first appears.
+### 4.1 Lighting
 
-Today `Uniforms` (`src/libs/graphics/uniforms.cpp`) owns nine `UniformBuffer`s
-bound to fixed indices from `UniformBlockBindingPoints`. Each setter mutates a
-CPU-side mirror struct and re-uploads the **whole block**:
+The resolve currently lights from one fixed direction. `glsl/f_pbr_combine.glsl`
+is the real thing and has to come across: light lists, shadow lookups, the PBR
+BRDF, fog, and the geometry feature bits packed into the lightmap alpha.
 
-```cpp
-void Uniforms::setGlobals(const std::function<void(GlobalUniforms &)> &block) {
-    block(_globals);
-    _context.bindUniformBuffer(*_ubGlobals, UniformBlockBindingPoints::globals);
-    _ubGlobals->setData(&_globals, sizeof(GlobalUniforms)); // glBufferSubData
-}
-```
+`lib/surface.slang` already describes a surface independently of how it was
+sampled, which is the right shape — the resolve consumes `SurfaceParams` and does
+not care whether a G-buffer or a ray hit produced it. Keep that.
 
-Three properties of that do not survive the move:
+### 4.2 Materials reaching the backend
 
-- **Per-draw whole-buffer overwrite.** `setLocals` runs on every draw, and
-  `BoneUniforms` is 3 KB per skinned draw since previous-frame bones were added.
-  Overwriting a buffer that queued draws still reference is legal in OpenGL only
-  because the driver renames behind the caller. Under recorded command buffers it
-  is simply invalid, and has to become bump-allocated slices of a per-frame buffer
-  addressed by dynamic offset.
-- **Binding uniform blocks by name.** `bindUniformBlock("Globals", 0)` has no
-  Vulkan equivalent, and fails silently on a miss (see §4.1).
-- **Loose uniforms.** Seven live call sites set uniforms outside any block:
-  `uSaberDisplacement` (pass/pbr.cpp:213, retro.cpp:203), `uCorners`
-  (pbr.cpp:327, retro.cpp:296, drawdebug.cpp ×2), `uEnvMapDerivedLayer`
-  (pbr.cpp:74), `uRoughness` (pbrtextures.cpp:195). Vulkan has no loose uniforms.
-  The small scalars belong in push constants; the per-draw values belong in the
-  per-draw record. A `saber` binding point already exists at index 4, declared and
-  unused, so the intent predates this document.
+`Material` (`include/reone/graphics/material.h`) is a texture-unit map plus a
+handful of colours and flags. It never reaches the Vulkan backend today.
 
-Target shape for the raster path: descriptor sets grouped by update frequency -
-per frame, per pass, per material, per draw - with the per-draw set addressed by
-dynamic offset into a ring buffer.
+Two things are needed, and they should be designed together because the second is
+what §9 wants:
 
-**Do not over-invest here.** A path tracer does not bind per draw at all (§5.6),
-so most of a beautiful per-draw binding scheme is superseded in phase 6. Design
-the material representation once, GPU-resident and index-addressed, and let the
-raster path index into it too.
+- A **material → uniform mapping**, so `LocalUniforms.featureMask` and the colour
+  fields are filled from `Material` rather than by hand.
+- A **material buffer**, GPU-resident and index-addressed, rather than a
+  descriptor set bound per material. The raster path indexes into it; the path
+  tracer will index into the same buffer from a hit record. Designing it once,
+  now, avoids doing it twice.
 
----
+## 5. The remaining geometry kinds
 
-## 4. Shaders — Slang, at phase 4, targeting SPIR-V only
+The model variants (static, skinned, dangly, saber) and grass are done in the
+sense that their pipelines build and draw. Still needed: **particles**,
+**billboards**, **walkmeshes** and the **AABB** debug geometry. Each is an entry
+point already written or portable from GLSL, plus a pipeline variant the cache
+will produce.
 
-This section originally proposed migrating the existing GLSL to Slang *ahead* of
-Vulkan, on the theory that one source tree could feed both backends. A spike
-against slangc 2026.7.1 showed that does not hold for this engine. Revised
-position: **Slang enters with the Vulkan backend and targets SPIR-V, its
-first-class output. The frozen GL backend keeps its hand-written GLSL until it is
-deleted.**
+`walkmesh.slang` exists and is registered nowhere.
 
-Slang is still the right choice when it arrives:
+## 6. The rest of the frame
 
-- a real module system in place of the regex `#include` preprocessor
-  (`src/libs/resource/provider/shaders.cpp:197`);
-- reflection, which generates the binding tables and the std140 layout contract
-  rather than leaving them hand-maintained (§4.2);
-- first-class raytracing entry points (`[shader("raygeneration")]`,
-  `[shader("closesthit")]`, `[shader("anyhit")]`);
-- generics, which matter for a material system shared between raster and path
-  tracing.
+- **Movie playback.** Uploads an ffmpeg frame per tick. The resource cache
+  uploads once and keeps; this needs a streaming path — a per-frame staging
+  buffer and an image re-written rather than re-created.
+- **The cursor** already goes through `I2DRenderer` and should work once the game
+  reaches gameplay.
+- **The ImGui editor** needs the Vulkan ImGui backend. Low priority but cheap,
+  and it is the render-target viewer that makes the G-buffer inspectable.
+- **The profiler and console** render through GL directly and need converting to
+  `I2DRenderer` — mostly text and rects.
 
-### 4.1 Why not Slang → GLSL
+## 7. Retiring OpenGL
 
-Verified by compiling representative shaders with `slangc -target glsl`:
+**Decision: freeze GL as maintenance-only, then retire it.** Two live backends
+taxes every interface decision.
 
-**Works.** `[[vk::location(N)]]` emits exactly `layout(location = N)`, preserving
-the engine's vertex layouts including deliberately skipped slots. `noperspective`
-survives. Varying names are mangled but match by location across stages, so that
-is harmless.
+- GL receives no new features. It only ever needs to do what the toolkit does —
+  model viewing.
+- The toolkit stays on `wxGLCanvas` for now: wxWidgets 3.3 has no Vulkan canvas,
+  and writing `VkSurfaceKHR`-from-`HWND` glue before any RT payoff is the wrong
+  order of work.
+- **Retirement path:** the toolkit is a model viewer and needs no swapchain.
+  Render Vulkan offscreen, read back, blit into a plain `wxPanel`. No
+  platform-specific surface code at all, and once it works the GL backend and its
+  71 GLSL shaders can be deleted outright.
 
-**Does not work.**
-
-| Emitted | Consequence |
-| --- | --- |
-| `block_SLANG_ParameterGroup_ScreenEffect_0` | `bindUniformBlock("ScreenEffect", ...)` misses - and returns silently, so the result is garbage uniforms with no error |
-| `sMainTex_0` | `setUniform("sMainTex", unit)` misses |
-| Loose uniforms gathered into a `GlobalParams` block | `uSaberDisplacement`, `uCorners`, `uEnvMapDerivedLayer` stop being settable by name |
-| `#version 450`, regardless of `-profile glsl_400` | collides with the `#version 400 core` the shader provider prepends |
-| `layout(binding = N)` on blocks and samplers | GLSL 420+ only. The engine creates a **GL 4.0 core** context (`window.cpp:33-35`) |
-
-Reflection (§4.2) answers the naming rows - the host can bind from reflection
-data instead of names. It does not answer the GL version floor. Adopting Slang on
-the GL path therefore means raising the context to 4.5 and migrating the binding
-model, on a backend §2.3 has already committed to retiring. The payoff would die
-with the backend.
-
-Also note `-matrix-layout-column-major` emits GLSL `layout(row_major)`, and the
-row-major flag emits `column_major`. Slang's convention is transposed relative to
-GLSL's. Whichever target is used, this must be validated numerically against a
-known transform rather than reasoned about.
-
-### 4.2 Reflection is the real prize
-
-`slangc -reflection-json` reports source-level names, assigned binding indices,
-and the complete std140 offset table:
-
-```
-ScreenEffect  kind=constantBuffer  binding=descriptorTableSlot index=1
-sMainTex      kind=resource        binding=descriptorTableSlot index=2
-uProjection      offset=0     size=64
-uSSAOSamples     offset=192   size=1024
-uSharpenAmount   offset=1268  size=4
-```
-
-Those offsets match `ScreenEffectUniforms` in `include/reone/graphics/uniforms.h`
-byte for byte.
-
-That matters because the contract between the nine `layout(std140)` blocks in
-`glsl/u_*.glsl` and the fourteen C++ structs in `uniforms.h` is currently
-maintained **by hand and checked by nothing**. Four of those structs are held in
-place by hand-written `alignas(16)` derived from std140's struct alignment rule.
-A mismatch renders garbage silently. Reflection makes that contract machine
-checkable, and in the Vulkan backend it also generates descriptor set layouts.
-
-### 4.3 Closing the std140 hazard before then
-
-The desync hazard is present today and does not need Slang to address. OpenGL
-already knows the true layout of every linked program: `glGetUniformIndices` plus
-`glGetActiveUniformsiv` with `GL_UNIFORM_OFFSET`, `GL_UNIFORM_ARRAY_STRIDE` and
-`GL_UNIFORM_MATRIX_STRIDE` yield the driver's offsets, which can be compared
-against `offsetof` in a debug-build validation pass after link.
-
-That is roughly an hour of work, needs no new dependency, and validates what the
-driver actually did rather than what a tool predicts. Preferred over pulling
-Slang forward purely to catch layout drift.
+Deferred cleanup still outstanding: the SPIR-V loading path in the GL backend,
+the `--slangshaders` toggle, and `ShaderRegistry` variant selection. All dead
+since §14.4 and worth removing before they confuse someone.
 
 ---
 
-## 5. Prerequisites specific to path tracing this engine
+# Part III — Beyond parity
 
-These are the real work — more so than the Vulkan plumbing.
+## 8. Material PBR-ification
 
-### 5.1 Anything the vertex shader synthesises must become real geometry
+A prerequisite for path tracing, and worth stating plainly: **no KotOR asset
+carries metallic or roughness.** Odyssey materials are diffuse, lightmap, envmap
+and bumpmap, plus ambient, diffuse and self-illumination colours. A path tracer
+needs a real BSDF parameterisation, so one has to be synthesised.
 
-Ray tracing cannot see vertex shaders. Whatever the raster path computes on the
-fly has to physically exist in a BLAS, which makes three current features the
-same problem wearing different names:
+### 8.1 What the assets do tell us
 
-| Feature | Synthesised by | Driven by |
-| --- | --- | --- |
-| Skinning | `u_bones.glsl`, `drawSkinned` | `BoneUniforms` |
-| Dangly meshes | `u_dangly.glsl`, `drawDangly` | `DanglyUniforms` |
-| Lightsaber blades | `u_saber.glsl`, `drawSaber` | loose `uSaberDisplacement` |
+- **Envmap presence** is the strongest signal available: a surface with an
+  environment map is meant to look reflective, and envmap intensity maps
+  reasonably onto low roughness.
+- **Specular colour in the TXI** exists on some textures.
+- **Bump and normal maps** give detail independent of roughness, but their
+  presence correlates with materials the artists treated as detailed.
+- **Diffuse luminance and saturation** are weak but usable priors: near-neutral
+  dark surfaces are more often metal-ish, saturated bright ones dielectric.
 
-Plan: a compute pass consumes those inputs and writes deformed world-space
-vertices to a buffer, followed by a per-frame BLAS refit for each affected model.
+### 8.2 Approach
 
-Note the coupling with §3.1: all three inputs arrive today through the per-draw
-uniform path, and two of them are among the loose uniforms that Vulkan cannot
-express. On the path-traced side they stop being shader inputs altogether - the
-compute pass consumes them and the closest-hit shader reads plain geometry - so
-they should not be carefully ported into a per-draw binding scheme that phase 6
-then discards.
+A **heuristic mapping layer**, not a guess baked into assets:
 
-### 5.2 Motion vectors — done, conventions unsettled
+1. A default dielectric BSDF — roughness around 0.7, metallic 0, specular 0.04.
+2. Envmap-bearing materials get lower roughness, scaled by envmap intensity.
+3. An override table keyed by texture or material name, for the cases the
+   heuristic gets visibly wrong. Ship it with the engine; it is small, and it is
+   the honest way to handle a game whose art has no PBR intent.
+4. The lightmap becomes a *baked irradiance* input rather than a multiplier once
+   real GI exists (§16.2).
 
-FSR and any temporal denoiser require per-pixel motion vectors, depth, and a
-jittered projection. None of that existed; phase 1 added it. `GlobalUniforms`
-carries unjittered current and previous view-projection plus the jitter offset,
-`LocalUniforms` a previous model matrix, `BoneUniforms` a previous bone set, and
-`SceneNode` latches its previous absolute transform once per frame. The PBR
-G-buffer writes an RG16F motion target from all four opaque-pass shaders.
+The mapping belongs in the material buffer of §4.2, computed at load time, so the
+raster and traced paths see identical parameters.
 
-Two things remain open, both recorded in §8: the sign and axis conventions were
-chosen arbitrarily because nothing consumes the buffer yet, and the values have
-been eyeballed but never numerically verified.
+### 8.3 Ordering
 
-Note the deliberate limits. Dangly and saber meshes deform per-vertex with no
-previous vertex positions tracked, so their vectors capture rigid motion only,
-and grass billboards ignore their camera-facing re-orientation. §5.1 removes both
-limitations as a side effect of moving deformation into compute.
+After raster parity, before path tracing. Earlier means changing the raster look
+while still using it as the parity reference; later means the path tracer has
+nothing sensible to trace.
 
-### 5.3 Lighting model — treat all albedo maps as albedo
-
-**Decision: diffuse textures are used directly as albedo, and lightmap textures
-are ignored entirely by the path tracer.** All lighting is computed for real.
-
-Accepted consequence: KotOR diffuse textures frequently have lighting painted
-into them, and that baked-in shading will remain visible on top of the traced
-result. This is a known, accepted artifact for now — no de-lighting pass, no
-attempt to recover clean albedo. Interiors in particular will not match the
-original game's look.
-
-Lighting inputs for the path tracer:
-
-- emissive geometry derived from `selfIllumColor` (`material.h:47`);
-- the gameplay point/directional lights in `_activeLights`
-  (`graph.cpp:474-486`), promoted to area lights where a radius exists;
-- ambient replaced by real global illumination.
-
-The lightmap texture slot stays populated for the raster pipelines, which
-continue to use it unchanged.
-
-### 5.4 Material model is thin
-
-`Material` (`material.h:36`) is Odyssey-era: diffuse/lightmap/envmap/bumpmap plus
-ambient/diffuse/selfIllum colors. No metallic/roughness comes from game assets;
-`PBRTextures` synthesizes IBL. A path-traced BSDF needs a real parameterization,
-so expect a heuristic mapping layer.
-
-### 5.5 Smaller items
-
-- Alpha-tested foliage (`glsl/i_hashedalpha.glsl`, grass) needs any-hit shaders.
-- Particles and emitters are best left rasterized and composited, not traced.
-- `IStatistic` needs GPU timestamp queries added.
-
-### 5.6 The scene has to be GPU-resident
+## 9. The scene has to be GPU-resident
 
 A path tracer has no draws, so there is nothing to bind per draw. A ray may hit
 any surface, which means the whole scene must be addressable before tracing
 starts:
 
 - one global vertex/index buffer with meshes suballocated into it;
-- one material buffer, indexed by instance;
-- **bindless textures** - a descriptor-indexed array sampled by index taken from
-  the hit record;
+- one material buffer, indexed by instance (§4.2);
+- **bindless textures** — a descriptor-indexed array sampled by an index taken
+  from the hit record;
 - TLAS instances carrying that material index.
 
-This is the endpoint the per-draw uniform work in §3.1 should be aimed at rather
-than away from: the material representation wants to be designed once,
-GPU-resident and index-addressed, with the raster path indexing into the same
-buffer instead of binding a per-material descriptor set.
+This replaces the per-frame texture descriptor sets of §16.3, which exist only
+because a set bound to a recording command buffer cannot be rewritten. Descriptor
+indexing removes the problem rather than working around it.
 
 `SceneGraph::refresh()` already flattens the node tree into typed arrays every
-frame, which is the natural hook for building TLAS instances. One caveat: those
-arrays are rebuilt and reordered per frame, so a BLAS instance cache needs a
-stable per-instance identity that does not exist yet.
+frame, which is the natural hook for building TLAS instances. **One caveat:**
+those arrays are rebuilt and reordered per frame, so a BLAS instance cache needs
+a stable per-instance identity that does not exist yet.
 
----
+### 9.1 Anything the vertex shader synthesises must become real geometry
 
-## 6. Dependencies
+Rasterisation lets the vertex stage invent geometry. A ray tracer cannot see
+that: only what is in a BLAS exists.
 
-| Purpose | Choice | Note |
+| Kind | Today | Needed |
 | --- | --- | --- |
-| Loader | volk | avoids linking `vulkan-1` |
-| Headers | vulkan-headers | vcpkg |
-| Allocation | VMA | non-negotiable |
-| Init | vk-bootstrap | optional; saves significant boilerplate |
-| Shaders | shader-slang | in vcpkg; its reflection replaces spirv-reflect |
-| Upscaler | FidelityFX FSR | native Vulkan backend |
-| Denoiser | NRD, or hand-rolled SVGF/ReSTIR | |
+| Skinned meshes | bones applied in the vertex shader | compute skinning into a buffer, rebuild BLAS per frame |
+| Dangly meshes | positions from a uniform block | same, or CPU-written into the vertex buffer |
+| Sabers | quads built from a displacement | real quads |
+| Grass | billboards from cluster positions | real quads, or leave rasterised |
+| Particles | billboards | leave rasterised and composite |
 
-Gate behind CMake options so default and CI builds are unaffected:
+Compute skinning is the largest item here and is shared with §5 — the raster path
+can use it too, which removes the vertex-shader skinning path entirely.
 
-```cmake
-option(ENABLE_VULKAN "build Vulkan backend" OFF)
-option(ENABLE_FSR    "build FSR upscaler" OFF)
-```
+## 10. Hardware ray tracing
 
-### 6.1 Licensing
+### 10.1 Extensions, and the choice within them
 
-reone is GPL-3 (`COPYING`), clean-room, explicitly non-commercial. FidelityFX /
-FSR is permissively licensed (MIT) and can be linked directly with no GPL
-conflict — *verify the current license text before committing, as these terms
-change.*
+Required: `VK_KHR_acceleration_structure`, `VK_KHR_deferred_host_operations`,
+buffer device address, descriptor indexing. Then one of:
 
-Because FSR is the only upscaler, no dynamic-plugin indirection is needed. A thin
-internal `IUpscaler` seam is still worth having so upscaling can be switched off
-at runtime and so the denoiser can be swapped, but it is an ordinary interface
-compiled into the backend, not a loadable module.
+- **`VK_KHR_ray_query`** — tracing from inside ordinary fragment or compute
+  shaders. Simpler: no shader binding table, no new pipeline type. Right for
+  hybrid effects.
+- **`VK_KHR_ray_tracing_pipeline`** — ray generation, closest-hit, any-hit and
+  miss shaders with a shader binding table. Required for a real path tracer,
+  where recursion and per-material hit shaders matter.
 
----
+**Do both, in that order.** Ray query first, because it needs no new pipeline
+machinery and gives a visible result early. The full pipeline when path tracing
+starts.
 
-## 7. Phasing
+### 10.2 Acceleration structures
 
-Steps 1–3 are worth doing even if the Vulkan backend never lands. That is the
-main argument for this ordering.
+- **BLAS per mesh**, built once for static geometry, rebuilt or refitted per
+  frame for skinned and dangly.
+- **TLAS per frame** from the flattened scene arrays, carrying a material index
+  per instance.
+- Refit rather than rebuild where topology is unchanged — the common case for
+  skinned meshes.
+- Compaction for static BLASes is worth it, and cheap once the build path works.
 
-1. **Motion vectors and previous-frame transforms** in the existing GL PBR
-   pipeline. Small, independently useful, de-risks the uniform plumbing.
-   **Done.** `GlobalUniforms` carries unjittered current/previous view-projection
-   plus the jitter offset, `LocalUniforms` a previous model matrix, and
-   `BoneUniforms` a previous bone set. `SceneNode` latches its previous absolute
-   transform once per frame at the end of `SceneGraph::render`. The PBR G-buffer
-   gained an RG16F motion target at attachment 4, written by all four opaque-pass
-   shaders. Jitter is behind `--taajitter`, off by default until something
-   resolves it. Nothing consumes the motion target yet, though the render target
-   viewer added to the ImGui editor can display it.
-2. **std140 layout validation** (§4.3). An hour, no new dependency, and it closes
-   a live silent-corruption hazard on code already committed.
-3. **`IRenderer` seam** — move presentation out of `game.cpp` and the toolkit;
-   add the 2D batcher abstraction covering the 16 sites in §3. **Done** —
-   presentation in §2.2, the 2D renderer in §3. Nothing outside the graphics
-   library names a shader program or a quad mesh any more.
-4. **Vulkan raster backend** to PBR parity. Unglamorous but mandatory: swapchain,
-   descriptor management, GUI, text, movie playback, and the uniform update model
-   in §3.1. **Slang enters here**, targeting SPIR-V (§4).
+### 10.3 Hybrid effects, in order of payoff
 
-   **In progress — the spine exists, nothing is connected to the game yet.**
-   Device, swapchain, frames in flight, presentation, screenshot readback,
-   buffers, the uniform ring of §3.1, both descriptor sets, pipelines, images and
-   samplers, `Mesh` upload, depth, and a five-attachment G-buffer with a deferred
-   resolve. All of it exercised by `vulkanprobe` with the validation layers on
-   and silent. See §10.
+1. **Ray-traced shadows**, replacing the shadow map passes entirely. Biggest
+   visual win per unit of work, and it deletes two passes.
+2. **Ray-traced ambient occlusion**, replacing SSAO.
+3. **Ray-traced reflections**, replacing SSR — the one that most obviously beats
+   its screen-space predecessor, which cannot reflect what is off-screen.
 
-   **The engine runs on Vulkan as far as the main menu; the scene pipeline does
-   not exist yet.** `--backend vulkan` renders the menu correctly through the
-   same `I2DRenderer` the GL backend implements. All four `pbr_model` geometry
-   variants and instanced grass have been shown to render into the Vulkan
-   G-buffer. Still missing: the pass chain, real lighting and materials,
-   particles and billboards, movie playback, and the scene pipeline that would
-   put any of that on screen in the game. See §10.14.
-5. **Acceleration structures and hybrid RT** — compute skinning, BLAS/TLAS, then
-   RT shadows/AO/reflections replacing the current SSAO and SSR passes. First
-   visible payoff.
-6. **Path tracing** as `RendererType::PathTraced`, plus denoiser and FSR.
-7. *(Optional)* **Retire OpenGL** — move the toolkit to offscreen Vulkan with
-   readback into a plain `wxPanel`, then delete the GL backend.
+Each is independently shippable and each removes an existing pass, so the
+pipeline gets simpler as it gets better.
 
----
+### 10.4 Alpha-tested geometry needs any-hit shaders
 
-## 8. Open questions
+Foliage and grass are alpha-tested (`lib/hashedalpha.slang`). Under
+rasterisation the fragment shader discards; under tracing an any-hit shader must
+do the equivalent, and it must be cheap, because it runs per candidate hit.
 
-- ~~Should the 2D batcher be broader than a sprite/text batcher?~~ Answered by
-  building it: five operations covered all 16 sites plus the 26 that already
-  went through `IRenderPass::drawImage`. Nothing wanted more.
-- **A reference worktree exists** at `C:/Development/reone-ref`, a second
-  checkout with its own build tree, so a comparison build never disturbs the
-  working one. Configure it with the same vcpkg toolchain but only the `engine`
-  target, and copy `reone.cfg` into its `bin` - without it the settings differ
-  and the diff is meaningless.
-- **The scene is not frame-deterministic.** Partly fixed, not solved. Two runs
-  of the same build, stopped at the same frame, still differ across roughly a
-  third of a gameplay frame. GUI frames are bit-identical, so the harness is
-  trustworthy for 2D but currently proves nothing automatic about the 3D scene.
-  This has to be closed before GL-and-Vulkan parity can be checked
-  automatically, which is the whole point of having the harness.
+## 11. Path tracing
 
-  **Fixed:** the shared random generator was seeded from `time(nullptr)`. Grass
-  variants, particle emitters and the SSAO noise texture all draw from it, so
-  every run laid the world out differently. It is seedable now, and a capture
-  run seeds it deterministically. This removed all the *sharp* differences: peak
-  per-pixel error fell from 246 to 64.
+The endpoint: `RendererType::PathTraced` alongside the raster pipelines, sharing
+the scene, materials and acceleration structures.
 
-  **What remains** is diffuse and low-amplitude - mean error 3, concentrated in
-  sky and distant terrain, near geometry almost untouched - and it is *bimodal*:
-  any two runs either agree to within 1% of pixels or differ across 33%, with
-  nothing in between.
+### 11.1 Shape
 
-  Ruled out, each by measurement rather than reading:
-  - *RNG divergence.* Draw counts are identical between runs (7381 both times),
-    so the generator is consumed in the same order and produces the same values.
-  - *Frame timing.* The capture path already forces a fixed 1/60 timestep.
-  - *SSAO or SSR.* Disabling either appeared to fix it, then the result flipped
-    on repeat - the low-variance outcome shows up in about half of all runs
-    whatever the flags say. The first reading was an artifact of the bimodality.
-  - *An off-by-one frame.* Comparing a reference frame 600 against runs stopped
-    at 599 and 601 is worse than against 600, so the state is not simply shifted.
-  - *Threaded loading.* There is none in `resource`, `graphics` or `scene`.
+- A **ray generation** shader per pixel, using the camera jitter that already
+  exists for TAA.
+- **Closest-hit** shaders filling `SurfaceParams` from the material buffer and
+  the hit record — the same struct the deferred resolve consumes, which is why
+  `lib/surface.slang` is worth keeping as the single surface description.
+- **Any-hit** for alpha test (§10.4).
+- **Miss** returning skybox or fog.
+- Multiple bounces with Russian-roulette termination.
+- **Next-event estimation** against the scene light list. KotOR interiors are lit
+  by many small point lights, and pure path tracing without NEE will be unusably
+  noisy in exactly the scenes people care about.
 
-  The bimodality is the strongest clue: something settles into one of two states
-  early and stays there. Worth checking next: whether the number of `update`
-  calls before the capture frame is constant, and whether any pass samples a
-  render target that is never cleared.
-- Denoiser choice (NRD vs hand-rolled SVGF/ReSTIR) — defer until phase 5 gives
-  real ray-traced input to evaluate against.
-- Whether the accepted baked-in-lighting artifact (§5.3) is tolerable in practice,
-  or whether a de-lighting pass becomes necessary after seeing phase 6 output.
-- Motion vector conventions are unsettled. `i_motion.glsl` currently emits
-  `0.5 * (cur - prev)` in UV units, y-up: the vector points where the surface
-  went. Temporal resolves generally want the reprojection vector, `prev - cur`,
-  y-down. Nothing reads the buffer yet, so neither is wrong - but both should be
-  fixed deliberately when FSR arrives rather than discovered then.
-- Whether the motion vectors are numerically correct is still unverified. They
-  have been eyeballed through the render target viewer and look plausible; a
-  known-rotation test against expected pixel displacement would settle it.
-- Stable per-instance identity across frames, for a BLAS cache (§5.6).
+### 11.2 What it replaces, and what it keeps
+
+Keeps the raster path for GUI, text, particles and movies; none of those has any
+business being traced. The 2D renderer is already backend-clean, so this costs
+nothing.
+
+### 11.3 Realistic expectations
+
+At 1080p on a modern GPU the budget is one to two samples per pixel per frame.
+Everything then depends on the denoiser, which is why §12 is not optional.
+
+## 12. Denoising and FSR
+
+### 12.1 Denoising
+
+One to two samples per pixel is unusable raw. Options:
+
+- **NRD** (NVIDIA Real-Time Denoisers) — mature, vendor-neutral in practice,
+  designed for exactly this input. The pragmatic default.
+- **Hand-rolled SVGF** — more work, fully understood, a reasonable fallback if
+  NRD's licensing or integration proves awkward.
+- **ReSTIR** for direct lighting is a larger change but the right answer for
+  many-light interiors, and KotOR interiors are exactly that.
+
+Defer the choice until §10.3 produces real traced input. Choosing now would be
+choosing without data.
+
+### 12.2 FSR
+
+**FidelityFX FSR, native Vulkan backend.** Upscaling matters more here than in
+most projects: it is what buys the sample budget back.
+
+What FSR needs, and how much exists already:
+
+| Input | Status |
+| --- | --- |
+| Colour | yes |
+| Depth | yes |
+| **Motion vectors** | **yes** — RG16F G-buffer attachment, written by all four opaque shaders |
+| **Camera jitter** | **yes** — Halton (2,3), behind `--taajitter`, off by default |
+| Exposure | trivial |
+
+Motion vectors and jitter were built in phase 1 precisely so this would be wiring
+rather than a project. Two things to settle when it lands:
+
+- **Jitter has been off by default** because nothing consumed it. FSR is that
+  consumer, and turning it on will change every screenshot comparison — do it
+  deliberately, not incidentally.
+- **Motion vector conventions** (§16.1) are still unverified. FSR is the first
+  real consumer and will expose any sign or scale error immediately.
+
+Verify the current FSR licence text before committing. It has been MIT, which is
+compatible with GPL-3, but these terms change.
 
 ---
 
-## 9. Shader architecture
+# Part IV — Reference
 
-The shaders are being rewritten rather than transliterated. A mechanical port was
-taken far enough to prove the toolchain (§4.1) and is kept as reference, but the
-existing shaders were designed against name-based stage linking and a runtime
-feature mask, and neither survives the destination.
+## 13. Dependencies
 
-Rewriting happens against OpenGL, where each shader can be validated visually as
-it lands. The Vulkan-shaped decisions - explicit bindings, uniform blocks, no
-loose uniforms, no by-name lookup - are already made, so the remaining delta to
-SPIR-V is declarations rather than logic: descriptor set indices, push constants,
-and replacing the geometry-shader shadow path.
-
-### 9.1 Share code, not entry points
-
-`v_model` is one entry point serving three programs, `v_passthrough` serves nine.
-That is why porting `f_texture` forced two unrelated vertex stages onto a common
-varyings layout: GLSL matched stage interfaces by name, so the sharing was free;
-explicit locations make every fragment stage constrain every vertex stage it
-pairs with.
-
-Each program therefore gets its own entry point, and shared work becomes shared
-*functions* in modules. Slang makes that free, and the coupling disappears.
-
-### 9.2 Specialise geometry, branch on material
-
-The fifteen feature flags are evaluated per vertex and per fragment. Two reasons
-to split them rather than keep branching:
-
-- the skinned, dangly and saber paths have to become compute passes writing real
-  geometry (§5.1), so they want to be separate pipelines, not branches;
-- a path tracer has no vertex stage at all, so anything the vertex shader
-  synthesises has to be resolved before tracing.
-
-So the **geometry** path is specialised - static, skinned, dangly and saber become
-distinct entry points over shared transform functions - while **material**
-features stay runtime branches. Specialising both would multiply into a
-permutation explosion for little gain, since the material branches are uniform
-across a draw and predict well.
-
-### 9.3 One surface description, two consumers
-
-The raster resolve and the path tracer's closest-hit shader need the same thing:
-a surface's shading parameters at a point. Today each shader re-derives them from
-Odyssey texture slots in its own way.
-
-Instead a single `SurfaceParams` - albedo, normal, roughness, metallic, emissive,
-alpha - is produced by one function and consumed by a BSDF that neither knows nor
-cares which renderer called it.
-
-The mapping from Odyssey slots to those parameters wants to move out of the
-shader entirely, into the material buffer described in §5.6, computed once when
-the material is built rather than per fragment. The shader-side split is written
-now so that the move is a change of where `SurfaceParams` comes from, not a
-rewrite of everything that uses it.
-
-### 9.4 Cross-stage uniform block naming
-
-Slang emits only the uniform blocks a given entry point references, and
-disambiguates identifiers across whatever it emitted. Two stages of one program
-that touch different sets of blocks therefore get different member names for the
-blocks they share, and OpenGL links interface block members by name.
-
-Concretely, for the grass program:
-
-| Stage | Blocks emitted | `GlobalUniformsLight` |
+| Purpose | Choice | Status |
 | --- | --- | --- |
-| vertex | Grass, Globals | `vec4 color_0;` |
-| fragment | Grass, **Locals**, Globals | `vec4 color_1;` |
+| Loader | volk | in use |
+| Headers | vulkan-headers | in use |
+| Allocation | VMA | in use |
+| Init | vk-bootstrap | in use |
+| Window | `sdl3[core,vulkan]` | in use — the default port refuses `SDL_WINDOW_VULKAN` |
+| Shaders | shader-slang | in use |
+| Upscaler | FidelityFX FSR | not started |
+| Denoiser | NRD, or hand-rolled SVGF/ReSTIR | not chosen |
 
-The fragment reads `localUniforms.featureMask` through `isFeatureEnabled`, so
-`LocalUniforms::color` takes the unsuffixed name and the light's colour is pushed
-to `_1`. Linking fails with "struct fields mismatch between shaders".
+Gated behind `ENABLE_VULKAN`, default OFF, so ordinary builds are unaffected.
 
-The opaque model program is unaffected only by luck - both of its stages happen to
-reference Locals.
+### 13.1 Licensing
 
-Compiling every entry point of a program in one slangc invocation would fix it,
-but GLSL is a single-entry-point target and slangc rejects multiple `-o` options
-for it. Three ways out:
+reone is GPL-3, clean-room, explicitly non-commercial. FSR is permissively
+licensed and links without conflict — *verify the current text before
+committing*. No dynamic-plugin indirection is needed; a thin internal
+`IUpscaler` seam is still worth having so upscaling can be switched off at
+runtime and the denoiser swapped, but it is an ordinary interface compiled in.
 
-1. **Make member names globally unique**, so disambiguation never applies. The
-   collisions are all in the structs nested inside blocks - `color` appears in
-   `GlobalUniformsLight`, `LocalUniforms` and `ParticleUniformsParticle`, `radius`
-   in `GlobalUniformsLight` and `GrassUniforms`. Renaming those means renaming the
-   C++ members too, since the layout assertions map the two by identity.
-2. **Force every stage to reference every block**, which is brittle and relies on
-   the optimiser not removing the reference.
-3. **Rewrite the identifiers after transpiling**, which is fragile.
+## 14. Shader architecture
 
-The first is the only principled option, and it is one more reason the transitional
-Slang-to-GLSL path costs more than Slang-to-SPIR-V will: SPIR-V binds by number
-and has no cross-stage name matching at all.
+### 14.1 Share code, not entry points
 
-### 9.5 Slang's SPIR-V uses Vulkan builtins that OpenGL ignores
+One module per program family, entry points per variant, shared code in
+`slang/lib/`. Slang emits one SPIR-V blob per module with every entry point in
+it, so shared code compiles once and a second entry point costs nothing.
 
-`SV_InstanceID` lowers to `InstanceIndex - BaseInstance` and `SV_VertexID` to
-`VertexIndex`, under `OpCapability DrawParameters`. Those are Vulkan builtins.
-The OpenGL SPIR-V environment uses `InstanceId` and `VertexId` instead.
+### 14.2 Specialise geometry, branch on material
 
-OpenGL accepts the module anyway - glSpecializeShader reports success - and the
-builtin reads zero. Grass therefore drew all 256 instances on top of cluster 0,
-which happens to sit behind nearer terrain, so nothing appeared at all. The
-symptom looks like missing geometry rather than a wrong index, and every probe
-that assumed the geometry was misplaced came back negative.
+Geometry kind is a pipeline: static, skinned, dangly and saber are separate
+vertex entry points. Material variation is a branch on `featureMask` inside one
+fragment shader. Geometry differences change the vertex contract; material
+differences do not.
 
-It was found by reading the vertex output in RenderDoc: instance 13 reported a
-world position derived from cluster 0.
+### 14.3 One surface description, two consumers
 
-The same applies to any shader reading a vertex or instance id, which currently
-means the dangly and saber geometry paths as well as grass. The static and
-skinned paths are unaffected because they never read one.
+`lib/surface.slang` describes a shaded surface independently of how it was
+sampled. The deferred resolve fills it from a G-buffer; the path tracer will fill
+it from a hit record. Everything downstream is shared. This is the single most
+important structural decision for making §11 tractable.
 
-Adding `SV_StartInstanceLocation` back cancels the subtraction, but does not help
-when the underlying builtin is itself zero.
+### 14.4 Why Slang no longer targets OpenGL
 
-Three ways out:
+Slang's SPIR-V uses Vulkan builtins — `InstanceIndex`, `VertexIndex`,
+`BaseInstance`, needing the `DrawParameters` capability. OpenGL's SPIR-V path
+reads them as **zero, silently**: 256 grass instances collapsed onto one and the
+field vanished. Finding it took a RenderDoc investigation.
 
-1. **Supply the index as an instanced vertex attribute** with divisor 1. Portable
-   and works on both backends, but only solves the instance id, not the vertex id.
-2. **Compile Slang to GLSL, then GLSL to SPIR-V with glslang `-G`**, which emits
-   the OpenGL builtins. The cross-stage naming problem of section 9.4 does not
-   apply, because the result still binds by number. Adds a pipeline stage.
-3. **Rewrite the builtin decorations in the emitted SPIR-V.** Mechanical but
-   fragile.
-
-Option 2 is the most promising: it keeps one shader source, needs no engine
-change, and the intermediate GLSL is already known to be correct.
-
-### 9.6 Decision: stop running Slang on OpenGL
-
-Every obstacle to running the rewritten shaders on OpenGL has been a mismatch
-between what Slang emits and what OpenGL accepts - cross-stage identifier naming
-in transpiled GLSL (9.4), Vulkan-only builtins in GLSL, and Vulkan-only builtins
-in SPIR-V that OpenGL silently reads as zero (9.5). The shaders themselves have
-been correct Vulkan throughout. Each workaround is deleted when the OpenGL
-backend is.
-
-So the Slang shaders now target Vulkan only, and the OpenGL backend goes back to
-its hand-written GLSL, unchanged and frozen. It stops being something to fight
-and returns to being the reference the Vulkan output is compared against.
-
-The comparison survives the move: the capture harness screenshots whatever
-backend is running, so GL against Vulkan is the same A/B as before.
-
-What carries forward unchanged: the uniform blocks and their layout assertions,
-every Slang shader written so far, the capture harness, and the RenderDoc
-workflow. What is removed: the SPIR-V loading path in the OpenGL backend, the
---slangshaders toggle, and the shader registry's variant selection.
-
-The cost is that nothing renders until a good deal of phase 4 exists, which was
-the original argument for doing shaders on OpenGL first. That argument has
-weakened now the shaders are written and known to be Vulkan-shaped - what would
-have been guesswork no longer is.
-
----
-
-## 10. Vulkan backend progress
-
-**Status:** the backend can open a window, build a device, upload geometry and
-textures, and render a depth-tested, textured mesh through a G-buffer and a
-deferred resolve, validation-clean. It is driven by `vulkanprobe`, not by the
-engine: no game asset has been through it, and the engine still runs entirely on
-OpenGL. The sections below are in the order the work happened, and record the
-traps as much as the results.
-
-### 10.1 Standing up the device
-
-`src/libs/graphics/vulkan/` builds as `graphicsvulkan`, gated behind
-`ENABLE_VULKAN` (default OFF, so ordinary builds are untouched). Dependencies
-are the ones §6 chose, all from vcpkg: volk, vulkan-headers, VMA, vk-bootstrap.
-SDL3 had to be reinstalled as `sdl3[core,vulkan]` — the default port has no
-Vulkan support and `SDL_CreateWindow` refuses `SDL_WINDOW_VULKAN` without it.
-
-`VulkanDevice` is instance, surface, physical device, logical device, queues and
-the VMA allocator. `VulkanSwapchain` is the part that gets rebuilt on resize.
-`VulkanRenderer` implements the same `IRenderer` as the GL backend: acquire,
-record, submit, present, with two frames in flight.
-
-`captureFrame` works, so a Vulkan frame goes through the same screenshot path as
-a GL one. It cuts the frame in two — submits what has been recorded, waits,
-reads the staging buffer, then reopens a command buffer for `endFrame` — which
-stalls hard and is why it stays a screenshot path.
-
-Verified: 300 frames presented with the validation layers on and no messages,
-and a captured frame is a single uniform colour matching the requested clear
-exactly.
-
-### 10.2 Three things that cost time, recorded so they do not cost it twice
-
-- **VMA and volk.** With `VMA_STATIC_VULKAN_FUNCTIONS=0` *and*
-  `VMA_DYNAMIC_VULKAN_FUNCTIONS=0`, VMA expects every entry point supplied by
-  hand and otherwise calls through null pointers — it segfaults inside
-  `vmaCreateAllocator`, before any allocation, with no diagnostic. The dynamic
-  path must be on so VMA can fetch what it needs from the two getters it is
-  given. The macros belong in CMake, not in the implementation file, so every
-  translation unit including the header agrees with the one defining it.
-- **The present semaphore is per image, not per frame in flight.** Presentation
-  consumes it against a particular swapchain image and gives no signal that it
-  has, so a per-frame semaphore can be re-signalled while a present is still
-  pending on it. The image count need not equal the in-flight count either.
-  Validation catches this immediately (`VUID-vkQueueSubmit2-semaphore-03868`).
-- **Swapchain images need `TRANSFER_DST` as well as `TRANSFER_SRC`** — SRC for
-  the screenshot readback, DST for `vkCmdClearColorImage`.
-
-### 10.3 Why there is a probe application
-
-`src/apps/vulkanprobe/` is a small host that opens a window and drives the
-backend directly. The engine cannot select a backend yet: GL and Vulkan cannot
-share a window, and every other subsystem still talks to the GL context, so
-pointing the engine at Vulkan today means it dies in module init rather than
-telling us anything about the backend.
-
-It is scaffolding and should be deleted once the engine can switch.
-
-### 10.4 Buffers, the uniform ring, descriptors and a first draw
-
-`VulkanBuffer` wraps a VMA allocation in the two shapes that matter: host-visible
-and permanently mapped, for data rewritten every frame; and device-local filled
-once through a staging copy, for vertices and indices. `VulkanDevice` grew
-`immediateSubmit` for the load-time work those copies need.
-
-`VulkanUniformRing` is the §3.1 replacement for the OpenGL update model. One
-host-visible arena per frame in flight, bump-allocated, each draw taking its own
-slice addressed by a dynamic offset. Nothing is overwritten within a frame, and
-an arena is only reused once its frame's fence says the GPU has finished with
-it. Exhausting an arena throws rather than wrapping: wrapping would hand out
-storage that draws already recorded this frame still point at, and the
-corruption would read as a shader bug.
-
-`VulkanDescriptors` builds one set per frame from the binding points in
-`uniforms.h`, as `VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC`. The descriptors
-never change - they always cover that frame's whole arena - so only the offsets
-move, and the set count does not track the draw count. Each binding's range is
-its block's actual size rather than `VK_WHOLE_SIZE`, so a shader cannot read
-past its slice into another draw's data.
-
-`VulkanPipeline` builds a graphics pipeline from a Slang SPIR-V module, using
-dynamic rendering so there is no `VkRenderPass` or `VkFramebuffer` to keep in
-step. Viewport and scissor stay dynamic; everything else is baked, which is the
-concrete reason `IContext` must not be implemented here (§1.3).
-
-`slang/vktriangle.slang` exercises the lot: a triangle positioned from
-`SV_VertexID`, coloured from `localUniforms.color` pushed through the ring that
-frame. Verified by capture - the drawn colour is exactly the value pushed, over
-a background of exactly the clear colour, with the validation layers silent.
-
-**`SV_VertexID` works here.** Slang lowers it to `VertexIndex` adjusted by
-`BaseVertex`, which needs the `DrawParameters` capability. That is the same
-capability OpenGL's SPIR-V path silently ignored, reading the builtin as zero
-and collapsing every grass instance onto one (§9.5). On Vulkan the validation
-layers name it immediately and enabling
+On Vulkan the same shader works, and enabling
 `VkPhysicalDeviceVulkan11Features::shaderDrawParameters` is the whole fix. The
-shaders were correct all along; the backend was not.
+shaders were correct all along; the backend was not. That is the clearest single
+justification for the move.
 
-### 10.5 Images, samplers, and two descriptor sets
+## 15. Conventions that must hold
 
-`VulkanImage` allocates a sampled 2D image and fills it through a staging
-buffer. Upload is three steps rather than one, because an image has a layout:
-transition to a transfer target, copy, transition to shader-read.
+Load-bearing. Breaking one produces a plausible-looking wrong image.
 
-**Uniform blocks and textures cannot share a descriptor set.** Both number from
-zero - `globalUniforms` is binding 0 and so is `sMainTex` - so they collide as
-written. Uniforms are now set 0 and textures set 1, which the shaders spell as
-`[[vk::binding(n, 1)]]`. `common.slang`, `grass.slang` and `pbr_model.slang`
-were updated to match; verified by disassembling the SPIR-V rather than by
-reading the source.
+- **Descriptor sets.** Uniforms are set 0, textures set 1. Both number from zero,
+  so they cannot share a set — `[[vk::binding(n, 1)]]` for textures.
+- **Uniform block bindings** are pinned in `uniforms.slang` and mirrored by
+  `uniformlayout.generated.h`, which asserts every offset and size at compile
+  time. That header caught a real std140 bug; regenerate it, never edit it.
+- **Vertex attribute locations** are declared in three places that must agree:
+  `Mesh::VertexLayout`, the Slang `[[vk::location(n)]]`, and
+  `VulkanMesh::attributeDescriptions`. Two quirks carried from GL: `offTanSpace`
+  covers three consecutive vec3s as bitangent, tangent, tangent-space normal; and
+  bone indices are stored as floats.
+- **Clip space.** Vulkan depth is 0..1 — use the `_ZO` GLM variants, never
+  `GLM_FORCE_DEPTH_ZERO_TO_ONE`, which would change the GL backend too. Clip
+  space y points *down*, so a screen-space ortho passes `(0, w, 0, h)`, not the
+  OpenGL `(0, w, h, 0)`.
+- **Texture v.** The same bytes are read bottom-up by OpenGL and top-down by
+  Vulkan, and the quad mesh pairs position (0,0) with uv (0,1). 2D shaders flip v.
+- **Screenshots must match the window.** `captureFrame` reverses rows, because a
+  Vulkan image copy is top-down where `glReadPixels` is bottom-up.
+- **`captureFrame` before `endFrame`.** A presented swapchain image has undefined
+  contents.
 
-The texture set has one binding per `TextureUnits` entry, all
-`COMBINED_IMAGE_SAMPLER`, all defaulted to a 1x1 white image at init. A set may
-not be bound with any descriptor left unwritten, and a shader is free to sample
-a unit no material filled in, so a default is not optional.
+## 16. Traps already paid for
 
-Verified by capture: an 8x8 checkerboard sampled across the triangle, tiled
-twice by the repeat address mode and filtered smoothly, over the clear colour,
-validation silent.
+Recorded so they are not paid for twice. Every one cost real time.
 
-### 10.6 The stale shader trap, again
+### 16.1 Motion vectors — done, conventions unverified
 
-Building a specific target - `--target vulkanprobe` - does not run
-`transpile_spirv`. The probe therefore ran against a module compiled before the
-texture sample was added, sampled the default white texture, and produced a
-result that looked like a descriptor bug. Disassembling the module showed
-`sMainTex` was not in it at all.
+`GlobalUniforms` carries unjittered current and previous view-projection plus the
+jitter offset; `LocalUniforms` a previous model matrix; `BoneUniforms` a previous
+bone set. `SceneNode` latches its previous absolute transform once per frame. The
+G-buffer has an RG16F motion target written by all four opaque shaders.
 
-This is the same trap already written up in the RenderDoc skill, which cost
-three debugging probes the first time. The lesson it recorded - "always build
-the default target" - is easy to lose the moment building one target is faster.
-When a shader change appears not to take effect, disassemble the module and look
-for the thing you just added before suspecting anything else.
+**Nothing consumes it yet**, so the sign and scale conventions are unverified.
+FSR (§12.2) is the first real consumer and will expose any error.
 
-### 10.7 Real geometry and depth
+### 16.2 Lighting model — treat all albedo maps as albedo
 
-`VulkanMesh` uploads a `Mesh` as it already describes itself - interleaved
-vertex data with a stride and a set of offsets - into a device-local vertex
-buffer, plus an index buffer built from its faces.
+Baked lightmaps are treated as albedo for now, even where that is physically
+wrong. Revisit when real GI exists (§8.2).
 
-The vertex layout is not reinterpreted anywhere. `Mesh::VertexLayout` gives the
-offsets, and the attribute locations are the ones the Slang shaders declare with
-`[[vk::location(n)]]`, which are in turn the ones the GL path binds. All three
-have to agree, so `VulkanMesh::attributeDescriptions` is the single place they
-are written down. Two details carried over from the GL path: one offset
-(`offTanSpace`) covers three consecutive vec3s in the order bitangent, tangent,
-tangent-space normal; and bone indices are stored as floats, not integers.
+### 16.3 The bugs
 
-`Mesh` gained `vertexData()` and `vertexLayout()` accessors. It already held
-both; they were simply private.
-
-The renderer now owns a depth image sized with the swapchain and rebuilt with
-it, and `VulkanPipeline::Config` takes an optional depth format that switches
-depth test and write on. Without it a cube renders inside-out, which is a
-useful reminder that nothing about depth is implicit here.
-
-Verified by capture: a rotating textured cube, 36 indices, stride 32, three
-attributes, with per-face normal shading and correct occlusion. Validation
-silent. The uniform arena peaks at 2816 bytes for two blocks per frame across
-two frames in flight, which says the 1 MB guess is generous by three orders of
-magnitude and can be revisited when there are real draw counts.
-
-### 10.8 The G-buffer and a deferred resolve
-
-`VulkanGBuffer` owns five colour attachments and a depth attachment, in the same
-order and to the same formats as `fbOpaqueGeometry` in the OpenGL PBR pipeline -
-diffuse, eye normal, lightmap, self-illumination, motion - so the two can
-eventually be compared attachment by attachment. One deviation: eye normals are
-RGBA8 rather than RGB8, because three-component render targets are not
-universally supported and the fourth channel is free here.
-
-`slang/vkgbuffer.slang` has both halves. The geometry pass writes the five
-targets from one fragment shader; the resolve reads them back and lights once
-per pixel. Normals are packed to 0..1 on the way in and unpacked on the way out,
-since the target is unorm and normals are signed.
-
-A frame is now: clear, geometry pass into the G-buffer, barrier flipping all
-five attachments from colour-attachment to shader-read, resolve into the
-swapchain, barrier back. Verified by capture with validation silent, and the
-per-face shading in the result confirms the normal target genuinely round-trips
-rather than the diffuse target being copied through.
-
-Two things Vulkan does not do for you, both caught by validation:
-
-- **Dynamic rendering does not transition attachments.** Images are created
-  `UNDEFINED`, so the first frame begins a pass declaring a layout the images
-  are not in. They need one explicit transition at creation; the per-frame cycle
-  takes over after that.
-- **One blend state per attachment is mandatory**, even when they are identical.
-  A count mismatch against `colorAttachmentCount` is an error, not a default.
-
-### 10.9 A teardown bug that a passing test was hiding
-
-Running the probe without `--capture` reported ten validation errors at exit:
-pipelines and images destroyed while the GPU might still have been reading them.
-Every earlier run had used `--capture`, whose readback calls `vkQueueWaitIdle`
-on the final frame and so happened to leave the device idle before teardown. The
-bug was there the whole time; the verification path was masking it.
-
-`VulkanDevice::waitIdle()` now exists and the probe calls it after the loop,
-before anything it owns goes out of scope. Worth keeping in mind generally: the
-probe's resources are destroyed before the renderer's, so anything the host
-allocates has to outlive the GPU's use of it by an explicit wait.
-
-The wider lesson is about the harness rather than Vulkan. A check that always
-runs one particular way can quietly guarantee the conditions it is meant to
-test. Run the smoke test in every mode it supports, not just the one that
-produces an image.
-
-### 10.10 Caches, and the 2D renderer
-
-`VulkanPipelineCache` builds pipelines on first use, keyed on shader pair,
-attachment formats, vertex layout, blend, cull and depth - the state Vulkan
-bakes in that OpenGL would have set per draw. `VulkanResources` uploads engine
-`Texture`s and `Mesh`es once each, keyed by address.
-
-`Vulkan2DRenderer` implements `I2DRenderer`, the same interface the GL backend
-implements: sprites, tinted sprites, solid rectangles, full-target images, text,
-and the blend and scissor scopes. No caller changes were needed, which is the
-return on the phase 3 seam. No vertex buffers either - every 2D primitive is a
-quad synthesised from `SV_VertexID`, and text draws one instance per glyph from
-the text uniform block.
-
-Verified by capture, validation silent: a plain sprite, a tinted sprite, an
-additively blended sprite, a solid bar, a scissor-clipped sprite, and a line of
-text as fourteen instanced glyphs.
-
-Two bugs worth carrying forward:
-
-- **A descriptor set bound to a recording command buffer may not be rewritten.**
-  Pointing one shared texture set at a different image per draw invalidated the
-  command buffer - 81 validation errors, all downstream of a single
-  `vkUpdateDescriptorSets`. Texture sets are now allocated per distinct texture
-  from a per-frame pool and recycled when the frame's fence clears. Descriptor
-  indexing removes the problem entirely and is what §5.6 wants anyway, but it
-  changes how every shader declares textures.
-- **`glm::ortho` uses OpenGL's -1..1 depth range.** At z=0 every 2D quad landed
-  at `z_ndc` -1 and Vulkan clipped all of them, so nothing drew at all.
-  `orthoRH_ZO` is the explicit zero-to-one form. `GLM_FORCE_DEPTH_ZERO_TO_ONE`
-  would fix it globally and break the GL backend, so it is not used.
-
-### 10.11 The shipping shaders, running
-
-`pbr_model.slang` renders on Vulkan: `staticVertex`, `skinnedVertex`,
-`danglyVertex` and `saberVertex`, all four feeding `opaqueFragment` into the
-G-buffer, four pipelines from one module differing only in the vertex stage.
-Its `GBufferOutput` already matched `VulkanGBuffer`'s attachment order, so
-nothing had to be adapted. `grass.slang` renders too - 256 instanced clusters
-spread across a grid.
-
-**The grass case is the one that started this.** Slang lowers `SV_InstanceID` to
-`InstanceIndex` minus `BaseInstance`; OpenGL's SPIR-V path read both as zero,
-every instance landed on cluster 0, and the field vanished. Finding that took a
-RenderDoc investigation. On Vulkan the same shader, unchanged, simply works.
-
-Four general lessons came out of getting there:
-
-- **A descriptor's image view type must match the shader's declaration.** The
-  texture set is one descriptor type throughout, but `Sampler2DArray` and
-  `SamplerCube` units need array and cube views; a 2D view is an error, not a
-  coercion. There is now a default of each shape, chosen per unit.
-- **Image layout belongs to the object, not the caller.** `VulkanGBuffer` tracks
-  its own, because whether the attachments are readable depends on what the
-  previous frame did and the caller is the party least able to know.
-- **A pass that samples fixed images wants its own persistent set.** Putting the
-  G-buffer into the standing bindings made the geometry pass bind descriptors
-  pointing at images that were colour attachments at that moment.
+- **VMA needs its dynamic function path** with volk. With both static and dynamic
+  function macros off it calls through null pointers inside `vmaCreateAllocator`
+  — before any allocation, with no diagnostic. The macros belong in CMake so every
+  translation unit agrees with the one defining the implementation.
+- **The present semaphore is per swapchain image, not per frame in flight.**
+  Presentation consumes it against an image and never signals that it has.
+- **Dynamic rendering does not transition attachments.** Images created
+  `UNDEFINED` need one explicit transition before the first pass declares a
+  layout they are not in.
+- **One blend state per attachment is mandatory**, even when identical.
+- **Image layout belongs to the object.** `VulkanGBuffer` tracks its own, because
+  whether the attachments are readable depends on what the previous frame did and
+  the caller cannot know.
+- **A descriptor set bound to a recording command buffer cannot be rewritten.**
+  Pointing one shared texture set at a different image per draw invalidates the
+  buffer — 81 validation errors from one `vkUpdateDescriptorSets`. Descriptor
+  indexing (§9) is the real fix.
+- **A descriptor's image view type must match the shader's declaration.**
+  `Sampler2DArray` and `SamplerCube` units need array and cube views; a 2D view is
+  an error, not a coercion.
+- **A vertex input the pipeline does not supply is an error**, not a default.
+- **KotOR textures are DXT** and upload as BC1/BC3 unchanged.
 - **Empty uniform blocks hide failures.** Three of the four model variants draw
   fine with zeroed blocks; `danglyVertex` takes its position wholly from
-  `DanglyUniforms` and silently vanishes. Skinning needs full weight on bone
-  zero for the same reason. A variant that renders nothing is not necessarily a
-  broken pipeline.
+  `DanglyUniforms` and silently vanishes. A variant rendering nothing is not
+  necessarily a broken pipeline.
+- **Building a named target skips `transpile_spirv`.** This has cost two separate
+  investigations. When a shader edit appears not to take, disassemble the module
+  (`spirv-dis x.spv | grep Decorate`) before suspecting anything else.
+- **A verification path can hide the bug it should catch.** Ten teardown
+  validation errors were invisible because every run used `--capture`, whose
+  readback waits on the queue and left the device idle by accident.
+- **An "intermittent" crash may not be.** `imguiHandle` ran on every SDL event
+  with no ImGui context under Vulkan; it faulted only when an event arrived before
+  the first frame, which looked like a race.
 
-### 10.12 The engine hosting Vulkan
+### 16.4 The comparison harness
 
-`--backend vulkan` runs the game on the Vulkan backend, and the main menu
-renders: background, panel, logo, all six buttons and their text, matching the
-OpenGL frame apart from the 3D model behind the panel.
+Screenshot comparison is only meaningful with care:
 
-`graphics/backend.h` holds the choice process-wide. That is deliberate rather
-than threaded through constructors: the two backends cannot share a window so it
-is decided once before anything graphical exists, and the objects that need to
-ask - `Texture`, `Mesh` - are built deep inside resource providers with no other
-reason to know about backends.
+- `--captureframe` counts frames, not seconds, and capture runs use a fixed 1/60
+  timestep. Two runs at the same frame are bit-identical **for GUI frames**.
+- **Gameplay frames are not deterministic.** About a third of the image differs
+  between two runs of the *same* build, and the variance is *bimodal* — pairs
+  either agree within 1% or differ across 33%. A single A/B pair endorses whatever
+  you hoped for about half the time. Ruled out already: RNG divergence (draw
+  counts identical), frame timing, SSAO/SSR, an off-by-one frame, and threaded
+  loading. Unresolved; see §17.
+- Match settings, not just builds — a second build tree without `reone.cfg` runs a
+  different resolution *and* a different pipeline.
+- The mouse cursor is in the capture.
+- Diff by region against the same-build noise floor, not by whole-frame
+  percentage. That is what exposed a real minimap regression hiding inside
+  animation noise.
 
-Under Vulkan the OpenGL services are constructed but never initialised.
-`Context`, `MeshRegistry`, `TextureRegistry` and `Uniforms` still have to hand
-out references through `GraphicsServices`, but nothing on the Vulkan path may
-call them, and anything that does faults immediately rather than silently
-drawing nothing. That is the right trade while the backend is incomplete, and it
-is what turned up the remaining GL calls on the 2D path.
+## 17. Open questions
 
-`GraphicsModule` cannot construct the Vulkan renderers - `graphicsvulkan` links
-against `graphics`, not the other way round - so the engine, which links both,
-builds them and injects them with `setRenderers`.
-
-**Five GL calls were still on the 2D path** after phase 3, invisible on OpenGL
-and fatal without a context: a `useProgram` in `Control::renderBorder` left over
-from the conversion, two `context.withBlendMode` scopes, and a whole open-coded
-quad draw in `Game::renderDeveloperRect` that was simply `drawRect`. Phase 3
-converted the draws and missed the state scopes around them.
-
-Skipped rather than ported, each for a reason recorded in the code: GLSL
-compilation, movie playback, the ImGui editor, and the 3D sub-scene behind the
-menu panel.
-
-### 10.13 Four bugs worth remembering
-
-- **KotOR textures are DXT.** They upload as BC1 and BC3 unchanged - the GPU
-  samples block-compressed data directly, and decompressing would cost time and
-  several times the memory for nothing.
-- **The frame was upside down and the screenshots hid it.** Vulkan clip space
-  has y pointing down, so the OpenGL ortho - which swaps bottom and top - put
-  screen y=0 at the bottom. It was invisible in captures because
-  `captureFrame` handed back top-down rows where `glReadPixels` gives bottom-up,
-  so the TGA was flipped a second time and looked correct. Two wrongs. The
-  capture now reverses rows so a screenshot always agrees with the window.
-- **Textures still need a v flip.** Uploaded bytes are the same for both APIs,
-  but OpenGL treats the first row as the bottom and Vulkan as the top, and the
-  quad mesh pairs position (0,0) with uv (0,1). Get this and the projection
-  confused and one cancels the other.
-- **An intermittent segfault that was not intermittent.** `imguiHandle` ran on
-  every SDL event with no ImGui context under Vulkan, so `ImGui::GetIO()`
-  dereferenced null - but only if an event arrived before the first frame, which
-  made it look like a race and survive whole runs untouched. Diagnosed by asking
-  codex to rank the candidates; it named this first.
-
-### 10.14 What phase 4 still needs
-
-Phase 4 is defined as parity with the OpenGL PBR pipeline. The backend can now
-do everything *structurally* required - present, allocate, upload, describe,
-cache pipelines, rasterise geometry into a G-buffer, resolve it, and draw the
-whole 2D vocabulary. What it does not have is the pipeline itself and the
-content that feeds it:
-
-1. **The pass chain.** `scene/render/pipeline/pbr.cpp` is around 500 lines of
-   orchestration over shadow maps, transparency and OIT, SSAO, SSR, bloom and
-   the combine pass. The opaque geometry pass and a stand-in resolve exist in
-   Vulkan; none of the rest does.
-2. **Real lighting.** The resolve lights from one fixed direction.
-   `f_pbr_combine.glsl` - light lists, shadow lookups, the PBR BRDF, fog - has
-   to be ported, and `Material` has to reach the backend so the feature mask
-   means something.
-3. **Remaining geometry kinds.** Particles, billboards and walkmeshes. The four
-   model variants and grass are done.
-4. **Movie playback**, which uploads a frame per tick.
-5. ~~**Engine hosting.**~~ Done for 2D - see §10.12. What remains is the scene:
-   `Game::renderScene` and the sub-scene in `Control` are still skipped, because
-   both go through the GL render pipeline.
-
-Items 1 and 2 are the bulk, and they are now the only thing between the menu and
-a playable frame. The probe application has been deleted along with its test
-shaders: the engine itself is the harness now.
-
-### 10.12 Next
-
-- Wiring `MeshRegistry`, `Texture` and `Material` through, so game assets rather
-  than a synthesised cube go down this path.
-- A pipeline cache, since every material and pass combination is now its own
-  pipeline object.
-- Then the engine can begin to select a backend, and `vulkanprobe` can go.
+- **Scene nondeterminism** (§16.4). Must be closed before GL-and-Vulkan parity can
+  be checked automatically, which is the entire point of the harness. The
+  bimodality is the strongest clue: something settles into one of two states
+  early. Worth checking whether the number of `update` calls before the capture
+  frame is constant, and whether any pass samples a target that is never cleared.
+- **Denoiser choice** (§12.1) — defer until §10.3 produces traced input.
+- **Compute skinning ownership** — the raster path could use it too, which would
+  delete the vertex-shader skinning path. Decide when §9.1 is built.
+- **Whether grass and particles are ever traced**, or stay rasterised and
+  composited. Leaning composited; revisit if the seams show.
+- **`IStatistic` has no GPU timing.** Needed before any performance claim about
+  the Vulkan backend can be taken seriously.
