@@ -204,6 +204,15 @@ touches, and how far it moves them.
 
 ## Traps that cost real time here
 
+- **Validation is off unless you ask for it, and it does not go to the log.**
+  `--vkvalidation` defaults to false, so grepping `engine.log` for VUIDs
+  without it always returns zero - which reads exactly like "no errors" and was
+  reported as such several times during this work. The messages also go to the
+  debug messenger on stderr, not into `engine.log`, so redirecting stdout to
+  `/dev/null` hides them even when the layers are on. Run
+  `--vkvalidation 1 ... > val.txt 2>&1` and grep that. Sanity-check the
+  mechanism once by confirming a known-bad build does print something; a count
+  of zero is only evidence if a non-zero count was reachable.
 - **Channel order is not uniform across targets.** The Vulkan `output` image
   carries the swapchain format, `B8G8R8A8_UNORM`, while every G-buffer target
   is RGBA. `--dumptargets` now swizzles the output to RGBA on the way out so
