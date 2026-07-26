@@ -224,6 +224,19 @@ float4 resolveFragment(Varyings input) : SV_Target {
 
     float3 albedo = gammaToLinear(mainTexSample.rgb);
     float3 emission = gammaToLinear(selfIllumSample.rgb);
+    // Odyssey assets carry neither metalness nor roughness. What an
+    // environment-mapped surface does carry is diffuse alpha, which the retro
+    // renderer uses as a reflection strength: it adds the environment at
+    // (1 - alpha), see glsl/f_rtr_opaqmodel.glsl. Deferred PBR read that alpha
+    // as roughness and dropped the strength entirely, so every reflection came
+    // back weighted by a dielectric's 4% - a droid whose alpha averages 0.7
+    // reflected about a fifth of what the original renderer gave it.
+    //
+    // Feeding the strength into F0 restores the magnitude without a second
+    // environment term: alpha 0 reflects like a mirror, alpha 1 like any other
+    // dielectric. Reflectance rather than metalness, so the reflection stays
+    // untinted by albedo and the diffuse lobe is not switched off, which is
+    // what the retro path does and what metalness would not.
     float metallic = 0.0;
     // Odyssey assets carry no roughness channel; the diffuse alpha stands in,
     // floored so that nothing turns into a perfect mirror.
@@ -244,7 +257,10 @@ float4 resolveFragment(Varyings input) : SV_Target {
     float fog = fogEnabled ? getFog(worldPos) : 0.0;
 
     float NdotV = max(0.0, dot(normal, V));
-    float3 F0 = lerp(float3(0.04), albedo, metallic);
+    // Gated on envmapped: on everything else the diffuse alpha is an opacity
+    // or an alpha-test threshold and means nothing about reflectance.
+    float envMapStrength = envmapped ? (1.0 - mainTexSample.a) : 0.0;
+    float3 F0 = lerp(lerp(float3(0.04), albedo, metallic), float3(1.0), envMapStrength);
 
     // The reflection direction is what both derived maps are indexed by.
     float3 R = reflect(-V, normal);

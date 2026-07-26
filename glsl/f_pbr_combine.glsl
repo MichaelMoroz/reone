@@ -58,6 +58,19 @@ void main() {
 
     vec3 albedo = gammaToLinear(mainTexSample.rgb);
     vec3 emission = gammaToLinear(selfIllumSample.rgb);
+    // Odyssey assets carry neither metalness nor roughness. What an
+    // environment-mapped surface does carry is diffuse alpha, which the retro
+    // renderer uses as a reflection strength: it adds the environment at
+    // (1 - alpha), see f_rtr_opaqmodel.glsl. Deferred PBR read that alpha as
+    // roughness and dropped the strength entirely, so every reflection came
+    // back weighted by a dielectric's 4% - a droid whose alpha averages 0.7
+    // reflected about a fifth of what the original renderer gave it.
+    //
+    // Feeding the strength into F0 restores the magnitude without a second
+    // environment term: alpha 0 reflects like a mirror, alpha 1 like any other
+    // dielectric. Reflectance rather than metalness, so the reflection stays
+    // untinted by albedo and the diffuse lobe is not switched off, which is
+    // what the retro path does and what metalness would not.
     float metallic = 0.0;
     float roughness = clamp(mainTexSample.a, 0.2, 1.0);
 #ifdef R_SSAO
@@ -98,7 +111,11 @@ void main() {
     {
         float NdotV = max(0.0, dot(normal, V));
 
-        vec3 F0 = mix(vec3(0.04), albedo, metallic);
+        // Gated on envmapped: on everything else the diffuse alpha is an
+        // opacity or an alpha-test threshold and means nothing about
+        // reflectance.
+        float envMapStrength = envmapped ? (1.0 - mainTexSample.a) : 0.0;
+        vec3 F0 = mix(mix(vec3(0.04), albedo, metallic), vec3(1.0), envMapStrength);
 
         vec3 irradiance = gammaToLinear(uWorldAmbientColor.rgb);
         irradiance += int(envmapped) * gammaToLinear(irradianceSample);
