@@ -527,13 +527,13 @@ main argument for this ordering.
    resolve. All of it exercised by `vulkanprobe` with the validation layers on
    and silent. See §10.
 
-   **The shipping shaders run; the pass chain does not exist yet.** All four
-   `pbr_model` geometry variants and instanced grass render into the Vulkan
-   G-buffer, pipelines are cached, engine `Texture`s and `Mesh`es upload through
-   a cache, and the whole 2D vocabulary runs through the same `I2DRenderer` the
-   GL backend implements. Still missing: shadow, transparency, SSAO, SSR and
-   combine passes, real lighting and materials, particles and billboards, movie
-   playback, and engine-side backend selection. See §10.12.
+   **The engine runs on Vulkan as far as the main menu; the scene pipeline does
+   not exist yet.** `--backend vulkan` renders the menu correctly through the
+   same `I2DRenderer` the GL backend implements. All four `pbr_model` geometry
+   variants and instanced grass have been shown to render into the Vulkan
+   G-buffer. Still missing: the pass chain, real lighting and materials,
+   particles and billboards, movie playback, and the scene pipeline that would
+   put any of that on screen in the game. See §10.14.
 5. **Acceleration structures and hybrid RT** — compute skinning, BLAS/TLAS, then
    RT shadows/AO/reflections replacing the current SSAO and SSR passes. First
    visible payoff.
@@ -1032,7 +1032,61 @@ Four general lessons came out of getting there:
   zero for the same reason. A variant that renders nothing is not necessarily a
   broken pipeline.
 
-### 10.12 What phase 4 still needs
+### 10.12 The engine hosting Vulkan
+
+`--backend vulkan` runs the game on the Vulkan backend, and the main menu
+renders: background, panel, logo, all six buttons and their text, matching the
+OpenGL frame apart from the 3D model behind the panel.
+
+`graphics/backend.h` holds the choice process-wide. That is deliberate rather
+than threaded through constructors: the two backends cannot share a window so it
+is decided once before anything graphical exists, and the objects that need to
+ask - `Texture`, `Mesh` - are built deep inside resource providers with no other
+reason to know about backends.
+
+Under Vulkan the OpenGL services are constructed but never initialised.
+`Context`, `MeshRegistry`, `TextureRegistry` and `Uniforms` still have to hand
+out references through `GraphicsServices`, but nothing on the Vulkan path may
+call them, and anything that does faults immediately rather than silently
+drawing nothing. That is the right trade while the backend is incomplete, and it
+is what turned up the remaining GL calls on the 2D path.
+
+`GraphicsModule` cannot construct the Vulkan renderers - `graphicsvulkan` links
+against `graphics`, not the other way round - so the engine, which links both,
+builds them and injects them with `setRenderers`.
+
+**Five GL calls were still on the 2D path** after phase 3, invisible on OpenGL
+and fatal without a context: a `useProgram` in `Control::renderBorder` left over
+from the conversion, two `context.withBlendMode` scopes, and a whole open-coded
+quad draw in `Game::renderDeveloperRect` that was simply `drawRect`. Phase 3
+converted the draws and missed the state scopes around them.
+
+Skipped rather than ported, each for a reason recorded in the code: GLSL
+compilation, movie playback, the ImGui editor, and the 3D sub-scene behind the
+menu panel.
+
+### 10.13 Four bugs worth remembering
+
+- **KotOR textures are DXT.** They upload as BC1 and BC3 unchanged - the GPU
+  samples block-compressed data directly, and decompressing would cost time and
+  several times the memory for nothing.
+- **The frame was upside down and the screenshots hid it.** Vulkan clip space
+  has y pointing down, so the OpenGL ortho - which swaps bottom and top - put
+  screen y=0 at the bottom. It was invisible in captures because
+  `captureFrame` handed back top-down rows where `glReadPixels` gives bottom-up,
+  so the TGA was flipped a second time and looked correct. Two wrongs. The
+  capture now reverses rows so a screenshot always agrees with the window.
+- **Textures still need a v flip.** Uploaded bytes are the same for both APIs,
+  but OpenGL treats the first row as the bottom and Vulkan as the top, and the
+  quad mesh pairs position (0,0) with uv (0,1). Get this and the projection
+  confused and one cancels the other.
+- **An intermittent segfault that was not intermittent.** `imguiHandle` ran on
+  every SDL event with no ImGui context under Vulkan, so `ImGui::GetIO()`
+  dereferenced null - but only if an event arrived before the first frame, which
+  made it look like a race and survive whole runs untouched. Diagnosed by asking
+  codex to rank the candidates; it named this first.
+
+### 10.14 What phase 4 still needs
 
 Phase 4 is defined as parity with the OpenGL PBR pipeline. The backend can now
 do everything *structurally* required - present, allocate, upload, describe,
@@ -1051,14 +1105,13 @@ content that feeds it:
 3. **Remaining geometry kinds.** Particles, billboards and walkmeshes. The four
    model variants and grass are done.
 4. **Movie playback**, which uploads a frame per tick.
-5. **Engine hosting.** The engine cannot select a backend. Everything outside
-   the graphics library still calls the GL context directly, so `--backend
-   vulkan` would die in module init. This is what turns the backend from a
-   demonstration into something usable.
+5. ~~**Engine hosting.**~~ Done for 2D - see §10.12. What remains is the scene:
+   `Game::renderScene` and the sub-scene in `Control` are still skipped, because
+   both go through the GL render pipeline.
 
-Items 1 and 2 are the bulk. Item 5 is what makes any of it visible in the game,
-and the 2D renderer being finished means a Vulkan window hosting the GUI is
-reachable before the scene pipeline is.
+Items 1 and 2 are the bulk, and they are now the only thing between the menu and
+a playable frame. The probe application has been deleted along with its test
+shaders: the engine itself is the harness now.
 
 ### 10.12 Next
 

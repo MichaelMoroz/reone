@@ -49,6 +49,7 @@
 #include "reone/graphics/modelnode.h"
 #include "reone/graphics/renderbuffer.h"
 #include "reone/graphics/renderer.h"
+#include "reone/graphics/renderer2d.h"
 #include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/gui/gui.h"
@@ -1050,10 +1051,10 @@ void Game::renderDeveloperOverlay() {
             0.0f, 0.0f, 100.0f);
         globals.projectionInv = glm::inverse(globals.projection);
     });
-    _services.graphics.context.withBlendMode(BlendMode::Normal, [this]() {
+    _services.graphics.renderer2d.withBlendMode(BlendMode::Normal, [this]() {
         renderDeveloperBanner();
     });
-    _services.graphics.context.withBlendMode(BlendMode::Normal, [this, hasCamera, &projection, &view]() {
+    _services.graphics.renderer2d.withBlendMode(BlendMode::Normal, [this, hasCamera, &projection, &view]() {
         if (_developerOverlay.triggers && hasCamera) {
             renderDeveloperTriggerOverlay(projection, view);
         }
@@ -1293,17 +1294,7 @@ void Game::renderDeveloperPanel(const std::vector<std::string> &lines, glm::vec2
 }
 
 void Game::renderDeveloperRect(glm::vec2 position, glm::vec2 size, glm::vec4 color) {
-    glm::mat4 transform(1.0f);
-    transform = glm::translate(transform, glm::vec3(position.x, position.y, 0.0f));
-    transform = glm::scale(transform, glm::vec3(size.x, size.y, 1.0f));
-
-    _services.graphics.uniforms.setLocals([transform, color](auto &locals) {
-        locals.reset();
-        locals.model = transform;
-        locals.color = color;
-    });
-    _services.graphics.context.useProgram(_services.graphics.shaderRegistry.get(ShaderProgramId::mvpColor));
-    _services.graphics.meshRegistry.get(MeshName::quad).draw(_services.graphics.statistic);
+    _services.graphics.renderer2d.drawRect(position, size, color);
 }
 
 void Game::updateMusic() {

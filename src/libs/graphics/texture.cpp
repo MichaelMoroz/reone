@@ -17,6 +17,8 @@
 
 #include "reone/graphics/texture.h"
 
+#include "reone/graphics/backend.h"
+
 #include "reone/graphics/pixelutil.h"
 #include "reone/graphics/textureutil.h"
 #include "reone/system/exception/notimplemented.h"
@@ -112,6 +114,11 @@ static uint32_t getFilterGL(Texture::Filtering filter) {
 
 void Texture::init() {
     if (_inited) {
+        return;
+    }
+    if (isVulkanBackend()) {
+        // Nothing to do: the Vulkan backend uploads from the pixel data this
+        // object already holds, on first use, and owns the device image itself.
         return;
     }
     checkMainThread();

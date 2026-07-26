@@ -20,6 +20,7 @@
 #include "../context.h"
 #include "../meshregistry.h"
 #include "../pbrtextures.h"
+#include "../backend.h"
 #include "../renderer/gl.h"
 #include "../renderer/gl2d.h"
 #include "../shaderregistry.h"
@@ -44,6 +45,18 @@ public:
         _window(window) {
     }
 
+    /**
+     * Supply the renderers instead of building the OpenGL pair.
+     *
+     * The Vulkan backend is a separate library that links against this one, so
+     * this library cannot construct it. The host, which links both, does that
+     * and hands the result in. Must be called before init().
+     */
+    void setRenderers(IRenderer &renderer, I2DRenderer &renderer2d) {
+        _externalRenderer = &renderer;
+        _externalRenderer2d = &renderer2d;
+    }
+
     ~GraphicsModule() { deinit(); }
 
     void init();
@@ -52,8 +65,8 @@ public:
     Context &context() { return *_context; }
     MeshRegistry &meshRegistry() { return *_meshRegistry; }
     PBRTextures &pbrTextures() { return *_pbrTextures; }
-    IRenderer &renderer() { return *_renderer; }
-    I2DRenderer &renderer2d() { return *_renderer2d; }
+    IRenderer &renderer() { return _externalRenderer ? *_externalRenderer : *_renderer; }
+    I2DRenderer &renderer2d() { return _externalRenderer2d ? *_externalRenderer2d : *_renderer2d; }
     ShaderRegistry &shaderRegistry() { return *_shaderRegistry; }
     Statistic &statistic() { return *_statistic; }
     TextureRegistry &textureRegistry() { return *_textureRegistry; }
@@ -70,6 +83,8 @@ private:
     std::unique_ptr<PBRTextures> _pbrTextures;
     std::unique_ptr<GLRenderer> _renderer;
     std::unique_ptr<GL2DRenderer> _renderer2d;
+    IRenderer *_externalRenderer {nullptr};
+    I2DRenderer *_externalRenderer2d {nullptr};
     std::unique_ptr<ShaderRegistry> _shaderRegistry;
     std::unique_ptr<Statistic> _statistic;
     std::unique_ptr<TextureRegistry> _textureRegistry;

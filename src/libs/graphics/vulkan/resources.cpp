@@ -32,11 +32,11 @@ bool VulkanResources::supported(PixelFormat format) {
     case PixelFormat::RGBA8:
     case PixelFormat::BGR8:
     case PixelFormat::BGRA8:
+    case PixelFormat::DXT1:
+    case PixelFormat::DXT5:
         return true;
     default:
-        // DXT stays compressed on the device rather than being expanded, so it
-        // needs its own path with the BC formats. Everything else here is a
-        // render target format that is never uploaded from pixels.
+        // What remains are render target formats, never uploaded from pixels.
         return false;
     }
 }
@@ -92,6 +92,24 @@ static std::vector<uint8_t> widenToRGBA(const ByteBuffer &pixels,
     return out;
 }
 
+/**
+ * The block-compressed formats, which upload as they stand.
+ *
+ * The game ships nearly every texture as DXT, so this is the common path rather
+ * than a special case. Decompressing on load would cost both time and four to
+ * eight times the memory for no benefit: the GPU samples BC directly.
+ */
+static std::optional<VkFormat> compressedFormat(PixelFormat format) {
+    switch (format) {
+    case PixelFormat::DXT1:
+        return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+    case PixelFormat::DXT5:
+        return VK_FORMAT_BC3_UNORM_BLOCK;
+    default:
+        return std::nullopt;
+    }
+}
+
 const VulkanImage &VulkanResources::get(const Texture &texture) {
     auto existing = _textures.find(&texture);
     if (existing != _textures.end()) {
@@ -104,15 +122,22 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
     if (texture.layers().empty() || !texture.layers().front().pixels) {
         throw std::invalid_argument("Vulkan: texture " + texture.name() + " has no pixels");
     }
-    auto widened = widenToRGBA(*texture.layers().front().pixels,
-                               texture.pixelFormat(),
-                               texture.width(),
-                               texture.height());
-
     auto image = std::make_unique<VulkanImage>(_device);
-    image->initSampled2D({texture.width(), texture.height()},
-                         VK_FORMAT_R8G8B8A8_UNORM,
-                         widened.data());
+    if (auto compressed = compressedFormat(texture.pixelFormat())) {
+        const auto &pixels = *texture.layers().front().pixels;
+        image->initSampled2DSized({texture.width(), texture.height()},
+                                  *compressed,
+                                  pixels.data(),
+                                  static_cast<VkDeviceSize>(pixels.size()));
+    } else {
+        auto widened = widenToRGBA(*texture.layers().front().pixels,
+                                   texture.pixelFormat(),
+                                   texture.width(),
+                                   texture.height());
+        image->initSampled2D({texture.width(), texture.height()},
+                             VK_FORMAT_R8G8B8A8_UNORM,
+                             widened.data());
+    }
     debug("Vulkan: uploaded texture " + texture.name(), LogChannel::Graphics);
     return *_textures.insert({&texture, std::move(image)}).first->second;
 }

@@ -17,6 +17,8 @@
 
 #include "reone/graphics/di/module.h"
 
+#include "reone/graphics/backend.h"
+
 namespace reone {
 
 namespace graphics {
@@ -34,37 +36,49 @@ void GraphicsModule::init() {
         *_shaderRegistry,
         *_statistic,
         *_uniforms);
-    _renderer = std::make_unique<GLRenderer>(
-        *_context,
-        *_meshRegistry,
-        *_shaderRegistry,
-        *_statistic,
-        *_uniforms,
-        _window);
-    _renderer2d = std::make_unique<GL2DRenderer>(
-        *_context,
-        *_meshRegistry,
-        *_shaderRegistry,
-        *_statistic,
-        *_uniforms);
+    if (!_externalRenderer) {
+        _renderer = std::make_unique<GLRenderer>(
+            *_context,
+            *_meshRegistry,
+            *_shaderRegistry,
+            *_statistic,
+            *_uniforms,
+            _window);
+    }
+    if (!_externalRenderer2d) {
+        _renderer2d = std::make_unique<GL2DRenderer>(
+            *_context,
+            *_meshRegistry,
+            *_shaderRegistry,
+            *_statistic,
+            *_uniforms);
+    }
 
     _services = std::make_unique<GraphicsServices>(
         *_context,
         *_meshRegistry,
         *_pbrTextures,
-        *_renderer,
-        *_renderer2d,
+        renderer(),
+        renderer2d(),
         *_shaderRegistry,
         *_statistic,
         *_textureRegistry,
         *_uniforms);
 
-    _context->init();
-    _meshRegistry->init();
-    _textureRegistry->init();
-    _uniforms->init();
-    _renderer->init();
-    _renderer2d->init();
+    if (!isVulkanBackend()) {
+        // All four are OpenGL objects that make GL calls on init. Under Vulkan
+        // they stay constructed but uninitialised: the services struct still
+        // has to hand out references, and nothing on the Vulkan path calls
+        // them. Anything that does will fault loudly rather than silently
+        // drawing nothing, which is the behaviour we want while the backend is
+        // incomplete.
+        _context->init();
+        _meshRegistry->init();
+        _textureRegistry->init();
+        _uniforms->init();
+    }
+    renderer().init();
+    renderer2d().init();
 }
 
 void GraphicsModule::deinit() {
@@ -72,6 +86,8 @@ void GraphicsModule::deinit() {
 
     _renderer2d.reset();
     _renderer.reset();
+    _externalRenderer = nullptr;
+    _externalRenderer2d = nullptr;
     _pbrTextures.reset();
     _uniforms.reset();
     _meshRegistry.reset();

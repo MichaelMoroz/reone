@@ -38,9 +38,6 @@ set(SPIRV_MODULES
     "pbr_model:staticVertex+skinnedVertex+danglyVertex+saberVertex+opaqueFragment"
     "grass:grassVertex+pbrFragment+retroFragment"
     "walkmesh:walkmeshVertex+pbrFragment+retroFragment"
-    "vktriangle:triangleVertex+triangleFragment"
-    "vkmesh:meshVertex+meshFragment"
-    "vkgbuffer:geometryVertex+geometryFragment+resolveVertex+resolveFragment"
     "vk2d:quadVertex+imageFragment+colorFragment+fullTargetVertex+textVertex+textFragment")
 
 if(SLANGC_EXECUTABLE)

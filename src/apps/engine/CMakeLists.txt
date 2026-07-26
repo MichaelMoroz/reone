@@ -42,4 +42,9 @@ target_include_directories(engine PRIVATE ${CMAKE_SOURCE_DIR}/extern)
 target_precompile_headers(engine PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(engine PRIVATE game ${Boost_PROGRAM_OPTIONS_LIBRARY} imgui::imgui)
 
+if(ENABLE_VULKAN)
+    target_link_libraries(engine PRIVATE graphicsvulkan)
+    target_compile_definitions(engine PRIVATE R_ENABLE_VULKAN)
+endif()
+
 list(APPEND InstallTargets engine)

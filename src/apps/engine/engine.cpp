@@ -136,11 +136,24 @@ void Engine::init() {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         throw std::runtime_error("SDL_Init failed: " + std::string(SDL_GetError()));
     }
+    _vulkan = _options.backend == "vulkan";
+    if (_vulkan) {
+#ifndef R_ENABLE_VULKAN
+        throw std::runtime_error("--backend vulkan requires a build with ENABLE_VULKAN");
+#endif
+        // Before the window: the two backends need different window flags, and
+        // asset objects consult this when deciding whether to make GL calls.
+        setCurrentBackend(GraphicsBackend::Vulkan);
+    }
     _window = std::make_unique<Window>(_options.graphics);
     _window->init();
 
-    imguiInit();
-    imguiInitWindow(*_window);
+    if (!_vulkan) {
+        // The ImGui backends are OpenGL ones. The editor is unavailable on
+        // Vulkan until they are replaced.
+        imguiInit();
+        imguiInitWindow(*_window);
+    }
 
     if (_options.randomSeed >= 0) {
         seedRandom(static_cast<uint32_t>(_options.randomSeed));
@@ -157,6 +170,17 @@ void Engine::init() {
 
     _systemModule = std::make_unique<SystemModule>(*_clock);
     _graphicsModule = std::make_unique<GraphicsModule>(_options.graphics, _window.get());
+#ifdef R_ENABLE_VULKAN
+    if (_vulkan) {
+        _vulkanRenderer = std::make_unique<VulkanRenderer>(
+            _window->sdlWindow(),
+            glm::ivec2 {_options.graphics.width, _options.graphics.height},
+            _options.graphics.vsync,
+            _options.vulkanValidation);
+        _vulkanRenderer->init();
+        _graphicsModule->setRenderers(*_vulkanRenderer, _vulkanRenderer->renderer2d());
+    }
+#endif
     _audioModule = std::make_unique<AudioModule>(_options.audio);
     _movieModule = std::make_unique<MovieModule>();
     _scriptModule = std::make_unique<ScriptModule>();
@@ -234,7 +258,11 @@ void Engine::init() {
         *_console);
     _game->init();
 
-    _editor = std::make_unique<Editor>(*this);
+    if (!_vulkan) {
+        // Editor is built on the ImGui OpenGL backend, which is not initialised
+        // under Vulkan.
+        _editor = std::make_unique<Editor>(*this);
+    }
 
     if (!_options.commandsFile.empty()) {
         std::ifstream file(_options.commandsFile);
@@ -331,11 +359,13 @@ int Engine::run() {
             break;
         }
         _profiler->measure(kMainThreadName, kProfilerUpdateTimeIndex, [this, &frameTime]() {
-            imguiNewFrame();
+            if (!_vulkan) {
+                imguiNewFrame();
+            }
             _game->update(frameTime);
             bool showcur = _game->cursorType() == CursorType::None;
             bool relmouse = _game->relativeMouseMode();
-            if (_editor->isEnabled()) {
+            if (_editor && _editor->isEnabled()) {
                 // The in-game camera grabs the pointer, which would make editor
                 // windows unreachable. Release it for as long as the editor is up.
                 // Cursor visibility is left to ImGui, which drives it every frame
@@ -345,10 +375,16 @@ int Engine::run() {
             showCursor(showcur);
             setRelativeMouseMode(relmouse);
             _profiler->update(frameTime);
-            _editor->update(frameTime);
+            if (_editor) {
+                _editor->update(frameTime);
+            }
         });
         _profiler->measure(kMainThreadName, kProfilerRenderGraphicsTimeIndex, [this, &quit]() {
             _services->graphics.statistic.resetDrawCalls();
+            if (_vulkan) {
+                renderVulkanFrame(quit);
+                return;
+            }
             if (_options.graphics.pbr) {
                 _services->graphics.pbrTextures.refresh();
             }
@@ -357,7 +393,9 @@ int Engine::run() {
             _game->render();
             _profiler->render();
             _console->render();
-            _editor->render();
+            if (_editor) {
+                _editor->render();
+            }
             imguiRender();
             captureIfRequested(quit);
             _services->graphics.renderer.endFrame();
@@ -429,6 +467,50 @@ void Engine::captureIfRequested(bool &quit) {
     quit = true;
 }
 
+void Engine::renderVulkanFrame(bool &quit) {
+#ifdef R_ENABLE_VULKAN
+    glm::ivec2 extent {_options.graphics.width, _options.graphics.height};
+    info("vk: beginFrame");
+    _vulkanRenderer->beginFrame(extent);
+
+    // One rendering scope for the whole frame. Everything the game draws at
+    // this point is 2D; the scene pipeline is not on Vulkan yet.
+    auto cmd = _vulkanRenderer->commandBuffer();
+    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    attachment.imageView = _vulkanRenderer->currentImageView();
+    attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = {static_cast<uint32_t>(extent.x),
+                                   static_cast<uint32_t>(extent.y)};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &attachment;
+
+    VkViewport viewport {0.0f, 0.0f, static_cast<float>(extent.x),
+                         static_cast<float>(extent.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(extent.x),
+                               static_cast<uint32_t>(extent.y)}};
+
+    vkCmdBeginRendering(cmd, &rendering);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    auto &renderer2d = _vulkanRenderer->renderer2d();
+    renderer2d.begin(cmd, extent, _vulkanRenderer->swapchain().imageFormat());
+    _game->render();
+    renderer2d.end();
+
+    vkCmdEndRendering(cmd);
+
+    info("vk: endFrame");
+    captureIfRequested(quit);
+    _vulkanRenderer->endFrame();
+#endif
+}
+
 void Engine::processEvents(bool &quit) {
     std::queue<input::Event> unhandled;
     SDL_Event sdlEvent;
@@ -438,7 +520,9 @@ void Engine::processEvents(bool &quit) {
             break;
         }
         if (!_window->isAssociatedWith(sdlEvent)) {
-            imguiHandle(sdlEvent);
+            if (!_vulkan) {
+                imguiHandle(sdlEvent);
+            }
             continue;
         }
         if (_window->handle(sdlEvent)) {
@@ -455,12 +539,14 @@ void Engine::processEvents(bool &quit) {
         if (_profiler->handle(*event)) {
             continue;
         }
-        if (_editor->handle(*event)) {
+        if (_editor && _editor->handle(*event)) {
             continue;
         }
         // Last filter before the game sees it: ImGui only claims the event when
-        // it actually wants the mouse or keyboard.
-        if (imguiHandle(sdlEvent)) {
+        // it actually wants the mouse or keyboard. There is no ImGui context
+        // under Vulkan, and ImGui::GetIO() on a null context faults - which is
+        // why the crash depended on whether an SDL event happened to arrive.
+        if (!_vulkan && imguiHandle(sdlEvent)) {
             continue;
         }
         unhandled.push(*event);

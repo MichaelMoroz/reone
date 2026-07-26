@@ -299,14 +299,22 @@ std::shared_ptr<Texture> VulkanRenderer::captureFrame() {
           "vkQueueSubmit2");
     check(vkQueueWaitIdle(_device.graphicsQueue()), "vkQueueWaitIdle");
 
-    // The swapchain format is B8G8R8A8; Texture wants RGB8.
+    // The swapchain format is B8G8R8A8; Texture wants RGB8. Rows are also
+    // reversed: a Vulkan image copy yields them top-down, while glReadPixels
+    // yields bottom-up, and everything downstream - TgaWriter, the comparison
+    // harness - assumes the OpenGL order. Without this the screenshot and the
+    // window disagree, which is worse than either being wrong.
     auto pixels = std::make_shared<ByteBuffer>();
     pixels->resize(static_cast<size_t>(extent.x) * extent.y * 3);
     auto src = static_cast<const uint8_t *>(allocated.pMappedData);
-    for (size_t i = 0, n = static_cast<size_t>(extent.x) * extent.y; i < n; ++i) {
-        (*pixels)[i * 3 + 0] = src[i * 4 + 2];
-        (*pixels)[i * 3 + 1] = src[i * 4 + 1];
-        (*pixels)[i * 3 + 2] = src[i * 4 + 0];
+    for (int y = 0; y < extent.y; ++y) {
+        auto srcRow = src + static_cast<size_t>(y) * extent.x * 4;
+        auto dstRow = &(*pixels)[static_cast<size_t>(extent.y - 1 - y) * extent.x * 3];
+        for (int x = 0; x < extent.x; ++x) {
+            dstRow[x * 3 + 0] = srcRow[x * 4 + 2];
+            dstRow[x * 3 + 1] = srcRow[x * 4 + 1];
+            dstRow[x * 3 + 2] = srcRow[x * 4 + 0];
+        }
     }
     vmaDestroyBuffer(_device.allocator(), staging, allocation);
 

@@ -21,7 +21,11 @@
 #include "reone/game/di/module.h"
 #include "reone/game/game.h"
 #include "reone/graphics/di/module.h"
+#include "reone/graphics/backend.h"
 #include "reone/graphics/window.h"
+#ifdef R_ENABLE_VULKAN
+#include "reone/graphics/vulkan/renderer.h"
+#endif
 #include "reone/gui/di/module.h"
 #include "reone/input/event.h"
 #include "reone/movie/di/module.h"
@@ -66,6 +70,10 @@ private:
 
     std::unique_ptr<game::OptionsView> _optionsView;
     std::unique_ptr<graphics::Window> _window;
+#ifdef R_ENABLE_VULKAN
+    std::unique_ptr<graphics::VulkanRenderer> _vulkanRenderer;
+#endif
+    bool _vulkan {false};
 
     std::unique_ptr<Clock> _clock;
     std::unique_ptr<SystemModule> _systemModule;
@@ -96,6 +104,8 @@ private:
     bool _relativeMouseMode {false};
 
     void processEvents(bool &quit);
+    /** Records the GUI through the 2D renderer, in its own rendering scope. */
+    void renderVulkanFrame(bool &quit);
     void captureIfRequested(bool &quit);
 
     void showCursor(bool show);

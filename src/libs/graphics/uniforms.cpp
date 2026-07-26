@@ -17,6 +17,8 @@
 
 #include "reone/graphics/uniforms.h"
 
+#include "reone/graphics/backend.h"
+
 #include "reone/graphics/context.h"
 
 // Compiles the generated std140 assertions. Included here rather than from the
@@ -29,6 +31,13 @@ namespace reone {
 namespace graphics {
 
 void Uniforms::init() {
+    if (isVulkanBackend()) {
+        // These are OpenGL uniform buffers, never initialised on the Vulkan
+        // path. Vulkan writes its uniforms into a per-frame arena instead
+        // (VulkanUniformRing), so callers shared with the GL path can keep
+        // calling these and have them do nothing.
+        return;
+    }
     if (_inited) {
         return;
     }
@@ -89,60 +98,130 @@ void Uniforms::deinit() {
 }
 
 void Uniforms::setGlobals(const std::function<void(GlobalUniforms &)> &block) {
+    if (isVulkanBackend()) {
+        // These are OpenGL uniform buffers, never initialised on the Vulkan
+        // path. Vulkan writes its uniforms into a per-frame arena instead
+        // (VulkanUniformRing), so callers shared with the GL path can keep
+        // calling these and have them do nothing.
+        return;
+    }
     block(_globals);
     _context.bindUniformBuffer(*_ubGlobals, UniformBlockBindingPoints::globals);
     _ubGlobals->setData(&_globals, sizeof(GlobalUniforms));
 }
 
 void Uniforms::setLocals(const std::function<void(LocalUniforms &)> &block) {
+    if (isVulkanBackend()) {
+        // These are OpenGL uniform buffers, never initialised on the Vulkan
+        // path. Vulkan writes its uniforms into a per-frame arena instead
+        // (VulkanUniformRing), so callers shared with the GL path can keep
+        // calling these and have them do nothing.
+        return;
+    }
     block(_locals);
     _context.bindUniformBuffer(*_ubLocals, UniformBlockBindingPoints::locals);
     _ubLocals->setData(&_locals, sizeof(LocalUniforms));
 }
 
 void Uniforms::setBones(const std::function<void(BoneUniforms &)> &block) {
+    if (isVulkanBackend()) {
+        // These are OpenGL uniform buffers, never initialised on the Vulkan
+        // path. Vulkan writes its uniforms into a per-frame arena instead
+        // (VulkanUniformRing), so callers shared with the GL path can keep
+        // calling these and have them do nothing.
+        return;
+    }
     block(_bones);
     _context.bindUniformBuffer(*_ubBones, UniformBlockBindingPoints::bones);
     _ubBones->setData(&_bones, sizeof(BoneUniforms));
 }
 
 void Uniforms::setDangly(const std::function<void(DanglyUniforms &)> &block) {
+    if (isVulkanBackend()) {
+        // These are OpenGL uniform buffers, never initialised on the Vulkan
+        // path. Vulkan writes its uniforms into a per-frame arena instead
+        // (VulkanUniformRing), so callers shared with the GL path can keep
+        // calling these and have them do nothing.
+        return;
+    }
     block(_dangly);
     _context.bindUniformBuffer(*_ubDangly, UniformBlockBindingPoints::dangly);
     _ubDangly->setData(&_dangly, sizeof(DanglyUniforms));
 }
 
 void Uniforms::setParticles(const std::function<void(ParticleUniforms &)> &block) {
+    if (isVulkanBackend()) {
+        // These are OpenGL uniform buffers, never initialised on the Vulkan
+        // path. Vulkan writes its uniforms into a per-frame arena instead
+        // (VulkanUniformRing), so callers shared with the GL path can keep
+        // calling these and have them do nothing.
+        return;
+    }
     block(_particles);
     _context.bindUniformBuffer(*_ubParticles, UniformBlockBindingPoints::particles);
     _ubParticles->setData(&_particles, sizeof(ParticleUniforms));
 }
 
 void Uniforms::setGrass(const std::function<void(GrassUniforms &)> &block) {
+    if (isVulkanBackend()) {
+        // These are OpenGL uniform buffers, never initialised on the Vulkan
+        // path. Vulkan writes its uniforms into a per-frame arena instead
+        // (VulkanUniformRing), so callers shared with the GL path can keep
+        // calling these and have them do nothing.
+        return;
+    }
     block(_grass);
     _context.bindUniformBuffer(*_ubGrass, UniformBlockBindingPoints::grass);
     _ubGrass->setData(&_grass, sizeof(GrassUniforms));
 }
 
 void Uniforms::setWalkmesh(const std::function<void(WalkmeshUniforms &)> &block) {
+    if (isVulkanBackend()) {
+        // These are OpenGL uniform buffers, never initialised on the Vulkan
+        // path. Vulkan writes its uniforms into a per-frame arena instead
+        // (VulkanUniformRing), so callers shared with the GL path can keep
+        // calling these and have them do nothing.
+        return;
+    }
     block(_walkmesh);
     _context.bindUniformBuffer(*_ubWalkmesh, UniformBlockBindingPoints::walkmesh);
     _ubWalkmesh->setData(&_walkmesh, sizeof(WalkmeshUniforms));
 }
 
 void Uniforms::setAABB(const std::function<void(AABBUniforms &)> &block) {
+    if (isVulkanBackend()) {
+        // These are OpenGL uniform buffers, never initialised on the Vulkan
+        // path. Vulkan writes its uniforms into a per-frame arena instead
+        // (VulkanUniformRing), so callers shared with the GL path can keep
+        // calling these and have them do nothing.
+        return;
+    }
     block(_aabb);
     _context.bindUniformBuffer(*_ubAABB, UniformBlockBindingPoints::aabb);
     _ubAABB->setData(&_aabb, sizeof(AABBUniforms));
 }
 
 void Uniforms::setText(const std::function<void(TextUniforms &)> &block) {
+    if (isVulkanBackend()) {
+        // These are OpenGL uniform buffers, never initialised on the Vulkan
+        // path. Vulkan writes its uniforms into a per-frame arena instead
+        // (VulkanUniformRing), so callers shared with the GL path can keep
+        // calling these and have them do nothing.
+        return;
+    }
     block(_text);
     _context.bindUniformBuffer(*_ubText, UniformBlockBindingPoints::text);
     _ubText->setData(&_text, sizeof(TextUniforms));
 }
 
 void Uniforms::setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block) {
+    if (isVulkanBackend()) {
+        // These are OpenGL uniform buffers, never initialised on the Vulkan
+        // path. Vulkan writes its uniforms into a per-frame arena instead
+        // (VulkanUniformRing), so callers shared with the GL path can keep
+        // calling these and have them do nothing.
+        return;
+    }
     block(_screenEffect);
     _context.bindUniformBuffer(*_ubScreenEffect, UniformBlockBindingPoints::screenEffect);
     _ubScreenEffect->setData(&_screenEffect, sizeof(ScreenEffectUniforms));

@@ -38,6 +38,16 @@ static VkDeviceSize texelSize(VkFormat format) {
 }
 
 void VulkanImage::initSampled2D(glm::ivec2 extent, VkFormat format, const void *data) {
+    VkDeviceSize size = data
+                            ? static_cast<VkDeviceSize>(extent.x) * extent.y * texelSize(format)
+                            : 0;
+    initSampled2DSized(extent, format, data, size);
+}
+
+void VulkanImage::initSampled2DSized(glm::ivec2 extent,
+                                     VkFormat format,
+                                     const void *data,
+                                     VkDeviceSize size) {
     _extent = extent;
     _format = format;
 
@@ -75,7 +85,6 @@ void VulkanImage::initSampled2D(glm::ivec2 extent, VkFormat format, const void *
         return;
     }
 
-    VkDeviceSize size = static_cast<VkDeviceSize>(extent.x) * extent.y * texelSize(format);
     VulkanBuffer staging(_device);
     staging.initHostVisible(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
     std::memcpy(staging.mapped(), data, static_cast<size_t>(size));

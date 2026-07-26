@@ -24,6 +24,7 @@
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/graphics/vulkan/uniformring.h"
+#include "reone/system/logutil.h"
 
 namespace reone {
 
@@ -50,12 +51,14 @@ void Vulkan2DRenderer::begin(VkCommandBuffer cmd, glm::ivec2 extent, VkFormat co
     // caller's assumption about where things go.
     GlobalUniforms globals;
     globals.reset();
-    // orthoRH_ZO, not ortho: GLM defaults to OpenGL's -1..1 depth range unless
-    // the whole project defines GLM_FORCE_DEPTH_ZERO_TO_ONE, which would change
-    // the GL backend too. At z=0 the GL form puts every quad at z_ndc -1, which
-    // Vulkan clips, and nothing is drawn at all.
+    // Two departures from the OpenGL form, both because Vulkan's clip space
+    // differs. Depth is 0..1, so orthoRH_ZO rather than ortho - the GL form puts
+    // every quad at z_ndc -1, which Vulkan clips, and nothing draws at all.
+    // And clip-space y points down, so bottom and top are *not* swapped here:
+    // passing (h, 0) as the GL path does would put screen y=0 at the bottom and
+    // turn the whole frame upside down.
     globals.projection = glm::orthoRH_ZO(0.0f, static_cast<float>(extent.x),
-                                         static_cast<float>(extent.y), 0.0f,
+                                         0.0f, static_cast<float>(extent.y),
                                          0.0f, 100.0f);
     globals.projectionInv = glm::inverse(globals.projection);
     _globalsOffset = _ring.push(globals);
@@ -91,7 +94,6 @@ void Vulkan2DRenderer::drawQuads(const char *vertexEntry,
     offsets[UniformBlockBindingPoints::globals] = _globalsOffset;
     offsets[UniformBlockBindingPoints::locals] = _ring.push(locals);
     offsets[UniformBlockBindingPoints::text] = textOffset;
-
     const VulkanImage *mainTex = texture ? &_resources.get(*texture) : nullptr;
 
     vkCmdBindPipeline(_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
@@ -104,7 +106,6 @@ void Vulkan2DRenderer::drawQuads(const char *vertexEntry,
     auto textureSet = _descriptors.acquireTextureSet(_ring.frame(), mainTex);
     vkCmdBindDescriptorSets(_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
                             VulkanDescriptors::kTextureSet, 1, &textureSet, 0, nullptr);
-
     vkCmdDraw(_cmd, kQuadVertices, static_cast<uint32_t>(instances), 0, 0);
     ++_drawCount;
 }

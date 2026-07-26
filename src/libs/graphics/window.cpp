@@ -17,6 +17,8 @@
 
 #include "reone/graphics/window.h"
 
+#include "reone/graphics/backend.h"
+
 #include "SDL3/SDL.h"
 
 #include "reone/system/checkutil.h"
@@ -29,6 +31,25 @@ namespace graphics {
 void Window::init() {
     checkThat(!_inited, "Must not be initialized");
     checkMainThread();
+
+    if (isVulkanBackend()) {
+        int flags = SDL_WINDOW_VULKAN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+        if (_options.fullscreen) {
+            flags |= SDL_WINDOW_FULLSCREEN;
+        }
+        _window = SDL_CreateWindow(
+            "reone",
+            _options.width * _options.winScale / 100,
+            _options.height * _options.winScale / 100,
+            flags);
+        if (!_window) {
+            throw std::runtime_error("SDL_CreateWindow failed: " + std::string(SDL_GetError()));
+        }
+        _windowID = SDL_GetWindowID(_window);
+        // No GL context, and no swap: the Vulkan renderer presents.
+        _inited = true;
+        return;
+    }
 
     // 4.6 rather than 4.0, for two reasons. Slang-generated GLSL declares
     // layout(binding = N) on uniform blocks and samplers, which is 4.2 and later.
@@ -128,6 +149,9 @@ bool Window::handleKeyDownEvent(const SDL_KeyboardEvent &event) {
 }
 
 void Window::swap() {
+    if (isVulkanBackend()) {
+        return;
+    }
     SDL_GL_SwapWindow(_window);
 }
 

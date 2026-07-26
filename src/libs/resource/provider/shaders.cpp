@@ -17,6 +17,8 @@
 
 #include "reone/resource/provider/shaders.h"
 
+#include "reone/graphics/backend.h"
+
 #include "reone/graphics/options.h"
 #include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/uniforms.h"
@@ -87,6 +89,14 @@ static const std::string kFragProfiler = "f_profiler";
 
 void Shaders::init() {
     if (_inited) {
+        return;
+    }
+    if (graphics::isVulkanBackend()) {
+        // Every program here is GLSL compiled through the GL driver, and under
+        // Vulkan there is no context to compile against - the entry points are
+        // not even loaded. The Vulkan backend builds its pipelines from SPIR-V
+        // modules instead, through VulkanPipelineCache.
+        _inited = true;
         return;
     }
 

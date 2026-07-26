@@ -17,6 +17,17 @@ float2 quadCorner(uint vertexId) {
     return float2(corner & 1, (corner >> 1) & 1);
 }
 
+/**
+ * Texture coordinate for a corner.
+ *
+ * The OpenGL quad mesh pairs position (0,0) with uv (0,1) - v runs upwards
+ * while screen y runs down - so the same pairing has to hold here or every
+ * sprite, glyph and panel comes out upside down.
+ */
+float2 quadUV(float2 corner) {
+    return float2(corner.x, 1.0f - corner.y);
+}
+
 struct Varyings {
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;
@@ -34,9 +45,9 @@ Varyings quadVertex(uint vertexId: SV_VertexID) {
     output.position = mul(globalUniforms.projection,
                           mul(localUniforms.model, float4(corner, 0.0f, 1.0f)));
     // localUniforms.uv is the same 3x4 the GL path uses to flip or sub-rect.
-    output.uv = mul(float3(corner, 1.0f), float3x2(localUniforms.uv[0].xy,
-                                                   localUniforms.uv[1].xy,
-                                                   localUniforms.uv[2].xy));
+    output.uv = mul(float3(quadUV(corner), 1.0f), float3x2(localUniforms.uv[0].xy,
+                                                           localUniforms.uv[1].xy,
+                                                           localUniforms.uv[2].xy));
     return output;
 }
 
@@ -57,9 +68,9 @@ Varyings fullTargetVertex(uint vertexId: SV_VertexID) {
 
     Varyings output;
     output.position = float4(corner * 2.0f - 1.0f, 0.0f, 1.0f);
-    output.uv = mul(float3(corner, 1.0f), float3x2(localUniforms.uv[0].xy,
-                                                   localUniforms.uv[1].xy,
-                                                   localUniforms.uv[2].xy));
+    output.uv = mul(float3(quadUV(corner), 1.0f), float3x2(localUniforms.uv[0].xy,
+                                                           localUniforms.uv[1].xy,
+                                                           localUniforms.uv[2].xy));
     return output;
 }
 
@@ -76,7 +87,9 @@ Varyings textVertex(uint vertexId: SV_VertexID, uint glyph: SV_InstanceID) {
     Varyings output;
     output.position = mul(globalUniforms.projection,
                           float4(posScale.xy + corner * posScale.zw, 0.0f, 1.0f));
-    output.uv = uv.xy + corner * uv.zw;
+    // Same v convention as the sprites: the glyph rect starts at the atlas
+    // bottom and grows upwards, while screen y grows downwards.
+    output.uv = uv.xy + quadUV(corner) * uv.zw;
     return output;
 }
 

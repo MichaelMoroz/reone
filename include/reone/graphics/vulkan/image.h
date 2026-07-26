@@ -52,6 +52,19 @@ public:
     void initSampled2D(glm::ivec2 extent, VkFormat format, const void *data);
 
     /**
+     * As initSampled2D, but with the byte count given rather than derived.
+     *
+     * Block-compressed formats have no per-texel size - BC1 is eight bytes per
+     * four-by-four block, BC3 sixteen - so the caller supplies the length. The
+     * data is uploaded as it stands; the GPU samples it compressed, which is
+     * the point of shipping it that way.
+     */
+    void initSampled2DSized(glm::ivec2 extent,
+                            VkFormat format,
+                            const void *data,
+                            VkDeviceSize size);
+
+    /**
      * A depth attachment. Left in UNDEFINED: dynamic rendering transitions it
      * on first use, and its contents never need to survive a frame.
      */

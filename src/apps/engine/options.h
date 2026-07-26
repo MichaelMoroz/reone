@@ -58,6 +58,12 @@ struct Options {
      * reason it uses a fixed timestep: an unrepeatable run cannot be compared.
      */
     int randomSeed {-1};
+
+    /** "gl" or "vulkan". Chosen before the window exists; the two cannot share one. */
+    std::string backend {"gl"};
+
+    /** Vulkan validation layers. Off by default; they cost real time. */
+    bool vulkanValidation {false};
     /** Trigger a RenderDoc frame capture alongside the screenshot. */
     bool renderdoc {false};
 

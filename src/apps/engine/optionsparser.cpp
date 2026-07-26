@@ -45,6 +45,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("capture", value<std::string>()->default_value(""), "write a screenshot to this path and exit")                        //
         ("captureframe", value<int>()->default_value(3), "frame to capture on, counted from the first rendered frame")         //
         ("randomseed", value<int>()->default_value(-1), "seed the random generator, or -1 to seed from the clock")             //
+        ("backend", value<std::string>()->default_value("gl"), "graphics backend: gl or vulkan")                              //
+        ("vkvalidation", value<bool>()->default_value(false), "enable Vulkan validation layers")                              //
         ("renderdoc", value<bool>()->default_value(false), "trigger a RenderDoc frame capture with the screenshot")            //
         ("dev", value<bool>()->default_value(options->game.developer), "enable developer mode")                                 //
         ("width", value<int>()->default_value(options->graphics.width), "render width")                                         //
@@ -90,6 +92,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->capturePath = vars["capture"].as<std::string>();
     options->captureFrame = vars["captureframe"].as<int>();
     options->randomSeed = vars["randomseed"].as<int>();
+    options->backend = vars["backend"].as<std::string>();
+    options->vulkanValidation = vars["vkvalidation"].as<bool>();
     options->renderdoc = vars["renderdoc"].as<bool>();
     options->graphics.width = vars["width"].as<int>();
     options->graphics.height = vars["height"].as<int>();

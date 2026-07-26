@@ -17,6 +17,9 @@
 
 #include "reone/gui/control.h"
 
+#include "reone/system/logutil.h"
+
+#include "reone/graphics/backend.h"
 #include "reone/graphics/context.h"
 #include "reone/graphics/renderer2d.h"
 #include "reone/graphics/mesh.h"
@@ -215,7 +218,9 @@ void Control::render(const glm::ivec2 &screenSize,
     if (!_textLines.empty()) {
         renderText(_textLines, offset, size);
     }
-    if (!_sceneName.empty()) {
+    // The sub-scene is rendered by the GL pipeline, which has no Vulkan
+    // counterpart yet. The control's borders and text still draw.
+    if (!_sceneName.empty() && !isVulkanBackend()) {
         std::optional<std::reference_wrapper<Texture>> output;
         _graphicsSvc.context.withBlendMode(BlendMode::None, [this, &output]() {
             output = _sceneGraphs.get(_sceneName).render({_extent.width, _extent.height});
@@ -241,8 +246,6 @@ void Control::render(const glm::ivec2 &screenSize,
 void Control::renderBorder(const Border &border,
                            const glm::ivec2 &offset,
                            const glm::ivec2 &size) {
-    _graphicsSvc.context.useProgram(_graphicsSvc.shaderRegistry.get(ShaderProgramId::mvpTexture));
-
     glm::vec3 color(getBorderColor());
     glm::mat4 transform(1.0f);
     glm::mat3x4 uv(1.0f);
@@ -257,7 +260,7 @@ void Control::renderBorder(const Border &border,
         auto blending = border.fill->features().blending == Texture::Blending::Additive
                             ? BlendMode::Additive
                             : BlendMode::Normal;
-        _graphicsSvc.context.withBlendMode(blending, [&]() {
+        _graphicsSvc.renderer2d.withBlendMode(blending, [&]() {
             _graphicsSvc.renderer2d.drawImage(
                 *border.fill,
                 {_extent.left + border.dimension + offset.x, _extent.top + border.dimension + offset.y},

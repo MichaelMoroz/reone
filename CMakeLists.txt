@@ -150,9 +150,6 @@ add_subdirectory(src/apps/shaderpack) # shaderpack application
 add_subdirectory(src/apps/uniformgen) # uniform layout assertion generator
 add_subdirectory(src/apps/engine) # engine application
 
-if(ENABLE_VULKAN)
-    add_subdirectory(src/apps/vulkanprobe) # vulkan backend smoke test
-endif()
 
 if(BUILD_LAUNCHER)
     add_subdirectory(src/apps/launcher) # launcher application

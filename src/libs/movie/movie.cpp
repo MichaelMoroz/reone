@@ -19,6 +19,7 @@
 
 #include "reone/audio/di/services.h"
 #include "reone/audio/mixer.h"
+#include "reone/graphics/backend.h"
 #include "reone/graphics/context.h"
 #include "reone/graphics/renderer2d.h"
 #include "reone/graphics/di/services.h"
@@ -87,6 +88,13 @@ void Movie::update(float dt) {
 
 void Movie::render() {
     if (!_videoStream) {
+        return;
+    }
+    if (graphics::isVulkanBackend()) {
+        // Movie frames are uploaded per tick through the GL texture path. The
+        // Vulkan equivalent needs a streaming upload rather than the
+        // upload-once resource cache, which is not built yet, so movies are
+        // silently skipped: playback still advances and the game moves on.
         return;
     }
     auto &frame = _videoStream->frame();
