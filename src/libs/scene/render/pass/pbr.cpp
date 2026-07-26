@@ -38,6 +38,7 @@ void PBRRenderPass::draw(Mesh &mesh,
                          const glm::mat4 &transform,
                          const glm::mat4 &transformInv,
                          const glm::mat4 &prevTransform) {
+    _geometryPath = GeometryPath::Static;
     withMaterialAppliedToContext(material, [&](auto &program) {
         _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform](auto &locals) {
             locals.reset();
@@ -54,14 +55,30 @@ void PBRRenderPass::withMaterialAppliedToContext(const Material &material, std::
     static const std::unordered_map<MaterialType, std::string> kMatTypeToProgramId {
         {MaterialType::DirLightShadow, ShaderProgramId::dirLightShadows},     //
         {MaterialType::PointLightShadow, ShaderProgramId::pointLightShadows}, //
-        {MaterialType::OpaqueModel, ShaderProgramId::pbrOpaqueModel},         //
+        {MaterialType::OpaqueModel, ShaderProgramId::pbrModelStatic},         //
         {MaterialType::TransparentModel, ShaderProgramId::oitModel},          //
         {MaterialType::Walkmesh, ShaderProgramId::pbrWalkmesh}                //
     };
     if (kMatTypeToProgramId.count(material.type) == 0) {
         throw std::invalid_argument(str(boost::format("Material type %1% is not associated with a shader program") % static_cast<int>(material.type)));
     }
-    auto &program = _shaderRegistry.get(kMatTypeToProgramId.at(material.type));
+    auto programId = kMatTypeToProgramId.at(material.type);
+    if (material.type == MaterialType::OpaqueModel) {
+        switch (_geometryPath) {
+        case GeometryPath::Skinned:
+            programId = ShaderProgramId::pbrModelSkinned;
+            break;
+        case GeometryPath::Dangly:
+            programId = ShaderProgramId::pbrModelDangly;
+            break;
+        case GeometryPath::Saber:
+            programId = ShaderProgramId::pbrModelSaber;
+            break;
+        default:
+            break;
+        }
+    }
+    auto &program = _shaderRegistry.get(programId);
     _context.useProgram(program);
     for (const auto &[unit, texture] : material.textures) {
         _context.bindTexture(texture, unit);
@@ -155,6 +172,7 @@ void PBRRenderPass::drawSkinned(Mesh &mesh,
                                 const glm::mat4 &prevTransform,
                                 const std::vector<glm::mat4> &bones,
                                 const std::vector<glm::mat4> &prevBones) {
+    _geometryPath = GeometryPath::Skinned;
     withMaterialAppliedToContext(material, [&](auto &program) {
         _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform](auto &locals) {
             locals.reset();
@@ -178,6 +196,7 @@ void PBRRenderPass::drawDangly(Mesh &mesh,
                                const glm::mat4 &transformInv,
                                const glm::mat4 &prevTransform,
                                const std::vector<glm::vec4> &positions) {
+    _geometryPath = GeometryPath::Dangly;
     withMaterialAppliedToContext(material, [&](auto &program) {
         _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform](auto &locals) {
             locals.reset();
@@ -201,6 +220,7 @@ void PBRRenderPass::drawSaber(Mesh &mesh,
                               const glm::mat4 &transformInv,
                               const glm::mat4 &prevTransform,
                               const glm::vec4 &displacement) {
+    _geometryPath = GeometryPath::Saber;
     withMaterialAppliedToContext(material, [&](auto &program) {
         _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform, &displacement](auto &locals) {
             locals.reset();

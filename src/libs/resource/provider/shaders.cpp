@@ -78,6 +78,13 @@ static const std::string kFragPostDebugTex = "f_pp_debugtex";
 // Transpiled from slang/pbr_opaque_model.slang
 static const std::string kVertSlangModel = "v_slang_model";
 static const std::string kFragSlangPBROpaqueModel = "f_slang_opaqmdl";
+
+// Rewritten opaque model, specialised by geometry path
+static const std::string kVertModelStatic = "v_sl_mdl_static";
+static const std::string kVertModelSkinned = "v_sl_mdl_skin";
+static const std::string kVertModelDangly = "v_sl_mdl_dangly";
+static const std::string kVertModelSaber = "v_sl_mdl_saber";
+static const std::string kFragModelOpaque = "f_sl_mdl_opaque";
 static const std::string kFragText = "f_text";
 static const std::string kFragTexture = "f_texture";
 static const std::string kFragTextureNoPerspective = "f_texnoper";
@@ -151,13 +158,27 @@ void Shaders::init() {
     _shaderRegistry.add(ShaderProgramId::pbrAABB, initShaderProgram({vertAABB, fragPBRAABB}));
     _shaderRegistry.add(ShaderProgramId::pbrCombine, initShaderProgram({vertPassthrough, fragPBRCombine}));
     _shaderRegistry.add(ShaderProgramId::pbrGrass, initShaderProgram({vertGrass, fragPBRGrass}));
-    _shaderRegistry.add(ShaderProgramId::pbrOpaqueModel, initShaderProgram({vertModel, fragPBROpaqueModel}));
-    // The transpiled twin is built alongside so the two can be switched between
-    // at runtime. Absent when the build had no slangc.
-    if (hasSource(kVertSlangModel) && hasSource(kFragSlangPBROpaqueModel)) {
-        auto vertSlangModel = initShader(ShaderType::Vertex, kVertSlangModel, SourceFlavor::Slang);
-        auto fragSlangOpaqueModel = initShader(ShaderType::Fragment, kFragSlangPBROpaqueModel, SourceFlavor::Slang);
-        _shaderRegistry.addSlangVariant(ShaderProgramId::pbrOpaqueModel, initShaderProgram({vertSlangModel, fragSlangOpaqueModel}));
+    auto pbrOpaqueModelProgram = initShaderProgram({vertModel, fragPBROpaqueModel});
+    _shaderRegistry.add(ShaderProgramId::pbrOpaqueModel, pbrOpaqueModelProgram);
+    // One GLSL program serves every geometry path, branching on the feature mask,
+    // so all four ids resolve to it.
+    _shaderRegistry.add(ShaderProgramId::pbrModelStatic, pbrOpaqueModelProgram);
+    _shaderRegistry.add(ShaderProgramId::pbrModelSkinned, pbrOpaqueModelProgram);
+    _shaderRegistry.add(ShaderProgramId::pbrModelDangly, pbrOpaqueModelProgram);
+    _shaderRegistry.add(ShaderProgramId::pbrModelSaber, pbrOpaqueModelProgram);
+
+    // The rewritten build specialises the geometry path into separate pipelines.
+    // Absent when the build had no slangc.
+    if (hasSource(kFragModelOpaque)) {
+        auto fragModelOpaque = initShader(ShaderType::Fragment, kFragModelOpaque, SourceFlavor::Slang);
+        auto addVariant = [&](const char *programId, const std::string &vertResRef) {
+            auto vert = initShader(ShaderType::Vertex, vertResRef, SourceFlavor::Slang);
+            _shaderRegistry.addSlangVariant(programId, initShaderProgram({vert, fragModelOpaque}));
+        };
+        addVariant(ShaderProgramId::pbrModelStatic, kVertModelStatic);
+        addVariant(ShaderProgramId::pbrModelSkinned, kVertModelSkinned);
+        addVariant(ShaderProgramId::pbrModelDangly, kVertModelDangly);
+        addVariant(ShaderProgramId::pbrModelSaber, kVertModelSaber);
     }
     _shaderRegistry.add(ShaderProgramId::pbrSSAO, initShaderProgram({vertPassthrough, fragPBRSSAO}));
     _shaderRegistry.add(ShaderProgramId::pbrSSR, initShaderProgram({vertPassthrough, fragPBRSSR}));

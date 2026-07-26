@@ -116,6 +116,19 @@ private:
     /** Resolved per material, then written into the Locals block. */
     int _envMapDerivedLayer {0};
 
+    /**
+     * Which vertex path a draw takes. The rewritten shaders specialise on this
+     * rather than branching on a feature flag, so it selects the program.
+     */
+    enum class GeometryPath {
+        Static,
+        Skinned,
+        Dangly,
+        Saber
+    };
+
+    GeometryPath _geometryPath {GeometryPath::Static};
+
     void applyMaterialToLocals(const graphics::Material &material, graphics::LocalUniforms &locals);
 
     int materialFeatureMask(const graphics::Material &material) const;

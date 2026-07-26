@@ -500,3 +500,61 @@ main argument for this ordering.
   have been eyeballed through the render target viewer and look plausible; a
   known-rotation test against expected pixel displacement would settle it.
 - Stable per-instance identity across frames, for a BLAS cache (§5.6).
+
+---
+
+## 9. Shader architecture
+
+The shaders are being rewritten rather than transliterated. A mechanical port was
+taken far enough to prove the toolchain (§4.1) and is kept as reference, but the
+existing shaders were designed against name-based stage linking and a runtime
+feature mask, and neither survives the destination.
+
+Rewriting happens against OpenGL, where each shader can be validated visually as
+it lands. The Vulkan-shaped decisions - explicit bindings, uniform blocks, no
+loose uniforms, no by-name lookup - are already made, so the remaining delta to
+SPIR-V is declarations rather than logic: descriptor set indices, push constants,
+and replacing the geometry-shader shadow path.
+
+### 9.1 Share code, not entry points
+
+`v_model` is one entry point serving three programs, `v_passthrough` serves nine.
+That is why porting `f_texture` forced two unrelated vertex stages onto a common
+varyings layout: GLSL matched stage interfaces by name, so the sharing was free;
+explicit locations make every fragment stage constrain every vertex stage it
+pairs with.
+
+Each program therefore gets its own entry point, and shared work becomes shared
+*functions* in modules. Slang makes that free, and the coupling disappears.
+
+### 9.2 Specialise geometry, branch on material
+
+The fifteen feature flags are evaluated per vertex and per fragment. Two reasons
+to split them rather than keep branching:
+
+- the skinned, dangly and saber paths have to become compute passes writing real
+  geometry (§5.1), so they want to be separate pipelines, not branches;
+- a path tracer has no vertex stage at all, so anything the vertex shader
+  synthesises has to be resolved before tracing.
+
+So the **geometry** path is specialised - static, skinned, dangly and saber become
+distinct entry points over shared transform functions - while **material**
+features stay runtime branches. Specialising both would multiply into a
+permutation explosion for little gain, since the material branches are uniform
+across a draw and predict well.
+
+### 9.3 One surface description, two consumers
+
+The raster resolve and the path tracer's closest-hit shader need the same thing:
+a surface's shading parameters at a point. Today each shader re-derives them from
+Odyssey texture slots in its own way.
+
+Instead a single `SurfaceParams` - albedo, normal, roughness, metallic, emissive,
+alpha - is produced by one function and consumed by a BSDF that neither knows nor
+cares which renderer called it.
+
+The mapping from Odyssey slots to those parameters wants to move out of the
+shader entirely, into the material buffer described in §5.6, computed once when
+the material is built rather than per fragment. The shader-side split is written
+now so that the move is a change of where `SurfaceParams` comes from, not a
+rewrite of everything that uses it.

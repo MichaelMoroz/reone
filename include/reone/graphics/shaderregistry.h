@@ -34,6 +34,16 @@ struct ShaderProgramId {
     static constexpr char pbrCombine[] = "pbr_combine";
     static constexpr char pbrGrass[] = "pbr_grass";
     static constexpr char pbrOpaqueModel[] = "pbr_opaque_model";
+    /**
+     * The opaque model program, specialised by geometry path. The GLSL build
+     * registers one program under all four ids and branches on the feature mask;
+     * the Slang build registers a distinct pipeline for each. See
+     * doc/vulkan-rt-backend.md section 9.2.
+     */
+    static constexpr char pbrModelStatic[] = "pbr_model_static";
+    static constexpr char pbrModelSkinned[] = "pbr_model_skinned";
+    static constexpr char pbrModelDangly[] = "pbr_model_dangly";
+    static constexpr char pbrModelSaber[] = "pbr_model_saber";
     static constexpr char pbrSSAO[] = "pbr_ssao";
     static constexpr char pbrSSR[] = "pbr_ssr";
     static constexpr char pbrWalkmesh[] = "pbr_walkmesh";
