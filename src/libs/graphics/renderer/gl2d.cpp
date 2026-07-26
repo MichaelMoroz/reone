@@ -150,7 +150,10 @@ void GL2DRenderer::withBlendMode(BlendMode mode, const std::function<void()> &bl
 }
 
 void GL2DRenderer::withScissor(const glm::ivec4 &bounds, const std::function<void()> &block) {
-    _context.withScissorTest(bounds, block);
+    // The interface measures from the top; glScissor measures from the bottom.
+    auto viewport = _context.viewport();
+    glm::ivec4 flipped {bounds[0], viewport[3] - (bounds[1] + bounds[3]), bounds[2], bounds[3]};
+    _context.withScissorTest(flipped, block);
 }
 
 } // namespace graphics

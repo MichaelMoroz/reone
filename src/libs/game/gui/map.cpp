@@ -99,8 +99,7 @@ void Map::renderArea(Mode mode, const glm::vec4 &bounds) {
         topLeft.x = bounds[0] + 0.5f * bounds[2] - mapPos.x * 440.0f / static_cast<float>(_areaTexture->width()) * _areaTexture->width();
         topLeft.y = bounds[1] + 0.5f * bounds[3] - mapPos.y * _areaTexture->height();
 
-        int height = _game.options().graphics.height;
-        glm::ivec4 scissorBounds(bounds[0], height - (bounds[1] + bounds[3]), bounds[2], bounds[3]);
+        glm::ivec4 scissorBounds(bounds[0], bounds[1], bounds[2], bounds[3]);
         _services.graphics.renderer2d.withScissor(scissorBounds, [this, &topLeft]() {
             _services.graphics.renderer2d.drawImage(
                 *_areaTexture,
