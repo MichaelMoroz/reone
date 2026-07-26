@@ -42,6 +42,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     descCommon.add_options()                                                                                                    //
         ("game", value<std::string>(), "path to game directory")                                                                //
         ("commands-file", value<std::string>()->default_value(""), "execute console commands from a file at startup")           //
+        ("commands-frame", value<int>()->default_value(0), "run the commands file on this frame instead of at startup")       //
         ("capture", value<std::string>()->default_value(""), "write a screenshot to this path and exit")                        //
         ("captureframe", value<int>()->default_value(3), "frame to capture on, counted from the first rendered frame")         //
         ("randomseed", value<int>()->default_value(-1), "seed the random generator, or -1 to seed from the clock")             //
@@ -159,6 +160,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->logging.channels = std::move(logChannels);
 
     options->commandsFile = vars["commands-file"].as<std::string>();
+    options->commandsFrame = vars["commands-frame"].as<int>();
 
     return options;
 }

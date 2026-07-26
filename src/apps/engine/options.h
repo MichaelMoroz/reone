@@ -41,6 +41,14 @@ struct Options {
      */
     std::string commandsFile;
     /**
+     * Run the commands file on this frame instead of during init.
+     *
+     * Loading a module from a running game is not the same code path as warping
+     * before the first frame: the previous scene is torn down while the
+     * renderer holds resources from it. This makes that reproducible.
+     */
+    int commandsFrame {0};
+    /**
      * Write a screenshot to this path on frame captureFrame and exit. Lets two
      * builds be rendered and compared without a human in the loop.
      *

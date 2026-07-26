@@ -72,6 +72,7 @@ public:
     void drawSceneOutput(Texture &output) override;
     std::shared_ptr<Texture> captureFrame() override;
     void endFrame() override;
+    void invalidateResources() override;
 
     /** The colour beginFrame clears to. */
     void setClearColor(glm::vec4 color) { _clearColor = color; }
@@ -92,6 +93,9 @@ public:
     /** The uniform descriptor set for the frame being recorded. */
     VkDescriptorSet uniformSet() const { return _descriptors.uniformSet(_frameIndex); }
     VulkanSwapchain &swapchain() { return _swapchain; }
+
+    /** Whether a frame is open, and so whether recording is legal. */
+    bool inFrame() const { return _inFrame; }
 
     /** The command buffer being recorded, valid only between begin and end. */
     VkCommandBuffer commandBuffer() const { return _frames[_frameIndex].commandBuffer; }

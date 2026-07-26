@@ -136,6 +136,18 @@ public:
      */
     void renderSceneOffscreen();
 
+    /**
+     * How the game asks its host to present a complete frame.
+     *
+     * A long synchronous load draws a loading screen partway through, and on a
+     * backend with explicit frames that cannot be a bare render() call: there is
+     * no frame open, so every draw is illegal. The host owns frame boundaries,
+     * so it supplies this and the game asks rather than assumes.
+     */
+    void setPresentFrame(std::function<void()> presentFrame) {
+        _presentFrame = std::move(presentFrame);
+    }
+
     void playVideo(const std::string &name);
 
     bool isPaused() const { return _paused; }
@@ -553,9 +565,11 @@ private:
     // Rendering
 
     void renderScene();
+    void presentFrame();
     void renderGUI();
 
     graphics::Texture *_sceneOutput {nullptr};
+    std::function<void()> _presentFrame;
     void renderDeveloperOverlay();
     void renderDeveloperBanner();
     void renderDeveloperTriggerOverlay(const glm::mat4 &projection, const glm::mat4 &view);

@@ -265,6 +265,12 @@ void Engine::init() {
         *_services,
         *_console);
     _game->init();
+    // A long synchronous load draws a loading screen partway through. The game
+    // cannot open a frame itself - the host owns frame boundaries - so it asks.
+    _game->setPresentFrame([this]() {
+        bool quit = false;
+        renderFrame(quit);
+    });
 
     if (!_vulkan) {
         // Editor is built on the ImGui OpenGL backend, which is not initialised
@@ -272,21 +278,8 @@ void Engine::init() {
         _editor = std::make_unique<Editor>(*this);
     }
 
-    if (!_options.commandsFile.empty()) {
-        std::ifstream file(_options.commandsFile);
-        if (!file.good()) {
-            throw std::runtime_error("Failed to open commands file: " + _options.commandsFile);
-        }
-        for (std::string line; std::getline(file, line);) {
-            // getline keeps the carriage return of a CRLF file, which would end
-            // up inside the last argument of every command.
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            if (!line.empty()) {
-                _console->execute(line);
-            }
-        }
+    if (_options.commandsFrame == 0) {
+        runCommandsFile();
     }
 }
 
@@ -366,6 +359,12 @@ int Engine::run() {
         if (quit) {
             break;
         }
+        ++_frameIndex;
+        if (_options.commandsFrame > 0 && _frameIndex >= _options.commandsFrame &&
+            !_commandsRun) {
+            _commandsRun = true;
+            runCommandsFile();
+        }
         _profiler->measure(kMainThreadName, kProfilerUpdateTimeIndex, [this, &frameTime]() {
             if (!_vulkan) {
                 imguiNewFrame();
@@ -388,25 +387,7 @@ int Engine::run() {
             }
         });
         _profiler->measure(kMainThreadName, kProfilerRenderGraphicsTimeIndex, [this, &quit]() {
-            _services->graphics.statistic.resetDrawCalls();
-            if (_vulkan) {
-                renderVulkanFrame(quit);
-                return;
-            }
-            if (_options.graphics.pbr) {
-                _services->graphics.pbrTextures.refresh();
-            }
-            _services->graphics.renderer.beginFrame(
-                {_options.graphics.width, _options.graphics.height});
-            _game->render();
-            _profiler->render();
-            _console->render();
-            if (_editor) {
-                _editor->render();
-            }
-            imguiRender();
-            captureIfRequested(quit);
-            _services->graphics.renderer.endFrame();
+            renderFrame(quit);
         });
         _profiler->measure(kMainThreadName, kProfilerRenderAudioTimeIndex, [this]() {
             _services->audio.mixer.render();
@@ -449,7 +430,6 @@ void Engine::captureIfRequested(bool &quit) {
     if (_options.capturePath.empty() || _captured) {
         return;
     }
-    ++_frameIndex;
     if (_frameIndex < _options.captureFrame) {
         // Ask RenderDoc for the frame before the one we screenshot, so the
         // capture holds a complete frame rather than one cut short by the exit.
@@ -473,6 +453,40 @@ void Engine::captureIfRequested(bool &quit) {
     info("Wrote screenshot: " + _options.capturePath);
     _captured = true;
     quit = true;
+}
+
+void Engine::renderFrame(bool &quit) {
+    if (_inFrame) {
+        // Reached from inside a frame. The game asks for one while a module
+        // loads, and that request must not arrive mid-frame; if it ever does,
+        // dropping it is safer than nesting frame boundaries.
+        return;
+    }
+    _inFrame = true;
+    _services->graphics.statistic.resetDrawCalls();
+    if (_vulkan) {
+        renderVulkanFrame(quit);
+    } else {
+        renderGLFrame(quit);
+    }
+    _inFrame = false;
+}
+
+void Engine::renderGLFrame(bool &quit) {
+    if (_options.graphics.pbr) {
+        _services->graphics.pbrTextures.refresh();
+    }
+    _services->graphics.renderer.beginFrame(
+        {_options.graphics.width, _options.graphics.height});
+    _game->render();
+    _profiler->render();
+    _console->render();
+    if (_editor) {
+        _editor->render();
+    }
+    imguiRender();
+    captureIfRequested(quit);
+    _services->graphics.renderer.endFrame();
 }
 
 void Engine::renderVulkanFrame(bool &quit) {
@@ -518,6 +532,26 @@ void Engine::renderVulkanFrame(bool &quit) {
     captureIfRequested(quit);
     _vulkanRenderer->endFrame();
 #endif
+}
+
+void Engine::runCommandsFile() {
+    if (_options.commandsFile.empty()) {
+        return;
+    }
+    std::ifstream file(_options.commandsFile);
+    if (!file.good()) {
+        throw std::runtime_error("Failed to open commands file: " + _options.commandsFile);
+    }
+    for (std::string line; std::getline(file, line);) {
+        // getline keeps the carriage return of a CRLF file, which would end up
+        // inside the last argument of every command.
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (!line.empty()) {
+            _console->execute(line);
+        }
+    }
 }
 
 void Engine::processEvents(bool &quit) {

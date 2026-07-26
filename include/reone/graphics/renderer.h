@@ -70,6 +70,16 @@ public:
      * canvas, say - ends the frame without presenting.
      */
     virtual void endFrame() = 0;
+
+    /**
+     * Drop every cached device-side copy of an engine resource.
+     *
+     * Must be called when the engine frees Meshes and Textures in bulk - a
+     * module transition. A backend that caches them by address cannot otherwise
+     * tell that an address has been reused by a different object, and would
+     * hand a new mesh the previous one's buffers.
+     */
+    virtual void invalidateResources() {}
 };
 
 } // namespace graphics

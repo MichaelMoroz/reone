@@ -98,13 +98,18 @@ private:
 
     int _frameIndex {0};
     bool _captured {false};
+    bool _commandsRun {false};
+    bool _inFrame {false};
     bool _renderdocTriggered {false};
 
     bool _showCursor {true};
     bool _relativeMouseMode {false};
 
     void processEvents(bool &quit);
+    void runCommandsFile();
     /** Records the GUI through the 2D renderer, in its own rendering scope. */
+    void renderFrame(bool &quit);
+    void renderGLFrame(bool &quit);
     void renderVulkanFrame(bool &quit);
     void captureIfRequested(bool &quit);
 

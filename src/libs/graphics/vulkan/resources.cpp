@@ -208,6 +208,11 @@ const VulkanMesh &VulkanResources::get(const Mesh &mesh) {
     return *_meshes.insert({&mesh, std::move(uploaded)}).first->second;
 }
 
+void VulkanResources::clearUploaded() {
+    _textures.clear();
+    _meshes.clear();
+}
+
 void VulkanResources::deinit() {
     _zeroBuffer.reset();
     _fallback2D.reset();

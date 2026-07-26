@@ -332,6 +332,13 @@ std::shared_ptr<Texture> VulkanRenderer::captureFrame() {
     return texture;
 }
 
+void VulkanRenderer::invalidateResources() {
+    // The GPU may still be reading anything uploaded, and this is a load-time
+    // operation, so the blunt wait is the right one.
+    _device.waitIdle();
+    _resources.clearUploaded();
+}
+
 void VulkanRenderer::endFrame() {
     if (!_inFrame) {
         throw std::logic_error("Renderer: no frame begun");

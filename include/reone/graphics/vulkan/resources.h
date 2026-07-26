@@ -52,6 +52,14 @@ public:
 
     void deinit();
 
+    /**
+     * Drop uploaded Textures and Meshes, keeping externally registered images.
+     *
+     * Those are render targets owned by a pipeline that outlives the module,
+     * and dropping them would dangle the scene output handle.
+     */
+    void clearUploaded();
+
     /** Upload @p texture if it has not been seen, and return the image. */
     const VulkanImage &get(const Texture &texture);
 

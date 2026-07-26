@@ -587,8 +587,12 @@ void Game::loadModule(const std::string &name, std::string entry, bool fromSave)
             if (_loadScreen) {
                 _loadScreen->setProgress(50);
             }
-            render();
+            presentFrame();
 
+            // Everything the old module owned is about to be freed, and a
+            // backend caching by address cannot see that an address has been
+            // reused. Tell it before the new module allocates over them.
+            _services.graphics.renderer.invalidateResources();
             _services.scene.graphs.get(kSceneMain).clear();
 
             auto maybeModule = _loadedModules.find(name);
@@ -623,7 +627,7 @@ void Game::loadModule(const std::string &name, std::string entry, bool fromSave)
             if (_loadScreen) {
                 _loadScreen->setProgress(100);
             }
-            render();
+            presentFrame();
 
             std::string musicName(_module->area()->music());
             playMusic(musicName);
@@ -1586,6 +1590,15 @@ void Game::setRelativeMouseMode(bool relative) {
     _relativeMouseMode = relative;
 }
 
+void Game::presentFrame() {
+    if (!_presentFrame) {
+        // No host callback - the toolkit drives rendering itself. Nothing to
+        // do; the caller only wanted the screen refreshed.
+        return;
+    }
+    _presentFrame();
+}
+
 void Game::withLoadingScreen(const std::string &imageResRef, const std::function<void()> &block) {
     if (!_loadScreen) {
         _loadScreen = tryLoadGUI<LoadingScreen>();
@@ -1595,7 +1608,7 @@ void Game::withLoadingScreen(const std::string &imageResRef, const std::function
         _loadScreen->setProgress(0);
     }
     changeScreen(Screen::Loading);
-    render();
+    presentFrame();
     block();
 }
 
@@ -2187,7 +2200,7 @@ void Game::startCharacterGeneration() {
     }
     withLoadingScreen(_charGen->loadScreenResRef(), [this]() {
         _loadScreen->setProgress(100);
-        render();
+        presentFrame();
         playMusic(_charGen->musicResRef());
         changeScreen(Screen::CharacterGeneration);
     });
