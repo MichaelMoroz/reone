@@ -685,15 +685,13 @@ void SceneGraph::renderLensFlares(IRenderPass &pass) {
     if (_flareLights.empty() || _renderWalkmeshes) {
         return;
     }
-    _graphicsSvc.context.withDepthTestMode(DepthTestMode::None, [this, &pass]() {
-        for (auto &light : _flareLights) {
-            Collision collision;
-            if (testLineOfSight(_activeCamera->origin(), light->origin(), collision)) {
-                continue;
-            }
-            light->renderLensFlare(pass, light->modelNode().light()->flares.front());
+    for (auto &light : _flareLights) {
+        Collision collision;
+        if (testLineOfSight(_activeCamera->origin(), light->origin(), collision)) {
+            continue;
         }
-    });
+        light->renderLensFlare(pass, light->modelNode().light()->flares.front());
+    }
 }
 
 static std::vector<glm::vec4> computeFrustumCornersWorldSpace(const glm::mat4 &projection, const glm::mat4 &view) {

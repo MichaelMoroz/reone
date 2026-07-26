@@ -252,8 +252,14 @@ void PBRRenderPass::drawBillboard(Texture &texture,
             locals.billboardSize = *size;
         }
     });
+    // Depth off as well as additive: a lens flare stands for a light the caller
+    // has already traced to, so it is meant to be seen through whatever is in
+    // front of it. This used to be an ambient context scope around the caller,
+    // which made it a raw GL call on a path the Vulkan backend also takes.
     _context.pushBlendMode(BlendMode::Additive);
-    _meshRegistry.get(MeshName::billboard).draw(_statistic);
+    _context.withDepthTestMode(DepthTestMode::None, [this]() {
+        _meshRegistry.get(MeshName::billboard).draw(_statistic);
+    });
     _context.popBlendMode();
 }
 

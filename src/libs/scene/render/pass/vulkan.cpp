@@ -41,6 +41,7 @@ static constexpr char kOpaqueFragment[] = "opaqueFragment";
 static constexpr char kTransparentFragment[] = "transparentFragment";
 static constexpr char kGrassModule[] = "grass";
 static constexpr char kParticleModule[] = "particles";
+static constexpr char kCommonModule[] = "common";
 static constexpr char kWalkmeshModule[] = "walkmesh";
 /** Both grass and walkmesh name their G-buffer fragment stage this. */
 static constexpr char kPBRFragment[] = "pbrFragment";
@@ -290,7 +291,43 @@ void VulkanRenderPass::drawBillboard(Texture &texture,
                                      const glm::mat4 &transform,
                                      const glm::mat4 &transformInv,
                                      std::optional<float> size) {
-    warnOnce("billboards");
+    const auto &quad = _resources.get(_meshRegistry.get(MeshName::billboard));
+
+    VulkanPipelineCache::Key key;
+    key.module = kCommonModule;
+    key.vertexEntry = "billboardVertex";
+    key.fragmentEntry = "textureFragment";
+    key.colorFormats = _colorFormats;
+    key.depthFormat = _depthFormat;
+    // Lens flares are meant to be seen through whatever is in front of them -
+    // the caller has already decided the light is visible by tracing to it.
+    key.depthTest = false;
+    key.depthWrite = false;
+    key.blend = BlendMode::Additive;
+    key.cull = FaceCullMode::None;
+    key.vertexBindings = VulkanMesh::bindingDescriptions(
+        _meshRegistry.get(MeshName::billboard).vertexLayout());
+    key.vertexAttributes = VulkanMesh::attributeDescriptions(
+        _meshRegistry.get(MeshName::billboard).vertexLayout());
+    auto &pipeline = _pipelines.get(key);
+
+    LocalUniforms locals;
+    locals.reset();
+    locals.model = transform;
+    locals.modelInv = transformInv;
+    locals.color = color;
+    if (size) {
+        locals.featureMask |= UniformsFeatureFlags::fixedsize;
+        locals.billboardSize = *size;
+    }
+
+    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = _globalsOffset;
+    offsets[UniformBlockBindingPoints::locals] = _ring.push(locals);
+
+    bindAndDraw(pipeline, offsets,
+                {{TextureUnits::mainTex, &_resources.get(texture)}},
+                quad, 1);
 }
 
 void VulkanRenderPass::drawParticles(Texture &texture,

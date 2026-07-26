@@ -255,17 +255,17 @@ void VulkanRenderPipeline::resolvePass(VkCommandBuffer cmd, uint32_t globalsOffs
     // next, and render() moves it to a sampleable layout once that is done.
 }
 
-void VulkanRenderPipeline::transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset) {
-    auto callback = _passCallbacks.find(RenderPassName::TransparentGeometry);
-    if (callback == _passCallbacks.end()) {
-        return;
-    }
-
-    // Forward, not deferred. Transparent surfaces have no single depth to
-    // resolve lighting at, so they blend straight onto the resolved image,
-    // depth-tested against the opaque geometry but writing no depth of their
-    // own - which is also what leaves the emitter's own back-to-front ordering
-    // in charge of how overlapping particles stack.
+/**
+ * Draw onto the resolved image, depth-testing against the opaque geometry but
+ * writing no depth.
+ *
+ * Shared by everything that runs after the resolve. Forward, not deferred:
+ * these surfaces have no single depth at which to resolve lighting, so they
+ * shade in place and blend onto what is already there.
+ */
+void VulkanRenderPipeline::drawOntoOutput(VkCommandBuffer cmd,
+                                          uint32_t globalsOffset,
+                                          const std::function<void(IRenderPass &)> &callback) {
     _gbuffer->transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
 
     VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
@@ -313,9 +313,32 @@ void VulkanRenderPipeline::transparencyPass(VkCommandBuffer cmd, uint32_t global
                           VulkanGBuffer::depthFormat(),
                           true);
     pass.setGlobalsOffset(globalsOffset);
-    callback->second(pass);
+    callback(pass);
 
     vkCmdEndRendering(cmd);
+}
+
+void VulkanRenderPipeline::transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset) {
+    auto callback = _passCallbacks.find(RenderPassName::TransparentGeometry);
+    if (callback == _passCallbacks.end()) {
+        return;
+    }
+    drawOntoOutput(cmd, globalsOffset, callback->second);
+}
+
+/**
+ * Whatever the scene draws over the finished image.
+ *
+ * Only lens flares at present - billboards blended additively with no depth
+ * test. The filter chain the OpenGL pipeline runs under this name, FXAA and
+ * sharpening and bloom, is not here yet.
+ */
+void VulkanRenderPipeline::postProcessingPass(VkCommandBuffer cmd, uint32_t globalsOffset) {
+    auto callback = _passCallbacks.find(RenderPassName::PostProcessing);
+    if (callback == _passCallbacks.end()) {
+        return;
+    }
+    drawOntoOutput(cmd, globalsOffset, callback->second);
 }
 
 Texture &VulkanRenderPipeline::render() {
@@ -336,6 +359,7 @@ Texture &VulkanRenderPipeline::render() {
     geometryPass(cmd, globalsOffset);
     resolvePass(cmd, globalsOffset);
     transparencyPass(cmd, globalsOffset);
+    postProcessingPass(cmd, globalsOffset);
 
     // Everything that draws into the output has now run, so hand it to the 2D
     // compositor in a layout it can sample.

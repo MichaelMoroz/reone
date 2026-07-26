@@ -38,6 +38,7 @@ set(SPIRV_MODULES
     "pbr_model:staticVertex+skinnedVertex+danglyVertex+saberVertex+opaqueFragment+transparentFragment"
     "grass:grassVertex+pbrFragment+retroFragment"
     "walkmesh:walkmeshVertex+pbrFragment+retroFragment"
+    "common:billboardVertex+textureFragment"
     "particles:particleVertex+particleFragment"
     "pbr_resolve:resolveVertex+resolveFragment"
     "vk2d:quadVertex+imageFragment+colorFragment+fullTargetVertex+textVertex+textFragment")

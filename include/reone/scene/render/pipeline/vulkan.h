@@ -105,6 +105,10 @@ private:
 
     void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    void postProcessingPass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    void drawOntoOutput(VkCommandBuffer cmd,
+                        uint32_t globalsOffset,
+                        const std::function<void(IRenderPass &)> &callback);
     void resolvePass(VkCommandBuffer cmd, uint32_t globalsOffset);
 };
 
