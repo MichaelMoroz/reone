@@ -135,6 +135,12 @@ public:
      */
     void setGlobalsOffset(uint32_t offset) { _globalsOffset = offset; }
 
+    /**
+     * Which views a shadow draw broadcasts to. Zero outside a shadow pass; the
+     * pipeline it builds has to declare the same mask the pass does.
+     */
+    void setShadowViewMask(uint32_t mask) { _shadowViewMask = mask; }
+
     int drawCount() const { return _drawCount; }
 
 private:
@@ -155,6 +161,7 @@ private:
      * and read-only depth rather than the G-buffer's five and a writable one.
      */
     bool _transparency;
+    uint32_t _shadowViewMask {0};
     uint32_t _globalsOffset {0};
     int _drawCount {0};
 
@@ -172,6 +179,10 @@ private:
      * after that point.
      */
     uint32_t walkmeshOffset();
+
+    void drawShadow(graphics::Mesh &mesh,
+                    graphics::Material &material,
+                    const glm::mat4 &transform);
 
     std::optional<uint32_t> _walkmeshOffset;
 

@@ -52,6 +52,11 @@ public:
         std::vector<VkFormat> colorFormats;
         /** UNDEFINED means no depth attachment. */
         VkFormat depthFormat {VK_FORMAT_UNDEFINED};
+        /**
+         * Which views a draw broadcasts to, zero for none. Must match the
+         * VkRenderingInfo it is used with; a mismatch is a validation error.
+         */
+        uint32_t viewMask {0};
 
         // State OpenGL would have set per draw. In Vulkan it is baked in, which
         // is why these belong to the pipeline's identity rather than to a call.

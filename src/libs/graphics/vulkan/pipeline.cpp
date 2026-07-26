@@ -165,6 +165,7 @@ void VulkanPipeline::init(const Config &config) {
     // Dynamic rendering: no VkRenderPass and no VkFramebuffer, just the formats
     // the pipeline will write. Fewer objects to keep in step as passes change.
     VkPipelineRenderingCreateInfo rendering {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    rendering.viewMask = config.viewMask;
     rendering.colorAttachmentCount = static_cast<uint32_t>(config.colorFormats.size());
     rendering.pColorAttachmentFormats = config.colorFormats.data();
     rendering.depthAttachmentFormat = config.depthFormat;

@@ -355,6 +355,11 @@ void MeshSceneNode::renderShadow(IRenderPass &pass) {
                         ? MaterialType::DirLightShadow
                         : MaterialType::PointLightShadow;
     material.color = glm::vec4(1.0f, 1.0f, 1.0f, _alpha);
+    // Front faces cast, so that the depth error a surface introduces lands
+    // behind whatever receives the shadow rather than on the caster itself.
+    // Carried on the material rather than set as ambient context around the
+    // loop, which was a raw GL call on a path both backends take.
+    material.faceCulling = FaceCullMode::Front;
     pass.draw(*mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform);
 }
 

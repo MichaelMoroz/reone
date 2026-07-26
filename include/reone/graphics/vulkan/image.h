@@ -71,6 +71,14 @@ public:
     void initDepth(glm::ivec2 extent, VkFormat format);
 
     /**
+     * A layered depth image that is also sampled: a shadow map.
+     *
+     * @param cube view it as a cube map rather than a 2D array. Point lights
+     *             are sampled by direction, directional cascades by index.
+     */
+    void initDepthLayered(glm::ivec2 extent, VkFormat format, int layers, bool cube);
+
+    /**
      * A colour attachment that is also sampled afterwards, which is what every
      * G-buffer target is.
      */

@@ -54,6 +54,8 @@ public:
         std::string fragmentEntry;
         std::vector<VkFormat> colorFormats;
         VkFormat depthFormat {VK_FORMAT_UNDEFINED};
+        /** See VulkanPipeline::Config::viewMask. */
+        uint32_t viewMask {0};
         /** Empty for shaders that synthesise geometry from SV_VertexID. */
         std::vector<VkVertexInputBindingDescription> vertexBindings;
         std::vector<VkVertexInputAttributeDescription> vertexAttributes;

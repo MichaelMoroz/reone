@@ -357,6 +357,44 @@ void VulkanImage::initSampledLayers(
     });
 }
 
+void VulkanImage::initDepthLayered(glm::ivec2 extent, VkFormat format, int layers, bool cube) {
+    _extent = extent;
+    _format = format;
+
+    VkImageCreateInfo imageInfo {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = format;
+    imageInfo.extent = {static_cast<uint32_t>(extent.x), static_cast<uint32_t>(extent.y), 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = static_cast<uint32_t>(layers);
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (cube) {
+        imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    }
+
+    VmaAllocationCreateInfo allocInfo {};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+    if (vmaCreateImage(_device.allocator(), &imageInfo, &allocInfo,
+                       &_image, &_allocation, nullptr) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: layered depth image allocation failed");
+    }
+
+    VkImageViewCreateInfo viewInfo {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = _image;
+    viewInfo.viewType = cube ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.layerCount = static_cast<uint32_t>(layers);
+    if (vkCreateImageView(_device.handle(), &viewInfo, nullptr, &_view) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: layered depth image view creation failed");
+    }
+}
+
 void VulkanImage::initColorAttachment(glm::ivec2 extent, VkFormat format) {
     _extent = extent;
     _format = format;

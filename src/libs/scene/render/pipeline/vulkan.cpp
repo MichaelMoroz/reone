@@ -51,6 +51,43 @@ static glm::mat4 glToVulkanClip(const glm::mat4 &m) {
     return correction * m;
 }
 
+/**
+ * Move a shadow map between being written and being sampled.
+ *
+ * Local rather than on VulkanImage because the layout is tracked here: these
+ * two images are the pipeline's own, and nothing else touches them.
+ */
+static void transitionShadowMap(VkCommandBuffer cmd,
+                                const VulkanImage &image,
+                                VkImageLayout &from,
+                                VkImageLayout to) {
+    if (from == to) {
+        return;
+    }
+    VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    b.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                     VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    b.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                      VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    b.dstStageMask = b.srcStageMask;
+    b.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                      VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    b.oldLayout = from;
+    b.newLayout = to;
+    b.image = image.handle();
+    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    b.subresourceRange.levelCount = 1;
+    b.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
+
+    VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dep.imageMemoryBarrierCount = 1;
+    dep.pImageMemoryBarriers = &b;
+    vkCmdPipelineBarrier2(cmd, &dep);
+    from = to;
+}
+
 void VulkanRenderPipeline::init() {
     if (_inited) {
         return;
@@ -62,6 +99,50 @@ void VulkanRenderPipeline::init() {
 
     _output = std::make_unique<VulkanImage>(device);
     _output->initColorAttachment(_targetSize, _renderer.swapchain().imageFormat());
+
+    glm::ivec2 shadowSize {_options.shadowResolution, _options.shadowResolution};
+    _dirShadows = std::make_unique<VulkanImage>(device);
+    _dirShadows->initDepthLayered(shadowSize, VulkanGBuffer::depthFormat(),
+                                  kNumShadowCascades, false);
+    _pointShadows = std::make_unique<VulkanImage>(device);
+    _pointShadows->initDepthLayered(shadowSize, VulkanGBuffer::depthFormat(),
+                                    kNumCubeFaces, true);
+
+    // The resolve samples both maps whichever kind of light is casting, so the
+    // one that is not rendered this frame still has to hold something valid.
+    // Cleared to the far plane once here, which reads as nothing occluding, and
+    // moved into the layout the descriptor was written against.
+    device.immediateSubmit([this, shadowSize](VkCommandBuffer cmd) {
+        auto clear = [&](VulkanImage &image, int layers) {
+            VkRenderingAttachmentInfo depth {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+            depth.imageView = image.view();
+            depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            depth.clearValue.depthStencil.depth = 1.0f;
+
+            VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+            rendering.renderArea.extent = {static_cast<uint32_t>(shadowSize.x),
+                                           static_cast<uint32_t>(shadowSize.y)};
+            rendering.layerCount = 1;
+            rendering.viewMask = (1u << layers) - 1u;
+            rendering.pDepthAttachment = &depth;
+
+            VkImageLayout from = VK_IMAGE_LAYOUT_UNDEFINED;
+            transitionShadowMap(cmd, image, from, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+            vkCmdBeginRendering(cmd, &rendering);
+            vkCmdEndRendering(cmd);
+        };
+        clear(*_dirShadows, kNumShadowCascades);
+        clear(*_pointShadows, kNumCubeFaces);
+
+        _dirShadowLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        _pointShadowLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        transitionShadowMap(cmd, *_dirShadows, _dirShadowLayout,
+                            VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+        transitionShadowMap(cmd, *_pointShadows, _pointShadowLayout,
+                            VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+    });
 
     // The output crosses the seam as a Texture. It has no pixels and is never
     // uploaded; the resource cache maps it straight back to the image.
@@ -78,6 +159,8 @@ void VulkanRenderPipeline::init() {
     // The resolve reconstructs world position from depth, so it samples the
     // same image the geometry pass wrote.
     resolveTextures.push_back({TextureUnits::gBufDepth, &_gbuffer->depth()});
+    resolveTextures.push_back({TextureUnits::shadowMapArray, _dirShadows.get()});
+    resolveTextures.push_back({TextureUnits::shadowMapCube, _pointShadows.get()});
     _resolveSet = _renderer.descriptors().createPersistentTextureSet(resolveTextures);
 
     // The output is written as an attachment and then sampled by the 2D
@@ -113,9 +196,82 @@ void VulkanRenderPipeline::deinit() {
         _renderer.resources().unregisterExternal(*_outputHandle);
     }
     _output.reset();
+    _dirShadows.reset();
+    _pointShadows.reset();
     _gbuffer.reset();
     _outputHandle.reset();
     _inited = false;
+}
+
+/**
+ * Render the shadow map for whichever light is casting this frame.
+ *
+ * One pass covers every cascade, or every cube face, through multiview: the
+ * view mask says how many, and the vertex stage picks its matrix by view index.
+ * Only one of the two runs - the scene graph registers the callback for the
+ * kind of light it chose.
+ */
+void VulkanRenderPipeline::shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset) {
+    auto directional = _passCallbacks.find(RenderPassName::DirLightShadowsPass);
+    auto point = _passCallbacks.find(RenderPassName::PointLightShadows);
+    bool isDirectional = directional != _passCallbacks.end();
+    auto callback = isDirectional ? directional : point;
+    if (callback == _passCallbacks.end()) {
+        return;
+    }
+
+    auto &image = isDirectional ? *_dirShadows : *_pointShadows;
+    auto &layout = isDirectional ? _dirShadowLayout : _pointShadowLayout;
+    int layers = isDirectional ? kNumShadowCascades : kNumCubeFaces;
+    uint32_t viewMask = (1u << layers) - 1u;
+
+    transitionShadowMap(cmd, image, layout, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+
+    VkRenderingAttachmentInfo depth {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depth.imageView = image.view();
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depth.clearValue.depthStencil.depth = 1.0f;
+
+    auto extent = image.extent();
+    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = {static_cast<uint32_t>(extent.x),
+                                   static_cast<uint32_t>(extent.y)};
+    rendering.layerCount = 1;
+    rendering.viewMask = viewMask;
+    rendering.pDepthAttachment = &depth;
+
+    // No flipped viewport here. A shadow map is only ever compared against
+    // itself, so the one requirement is that rendering and lookup agree, and
+    // both use Vulkan's own convention.
+    VkViewport viewport {0.0f, 0.0f, static_cast<float>(extent.x),
+                         static_cast<float>(extent.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(extent.x),
+                               static_cast<uint32_t>(extent.y)}};
+
+    vkCmdBeginRendering(cmd, &rendering);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    VulkanRenderPass pass(_options,
+                          _renderer.device(),
+                          _renderer.pipelines(),
+                          _renderer.uniformRing(),
+                          _renderer.descriptors(),
+                          _renderer.resources(),
+                          _uniforms,
+                          _meshRegistry,
+                          cmd,
+                          {},
+                          VulkanGBuffer::depthFormat());
+    pass.setGlobalsOffset(globalsOffset);
+    pass.setShadowViewMask(viewMask);
+    callback->second(pass);
+
+    vkCmdEndRendering(cmd);
+
+    transitionShadowMap(cmd, image, layout, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
 }
 
 void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset) {
@@ -354,8 +510,15 @@ Texture &VulkanRenderPipeline::render() {
     globals.projectionInv = glm::inverse(globals.projection);
     globals.viewProjection = glToVulkanClip(globals.viewProjection);
     globals.prevViewProjection = glToVulkanClip(globals.prevViewProjection);
+    // The shadow matrices are built for OpenGL too, and are used twice: once to
+    // render the map and once to look into it. Correcting them here keeps the
+    // two agreeing, and puts shadow depth in 0..1 like everything else.
+    for (int i = 0; i < kNumShadowLightSpace; ++i) {
+        globals.shadowLightSpace[i] = glToVulkanClip(globals.shadowLightSpace[i]);
+    }
     auto globalsOffset = _renderer.uniformRing().push(globals);
 
+    shadowPass(cmd, globalsOffset);
     geometryPass(cmd, globalsOffset);
     resolvePass(cmd, globalsOffset);
     transparencyPass(cmd, globalsOffset);

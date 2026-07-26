@@ -29,6 +29,7 @@ bool VulkanPipelineCache::Key::operator==(const Key &other) const {
         vertexEntry != other.vertexEntry ||
         fragmentEntry != other.fragmentEntry ||
         depthFormat != other.depthFormat ||
+        viewMask != other.viewMask ||
         blend != other.blend ||
         cull != other.cull ||
         depthTest != other.depthTest ||
@@ -66,6 +67,7 @@ size_t VulkanPipelineCache::KeyHash::operator()(const Key &key) const {
         mix(static_cast<size_t>(format));
     }
     mix(static_cast<size_t>(key.depthFormat));
+    mix(static_cast<size_t>(key.viewMask));
     mix(key.vertexBindings.size());
     mix(key.vertexAttributes.size());
     for (const auto &attribute : key.vertexAttributes) {
@@ -106,6 +108,7 @@ VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
     config.fragmentEntry = key.fragmentEntry;
     config.colorFormats = key.colorFormats;
     config.depthFormat = key.depthFormat;
+    config.viewMask = key.viewMask;
     config.vertexBindings = key.vertexBindings;
     config.vertexAttributes = key.vertexAttributes;
     config.setLayouts = _setLayouts;

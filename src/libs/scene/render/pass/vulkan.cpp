@@ -42,6 +42,7 @@ static constexpr char kTransparentFragment[] = "transparentFragment";
 static constexpr char kGrassModule[] = "grass";
 static constexpr char kParticleModule[] = "particles";
 static constexpr char kCommonModule[] = "common";
+static constexpr char kShadowModule[] = "shadow";
 static constexpr char kWalkmeshModule[] = "walkmesh";
 /** Both grass and walkmesh name their G-buffer fragment stage this. */
 static constexpr char kPBRFragment[] = "pbrFragment";
@@ -148,6 +149,15 @@ void VulkanRenderPass::drawGeometry(Mesh &mesh,
                                     std::optional<glm::vec4> saberDisplacement) {
     const auto &vkMesh = _resources.get(mesh);
 
+    // A shadow draw writes depth from one shared vertex stage and nothing else,
+    // so it ignores the material entirely beyond which kind of light it is for.
+    bool shadow = material.type == MaterialType::DirLightShadow ||
+                  material.type == MaterialType::PointLightShadow;
+    if (shadow) {
+        drawShadow(mesh, material, transform);
+        return;
+    }
+
     // Walkmeshes are debug geometry with their own tiny shader; everything else
     // in this pass is a model.
     bool walkmesh = material.type == MaterialType::Walkmesh;
@@ -204,6 +214,41 @@ uint32_t VulkanRenderPass::walkmeshOffset() {
         _walkmeshOffset = _ring.push(_uniforms.walkmesh());
     }
     return *_walkmeshOffset;
+}
+
+void VulkanRenderPass::drawShadow(Mesh &mesh, Material &material, const glm::mat4 &transform) {
+    const auto &vkMesh = _resources.get(mesh);
+
+    VulkanPipelineCache::Key key;
+    key.module = kShadowModule;
+    key.vertexEntry = "shadowVertex";
+    // A directional cascade needs no fragment stage; a point light writes radial
+    // distance instead of projected depth.
+    key.fragmentEntry = material.type == MaterialType::DirLightShadow
+                            ? "nullFragment"
+                            : "pointFragment";
+    key.depthFormat = _depthFormat;
+    key.viewMask = _shadowViewMask;
+    key.depthTest = true;
+    key.depthWrite = true;
+    // Front faces, not back: shadow acne comes from the surface shadowing
+    // itself, and casting from the far side of the geometry moves the error
+    // behind whatever it is that receives the shadow.
+    key.cull = FaceCullMode::Front;
+    key.vertexBindings = VulkanMesh::bindingDescriptions(mesh.vertexLayout());
+    key.vertexAttributes = VulkanMesh::attributeDescriptions(mesh.vertexLayout());
+    auto &pipeline = _pipelines.get(key);
+
+    LocalUniforms locals;
+    locals.reset();
+    locals.model = transform;
+    locals.color = material.color;
+
+    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = _globalsOffset;
+    offsets[UniformBlockBindingPoints::locals] = _ring.push(locals);
+
+    bindAndDraw(pipeline, offsets, {}, vkMesh, 1);
 }
 
 void VulkanRenderPass::bindAndDraw(

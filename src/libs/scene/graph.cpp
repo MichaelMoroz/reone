@@ -618,11 +618,9 @@ void SceneGraph::renderShadows(IRenderPass &pass) {
     if (!_activeCamera) {
         return;
     }
-    _graphicsSvc.context.withFaceCullMode(FaceCullMode::Front, [this, &pass]() {
-        for (auto &mesh : _shadowMeshes) {
-            mesh->renderShadow(pass);
-        }
-    });
+    for (auto &mesh : _shadowMeshes) {
+        mesh->renderShadow(pass);
+    }
 }
 
 void SceneGraph::renderOpaque(IRenderPass &pass) {

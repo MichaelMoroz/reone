@@ -63,6 +63,10 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     VkPhysicalDeviceVulkan11Features features11 {};
     features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
     features11.shaderDrawParameters = VK_TRUE;
+    // Shadow maps render every cascade, or every cube face, from one draw. The
+    // OpenGL pipeline uses a geometry shader to fan the triangle out across
+    // layers; multiview does the same thing without one.
+    features11.multiview = VK_TRUE;
 
     VkPhysicalDeviceVulkan13Features features13 {};
     features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;

@@ -94,6 +94,12 @@ private:
     std::unique_ptr<graphics::VulkanGBuffer> _gbuffer;
     /** What the resolve writes, and what the frame composites. */
     std::unique_ptr<graphics::VulkanImage> _output;
+    /** Four directional cascades, as a 2D array. */
+    std::unique_ptr<graphics::VulkanImage> _dirShadows;
+    /** Six faces of one point light, as a cube. */
+    std::unique_ptr<graphics::VulkanImage> _pointShadows;
+    VkImageLayout _dirShadowLayout {VK_IMAGE_LAYOUT_UNDEFINED};
+    VkImageLayout _pointShadowLayout {VK_IMAGE_LAYOUT_UNDEFINED};
     /**
      * A Texture with no pixels, existing only so the output can cross the
      * `IRenderer::drawSceneOutput(Texture &)` seam. VulkanResources maps it back
@@ -104,6 +110,7 @@ private:
     VkDescriptorSet _resolveSet {VK_NULL_HANDLE};
 
     void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    void shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void postProcessingPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void drawOntoOutput(VkCommandBuffer cmd,
