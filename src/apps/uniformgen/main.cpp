@@ -160,7 +160,11 @@ int main(int argc, char **argv) {
             ++blockCount;
         }
 
-        for (const auto &element : nested) {
+        // Indexed rather than range-based: emitFields appends to nested when an
+        // element struct itself holds an array of structs, which would invalidate
+        // an iterator.
+        for (size_t i = 0; i < nested.size(); ++i) {
+            auto element = nested[i];
             if (!emittedNested.insert(element.name).second) {
                 continue;
             }

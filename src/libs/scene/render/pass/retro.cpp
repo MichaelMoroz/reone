@@ -192,15 +192,15 @@ void RetroRenderPass::drawSaber(Mesh &mesh,
                                 const glm::mat4 &prevTransform,
                                 const glm::vec4 &displacement) {
     withMaterialAppliedToContext(material, [&](auto &program) {
-        _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform](auto &locals) {
+        _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform, &displacement](auto &locals) {
             locals.reset();
             locals.featureMask |= UniformsFeatureFlags::saber;
             locals.model = transform;
             locals.modelInv = transformInv;
             locals.prevModel = prevTransform;
+            locals.saberDisplacement = displacement;
             applyMaterialToLocals(material, locals);
         });
-        program.setUniform("uSaberDisplacement", displacement);
         mesh.draw(_statistic);
     });
 }

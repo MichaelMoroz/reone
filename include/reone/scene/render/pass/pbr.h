@@ -113,6 +113,9 @@ private:
     graphics::ITextureRegistry &_textureRegistry;
     graphics::IUniforms &_uniforms;
 
+    /** Resolved per material, then written into the Locals block. */
+    int _envMapDerivedLayer {0};
+
     void applyMaterialToLocals(const graphics::Material &material, graphics::LocalUniforms &locals);
 
     int materialFeatureMask(const graphics::Material &material) const;

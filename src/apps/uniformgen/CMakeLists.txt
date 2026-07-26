@@ -30,7 +30,8 @@ if(SLANGC_EXECUTABLE)
     set(UNIFORM_REFLECTION ${CMAKE_BINARY_DIR}/uniforms-reflection.json)
     add_custom_target(uniformlayout
         COMMAND ${SLANGC_EXECUTABLE}
-            ${CMAKE_SOURCE_DIR}/slang/uniforms.slang
+            ${CMAKE_SOURCE_DIR}/slang/uniformreflect.slang
+            -I ${CMAKE_SOURCE_DIR}/slang
             -target glsl -entry main -stage compute
             -matrix-layout-column-major
             -reflection-json ${UNIFORM_REFLECTION}
@@ -38,6 +39,8 @@ if(SLANGC_EXECUTABLE)
         COMMAND uniformgen
             ${UNIFORM_REFLECTION}
             ${REONE_INCLUDE_DIR}/reone/graphics/uniformlayout.generated.h
-        DEPENDS uniformgen ${CMAKE_SOURCE_DIR}/slang/uniforms.slang
+        DEPENDS uniformgen
+            ${CMAKE_SOURCE_DIR}/slang/uniformreflect.slang
+            ${CMAKE_SOURCE_DIR}/slang/uniforms.slang
         COMMENT "Regenerating uniform layout assertions from slang/uniforms.slang")
 endif()

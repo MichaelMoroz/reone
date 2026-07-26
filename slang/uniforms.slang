@@ -68,11 +68,15 @@ struct LocalUniforms {
     float4 ambientColor;
     float4 diffuseColor;
     float4 selfIllumColor;
+    // Former loose uniforms. Vulkan has no equivalent, so they move into the
+    // block; see doc/vulkan-rt-backend.md section 3.1.
+    float4 saberDisplacement;
     int featureMask;
     int bumpMapFrame;
     float bumpMapScale;
     float waterAlpha;
     float billboardSize;
+    int envMapDerivedLayer;
 };
 
 struct BoneUniforms {
@@ -139,31 +143,40 @@ struct ScreenEffectUniforms {
     float sharpenAmount;
 };
 
-ConstantBuffer<GlobalUniforms> globalUniforms;
-ConstantBuffer<LocalUniforms> localUniforms;
-ConstantBuffer<BoneUniforms> boneUniforms;
-ConstantBuffer<DanglyUniforms> danglyUniforms;
-ConstantBuffer<ParticleUniforms> particleUniforms;
-ConstantBuffer<GrassUniforms> grassUniforms;
-ConstantBuffer<TextUniforms> textUniforms;
-ConstantBuffer<WalkmeshUniforms> walkmeshUniforms;
-ConstantBuffer<ScreenEffectUniforms> screenEffectUniforms;
+// Binding indices match UniformBlockBindingPoints in reone/graphics/types.h. In
+// GLSL these become uniform block binding points; the host no longer has to look
+// blocks up by name.
+//
+// No descriptor set index is given: Slang emits `set = N` into GLSL, which is not
+// valid GLSL. That means block and texture bindings share one number space when
+// targeting SPIR-V, so the two will need distinct ranges once Vulkan lands.
+[[vk::binding(0)]] ConstantBuffer<GlobalUniforms> globalUniforms;
+[[vk::binding(1)]] ConstantBuffer<LocalUniforms> localUniforms;
+[[vk::binding(2)]] ConstantBuffer<BoneUniforms> boneUniforms;
+[[vk::binding(3)]] ConstantBuffer<DanglyUniforms> danglyUniforms;
+[[vk::binding(5)]] ConstantBuffer<ParticleUniforms> particleUniforms;
+[[vk::binding(6)]] ConstantBuffer<GrassUniforms> grassUniforms;
+[[vk::binding(7)]] ConstantBuffer<WalkmeshUniforms> walkmeshUniforms;
+[[vk::binding(8)]] ConstantBuffer<TextUniforms> textUniforms;
+[[vk::binding(9)]] ConstantBuffer<ScreenEffectUniforms> screenEffectUniforms;
 
-RWStructuredBuffer<float> sink;
+// UniformsFeatureFlags in reone/graphics/uniforms.h
+static const int kFeatureLightmap = 1 << 0;
+static const int kFeatureEnvMap = 1 << 1;
+static const int kFeatureNormalMap = 1 << 2;
+static const int kFeatureBumpMap = 1 << 3;
+static const int kFeatureSkin = 1 << 4;
+static const int kFeatureDangly = 1 << 5;
+static const int kFeatureSaber = 1 << 6;
+static const int kFeatureShadows = 1 << 7;
+static const int kFeatureWater = 1 << 8;
+static const int kFeatureFog = 1 << 9;
+static const int kFeatureFixedSize = 1 << 10;
+static const int kFeatureHashedAlphaTest = 1 << 11;
+static const int kFeaturePremulAlpha = 1 << 12;
+static const int kFeatureEnvMapCube = 1 << 13;
+static const int kFeatureStatic = 1 << 14;
 
-// Reflection only reports parameters an entry point actually uses, so this
-// touches every block. It is never executed.
-[shader("compute")]
-[numthreads(1, 1, 1)]
-void main() {
-    sink[0] =
-        globalUniforms.projection[0][0] +
-        localUniforms.model[0][0] +
-        boneUniforms.bones[0][0][0] +
-        danglyUniforms.positions[0].x +
-        particleUniforms.particles[0].size.x +
-        grassUniforms.clusters[0].lightmapUV.x +
-        textUniforms.chars[0].uv.x +
-        walkmeshUniforms.materials[0].x +
-        screenEffectUniforms.projection[0][0];
+bool isFeatureEnabled(int flag) {
+    return (localUniforms.featureMask & flag) != 0;
 }

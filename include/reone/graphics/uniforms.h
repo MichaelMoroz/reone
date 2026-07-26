@@ -131,11 +131,17 @@ struct alignas(16) LocalUniforms {
     glm::vec4 ambientColor;
     glm::vec4 diffuseColor;
     glm::vec4 selfIllumColor;
+    /**
+     * Formerly loose uniforms set by name per draw. Vulkan has no equivalent, so
+     * they live in the block; see doc/vulkan-rt-backend.md section 3.1.
+     */
+    glm::vec4 saberDisplacement;
     int featureMask;
     int bumpMapFrame;
     float bumpMapScale;
     float waterAlpha;
     float billboardSize;
+    int envMapDerivedLayer;
 
     LocalUniforms() {
         reset();
@@ -150,11 +156,13 @@ struct alignas(16) LocalUniforms {
         ambientColor = glm::vec4(1.0f);
         diffuseColor = glm::vec4(1.0f);
         selfIllumColor = glm::vec4(0.0f);
+        saberDisplacement = glm::vec4(0.0f);
         featureMask = 0;
         bumpMapFrame = 0;
         bumpMapScale = 1.0f;
         waterAlpha = 0.0f;
         billboardSize = 1.0f;
+        envMapDerivedLayer = 0;
     }
 };
 

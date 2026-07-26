@@ -52,12 +52,14 @@ static_assert(offsetof(LocalUniforms, color) == 240, "LocalUniforms::color moved
 static_assert(offsetof(LocalUniforms, ambientColor) == 256, "LocalUniforms::ambientColor moved; shader layout disagrees");
 static_assert(offsetof(LocalUniforms, diffuseColor) == 272, "LocalUniforms::diffuseColor moved; shader layout disagrees");
 static_assert(offsetof(LocalUniforms, selfIllumColor) == 288, "LocalUniforms::selfIllumColor moved; shader layout disagrees");
-static_assert(offsetof(LocalUniforms, featureMask) == 304, "LocalUniforms::featureMask moved; shader layout disagrees");
-static_assert(offsetof(LocalUniforms, bumpMapFrame) == 308, "LocalUniforms::bumpMapFrame moved; shader layout disagrees");
-static_assert(offsetof(LocalUniforms, bumpMapScale) == 312, "LocalUniforms::bumpMapScale moved; shader layout disagrees");
-static_assert(offsetof(LocalUniforms, waterAlpha) == 316, "LocalUniforms::waterAlpha moved; shader layout disagrees");
-static_assert(offsetof(LocalUniforms, billboardSize) == 320, "LocalUniforms::billboardSize moved; shader layout disagrees");
-static_assert(sizeof(LocalUniforms) == 336, "LocalUniforms is not the size std140 expects");
+static_assert(offsetof(LocalUniforms, saberDisplacement) == 304, "LocalUniforms::saberDisplacement moved; shader layout disagrees");
+static_assert(offsetof(LocalUniforms, featureMask) == 320, "LocalUniforms::featureMask moved; shader layout disagrees");
+static_assert(offsetof(LocalUniforms, bumpMapFrame) == 324, "LocalUniforms::bumpMapFrame moved; shader layout disagrees");
+static_assert(offsetof(LocalUniforms, bumpMapScale) == 328, "LocalUniforms::bumpMapScale moved; shader layout disagrees");
+static_assert(offsetof(LocalUniforms, waterAlpha) == 332, "LocalUniforms::waterAlpha moved; shader layout disagrees");
+static_assert(offsetof(LocalUniforms, billboardSize) == 336, "LocalUniforms::billboardSize moved; shader layout disagrees");
+static_assert(offsetof(LocalUniforms, envMapDerivedLayer) == 340, "LocalUniforms::envMapDerivedLayer moved; shader layout disagrees");
+static_assert(sizeof(LocalUniforms) == 352, "LocalUniforms is not the size std140 expects");
 
 // BoneUniforms
 static_assert(offsetof(BoneUniforms, bones) == 0, "BoneUniforms::bones moved; shader layout disagrees");
@@ -79,13 +81,13 @@ static_assert(offsetof(GrassUniforms, radius) == 8, "GrassUniforms::radius moved
 static_assert(offsetof(GrassUniforms, clusters) == 16, "GrassUniforms::clusters moved; shader layout disagrees");
 static_assert(sizeof(GrassUniforms) == 8208, "GrassUniforms is not the size std140 expects");
 
-// TextUniforms
-static_assert(offsetof(TextUniforms, chars) == 0, "TextUniforms::chars moved; shader layout disagrees");
-static_assert(sizeof(TextUniforms) == 4096, "TextUniforms is not the size std140 expects");
-
 // WalkmeshUniforms
 static_assert(offsetof(WalkmeshUniforms, materials) == 0, "WalkmeshUniforms::materials moved; shader layout disagrees");
 static_assert(sizeof(WalkmeshUniforms) == 512, "WalkmeshUniforms is not the size std140 expects");
+
+// TextUniforms
+static_assert(offsetof(TextUniforms, chars) == 0, "TextUniforms::chars moved; shader layout disagrees");
+static_assert(sizeof(TextUniforms) == 4096, "TextUniforms is not the size std140 expects");
 
 // ScreenEffectUniforms
 static_assert(offsetof(ScreenEffectUniforms, projection) == 0, "ScreenEffectUniforms::projection moved; shader layout disagrees");

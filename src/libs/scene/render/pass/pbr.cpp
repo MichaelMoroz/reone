@@ -71,9 +71,9 @@ void PBRRenderPass::withMaterialAppliedToContext(const Material &material, std::
         if (_options.pbr) {
             auto layer = _pbrTextures.findEnvMapDerivedLayer(envMap.name());
             if (layer) {
-                program.setUniform("uEnvMapDerivedLayer", *layer);
+                _envMapDerivedLayer = *layer;
             } else {
-                program.setUniform("uEnvMapDerivedLayer", 0);
+                _envMapDerivedLayer = 0;
                 _pbrTextures.requestEnvMapDerived({envMap});
             }
         }
@@ -202,15 +202,15 @@ void PBRRenderPass::drawSaber(Mesh &mesh,
                               const glm::mat4 &prevTransform,
                               const glm::vec4 &displacement) {
     withMaterialAppliedToContext(material, [&](auto &program) {
-        _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform](auto &locals) {
+        _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform, &displacement](auto &locals) {
             locals.reset();
             locals.featureMask |= UniformsFeatureFlags::saber;
             locals.model = transform;
             locals.modelInv = transformInv;
             locals.prevModel = prevTransform;
+            locals.saberDisplacement = displacement;
             applyMaterialToLocals(material, locals);
         });
-        program.setUniform("uSaberDisplacement", displacement);
         mesh.draw(_statistic);
     });
 }
@@ -302,6 +302,8 @@ void PBRRenderPass::drawGrass(float radius,
 
 void PBRRenderPass::applyMaterialToLocals(const Material &material,
                                           LocalUniforms &locals) {
+    // Resolved by withMaterialAppliedToContext, which always runs first.
+    locals.envMapDerivedLayer = _envMapDerivedLayer;
     locals.featureMask |= materialFeatureMask(material);
     locals.uv = material.uv;
     locals.color = material.color;
