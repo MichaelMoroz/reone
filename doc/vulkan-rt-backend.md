@@ -872,8 +872,37 @@ the default target" - is easy to lose the moment building one target is faster.
 When a shader change appears not to take effect, disassemble the module and look
 for the thing you just added before suspecting anything else.
 
-### 10.7 Next
+### 10.7 Real geometry and depth
 
-- Vertex and index buffers from `Mesh`, and a pipeline with real attributes.
-- The G-buffer and the deferred pipeline.
+`VulkanMesh` uploads a `Mesh` as it already describes itself - interleaved
+vertex data with a stride and a set of offsets - into a device-local vertex
+buffer, plus an index buffer built from its faces.
+
+The vertex layout is not reinterpreted anywhere. `Mesh::VertexLayout` gives the
+offsets, and the attribute locations are the ones the Slang shaders declare with
+`[[vk::location(n)]]`, which are in turn the ones the GL path binds. All three
+have to agree, so `VulkanMesh::attributeDescriptions` is the single place they
+are written down. Two details carried over from the GL path: one offset
+(`offTanSpace`) covers three consecutive vec3s in the order bitangent, tangent,
+tangent-space normal; and bone indices are stored as floats, not integers.
+
+`Mesh` gained `vertexData()` and `vertexLayout()` accessors. It already held
+both; they were simply private.
+
+The renderer now owns a depth image sized with the swapchain and rebuilt with
+it, and `VulkanPipeline::Config` takes an optional depth format that switches
+depth test and write on. Without it a cube renders inside-out, which is a
+useful reminder that nothing about depth is implicit here.
+
+Verified by capture: a rotating textured cube, 36 indices, stride 32, three
+attributes, with per-face normal shading and correct occlusion. Validation
+silent. The uniform arena peaks at 2816 bytes for two blocks per frame across
+two frames in flight, which says the 1 MB guess is generous by three orders of
+magnitude and can be revisited when there are real draw counts.
+
+### 10.8 Next
+
+- The G-buffer: several colour attachments, and the deferred resolve.
+- Wiring `MeshRegistry`, `Texture` and `Material` through, so game assets rather
+  than a synthesised cube go down this path.
 - Then the engine can begin to select a backend, and `vulkanprobe` can go.

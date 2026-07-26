@@ -45,7 +45,16 @@ public:
         std::string fragmentEntry;
         /** Colour attachment format, for dynamic rendering. */
         VkFormat colorFormat {VK_FORMAT_UNDEFINED};
+        /** UNDEFINED disables depth testing and writing. */
+        VkFormat depthFormat {VK_FORMAT_UNDEFINED};
         std::vector<VkDescriptorSetLayout> setLayouts;
+
+        /**
+         * Empty means the vertex shader synthesises its own geometry from
+         * SV_VertexID and no vertex buffer is bound.
+         */
+        std::vector<VkVertexInputBindingDescription> vertexBindings;
+        std::vector<VkVertexInputAttributeDescription> vertexAttributes;
     };
 
     VulkanPipeline(VulkanDevice &device) :

@@ -18,6 +18,7 @@
 #include "reone/graphics/vulkan/renderer.h"
 
 #include "reone/graphics/texture.h"
+#include "reone/graphics/vulkan/image.h"
 #include "reone/system/logutil.h"
 
 namespace reone {
@@ -41,6 +42,8 @@ void VulkanRenderer::init() {
     // 1 MB per frame is a guess, not a measurement. peakUsage() reports what is
     // actually wanted once there are real draws, and exhausting it throws with
     // that number rather than corrupting anything.
+    _depth = std::make_unique<VulkanImage>(_device);
+    _depth->initDepth(_swapchain.extent(), kDepthFormat);
     _uniformRing.init(kFramesInFlight, 1u << 20);
     _descriptors.init(kFramesInFlight, _uniformRing);
     _inited = true;
@@ -54,6 +57,7 @@ void VulkanRenderer::deinit() {
     vkDeviceWaitIdle(_device.handle());
     _descriptors.deinit();
     _uniformRing.deinit();
+    _depth.reset();
     deinitImageSemaphores();
     deinitFrames();
     _swapchain.deinit();
@@ -157,6 +161,8 @@ void VulkanRenderer::beginFrame(glm::ivec2 extent) {
         // recreate, so they are safe to replace here.
         deinitImageSemaphores();
         initImageSemaphores();
+        _depth = std::make_unique<VulkanImage>(_device);
+        _depth->initDepth(_swapchain.extent(), kDepthFormat);
         _needsRecreate = false;
     }
     _extent = extent;

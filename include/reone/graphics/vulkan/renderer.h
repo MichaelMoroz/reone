@@ -44,6 +44,9 @@ class VulkanRenderer : public IRenderer, boost::noncopyable {
 public:
     static constexpr int kFramesInFlight = 2;
 
+    /** Guaranteed present as a depth format on every implementation. */
+    static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
+
     VulkanRenderer(SDL_Window *window, glm::ivec2 extent, bool vsync, bool validation) :
         _window(window),
         _extent(extent),
@@ -81,6 +84,10 @@ public:
     /** The image being rendered into this frame, and its view. */
     VkImageView currentImageView() const { return _swapchain.imageView(_imageIndex); }
 
+    /** Depth attachment sized with the swapchain, recreated alongside it. */
+    VkImageView depthView() const { return _depth->view(); }
+    VkFormat depthFormat() const { return kDepthFormat; }
+
 private:
     /**
      * Everything a frame in flight needs its own copy of. Sharing any of these
@@ -104,6 +111,7 @@ private:
 
     VulkanDevice _device;
     VulkanSwapchain _swapchain;
+    std::unique_ptr<VulkanImage> _depth;
     VulkanUniformRing _uniformRing;
     VulkanDescriptors _descriptors;
 

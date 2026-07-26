@@ -34,9 +34,11 @@
 #include <boost/program_options.hpp>
 
 #include "reone/graphics/format/tgawriter.h"
+#include "reone/graphics/mesh.h"
 #include "reone/graphics/types.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/image.h"
+#include "reone/graphics/vulkan/mesh.h"
 #include "reone/graphics/vulkan/pipeline.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/system/stream/fileoutput.h"
@@ -46,12 +48,58 @@
 using namespace reone;
 using namespace reone::graphics;
 
+/**
+ * A unit cube as a Mesh, built the way the game builds meshes: interleaved
+ * vertex data plus a VertexLayout describing it. Each face gets its own four
+ * vertices so the normals are flat.
+ */
+static std::shared_ptr<Mesh> makeCube() {
+    struct Face {
+        glm::vec3 normal;
+        glm::vec3 corners[4];
+    };
+    const Face faces[] {
+        {{0, 0, 1}, {{-1, -1, 1}, {1, -1, 1}, {1, 1, 1}, {-1, 1, 1}}},
+        {{0, 0, -1}, {{1, -1, -1}, {-1, -1, -1}, {-1, 1, -1}, {1, 1, -1}}},
+        {{1, 0, 0}, {{1, -1, 1}, {1, -1, -1}, {1, 1, -1}, {1, 1, 1}}},
+        {{-1, 0, 0}, {{-1, -1, -1}, {-1, -1, 1}, {-1, 1, 1}, {-1, 1, -1}}},
+        {{0, 1, 0}, {{-1, 1, 1}, {1, 1, 1}, {1, 1, -1}, {-1, 1, -1}}},
+        {{0, -1, 0}, {{-1, -1, -1}, {1, -1, -1}, {1, -1, 1}, {-1, -1, 1}}},
+    };
+    const glm::vec2 uvs[4] {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+
+    std::vector<Mesh::Vertex> vertices;
+    std::vector<Mesh::Face> meshFaces;
+    for (const auto &face : faces) {
+        auto base = static_cast<uint16_t>(vertices.size());
+        for (int i = 0; i < 4; ++i) {
+            vertices.push_back(Mesh::VertexBuilder()
+                                   .position(face.corners[i])
+                                   .normal(face.normal)
+                                   .uv1(uvs[i])
+                                   .build());
+        }
+        meshFaces.push_back(Mesh::Face({base, static_cast<uint16_t>(base + 1), static_cast<uint16_t>(base + 2)}));
+        meshFaces.push_back(Mesh::Face({base, static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 3)}));
+    }
+
+    // position, normal, uv1: 8 floats, in that order.
+    auto layout = Mesh::VertexLayoutBuilder()
+                      .stride(8 * sizeof(float))
+                      .offPosition(0)
+                      .offNormals(3 * sizeof(float))
+                      .offUV1(6 * sizeof(float))
+                      .build();
+    return std::make_shared<Mesh>(std::move(vertices), std::move(layout), std::move(meshFaces));
+}
+
 int main(int argc, char **argv) {
     namespace po = boost::program_options;
 
     int width, height, frames;
     bool validation, vsync;
     std::string capturePath, clearColor, spirvPath, drawColor;
+    bool drawMesh;
 
     po::options_description desc("Options");
     desc.add_options()                                                              //
@@ -70,7 +118,9 @@ int main(int argc, char **argv) {
         ("spirv", po::value<std::string>(&spirvPath)->default_value("spirv/vktriangle.spv"), //
          "SPIR-V module to draw a test triangle with, if present")                  //
         ("draw", po::value<std::string>(&drawColor)->default_value("0.9,0.4,0.1"),  //
-         "triangle colour, pushed through the uniform ring");                       //
+         "draw colour, pushed through the uniform ring")                            //
+        ("mesh", po::value<bool>(&drawMesh)->default_value(false),                  //
+         "draw a cube with real vertex attributes instead of the triangle");        //
 
     po::variables_map vars;
     po::store(po::parse_command_line(argc, argv, desc), vars);
@@ -119,14 +169,27 @@ int main(int argc, char **argv) {
         // The draw is optional so the clear path can still be exercised alone.
         std::unique_ptr<VulkanPipeline> pipeline;
         std::unique_ptr<VulkanImage> checker;
+        std::shared_ptr<Mesh> cube;
+        std::unique_ptr<VulkanMesh> vkCube;
+        if (drawMesh && spirvPath == "spirv/vktriangle.spv") {
+            spirvPath = "spirv/vkmesh.spv";
+        }
         if (!std::filesystem::exists(spirvPath)) {
             info("No SPIR-V at " + spirvPath + " - clearing only");
         } else {
             VulkanPipeline::Config config;
             config.spirv = readSpirV(spirvPath);
-            config.vertexEntry = "triangleVertex";
-            config.fragmentEntry = "triangleFragment";
+            config.vertexEntry = drawMesh ? "meshVertex" : "triangleVertex";
+            config.fragmentEntry = drawMesh ? "meshFragment" : "triangleFragment";
+            if (drawMesh) {
+                cube = makeCube();
+                config.vertexBindings = {VulkanMesh::bindingDescription(cube->vertexLayout())};
+                config.vertexAttributes = VulkanMesh::attributeDescriptions(cube->vertexLayout());
+            }
             config.colorFormat = renderer.swapchain().imageFormat();
+            if (drawMesh) {
+                config.depthFormat = renderer.depthFormat();
+            }
             config.setLayouts = {renderer.descriptors().uniformLayout(),
                                  renderer.descriptors().textureLayout()};
             pipeline = std::make_unique<VulkanPipeline>(renderer.device());
@@ -145,6 +208,14 @@ int main(int argc, char **argv) {
             checker = std::make_unique<VulkanImage>(renderer.device());
             checker->initSampled2D({kSide, kSide}, VK_FORMAT_R8G8B8A8_UNORM, texels.data());
             renderer.descriptors().setTexture(TextureUnits::mainTex, *checker);
+
+            if (drawMesh) {
+                vkCube = std::make_unique<VulkanMesh>(renderer.device());
+                vkCube->init(*cube);
+                info(str(boost::format("Cube uploaded: %d indices, stride %d, %d attributes") %
+                         vkCube->indexCount() % cube->vertexLayout().stride %
+                         VulkanMesh::attributeDescriptions(cube->vertexLayout()).size()));
+            }
         }
 
         int frame = 0;
@@ -176,12 +247,28 @@ int main(int argc, char **argv) {
                 LocalUniforms locals;
                 locals.reset();
                 locals.color = draw;
-                auto offset = renderer.uniformRing().push(locals);
+
+                GlobalUniforms globals;
+                globals.reset();
+                if (drawMesh) {
+                    // Spin it, so a capture shows the shape rather than a
+                    // silhouette that could be a flat quad.
+                    float angle = glm::radians(35.0f) + frame * 0.01f;
+                    locals.model = glm::rotate(glm::mat4(1.0f), angle, glm::vec3(0.3f, 1.0f, 0.1f));
+                    auto view = glm::lookAt(glm::vec3(0.0f, 0.0f, 6.0f),
+                                            glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+                    auto proj = glm::perspective(glm::radians(45.0f),
+                                                 w / static_cast<float>(h), 0.1f, 100.0f);
+                    // Vulkan clip space has y down relative to OpenGL's.
+                    proj[1][1] *= -1.0f;
+                    globals.viewProjection = proj * view;
+                }
 
                 // Every binding in the set is dynamic, so every one needs an
-                // offset even though only locals is read.
+                // offset even if the shader does not read it.
                 std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
-                offsets[UniformBlockBindingPoints::locals] = offset;
+                offsets[UniformBlockBindingPoints::globals] = renderer.uniformRing().push(globals);
+                offsets[UniformBlockBindingPoints::locals] = renderer.uniformRing().push(locals);
 
                 auto cmd = renderer.commandBuffer();
 
@@ -193,11 +280,21 @@ int main(int argc, char **argv) {
                 colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
                 colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
+                VkRenderingAttachmentInfo depthAttachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+                depthAttachment.imageView = renderer.depthView();
+                depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+                depthAttachment.clearValue.depthStencil.depth = 1.0f;
+
                 VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
                 rendering.renderArea.extent = {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
                 rendering.layerCount = 1;
                 rendering.colorAttachmentCount = 1;
                 rendering.pColorAttachments = &colorAttachment;
+                if (drawMesh) {
+                    rendering.pDepthAttachment = &depthAttachment;
+                }
 
                 vkCmdBeginRendering(cmd, &rendering);
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->handle());
@@ -217,7 +314,11 @@ int main(int argc, char **argv) {
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         pipeline->layout(), VulkanDescriptors::kTextureSet,
                                         1, &textureSet, 0, nullptr);
-                vkCmdDraw(cmd, 3, 1, 0, 0);
+                if (vkCube) {
+                    vkCube->draw(cmd);
+                } else {
+                    vkCmdDraw(cmd, 3, 1, 0, 0);
+                }
                 vkCmdEndRendering(cmd);
             }
 

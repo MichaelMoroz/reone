@@ -257,6 +257,10 @@ public:
 
     int vertexCount() const { return _vertices.size(); }
     const std::vector<Face> &faces() const { return _faces; }
+
+    /** Interleaved vertex data, laid out as vertexLayout() describes. */
+    const std::vector<float> &vertexData() const { return _vertexData; }
+    const VertexLayout &vertexLayout() const { return _vertexLayout; }
     const AABB &aabb() const { return _aabb; }
 
 private:

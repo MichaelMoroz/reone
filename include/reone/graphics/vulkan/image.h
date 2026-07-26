@@ -51,6 +51,12 @@ public:
      */
     void initSampled2D(glm::ivec2 extent, VkFormat format, const void *data);
 
+    /**
+     * A depth attachment. Left in UNDEFINED: dynamic rendering transitions it
+     * on first use, and its contents never need to survive a frame.
+     */
+    void initDepth(glm::ivec2 extent, VkFormat format);
+
     void deinit();
 
     VkImage handle() const { return _image; }

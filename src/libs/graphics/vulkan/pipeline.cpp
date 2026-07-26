@@ -70,10 +70,14 @@ void VulkanPipeline::init(const Config &config) {
         throw std::runtime_error("Vulkan: pipeline layout creation failed");
     }
 
-    // No vertex bindings: the triangle is synthesised from SV_VertexID. Real
-    // geometry gets its attribute description here.
     VkPipelineVertexInputStateCreateInfo vertexInput {
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vertexInput.vertexBindingDescriptionCount =
+        static_cast<uint32_t>(config.vertexBindings.size());
+    vertexInput.pVertexBindingDescriptions = config.vertexBindings.data();
+    vertexInput.vertexAttributeDescriptionCount =
+        static_cast<uint32_t>(config.vertexAttributes.size());
+    vertexInput.pVertexAttributeDescriptions = config.vertexAttributes.data();
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly {
         VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
@@ -106,6 +110,12 @@ void VulkanPipeline::init(const Config &config) {
 
     VkPipelineDepthStencilStateCreateInfo depthStencil {
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    if (config.depthFormat != VK_FORMAT_UNDEFINED) {
+        depthStencil.depthTestEnable = VK_TRUE;
+        depthStencil.depthWriteEnable = VK_TRUE;
+        depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+        depthStencil.maxDepthBounds = 1.0f;
+    }
 
     std::array<VkDynamicState, 2> dynamicStates {
         VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
@@ -120,6 +130,7 @@ void VulkanPipeline::init(const Config &config) {
     VkPipelineRenderingCreateInfo rendering {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachmentFormats = &colorFormat;
+    rendering.depthAttachmentFormat = config.depthFormat;
 
     VkGraphicsPipelineCreateInfo pipelineInfo {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     pipelineInfo.pNext = &rendering;

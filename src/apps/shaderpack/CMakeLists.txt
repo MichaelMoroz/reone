@@ -38,7 +38,8 @@ set(SPIRV_MODULES
     "pbr_model:staticVertex+skinnedVertex+danglyVertex+saberVertex+opaqueFragment"
     "grass:grassVertex+pbrFragment+retroFragment"
     "walkmesh:walkmeshVertex+pbrFragment+retroFragment"
-    "vktriangle:triangleVertex+triangleFragment")
+    "vktriangle:triangleVertex+triangleFragment"
+    "vkmesh:meshVertex+meshFragment")
 
 if(SLANGC_EXECUTABLE)
     set(SPIRV_OUTPUTS)
