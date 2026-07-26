@@ -165,7 +165,8 @@ them.
    everything looking right**, not a refinement.
 3. Transparency and OIT.
 4. SSAO and SSR.
-5. Post-processing: bloom, FXAA, sharpen, combine.
+5. Post-processing: bloom, FXAA, sharpen, combine. On Vulkan the last two
+   are replaced by FSR (§12.2) rather than ported.
 6. Shadows, directional then point.
 7. Debug: AABBs, walkmeshes, the draw-debug overlay.
 
@@ -435,6 +436,33 @@ rather than a project. Two things to settle when it lands:
 - **Motion vector conventions** (§16.1) are still unverified. FSR is the first
   real consumer and will expose any sign or scale error immediately.
 
+**Temporal FSR, not spatial, and it replaces FXAA rather than joining it.**
+Decided deliberately: FSR 1 is EASU plus RCAS, a spatial upscaler that does not
+anti-alias at all - at native scale it is little more than a sharpen, so the
+aliasing FXAA exists to hide would remain. FSR 2/3 accumulates over frames and
+therefore *is* the anti-aliasing, which is also what makes it the right fit for
+a path tracer later. So the OpenGL pipeline's FXAA and sharpen stages have no
+Vulkan counterparts at all: FSR subsumes both, RCAS doing the sharpening.
+
+**Take the SDK; do not port the shaders.** FSR 1 would be two shaders and worth
+porting to keep the Slang-only convention. FSR 2 is a dozen-odd compute passes
+with history buffers, lock management, reactive masks and exposure handling,
+and hand-porting it would be substantially more work than integrating AMD's,
+which already ships a Vulkan backend. It is not in vcpkg, so it arrives as the
+first vendored build dependency.
+
+Integration risks specific to this backend, none of them settled:
+
+- **volk owns the Vulkan entry points here.** The SDK's Vulkan backend resolves
+  its own, and the two have to be reconciled - the same class of problem as the
+  VMA segfault in §16, which needed `VMA_DYNAMIC_VULKAN_FUNCTIONS`.
+- **Render resolution is currently the swapchain resolution.** Upscaling means
+  decoupling the scene pipeline's target size from the window, which nothing
+  needs today.
+- **The 2D layer must not be upscaled.** This one falls out well: the scene
+  already crosses to the compositor as a texture, so FSR slots exactly at that
+  seam and the GUI draws over the result at display resolution.
+
 Verify the current FSR licence text before committing. It has been MIT, which is
 compatible with GPL-3, but these terms change.
 
@@ -452,7 +480,7 @@ compatible with GPL-3, but these terms change.
 | Init | vk-bootstrap | in use |
 | Window | `sdl3[core,vulkan]` | in use — the default port refuses `SDL_WINDOW_VULKAN` |
 | Shaders | shader-slang | in use |
-| Upscaler | FidelityFX FSR | not started |
+| Upscaler | FidelityFX FSR 2/3, SDK vendored | not started |
 | Denoiser | NRD, or hand-rolled SVGF/ReSTIR | not chosen |
 
 Gated behind `ENABLE_VULKAN`, default OFF, so ordinary builds are unaffected.
