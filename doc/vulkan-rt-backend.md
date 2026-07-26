@@ -519,6 +519,7 @@ main argument for this ordering.
 4. **Vulkan raster backend** to PBR parity. Unglamorous but mandatory: swapchain,
    descriptor management, GUI, text, movie playback, and the uniform update model
    in §3.1. **Slang enters here**, targeting SPIR-V (§4).
+   **Started** — see §10.
 5. **Acceleration structures and hybrid RT** — compute skinning, BLAS/TLAS, then
    RT shadows/AO/reflections replacing the current SSAO and SSR passes. First
    visible payoff.
@@ -741,3 +742,65 @@ The cost is that nothing renders until a good deal of phase 4 exists, which was
 the original argument for doing shaders on OpenGL first. That argument has
 weakened now the shaders are written and known to be Vulkan-shaped - what would
 have been guesswork no longer is.
+
+---
+
+## 10. Vulkan backend progress
+
+### 10.1 Standing up the device
+
+`src/libs/graphics/vulkan/` builds as `graphicsvulkan`, gated behind
+`ENABLE_VULKAN` (default OFF, so ordinary builds are untouched). Dependencies
+are the ones §6 chose, all from vcpkg: volk, vulkan-headers, VMA, vk-bootstrap.
+SDL3 had to be reinstalled as `sdl3[core,vulkan]` — the default port has no
+Vulkan support and `SDL_CreateWindow` refuses `SDL_WINDOW_VULKAN` without it.
+
+`VulkanDevice` is instance, surface, physical device, logical device, queues and
+the VMA allocator. `VulkanSwapchain` is the part that gets rebuilt on resize.
+`VulkanRenderer` implements the same `IRenderer` as the GL backend: acquire,
+record, submit, present, with two frames in flight.
+
+`captureFrame` works, so a Vulkan frame goes through the same screenshot path as
+a GL one. It cuts the frame in two — submits what has been recorded, waits,
+reads the staging buffer, then reopens a command buffer for `endFrame` — which
+stalls hard and is why it stays a screenshot path.
+
+Verified: 300 frames presented with the validation layers on and no messages,
+and a captured frame is a single uniform colour matching the requested clear
+exactly.
+
+### 10.2 Three things that cost time, recorded so they do not cost it twice
+
+- **VMA and volk.** With `VMA_STATIC_VULKAN_FUNCTIONS=0` *and*
+  `VMA_DYNAMIC_VULKAN_FUNCTIONS=0`, VMA expects every entry point supplied by
+  hand and otherwise calls through null pointers — it segfaults inside
+  `vmaCreateAllocator`, before any allocation, with no diagnostic. The dynamic
+  path must be on so VMA can fetch what it needs from the two getters it is
+  given. The macros belong in CMake, not in the implementation file, so every
+  translation unit including the header agrees with the one defining it.
+- **The present semaphore is per image, not per frame in flight.** Presentation
+  consumes it against a particular swapchain image and gives no signal that it
+  has, so a per-frame semaphore can be re-signalled while a present is still
+  pending on it. The image count need not equal the in-flight count either.
+  Validation catches this immediately (`VUID-vkQueueSubmit2-semaphore-03868`).
+- **Swapchain images need `TRANSFER_DST` as well as `TRANSFER_SRC`** — SRC for
+  the screenshot readback, DST for `vkCmdClearColorImage`.
+
+### 10.3 Why there is a probe application
+
+`src/apps/vulkanprobe/` is a small host that opens a window and drives the
+backend directly. The engine cannot select a backend yet: GL and Vulkan cannot
+share a window, and every other subsystem still talks to the GL context, so
+pointing the engine at Vulkan today means it dies in module init rather than
+telling us anything about the backend.
+
+It is scaffolding and should be deleted once the engine can switch.
+
+### 10.4 Next
+
+- Texture and buffer upload through VMA, and the per-frame uniform ring buffer
+  of §3.1.
+- Descriptor set layouts matching the pinned bindings in `slang/uniforms.slang`.
+- A graphics pipeline and one textured mesh, which is what finally puts the
+  Slang shaders on hardware that runs them as intended.
+- Only then the G-buffer and the deferred pipeline.

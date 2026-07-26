@@ -1,0 +1,354 @@
+/*
+ * Copyright (c) 2020-2026 The reone project contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#include "reone/graphics/vulkan/renderer.h"
+
+#include "reone/graphics/texture.h"
+#include "reone/system/logutil.h"
+
+namespace reone {
+
+namespace graphics {
+
+static void check(VkResult result, const char *what) {
+    if (result != VK_SUCCESS) {
+        throw std::runtime_error(str(boost::format("Vulkan: %s failed (%d)") % what % result));
+    }
+}
+
+void VulkanRenderer::init() {
+    if (_inited) {
+        return;
+    }
+    _device.init(_window, _validation);
+    _swapchain.init(_extent, _vsync);
+    initFrames();
+    initImageSemaphores();
+    _inited = true;
+}
+
+void VulkanRenderer::deinit() {
+    if (!_inited) {
+        return;
+    }
+    // Nothing may be destroyed while the GPU might still be reading it.
+    vkDeviceWaitIdle(_device.handle());
+    deinitImageSemaphores();
+    deinitFrames();
+    _swapchain.deinit();
+    _device.deinit();
+    _inited = false;
+}
+
+void VulkanRenderer::initFrames() {
+    VkCommandPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.queueFamilyIndex = _device.graphicsQueueFamily();
+
+    VkSemaphoreCreateInfo semInfo {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+
+    // Created signalled, so the first frame does not wait for a submission that
+    // never happened.
+    VkFenceCreateInfo fenceInfo {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+    for (auto &frame : _frames) {
+        check(vkCreateCommandPool(_device.handle(), &poolInfo, nullptr, &frame.commandPool),
+              "vkCreateCommandPool");
+
+        VkCommandBufferAllocateInfo allocInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        allocInfo.commandPool = frame.commandPool;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = 1;
+        check(vkAllocateCommandBuffers(_device.handle(), &allocInfo, &frame.commandBuffer),
+              "vkAllocateCommandBuffers");
+
+        check(vkCreateSemaphore(_device.handle(), &semInfo, nullptr, &frame.imageAvailable),
+              "vkCreateSemaphore");
+        check(vkCreateFence(_device.handle(), &fenceInfo, nullptr, &frame.inFlight),
+              "vkCreateFence");
+    }
+}
+
+void VulkanRenderer::deinitFrames() {
+    for (auto &frame : _frames) {
+        if (frame.inFlight) {
+            vkDestroyFence(_device.handle(), frame.inFlight, nullptr);
+        }
+        if (frame.imageAvailable) {
+            vkDestroySemaphore(_device.handle(), frame.imageAvailable, nullptr);
+        }
+        if (frame.commandPool) {
+            vkDestroyCommandPool(_device.handle(), frame.commandPool, nullptr);
+        }
+        frame = Frame {};
+    }
+}
+
+void VulkanRenderer::initImageSemaphores() {
+    VkSemaphoreCreateInfo semInfo {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    _renderFinished.resize(_swapchain.imageCount());
+    for (auto &sem : _renderFinished) {
+        check(vkCreateSemaphore(_device.handle(), &semInfo, nullptr, &sem), "vkCreateSemaphore");
+    }
+}
+
+void VulkanRenderer::deinitImageSemaphores() {
+    for (auto sem : _renderFinished) {
+        vkDestroySemaphore(_device.handle(), sem, nullptr);
+    }
+    _renderFinished.clear();
+}
+
+void VulkanRenderer::transitionImage(VkCommandBuffer cmd,
+                                     VkImage image,
+                                     VkImageLayout from,
+                                     VkImageLayout to) {
+    VkImageMemoryBarrier2 barrier {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    // Deliberately conservative: correctness first, and a barrier per frame is
+    // not where any time goes. Tighten the stage and access masks once there
+    // are real passes with real dependencies between them.
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    barrier.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    barrier.dstAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT;
+    barrier.oldLayout = from;
+    barrier.newLayout = to;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
+    barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
+
+    VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dep.imageMemoryBarrierCount = 1;
+    dep.pImageMemoryBarriers = &barrier;
+    vkCmdPipelineBarrier2(cmd, &dep);
+}
+
+void VulkanRenderer::beginFrame(glm::ivec2 extent) {
+    if (_inFrame) {
+        throw std::logic_error("Renderer: frame already begun");
+    }
+    if (_needsRecreate || extent != _swapchain.extent()) {
+        _swapchain.recreate(extent);
+        // The image count can change with the swapchain, and any pending
+        // present on the old semaphores is finished by the wait inside
+        // recreate, so they are safe to replace here.
+        deinitImageSemaphores();
+        initImageSemaphores();
+        _needsRecreate = false;
+    }
+    _extent = extent;
+
+    auto &frame = _frames[_frameIndex];
+    check(vkWaitForFences(_device.handle(), 1, &frame.inFlight, VK_TRUE, UINT64_MAX),
+          "vkWaitForFences");
+
+    auto acquired = vkAcquireNextImageKHR(
+        _device.handle(), _swapchain.handle(), UINT64_MAX,
+        frame.imageAvailable, VK_NULL_HANDLE, &_imageIndex);
+    if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
+        // The image was never acquired, so the semaphore was not signalled and
+        // there is nothing to submit. Rebuild and take the image on the retry.
+        _swapchain.recreate(extent);
+        deinitImageSemaphores();
+        initImageSemaphores();
+        acquired = vkAcquireNextImageKHR(
+            _device.handle(), _swapchain.handle(), UINT64_MAX,
+            frame.imageAvailable, VK_NULL_HANDLE, &_imageIndex);
+    }
+    if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
+        check(acquired, "vkAcquireNextImageKHR");
+    }
+
+    // Reset only once we know we will submit; a fence reset without a matching
+    // submit deadlocks the next frame's wait.
+    check(vkResetFences(_device.handle(), 1, &frame.inFlight), "vkResetFences");
+    check(vkResetCommandBuffer(frame.commandBuffer, 0), "vkResetCommandBuffer");
+
+    VkCommandBufferBeginInfo beginInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    check(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo), "vkBeginCommandBuffer");
+
+    auto image = _swapchain.image(_imageIndex);
+    transitionImage(frame.commandBuffer, image,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+
+    // Clear here rather than as a render pass load op: there are no attachments
+    // yet, and this keeps beginFrame meaning the same thing it does in GL.
+    VkClearColorValue clear {{_clearColor.r, _clearColor.g, _clearColor.b, _clearColor.a}};
+    VkImageSubresourceRange range {};
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = VK_REMAINING_MIP_LEVELS;
+    range.layerCount = VK_REMAINING_ARRAY_LAYERS;
+    vkCmdClearColorImage(frame.commandBuffer, image,
+                         VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
+
+    _inFrame = true;
+}
+
+void VulkanRenderer::drawSceneOutput(Texture &output) {
+    if (!_inFrame) {
+        throw std::logic_error("Renderer: no frame begun");
+    }
+    // Nothing produces a Vulkan scene texture yet. Left unimplemented rather
+    // than silently doing nothing, so the first caller finds out here instead
+    // of wondering why the screen is empty.
+    throw std::logic_error("Vulkan: drawSceneOutput not implemented");
+}
+
+std::shared_ptr<Texture> VulkanRenderer::captureFrame() {
+    if (!_inFrame) {
+        throw std::logic_error("Renderer: no frame begun");
+    }
+    auto &frame = _frames[_frameIndex];
+    auto image = _swapchain.image(_imageIndex);
+    auto extent = _swapchain.extent();
+    VkDeviceSize size = static_cast<VkDeviceSize>(extent.x) * extent.y * 4;
+
+    VkBufferCreateInfo bufInfo {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufInfo.size = size;
+    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+    VmaAllocationCreateInfo allocInfo {};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+    allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                      VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+    VkBuffer staging {VK_NULL_HANDLE};
+    VmaAllocation allocation {VK_NULL_HANDLE};
+    VmaAllocationInfo allocated {};
+    check(vmaCreateBuffer(_device.allocator(), &bufInfo, &allocInfo,
+                          &staging, &allocation, &allocated),
+          "vmaCreateBuffer");
+
+    transitionImage(frame.commandBuffer, image,
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+    VkBufferImageCopy region {};
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = {static_cast<uint32_t>(extent.x), static_cast<uint32_t>(extent.y), 1};
+    vkCmdCopyImageToBuffer(frame.commandBuffer, image,
+                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging, 1, &region);
+
+    transitionImage(frame.commandBuffer, image,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+
+    // The pixels have to exist before this returns, so the frame is cut in two:
+    // submit what has been recorded, wait for it, read the buffer, then open a
+    // fresh command buffer for endFrame to finish and present with. This stalls
+    // hard, which is why it is a screenshot path and not a per-frame one.
+    check(vkEndCommandBuffer(frame.commandBuffer), "vkEndCommandBuffer");
+
+    VkCommandBufferSubmitInfo cmdInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    cmdInfo.commandBuffer = frame.commandBuffer;
+
+    VkSemaphoreSubmitInfo waitInfo {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    waitInfo.semaphore = frame.imageAvailable;
+    waitInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+    VkSubmitInfo2 submit {VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.waitSemaphoreInfoCount = 1;
+    submit.pWaitSemaphoreInfos = &waitInfo;
+    submit.commandBufferInfoCount = 1;
+    submit.pCommandBufferInfos = &cmdInfo;
+    check(vkQueueSubmit2(_device.graphicsQueue(), 1, &submit, VK_NULL_HANDLE),
+          "vkQueueSubmit2");
+    check(vkQueueWaitIdle(_device.graphicsQueue()), "vkQueueWaitIdle");
+
+    // The swapchain format is B8G8R8A8; Texture wants RGB8.
+    auto pixels = std::make_shared<ByteBuffer>();
+    pixels->resize(static_cast<size_t>(extent.x) * extent.y * 3);
+    auto src = static_cast<const uint8_t *>(allocated.pMappedData);
+    for (size_t i = 0, n = static_cast<size_t>(extent.x) * extent.y; i < n; ++i) {
+        (*pixels)[i * 3 + 0] = src[i * 4 + 2];
+        (*pixels)[i * 3 + 1] = src[i * 4 + 1];
+        (*pixels)[i * 3 + 2] = src[i * 4 + 0];
+    }
+    vmaDestroyBuffer(_device.allocator(), staging, allocation);
+
+    auto texture = std::make_shared<Texture>("screenshot", TextureType::TwoDim, Texture::Properties());
+    texture->setPixels(extent.x, extent.y, PixelFormat::RGB8, Texture::Layer {pixels});
+
+    // Reopen for the rest of the frame. imageAvailable has been consumed by the
+    // submit above, so endFrame must not wait on it again.
+    check(vkResetCommandBuffer(frame.commandBuffer, 0), "vkResetCommandBuffer");
+    VkCommandBufferBeginInfo beginInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    check(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo), "vkBeginCommandBuffer");
+    _imageAvailableConsumed = true;
+
+    return texture;
+}
+
+void VulkanRenderer::endFrame() {
+    if (!_inFrame) {
+        throw std::logic_error("Renderer: no frame begun");
+    }
+    auto &frame = _frames[_frameIndex];
+
+    transitionImage(frame.commandBuffer, _swapchain.image(_imageIndex),
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    check(vkEndCommandBuffer(frame.commandBuffer), "vkEndCommandBuffer");
+
+    VkCommandBufferSubmitInfo cmdInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    cmdInfo.commandBuffer = frame.commandBuffer;
+
+    VkSemaphoreSubmitInfo waitInfo {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    waitInfo.semaphore = frame.imageAvailable;
+    waitInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+    VkSemaphoreSubmitInfo signalInfo {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    signalInfo.semaphore = _renderFinished[_imageIndex];
+    signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+
+    VkSubmitInfo2 submit {VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    // A capture already waited on and consumed imageAvailable; waiting again
+    // would block on a semaphore nothing will signal.
+    submit.waitSemaphoreInfoCount = _imageAvailableConsumed ? 0 : 1;
+    submit.pWaitSemaphoreInfos = &waitInfo;
+    submit.commandBufferInfoCount = 1;
+    submit.pCommandBufferInfos = &cmdInfo;
+    submit.signalSemaphoreInfoCount = 1;
+    submit.pSignalSemaphoreInfos = &signalInfo;
+    check(vkQueueSubmit2(_device.graphicsQueue(), 1, &submit, frame.inFlight),
+          "vkQueueSubmit2");
+    _imageAvailableConsumed = false;
+
+    auto swapchain = _swapchain.handle();
+    VkPresentInfoKHR present {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    present.waitSemaphoreCount = 1;
+    present.pWaitSemaphores = &_renderFinished[_imageIndex];
+    present.swapchainCount = 1;
+    present.pSwapchains = &swapchain;
+    present.pImageIndices = &_imageIndex;
+
+    auto presented = vkQueuePresentKHR(_device.graphicsQueue(), &present);
+    if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) {
+        _needsRecreate = true;
+    } else {
+        check(presented, "vkQueuePresentKHR");
+    }
+
+    _frameIndex = (_frameIndex + 1) % kFramesInFlight;
+    _inFrame = false;
+}
+
+} // namespace graphics
+
+} // namespace reone

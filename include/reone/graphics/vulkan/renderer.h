@@ -1,0 +1,139 @@
+/*
+ * Copyright (c) 2020-2026 The reone project contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+#include <volk.h>
+
+#include "../renderer.h"
+
+#include "device.h"
+#include "swapchain.h"
+
+struct SDL_Window;
+
+namespace reone {
+
+namespace graphics {
+
+/**
+ * The frame as Vulkan sees it: acquire a swapchain image, record a command
+ * buffer, submit, present.
+ *
+ * Frames overlap. kFramesInFlight sets of per-frame objects are cycled so the
+ * CPU can record frame N+1 while the GPU is still working on frame N, and the
+ * fence is what stops it from getting further ahead than that.
+ */
+class VulkanRenderer : public IRenderer, boost::noncopyable {
+public:
+    static constexpr int kFramesInFlight = 2;
+
+    VulkanRenderer(SDL_Window *window, glm::ivec2 extent, bool vsync, bool validation) :
+        _window(window),
+        _extent(extent),
+        _vsync(vsync),
+        _validation(validation),
+        _swapchain(_device) {
+    }
+
+    ~VulkanRenderer() { deinit(); }
+
+    void init() override;
+    void deinit() override;
+
+    void beginFrame(glm::ivec2 extent) override;
+    void drawSceneOutput(Texture &output) override;
+    std::shared_ptr<Texture> captureFrame() override;
+    void endFrame() override;
+
+    /** The colour beginFrame clears to. */
+    void setClearColor(glm::vec4 color) { _clearColor = color; }
+
+    VulkanDevice &device() { return _device; }
+    VulkanSwapchain &swapchain() { return _swapchain; }
+
+    /** The command buffer being recorded, valid only between begin and end. */
+    VkCommandBuffer commandBuffer() const { return _frames[_frameIndex].commandBuffer; }
+
+private:
+    /**
+     * Everything a frame in flight needs its own copy of. Sharing any of these
+     * between overlapping frames is the classic source of validation errors
+     * that only appear under load.
+     */
+    struct Frame {
+        VkCommandPool commandPool {VK_NULL_HANDLE};
+        VkCommandBuffer commandBuffer {VK_NULL_HANDLE};
+        /** Signalled when the acquired image is ready to be rendered into. */
+        VkSemaphore imageAvailable {VK_NULL_HANDLE};
+        /** Signalled when the GPU is done, so the CPU may reuse this set. */
+        VkFence inFlight {VK_NULL_HANDLE};
+    };
+
+    SDL_Window *_window;
+    glm::ivec2 _extent;
+    bool _vsync;
+    bool _validation;
+    glm::vec4 _clearColor {0.0f, 0.0f, 0.0f, 1.0f};
+
+    VulkanDevice _device;
+    VulkanSwapchain _swapchain;
+
+    bool _inited {false};
+    bool _inFrame {false};
+    /**
+     * Set when acquire or present reports the swapchain no longer matches the
+     * window. Acted on at the start of the next frame rather than immediately,
+     * because a half-recorded frame still has to be finished or abandoned
+     * cleanly.
+     */
+    bool _needsRecreate {false};
+    /** Set by captureFrame, which submits mid-frame and consumes the wait. */
+    bool _imageAvailableConsumed {false};
+
+    std::array<Frame, kFramesInFlight> _frames;
+    int _frameIndex {0};
+    uint32_t _imageIndex {0};
+
+    /**
+     * Signalled when rendering into a swapchain image is done and it may be
+     * presented. One per swapchain image rather than per frame in flight:
+     * presentation consumes this semaphore against a particular image, and
+     * there is no signal that it has done so, so a per-frame semaphore can be
+     * re-signalled while a present is still pending on it. The image count and
+     * the in-flight count also need not match.
+     */
+    std::vector<VkSemaphore> _renderFinished;
+
+    void initFrames();
+    void deinitFrames();
+    void initImageSemaphores();
+    void deinitImageSemaphores();
+
+    /**
+     * Swapchain images arrive in an undefined layout and must be presentable
+     * when handed back, so every frame moves its image twice.
+     */
+    void transitionImage(VkCommandBuffer cmd,
+                         VkImage image,
+                         VkImageLayout from,
+                         VkImageLayout to);
+};
+
+} // namespace graphics
+
+} // namespace reone

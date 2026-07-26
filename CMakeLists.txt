@@ -29,6 +29,7 @@ option(BUILD_GFF2JSON "build gff2json application" ON)
 option(BUILD_UNERF "build unerf application" ON)
 
 option(ENABLE_MOVIE "enable movie playback" ON)
+option(ENABLE_VULKAN "build the Vulkan backend" OFF)
 option(ENABLE_ASAN "enable address sanitizer" OFF)
 
 # END Options
@@ -65,6 +66,15 @@ if(BUILD_LAUNCHER OR BUILD_TOOLKIT)
 endif()
 
 find_package(imgui CONFIG REQUIRED)
+
+if(ENABLE_VULKAN)
+    # Headers only: volk loads every entry point at runtime, so nothing links
+    # vulkan-1 and the build does not depend on a loader being present.
+    find_package(VulkanHeaders CONFIG REQUIRED)
+    find_package(volk CONFIG REQUIRED)
+    find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+    find_package(vk-bootstrap CONFIG REQUIRED)
+endif()
 
 # Transpiles slang/ to GLSL and regenerates the uniform layout assertions. Both
 # uses degrade gracefully when it is missing: the transpiled shaders are simply
@@ -118,6 +128,10 @@ endif()
 add_subdirectory(src/libs/system) # system static library
 add_subdirectory(src/libs/resource) # resource static library
 add_subdirectory(src/libs/graphics) # graphics static library
+
+if(ENABLE_VULKAN)
+    add_subdirectory(src/libs/graphics/vulkan) # vulkan backend static library
+endif()
 add_subdirectory(src/libs/audio) # audio static library
 add_subdirectory(src/libs/input) # input static library
 add_subdirectory(src/libs/json) # json static library
@@ -135,6 +149,10 @@ add_subdirectory(src/libs/tools) # tools static library
 add_subdirectory(src/apps/shaderpack) # shaderpack application
 add_subdirectory(src/apps/uniformgen) # uniform layout assertion generator
 add_subdirectory(src/apps/engine) # engine application
+
+if(ENABLE_VULKAN)
+    add_subdirectory(src/apps/vulkanprobe) # vulkan backend smoke test
+endif()
 
 if(BUILD_LAUNCHER)
     add_subdirectory(src/apps/launcher) # launcher application
