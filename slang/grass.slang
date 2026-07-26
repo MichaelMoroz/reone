@@ -30,29 +30,31 @@ Varyings grassVertex(
     [[vk::location(0)]] float3 position: POSITION,
     [[vk::location(2)]] float2 uv1: TEXCOORD0,
     uint instanceId: SV_InstanceID) {
+    int instanceIndex = int(instanceId);
     Varyings output;
 
-    float3 clusterToCamera = grassUniforms.clusters[instanceId].positionVariant.xyz -
+    float3 clusterToCamera = grassUniforms.clusters[instanceIndex].positionVariant.xyz -
                              globalUniforms.cameraPosition.xyz;
     float A = asin(smoothstep(0.5 * grassUniforms.radius, grassUniforms.radius, length(clusterToCamera)));
 
-    // Rotation about X. Written as rows, which is how Slang's constructor fills a
-    // matrix; the original lists the same values as GLSL columns.
-    float4x4 pitch = float4x4(
-        float4(1.0, 0.0, 0.0, 0.0),
-        float4(0.0, cos(A), -sin(A), 0.0),
-        float4(0.0, sin(A), cos(A), 0.0),
-        float4(0.0, 0.0, 0.0, 1.0));
-
-    // The original takes the first two rows of pitch * uView as the billboard
-    // axes, spelled as one component from each column.
-    float4x4 M = mul(pitch, globalUniforms.view);
-    float3 right = M[0].xyz;
-    float3 up = M[1].xyz;
+    // The original builds a pitch rotation about X, multiplies it by the view
+    // matrix, and takes the first two rows as the billboard axes. The product is
+    // expanded here rather than written as a matrix multiply: only mul(matrix,
+    // vector) has been verified against the reference renderer, and a
+    // matrix-matrix product would additionally depend on how the row-major
+    // storage qualifier interacts with row extraction.
+    //
+    // For a rotation about X, row 0 is untouched and row 1 is a blend of the
+    // view's rows 1 and 2.
+    float3 viewRow0 = globalUniforms.view[0].xyz;
+    float3 viewRow1 = globalUniforms.view[1].xyz;
+    float3 viewRow2 = globalUniforms.view[2].xyz;
+    float3 right = viewRow0;
+    float3 up = cos(A) * viewRow1 - sin(A) * viewRow2;
 
     output.objectPos = float4(position, 1.0);
     output.worldPos = float4(
-        grassUniforms.clusters[instanceId].positionVariant.xyz +
+        grassUniforms.clusters[instanceIndex].positionVariant.xyz +
             right * position.x * grassUniforms.quadSize.x +
             up * position.y * grassUniforms.quadSize.y,
         1.0);
@@ -64,7 +66,7 @@ Varyings grassVertex(
 
     output.worldNormal = cross(right, up);
     output.uv1 = uv1;
-    output.instanceId = int(instanceId);
+    output.instanceId = instanceIndex;
     output.position = mul(globalUniforms.projection, mul(globalUniforms.view, output.worldPos));
     return output;
 }
