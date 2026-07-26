@@ -538,12 +538,39 @@ main argument for this ordering.
   working one. Configure it with the same vcpkg toolchain but only the `engine`
   target, and copy `reone.cfg` into its `bin` - without it the settings differ
   and the diff is meaningless.
-- **The scene is not frame-deterministic.** Two runs of the same build, stopped
-  at the same frame with a fixed timestep, differ across roughly a third of a
-  gameplay frame - sky, foliage and grass. GUI frames are bit-identical, so the
-  harness is trustworthy for 2D but currently proves nothing about the 3D scene
-  beyond eyeballing. This has to be tracked down before GL-and-Vulkan parity can
-  be checked automatically, which is the whole point of having the harness.
+- **The scene is not frame-deterministic.** Partly fixed, not solved. Two runs
+  of the same build, stopped at the same frame, still differ across roughly a
+  third of a gameplay frame. GUI frames are bit-identical, so the harness is
+  trustworthy for 2D but currently proves nothing automatic about the 3D scene.
+  This has to be closed before GL-and-Vulkan parity can be checked
+  automatically, which is the whole point of having the harness.
+
+  **Fixed:** the shared random generator was seeded from `time(nullptr)`. Grass
+  variants, particle emitters and the SSAO noise texture all draw from it, so
+  every run laid the world out differently. It is seedable now, and a capture
+  run seeds it deterministically. This removed all the *sharp* differences: peak
+  per-pixel error fell from 246 to 64.
+
+  **What remains** is diffuse and low-amplitude - mean error 3, concentrated in
+  sky and distant terrain, near geometry almost untouched - and it is *bimodal*:
+  any two runs either agree to within 1% of pixels or differ across 33%, with
+  nothing in between.
+
+  Ruled out, each by measurement rather than reading:
+  - *RNG divergence.* Draw counts are identical between runs (7381 both times),
+    so the generator is consumed in the same order and produces the same values.
+  - *Frame timing.* The capture path already forces a fixed 1/60 timestep.
+  - *SSAO or SSR.* Disabling either appeared to fix it, then the result flipped
+    on repeat - the low-variance outcome shows up in about half of all runs
+    whatever the flags say. The first reading was an artifact of the bimodality.
+  - *An off-by-one frame.* Comparing a reference frame 600 against runs stopped
+    at 599 and 601 is worse than against 600, so the state is not simply shifted.
+  - *Threaded loading.* There is none in `resource`, `graphics` or `scene`.
+
+  The bimodality is the strongest clue: something settles into one of two states
+  early and stays there. Worth checking next: whether the number of `update`
+  calls before the capture frame is constant, and whether any pass samples a
+  render target that is never cleared.
 - Denoiser choice (NRD vs hand-rolled SVGF/ReSTIR) — defer until phase 5 gives
   real ray-traced input to evaluate against.
 - Whether the accepted baked-in-lighting artifact (§5.3) is tolerable in practice,

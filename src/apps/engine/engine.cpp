@@ -31,6 +31,7 @@
 
 #include "reone/graphics/format/tgawriter.h"
 #include "reone/graphics/window.h"
+#include "reone/system/randomutil.h"
 #include "reone/system/stream/fileoutput.h"
 #include "reone/resource/exception/notfound.h"
 #include "reone/resource/gameprobe.h"
@@ -140,6 +141,12 @@ void Engine::init() {
 
     imguiInit();
     imguiInitWindow(*_window);
+
+    if (_options.randomSeed >= 0) {
+        seedRandom(static_cast<uint32_t>(_options.randomSeed));
+    } else if (!_options.capturePath.empty()) {
+        seedRandom(0);
+    }
 
     _optionsView = _options.toView();
     GameProbe probe {_options.game.path};

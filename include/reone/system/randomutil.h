@@ -20,6 +20,14 @@
 namespace reone {
 
 /**
+ * Seed the shared generator. Without this it is seeded from the wall clock,
+ * which makes a run unrepeatable: grass variants, particle emitters and the
+ * SSAO noise texture all draw from here, so two runs of the same build render
+ * differently. Seed it to compare frames between builds.
+ */
+void seedRandom(uint32_t seed);
+
+/**
  * @param min lower bound (inclusive)
  * @param max upper bound (inclusive)
  */

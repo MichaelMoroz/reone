@@ -51,6 +51,13 @@ struct Options {
      */
     std::string capturePath;
     int captureFrame {3};
+
+    /**
+     * Seed for the shared random generator, or -1 to seed from the wall clock.
+     * A capture run seeds deterministically unless told otherwise, for the same
+     * reason it uses a fixed timestep: an unrepeatable run cannot be compared.
+     */
+    int randomSeed {-1};
     /** Trigger a RenderDoc frame capture alongside the screenshot. */
     bool renderdoc {false};
 

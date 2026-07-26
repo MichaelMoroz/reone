@@ -144,7 +144,11 @@ installed here: `GetConstantBlock` (not `GetConstantBuffer`/`GetConstantBuffers`
   minimap is bit-stable run to run, so its 17.6% could not be animation, while
   everything else in the frame sat at its own noise level.
 - **Know which frames are deterministic.** GUI frames are bit-identical run to
-  run. A gameplay frame is not: sky, foliage and grass differ across about a
-  third of the image between two runs of the *same* build. Before attributing a
-  scene diff to a change, run the same build twice and compare that noise floor
-  first.
+  run. A gameplay frame is not: about a third of the image differs between two
+  runs of the *same* build. Before attributing a scene diff to a change, run the
+  same build twice and compare that noise floor first.
+- **Beware bimodal noise.** The scene variance is not a smooth distribution:
+  two runs either agree to within 1% or differ across 33%. A single pair of runs
+  therefore "proves" whatever you were hoping for about half the time. Disabling
+  SSAO looked like a clean fix on the first try and reversed on the second.
+  Repeat any A/B that changes a conclusion.
