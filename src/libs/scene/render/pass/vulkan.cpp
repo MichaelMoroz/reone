@@ -26,6 +26,7 @@
 #include "reone/graphics/vulkan/descriptors.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/mesh.h"
+#include "reone/graphics/vulkan/pbrtextures.h"
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/graphics/vulkan/uniformring.h"
 #include "reone/system/logutil.h"
@@ -116,6 +117,18 @@ void VulkanRenderPass::fillLocals(LocalUniforms &locals,
     locals.modelInv = transformInv;
     locals.prevModel = prevTransform;
     locals.featureMask |= materialFeatureMask(material) | extraFeatureBits;
+    if (material.textures.count(TextureUnits::envMapCube) > 0 && _options.pbr) {
+        // The resolve samples a convolved copy, not this cube map, so the first
+        // sighting only asks for one and settles for layer zero until it exists.
+        auto &envMap = material.textures.at(TextureUnits::envMapCube).get();
+        auto layer = _pbrTextures.findEnvMapDerivedLayer(envMap.name());
+        if (layer) {
+            locals.envMapDerivedLayer = *layer;
+        } else {
+            locals.envMapDerivedLayer = 0;
+            _pbrTextures.requestEnvMapDerived({envMap});
+        }
+    }
     locals.uv = material.uv;
     locals.color = material.color;
     locals.ambientColor = glm::vec4 {material.ambientColor, 0.0f};

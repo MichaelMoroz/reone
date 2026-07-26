@@ -26,6 +26,7 @@
 #include "swapchain.h"
 #include "pipelinecache.h"
 #include "renderer2d.h"
+#include "pbrtextures.h"
 #include "resources.h"
 #include "uniformring.h"
 
@@ -60,6 +61,7 @@ public:
         _descriptors(_device),
         _pipelines(_device),
         _resources(_device),
+        _pbrTextures(_device, _pipelines, _uniformRing, _descriptors, _resources),
         _renderer2d(_device, _pipelines, _uniformRing, _descriptors, _resources) {
     }
 
@@ -82,6 +84,7 @@ public:
     VulkanDescriptors &descriptors() { return _descriptors; }
     VulkanPipelineCache &pipelines() { return _pipelines; }
     VulkanResources &resources() { return _resources; }
+    VulkanPBRTextures &pbrTextures() { return _pbrTextures; }
     Vulkan2DRenderer &renderer2d() { return _renderer2d; }
 
     /**
@@ -135,6 +138,7 @@ private:
     VulkanDescriptors _descriptors;
     VulkanPipelineCache _pipelines;
     VulkanResources _resources;
+    VulkanPBRTextures _pbrTextures;
     Vulkan2DRenderer _renderer2d;
     std::filesystem::path _shaderDir {"spirv"};
 

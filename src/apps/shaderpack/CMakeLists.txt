@@ -40,6 +40,7 @@ set(SPIRV_MODULES
     "walkmesh:walkmeshVertex+pbrFragment+retroFragment"
     "common:billboardVertex+textureFragment"
     "shadow:shadowVertex+nullFragment+pointFragment"
+    "pbr_ibl:iblVertex+brdfFragment+irradianceFragment+prefilterFragment"
     "particles:particleVertex+particleFragment"
     "pbr_resolve:resolveVertex+resolveFragment"
     "vk2d:quadVertex+imageFragment+colorFragment+fullTargetVertex+textVertex+textFragment")

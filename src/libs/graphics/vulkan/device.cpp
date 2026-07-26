@@ -87,9 +87,15 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     features13.dynamicRendering = VK_TRUE;
     features13.synchronization2 = VK_TRUE;
 
+    // The resolve samples the derived environment maps as cube arrays, which is
+    // not a baseline capability.
+    VkPhysicalDeviceFeatures features {};
+    features.imageCubeArray = VK_TRUE;
+
     auto physicalResult = vkb::PhysicalDeviceSelector(_instance)
                               .set_surface(_surface)
                               .set_minimum_version(1, 3)
+                              .set_required_features(features)
                               .set_required_features_11(features11)
                               .set_required_features_13(features13)
                               .select();

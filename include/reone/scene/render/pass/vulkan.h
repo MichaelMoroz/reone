@@ -32,6 +32,7 @@ namespace graphics {
 class VulkanDescriptors;
 class VulkanDevice;
 class IMeshRegistry;
+class VulkanPBRTextures;
 class VulkanResources;
 class VulkanUniformRing;
 
@@ -62,6 +63,7 @@ public:
                      graphics::VulkanDescriptors &descriptors,
                      graphics::VulkanResources &resources,
                      graphics::IUniforms &uniforms,
+                     graphics::VulkanPBRTextures &pbrTextures,
                      graphics::IMeshRegistry &meshRegistry,
                      VkCommandBuffer cmd,
                      std::vector<VkFormat> colorFormats,
@@ -74,6 +76,7 @@ public:
         _descriptors(descriptors),
         _resources(resources),
         _uniforms(uniforms),
+        _pbrTextures(pbrTextures),
         _meshRegistry(meshRegistry),
         _cmd(cmd),
         _colorFormats(std::move(colorFormats)),
@@ -151,6 +154,7 @@ private:
     graphics::VulkanDescriptors &_descriptors;
     graphics::VulkanResources &_resources;
     graphics::IUniforms &_uniforms;
+    graphics::VulkanPBRTextures &_pbrTextures;
     graphics::IMeshRegistry &_meshRegistry;
 
     VkCommandBuffer _cmd;

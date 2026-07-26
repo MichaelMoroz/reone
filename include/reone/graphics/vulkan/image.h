@@ -85,6 +85,39 @@ public:
     void initColorAttachment(glm::ivec2 extent, VkFormat format);
 
     /**
+     * A cube map array that is rendered into and then sampled: the derived
+     * environment maps.
+     *
+     * @param cubes number of cube maps; the image holds six layers per cube.
+     * @param mips  roughness levels, for a prefiltered map. One otherwise.
+     *
+     * The sampling view covers the whole thing as a cube array. Rendering needs
+     * a different view per cube and per mip, which renderView supplies.
+     */
+    void initCubeArrayAttachment(glm::ivec2 faceExtent, VkFormat format, int cubes, int mips);
+
+    /**
+     * A sampled-only cube array, every face filled from @p data.
+     *
+     * For the stand-in a descriptor needs when nothing real is bound yet: the
+     * view type has to match how the shader declares the sampler, so a 2D array
+     * will not do in a cube array's place.
+     */
+    void initSampledCubeArray(glm::ivec2 faceExtent, VkFormat format, int cubes,
+                              const void *data);
+
+    /**
+     * A view of six consecutive layers at one mip, as a 2D array.
+     *
+     * This is what a cube's faces are rendered through - a six-view mask writes
+     * one face per view. Created on demand and owned by the image, because the
+     * number wanted is small and fixed and they outlive any one frame.
+     */
+    VkImageView renderView(int cube, int mip);
+
+    int mipLevels() const { return _mipLevels; }
+
+    /**
      * A sampled array or cube image, filled with @p data repeated per layer.
      *
      * A descriptor's view type has to match how the shader declares the
@@ -131,6 +164,9 @@ private:
 
     VkImage _image {VK_NULL_HANDLE};
     VkImageView _view {VK_NULL_HANDLE};
+    int _mipLevels {1};
+    /** Keyed on cube * mipLevels + mip; see renderView. */
+    std::unordered_map<int, VkImageView> _renderViews;
     VmaAllocation _allocation {VK_NULL_HANDLE};
     glm::ivec2 _extent {0};
     VkFormat _format {VK_FORMAT_UNDEFINED};

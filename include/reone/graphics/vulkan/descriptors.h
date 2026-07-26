@@ -145,11 +145,19 @@ private:
     std::unique_ptr<VulkanImage> _default2D;
     std::unique_ptr<VulkanImage> _defaultArray;
     std::unique_ptr<VulkanImage> _defaultCube;
+    /**
+     * The irradiance and prefiltered environment maps are declared as cube
+     * arrays. A 2D-array stand-in there is not merely wrong-looking; the view
+     * type has to match how the shader declares the sampler or the descriptor
+     * is invalid.
+     */
+    std::unique_ptr<VulkanImage> _defaultCubeArray;
 
     static const VulkanImage *defaultFor(int unit,
                                          const VulkanImage *twoD,
                                          const VulkanImage *array,
-                                         const VulkanImage *cube);
+                                         const VulkanImage *cube,
+                                         const VulkanImage *cubeArray);
 
     /** What every acquired set gets, before the per-draw main texture. */
     std::array<const VulkanImage *, kNumTextures> _standing {};

@@ -77,6 +77,7 @@ struct LocalUniforms {
     float waterAlpha;
     float billboardSize;
     int envMapDerivedLayer;
+    float iblRoughness;
 };
 
 struct BoneUniforms {

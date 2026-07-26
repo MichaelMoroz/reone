@@ -24,6 +24,7 @@ set(VULKAN_HEADERS
     ${VULKAN_INCLUDE_DIR}/gbuffer.h
     ${VULKAN_INCLUDE_DIR}/image.h
     ${VULKAN_INCLUDE_DIR}/mesh.h
+    ${VULKAN_INCLUDE_DIR}/pbrtextures.h
     ${VULKAN_INCLUDE_DIR}/pipeline.h
     ${VULKAN_INCLUDE_DIR}/pipelinecache.h
     ${VULKAN_INCLUDE_DIR}/renderer.h
@@ -39,6 +40,7 @@ set(VULKAN_SOURCES
     ${VULKAN_SOURCE_DIR}/gbuffer.cpp
     ${VULKAN_SOURCE_DIR}/image.cpp
     ${VULKAN_SOURCE_DIR}/mesh.cpp
+    ${VULKAN_SOURCE_DIR}/pbrtextures.cpp
     ${VULKAN_SOURCE_DIR}/pipeline.cpp
     ${VULKAN_SOURCE_DIR}/pipelinecache.cpp
     ${VULKAN_SOURCE_DIR}/renderer.cpp

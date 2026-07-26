@@ -142,6 +142,8 @@ struct alignas(16) LocalUniforms {
     float waterAlpha;
     float billboardSize;
     int envMapDerivedLayer;
+    /** Roughness the prefiltered environment mip being generated stands for. */
+    float iblRoughness;
 
     LocalUniforms() {
         reset();
@@ -163,6 +165,7 @@ struct alignas(16) LocalUniforms {
         waterAlpha = 0.0f;
         billboardSize = 1.0f;
         envMapDerivedLayer = 0;
+        iblRoughness = 0.0f;
     }
 };
 

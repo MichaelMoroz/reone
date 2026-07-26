@@ -7,8 +7,6 @@
 //
 // Stubbed, because the pipeline has no counterpart yet - each written so that
 // the term drops out rather than being approximated:
-//   - the irradiance and prefiltered environment cube arrays, and the BRDF LUT.
-//     Ambient specular is zero, so the LUT is not needed either.
 //   - SSAO and SSR. Ambient occlusion is one.
 //
 // The important part is the shape rather than the lighting. SurfaceParams is
@@ -26,6 +24,12 @@ import lib.surface;
 [[vk::binding(5, 1)]] Sampler2D sGBufDepth;
 [[vk::binding(15, 1)]] Sampler2DArray sShadowMap;
 [[vk::binding(19, 1)]] SamplerCube sShadowMapCube;
+[[vk::binding(13, 1)]] Sampler2D sBRDFLUT;
+[[vk::binding(16, 1)]] SamplerCubeArray sIrradianceMapArray;
+[[vk::binding(17, 1)]] SamplerCubeArray sPrefilteredEnvMapArray;
+
+/** Roughness spans this many prefiltered mips; see VulkanPBRTextures. */
+static const float kMaxReflectionLOD = 4.0;
 
 static const float kGamma = 2.2;
 
@@ -242,7 +246,18 @@ float4 resolveFragment(Varyings input) : SV_Target {
     float NdotV = max(0.0, dot(normal, V));
     float3 F0 = lerp(float3(0.04), albedo, metallic);
 
+    // The reflection direction is what both derived maps are indexed by.
+    float3 R = reflect(-V, normal);
+    int envLayer = int(round(selfIllumSample.a * 255.0));
+
+    float3 environment = float3(0.0);
     float3 irradiance = gammaToLinear(globalUniforms.worldAmbientColor.rgb);
+    if (envmapped) {
+        irradiance += gammaToLinear(sIrradianceMapArray.Sample(float4(R, float(envLayer))).rgb);
+        environment = gammaToLinear(
+            sPrefilteredEnvMapArray.SampleLevel(float4(R, float(envLayer)),
+                                                roughness * kMaxReflectionLOD).rgb);
+    }
     float3 directD = float3(0.0);
     float3 directS = float3(0.0);
 
@@ -288,9 +303,14 @@ float4 resolveFragment(Varyings input) : SV_Target {
     float3 F = fresnelSchlickRoughness(NdotV, F0, roughness);
     float3 kD = (1.0 - F) * (1.0 - metallic);
     float3 ambientD = kD * irradiance;
-    // Ambient specular needs the prefiltered environment map and the BRDF LUT,
-    // neither of which exists here yet. Zero rather than approximated.
+
+    // Ambient specular: the environment blurred to this surface's roughness,
+    // weighted by the split-sum approximation's scale and bias.
     float3 ambientS = float3(0.0);
+    if (envmapped) {
+        float2 brdf = sBRDFLUT.Sample(float2(NdotV, roughness)).xy;
+        ambientS = environment * (F * brdf.x + brdf.y);
+    }
 
     float3 selfIllumStep = step(float3(1e-4), selfIllumSample.rgb);
     float selfIllumed = max(selfIllumStep.x, max(selfIllumStep.y, selfIllumStep.z));

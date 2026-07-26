@@ -179,8 +179,14 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
     _defaultArray->initSampledLayered({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, 1, false, &white);
     _defaultCube = std::make_unique<VulkanImage>(_device);
     _defaultCube->initSampledLayered({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, 6, true, &white);
+    // Black: this stands in for incoming radiance, and a white one would light
+    // every environment-mapped surface from all directions at full strength.
+    const uint32_t black = 0xff000000;
+    _defaultCubeArray = std::make_unique<VulkanImage>(_device);
+    _defaultCubeArray->initSampledCubeArray({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, 1, &black);
     for (int i = 0; i < kNumTextures; ++i) {
-        _standing[i] = defaultFor(i, _default2D.get(), _defaultArray.get(), _defaultCube.get());
+        _standing[i] = defaultFor(i, _default2D.get(), _defaultArray.get(), _defaultCube.get(),
+                                  _defaultCubeArray.get());
     }
 
     // One pool per frame in flight, reset wholesale rather than freeing sets
@@ -263,7 +269,8 @@ VkDescriptorSet VulkanDescriptors::createPersistentTextureSet(
     std::array<VkDescriptorImageInfo, kNumTextures> infos {};
     std::array<VkWriteDescriptorSet, kNumTextures> writes {};
     for (int i = 0; i < kNumTextures; ++i) {
-        auto image = defaultFor(i, _default2D.get(), _defaultArray.get(), _defaultCube.get());
+        auto image = defaultFor(i, _default2D.get(), _defaultArray.get(), _defaultCube.get(),
+                                  _defaultCubeArray.get());
         for (const auto &[unit, override] : bindings) {
             if (unit == i) {
                 image = override;
@@ -372,13 +379,15 @@ VkDescriptorSet VulkanDescriptors::acquireTextureSet(int frame, const VulkanImag
 const VulkanImage *VulkanDescriptors::defaultFor(int unit,
                                                  const VulkanImage *twoD,
                                                  const VulkanImage *array,
-                                                 const VulkanImage *cube) {
+                                                 const VulkanImage *cube,
+                                                 const VulkanImage *cubeArray) {
     switch (unit) {
     case TextureUnits::bumpMapArray:
     case TextureUnits::shadowMapArray:
+        return array;
     case TextureUnits::irradianceMapArray:
     case TextureUnits::prefilteredEnvMapArray:
-        return array;
+        return cubeArray;
     case TextureUnits::envMapCube:
     case TextureUnits::shadowMapCube:
         return cube;
@@ -401,6 +410,11 @@ void VulkanDescriptors::deinit() {
     _default2D.reset();
     _defaultArray.reset();
     _defaultCube.reset();
+    // Every default has to be released here rather than left to the member
+    // destructor: this object outlives VulkanDevice::deinit, so an image still
+    // holding a VMA allocation at that point is freed against an allocator that
+    // no longer exists.
+    _defaultCubeArray.reset();
     if (_sampler != VK_NULL_HANDLE) {
         vkDestroySampler(_device.handle(), _sampler, nullptr);
         _sampler = VK_NULL_HANDLE;

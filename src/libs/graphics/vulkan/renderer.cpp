@@ -27,9 +27,23 @@ namespace reone {
 namespace graphics {
 
 static void check(VkResult result, const char *what) {
-    if (result != VK_SUCCESS) {
-        throw std::runtime_error(str(boost::format("Vulkan: %s failed (%d)") % what % result));
+    if (result == VK_SUCCESS) {
+        return;
     }
+    // Device loss is worth naming rather than leaving as a number. It is what a
+    // display driver watchdog reset looks like from here, and the validation
+    // layers say nothing about it because nothing was used incorrectly - a
+    // shader simply ran for longer than the driver was willing to wait. Whatever
+    // is thrown next tends to surface far from the pass that caused it, so the
+    // log line is the only thing tying the two together.
+    if (result == VK_ERROR_DEVICE_LOST) {
+        error(str(boost::format("Vulkan: device lost during %s - the GPU was reset, "
+                                "most likely by the driver watchdog timing out a "
+                                "long-running shader") %
+                  what),
+              LogChannel::Graphics);
+    }
+    throw std::runtime_error(str(boost::format("Vulkan: %s failed (%d)") % what % result));
 }
 
 void VulkanRenderer::init() {
@@ -50,6 +64,7 @@ void VulkanRenderer::init() {
     _depth->initDepth(_swapchain.extent(), kDepthFormat);
     _uniformRing.init(kFramesInFlight, 16u << 20);
     _descriptors.init(kFramesInFlight, _uniformRing);
+    _pbrTextures.init();
     _pipelines.init(
         [this](const std::string &name) {
             return readSpirV(_shaderDir / (name + ".spv"));
@@ -67,6 +82,7 @@ void VulkanRenderer::deinit() {
     vkDeviceWaitIdle(_device.handle());
     info(str(boost::format("Vulkan: peak uniform arena usage %llu bytes") %
              _uniformRing.peakUsage()));
+    _pbrTextures.deinit();
     _renderer2d.deinit();
     _resources.deinit();
     _pipelines.deinit();

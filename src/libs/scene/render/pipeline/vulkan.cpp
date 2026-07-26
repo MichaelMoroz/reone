@@ -22,6 +22,7 @@
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/debugscope.h"
 #include "reone/graphics/vulkan/descriptors.h"
+#include "reone/graphics/vulkan/pbrtextures.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/graphics/vulkan/resources.h"
@@ -162,6 +163,10 @@ void VulkanRenderPipeline::init() {
     resolveTextures.push_back({TextureUnits::gBufDepth, &_gbuffer->depth()});
     resolveTextures.push_back({TextureUnits::shadowMapArray, _dirShadows.get()});
     resolveTextures.push_back({TextureUnits::shadowMapCube, _pointShadows.get()});
+    auto &pbr = _renderer.pbrTextures();
+    resolveTextures.push_back({TextureUnits::brdfLUT, &pbr.brdfImage()});
+    resolveTextures.push_back({TextureUnits::irradianceMapArray, &pbr.irradianceArray()});
+    resolveTextures.push_back({TextureUnits::prefilteredEnvMapArray, &pbr.prefilteredArray()});
     _resolveSet = _renderer.descriptors().createPersistentTextureSet(resolveTextures);
 
     // The output is written as an attachment and then sampled by the 2D
@@ -284,6 +289,7 @@ void VulkanRenderPipeline::shadowPass(VkCommandBuffer cmd, uint32_t globalsOffse
                           _renderer.descriptors(),
                           _renderer.resources(),
                           _uniforms,
+                          _renderer.pbrTextures(),
                           _meshRegistry,
                           cmd,
                           {},
@@ -358,6 +364,7 @@ void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOff
                           _renderer.descriptors(),
                           _renderer.resources(),
                           _uniforms,
+                          _renderer.pbrTextures(),
                           _meshRegistry,
                           cmd,
                           VulkanGBuffer::colorFormats(),
@@ -495,6 +502,7 @@ void VulkanRenderPipeline::drawOntoOutput(VkCommandBuffer cmd,
                           _renderer.descriptors(),
                           _renderer.resources(),
                           _uniforms,
+                          _renderer.pbrTextures(),
                           _meshRegistry,
                           cmd,
                           {_renderer.swapchain().imageFormat()},
@@ -549,6 +557,11 @@ Texture &VulkanRenderPipeline::render() {
         globals.shadowLightSpace[i] = glToVulkanClip(globals.shadowLightSpace[i]);
     }
     auto globalsOffset = _renderer.uniformRing().push(globals);
+
+    // Before anything else this frame: a newly seen environment map has to be
+    // convolved before the resolve can sample it, and this begins its own
+    // render passes, so it cannot sit inside one.
+    _renderer.pbrTextures().process(cmd, globalsOffset);
 
     shadowPass(cmd, globalsOffset);
     geometryPass(cmd, globalsOffset);
