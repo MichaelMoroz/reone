@@ -26,57 +26,52 @@ target_link_libraries(shaderpack PRIVATE resource movie graphics audio script sy
 # the build tree - without slangc those resrefs are simply absent, and the engine
 # keeps using the hand-written equivalents.
 set(SHADER_STAGE_DIR ${CMAKE_BINARY_DIR}/shaders)
-set(SLANG_GENERATED_DIR ${CMAKE_BINARY_DIR}/slang-glsl)
 
-# Each entry is <slang source>:<entry point>:<stage>:<output resref>
-set(SLANG_SHADERS
-    "pbr_model:staticVertex:vertex:v_sl_mdl_static"
-    "pbr_model:skinnedVertex:vertex:v_sl_mdl_skin"
-    "pbr_model:danglyVertex:vertex:v_sl_mdl_dangly"
-    "pbr_model:saberVertex:vertex:v_sl_mdl_saber"
-    "pbr_model:opaqueFragment:fragment:f_sl_mdl_opaque"
-    "grass:grassVertex:vertex:v_sl_grass"
-    "grass:pbrFragment:fragment:f_sl_grass_pbr"
-    "grass:retroFragment:fragment:f_sl_grass_rtr"
-    "walkmesh:walkmeshVertex:vertex:v_sl_walkmesh"
-    "walkmesh:pbrFragment:fragment:f_sl_walkm_pbr"
-    "walkmesh:retroFragment:fragment:f_sl_walkm_rtr")
+# One SPIR-V module per source file, carrying every entry point that file
+# declares. Binding is by number, so stages of a program need no agreement on
+# names - which is what the transpiled-GLSL path could not deliver. Emitted
+# beside the executable; the shader pack still carries the legacy GLSL.
+set(SPIRV_OUT_DIR ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin/spirv)
+
+# <source>:<entry>[+<entry>...]
+set(SPIRV_MODULES
+    "pbr_model:staticVertex+skinnedVertex+danglyVertex+saberVertex+opaqueFragment"
+    "grass:grassVertex+pbrFragment+retroFragment"
+    "walkmesh:walkmeshVertex+pbrFragment+retroFragment")
 
 if(SLANGC_EXECUTABLE)
-    set(SLANG_OUTPUTS)
-    foreach(entry ${SLANG_SHADERS})
+    set(SPIRV_OUTPUTS)
+    foreach(entry ${SPIRV_MODULES})
         string(REPLACE ":" ";" parts ${entry})
-        list(GET parts 0 slang_source)
-        list(GET parts 1 slang_entry)
-        list(GET parts 2 slang_stage)
-        list(GET parts 3 slang_resref)
-        set(out ${SLANG_GENERATED_DIR}/${slang_resref}.glsl)
+        list(GET parts 0 spv_source)
+        list(GET parts 1 spv_entries)
+        string(REPLACE "+" ";" spv_entries "${spv_entries}")
+        set(entry_args)
+        foreach(e ${spv_entries})
+            list(APPEND entry_args -entry ${e})
+        endforeach()
+        set(out ${SPIRV_OUT_DIR}/${spv_source}.spv)
         add_custom_command(
             OUTPUT ${out}
-            COMMAND ${CMAKE_COMMAND} -E make_directory ${SLANG_GENERATED_DIR}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${SPIRV_OUT_DIR}
             COMMAND ${SLANGC_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/slang/${slang_source}.slang
+                ${CMAKE_SOURCE_DIR}/slang/${spv_source}.slang
                 -I ${CMAKE_SOURCE_DIR}/slang
-                -target glsl -entry ${slang_entry} -stage ${slang_stage}
-                -matrix-layout-column-major
-                -o ${out}
-            COMMAND ${CMAKE_COMMAND} -DFILE=${out} -P ${CMAKE_SOURCE_DIR}/cmake/SlangGLCompat.cmake
-            DEPENDS ${CMAKE_SOURCE_DIR}/slang/${slang_source}.slang
+                -target spirv -matrix-layout-column-major
+                ${entry_args} -o ${out}
+            DEPENDS ${CMAKE_SOURCE_DIR}/slang/${spv_source}.slang
                     ${CMAKE_SOURCE_DIR}/slang/uniforms.slang
-                    ${CMAKE_SOURCE_DIR}/cmake/SlangGLCompat.cmake
-            COMMENT "slangc ${slang_source}.slang -> ${slang_resref}.glsl")
-        list(APPEND SLANG_OUTPUTS ${out})
+            COMMENT "slangc ${spv_source}.slang -> ${spv_source}.spv")
+        list(APPEND SPIRV_OUTPUTS ${out})
     endforeach()
-    add_custom_target(transpile_slang DEPENDS ${SLANG_OUTPUTS})
+    add_custom_target(transpile_spirv ALL DEPENDS ${SPIRV_OUTPUTS})
 else()
-    add_custom_target(transpile_slang)
+    add_custom_target(transpile_spirv)
 endif()
 
 add_custom_target(create_shaderpack ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_STAGE_DIR}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${SLANG_GENERATED_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/glsl ${SHADER_STAGE_DIR}
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${SLANG_GENERATED_DIR} ${SHADER_STAGE_DIR}
     COMMAND shaderpack ${SHADER_STAGE_DIR} ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin
-    DEPENDS shaderpack transpile_slang
+    DEPENDS shaderpack
     COMMENT "Packing shaders")

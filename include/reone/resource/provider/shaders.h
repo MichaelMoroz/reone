@@ -70,21 +70,12 @@ private:
 
     std::map<std::string, ByteBuffer> _sourceResRefToData;
 
-    /**
-     * Where a shader's source came from. Slang-transpiled GLSL carries its own
-     * version directive and has no includes, so it must skip the preamble the
-     * hand-written sources rely on.
-     */
-    enum class SourceFlavor {
-        Glsl,
-        Slang
-    };
-
-    std::shared_ptr<graphics::Shader> initShader(graphics::ShaderType type,
-                                                 std::string resRef,
-                                                 SourceFlavor flavor = SourceFlavor::Glsl);
+    std::shared_ptr<graphics::Shader> initShader(graphics::ShaderType type, std::string resRef);
 
     bool hasSource(const std::string &resRef) const;
+
+    /** A SPIR-V module emitted beside the executable, if the build produced one. */
+    std::optional<ByteBuffer> loadSpirvModule(const std::string &name) const;
 
     bool _slangShadersAvailable {false};
     std::shared_ptr<graphics::ShaderProgram> initShaderProgram(std::vector<std::shared_ptr<graphics::Shader>> shaders);

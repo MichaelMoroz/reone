@@ -22,6 +22,7 @@
 #include "reone/graphics/uniforms.h"
 #include "reone/resource/resources.h"
 #include "reone/system/logutil.h"
+#include "reone/system/stream/fileinput.h"
 #include "reone/system/stream/memoryinput.h"
 #include "reone/system/stringbuilder.h"
 #include "reone/system/textreader.h"
@@ -74,20 +75,6 @@ static const std::string kFragPostMedianFilter3 = "f_pp_medianfilt3";
 static const std::string kFragPostMedianFilter5 = "f_pp_medianfilt5";
 static const std::string kFragPostSharpen = "f_pp_sharpen";
 static const std::string kFragPostDebugTex = "f_pp_debugtex";
-
-// Transpiled from slang/pbr_opaque_model.slang
-// Rewritten opaque model, specialised by geometry path
-static const std::string kVertModelStatic = "v_sl_mdl_static";
-static const std::string kVertModelSkinned = "v_sl_mdl_skin";
-static const std::string kVertModelDangly = "v_sl_mdl_dangly";
-static const std::string kVertModelSaber = "v_sl_mdl_saber";
-static const std::string kFragModelOpaque = "f_sl_mdl_opaque";
-static const std::string kVertSlGrass = "v_sl_grass";
-static const std::string kFragSlGrassPBR = "f_sl_grass_pbr";
-static const std::string kFragSlGrassRetro = "f_sl_grass_rtr";
-static const std::string kVertSlWalkmesh = "v_sl_walkmesh";
-static const std::string kFragSlWalkmeshPBR = "f_sl_walkm_pbr";
-static const std::string kFragSlWalkmeshRetro = "f_sl_walkm_rtr";
 static const std::string kFragText = "f_text";
 static const std::string kFragTexture = "f_texture";
 static const std::string kFragTextureNoPerspective = "f_texnoper";
@@ -95,6 +82,8 @@ static const std::string kFragPBRIrradiance = "f_pbr_irradiance";
 static const std::string kFragPBRBRDF = "f_pbr_brdf";
 static const std::string kFragPBRPrefilter = "f_pbr_prefilter";
 static const std::string kFragProfiler = "f_profiler";
+
+// Transpiled from slang/pbr_opaque_model.slang
 
 void Shaders::init() {
     if (_inited) {
@@ -170,35 +159,42 @@ void Shaders::init() {
     _shaderRegistry.add(ShaderProgramId::pbrModelDangly, pbrOpaqueModelProgram);
     _shaderRegistry.add(ShaderProgramId::pbrModelSaber, pbrOpaqueModelProgram);
 
-    // The rewritten build specialises the geometry path into separate pipelines.
-    // Absent when the build had no slangc.
-    if (hasSource(kFragModelOpaque)) {
-        auto fragModelOpaque = initShader(ShaderType::Fragment, kFragModelOpaque, SourceFlavor::Slang);
-        auto addVariant = [&](const char *programId, const std::string &vertResRef) {
-            auto vert = initShader(ShaderType::Vertex, vertResRef, SourceFlavor::Slang);
-            _shaderRegistry.addSlangVariant(programId, initShaderProgram({vert, fragModelOpaque}));
+    // Rewritten shaders, loaded as SPIR-V modules. One module holds every entry
+    // point of its source file, and everything binds by number, so stages need no
+    // agreement on identifier names.
+    auto spirvShader = [](ShaderType type, const ByteBuffer &module, const char *entryPoint) {
+        auto shader = std::make_shared<Shader>(type, module, entryPoint);
+        shader->init();
+        return shader;
+    };
+    if (auto model = loadSpirvModule("pbr_model")) {
+        auto frag = spirvShader(ShaderType::Fragment, *model, "opaqueFragment");
+        auto add = [&](const char *programId, const char *entryPoint) {
+            auto vert = spirvShader(ShaderType::Vertex, *model, entryPoint);
+            _shaderRegistry.addSlangVariant(programId, initShaderProgram({vert, frag}));
         };
-        addVariant(ShaderProgramId::pbrModelStatic, kVertModelStatic);
-        addVariant(ShaderProgramId::pbrModelSkinned, kVertModelSkinned);
-        addVariant(ShaderProgramId::pbrModelDangly, kVertModelDangly);
-        addVariant(ShaderProgramId::pbrModelSaber, kVertModelSaber);
+        add(ShaderProgramId::pbrModelStatic, "staticVertex");
+        add(ShaderProgramId::pbrModelSkinned, "skinnedVertex");
+        add(ShaderProgramId::pbrModelDangly, "danglyVertex");
+        add(ShaderProgramId::pbrModelSaber, "saberVertex");
     }
-    // Not registered yet: the grass and walkmesh stages emit different sets of
-    // uniform blocks, which shifts Slang's identifier suffixes and breaks linking.
-    // See doc/vulkan-rt-backend.md section 9.4.
-    if (false && hasSource(kVertSlGrass)) {
-        auto vert = initShader(ShaderType::Vertex, kVertSlGrass, SourceFlavor::Slang);
-        auto fragPBR = initShader(ShaderType::Fragment, kFragSlGrassPBR, SourceFlavor::Slang);
-        auto fragRetro = initShader(ShaderType::Fragment, kFragSlGrassRetro, SourceFlavor::Slang);
-        _shaderRegistry.addSlangVariant(ShaderProgramId::pbrGrass, initShaderProgram({vert, fragPBR}));
-        _shaderRegistry.addSlangVariant(ShaderProgramId::retroGrass, initShaderProgram({vert, fragRetro}));
+    if (auto grass = loadSpirvModule("grass")) {
+        auto vert = spirvShader(ShaderType::Vertex, *grass, "grassVertex");
+        _shaderRegistry.addSlangVariant(
+            ShaderProgramId::pbrGrass,
+            initShaderProgram({vert, spirvShader(ShaderType::Fragment, *grass, "pbrFragment")}));
+        _shaderRegistry.addSlangVariant(
+            ShaderProgramId::retroGrass,
+            initShaderProgram({vert, spirvShader(ShaderType::Fragment, *grass, "retroFragment")}));
     }
-    if (false && hasSource(kVertSlWalkmesh)) {
-        auto vert = initShader(ShaderType::Vertex, kVertSlWalkmesh, SourceFlavor::Slang);
-        auto fragPBR = initShader(ShaderType::Fragment, kFragSlWalkmeshPBR, SourceFlavor::Slang);
-        auto fragRetro = initShader(ShaderType::Fragment, kFragSlWalkmeshRetro, SourceFlavor::Slang);
-        _shaderRegistry.addSlangVariant(ShaderProgramId::pbrWalkmesh, initShaderProgram({vert, fragPBR}));
-        _shaderRegistry.addSlangVariant(ShaderProgramId::retroWalkmesh, initShaderProgram({vert, fragRetro}));
+    if (auto walkmesh = loadSpirvModule("walkmesh")) {
+        auto vert = spirvShader(ShaderType::Vertex, *walkmesh, "walkmeshVertex");
+        _shaderRegistry.addSlangVariant(
+            ShaderProgramId::pbrWalkmesh,
+            initShaderProgram({vert, spirvShader(ShaderType::Fragment, *walkmesh, "pbrFragment")}));
+        _shaderRegistry.addSlangVariant(
+            ShaderProgramId::retroWalkmesh,
+            initShaderProgram({vert, spirvShader(ShaderType::Fragment, *walkmesh, "retroFragment")}));
     }
     _shaderRegistry.add(ShaderProgramId::pbrSSAO, initShaderProgram({vertPassthrough, fragPBRSSAO}));
     _shaderRegistry.add(ShaderProgramId::pbrSSR, initShaderProgram({vertPassthrough, fragPBRSSR}));
@@ -236,11 +232,27 @@ void Shaders::deinit() {
     _inited = false;
 }
 
+std::optional<ByteBuffer> Shaders::loadSpirvModule(const std::string &name) const {
+    auto path = std::filesystem::path("spirv") / (name + ".spv");
+    if (!std::filesystem::exists(path)) {
+        return std::nullopt;
+    }
+    auto stream = FileInputStream(path);
+    stream.seek(0, SeekOrigin::End);
+    auto size = stream.position();
+    stream.seek(0, SeekOrigin::Begin);
+    ByteBuffer bytes;
+    bytes.resize(size);
+    stream.read(&bytes[0], size);
+    debug("Loaded SPIR-V module: " + name, LogChannel::Graphics);
+    return bytes;
+}
+
 bool Shaders::hasSource(const std::string &resRef) const {
     return static_cast<bool>(_resources.find(ResourceId(resRef, ResType::Glsl)));
 }
 
-std::shared_ptr<Shader> Shaders::initShader(ShaderType type, std::string resRef, SourceFlavor flavor) {
+std::shared_ptr<Shader> Shaders::initShader(ShaderType type, std::string resRef) {
     debug(
         str(boost::format("Initializing shader: type=%d resRef='%s'") % static_cast<int>(type) % resRef),
         LogChannel::Graphics);
@@ -269,14 +281,6 @@ std::shared_ptr<Shader> Shaders::initShader(ShaderType type, std::string resRef,
             source.append("\n");
         }
         sources.push_front(source.string());
-    }
-
-    if (flavor == SourceFlavor::Slang) {
-        // Transpiled sources carry their own #version and resolve their own
-        // imports, so none of the preamble below applies.
-        auto shader = std::make_unique<Shader>(type, std::move(sources));
-        shader->init();
-        return shader;
     }
 
     // Prepend preprocessor directives

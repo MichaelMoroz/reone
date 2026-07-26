@@ -17,6 +17,8 @@
 
 #include "reone/graphics/shader.h"
 
+#include "SDL3/SDL.h"
+
 #include "reone/system/threadutil.h"
 
 namespace reone {
@@ -41,6 +43,36 @@ void Shader::init() {
         return;
     }
     checkMainThread();
+
+    if (!_spirv.empty()) {
+        // The bundled glad loader is generated for OpenGL 4.0, so it declares
+        // neither of these - glShaderBinary is 4.1 and glSpecializeShader is 4.6.
+        // Resolved here for the spike; regenerating glad is the real fix.
+        static constexpr GLenum kShaderBinaryFormatSpirV = 0x9551;
+        using PfnShaderBinary = void(GLAD_API_PTR *)(GLsizei, const GLuint *, GLenum, const void *, GLsizei);
+        using PfnSpecializeShader = void(GLAD_API_PTR *)(GLuint, const GLchar *, GLuint, const GLuint *, const GLuint *);
+        static auto shaderBinary = reinterpret_cast<PfnShaderBinary>(SDL_GL_GetProcAddress("glShaderBinary"));
+        static auto specializeShader = reinterpret_cast<PfnSpecializeShader>(SDL_GL_GetProcAddress("glSpecializeShader"));
+        if (!shaderBinary || !specializeShader) {
+            throw std::runtime_error("SPIR-V shaders require OpenGL 4.6; entry points not available");
+        }
+
+        _nameGL = glCreateShader(getShaderTypeGL(_type));
+        shaderBinary(1, &_nameGL, kShaderBinaryFormatSpirV,
+                     _spirv.data(), static_cast<GLsizei>(_spirv.size()));
+        specializeShader(_nameGL, _entryPoint.c_str(), 0, nullptr, nullptr);
+        GLint specialized;
+        glGetShaderiv(_nameGL, GL_COMPILE_STATUS, &specialized);
+        if (!specialized) {
+            char log[4096];
+            GLsizei logSize;
+            glGetShaderInfoLog(_nameGL, sizeof(log), &logSize, log);
+            throw std::runtime_error(str(boost::format("Failed specializing SPIR-V shader, entry point '%s': %s") %
+                                         _entryPoint % std::string(log, logSize)));
+        }
+        _inited = true;
+        return;
+    }
 
     std::vector<const char *> sourcePtrs;
     for (auto &src : _sources) {
