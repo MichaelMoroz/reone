@@ -821,6 +821,17 @@ static float halfToFloat(uint16_t half) {
     return result;
 }
 
+/** Whether a format stores blue first, and so needs swizzling on the way out. */
+static bool isBGRA(VkFormat format) {
+    switch (format) {
+    case VK_FORMAT_B8G8R8A8_UNORM:
+    case VK_FORMAT_B8G8R8A8_SRGB:
+        return true;
+    default:
+        return false;
+    }
+}
+
 void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
     if (!_inited) {
         return;
@@ -853,6 +864,17 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
         }
         auto raw = entry.image->readBack(entry.layout, entry.depth);
         auto extent = entry.image->extent();
+        // The output image carries the swapchain's format, which is BGRA here
+        // while every G-buffer target is RGBA. A dump exists to be compared
+        // against the OpenGL backend, so it is written in one channel order
+        // rather than leaving whoever reads it to know which target is which -
+        // getting that wrong once already turned an 0.9 difference into an
+        // apparent 11.7 and invented a colour cast that was not there.
+        if (isBGRA(entry.image->format())) {
+            for (size_t i = 0; i + 3 < raw.size(); i += 4) {
+                std::swap(raw[i], raw[i + 2]);
+            }
+        }
         auto path = dir / (std::string(entry.name) + ".npy");
         if (format->halfToFloat) {
             size_t count = raw.size() / sizeof(uint16_t);

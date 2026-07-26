@@ -254,8 +254,13 @@ float4 fxaaFragment(Varyings input) : SV_Target {
         }
     }
 
-    float dstN = horzSpan ? (posM.y - posN.y) : (posM.x - posN.x);
-    float dstP = horzSpan ? (posP.y - posM.y) : (posP.x - posM.x);
+    // Along the axis the search actually walked, which offNP already chose: x
+    // for a horizontal span, y for a vertical one. Measuring the other axis
+    // gives a span length of zero, and the pixel offset derived from it is
+    // then meaningless - the edges are still found, but every one of them is
+    // blended by the wrong amount.
+    float dstN = horzSpan ? (posM.x - posN.x) : (posM.y - posN.y);
+    float dstP = horzSpan ? (posP.x - posM.x) : (posP.y - posM.y);
 
     bool goodSpanN = (lumaEndN < 0.0) != lumaMLTZero;
     bool goodSpanP = (lumaEndP < 0.0) != lumaMLTZero;
