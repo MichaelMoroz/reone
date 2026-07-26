@@ -93,6 +93,9 @@ public:
     /** Whether labels and names actually reach anything. */
     bool debugUtilsAvailable() const { return _debugUtils; }
 
+    /** The largest anisotropy this device will accept in a sampler. */
+    float maxAnisotropy() const { return _maxAnisotropy; }
+
     /** Round @p size up to the minimum uniform buffer offset alignment. */
     VkDeviceSize alignUniform(VkDeviceSize size) const;
 
@@ -116,6 +119,7 @@ private:
 
     std::string _deviceName;
     VkDeviceSize _uniformAlignment {256};
+    float _maxAnisotropy {1.0f};
 
     VkCommandPool _immediatePool {VK_NULL_HANDLE};
     VkCommandBuffer _immediateBuffer {VK_NULL_HANDLE};

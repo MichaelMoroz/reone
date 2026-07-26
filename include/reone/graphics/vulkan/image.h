@@ -184,6 +184,16 @@ public:
 
     VkImage handle() const { return _image; }
     VkImageView view() const { return _view; }
+
+    /**
+     * The sampler this image should be read through, or null for the default.
+     *
+     * Filtering belongs to the texture in OpenGL and to the sampler in Vulkan,
+     * so the sampler is chosen where the Texture is still in hand - at upload -
+     * and carried here. Not owned; VulkanSamplers caches and destroys them.
+     */
+    VkSampler sampler() const { return _sampler; }
+    void setSampler(VkSampler sampler) { _sampler = sampler; }
     glm::ivec2 extent() const { return _extent; }
     VkFormat format() const { return _format; }
 
@@ -192,6 +202,7 @@ private:
 
     VkImage _image {VK_NULL_HANDLE};
     VkImageView _view {VK_NULL_HANDLE};
+    VkSampler _sampler {VK_NULL_HANDLE};
     int _mipLevels {1};
     /** Keyed on cube * mipLevels + mip; see renderView. */
     std::unordered_map<int, VkImageView> _renderViews;

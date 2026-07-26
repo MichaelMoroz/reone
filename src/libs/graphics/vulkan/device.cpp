@@ -91,6 +91,10 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     // not a baseline capability.
     VkPhysicalDeviceFeatures features {};
     features.imageCubeArray = VK_TRUE;
+    // The OpenGL backend filters material textures anisotropically, so
+    // matching it needs this. Required rather than optional: every device
+    // this targets has had it for well over a decade.
+    features.samplerAnisotropy = VK_TRUE;
 
     auto physicalResult = vkb::PhysicalDeviceSelector(_instance)
                               .set_surface(_surface)
@@ -140,6 +144,7 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     vkGetPhysicalDeviceProperties(_device.physical_device, &props);
     _deviceName = props.deviceName;
     _uniformAlignment = props.limits.minUniformBufferOffsetAlignment;
+    _maxAnisotropy = props.limits.maxSamplerAnisotropy;
     info("Vulkan device: " + _deviceName);
     if (!_debugUtils) {
         info("Vulkan: debug utils unavailable; captures will be unlabelled",

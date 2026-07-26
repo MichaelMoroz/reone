@@ -225,7 +225,7 @@ void VulkanDescriptors::writeTextureSet(VkDescriptorSet set, const VulkanImage *
     std::array<VkWriteDescriptorSet, kNumTextures> writes {};
     for (int i = 0; i < kNumTextures; ++i) {
         auto image = (i == TextureUnits::mainTex && mainTex) ? mainTex : _standing[i];
-        infos[i].sampler = _sampler;
+        infos[i].sampler = image->sampler() ? image->sampler() : _sampler;
         infos[i].imageView = image->view();
         infos[i].imageLayout = sampledLayoutFor(*image);
 
@@ -276,7 +276,7 @@ VkDescriptorSet VulkanDescriptors::createPersistentTextureSet(
                 image = override;
             }
         }
-        infos[i].sampler = _sampler;
+        infos[i].sampler = image->sampler() ? image->sampler() : _sampler;
         infos[i].imageView = image->view();
         infos[i].imageLayout = sampledLayoutFor(*image);
 
@@ -304,7 +304,7 @@ void VulkanDescriptors::writeTextureSet(
                 image = binding.second;
             }
         }
-        infos[i].sampler = _sampler;
+        infos[i].sampler = image->sampler() ? image->sampler() : _sampler;
         infos[i].imageView = image->view();
         infos[i].imageLayout = sampledLayoutFor(*image);
 

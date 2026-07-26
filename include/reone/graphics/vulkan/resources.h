@@ -22,6 +22,7 @@
 #include "reone/graphics/types.h"
 
 #include "image.h"
+#include "samplers.h"
 #include "mesh.h"
 
 namespace reone {
@@ -47,7 +48,8 @@ class VulkanDevice;
 class VulkanResources : boost::noncopyable {
 public:
     VulkanResources(VulkanDevice &device) :
-        _device(device) {
+        _device(device),
+        _samplers(device) {
     }
 
     void deinit();
@@ -110,6 +112,11 @@ public:
 
 private:
     VulkanDevice &_device;
+    /**
+     * Owned here because a sampler is chosen per texture at upload, which is
+     * the only point where the Texture and its properties are both in hand.
+     */
+    VulkanSamplers _samplers;
 
     std::unordered_map<const Texture *, std::unique_ptr<VulkanImage>> _textures;
     std::unordered_map<const Texture *, const VulkanImage *> _external;

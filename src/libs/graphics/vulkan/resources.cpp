@@ -239,6 +239,7 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
         image->initSampledLayers({texture.width(), texture.height()},
                                  compressed ? *compressed : VK_FORMAT_R8G8B8A8_UNORM,
                                  cube, layers);
+        image->setSampler(_samplers.get(texture.properties()));
         debug("Vulkan: uploaded texture " + texture.name(), LogChannel::Graphics);
         return *_textures.insert({&texture, std::move(image)}).first->second;
     }
@@ -288,6 +289,7 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
                                 false, 1, static_cast<uint32_t>(subresources.size()),
                                 subresources);
     }
+    image->setSampler(_samplers.get(texture.properties()));
     debug("Vulkan: uploaded texture " + texture.name(), LogChannel::Graphics);
     return *_textures.insert({&texture, std::move(image)}).first->second;
 }
@@ -326,6 +328,10 @@ void VulkanResources::deinit() {
     _external.clear();
     _textures.clear();
     _meshes.clear();
+    // Explicitly, not from the member destructor: this object outlives
+    // VulkanDevice::deinit, and destroying a sampler after the device is gone
+    // is a use-after-free.
+    _samplers.deinit();
 }
 
 } // namespace graphics

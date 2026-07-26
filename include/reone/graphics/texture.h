@@ -160,6 +160,13 @@ public:
     std::vector<Layer> &layers() { return _layers; }
     const std::vector<Layer> &layers() const { return _layers; }
     const Features &features() const { return _features; }
+    /**
+     * Filtering and wrapping, chosen from the texture's usage.
+     *
+     * OpenGL applies these to the texture object itself. Vulkan keeps them in
+     * a sampler, so its backend has to read them here to build a matching one.
+     */
+    const Properties &properties() const { return _properties; }
     PixelFormat pixelFormat() const { return _pixelFormat; }
 
     void setType(TextureType type) { _type = type; }
