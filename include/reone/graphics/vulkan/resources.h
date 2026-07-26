@@ -54,6 +54,9 @@ public:
 
     void deinit();
 
+    /** The sampler cache, for images this class did not upload. */
+    VulkanSamplers &samplers() { return _samplers; }
+
     /**
      * Drop uploaded Textures and Meshes, keeping externally registered images.
      *

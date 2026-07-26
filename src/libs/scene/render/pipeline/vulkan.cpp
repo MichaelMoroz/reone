@@ -19,6 +19,7 @@
 
 #include "reone/graphics/npyutil.h"
 #include "reone/graphics/options.h"
+#include "reone/graphics/textureutil.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/debugscope.h"
 #include "reone/graphics/vulkan/descriptors.h"
@@ -108,6 +109,15 @@ void VulkanRenderPipeline::init() {
 
     _ping = std::make_unique<VulkanImage>(device);
     _ping->initColorAttachment(_targetSize, _renderer.swapchain().imageFormat());
+
+    // The filters sample these, and OpenGL's colour buffers clamp to edge with
+    // no mip filtering. Left on the default sampler they would repeat, so a tap
+    // just past one screen edge would read the opposite edge - which FXAA does
+    // at every border pixel, and sharpen and the blurs do too.
+    auto filterSampler = _renderer.resources().samplers().get(
+        getTextureProperties(TextureUsage::ColorBuffer));
+    _output->setSampler(filterSampler);
+    _ping->setSampler(filterSampler);
 
     glm::ivec2 shadowSize {_options.shadowResolution, _options.shadowResolution};
     _dirShadows = std::make_unique<VulkanImage>(device);
@@ -566,13 +576,37 @@ static void transitionFilterImage(VkCommandBuffer cmd,
                                   const VulkanImage &image,
                                   VkImageLayout from,
                                   VkImageLayout to) {
+    // A transfer layout has to name the transfer stage: the copy at the end of
+    // an odd-length chain is neither an attachment write nor a shader read, and
+    // describing it as one is a layout-transition error even though the copy
+    // itself would appear to work.
+    auto stageFor = [](VkImageLayout layout) -> VkPipelineStageFlags2 {
+        switch (layout) {
+        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+            return VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        default:
+            return VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
+                   VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        }
+    };
+    auto accessFor = [](VkImageLayout layout) -> VkAccessFlags2 {
+        switch (layout) {
+        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+            return VK_ACCESS_2_TRANSFER_READ_BIT;
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+            return VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        default:
+            return VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                   VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        }
+    };
+
     VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    b.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
-                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-    b.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
-                      VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-    b.dstStageMask = b.srcStageMask;
-    b.dstAccessMask = b.srcAccessMask;
+    b.srcStageMask = stageFor(from);
+    b.srcAccessMask = accessFor(from);
+    b.dstStageMask = stageFor(to);
+    b.dstAccessMask = accessFor(to);
     b.oldLayout = from;
     b.newLayout = to;
     b.image = image.handle();
@@ -742,8 +776,12 @@ Texture &VulkanRenderPipeline::render() {
     // Everything that draws into the output has now run, so hand it to the 2D
     // compositor in a layout it can sample.
     VkImageMemoryBarrier2 toRead {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    toRead.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    toRead.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    // Transfer as well as attachment: with one filter enabled the last thing to
+    // touch the output is a copy, not a draw.
+    toRead.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
+                          VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    toRead.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                           VK_ACCESS_2_TRANSFER_WRITE_BIT;
     toRead.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
     toRead.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
     toRead.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;

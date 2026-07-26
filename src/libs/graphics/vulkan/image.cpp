@@ -698,9 +698,11 @@ void VulkanImage::initColorAttachment(glm::ivec2 extent, VkFormat format) {
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     // TRANSFER_SRC so the target can be read back for a G-buffer dump. Not
     // free, but a colour attachment that cannot be copied out of cannot be
-    // compared against the other backend either.
+    // compared against the other backend either. TRANSFER_DST because the
+    // filter chain copies one of these back over another when it runs an odd
+    // number of passes.
     imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VmaAllocationCreateInfo allocInfo {};

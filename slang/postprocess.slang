@@ -13,6 +13,10 @@
 
 import uniforms;
 
+// Sampled with an explicit level throughout. These passes read images that
+// have no mip chain, so level zero is what OpenGL's texture() resolves to
+// anyway - and Slang's implicit-LOD Sample() emits the MinLod capability,
+// which needs a device feature that nothing else here wants.
 [[vk::binding(0, 1)]] Sampler2D sMainTex;
 
 struct Varyings {
@@ -51,15 +55,15 @@ float4 gausBlur9Fragment(Varyings input) : SV_Target {
     float2 direction = screenEffectUniforms.blurDirection;
     float2 rcp = screenEffectUniforms.screenResolutionRcp;
 
-    float4 color = sMainTex.Sample(uv);
+    float4 color = sMainTex.SampleLevel(uv, 0.0);
     color.rgb *= 0.2270270270;
 
     float2 off1 = 1.3846153846 * direction;
     float2 off2 = 3.2307692308 * direction;
-    color.rgb += sMainTex.Sample(uv + off1 * rcp).rgb * 0.3162162162;
-    color.rgb += sMainTex.Sample(uv - off1 * rcp).rgb * 0.3162162162;
-    color.rgb += sMainTex.Sample(uv + off2 * rcp).rgb * 0.0702702703;
-    color.rgb += sMainTex.Sample(uv - off2 * rcp).rgb * 0.0702702703;
+    color.rgb += sMainTex.SampleLevel(uv + off1 * rcp, 0.0).rgb * 0.3162162162;
+    color.rgb += sMainTex.SampleLevel(uv - off1 * rcp, 0.0).rgb * 0.3162162162;
+    color.rgb += sMainTex.SampleLevel(uv + off2 * rcp, 0.0).rgb * 0.0702702703;
+    color.rgb += sMainTex.SampleLevel(uv - off2 * rcp, 0.0).rgb * 0.0702702703;
     return color;
 }
 
@@ -80,13 +84,13 @@ float4 gausBlur13Fragment(Varyings input) : SV_Target {
     float2 off2 = 3.2941176470588234 * direction;
     float2 off3 = 5.176470588235294 * direction;
 
-    float4 color = sMainTex.Sample(uv) * 0.1964825501511404;
-    color += sMainTex.Sample(uv + off1 * rcp) * 0.2969069646728344;
-    color += sMainTex.Sample(uv - off1 * rcp) * 0.2969069646728344;
-    color += sMainTex.Sample(uv + off2 * rcp) * 0.09447039785044732;
-    color += sMainTex.Sample(uv - off2 * rcp) * 0.09447039785044732;
-    color += sMainTex.Sample(uv + off3 * rcp) * 0.010381362401148057;
-    color += sMainTex.Sample(uv - off3 * rcp) * 0.010381362401148057;
+    float4 color = sMainTex.SampleLevel(uv, 0.0) * 0.1964825501511404;
+    color += sMainTex.SampleLevel(uv + off1 * rcp, 0.0) * 0.2969069646728344;
+    color += sMainTex.SampleLevel(uv - off1 * rcp, 0.0) * 0.2969069646728344;
+    color += sMainTex.SampleLevel(uv + off2 * rcp, 0.0) * 0.09447039785044732;
+    color += sMainTex.SampleLevel(uv - off2 * rcp, 0.0) * 0.09447039785044732;
+    color += sMainTex.SampleLevel(uv + off3 * rcp, 0.0) * 0.010381362401148057;
+    color += sMainTex.SampleLevel(uv - off3 * rcp, 0.0) * 0.010381362401148057;
     return color;
 }
 
@@ -97,13 +101,13 @@ float4 sharpenFragment(Varyings input) : SV_Target {
     float neighbor = amount * -1.0;
     float center = amount * 4.0 + 1.0;
 
-    float4 rgbaM = sMainTex.Sample(input.uv);
+    float4 rgbaM = sMainTex.SampleLevel(input.uv, 0.0);
     float3 color =
         center * rgbaM.rgb +
-        neighbor * sMainTex.Sample(input.uv, int2(0, 1)).rgb +
-        neighbor * sMainTex.Sample(input.uv, int2(-1, 0)).rgb +
-        neighbor * sMainTex.Sample(input.uv, int2(1, 0)).rgb +
-        neighbor * sMainTex.Sample(input.uv, int2(0, -1)).rgb;
+        neighbor * sMainTex.SampleLevel(input.uv, 0.0, int2(0, 1)).rgb +
+        neighbor * sMainTex.SampleLevel(input.uv, 0.0, int2(-1, 0)).rgb +
+        neighbor * sMainTex.SampleLevel(input.uv, 0.0, int2(1, 0)).rgb +
+        neighbor * sMainTex.SampleLevel(input.uv, 0.0, int2(0, -1)).rgb;
     return float4(color, rgbaM.a);
 }
 
