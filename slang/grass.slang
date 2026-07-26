@@ -29,8 +29,13 @@ struct Varyings {
 Varyings grassVertex(
     [[vk::location(0)]] float3 position: POSITION,
     [[vk::location(2)]] float2 uv1: TEXCOORD0,
-    uint instanceId: SV_InstanceID) {
-    int instanceIndex = int(instanceId);
+    uint instanceId: SV_InstanceID,
+    uint startInstance: SV_StartInstanceLocation) {
+    // Slang lowers SV_InstanceID to InstanceIndex - BaseInstance, matching D3D.
+    // Under OpenGL that evaluates to zero for every instance, so all the grass
+    // stacks on one cluster and the field vanishes. Adding the base back cancels
+    // the subtraction and leaves the true index, whatever BaseInstance reports.
+    int instanceIndex = int(instanceId + startInstance);
     Varyings output;
 
     float3 clusterToCamera = grassUniforms.clusters[instanceIndex].positionVariant.xyz -

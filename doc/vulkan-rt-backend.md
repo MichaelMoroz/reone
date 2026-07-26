@@ -596,3 +596,38 @@ for it. Three ways out:
 The first is the only principled option, and it is one more reason the transitional
 Slang-to-GLSL path costs more than Slang-to-SPIR-V will: SPIR-V binds by number
 and has no cross-stage name matching at all.
+
+### 9.5 Slang's SPIR-V uses Vulkan builtins that OpenGL ignores
+
+`SV_InstanceID` lowers to `InstanceIndex - BaseInstance` and `SV_VertexID` to
+`VertexIndex`, under `OpCapability DrawParameters`. Those are Vulkan builtins.
+The OpenGL SPIR-V environment uses `InstanceId` and `VertexId` instead.
+
+OpenGL accepts the module anyway - glSpecializeShader reports success - and the
+builtin reads zero. Grass therefore drew all 256 instances on top of cluster 0,
+which happens to sit behind nearer terrain, so nothing appeared at all. The
+symptom looks like missing geometry rather than a wrong index, and every probe
+that assumed the geometry was misplaced came back negative.
+
+It was found by reading the vertex output in RenderDoc: instance 13 reported a
+world position derived from cluster 0.
+
+The same applies to any shader reading a vertex or instance id, which currently
+means the dangly and saber geometry paths as well as grass. The static and
+skinned paths are unaffected because they never read one.
+
+Adding `SV_StartInstanceLocation` back cancels the subtraction, but does not help
+when the underlying builtin is itself zero.
+
+Three ways out:
+
+1. **Supply the index as an instanced vertex attribute** with divisor 1. Portable
+   and works on both backends, but only solves the instance id, not the vertex id.
+2. **Compile Slang to GLSL, then GLSL to SPIR-V with glslang `-G`**, which emits
+   the OpenGL builtins. The cross-stage naming problem of section 9.4 does not
+   apply, because the result still binds by number. Adds a pipeline stage.
+3. **Rewrite the builtin decorations in the emitted SPIR-V.** Mechanical but
+   fragile.
+
+Option 2 is the most promising: it keeps one shader source, needs no engine
+change, and the intermediate GLSL is already known to be correct.
