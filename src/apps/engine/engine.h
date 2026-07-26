@@ -112,6 +112,7 @@ private:
     void renderGLFrame(bool &quit);
     void renderVulkanFrame(bool &quit);
     void captureIfRequested(bool &quit);
+    void dumpTargetsIfRequested();
 
     void showCursor(bool show);
     void setRelativeMouseMode(bool relative);

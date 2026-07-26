@@ -32,6 +32,14 @@ static VkDeviceSize texelSize(VkFormat format) {
         return 4;
     case VK_FORMAT_R8_UNORM:
         return 1;
+    case VK_FORMAT_R16G16_SFLOAT:
+        return 4;
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+        return 8;
+    case VK_FORMAT_D32_SFLOAT:
+        return 4;
+    case VK_FORMAT_B8G8R8A8_SRGB:
+        return 4;
     default:
         throw std::invalid_argument("Vulkan: unsupported image format");
     }
@@ -361,7 +369,11 @@ void VulkanImage::initColorAttachment(glm::ivec2 extent, VkFormat format) {
     imageInfo.arrayLayers = 1;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    // TRANSFER_SRC so the target can be read back for a G-buffer dump. Not
+    // free, but a colour attachment that cannot be copied out of cannot be
+    // compared against the other backend either.
+    imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VmaAllocationCreateInfo allocInfo {};
@@ -398,8 +410,10 @@ void VulkanImage::initDepth(glm::ivec2 extent, VkFormat format) {
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     // Sampled as well as written: the deferred resolve reconstructs world
     // position from depth, so the same image is read back as a texture.
+    // TRANSFER_SRC additionally lets it be dumped for comparison.
     imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                      VK_IMAGE_USAGE_SAMPLED_BIT;
+                      VK_IMAGE_USAGE_SAMPLED_BIT |
+                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VmaAllocationCreateInfo allocInfo {};
@@ -420,6 +434,57 @@ void VulkanImage::initDepth(glm::ivec2 extent, VkFormat format) {
     if (vkCreateImageView(_device.handle(), &viewInfo, nullptr, &_view) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: depth image view creation failed");
     }
+}
+
+std::vector<uint8_t> VulkanImage::readBack(VkImageLayout layout, bool depth) const {
+    auto aspect = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    VkDeviceSize size = static_cast<VkDeviceSize>(_extent.x) * _extent.y * texelSize(_format);
+
+    VulkanBuffer staging(_device);
+    staging.initHostVisible(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+
+    auto image = _image;
+    auto dst = staging.handle();
+    auto extent = _extent;
+    _device.immediateSubmit([image, dst, extent, aspect, layout](VkCommandBuffer cmd) {
+        auto barrier = [&](VkImageLayout from, VkImageLayout to) {
+            VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            // Conservative on both sides: this runs once, outside the frame, and
+            // getting a dump slightly wrong is worse than getting it slowly.
+            b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+            b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+            b.oldLayout = from;
+            b.newLayout = to;
+            b.image = image;
+            b.subresourceRange.aspectMask = aspect;
+            b.subresourceRange.levelCount = 1;
+            b.subresourceRange.layerCount = 1;
+
+            VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            dep.imageMemoryBarrierCount = 1;
+            dep.pImageMemoryBarriers = &b;
+            vkCmdPipelineBarrier2(cmd, &dep);
+        };
+
+        barrier(layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+        VkBufferImageCopy region {};
+        region.imageSubresource.aspectMask = aspect;
+        region.imageSubresource.layerCount = 1;
+        region.imageExtent = {static_cast<uint32_t>(extent.x),
+                              static_cast<uint32_t>(extent.y), 1};
+        vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               dst, 1, &region);
+
+        // Put it back, so the next frame finds the image where it left it.
+        barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, layout);
+    });
+
+    std::vector<uint8_t> result(static_cast<size_t>(size));
+    std::memcpy(result.data(), staging.mapped(), result.size());
+    return result;
 }
 
 void VulkanImage::deinit() {

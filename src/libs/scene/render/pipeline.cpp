@@ -19,6 +19,7 @@
 
 #include "reone/graphics/context.h"
 #include "reone/graphics/meshregistry.h"
+#include "reone/graphics/npyutil.h"
 #include "reone/graphics/pbrtextures.h"
 #include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/statistic.h"
@@ -29,12 +30,111 @@
 #include "reone/scene/render/pipeline/vulkan.h"
 #endif
 #include "reone/scene/render/pipeline/retro.h"
+#include "reone/system/logutil.h"
 
 using namespace reone::graphics;
 
 namespace reone {
 
 namespace scene {
+
+/**
+ * What a PixelFormat looks like once it is off the GPU: how many channels, what
+ * the elements are, and what to ask OpenGL for.
+ *
+ * Read back at the stored width rather than a convenient one - a depth target
+ * is 32-bit float and a motion target is signed half float, and rounding either
+ * into bytes would throw away exactly the differences this is meant to find.
+ */
+struct ReadbackFormat {
+    int channels;
+    NpyType type;
+    uint32_t glFormat;
+    uint32_t glType;
+};
+
+static std::optional<ReadbackFormat> readbackFormat(PixelFormat format) {
+    switch (format) {
+    case PixelFormat::R8:
+        return ReadbackFormat {1, NpyType::UInt8, GL_RED, GL_UNSIGNED_BYTE};
+    case PixelFormat::RG8:
+        return ReadbackFormat {2, NpyType::UInt8, GL_RG, GL_UNSIGNED_BYTE};
+    case PixelFormat::RGB8:
+        return ReadbackFormat {3, NpyType::UInt8, GL_RGB, GL_UNSIGNED_BYTE};
+    case PixelFormat::RGBA8:
+        return ReadbackFormat {4, NpyType::UInt8, GL_RGBA, GL_UNSIGNED_BYTE};
+    case PixelFormat::BGR8:
+        return ReadbackFormat {3, NpyType::UInt8, GL_BGR, GL_UNSIGNED_BYTE};
+    case PixelFormat::BGRA8:
+        return ReadbackFormat {4, NpyType::UInt8, GL_BGRA, GL_UNSIGNED_BYTE};
+    case PixelFormat::R16F:
+        return ReadbackFormat {1, NpyType::Float32, GL_RED, GL_FLOAT};
+    case PixelFormat::RG16F:
+        return ReadbackFormat {2, NpyType::Float32, GL_RG, GL_FLOAT};
+    case PixelFormat::RGB16F:
+        return ReadbackFormat {3, NpyType::Float32, GL_RGB, GL_FLOAT};
+    case PixelFormat::RGBA16F:
+        return ReadbackFormat {4, NpyType::Float32, GL_RGBA, GL_FLOAT};
+    case PixelFormat::Depth24:
+    case PixelFormat::Depth32F:
+        return ReadbackFormat {1, NpyType::Float32, GL_DEPTH_COMPONENT, GL_FLOAT};
+    default:
+        // Compressed and stencil formats have no useful flat readback.
+        return std::nullopt;
+    }
+}
+
+/** Strip characters a filename cannot carry, so target names can be free text. */
+static std::string toFileName(const std::string &name) {
+    std::string result;
+    result.reserve(name.size());
+    for (char c : name) {
+        result.push_back(std::isalnum(static_cast<unsigned char>(c)) ? std::tolower(c) : '_');
+    }
+    return result;
+}
+
+void RenderPipelineBase::dumpTargets(const std::filesystem::path &dir) {
+    std::filesystem::create_directories(dir);
+    for (const auto &target : targets()) {
+        if (!target.texture) {
+            continue;
+        }
+        auto format = readbackFormat(target.texture->pixelFormat());
+        if (!format) {
+            warn("Cannot dump target '" + target.name + "': unsupported pixel format",
+                 LogChannel::Graphics);
+            continue;
+        }
+        auto width = target.texture->width();
+        auto height = target.texture->height();
+        size_t elementSize = format->type == NpyType::UInt8 ? 1 : 4;
+        std::vector<uint8_t> pixels(elementSize * format->channels * width * height);
+
+        // Straight from the texture rather than through a framebuffer: a depth
+        // attachment cannot be a colour read source, and glGetTexImage does not
+        // care which framebuffer happens to be bound.
+        glBindTexture(GL_TEXTURE_2D, target.texture->nameGL());
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glGetTexImage(GL_TEXTURE_2D, 0, format->glFormat, format->glType, pixels.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        // OpenGL hands back the bottom row first. Flipped here so both backends
+        // write top-down and the arrays line up index for index.
+        size_t stride = elementSize * format->channels * width;
+        std::vector<uint8_t> flipped(pixels.size());
+        for (int y = 0; y < height; ++y) {
+            std::memcpy(flipped.data() + y * stride,
+                        pixels.data() + (height - 1 - y) * stride,
+                        stride);
+        }
+
+        writeNpy(dir / (toFileName(target.name) + ".npy"), flipped.data(),
+                 width, height, format->channels, format->type);
+    }
+    info("Dumped " + std::to_string(targets().size()) + " render targets to " + dir.string(),
+         LogChannel::Graphics);
+}
 
 void RenderPipelineBase::applyBoxBlur(Texture &srcTexture, Framebuffer &dst, const glm::ivec2 &size) {
     _context.useProgram(_shaderRegistry.get(ShaderProgramId::postBoxBlur4));

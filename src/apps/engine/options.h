@@ -58,6 +58,8 @@ struct Options {
      * in the diff as though it were a rendering difference.
      */
     std::string capturePath;
+    /** Where to write the scene render targets, or empty not to. */
+    std::string dumpTargetsPath;
     int captureFrame {3};
 
     /**

@@ -17,6 +17,7 @@
 
 #include "reone/scene/render/pipeline/vulkan.h"
 
+#include "reone/graphics/npyutil.h"
 #include "reone/graphics/options.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/descriptors.h"
@@ -348,6 +349,116 @@ Texture &VulkanRenderPipeline::render() {
     vkCmdPipelineBarrier2(cmd, &dep);
 
     return *_outputHandle;
+}
+
+/**
+ * How a target's format comes back on the CPU: channel count and element type.
+ *
+ * Read back as stored. Half-float targets are widened to float on the way out
+ * rather than written as halves, so a dump from either backend has the same
+ * dtype and the two can be subtracted without a cast - OpenGL's readback widens
+ * them in the driver, and half to float is exact either way.
+ */
+struct DumpFormat {
+    int channels;
+    NpyType type;
+    bool halfToFloat;
+};
+
+static std::optional<DumpFormat> dumpFormatFor(VkFormat format) {
+    switch (format) {
+    case VK_FORMAT_R8G8B8A8_UNORM:
+    case VK_FORMAT_B8G8R8A8_UNORM:
+    case VK_FORMAT_B8G8R8A8_SRGB:
+        return DumpFormat {4, NpyType::UInt8, false};
+    case VK_FORMAT_R16G16_SFLOAT:
+        return DumpFormat {2, NpyType::Float32, true};
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+        return DumpFormat {4, NpyType::Float32, true};
+    case VK_FORMAT_D32_SFLOAT:
+        return DumpFormat {1, NpyType::Float32, false};
+    default:
+        return std::nullopt;
+    }
+}
+
+/** IEEE half to float. Exact - every half has an exact float representation. */
+static float halfToFloat(uint16_t half) {
+    uint32_t sign = static_cast<uint32_t>(half & 0x8000) << 16;
+    uint32_t exponent = (half >> 10) & 0x1f;
+    uint32_t mantissa = half & 0x3ff;
+    uint32_t bits;
+    if (exponent == 0) {
+        if (mantissa == 0) {
+            bits = sign;
+        } else {
+            // Subnormal: renormalise into float's wider exponent range.
+            exponent = 127 - 15 + 1;
+            while ((mantissa & 0x400) == 0) {
+                mantissa <<= 1;
+                --exponent;
+            }
+            mantissa &= 0x3ff;
+            bits = sign | (exponent << 23) | (mantissa << 13);
+        }
+    } else if (exponent == 0x1f) {
+        bits = sign | 0x7f800000u | (mantissa << 13);
+    } else {
+        bits = sign | ((exponent - 15 + 127) << 23) | (mantissa << 13);
+    }
+    float result;
+    std::memcpy(&result, &bits, sizeof(result));
+    return result;
+}
+
+void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
+    if (!_inited) {
+        return;
+    }
+    std::filesystem::create_directories(dir);
+
+    struct Entry {
+        const char *name;
+        const VulkanImage *image;
+        VkImageLayout layout;
+        bool depth;
+    };
+    std::vector<Entry> entries;
+    static const char *kColorNames[VulkanGBuffer::Count] = {
+        "g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_lightmap",
+        "g_buffer_self_illum", "g_buffer_motion"};
+    for (int i = 0; i < VulkanGBuffer::Count; ++i) {
+        entries.push_back({kColorNames[i], &_gbuffer->color(i), _gbuffer->colorLayout(), false});
+    }
+    entries.push_back({"g_buffer_depth", &_gbuffer->depth(), _gbuffer->depthLayout(), true});
+    // The output has been handed to the compositor by the time a dump runs.
+    entries.push_back({"output", _output.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
+
+    for (const auto &entry : entries) {
+        auto format = dumpFormatFor(entry.image->format());
+        if (!format) {
+            warn("Cannot dump target '" + std::string(entry.name) + "': unsupported format",
+                 LogChannel::Graphics);
+            continue;
+        }
+        auto raw = entry.image->readBack(entry.layout, entry.depth);
+        auto extent = entry.image->extent();
+        auto path = dir / (std::string(entry.name) + ".npy");
+        if (format->halfToFloat) {
+            size_t count = raw.size() / sizeof(uint16_t);
+            std::vector<float> widened(count);
+            for (size_t i = 0; i < count; ++i) {
+                uint16_t half;
+                std::memcpy(&half, raw.data() + i * sizeof(uint16_t), sizeof(half));
+                widened[i] = halfToFloat(half);
+            }
+            writeNpy(path, widened.data(), extent.x, extent.y, format->channels, format->type);
+        } else {
+            writeNpy(path, raw.data(), extent.x, extent.y, format->channels, format->type);
+        }
+    }
+    info("Dumped " + std::to_string(entries.size()) + " render targets to " + dir.string(),
+         LogChannel::Graphics);
 }
 
 std::vector<RenderTargetInfo> VulkanRenderPipeline::targets() const {

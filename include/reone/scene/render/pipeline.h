@@ -93,6 +93,20 @@ public:
      * the pipeline chooses to expose any.
      */
     virtual std::vector<RenderTargetInfo> targets() const = 0;
+
+    /**
+     * Write every exposed target into @p dir, one .npy per target.
+     *
+     * For comparing one backend against another: what a screenshot shows is the
+     * end of a long chain, and when two backends disagree it says nothing about
+     * where. Dumping the G-buffer separates "the geometry pass wrote different
+     * values" from "the resolve read them differently".
+     *
+     * Read back exactly as stored, so a 32-bit depth target arrives as 32-bit
+     * floats rather than being flattened into something displayable. The GPU
+     * has to be idle before this is called; the caller owns that.
+     */
+    virtual void dumpTargets(const std::filesystem::path &dir) = 0;
 };
 
 class IRenderPipelineFactory {
@@ -123,6 +137,8 @@ public:
     std::vector<RenderTargetInfo> targets() const override {
         return {};
     }
+
+    void dumpTargets(const std::filesystem::path &dir) override;
 
 protected:
     struct GaussianBlurParams {

@@ -79,6 +79,7 @@ public:
     graphics::Texture &render() override;
 
     std::vector<RenderTargetInfo> targets() const override;
+    void dumpTargets(const std::filesystem::path &dir) override;
 
 private:
     glm::ivec2 _targetSize;

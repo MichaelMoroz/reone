@@ -452,7 +452,31 @@ void Engine::captureIfRequested(bool &quit) {
     TgaWriter(screenshot).save(stream);
     info("Wrote screenshot: " + _options.capturePath);
     _captured = true;
+    dumpTargetsIfRequested();
     quit = true;
+}
+
+void Engine::dumpTargetsIfRequested() {
+    if (_options.dumpTargetsPath.empty()) {
+        return;
+    }
+    auto *pipeline = _services->scene.graphs.get(kSceneMain).renderPipeline();
+    if (!pipeline) {
+        warn("--dumptargets given but the main scene has not been rendered");
+        return;
+    }
+    // The frame this describes has to be finished before its targets are read.
+    // On Vulkan the work was only submitted; on OpenGL the driver may still be
+    // several frames behind. Both are settled here rather than inside the dump,
+    // because only the caller knows which frame it means.
+    if (_vulkan) {
+#ifdef R_ENABLE_VULKAN
+        _vulkanRenderer->device().waitIdle();
+#endif
+    } else {
+        glFinish();
+    }
+    pipeline->dumpTargets(_options.dumpTargetsPath);
 }
 
 void Engine::renderFrame(bool &quit) {

@@ -103,6 +103,14 @@ public:
                            bool cube,
                            const std::vector<std::pair<const void *, VkDeviceSize>> &layers);
 
+    /**
+     * Copy the image back to host memory, exactly as stored.
+     *
+     * @param layout the layout the image is currently in, restored afterwards.
+     * @param depth  true to copy the depth aspect rather than colour.
+     */
+    std::vector<uint8_t> readBack(VkImageLayout layout, bool depth = false) const;
+
     void deinit();
 
     VkImage handle() const { return _image; }

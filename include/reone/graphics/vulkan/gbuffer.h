@@ -83,6 +83,7 @@ public:
     void transitionDepth(VkCommandBuffer cmd, VkImageLayout to);
 
     VkImageLayout colorLayout() const { return _colorLayout; }
+    VkImageLayout depthLayout() const { return _depthLayout; }
 
 private:
     VulkanDevice &_device;

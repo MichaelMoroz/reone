@@ -44,6 +44,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("commands-file", value<std::string>()->default_value(""), "execute console commands from a file at startup")           //
         ("commands-frame", value<int>()->default_value(0), "run the commands file on this frame instead of at startup")       //
         ("capture", value<std::string>()->default_value(""), "write a screenshot to this path and exit")                        //
+        ("dumptargets", value<std::string>()->default_value(""), "write the scene render targets to this directory as .npy")   //
         ("captureframe", value<int>()->default_value(3), "frame to capture on, counted from the first rendered frame")         //
         ("randomseed", value<int>()->default_value(-1), "seed the random generator, or -1 to seed from the clock")             //
         ("backend", value<std::string>()->default_value("gl"), "graphics backend: gl or vulkan")                              //
@@ -91,6 +92,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->game.path = vars.count("game") > 0 ? std::filesystem::path(vars["game"].as<std::string>()) : std::filesystem::current_path();
     options->game.developer = vars["dev"].as<bool>();
     options->capturePath = vars["capture"].as<std::string>();
+    options->dumpTargetsPath = vars["dumptargets"].as<std::string>();
     options->captureFrame = vars["captureframe"].as<int>();
     options->randomSeed = vars["randomseed"].as<int>();
     options->backend = vars["backend"].as<std::string>();
