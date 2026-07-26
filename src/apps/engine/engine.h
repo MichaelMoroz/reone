@@ -90,6 +90,7 @@ private:
 
     float _captureElapsed {0.0f};
     bool _captured {false};
+    bool _renderdocTriggered {false};
 
     bool _showCursor {true};
     bool _relativeMouseMode {false};

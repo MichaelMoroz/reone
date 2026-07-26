@@ -23,6 +23,12 @@
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl3.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#include "renderdoc_app.h"
+
 #include "reone/graphics/format/tgawriter.h"
 #include "reone/graphics/window.h"
 #include "reone/system/stream/fileoutput.h"
@@ -346,12 +352,54 @@ int Engine::run() {
     return 0;
 }
 
+/**
+ * The RenderDoc in-application API, when the process was launched under
+ * RenderDoc. renderdoccmd has no option to capture a particular frame, and
+ * triggering by keypress does not suit an unattended run, so the frame we
+ * screenshot is the frame we ask RenderDoc for.
+ */
+static RENDERDOC_API_1_1_2 *renderdocApi() {
+#ifdef _WIN32
+    static RENDERDOC_API_1_1_2 *api = []() -> RENDERDOC_API_1_1_2 * {
+        auto module = GetModuleHandleA("renderdoc.dll");
+        if (!module) {
+            return nullptr;
+        }
+        auto getApi = reinterpret_cast<pRENDERDOC_GetAPI>(GetProcAddress(module, "RENDERDOC_GetAPI"));
+        if (!getApi) {
+            return nullptr;
+        }
+        RENDERDOC_API_1_1_2 *result = nullptr;
+        if (getApi(eRENDERDOC_API_Version_1_1_2, reinterpret_cast<void **>(&result)) != 1) {
+            return nullptr;
+        }
+        return result;
+    }();
+    return api;
+#else
+    return nullptr;
+#endif
+}
+
 void Engine::captureIfRequested(bool &quit) {
     if (_options.capturePath.empty() || _captured) {
         return;
     }
     _captureElapsed += 1.0f / 60.0f;
     if (_captureElapsed < _options.captureDelay) {
+        // Ask RenderDoc for the frame before the one we screenshot, so the
+        // capture holds a complete frame rather than one cut short by the exit.
+        if (_options.renderdoc && !_renderdocTriggered &&
+            _captureElapsed >= _options.captureDelay - 1.0f / 60.0f) {
+            if (auto api = renderdocApi()) {
+                api->TriggerCapture();
+                info("RenderDoc capture triggered");
+                _renderdocTriggered = true;
+            } else {
+                warn("--renderdoc given but the process is not running under RenderDoc");
+                _renderdocTriggered = true;
+            }
+        }
         return;
     }
     // Read before the swap, while the finished frame is still the back buffer.

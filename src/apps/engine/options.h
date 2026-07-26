@@ -46,6 +46,8 @@ struct Options {
      */
     std::string capturePath;
     float captureDelay {5.0f};
+    /** Trigger a RenderDoc frame capture alongside the screenshot. */
+    bool renderdoc {false};
 
     std::unique_ptr<game::OptionsView> toView() {
         return std::make_unique<game::OptionsView>(game, graphics, audio);
