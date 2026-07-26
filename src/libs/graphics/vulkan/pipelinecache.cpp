@@ -119,6 +119,13 @@ VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
 
     auto pipeline = std::make_unique<VulkanPipeline>(_device);
     pipeline->init(config);
+    // Named after the shaders it was built from, so a capture says which
+    // program a draw used instead of a bare handle.
+    auto label = key.module + ":" + key.vertexEntry + "/" + key.fragmentEntry;
+    _device.setObjectName(VK_OBJECT_TYPE_PIPELINE,
+                          reinterpret_cast<uint64_t>(pipeline->handle()), label);
+    _device.setObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
+                          reinterpret_cast<uint64_t>(pipeline->layout()), label + " layout");
     debug(str(boost::format("Vulkan: built pipeline %s:%s/%s (%d cached)") %
               key.module % key.vertexEntry % key.fragmentEntry % (_pipelines.size() + 1)),
           LogChannel::Graphics);

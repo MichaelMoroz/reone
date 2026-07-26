@@ -19,6 +19,7 @@ set(VULKAN_SOURCE_DIR ${CMAKE_SOURCE_DIR}/src/libs/graphics/vulkan)
 set(VULKAN_HEADERS
     ${VULKAN_INCLUDE_DIR}/buffer.h
     ${VULKAN_INCLUDE_DIR}/descriptors.h
+    ${VULKAN_INCLUDE_DIR}/debugscope.h
     ${VULKAN_INCLUDE_DIR}/device.h
     ${VULKAN_INCLUDE_DIR}/gbuffer.h
     ${VULKAN_INCLUDE_DIR}/image.h

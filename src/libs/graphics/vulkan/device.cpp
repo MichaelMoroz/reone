@@ -35,18 +35,32 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
         throw std::runtime_error("Vulkan: no loader found");
     }
 
-    auto instanceResult = vkb::InstanceBuilder()
-                              .set_app_name("reone")
-                              .require_api_version(1, 3, 0)
-                              .request_validation_layers(validation)
-                              .use_default_debug_messenger()
-                              .build();
+    // Debug utils gives pass labels and object names in a graphics debugger,
+    // which is most of what makes a capture readable. Wanted whether or not the
+    // validation layers are on, so asked for explicitly - but only if the
+    // loader actually has it, since a missing instance extension is fatal.
+    auto systemInfo = vkb::SystemInfo::get_system_info();
+    bool debugUtils = systemInfo &&
+                      systemInfo->is_extension_available(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+
+    vkb::InstanceBuilder instanceBuilder;
+    instanceBuilder.set_app_name("reone")
+        .require_api_version(1, 3, 0)
+        .request_validation_layers(validation)
+        .use_default_debug_messenger();
+    if (debugUtils) {
+        instanceBuilder.enable_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    }
+    auto instanceResult = instanceBuilder.build();
     if (!instanceResult) {
         throw std::runtime_error("Vulkan: instance creation failed: " +
                                  instanceResult.error().message());
     }
     _instance = instanceResult.value();
     volkLoadInstance(_instance.instance);
+    // volk leaves the entry points null when the extension is absent, so this
+    // is the honest test rather than what was asked for.
+    _debugUtils = debugUtils && vkSetDebugUtilsObjectNameEXT != nullptr;
 
     if (!SDL_Vulkan_CreateSurface(window, _instance.instance, nullptr, &_surface)) {
         throw std::runtime_error("Vulkan: surface creation failed: " +
@@ -121,6 +135,10 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     _deviceName = props.deviceName;
     _uniformAlignment = props.limits.minUniformBufferOffsetAlignment;
     info("Vulkan device: " + _deviceName);
+    if (!_debugUtils) {
+        info("Vulkan: debug utils unavailable; captures will be unlabelled",
+             LogChannel::Graphics);
+    }
 
     VkCommandPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -141,6 +159,39 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     }
 
     _inited = true;
+}
+
+void VulkanDevice::setObjectName(VkObjectType type, uint64_t handle,
+                                 const std::string &name) const {
+    if (!_debugUtils) {
+        return;
+    }
+    VkDebugUtilsObjectNameInfoEXT info {VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT};
+    info.objectType = type;
+    info.objectHandle = handle;
+    info.pObjectName = name.c_str();
+    vkSetDebugUtilsObjectNameEXT(_device.device, &info);
+}
+
+void VulkanDevice::beginLabel(VkCommandBuffer cmd, const char *name,
+                              const glm::vec3 &color) const {
+    if (!_debugUtils || vkCmdBeginDebugUtilsLabelEXT == nullptr) {
+        return;
+    }
+    VkDebugUtilsLabelEXT label {VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
+    label.pLabelName = name;
+    label.color[0] = color.r;
+    label.color[1] = color.g;
+    label.color[2] = color.b;
+    label.color[3] = 1.0f;
+    vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
+}
+
+void VulkanDevice::endLabel(VkCommandBuffer cmd) const {
+    if (!_debugUtils || vkCmdEndDebugUtilsLabelEXT == nullptr) {
+        return;
+    }
+    vkCmdEndDebugUtilsLabelEXT(cmd);
 }
 
 void VulkanDevice::deinit() {

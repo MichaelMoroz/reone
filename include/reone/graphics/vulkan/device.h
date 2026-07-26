@@ -74,6 +74,25 @@ public:
      */
     void waitIdle() const { vkDeviceWaitIdle(_device.device); }
 
+    /**
+     * Name a Vulkan object, so a capture shows "g-buffer diffuse" rather than
+     * VkImage 0x43. Costs nothing when the debug utils extension is absent.
+     */
+    void setObjectName(VkObjectType type, uint64_t handle, const std::string &name) const;
+
+    /**
+     * Open and close a labelled region in a command buffer, which is what a
+     * graphics debugger groups its event list by.
+     *
+     * Prefer VulkanDebugScope over calling these directly - it cannot leave a
+     * region open on an early return.
+     */
+    void beginLabel(VkCommandBuffer cmd, const char *name, const glm::vec3 &color) const;
+    void endLabel(VkCommandBuffer cmd) const;
+
+    /** Whether labels and names actually reach anything. */
+    bool debugUtilsAvailable() const { return _debugUtils; }
+
     /** Round @p size up to the minimum uniform buffer offset alignment. */
     VkDeviceSize alignUniform(VkDeviceSize size) const;
 
@@ -89,6 +108,8 @@ private:
     vkb::Device _device;
     VkSurfaceKHR _surface {VK_NULL_HANDLE};
     VmaAllocator _allocator {VK_NULL_HANDLE};
+
+    bool _debugUtils {false};
 
     VkQueue _graphicsQueue {VK_NULL_HANDLE};
     uint32_t _graphicsQueueFamily {0};

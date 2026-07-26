@@ -115,7 +115,8 @@ private:
     void postProcessingPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void drawOntoOutput(VkCommandBuffer cmd,
                         uint32_t globalsOffset,
-                        const std::function<void(IRenderPass &)> &callback);
+                        const std::function<void(IRenderPass &)> &callback,
+                        const char *label);
     void resolvePass(VkCommandBuffer cmd, uint32_t globalsOffset);
 };
 

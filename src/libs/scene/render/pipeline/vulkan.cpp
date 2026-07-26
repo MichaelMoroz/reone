@@ -20,6 +20,7 @@
 #include "reone/graphics/npyutil.h"
 #include "reone/graphics/options.h"
 #include "reone/graphics/uniforms.h"
+#include "reone/graphics/vulkan/debugscope.h"
 #include "reone/graphics/vulkan/descriptors.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/renderer.h"
@@ -183,6 +184,23 @@ void VulkanRenderPipeline::init() {
         vkCmdPipelineBarrier2(cmd, &dep);
     });
 
+    auto name = [&device](const VulkanImage &image, const std::string &label) {
+        device.setObjectName(VK_OBJECT_TYPE_IMAGE,
+                             reinterpret_cast<uint64_t>(image.handle()), label);
+        device.setObjectName(VK_OBJECT_TYPE_IMAGE_VIEW,
+                             reinterpret_cast<uint64_t>(image.view()), label + " view");
+    };
+    static const char *kColorNames[VulkanGBuffer::Count] = {
+        "G-buffer diffuse", "G-buffer eye normal", "G-buffer lightmap",
+        "G-buffer self-illum", "G-buffer motion"};
+    for (int i = 0; i < VulkanGBuffer::Count; ++i) {
+        name(_gbuffer->color(i), kColorNames[i]);
+    }
+    name(_gbuffer->depth(), "G-buffer depth");
+    name(*_dirShadows, "Shadow map (cascades)");
+    name(*_pointShadows, "Shadow map (cube)");
+    name(*_output, "Scene output");
+
     _inited = true;
 }
 
@@ -224,6 +242,11 @@ void VulkanRenderPipeline::shadowPass(VkCommandBuffer cmd, uint32_t globalsOffse
     auto &layout = isDirectional ? _dirShadowLayout : _pointShadowLayout;
     int layers = isDirectional ? kNumShadowCascades : kNumCubeFaces;
     uint32_t viewMask = (1u << layers) - 1u;
+
+    VulkanDebugScope scope(_renderer.device(), cmd,
+                           isDirectional ? "Shadows (directional cascades)"
+                                         : "Shadows (point light cube)",
+                           {0.2f, 0.2f, 0.5f});
 
     transitionShadowMap(cmd, image, layout, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 
@@ -279,6 +302,9 @@ void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOff
     if (callback == _passCallbacks.end()) {
         return;
     }
+
+    VulkanDebugScope scope(_renderer.device(), cmd, "Opaque geometry (G-buffer)",
+                           {0.3f, 0.6f, 0.3f});
 
     std::array<VkRenderingAttachmentInfo, VulkanGBuffer::Count> attachments {};
     for (int i = 0; i < VulkanGBuffer::Count; ++i) {
@@ -343,6 +369,9 @@ void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOff
 }
 
 void VulkanRenderPipeline::resolvePass(VkCommandBuffer cmd, uint32_t globalsOffset) {
+    VulkanDebugScope scope(_renderer.device(), cmd, "Deferred resolve",
+                           {0.9f, 0.7f, 0.3f});
+
     // Attachments become textures. Depth moves to the read-only layout it is
     // sampled from, which is also what the transparency pass afterwards needs,
     // so it stays there for the rest of the frame.
@@ -421,7 +450,10 @@ void VulkanRenderPipeline::resolvePass(VkCommandBuffer cmd, uint32_t globalsOffs
  */
 void VulkanRenderPipeline::drawOntoOutput(VkCommandBuffer cmd,
                                           uint32_t globalsOffset,
-                                          const std::function<void(IRenderPass &)> &callback) {
+                                          const std::function<void(IRenderPass &)> &callback,
+                                          const char *label) {
+    VulkanDebugScope scope(_renderer.device(), cmd, label, {0.7f, 0.4f, 0.7f});
+
     _gbuffer->transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
 
     VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
@@ -479,7 +511,7 @@ void VulkanRenderPipeline::transparencyPass(VkCommandBuffer cmd, uint32_t global
     if (callback == _passCallbacks.end()) {
         return;
     }
-    drawOntoOutput(cmd, globalsOffset, callback->second);
+    drawOntoOutput(cmd, globalsOffset, callback->second, "Transparent geometry");
 }
 
 /**
@@ -494,7 +526,7 @@ void VulkanRenderPipeline::postProcessingPass(VkCommandBuffer cmd, uint32_t glob
     if (callback == _passCallbacks.end()) {
         return;
     }
-    drawOntoOutput(cmd, globalsOffset, callback->second);
+    drawOntoOutput(cmd, globalsOffset, callback->second, "Post-processing");
 }
 
 Texture &VulkanRenderPipeline::render() {

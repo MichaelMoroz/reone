@@ -31,6 +31,9 @@
 
 #include "reone/graphics/format/tgawriter.h"
 #include "reone/graphics/window.h"
+#ifdef R_ENABLE_VULKAN
+#include "reone/graphics/vulkan/debugscope.h"
+#endif
 #include "reone/system/randomutil.h"
 #include "reone/system/stream/fileoutput.h"
 #include "reone/resource/exception/notfound.h"
@@ -545,17 +548,25 @@ void Engine::renderVulkanFrame(bool &quit) {
     VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(extent.x),
                                static_cast<uint32_t>(extent.y)}};
 
-    vkCmdBeginRendering(cmd, &rendering);
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    {
+        // Closed before endFrame ends the command buffer: a label scope that
+        // outlives recording is a validation error, not a stray marker.
+        graphics::VulkanDebugScope scope2d(_vulkanRenderer->device(), cmd,
+                                           "2D (scene composite, GUI, console)",
+                                           {0.9f, 0.9f, 0.4f});
 
-    auto &renderer2d = _vulkanRenderer->renderer2d();
-    renderer2d.begin(cmd, extent, _vulkanRenderer->swapchain().imageFormat());
-    _game->render();
-    _console->render();
-    renderer2d.end();
+        vkCmdBeginRendering(cmd, &rendering);
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    vkCmdEndRendering(cmd);
+        auto &renderer2d = _vulkanRenderer->renderer2d();
+        renderer2d.begin(cmd, extent, _vulkanRenderer->swapchain().imageFormat());
+        _game->render();
+        _console->render();
+        renderer2d.end();
+
+        vkCmdEndRendering(cmd);
+    }
 
     captureIfRequested(quit);
     _vulkanRenderer->endFrame();
