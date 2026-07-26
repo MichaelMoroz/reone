@@ -245,8 +245,15 @@ touches, and how far it moves them.
   Any object owning a VMA allocation and outliving the device must be reset in
   an explicit `deinit`, never left to its destructor.
 - **Stale shader modules.** Building *any* named target - `--target engine`,
-  `--target vulkanprobe` - skips the SPIR-V transpile. This has now cost two
-  separate investigations: three debugging probes against a module older than
+  `--target vulkanprobe` - skips the SPIR-V transpile. Separately, the
+  transpile rule used to depend only on the top-level `.slang` file, so editing
+  anything under `slang/lib/` left every `.spv` stale while the build reported
+  success. That is fixed - the rule now globs all of `slang/` - but the failure
+  mode is worth knowing, because it is silent and the measurements that follow
+  look real: a hash fix was measured as making parity *worse* when in fact only
+  the OpenGL half of it had been compiled. If a change should affect both
+  backends, confirm both actually moved before interpreting the direction.
+  This has now cost three separate investigations: three debugging probes against a module older than
   the edit, and later a texture that sampled as flat white because the sample
   was not in the compiled module at all. Build the default target, or the
   `transpile_spirv` target explicitly.

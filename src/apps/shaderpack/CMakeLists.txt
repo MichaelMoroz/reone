@@ -46,6 +46,13 @@ set(SPIRV_MODULES
     "postprocess:postVertex+gausBlur9Fragment+gausBlur13Fragment+sharpenFragment+fxaaFragment"
     "vk2d:quadVertex+imageFragment+colorFragment+fullTargetVertex+textVertex+textFragment")
 
+# Every .slang file, not just the module being compiled. A module imports from
+# slang/lib, and listing only the top-level file meant editing lib/hashedalpha
+# or lib/math left the .spv untouched while the build reported success - a
+# stale-module trap that has now cost three separate investigations, the last
+# one measuring a "fix" that was never in the binary.
+file(GLOB_RECURSE SLANG_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/slang/*.slang)
+
 if(SLANGC_EXECUTABLE)
     set(SPIRV_OUTPUTS)
     foreach(entry ${SPIRV_MODULES})
@@ -66,8 +73,7 @@ if(SLANGC_EXECUTABLE)
                 -I ${CMAKE_SOURCE_DIR}/slang
                 -target spirv -matrix-layout-column-major
                 ${entry_args} -o ${out}
-            DEPENDS ${CMAKE_SOURCE_DIR}/slang/${spv_source}.slang
-                    ${CMAKE_SOURCE_DIR}/slang/uniforms.slang
+            DEPENDS ${SLANG_SOURCES}
             COMMENT "slangc ${spv_source}.slang -> ${spv_source}.spv")
         list(APPEND SPIRV_OUTPUTS ${out})
     endforeach()

@@ -3,12 +3,27 @@ module hashedalpha;
 // Hashed alpha testing, as used for foliage and other punch-through surfaces.
 // Ported from glsl/i_hash.glsl and glsl/i_hashedalpha.glsl.
 
-float hash2(float2 p) {
-    return frac(1.0e4 * sin(17.0 * p.x + 0.1 * p.y) * (0.1 + abs(sin(13.0 * p.y + p.x))));
+// This was frac(1e4 * sin(...) * ...), matching the original GLSL. That is not
+// reproducible between backends: sin() is not bit-exact across the GLSL and
+// SPIR-V compilation paths, and multiplying by ten thousand before taking the
+// fraction turns a difference of one ulp into an unrelated number. The alpha
+// test then kept different fragments under each backend, which showed up as
+// speckle over every piece of foliage - depth and the sampled alpha agreed,
+// only the threshold did not. glsl/i_hash.glsl carries the same integer hash.
+uint hashUint(uint x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
 }
 
+/** The caller has already floored its input to a cell. */
 float hash3(float3 p) {
-    return hash2(float2(hash2(p.xy), p.z));
+    int3 c = int3(p);
+    uint h = hashUint(uint(c.x) ^ hashUint(uint(c.y) ^ hashUint(uint(c.z))));
+    return float(h) * (1.0 / 4294967296.0);
 }
 
 /** @return true when the fragment should be discarded */
