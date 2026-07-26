@@ -160,7 +160,9 @@ void Engine::init() {
 
     if (_options.randomSeed >= 0) {
         seedRandom(static_cast<uint32_t>(_options.randomSeed));
-    } else if (!_options.capturePath.empty()) {
+    } else if (isCaptureRun()) {
+        // Any run that produces something to compare needs the same sequence
+        // every time, whether it writes a screenshot, a target dump, or both.
         seedRandom(0);
     }
 
@@ -336,11 +338,17 @@ int Engine::run() {
         uint64_t ticks = clock.micros();
         auto frameTime = (ticks - _ticks) / 10e5f;
         _ticks = ticks;
-        if (!_options.capturePath.empty()) {
+        if (isCaptureRun()) {
             // A capture run exists to be compared against another one, which
             // only works if both see the same sequence of frames. Wall-clock
             // timing does not give that: the same frame number lands on
             // different animation state every run.
+            //
+            // The consequence is that such a run is not played at real speed:
+            // the simulation advances a sixtieth of a second per frame however
+            // long the frame took, so it appears fast on a light scene and slow
+            // on a heavy one. That is the point, and it does not affect what is
+            // captured.
             frameTime = 1.0f / 60.0f;
         }
         _profiler->measure(kMainThreadName, kProfilerInputTimeIndex, [this, &quit]() {
@@ -433,7 +441,7 @@ static RENDERDOC_API_1_1_2 *renderdocApi() {
 }
 
 void Engine::captureIfRequested(bool &quit) {
-    if (_options.capturePath.empty() || _captured) {
+    if (!isCaptureRun() || _captured) {
         return;
     }
     if (_frameIndex < _options.captureFrame) {
@@ -452,11 +460,13 @@ void Engine::captureIfRequested(bool &quit) {
         }
         return;
     }
-    // Read before endFrame, while the finished frame is still readable.
-    auto screenshot = _services->graphics.renderer.captureFrame();
-    auto stream = FileOutputStream(_options.capturePath);
-    TgaWriter(screenshot).save(stream);
-    info("Wrote screenshot: " + _options.capturePath);
+    if (!_options.capturePath.empty()) {
+        // Read before endFrame, while the finished frame is still readable.
+        auto screenshot = _services->graphics.renderer.captureFrame();
+        auto stream = FileOutputStream(_options.capturePath);
+        TgaWriter(screenshot).save(stream);
+        info("Wrote screenshot: " + _options.capturePath);
+    }
     _captured = true;
     dumpTargetsIfRequested();
     quit = true;
