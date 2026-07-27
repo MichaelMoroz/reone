@@ -101,6 +101,18 @@ private:
     char _warpFilter[64] {};
     std::string _pendingWarp;
 
+    struct SaveEntry {
+        std::string directory;
+        std::string name;
+        std::string area;
+        std::string module;
+        uint32_t timePlayed {0};
+    };
+    std::vector<SaveEntry> _saves;
+    bool _savesScanned {false};
+    std::string _pendingLoadGame;
+    void scanSaves();
+
     // 2DA List window
     void twoDa();
     bool _showTwoDa {false};

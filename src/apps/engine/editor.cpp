@@ -18,6 +18,9 @@
 #include "editor.h"
 #include "engine.h"
 #include "reone/game/types.h"
+#include "reone/resource/format/gffreader.h"
+#include "reone/resource/parser/gff/nfo.h"
+#include "reone/system/stream/fileinput.h"
 #include "reone/graphics/backend.h"
 #include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
@@ -197,6 +200,48 @@ void Editor::imGuiDemo() {
     ImGui::ShowDemoWindow(&_showImGuiDemo);
 }
 
+void Editor::scanSaves() {
+    _saves.clear();
+    _savesScanned = true;
+
+    auto savesPath = _engine._options.game.path / "saves";
+    std::error_code ec;
+    if (!std::filesystem::is_directory(savesPath, ec)) {
+        return;
+    }
+    for (const auto &entry : std::filesystem::directory_iterator(savesPath, ec)) {
+        if (!entry.is_directory()) {
+            continue;
+        }
+        auto nfoPath = entry.path() / "savenfo.res";
+        if (!std::filesystem::exists(nfoPath, ec)) {
+            continue;
+        }
+        try {
+            auto stream = reone::FileInputStream(nfoPath);
+            resource::GffReader reader(stream);
+            reader.load();
+            auto nfo = resource::parseNFO(*reader.root());
+            SaveEntry save;
+            save.directory = entry.path().filename().string();
+            save.name = nfo.savegameName;
+            save.area = nfo.areaName;
+            save.module = nfo.lastModule;
+            save.timePlayed = nfo.timePlayed;
+            _saves.push_back(std::move(save));
+        } catch (const std::exception &e) {
+            // A save that cannot be read is worth listing as unreadable rather
+            // than silently omitting, but not worth failing the window over.
+            SaveEntry save;
+            save.directory = entry.path().filename().string();
+            save.name = "<unreadable>";
+            _saves.push_back(std::move(save));
+        }
+    }
+    std::sort(_saves.begin(), _saves.end(),
+              [](const auto &a, const auto &b) { return a.directory < b.directory; });
+}
+
 void Editor::warp() {
     dockNext();
     ImGui::SetNextWindowSize(ImVec2(320, 480), ImGuiCond_FirstUseEver);
@@ -217,7 +262,8 @@ void Editor::warp() {
     // Loading a module tears down the scene this window is being drawn from,
     // so the choice is taken now and acted on once the frame is over.
     std::string chosen;
-    if (ImGui::BeginChild("modules")) {
+    // Bounded, so the saves below are not pushed off the bottom.
+    if (ImGui::BeginChild("modules", ImVec2(0.0f, -280.0f))) {
         for (const auto &name : game->moduleNames()) {
             if (!filter.empty() && name.find(filter) == std::string::npos) {
                 continue;
@@ -228,10 +274,55 @@ void Editor::warp() {
         }
     }
     ImGui::EndChild();
+
+    ImGui::Separator();
+    if (!_savesScanned) {
+        scanSaves();
+    }
+    if (ImGui::Button("Rescan saves")) {
+        scanSaves();
+    }
+    ImGui::SameLine();
+    ImGui::Text("%zu saves", _saves.size());
+
+    std::string chosenSave;
+    if (ImGui::BeginTable("saves", 4,
+                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                              ImGuiTableFlags_ScrollY,
+                          ImVec2(0.0f, 200.0f))) {
+        ImGui::TableSetupColumn("Name");
+        ImGui::TableSetupColumn("Area");
+        ImGui::TableSetupColumn("Module");
+        ImGui::TableSetupColumn("Played");
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableHeadersRow();
+        for (const auto &save : _saves) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (ImGui::Selectable(save.name.empty() ? save.directory.c_str() : save.name.c_str(),
+                                  false, ImGuiSelectableFlags_SpanAllColumns)) {
+                chosenSave = save.directory;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", save.directory.c_str());
+            }
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(save.area.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(save.module.c_str());
+            ImGui::TableNextColumn();
+            ImGui::Text("%u:%02u:%02u", save.timePlayed / 3600,
+                        (save.timePlayed / 60) % 60, save.timePlayed % 60);
+        }
+        ImGui::EndTable();
+    }
     ImGui::End();
 
     if (!chosen.empty()) {
         _pendingWarp = chosen;
+    }
+    if (!chosenSave.empty()) {
+        _pendingLoadGame = chosenSave;
     }
 }
 
@@ -525,6 +616,12 @@ void Editor::update(float dt) {
         auto target = std::move(_pendingWarp);
         _pendingWarp.clear();
         _engine._game->loadModule(target);
+        return;
+    }
+    if (!_pendingLoadGame.empty()) {
+        auto target = std::move(_pendingLoadGame);
+        _pendingLoadGame.clear();
+        _engine._game->loadGame(target);
         return;
     }
 
