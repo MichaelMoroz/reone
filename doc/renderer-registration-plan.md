@@ -257,11 +257,31 @@ uses them that way - `cm_baremetal` against `cm_dantne` are environment maps
 whose names describe the material, not the geometry.
 
 So a resref of `c_drdastro`, a node called `head_g`, a texture prefixed `cm_`
-or a walkmesh surface type are all evidence about what something is made of. A
-lookup from name patterns to PBR presets would give metal, glass and water the
-parameters the format never stored. It is a heuristic and will be wrong
-sometimes, which is an argument for keeping it in one table that can be
-corrected, not for spreading it through the shaders.
+or a walkmesh surface type are all evidence about what something is made of.
+
+Two tiers, in this order:
+
+**1. An authored name-to-material map.** Data, shipped with the project and
+under version control, keyed on the names above. Most specific key wins - model
+plus node beats model, which beats texture. This is the source of truth, and
+being data means a wrong assignment is a one-line fix by anyone, not a rebuild.
+
+That needs **an editor mode to maintain it**, and the registry is what makes
+one possible: it already knows every object in the frame and, with the handle,
+what each is called. So the mode is a list of what the scene actually contains,
+a material assignment per entry, and a save. The useful part is the inverse
+view - which registered objects have **no** authored entry - because that is
+the work queue, and it is measurable as a percentage rather than a feeling.
+
+**2. A heuristic for everything unmapped.** Pattern matching over the same
+names for the long tail nobody will ever hand-assign. It will be wrong
+sometimes, which is why it must be **visibly** a guess: the editor should show
+which tier decided a given surface, so an inferred material is never mistaken
+for an authored one, and so a bad guess is findable rather than merely
+suspected.
+
+Keeping both in one table rather than spreading inference through the shaders
+is what makes either correctable.
 
 Where it pays:
 
