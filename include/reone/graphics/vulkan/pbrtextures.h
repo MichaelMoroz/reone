@@ -96,6 +96,8 @@ public:
     const VulkanImage &brdfImage() const { return *_brdf; }
     const VulkanImage &irradianceArray() const { return *_irradiance; }
     const VulkanImage &prefilteredArray() const { return *_prefiltered; }
+    /** Source textures currently occupying the derived-map ring, for diagnostics. */
+    const std::map<int, Texture *> &sourceEnvMaps() const { return _envMapSources; }
 
 private:
     VulkanDevice &_device;
@@ -113,6 +115,7 @@ private:
 
     std::set<EnvMapDerivedRequest> _requests;
     std::unordered_map<std::string, int> _envMapToLayer;
+    std::map<int, Texture *> _envMapSources;
     int _nextLayer {0};
 
     void generateBRDF(VkCommandBuffer cmd, uint32_t globalsOffset);

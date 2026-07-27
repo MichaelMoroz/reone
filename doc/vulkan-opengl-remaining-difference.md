@@ -4,7 +4,8 @@ Where the two backends still disagree, how far it was chased, and what was ruled
 out along the way. Self-contained: everything needed to pick this up is here.
 
 Written after the work that closed the retro static flag, the target-dump frame
-offset, the OpenGL Slang path, SSAO, SSR, bloom, and cube-map mip chains.
+offset, the OpenGL Slang path, SSAO, SSR, bloom, cube-map mip chains, and the
+IBL storage and irradiance-LOD parity fixes described below.
 
 ## The number
 
@@ -13,14 +14,16 @@ Vulkan against OpenGL, mean absolute difference on RGB over the whole frame:
 
 | scene | difference | pixels differing | of those, exactly one level |
 |---|---|---|---|
-| danm14ab | **0.00804** | 1.58% | 94% |
-| tar_m02aa | **0.09349** | 13.22% | 77% |
+| danm14ab | **0.005771** | 0.984% | 96.59% |
+| tar_m02aa | **0.001807** | 0.345% | 93.21% |
 
-`--pbr 0` in danm14ab is 0.01747.
+`--pbr 0` in danm14ab is 0.015719 (1.953% differing pixels; 97.70%
+within one RGB level).
 
-danm14ab is at the floor. Two different shader compilers cannot be expected to
-round identically, and 94% of what differs there differs by one least
-significant bit. tar_m02aa is the outlier and is what this document is about.
+Both scenes are now at the floor. Two different shader compilers cannot be
+expected to round identically, and over 93% of tar_m02aa's differing pixels are
+within one RGB level. The large tar_m02aa outlier is closed; a fresh danm14ab
+capture confirms the fix improves both its PBR and retro paths.
 
 ## Measure it this way, or the number means nothing
 
@@ -46,85 +49,68 @@ frame stale.
 silently dropped instanced geometry - grass and hair vanished. Comparisons made
 with it on were comparing against an OpenGL that was not drawing the scene.
 
-## What the remaining tar_m02aa difference is
+## IBL storage parity fix
 
-**It is on reflective surfaces, and it is in mip generation, not mip presence.**
+OpenGL renders both derived IBL arrays into `RGB8` textures. Vulkan was using
+`R16G16B16A16_SFLOAT`: it retained the convolution's fractional results while
+OpenGL quantised after each render. The resolve therefore sampled a different
+prefiltered value at every non-base roughness level.
 
-Splitting the frame on the G-buffer's envmapped flag - bit 0 of the lightmap
-alpha, see `unpackGeometryFeatures` in `slang/pbr_resolve.slang`:
+Vulkan now uses `R8G8B8A8_UNORM` for its irradiance and prefiltered cube
+arrays. On the exact frame above this changed the output from **0.09349** to
+**0.08551**. The prefiltered maps then agreed to quantisation precision:
 
-| | pixels | difference | share of the total |
-|---|---|---|---|
-| envmapped | 81.3% | 0.11394 | **99.1%** |
-| not envmapped | 18.7% | 0.00442 | 0.9% |
+| derived target | previous mean RGB difference | current mean RGB difference |
+|---|---:|---:|
+| prefiltered mip 0 | 0.04819 | 0.00171 |
+| prefiltered mip 1 | 0.09234 | 0.00006 |
+| prefiltered mip 2 | 0.08790 | 0.00001 |
+| prefiltered mip 3 | 0.08799 | 0.00000 |
+| prefiltered mip 4 | 0.07581 | 0.00000 |
+| irradiance | 0.12181 | 0.06120 |
 
-Not a brightness artefact: the non-envmapped group is the brighter of the two,
-92.3 against 86.5, and restricting both to pixels above 32 does not move either
-figure.
+The old source-cube hypothesis was tested directly. Levels 0 through 5 of the
+active BC1 cube differ only by one RGB level, spread across their interiors
+rather than concentrated at face edges. OpenGL also exposes a final 1×1 level
+where Vulkan ends at 2×2, but adding an equivalent terminal level changed
+neither the prefilter arrays nor the frame. It is not the remaining cause.
 
-Binned by roughness, which is `clamp(mainTexSample.a, 0.2, 1.0)` and is exactly
-what selects the prefiltered mip:
+## The irradiance LOD mismatch that closed tar_m02aa
 
-| roughness | n | difference |
-|---|---|---|
-| 0.2-0.3 | 602 | 0.08084 |
-| 0.5-0.6 | 49561 | 0.03686 |
-| 0.6-0.7 | 166916 | 0.03611 |
-| 0.7-0.8 | 40396 | 0.03849 |
-| 0.8-0.9 | 199073 | 0.07402 |
-| 0.9-1.0 | 1229776 | **0.13657** |
+OpenGL's irradiance convolution uses implicit-LOD `texture(...)` lookups, whose
+direction gradients choose the source mip. Vulkan forced every lookup to
+`SampleLevel(..., 0.0)`. This does not affect prefiltering, which explicitly
+chooses its own LOD, but it changed the cosine convolution enough to remain
+visible on almost every reflective surface.
 
-Correlation with roughness is **+0.070**. Before cube mip chains were fixed it
-was **-0.33** - the error used to be worst on mirrors and is now worst on rough
-surfaces, which sample the coarsest levels at the far end of the chain.
+Vulkan now uses an implicit `Sample(...)` lookup for irradiance. Irradiance
+difference fell from **0.06120** to **0.000003**, and the final tar_m02aa frame
+from **0.08551** to **0.001807**. The remaining output difference is comparable
+to the already-upstream G-buffer difference (**0.001943**), rather than a
+distinct IBL problem.
 
-The prefiltered array agrees with that: mip 0 differs by 0.0482 while mips 1
-through 4 all sit near 0.08-0.09. Uniformly above the base level, and no longer
-the 1.3 to 2.5 they were before.
-
-## The hypothesis, and why it is not proven
-
-OpenGL builds the source cube's chain with `glGenerateMipmap`, and has
-`GL_TEXTURE_CUBE_MAP_SEAMLESS` enabled. Vulkan now builds it with successive
-`vkCmdBlitImage` at `VK_FILTER_LINEAR`, which is inherently per-face.
-
-Two ways those diverge, both compounding toward the small levels:
-
-- **Face seams.** A driver's `glGenerateMipmap` on a seamless cube map may
-  filter across face boundaries. A per-face blit clamps at the edge. Note that
-  Vulkan *sampling* is seamless by specification - there is no toggle and none
-  is needed. This is only about generation.
-- **Accumulated rounding.** Each level is generated from the one before, so any
-  per-level difference compounds. This matches the error being largest at the
-  coarsest levels.
-
-**Neither is confirmed.** The way to tell them apart is to dump the source
-environment cube's own chain level by level on both backends and look at where
-the error sits: concentrated at face seams means the first, spread uniformly
-across each face means the second. An attempt at that plumbing was made and
-abandoned - the Vulkan side emitted nothing, because the recorded derived source
-was not a cube at dump time. That is the next step if this is picked up.
-
-If it turns out to be seams, matching OpenGL means writing a seam-aware
-downsample pass rather than blitting, to reproduce behaviour the GL driver does
-not document. That is a lot of code for roughly 0.09 in one scene, which is why
-it stops here rather than being closed.
+The old source-cube hypothesis was also tested directly. Levels 0 through 5 of
+the active BC1 cube differ only by one RGB level, spread across their interiors
+rather than concentrated at face edges. OpenGL also exposes a final 1×1 level
+where Vulkan ends at 2×2, but adding an equivalent terminal level changed
+neither the derived maps nor the frame.
 
 ## What was ruled out, so it is not re-investigated
 
 Each of these was tested rather than reasoned about, and each is a dead end.
 
-- **The IBL convolutions.** `prefilterFragment` in `slang/pbr_ibl.slang` and
-  `glsl/f_pbr_prefilter.glsl` are character for character the same algorithm -
-  same 1024 samples, same `resolution = 512.0`, same GGX, Hammersley and
-  mip-selection formula. So are the irradiance pair.
+- **The IBL convolution mathematics.** The prefilter pair has the same 1024
+  samples, `resolution = 512.0`, GGX, Hammersley and mip-selection formula.
+  The irradiance sampling-LOD difference was real and is fixed above.
 - **Prefiltered array allocation and LOD mapping.** Both backends allocate five
   mips at 128/64/32/16/8, both write roughness as `mip / 4`, both resolve with
-  `roughness * kMaxReflectionLOD`. No mismatch.
-- **Missing 2D texture mips.** Suppressing `glGenerateMipmap` on OpenGL moved its
-  output by exactly **0.0000**: the game's 2D textures are TPCs carrying authored
-  chains that both backends upload. This says nothing about cube textures, which
-  took a different upload path - that one was a real bug and is fixed.
+  `roughness * kMaxReflectionLOD`, and both now store the result as 8-bit
+  normalised RGB(A). The previous half-float Vulkan allocation was a mismatch
+  and is fixed.
+- **Missing 2D texture mips in tar_m02aa.** The relevant environment sources are
+  cube maps, so completing Vulkan's generated uncompressed 2D chains does not
+  move this frame. The 2D upload path now nevertheless follows OpenGL's rule:
+  generate a chain only when no authored chain is present.
 - **DXT1 semantics.** OpenGL uses `GL_COMPRESSED_RGB_S3TC_DXT1_EXT` and Vulkan
   `VK_FORMAT_BC1_RGBA_UNORM_BLOCK`, which differ on three-colour blocks. Switching
   Vulkan to `BC1_RGB` produced **bit-identical** output in all three scenes. The
@@ -134,10 +120,6 @@ Each of these was tested rather than reasoned about, and each is a dead end.
   replaced the sine hash.
 - **Sampler state.** Filters, wrap modes, LOD clamps and anisotropy are built
   from the same `Texture::Properties` on both sides.
-- **An intensity difference.** On envmapped pixels a best-fit multiplicative
-  scale gives k = 1.0014 with residual 0.414, and a best-fit offset +0.120 with
-  residual 0.414 - both worse than the uncorrected 0.337 measured at the time.
-  Whatever this is, it is structured, not a gain.
 
 ## Smaller known differences, unrelated to the above
 
@@ -155,9 +137,12 @@ Each of these was tested rather than reasoned about, and each is a dead end.
 
 `--dumptargets <dir>` writes every exposed target as `.npy`. On the PBR path that
 now includes the G-buffer, SSAO, SSR, the deferred highlights, the OIT pair, the
-output, the irradiance array, and the prefiltered array per mip. Cube arrays are
+output, the irradiance array, the prefiltered array per mip, and every source
+environment map that occupies a derived IBL layer. Cube arrays are
 unrolled face after face, layer 0 +X through -Z first, with Vulkan's row order
-normalised to OpenGL's so the two subtract directly.
+normalised to OpenGL's so the two subtract directly. Source environment maps
+are named `environment_map_layer<N>_mip<M>.npy`; BC1 and BC3 sources are decoded
+to RGBA8 in the Vulkan dump so their texels compare directly with OpenGL.
 
 Validate a single pass against **its own** backend's frame with the feature off,
 never against the other backend - a pass inherits whatever difference preceded

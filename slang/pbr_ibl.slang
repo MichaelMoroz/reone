@@ -87,6 +87,23 @@ float3 sampleEnvironment(float3 direction, float lod) {
     return sEnvMap.SampleLevel(uv, lod).rgb;
 }
 
+/**
+ * The irradiance convolution intentionally follows the OpenGL shader's
+ * implicit texture lookup. Its source direction varies across the rendered
+ * cube face, so the sampler's derivatives select the same source LOD GL uses.
+ * The prefilter convolution below is different: its sample direction is part
+ * of the integration and explicitly chooses a LOD from the sample solid angle.
+ */
+float3 sampleEnvironment(float3 direction) {
+    if (isFeatureEnabled(kFeatureEnvMapCube)) {
+        return sEnvMapCube.Sample(direction).rgb;
+    }
+    float3 d = normalize(-direction);
+    float2 uv = float2(0.5 + atan2(d.x, d.z) / (2.0 * kPi),
+                       0.5 - asin(d.y) / kPi);
+    return sEnvMap.Sample(uv).rgb;
+}
+
 /** Van der Corput radical inverse, the second dimension of a Hammersley set. */
 float radicalInverseVdC(uint bits) {
     bits = (bits << 16u) | (bits >> 16u);
@@ -184,7 +201,7 @@ float4 irradianceFragment(Varyings input) : SV_Target {
             float3 sampleVec = tangentSample.x * right +
                                tangentSample.y * up +
                                tangentSample.z * N;
-            irradiance += sampleEnvironment(sampleVec, 0.0) * cos(theta) * sin(theta);
+            irradiance += sampleEnvironment(sampleVec) * cos(theta) * sin(theta);
             samples += 1.0;
         }
     }

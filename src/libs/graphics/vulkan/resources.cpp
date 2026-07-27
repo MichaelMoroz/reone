@@ -392,28 +392,46 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
                                 false, 1, static_cast<uint32_t>(subresources.size()),
                                 subresources);
     } else {
-        widened.reserve(1 + layer.mips.size());
+        uint32_t authoredMips = 0;
+        while (authoredMips < layer.mips.size()) {
+            const auto &level = layer.mips[authoredMips];
+            if (!level || level->empty()) {
+                break;
+            }
+            ++authoredMips;
+        }
+        uint32_t fullMipCount = 1;
+        for (int size = std::max(texture.width(), texture.height()); size > 1; size >>= 1) {
+            ++fullMipCount;
+        }
+        // This is the 2D counterpart of the cube/layered path above. OpenGL
+        // calls glGenerateMipmap for an uncompressed texture that did not ship
+        // a chain, including ordinary 2D environment maps.
+        // Leaving Vulkan at level zero makes every explicit source LOD in the
+        // IBL prefilter clamp to that sharp base image instead.
+        bool generateMips = authoredMips == 0 && fullMipCount > 1;
+        uint32_t mipCount = authoredMips > 0 ? authoredMips + 1
+                                             : (generateMips ? fullMipCount : 1);
+        widened.reserve(mipCount);
         widened.push_back(uploadPixels(*layer.pixels, texture.pixelFormat(),
                                        texture.width(), texture.height()));
         subresources.push_back({widened.back().data(),
                                 static_cast<VkDeviceSize>(widened.back().size()), 0, 0});
-        uint32_t mip = 1;
-        for (const auto &level : layer.mips) {
-            if (!level || level->empty()) {
-                break;
-            }
+        for (uint32_t mip = 1; mip <= authoredMips; ++mip) {
+            const auto &level = layer.mips[mip - 1];
             widened.push_back(uploadPixels(*level, texture.pixelFormat(),
                                            std::max(1, texture.width() >> mip),
                                            std::max(1, texture.height() >> mip)));
             subresources.push_back({widened.back().data(),
                                     static_cast<VkDeviceSize>(widened.back().size()),
                                     0, mip});
-            ++mip;
         }
         image->initSampledChain({texture.width(), texture.height()},
                                 uploadFormat(texture.pixelFormat()),
-                                false, 1, static_cast<uint32_t>(subresources.size()),
-                                subresources);
+                                false, 1, mipCount, subresources, generateMips);
+        auto chain = generateMips ? "generated" : (authoredMips ? "authored" : "base-level");
+        debug("Vulkan: uploaded " + std::string(chain) + " mip chain for " + texture.name(),
+              LogChannel::Graphics);
     }
     image->setSampler(_samplers.get(texture.properties()));
     debug("Vulkan: uploaded texture " + texture.name(), LogChannel::Graphics);

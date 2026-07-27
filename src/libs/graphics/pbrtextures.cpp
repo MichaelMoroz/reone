@@ -151,6 +151,7 @@ void PBRTextures::refreshEnvMapDerived(const EnvMapDerivedRequest &request) {
     refreshIrradianceMap(request, _envMapDerivedLayer);
     refreshPrefilteredEnvMap(request, _envMapDerivedLayer);
     _envMapToDerivedLayer.insert({request.texture.name(), _envMapDerivedLayer});
+    _envMapSources[_envMapDerivedLayer] = &request.texture;
     if (++_envMapDerivedLayer == kMaxEnvMapDerivedLayers) {
         _envMapDerivedLayer = 0;
     }

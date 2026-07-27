@@ -25,6 +25,7 @@
 #include "reone/graphics/textureregistry.h"
 #include "reone/graphics/textureutil.h"
 #include "reone/graphics/uniforms.h"
+#include "reone/system/logutil.h"
 #include "reone/scene/render/pass/pbr.h"
 #include "reone/system/checkutil.h"
 #include "reone/system/randomutil.h"
@@ -358,6 +359,62 @@ void PBRRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
     for (int mip = 0; mip < 5; ++mip) {
         dumpCubeArray(("prefiltered_env_map_array_mip" + std::to_string(mip)).c_str(),
                       _pbrTextures.prefilteredEnvMapArray(), mip, 128, 16);
+    }
+
+    // The IBL arrays show that a derived map differs, but not whether its
+    // source did. Keep the source shape intact here: tar_m02aa uses ordinary
+    // 2D environment maps as well as cube maps, so treating every source as a
+    // cube produced an all-black, useless diagnostic.
+    auto dumpSourceEnvMap = [&dir](int layer, const Texture &texture) {
+        if (!texture.is2D() && !texture.isCubeMap()) {
+            warn("Cannot dump environment source '" + texture.name() + "': unsupported texture shape",
+                 LogChannel::Graphics);
+            return;
+        }
+        auto target = texture.isCubeMap() ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
+        auto levelTarget = texture.isCubeMap() ? GL_TEXTURE_CUBE_MAP_POSITIVE_X : GL_TEXTURE_2D;
+        int faces = texture.isCubeMap() ? kNumCubeFaces : 1;
+        glBindTexture(target, texture.nameGL());
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        for (int mip = 0;; ++mip) {
+            int size = 0;
+            glGetTexLevelParameteriv(levelTarget, mip, GL_TEXTURE_WIDTH, &size);
+            if (size == 0) {
+                break;
+            }
+            constexpr int kChannels = 4;
+            std::vector<uint8_t> source(size * size * kChannels * faces);
+            std::vector<uint8_t> flipped(source.size());
+            size_t faceBytes = static_cast<size_t>(size) * size * kChannels;
+            size_t rowBytes = static_cast<size_t>(size) * kChannels;
+            if (texture.isCubeMap()) {
+                // glGetTexImage reads one cube face at a time. Passing the
+                // aggregate GL_TEXTURE_CUBE_MAP target merely leaves the
+                // caller's buffer untouched on this driver.
+                for (int face = 0; face < faces; ++face) {
+                    glGetTexImage(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, mip,
+                                  GL_RGBA, GL_UNSIGNED_BYTE,
+                                  source.data() + face * faceBytes);
+                }
+            } else {
+                glGetTexImage(target, mip, GL_RGBA, GL_UNSIGNED_BYTE, source.data());
+            }
+            for (int face = 0; face < faces; ++face) {
+                for (int y = 0; y < size; ++y) {
+                    std::memcpy(flipped.data() + face * faceBytes + y * rowBytes,
+                                source.data() + face * faceBytes + (size - 1 - y) * rowBytes,
+                                rowBytes);
+                }
+            }
+            auto name = "environment_map_layer" + std::to_string(layer) +
+                        "_mip" + std::to_string(mip);
+            writeNpy(dir / (name + ".npy"), flipped.data(), size, size * faces,
+                     kChannels, NpyType::UInt8);
+        }
+        glBindTexture(target, 0);
+    };
+    for (const auto &[layer, texture] : _pbrTextures.sourceEnvMaps()) {
+        dumpSourceEnvMap(layer, *texture);
     }
 }
 

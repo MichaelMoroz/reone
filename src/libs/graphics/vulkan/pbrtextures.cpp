@@ -56,12 +56,12 @@ void VulkanPBRTextures::init() {
 
     _irradiance = std::make_unique<VulkanImage>(_device);
     _irradiance->initCubeArrayAttachment({kIrradianceSize, kIrradianceSize},
-                                         VK_FORMAT_R16G16B16A16_SFLOAT,
+                                         VK_FORMAT_R8G8B8A8_UNORM,
                                          kMaxDerivedLayers, 1);
 
     _prefiltered = std::make_unique<VulkanImage>(_device);
     _prefiltered->initCubeArrayAttachment({kPrefilteredSize, kPrefilteredSize},
-                                          VK_FORMAT_R16G16B16A16_SFLOAT,
+                                          VK_FORMAT_R8G8B8A8_UNORM,
                                           kMaxDerivedLayers, kNumPrefilteredMips);
 
     _device.setObjectName(VK_OBJECT_TYPE_IMAGE,
@@ -122,6 +122,7 @@ void VulkanPBRTextures::deinit() {
     _prefiltered.reset();
     _requests.clear();
     _envMapToLayer.clear();
+    _envMapSources.clear();
     // Reset the generation state too, so a re-init starts from nothing rather
     // than believing a BRDF table it no longer owns is still there.
     _brdfGenerated = false;
@@ -197,6 +198,7 @@ void VulkanPBRTextures::process(VkCommandBuffer cmd, uint32_t globalsOffset) {
                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     _envMapToLayer[envMap.name()] = layer;
+    _envMapSources[layer] = &envMap;
     debug("Vulkan: derived environment map " + envMap.name() + " into layer " +
               std::to_string(layer),
           LogChannel::Graphics);

@@ -106,6 +106,9 @@ public:
         return *_prefilteredEnvMapArray;
     }
 
+    /** Source textures currently occupying the derived-map ring, for diagnostics. */
+    const std::map<int, Texture *> &sourceEnvMaps() const { return _envMapSources; }
+
 private:
     IContext &_context;
     IMeshRegistry &_meshRegistry;
@@ -125,6 +128,7 @@ private:
     std::vector<std::shared_ptr<Renderbuffer>> _prefilterDepthBuffers;
     std::shared_ptr<Framebuffer> _prefilterFramebuffer;
     std::map<std::string, int> _envMapToDerivedLayer;
+    std::map<int, Texture *> _envMapSources;
 
     int _envMapDerivedLayer {0};
 

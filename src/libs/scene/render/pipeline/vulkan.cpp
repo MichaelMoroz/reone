@@ -19,6 +19,7 @@
 
 #include "reone/graphics/npyutil.h"
 #include "reone/graphics/options.h"
+#include "reone/graphics/dxtutil.h"
 #include "reone/graphics/textureutil.h"
 #include "reone/graphics/textureregistry.h"
 #include "reone/graphics/uniforms.h"
@@ -1669,6 +1670,74 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
         for (int mip = 0; mip < pbr.prefilteredArray().mipLevels(); ++mip) {
             dumpCubeArray(("prefiltered_env_map_array_mip" + std::to_string(mip)).c_str(),
                           pbr.prefilteredArray(), mip, 16 * 6);
+        }
+
+        auto dumpSourceEnvMap = [&dir, this](int layer, const Texture &texture) {
+            if (!texture.is2D() && !texture.isCubeMap()) {
+                warn("Cannot dump environment source '" + texture.name() +
+                         "': unsupported texture shape",
+                     LogChannel::Graphics);
+                return;
+            }
+            const auto &image = _renderer.resources().get(texture);
+            auto format = dumpFormatFor(image.format());
+            bool compressed = image.format() == VK_FORMAT_BC1_RGBA_UNORM_BLOCK ||
+                              image.format() == VK_FORMAT_BC3_UNORM_BLOCK;
+            // The OpenGL counterpart explicitly widens every source to RGBA8.
+            // Decode BC sources to that same layout before writing the dump.
+            if ((!format || format->channels != 4 || format->type != NpyType::UInt8) && !compressed) {
+                warn("Cannot dump environment source '" + texture.name() +
+                         "': unsupported Vulkan format",
+                     LogChannel::Graphics);
+                return;
+            }
+            uint32_t layers = texture.isCubeMap() ? kNumCubeFaces : 1;
+            for (int mip = 0; mip < image.mipLevels(); ++mip) {
+                auto raw = image.readBack(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, mip, layers);
+                auto extent = glm::max(glm::ivec2(1), image.extent() >> mip);
+                if (compressed) {
+                    size_t blockBytes = image.format() == VK_FORMAT_BC1_RGBA_UNORM_BLOCK ? 8 : 16;
+                    size_t faceBytes = static_cast<size_t>((extent.x + 3) / 4) *
+                                       ((extent.y + 3) / 4) * blockBytes;
+                    std::vector<uint8_t> decoded(static_cast<size_t>(extent.x) * extent.y * layers * 4);
+                    std::vector<uint32_t> pixels(static_cast<size_t>(extent.x) * extent.y);
+                    for (uint32_t face = 0; face < layers; ++face) {
+                        if (image.format() == VK_FORMAT_BC1_RGBA_UNORM_BLOCK) {
+                            decompressDXT1(extent.x, extent.y, raw.data() + face * faceBytes,
+                                           pixels.data());
+                        } else {
+                            decompressDXT5(extent.x, extent.y, raw.data() + face * faceBytes,
+                                           pixels.data());
+                        }
+                        for (size_t i = 0; i < pixels.size(); ++i) {
+                            auto pixel = pixels[i];
+                            auto *dst = decoded.data() + (static_cast<size_t>(face) * pixels.size() + i) * 4;
+                            dst[0] = (pixel >> 24) & 0xff;
+                            dst[1] = (pixel >> 16) & 0xff;
+                            dst[2] = (pixel >> 8) & 0xff;
+                            dst[3] = image.format() == VK_FORMAT_BC1_RGBA_UNORM_BLOCK ? 0xff : pixel & 0xff;
+                        }
+                    }
+                    raw = std::move(decoded);
+                }
+                std::vector<uint8_t> flipped(raw.size());
+                size_t rowBytes = raw.size() / (static_cast<size_t>(layers) * extent.y);
+                size_t faceBytes = rowBytes * extent.y;
+                for (uint32_t face = 0; face < layers; ++face) {
+                    for (int y = 0; y < extent.y; ++y) {
+                        std::memcpy(flipped.data() + face * faceBytes + y * rowBytes,
+                                    raw.data() + face * faceBytes + (extent.y - 1 - y) * rowBytes,
+                                    rowBytes);
+                    }
+                }
+                auto name = "environment_map_layer" + std::to_string(layer) +
+                            "_mip" + std::to_string(mip);
+                writeNpy(dir / (name + ".npy"), flipped.data(), extent.x,
+                         extent.y * static_cast<int>(layers), 4, NpyType::UInt8);
+            }
+        };
+        for (const auto &[layer, texture] : pbr.sourceEnvMaps()) {
+            dumpSourceEnvMap(layer, *texture);
         }
     }
     info("Dumped " + std::to_string(entries.size()) + " render targets to " + dir.string(),

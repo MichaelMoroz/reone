@@ -526,6 +526,18 @@ void VulkanImage::initSampledChain(glm::ivec2 extent,
     });
 }
 
+/** The bytes a tightly packed image copy occupies, including BC blocks. */
+static VkDeviceSize imageSize(VkFormat format, glm::ivec2 extent, uint32_t layers) {
+    switch (format) {
+    case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
+        return static_cast<VkDeviceSize>((extent.x + 3) / 4) * ((extent.y + 3) / 4) * layers * 8;
+    case VK_FORMAT_BC3_UNORM_BLOCK:
+        return static_cast<VkDeviceSize>((extent.x + 3) / 4) * ((extent.y + 3) / 4) * layers * 16;
+    default:
+        return static_cast<VkDeviceSize>(extent.x) * extent.y * layers * texelSize(format);
+    }
+}
+
 void VulkanImage::initDepthLayered(glm::ivec2 extent, VkFormat format, int layers, bool cube) {
     _extent = extent;
     _format = format;
@@ -809,7 +821,7 @@ void VulkanImage::initDepth(glm::ivec2 extent, VkFormat format) {
 
 std::vector<uint8_t> VulkanImage::readBack(VkImageLayout layout, bool depth) const {
     auto aspect = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-    VkDeviceSize size = static_cast<VkDeviceSize>(_extent.x) * _extent.y * texelSize(_format);
+    VkDeviceSize size = imageSize(_format, _extent, 1);
 
     VulkanBuffer staging(_device);
     staging.initHostVisible(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
@@ -861,7 +873,7 @@ std::vector<uint8_t> VulkanImage::readBack(VkImageLayout layout, bool depth) con
 std::vector<uint8_t> VulkanImage::readBack(VkImageLayout layout, uint32_t mip,
                                            uint32_t layers) const {
     auto extent = glm::max(glm::ivec2(1), _extent >> static_cast<int>(mip));
-    VkDeviceSize size = static_cast<VkDeviceSize>(extent.x) * extent.y * layers * texelSize(_format);
+    VkDeviceSize size = imageSize(_format, extent, layers);
 
     VulkanBuffer staging(_device);
     staging.initHostVisible(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
