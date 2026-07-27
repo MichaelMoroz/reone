@@ -94,6 +94,10 @@ public:
      */
     virtual std::vector<RenderTargetInfo> targets() const = 0;
 
+    virtual void *renderTargetPreview(const std::string &name, int mode, float scale) {
+        return nullptr;
+    }
+
     /**
      * Write every exposed target into @p dir, one .npy per target.
      *

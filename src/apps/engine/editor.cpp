@@ -17,6 +17,7 @@
 
 #include "editor.h"
 #include "engine.h"
+#include "reone/game/types.h"
 #include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/mesh.h"
@@ -238,7 +239,12 @@ void Editor::renderTargets() {
         return;
     }
     if (_rtScene.empty() || sceneNames.count(_rtScene) == 0) {
-        _rtScene = *sceneNames.begin();
+        // The first name alphabetically is a portrait scene, which is only
+        // rendered while a portrait is on screen and so usually has no
+        // pipeline at all. Landing there shows an empty panel and reads as the
+        // viewer being broken, so prefer the scene the game is actually in.
+        auto main = sceneNames.find(game::kSceneMain);
+        _rtScene = main != sceneNames.end() ? *main : *sceneNames.begin();
     }
     if (ImGui::BeginCombo("Scene", _rtScene.c_str())) {
         for (const auto &name : sceneNames) {
@@ -296,7 +302,11 @@ void Editor::renderTargets() {
     }
 
     _rtSource = selected->texture;
-    if (_rtPreviewColor) {
+    auto preview = pipeline->renderTargetPreview(selected->name, _rtMode, _rtScale);
+    if (preview) {
+        ImGui::Image(reinterpret_cast<ImTextureID>(preview),
+                     ImVec2(kPreviewWidth, kPreviewHeight));
+    } else if (_rtPreviewColor) {
         // Flipped vertically: OpenGL's origin is bottom-left, ImGui's is top-left.
         ImGui::Image(
             static_cast<ImTextureID>(_rtPreviewColor->nameGL()),

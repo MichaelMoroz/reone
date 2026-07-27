@@ -31,6 +31,8 @@
 #include "reone/scene/render/pass/vulkan.h"
 #include "reone/system/logutil.h"
 
+#include "imgui_impl_vulkan.h"
+
 using namespace reone::graphics;
 
 namespace reone {
@@ -344,6 +346,14 @@ void VulkanRenderPipeline::deinit() {
     if (!_inited) {
         return;
     }
+    // The descriptor owns a reference to the preview view, so release it
+    // before that view. Engine teardown keeps ImGui alive until its pipelines
+    // have done the same.
+    if (_preview && _preview->imguiTexture) {
+        ImGui_ImplVulkan_RemoveTexture(
+            static_cast<VkDescriptorSet>(_preview->imguiTexture));
+    }
+    _preview.reset();
     // Deregistered before the image goes: the registry holds a raw pointer to
     // it, keyed on the Texture, and would outlive both.
     if (_outputHandle) {
@@ -974,6 +984,8 @@ Texture &VulkanRenderPipeline::render() {
     dep.pImageMemoryBarriers = &toRead;
     vkCmdPipelineBarrier2(cmd, &dep);
 
+    previewPass(cmd, globalsOffset);
+
     _renderer.resources().registerExternal(*_outputHandle, *_frameImage);
     return *_outputHandle;
 }
@@ -1051,33 +1063,135 @@ static bool isBGRA(VkFormat format) {
     }
 }
 
+std::vector<VulkanRenderPipeline::Target> VulkanRenderPipeline::targetEntries() const {
+    if (!_inited) {
+        return {};
+    }
+    std::vector<Target> entries;
+    static const char *kDisplayNames[VulkanGBuffer::Count] = {
+        "G-buffer diffuse", "G-buffer eye normal", "G-buffer lightmap",
+        "G-buffer self-illum", "G-buffer motion"};
+    static const char *kDumpNames[VulkanGBuffer::Count] = {
+        "g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_lightmap",
+        "g_buffer_self_illum", "g_buffer_motion"};
+    for (int i = 0; i < VulkanGBuffer::Count; ++i) {
+        auto kind = i == VulkanGBuffer::EyeNormal ? RenderTargetKind::EyeNormal :
+                    i == VulkanGBuffer::Motion ? RenderTargetKind::Motion :
+                                                  RenderTargetKind::Color;
+        entries.push_back({kDisplayNames[i], kDumpNames[i], kind, &_gbuffer->color(i),
+                           _gbuffer->colorLayout(), false});
+    }
+    entries.push_back({"G-buffer depth", "g_buffer_depth", RenderTargetKind::Depth,
+                       &_gbuffer->depth(), _gbuffer->depthLayout(), true});
+    entries.push_back({"OIT accum", "oit_accum", RenderTargetKind::Color,
+                       _oitAccum.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
+    entries.push_back({"OIT revealage", "oit_revealage", RenderTargetKind::Color,
+                       _oitRevealage.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
+    entries.push_back({"Output", "output", RenderTargetKind::Color,
+                       _frameImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
+    return entries;
+}
+
+void *VulkanRenderPipeline::renderTargetPreview(const std::string &name, int mode, float scale) {
+    auto entries = targetEntries();
+    if (std::none_of(entries.begin(), entries.end(), [&name](const auto &entry) {
+            return entry.name == name;
+        })) {
+        return nullptr;
+    }
+    if (!_preview) {
+        _preview = std::make_unique<Preview>();
+        _preview->image = std::make_unique<VulkanImage>(_renderer.device());
+        _preview->image->initColorAttachment({480, 360}, VK_FORMAT_R8G8B8A8_UNORM);
+        _preview->image->setSampler(
+            _renderer.resources().samplers().get(getTextureProperties(TextureUsage::ColorBuffer)));
+        _renderer.device().immediateSubmit([this](VkCommandBuffer cmd) {
+            transitionColorImage(cmd, *_preview->image, VK_IMAGE_LAYOUT_UNDEFINED,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        });
+        _preview->imguiTexture = ImGui_ImplVulkan_AddTexture(
+            _preview->image->sampler(), _preview->image->view(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    _preview->target = name;
+    _preview->mode = mode;
+    _preview->scale = scale;
+    return _preview->imguiTexture;
+}
+
+void VulkanRenderPipeline::previewPass(VkCommandBuffer cmd, uint32_t globalsOffset) {
+    if (!_preview) {
+        return;
+    }
+    auto entries = targetEntries();
+    auto selected = std::find_if(entries.begin(), entries.end(), [this](const auto &entry) {
+        return entry.name == _preview->target;
+    });
+    if (selected == entries.end()) {
+        return;
+    }
+
+    VulkanDebugScope scope(_renderer.device(), cmd, "Render target preview", {0.5f, 0.7f, 0.9f});
+    transitionColorImage(cmd, *_preview->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    attachment.imageView = _preview->image->view();
+    attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = {480, 360};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &attachment;
+
+    VulkanPipelineCache::Key key;
+    key.module = kPostProcessModule;
+    key.vertexEntry = "postVertex";
+    key.fragmentEntry = "debugTextureFragment";
+    key.colorFormats = {_preview->image->format()};
+    auto &pipeline = _renderer.pipelines().get(key);
+
+    ScreenEffectUniforms screenEffect;
+    screenEffect.clipNear = _uniforms.globals().clipNear;
+    screenEffect.clipFar = _uniforms.globals().clipFar;
+    // These fields are otherwise irrelevant to this pass and avoid another
+    // uniform block solely for the two viewer controls.
+    screenEffect.ssaoSampleRadius = static_cast<float>(_preview->mode);
+    screenEffect.ssrBias = _preview->scale;
+    auto screenEffectOffset = _renderer.uniformRing().push(screenEffect);
+    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+    offsets[UniformBlockBindingPoints::screenEffect] = screenEffectOffset;
+    auto sourceSet = _renderer.descriptors().acquireTextureSet(
+        _renderer.uniformRing().frame(), selected->image);
+    VkViewport viewport {0.0f, 0.0f, 480.0f, 360.0f, 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {480, 360}};
+
+    vkCmdBeginRendering(cmd, &rendering);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    auto uniformSet = _renderer.descriptors().uniformSet(_renderer.uniformRing().frame());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                            VulkanDescriptors::kUniformSet, 1, &uniformSet,
+                            static_cast<uint32_t>(offsets.size()), offsets.data());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                            VulkanDescriptors::kTextureSet, 1, &sourceSet, 0, nullptr);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+    transitionColorImage(cmd, *_preview->image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
 void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
     if (!_inited) {
         return;
     }
     std::filesystem::create_directories(dir);
 
-    struct Entry {
-        const char *name;
-        const VulkanImage *image;
-        VkImageLayout layout;
-        bool depth;
-    };
-    std::vector<Entry> entries;
-    static const char *kColorNames[VulkanGBuffer::Count] = {
-        "g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_lightmap",
-        "g_buffer_self_illum", "g_buffer_motion"};
-    for (int i = 0; i < VulkanGBuffer::Count; ++i) {
-        entries.push_back({kColorNames[i], &_gbuffer->color(i), _gbuffer->colorLayout(), false});
-    }
-    entries.push_back({"g_buffer_depth", &_gbuffer->depth(), _gbuffer->depthLayout(), true});
-    // The output has been handed to the compositor by the time a dump runs, and
-    // the OIT targets were left sampleable by their resolve.
-    entries.push_back({"output", _frameImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
-    entries.push_back({"oit_accum", _oitAccum.get(),
-                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
-    entries.push_back({"oit_revealage", _oitRevealage.get(),
-                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
+    auto entries = targetEntries();
 
     for (const auto &entry : entries) {
         auto format = dumpFormatFor(entry.image->format());
@@ -1099,7 +1213,7 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
                 std::swap(raw[i], raw[i + 2]);
             }
         }
-        auto path = dir / (std::string(entry.name) + ".npy");
+        auto path = dir / (std::string(entry.dumpName) + ".npy");
         if (format->halfToFloat) {
             size_t count = raw.size() / sizeof(uint16_t);
             std::vector<float> widened(count);
@@ -1118,9 +1232,11 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
 }
 
 std::vector<RenderTargetInfo> VulkanRenderPipeline::targets() const {
-    // Nothing is exposed for inspection yet: the render target viewer is part of
-    // the ImGui editor, which does not run on Vulkan.
-    return {};
+    std::vector<RenderTargetInfo> result;
+    for (const auto &entry : targetEntries()) {
+        result.push_back({entry.name, entry.kind, nullptr});
+    }
+    return result;
 }
 
 } // namespace scene

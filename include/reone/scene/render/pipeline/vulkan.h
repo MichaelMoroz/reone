@@ -79,6 +79,7 @@ public:
     graphics::Texture &render() override;
 
     std::vector<RenderTargetInfo> targets() const override;
+    void *renderTargetPreview(const std::string &name, int mode, float scale) override;
     void dumpTargets(const std::filesystem::path &dir) override;
 
 private:
@@ -137,6 +138,24 @@ private:
     VkDescriptorSet _oitBlendOutputSet {VK_NULL_HANDLE};
     VkDescriptorSet _oitBlendPingSet {VK_NULL_HANDLE};
 
+    struct Preview {
+        std::unique_ptr<graphics::VulkanImage> image;
+        void *imguiTexture {nullptr};
+        std::string target;
+        int mode {0};
+        float scale {1.0f};
+    };
+    std::unique_ptr<Preview> _preview;
+
+    struct Target {
+        const char *name;
+        const char *dumpName;
+        RenderTargetKind kind;
+        const graphics::VulkanImage *image;
+        VkImageLayout layout;
+        bool depth;
+    };
+
     void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset);
@@ -154,6 +173,8 @@ private:
                         const std::function<void(IRenderPass &)> &callback,
                         const char *label);
     void resolvePass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    void previewPass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    std::vector<Target> targetEntries() const;
 };
 
 } // namespace scene

@@ -397,16 +397,22 @@ void Engine::init() {
 
 void Engine::deinit() {
     _editor.reset();
+
+    // Before ImGui goes away. A render pipeline holds an ImGui descriptor set
+    // for its target preview, allocated from a pool that ImGui's shutdown
+    // destroys, so a pipeline outliving that shutdown releases a descriptor
+    // against a pool that is already gone.
+    _game.reset();
+    _gameModule.reset();
+    _guiModule.reset();
+    _sceneModule.reset();
+
     imguiShutdown();
 
     _console.reset();
     _profiler.reset();
-    _game.reset();
     _services.reset();
 
-    _gameModule.reset();
-    _guiModule.reset();
-    _sceneModule.reset();
     _resourceModule.reset();
     _scriptModule.reset();
     _movieModule.reset();

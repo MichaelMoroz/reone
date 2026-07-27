@@ -47,6 +47,34 @@ float rgbToLuma(float3 rgb) {
     return dot(rgb, float3(0.299, 0.587, 0.114));
 }
 
+/** Convert renderer-owned targets into the forms used by the target viewer. */
+[shader("fragment")]
+float4 debugTextureFragment(Varyings input) : SV_Target {
+    float4 texel = sMainTex.SampleLevel(input.uv, 0.0);
+    int mode = int(screenEffectUniforms.ssaoSampleRadius);
+    float scale = screenEffectUniforms.ssrBias;
+    float3 color;
+    if (mode == 1) {
+        float ndc = 2.0 * texel.r - 1.0;
+        float viewZ = 2.0 * screenEffectUniforms.clipNear * screenEffectUniforms.clipFar /
+            (screenEffectUniforms.clipFar + screenEffectUniforms.clipNear -
+             ndc * (screenEffectUniforms.clipFar - screenEffectUniforms.clipNear));
+        color = scale * viewZ.xxx / screenEffectUniforms.clipFar;
+    } else if (mode == 2) {
+        color = normalize(2.0 * texel.rgb - 1.0) * 0.5 + 0.5;
+    } else if (mode == 3) {
+        color = float3(0.5 + scale * texel.rg, 0.5);
+    } else if (mode == 4) {
+        float magnitude = clamp(scale * length(texel.rg), 0.0, 1.0);
+        float hue = (atan2(texel.g, texel.r) + 3.14159265359) / 6.28318530718;
+        float3 k = fmod(float3(5.0, 3.0, 1.0) + 6.0 * hue, 6.0);
+        color = magnitude * (1.0 - max(min(min(k, 4.0 - k), 1.0), 0.0));
+    } else {
+        color = scale * texel.rgb;
+    }
+    return float4(color, 1.0);
+}
+
 /**
  * Resolve the weighted-blended transparency targets onto the opaque image,
  * ported from glsl/f_oit_blend.glsl.
