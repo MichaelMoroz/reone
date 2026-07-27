@@ -5,10 +5,6 @@
 // the scene light list, the GGX/Smith/Fresnel BRDF, world ambient, gamma
 // handling, the geometry feature bits packed into the lightmap alpha, and fog.
 //
-// Stubbed, because the pipeline has no counterpart yet - each written so that
-// the term drops out rather than being approximated:
-//   - SSAO and SSR. Ambient occlusion is one.
-//
 // The important part is the shape rather than the lighting. SurfaceParams is
 // filled here from a G-buffer, and a path tracer will fill the same struct from
 // a hit record; everything downstream of it is shared. Keep that boundary.
@@ -23,6 +19,8 @@ import lib.surface;
 [[vk::binding(3, 1)]] Sampler2D sGBufLightmap;
 [[vk::binding(4, 1)]] Sampler2D sGBufSelfIllum;
 [[vk::binding(5, 1)]] Sampler2D sGBufDepth;
+[[vk::binding(7, 1)]] Sampler2D sSSAO;
+[[vk::binding(8, 1)]] Sampler2D sSSR;
 [[vk::binding(13, 1)]] Sampler2D sBRDFLUT;
 [[vk::binding(16, 1)]] SamplerCubeArray sIrradianceMapArray;
 [[vk::binding(17, 1)]] SamplerCubeArray sPrefilteredEnvMapArray;
@@ -122,8 +120,13 @@ float getFog(float3 worldPos) {
     return 1.0 - saturate(f);
 }
 
+struct ResolveOutput {
+    float4 color : SV_Target0;
+    float4 hilights : SV_Target1;
+};
+
 [shader("fragment")]
-float4 resolveFragment(Varyings input) : SV_Target {
+ResolveOutput resolveFragment(Varyings input) {
     float2 uv = input.uv;
 
     float4 mainTexSample = sGBufDiffuse.Sample(uv);
@@ -133,7 +136,10 @@ float4 resolveFragment(Varyings input) : SV_Target {
     // Nothing was drawn here: leave the clear colour alone rather than lighting
     // it, which would tint the whole background.
     if (mainTexSample.a == 0.0 && lightmapSample.a == 0.0) {
-        return float4(0.0, 0.0, 0.0, 1.0);
+        ResolveOutput output;
+        output.color = float4(0.0, 0.0, 0.0, 1.0);
+        output.hilights = float4(0.0, 0.0, 0.0, 0.0);
+        return output;
     }
 
     float3 eyePos = reconstructViewPos(uv);
@@ -162,7 +168,8 @@ float4 resolveFragment(Varyings input) : SV_Target {
     // Odyssey assets carry no roughness channel; the diffuse alpha stands in,
     // floored so that nothing turns into a perfect mirror.
     float roughness = clamp(mainTexSample.a, 0.2, 1.0);
-    float ao = 1.0;
+    // Disabled effects leave their persistent targets at their neutral terms.
+    float ao = sSSAO.Sample(uv).r;
 
     bool envmapped;
     bool shadowsEnabled;
@@ -194,6 +201,9 @@ float4 resolveFragment(Varyings input) : SV_Target {
         environment = gammaToLinear(
             sPrefilteredEnvMapArray.SampleLevel(float4(R, float(envLayer)),
                                                 roughness * kMaxReflectionLOD).rgb);
+        float4 ssrSample = sSSR.Sample(uv);
+        environment = lerp(environment, gammaToLinear(ssrSample.rgb),
+                           (1.0 - roughness) * ssrSample.a);
     }
     float3 directD = float3(0.0);
     float3 directS = float3(0.0);
@@ -265,5 +275,9 @@ float4 resolveFragment(Varyings input) : SV_Target {
 
     color = linearToGamma(color);
     color = lerp(color, globalUniforms.fogColor.rgb, fog);
-    return float4(color, 1.0);
+
+    ResolveOutput output;
+    output.color = float4(color, 1.0);
+    output.hilights = float4(selfIllumed * step(float3(0.95), color) * color, 0.0);
+    return output;
 }

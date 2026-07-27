@@ -33,6 +33,7 @@ bool VulkanResources::supported(PixelFormat format) {
     case PixelFormat::RGBA8:
     case PixelFormat::BGR8:
     case PixelFormat::BGRA8:
+    case PixelFormat::RG16F:
     case PixelFormat::DXT1:
     case PixelFormat::DXT5:
         return true;
@@ -91,6 +92,59 @@ static std::vector<uint8_t> widenToRGBA(const ByteBuffer &pixels,
         throw std::invalid_argument("Vulkan: unsupported pixel format for upload");
     }
     return out;
+}
+
+/**
+ * Texture pixels use floats as their CPU representation for the 16F formats:
+ * OpenGL converts those floats while uploading to its RG16F texture. Vulkan's
+ * RG16_SFLOAT image instead expects the IEEE half-float bits in the staging
+ * buffer, so preserve the signed noise values while narrowing them here.
+ */
+static uint16_t floatToHalf(float value) {
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    uint32_t sign = (bits >> 16) & 0x8000;
+    int exponent = static_cast<int>((bits >> 23) & 0xff) - 127 + 15;
+    uint32_t mantissa = bits & 0x7fffff;
+    if (exponent <= 0) {
+        if (exponent < -10) {
+            return static_cast<uint16_t>(sign);
+        }
+        mantissa = (mantissa | 0x800000) >> (1 - exponent);
+        return static_cast<uint16_t>(sign | ((mantissa + 0x1000) >> 13));
+    }
+    if (exponent >= 31) {
+        return static_cast<uint16_t>(sign | 0x7c00);
+    }
+    return static_cast<uint16_t>(sign | (static_cast<uint32_t>(exponent) << 10) |
+                                 ((mantissa + 0x1000) >> 13));
+}
+
+static std::vector<uint8_t> packRG16F(const ByteBuffer &pixels, int width, int height) {
+    size_t components = static_cast<size_t>(width) * height * 2;
+    std::vector<uint8_t> out(components * sizeof(uint16_t));
+    for (size_t i = 0; i < components; ++i) {
+        float value;
+        std::memcpy(&value, pixels.data() + i * sizeof(value), sizeof(value));
+        auto half = floatToHalf(value);
+        std::memcpy(out.data() + i * sizeof(half), &half, sizeof(half));
+    }
+    return out;
+}
+
+static std::vector<uint8_t> uploadPixels(const ByteBuffer &pixels,
+                                         PixelFormat format,
+                                         int width,
+                                         int height) {
+    if (format == PixelFormat::RG16F) {
+        return packRG16F(pixels, width, height);
+    }
+    return widenToRGBA(pixels, format, width, height);
+}
+
+static VkFormat uploadFormat(PixelFormat format) {
+    return format == PixelFormat::RG16F ? VK_FORMAT_R16G16_SFLOAT
+                                        : VK_FORMAT_R8G8B8A8_UNORM;
 }
 
 /**
@@ -206,8 +260,8 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
                 layers.push_back({layer.pixels->data(),
                                   static_cast<VkDeviceSize>(layer.pixels->size())});
             } else {
-                widened.push_back(widenToRGBA(*layer.pixels, texture.pixelFormat(),
-                                              texture.width(), texture.height()));
+                widened.push_back(uploadPixels(*layer.pixels, texture.pixelFormat(),
+                                               texture.width(), texture.height()));
                 layers.push_back({widened.back().data(),
                                   static_cast<VkDeviceSize>(widened.back().size())});
             }
@@ -246,7 +300,7 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
             layer = {blank.data(), layerSize};
         }
         image->initSampledLayers({texture.width(), texture.height()},
-                                 compressed ? *compressed : VK_FORMAT_R8G8B8A8_UNORM,
+                                 compressed ? *compressed : uploadFormat(texture.pixelFormat()),
                                  cube, layers);
         image->setSampler(_samplers.get(texture.properties()));
         debug("Vulkan: uploaded texture " + texture.name(), LogChannel::Graphics);
@@ -276,8 +330,8 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
                                 subresources);
     } else {
         widened.reserve(1 + layer.mips.size());
-        widened.push_back(widenToRGBA(*layer.pixels, texture.pixelFormat(),
-                                      texture.width(), texture.height()));
+        widened.push_back(uploadPixels(*layer.pixels, texture.pixelFormat(),
+                                       texture.width(), texture.height()));
         subresources.push_back({widened.back().data(),
                                 static_cast<VkDeviceSize>(widened.back().size()), 0, 0});
         uint32_t mip = 1;
@@ -285,16 +339,16 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
             if (!level || level->empty()) {
                 break;
             }
-            widened.push_back(widenToRGBA(*level, texture.pixelFormat(),
-                                          std::max(1, texture.width() >> mip),
-                                          std::max(1, texture.height() >> mip)));
+            widened.push_back(uploadPixels(*level, texture.pixelFormat(),
+                                           std::max(1, texture.width() >> mip),
+                                           std::max(1, texture.height() >> mip)));
             subresources.push_back({widened.back().data(),
                                     static_cast<VkDeviceSize>(widened.back().size()),
                                     0, mip});
             ++mip;
         }
         image->initSampledChain({texture.width(), texture.height()},
-                                VK_FORMAT_R8G8B8A8_UNORM,
+                                uploadFormat(texture.pixelFormat()),
                                 false, 1, static_cast<uint32_t>(subresources.size()),
                                 subresources);
     }

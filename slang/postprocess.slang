@@ -48,6 +48,18 @@ float rgbToLuma(float3 rgb) {
     return dot(rgb, float3(0.299, 0.587, 0.114));
 }
 
+/** The small square blur used to soften half-resolution SSAO. */
+[shader("fragment")]
+float4 boxBlur4Fragment(Varyings input) : SV_Target {
+    float3 color = float3(0.0);
+    for (int x = -2; x < 2; ++x) {
+        for (int y = -2; y < 2; ++y) {
+            color += sMainTex.SampleLevel(input.uv, 0.0, int2(x, y)).rgb;
+        }
+    }
+    return float4(color * (1.0 / 16.0), 1.0);
+}
+
 /** Convert renderer-owned targets into the forms used by the target viewer. */
 [shader("fragment")]
 float4 debugTextureFragment(Varyings input) : SV_Target {

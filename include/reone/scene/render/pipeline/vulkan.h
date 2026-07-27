@@ -41,9 +41,8 @@ namespace scene {
  * The Vulkan scene pipeline.
  *
  * At present it runs one pass - opaque geometry into the G-buffer - and
- * resolves it. Shadows, transparency, SSAO, SSR and post-processing are
- * registered by the scene graph and dropped here; each will become a pass as
- * section 3.2 of the plan works through them.
+ * resolves it. Shadows, transparency, screen-space effects and post-processing
+ * are recorded into the same command buffer as the scene graph.
  *
  * It records into the frame's command buffer rather than owning one, so the
  * scene passes and the GUI end up in the same submission. That means render()
@@ -56,12 +55,14 @@ public:
                          graphics::GraphicsOptions &options,
                          graphics::VulkanRenderer &renderer,
                          graphics::IUniforms &uniforms,
-                         graphics::IMeshRegistry &meshRegistry) :
+                         graphics::IMeshRegistry &meshRegistry,
+                         graphics::TextureRegistry &textureRegistry) :
         _targetSize(std::move(targetSize)),
         _options(options),
         _renderer(renderer),
         _uniforms(uniforms),
-        _meshRegistry(meshRegistry) {
+        _meshRegistry(meshRegistry),
+        _textureRegistry(textureRegistry) {
     }
 
     ~VulkanRenderPipeline() { deinit(); }
@@ -85,6 +86,7 @@ private:
     graphics::VulkanRenderer &_renderer;
     graphics::IUniforms &_uniforms;
     graphics::IMeshRegistry &_meshRegistry;
+    graphics::TextureRegistry &_textureRegistry;
     RenderRegistry *_registry {nullptr};
     const CameraSceneNode *_cullCamera {nullptr};
     RenderPassName _shadowPass {RenderPassName::None};
@@ -109,8 +111,13 @@ private:
 
     /** The second of two stable scene-colour allocations. */
     std::unique_ptr<graphics::VulkanImage> _ping;
-    /** Forward retro shading writes the original renderer's highlight buffer here. */
+    /** Opaque shading writes the original renderer's highlight buffer here. */
     std::unique_ptr<graphics::VulkanImage> _hilights;
+    std::unique_ptr<graphics::VulkanImage> _ssao;
+    std::unique_ptr<graphics::VulkanImage> _ssr;
+    std::unique_ptr<graphics::VulkanImage> _ssaoPing;
+    std::unique_ptr<graphics::VulkanImage> _halfPing;
+    std::array<glm::vec4, graphics::kNumSSAOSamples> _ssaoSamples;
     /**
      * The image containing the latest complete scene colour, and the image
      * available for the next full-screen pass.
@@ -137,6 +144,12 @@ private:
     VkDescriptorSet _pingAsSourceSet {VK_NULL_HANDLE};
     /** Unit 0 pointed at the highlight buffer, for blurring it in place. */
     VkDescriptorSet _hilightsAsSourceSet {VK_NULL_HANDLE};
+    VkDescriptorSet _ssaoSet {VK_NULL_HANDLE};
+    VkDescriptorSet _ssrSet {VK_NULL_HANDLE};
+    VkDescriptorSet _ssaoAsSourceSet {VK_NULL_HANDLE};
+    VkDescriptorSet _ssrAsSourceSet {VK_NULL_HANDLE};
+    VkDescriptorSet _ssaoPingAsSourceSet {VK_NULL_HANDLE};
+    VkDescriptorSet _halfPingAsSourceSet {VK_NULL_HANDLE};
     /** The OIT targets plus each possible scene-colour source. */
     VkDescriptorSet _oitBlendOutputSet {VK_NULL_HANDLE};
     VkDescriptorSet _oitBlendPingSet {VK_NULL_HANDLE};
@@ -163,6 +176,7 @@ private:
     void retroGeometryPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     /** Separable blur of the retro highlight buffer, in place. Follows retroGeometryPass. */
     void hilightsBlurPass(VkCommandBuffer cmd);
+    void screenSpaceEffectsPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     /** Resolve the OIT targets onto the opaque image. Follows transparencyPass. */

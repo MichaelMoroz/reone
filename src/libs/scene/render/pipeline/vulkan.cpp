@@ -20,6 +20,7 @@
 #include "reone/graphics/npyutil.h"
 #include "reone/graphics/options.h"
 #include "reone/graphics/textureutil.h"
+#include "reone/graphics/textureregistry.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/debugscope.h"
 #include "reone/graphics/vulkan/descriptors.h"
@@ -30,6 +31,7 @@
 #include "reone/graphics/vulkan/uniformring.h"
 #include "reone/scene/render/pass/vulkan.h"
 #include "reone/system/logutil.h"
+#include "reone/system/randomutil.h"
 
 #include "imgui_impl_vulkan.h"
 
@@ -41,6 +43,8 @@ namespace scene {
 
 static constexpr char kResolveModule[] = "pbr_resolve";
 static constexpr char kPostProcessModule[] = "postprocess";
+static constexpr char kSSAOModule[] = "pbr_ssao";
+static constexpr char kSSRModule[] = "pbr_ssr";
 
 /** What the OpenGL pipeline gives cbTransparentGeometry1 and 2. */
 static constexpr VkFormat kOITAccumFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -48,6 +52,11 @@ static constexpr VkFormat kOITRevealageFormat = VK_FORMAT_R16_SFLOAT;
 
 /** Matches the OpenGL pipeline's constant of the same name. */
 static constexpr float kSharpenAmount = 0.25f;
+static constexpr float kSSAOSampleRadius = 0.5f;
+static constexpr float kSSAOBias = 0.1f;
+static constexpr float kSSRBias = 0.25f;
+static constexpr float kSSRPixelStride = 4.0f;
+static constexpr float kSSRMaxSteps = 64.0f;
 
 /**
  * Map an OpenGL clip volume onto Vulkan's.
@@ -173,6 +182,15 @@ void VulkanRenderPipeline::init() {
 
     _hilights = std::make_unique<VulkanImage>(device);
     _hilights->initColorAttachment(_targetSize, _renderer.swapchain().imageFormat());
+    auto halfSize = _targetSize / 2;
+    _ssao = std::make_unique<VulkanImage>(device);
+    _ssao->initColorAttachment(halfSize, VK_FORMAT_R8_UNORM);
+    _ssr = std::make_unique<VulkanImage>(device);
+    _ssr->initColorAttachment(halfSize, VK_FORMAT_R8G8B8A8_UNORM);
+    _ssaoPing = std::make_unique<VulkanImage>(device);
+    _ssaoPing->initColorAttachment(halfSize, VK_FORMAT_R8_UNORM);
+    _halfPing = std::make_unique<VulkanImage>(device);
+    _halfPing->initColorAttachment(halfSize, VK_FORMAT_R8G8B8A8_UNORM);
 
     _oitAccum = std::make_unique<VulkanImage>(device);
     _oitAccum->initColorAttachment(_targetSize, kOITAccumFormat);
@@ -193,6 +211,50 @@ void VulkanRenderPipeline::init() {
     _output->setSampler(filterSampler);
     _ping->setSampler(filterSampler);
     _hilights->setSampler(filterSampler);
+    _ssao->setSampler(filterSampler);
+    _ssr->setSampler(filterSampler);
+    _ssaoPing->setSampler(filterSampler);
+    _halfPing->setSampler(filterSampler);
+
+    // Disabled effects still occupy the resolve's fixed descriptor set. Clear
+    // them to their neutral terms once so sampling them leaves today's result.
+    device.immediateSubmit([this, halfSize](VkCommandBuffer cmd) {
+        auto clear = [&](VulkanImage &image, VkClearColorValue value) {
+            transitionColorImage(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED,
+                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+            attachment.imageView = image.view();
+            attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            attachment.clearValue.color = value;
+            VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+            rendering.renderArea.extent = {static_cast<uint32_t>(halfSize.x), static_cast<uint32_t>(halfSize.y)};
+            rendering.layerCount = 1;
+            rendering.colorAttachmentCount = 1;
+            rendering.pColorAttachments = &attachment;
+            vkCmdBeginRendering(cmd, &rendering);
+            vkCmdEndRendering(cmd);
+            transitionColorImage(cmd, image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        };
+        // Ambient occlusion of one, and a reflection the resolve weights by its
+        // own alpha, so a disabled pass contributes nothing.
+        clear(*_ssao, {{1.0f, 1.0f, 1.0f, 1.0f}});
+        clear(*_ssr, {{0.0f, 0.0f, 0.0f, 0.0f}});
+        clear(*_ssaoPing, {{0.0f, 0.0f, 0.0f, 0.0f}});
+        clear(*_halfPing, {{0.0f, 0.0f, 0.0f, 0.0f}});
+    });
+
+    if (_options.ssao) {
+        for (int i = 0; i < kNumSSAOSamples; ++i) {
+            float scale = i / static_cast<float>(kNumSSAOSamples);
+            scale = glm::mix(0.1f, 1.0f, scale * scale);
+            auto sample = glm::vec3(renderRandomFloat(-1.0f, 1.0f), renderRandomFloat(-1.0f, 1.0f),
+                                    renderRandomFloat(0.0f, 1.0f));
+            _ssaoSamples[i] = glm::vec4(glm::normalize(sample) * scale, 0.0f);
+        }
+    }
     _oitAccum->setSampler(filterSampler);
     _oitRevealage->setSampler(filterSampler);
 
@@ -269,6 +331,8 @@ void VulkanRenderPipeline::init() {
     // The resolve reconstructs world position from depth, so it samples the
     // same image the geometry pass wrote.
     resolveTextures.push_back({TextureUnits::gBufDepth, &_gbuffer->depth()});
+    resolveTextures.push_back({TextureUnits::ssao, _ssao.get()});
+    resolveTextures.push_back({TextureUnits::ssr, _ssr.get()});
     resolveTextures.push_back({TextureUnits::shadowMapArray, _dirShadows.get()});
     resolveTextures.push_back({TextureUnits::shadowMapCube, _pointShadows.get()});
     auto &pbr = _renderer.pbrTextures();
@@ -285,6 +349,23 @@ void VulkanRenderPipeline::init() {
         {{TextureUnits::mainTex, _ping.get()}});
     _hilightsAsSourceSet = _renderer.descriptors().createPersistentTextureSet(
         {{TextureUnits::mainTex, _hilights.get()}});
+    _ssaoSet = _renderer.descriptors().createPersistentTextureSet(
+        {{TextureUnits::gBufDepth, &_gbuffer->depth()},
+         {TextureUnits::gBufEyeNormal, &_gbuffer->color(VulkanGBuffer::EyeNormal)},
+         {TextureUnits::noise, &_renderer.resources().get(_textureRegistry.get(TextureName::noiseRg))}});
+    _ssrSet = _renderer.descriptors().createPersistentTextureSet(
+        {{TextureUnits::mainTex, &_gbuffer->color(VulkanGBuffer::Diffuse)},
+         {TextureUnits::lightmap, &_gbuffer->color(VulkanGBuffer::Lightmap)},
+         {TextureUnits::gBufDepth, &_gbuffer->depth()},
+         {TextureUnits::gBufEyeNormal, &_gbuffer->color(VulkanGBuffer::EyeNormal)}});
+    _ssaoAsSourceSet = _renderer.descriptors().createPersistentTextureSet(
+        {{TextureUnits::mainTex, _ssao.get()}});
+    _ssrAsSourceSet = _renderer.descriptors().createPersistentTextureSet(
+        {{TextureUnits::mainTex, _ssr.get()}});
+    _ssaoPingAsSourceSet = _renderer.descriptors().createPersistentTextureSet(
+        {{TextureUnits::mainTex, _ssaoPing.get()}});
+    _halfPingAsSourceSet = _renderer.descriptors().createPersistentTextureSet(
+        {{TextureUnits::mainTex, _halfPing.get()}});
 
     _oitBlendOutputSet = _renderer.descriptors().createPersistentTextureSet(
         {{TextureUnits::mainTex, _output.get()},
@@ -368,6 +449,10 @@ void VulkanRenderPipeline::init() {
     name(*_output, "Scene colour 0");
     name(*_ping, "Scene colour 1");
     name(*_hilights, "Retro highlights");
+    name(*_ssao, "SSAO");
+    name(*_ssr, "SSR");
+    name(*_ssaoPing, "SSAO filter ping");
+    name(*_halfPing, "Half-resolution filter ping");
     name(*_oitAccum, "OIT accum");
     name(*_oitRevealage, "OIT revealage");
 
@@ -396,6 +481,10 @@ void VulkanRenderPipeline::deinit() {
     _output.reset();
     _ping.reset();
     _hilights.reset();
+    _ssao.reset();
+    _ssr.reset();
+    _ssaoPing.reset();
+    _halfPing.reset();
     _oitAccum.reset();
     _oitRevealage.reset();
     _dirShadows.reset();
@@ -682,6 +771,103 @@ void VulkanRenderPipeline::hilightsBlurPass(VkCommandBuffer cmd) {
     axis(*_ping, _pingAsSourceSet, *_hilights, {0.0f, 1.0f});
 }
 
+void VulkanRenderPipeline::screenSpaceEffectsPass(VkCommandBuffer cmd, uint32_t globalsOffset) {
+    if (!_options.ssao && !_options.ssr) {
+        return;
+    }
+    VulkanDebugScope scope(_renderer.device(), cmd, "Screen-space effects", {0.4f, 0.7f, 0.6f});
+    auto halfSize = _targetSize / 2;
+    _gbuffer->transitionColor(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    _gbuffer->transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+
+    VkViewport viewport {0.0f, 0.0f, static_cast<float>(halfSize.x), static_cast<float>(halfSize.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(halfSize.x), static_cast<uint32_t>(halfSize.y)}};
+    auto draw = [&](const char *module, const char *vertex, const char *fragment, VkFormat format,
+                    VulkanImage &destination, VkDescriptorSet textures, const ScreenEffectUniforms &screenEffect) {
+        transitionColorImage(cmd, destination, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VulkanPipelineCache::Key key;
+        key.module = module;
+        key.vertexEntry = vertex;
+        key.fragmentEntry = fragment;
+        key.colorFormats = {format};
+        auto &pipeline = _renderer.pipelines().get(key);
+        auto offset = _renderer.uniformRing().push(screenEffect);
+        VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        attachment.imageView = destination.view();
+        attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+        rendering.renderArea.extent = {static_cast<uint32_t>(halfSize.x), static_cast<uint32_t>(halfSize.y)};
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &attachment;
+        std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+        offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+        offsets[UniformBlockBindingPoints::screenEffect] = offset;
+        vkCmdBeginRendering(cmd, &rendering);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        auto uniformSet = _renderer.descriptors().uniformSet(_renderer.uniformRing().frame());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                                VulkanDescriptors::kUniformSet, 1, &uniformSet,
+                                static_cast<uint32_t>(offsets.size()), offsets.data());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                                VulkanDescriptors::kTextureSet, 1, &textures, 0, nullptr);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRendering(cmd);
+    };
+    auto filter = [&](VulkanImage &source, VkDescriptorSet sourceSet, VulkanImage &destination,
+                      VkFormat format, const char *fragment, glm::vec2 direction) {
+        transitionColorImage(cmd, source, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        ScreenEffectUniforms screenEffect;
+        screenEffect.screenResolution = glm::vec2(halfSize);
+        screenEffect.screenResolutionRcp = 1.0f / screenEffect.screenResolution;
+        screenEffect.blurDirection = direction;
+        draw(kPostProcessModule, "postVertex", fragment, format, destination, sourceSet, screenEffect);
+    };
+
+    if (_options.ssao) {
+        ScreenEffectUniforms screenEffect;
+        screenEffect.screenResolution = glm::vec2(halfSize);
+        screenEffect.screenResolutionRcp = 1.0f / screenEffect.screenResolution;
+        screenEffect.ssaoSampleRadius = kSSAOSampleRadius;
+        screenEffect.ssaoBias = kSSAOBias;
+        std::copy(_ssaoSamples.begin(), _ssaoSamples.end(), std::begin(screenEffect.ssaoSamples));
+        draw(kSSAOModule, "ssaoVertex", "ssaoFragment", VK_FORMAT_R8_UNORM, *_ssao, _ssaoSet, screenEffect);
+        filter(*_ssao, _ssaoAsSourceSet, *_ssaoPing, VK_FORMAT_R8_UNORM, "boxBlur4Fragment", {0.0f, 0.0f});
+        transitionColorImage(cmd, *_ssaoPing, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        transitionColorImage(cmd, *_ssao, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkImageBlit blit {};
+        blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.srcSubresource.layerCount = 1;
+        blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.dstSubresource.layerCount = 1;
+        blit.srcOffsets[1] = {halfSize.x, halfSize.y, 1};
+        blit.dstOffsets[1] = {halfSize.x, halfSize.y, 1};
+        vkCmdBlitImage(cmd, _ssaoPing->handle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       _ssao->handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+        transitionColorImage(cmd, *_ssaoPing, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        transitionColorImage(cmd, *_ssao, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    if (_options.ssr) {
+        ScreenEffectUniforms screenEffect;
+        screenEffect.screenResolution = glm::vec2(halfSize);
+        screenEffect.screenResolutionRcp = 1.0f / screenEffect.screenResolution;
+        screenEffect.clipNear = _uniforms.globals().clipNear;
+        screenEffect.ssrBias = kSSRBias;
+        screenEffect.ssrPixelStride = kSSRPixelStride;
+        screenEffect.ssrMaxSteps = kSSRMaxSteps;
+        draw(kSSRModule, "ssrVertex", "ssrFragment", VK_FORMAT_R8G8B8A8_UNORM, *_ssr, _ssrSet, screenEffect);
+        filter(*_ssr, _ssrAsSourceSet, *_halfPing, VK_FORMAT_R8G8B8A8_UNORM, "gausBlur13Fragment", {1.0f, 0.0f});
+        filter(*_halfPing, _halfPingAsSourceSet, *_ssr, VK_FORMAT_R8G8B8A8_UNORM, "gausBlur13Fragment", {0.0f, 1.0f});
+        transitionColorImage(cmd, *_ssr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+}
+
 void VulkanRenderPipeline::resolvePass(VkCommandBuffer cmd, uint32_t globalsOffset) {
     VulkanDebugScope scope(_renderer.device(), cmd, "Deferred resolve",
                            {0.9f, 0.7f, 0.3f});
@@ -708,25 +894,31 @@ void VulkanRenderPipeline::resolvePass(VkCommandBuffer cmd, uint32_t globalsOffs
     dep.imageMemoryBarrierCount = 1;
     dep.pImageMemoryBarriers = &toAttachment;
     vkCmdPipelineBarrier2(cmd, &dep);
+    transitionColorImage(cmd, *_hilights, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
-    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    attachment.imageView = _frameImage->view();
-    attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    std::array<VkRenderingAttachmentInfo, 2> attachments {};
+    for (auto &attachment : attachments) {
+        attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    }
+    attachments[0].imageView = _frameImage->view();
+    attachments[1].imageView = _hilights->view();
 
     VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
     rendering.renderArea.extent = {static_cast<uint32_t>(_targetSize.x),
                                    static_cast<uint32_t>(_targetSize.y)};
     rendering.layerCount = 1;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachments = &attachment;
+    rendering.colorAttachmentCount = static_cast<uint32_t>(attachments.size());
+    rendering.pColorAttachments = attachments.data();
 
     VulkanPipelineCache::Key key;
     key.module = kResolveModule;
     key.vertexEntry = "resolveVertex";
     key.fragmentEntry = "resolveFragment";
-    key.colorFormats = {_renderer.swapchain().imageFormat()};
+    key.colorFormats = {_renderer.swapchain().imageFormat(), _renderer.swapchain().imageFormat()};
     auto &pipeline = _renderer.pipelines().get(key);
 
     VkViewport viewport {0.0f, 0.0f, static_cast<float>(_targetSize.x),
@@ -750,6 +942,7 @@ void VulkanRenderPipeline::resolvePass(VkCommandBuffer cmd, uint32_t globalsOffs
                             VulkanDescriptors::kTextureSet, 1, &_resolveSet, 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);
+    hilightsBlurPass(cmd);
     // Deliberately left as a colour attachment: transparency blends onto it
     // next, and render() moves it to a sampleable layout once that is done.
 }
@@ -926,10 +1119,11 @@ void VulkanRenderPipeline::oitBlendPass(VkCommandBuffer cmd) {
                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     transitionColorImage(cmd, *_frameImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    if (!_options.pbr) {
-        transitionColorImage(cmd, *_hilights, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    }
+    // Both the retro geometry pass and the deferred resolve blur highlights
+    // before reaching this point. The blur restores its destination's incoming
+    // layout, so this is a colour attachment on either path.
+    transitionColorImage(cmd, *_hilights, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     transitionColorImage(cmd, *_spareImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
@@ -1132,6 +1326,7 @@ Texture &VulkanRenderPipeline::render(RenderRegistry &registry,
     _frameImage = _output.get();
     _spareImage = _ping.get();
     if (_options.pbr) {
+        screenSpaceEffectsPass(cmd, globalsOffset);
         resolvePass(cmd, globalsOffset);
     }
     transparencyPass(cmd, globalsOffset);
@@ -1184,6 +1379,8 @@ static std::optional<DumpFormat> dumpFormatFor(VkFormat format) {
     case VK_FORMAT_B8G8R8A8_UNORM:
     case VK_FORMAT_B8G8R8A8_SRGB:
         return DumpFormat {4, NpyType::UInt8, false};
+    case VK_FORMAT_R8_UNORM:
+        return DumpFormat {1, NpyType::UInt8, false};
     case VK_FORMAT_R16_SFLOAT:
         return DumpFormat {1, NpyType::Float32, true};
     case VK_FORMAT_R16G16_SFLOAT:
@@ -1262,6 +1459,12 @@ std::vector<VulkanRenderPipeline::Target> VulkanRenderPipeline::targetEntries() 
     }
     entries.push_back({"G-buffer depth", "g_buffer_depth", RenderTargetKind::Depth,
                        &_gbuffer->depth(), _gbuffer->depthLayout(), true});
+    entries.push_back({"SSAO", "ssao", RenderTargetKind::Color,
+                       _ssao.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
+    entries.push_back({"SSR", "ssr", RenderTargetKind::Color,
+                       _ssr.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
+    entries.push_back({"Deferred opaque 2", "deferred_opaque_2", RenderTargetKind::Color,
+                       _hilights.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
     entries.push_back({"OIT accum", "oit_accum", RenderTargetKind::Color,
                        _oitAccum.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
     entries.push_back({"OIT revealage", "oit_revealage", RenderTargetKind::Color,

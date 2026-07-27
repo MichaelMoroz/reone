@@ -41,7 +41,9 @@ set(SPIRV_MODULES
     "pbr_ibl:iblVertex+brdfFragment+irradianceFragment+prefilterFragment"
     "particles:particleVertex+particleFragment+oitParticleFragment"
     "pbr_resolve:resolveVertex+resolveFragment"
-    "postprocess:postVertex+gausBlur9Fragment+gausBlur13Fragment+sharpenFragment+fxaaFragment+oitBlendFragment+debugTextureFragment"
+    "pbr_ssao:ssaoVertex+ssaoFragment"
+    "pbr_ssr:ssrVertex+ssrFragment"
+    "postprocess:postVertex+boxBlur4Fragment+gausBlur9Fragment+gausBlur13Fragment+sharpenFragment+fxaaFragment+oitBlendFragment+debugTextureFragment"
     "vk2d:quadVertex+imageFragment+colorFragment+fullTargetVertex+textVertex+textFragment")
 
 # Every .slang file, not just the module being compiled. A module imports from
