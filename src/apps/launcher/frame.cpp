@@ -135,7 +135,7 @@ LauncherFrame::LauncherFrame() :
         _choiceBackend->Disable();
     }
     _choiceBackend->Bind(wxEVT_COMMAND_CHOICE_SELECTED, [this](const wxCommandEvent &evt) {
-        UpdateBackendDependentControls(_choiceBackend->GetStringSelection() == "Vulkan");
+        UpdateRendererDependentControls();
     });
 
     auto backendSizer = new wxBoxSizer(wxVERTICAL);
@@ -155,11 +155,7 @@ LauncherFrame::LauncherFrame() :
     _choiceRenderer = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, rendererChoices);
     _choiceRenderer->SetSelection(_config.pbr ? 1 : 0);
     _choiceRenderer->Bind(wxEVT_COMMAND_CHOICE_SELECTED, [this](const wxCommandEvent &evt) {
-        // Deliberately routed through the same place the backend uses: SSAO and
-        // SSR need both a PBR renderer and a backend that has a post-processing
-        // chain, and two handlers each enabling on their own condition would
-        // undo each other.
-        UpdateBackendDependentControls(_choiceBackend->GetStringSelection() == "Vulkan");
+        UpdateRendererDependentControls();
     });
 
     auto rendererSizer = new wxBoxSizer(wxVERTICAL);
@@ -257,7 +253,7 @@ LauncherFrame::LauncherFrame() :
     _checkBoxSharpen = new wxCheckBox(this, wxID_ANY, "Enable Image Sharpening", wxDefaultPosition, wxDefaultSize);
     _checkBoxSharpen->SetValue(_config.sharpen);
 
-    UpdateBackendDependentControls(_config.backend == "vulkan");
+    UpdateRendererDependentControls();
 
     auto graphicsSizer = new wxStaticBoxSizer(wxVERTICAL, this, "Graphics");
     graphicsSizer->Add(resSizer, wxSizerFlags(0).Expand());
@@ -372,18 +368,16 @@ LauncherFrame::LauncherFrame() :
     Bind(wxEVT_BUTTON, &LauncherFrame::OnSaveConfig, this, WindowID::saveConfig);
 }
 
-void LauncherFrame::UpdateBackendDependentControls(bool vulkan) {
-    // The Vulkan pipeline is geometry, resolve and transparency; it has no
-    // post-processing chain, so these are ignored rather than merely
-    // unsupported. Greyed out instead of hidden, so their saved values are
-    // still visible and still written back.
-    _checkBoxFXAA->Enable(!vulkan);
-    _checkBoxSharpen->Enable(!vulkan);
-
-    // SSAO and SSR additionally need the PBR renderer.
+void LauncherFrame::UpdateRendererDependentControls() {
+    // Both backends now carry the whole chain - filters, retro forward shading,
+    // and the screen-space effects - so nothing here depends on the backend any
+    // more. Only SSAO and SSR remain conditional, and on the renderer rather
+    // than the backend: they read the G-buffer, which the retro path does not
+    // produce. Greyed out instead of hidden, so their saved values are still
+    // visible and still written back.
     bool pbr = _choiceRenderer->GetStringSelection() == "PBR";
-    _checkBoxSSAO->Enable(!vulkan && pbr);
-    _checkBoxSSR->Enable(!vulkan && pbr);
+    _checkBoxSSAO->Enable(pbr);
+    _checkBoxSSR->Enable(pbr);
 }
 
 void LauncherFrame::LoadConfiguration() {

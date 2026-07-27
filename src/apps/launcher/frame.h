@@ -95,7 +95,7 @@ private:
     void OnGameDirLeftDown(wxMouseEvent &event);
 
     /** Grey out the options the chosen backend ignores. */
-    void UpdateBackendDependentControls(bool vulkan);
+    void UpdateRendererDependentControls();
 
     void LoadConfiguration();
     void SaveConfiguration();
