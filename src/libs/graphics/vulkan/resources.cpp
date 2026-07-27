@@ -249,7 +249,11 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
         std::vector<std::pair<const void *, VkDeviceSize>> layers;
         layers.reserve(texture.layers().size());
         if (!compressed) {
-            widened.reserve(texture.layers().size());
+            uint32_t fullMipCount = 1;
+            for (int size = std::max(texture.width(), texture.height()); size > 1; size >>= 1) {
+                ++fullMipCount;
+            }
+            widened.reserve(texture.layers().size() * fullMipCount);
         }
         for (const auto &layer : texture.layers()) {
             if (!layer.pixels || layer.pixels->empty()) {
@@ -299,9 +303,68 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
             }
             layer = {blank.data(), layerSize};
         }
-        image->initSampledLayers({texture.width(), texture.height()},
-                                 compressed ? *compressed : uploadFormat(texture.pixelFormat()),
-                                 cube, layers);
+        // GL generates a chain only when the first face did not ship one. TPC
+        // cubemaps normally carry an identical chain for every face; upload
+        // that data verbatim, including the per-face/per-level byte sizes.
+        uint32_t authoredMips = 0;
+        while (authoredMips < texture.layers().front().mips.size()) {
+            const auto &mip = texture.layers().front().mips[authoredMips];
+            if (!mip || mip->empty()) {
+                break;
+            }
+            ++authoredMips;
+        }
+        if (authoredMips > 0) {
+            for (const auto &layer : texture.layers()) {
+                if (layer.mips.size() < authoredMips) {
+                    return fallbackFor(texture, "texture " + texture.name() +
+                                                    " has an incomplete layered mip chain");
+                }
+                for (uint32_t mip = 0; mip < authoredMips; ++mip) {
+                    if (!layer.mips[mip] || layer.mips[mip]->empty()) {
+                        return fallbackFor(texture, "texture " + texture.name() +
+                                                        " has an incomplete layered mip chain");
+                    }
+                }
+            }
+        }
+
+        uint32_t fullMipCount = 1;
+        for (int size = std::max(texture.width(), texture.height()); size > 1; size >>= 1) {
+            ++fullMipCount;
+        }
+        // Vulkan cannot blit BC images. Those must use the authored levels,
+        // just as the 2D path does; uncompressed cubes/arrays without a chain
+        // take the same generated-mip branch as GL.
+        bool generateMips = authoredMips == 0 && !compressed && fullMipCount > 1;
+        uint32_t mipCount = authoredMips > 0 ? authoredMips + 1
+                                             : (generateMips ? fullMipCount : 1);
+        std::vector<VulkanImage::Subresource> subresources;
+        subresources.reserve(layers.size() * (authoredMips + 1));
+        for (uint32_t layerIndex = 0; layerIndex < layers.size(); ++layerIndex) {
+            subresources.push_back({layers[layerIndex].first, layers[layerIndex].second, layerIndex, 0});
+            for (uint32_t mip = 0; mip < authoredMips; ++mip) {
+                const auto &level = texture.layers()[layerIndex].mips[mip];
+                if (compressed) {
+                    subresources.push_back({level->data(), static_cast<VkDeviceSize>(level->size()),
+                                             layerIndex, mip + 1});
+                } else {
+                    widened.push_back(uploadPixels(*level, texture.pixelFormat(),
+                                                   std::max(1, texture.width() >> (mip + 1)),
+                                                   std::max(1, texture.height() >> (mip + 1))));
+                    subresources.push_back({widened.back().data(),
+                                             static_cast<VkDeviceSize>(widened.back().size()),
+                                             layerIndex, mip + 1});
+                }
+            }
+        }
+        image->initSampledChain({texture.width(), texture.height()},
+                                compressed ? *compressed : uploadFormat(texture.pixelFormat()),
+                                cube, static_cast<uint32_t>(layers.size()), mipCount,
+                                subresources, generateMips);
+        auto chain = generateMips ? "generated" : (authoredMips ? "authored" : "base-level");
+        debug("Vulkan: uploaded " + std::string(chain) + " mip chain for " + texture.name(),
+              LogChannel::Graphics);
         image->setSampler(_samplers.get(texture.properties()));
         debug("Vulkan: uploaded texture " + texture.name(), LogChannel::Graphics);
         return *_textures.insert({&texture, std::move(image)}).first->second;

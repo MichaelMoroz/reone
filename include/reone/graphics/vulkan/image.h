@@ -84,13 +84,18 @@ public:
      * Level i is max(1, extent >> i); sizes come from the caller because a
      * compressed level's length is a function of its block count, not its
      * texel count. Leaves the image in SHADER_READ_ONLY_OPTIMAL.
+     *
+     * When @p generateMips is true, @p subresources contains only level zero
+     * and the remaining levels are filtered from it on the GPU.  Callers use
+     * this only for formats Vulkan can blit.
      */
     void initSampledChain(glm::ivec2 extent,
                           VkFormat format,
                           bool cube,
                           uint32_t layerCount,
                           uint32_t mipCount,
-                          const std::vector<Subresource> &subresources);
+                          const std::vector<Subresource> &subresources,
+                          bool generateMips = false);
 
     /**
      * A depth attachment. Left in UNDEFINED: dynamic rendering transitions it
@@ -179,6 +184,13 @@ public:
      * @param depth  true to copy the depth aspect rather than colour.
      */
     std::vector<uint8_t> readBack(VkImageLayout layout, bool depth = false) const;
+
+    /**
+     * Copy one mip's consecutive colour layers back to host memory. This is
+     * used for cube-array diagnostics, where each cube face becomes one
+     * vertically unrolled image in the dump.
+     */
+    std::vector<uint8_t> readBack(VkImageLayout layout, uint32_t mip, uint32_t layers) const;
 
     void deinit();
 

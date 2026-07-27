@@ -365,7 +365,8 @@ void VulkanImage::initSampledChain(glm::ivec2 extent,
                                    bool cube,
                                    uint32_t layerCount,
                                    uint32_t mipCount,
-                                   const std::vector<Subresource> &subresources) {
+                                   const std::vector<Subresource> &subresources,
+                                   bool generateMips) {
     if (layerCount == 0 || mipCount == 0) {
         throw std::invalid_argument("Vulkan: an image needs at least one layer and one mip");
     }
@@ -382,6 +383,9 @@ void VulkanImage::initSampledChain(glm::ivec2 extent,
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (generateMips) {
+        imageInfo.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    }
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (cube) {
         imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
@@ -451,10 +455,12 @@ void VulkanImage::initSampledChain(glm::ivec2 extent,
 
     auto image = _image;
     auto src = staging.handle();
-    _device.immediateSubmit([image, src, layerCount, mipCount, &regions](VkCommandBuffer cmd) {
+    _device.immediateSubmit([image, src, extent, layerCount, mipCount, generateMips,
+                             &regions](VkCommandBuffer cmd) {
         auto barrier = [&](VkImageLayout from, VkImageLayout to,
                            VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
-                           VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
+                           VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess,
+                           uint32_t baseMip, uint32_t levelCount) {
             VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
             b.srcStageMask = srcStage;
             b.srcAccessMask = srcAccess;
@@ -464,7 +470,8 @@ void VulkanImage::initSampledChain(glm::ivec2 extent,
             b.newLayout = to;
             b.image = image;
             b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            b.subresourceRange.levelCount = mipCount;
+            b.subresourceRange.baseMipLevel = baseMip;
+            b.subresourceRange.levelCount = levelCount;
             b.subresourceRange.layerCount = layerCount;
 
             VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
@@ -475,14 +482,47 @@ void VulkanImage::initSampledChain(glm::ivec2 extent,
 
         barrier(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, 0, mipCount);
         if (!regions.empty()) {
             vkCmdCopyBufferToImage(cmd, src, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    static_cast<uint32_t>(regions.size()), regions.data());
         }
+        if (!generateMips) {
+            barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    0, mipCount);
+            return;
+        }
+
+        for (uint32_t mip = 0; mip + 1 < mipCount; ++mip) {
+            barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, mip, 1);
+
+            VkImageBlit blit {};
+            blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            blit.srcSubresource.mipLevel = mip;
+            blit.srcSubresource.layerCount = layerCount;
+            blit.srcOffsets[1] = {std::max(1, extent.x >> static_cast<int>(mip)),
+                                  std::max(1, extent.y >> static_cast<int>(mip)), 1};
+            blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            blit.dstSubresource.mipLevel = mip + 1;
+            blit.dstSubresource.layerCount = layerCount;
+            blit.dstOffsets[1] = {std::max(1, extent.x >> static_cast<int>(mip + 1)),
+                                  std::max(1, extent.y >> static_cast<int>(mip + 1)), 1};
+            vkCmdBlitImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+
+            barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    mip, 1);
+        }
         barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                mipCount - 1, 1);
     });
 }
 
@@ -810,6 +850,52 @@ std::vector<uint8_t> VulkanImage::readBack(VkImageLayout layout, bool depth) con
                                dst, 1, &region);
 
         // Put it back, so the next frame finds the image where it left it.
+        barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, layout);
+    });
+
+    std::vector<uint8_t> result(static_cast<size_t>(size));
+    std::memcpy(result.data(), staging.mapped(), result.size());
+    return result;
+}
+
+std::vector<uint8_t> VulkanImage::readBack(VkImageLayout layout, uint32_t mip,
+                                           uint32_t layers) const {
+    auto extent = glm::max(glm::ivec2(1), _extent >> static_cast<int>(mip));
+    VkDeviceSize size = static_cast<VkDeviceSize>(extent.x) * extent.y * layers * texelSize(_format);
+
+    VulkanBuffer staging(_device);
+    staging.initHostVisible(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+
+    auto image = _image;
+    auto dst = staging.handle();
+    _device.immediateSubmit([image, dst, extent, mip, layers, layout](VkCommandBuffer cmd) {
+        auto barrier = [&](VkImageLayout from, VkImageLayout to) {
+            VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+            b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+            b.oldLayout = from;
+            b.newLayout = to;
+            b.image = image;
+            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            b.subresourceRange.baseMipLevel = mip;
+            b.subresourceRange.levelCount = 1;
+            b.subresourceRange.layerCount = layers;
+
+            VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            dep.imageMemoryBarrierCount = 1;
+            dep.pImageMemoryBarriers = &b;
+            vkCmdPipelineBarrier2(cmd, &dep);
+        };
+
+        barrier(layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        VkBufferImageCopy region {};
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel = mip;
+        region.imageSubresource.layerCount = layers;
+        region.imageExtent = {static_cast<uint32_t>(extent.x), static_cast<uint32_t>(extent.y), 1};
+        vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, 1, &region);
         barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, layout);
     });
 
