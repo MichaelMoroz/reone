@@ -225,6 +225,10 @@ on a clean build of this commit. Measure from the `.npy` dumps rather than a
 screenshot; a figure of 1.0299 has been reported twice from some other method
 and does not reproduce.
 
+This figure predates the Vulkan target-dump frame-flush fix. If it was measured
+with `--dumptargets` without `--capture`, it includes a one-frame error and
+must be re-measured; no replacement value is known yet.
+
 An earlier figure of 1.2179 appears in commit messages up to this point, and
 it was correct for its time. The merge of pull request #1 moved it: that
 change touches area, creature and player logic and no shader or renderer code,

@@ -106,8 +106,9 @@ couple of levels of 255, and `output` differing by 17%. The geometry pass was ri
 the whole discrepancy was in the resolve. Reason about a screenshot only after
 the dumps say which pass to look at.
 
-`--dumptargets` works with or without `--capture`. Only the OpenGL **PBR**
-pipeline exposes targets; the retro pipeline exposes none and dumps nothing.
+`--dumptargets` works with or without `--capture`: on Vulkan it flushes the
+current frame before reading targets back. Only the OpenGL **PBR** pipeline
+exposes targets; the retro pipeline exposes none and dumps nothing.
 
 ## RenderDoc, scripted
 
@@ -204,6 +205,10 @@ touches, and how far it moves them.
 
 ## Traps that cost real time here
 
+- **Vulkan readback before submission returns the previous frame.** The target
+  images still contain frame N-1 while frame N is only recorded, so a dump can
+  look correct wherever the scene is static while every moving thing is one
+  frame out. Flush the frame before starting a separate readback command buffer.
 - **Validation is off unless you ask for it, and it does not go to the log.**
   `--vkvalidation` defaults to false, so grepping `engine.log` for VUIDs
   without it always returns zero - which reads exactly like "no errors" and was

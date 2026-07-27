@@ -299,27 +299,7 @@ std::shared_ptr<Texture> VulkanRenderer::captureFrame() {
     transitionImage(frame.commandBuffer, image,
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
 
-    // The pixels have to exist before this returns, so the frame is cut in two:
-    // submit what has been recorded, wait for it, read the buffer, then open a
-    // fresh command buffer for endFrame to finish and present with. This stalls
-    // hard, which is why it is a screenshot path and not a per-frame one.
-    check(vkEndCommandBuffer(frame.commandBuffer), "vkEndCommandBuffer");
-
-    VkCommandBufferSubmitInfo cmdInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-    cmdInfo.commandBuffer = frame.commandBuffer;
-
-    VkSemaphoreSubmitInfo waitInfo {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-    waitInfo.semaphore = frame.imageAvailable;
-    waitInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-
-    VkSubmitInfo2 submit {VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-    submit.waitSemaphoreInfoCount = 1;
-    submit.pWaitSemaphoreInfos = &waitInfo;
-    submit.commandBufferInfoCount = 1;
-    submit.pCommandBufferInfos = &cmdInfo;
-    check(vkQueueSubmit2(_device.graphicsQueue(), 1, &submit, VK_NULL_HANDLE),
-          "vkQueueSubmit2");
-    check(vkQueueWaitIdle(_device.graphicsQueue()), "vkQueueWaitIdle");
+    flushFrame();
 
     // The swapchain format is B8G8R8A8; Texture wants RGB8. Rows are also
     // reversed: a Vulkan image copy yields them top-down, while glReadPixels
@@ -343,15 +323,47 @@ std::shared_ptr<Texture> VulkanRenderer::captureFrame() {
     auto texture = std::make_shared<Texture>("screenshot", TextureType::TwoDim, Texture::Properties());
     texture->setPixels(extent.x, extent.y, PixelFormat::RGB8, Texture::Layer {pixels});
 
-    // Reopen for the rest of the frame. imageAvailable has been consumed by the
-    // submit above, so endFrame must not wait on it again.
+    return texture;
+}
+
+void VulkanRenderer::flushFrame() {
+    if (!_inFrame) {
+        throw std::logic_error("Renderer: no frame begun");
+    }
+    if (_imageAvailableConsumed) {
+        // captureFrame already split this frame; its follow-up buffer only
+        // contains endFrame work, so another flush would add no target data.
+        return;
+    }
+    auto &frame = _frames[_frameIndex];
+
+    // Readback needs the current frame's commands to finish, but endFrame still
+    // owns the transition and present, so it continues in a fresh buffer.
+    check(vkEndCommandBuffer(frame.commandBuffer), "vkEndCommandBuffer");
+
+    VkCommandBufferSubmitInfo cmdInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    cmdInfo.commandBuffer = frame.commandBuffer;
+
+    VkSemaphoreSubmitInfo waitInfo {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    waitInfo.semaphore = frame.imageAvailable;
+    waitInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+    VkSubmitInfo2 submit {VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.waitSemaphoreInfoCount = 1;
+    submit.pWaitSemaphoreInfos = &waitInfo;
+    submit.commandBufferInfoCount = 1;
+    submit.pCommandBufferInfos = &cmdInfo;
+    check(vkQueueSubmit2(_device.graphicsQueue(), 1, &submit, VK_NULL_HANDLE),
+          "vkQueueSubmit2");
+    check(vkQueueWaitIdle(_device.graphicsQueue()), "vkQueueWaitIdle");
+
+    // imageAvailable was consumed by the submit above, so endFrame must not
+    // wait on it again.
     check(vkResetCommandBuffer(frame.commandBuffer, 0), "vkResetCommandBuffer");
     VkCommandBufferBeginInfo beginInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo), "vkBeginCommandBuffer");
     _imageAvailableConsumed = true;
-
-    return texture;
 }
 
 void VulkanRenderer::invalidateResources() {

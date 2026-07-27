@@ -73,6 +73,8 @@ public:
     void beginFrame(glm::ivec2 extent) override;
     void drawSceneOutput(Texture &output) override;
     std::shared_ptr<Texture> captureFrame() override;
+    /** Submit completed recording so a synchronous readback can see this frame. */
+    void flushFrame();
     void endFrame() override;
     void invalidateResources() override;
     void invalidateTexture(Texture &texture) override;
@@ -156,7 +158,7 @@ private:
      * cleanly.
      */
     bool _needsRecreate {false};
-    /** Set by captureFrame, which submits mid-frame and consumes the wait. */
+    /** Set when a mid-frame flush consumes the acquire semaphore. */
     bool _imageAvailableConsumed {false};
 
     std::array<Frame, kFramesInFlight> _frames;

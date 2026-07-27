@@ -601,12 +601,12 @@ void Engine::dumpTargetsIfRequested() {
         return;
     }
     // The frame this describes has to be finished before its targets are read.
-    // On Vulkan the work was only submitted; on OpenGL the driver may still be
+    // Vulkan needs its recorded commands submitted first; OpenGL may still be
     // several frames behind. Both are settled here rather than inside the dump,
     // because only the caller knows which frame it means.
     if (_vulkan) {
 #ifdef R_ENABLE_VULKAN
-        _vulkanRenderer->device().waitIdle();
+        _vulkanRenderer->flushFrame();
 #endif
     } else {
         glFinish();
