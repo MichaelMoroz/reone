@@ -24,7 +24,6 @@
 #include "reone/graphics/uniforms.h"
 #include "reone/resource/resources.h"
 #include "reone/system/logutil.h"
-#include "reone/system/stream/fileinput.h"
 #include "reone/system/stream/memoryinput.h"
 #include "reone/system/stringbuilder.h"
 #include "reone/system/textreader.h"
@@ -84,8 +83,6 @@ static const std::string kFragPBRIrradiance = "f_pbr_irradiance";
 static const std::string kFragPBRBRDF = "f_pbr_brdf";
 static const std::string kFragPBRPrefilter = "f_pbr_prefilter";
 static const std::string kFragProfiler = "f_profiler";
-
-// Transpiled from slang/pbr_opaque_model.slang
 
 void Shaders::init() {
     if (_inited) {
@@ -169,43 +166,6 @@ void Shaders::init() {
     _shaderRegistry.add(ShaderProgramId::pbrModelDangly, pbrOpaqueModelProgram);
     _shaderRegistry.add(ShaderProgramId::pbrModelSaber, pbrOpaqueModelProgram);
 
-    // Rewritten shaders, loaded as SPIR-V modules. One module holds every entry
-    // point of its source file, and everything binds by number, so stages need no
-    // agreement on identifier names.
-    auto spirvShader = [](ShaderType type, const ByteBuffer &module, const char *entryPoint) {
-        auto shader = std::make_shared<Shader>(type, module, entryPoint);
-        shader->init();
-        return shader;
-    };
-    if (auto model = loadSpirvModule("pbr_model")) {
-        auto frag = spirvShader(ShaderType::Fragment, *model, "opaqueFragment");
-        auto add = [&](const char *programId, const char *entryPoint) {
-            auto vert = spirvShader(ShaderType::Vertex, *model, entryPoint);
-            _shaderRegistry.addSlangVariant(programId, initShaderProgram({vert, frag}));
-        };
-        add(ShaderProgramId::pbrModelStatic, "staticVertex");
-        add(ShaderProgramId::pbrModelSkinned, "skinnedVertex");
-        add(ShaderProgramId::pbrModelDangly, "danglyVertex");
-        add(ShaderProgramId::pbrModelSaber, "saberVertex");
-    }
-    if (auto grass = loadSpirvModule("grass")) {
-        auto vert = spirvShader(ShaderType::Vertex, *grass, "grassVertex");
-        _shaderRegistry.addSlangVariant(
-            ShaderProgramId::pbrGrass,
-            initShaderProgram({vert, spirvShader(ShaderType::Fragment, *grass, "pbrFragment")}));
-        _shaderRegistry.addSlangVariant(
-            ShaderProgramId::retroGrass,
-            initShaderProgram({vert, spirvShader(ShaderType::Fragment, *grass, "retroFragment")}));
-    }
-    if (auto walkmesh = loadSpirvModule("walkmesh")) {
-        auto vert = spirvShader(ShaderType::Vertex, *walkmesh, "walkmeshVertex");
-        _shaderRegistry.addSlangVariant(
-            ShaderProgramId::pbrWalkmesh,
-            initShaderProgram({vert, spirvShader(ShaderType::Fragment, *walkmesh, "pbrFragment")}));
-        _shaderRegistry.addSlangVariant(
-            ShaderProgramId::retroWalkmesh,
-            initShaderProgram({vert, spirvShader(ShaderType::Fragment, *walkmesh, "retroFragment")}));
-    }
     _shaderRegistry.add(ShaderProgramId::pbrSSAO, initShaderProgram({vertPassthrough, fragPBRSSAO}));
     _shaderRegistry.add(ShaderProgramId::pbrSSR, initShaderProgram({vertPassthrough, fragPBRSSR}));
     _shaderRegistry.add(ShaderProgramId::pbrWalkmesh, initShaderProgram({vertWalkmesh, fragPBRWalkmesh}));
@@ -232,13 +192,6 @@ void Shaders::init() {
     _shaderRegistry.add(ShaderProgramId::pbrPrefilter, initShaderProgram({vertMVP, fragPBRPrefilter}));
     _shaderRegistry.add(ShaderProgramId::profiler, initShaderProgram({vertMVP, fragProfiler}));
 
-    // Honour the startup option. Without this the registry stays on the
-    // hand-written shaders regardless, and --slangshaders=1 silently does nothing.
-    _shaderRegistry.setUseSlangVariants(_graphicsOpt.slangShaders);
-    debug(str(boost::format("Shader variants: %d Slang programs, active=%d") %
-              _shaderRegistry.slangVariantCount() % static_cast<int>(_graphicsOpt.slangShaders)),
-          LogChannel::Graphics);
-
     _inited = true;
 }
 
@@ -247,22 +200,6 @@ void Shaders::deinit() {
         return;
     }
     _inited = false;
-}
-
-std::optional<ByteBuffer> Shaders::loadSpirvModule(const std::string &name) const {
-    auto path = std::filesystem::path("spirv") / (name + ".spv");
-    if (!std::filesystem::exists(path)) {
-        return std::nullopt;
-    }
-    auto stream = FileInputStream(path);
-    stream.seek(0, SeekOrigin::End);
-    auto size = stream.position();
-    stream.seek(0, SeekOrigin::Begin);
-    ByteBuffer bytes;
-    bytes.resize(size);
-    stream.read(&bytes[0], size);
-    debug("Loaded SPIR-V module: " + name, LogChannel::Graphics);
-    return bytes;
 }
 
 bool Shaders::hasSource(const std::string &resRef) const {

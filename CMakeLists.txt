@@ -76,16 +76,16 @@ if(ENABLE_VULKAN)
     find_package(vk-bootstrap CONFIG REQUIRED)
 endif()
 
-# Transpiles slang/ to GLSL and regenerates the uniform layout assertions. Both
-# uses degrade gracefully when it is missing: the transpiled shaders are simply
-# absent from the shader pack, and the assertion header is committed.
+# Compiles slang/ to SPIR-V for Vulkan and regenerates the uniform layout
+# assertions from GLSL-target reflection. Both uses degrade gracefully when it
+# is missing: Vulkan shader modules are absent, and the assertion header is committed.
 find_program(SLANGC_EXECUTABLE slangc
     HINTS ${CMAKE_PREFIX_PATH} ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/shader-slang
     DOC "Slang compiler")
 if(SLANGC_EXECUTABLE)
     message(STATUS "Found slangc: ${SLANGC_EXECUTABLE}")
 else()
-    message(STATUS "slangc not found - Slang shaders will not be transpiled")
+    message(STATUS "slangc not found - Vulkan shader modules will not be transpiled")
 endif()
 
 set(REONE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)

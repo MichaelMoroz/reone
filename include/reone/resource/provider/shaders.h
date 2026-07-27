@@ -51,9 +51,6 @@ public:
         _resources(resources) {
     }
 
-    /** Whether the Slang-transpiled programs were present in this build. */
-    bool slangShadersAvailable() const { return _slangShadersAvailable; }
-
     ~Shaders() {
         deinit();
     }
@@ -74,10 +71,6 @@ private:
 
     bool hasSource(const std::string &resRef) const;
 
-    /** A SPIR-V module emitted beside the executable, if the build produced one. */
-    std::optional<ByteBuffer> loadSpirvModule(const std::string &name) const;
-
-    bool _slangShadersAvailable {false};
     std::shared_ptr<graphics::ShaderProgram> initShaderProgram(std::vector<std::shared_ptr<graphics::Shader>> shaders);
 };
 

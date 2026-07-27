@@ -31,10 +31,9 @@ Varyings grassVertex(
     [[vk::location(2)]] float2 uv1: TEXCOORD0,
     uint instanceId: SV_InstanceID,
     uint startInstance: SV_StartInstanceLocation) {
-    // Slang lowers SV_InstanceID to InstanceIndex - BaseInstance, matching D3D.
-    // Under OpenGL that evaluates to zero for every instance, so all the grass
-    // stacks on one cluster and the field vanishes. Adding the base back cancels
-    // the subtraction and leaves the true index, whatever BaseInstance reports.
+    // Adding the base back cancels the subtraction Slang lowers SV_InstanceID
+    // to. The removed OpenGL SPIR-V path could not read those builtins; see
+    // doc/vulkan-rt-backend.md section 14.4.
     int instanceIndex = int(instanceId + startInstance);
     Varyings output;
 

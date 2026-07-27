@@ -21,16 +21,14 @@ set_target_properties(shaderpack PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BIN
 target_precompile_headers(shaderpack PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(shaderpack PRIVATE resource movie graphics audio script system ${Boost_PROGRAM_OPTIONS_LIBRARY} ${Boost_EXCEPTION_LIBRARY})
 
-# Shaders are staged into one flat directory before packing: the hand-written
-# GLSL, plus whatever slangc transpiles from slang/. Transpiled output stays in
-# the build tree - without slangc those resrefs are simply absent, and the engine
-# keeps using the hand-written equivalents.
+# Hand-written GLSL is staged into one flat directory before packing. SPIR-V
+# modules are emitted beside the executable for Vulkan rather than packed.
 set(SHADER_STAGE_DIR ${CMAKE_BINARY_DIR}/shaders)
 
 # One SPIR-V module per source file, carrying every entry point that file
 # declares. Binding is by number, so stages of a program need no agreement on
-# names - which is what the transpiled-GLSL path could not deliver. Emitted
-# beside the executable; the shader pack still carries the legacy GLSL.
+# names. Emitted beside the executable; the shader pack carries the hand-written
+# GLSL used by OpenGL.
 set(SPIRV_OUT_DIR ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin/spirv)
 
 # <source>:<entry>[+<entry>...]
@@ -77,14 +75,14 @@ if(SLANGC_EXECUTABLE)
             COMMENT "slangc ${spv_source}.slang -> ${spv_source}.spv")
         list(APPEND SPIRV_OUTPUTS ${out})
     endforeach()
-    add_custom_target(transpile_spirv ALL DEPENDS ${SPIRV_OUTPUTS})
+    add_custom_target(compile_spirv ALL DEPENDS ${SPIRV_OUTPUTS})
 else()
-    add_custom_target(transpile_spirv)
+    add_custom_target(compile_spirv)
 endif()
 
 add_custom_target(create_shaderpack ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_STAGE_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/glsl ${SHADER_STAGE_DIR}
     COMMAND shaderpack ${SHADER_STAGE_DIR} ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin
-    DEPENDS shaderpack transpile_spirv
+    DEPENDS shaderpack compile_spirv
     COMMENT "Packing shaders")

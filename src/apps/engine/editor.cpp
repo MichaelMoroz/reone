@@ -637,21 +637,6 @@ void Editor::update(float dt) {
         }
 
         if (ImGui::BeginMenu("Debug")) {
-            auto &shaderRegistry = _engine._graphicsModule->shaderRegistry();
-            size_t variants = shaderRegistry.slangVariantCount();
-            bool useSlang = shaderRegistry.useSlangVariants();
-            if (ImGui::MenuItem("Slang shaders", nullptr, &useSlang, variants > 0)) {
-                // Every variant is built at startup; the registry hands out the
-                // transpiled build from the next draw on.
-                shaderRegistry.setUseSlangVariants(useSlang);
-            }
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                if (variants > 0) {
-                    ImGui::SetTooltip("%zu of the shader programs have a transpiled twin.", variants);
-                } else {
-                    ImGui::SetTooltip("This build has no transpiled shaders - slangc was not found.");
-                }
-            }
             ImGui::MenuItem("ImGui Demo", nullptr, &_showImGuiDemo);
             ImGui::EndMenu();
         }

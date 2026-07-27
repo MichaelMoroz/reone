@@ -24,7 +24,7 @@ Varyings particleVertex(
     uint instanceId: SV_InstanceID,
     uint startInstance: SV_StartInstanceLocation) {
     // Adding the base instance back cancels the subtraction Slang lowers
-    // SV_InstanceID to; see the same comment in grass.slang.
+    // SV_InstanceID to; see the Vulkan rationale in grass.slang.
     int instanceIndex = int(instanceId + startInstance);
     ParticleUniformsParticle particle = particleUniforms.particles[instanceIndex];
 

@@ -237,9 +237,9 @@ taxes every interface decision.
   platform-specific surface code at all, and once it works the GL backend and its
   71 GLSL shaders can be deleted outright.
 
-Deferred cleanup still outstanding: the SPIR-V loading path in the GL backend,
-the `--slangshaders` toggle, and `ShaderRegistry` variant selection. All dead
-since §14.4 and worth removing before they confuse someone.
+The GL SPIR-V loading path, the `--slangshaders` toggle, and `ShaderRegistry`
+variant selection were removed after §14.4 established that they silently
+dropped geometry.
 
 ---
 
@@ -518,9 +518,9 @@ important structural decision for making §11 tractable.
 ### 14.4 Why Slang no longer targets OpenGL
 
 Slang's SPIR-V uses Vulkan builtins — `InstanceIndex`, `VertexIndex`,
-`BaseInstance`, needing the `DrawParameters` capability. OpenGL's SPIR-V path
-reads them as **zero, silently**: 256 grass instances collapsed onto one and the
-field vanished. Finding it took a RenderDoc investigation.
+`BaseInstance`, needing the `DrawParameters` capability. The removed OpenGL
+SPIR-V path read them as **zero, silently**: 256 grass instances collapsed onto
+one and the field vanished. Finding it took a RenderDoc investigation.
 
 On Vulkan the same shader works, and enabling
 `VkPhysicalDeviceVulkan11Features::shaderDrawParameters` is the whole fix. The
@@ -599,7 +599,7 @@ wrong. Revisit when real GI exists (§8.2).
   fine with zeroed blocks; `danglyVertex` takes its position wholly from
   `DanglyUniforms` and silently vanishes. A variant rendering nothing is not
   necessarily a broken pipeline.
-- **Building a named target skips `transpile_spirv`.** This has cost two separate
+- **Building a named target skips `compile_spirv`.** This has cost two separate
   investigations. When a shader edit appears not to take, disassemble the module
   (`spirv-dis x.spv | grep Decorate`) before suspecting anything else.
 - **A verification path can hide the bug it should catch.** Ten teardown

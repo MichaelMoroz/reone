@@ -213,21 +213,13 @@ Build the `engine` target, never a sublibrary alone: shaders come from
 `glsl/` or `slang/` that is not repacked runs the previous shader and reports
 success.
 
-`--slangshaders` defaults to false. A run without it does not exercise the
-Slang path at all.
-
 If `engine.exe` is locked, a previous run is still alive: the link fails and
 the next measurement silently uses the old binary.
 
-Whole-frame RGB mean absolute difference between the backends in danm14ab
-frame 900, `--pbr 1 --ssao 0 --ssr 0 --dev 0 --slangshaders=1`, is **1.2516**
-on a clean build of this commit. Measure from the `.npy` dumps rather than a
-screenshot; a figure of 1.0299 has been reported twice from some other method
-and does not reproduce.
-
-This figure predates the Vulkan target-dump frame-flush fix. If it was measured
-with `--dumptargets` without `--capture`, it includes a one-frame error and
-must be re-measured; no replacement value is known yet.
+The former 1.2516 whole-frame RGB mean absolute-difference baseline for
+danm14ab frame 900 is invalid. It used a stale Vulkan dump (fixed in commit
+3b4f5897) and compared against OpenGL's Slang SPIR-V path, which dropped grass
+and character hair. No replacement figure is known yet.
 
 An earlier figure of 1.2179 appears in commit messages up to this point, and
 it was correct for its time. The merge of pull request #1 moved it: that

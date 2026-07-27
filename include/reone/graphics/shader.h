@@ -17,8 +17,6 @@
 
 #pragma once
 
-#include "reone/system/types.h"
-
 #include "types.h"
 
 namespace reone {
@@ -32,17 +30,6 @@ public:
         _sources(std::move(sources)) {
     }
 
-    /**
-     * A stage taken from a SPIR-V module rather than compiled from source. One
-     * module can hold every stage of a program; the entry point selects which.
-     * Core since OpenGL 4.6.
-     */
-    Shader(ShaderType type, ByteBuffer spirv, std::string entryPoint) :
-        _type(type),
-        _spirv(std::move(spirv)),
-        _entryPoint(std::move(entryPoint)) {
-    }
-
     ~Shader() { deinit(); }
 
     void init();
@@ -53,8 +40,6 @@ public:
 private:
     ShaderType _type;
     std::list<std::string> _sources;
-    ByteBuffer _spirv;
-    std::string _entryPoint;
 
     bool _inited {false};
 

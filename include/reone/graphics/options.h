@@ -41,12 +41,6 @@ struct GraphicsOptions {
      * default because nothing resolves it yet.
      */
     bool taaJitter {false};
-    /**
-     * Build the opaque model program from slang/pbr_opaque_model.slang instead of
-     * the hand-written GLSL, so the transpiler's output can be compared against
-     * it in one binary.
-     */
-    bool slangShaders {false};
     TextureQuality textureQuality {TextureQuality::High};
     int shadowResolution {2048};
     int anisotropicFiltering {2};

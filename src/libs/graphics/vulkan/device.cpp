@@ -71,9 +71,8 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     // this window, which on a laptop with switchable graphics is a real case.
     // Slang lowers SV_VertexID and SV_InstanceID to VertexIndex/InstanceIndex
     // adjusted by BaseVertex/BaseInstance, which needs the DrawParameters
-    // capability. This is the same capability OpenGL's SPIR-V path silently
-    // ignored, reading the builtins as zero and collapsing every grass instance
-    // onto one (§9.5). Here it is simply a feature to ask for.
+    // capability. The removed OpenGL SPIR-V path could not read these builtins;
+    // here it is simply a feature to ask for.
     VkPhysicalDeviceVulkan11Features features11 {};
     features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
     features11.shaderDrawParameters = VK_TRUE;

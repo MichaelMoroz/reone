@@ -16,7 +16,7 @@ The engine can warp somewhere, render, screenshot and exit with no human present
 ```
 cd build/bin
 echo warp danm14ab > warp.txt
-engine.exe --game "<GAME_DIR>" --slangshaders=1 \
+engine.exe --game "<GAME_DIR>" \
     --commands-file warp.txt --capture out.tga --captureframe 3
 ```
 
@@ -49,9 +49,8 @@ however long the frame actually took, so it looks fast on a light scene and slow
 on a heavy one. That is exactly what makes frame N the same simulated moment
 every time, and it does not affect what is captured.
 
-Run it twice with whatever you are comparing - `--backend gl` against
-`--backend vulkan`, or `--slangshaders=0` against `=1` - then diff. TGA here is
-BGR and bottom-up:
+Run it twice with whatever you are comparing - for example, `--backend gl`
+against `--backend vulkan` - then diff. TGA here is BGR and bottom-up:
 
 ```python
 from PIL import Image, ImageChops
@@ -125,7 +124,7 @@ the screenshot. `extern/renderdoc_app.h` is vendored from the installation.
 ```
 & "C:\Program Files\RenderDoc\renderdoccmd.exe" capture --wait-for-exit \
     --working-dir "<BIN>" --capture-file "<BIN>\name" \
-    "<BIN>\engine.exe" --game "<GAME_DIR>" --slangshaders=1 \
+    "<BIN>\engine.exe" --game "<GAME_DIR>" \
     --commands-file warp.txt --capture rdc.tga --captureframe 3 --renderdoc 1
 ```
 
@@ -261,11 +260,14 @@ touches, and how far it moves them.
   This has now cost three separate investigations: three debugging probes against a module older than
   the edit, and later a texture that sampled as flat white because the sample
   was not in the compiled module at all. Build the default target, or the
-  `transpile_spirv` target explicitly.
+  `compile_spirv` target explicitly.
   **When a shader edit seems not to take effect, disassemble the module first**
   (`spirv-dis x.spv | grep Decorate`) and confirm the thing you just wrote is
   actually in there. It is a five-second check that beats an hour of suspecting
   descriptors.
+- **Removed OpenGL Slang path.** OpenGL once ran Slang SPIR-V modules, but its
+  missing Vulkan draw-parameter builtins silently dropped instanced geometry.
+  Measurements made through that path are invalid.
 - **Probing the G-buffer.** Writing a marker colour to `SV_Target0` in a
   deferred pass does not put that colour on screen - it goes through lighting.
   Write to the self-illumination target instead, which is added directly.
