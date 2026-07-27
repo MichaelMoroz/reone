@@ -1,0 +1,172 @@
+# What is left on the Vulkan backend
+
+Five pieces, ordered so each one is useful before the next starts. Every
+file:line below is a thing to read before changing it.
+
+## 1. The render target viewer has nothing to show on Vulkan
+
+`VulkanRenderPipeline::targets()` returns an empty vector -
+`src/libs/scene/render/pipeline/vulkan.cpp:1120`. Its comment says the viewer
+is part of the ImGui editor and the editor does not run on Vulkan, which
+stopped being true when the editor was brought up. So the list is empty for
+one reason only: nothing was ever put in it.
+
+The OpenGL side is the reference, `src/libs/scene/render/pipeline/pbr.cpp:298`:
+
+    G-buffer diffuse, eye normal, lightmap, self-illum, motion, depth
+    SSAO, SSR
+    Deferred opaque 1, Deferred opaque 2
+    OIT accum, OIT revealage
+    Output
+
+Vulkan can supply all of these except SSAO, SSR and the two deferred-opaque
+targets, which do not exist there yet - items 3 and 4 add three of them.
+
+Two things stand in the way, and only the second is real work.
+
+`RenderTargetInfo` carries a `graphics::Texture *`, and the editor hands
+ImGui an OpenGL texture id at `src/apps/engine/editor.cpp:301`. Vulkan targets
+are `VulkanImage`s, not `Texture`s. So the viewer needs a backend-neutral
+handle: on Vulkan that is a descriptor set from `ImGui_ImplVulkan_AddTexture`,
+cached per image and destroyed **before** the image view it points at. Targets
+are recreated on resize, so that ordering is not optional - a stale set is a
+use-after-free that no single-frame capture will catch.
+
+The dump path at `dumpTargets` already enumerates every Vulkan target with its
+name and current layout. That enumeration is most of what the viewer wants;
+prefer one list serving both over two lists that must agree. Two enumerations
+that have to stay in step is exactly how the duplicated feature masks became a
+hazard.
+
+Note the depth and motion targets need their `RenderTargetKind` respected -
+raw depth in a preview pane is unreadable without the conversion the OpenGL
+viewer already does.
+
+## 2. A settings tool, and which settings can actually change
+
+They are not uniformly runtime-changeable. Three tiers, from reading where
+each option is consulted:
+
+**Free - read per frame, change and it takes effect next frame**
+
+    fxaa, sharpen      filterChainPass, vulkan.cpp:893-912, pbr.cpp:417-421
+    ssao, ssr          bound conditionally per frame
+    drawDistance, taaJitter
+
+**Needs targets or the swapchain rebuilt**
+
+    shadowResolution   sizes shadow targets at init - pbr.cpp:122,135,
+                       vulkan.cpp:193
+    width, height      size every target
+    vsync              swapchain present mode
+
+**Needs assets or the scene reloaded**
+
+    grass              read when the area builds its grass nodes,
+                       src/libs/game/object/area.cpp:463 - toggling it later
+                       does nothing until the area reloads
+    textureQuality     affects what is loaded
+    anisotropicFiltering  baked into the sampler cache at upload
+    pbr                selects the whole pipeline
+
+So the tool should be honest about the tiers rather than presenting twelve
+checkboxes that behave in three different ways:
+
+- tier 1 as live controls;
+- tier 2 as controls that trigger an explicit rebuild, which the pipeline
+  already knows how to do on resize;
+- tier 3 either disabled with a note, or offered with a "requires reload"
+  marker and no pretence that it applies now.
+
+`grass` is the interesting one. It is a per-frame skip in every other respect;
+only node creation is gated. Moving that gate from area load to draw time
+would promote it to tier 1 cheaply, and is worth doing while the tool is being
+written. That also aligns with the registration rework, where the renderer
+decides what to draw.
+
+The tool belongs beside the existing editor windows and should work on both
+backends - the options struct is shared, and nothing here is Vulkan-specific
+except the swapchain rebuild.
+
+## 3. Bloom
+
+OpenGL renders self-illuminated highlights into a second colour attachment in
+the deferred resolve - `fragHilights` in `glsl/f_pbr_combine.glsl`, landing in
+`cbDeferredOpaque2` - blurs it, and adds it back when resolving transparency,
+`glsl/f_oit_blend.glsl:20`.
+
+Vulkan's `oitBlendFragment` substitutes zero for that term, with a comment
+saying it belongs with the bloom port. This is now the last known reason
+transparency cannot reach zero difference between the backends: at a saber-crop
+revealage of 0.956, a mean blurred highlight of about 0.057 accounts for the
+entire residual.
+
+What is needed:
+
+- a second colour attachment on the Vulkan resolve, carrying
+  `selfIllumed * step(0.95, color) * color` as the OpenGL one does;
+- a blur. `gausBlur9Fragment` and `gausBlur13Fragment` are already ported in
+  `slang/postprocess.slang` from the FXAA work, and the OpenGL pipeline runs
+  the blur separably, once per axis - see where it blurs before transparent
+  geometry in `pbr.cpp`;
+- feeding the result into `oitBlendFragment` in place of the zero;
+- both new targets exposed through `targets()` and `dumpTargets`, so the pair
+  can be diffed directly rather than inferred from the composite.
+
+Verification is unusually clean here: the saber crop is 4.5450 today, and the
+prediction is that most of what remains is this term. If it does not move by
+roughly that much, the diagnosis was wrong and should be revisited rather than
+patched around.
+
+## 4. SSAO and SSR
+
+Both exist on OpenGL - `glsl/f_pbr_ssao.glsl`, `glsl/f_pbr_ssr.glsl` - and
+neither exists on Vulkan. Measured together they are worth about 0.169/255 of
+whole-frame difference in danm14ab frame 900, which is small, but that frame
+has little reflective geometry and the figure is scene-dependent.
+
+Isolate them when measuring. They were tested together once and the result
+attributed to SSR alone; re-isolated, SSAO was about 0.113 and SSR about 0.068.
+
+Both are screen-space passes over the existing G-buffer, so this is a port of
+two fragment shaders plus two targets, not new plumbing. The resolve already
+has `#ifdef R_SSAO` and `R_SSR` branches on the OpenGL side and the Slang
+resolve has the same shape with the terms dropped out, so the wiring points
+are already marked.
+
+Do SSAO first: it applies to every surface, so it is easier to see and easier
+to verify, and it does not depend on reflection geometry being present in the
+test frame.
+
+## 5. Renderer registration
+
+Has its own document - `doc/renderer-registration-plan.md`. It is last here
+because it is the only item that changes the shape of the scene/renderer
+boundary, and because items 1 to 4 all produce things it will want to move:
+more targets to expose, more settings to toggle, and two more screen-space
+passes whose culling policy the renderer will own.
+
+Two cheap pieces of preparation can be done at any time, independently:
+
+- check whether grass cluster placement is deterministic per face, and make it
+  a hash of (face index, cluster index) if it is not;
+- count total grass instances for a real outdoor area, to find out whether
+  "grass everywhere" is a TLAS that can simply be built.
+
+## Working notes that apply to all of it
+
+Build the `engine` target, never a sublibrary alone: shaders come from
+`build/bin/shaderpack.erf` and only that target repacks them. An edit to
+`glsl/` or `slang/` that is not repacked runs the previous shader and reports
+success.
+
+`--slangshaders` defaults to false. A run without it does not exercise the
+Slang path at all.
+
+If `engine.exe` is locked, a previous run is still alive: the link fails and
+the next measurement silently uses the old binary.
+
+Whole-frame RGB mean absolute difference between the backends in danm14ab
+frame 900, `--pbr 1 --ssao 0 --ssr 0 --dev 0 --slangshaders=1`, is **1.2179**.
+Measure from the `.npy` dumps rather than a screenshot; a figure of 1.0299 has
+been reported twice from some other method and does not reproduce.
