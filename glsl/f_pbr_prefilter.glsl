@@ -1,4 +1,5 @@
 #include "i_math.glsl"
+#include "u_locals.glsl"
 
 in vec4 fragPosWorld;
 
@@ -7,6 +8,16 @@ out vec4 fragColor;
 uniform float uRoughness;
 
 uniform samplerCube sEnvMapCube;
+uniform sampler2D sEnvMap;
+
+vec3 sampleEnvironment(vec3 direction, float lod) {
+    if (isFeatureEnabled(FEATURE_ENVMAPCUBE)) {
+        return textureLod(sEnvMapCube, direction, lod).rgb;
+    }
+    vec3 d = normalize(-direction);
+    vec2 uv = vec2(0.5 + atan(d.x, d.z) / (2.0 * PI), 0.5 - asin(d.y) / PI);
+    return textureLod(sEnvMap, uv, lod).rgb;
+}
 
 float DistributionGGX(vec3 N, vec3 H, float roughness) {
     float a = roughness * roughness;
@@ -87,7 +98,7 @@ void main() {
 
             float mipLevel = uRoughness == 0.0 ? 0.0 : 0.5 * log2(saSample / saTexel);
 
-            prefilteredColor += textureLod(sEnvMapCube, L, mipLevel).rgb * NdotL;
+            prefilteredColor += sampleEnvironment(L, mipLevel) * NdotL;
             totalWeight += NdotL;
         }
     }

@@ -27,6 +27,7 @@ static const uint kPrefilterSamples = 1024u;
 static const float kIrradianceDelta = 0.025;
 
 [[vk::binding(18, 1)]] SamplerCube sEnvMapCube;
+[[vk::binding(2, 1)]] Sampler2D sEnvMap;
 
 struct Varyings {
     float4 position : SV_Position;
@@ -74,6 +75,16 @@ float3 directionFor(int face, float2 uv) {
     default:
         return normalize(float3(-st.x, st.y, -1.0));
     }
+}
+
+float3 sampleEnvironment(float3 direction, float lod) {
+    if (isFeatureEnabled(kFeatureEnvMapCube)) {
+        return sEnvMapCube.SampleLevel(direction, lod).rgb;
+    }
+    float3 d = normalize(-direction);
+    float2 uv = float2(0.5 + atan2(d.x, d.z) / (2.0 * kPi),
+                       0.5 - asin(d.y) / kPi);
+    return sEnvMap.SampleLevel(uv, lod).rgb;
 }
 
 /** Van der Corput radical inverse, the second dimension of a Hammersley set. */
@@ -173,7 +184,7 @@ float4 irradianceFragment(Varyings input) : SV_Target {
             float3 sampleVec = tangentSample.x * right +
                                tangentSample.y * up +
                                tangentSample.z * N;
-            irradiance += sEnvMapCube.Sample(sampleVec).rgb * cos(theta) * sin(theta);
+            irradiance += sampleEnvironment(sampleVec, 0.0) * cos(theta) * sin(theta);
             samples += 1.0;
         }
     }
@@ -228,7 +239,7 @@ float4 prefilterFragment(Varyings input) : SV_Target {
         float saSample = 1.0 / (float(kSampleCount) * pdf + 0.0001);
         float mipLevel = roughness == 0.0 ? 0.0 : 0.5 * log2(saSample / saTexel);
 
-        prefiltered += sEnvMapCube.SampleLevel(L, mipLevel).rgb * NdotL;
+        prefiltered += sampleEnvironment(L, mipLevel) * NdotL;
         totalWeight += NdotL;
     }
     return float4(prefiltered / totalWeight, 1.0);

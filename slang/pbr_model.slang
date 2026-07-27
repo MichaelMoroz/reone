@@ -279,7 +279,7 @@ GBufferOutput opaqueFragment(Varyings input) {
     }
 
     float features = packGeometryFeatures(
-        isFeatureEnabled(kFeatureEnvMapCube),
+        isFeatureEnabled(kFeatureEnvMap),
         isFeatureEnabled(kFeatureShadows),
         isFeatureEnabled(kFeatureFog));
 

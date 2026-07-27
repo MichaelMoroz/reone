@@ -83,8 +83,13 @@ void PBRRenderPass::withMaterialAppliedToContext(const Material &material, std::
     for (const auto &[unit, texture] : material.textures) {
         _context.bindTexture(texture, unit);
     }
-    if (material.textures.count(TextureUnits::envMapCube) > 0) {
-        auto &envMap = material.textures.at(TextureUnits::envMapCube).get();
+    _envMapDerivedLayer = 0;
+    auto envMapIt = material.textures.find(TextureUnits::envMapCube);
+    if (envMapIt == material.textures.end()) {
+        envMapIt = material.textures.find(TextureUnits::envMap);
+    }
+    if (envMapIt != material.textures.end()) {
+        auto &envMap = envMapIt->second.get();
         if (_options.pbr) {
             auto layer = _pbrTextures.findEnvMapDerivedLayer(envMap.name());
             if (layer) {
@@ -117,52 +122,6 @@ void PBRRenderPass::withMaterialAppliedToContext(const Material &material, std::
     if (material.polygonMode && *material.polygonMode != prevPolygonMode) {
         _context.popPolygonMode();
     }
-}
-
-int PBRRenderPass::materialFeatureMask(const Material &material) const {
-    int mask = 0;
-    const auto &textures = material.textures;
-    if (textures.count(TextureUnits::mainTex) > 0) {
-        const auto &mainTex = textures.at(TextureUnits::mainTex).get();
-        switch (mainTex.features().blending) {
-        case Texture::Blending::PunchThrough:
-            mask |= UniformsFeatureFlags::hashedalphatest;
-            break;
-        case Texture::Blending::Additive:
-            if (textures.count(TextureUnits::envMap) == 0 &&
-                textures.count(TextureUnits::envMapCube) == 0) {
-                mask |= UniformsFeatureFlags::premulalpha;
-            }
-            break;
-        default:
-            break;
-        }
-        if (mainTex.features().waterAlpha != -1.0f) {
-            mask |= UniformsFeatureFlags::water;
-        }
-    }
-    if (textures.count(TextureUnits::lightmap) > 0) {
-        mask |= UniformsFeatureFlags::lightmap;
-    }
-    if (textures.count(TextureUnits::envMap) > 0) {
-        mask |= UniformsFeatureFlags::envmap;
-    }
-    if (textures.count(TextureUnits::envMapCube) > 0) {
-        mask |= UniformsFeatureFlags::envmap | UniformsFeatureFlags::envmapcube;
-    }
-    if (textures.count(TextureUnits::normalMap) > 0) {
-        mask |= UniformsFeatureFlags::normalmap;
-    }
-    if (textures.count(TextureUnits::bumpMapArray) > 0) {
-        mask |= UniformsFeatureFlags::bumpmap;
-    }
-    if (material.affectedByShadows) {
-        mask |= UniformsFeatureFlags::shadows;
-    }
-    if (material.affectedByFog) {
-        mask |= UniformsFeatureFlags::fog;
-    }
-    return mask;
 }
 
 void PBRRenderPass::drawSkinned(Mesh &mesh,
@@ -330,7 +289,7 @@ void PBRRenderPass::applyMaterialToLocals(const Material &material,
                                           LocalUniforms &locals) {
     // Resolved by withMaterialAppliedToContext, which always runs first.
     locals.envMapDerivedLayer = _envMapDerivedLayer;
-    locals.featureMask |= materialFeatureMask(material);
+    locals.featureMask |= graphics::materialFeatureMask(material);
     locals.uv = material.uv;
     locals.color = material.color;
     locals.ambientColor = glm::vec4 {material.ambientColor, 0.0f};

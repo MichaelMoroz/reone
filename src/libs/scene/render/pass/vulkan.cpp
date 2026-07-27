@@ -58,54 +58,6 @@ void VulkanRenderPass::warnOnce(const std::string &what) {
          LogChannel::Graphics);
 }
 
-int VulkanRenderPass::materialFeatureMask(const Material &material) const {
-    // Mirrors PBRRenderPass::materialFeatureMask. The two must agree, because
-    // they feed the same fragment shader.
-    int mask = 0;
-    const auto &textures = material.textures;
-    if (textures.count(TextureUnits::mainTex) > 0) {
-        const auto &mainTex = textures.at(TextureUnits::mainTex).get();
-        switch (mainTex.features().blending) {
-        case Texture::Blending::PunchThrough:
-            mask |= UniformsFeatureFlags::hashedalphatest;
-            break;
-        case Texture::Blending::Additive:
-            if (textures.count(TextureUnits::envMap) == 0 &&
-                textures.count(TextureUnits::envMapCube) == 0) {
-                mask |= UniformsFeatureFlags::premulalpha;
-            }
-            break;
-        default:
-            break;
-        }
-        if (mainTex.features().waterAlpha != -1.0f) {
-            mask |= UniformsFeatureFlags::water;
-        }
-    }
-    if (textures.count(TextureUnits::lightmap) > 0) {
-        mask |= UniformsFeatureFlags::lightmap;
-    }
-    if (textures.count(TextureUnits::envMap) > 0) {
-        mask |= UniformsFeatureFlags::envmap;
-    }
-    if (textures.count(TextureUnits::envMapCube) > 0) {
-        mask |= UniformsFeatureFlags::envmap | UniformsFeatureFlags::envmapcube;
-    }
-    if (textures.count(TextureUnits::normalMap) > 0) {
-        mask |= UniformsFeatureFlags::normalmap;
-    }
-    if (textures.count(TextureUnits::bumpMapArray) > 0) {
-        mask |= UniformsFeatureFlags::bumpmap;
-    }
-    if (material.affectedByShadows) {
-        mask |= UniformsFeatureFlags::shadows;
-    }
-    if (material.affectedByFog) {
-        mask |= UniformsFeatureFlags::fog;
-    }
-    return mask;
-}
-
 void VulkanRenderPass::fillLocals(LocalUniforms &locals,
                                   const Material &material,
                                   const glm::mat4 &transform,
@@ -117,11 +69,15 @@ void VulkanRenderPass::fillLocals(LocalUniforms &locals,
     locals.model = transform;
     locals.modelInv = transformInv;
     locals.prevModel = prevTransform;
-    locals.featureMask |= materialFeatureMask(material) | extraFeatureBits;
-    if (material.textures.count(TextureUnits::envMapCube) > 0 && _options.pbr) {
-        // The resolve samples a convolved copy, not this cube map, so the first
+    locals.featureMask |= graphics::materialFeatureMask(material) | extraFeatureBits;
+    auto envMapIt = material.textures.find(TextureUnits::envMapCube);
+    if (envMapIt == material.textures.end()) {
+        envMapIt = material.textures.find(TextureUnits::envMap);
+    }
+    if (envMapIt != material.textures.end() && _options.pbr) {
+        // The resolve samples a convolved copy, not the source environment map, so the first
         // sighting only asks for one and settles for layer zero until it exists.
-        auto &envMap = material.textures.at(TextureUnits::envMapCube).get();
+        auto &envMap = envMapIt->second.get();
         auto layer = _pbrTextures.findEnvMapDerivedLayer(envMap.name());
         if (layer) {
             locals.envMapDerivedLayer = *layer;

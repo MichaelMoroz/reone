@@ -17,7 +17,9 @@
 
 #pragma once
 
+#include "texture.h"
 #include "types.h"
+#include "uniforms.h"
 
 namespace reone {
 
@@ -56,6 +58,57 @@ public:
     std::optional<FaceCullMode> faceCulling;
     std::optional<PolygonMode> polygonMode;
 };
+
+/**
+ * Features that describe a material rather than a particular draw path.
+ * Keeping this beside Material prevents backend-specific copies from quietly
+ * changing which fragment path an otherwise identical material takes.
+ */
+inline int materialFeatureMask(const Material &material) {
+    int mask = 0;
+    const auto &textures = material.textures;
+    if (auto it = textures.find(TextureUnits::mainTex); it != textures.end()) {
+        const auto &mainTex = it->second.get();
+        switch (mainTex.features().blending) {
+        case Texture::Blending::PunchThrough:
+            mask |= UniformsFeatureFlags::hashedalphatest;
+            break;
+        case Texture::Blending::Additive:
+            if (textures.count(TextureUnits::envMap) == 0 &&
+                textures.count(TextureUnits::envMapCube) == 0) {
+                mask |= UniformsFeatureFlags::premulalpha;
+            }
+            break;
+        default:
+            break;
+        }
+        if (mainTex.features().waterAlpha != -1.0f) {
+            mask |= UniformsFeatureFlags::water;
+        }
+    }
+    if (textures.count(TextureUnits::lightmap) > 0) {
+        mask |= UniformsFeatureFlags::lightmap;
+    }
+    if (textures.count(TextureUnits::envMap) > 0) {
+        mask |= UniformsFeatureFlags::envmap;
+    }
+    if (textures.count(TextureUnits::envMapCube) > 0) {
+        mask |= UniformsFeatureFlags::envmap | UniformsFeatureFlags::envmapcube;
+    }
+    if (textures.count(TextureUnits::normalMap) > 0) {
+        mask |= UniformsFeatureFlags::normalmap;
+    }
+    if (textures.count(TextureUnits::bumpMapArray) > 0) {
+        mask |= UniformsFeatureFlags::bumpmap;
+    }
+    if (material.affectedByShadows) {
+        mask |= UniformsFeatureFlags::shadows;
+    }
+    if (material.affectedByFog) {
+        mask |= UniformsFeatureFlags::fog;
+    }
+    return mask;
+}
 
 } // namespace graphics
 

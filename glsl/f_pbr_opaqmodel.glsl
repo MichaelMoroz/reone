@@ -60,7 +60,7 @@ void main() {
         diffuseColor *= uWaterAlpha;
     }
 
-    float features = packGeometryFeatures(isFeatureEnabled(FEATURE_ENVMAPCUBE),
+    float features = packGeometryFeatures(isFeatureEnabled(FEATURE_ENVMAP),
                                           isFeatureEnabled(FEATURE_SHADOWS),
                                           isFeatureEnabled(FEATURE_FOG));
 

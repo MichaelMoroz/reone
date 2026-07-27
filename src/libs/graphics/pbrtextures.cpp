@@ -160,9 +160,12 @@ void PBRTextures::refreshIrradianceMap(const EnvMapDerivedRequest &request, int 
     _context.bindDrawFramebuffer(*_irradianceFramebuffer, {0});
     auto &shader = _shaderRegistry.get(ShaderProgramId::pbrIrradiance);
     _context.useProgram(shader);
-    _context.bindTexture(request.texture, TextureUnits::envMapCube);
-    _uniforms.setLocals([](auto &locals) {
+    _context.bindTexture(request.texture, request.texture.isCubeMap() ? TextureUnits::envMapCube : TextureUnits::envMap);
+    _uniforms.setLocals([&request](auto &locals) {
         locals.reset();
+        if (request.texture.isCubeMap()) {
+            locals.featureMask |= UniformsFeatureFlags::envmapcube;
+        }
     });
     _context.withViewport(glm::ivec4 {0, 0, kIrradianceTextureSize, kIrradianceTextureSize}, [this, &layer]() {
         for (int i = 0; i < kNumCubeFaces; ++i) {
@@ -183,9 +186,12 @@ void PBRTextures::refreshPrefilteredEnvMap(const EnvMapDerivedRequest &request, 
     _context.bindDrawFramebuffer(*_prefilterFramebuffer, {0});
     auto &shader = _shaderRegistry.get(ShaderProgramId::pbrPrefilter);
     _context.useProgram(shader);
-    _context.bindTexture(request.texture, TextureUnits::envMapCube);
-    _uniforms.setLocals([](auto &locals) {
+    _context.bindTexture(request.texture, request.texture.isCubeMap() ? TextureUnits::envMapCube : TextureUnits::envMap);
+    _uniforms.setLocals([&request](auto &locals) {
         locals.reset();
+        if (request.texture.isCubeMap()) {
+            locals.featureMask |= UniformsFeatureFlags::envmapcube;
+        }
     });
     for (int mip = 0; mip < kNumPrefilteredMipMaps; ++mip) {
         int w = static_cast<int>(kPrefilteredTextureSize * std::pow(0.5, mip));

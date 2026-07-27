@@ -241,7 +241,6 @@ private:
                     int extraFeatureBits,
                     std::optional<glm::vec4> saberDisplacement) const;
 
-    int materialFeatureMask(const graphics::Material &material) const;
 };
 
 } // namespace scene

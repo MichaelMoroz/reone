@@ -293,6 +293,9 @@ void VulkanPBRTextures::renderCubeFaces(VkCommandBuffer cmd,
     LocalUniforms locals;
     locals.reset();
     locals.iblRoughness = roughness;
+    if (envMap && envMap->isCubeMap()) {
+        locals.featureMask |= UniformsFeatureFlags::envmapcube;
+    }
 
     std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
@@ -305,7 +308,8 @@ void VulkanPBRTextures::renderCubeFaces(VkCommandBuffer cmd,
 
     std::vector<std::pair<int, const VulkanImage *>> textures;
     if (envMap) {
-        textures.push_back({TextureUnits::envMapCube, &_resources.get(*envMap)});
+        auto unit = envMap->isCubeMap() ? TextureUnits::envMapCube : TextureUnits::envMap;
+        textures.push_back({unit, &_resources.get(*envMap)});
     }
 
     vkCmdBeginRendering(cmd, &rendering);

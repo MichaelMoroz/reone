@@ -1,10 +1,21 @@
 #include "i_math.glsl"
+#include "u_locals.glsl"
 
 in vec4 fragPosWorld;
 
 out vec4 fragColor;
 
 uniform samplerCube sEnvMapCube;
+uniform sampler2D sEnvMap;
+
+vec3 sampleEnvironment(vec3 direction) {
+    if (isFeatureEnabled(FEATURE_ENVMAPCUBE)) {
+        return texture(sEnvMapCube, direction).rgb;
+    }
+    vec3 d = normalize(-direction);
+    vec2 uv = vec2(0.5 + atan(d.x, d.z) / (2.0 * PI), 0.5 - asin(d.y) / PI);
+    return texture(sEnvMap, uv).rgb;
+}
 
 void main() {
     vec3 N = normalize(fragPosWorld.xyz);
@@ -25,7 +36,7 @@ void main() {
             // tangent space to world
             vec3 sampleVec = tangentSample.x * right + tangentSample.y * up + tangentSample.z * N;
 
-            irradiance += texture(sEnvMapCube, sampleVec).rgb * cos(theta) * sin(theta);
+            irradiance += sampleEnvironment(sampleVec) * cos(theta) * sin(theta);
             nrSamples++;
         }
     }
