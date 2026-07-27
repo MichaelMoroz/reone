@@ -88,6 +88,21 @@ The tool belongs beside the existing editor windows and should work on both
 backends - the options struct is shared, and nothing here is Vulkan-specific
 except the swapchain rebuild.
 
+### Unfinished: resolution changes at runtime
+
+Aspect ratio and the interface's screen centre are now read from the options
+rather than cached, but nothing re-applies them, so changing the resolution
+while a module is loaded still leaves the view stretched and the interface
+off-centre. Both need a trigger, not just a live value:
+
+- each camera applies its projection from `load`, `deserialize` or
+  `updateProjection` depending on the class, and none of those runs again;
+- `GUI::_rootOffset` is computed inside `load` and used by every control.
+
+Doing it properly means a virtual on the camera base that the area can call
+over its cameras, and lifting the scaling switch out of `GUI::load` so it can
+be re-run. Until then, treat resolution as needing a restart.
+
 ## 3. Bloom
 
 OpenGL renders self-illuminated highlights into a second colour attachment in
