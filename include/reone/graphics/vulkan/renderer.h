@@ -76,6 +76,10 @@ public:
     void endFrame() override;
     void invalidateResources() override;
     void invalidateTexture(Texture &texture) override;
+    void setVsync(bool enabled) {
+        _swapchain.setVsync(enabled);
+        _needsRecreate = true;
+    }
 
     /** The colour beginFrame clears to. */
     void setClearColor(glm::vec4 color) { _clearColor = color; }

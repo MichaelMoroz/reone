@@ -214,9 +214,6 @@ void Profiler::measure(const std::string &threadName,
     uint64_t before = _systemSvc.clock.micros();
     block();
     uint64_t after = _systemSvc.clock.micros();
-    if (!_enabled.load(std::memory_order::memory_order_acquire)) {
-        return;
-    }
     checkThat(0 <= timeIndex && timeIndex < 4, "timeIndex must be between 0 and 3");
     checkThat(_nameToTimedThread.count(threadName) > 0, "Timed thread must be reserved");
     auto &thread = _nameToTimedThread.at(threadName).get();
@@ -226,6 +223,20 @@ void Profiler::measure(const std::string &threadName,
         times.pop_front();
     }
     times.push_back((after - before) / 1e6f);
+}
+
+std::array<std::vector<float>, 4> Profiler::frameTimes(const std::string &threadName) const {
+    std::array<std::vector<float>, 4> result;
+    auto found = _nameToTimedThread.find(threadName);
+    if (found == _nameToTimedThread.end()) {
+        return result;
+    }
+    const auto &thread = found->second.get();
+    std::lock_guard<std::mutex> lock {thread.mutex};
+    for (size_t i = 0; i < result.size(); ++i) {
+        result[i].assign(thread.times[i].begin(), thread.times[i].end());
+    }
+    return result;
 }
 
 } // namespace reone

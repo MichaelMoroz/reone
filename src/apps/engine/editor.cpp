@@ -35,6 +35,9 @@
 #include "imgui_internal.h" // DockBuilder, for the default right-hand layout
 #include "imgui_stdlib.h"
 
+#include <algorithm>
+#include <numeric>
+
 namespace reone {
 
 // Editor::handle should take priority over ImGui event processing, so it close
@@ -191,6 +194,103 @@ void Editor::twoDa() {
 void Editor::imGuiDemo() {
     dockNext();
     ImGui::ShowDemoWindow(&_showImGuiDemo);
+}
+
+void Editor::graphicsSettings() {
+    dockNext();
+    ImGui::SetNextWindowSize(ImVec2(410, 520), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Graphics settings", &_showGraphicsSettings)) {
+        ImGui::End();
+        return;
+    }
+    auto &options = _engine._options.graphics;
+
+    ImGui::TextUnformatted("Live (applies next frame)");
+    ImGui::Separator();
+    ImGui::Checkbox("FXAA", &options.fxaa);
+    ImGui::Checkbox("Sharpen", &options.sharpen);
+    ImGui::Checkbox("SSAO", &options.ssao);
+    ImGui::Checkbox("SSR", &options.ssr);
+    ImGui::Checkbox("Grass", &options.grass);
+    ImGui::Checkbox("TAA jitter", &options.taaJitter);
+    ImGui::SliderFloat("Draw distance", &options.drawDistance, 1.0f, 1000.0f, "%.0f");
+
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Requires graphics rebuild");
+    ImGui::Separator();
+    if (_pendingWidth == 0) {
+        _pendingWidth = options.width;
+        _pendingHeight = options.height;
+        _pendingShadowResolution = options.shadowResolution;
+        _pendingVsync = options.vsync;
+    }
+    ImGui::InputInt("Width", &_pendingWidth);
+    ImGui::InputInt("Height", &_pendingHeight);
+    ImGui::SliderInt("Shadow resolution", &_pendingShadowResolution, 512, 8192, "%d", ImGuiSliderFlags_Logarithmic);
+    ImGui::Checkbox("V-sync", &_pendingVsync);
+    if (ImGui::Button("Rebuild graphics targets")) {
+        options.width = std::max(1, _pendingWidth);
+        options.height = std::max(1, _pendingHeight);
+        options.shadowResolution = _pendingShadowResolution;
+        options.vsync = _pendingVsync;
+        _engine.requestGraphicsRebuild();
+    }
+
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Requires scene or asset reload");
+    ImGui::Separator();
+    bool pbr = options.pbr;
+    int textureQuality = static_cast<int>(options.textureQuality);
+    int anisotropic = options.anisotropicFiltering;
+    ImGui::BeginDisabled();
+    ImGui::Checkbox("PBR", &pbr);
+    ImGui::SliderInt("Texture quality", &textureQuality, 0, 2);
+    ImGui::SliderInt("Anisotropic filtering", &anisotropic, 1, 16);
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("These settings take effect after reloading.");
+    ImGui::End();
+}
+
+void Editor::frameTimes() {
+    dockNext();
+    ImGui::SetNextWindowSize(ImVec2(480, 370), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Frame times", &_showFrameTimes)) {
+        ImGui::End();
+        return;
+    }
+    auto slots = _engine._profiler->frameTimes("main");
+    if (std::any_of(slots.begin(), slots.end(), [](const auto &slot) { return slot.empty(); })) {
+        ImGui::TextUnformatted("Collecting samples...");
+        ImGui::End();
+        return;
+    }
+    size_t count = slots[0].size();
+    for (const auto &slot : slots) {
+        count = std::min(count, slot.size());
+    }
+    std::vector<float> total(count, 0.0f);
+    for (const auto &slot : slots) {
+        for (size_t i = 0; i < total.size(); ++i) {
+            total[i] += slot[i] * 1000.0f;
+        }
+    }
+    float mean = std::accumulate(total.begin(), total.end(), 0.0f) / total.size();
+    auto sorted = total;
+    std::sort(sorted.begin(), sorted.end());
+    float onePercentWorst = sorted[std::max<size_t>(0, sorted.size() * 99 / 100)];
+    ImGui::Text("Mean %.2f ms (%.1f FPS)   1%% worst %.2f ms", mean, 1000.0f / mean, onePercentWorst);
+    ImGui::PlotLines("Frame time (ms)", total.data(), static_cast<int>(total.size()), 0, nullptr, 0.0f,
+                     std::max(33.0f, *std::max_element(total.begin(), total.end()) * 1.1f), ImVec2(-FLT_MIN, 130));
+    static constexpr const char *names[] = {"Input", "Update", "Graphics render", "Audio render"};
+    for (size_t i = 0; i < slots.size(); ++i) {
+        slots[i].resize(count);
+        for (float &sample : slots[i]) {
+            sample *= 1000.0f;
+        }
+        ImGui::PlotLines(names[i], slots[i].data(), static_cast<int>(slots[i].size()), 0, nullptr, 0.0f,
+                         std::max(16.0f, *std::max_element(slots[i].begin(), slots[i].end()) * 1.1f), ImVec2(-FLT_MIN, 42));
+    }
+    ImGui::End();
 }
 
 static constexpr int kPreviewWidth = 640;
@@ -358,6 +458,8 @@ void Editor::update(float dt) {
         if (ImGui::BeginMenu("Tools")) {
             ImGui::MenuItem("2DA", nullptr, &_showTwoDa);
             ImGui::MenuItem("Render targets", nullptr, &_showRenderTargets);
+            ImGui::MenuItem("Graphics settings", nullptr, &_showGraphicsSettings);
+            ImGui::MenuItem("Frame times", nullptr, &_showFrameTimes);
             ImGui::EndMenu();
         }
 
@@ -380,6 +482,25 @@ void Editor::update(float dt) {
             ImGui::MenuItem("ImGui Demo", nullptr, &_showImGuiDemo);
             ImGui::EndMenu();
         }
+        // After the menus rather than before them. SameLine positions the next
+        // item relative to the previous one, and with nothing yet on the bar
+        // there is no previous one, so the readout was placed nowhere and
+        // never appeared.
+        {
+            auto slots = _engine._profiler->frameTimes("main");
+            float latest = 0.0f;
+            for (const auto &slot : slots) {
+                if (!slot.empty()) {
+                    latest += slot.back();
+                }
+            }
+            ImGui::SameLine(ImGui::GetWindowWidth() - 200.0f);
+            if (latest > 0.0f) {
+                ImGui::Text("%.1f FPS  %.2f ms", 1.0f / latest, latest * 1000.0f);
+            } else {
+                ImGui::TextUnformatted("FPS collecting...");
+            }
+        }
         ImGui::EndMainMenuBar();
     }
 
@@ -389,6 +510,14 @@ void Editor::update(float dt) {
         renderTargets();
     } else {
         _rtSource = nullptr;
+    }
+
+    if (_showGraphicsSettings) {
+        graphicsSettings();
+    }
+
+    if (_showFrameTimes) {
+        frameTimes();
     }
 
     if (_showTwoDa) {

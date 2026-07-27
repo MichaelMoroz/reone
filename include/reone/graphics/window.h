@@ -53,6 +53,8 @@ public:
     }
 
     void setRelativeMouseMode(bool relative);
+    void resize(int width, int height);
+    void setVsync(bool enabled);
 
     /**
      * Exposed for Dear ImGui, whose SDL and OpenGL backends need the raw

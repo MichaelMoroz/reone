@@ -44,6 +44,12 @@ ISceneGraph &SceneGraphs::get(const std::string &name) {
     return *maybeScene->second;
 }
 
+void SceneGraphs::invalidateRenderPipelines() {
+    for (auto &[name, scene] : _scenes) {
+        scene->invalidateRenderPipeline();
+    }
+}
+
 } // namespace scene
 
 } // namespace reone

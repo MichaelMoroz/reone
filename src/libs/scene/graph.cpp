@@ -379,6 +379,9 @@ void SceneGraph::prepareOpaqueLeafs() {
     auto camera = _activeCamera->camera();
 
     // Group grass clusters into buckets without sorting
+    if (!_graphicsOpt.grass) {
+        return;
+    }
     for (auto &grass : _grassRoots) {
         if (!grass->isEnabled()) {
             continue;

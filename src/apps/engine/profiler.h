@@ -72,12 +72,14 @@ public:
                  int timeIndex,
                  const std::function<void()> &block) override;
 
+    std::array<std::vector<float>, 4> frameTimes(const std::string &threadName) const;
+
 private:
     struct TimedThread {
         std::string name;
         std::vector<glm::vec3> colors;
         std::array<std::deque<float>, 4> times;
-        std::mutex mutex;
+        mutable std::mutex mutex;
     };
 
     graphics::GraphicsOptions &_graphicsOpt;

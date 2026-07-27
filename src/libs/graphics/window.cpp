@@ -159,6 +159,17 @@ void Window::setRelativeMouseMode(bool isRelative) {
     SDL_SetWindowRelativeMouseMode(_window, isRelative);
 }
 
+void Window::resize(int width, int height) {
+    SDL_SetWindowSize(_window, width * _options.winScale / 100,
+                      height * _options.winScale / 100);
+}
+
+void Window::setVsync(bool enabled) {
+    if (!isVulkanBackend()) {
+        SDL_GL_SetSwapInterval(enabled ? 1 : 0);
+    }
+}
+
 } // namespace graphics
 
 } // namespace reone

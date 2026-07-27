@@ -47,6 +47,7 @@ public:
 
     /** Tear down and rebuild at a new size, keeping the same format. */
     void recreate(glm::ivec2 extent);
+    void setVsync(bool enabled) { _vsync = enabled; }
 
     VkSwapchainKHR handle() const { return _swapchain.swapchain; }
     VkFormat imageFormat() const { return _swapchain.image_format; }

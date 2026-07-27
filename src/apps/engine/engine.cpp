@@ -398,6 +398,14 @@ void Engine::init() {
 void Engine::deinit() {
     _editor.reset();
 
+#ifdef R_ENABLE_VULKAN
+    if (_vulkanRenderer) {
+        // Pipelines own images sampled by the last submitted command buffer;
+        // release them only after that work has completed.
+        _vulkanRenderer->device().waitIdle();
+    }
+#endif
+
     // Before ImGui goes away. A render pipeline holds an ImGui descriptor set
     // for its target preview, allocated from a pool that ImGui's shutdown
     // destroys, so a pipeline outliving that shutdown releases a descriptor
@@ -624,6 +632,7 @@ void Engine::renderFrame(bool &quit) {
 }
 
 void Engine::renderGLFrame(bool &quit) {
+    applyGraphicsRebuildGL();
     if (_options.graphics.pbr) {
         _services->graphics.pbrTextures.refresh();
     }
@@ -650,9 +659,14 @@ void Engine::renderGLFrame(bool &quit) {
 void Engine::renderVulkanFrame(bool &quit) {
 #ifdef R_ENABLE_VULKAN
     glm::ivec2 extent {_options.graphics.width, _options.graphics.height};
+    if (_graphicsRebuildRequested) {
+        _window->resize(_options.graphics.width, _options.graphics.height);
+        _vulkanRenderer->setVsync(_options.graphics.vsync);
+    }
     // Before the frame's rendering scope: the scene pipeline begins render
     // passes of its own, and one cannot be nested inside another.
     _vulkanRenderer->beginFrame(extent);
+    applyGraphicsRebuildVulkan();
     imguiBeginFrame();
     _game->renderSceneOffscreen();
 
@@ -700,6 +714,31 @@ void Engine::renderVulkanFrame(bool &quit) {
     imguiRender();
     captureIfRequested(quit);
     _vulkanRenderer->endFrame();
+#endif
+}
+
+void Engine::applyGraphicsRebuildGL() {
+    if (!_graphicsRebuildRequested) {
+        return;
+    }
+    // The preceding frame may still be sampling its targets when this is
+    // called, so wait before letting their owners release them.
+    glFinish();
+    _window->resize(_options.graphics.width, _options.graphics.height);
+    _window->setVsync(_options.graphics.vsync);
+    _sceneModule->graphs().invalidateRenderPipelines();
+    _graphicsRebuildRequested = false;
+}
+
+void Engine::applyGraphicsRebuildVulkan() {
+#ifdef R_ENABLE_VULKAN
+    if (!_graphicsRebuildRequested) {
+        return;
+    }
+    // beginFrame recreated the swapchain and waited for old work before this
+    // point, which makes releasing the old scene images safe.
+    _sceneModule->graphs().invalidateRenderPipelines();
+    _graphicsRebuildRequested = false;
 #endif
 }
 

@@ -51,6 +51,7 @@ public:
     virtual void reserve(std::string name) = 0;
 
     virtual ISceneGraph &get(const std::string &name) = 0;
+    virtual void invalidateRenderPipelines() = 0;
 
     virtual std::set<std::string> sceneNames() const = 0;
 };
@@ -73,6 +74,7 @@ public:
     void reserve(std::string name) override;
 
     ISceneGraph &get(const std::string &name) override;
+    void invalidateRenderPipelines() override;
 
     std::set<std::string> sceneNames() const override {
         auto names = std::set<std::string>();

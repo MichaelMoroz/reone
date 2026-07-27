@@ -86,6 +86,16 @@ private:
     std::unique_ptr<graphics::Framebuffer> _rtPreview;
     graphics::Texture *_rtSource {nullptr};
 
+    void graphicsSettings();
+    bool _showGraphicsSettings {false};
+    int _pendingWidth {0};
+    int _pendingHeight {0};
+    int _pendingShadowResolution {0};
+    bool _pendingVsync {true};
+
+    void frameTimes();
+    bool _showFrameTimes {false};
+
     // 2DA List window
     void twoDa();
     bool _showTwoDa {false};

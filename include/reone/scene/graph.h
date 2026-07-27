@@ -89,6 +89,8 @@ public:
      * created lazily on the first render.
      */
     virtual IRenderPipeline *renderPipeline() = 0;
+    /** Discard target-sized state before the next render recreates it. */
+    virtual void invalidateRenderPipeline() = 0;
     virtual std::optional<std::reference_wrapper<CameraSceneNode>> camera() = 0;
 
     virtual void setAmbientLightColor(glm::vec3 color) = 0;
@@ -162,6 +164,7 @@ public:
 
     void update(float dt) override;
     graphics::Texture &render(const glm::ivec2 &dim) override;
+    void invalidateRenderPipeline() override { _renderPipeline.reset(); }
 
     void renderShadows(IRenderPass &pass);
     void renderOpaque(IRenderPass &pass);
