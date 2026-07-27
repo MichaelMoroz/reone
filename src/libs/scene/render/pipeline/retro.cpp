@@ -166,6 +166,13 @@ void RetroRenderPipeline::initRenderTargets() {
     _targets.output->init();
 }
 
+std::vector<RenderTargetInfo> RetroRenderPipeline::targets() const {
+    if (!_targets.outputColor) {
+        return {};
+    }
+    return {{"Output", RenderTargetKind::Color, _targets.outputColor.get()}};
+}
+
 Texture &RetroRenderPipeline::render(RenderRegistry &registry,
                                      const CameraSceneNode *camera,
                                      RenderPassName shadowPass) {

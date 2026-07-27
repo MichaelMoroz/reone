@@ -15,6 +15,7 @@
 
 import uniforms;
 import lib.math;
+import lib.shadow;
 import lib.surface;
 
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
@@ -22,8 +23,6 @@ import lib.surface;
 [[vk::binding(3, 1)]] Sampler2D sGBufLightmap;
 [[vk::binding(4, 1)]] Sampler2D sGBufSelfIllum;
 [[vk::binding(5, 1)]] Sampler2D sGBufDepth;
-[[vk::binding(15, 1)]] Sampler2DArray sShadowMap;
-[[vk::binding(19, 1)]] SamplerCube sShadowMapCube;
 [[vk::binding(13, 1)]] Sampler2D sBRDFLUT;
 [[vk::binding(16, 1)]] SamplerCubeArray sIrradianceMapArray;
 [[vk::binding(17, 1)]] SamplerCubeArray sPrefilteredEnvMapArray;
@@ -33,11 +32,6 @@ static const float kMaxReflectionLOD = 4.0;
 
 static const float kGamma = 2.2;
 
-static const int kNumShadowCascades = 4;
-static const int kNumPCFSamples = 20;
-static const float kPCFSampleRadius = 0.1;
-/** The fixed far plane point-light shadows are normalised against. */
-static const float kPointShadowFar = 2500.0;
 
 // Packed into the lightmap alpha by the geometry pass; see lib/gbuf.slang.
 static const int kGeometryFeatureEnvMap = 1 << 0;
@@ -119,79 +113,6 @@ float3 fresnelSchlick(float cosTheta, float3 F0) {
 float3 fresnelSchlickRoughness(float cosTheta, float3 F0, float roughness) {
     float3 ceiling = max(F0, float3(1.0 - roughness));
     return F0 + (ceiling - F0) * pow(saturate(1.0 - cosTheta), 5.0);
-}
-
-/** Cascade whose far plane first contains this depth; the last one otherwise. */
-int cascadeFor(float3 viewPos) {
-    for (int i = 0; i < kNumShadowCascades; ++i) {
-        if (abs(viewPos.z) < globalUniforms.shadowCascadeFarPlanes[i]) {
-            return i;
-        }
-    }
-    return kNumShadowCascades - 1;
-}
-
-float getDirectionalLightShadow(float3 viewPos, float3 worldPos) {
-    int cascade = cascadeFor(viewPos);
-    float4 lightSpacePos = mul(globalUniforms.shadowLightSpace[cascade], float4(worldPos, 1.0));
-    float3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
-    // Only xy needs remapping: the matrix was corrected to Vulkan clip space, so
-    // z already runs 0..1 and matches what the shadow pass wrote.
-    projCoords.xy = 0.5 * projCoords.xy + 0.5;
-
-    float currentDepth = projCoords.z;
-    if (currentDepth > 1.0) {
-        return 0.0;
-    }
-
-    uint width;
-    uint height;
-    uint layers;
-    sShadowMap.GetDimensions(width, height, layers);
-    float2 texelSize = 1.0 / float2(width, height);
-
-    float shadow = 0.0;
-    for (int x = -1; x <= 1; ++x) {
-        for (int y = -1; y <= 1; ++y) {
-            float2 offset = float2(x, y) * texelSize;
-            float pcfDepth = sShadowMap.Sample(
-                float3(projCoords.xy + offset, float(cascade))).r;
-            shadow += currentDepth > pcfDepth ? 1.0 : 0.0;
-        }
-    }
-    return shadow / 9.0;
-}
-
-static const float3 kPCFOffsets[kNumPCFSamples] = {
-    float3(1, 1, 1), float3(1, -1, 1), float3(-1, -1, 1), float3(-1, 1, 1),
-    float3(1, 1, -1), float3(1, -1, -1), float3(-1, -1, -1), float3(-1, 1, -1),
-    float3(1, 1, 0), float3(1, -1, 0), float3(-1, -1, 0), float3(-1, 1, 0),
-    float3(1, 0, 1), float3(-1, 0, 1), float3(1, 0, -1), float3(-1, 0, -1),
-    float3(0, 1, 1), float3(0, -1, 1), float3(0, -1, -1), float3(0, 1, -1)};
-
-float getPointLightShadow(float3 worldPos) {
-    float3 fragToLight = worldPos - globalUniforms.shadowLightPosition.xyz;
-    float currentDepth = length(fragToLight);
-
-    float shadow = 0.0;
-    for (int i = 0; i < kNumPCFSamples; ++i) {
-        float closestDepth = kPointShadowFar *
-                             sShadowMapCube.Sample(
-                                 fragToLight + kPCFSampleRadius * kPCFOffsets[i]).r;
-        shadow += currentDepth > closestDepth ? 1.0 : 0.0;
-    }
-    shadow /= float(kNumPCFSamples);
-    // Fade the shadow out towards the light's reach, so it does not end abruptly.
-    shadow *= 1.0 - smoothstep(globalUniforms.shadowRadius,
-                               2.0 * globalUniforms.shadowRadius, currentDepth);
-    return shadow;
-}
-
-float getShadow(float3 viewPos, float3 worldPos) {
-    float shadow = globalUniforms.shadowLightPosition.w == 0.0
-                       ? getDirectionalLightShadow(viewPos, worldPos)
-                       : getPointLightShadow(worldPos);
-    return shadow * globalUniforms.shadowStrength;
 }
 
 float getFog(float3 worldPos) {

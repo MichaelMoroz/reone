@@ -76,6 +76,9 @@ public:
          * depth as well; what lens flares and the like use.
          */
         Forward
+        ,
+        /** Forward-lit opaque geometry for the original renderer. */
+        Retro
     };
 
     VulkanRenderPass(graphics::GraphicsOptions &options,

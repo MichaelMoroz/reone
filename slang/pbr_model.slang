@@ -14,6 +14,7 @@ import lib.gbuf;
 import lib.hashedalpha;
 import lib.motion;
 import lib.oit;
+import lib.shadow;
 import lib.surface;
 
 [[vk::binding(0, 1)]] Sampler2D sMainTex;
@@ -293,5 +294,69 @@ GBufferOutput opaqueFragment(Varyings input) {
     output.selfIllumColor = float4(surface.emissive, localUniforms.envMapDerivedLayer / 255.0);
     output.eyeNormal = float4(eyeNormal, 0.0);
     output.motion = computeMotion(input.curClipPos, input.prevClipPos);
+    return output;
+}
+
+struct RetroOutput {
+    float4 color : SV_Target0;
+    float4 hilights : SV_Target1;
+};
+
+float lightAttenuationQuadratic(GlobalUniformsLight light, float distance) {
+    float d = light.radius + distance;
+    return (light.radius * light.radius) / (d * d);
+}
+
+/** Forward lighting used by the original renderer, retained separately from PBR resolve. */
+[shader("fragment")]
+RetroOutput retroOpaqueFragment(Varyings input) {
+    float2 uv = transformedUV(input.uv1);
+    SurfaceParams surface = sampleSurface(input, uv);
+    if (!isFeatureEnabled(kFeatureEnvMap)) {
+        if (isFeatureEnabled(kFeatureHashedAlphaTest)) {
+            if (hashedAlphaTestFails(surface.alpha, input.objectPos.xyz)) discard;
+        } else if (surface.alpha == 0.0) discard;
+    }
+
+    float3 ambient = float3(0.0);
+    float3 diffuse = localUniforms.selfIllumColor.rgb;
+    if (isFeatureEnabled(kFeatureLightmap)) {
+        diffuse += surface.lightmap;
+    } else if (!isFeatureEnabled(kFeatureStatic)) {
+        ambient += localUniforms.ambientColor.rgb * globalUniforms.worldAmbientColor.rgb;
+    }
+    for (int i = 0; i < globalUniforms.numLights; ++i) {
+        GlobalUniformsLight light = globalUniforms.lights[i];
+        if (isFeatureEnabled(kFeatureStatic) && light.dynamicType != 2) continue;
+        float3 lightVector = light.position.xyz - input.worldPos.xyz;
+        float distance = length(lightVector);
+        if (distance > light.radius * light.radius) continue;
+        float attenuation = lightAttenuationQuadratic(light, distance);
+        if (light.ambientOnly != 0) {
+            ambient += light.multiplier * attenuation * localUniforms.ambientColor.rgb * light.color.rgb;
+        } else {
+            diffuse += light.multiplier * max(0.0, dot(surface.normal, lightVector / max(0.0001, distance))) * attenuation * localUniforms.diffuseColor.rgb * light.color.rgb;
+        }
+    }
+    float shadow = isFeatureEnabled(kFeatureShadows)
+                       ? getShadow(mul(globalUniforms.view, input.worldPos).xyz,
+                                   input.worldPos.xyz)
+                       : 0.0;
+    float3 color = min(float3(1.0),
+                       ambient + (1.0 - shadow) * max(float3(0.0), diffuse)) *
+                   surface.albedo;
+    if (isFeatureEnabled(kFeatureEnvMap)) {
+        float3 viewDir = normalize(globalUniforms.cameraPosition.xyz - input.worldPos.xyz);
+        color += sampleEnvMap(reflect(-viewDir, surface.normal)).rgb * (1.0 - surface.alpha);
+    }
+    if (isFeatureEnabled(kFeatureFog)) {
+        float d = length(input.worldPos.xyz - globalUniforms.cameraPosition.xyz);
+        float fog = 1.0 - saturate((globalUniforms.fogFar - d) /
+                                   max(0.0001, globalUniforms.fogFar - globalUniforms.fogNear));
+        color = lerp(color, globalUniforms.fogColor.rgb, fog);
+    }
+    RetroOutput output;
+    output.color = float4(color, 1.0);
+    output.hilights = float4(step(float3(0.0001), localUniforms.selfIllumColor.rgb) * step(float3(0.95), color) * color, 1.0);
     return output;
 }

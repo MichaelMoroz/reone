@@ -46,6 +46,8 @@ public:
 
     void init() override;
 
+    std::vector<RenderTargetInfo> targets() const override;
+
     graphics::Texture &render(RenderRegistry &registry,
                               const CameraSceneNode *camera,
                               RenderPassName shadowPass) override;

@@ -22,6 +22,7 @@ import uniforms;
 // so the pipeline binds them the same way it binds anything else.
 [[vk::binding(10, 1)]] Sampler2D sOITAccum;
 [[vk::binding(11, 1)]] Sampler2D sOITRevealage;
+[[vk::binding(9, 1)]] Sampler2D sHilights;
 
 struct Varyings {
     float4 position : SV_Position;
@@ -90,10 +91,7 @@ float4 oitBlendFragment(Varyings input) : SV_Target {
     float4 accumSample = sOITAccum.SampleLevel(input.uv, 0.0);
     float accumWeight = sOITRevealage.SampleLevel(input.uv, 0.0).r;
 
-    // The OpenGL blend adds the blurred bloom highlights to the opaque term
-    // here. This backend has no bloom target to add, so it contributes zero -
-    // that difference belongs with the bloom port, not with this one.
-    float3 hilights = float3(0.0);
+    float3 hilights = sHilights.SampleLevel(input.uv, 0.0).rgb;
 
     float revealage = accumSample.a;
     float alpha = 1.0 - revealage;

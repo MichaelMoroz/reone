@@ -120,6 +120,20 @@ float4 colorFragment() : SV_Target {
     return localUniforms.color;
 }
 
+struct RetroAABBOutput {
+    float4 color : SV_Target0;
+    float4 hilights : SV_Target1;
+};
+
+/** A debug box still has two attachments in the retro forward pass. */
+[shader("fragment")]
+RetroAABBOutput retroAABBFragment(AABBVaryings input) {
+    RetroAABBOutput output;
+    output.color = float4(1.0);
+    output.hilights = float4(0.0);
+    return output;
+}
+
 // ----------------------------------------------------------------------- null
 
 [shader("fragment")]

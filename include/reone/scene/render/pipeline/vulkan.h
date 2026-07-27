@@ -109,6 +109,8 @@ private:
 
     /** The second of two stable scene-colour allocations. */
     std::unique_ptr<graphics::VulkanImage> _ping;
+    /** Forward retro shading writes the original renderer's highlight buffer here. */
+    std::unique_ptr<graphics::VulkanImage> _hilights;
     /**
      * The image containing the latest complete scene colour, and the image
      * available for the next full-screen pass.
@@ -156,6 +158,7 @@ private:
     };
 
     void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    void retroGeometryPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     /** Resolve the OIT targets onto the opaque image. Follows transparencyPass. */

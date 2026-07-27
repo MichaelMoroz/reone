@@ -39,6 +39,7 @@ namespace scene {
 
 static constexpr char kModelModule[] = "pbr_model";
 static constexpr char kOpaqueFragment[] = "opaqueFragment";
+static constexpr char kRetroOpaqueFragment[] = "retroOpaqueFragment";
 static constexpr char kTransparentFragment[] = "transparentFragment";
 static constexpr char kOITModelFragment[] = "oitModelFragment";
 static constexpr char kGrassModule[] = "grass";
@@ -132,7 +133,7 @@ void VulkanRenderPass::drawGeometry(Mesh &mesh,
     // in this pass is a model.
     bool walkmesh = material.type == MaterialType::Walkmesh;
 
-    const char *modelFragment = kOpaqueFragment;
+    const char *modelFragment = _kind == Kind::Retro ? kRetroOpaqueFragment : kOpaqueFragment;
     switch (_kind) {
     case Kind::OIT:
         modelFragment = kOITModelFragment;
@@ -147,14 +148,14 @@ void VulkanRenderPass::drawGeometry(Mesh &mesh,
     VulkanPipelineCache::Key key;
     key.module = walkmesh ? kWalkmeshModule : kModelModule;
     key.vertexEntry = walkmesh ? "walkmeshVertex" : vertexEntry;
-    key.fragmentEntry = walkmesh ? kPBRFragment : modelFragment;
+    key.fragmentEntry = walkmesh ? (_kind == Kind::Retro ? "retroFragment" : kPBRFragment) : modelFragment;
     key.colorFormats = _colorFormats;
     key.depthFormat = _depthFormat;
     key.depthTest = true;
     // Transparent surfaces are shaded forward, and must not write depth: one
     // would otherwise hide the surface behind it instead of showing through
     // to it.
-    key.depthWrite = _kind == Kind::Geometry;
+    key.depthWrite = _kind == Kind::Geometry || _kind == Kind::Retro;
     if (_kind == Kind::OIT) {
         // One blend state for the whole pass, as the OpenGL pipeline has -
         // beginTransparentGeometryPass pushes it over whatever the material
@@ -444,7 +445,7 @@ void VulkanRenderPass::executeDrawGrass(float radius,
     VulkanPipelineCache::Key key;
     key.module = kGrassModule;
     key.vertexEntry = "grassVertex";
-    key.fragmentEntry = kPBRFragment;
+    key.fragmentEntry = _kind == Kind::Retro ? "retroFragment" : kPBRFragment;
     key.colorFormats = _colorFormats;
     key.depthFormat = _depthFormat;
     key.depthTest = true;
