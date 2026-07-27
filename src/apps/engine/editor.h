@@ -64,6 +64,9 @@ public:
     bool handle(const input::Event &event);
     void update(float dt);
     void render();
+    // Module loads present loading-screen frames. Run them only after the
+    // regular ImGui frame has been rendered and closed.
+    void applyPendingTransition();
 
     bool isEnabled() const { return _enabled; }
 
@@ -100,6 +103,19 @@ private:
     bool _showWarp {false};
     char _warpFilter[64] {};
     std::string _pendingWarp;
+
+    struct WarpTarget {
+        std::string module;
+        std::string title;
+        std::string entryArea;
+        std::string tag;
+        std::string startMovie;
+        size_t areaCount {0};
+    };
+    std::vector<WarpTarget> _warpTargets;
+    bool _warpTargetsScanned {false};
+    std::string _selectedWarp;
+    void scanWarpTargets();
 
     struct SaveEntry {
         std::string directory;

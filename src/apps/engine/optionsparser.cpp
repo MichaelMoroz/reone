@@ -43,6 +43,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("game", value<std::string>(), "path to game directory")                                                                //
         ("commands-file", value<std::string>()->default_value(""), "execute console commands from a file at startup")           //
         ("commands-frame", value<int>()->default_value(0), "run the commands file on this frame instead of at startup")       //
+        ("input-script", value<std::string>()->default_value(""), "run frame-indexed SDL mouse input script")                  //
         ("capture", value<std::string>()->default_value(""), "write a screenshot to this path and exit")                        //
         ("dumptargets", value<std::string>()->default_value(""), "write the scene render targets to this directory as .npy")   //
         ("captureframe", value<int>()->default_value(3), "frame to capture on, counted from the first rendered frame")         //
@@ -161,6 +162,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
 
     options->commandsFile = vars["commands-file"].as<std::string>();
     options->commandsFrame = vars["commands-frame"].as<int>();
+    options->inputScript = vars["input-script"].as<std::string>();
 
     return options;
 }

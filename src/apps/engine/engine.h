@@ -38,6 +38,8 @@
 #include "options.h"
 #include "profiler.h"
 
+#include <vector>
+
 namespace reone {
 
 class Editor;
@@ -94,6 +96,13 @@ private:
 
     std::queue<input::Event> _events;
 
+    struct AutomatedInputEvent {
+        int frame {0};
+        SDL_Event event {};
+    };
+    std::vector<AutomatedInputEvent> _automatedInput;
+    size_t _nextAutomatedInput {0};
+
     uint64_t _ticks {0};
 
     int _frameIndex {0};
@@ -107,6 +116,7 @@ private:
     bool _relativeMouseMode {false};
 
     void processEvents(bool &quit);
+    void loadInputScript();
     void runCommandsFile();
     /** Records the GUI through the 2D renderer, in its own rendering scope. */
     void renderFrame(bool &quit);

@@ -37,9 +37,10 @@ std::filesystem::path getFileIgnoreCase(const std::filesystem::path &dir, std::s
         throw FileNotFoundException((dir / relPath).string());
     }
 
+    auto requestedName = boost::to_lower_copy(tokens[0]);
     for (auto &entry : std::filesystem::directory_iterator(dir)) {
         auto filename = boost::to_lower_copy(entry.path().filename().string());
-        if (filename == tokens[0]) {
+        if (filename == requestedName) {
             if (tokens.size() == 1) {
                 return entry.path();
             }
@@ -57,9 +58,10 @@ std::optional<std::filesystem::path> findFileIgnoreCase(const std::filesystem::p
         return std::nullopt;
     }
 
+    auto requestedName = boost::to_lower_copy(tokens[0]);
     for (auto &entry : std::filesystem::directory_iterator(dir)) {
         auto filename = boost::to_lower_copy(entry.path().filename().string());
-        if (filename == tokens[0]) {
+        if (filename == requestedName) {
             if (tokens.size() == 1) {
                 return entry.path();
             }

@@ -46,6 +46,9 @@
 
 #include "editor.h"
 
+#include <algorithm>
+#include <sstream>
+
 using namespace reone::audio;
 using namespace reone::game;
 using namespace reone::graphics;
@@ -389,6 +392,12 @@ void Engine::init() {
     });
 
     _editor = std::make_unique<Editor>(*this, _options.game.developer);
+    if (!_options.inputScript.empty()) {
+        // UI automation must not inherit a developer's persisted docking
+        // layout: its client coordinates describe the fresh default layout.
+        ImGui::GetIO().IniFilename = nullptr;
+        loadInputScript();
+    }
 
     if (_options.commandsFrame == 0) {
         runCommandsFile();
@@ -525,6 +534,11 @@ int Engine::run() {
         _profiler->measure(kMainThreadName, kProfilerRenderAudioTimeIndex, [this]() {
             _services->audio.mixer.render();
         });
+        // A module/save load presents loading-screen frames. Defer it until
+        // the regular ImGui frame has been rendered and closed.
+        if (_editor) {
+            _editor->applyPendingTransition();
+        }
     }
 
     return 0;
@@ -764,52 +778,110 @@ void Engine::runCommandsFile() {
 
 void Engine::processEvents(bool &quit) {
     std::queue<input::Event> unhandled;
-    SDL_Event sdlEvent;
-    while (SDL_PollEvent(&sdlEvent)) {
+    auto processEvent = [this, &quit, &unhandled](SDL_Event &sdlEvent, bool automated) {
         if (sdlEvent.type == SDL_EVENT_QUIT) {
             quit = true;
-            break;
+            return;
         }
         if (!_window->isAssociatedWith(sdlEvent)) {
             imguiHandle(sdlEvent);
-            continue;
+            return;
         }
         if (_window->handle(sdlEvent)) {
             if (_window->isCloseRequested()) {
                 quit = true;
-                break;
             }
-            continue;
+            return;
         }
         auto event = eventFromSDLEvent(sdlEvent);
         if (!event) {
-            continue;
+            return;
         }
-        if (isCaptureRun()) {
+        if (isCaptureRun() && !automated) {
             // Dropped rather than handled. A single mouse move over the window
             // turns the camera, and from then on frame 900 is a different
             // frame - which is most of why two runs of the same build did not
             // match. Console commands still arrive, through the commands file
             // rather than through here.
-            continue;
+            return;
         }
         if (_profiler->handle(*event)) {
-            continue;
+            return;
         }
         if (_editor && _editor->handle(*event)) {
-            continue;
+            return;
         }
         // Last filter before the game sees it: ImGui only claims the event when
         // it actually wants the mouse or keyboard.
         if (imguiHandle(sdlEvent)) {
-            continue;
+            return;
         }
         unhandled.push(*event);
+    };
+
+    SDL_Event sdlEvent;
+    while (SDL_PollEvent(&sdlEvent)) {
+        processEvent(sdlEvent, false);
+        if (quit) {
+            break;
+        }
+    }
+    while (!quit && _nextAutomatedInput < _automatedInput.size() &&
+           _automatedInput[_nextAutomatedInput].frame <= _frameIndex + 1) {
+        auto event = _automatedInput[_nextAutomatedInput++].event;
+        processEvent(event, true);
     }
     while (!unhandled.empty()) {
         _events.push(std::move(unhandled.front()));
         unhandled.pop();
     }
+}
+
+void Engine::loadInputScript() {
+    std::ifstream file(_options.inputScript);
+    if (!file.good()) {
+        throw std::runtime_error("Failed to open input script: " + _options.inputScript);
+    }
+
+    auto addClick = [this](int frame, int x, int y) {
+        auto windowId = SDL_GetWindowID(_window->sdlWindow());
+        SDL_Event motion {};
+        motion.type = SDL_EVENT_MOUSE_MOTION;
+        motion.motion.windowID = windowId;
+        motion.motion.x = static_cast<float>(x);
+        motion.motion.y = static_cast<float>(y);
+        _automatedInput.push_back({frame, motion});
+
+        SDL_Event down {};
+        down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        down.button.windowID = windowId;
+        down.button.button = SDL_BUTTON_LEFT;
+        down.button.down = true;
+        down.button.clicks = 1;
+        down.button.x = static_cast<float>(x);
+        down.button.y = static_cast<float>(y);
+        _automatedInput.push_back({frame + 1, down});
+
+        SDL_Event up = down;
+        up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        up.button.down = false;
+        _automatedInput.push_back({frame + 2, up});
+    };
+
+    for (std::string line; std::getline(file, line);) {
+        std::istringstream stream(line);
+        int frame, x, y;
+        std::string action;
+        if (!(stream >> frame >> action) || (!action.empty() && action[0] == '#')) {
+            continue;
+        }
+        if (action != "click" || !(stream >> x >> y) || frame < 1) {
+            throw std::runtime_error("Invalid input script line: " + line);
+        }
+        addClick(frame, x, y);
+    }
+    std::stable_sort(_automatedInput.begin(), _automatedInput.end(),
+                     [](const auto &lhs, const auto &rhs) { return lhs.frame < rhs.frame; });
 }
 
 void Engine::showCursor(bool show) {

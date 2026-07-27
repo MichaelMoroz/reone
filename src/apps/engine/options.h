@@ -48,6 +48,8 @@ struct Options {
      * renderer holds resources from it. This makes that reproducible.
      */
     int commandsFrame {0};
+    /** Frame-indexed SDL mouse input script for deterministic UI automation. */
+    std::string inputScript;
     /**
      * Write a screenshot to this path on frame captureFrame and exit. Lets two
      * builds be rendered and compared without a human in the loop.

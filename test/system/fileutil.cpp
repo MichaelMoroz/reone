@@ -64,7 +64,8 @@ TEST(FileUtilities, should_find_file_ignoring_case) {
 
     // then
     EXPECT_EQ(tmpFilePath, *lowerPath);
-    EXPECT_FALSE(upperPath);
+    ASSERT_TRUE(upperPath);
+    EXPECT_EQ(tmpFilePath, *upperPath);
     EXPECT_FALSE(superPath);
 
     // cleanup

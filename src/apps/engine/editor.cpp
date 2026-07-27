@@ -18,9 +18,14 @@
 #include "editor.h"
 #include "engine.h"
 #include "reone/game/types.h"
+#include "reone/resource/container/erf.h"
+#include "reone/resource/container/rim.h"
 #include "reone/resource/format/gffreader.h"
+#include "reone/resource/parser/gff/ifo.h"
 #include "reone/resource/parser/gff/nfo.h"
+#include "reone/system/fileutil.h"
 #include "reone/system/stream/fileinput.h"
+#include "reone/system/stream/memoryinput.h"
 #include "reone/graphics/backend.h"
 #include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
@@ -242,6 +247,57 @@ void Editor::scanSaves() {
               [](const auto &a, const auto &b) { return a.directory < b.directory; });
 }
 
+void Editor::scanWarpTargets() {
+    _warpTargets.clear();
+    _warpTargetsScanned = true;
+
+    auto &game = _engine._game;
+    if (!game) {
+        return;
+    }
+
+    auto modulesPath = findFileIgnoreCase(_engine._options.game.path, "modules");
+    if (!modulesPath) {
+        return;
+    }
+
+    for (const std::string &module : game->moduleNames()) {
+        WarpTarget target;
+        target.module = module;
+
+        auto readIfo = [&target](auto &container) {
+            container.init();
+            auto data = container.findResourceData(resource::ResourceId("module", resource::ResType::Ifo));
+            if (!data) {
+                return;
+            }
+            auto stream = MemoryInputStream(*data);
+            resource::GffReader reader(stream);
+            reader.load();
+            auto ifo = resource::generated::parseIFO(*reader.root());
+            target.title = ifo.Mod_Name.second;
+            target.entryArea = ifo.Mod_Entry_Area;
+            target.tag = ifo.Mod_Tag;
+            target.startMovie = ifo.Mod_StartMovie;
+            target.areaCount = ifo.Mod_Area_list.size();
+        };
+
+        try {
+            if (auto rimPath = findFileIgnoreCase(*modulesPath, module + ".rim")) {
+                resource::RimResourceContainer container(*rimPath);
+                readIfo(container);
+            } else if (auto modPath = findFileIgnoreCase(*modulesPath, module + ".mod")) {
+                resource::ErfResourceContainer container(*modPath);
+                readIfo(container);
+            }
+        } catch (const std::exception &) {
+            // The module remains warpable; only its optional display metadata
+            // is unavailable.
+        }
+        _warpTargets.push_back(std::move(target));
+    }
+}
+
 void Editor::warp() {
     dockNext();
     ImGui::SetNextWindowSize(ImVec2(320, 480), ImGuiCond_FirstUseEver);
@@ -255,67 +311,139 @@ void Editor::warp() {
         ImGui::End();
         return;
     }
-    ImGui::InputTextWithHint("##filter", "filter", _warpFilter, sizeof(_warpFilter));
-    ImGui::Separator();
-
-    std::string filter = boost::to_lower_copy(std::string(_warpFilter));
-    // Loading a module tears down the scene this window is being drawn from,
-    // so the choice is taken now and acted on once the frame is over.
     std::string chosen;
-    // Bounded, so the saves below are not pushed off the bottom.
-    if (ImGui::BeginChild("modules", ImVec2(0.0f, -280.0f))) {
-        for (const auto &name : game->moduleNames()) {
-            if (!filter.empty() && name.find(filter) == std::string::npos) {
-                continue;
+    if (!_savesScanned) {
+        scanSaves();
+    }
+    if (!_warpTargetsScanned) {
+        scanWarpTargets();
+    }
+
+    ImGui::InputTextWithHint("##filter", "Filter targets and saves", _warpFilter, sizeof(_warpFilter));
+    ImGui::Separator();
+    std::string filter = boost::to_lower_copy(std::string(_warpFilter));
+
+    // Keep warp targets and save games equally visible regardless of window
+    // size. Each pane owns its scrolling table and its controls.
+    float paneHeight = std::max(0.0f, (ImGui::GetContentRegionAvail().y - ImGui::GetStyle().ItemSpacing.y) * 0.5f);
+    if (ImGui::BeginChild("warp targets", ImVec2(0.0f, paneHeight), true)) {
+        ImGui::Text("Warp targets (%zu)", _warpTargets.size());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Rescan targets")) {
+            scanWarpTargets();
+        }
+
+        auto detailsHeight = 5.0f * ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+        if (ImGui::BeginTable("targets", 4,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp,
+                              ImVec2(0.0f, -detailsHeight))) {
+            ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthStretch, 1.5f);
+            ImGui::TableSetupColumn("Module", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Entry area", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Areas", ImGuiTableColumnFlags_WidthFixed, 48.0f);
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableHeadersRow();
+            for (const auto &target : _warpTargets) {
+                if (!filter.empty() &&
+                    target.module.find(filter) == std::string::npos &&
+                    boost::to_lower_copy(target.title).find(filter) == std::string::npos &&
+                    boost::to_lower_copy(target.entryArea).find(filter) == std::string::npos &&
+                    boost::to_lower_copy(target.tag).find(filter) == std::string::npos) {
+                    continue;
+                }
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                const std::string &label = target.title.empty() ? target.module : target.title;
+                bool selected = _selectedWarp == target.module;
+                // Titles such as "Dantooine" are shared by several module
+                // archives, so the resref must provide the widget identity.
+                ImGui::PushID(target.module.c_str());
+                if (ImGui::Selectable(label.c_str(), selected, ImGuiSelectableFlags_SpanAllColumns)) {
+                    _selectedWarp = target.module;
+                }
+                ImGui::PopID();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(target.module.c_str());
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(target.entryArea.empty() ? "-" : target.entryArea.c_str());
+                ImGui::TableNextColumn();
+                if (target.areaCount != 0) {
+                    ImGui::Text("%zu", target.areaCount);
+                } else {
+                    ImGui::TextUnformatted("-");
+                }
             }
-            if (ImGui::Selectable(name.c_str())) {
-                chosen = name;
+            ImGui::EndTable();
+        }
+
+        auto selected = std::find_if(_warpTargets.begin(), _warpTargets.end(), [this](const auto &target) {
+            return target.module == _selectedWarp;
+        });
+        ImGui::Separator();
+        if (selected == _warpTargets.end()) {
+            ImGui::TextDisabled("Select a target to inspect its level metadata.");
+        } else {
+            ImGui::Text("Target: %s", selected->module.c_str());
+            ImGui::Text("Entry area: %s", selected->entryArea.empty() ? "unavailable" : selected->entryArea.c_str());
+            ImGui::Text("Tag: %s", selected->tag.empty() ? "unavailable" : selected->tag.c_str());
+            ImGui::Text("Start movie: %s", selected->startMovie.empty() ? "none" : selected->startMovie.c_str());
+            if (ImGui::Button("Warp to selected")) {
+                chosen = selected->module;
             }
         }
     }
     ImGui::EndChild();
 
-    ImGui::Separator();
-    if (!_savesScanned) {
-        scanSaves();
-    }
-    if (ImGui::Button("Rescan saves")) {
-        scanSaves();
-    }
-    ImGui::SameLine();
-    ImGui::Text("%zu saves", _saves.size());
-
     std::string chosenSave;
-    if (ImGui::BeginTable("saves", 4,
-                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                              ImGuiTableFlags_ScrollY,
-                          ImVec2(0.0f, 200.0f))) {
-        ImGui::TableSetupColumn("Name");
-        ImGui::TableSetupColumn("Area");
-        ImGui::TableSetupColumn("Module");
-        ImGui::TableSetupColumn("Played");
-        ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableHeadersRow();
-        for (const auto &save : _saves) {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            if (ImGui::Selectable(save.name.empty() ? save.directory.c_str() : save.name.c_str(),
-                                  false, ImGuiSelectableFlags_SpanAllColumns)) {
-                chosenSave = save.directory;
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("%s", save.directory.c_str());
-            }
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted(save.area.c_str());
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted(save.module.c_str());
-            ImGui::TableNextColumn();
-            ImGui::Text("%u:%02u:%02u", save.timePlayed / 3600,
-                        (save.timePlayed / 60) % 60, save.timePlayed % 60);
+    if (ImGui::BeginChild("saved games", ImVec2(0.0f, paneHeight), true)) {
+        ImGui::Text("Saved games (%zu)", _saves.size());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Rescan saves")) {
+            scanSaves();
         }
-        ImGui::EndTable();
+        if (ImGui::BeginTable("saves", 4,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp,
+                              ImVec2(0.0f, 0.0f))) {
+            ImGui::TableSetupColumn("Name");
+            ImGui::TableSetupColumn("Area");
+            ImGui::TableSetupColumn("Module");
+            ImGui::TableSetupColumn("Played");
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableHeadersRow();
+            for (const auto &save : _saves) {
+                if (!filter.empty() &&
+                    boost::to_lower_copy(save.name).find(filter) == std::string::npos &&
+                    boost::to_lower_copy(save.area).find(filter) == std::string::npos &&
+                    boost::to_lower_copy(save.module).find(filter) == std::string::npos &&
+                    boost::to_lower_copy(save.directory).find(filter) == std::string::npos) {
+                    continue;
+                }
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                // Save names are user-editable and can also repeat.
+                ImGui::PushID(save.directory.c_str());
+                if (ImGui::Selectable(save.name.empty() ? save.directory.c_str() : save.name.c_str(),
+                                      false, ImGuiSelectableFlags_SpanAllColumns)) {
+                    chosenSave = save.directory;
+                }
+                ImGui::PopID();
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", save.directory.c_str());
+                }
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(save.area.c_str());
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(save.module.c_str());
+                ImGui::TableNextColumn();
+                ImGui::Text("%u:%02u:%02u", save.timePlayed / 3600,
+                            (save.timePlayed / 60) % 60, save.timePlayed % 60);
+            }
+            ImGui::EndTable();
+        }
     }
+    ImGui::EndChild();
     ImGui::End();
 
     if (!chosen.empty()) {
@@ -604,26 +732,35 @@ void Editor::render() {
     graphicsSvc.context.resetDrawFramebuffer();
 }
 
-void Editor::update(float dt) {
-    if (!_enabled) {
-        return;
-    }
-
-    // Acted on here rather than where it is chosen: loading a module destroys
-    // the scene the window was drawn from, and update runs before any of this
-    // frame's rendering.
+void Editor::applyPendingTransition() {
     if (!_pendingWarp.empty()) {
         auto target = std::move(_pendingWarp);
         _pendingWarp.clear();
-        _engine._game->loadModule(target);
+        // The render-target viewer keeps a raw scene texture pointer. Loading
+        // a module destroys that scene before its loading screen presents.
+        _rtSource = nullptr;
+        if (_engine._game) {
+            _engine._game->loadModule(target);
+        }
         return;
     }
     if (!_pendingLoadGame.empty()) {
         auto target = std::move(_pendingLoadGame);
         _pendingLoadGame.clear();
-        _engine._game->loadGame(target);
+        _rtSource = nullptr;
+        if (_engine._game) {
+            _engine._game->loadGame(target);
+        }
         return;
     }
+}
+
+void Editor::update(float dt) {
+    if (!_enabled) {
+        return;
+    }
+
+    (void)dt;
 
     // Submitted before the dockspace so the viewport work area excludes it.
     if (ImGui::BeginMainMenuBar()) {
