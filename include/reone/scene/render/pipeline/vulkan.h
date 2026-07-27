@@ -92,7 +92,7 @@ private:
     std::unordered_map<RenderPassName, std::function<void(IRenderPass &)>> _passCallbacks;
 
     std::unique_ptr<graphics::VulkanGBuffer> _gbuffer;
-    /** What the resolve writes, and what the frame composites. */
+    /** The first of two stable scene-colour allocations. */
     std::unique_ptr<graphics::VulkanImage> _output;
     /** Four directional cascades, as a 2D array. */
     std::unique_ptr<graphics::VulkanImage> _dirShadows;
@@ -107,15 +107,18 @@ private:
      */
     std::shared_ptr<graphics::Texture> _outputHandle;
 
-    /**
-     * The other half of the filter chain's ping-pong.
-     *
-     * A filter samples the whole of its source, so it cannot write back into
-     * it: the read and the write would race across the image, not per pixel.
-     * The OpenGL pipeline keeps a spare colour buffer for exactly this and
-     * calls it ping; this is the same thing.
-     */
+    /** The second of two stable scene-colour allocations. */
     std::unique_ptr<graphics::VulkanImage> _ping;
+    /**
+     * The image containing the latest complete scene colour, and the image
+     * available for the next full-screen pass.
+     *
+     * Keeping this state separate from ownership makes every pass publish its
+     * result directly. Presentation therefore does not have to reconstruct the
+     * answer from how many passes happened to run.
+     */
+    graphics::VulkanImage *_frameImage {nullptr};
+    graphics::VulkanImage *_spareImage {nullptr};
 
     /**
      * Weighted-blended transparency, as the OpenGL pipeline accumulates it:
@@ -127,35 +130,23 @@ private:
     std::unique_ptr<graphics::VulkanImage> _oitRevealage;
 
     VkDescriptorSet _resolveSet {VK_NULL_HANDLE};
-    /** Unit 0 pointed at the output and at the ping image respectively. */
+    /** Unit 0 pointed at the two stable scene-colour allocations. */
     VkDescriptorSet _outputAsSourceSet {VK_NULL_HANDLE};
     VkDescriptorSet _pingAsSourceSet {VK_NULL_HANDLE};
-    /**
-     * The OIT targets plus the image currently playing the output, and the
-     * same with the two colour images the other way round.
-     *
-     * Two sets rather than one because the blend cannot read and write one
-     * image, so the two exchange roles every frame; swapOutputAndPing keeps
-     * this pair in step with them.
-     */
-    VkDescriptorSet _oitBlendSet {VK_NULL_HANDLE};
-    VkDescriptorSet _oitBlendSetSwapped {VK_NULL_HANDLE};
+    /** The OIT targets plus each possible scene-colour source. */
+    VkDescriptorSet _oitBlendOutputSet {VK_NULL_HANDLE};
+    VkDescriptorSet _oitBlendPingSet {VK_NULL_HANDLE};
 
     void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     /** Resolve the OIT targets onto the opaque image. Follows transparencyPass. */
     void oitBlendPass(VkCommandBuffer cmd);
-    /** Exchange the roles of the two colour images, and everything naming them. */
-    void swapOutputAndPing();
     void postProcessingPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void filterChainPass(VkCommandBuffer cmd);
-    /** One full-screen filter, from one image onto the other. */
+    /** Apply one full-screen filter and publish its destination as the frame. */
     void filterPass(VkCommandBuffer cmd,
                     uint32_t screenEffectOffset,
-                    graphics::VulkanImage &src,
-                    graphics::VulkanImage &dst,
-                    VkDescriptorSet srcSet,
                     const char *fragmentEntry,
                     const char *label);
     void drawOntoOutput(VkCommandBuffer cmd,
