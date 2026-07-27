@@ -173,6 +173,46 @@ A hit shader indexes the material directly, so both stop being load-bearing -
 and with them goes the class of bug where a stale layer index bleeds onto a
 surface that never had an environment map.
 
+## Registry lifetime: rebuilt per frame, for now
+
+The registry is currently cleared and refilled every frame. That is a stopgap
+chosen because it is correct by construction - there is no invalidation
+contract to get wrong - and not because it is the right end state.
+
+Two reasons it does not survive contact with ray tracing.
+
+**Cost.** A frame in danm14ab registers around 1,500 entries, each carrying an
+owned `Material`, and 551 of them are dangly meshes each copying a
+`std::vector<glm::vec4>` of per-vertex positions. Those positions are already
+recomputed on the CPU every frame, so they are computed and then copied.
+Measure this before defending the rebuild; if the dangly copies dominate, that
+alone justifies moving earlier than the schedule below suggests.
+
+**Identity.** A TLAS instance index, a cached BLAS and temporal accumulation
+all key off an object still being the same object next frame. Nothing can be
+stable if every entry is fresh. Retained identity is a prerequisite there, not
+an optimisation.
+
+The way out is not "register once and never touch it", which is the promise the
+plan warns against elsewhere. Split by how often a field actually changes:
+
+- **Identity is retained.** An object registers when it enters the scene and
+  unregisters when it leaves. The TLAS instance index and the cached BLAS hang
+  off this.
+- **Volatile state is written every frame** - transform, previous transform,
+  bones, dangly positions. These change every frame regardless, so there is no
+  invalidation to get wrong; they are overwritten, not invalidated.
+- **Only rare, static things need an invalidation hook** - a material change, a
+  texture swap, visibility. `Material::staticObject` already marks most of what
+  never needs one.
+
+That confines the hard part to a small and infrequent set rather than to the
+whole registry, which is what makes the contract tractable.
+
+**When.** Keep the per-frame rebuild until BLAS work begins. That is the point
+where identity stops being an efficiency question and becomes a correctness
+one, and it is far enough out that the registry's shape will have settled.
+
 ## Sequencing
 
 Doing this while both backends exist means implementing it twice and
