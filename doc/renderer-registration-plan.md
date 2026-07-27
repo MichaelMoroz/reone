@@ -173,6 +173,45 @@ A hit shader indexes the material directly, so both stop being load-bearing -
 and with them goes the class of bug where a stale layer index bleeds onto a
 surface that never had an environment map.
 
+## Objects have no identity yet
+
+Retained identity needs a key, and the scene has none.
+
+- `SceneNode` carries no id and no name. It has `IUser *_user`, but `IUser`
+  (`include/reone/scene/user.h:24`) is an empty interface - a virtual
+  destructor and nothing else - so it is a back-pointer tag with nothing
+  readable on it.
+- Game `Object::id()` is a real, stable `uint32_t`
+  (`include/reone/game/object.h:85`), but reaching it means `SceneNode::user()`
+  plus a downcast to `game::Object`, and the scene library does not depend on
+  game. The registry cannot use it without inverting that dependency.
+- `graphics::ModelNode::number()` is a `uint16_t` unique *within a model*
+  (`include/reone/graphics/modelnode.h:179`). Useful as half a composite key,
+  useless alone.
+- Pointer identity is what is actually used - `VulkanResources` caches by
+  `Mesh *`, and the registry carries a `ModelSceneNode *` for culling.
+
+Pointer identity has a failure mode this codebase already knows about.
+`IRenderer::invalidateResources` exists for it, and says so: a backend caching
+by address "cannot otherwise tell that an address has been reused by a
+different object, and would hand a new mesh the previous one's buffers". That
+is a bulk sledgehammer swung on module transition. Adequate for a texture
+cache; useless for a TLAS instance index, where what matters is knowing *which*
+object went away.
+
+**Give `SceneNode` a generation-stamped handle** - a `uint32_t` index and a
+`uint32_t` generation, or one packed 64-bit value. The scene graph assigns on
+creation and bumps the generation on destruction, so a reused slot yields a
+handle that compares unequal to the stale one.
+
+That buys three things at once: the registry gets a key that survives a frame,
+a TLAS instance and a per-node BLAS get something to hang off, and
+`invalidateResources` can stop being a sledgehammer because a stale handle
+becomes detectable rather than merely suspected.
+
+Cheap while the registry is being reshaped. Awkward once things are keyed on
+pointers.
+
 ## Registry lifetime: rebuilt per frame, for now
 
 The registry is currently cleared and refilled every frame. That is a stopgap
