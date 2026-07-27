@@ -21,6 +21,14 @@ Lastly, reone is explicitly a non-commercial project: we do not seek to gain pro
 
 To install reone, either download a prebuilt executable from the [releases](https://github.com/seedhartha/reone/releases) page, or build it from source. Building it requires a modern C++ compiler and a set of free and open source libraries. See detailed instructions for your operating system [here](https://github.com/seedhartha/reone/wiki/Installation).
 
+Dear ImGui has to be built with a specific set of features, because CMake only asks for the package and will configure happily against a build that is missing them - the failure then arrives at compile time, in whichever file first includes a backend header. Under vcpkg:
+
+```
+vcpkg install "imgui[docking-experimental,opengl3-binding,sdl3-binding,vulkan-binding]"
+```
+
+All four are required: the editor docks its windows, and each backend needs its own binding. Naming only the one you are adding will drop the others, since vcpkg treats the feature list as the whole set rather than as an addition to it.
+
 reone is being developed and tested against unmodded Steam versions of both KotOR and TSL. Compatibility with any other version is not guaranteed, although GOG and retail versions should work with no or minor modification.
 
 Install [Visual C++ Redistributable](https://aka.ms/vs/16/release/vc_redist.x64.exe) to run prebuilt Windows executables.
@@ -60,4 +68,4 @@ In contrast, this is what reone offers:
 
 - KotOR and TSL only, unlike xoreos, which aims to reimplement all of Aurora engine games - codebase is lighter and development is more focused
 - Written in C++ - industry standard language, faster than the JavaScript implementation
-- Custom game engine based on SDL 2 and OpenGL 3.3 - does not depend on Unity, which is a proprietary software with a learning curve of itself
+- Custom game engine based on SDL 3, with an OpenGL 3.3 renderer and a Vulkan one - does not depend on Unity, which is a proprietary software with a learning curve of itself
