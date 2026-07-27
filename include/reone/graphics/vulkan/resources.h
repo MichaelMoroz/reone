@@ -65,6 +65,16 @@ public:
      */
     void clearUploaded();
 
+    /**
+     * Forget one uploaded texture after waiting for draws that may sample it.
+     *
+     * The replacement is created by get() in the current frame. Waiting here
+     * is intentionally conservative: the old image can be sampled by either
+     * of the two frames in flight, and destroying it earlier is a use-after-
+     * free on the GPU rather than a normal cache eviction.
+     */
+    void invalidate(const Texture &texture);
+
     /** Upload @p texture if it has not been seen, and return the image. */
     const VulkanImage &get(const Texture &texture);
 

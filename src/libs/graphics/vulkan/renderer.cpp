@@ -361,6 +361,10 @@ void VulkanRenderer::invalidateResources() {
     _resources.clearUploaded();
 }
 
+void VulkanRenderer::invalidateTexture(Texture &texture) {
+    _resources.invalidate(texture);
+}
+
 void VulkanRenderer::endFrame() {
     if (!_inFrame) {
         throw std::logic_error("Renderer: no frame begun");

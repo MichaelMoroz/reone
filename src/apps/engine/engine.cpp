@@ -380,9 +380,6 @@ int Engine::run() {
             runCommandsFile();
         }
         _profiler->measure(kMainThreadName, kProfilerUpdateTimeIndex, [this, &frameTime]() {
-            if (!_vulkan) {
-                imguiNewFrame();
-            }
             _game->update(frameTime);
             bool showcur = _game->cursorType() == CursorType::None;
             bool relmouse = _game->relativeMouseMode();
@@ -518,6 +515,10 @@ void Engine::renderGLFrame(bool &quit) {
     }
     _services->graphics.renderer.beginFrame(
         {_options.graphics.width, _options.graphics.height});
+    // Loading may request a present before the main loop reaches update(). The
+    // frame owner starts ImGui here so every path that renders its draw data has
+    // first opened the matching frame.
+    imguiNewFrame();
     // Scene targets are produced before anything 2D is drawn, on both backends,
     // so the two paths agree on when a scene may be rendered.
     _game->renderSceneOffscreen();

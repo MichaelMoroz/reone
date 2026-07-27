@@ -21,6 +21,7 @@
 #include "reone/audio/mixer.h"
 #include "reone/graphics/backend.h"
 #include "reone/graphics/context.h"
+#include "reone/graphics/renderer.h"
 #include "reone/graphics/renderer2d.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/mesh.h"
@@ -90,17 +91,17 @@ void Movie::render() {
     if (!_videoStream) {
         return;
     }
-    if (graphics::isVulkanBackend()) {
-        // Movie frames are uploaded per tick through the GL texture path. The
-        // Vulkan equivalent needs a streaming upload rather than the
-        // upload-once resource cache, which is not built yet, so movies are
-        // silently skipped: playback still advances and the game moves on.
-        return;
-    }
     auto &frame = _videoStream->frame();
     if (frame.pixels) {
-        _graphicsSvc.context.bindTexture(*_texture);
-        _texture->setPixels(_width, _height, PixelFormat::RGB8, Texture::Layer {frame.pixels}, true);
+        if (!graphics::isVulkanBackend()) {
+            _graphicsSvc.context.bindTexture(*_texture);
+        }
+        _texture->setPixels(_width, _height, PixelFormat::RGB8, Texture::Layer {frame.pixels},
+                            !graphics::isVulkanBackend());
+        // VulkanResources keys its immutable uploads by Texture address. A
+        // movie deliberately keeps that address while replacing its pixels,
+        // so discard just this image before the 2D renderer asks for it again.
+        _graphicsSvc.renderer.invalidateTexture(*_texture);
     }
     // ffmpeg hands over rows top-down; the quad expects them the other way up.
     auto uv = glm::mat3x4(

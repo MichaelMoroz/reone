@@ -119,6 +119,15 @@ void VulkanResources::unregisterExternal(const Texture &texture) {
     _external.erase(&texture);
 }
 
+void VulkanResources::invalidate(const Texture &texture) {
+    auto existing = _textures.find(&texture);
+    if (existing == _textures.end()) {
+        return;
+    }
+    _device.waitIdle();
+    _textures.erase(existing);
+}
+
 const VulkanImage &VulkanResources::fallbackFor(const Texture &texture,
                                                 const std::string &why) {
     if (_warned.insert(why).second) {

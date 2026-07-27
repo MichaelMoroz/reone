@@ -75,6 +75,7 @@ public:
     std::shared_ptr<Texture> captureFrame() override;
     void endFrame() override;
     void invalidateResources() override;
+    void invalidateTexture(Texture &texture) override;
 
     /** The colour beginFrame clears to. */
     void setClearColor(glm::vec4 color) { _clearColor = color; }

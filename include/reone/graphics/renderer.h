@@ -80,6 +80,15 @@ public:
      * hand a new mesh the previous one's buffers.
      */
     virtual void invalidateResources() {}
+
+    /**
+     * Drop the device-side copy of one texture whose pixels have changed.
+     *
+     * Asset textures are immutable after upload, but video reuses one Texture
+     * object for every decoded frame. Backends which cache by object identity
+     * need this narrower lifetime boundary without discarding unrelated assets.
+     */
+    virtual void invalidateTexture(Texture &) {}
 };
 
 } // namespace graphics
