@@ -33,7 +33,7 @@ namespace reone {
 
 namespace scene {
 
-void PBRRenderPass::draw(Mesh &mesh,
+void PBRRenderPass::executeDraw(Mesh &mesh,
                          Material &material,
                          const glm::mat4 &transform,
                          const glm::mat4 &transformInv,
@@ -124,7 +124,7 @@ void PBRRenderPass::withMaterialAppliedToContext(const Material &material, std::
     }
 }
 
-void PBRRenderPass::drawSkinned(Mesh &mesh,
+void PBRRenderPass::executeDrawSkinned(Mesh &mesh,
                                 Material &material,
                                 const glm::mat4 &transform,
                                 const glm::mat4 &transformInv,
@@ -149,7 +149,7 @@ void PBRRenderPass::drawSkinned(Mesh &mesh,
     });
 }
 
-void PBRRenderPass::drawDangly(Mesh &mesh,
+void PBRRenderPass::executeDrawDangly(Mesh &mesh,
                                Material &material,
                                const glm::mat4 &transform,
                                const glm::mat4 &transformInv,
@@ -173,7 +173,7 @@ void PBRRenderPass::drawDangly(Mesh &mesh,
     });
 }
 
-void PBRRenderPass::drawSaber(Mesh &mesh,
+void PBRRenderPass::executeDrawSaber(Mesh &mesh,
                               Material &material,
                               const glm::mat4 &transform,
                               const glm::mat4 &transformInv,
@@ -194,7 +194,7 @@ void PBRRenderPass::drawSaber(Mesh &mesh,
     });
 }
 
-void PBRRenderPass::drawBillboard(Texture &texture,
+void PBRRenderPass::executeDrawBillboard(Texture &texture,
                                   const glm::vec4 &color,
                                   const glm::mat4 &transform,
                                   const glm::mat4 &transformInv,
@@ -222,7 +222,7 @@ void PBRRenderPass::drawBillboard(Texture &texture,
     _context.popBlendMode();
 }
 
-void PBRRenderPass::drawParticles(Material &material,
+void PBRRenderPass::executeDrawParticles(Material &material,
                                   const glm::ivec2 &gridSize,
                                   const std::vector<ParticleInstance> &particles) {
     auto &texture = material.textures.at(TextureUnits::mainTex).get();
@@ -257,7 +257,7 @@ void PBRRenderPass::drawParticles(Material &material,
     }
 }
 
-void PBRRenderPass::drawGrass(float radius,
+void PBRRenderPass::executeDrawGrass(float radius,
                               float quadSize,
                               Material &material,
                               const std::vector<GrassInstance> &instances) {
@@ -311,7 +311,7 @@ void PBRRenderPass::applyMaterialToLocals(const Material &material,
     }
 }
 
-void PBRRenderPass::drawAABB(const std::vector<glm::vec4> &corners) {
+void PBRRenderPass::executeDrawAABB(const std::vector<glm::vec4> &corners) {
     auto &program = _shaderRegistry.get(ShaderProgramId::pbrAABB);
     _context.useProgram(program);
     _uniforms.setAABB([&corners](auto &aabb) {

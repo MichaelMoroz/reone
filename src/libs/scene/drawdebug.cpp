@@ -180,7 +180,7 @@ glm::mat4 transformLine(glm::vec3 start, glm::vec3 end, float thickness) {
         glm::vec4(pos, 1.0f));
 }
 
-static void renderLine(const Line &line, const DrawContext &ctx, IRenderPass &pass) {
+static void renderLine(const Line &line, const DrawContext &ctx) {
     ctx.services.context.useProgram(ctx.mvpColor);
     ctx.services.uniforms.setLocals([&line](LocalUniforms &locals) {
         locals.reset();
@@ -191,7 +191,7 @@ static void renderLine(const Line &line, const DrawContext &ctx, IRenderPass &pa
     ctx.billboard.draw(ctx.services.statistic);
 }
 
-static void renderTriangle(const Triangle &tri, const DrawContext &ctx, IRenderPass &pass) {
+static void renderTriangle(const Triangle &tri, const DrawContext &ctx) {
     ShaderProgram &program = ctx.aabbColor;
     ctx.services.context.useProgram(program);
 
@@ -211,7 +211,7 @@ static void renderTriangle(const Triangle &tri, const DrawContext &ctx, IRenderP
     ctx.billboard.draw(ctx.services.statistic);
 }
 
-static void renderText(const Text &text, const std::string &str, const DrawContext &ctx, IRenderPass &pass) {
+static void renderText(const Text &text, const std::string &str, const DrawContext &ctx) {
     ctx.services.context.useProgram(ctx.textBillboard);
     ctx.services.context.bindTexture(ctx.font->texture());
 
@@ -245,7 +245,7 @@ static void renderText(const Text &text, const std::string &str, const DrawConte
     ctx.services.meshRegistry.get(MeshName::quad).drawInstanced(numChars, ctx.services.statistic);
 }
 
-static void renderPoint(const Point &point, const DrawContext &ctx, IRenderPass &pass) {
+static void renderPoint(const Point &point, const DrawContext &ctx) {
     ctx.services.context.useProgram(ctx.textureBillboard);
     ctx.services.context.bindTexture(*ctx.point);
 
@@ -259,7 +259,7 @@ static void renderPoint(const Point &point, const DrawContext &ctx, IRenderPass 
     ctx.billboard.draw(ctx.services.statistic);
 }
 
-static void renderBox(const Box &box, const DrawContext &ctx, IRenderPass &pass) {
+static void renderBox(const Box &box, const DrawContext &ctx) {
     ShaderProgram &program = ctx.aabbColor;
     ctx.services.context.useProgram(program);
 
@@ -289,24 +289,24 @@ static void renderBox(const Box &box, const DrawContext &ctx, IRenderPass &pass)
     ctx.services.context.popPolygonMode();
 }
 
-static void doRender(const Element &e, IRenderPass &pass, DrawContext &ctx) {
+static void doRender(const Element &e, DrawContext &ctx) {
     switch (e.kind) {
     case Shape::Invalid:
         break;
     case Shape::Line:
-        renderLine(e.shape.line, ctx, pass);
+        renderLine(e.shape.line, ctx);
         break;
     case Shape::Triangle:
-        renderTriangle(e.shape.triangle, ctx, pass);
+        renderTriangle(e.shape.triangle, ctx);
         break;
     case Shape::Text:
-        renderText(e.shape.text, e.str, ctx, pass);
+        renderText(e.shape.text, e.str, ctx);
         break;
     case Shape::Point:
-        renderPoint(e.shape.point, ctx, pass);
+        renderPoint(e.shape.point, ctx);
         break;
     case Shape::Box:
-        renderBox(e.shape.box, ctx, pass);
+        renderBox(e.shape.box, ctx);
         break;
     }
 }
@@ -393,15 +393,30 @@ void updateDrawDebug(float dt) {
     }
 }
 
-/// Render elements for a scene.
-void renderDrawDebug(scene::IRenderPass &pass,
-                     graphics::GraphicsServices &services,
-                     resource::ResourceServices &resources,
-                     std::string_view scene) {
+static void ensureDrawDebugContext(graphics::GraphicsServices &services,
+                                   resource::ResourceServices &resources) {
     if (!g_state.ctx) {
         g_state.ctx.reset(new DrawContext(services, resources));
     }
+}
 
+void prepareDrawDebug(graphics::GraphicsServices &services,
+                      resource::ResourceServices &resources) {
+    ensureDrawDebugContext(services, resources);
+    auto &renderCtx = g_state.ctx->services.context;
+    renderCtx.pushFaceCullMode(FaceCullMode::None);
+    renderCtx.pushBlendMode(BlendMode::Normal);
+    renderCtx.pushPolygonMode(PolygonMode::Fill);
+    renderCtx.popPolygonMode();
+    renderCtx.popBlendMode();
+    renderCtx.popFaceCullMode();
+}
+
+/// Render elements for a scene.
+void renderDrawDebug(graphics::GraphicsServices &services,
+                     resource::ResourceServices &resources,
+                     std::string_view scene) {
+    ensureDrawDebugContext(services, resources);
     auto &renderCtx = g_state.ctx->services.context;
 
     renderCtx.pushFaceCullMode(FaceCullMode::None);
@@ -410,7 +425,7 @@ void renderDrawDebug(scene::IRenderPass &pass,
 
     for (auto &[id, elements] : g_state.elementsMap(scene)) {
         for (auto &element : elements) {
-            doRender(element, pass, *g_state.ctx);
+            doRender(element, *g_state.ctx);
         }
     }
 

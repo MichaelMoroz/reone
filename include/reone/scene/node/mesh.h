@@ -48,8 +48,8 @@ public:
 
     void update(float dt) override;
 
-    void render(IRenderPass &pass);
-    void renderShadow(IRenderPass &pass);
+    void registerRender(RenderRegistry &registry);
+    void registerShadow(RenderRegistry &registry);
 
     bool shouldRender() const;
     bool shouldCastShadows() const;

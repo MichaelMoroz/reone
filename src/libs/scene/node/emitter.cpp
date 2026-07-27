@@ -249,7 +249,7 @@ void EmitterSceneNode::detonate() {
     doSpawnParticle();
 }
 
-void EmitterSceneNode::renderLeafs(IRenderPass &pass, const std::vector<SceneNode *> &leafs) {
+void EmitterSceneNode::registerLeafs(RenderRegistry &registry, const std::vector<SceneNode *> &leafs) {
     if (leafs.empty()) {
         return;
     }
@@ -314,7 +314,15 @@ void EmitterSceneNode::renderLeafs(IRenderPass &pass, const std::vector<SceneNod
     if (emitter->blendMode == ModelNode::Emitter::BlendMode::Lighten) {
         material.blending = graphics::BlendMode::Lighten;
     }
-    pass.drawParticles(material, emitter->gridSize, particles);
+    SceneNode *root = this;
+    while (root->parent()) {
+        root = root->parent();
+    }
+    auto cullRoot = root->type() == SceneNodeType::Model
+                        ? static_cast<ModelSceneNode *>(root)
+                        : nullptr;
+    registry.registerParticles(
+        renderCategory(RenderCategory::Transparent), material, emitter->gridSize, particles, cullRoot);
 }
 
 } // namespace scene

@@ -106,20 +106,20 @@ void ModelSceneNode::update(float dt) {
     updateAnimations(dt);
 }
 
-void ModelSceneNode::renderLeafs(IRenderPass &pass, const std::vector<SceneNode *> &leafs) {
+void ModelSceneNode::registerLeafs(RenderRegistry &registry, const std::vector<SceneNode *> &leafs) {
     for (auto &leaf : leafs) {
-        static_cast<MeshSceneNode *>(leaf)->render(pass);
+        static_cast<MeshSceneNode *>(leaf)->registerRender(registry);
     }
 }
 
-void ModelSceneNode::renderAABB(IRenderPass &pass) {
+void ModelSceneNode::registerAABB(RenderRegistry &registry) {
     auto aabbWorld = _aabb * _absTransform;
     std::vector<glm::vec4> corners;
     corners.reserve(8);
     for (const auto &corner : aabbWorld.corners()) {
         corners.emplace_back(corner, 1.0f);
     }
-    pass.drawAABB(corners);
+    registry.registerAABB(renderCategory(RenderCategory::Debug), corners, this);
 }
 
 void ModelSceneNode::computeAABB() {
@@ -303,7 +303,8 @@ void ModelSceneNode::updateAnimations(float dt) {
         }
     }
 
-    // Apply states and compute bone transforms only when this model is not culled
+    // Animation work can still be suppressed by non-renderer users of the
+    // legacy visibility flag; registry culling never mutates it.
     if (!_culled) {
         applyAnimationStates(*_model->rootNode());
     }
@@ -329,7 +330,6 @@ void ModelSceneNode::updateAnimationChannel(AnimationChannel &channel, float dt)
         }
     }
 
-    // Compute animation states only when this model is not culled
     if (!_culled) {
         float time = channel.transition ? channel.anim->transitionTime() : channel.time;
         channel.stateByNodeNumber.clear();

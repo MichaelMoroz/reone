@@ -320,7 +320,10 @@ std::vector<RenderTargetInfo> PBRRenderPipeline::targets() const {
     return result;
 }
 
-Texture &PBRRenderPipeline::render() {
+Texture &PBRRenderPipeline::render(RenderRegistry &registry,
+                                   const CameraSceneNode *camera,
+                                   RenderPassName shadowPass) {
+    _registry = &registry;
     auto pass = PBRRenderPass {_options,
                                _context,
                                _shaderRegistry,
@@ -329,25 +332,26 @@ Texture &PBRRenderPipeline::render() {
                                _pbrTextures,
                                _textureRegistry,
                                _uniforms};
+    auto drawScene = [&registry, &pass, camera](RenderPassName name, RenderCategory category) {
+        registry.drawScene(pass, {name, category}, camera);
+    };
 
     glm::ivec4 screenRect {0, 0, _targetSize.x, _targetSize.y};
-    _context.withViewport(screenRect, [this, &pass, &screenRect]() {
+    _context.withViewport(screenRect, [this, &pass, &screenRect, &drawScene, shadowPass]() {
         // Shadows pass
-        if (_passCallbacks.count(RenderPassName::DirLightShadowsPass) > 0) {
+        if (shadowPass == RenderPassName::DirLightShadowsPass) {
             beginDirLightShadowsPass();
-            _passCallbacks.at(RenderPassName::DirLightShadowsPass)(pass);
+            drawScene(RenderPassName::DirLightShadowsPass, RenderCategory::ShadowCaster);
             endDirLightShadowsPass();
-        } else if (_passCallbacks.count(RenderPassName::PointLightShadows) > 0) {
+        } else if (shadowPass == RenderPassName::PointLightShadows) {
             beginPointLightShadowsPass();
-            _passCallbacks.at(RenderPassName::PointLightShadows)(pass);
+            drawScene(RenderPassName::PointLightShadows, RenderCategory::ShadowCaster);
             endPointLightShadowsPass();
         }
 
         // Opaque geometry pass
         beginOpaqueGeometryPass();
-        if (_passCallbacks.count(RenderPassName::OpaqueGeometry) > 0) {
-            _passCallbacks.at(RenderPassName::OpaqueGeometry)(pass);
-        }
+        drawScene(RenderPassName::OpaqueGeometry, RenderCategory::Opaque);
         endOpaqueGeometryPass();
         if (_options.ssao || _options.ssr) {
             auto halfSize = _targetSize / 2;
@@ -402,17 +406,13 @@ Texture &PBRRenderPipeline::render() {
 
         // Transparent geometry pass
         beginTransparentGeometryPass();
-        if (_passCallbacks.count(RenderPassName::TransparentGeometry) > 0) {
-            _passCallbacks.at(RenderPassName::TransparentGeometry)(pass);
-        }
+        drawScene(RenderPassName::TransparentGeometry, RenderCategory::Transparent);
         endTransparentGeometryPass();
         blendTransparentGeometry();
 
         // Post-processing pass
         beginPostProcessingPass();
-        if (_passCallbacks.count(RenderPassName::PostProcessing) > 0) {
-            _passCallbacks.at(RenderPassName::PostProcessing)(pass);
-        }
+        drawScene(RenderPassName::PostProcessing, RenderCategory::LensFlare);
         endPostProcessingPass();
         if (_options.fxaa && _options.sharpen) {
             applyFXAA(*_targets.cbOutput, *_targets.fbPing, _targetSize);
@@ -431,9 +431,7 @@ Texture &PBRRenderPipeline::render() {
 
         // Draw debug elements (lines, points, etc.)
         beginDebugPass();
-        if (_passCallbacks.count(RenderPassName::Debug) > 0) {
-            _passCallbacks.at(RenderPassName::Debug)(pass);
-        }
+        drawScene(RenderPassName::Debug, RenderCategory::Debug);
         endDebugPass();
 
         _context.resetDrawFramebuffer();

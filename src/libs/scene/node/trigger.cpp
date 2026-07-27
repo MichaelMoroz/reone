@@ -104,7 +104,7 @@ void TriggerSceneNode::init() {
     _mesh->init();
 }
 
-void TriggerSceneNode::render(IRenderPass &pass) {
+void TriggerSceneNode::registerRender(RenderRegistry &registry) {
     _graphicsSvc.uniforms.setWalkmesh([this](auto &walkmesh) {
         walkmesh.materials[kMaxWalkmeshMaterials - 1] = _debugColor;
     });
@@ -113,7 +113,8 @@ void TriggerSceneNode::render(IRenderPass &pass) {
     material.type = MaterialType::Walkmesh;
     material.faceCulling = FaceCullMode::None;
     material.polygonMode = PolygonMode::Line;
-    pass.draw(*_mesh, material, _absTransform, _absTransformInv, _prevAbsTransform);
+    registry.registerMesh(renderCategory(RenderCategory::Debug),
+                     *_mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, {}, nullptr);
 }
 
 bool TriggerSceneNode::isIn(const glm::vec2 &pt) const {

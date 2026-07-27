@@ -66,7 +66,7 @@ void LightSceneNode::update(float dt) {
     }
 }
 
-void LightSceneNode::renderLensFlare(IRenderPass &pass, const ModelNode::LensFlare &flare) {
+void LightSceneNode::registerLensFlare(RenderRegistry &registry, const ModelNode::LensFlare &flare) {
     std::shared_ptr<Camera> camera(_sceneGraph.camera()->get().camera());
     if (!camera) {
         return;
@@ -77,7 +77,8 @@ void LightSceneNode::renderLensFlare(IRenderPass &pass, const ModelNode::LensFla
     }
     auto color = glm::vec4(_color, 0.5f);
     auto transform = glm::translate(origin());
-    pass.drawBillboard(*texture, color, transform, glm::inverse(transform), 0.2f * flare.size);
+    registry.registerBillboard(renderCategory(RenderCategory::LensFlare),
+                          *texture, color, transform, glm::inverse(transform), 0.2f * flare.size, &_model);
 }
 
 bool LightSceneNode::isDirectional() const {

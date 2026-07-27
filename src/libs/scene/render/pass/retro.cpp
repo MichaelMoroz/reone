@@ -32,7 +32,7 @@ namespace reone {
 
 namespace scene {
 
-void RetroRenderPass::draw(Mesh &mesh,
+void RetroRenderPass::executeDraw(Mesh &mesh,
                            Material &material,
                            const glm::mat4 &transform,
                            const glm::mat4 &transformInv,
@@ -138,7 +138,7 @@ int RetroRenderPass::materialFeatureMask(const Material &material) const {
     return mask;
 }
 
-void RetroRenderPass::drawSkinned(Mesh &mesh,
+void RetroRenderPass::executeDrawSkinned(Mesh &mesh,
                                   Material &material,
                                   const glm::mat4 &transform,
                                   const glm::mat4 &transformInv,
@@ -162,7 +162,7 @@ void RetroRenderPass::drawSkinned(Mesh &mesh,
     });
 }
 
-void RetroRenderPass::drawDangly(Mesh &mesh,
+void RetroRenderPass::executeDrawDangly(Mesh &mesh,
                                  Material &material,
                                  const glm::mat4 &transform,
                                  const glm::mat4 &transformInv,
@@ -185,7 +185,7 @@ void RetroRenderPass::drawDangly(Mesh &mesh,
     });
 }
 
-void RetroRenderPass::drawSaber(Mesh &mesh,
+void RetroRenderPass::executeDrawSaber(Mesh &mesh,
                                 Material &material,
                                 const glm::mat4 &transform,
                                 const glm::mat4 &transformInv,
@@ -205,7 +205,7 @@ void RetroRenderPass::drawSaber(Mesh &mesh,
     });
 }
 
-void RetroRenderPass::drawBillboard(Texture &texture,
+void RetroRenderPass::executeDrawBillboard(Texture &texture,
                                     const glm::vec4 &color,
                                     const glm::mat4 &transform,
                                     const glm::mat4 &transformInv,
@@ -233,7 +233,7 @@ void RetroRenderPass::drawBillboard(Texture &texture,
     _context.popBlendMode();
 }
 
-void RetroRenderPass::drawParticles(Material &material,
+void RetroRenderPass::executeDrawParticles(Material &material,
                                     const glm::ivec2 &gridSize,
                                     const std::vector<ParticleInstance> &particles) {
     auto &texture = material.textures.at(TextureUnits::mainTex).get();
@@ -268,7 +268,7 @@ void RetroRenderPass::drawParticles(Material &material,
     }
 }
 
-void RetroRenderPass::drawGrass(float radius,
+void RetroRenderPass::executeDrawGrass(float radius,
                                 float quadSize,
                                 Material &material,
                                 const std::vector<GrassInstance> &instances) {
@@ -299,7 +299,7 @@ void RetroRenderPass::drawGrass(float radius,
     _meshRegistry.get(MeshName::grass).drawInstanced(instances.size(), _statistic);
 }
 
-void RetroRenderPass::drawAABB(const std::vector<glm::vec4> &corners) {
+void RetroRenderPass::executeDrawAABB(const std::vector<glm::vec4> &corners) {
     auto &program = _shaderRegistry.get(ShaderProgramId::retroAABB);
     _context.useProgram(program);
     _uniforms.setAABB([&corners](auto &aabb) {

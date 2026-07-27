@@ -245,7 +245,7 @@ static bool isReceivingShadows(const ModelSceneNode &model, const MeshSceneNode 
     return model.usage() == ModelUsage::Room;
 }
 
-void MeshSceneNode::render(IRenderPass &pass) {
+void MeshSceneNode::registerRender(RenderRegistry &registry) {
     auto mesh = _modelNode.mesh();
     if (!mesh || !_nodeTextures.diffuse) {
         return;
@@ -312,28 +312,25 @@ void MeshSceneNode::render(IRenderPass &pass) {
         if (_prevBones.size() != _bones.size()) {
             _prevBones = _bones;
         }
-        pass.drawSkinned(*mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, _bones, _prevBones);
+        registry.registerMesh(renderCategory(isTransparent() ? RenderCategory::Transparent : RenderCategory::Opaque),
+                         *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
+                         RegisteredSkin {_bones, _prevBones}, &_model);
     } else if (_modelNode.isDanglymesh()) {
         std::vector<glm::vec4> positions;
         positions.reserve(_dangly.vertices.size());
         for (const auto &vertex : _dangly.vertices) {
             positions.emplace_back(vertex.position + vertex.displacement, 1.0f);
         }
-        pass.drawDangly(*mesh->mesh,
-                        material,
-                        _absTransform,
-                        _absTransformInv,
-                        _prevAbsTransform,
-                        positions);
+        registry.registerMesh(renderCategory(isTransparent() ? RenderCategory::Transparent : RenderCategory::Opaque),
+                         *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
+                         RegisteredDangly {std::move(positions)}, &_model);
     } else if (_modelNode.isSaberMesh()) {
-        pass.drawSaber(*mesh->mesh,
-                       material,
-                       _absTransform,
-                       _absTransformInv,
-                       _prevAbsTransform,
-                       glm::vec4 {_saber.displacement, 0.0f});
+        registry.registerMesh(renderCategory(isTransparent() ? RenderCategory::Transparent : RenderCategory::Opaque),
+                         *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
+                         RegisteredSaber {glm::vec4 {_saber.displacement, 0.0f}}, &_model);
     } else {
-        pass.draw(*mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform);
+        registry.registerMesh(renderCategory(isTransparent() ? RenderCategory::Transparent : RenderCategory::Opaque),
+                         *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, {}, &_model);
     }
 }
 
@@ -345,7 +342,7 @@ void MeshSceneNode::snapshotPreviousFrame(uint64_t frame) {
     SceneNode::snapshotPreviousFrame(frame);
 }
 
-void MeshSceneNode::renderShadow(IRenderPass &pass) {
+void MeshSceneNode::registerShadow(RenderRegistry &registry) {
     std::shared_ptr<ModelNode::TriangleMesh> mesh(_modelNode.mesh());
     if (!mesh) {
         return;
@@ -360,7 +357,8 @@ void MeshSceneNode::renderShadow(IRenderPass &pass) {
     // Carried on the material rather than set as ambient context around the
     // loop, which was a raw GL call on a path both backends take.
     material.faceCulling = FaceCullMode::Front;
-    pass.draw(*mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform);
+    registry.registerMesh(renderCategory(RenderCategory::ShadowCaster),
+                     *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, {}, &_model);
 }
 
 bool MeshSceneNode::isLightingEnabled() const {

@@ -377,17 +377,13 @@ void VulkanRenderPipeline::deinit() {
  *
  * One pass covers every cascade, or every cube face, through multiview: the
  * view mask says how many, and the vertex stage picks its matrix by view index.
- * Only one of the two runs - the scene graph registers the callback for the
- * kind of light it chose.
+ * Only one of the two runs; the graph supplies the kind of light it chose.
  */
 void VulkanRenderPipeline::shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset) {
-    auto directional = _passCallbacks.find(RenderPassName::DirLightShadowsPass);
-    auto point = _passCallbacks.find(RenderPassName::PointLightShadows);
-    bool isDirectional = directional != _passCallbacks.end();
-    auto callback = isDirectional ? directional : point;
-    if (callback == _passCallbacks.end()) {
+    if (_shadowPass == RenderPassName::None) {
         return;
     }
+    bool isDirectional = _shadowPass == RenderPassName::DirLightShadowsPass;
 
     auto &image = isDirectional ? *_dirShadows : *_pointShadows;
     auto &layout = isDirectional ? _dirShadowLayout : _pointShadowLayout;
@@ -437,13 +433,15 @@ void VulkanRenderPipeline::shadowPass(VkCommandBuffer cmd, uint32_t globalsOffse
                           _uniforms,
                           _renderer.pbrTextures(),
                           _meshRegistry,
-                          _registry,
                           cmd,
                           {},
                           VulkanGBuffer::depthFormat());
     pass.setGlobalsOffset(globalsOffset);
     pass.setShadowViewMask(viewMask);
-    callback->second(pass);
+    _registry->drawScene(
+        pass,
+        {_shadowPass, RenderCategory::ShadowCaster},
+        _cullCamera);
 
     vkCmdEndRendering(cmd);
 
@@ -451,11 +449,6 @@ void VulkanRenderPipeline::shadowPass(VkCommandBuffer cmd, uint32_t globalsOffse
 }
 
 void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset) {
-    auto callback = _passCallbacks.find(RenderPassName::OpaqueGeometry);
-    if (callback == _passCallbacks.end()) {
-        return;
-    }
-
     VulkanDebugScope scope(_renderer.device(), cmd, "Opaque geometry (G-buffer)",
                            {0.3f, 0.6f, 0.3f});
 
@@ -513,12 +506,14 @@ void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOff
                           _uniforms,
                           _renderer.pbrTextures(),
                           _meshRegistry,
-                          _registry,
                           cmd,
                           VulkanGBuffer::colorFormats(),
                           VulkanGBuffer::depthFormat());
     pass.setGlobalsOffset(globalsOffset);
-    callback->second(pass);
+    _registry->drawScene(
+        pass,
+        {RenderPassName::OpaqueGeometry, RenderCategory::Opaque},
+        _cullCamera);
 
     vkCmdEndRendering(cmd);
 }
@@ -606,7 +601,7 @@ void VulkanRenderPipeline::resolvePass(VkCommandBuffer cmd, uint32_t globalsOffs
  */
 void VulkanRenderPipeline::drawOntoOutput(VkCommandBuffer cmd,
                                           uint32_t globalsOffset,
-                                          const std::function<void(IRenderPass &)> &callback,
+                                          RenderPassName passName,
                                           const char *label) {
     VulkanDebugScope scope(_renderer.device(), cmd, label, {0.7f, 0.4f, 0.7f});
 
@@ -653,13 +648,15 @@ void VulkanRenderPipeline::drawOntoOutput(VkCommandBuffer cmd,
                           _uniforms,
                           _renderer.pbrTextures(),
                           _meshRegistry,
-                          _registry,
                           cmd,
                           {_renderer.swapchain().imageFormat()},
                           VulkanGBuffer::depthFormat(),
                           VulkanRenderPass::Kind::Forward);
     pass.setGlobalsOffset(globalsOffset);
-    callback(pass);
+    auto category = passName == RenderPassName::PostProcessing
+                        ? RenderCategory::LensFlare
+                        : RenderCategory::Debug;
+    _registry->drawScene(pass, {passName, category}, _cullCamera);
 
     vkCmdEndRendering(cmd);
 }
@@ -728,9 +725,7 @@ void VulkanRenderPipeline::transparencyPass(VkCommandBuffer cmd, uint32_t global
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    auto callback = _passCallbacks.find(RenderPassName::TransparentGeometry);
-    if (callback != _passCallbacks.end()) {
-        VulkanRenderPass pass(_options,
+    VulkanRenderPass pass(_options,
                               _renderer.device(),
                               _renderer.pipelines(),
                               _renderer.uniformRing(),
@@ -739,14 +734,15 @@ void VulkanRenderPipeline::transparencyPass(VkCommandBuffer cmd, uint32_t global
                               _uniforms,
                               _renderer.pbrTextures(),
                               _meshRegistry,
-                              _registry,
                               cmd,
                               {kOITAccumFormat, kOITRevealageFormat},
                               VulkanGBuffer::depthFormat(),
                               VulkanRenderPass::Kind::OIT);
-        pass.setGlobalsOffset(globalsOffset);
-        callback->second(pass);
-    }
+    pass.setGlobalsOffset(globalsOffset);
+    _registry->drawScene(
+        pass,
+        {RenderPassName::TransparentGeometry, RenderCategory::Transparent},
+        _cullCamera);
 
     vkCmdEndRendering(cmd);
 }
@@ -828,11 +824,8 @@ void VulkanRenderPipeline::oitBlendPass(VkCommandBuffer cmd) {
  * test. The filter chain that runs after this is filterChainPass.
  */
 void VulkanRenderPipeline::postProcessingPass(VkCommandBuffer cmd, uint32_t globalsOffset) {
-    auto callback = _passCallbacks.find(RenderPassName::PostProcessing);
-    if (callback == _passCallbacks.end()) {
-        return;
-    }
-    drawOntoOutput(cmd, globalsOffset, callback->second, "Post-processing");
+    drawOntoOutput(
+        cmd, globalsOffset, RenderPassName::PostProcessing, "Post-processing");
 }
 
 void VulkanRenderPipeline::filterPass(VkCommandBuffer cmd,
@@ -930,9 +923,13 @@ void VulkanRenderPipeline::filterChainPass(VkCommandBuffer cmd) {
     }
 }
 
-Texture &VulkanRenderPipeline::render() {
+Texture &VulkanRenderPipeline::render(RenderRegistry &registry,
+                                      const CameraSceneNode *camera,
+                                      RenderPassName activeShadowPass) {
     auto cmd = _renderer.commandBuffer();
-    _registry.clear();
+    _registry = &registry;
+    _cullCamera = camera;
+    _shadowPass = activeShadowPass;
 
     // The scene graph filled GlobalUniforms through the GL Uniforms object,
     // which is inert under Vulkan, so the values are read back from its CPU
@@ -1196,41 +1193,15 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
     }
     std::filesystem::create_directories(dir);
 
-    size_t rigid = 0;
-    size_t skinned = 0;
-    size_t dangly = 0;
-    size_t sabers = 0;
-    for (const auto &entry : _registry.meshes()) {
-        if (std::holds_alternative<RegisteredSkin>(entry.deformation)) {
-            ++skinned;
-        } else if (std::holds_alternative<RegisteredDangly>(entry.deformation)) {
-            ++dangly;
-        } else if (std::holds_alternative<RegisteredSaber>(entry.deformation)) {
-            ++sabers;
-        } else {
-            ++rigid;
-        }
-    }
-    size_t particleInstances = 0;
-    for (const auto &entry : _registry.particles()) {
-        particleInstances += entry.instances.size();
-    }
-    size_t grassInstances = 0;
-    for (const auto &entry : _registry.grass()) {
-        grassInstances += entry.instances.size();
-    }
-    auto objectCount =
-        _registry.meshes().size() + _registry.particles().size() + _registry.grass().size();
-    info("Vulkan registry: objects=" + std::to_string(objectCount) +
-             ", rigid=" + std::to_string(rigid) +
-             ", skinned=" + std::to_string(skinned) +
-             ", dangly=" + std::to_string(dangly) +
-             ", saber=" + std::to_string(sabers) +
-             ", particle_emitters=" + std::to_string(_registry.particles().size()) +
-             ", particles=" + std::to_string(particleInstances) +
-             ", grass_nodes=" + std::to_string(_registry.grass().size()) +
-             ", grass_clusters=" + std::to_string(grassInstances),
+    info("Vulkan scene traversals: " + std::to_string(_registry->traversalCount()),
          LogChannel::Graphics);
+    info("Vulkan registry registered: " + formatRegistryCounts(_registry->registeredCounts()),
+         LogChannel::Graphics);
+    for (const auto &[pass, drawn] : _registry->drawnCountsByPass()) {
+        info("Vulkan registry drawn " + renderPassName(pass) +
+                 ": " + formatRegistryCounts(drawn),
+             LogChannel::Graphics);
+    }
 
     auto entries = targetEntries();
 

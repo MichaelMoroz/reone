@@ -52,7 +52,7 @@ public:
     }
 
     void init();
-    void render(IRenderPass &pass);
+    void registerRender(RenderRegistry &registry);
 
     const graphics::Walkmesh &walkmesh() const { return _walkmesh; }
 

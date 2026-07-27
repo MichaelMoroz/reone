@@ -24,7 +24,7 @@
 #include "reone/graphics/vulkan/pipelinecache.h"
 
 #include "../pass.h"
-#include "../registry.h"
+#include "../../registry.h"
 
 namespace reone {
 
@@ -51,11 +51,10 @@ namespace scene {
  * frame's uniform arena and records a draw. The uniform contents are the same,
  * because both feed the same shaders.
  *
- * Only the opaque geometry pass is implemented. The other entry points on
- * IRenderPass are stubs that warn once - a scene containing particles should
- * render its geometry and say what it dropped, not abort the frame.
+ * Unsupported executor entry points warn once so a scene says what it dropped
+ * instead of aborting the frame.
  */
-class VulkanRenderPass : public IRenderPass, boost::noncopyable {
+class VulkanRenderPass : public IRenderPassExecutor {
 public:
     /**
      * Which of the pipeline's passes is recording.
@@ -88,7 +87,6 @@ public:
                      graphics::IUniforms &uniforms,
                      graphics::VulkanPBRTextures &pbrTextures,
                      graphics::IMeshRegistry &meshRegistry,
-                     RenderRegistry &registry,
                      VkCommandBuffer cmd,
                      std::vector<VkFormat> colorFormats,
                      VkFormat depthFormat,
@@ -102,20 +100,19 @@ public:
         _uniforms(uniforms),
         _pbrTextures(pbrTextures),
         _meshRegistry(meshRegistry),
-        _registry(registry),
         _cmd(cmd),
         _colorFormats(std::move(colorFormats)),
         _depthFormat(depthFormat),
         _kind(kind) {
     }
 
-    void draw(graphics::Mesh &mesh,
+    void executeDraw(graphics::Mesh &mesh,
               graphics::Material &material,
               const glm::mat4 &transform,
               const glm::mat4 &transformInv,
               const glm::mat4 &prevTransform) override;
 
-    void drawSkinned(graphics::Mesh &mesh,
+    void executeDrawSkinned(graphics::Mesh &mesh,
                      graphics::Material &material,
                      const glm::mat4 &transform,
                      const glm::mat4 &transformInv,
@@ -123,36 +120,37 @@ public:
                      const std::vector<glm::mat4> &bones,
                      const std::vector<glm::mat4> &prevBones) override;
 
-    void drawDangly(graphics::Mesh &mesh,
+    void executeDrawDangly(graphics::Mesh &mesh,
                     graphics::Material &material,
                     const glm::mat4 &transform,
                     const glm::mat4 &transformInv,
                     const glm::mat4 &prevTransform,
                     const std::vector<glm::vec4> &positions) override;
 
-    void drawSaber(graphics::Mesh &mesh,
+    void executeDrawSaber(graphics::Mesh &mesh,
                    graphics::Material &material,
                    const glm::mat4 &transform,
                    const glm::mat4 &transformInv,
                    const glm::mat4 &prevTransform,
                    const glm::vec4 &displacement) override;
 
-    void drawBillboard(graphics::Texture &texture,
+    void executeDrawBillboard(graphics::Texture &texture,
                        const glm::vec4 &color,
                        const glm::mat4 &transform,
                        const glm::mat4 &transformInv,
                        std::optional<float> size) override;
 
-    void drawParticles(graphics::Material &material,
+    void executeDrawParticles(graphics::Material &material,
                        const glm::ivec2 &gridSize,
                        const std::vector<ParticleInstance> &particles) override;
 
-    void drawGrass(float radius,
+    void executeDrawGrass(float radius,
                    float quadSize,
                    graphics::Material &material,
                    const std::vector<GrassInstance> &instances) override;
 
-    void drawAABB(const std::vector<glm::vec4> &corners) override;
+    void executeDrawAABB(const std::vector<glm::vec4> &corners) override;
+    void executeDrawDebug(const std::function<void()> &execute) override;
 
     /**
      * Offset of this frame's GlobalUniforms slice. The pipeline pushes it once
@@ -178,8 +176,6 @@ private:
     graphics::IUniforms &_uniforms;
     graphics::VulkanPBRTextures &_pbrTextures;
     graphics::IMeshRegistry &_meshRegistry;
-    RenderRegistry &_registry;
-
     VkCommandBuffer _cmd;
     std::vector<VkFormat> _colorFormats;
     VkFormat _depthFormat;

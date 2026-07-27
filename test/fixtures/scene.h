@@ -115,10 +115,9 @@ class MockRenderPipeline : public IRenderPipeline, boost::noncopyable {
 public:
     MOCK_METHOD(void, init, (), (override));
 
-    MOCK_METHOD(void, reset, (), (override));
-    MOCK_METHOD(void, inRenderPass, (RenderPassName, std::function<void(IRenderPass &)>), (override));
-
-    MOCK_METHOD(graphics::Texture &, render, (), (override));
+    MOCK_METHOD(graphics::Texture &, render,
+                (RenderRegistry &, const CameraSceneNode *, RenderPassName),
+                (override));
     MOCK_METHOD(std::vector<RenderTargetInfo>, targets, (), (const override));
 };
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2023 The reone project contributors
+ * Copyright (c) 2020-2026 The reone project contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,6 +18,8 @@
 #pragma once
 
 #include "reone/graphics/types.h"
+
+#include "../registry.h"
 
 namespace reone {
 
@@ -41,90 +43,54 @@ struct Material;
 
 namespace scene {
 
-enum class RenderPassName {
-    None,
-    DirLightShadowsPass,
-    PointLightShadows,
-    OpaqueGeometry,
-    TransparentGeometry,
-    PostProcessing,
-    Debug
-};
-
-struct ParticleInstance {
-    int frame {0};
-    glm::vec3 position {0.0f};
-    glm::vec2 size {0.0f};
-    glm::vec4 color {1.0f};
-    glm::vec3 right {0.0f};
-    glm::vec3 up {0.0f};
-};
-
-struct GrassInstance {
-    int variant {0};
-    glm::vec3 position {0.0f};
-    glm::vec2 lightmapUV {0.0f};
-};
-
-class IRenderPass {
+/**
+ * Executes entries selected from a completed frame registry.
+ *
+ * Scene code never sees this interface. Keeping execution separate from
+ * registration prevents a pass from causing another scene traversal.
+ */
+class IRenderPassExecutor {
 public:
-    virtual ~IRenderPass() = default;
+    virtual ~IRenderPassExecutor() = default;
 
-    /**
-     * The prevTransform/prevBones arguments carry the values this geometry was
-     * drawn with in the previous frame, and exist solely to produce motion
-     * vectors. Callers that have no previous frame to report - newly spawned
-     * geometry, or geometry that was culled last frame - pass the current values,
-     * which yields zero motion.
-     *
-     * Note that dangly and saber meshes deform per-vertex on the GPU and their
-     * previous vertex positions are not tracked, so their motion vectors capture
-     * only the rigid part of the movement.
-     */
-    virtual void draw(graphics::Mesh &mesh,
-                      graphics::Material &material,
-                      const glm::mat4 &transform,
-                      const glm::mat4 &transformInv,
-                      const glm::mat4 &prevTransform) = 0;
-
-    virtual void drawSkinned(graphics::Mesh &mesh,
+    virtual void executeDraw(graphics::Mesh &mesh,
                              graphics::Material &material,
                              const glm::mat4 &transform,
                              const glm::mat4 &transformInv,
-                             const glm::mat4 &prevTransform,
-                             const std::vector<glm::mat4> &bones,
-                             const std::vector<glm::mat4> &prevBones) = 0;
-
-    virtual void drawDangly(graphics::Mesh &mesh,
-                            graphics::Material &material,
-                            const glm::mat4 &transform,
-                            const glm::mat4 &transformInv,
-                            const glm::mat4 &prevTransform,
-                            const std::vector<glm::vec4> &positions) = 0;
-
-    virtual void drawSaber(graphics::Mesh &mesh,
-                           graphics::Material &material,
-                           const glm::mat4 &transform,
-                           const glm::mat4 &transformInv,
-                           const glm::mat4 &prevTransform,
-                           const glm::vec4 &displacement) = 0;
-
-    virtual void drawBillboard(graphics::Texture &texture,
-                               const glm::vec4 &color,
-                               const glm::mat4 &transform,
-                               const glm::mat4 &transformInv,
-                               std::optional<float> size) = 0;
-
-    virtual void drawParticles(graphics::Material &material,
-                               const glm::ivec2 &gridSize,
-                               const std::vector<ParticleInstance> &particles) = 0;
-
-    virtual void drawGrass(float radius,
-                           float quadSize,
-                           graphics::Material &material,
-                           const std::vector<GrassInstance> &instances) = 0;
-
-    virtual void drawAABB(const std::vector<glm::vec4> &corners) = 0;
+                             const glm::mat4 &prevTransform) = 0;
+    virtual void executeDrawSkinned(graphics::Mesh &mesh,
+                                    graphics::Material &material,
+                                    const glm::mat4 &transform,
+                                    const glm::mat4 &transformInv,
+                                    const glm::mat4 &prevTransform,
+                                    const std::vector<glm::mat4> &bones,
+                                    const std::vector<glm::mat4> &prevBones) = 0;
+    virtual void executeDrawDangly(graphics::Mesh &mesh,
+                                   graphics::Material &material,
+                                   const glm::mat4 &transform,
+                                   const glm::mat4 &transformInv,
+                                   const glm::mat4 &prevTransform,
+                                   const std::vector<glm::vec4> &positions) = 0;
+    virtual void executeDrawSaber(graphics::Mesh &mesh,
+                                  graphics::Material &material,
+                                  const glm::mat4 &transform,
+                                  const glm::mat4 &transformInv,
+                                  const glm::mat4 &prevTransform,
+                                  const glm::vec4 &displacement) = 0;
+    virtual void executeDrawBillboard(graphics::Texture &texture,
+                                      const glm::vec4 &color,
+                                      const glm::mat4 &transform,
+                                      const glm::mat4 &transformInv,
+                                      std::optional<float> size) = 0;
+    virtual void executeDrawParticles(graphics::Material &material,
+                                      const glm::ivec2 &gridSize,
+                                      const std::vector<ParticleInstance> &particles) = 0;
+    virtual void executeDrawGrass(float radius,
+                                  float quadSize,
+                                  graphics::Material &material,
+                                  const std::vector<GrassInstance> &instances) = 0;
+    virtual void executeDrawAABB(const std::vector<glm::vec4> &corners) = 0;
+    virtual void executeDrawDebug(const std::function<void()> &execute) = 0;
 };
 
 } // namespace scene

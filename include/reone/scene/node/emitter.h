@@ -49,7 +49,7 @@ public:
 
     void update(float dt) override;
 
-    void renderLeafs(IRenderPass &pass, const std::vector<SceneNode *> &leafs) override;
+    void registerLeafs(RenderRegistry &registry, const std::vector<SceneNode *> &leafs) override;
 
     void detonate();
 

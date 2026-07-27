@@ -41,6 +41,7 @@ set(SCENE_HEADERS
     ${SCENE_INCLUDE_DIR}/node/sound.h
     ${SCENE_INCLUDE_DIR}/node/trigger.h
     ${SCENE_INCLUDE_DIR}/node/walkmesh.h
+    ${SCENE_INCLUDE_DIR}/registry.h
     ${SCENE_INCLUDE_DIR}/render/pass.h
     ${SCENE_INCLUDE_DIR}/render/pass/retro.h
     ${SCENE_INCLUDE_DIR}/render/pass/pbr.h
@@ -69,6 +70,7 @@ set(SCENE_SOURCES
     ${SCENE_SOURCE_DIR}/node/sound.cpp
     ${SCENE_SOURCE_DIR}/node/trigger.cpp
     ${SCENE_SOURCE_DIR}/node/walkmesh.cpp
+    ${SCENE_SOURCE_DIR}/registry.cpp
     ${SCENE_SOURCE_DIR}/render/pass/retro.cpp
     ${SCENE_SOURCE_DIR}/render/pass/pbr.cpp
     ${SCENE_SOURCE_DIR}/render/pipeline.cpp

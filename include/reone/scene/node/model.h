@@ -103,8 +103,8 @@ public:
 
     void update(float dt) override;
 
-    void renderLeafs(IRenderPass &pass, const std::vector<SceneNode *> &leafs) override;
-    void renderAABB(IRenderPass &pass);
+    void registerLeafs(RenderRegistry &registry, const std::vector<SceneNode *> &leafs) override;
+    void registerAABB(RenderRegistry &registry);
 
     void computeAABB();
     void signalEvent(const std::string &name);

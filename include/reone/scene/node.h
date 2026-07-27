@@ -43,7 +43,7 @@ struct ResourceServices;
 
 namespace scene {
 
-class IRenderPass;
+class RenderRegistry;
 class ISceneGraph;
 class IUser;
 
@@ -55,7 +55,7 @@ public:
 
     virtual void update(float dt);
 
-    virtual void renderLeafs(IRenderPass &pass, const std::vector<SceneNode *> &leafs) {
+    virtual void registerLeafs(RenderRegistry &registry, const std::vector<SceneNode *> &leafs) {
     }
 
     bool isEnabled() const { return _enabled; }
@@ -153,7 +153,7 @@ protected:
     // Flags
 
     bool _enabled {true};
-    bool _culled {false}; /**< has this node been frustum- or distance-culled? */
+    bool _culled {false};
     bool _point {true};   /**< is this node represented by a single point?  */
 
     /**

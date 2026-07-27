@@ -62,7 +62,6 @@ static constexpr float kElevationTestZ = 1024.0f;
 struct Collision;
 
 class IAnimationEventListener;
-class IRenderPass;
 class IRenderPipelineFactory;
 
 class ISceneGraph {
@@ -166,10 +165,7 @@ public:
     graphics::Texture &render(const glm::ivec2 &dim) override;
     void invalidateRenderPipeline() override { _renderPipeline.reset(); }
 
-    void renderShadows(IRenderPass &pass);
-    void renderOpaque(IRenderPass &pass);
-    void renderTransparent(IRenderPass &pass);
-    void renderLensFlares(IRenderPass &pass);
+    void renderScene(RenderRegistry &registry);
 
     const std::string &name() const override {
         return _name;
@@ -298,6 +294,7 @@ private:
     resource::ResourceServices &_resourceSvc;
 
     std::unique_ptr<IRenderPipeline> _renderPipeline;
+    RenderRegistry _registry;
 
     bool _updateRoots {true};
 
@@ -377,8 +374,6 @@ private:
     std::set<uint32_t> _lineOfSightSurfaces;
 
     // END Surfaces
-
-    void cullRoots();
 
     void refresh();
     void refreshFromNode(SceneNode &node);

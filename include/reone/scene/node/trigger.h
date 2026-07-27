@@ -50,7 +50,7 @@ public:
     }
 
     void init();
-    void render(IRenderPass &pass);
+    void registerRender(RenderRegistry &registry);
 
     bool isIn(const glm::vec2 &pt) const;
 

@@ -22,8 +22,8 @@
 #include "reone/graphics/texture.h"
 #include "reone/graphics/vulkan/gbuffer.h"
 
+#include "../../registry.h"
 #include "../pipeline.h"
-#include "../registry.h"
 
 namespace reone {
 
@@ -69,21 +69,15 @@ public:
     void init() override;
     void deinit();
 
-    void reset() override {
-        _passCallbacks.clear();
-    }
-
-    void inRenderPass(RenderPassName name, std::function<void(IRenderPass &)> callback) override {
-        _passCallbacks[name] = std::move(callback);
-    }
-
-    graphics::Texture &render() override;
+    graphics::Texture &render(RenderRegistry &registry,
+                              const CameraSceneNode *camera,
+                              RenderPassName activeShadowPass) override;
 
     std::vector<RenderTargetInfo> targets() const override;
     void *renderTargetPreview(const std::string &name, int mode, float scale) override;
     void dumpTargets(const std::filesystem::path &dir) override;
 
-    const RenderRegistry &registry() const { return _registry; }
+    const RenderRegistry &registry() const { return *_registry; }
 
 private:
     glm::ivec2 _targetSize;
@@ -91,10 +85,11 @@ private:
     graphics::VulkanRenderer &_renderer;
     graphics::IUniforms &_uniforms;
     graphics::IMeshRegistry &_meshRegistry;
-    RenderRegistry _registry;
+    RenderRegistry *_registry {nullptr};
+    const CameraSceneNode *_cullCamera {nullptr};
+    RenderPassName _shadowPass {RenderPassName::None};
 
     bool _inited {false};
-    std::unordered_map<RenderPassName, std::function<void(IRenderPass &)>> _passCallbacks;
 
     std::unique_ptr<graphics::VulkanGBuffer> _gbuffer;
     /** The first of two stable scene-colour allocations. */
@@ -174,7 +169,7 @@ private:
                     const char *label);
     void drawOntoOutput(VkCommandBuffer cmd,
                         uint32_t globalsOffset,
-                        const std::function<void(IRenderPass &)> &callback,
+                        RenderPassName passName,
                         const char *label);
     void resolvePass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void previewPass(VkCommandBuffer cmd, uint32_t globalsOffset);

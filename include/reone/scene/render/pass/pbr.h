@@ -29,7 +29,7 @@ class ShaderProgram;
 
 namespace scene {
 
-class PBRRenderPass : public IRenderPass, boost::noncopyable {
+class PBRRenderPass : public IRenderPassExecutor {
 public:
     PBRRenderPass(graphics::GraphicsOptions &options,
                   graphics::IContext &context,
@@ -49,13 +49,13 @@ public:
         _uniforms(uniforms) {
     }
 
-    void draw(graphics::Mesh &mesh,
+    void executeDraw(graphics::Mesh &mesh,
               graphics::Material &material,
               const glm::mat4 &transform,
               const glm::mat4 &transformInv,
               const glm::mat4 &prevTransform) override;
 
-    void drawSkinned(graphics::Mesh &mesh,
+    void executeDrawSkinned(graphics::Mesh &mesh,
                      graphics::Material &material,
                      const glm::mat4 &transform,
                      const glm::mat4 &transformInv,
@@ -63,36 +63,39 @@ public:
                      const std::vector<glm::mat4> &bones,
                      const std::vector<glm::mat4> &prevBones) override;
 
-    void drawDangly(graphics::Mesh &mesh,
+    void executeDrawDangly(graphics::Mesh &mesh,
                     graphics::Material &material,
                     const glm::mat4 &transform,
                     const glm::mat4 &transformInv,
                     const glm::mat4 &prevTransform,
                     const std::vector<glm::vec4> &positions) override;
 
-    void drawSaber(graphics::Mesh &mesh,
+    void executeDrawSaber(graphics::Mesh &mesh,
                    graphics::Material &material,
                    const glm::mat4 &transform,
                    const glm::mat4 &transformInv,
                    const glm::mat4 &prevTransform,
                    const glm::vec4 &displacement) override;
 
-    void drawBillboard(graphics::Texture &texture,
+    void executeDrawBillboard(graphics::Texture &texture,
                        const glm::vec4 &color,
                        const glm::mat4 &transform,
                        const glm::mat4 &transformInv,
                        std::optional<float> size) override;
 
-    void drawParticles(graphics::Material &material,
+    void executeDrawParticles(graphics::Material &material,
                        const glm::ivec2 &gridSize,
                        const std::vector<ParticleInstance> &particles) override;
 
-    void drawGrass(float radius,
+    void executeDrawGrass(float radius,
                    float quadSize,
                    graphics::Material &material,
                    const std::vector<GrassInstance> &instances) override;
 
-    void drawAABB(const std::vector<glm::vec4> &corners) override;
+    void executeDrawAABB(const std::vector<glm::vec4> &corners) override;
+    void executeDrawDebug(const std::function<void()> &execute) override {
+        execute();
+    }
 
 
 private:

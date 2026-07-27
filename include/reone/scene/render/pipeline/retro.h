@@ -46,7 +46,9 @@ public:
 
     void init() override;
 
-    graphics::Texture &render() override;
+    graphics::Texture &render(RenderRegistry &registry,
+                              const CameraSceneNode *camera,
+                              RenderPassName shadowPass) override;
 
 private:
     struct RenderTargets {

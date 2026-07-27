@@ -25,18 +25,16 @@ namespace graphics {
 class GraphicsServices;
 }
 
-namespace scene {
-class IRenderPass;
-}
-
 namespace resource {
 class ResourceServices;
 }
 
 void updateDrawDebug(float dt);
 
-void renderDrawDebug(scene::IRenderPass &pass,
-                     graphics::GraphicsServices &services,
+void prepareDrawDebug(graphics::GraphicsServices &services,
+                      resource::ResourceServices &resources);
+
+void renderDrawDebug(graphics::GraphicsServices &services,
                      resource::ResourceServices &resources,
                      std::string_view sceneName);
 

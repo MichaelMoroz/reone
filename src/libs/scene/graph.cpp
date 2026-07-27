@@ -164,7 +164,6 @@ void SceneGraph::update(float dt) {
     if (!_activeCamera) {
         return;
     }
-    cullRoots();
     refresh();
     updateLighting();
     updateShadowLight(dt);
@@ -172,26 +171,6 @@ void SceneGraph::update(float dt) {
     updateSounds();
     prepareOpaqueLeafs();
     prepareTransparentLeafs();
-}
-
-void SceneGraph::cullRoots() {
-    for (auto &root : _modelRoots) {
-        if (!root->isEnabled()) {
-            root->setCulled(true);
-            continue;
-        }
-
-        if (!root->isCullingEnabled()) {
-            root->setCulled(false);
-            continue; // disable distance and frustum culling
-        }
-
-        float distanceToCamera = root->getSquareDistanceTo(*_activeCamera);
-        float drawDistance = root->drawDistance() * root->drawDistance();
-
-        bool culled = (distanceToCamera > drawDistance) || (!_activeCamera->isInFrustum(*root));
-        root->setCulled(culled);
-    }
 }
 
 void SceneGraph::updateLighting() {
@@ -328,17 +307,7 @@ void SceneGraph::refreshFromNode(SceneNode &node) {
         return;
     }
 
-    bool propagate = true;
-
     switch (node.type()) {
-    case SceneNodeType::Model: {
-        // Ignore models that have been culled
-        auto &model = static_cast<ModelSceneNode &>(node);
-        if (model.isCulled()) {
-            propagate = false;
-        }
-        break;
-    }
     case SceneNodeType::Mesh: {
         // For model nodes, determine whether they should be rendered and cast shadows
         auto &modelNode = static_cast<MeshSceneNode &>(node);
@@ -365,10 +334,8 @@ void SceneGraph::refreshFromNode(SceneNode &node) {
         break;
     }
 
-    if (propagate) {
-        for (auto &child : node.children()) {
-            refreshFromNode(*child);
-        }
+    for (auto &child : node.children()) {
+        refreshFromNode(*child);
     }
 }
 
@@ -376,8 +343,6 @@ void SceneGraph::prepareOpaqueLeafs() {
     _opaqueLeafs.clear();
 
     std::vector<SceneNode *> bucket;
-    auto camera = _activeCamera->camera();
-
     // Group grass clusters into buckets without sorting
     if (!_graphicsOpt.grass) {
         return;
@@ -391,13 +356,6 @@ void SceneGraph::prepareOpaqueLeafs() {
                 continue;
             }
             auto cluster = static_cast<GrassClusterSceneNode *>(child);
-            if (!camera->isInFrustum(cluster->origin())) {
-                continue;
-            }
-            if (bucket.size() >= kMaxGrassClusters) {
-                _opaqueLeafs.push_back(std::make_pair(grass.get(), bucket));
-                bucket.clear();
-            }
             bucket.push_back(cluster);
         }
         if (!bucket.empty()) {
@@ -410,8 +368,6 @@ void SceneGraph::prepareOpaqueLeafs() {
 void SceneGraph::prepareTransparentLeafs() {
     _transparentLeafs.clear();
 
-    auto camera = _activeCamera->camera();
-
     // Add meshes and emitters to transparent leafs
     std::vector<SceneNode *> leafs;
     for (auto &mesh : _transparentMeshes) {
@@ -423,9 +379,6 @@ void SceneGraph::prepareTransparentLeafs() {
                 continue;
             }
             auto particle = static_cast<ParticleSceneNode *>(child);
-            if (!camera->isInFrustum(particle->origin())) {
-                continue;
-            }
             leafs.push_back(particle);
         }
     }
@@ -467,7 +420,7 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
         _renderPipeline->init();
     }
     auto &pipeline = *_renderPipeline;
-    pipeline.reset();
+    _registry.resetFrame();
 
     auto cameraNode = this->camera();
     if (cameraNode) {
@@ -532,31 +485,15 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
             screenEffect.clipNear = camera->zNear();
             screenEffect.clipFar = camera->zFar();
         });
-        if (hasShadowLight()) {
-            auto passName = isShadowLightDirectional()
-                                ? RenderPassName::DirLightShadowsPass
-                                : RenderPassName::PointLightShadows;
-            pipeline.inRenderPass(passName, [this](auto &pass) {
-                renderShadows(pass);
-            });
-        }
-        pipeline.inRenderPass(RenderPassName::OpaqueGeometry, [this](auto &pass) {
-            renderOpaque(pass);
-        });
-        pipeline.inRenderPass(RenderPassName::TransparentGeometry, [this](auto &pass) {
-            renderTransparent(pass);
-        });
-        pipeline.inRenderPass(RenderPassName::PostProcessing, [this, &camera](auto &pass) {
-            if (!_flareLights.empty()) {
-                renderLensFlares(pass);
-            }
-        });
-        pipeline.inRenderPass(RenderPassName::Debug, [this, &camera](auto &pass) {
-            renderDrawDebug(pass, _graphicsSvc, _resourceSvc, name());
-        });
+        renderScene(_registry);
     }
 
-    auto &output = pipeline.render();
+    auto shadowPass = !hasShadowLight()
+                          ? RenderPassName::None
+                          : (isShadowLightDirectional()
+                                 ? RenderPassName::DirLightShadowsPass
+                                 : RenderPassName::PointLightShadows);
+    auto &output = pipeline.render(_registry, _activeCamera, shadowPass);
     snapshotPreviousFrame();
     return output;
 }
@@ -617,19 +554,16 @@ void SceneGraph::snapshotPreviousFrame() {
     }
 }
 
-void SceneGraph::renderShadows(IRenderPass &pass) {
+void SceneGraph::renderScene(RenderRegistry &registry) {
     if (!_activeCamera) {
         return;
     }
-    for (auto &mesh : _shadowMeshes) {
-        mesh->renderShadow(pass);
-    }
-}
+    registry.beginSceneTraversal();
 
-void SceneGraph::renderOpaque(IRenderPass &pass) {
-    if (!_activeCamera) {
-        return;
+    for (auto &mesh : _shadowMeshes) {
+        mesh->registerShadow(registry);
     }
+
     if (_renderWalkmeshes || _renderTriggers) {
         _graphicsSvc.uniforms.setWalkmesh([this](auto &walkmesh) {
             for (int i = 0; i < kMaxWalkmeshMaterials - 1; ++i) {
@@ -641,58 +575,57 @@ void SceneGraph::renderOpaque(IRenderPass &pass) {
 
     // Draw opaque meshes
     for (auto &mesh : _opaqueMeshes) {
-        mesh->render(pass);
+        mesh->registerRender(registry);
     }
     // Draw opaque leafs
     for (auto &[node, leafs] : _opaqueLeafs) {
-        node->renderLeafs(pass, leafs);
+        node->registerLeafs(registry, leafs);
     }
 
     if (_renderAABB) {
         for (auto &model : _modelRoots) {
-            if (model->isEnabled() && !model->isCulled()) {
-                model->renderAABB(pass);
+            if (model->isEnabled()) {
+                model->registerAABB(registry);
             }
         }
     }
     if (_renderWalkmeshes) {
         for (auto &walkmesh : _walkmeshRoots) {
-            if (walkmesh->isEnabled() && !walkmesh->isCulled()) {
-                walkmesh->render(pass);
+            if (walkmesh->isEnabled()) {
+                walkmesh->registerRender(registry);
             }
         }
     }
     if (_renderTriggers) {
         for (auto &trigger : _triggerRoots) {
-            if (trigger->isEnabled() && !trigger->isCulled()) {
-                trigger->render(pass);
+            if (trigger->isEnabled()) {
+                trigger->registerRender(registry);
             }
         }
     }
-}
-
-void SceneGraph::renderTransparent(IRenderPass &pass) {
-    if (!_activeCamera || _renderWalkmeshes) {
-        return;
-    }
-    // Draw transparent leafs (incl. meshes)
-    for (auto &[node, leafs] : _transparentLeafs) {
-        node->renderLeafs(pass, leafs);
-    }
-}
-
-void SceneGraph::renderLensFlares(IRenderPass &pass) {
-    // Draw lens flares
-    if (_flareLights.empty() || _renderWalkmeshes) {
-        return;
-    }
-    for (auto &light : _flareLights) {
-        Collision collision;
-        if (testLineOfSight(_activeCamera->origin(), light->origin(), collision)) {
-            continue;
+    if (!_renderWalkmeshes) {
+        // Draw transparent leafs (incl. meshes)
+        for (auto &[node, leafs] : _transparentLeafs) {
+            node->registerLeafs(registry, leafs);
         }
-        light->renderLensFlare(pass, light->modelNode().light()->flares.front());
+
+        // Draw lens flares
+        for (auto &light : _flareLights) {
+            Collision collision;
+            if (testLineOfSight(_activeCamera->origin(), light->origin(), collision)) {
+                continue;
+            }
+            light->registerLensFlare(registry, light->modelNode().light()->flares.front());
+        }
     }
+    // Preflighting preserves the backend state seen by the first pass while
+    // the actual debug draws remain deferred to their tagged pass.
+    if (!graphics::isVulkanBackend()) {
+        prepareDrawDebug(_graphicsSvc, _resourceSvc);
+    }
+    registry.addDebug([this]() {
+        renderDrawDebug(_graphicsSvc, _resourceSvc, name());
+    });
 }
 
 static std::vector<glm::vec4> computeFrustumCornersWorldSpace(const glm::mat4 &projection, const glm::mat4 &view) {
@@ -998,7 +931,7 @@ std::optional<std::reference_wrapper<ModelSceneNode>> SceneGraph::pickModelRay(c
     ModelSceneNode *model {nullptr};
     float minDistance = std::numeric_limits<float>::max();
     for (auto &root : _modelRoots) {
-        if (!root->isEnabled() || root->isCulled() || !root->isPickable()) {
+        if (!root->isEnabled() || !root->isPickable()) {
             continue;
         }
         auto aabbWorld = root->aabb() * root->absoluteTransform();

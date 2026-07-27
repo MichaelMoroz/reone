@@ -49,11 +49,6 @@ static constexpr char kWalkmeshModule[] = "walkmesh";
 /** Both grass and walkmesh name their G-buffer fragment stage this. */
 static constexpr char kPBRFragment[] = "pbrFragment";
 
-static bool isRegistrableMesh(const Material &material) {
-    return material.type == MaterialType::OpaqueModel ||
-           material.type == MaterialType::TransparentModel;
-}
-
 void VulkanRenderPass::warnOnce(const std::string &what) {
     if (_warned.count(what) > 0) {
         return;
@@ -263,29 +258,22 @@ void VulkanRenderPass::bindAndDraw(
     ++_drawCount;
 }
 
-void VulkanRenderPass::draw(Mesh &mesh,
+void VulkanRenderPass::executeDraw(Mesh &mesh,
                             Material &material,
                             const glm::mat4 &transform,
                             const glm::mat4 &transformInv,
                             const glm::mat4 &prevTransform) {
-    if (isRegistrableMesh(material)) {
-        _registry.addMesh(mesh, material, transform, transformInv, prevTransform);
-    }
     drawGeometry(mesh, material, "staticVertex",
                  transform, transformInv, prevTransform, 0, {});
 }
 
-void VulkanRenderPass::drawSkinned(Mesh &mesh,
+void VulkanRenderPass::executeDrawSkinned(Mesh &mesh,
                                    Material &material,
                                    const glm::mat4 &transform,
                                    const glm::mat4 &transformInv,
                                    const glm::mat4 &prevTransform,
                                    const std::vector<glm::mat4> &bones,
                                    const std::vector<glm::mat4> &prevBones) {
-    if (isRegistrableMesh(material)) {
-        _registry.addMesh(mesh, material, transform, transformInv, prevTransform,
-                          RegisteredSkin {bones, prevBones});
-    }
     BoneUniforms uniforms;
     for (size_t i = 0; i < bones.size() && i < kMaxBones; ++i) {
         uniforms.bones[i] = bones[i];
@@ -300,16 +288,12 @@ void VulkanRenderPass::drawSkinned(Mesh &mesh,
                  {{UniformBlockBindingPoints::bones, offset}});
 }
 
-void VulkanRenderPass::drawDangly(Mesh &mesh,
+void VulkanRenderPass::executeDrawDangly(Mesh &mesh,
                                   Material &material,
                                   const glm::mat4 &transform,
                                   const glm::mat4 &transformInv,
                                   const glm::mat4 &prevTransform,
                                   const std::vector<glm::vec4> &positions) {
-    if (isRegistrableMesh(material)) {
-        _registry.addMesh(mesh, material, transform, transformInv, prevTransform,
-                          RegisteredDangly {positions});
-    }
     DanglyUniforms uniforms;
     for (size_t i = 0; i < positions.size() && i < kMaxDanglyVertices; ++i) {
         uniforms.positions[i] = positions[i];
@@ -321,23 +305,19 @@ void VulkanRenderPass::drawDangly(Mesh &mesh,
                  {{UniformBlockBindingPoints::dangly, offset}});
 }
 
-void VulkanRenderPass::drawSaber(Mesh &mesh,
+void VulkanRenderPass::executeDrawSaber(Mesh &mesh,
                                  Material &material,
                                  const glm::mat4 &transform,
                                  const glm::mat4 &transformInv,
                                  const glm::mat4 &prevTransform,
                                  const glm::vec4 &displacement) {
-    if (isRegistrableMesh(material)) {
-        _registry.addMesh(mesh, material, transform, transformInv, prevTransform,
-                          RegisteredSaber {displacement});
-    }
     // The displacement rides in LocalUniforms rather than a block of its own.
     drawGeometry(mesh, material, "saberVertex",
                  transform, transformInv, prevTransform,
                  UniformsFeatureFlags::saber, {}, displacement);
 }
 
-void VulkanRenderPass::drawBillboard(Texture &texture,
+void VulkanRenderPass::executeDrawBillboard(Texture &texture,
                                      const glm::vec4 &color,
                                      const glm::mat4 &transform,
                                      const glm::mat4 &transformInv,
@@ -381,13 +361,12 @@ void VulkanRenderPass::drawBillboard(Texture &texture,
                 quad, 1);
 }
 
-void VulkanRenderPass::drawParticles(Material &material,
+void VulkanRenderPass::executeDrawParticles(Material &material,
                                      const glm::ivec2 &gridSize,
                                      const std::vector<ParticleInstance> &particles) {
     if (particles.empty()) {
         return;
     }
-    _registry.addParticles(material, gridSize, particles);
     auto &texture = material.textures.at(TextureUnits::mainTex).get();
     auto faceCulling = material.faceCulling.value_or(FaceCullMode::Back);
     bool premultipliedAlpha = material.blending == BlendMode::Lighten;
@@ -447,14 +426,13 @@ void VulkanRenderPass::drawParticles(Material &material,
                 billboard, static_cast<int>(count));
 }
 
-void VulkanRenderPass::drawGrass(float radius,
+void VulkanRenderPass::executeDrawGrass(float radius,
                                  float quadSize,
                                  Material &material,
                                  const std::vector<GrassInstance> &instances) {
     if (instances.empty()) {
         return;
     }
-    _registry.addGrass(material, radius, quadSize, instances);
     auto &texture = material.textures.at(TextureUnits::mainTex).get();
     auto lightmap = material.textures.find(TextureUnits::lightmap);
     bool hasLightmap = lightmap != material.textures.end();
@@ -510,8 +488,12 @@ void VulkanRenderPass::drawGrass(float radius,
     bindAndDraw(pipeline, offsets, bindings, quad, static_cast<int>(count));
 }
 
-void VulkanRenderPass::drawAABB(const std::vector<glm::vec4> &corners) {
+void VulkanRenderPass::executeDrawAABB(const std::vector<glm::vec4> &corners) {
     warnOnce("AABBs");
+}
+
+void VulkanRenderPass::executeDrawDebug(const std::function<void()> &execute) {
+    warnOnce("draw debug");
 }
 
 } // namespace scene

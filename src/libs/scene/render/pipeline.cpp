@@ -96,6 +96,15 @@ static std::string toFileName(const std::string &name) {
 
 void RenderPipelineBase::dumpTargets(const std::filesystem::path &dir) {
     std::filesystem::create_directories(dir);
+    info("OpenGL scene traversals: " + std::to_string(_registry->traversalCount()),
+         LogChannel::Graphics);
+    info("OpenGL registry registered: " + formatRegistryCounts(_registry->registeredCounts()),
+         LogChannel::Graphics);
+    for (const auto &[pass, drawn] : _registry->drawnCountsByPass()) {
+        info("OpenGL registry drawn " + renderPassName(pass) +
+                 ": " + formatRegistryCounts(drawn),
+             LogChannel::Graphics);
+    }
     for (const auto &target : targets()) {
         if (!target.texture) {
             continue;

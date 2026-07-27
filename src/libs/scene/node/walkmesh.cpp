@@ -69,11 +69,12 @@ void WalkmeshSceneNode::init() {
     _mesh->init();
 }
 
-void WalkmeshSceneNode::render(IRenderPass &pass) {
+void WalkmeshSceneNode::registerRender(RenderRegistry &registry) {
     Material material;
     material.type = MaterialType::Walkmesh;
     material.faceCulling = FaceCullMode::Back;
-    pass.draw(*_mesh, material, _absTransform, _absTransformInv, _prevAbsTransform);
+    registry.registerMesh(renderCategory(RenderCategory::Debug),
+                     *_mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, {}, nullptr);
 }
 
 } // namespace scene

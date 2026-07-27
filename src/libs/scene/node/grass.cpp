@@ -156,7 +156,7 @@ void GrassSceneNode::update(float dt) {
     }
 }
 
-void GrassSceneNode::renderLeafs(IRenderPass &pass, const std::vector<SceneNode *> &leafs) {
+void GrassSceneNode::registerLeafs(RenderRegistry &registry, const std::vector<SceneNode *> &leafs) {
     if (leafs.empty()) {
         return;
     }
@@ -178,10 +178,11 @@ void GrassSceneNode::renderLeafs(IRenderPass &pass, const std::vector<SceneNode 
         material.textures.insert({TextureUnits::lightmap, lightmap->get()});
     }
     material.faceCulling = FaceCullMode::None;
-    pass.drawGrass(kMaxClusterDistance,
-                   _properties.quadSize,
-                   material,
-                   instances);
+    registry.registerGrass(renderCategory(RenderCategory::Opaque),
+                      material,
+                      kMaxClusterDistance,
+                      _properties.quadSize,
+                      instances);
 }
 
 int GrassSceneNode::getNumClustersInFace(float area) const {

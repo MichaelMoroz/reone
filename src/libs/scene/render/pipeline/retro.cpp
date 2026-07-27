@@ -166,7 +166,10 @@ void RetroRenderPipeline::initRenderTargets() {
     _targets.output->init();
 }
 
-Texture &RetroRenderPipeline::render() {
+Texture &RetroRenderPipeline::render(RenderRegistry &registry,
+                                     const CameraSceneNode *camera,
+                                     RenderPassName shadowPass) {
+    _registry = &registry;
     auto pass = RetroRenderPass {_options,
                                  _context,
                                  _shaderRegistry,
@@ -174,36 +177,37 @@ Texture &RetroRenderPipeline::render() {
                                  _meshRegistry,
                                  _textureRegistry,
                                  _uniforms};
+    auto drawScene = [&registry, &pass, camera](RenderPassName name, RenderCategory category) {
+        registry.drawScene(pass, {name, category}, camera);
+    };
 
-    bool dirLightShadows = _passCallbacks.count(RenderPassName::DirLightShadowsPass) > 0;
-    bool pointLightShadows = _passCallbacks.count(RenderPassName::PointLightShadows) > 0;
+    bool dirLightShadows = shadowPass == RenderPassName::DirLightShadowsPass;
+    bool pointLightShadows = shadowPass == RenderPassName::PointLightShadows;
     if (dirLightShadows || pointLightShadows) {
         _context.bindDrawFramebuffer(*_targets.shadows, {});
-        _context.withViewport(glm::ivec4 {0, 0, _options.shadowResolution, _options.shadowResolution}, [this, &pass, &dirLightShadows]() {
+        _context.withViewport(glm::ivec4 {0, 0, _options.shadowResolution, _options.shadowResolution}, [this, &pass, &dirLightShadows, &drawScene]() {
             _context.clearDepth();
             if (dirLightShadows) {
                 _targets.shadows->attachTexture(*_targets.dirLightShadowsDepth, Framebuffer::Attachment::Depth);
-                _passCallbacks.at(RenderPassName::DirLightShadowsPass)(pass);
+                drawScene(RenderPassName::DirLightShadowsPass, RenderCategory::ShadowCaster);
             } else {
                 _targets.shadows->attachTexture(*_targets.pointLightShadowsDepth, Framebuffer::Attachment::Depth);
-                _passCallbacks.at(RenderPassName::PointLightShadows)(pass);
+                drawScene(RenderPassName::PointLightShadows, RenderCategory::ShadowCaster);
             }
         });
     }
 
     glm::ivec4 screenRect {0, 0, _targetSize};
-    _context.withViewport(screenRect, [this, &pass, &dirLightShadows, &pointLightShadows, &screenRect]() {
+    _context.withViewport(screenRect, [this, &pass, &dirLightShadows, &pointLightShadows, &screenRect, &drawScene]() {
         // Render opaque geometry
         _context.bindDrawFramebuffer(*_targets.opaque, {0, 1});
         _context.clearColorDepth();
-        if (_passCallbacks.count(RenderPassName::OpaqueGeometry) > 0) {
-            if (dirLightShadows) {
-                _context.bindTexture(*_targets.dirLightShadowsDepth, TextureUnits::shadowMapArray);
-            } else if (pointLightShadows) {
-                _context.bindTexture(*_targets.pointLightShadowsDepth, TextureUnits::shadowMapCube);
-            }
-            _passCallbacks.at(RenderPassName::OpaqueGeometry)(pass);
+        if (dirLightShadows) {
+            _context.bindTexture(*_targets.dirLightShadowsDepth, TextureUnits::shadowMapArray);
+        } else if (pointLightShadows) {
+            _context.bindTexture(*_targets.pointLightShadowsDepth, TextureUnits::shadowMapCube);
         }
+        drawScene(RenderPassName::OpaqueGeometry, RenderCategory::Opaque);
 
         // Blur hilights
         GaussianBlurParams blurParams;
@@ -227,21 +231,19 @@ Texture &RetroRenderPipeline::render() {
             0, 1);
 
         // Render transparent geometry
-        if (_passCallbacks.count(RenderPassName::TransparentGeometry) > 0) {
-            _context.blitFramebuffer(
-                *_targets.opaque,
-                *_targets.transparent,
-                screenRect, screenRect,
-                0, 0,
-                FramebufferBlitFlags::depth);
-            _context.bindDrawFramebuffer(*_targets.transparent, {0, 1});
-            _context.clearColor({0.0f, 0.0f, 0.0f, 1.0f});
-            _context.withBlendMode(BlendMode::OIT_Transparent, [this, &pass]() {
-                _context.withDepthMask(false, [this, &pass]() {
-                    _passCallbacks.at(RenderPassName::TransparentGeometry)(pass);
-                });
+        _context.blitFramebuffer(
+            *_targets.opaque,
+            *_targets.transparent,
+            screenRect, screenRect,
+            0, 0,
+            FramebufferBlitFlags::depth);
+        _context.bindDrawFramebuffer(*_targets.transparent, {0, 1});
+        _context.clearColor({0.0f, 0.0f, 0.0f, 1.0f});
+        _context.withBlendMode(BlendMode::OIT_Transparent, [this, &pass, &drawScene]() {
+            _context.withDepthMask(false, [this, &pass, &drawScene]() {
+                drawScene(RenderPassName::TransparentGeometry, RenderCategory::Transparent);
             });
-        }
+        });
 
         // Blend opaque and transparent geometry
         _context.bindDrawFramebuffer(*_targets.output, {0});
@@ -275,16 +277,12 @@ Texture &RetroRenderPipeline::render() {
         }
 
         // Post-processing effects
-        if (_passCallbacks.count(RenderPassName::PostProcessing) > 0) {
-            _passCallbacks.at(RenderPassName::PostProcessing)(pass);
-        }
+        drawScene(RenderPassName::PostProcessing, RenderCategory::LensFlare);
 
         // Draw debug elements (lines, points, etc.)
         _context.bindDrawFramebuffer(*_targets.output, {0});
         _context.clearDepth();
-        if (_passCallbacks.count(RenderPassName::Debug) > 0) {
-            _passCallbacks.at(RenderPassName::Debug)(pass);
-        }
+        drawScene(RenderPassName::Debug, RenderCategory::Debug);
 
         _context.resetDrawFramebuffer();
     });
