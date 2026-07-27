@@ -197,6 +197,44 @@ void Editor::imGuiDemo() {
     ImGui::ShowDemoWindow(&_showImGuiDemo);
 }
 
+void Editor::warp() {
+    dockNext();
+    ImGui::SetNextWindowSize(ImVec2(320, 480), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Warp", &_showWarp)) {
+        ImGui::End();
+        return;
+    }
+    auto &game = _engine._game;
+    if (!game) {
+        ImGui::TextUnformatted("No game loaded.");
+        ImGui::End();
+        return;
+    }
+    ImGui::InputTextWithHint("##filter", "filter", _warpFilter, sizeof(_warpFilter));
+    ImGui::Separator();
+
+    std::string filter = boost::to_lower_copy(std::string(_warpFilter));
+    // Loading a module tears down the scene this window is being drawn from,
+    // so the choice is taken now and acted on once the frame is over.
+    std::string chosen;
+    if (ImGui::BeginChild("modules")) {
+        for (const auto &name : game->moduleNames()) {
+            if (!filter.empty() && name.find(filter) == std::string::npos) {
+                continue;
+            }
+            if (ImGui::Selectable(name.c_str())) {
+                chosen = name;
+            }
+        }
+    }
+    ImGui::EndChild();
+    ImGui::End();
+
+    if (!chosen.empty()) {
+        _pendingWarp = chosen;
+    }
+}
+
 void Editor::graphicsSettings() {
     dockNext();
     ImGui::SetNextWindowSize(ImVec2(410, 520), ImGuiCond_FirstUseEver);
@@ -480,12 +518,23 @@ void Editor::update(float dt) {
         return;
     }
 
+    // Acted on here rather than where it is chosen: loading a module destroys
+    // the scene the window was drawn from, and update runs before any of this
+    // frame's rendering.
+    if (!_pendingWarp.empty()) {
+        auto target = std::move(_pendingWarp);
+        _pendingWarp.clear();
+        _engine._game->loadModule(target);
+        return;
+    }
+
     // Submitted before the dockspace so the viewport work area excludes it.
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("Tools")) {
             ImGui::MenuItem("2DA", nullptr, &_showTwoDa);
             ImGui::MenuItem("Render targets", nullptr, &_showRenderTargets);
             ImGui::MenuItem("Graphics settings", nullptr, &_showGraphicsSettings);
+            ImGui::MenuItem("Warp", nullptr, &_showWarp);
             ImGui::MenuItem("Frame times", nullptr, &_showFrameTimes);
             ImGui::EndMenu();
         }
@@ -539,6 +588,9 @@ void Editor::update(float dt) {
         _rtSource = nullptr;
     }
 
+    if (_showWarp) {
+        warp();
+    }
     if (_showGraphicsSettings) {
         graphicsSettings();
     }

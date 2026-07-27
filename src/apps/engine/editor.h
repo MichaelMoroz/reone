@@ -96,6 +96,11 @@ private:
     void frameTimes();
     bool _showFrameTimes {false};
 
+    void warp();
+    bool _showWarp {false};
+    char _warpFilter[64] {};
+    std::string _pendingWarp;
+
     // 2DA List window
     void twoDa();
     bool _showTwoDa {false};
