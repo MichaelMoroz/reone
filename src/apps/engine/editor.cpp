@@ -18,6 +18,7 @@
 #include "editor.h"
 #include "engine.h"
 #include "reone/game/types.h"
+#include "reone/graphics/backend.h"
 #include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/mesh.h"
@@ -205,6 +206,11 @@ void Editor::graphicsSettings() {
     }
     auto &options = _engine._options.graphics;
 
+    // Which backend is running is decided by a command line flag before any of
+    // this exists, so it is shown rather than offered.
+    ImGui::Text("Backend: %s", graphics::isVulkanBackend() ? "Vulkan" : "OpenGL");
+    ImGui::Spacing();
+
     ImGui::TextUnformatted("Live (applies next frame)");
     ImGui::Separator();
     ImGui::Checkbox("FXAA", &options.fxaa);
@@ -223,6 +229,27 @@ void Editor::graphicsSettings() {
         _pendingHeight = options.height;
         _pendingShadowResolution = options.shadowResolution;
         _pendingVsync = options.vsync;
+    }
+    static const struct {
+        const char *name;
+        int width;
+        int height;
+    } kResolutions[] {
+        {"1280x720", 1280, 720},
+        {"1600x900", 1600, 900},
+        {"1920x1080", 1920, 1080},
+        {"2560x1440", 2560, 1440},
+        {"3840x2160", 3840, 2160}};
+    std::string current = std::to_string(_pendingWidth) + "x" + std::to_string(_pendingHeight);
+    if (ImGui::BeginCombo("Preset", current.c_str())) {
+        for (const auto &res : kResolutions) {
+            bool selected = res.width == _pendingWidth && res.height == _pendingHeight;
+            if (ImGui::Selectable(res.name, selected)) {
+                _pendingWidth = res.width;
+                _pendingHeight = res.height;
+            }
+        }
+        ImGui::EndCombo();
     }
     ImGui::InputInt("Width", &_pendingWidth);
     ImGui::InputInt("Height", &_pendingHeight);
