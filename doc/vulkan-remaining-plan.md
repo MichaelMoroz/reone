@@ -209,6 +209,14 @@ If `engine.exe` is locked, a previous run is still alive: the link fails and
 the next measurement silently uses the old binary.
 
 Whole-frame RGB mean absolute difference between the backends in danm14ab
-frame 900, `--pbr 1 --ssao 0 --ssr 0 --dev 0 --slangshaders=1`, is **1.2179**.
-Measure from the `.npy` dumps rather than a screenshot; a figure of 1.0299 has
-been reported twice from some other method and does not reproduce.
+frame 900, `--pbr 1 --ssao 0 --ssr 0 --dev 0 --slangshaders=1`, is **1.2516**
+on a clean build of this commit. Measure from the `.npy` dumps rather than a
+screenshot; a figure of 1.0299 has been reported twice from some other method
+and does not reproduce.
+
+An earlier figure of 1.2179 appears in commit messages up to this point. It
+was measured against a build whose shader pack was stale: rebuilding the pack
+alone moves the OpenGL output by 0.2949 while leaving every G-buffer target
+bit-identical, so only the transparency resolve and filter chain differ. Take
+any comparison against a number from a different build with suspicion, and
+rebuild the pack before establishing a baseline.
