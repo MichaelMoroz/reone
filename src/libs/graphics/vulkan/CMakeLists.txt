@@ -50,6 +50,7 @@ set(VULKAN_SOURCES
     ${VULKAN_SOURCE_DIR}/samplers.cpp
     ${VULKAN_SOURCE_DIR}/swapchain.cpp
     ${VULKAN_SOURCE_DIR}/uniformring.cpp
+    ${VULKAN_SOURCE_DIR}/volk.cpp
     ${VULKAN_SOURCE_DIR}/vma.cpp)
 
 add_library(graphicsvulkan STATIC ${VULKAN_HEADERS} ${VULKAN_SOURCES} ${CLANG_FORMAT_PATH})
@@ -60,6 +61,10 @@ target_precompile_headers(graphicsvulkan PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 # defines as function pointers; without it the two collide at link time.
 target_compile_definitions(graphicsvulkan PUBLIC
     VK_NO_PROTOTYPES
+    # ImGui's packaged Vulkan backend uses loader prototypes. Namespacing
+    # volk keeps its function-pointer variables from satisfying those function
+    # symbols with data addresses.
+    VOLK_NAMESPACE
     # volk owns the entry points, so VMA must not expect linked prototypes.
     # It has to fetch its own through the two getters it is handed at creation,
     # which is what the dynamic path does; with both of these off it calls
@@ -71,7 +76,7 @@ target_link_libraries(graphicsvulkan PUBLIC
     graphics
     system
     Vulkan::Headers
-    volk::volk
+    volk::volk_headers
     GPUOpen::VulkanMemoryAllocator
     vk-bootstrap::vk-bootstrap)
 

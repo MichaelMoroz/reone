@@ -58,8 +58,9 @@ private:
 
 class Editor {
 public:
-    Editor(Engine &engine) :
-        _engine(engine) {};
+    Editor(Engine &engine, bool enabled) :
+        _engine(engine),
+        _enabled(enabled) {};
     bool handle(const input::Event &event);
     void update(float dt);
     void render();

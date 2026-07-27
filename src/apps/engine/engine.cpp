@@ -21,6 +21,11 @@
 
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
+#ifdef R_ENABLE_VULKAN
+#include "imgui_impl_vulkan.h"
+#include "reone/graphics/vulkan/renderer.h"
+#include "reone/graphics/vulkan/swapchain.h"
+#endif
 #include "imgui_impl_sdl3.h"
 
 #ifdef _WIN32
@@ -59,6 +64,8 @@ static constexpr int kProfilerUpdateTimeIndex = 1;
 static constexpr int kProfilerRenderGraphicsTimeIndex = 2;
 static constexpr int kProfilerRenderAudioTimeIndex = 3;
 
+static bool g_imguiFrameOpen = false;
+
 static void imguiInit() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -69,9 +76,82 @@ static void imguiInit() {
     ImGui::GetStyle().FontScaleMain = 1.5f;
 }
 
+#ifdef R_ENABLE_VULKAN
+static VulkanRenderer *g_vulkanRenderer = nullptr;
+
+static void imguiInitVulkan(Window &window, VulkanRenderer &renderer) {
+    auto &device = renderer.device();
+    auto &swapchain = renderer.swapchain();
+
+    if (!ImGui_ImplSDL3_InitForVulkan(window.sdlWindow())) {
+        ImGui::DestroyContext();
+        throw std::runtime_error("ImGui: SDL Vulkan backend initialization failed");
+    }
+
+    VkFormat colorFormat = swapchain.imageFormat();
+
+    ImGui_ImplVulkan_InitInfo info {};
+    info.ApiVersion = VK_API_VERSION_1_3;
+    info.Instance = device.instance();
+    info.PhysicalDevice = device.physicalDevice();
+    info.Device = device.handle();
+    info.QueueFamily = device.graphicsQueueFamily();
+    info.Queue = device.graphicsQueue();
+    info.DescriptorPoolSize = 64;
+    info.MinImageCount = 2;
+    info.ImageCount = swapchain.imageCount() < 2u ? 2u : swapchain.imageCount();
+    info.UseDynamicRendering = true;
+    info.PipelineInfoMain.PipelineRenderingCreateInfo.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    info.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &colorFormat;
+
+    if (!ImGui_ImplVulkan_Init(&info)) {
+        ImGui_ImplSDL3_Shutdown();
+        ImGui::DestroyContext();
+        throw std::runtime_error("ImGui: Vulkan renderer backend initialization failed");
+    }
+    g_vulkanRenderer = &renderer;
+}
+
+static void imguiRenderVulkan(ImDrawData *drawData) {
+    auto &renderer = *g_vulkanRenderer;
+    if (!renderer.inFrame()) {
+        return;
+    }
+    auto cmd = renderer.commandBuffer();
+    auto &swapchain = renderer.swapchain();
+
+    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    attachment.imageView = renderer.currentImageView();
+    attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    auto extent = swapchain.extent();
+    rendering.renderArea.extent = {static_cast<uint32_t>(extent.x),
+                                   static_cast<uint32_t>(extent.y)};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &attachment;
+
+    vkCmdBeginRendering(cmd, &rendering);
+    ImGui_ImplVulkan_RenderDrawData(drawData, cmd);
+    vkCmdEndRendering(cmd);
+}
+#endif
+
 static void imguiInitWindow(Window &window) {
-    ImGui_ImplSDL3_InitForOpenGL(window.sdlWindow(), window.sdlContext());
-    ImGui_ImplOpenGL3_Init();
+    if (!ImGui_ImplSDL3_InitForOpenGL(window.sdlWindow(), window.sdlContext())) {
+        ImGui::DestroyContext();
+        throw std::runtime_error("ImGui: SDL OpenGL backend initialization failed");
+    }
+    if (!ImGui_ImplOpenGL3_Init()) {
+        ImGui_ImplSDL3_Shutdown();
+        ImGui::DestroyContext();
+        throw std::runtime_error("ImGui: OpenGL backend initialization failed");
+    }
 }
 
 /**
@@ -101,10 +181,22 @@ static bool imguiHandle(SDL_Event &event) {
     }
 }
 
-static void imguiNewFrame() {
-    ImGui_ImplOpenGL3_NewFrame();
+static void imguiBeginFrame() {
+    // Loading can request a frame before the main loop, while normal frames
+    // begin before update so widgets submitted there belong to the render that
+    // follows. Either path may reach the frame owner first.
+    if (g_imguiFrameOpen) {
+        return;
+    }
+#ifdef R_ENABLE_VULKAN
+    if (isVulkanBackend()) {
+        ImGui_ImplVulkan_NewFrame();
+    } else
+#endif
+        ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
+    g_imguiFrameOpen = true;
     if (!ImGui::GetIO().WantCaptureMouse) {
         // Hand the cursor back to the game once it leaves an ImGui window.
         ImGui::SetMouseCursor(ImGuiMouseCursor_None);
@@ -113,6 +205,13 @@ static void imguiNewFrame() {
 
 static void imguiRender() {
     ImGui::Render();
+    g_imguiFrameOpen = false;
+#ifdef R_ENABLE_VULKAN
+    if (isVulkanBackend()) {
+        imguiRenderVulkan(ImGui::GetDrawData());
+        return;
+    }
+#endif
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
@@ -122,7 +221,20 @@ static void imguiShutdown() {
     if (!ImGui::GetCurrentContext()) {
         return;
     }
-    ImGui_ImplOpenGL3_Shutdown();
+    if (g_imguiFrameOpen) {
+        ImGui::EndFrame();
+        g_imguiFrameOpen = false;
+    }
+#ifdef R_ENABLE_VULKAN
+    if (isVulkanBackend()) {
+        // The last submitted frame may still reference the font texture,
+        // descriptor sets, and pipeline owned by the backend.
+        g_vulkanRenderer->device().waitIdle();
+        ImGui_ImplVulkan_Shutdown();
+        g_vulkanRenderer = nullptr;
+    } else
+#endif
+        ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
 }
@@ -151,10 +263,8 @@ void Engine::init() {
     _window = std::make_unique<Window>(_options.graphics);
     _window->init();
 
+    imguiInit();
     if (!_vulkan) {
-        // The ImGui backends are OpenGL ones. The editor is unavailable on
-        // Vulkan until they are replaced.
-        imguiInit();
         imguiInitWindow(*_window);
     }
 
@@ -184,6 +294,7 @@ void Engine::init() {
             _options.vulkanValidation);
         _vulkanRenderer->init();
         _graphicsModule->setRenderers(*_vulkanRenderer, _vulkanRenderer->renderer2d());
+        imguiInitVulkan(*_window, *_vulkanRenderer);
     }
 #endif
     _audioModule = std::make_unique<AudioModule>(_options.audio);
@@ -277,11 +388,7 @@ void Engine::init() {
         renderFrame(quit);
     });
 
-    if (!_vulkan) {
-        // Editor is built on the ImGui OpenGL backend, which is not initialised
-        // under Vulkan.
-        _editor = std::make_unique<Editor>(*this);
-    }
+    _editor = std::make_unique<Editor>(*this, _options.game.developer);
 
     if (_options.commandsFrame == 0) {
         runCommandsFile();
@@ -380,6 +487,7 @@ int Engine::run() {
             runCommandsFile();
         }
         _profiler->measure(kMainThreadName, kProfilerUpdateTimeIndex, [this, &frameTime]() {
+            imguiBeginFrame();
             _game->update(frameTime);
             bool showcur = _game->cursorType() == CursorType::None;
             bool relmouse = _game->relativeMouseMode();
@@ -387,7 +495,7 @@ int Engine::run() {
                 // The in-game camera grabs the pointer, which would make editor
                 // windows unreachable. Release it for as long as the editor is up.
                 // Cursor visibility is left to ImGui, which drives it every frame
-                // from the cursor imguiNewFrame selects.
+                // from the cursor imguiBeginFrame selects.
                 relmouse = false;
             }
             showCursor(showcur);
@@ -518,7 +626,7 @@ void Engine::renderGLFrame(bool &quit) {
     // Loading may request a present before the main loop reaches update(). The
     // frame owner starts ImGui here so every path that renders its draw data has
     // first opened the matching frame.
-    imguiNewFrame();
+    imguiBeginFrame();
     // Scene targets are produced before anything 2D is drawn, on both backends,
     // so the two paths agree on when a scene may be rendered.
     _game->renderSceneOffscreen();
@@ -539,6 +647,7 @@ void Engine::renderVulkanFrame(bool &quit) {
     // Before the frame's rendering scope: the scene pipeline begins render
     // passes of its own, and one cannot be nested inside another.
     _vulkanRenderer->beginFrame(extent);
+    imguiBeginFrame();
     _game->renderSceneOffscreen();
 
     // One rendering scope for the whole frame. Everything the game draws at
@@ -582,6 +691,7 @@ void Engine::renderVulkanFrame(bool &quit) {
         vkCmdEndRendering(cmd);
     }
 
+    imguiRender();
     captureIfRequested(quit);
     _vulkanRenderer->endFrame();
 #endif
@@ -616,9 +726,7 @@ void Engine::processEvents(bool &quit) {
             break;
         }
         if (!_window->isAssociatedWith(sdlEvent)) {
-            if (!_vulkan) {
-                imguiHandle(sdlEvent);
-            }
+            imguiHandle(sdlEvent);
             continue;
         }
         if (_window->handle(sdlEvent)) {
@@ -647,10 +755,8 @@ void Engine::processEvents(bool &quit) {
             continue;
         }
         // Last filter before the game sees it: ImGui only claims the event when
-        // it actually wants the mouse or keyboard. There is no ImGui context
-        // under Vulkan, and ImGui::GetIO() on a null context faults - which is
-        // why the crash depended on whether an SDL event happened to arrive.
-        if (!_vulkan && imguiHandle(sdlEvent)) {
+        // it actually wants the mouse or keyboard.
+        if (imguiHandle(sdlEvent)) {
             continue;
         }
         unhandled.push(*event);
