@@ -1,6 +1,6 @@
 # What is left on the Vulkan backend
 
-Five pieces, ordered so each one is useful before the next starts. Every
+Six pieces, ordered so each one is useful before the next starts. Every
 file:line below is a thing to read before changing it.
 
 ## 1. The render target viewer has nothing to show on Vulkan
@@ -138,11 +138,53 @@ Do SSAO first: it applies to every surface, so it is easier to see and easier
 to verify, and it does not depend on reflection geometry being present in the
 test frame.
 
-## 5. Renderer registration
+## 5. The retro pipeline
+
+Selected with `--pbr 0`, and it is the only thing in the engine that renders
+the game the way the original did. It exists on OpenGL only:
+`src/libs/scene/render/pipeline/retro.cpp` (297 lines) and
+`src/libs/scene/render/pass/retro.cpp` (336). Vulkan has no counterpart, so
+`--pbr 0 --backend vulkan` has nothing to run.
+
+It is a smaller job than the line count suggests, because it is **forward, not
+deferred** - no G-buffer, no resolve, no environment derivation. Draw opaque
+models with lighting applied in the fragment shader, then transparency, then
+post-processing.
+
+Four shaders have no Slang counterpart:
+
+    glsl/f_rtr_opaqmodel.glsl
+    glsl/f_rtr_grass.glsl
+    glsl/f_rtr_walkmesh.glsl
+    glsl/f_rtr_aabb.glsl
+
+Everything else the retro pass uses is already ported for the PBR pipeline:
+directional and point shadows, `oitModel` and `oitParticles`, and billboards.
+So the work is those four fragment shaders plus a Vulkan pipeline that
+sequences them, and it inherits the OIT and shadow work already done.
+
+`f_rtr_opaqmodel.glsl:81-84` is worth reading first regardless - it is the
+original environment-map application, `env * (1 - alpha)`, which is what the
+PBR path's reflection strength was reconstructed from. Porting it puts the
+reference and the reimplementation in the same binary.
+
+**The harness does not cover this pipeline.** `RetroRenderPipeline` exposes no
+targets and dumps nothing, so `--dumptargets` produces an empty directory and
+every parity number in this document is a PBR number. Two backends can only be
+compared here by screenshot, which is precisely the situation the dump path
+exists to avoid. Exposing even the output target would restore lossless
+comparison; doing it on both backends at once is the cheapest moment, since
+the OpenGL side needs it too.
+
+Ordering note: this could equally come before bloom or SSAO. It is placed here
+because those two close measurable gaps in a pipeline that is already
+comparable, whereas this one first has to become comparable at all.
+
+## 6. Renderer registration
 
 Has its own document - `doc/renderer-registration-plan.md`. It is last here
 because it is the only item that changes the shape of the scene/renderer
-boundary, and because items 1 to 4 all produce things it will want to move:
+boundary, and because items 1 to 5 all produce things it will want to move:
 more targets to expose, more settings to toggle, and two more screen-space
 passes whose culling policy the renderer will own.
 
