@@ -239,13 +239,39 @@ So the handle is roughly an index, a generation, a type, and two interned
 name ids - model and node. Small enough to sit in a registry entry, and
 enough to answer "what is that" without a second lookup structure.
 
+The two halves have different jobs, and it is worth being explicit about
+which is which:
+
+- **the integer is for indexing and identity** - the registry key, the TLAS
+  instance index, what a cached BLAS hangs off. It must be cheap, dense and
+  meaningless.
+- **the strings are for heuristics** - deciding what a surface is made of,
+  which is a question the assets cannot answer.
+
+That second one is not a debugging luxury. Odyssey assets carry no metalness
+and no roughness at all: the MDL reader reads specular and shininess and drops
+them, roughness is scavenged from diffuse alpha, and `metallic` is hardcoded to
+zero in both resolves. Every PBR parameter beyond the environment strength is
+currently invented. Names are the only remaining signal, and the data already
+uses them that way - `cm_baremetal` against `cm_dantne` are environment maps
+whose names describe the material, not the geometry.
+
+So a resref of `c_drdastro`, a node called `head_g`, a texture prefixed `cm_`
+or a walkmesh surface type are all evidence about what something is made of. A
+lookup from name patterns to PBR presets would give metal, glass and water the
+parameters the format never stored. It is a heuristic and will be wrong
+sometimes, which is an argument for keeping it in one table that can be
+corrected, not for spreading it through the shaders.
+
 Where it pays:
 
 - the render target viewer can name what is under the cursor;
 - a hit record in a path tracer carries an instance index, which resolves to
   `c_drdastro / head_g` rather than to a number;
 - "was this registered, and did it survive culling" becomes a question with a
-  readable answer.
+  readable answer;
+- material inference gets a place to live that is not a hardcoded constant in
+  a resolve shader.
 
 One constraint from the destination: a TLAS instance custom index is 24 bits,
 so whatever part of the handle is used as one has to fit in that.
