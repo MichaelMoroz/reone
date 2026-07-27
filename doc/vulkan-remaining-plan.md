@@ -214,9 +214,16 @@ on a clean build of this commit. Measure from the `.npy` dumps rather than a
 screenshot; a figure of 1.0299 has been reported twice from some other method
 and does not reproduce.
 
-An earlier figure of 1.2179 appears in commit messages up to this point. It
-was measured against a build whose shader pack was stale: rebuilding the pack
-alone moves the OpenGL output by 0.2949 while leaving every G-buffer target
-bit-identical, so only the transparency resolve and filter chain differ. Take
-any comparison against a number from a different build with suspicion, and
-rebuild the pack before establishing a baseline.
+An earlier figure of 1.2179 appears in commit messages up to this point, and
+it was correct for its time. The merge of pull request #1 moved it: that
+change touches area, creature and player logic and no shader or renderer code,
+but it shifts the OpenGL output alone by 0.2949 while leaving every G-buffer
+target bit-identical. Opaque geometry is unchanged; `oit_accum` moves by
+0.0030, and the transparency resolve divides accumulated colour by accumulated
+weight, so a small change there is amplified before the filter chain amplifies
+it again.
+
+The lesson is that this number is a property of the game state as much as of
+the renderer, and any change to what the scene contains at frame 900 rebases
+it. Re-measure the baseline after merging anything, rather than comparing a
+new figure against one taken before.
