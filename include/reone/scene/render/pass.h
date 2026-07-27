@@ -115,16 +115,13 @@ public:
                                const glm::mat4 &transformInv,
                                std::optional<float> size) = 0;
 
-    virtual void drawParticles(graphics::Texture &texture,
-                               graphics::FaceCullMode faceCulling,
-                               bool premultipliedAlpha,
+    virtual void drawParticles(graphics::Material &material,
                                const glm::ivec2 &gridSize,
                                const std::vector<ParticleInstance> &particles) = 0;
 
     virtual void drawGrass(float radius,
                            float quadSize,
-                           graphics::Texture &texture,
-                           std::optional<std::reference_wrapper<graphics::Texture>> &lightmap,
+                           graphics::Material &material,
                            const std::vector<GrassInstance> &instances) = 0;
 
     virtual void drawAABB(const std::vector<glm::vec4> &corners) = 0;

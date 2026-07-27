@@ -19,6 +19,7 @@
 
 #include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
+#include "reone/graphics/material.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/shaderregistry.h"
@@ -306,9 +307,14 @@ void EmitterSceneNode::renderLeafs(IRenderPass &pass, const std::vector<SceneNod
         }
     }
     bool twosided = _modelNode.emitter()->twosided || _modelNode.emitter()->renderMode == ModelNode::Emitter::RenderMode::MotionBlur;
-    auto faceCulling = twosided ? FaceCullMode::None : FaceCullMode::Back;
-    bool premultipliedAlpha = emitter->blendMode == ModelNode::Emitter::BlendMode::Lighten;
-    pass.drawParticles(*texture, faceCulling, premultipliedAlpha, emitter->gridSize, particles);
+    Material material;
+    material.type = MaterialType::Particle;
+    material.textures.insert({TextureUnits::mainTex, *texture});
+    material.faceCulling = twosided ? FaceCullMode::None : FaceCullMode::Back;
+    if (emitter->blendMode == ModelNode::Emitter::BlendMode::Lighten) {
+        material.blending = graphics::BlendMode::Lighten;
+    }
+    pass.drawParticles(material, emitter->gridSize, particles);
 }
 
 } // namespace scene

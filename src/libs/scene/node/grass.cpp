@@ -20,6 +20,7 @@
 #include "reone/graphics/barycentricutil.h"
 #include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
+#include "reone/graphics/material.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/shaderregistry.h"
@@ -170,10 +171,16 @@ void GrassSceneNode::renderLeafs(IRenderPass &pass, const std::vector<SceneNode 
         instances[i].variant = cluster->variant();
         instances[i].lightmapUV = cluster->lightmapUV();
     }
+    Material material;
+    material.type = MaterialType::Grass;
+    material.textures.insert({TextureUnits::mainTex, *_properties.texture});
+    if (lightmap) {
+        material.textures.insert({TextureUnits::lightmap, lightmap->get()});
+    }
+    material.faceCulling = FaceCullMode::None;
     pass.drawGrass(kMaxClusterDistance,
                    _properties.quadSize,
-                   *_properties.texture,
-                   lightmap,
+                   material,
                    instances);
 }
 

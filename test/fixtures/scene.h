@@ -100,6 +100,7 @@ public:
     MOCK_METHOD(glm::vec3, shadowLightPosition, (), (const override));
     MOCK_METHOD(float, shadowStrength, (), (const override));
     MOCK_METHOD(float, shadowRadius, (), (const override));
+    MOCK_METHOD(void, invalidateRenderPipeline, (), (override));
 };
 
 class MockSceneGraphs : public ISceneGraphs, boost::noncopyable {
@@ -107,6 +108,7 @@ public:
     MOCK_METHOD(void, reserve, (std::string name), (override));
     MOCK_METHOD(ISceneGraph &, get, (const std::string &name), (override));
     MOCK_METHOD(std::set<std::string>, sceneNames, (), (const override));
+    MOCK_METHOD(void, invalidateRenderPipelines, (), (override));
 };
 
 class MockRenderPipeline : public IRenderPipeline, boost::noncopyable {

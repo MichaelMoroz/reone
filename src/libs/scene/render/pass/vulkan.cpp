@@ -49,6 +49,11 @@ static constexpr char kWalkmeshModule[] = "walkmesh";
 /** Both grass and walkmesh name their G-buffer fragment stage this. */
 static constexpr char kPBRFragment[] = "pbrFragment";
 
+static bool isRegistrableMesh(const Material &material) {
+    return material.type == MaterialType::OpaqueModel ||
+           material.type == MaterialType::TransparentModel;
+}
+
 void VulkanRenderPass::warnOnce(const std::string &what) {
     if (_warned.count(what) > 0) {
         return;
@@ -263,6 +268,9 @@ void VulkanRenderPass::draw(Mesh &mesh,
                             const glm::mat4 &transform,
                             const glm::mat4 &transformInv,
                             const glm::mat4 &prevTransform) {
+    if (isRegistrableMesh(material)) {
+        _registry.addMesh(mesh, material, transform, transformInv, prevTransform);
+    }
     drawGeometry(mesh, material, "staticVertex",
                  transform, transformInv, prevTransform, 0, {});
 }
@@ -274,6 +282,10 @@ void VulkanRenderPass::drawSkinned(Mesh &mesh,
                                    const glm::mat4 &prevTransform,
                                    const std::vector<glm::mat4> &bones,
                                    const std::vector<glm::mat4> &prevBones) {
+    if (isRegistrableMesh(material)) {
+        _registry.addMesh(mesh, material, transform, transformInv, prevTransform,
+                          RegisteredSkin {bones, prevBones});
+    }
     BoneUniforms uniforms;
     for (size_t i = 0; i < bones.size() && i < kMaxBones; ++i) {
         uniforms.bones[i] = bones[i];
@@ -294,6 +306,10 @@ void VulkanRenderPass::drawDangly(Mesh &mesh,
                                   const glm::mat4 &transformInv,
                                   const glm::mat4 &prevTransform,
                                   const std::vector<glm::vec4> &positions) {
+    if (isRegistrableMesh(material)) {
+        _registry.addMesh(mesh, material, transform, transformInv, prevTransform,
+                          RegisteredDangly {positions});
+    }
     DanglyUniforms uniforms;
     for (size_t i = 0; i < positions.size() && i < kMaxDanglyVertices; ++i) {
         uniforms.positions[i] = positions[i];
@@ -311,6 +327,10 @@ void VulkanRenderPass::drawSaber(Mesh &mesh,
                                  const glm::mat4 &transformInv,
                                  const glm::mat4 &prevTransform,
                                  const glm::vec4 &displacement) {
+    if (isRegistrableMesh(material)) {
+        _registry.addMesh(mesh, material, transform, transformInv, prevTransform,
+                          RegisteredSaber {displacement});
+    }
     // The displacement rides in LocalUniforms rather than a block of its own.
     drawGeometry(mesh, material, "saberVertex",
                  transform, transformInv, prevTransform,
@@ -361,14 +381,16 @@ void VulkanRenderPass::drawBillboard(Texture &texture,
                 quad, 1);
 }
 
-void VulkanRenderPass::drawParticles(Texture &texture,
-                                     FaceCullMode faceCulling,
-                                     bool premultipliedAlpha,
+void VulkanRenderPass::drawParticles(Material &material,
                                      const glm::ivec2 &gridSize,
                                      const std::vector<ParticleInstance> &particles) {
     if (particles.empty()) {
         return;
     }
+    _registry.addParticles(material, gridSize, particles);
+    auto &texture = material.textures.at(TextureUnits::mainTex).get();
+    auto faceCulling = material.faceCulling.value_or(FaceCullMode::Back);
+    bool premultipliedAlpha = material.blending == BlendMode::Lighten;
     // One instanced billboard per particle, oriented in the vertex shader from
     // the axes the emitter computed. This runs in the transparency pass, so it
     // accumulates into the OIT targets rather than writing the G-buffer.
@@ -427,12 +449,15 @@ void VulkanRenderPass::drawParticles(Texture &texture,
 
 void VulkanRenderPass::drawGrass(float radius,
                                  float quadSize,
-                                 Texture &texture,
-                                 std::optional<std::reference_wrapper<Texture>> &lightmap,
+                                 Material &material,
                                  const std::vector<GrassInstance> &instances) {
     if (instances.empty()) {
         return;
     }
+    _registry.addGrass(material, radius, quadSize, instances);
+    auto &texture = material.textures.at(TextureUnits::mainTex).get();
+    auto lightmap = material.textures.find(TextureUnits::lightmap);
+    bool hasLightmap = lightmap != material.textures.end();
     // One instanced quad per cluster, billboarded in the vertex shader from the
     // cluster positions in the uniform block. This is the case SV_InstanceID
     // broke on OpenGL; see section 14.4 of the plan.
@@ -456,7 +481,7 @@ void VulkanRenderPass::drawGrass(float radius,
     LocalUniforms locals;
     locals.reset();
     locals.featureMask |= UniformsFeatureFlags::hashedalphatest;
-    if (lightmap) {
+    if (hasLightmap) {
         locals.featureMask |= UniformsFeatureFlags::lightmap;
     }
 
@@ -477,8 +502,9 @@ void VulkanRenderPass::drawGrass(float radius,
 
     std::vector<std::pair<int, const VulkanImage *>> bindings {
         {TextureUnits::mainTex, &_resources.get(texture)}};
-    if (lightmap) {
-        bindings.push_back({TextureUnits::lightmap, &_resources.get(lightmap->get())});
+    if (hasLightmap) {
+        bindings.push_back(
+            {TextureUnits::lightmap, &_resources.get(lightmap->second.get())});
     }
 
     bindAndDraw(pipeline, offsets, bindings, quad, static_cast<int>(count));

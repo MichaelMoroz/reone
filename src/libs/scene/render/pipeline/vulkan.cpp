@@ -437,6 +437,7 @@ void VulkanRenderPipeline::shadowPass(VkCommandBuffer cmd, uint32_t globalsOffse
                           _uniforms,
                           _renderer.pbrTextures(),
                           _meshRegistry,
+                          _registry,
                           cmd,
                           {},
                           VulkanGBuffer::depthFormat());
@@ -512,6 +513,7 @@ void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOff
                           _uniforms,
                           _renderer.pbrTextures(),
                           _meshRegistry,
+                          _registry,
                           cmd,
                           VulkanGBuffer::colorFormats(),
                           VulkanGBuffer::depthFormat());
@@ -651,6 +653,7 @@ void VulkanRenderPipeline::drawOntoOutput(VkCommandBuffer cmd,
                           _uniforms,
                           _renderer.pbrTextures(),
                           _meshRegistry,
+                          _registry,
                           cmd,
                           {_renderer.swapchain().imageFormat()},
                           VulkanGBuffer::depthFormat(),
@@ -736,6 +739,7 @@ void VulkanRenderPipeline::transparencyPass(VkCommandBuffer cmd, uint32_t global
                               _uniforms,
                               _renderer.pbrTextures(),
                               _meshRegistry,
+                              _registry,
                               cmd,
                               {kOITAccumFormat, kOITRevealageFormat},
                               VulkanGBuffer::depthFormat(),
@@ -928,6 +932,7 @@ void VulkanRenderPipeline::filterChainPass(VkCommandBuffer cmd) {
 
 Texture &VulkanRenderPipeline::render() {
     auto cmd = _renderer.commandBuffer();
+    _registry.clear();
 
     // The scene graph filled GlobalUniforms through the GL Uniforms object,
     // which is inert under Vulkan, so the values are read back from its CPU
@@ -1190,6 +1195,42 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
         return;
     }
     std::filesystem::create_directories(dir);
+
+    size_t rigid = 0;
+    size_t skinned = 0;
+    size_t dangly = 0;
+    size_t sabers = 0;
+    for (const auto &entry : _registry.meshes()) {
+        if (std::holds_alternative<RegisteredSkin>(entry.deformation)) {
+            ++skinned;
+        } else if (std::holds_alternative<RegisteredDangly>(entry.deformation)) {
+            ++dangly;
+        } else if (std::holds_alternative<RegisteredSaber>(entry.deformation)) {
+            ++sabers;
+        } else {
+            ++rigid;
+        }
+    }
+    size_t particleInstances = 0;
+    for (const auto &entry : _registry.particles()) {
+        particleInstances += entry.instances.size();
+    }
+    size_t grassInstances = 0;
+    for (const auto &entry : _registry.grass()) {
+        grassInstances += entry.instances.size();
+    }
+    auto objectCount =
+        _registry.meshes().size() + _registry.particles().size() + _registry.grass().size();
+    info("Vulkan registry: objects=" + std::to_string(objectCount) +
+             ", rigid=" + std::to_string(rigid) +
+             ", skinned=" + std::to_string(skinned) +
+             ", dangly=" + std::to_string(dangly) +
+             ", saber=" + std::to_string(sabers) +
+             ", particle_emitters=" + std::to_string(_registry.particles().size()) +
+             ", particles=" + std::to_string(particleInstances) +
+             ", grass_nodes=" + std::to_string(_registry.grass().size()) +
+             ", grass_clusters=" + std::to_string(grassInstances),
+         LogChannel::Graphics);
 
     auto entries = targetEntries();
 

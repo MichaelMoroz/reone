@@ -23,6 +23,7 @@
 #include "reone/graphics/vulkan/gbuffer.h"
 
 #include "../pipeline.h"
+#include "../registry.h"
 
 namespace reone {
 
@@ -82,12 +83,15 @@ public:
     void *renderTargetPreview(const std::string &name, int mode, float scale) override;
     void dumpTargets(const std::filesystem::path &dir) override;
 
+    const RenderRegistry &registry() const { return _registry; }
+
 private:
     glm::ivec2 _targetSize;
     graphics::GraphicsOptions &_options;
     graphics::VulkanRenderer &_renderer;
     graphics::IUniforms &_uniforms;
     graphics::IMeshRegistry &_meshRegistry;
+    RenderRegistry _registry;
 
     bool _inited {false};
     std::unordered_map<RenderPassName, std::function<void(IRenderPass &)>> _passCallbacks;

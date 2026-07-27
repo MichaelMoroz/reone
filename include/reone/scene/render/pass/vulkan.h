@@ -24,6 +24,7 @@
 #include "reone/graphics/vulkan/pipelinecache.h"
 
 #include "../pass.h"
+#include "../registry.h"
 
 namespace reone {
 
@@ -87,6 +88,7 @@ public:
                      graphics::IUniforms &uniforms,
                      graphics::VulkanPBRTextures &pbrTextures,
                      graphics::IMeshRegistry &meshRegistry,
+                     RenderRegistry &registry,
                      VkCommandBuffer cmd,
                      std::vector<VkFormat> colorFormats,
                      VkFormat depthFormat,
@@ -100,6 +102,7 @@ public:
         _uniforms(uniforms),
         _pbrTextures(pbrTextures),
         _meshRegistry(meshRegistry),
+        _registry(registry),
         _cmd(cmd),
         _colorFormats(std::move(colorFormats)),
         _depthFormat(depthFormat),
@@ -140,16 +143,13 @@ public:
                        const glm::mat4 &transformInv,
                        std::optional<float> size) override;
 
-    void drawParticles(graphics::Texture &texture,
-                       graphics::FaceCullMode faceCulling,
-                       bool premultipliedAlpha,
+    void drawParticles(graphics::Material &material,
                        const glm::ivec2 &gridSize,
                        const std::vector<ParticleInstance> &particles) override;
 
     void drawGrass(float radius,
                    float quadSize,
-                   graphics::Texture &texture,
-                   std::optional<std::reference_wrapper<graphics::Texture>> &lightmap,
+                   graphics::Material &material,
                    const std::vector<GrassInstance> &instances) override;
 
     void drawAABB(const std::vector<glm::vec4> &corners) override;
@@ -178,6 +178,7 @@ private:
     graphics::IUniforms &_uniforms;
     graphics::VulkanPBRTextures &_pbrTextures;
     graphics::IMeshRegistry &_meshRegistry;
+    RenderRegistry &_registry;
 
     VkCommandBuffer _cmd;
     std::vector<VkFormat> _colorFormats;

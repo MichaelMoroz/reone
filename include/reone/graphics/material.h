@@ -32,10 +32,12 @@ enum class MaterialType {
     TransparentModel,
     DirLightShadow,
     PointLightShadow,
-    Walkmesh
+    Walkmesh,
+    Grass,
+    Particle
 };
 
-struct Material : boost::noncopyable {
+struct Material {
 public:
     using TextureUnit = int;
     using TextureUnitToTexture = std::unordered_map<TextureUnit, std::reference_wrapper<Texture>>;

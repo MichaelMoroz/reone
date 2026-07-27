@@ -222,11 +222,12 @@ void PBRRenderPass::drawBillboard(Texture &texture,
     _context.popBlendMode();
 }
 
-void PBRRenderPass::drawParticles(Texture &texture,
-                                  FaceCullMode faceCulling,
-                                  bool premultipliedAlpha,
+void PBRRenderPass::drawParticles(Material &material,
                                   const glm::ivec2 &gridSize,
                                   const std::vector<ParticleInstance> &particles) {
+    auto &texture = material.textures.at(TextureUnits::mainTex).get();
+    auto faceCulling = material.faceCulling.value_or(FaceCullMode::Back);
+    bool premultipliedAlpha = material.blending == BlendMode::Lighten;
     _context.useProgram(_shaderRegistry.get(ShaderProgramId::oitParticles));
     _context.bindTexture(texture, TextureUnits::mainTex);
     _uniforms.setLocals([&premultipliedAlpha](auto &locals) {
@@ -258,18 +259,20 @@ void PBRRenderPass::drawParticles(Texture &texture,
 
 void PBRRenderPass::drawGrass(float radius,
                               float quadSize,
-                              Texture &texture,
-                              std::optional<std::reference_wrapper<Texture>> &lightmap,
+                              Material &material,
                               const std::vector<GrassInstance> &instances) {
+    auto &texture = material.textures.at(TextureUnits::mainTex).get();
+    auto lightmap = material.textures.find(TextureUnits::lightmap);
+    bool hasLightmap = lightmap != material.textures.end();
     _context.useProgram(_shaderRegistry.get(ShaderProgramId::pbrGrass));
     _context.bindTexture(texture, TextureUnits::mainTex);
-    if (lightmap) {
-        _context.bindTexture(lightmap->get(), TextureUnits::lightmap);
+    if (hasLightmap) {
+        _context.bindTexture(lightmap->second.get(), TextureUnits::lightmap);
     }
-    _uniforms.setLocals([&lightmap](auto &locals) {
+    _uniforms.setLocals([hasLightmap](auto &locals) {
         locals.reset();
         locals.featureMask |= UniformsFeatureFlags::hashedalphatest;
-        if (lightmap) {
+        if (hasLightmap) {
             locals.featureMask |= UniformsFeatureFlags::lightmap;
         }
     });
