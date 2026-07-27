@@ -212,6 +212,44 @@ becomes detectable rather than merely suspected.
 Cheap while the registry is being reshaped. Awkward once things are keyed on
 pointers.
 
+### The handle should carry meaning, not just be unique
+
+A bare integer identifies an object and tells you nothing about it. Debugging
+this renderer is mostly the question "what is that thing" - most of a night
+went into a missing head that would have been half an hour if a pixel could
+have named itself.
+
+Nothing needs authoring; the names already exist and are simply not reachable
+from the scene library:
+
+- `graphics::Model::name()` is the MDL resref - `c_drdastro`, `m14aa_01a`
+  (`include/reone/graphics/model.h:43`);
+- `graphics::ModelNode::name()` is the node within it - `head_g`, `wall_01`
+  (`include/reone/graphics/modelnode.h:180`);
+- `game::ObjectType` gives Creature, Placeable, Door, Trigger and the rest
+  (`include/reone/game/types.h:248`), where a game object is behind the node.
+
+**Intern them; do not store strings.** A registry entry is copied for every
+object every frame, and a `std::string` per entry would cost more than
+everything else in it. Keep a string table on the scene graph and put a
+`uint32_t` id in the handle. Copying stays a few words, and the text is
+resolved only when something actually displays it.
+
+So the handle is roughly an index, a generation, a type, and two interned
+name ids - model and node. Small enough to sit in a registry entry, and
+enough to answer "what is that" without a second lookup structure.
+
+Where it pays:
+
+- the render target viewer can name what is under the cursor;
+- a hit record in a path tracer carries an instance index, which resolves to
+  `c_drdastro / head_g` rather than to a number;
+- "was this registered, and did it survive culling" becomes a question with a
+  readable answer.
+
+One constraint from the destination: a TLAS instance custom index is 24 bits,
+so whatever part of the handle is used as one has to fit in that.
+
 ## Registry lifetime: rebuilt per frame, for now
 
 The registry is currently cleared and refilled every frame. That is a stopgap
