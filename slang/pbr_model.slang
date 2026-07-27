@@ -13,6 +13,7 @@ import lib.math;
 import lib.gbuf;
 import lib.hashedalpha;
 import lib.motion;
+import lib.oit;
 import lib.surface;
 
 [[vk::binding(0, 1)]] Sampler2D sMainTex;
@@ -181,16 +182,14 @@ float4 sampleEnvMap(float3 R) {
  * Transparent models, ported from glsl/f_oit_model.glsl.
  *
  * Forward rather than deferred: a transparent surface has no single depth at
- * which to resolve lighting, so it is shaded here and blended straight onto the
- * resolved image. It also emits one colour rather than the weighted-colour and
- * coverage pair the OpenGL pipeline's order-independent transparency wanted -
- * the same trade the particle path makes, and reversing it is a separate job.
+ * which to resolve lighting, so it is shaded here rather than through the
+ * G-buffer. There is no PBR lighting in either backend - a transparent surface
+ * takes its light from the lightmap alone, or none at all.
  *
- * There is no PBR lighting here in either backend. Transparent surfaces take
- * their light from the lightmap alone, or none at all.
+ * Returns colour with the coverage the surface ends up with, which the two
+ * entry points below either write straight out or split across the OIT pair.
  */
-[shader("fragment")]
-float4 transparentFragment(Varyings input) {
+float4 shadeTransparent(Varyings input) {
     float2 uv = transformedUV(input.uv1);
     SurfaceParams surface = sampleSurface(input, uv);
 
@@ -232,6 +231,29 @@ float4 transparentFragment(Varyings input) {
         color *= localUniforms.waterAlpha;
     }
     return float4(color, objectAlpha);
+}
+
+/**
+ * Weighted-blended order-independent transparency, the pipeline's usual path.
+ *
+ * The counterpart of glsl/f_oit_model.glsl: the same shading, accumulated into
+ * the two OIT targets instead of being blended onto the image in draw order.
+ */
+[shader("fragment")]
+OITOutput oitModelFragment(Varyings input) {
+    float4 shaded = shadeTransparent(input);
+    return packOIT(shaded.rgb, shaded.a, input.position.z);
+}
+
+/**
+ * The same surface blended straight onto the resolved image.
+ *
+ * What a pass with one colour attachment and no OIT targets uses. Order
+ * dependent, so it is only right where nothing overlaps.
+ */
+[shader("fragment")]
+float4 transparentFragment(Varyings input) {
+    return shadeTransparent(input);
 }
 
 [shader("fragment")]

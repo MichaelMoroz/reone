@@ -18,6 +18,10 @@ import uniforms;
 // anyway - and Slang's implicit-LOD Sample() emits the MinLod capability,
 // which needs a device feature that nothing else here wants.
 [[vk::binding(0, 1)]] Sampler2D sMainTex;
+// Read by oitBlendFragment alone. The units are the ones TextureUnits names,
+// so the pipeline binds them the same way it binds anything else.
+[[vk::binding(10, 1)]] Sampler2D sOITAccum;
+[[vk::binding(11, 1)]] Sampler2D sOITRevealage;
 
 struct Varyings {
     float4 position : SV_Position;
@@ -41,6 +45,33 @@ Varyings postVertex(uint vertexId: SV_VertexID) {
 
 float rgbToLuma(float3 rgb) {
     return dot(rgb, float3(0.299, 0.587, 0.114));
+}
+
+/**
+ * Resolve the weighted-blended transparency targets onto the opaque image,
+ * ported from glsl/f_oit_blend.glsl.
+ *
+ * The accumulated colour is a weighted sum, so it is divided by the sum of the
+ * weights to get an average, and revealage says how much of the opaque image
+ * survives underneath. Both come out of the pass's blend state rather than
+ * being computed here; see BlendMode::OIT_Transparent.
+ */
+[shader("fragment")]
+float4 oitBlendFragment(Varyings input) : SV_Target {
+    float4 mainTexSample = sMainTex.SampleLevel(input.uv, 0.0);
+    float4 accumSample = sOITAccum.SampleLevel(input.uv, 0.0);
+    float accumWeight = sOITRevealage.SampleLevel(input.uv, 0.0).r;
+
+    // The OpenGL blend adds the blurred bloom highlights to the opaque term
+    // here. This backend has no bloom target to add, so it contributes zero -
+    // that difference belongs with the bloom port, not with this one.
+    float3 hilights = float3(0.0);
+
+    float revealage = accumSample.a;
+    float alpha = 1.0 - revealage;
+    float3 color = alpha * (accumSample.rgb / max(0.0001, accumWeight)) +
+                   (1.0 - alpha) * (mainTexSample.rgb + hilights);
+    return float4(color, alpha + mainTexSample.a);
 }
 
 /**

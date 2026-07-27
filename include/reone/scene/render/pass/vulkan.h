@@ -56,6 +56,28 @@ namespace scene {
  */
 class VulkanRenderPass : public IRenderPass, boost::noncopyable {
 public:
+    /**
+     * Which of the pipeline's passes is recording.
+     *
+     * It decides three things at once - which fragment stage a draw picks,
+     * whether it writes depth, and how it blends - and those three always move
+     * together, so they are one choice rather than three flags.
+     */
+    enum class Kind {
+        /** Deferred opaque geometry into the G-buffer. Writes depth. */
+        Geometry,
+        /**
+         * Weighted-blended transparency into the pair of OIT targets. Depth
+         * tests against the geometry pass but does not write.
+         */
+        OIT,
+        /**
+         * Straight onto an already-resolved image, in draw order. Read-only
+         * depth as well; what lens flares and the like use.
+         */
+        Forward
+    };
+
     VulkanRenderPass(graphics::GraphicsOptions &options,
                      graphics::VulkanDevice &device,
                      graphics::VulkanPipelineCache &pipelines,
@@ -68,7 +90,7 @@ public:
                      VkCommandBuffer cmd,
                      std::vector<VkFormat> colorFormats,
                      VkFormat depthFormat,
-                     bool transparency = false) :
+                     Kind kind = Kind::Geometry) :
         _options(options),
         _device(device),
         _pipelines(pipelines),
@@ -81,7 +103,7 @@ public:
         _cmd(cmd),
         _colorFormats(std::move(colorFormats)),
         _depthFormat(depthFormat),
-        _transparency(transparency) {
+        _kind(kind) {
     }
 
     void draw(graphics::Mesh &mesh,
@@ -160,11 +182,7 @@ private:
     VkCommandBuffer _cmd;
     std::vector<VkFormat> _colorFormats;
     VkFormat _depthFormat;
-    /**
-     * True in the forward transparency pass, which has one colour attachment
-     * and read-only depth rather than the G-buffer's five and a writable one.
-     */
-    bool _transparency;
+    Kind _kind;
     uint32_t _shadowViewMask {0};
     uint32_t _globalsOffset {0};
     int _drawCount {0};

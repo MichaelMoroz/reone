@@ -33,6 +33,8 @@ static VkDeviceSize texelSize(VkFormat format) {
         return 4;
     case VK_FORMAT_R8_UNORM:
         return 1;
+    case VK_FORMAT_R16_SFLOAT:
+        return 2;
     case VK_FORMAT_R16G16_SFLOAT:
         return 4;
     case VK_FORMAT_R16G16B16A16_SFLOAT:

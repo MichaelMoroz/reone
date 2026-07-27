@@ -117,14 +117,37 @@ private:
      */
     std::unique_ptr<graphics::VulkanImage> _ping;
 
+    /**
+     * Weighted-blended transparency, as the OpenGL pipeline accumulates it:
+     * rgb of the first is the weighted colour sum and its alpha is revealage,
+     * and the second holds the sum of the weights. oitBlendPass divides one by
+     * the other and composites the result onto the opaque image.
+     */
+    std::unique_ptr<graphics::VulkanImage> _oitAccum;
+    std::unique_ptr<graphics::VulkanImage> _oitRevealage;
+
     VkDescriptorSet _resolveSet {VK_NULL_HANDLE};
     /** Unit 0 pointed at the output and at the ping image respectively. */
     VkDescriptorSet _outputAsSourceSet {VK_NULL_HANDLE};
     VkDescriptorSet _pingAsSourceSet {VK_NULL_HANDLE};
+    /**
+     * The OIT targets plus the image currently playing the output, and the
+     * same with the two colour images the other way round.
+     *
+     * Two sets rather than one because the blend cannot read and write one
+     * image, so the two exchange roles every frame; swapOutputAndPing keeps
+     * this pair in step with them.
+     */
+    VkDescriptorSet _oitBlendSet {VK_NULL_HANDLE};
+    VkDescriptorSet _oitBlendSetSwapped {VK_NULL_HANDLE};
 
     void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    /** Resolve the OIT targets onto the opaque image. Follows transparencyPass. */
+    void oitBlendPass(VkCommandBuffer cmd);
+    /** Exchange the roles of the two colour images, and everything naming them. */
+    void swapOutputAndPing();
     void postProcessingPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void filterChainPass(VkCommandBuffer cmd);
     /** One full-screen filter, from one image onto the other. */

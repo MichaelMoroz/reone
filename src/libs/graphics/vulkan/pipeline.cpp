@@ -135,6 +135,22 @@ void VulkanPipeline::init(const Config &config) {
             attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
             attachment.alphaBlendOp = VK_BLEND_OP_ADD;
             break;
+        case BlendMode::OIT_Transparent:
+            // Weighted-blended transparency, matching the glBlendFuncSeparate
+            // in context.cpp. Colour accumulates additively; alpha multiplies
+            // down by one minus coverage, which is what turns the first
+            // attachment's alpha into revealage given a clear of 1.0.
+            //
+            // The loop puts this on every attachment, as OpenGL's single blend
+            // state does - so the OIT pass needs no independentBlend feature.
+            attachment.blendEnable = VK_TRUE;
+            attachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            attachment.colorBlendOp = VK_BLEND_OP_ADD;
+            attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+            break;
         default:
             attachment.blendEnable = VK_FALSE;
             break;

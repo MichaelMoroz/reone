@@ -1,14 +1,13 @@
 // Particles, ported from glsl/v_particles and f_oit_particles.
 //
-// Unlike the OpenGL pipeline these do not go through order-independent
-// transparency. They are drawn forward, after the deferred resolve, blended
-// straight onto the resolved image with ordinary source-alpha blending. So the
-// fragment stage emits one colour rather than the weighted colour and coverage
-// pair the OIT targets wanted, and the emitter's own back-to-front ordering is
-// what decides how overlapping puffs of smoke stack up.
+// Two fragment stages over one shading function: the transparency pass takes
+// the weighted-blended pair, and anything drawing particles straight onto an
+// already-resolved image takes the single colour and leans on the emitter's own
+// back-to-front ordering instead.
 
 import uniforms;
 import lib.math;
+import lib.oit;
 
 [[vk::binding(0, 1)]] Sampler2D sMainTex;
 
@@ -56,8 +55,8 @@ float2 frameUV(Varyings input) {
     return uv;
 }
 
-[shader("fragment")]
-float4 particleFragment(Varyings input) {
+/** Colour and coverage of one particle fragment, before it is written out. */
+float4 shadeParticle(Varyings input) {
     ParticleUniformsParticle particle = particleUniforms.particles[input.instanceId];
 
     float4 mainTexSample = sMainTex.Sample(frameUV(input));
@@ -77,4 +76,16 @@ float4 particleFragment(Varyings input) {
         discard;
     }
     return float4(color, alpha);
+}
+
+/** The counterpart of glsl/f_oit_particles.glsl. */
+[shader("fragment")]
+OITOutput oitParticleFragment(Varyings input) {
+    float4 shaded = shadeParticle(input);
+    return packOIT(shaded.rgb, shaded.a, input.position.z);
+}
+
+[shader("fragment")]
+float4 particleFragment(Varyings input) {
+    return shadeParticle(input);
 }

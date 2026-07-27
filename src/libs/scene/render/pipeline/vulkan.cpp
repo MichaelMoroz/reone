@@ -40,6 +40,10 @@ namespace scene {
 static constexpr char kResolveModule[] = "pbr_resolve";
 static constexpr char kPostProcessModule[] = "postprocess";
 
+/** What the OpenGL pipeline gives cbTransparentGeometry1 and 2. */
+static constexpr VkFormat kOITAccumFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+static constexpr VkFormat kOITRevealageFormat = VK_FORMAT_R16_SFLOAT;
+
 /** Matches the OpenGL pipeline's constant of the same name. */
 static constexpr float kSharpenAmount = 0.25f;
 
@@ -95,6 +99,61 @@ static void transitionShadowMap(VkCommandBuffer cmd,
     from = to;
 }
 
+/**
+ * Move a colour image between being sampled and being drawn into.
+ *
+ * The filter chain flips both of its images between the two roles on every
+ * pass, and the OIT targets do the same once per frame, so this is called far
+ * more often than the one-way transitions elsewhere in this file.
+ */
+static void transitionColorImage(VkCommandBuffer cmd,
+                                 const VulkanImage &image,
+                                 VkImageLayout from,
+                                 VkImageLayout to) {
+    // A transfer layout has to name the transfer stage: the copy at the end of
+    // an odd-length chain is neither an attachment write nor a shader read, and
+    // describing it as one is a layout-transition error even though the copy
+    // itself would appear to work.
+    auto stageFor = [](VkImageLayout layout) -> VkPipelineStageFlags2 {
+        switch (layout) {
+        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+            return VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        default:
+            return VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
+                   VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        }
+    };
+    auto accessFor = [](VkImageLayout layout) -> VkAccessFlags2 {
+        switch (layout) {
+        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+            return VK_ACCESS_2_TRANSFER_READ_BIT;
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+            return VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        default:
+            return VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                   VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        }
+    };
+
+    VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    b.srcStageMask = stageFor(from);
+    b.srcAccessMask = accessFor(from);
+    b.dstStageMask = stageFor(to);
+    b.dstAccessMask = accessFor(to);
+    b.oldLayout = from;
+    b.newLayout = to;
+    b.image = image.handle();
+    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    b.subresourceRange.levelCount = 1;
+    b.subresourceRange.layerCount = 1;
+
+    VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dep.imageMemoryBarrierCount = 1;
+    dep.pImageMemoryBarriers = &b;
+    vkCmdPipelineBarrier2(cmd, &dep);
+}
+
 void VulkanRenderPipeline::init() {
     if (_inited) {
         return;
@@ -110,14 +169,26 @@ void VulkanRenderPipeline::init() {
     _ping = std::make_unique<VulkanImage>(device);
     _ping->initColorAttachment(_targetSize, _renderer.swapchain().imageFormat());
 
+    _oitAccum = std::make_unique<VulkanImage>(device);
+    _oitAccum->initColorAttachment(_targetSize, kOITAccumFormat);
+    _oitRevealage = std::make_unique<VulkanImage>(device);
+    _oitRevealage->initColorAttachment(_targetSize, kOITRevealageFormat);
+
     // The filters sample these, and OpenGL's colour buffers clamp to edge with
     // no mip filtering. Left on the default sampler they would repeat, so a tap
     // just past one screen edge would read the opposite edge - which FXAA does
     // at every border pixel, and sharpen and the blurs do too.
+    //
+    // The OIT targets are sampled one texel at a time and never step outside
+    // the image, but they take the same sampler because it is what OpenGL gives
+    // a colour buffer, and because an image created here has no sampler at all
+    // until one is set - see commit e2cd6629.
     auto &samplers = _renderer.resources().samplers();
     auto filterSampler = samplers.get(getTextureProperties(TextureUsage::ColorBuffer));
     _output->setSampler(filterSampler);
     _ping->setSampler(filterSampler);
+    _oitAccum->setSampler(filterSampler);
+    _oitRevealage->setSampler(filterSampler);
 
     glm::ivec2 shadowSize {_options.shadowResolution, _options.shadowResolution};
     _dirShadows = std::make_unique<VulkanImage>(device);
@@ -203,6 +274,17 @@ void VulkanRenderPipeline::init() {
     _pingAsSourceSet = _renderer.descriptors().createPersistentTextureSet(
         {{TextureUnits::mainTex, _ping.get()}});
 
+    // The OIT resolve reads whichever image is the output that frame, so it
+    // needs the same pair. swapOutputAndPing exchanges them alongside.
+    _oitBlendSet = _renderer.descriptors().createPersistentTextureSet(
+        {{TextureUnits::mainTex, _output.get()},
+         {TextureUnits::oitAccum, _oitAccum.get()},
+         {TextureUnits::oitRevealage, _oitRevealage.get()}});
+    _oitBlendSetSwapped = _renderer.descriptors().createPersistentTextureSet(
+        {{TextureUnits::mainTex, _ping.get()},
+         {TextureUnits::oitAccum, _oitAccum.get()},
+         {TextureUnits::oitRevealage, _oitRevealage.get()}});
+
     // The output is written as an attachment and then sampled by the 2D
     // compositor, so it starts in the layout the first pass expects.
     device.immediateSubmit([this](VkCommandBuffer cmd) {
@@ -217,10 +299,13 @@ void VulkanRenderPipeline::init() {
         barrier.subresourceRange.layerCount = 1;
 
         // The filter chain expects to find the ping image sampleable, since
-        // that is the state every pass leaves it in.
-        std::array<VkImageMemoryBarrier2, 2> barriers {barrier, barrier};
+        // that is the state every pass leaves it in. So do the OIT targets,
+        // which the transparency pass moves back to being attachments.
+        std::array<VkImageMemoryBarrier2, 4> barriers {barrier, barrier, barrier, barrier};
         barriers[0].image = _output->handle();
         barriers[1].image = _ping->handle();
+        barriers[2].image = _oitAccum->handle();
+        barriers[3].image = _oitRevealage->handle();
 
         VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
         dep.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
@@ -243,7 +328,13 @@ void VulkanRenderPipeline::init() {
     name(_gbuffer->depth(), "G-buffer depth");
     name(*_dirShadows, "Shadow map (cascades)");
     name(*_pointShadows, "Shadow map (cube)");
-    name(*_output, "Scene output");
+    // Numbered rather than named for their role: the two exchange being the
+    // output on every OIT resolve, so "Scene output" would name whichever one
+    // happened to hold it when init ran.
+    name(*_output, "Scene colour 0");
+    name(*_ping, "Scene colour 1");
+    name(*_oitAccum, "OIT accum");
+    name(*_oitRevealage, "OIT revealage");
 
     _inited = true;
 }
@@ -258,6 +349,9 @@ void VulkanRenderPipeline::deinit() {
         _renderer.resources().unregisterExternal(*_outputHandle);
     }
     _output.reset();
+    _ping.reset();
+    _oitAccum.reset();
+    _oitRevealage.reset();
     _dirShadows.reset();
     _pointShadows.reset();
     _gbuffer.reset();
@@ -490,9 +584,10 @@ void VulkanRenderPipeline::resolvePass(VkCommandBuffer cmd, uint32_t globalsOffs
  * Draw onto the resolved image, depth-testing against the opaque geometry but
  * writing no depth.
  *
- * Shared by everything that runs after the resolve. Forward, not deferred:
- * these surfaces have no single depth at which to resolve lighting, so they
- * shade in place and blend onto what is already there.
+ * What post-processing draws through. Forward, not deferred: these surfaces
+ * have no single depth at which to resolve lighting, so they shade in place and
+ * blend onto what is already there, in draw order. Transparent geometry proper
+ * does not come through here - it goes through the OIT targets instead.
  */
 void VulkanRenderPipeline::drawOntoOutput(VkCommandBuffer cmd,
                                           uint32_t globalsOffset,
@@ -546,19 +641,181 @@ void VulkanRenderPipeline::drawOntoOutput(VkCommandBuffer cmd,
                           cmd,
                           {_renderer.swapchain().imageFormat()},
                           VulkanGBuffer::depthFormat(),
-                          true);
+                          VulkanRenderPass::Kind::Forward);
     pass.setGlobalsOffset(globalsOffset);
     callback(pass);
 
     vkCmdEndRendering(cmd);
 }
 
+/**
+ * Transparent geometry, accumulated into the two OIT targets.
+ *
+ * Not onto the output: each surface contributes a weighted colour and a weight
+ * without regard to draw order, and oitBlendPass divides one by the other
+ * afterwards. The counterpart of beginTransparentGeometryPass in the OpenGL
+ * pipeline, down to the clear values - accum's alpha starts at one and the
+ * blend multiplies it down, which is what makes it revealage.
+ *
+ * Runs even with nothing to draw, as OpenGL's does, because the resolve reads
+ * these targets either way and a cleared pair composites to the opaque image
+ * unchanged.
+ */
 void VulkanRenderPipeline::transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset) {
-    auto callback = _passCallbacks.find(RenderPassName::TransparentGeometry);
-    if (callback == _passCallbacks.end()) {
-        return;
+    VulkanDebugScope scope(_renderer.device(), cmd, "Transparent geometry (OIT)",
+                           {0.7f, 0.4f, 0.7f});
+
+    transitionColorImage(cmd, *_oitAccum, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    transitionColorImage(cmd, *_oitRevealage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    _gbuffer->transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+
+    std::array<VkRenderingAttachmentInfo, 2> attachments {};
+    for (auto &a : attachments) {
+        a.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        a.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        a.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     }
-    drawOntoOutput(cmd, globalsOffset, callback->second, "Transparent geometry");
+    attachments[0].imageView = _oitAccum->view();
+    attachments[0].clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    attachments[1].imageView = _oitRevealage->view();
+    attachments[1].clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+
+    // Depth tests against the opaque geometry so that a transparent surface
+    // behind a wall stays behind it, but writes nothing: one transparent
+    // surface must not occlude the next.
+    VkRenderingAttachmentInfo depth {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depth.imageView = _gbuffer->depth().view();
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+
+    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = {static_cast<uint32_t>(_targetSize.x),
+                                   static_cast<uint32_t>(_targetSize.y)};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = static_cast<uint32_t>(attachments.size());
+    rendering.pColorAttachments = attachments.data();
+    rendering.pDepthAttachment = &depth;
+
+    // The same flipped viewport the geometry pass uses, so that transparent
+    // geometry lands where the opaque geometry it sits among did.
+    VkViewport viewport {0.0f, static_cast<float>(_targetSize.y),
+                         static_cast<float>(_targetSize.x),
+                         -static_cast<float>(_targetSize.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
+                               static_cast<uint32_t>(_targetSize.y)}};
+
+    vkCmdBeginRendering(cmd, &rendering);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    auto callback = _passCallbacks.find(RenderPassName::TransparentGeometry);
+    if (callback != _passCallbacks.end()) {
+        VulkanRenderPass pass(_options,
+                              _renderer.device(),
+                              _renderer.pipelines(),
+                              _renderer.uniformRing(),
+                              _renderer.descriptors(),
+                              _renderer.resources(),
+                              _uniforms,
+                              _renderer.pbrTextures(),
+                              _meshRegistry,
+                              cmd,
+                              {kOITAccumFormat, kOITRevealageFormat},
+                              VulkanGBuffer::depthFormat(),
+                              VulkanRenderPass::Kind::OIT);
+        pass.setGlobalsOffset(globalsOffset);
+        callback->second(pass);
+    }
+
+    vkCmdEndRendering(cmd);
+}
+
+/**
+ * Composite the accumulated transparency onto the opaque image.
+ *
+ * A full-screen pass cannot read and write one image, so this draws into the
+ * ping image and the two exchange roles afterwards - the same ping-pong the
+ * filter chain runs on, without the copy back that an odd-length chain needs.
+ */
+void VulkanRenderPipeline::oitBlendPass(VkCommandBuffer cmd) {
+    VulkanDebugScope scope(_renderer.device(), cmd, "OIT resolve", {0.8f, 0.5f, 0.5f});
+
+    transitionColorImage(cmd, *_oitAccum, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    transitionColorImage(cmd, *_oitRevealage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    transitionColorImage(cmd, *_ping, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    attachment.imageView = _ping->view();
+    attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    // Every texel is written, so there is nothing to preserve.
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = {static_cast<uint32_t>(_targetSize.x),
+                                   static_cast<uint32_t>(_targetSize.y)};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &attachment;
+
+    VulkanPipelineCache::Key key;
+    key.module = kPostProcessModule;
+    key.vertexEntry = "postVertex";
+    key.fragmentEntry = "oitBlendFragment";
+    key.colorFormats = {_renderer.swapchain().imageFormat()};
+    auto &pipeline = _renderer.pipelines().get(key);
+
+    // Not flipped: this samples by UV and writes the same UV, and all three of
+    // the images it reads were written the same way up.
+    VkViewport viewport {0.0f, 0.0f, static_cast<float>(_targetSize.x),
+                         static_cast<float>(_targetSize.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
+                               static_cast<uint32_t>(_targetSize.y)}};
+
+    // The shader reads no uniform block, but the layout still declares them all,
+    // so the set is bound with every offset at zero.
+    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+
+    vkCmdBeginRendering(cmd, &rendering);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    auto uniformSet = _renderer.descriptors().uniformSet(_renderer.uniformRing().frame());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                            VulkanDescriptors::kUniformSet, 1, &uniformSet,
+                            static_cast<uint32_t>(offsets.size()), offsets.data());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                            VulkanDescriptors::kTextureSet, 1, &_oitBlendSet, 0, nullptr);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+
+    swapOutputAndPing();
+}
+
+/**
+ * Make the ping image the output and the output the ping image.
+ *
+ * Everything that names one of the two moves with it: the descriptor sets that
+ * bind it as a source, and the Texture the 2D compositor samples the finished
+ * frame through. Their layouts travel with them as well, which is what leaves
+ * the invariant the filter chain relies on intact - the output an attachment,
+ * the ping image sampleable.
+ */
+void VulkanRenderPipeline::swapOutputAndPing() {
+    std::swap(_output, _ping);
+    std::swap(_outputAsSourceSet, _pingAsSourceSet);
+    std::swap(_oitBlendSet, _oitBlendSetSwapped);
+    _renderer.resources().registerExternal(*_outputHandle, *_output);
 }
 
 /**
@@ -575,61 +832,6 @@ void VulkanRenderPipeline::postProcessingPass(VkCommandBuffer cmd, uint32_t glob
     drawOntoOutput(cmd, globalsOffset, callback->second, "Post-processing");
 }
 
-/**
- * Move an image between being sampled and being drawn into.
- *
- * The filter chain flips both of its images between the two roles on every
- * pass, so this is called far more often than the one-way transitions
- * elsewhere in this file.
- */
-static void transitionFilterImage(VkCommandBuffer cmd,
-                                  const VulkanImage &image,
-                                  VkImageLayout from,
-                                  VkImageLayout to) {
-    // A transfer layout has to name the transfer stage: the copy at the end of
-    // an odd-length chain is neither an attachment write nor a shader read, and
-    // describing it as one is a layout-transition error even though the copy
-    // itself would appear to work.
-    auto stageFor = [](VkImageLayout layout) -> VkPipelineStageFlags2 {
-        switch (layout) {
-        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
-        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-            return VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        default:
-            return VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
-                   VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-        }
-    };
-    auto accessFor = [](VkImageLayout layout) -> VkAccessFlags2 {
-        switch (layout) {
-        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
-            return VK_ACCESS_2_TRANSFER_READ_BIT;
-        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-            return VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        default:
-            return VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
-                   VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        }
-    };
-
-    VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    b.srcStageMask = stageFor(from);
-    b.srcAccessMask = accessFor(from);
-    b.dstStageMask = stageFor(to);
-    b.dstAccessMask = accessFor(to);
-    b.oldLayout = from;
-    b.newLayout = to;
-    b.image = image.handle();
-    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    b.subresourceRange.levelCount = 1;
-    b.subresourceRange.layerCount = 1;
-
-    VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dep.imageMemoryBarrierCount = 1;
-    dep.pImageMemoryBarriers = &b;
-    vkCmdPipelineBarrier2(cmd, &dep);
-}
-
 void VulkanRenderPipeline::filterPass(VkCommandBuffer cmd,
                                       uint32_t screenEffectOffset,
                                       VulkanImage &src,
@@ -639,9 +841,9 @@ void VulkanRenderPipeline::filterPass(VkCommandBuffer cmd,
                                       const char *label) {
     VulkanDebugScope scope(_renderer.device(), cmd, label, {0.4f, 0.6f, 0.9f});
 
-    transitionFilterImage(cmd, src, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    transitionColorImage(cmd, src, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    transitionFilterImage(cmd, dst, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    transitionColorImage(cmd, dst, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
     VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
@@ -728,9 +930,9 @@ void VulkanRenderPipeline::filterChainPass(VkCommandBuffer cmd) {
     }
 
     // Odd chain: the result is in ping, and the frame expects it in output.
-    transitionFilterImage(cmd, *_ping, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    transitionColorImage(cmd, *_ping, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    transitionFilterImage(cmd, *_output, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
     VkImageCopy region {};
@@ -744,9 +946,9 @@ void VulkanRenderPipeline::filterChainPass(VkCommandBuffer cmd) {
                    _output->handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                    1, &region);
 
-    transitionFilterImage(cmd, *_output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    transitionFilterImage(cmd, *_ping, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+    transitionColorImage(cmd, *_ping, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
@@ -780,6 +982,7 @@ Texture &VulkanRenderPipeline::render() {
     geometryPass(cmd, globalsOffset);
     resolvePass(cmd, globalsOffset);
     transparencyPass(cmd, globalsOffset);
+    oitBlendPass(cmd);
     postProcessingPass(cmd, globalsOffset);
     filterChainPass(cmd);
 
@@ -829,6 +1032,8 @@ static std::optional<DumpFormat> dumpFormatFor(VkFormat format) {
     case VK_FORMAT_B8G8R8A8_UNORM:
     case VK_FORMAT_B8G8R8A8_SRGB:
         return DumpFormat {4, NpyType::UInt8, false};
+    case VK_FORMAT_R16_SFLOAT:
+        return DumpFormat {1, NpyType::Float32, true};
     case VK_FORMAT_R16G16_SFLOAT:
         return DumpFormat {2, NpyType::Float32, true};
     case VK_FORMAT_R16G16B16A16_SFLOAT:
@@ -900,8 +1105,13 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
         entries.push_back({kColorNames[i], &_gbuffer->color(i), _gbuffer->colorLayout(), false});
     }
     entries.push_back({"g_buffer_depth", &_gbuffer->depth(), _gbuffer->depthLayout(), true});
-    // The output has been handed to the compositor by the time a dump runs.
+    // The output has been handed to the compositor by the time a dump runs, and
+    // the OIT targets were left sampleable by their resolve.
     entries.push_back({"output", _output.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
+    entries.push_back({"oit_accum", _oitAccum.get(),
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
+    entries.push_back({"oit_revealage", _oitRevealage.get(),
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
 
     for (const auto &entry : entries) {
         auto format = dumpFormatFor(entry.image->format());

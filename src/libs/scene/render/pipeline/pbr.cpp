@@ -312,6 +312,10 @@ std::vector<RenderTargetInfo> PBRRenderPipeline::targets() const {
     add("SSR", RenderTargetKind::Color, _targets.cbSSR);
     add("Deferred opaque 1", RenderTargetKind::Color, _targets.cbDeferredOpaque1);
     add("Deferred opaque 2", RenderTargetKind::Color, _targets.cbDeferredOpaque2);
+    // Named to match the Vulkan pipeline's dump entries, so the two backends'
+    // .npy files line up by filename as well as by contents.
+    add("OIT accum", RenderTargetKind::Color, _targets.cbTransparentGeometry1);
+    add("OIT revealage", RenderTargetKind::Color, _targets.cbTransparentGeometry2);
     add("Output", RenderTargetKind::Color, _targets.cbOutput);
     return result;
 }

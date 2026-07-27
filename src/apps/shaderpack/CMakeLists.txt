@@ -35,15 +35,15 @@ set(SPIRV_OUT_DIR ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin/spirv)
 
 # <source>:<entry>[+<entry>...]
 set(SPIRV_MODULES
-    "pbr_model:staticVertex+skinnedVertex+danglyVertex+saberVertex+opaqueFragment+transparentFragment"
+    "pbr_model:staticVertex+skinnedVertex+danglyVertex+saberVertex+opaqueFragment+transparentFragment+oitModelFragment"
     "grass:grassVertex+pbrFragment+retroFragment"
     "walkmesh:walkmeshVertex+pbrFragment+retroFragment"
     "common:billboardVertex+textureFragment"
     "shadow:shadowVertex+nullFragment+pointFragment"
     "pbr_ibl:iblVertex+brdfFragment+irradianceFragment+prefilterFragment"
-    "particles:particleVertex+particleFragment"
+    "particles:particleVertex+particleFragment+oitParticleFragment"
     "pbr_resolve:resolveVertex+resolveFragment"
-    "postprocess:postVertex+gausBlur9Fragment+gausBlur13Fragment+sharpenFragment+fxaaFragment"
+    "postprocess:postVertex+gausBlur9Fragment+gausBlur13Fragment+sharpenFragment+fxaaFragment+oitBlendFragment"
     "vk2d:quadVertex+imageFragment+colorFragment+fullTargetVertex+textVertex+textFragment")
 
 # Every .slang file, not just the module being compiled. A module imports from

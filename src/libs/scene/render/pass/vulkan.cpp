@@ -40,6 +40,7 @@ namespace scene {
 static constexpr char kModelModule[] = "pbr_model";
 static constexpr char kOpaqueFragment[] = "opaqueFragment";
 static constexpr char kTransparentFragment[] = "transparentFragment";
+static constexpr char kOITModelFragment[] = "oitModelFragment";
 static constexpr char kGrassModule[] = "grass";
 static constexpr char kParticleModule[] = "particles";
 static constexpr char kCommonModule[] = "common";
@@ -175,19 +176,35 @@ void VulkanRenderPass::drawGeometry(Mesh &mesh,
     // in this pass is a model.
     bool walkmesh = material.type == MaterialType::Walkmesh;
 
+    const char *modelFragment = kOpaqueFragment;
+    switch (_kind) {
+    case Kind::OIT:
+        modelFragment = kOITModelFragment;
+        break;
+    case Kind::Forward:
+        modelFragment = kTransparentFragment;
+        break;
+    default:
+        break;
+    }
+
     VulkanPipelineCache::Key key;
     key.module = walkmesh ? kWalkmeshModule : kModelModule;
     key.vertexEntry = walkmesh ? "walkmeshVertex" : vertexEntry;
-    key.fragmentEntry = walkmesh ? kPBRFragment
-                                 : (_transparency ? kTransparentFragment : kOpaqueFragment);
+    key.fragmentEntry = walkmesh ? kPBRFragment : modelFragment;
     key.colorFormats = _colorFormats;
     key.depthFormat = _depthFormat;
     key.depthTest = true;
-    // Transparent surfaces are shaded forward and blended onto the resolved
-    // image, and must not write depth: one would otherwise hide the surface
-    // behind it instead of showing through to it.
-    key.depthWrite = !_transparency;
-    if (_transparency) {
+    // Transparent surfaces are shaded forward, and must not write depth: one
+    // would otherwise hide the surface behind it instead of showing through
+    // to it.
+    key.depthWrite = _kind == Kind::Geometry;
+    if (_kind == Kind::OIT) {
+        // One blend state for the whole pass, as the OpenGL pipeline has -
+        // beginTransparentGeometryPass pushes it over whatever the material
+        // asked for.
+        key.blend = BlendMode::OIT_Transparent;
+    } else if (_kind == Kind::Forward) {
         key.blend = material.blending.value_or(BlendMode::Normal);
     }
     key.cull = material.faceCulling.value_or(FaceCullMode::Back);
@@ -398,20 +415,22 @@ void VulkanRenderPass::drawParticles(Texture &texture,
     }
     // One instanced billboard per particle, oriented in the vertex shader from
     // the axes the emitter computed. This runs in the transparency pass, so it
-    // blends onto the already-resolved image rather than writing the G-buffer.
+    // accumulates into the OIT targets rather than writing the G-buffer.
     const auto &billboard = _resources.get(_meshRegistry.get(MeshName::billboard));
+
+    bool oit = _kind == Kind::OIT;
 
     VulkanPipelineCache::Key key;
     key.module = kParticleModule;
     key.vertexEntry = "particleVertex";
-    key.fragmentEntry = "particleFragment";
+    key.fragmentEntry = oit ? "oitParticleFragment" : "particleFragment";
     key.colorFormats = _colorFormats;
     key.depthFormat = _depthFormat;
     key.depthTest = true;
     // No depth write: particles are translucent, and one occluding the next
     // would punch a hole in the puff behind it.
     key.depthWrite = false;
-    key.blend = BlendMode::Normal;
+    key.blend = oit ? BlendMode::OIT_Transparent : BlendMode::Normal;
     key.cull = faceCulling;
     key.vertexBindings = VulkanMesh::bindingDescriptions(
         _meshRegistry.get(MeshName::billboard).vertexLayout());
