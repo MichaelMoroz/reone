@@ -1619,6 +1619,58 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
             writeNpy(path, raw.data(), extent.x, extent.y, format->channels, format->type);
         }
     }
+    if (_options.pbr) {
+        // Cube arrays are unrolled face-after-face: layer 0 +X..-Z, then
+        // layer 1 +X..-Z, and so on. Keeping every layer makes the dump useful
+        // even when a scene derives more than one environment map.
+        auto dumpCubeArray = [&dir](const char *name, const VulkanImage &image, int mip,
+                                    uint32_t layers) {
+            constexpr uint32_t kFaces = 6;
+            auto format = dumpFormatFor(image.format());
+            if (!format) {
+                warn("Cannot dump cube array '" + std::string(name) + "': unsupported format",
+                     LogChannel::Graphics);
+                return;
+            }
+            auto raw = image.readBack(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, mip, layers);
+            auto extent = glm::max(glm::ivec2(1), image.extent() >> mip);
+            // Vulkan's image-copy rows are upside down relative to the GL
+            // cube-array readback. Normalize the diagnostic layout here; this
+            // does not affect the texture's sampling convention.
+            std::vector<uint8_t> flipped(raw.size());
+            size_t rowBytes = raw.size() / (static_cast<size_t>(layers) * extent.y);
+            size_t faceBytes = rowBytes * extent.y;
+            for (uint32_t face = 0; face < layers; ++face) {
+                for (int y = 0; y < extent.y; ++y) {
+                    std::memcpy(flipped.data() + face * faceBytes + y * rowBytes,
+                                raw.data() + face * faceBytes + (extent.y - 1 - y) * rowBytes,
+                                rowBytes);
+                }
+            }
+            raw = std::move(flipped);
+            auto path = dir / (std::string(name) + ".npy");
+            if (format->halfToFloat) {
+                size_t count = raw.size() / sizeof(uint16_t);
+                std::vector<float> widened(count);
+                for (size_t i = 0; i < count; ++i) {
+                    uint16_t half;
+                    std::memcpy(&half, raw.data() + i * sizeof(uint16_t), sizeof(half));
+                    widened[i] = halfToFloat(half);
+                }
+                writeNpy(path, widened.data(), extent.x, extent.y * static_cast<int>(layers),
+                         format->channels, format->type);
+            } else {
+                writeNpy(path, raw.data(), extent.x, extent.y * static_cast<int>(layers),
+                         format->channels, format->type);
+            }
+        };
+        auto &pbr = _renderer.pbrTextures();
+        dumpCubeArray("irradiance_map_array", pbr.irradianceArray(), 0, 16 * 6);
+        for (int mip = 0; mip < pbr.prefilteredArray().mipLevels(); ++mip) {
+            dumpCubeArray(("prefiltered_env_map_array_mip" + std::to_string(mip)).c_str(),
+                          pbr.prefilteredArray(), mip, 16 * 6);
+        }
+    }
     info("Dumped " + std::to_string(entries.size()) + " render targets to " + dir.string(),
          LogChannel::Graphics);
 }

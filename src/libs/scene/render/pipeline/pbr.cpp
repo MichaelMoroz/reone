@@ -19,6 +19,7 @@
 
 #include "reone/graphics/context.h"
 #include "reone/graphics/meshregistry.h"
+#include "reone/graphics/npyutil.h"
 #include "reone/graphics/pbrtextures.h"
 #include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/textureregistry.h"
@@ -318,6 +319,46 @@ std::vector<RenderTargetInfo> PBRRenderPipeline::targets() const {
     add("OIT revealage", RenderTargetKind::Color, _targets.cbTransparentGeometry2);
     add("Output", RenderTargetKind::Color, _targets.cbOutput);
     return result;
+}
+
+void PBRRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
+    RenderPipelineBase::dumpTargets(dir);
+    if (!_options.pbr) {
+        return;
+    }
+
+    // Cube arrays are written face-after-face in one tall image. The order is
+    // layer 0 +X..-Z, layer 1 +X..-Z, ... and matches Vulkan's array layers.
+    auto dumpCubeArray = [&dir](const char *name, const Texture &texture, int mip, int faceSize,
+                                int layers) {
+        constexpr int kFaces = 6;
+        constexpr int kChannels = 4;
+        int size = std::max(1, faceSize >> mip);
+        std::vector<uint8_t> source(size * size * kChannels * kFaces * layers);
+        std::vector<uint8_t> unrolled(source.size());
+        auto target = texture.isCubeMap() ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_CUBE_MAP_ARRAY;
+        glBindTexture(target, texture.nameGL());
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glGetTexImage(target, mip, GL_RGBA, GL_UNSIGNED_BYTE, source.data());
+        glBindTexture(target, 0);
+        size_t faceBytes = static_cast<size_t>(size) * size * kChannels;
+        size_t rowBytes = static_cast<size_t>(size) * kChannels;
+        for (int face = 0; face < kFaces * layers; ++face) {
+            for (int y = 0; y < size; ++y) {
+                std::memcpy(unrolled.data() + face * faceBytes + y * rowBytes,
+                            source.data() + face * faceBytes + (size - 1 - y) * rowBytes,
+                            rowBytes);
+            }
+        }
+        writeNpy(dir / (std::string(name) + ".npy"), unrolled.data(), size, size * kFaces * layers,
+                 kChannels, NpyType::UInt8);
+    };
+
+    dumpCubeArray("irradiance_map_array", _pbrTextures.irradianceMapArray(), 0, 32, 16);
+    for (int mip = 0; mip < 5; ++mip) {
+        dumpCubeArray(("prefiltered_env_map_array_mip" + std::to_string(mip)).c_str(),
+                      _pbrTextures.prefilteredEnvMapArray(), mip, 128, 16);
+    }
 }
 
 Texture &PBRRenderPipeline::render(RenderRegistry &registry,

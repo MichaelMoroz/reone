@@ -53,6 +53,7 @@ public:
                               RenderPassName shadowPass) override;
 
     std::vector<RenderTargetInfo> targets() const override;
+    void dumpTargets(const std::filesystem::path &dir) override;
 
 private:
     struct RenderTargets {
