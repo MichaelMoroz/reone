@@ -134,10 +134,6 @@ has `#ifdef R_SSAO` and `R_SSR` branches on the OpenGL side and the Slang
 resolve has the same shape with the terms dropped out, so the wiring points
 are already marked.
 
-Do SSAO first: it applies to every surface, so it is easier to see and easier
-to verify, and it does not depend on reflection geometry being present in the
-test frame.
-
 ## 5. The retro pipeline
 
 Selected with `--pbr 0`, and it is the only thing in the engine that renders

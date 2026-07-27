@@ -99,9 +99,15 @@ public:
         _graphicsSvc(graphicsSvc),
         _resourceSvc(resourceSvc) {
 
-        _aspect = options.width / static_cast<float>(options.height);
-        _screenCenter.x = options.width / 2;
-        _screenCenter.y = options.height / 2;
+    }
+
+    /** Both derived from the current resolution, which can change at runtime. */
+    float aspect() const {
+        return _options.width / static_cast<float>(_options.height);
+    }
+
+    glm::ivec2 screenCenter() const {
+        return {_options.width / 2, _options.height / 2};
     }
 
     void load(const resource::Gff &gui) override;
@@ -166,8 +172,6 @@ private:
     int _resolutionX {kDefaultResolutionX};
     int _resolutionY {kDefaultResolutionY};
     ScalingMode _scaling {ScalingMode::Center};
-    float _aspect {0.0f};
-    glm::ivec2 _screenCenter {0};
     glm::ivec2 _rootOffset {0};
     glm::ivec2 _controlOffset {0};
     std::shared_ptr<graphics::Texture> _background;
