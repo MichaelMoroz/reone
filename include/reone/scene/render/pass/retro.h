@@ -107,8 +107,6 @@ private:
 
     void applyMaterialToLocals(const graphics::Material &material, graphics::LocalUniforms &locals);
 
-    int materialFeatureMask(const graphics::Material &material) const;
-
     void withMaterialAppliedToContext(const graphics::Material &material, std::function<void(graphics::ShaderProgram &)> block);
 };
 

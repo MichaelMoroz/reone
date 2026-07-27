@@ -283,6 +283,8 @@ void VulkanRenderPipeline::init() {
         {{TextureUnits::mainTex, _output.get()}});
     _pingAsSourceSet = _renderer.descriptors().createPersistentTextureSet(
         {{TextureUnits::mainTex, _ping.get()}});
+    _hilightsAsSourceSet = _renderer.descriptors().createPersistentTextureSet(
+        {{TextureUnits::mainTex, _hilights.get()}});
 
     _oitBlendOutputSet = _renderer.descriptors().createPersistentTextureSet(
         {{TextureUnits::mainTex, _output.get()},
@@ -596,6 +598,88 @@ void VulkanRenderPipeline::retroGeometryPass(VkCommandBuffer cmd, uint32_t globa
     pass.setGlobalsOffset(globalsOffset);
     _registry->drawScene(pass, {RenderPassName::OpaqueGeometry, RenderCategory::Opaque}, _cullCamera);
     vkCmdEndRendering(cmd);
+
+    hilightsBlurPass(cmd);
+}
+
+/**
+ * Blur the highlight buffer, as the OpenGL retro pipeline does before blending.
+ *
+ * Two thirteen-tap passes, one per axis, through the ping allocation and back.
+ * The buffer holds only the self-illuminated pixels that came out near white, so
+ * leaving it sharp does not merely soften the bloom - the blend adds it to the
+ * opaque image, and an unspread highlight adds all of its energy to the few
+ * pixels that produced it.
+ *
+ * Both images are left in the layout they arrived in, so nothing downstream has
+ * to know this ran.
+ */
+void VulkanRenderPipeline::hilightsBlurPass(VkCommandBuffer cmd) {
+    VulkanDebugScope scope(_renderer.device(), cmd, "Highlight blur", {0.8f, 0.8f, 0.4f});
+
+    ScreenEffectUniforms screenEffect;
+    screenEffect.screenResolution = glm::vec2(_targetSize);
+    screenEffect.screenResolutionRcp = 1.0f / screenEffect.screenResolution;
+
+    VulkanPipelineCache::Key key;
+    key.module = kPostProcessModule;
+    key.vertexEntry = "postVertex";
+    key.fragmentEntry = "gausBlur13Fragment";
+    key.colorFormats = {_renderer.swapchain().imageFormat()};
+    auto &pipeline = _renderer.pipelines().get(key);
+
+    // Not flipped, for the reason given in filterPass.
+    VkViewport viewport {0.0f, 0.0f, static_cast<float>(_targetSize.x),
+                         static_cast<float>(_targetSize.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
+                               static_cast<uint32_t>(_targetSize.y)}};
+
+    auto axis = [&](const VulkanImage &source, VkDescriptorSet sourceSet,
+                    const VulkanImage &destination, glm::vec2 direction) {
+        transitionColorImage(cmd, source, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        transitionColorImage(cmd, destination, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+        screenEffect.blurDirection = direction;
+        auto offset = _renderer.uniformRing().push(screenEffect);
+
+        VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        attachment.imageView = destination.view();
+        attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        // Every texel is written.
+        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+        VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+        rendering.renderArea.extent = {static_cast<uint32_t>(_targetSize.x),
+                                       static_cast<uint32_t>(_targetSize.y)};
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &attachment;
+
+        std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+        offsets[UniformBlockBindingPoints::screenEffect] = offset;
+
+        vkCmdBeginRendering(cmd, &rendering);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        auto uniformSet = _renderer.descriptors().uniformSet(_renderer.uniformRing().frame());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                                VulkanDescriptors::kUniformSet, 1, &uniformSet,
+                                static_cast<uint32_t>(offsets.size()), offsets.data());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                                VulkanDescriptors::kTextureSet, 1, &sourceSet, 0, nullptr);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRendering(cmd);
+    };
+
+    // The second axis reads the ping allocation back, which leaves it
+    // sampleable - the state every pass leaves it in, and the one the passes
+    // after this expect to find.
+    axis(*_hilights, _hilightsAsSourceSet, *_ping, {1.0f, 0.0f});
+    axis(*_ping, _pingAsSourceSet, *_hilights, {0.0f, 1.0f});
 }
 
 void VulkanRenderPipeline::resolvePass(VkCommandBuffer cmd, uint32_t globalsOffset) {

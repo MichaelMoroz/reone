@@ -307,6 +307,11 @@ float lightAttenuationQuadratic(GlobalUniformsLight light, float distance) {
     return (light.radius * light.radius) / (d * d);
 }
 
+// Mirrors i_lighting.glsl: a light lights static geometry only when it is
+// marked as lighting everything.
+static const int kLightDynamicTypeAll = 1;
+static const int kLightDynamicTypeDynamicOnly = 2;
+
 /** Forward lighting used by the original renderer, retained separately from PBR resolve. */
 [shader("fragment")]
 RetroOutput retroOpaqueFragment(Varyings input) {
@@ -327,7 +332,7 @@ RetroOutput retroOpaqueFragment(Varyings input) {
     }
     for (int i = 0; i < globalUniforms.numLights; ++i) {
         GlobalUniformsLight light = globalUniforms.lights[i];
-        if (isFeatureEnabled(kFeatureStatic) && light.dynamicType != 2) continue;
+        if (isFeatureEnabled(kFeatureStatic) && light.dynamicType != kLightDynamicTypeAll) continue;
         float3 lightVector = light.position.xyz - input.worldPos.xyz;
         float distance = length(lightVector);
         if (distance > light.radius * light.radius) continue;
@@ -338,9 +343,13 @@ RetroOutput retroOpaqueFragment(Varyings input) {
             diffuse += light.multiplier * max(0.0, dot(surface.normal, lightVector / max(0.0001, distance))) * attenuation * localUniforms.diffuseColor.rgb * light.color.rgb;
         }
     }
+    // Bug for bug with f_rtr_opaqmodel.glsl: the original renderer selects the
+    // cascade from the world-space camera-to-fragment vector, not from a view
+    // space position as the deferred resolve does. Passing the same thing keeps
+    // the two backends comparable; correcting it is a change to both at once.
+    float3 cascadeSelector = globalUniforms.cameraPosition.xyz - input.worldPos.xyz;
     float shadow = isFeatureEnabled(kFeatureShadows)
-                       ? getShadow(mul(globalUniforms.view, input.worldPos).xyz,
-                                   input.worldPos.xyz)
+                       ? getShadow(cascadeSelector, input.worldPos.xyz)
                        : 0.0;
     float3 color = min(float3(1.0),
                        ambient + (1.0 - shadow) * max(float3(0.0), diffuse)) *

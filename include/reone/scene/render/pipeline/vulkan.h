@@ -135,6 +135,8 @@ private:
     /** Unit 0 pointed at the two stable scene-colour allocations. */
     VkDescriptorSet _outputAsSourceSet {VK_NULL_HANDLE};
     VkDescriptorSet _pingAsSourceSet {VK_NULL_HANDLE};
+    /** Unit 0 pointed at the highlight buffer, for blurring it in place. */
+    VkDescriptorSet _hilightsAsSourceSet {VK_NULL_HANDLE};
     /** The OIT targets plus each possible scene-colour source. */
     VkDescriptorSet _oitBlendOutputSet {VK_NULL_HANDLE};
     VkDescriptorSet _oitBlendPingSet {VK_NULL_HANDLE};
@@ -159,6 +161,8 @@ private:
 
     void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void retroGeometryPass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    /** Separable blur of the retro highlight buffer, in place. Follows retroGeometryPass. */
+    void hilightsBlurPass(VkCommandBuffer cmd);
     void shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     /** Resolve the OIT targets onto the opaque image. Follows transparencyPass. */

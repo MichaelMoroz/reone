@@ -103,6 +103,9 @@ inline int materialFeatureMask(const Material &material) {
     if (textures.count(TextureUnits::bumpMapArray) > 0) {
         mask |= UniformsFeatureFlags::bumpmap;
     }
+    if (material.staticObject) {
+        mask |= UniformsFeatureFlags::staticobj;
+    }
     if (material.affectedByShadows) {
         mask |= UniformsFeatureFlags::shadows;
     }
