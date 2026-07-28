@@ -411,6 +411,43 @@ An object that is neither visible nor animating needs neither. That is a
 per-object decision the snapshot can already express, since it knows what was
 drawn and in which pass.
 
+### Optimisation: a light hierarchy, once areas get dense
+
+Direct lighting selects one light per sample by importance - contribution
+estimated as multiplier times attenuation times colour luminance - which makes
+shadow-ray cost constant per sample instead of scaling with the area's light
+count (`kMaxLights` is 32). The selection scan itself is still linear over the
+active list, and the estimate ignores occlusion and orientation.
+
+A flat power CDF is not a usable stage once emitter geometry joins the set:
+importance must be weighted by each light's angular area *from the shading
+point* - power alone ignores distance squared and orientation, so beside one
+lamp among hundreds of panes nearly every sample lands elsewhere - and a
+per-point CDF is O(N) per shading point. The entry requirement is therefore
+the light BVH itself (the Conty-Kulla many-lights family): per node spatial
+bounds, an orientation cone and aggregate power, descended stochastically per
+sample with each branch chosen by the receiver-dependent estimate and the pdf
+accumulated as the product of choices. O(log N) per sample, no CDF ever
+materialised, leaves small enough that a local pick is O(leaf). Built per
+frame beside the TLAS from the same snapshot. A flat CDF survives only as a
+debug fallback for validating the estimator against brute force.
+
+The same estimator absorbs emissive geometry. The several hundred emissive
+panes currently light the scene only when a hemisphere ray happens to hit one
+- high variance that no sample count fixes cheaply. The design: extract
+emitter triangles (non-sky - the sky's huge solid angle is exactly where
+hemisphere sampling wins, and kTraceSky already separates it) into the same
+sampled light set as the point lights, one power CDF over both record types,
+one NEE sample and shadow ray per path sample, weighted by the geometry term
+over area pdf - angular-area importance in the estimator, with per-point
+angular selection arriving with the light BVH. Emitters managed this way
+return zero emission to bounce rays - their light arrives via the estimator -
+but full emission to the camera ray, or directly-viewed screens would go
+dark while indirect light double-counted. Per-triangle power in the CDF is
+area times luma of selfIllum times diffuseColor, a stated approximation:
+average texel emission is not known CPU-side, while the shader samples the
+true textured emission at the chosen point.
+
 ### Optimisation: one BLAS for everything static
 
 The table above shares a BLAS between instances of the same mesh. The next step

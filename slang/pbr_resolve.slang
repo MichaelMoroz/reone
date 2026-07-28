@@ -195,6 +195,10 @@ ResolveOutput resolveFragment(Varyings input) {
     int envLayer = int(round(selfIllumSample.a * 255.0));
 
     float3 environment = float3(0.0);
+    // The path tracer deliberately does not add this flat term: outdoors its
+    // sky hemisphere integral already is ambient, so adding both doubles it.
+    // Interiors consequently lose this small raster-only baseline; direct
+    // scene lights are the intentionally shared illumination there.
     float3 irradiance = gammaToLinear(globalUniforms.worldAmbientColor.rgb);
     if (envmapped) {
         irradiance += gammaToLinear(sIrradianceMapArray.Sample(float4(R, float(envLayer))).rgb);

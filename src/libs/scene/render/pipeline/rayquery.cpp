@@ -56,6 +56,8 @@ static_assert(sizeof(InstanceMaterial) == 160);
 struct TraceStats {
     uint32_t secondaryRays {0};
     uint32_t secondaryMisses {0};
+    uint32_t survivingLights {0};
+    uint32_t primaryHits {0};
 };
 
 VkDeviceAddress alignedAddress(VkDeviceAddress address, VkDeviceSize alignment) {
@@ -351,6 +353,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         const auto *stats = static_cast<const TraceStats *>(frame.traceStats->mapped());
         _lastSecondaryRays = stats->secondaryRays;
         _lastSecondaryMisses = stats->secondaryMisses;
+        _lastSurvivingLights = stats->survivingLights;
+        _lastPrimaryHits = stats->primaryHits;
     }
     clearFrame(frame);
     auto &device = _renderer.device();
@@ -491,7 +495,9 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                   std::max(0.0f, _options.ptSkyIntensity),
                                   std::max(0.0f, _options.ptEmissiveIntensity),
                                   std::max(0.0f, _options.ptLightmapIntensity),
-                                  std::max(0.0001f, _options.ptRayOffset)};
+                                  std::max(0.0f, _options.ptDirectIntensity),
+                                  std::max(0.0001f, _options.ptRayOffset),
+                                  std::max(0.0f, _options.ptWorldAmbient)};
     vkCmdPushConstants(cmd, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), &constants);
     vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8), static_cast<uint32_t>((_extent.y + 7) / 8), 1);
     ++_frameNumber;
@@ -501,8 +507,10 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
          std::to_string(_lastOutOfRange) + " out-of-range meshes, build recorded in " +
          std::to_string(microseconds) + " us; " + std::to_string(_lastEmissive) +
           " emissive, " + std::to_string(_lastAdditive) + " additive, " +
-          std::to_string(_lastSabers) + " saber, " + std::to_string(_lastDangly) + " dangly; previous frame secondary misses " + std::to_string(_lastSecondaryMisses) +
+         std::to_string(_lastSabers) + " saber, " + std::to_string(_lastDangly) + " dangly; previous frame secondary misses " + std::to_string(_lastSecondaryMisses) +
          "/" + std::to_string(_lastSecondaryRays) + "; " +
+         std::to_string(_lastPrimaryHits ? static_cast<float>(_lastSurvivingLights) / _lastPrimaryHits : 0.0f) +
+         " lights past cutoff/primary hit; " +
          std::to_string(_lastBindlessTextureCount) + " bindless 2D textures; " +
          std::to_string(std::max(1, _options.pathTracingSamples)) + " spp", LogChannel::Graphics);
 }

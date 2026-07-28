@@ -59,6 +59,8 @@ private:
     uint32_t _lastDangly {0};
     uint32_t _lastSecondaryRays {0};
     uint32_t _lastSecondaryMisses {0};
+    uint32_t _lastSurvivingLights {0};
+    uint32_t _lastPrimaryHits {0};
     uint32_t _bindlessTextureCapacity {0};
     uint32_t _lastBindlessTextureCount {0};
     /** Must match PushConstants in slang/rayquery.slang. */
@@ -68,7 +70,9 @@ private:
         float skyIntensity;
         float emissiveIntensity;
         float lightmapIntensity;
+        float directIntensity;
         float rayOriginOffset;
+        float worldAmbientIntensity;
     };
 
     uint32_t _frameNumber {0};
