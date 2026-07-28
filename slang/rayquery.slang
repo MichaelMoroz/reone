@@ -57,6 +57,28 @@ struct CategoryOverride {
 static const uint kTraceCategoryShift = 27;
 static const uint kTraceCategoryMask = 0xFu;
 
+// traceFlags bits 4-7: debug view. 0 renders normally.
+static const uint kTraceDebugViewShift = 4;
+static const uint kTraceDebugViewMask = 0xFu;
+static const uint kDebugViewCategories = 1;
+static const uint kDebugViewEmissive = 2;
+static const uint kDebugViewNormals = 3;
+static const uint kDebugViewRoughness = 4;
+static const uint kDebugViewLightmap = 5;
+static const uint kDebugViewAlbedo = 6;
+
+static const float3 kCategoryPalette[9] = {
+    float3(0.5, 0.5, 0.5),  // GUI - never traced
+    float3(0.3, 0.5, 0.9),  // Room
+    float3(0.9, 0.3, 0.3),  // Creature
+    float3(0.3, 0.9, 0.4),  // Placeable
+    float3(0.9, 0.2, 0.9),  // Door
+    float3(0.9, 0.8, 0.2),  // Equipment
+    float3(0.5, 0.5, 0.5),  // Projectile - never traced
+    float3(0.5, 0.5, 0.5),  // Camera - never traced
+    float3(0.9, 0.5, 0.1),  // no model root
+};
+
 CategoryOverride categoryOverrideFor(uint featureMask) {
     return categoryOverrides[(featureMask >> kTraceCategoryShift) & kTraceCategoryMask];
 }
@@ -559,6 +581,35 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                                              primaryOverride.color.w);
         if (primaryOverride.params.x >= 0.0) primarySurface.surface.roughness = primaryOverride.params.x;
         primarySurface.surface.emissive *= primaryOverride.params.y;
+        // Debug views replace shading entirely; they sit before the sky
+        // early-out so the dome is inspectable like everything else.
+        uint debugView = (pushConstants.traceFlags >> kTraceDebugViewShift) & kTraceDebugViewMask;
+        if (debugView != 0) {
+            float shape = 0.35 + 0.65 * abs(dot(primarySurface.surface.normal, -ray.Direction));
+            float3 debugColor;
+            if (debugView == kDebugViewCategories) {
+                uint category = (material.featureMask >> kTraceCategoryShift) & kTraceCategoryMask;
+                debugColor = kCategoryPalette[min(category, 8u)] * shape;
+                if ((material.featureMask & kTraceSky) != 0) debugColor = float3(0.1, 0.8, 0.9);
+            } else if (debugView == kDebugViewEmissive) {
+                float emissiveLuma = luminance(primarySurface.surface.emissive);
+                debugColor = emissiveLuma > 0.001
+                                 ? float3(1.0, 0.25 + 0.75 * saturate(emissiveLuma), 0.0)
+                                 : luminance(primarySurface.surface.albedo) * shape * 0.35;
+            } else if (debugView == kDebugViewNormals) {
+                debugColor = primarySurface.surface.normal * 0.5 + 0.5;
+            } else if (debugView == kDebugViewRoughness) {
+                debugColor = primarySurface.surface.roughness * shape;
+            } else if (debugView == kDebugViewLightmap) {
+                debugColor = primarySurface.surface.hasLightmap
+                                 ? linearToGamma(primarySurface.surface.lightmap)
+                                 : float3(0.9, 0.0, 0.9) * shape * 0.4;
+            } else {
+                debugColor = linearToGamma(primarySurface.surface.albedo);
+            }
+            outputImage[dispatchId.xy] = float4(debugColor, 1.0);
+            return;
+        }
         float3 hitPosition = ray.Origin + ray.Direction * primary.CommittedRayT();
         // The sky is unlit emissive: the cubemap is the light source itself.
         // Running it through the surface path tinted it with direct light and

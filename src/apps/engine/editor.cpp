@@ -637,6 +637,12 @@ void Editor::pathTracingSettings() {
     ImGui::SliderFloat("Origin offset", &options.ptRayOffset, 0.0001f, 0.1f, "%.4f",
                        ImGuiSliderFlags_Logarithmic);
     ImGui::TextDisabled("Too small: acne and black speckling.\nToo large: light leaks at contact edges.");
+    ImGui::SeparatorText("Debug view");
+    static constexpr const char *kDebugViewNames[] = {
+        "Off", "Object categories", "Emissive highlight", "Normals",
+        "Roughness", "Lightmap", "Albedo"};
+    ImGui::Combo("View", &options.ptDebugView, kDebugViewNames, 7);
+    ImGui::TextDisabled("Replaces shading at the primary hit. Categories:\nblue rooms, red creatures, green placeables,\nmagenta doors, yellow equipment, cyan sky.");
     ImGui::SeparatorText("Category overrides");
     static constexpr const char *kCategoryNames[] = {
         "GUI", "Rooms", "Creatures", "Placeables", "Doors",

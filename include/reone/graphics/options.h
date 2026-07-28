@@ -67,6 +67,9 @@ struct GraphicsOptions {
     float ptRayOffset {0.01f};
     /** GPU trace-stats counters; off by default, the atomics cost frame time. */
     bool ptTraceStats {false};
+    /** Debug view: 0 off, then categories, emissive, normals, roughness,
+        lightmap, albedo - matches kDebugView* in slang/rayquery.slang. */
+    int ptDebugView {0};
     /**
      * Live per-category material overrides for the traced image - the
      * calibration programme's primary instrument, ImGui-driven. Indexed by
