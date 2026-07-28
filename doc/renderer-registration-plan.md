@@ -114,12 +114,25 @@ no culling at all for a full-scene bake, are the same seam.
 
 **Entries are still partly pass-shaped.** A shadow-casting mesh registers
 *twice*: once from `registerRender` with its real material, and once from
-`registerShadow` with a `DirLightShadow`/`PointLightShadow` material. The second
-entry passes `{}` for its deformation, so a skinned character casts its shadow
-from the bind pose. Pre-existing, and invisible until the same geometry is asked
-a second question. One object should be one entry; a pass should select a shader,
-not a material. Until then the entry count is inflated by every caster, and any
-per-object structure keyed off entries has to decide which of the two is real.
+`registerShadow` with a `DirLightShadow`/`PointLightShadow` material
+(`src/libs/scene/node/mesh.cpp:345-362`). Those two types are a pass wearing a
+material's clothes - they say which shader to use, not what the surface is,
+and the executors dispatch on them
+(`src/libs/scene/render/pass/pbr.cpp:55-61`). One object should be one entry;
+a pass should select a shader, not a material. Until then the entry count is
+inflated by every caster, and any per-object structure keyed off entries has
+to decide which of the two is real.
+
+The shadow entry passes `{}` for its deformation, but this costs less than it
+looks. `shouldCastShadows` (`src/libs/scene/node/mesh.cpp:201-213`) excludes
+skin meshes on creatures outright, so **skinned meshes never cast shadows at
+all** and no character is shadowed from its bind pose. What does lose its
+deformation is a dangly or saber caster, which is not a skin mesh and so
+passes the predicate. Fixing that is not a registration change:
+`slang/shadow.slang:25-33` has a single vertex stage taking `POSITION` and
+`localUniforms.model`, with no skinned, dangly or saber variant, so deforming
+shadows need new shader entry points and pipeline keys on both backends. Keep
+it separate from the entry merge.
 
 **Nothing has identity between frames.** Unchanged by the registry, and now the
 largest gap. See below.
@@ -554,12 +567,16 @@ Done:
 
 ### Critical path to a traced frame
 
-1. **Bindless flattening of `Material::textures`.** First, not last: it removes
-   the dominant per-frame allocation cost and it is what a hit shader needs,
-   and it depends on nothing else here.
+1. ~~**Bindless flattening of `Material::textures`.**~~ Done in `96b2d432`:
+   `std::array<Texture *, 6>` on a `MaterialTextureSlot` enum, `Material`
+   trivially copyable, verified pixel-identical on both backends.
 2. **One entry per object.** Fold the shadow registration into the primary
-   entry so a pass selects a shader rather than a material, which also fixes
-   skinned shadows casting from the bind pose.
+   entry, carrying `ShadowCaster` in the categories rather than in a second
+   entry with a `DirLightShadow`/`PointLightShadow` material. The pass supplies
+   the shader and the shadow-specific front-face culling; `MaterialType` keeps
+   only what a surface *is*. Deforming shadows are **not** part of this - see
+   "What the registry does not yet solve" for why they are a shader-variant
+   task instead.
 3. **Light-frustum culling for the shadow passes** - one argument at the
    `drawScene` call sites, now that per-pass policy is expressible.
 4. **Stable ids on `SceneNode`**, assigned at `newSceneNode` and carried on
