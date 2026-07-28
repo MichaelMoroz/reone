@@ -71,20 +71,19 @@ void VulkanRenderPass::fillLocals(LocalUniforms &locals,
     locals.modelInv = transformInv;
     locals.prevModel = prevTransform;
     locals.featureMask |= graphics::materialFeatureMask(material) | extraFeatureBits;
-    auto envMapIt = material.textures.find(TextureUnits::envMapCube);
-    if (envMapIt == material.textures.end()) {
-        envMapIt = material.textures.find(TextureUnits::envMap);
+    auto *envMap = material.textures[static_cast<size_t>(MaterialTextureSlot::EnvMapCube)];
+    if (!envMap) {
+        envMap = material.textures[static_cast<size_t>(MaterialTextureSlot::EnvMap)];
     }
-    if (envMapIt != material.textures.end() && _options.pbr) {
+    if (envMap && _options.pbr) {
         // The resolve samples a convolved copy, not the source environment map, so the first
         // sighting only asks for one and settles for layer zero until it exists.
-        auto &envMap = envMapIt->second.get();
-        auto layer = _pbrTextures.findEnvMapDerivedLayer(envMap.name());
+        auto layer = _pbrTextures.findEnvMapDerivedLayer(envMap->name());
         if (layer) {
             locals.envMapDerivedLayer = *layer;
         } else {
             locals.envMapDerivedLayer = 0;
-            _pbrTextures.requestEnvMapDerived({envMap});
+            _pbrTextures.requestEnvMapDerived({*envMap});
         }
     }
     locals.uv = material.uv;
@@ -93,16 +92,14 @@ void VulkanRenderPass::fillLocals(LocalUniforms &locals,
     locals.diffuseColor = glm::vec4 {material.diffuseColor, 0.0f};
     locals.selfIllumColor = glm::vec4 {material.selfIllumColor, 1.0f};
 
-    if (material.textures.count(TextureUnits::mainTex) > 0) {
-        const auto &mainTex = material.textures.at(TextureUnits::mainTex).get();
-        if (mainTex.features().waterAlpha != -1.0f) {
-            locals.waterAlpha = mainTex.features().waterAlpha;
+    if (const auto *mainTex = material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
+        if (mainTex->features().waterAlpha != -1.0f) {
+            locals.waterAlpha = mainTex->features().waterAlpha;
         }
     }
-    if (material.textures.count(TextureUnits::bumpMapArray) > 0) {
-        const auto &bumpmap = material.textures.at(TextureUnits::bumpMapArray).get();
+    if (const auto *bumpmap = material.textures[static_cast<size_t>(MaterialTextureSlot::BumpMapArray)]) {
         locals.bumpMapFrame = material.bumpMapFrame;
-        locals.bumpMapScale = bumpmap.features().bumpMapScaling;
+        locals.bumpMapScale = bumpmap->features().bumpMapScaling;
     }
     if (saberDisplacement) {
         locals.saberDisplacement = *saberDisplacement;
@@ -189,8 +186,11 @@ void VulkanRenderPass::drawGeometry(Mesh &mesh,
     // The material's texture units, uploaded on first use.
     std::vector<std::pair<int, const VulkanImage *>> bindings;
     bindings.reserve(material.textures.size());
-    for (const auto &entry : material.textures) {
-        bindings.push_back({entry.first, &_resources.get(entry.second.get())});
+    for (size_t i = 0; i < material.textures.size(); ++i) {
+        if (auto *texture = material.textures[i]) {
+            bindings.push_back(
+                {materialTextureUnit(static_cast<MaterialTextureSlot>(i)), &_resources.get(*texture)});
+        }
     }
 
     bindAndDraw(pipeline, offsets, bindings, vkMesh, 1);
@@ -368,7 +368,7 @@ void VulkanRenderPass::executeDrawParticles(Material &material,
     if (particles.empty()) {
         return;
     }
-    auto &texture = material.textures.at(TextureUnits::mainTex).get();
+    auto &texture = *material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)];
     auto faceCulling = material.faceCulling.value_or(FaceCullMode::Back);
     bool premultipliedAlpha = material.blending == BlendMode::Lighten;
     // One instanced billboard per particle, oriented in the vertex shader from
@@ -434,9 +434,9 @@ void VulkanRenderPass::executeDrawGrass(float radius,
     if (instances.empty()) {
         return;
     }
-    auto &texture = material.textures.at(TextureUnits::mainTex).get();
-    auto lightmap = material.textures.find(TextureUnits::lightmap);
-    bool hasLightmap = lightmap != material.textures.end();
+    auto &texture = *material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)];
+    auto *lightmap = material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)];
+    bool hasLightmap = lightmap;
     // One instanced quad per cluster, billboarded in the vertex shader from the
     // cluster positions in the uniform block. This is the case SV_InstanceID
     // broke on OpenGL; see section 14.4 of the plan.
@@ -483,7 +483,7 @@ void VulkanRenderPass::executeDrawGrass(float radius,
         {TextureUnits::mainTex, &_resources.get(texture)}};
     if (hasLightmap) {
         bindings.push_back(
-            {TextureUnits::lightmap, &_resources.get(lightmap->second.get())});
+            {TextureUnits::lightmap, &_resources.get(*lightmap)});
     }
 
     bindAndDraw(pipeline, offsets, bindings, quad, static_cast<int>(count));

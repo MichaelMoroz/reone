@@ -62,8 +62,11 @@ void RetroRenderPass::withMaterialAppliedToContext(const Material &material, std
     }
     auto &program = _shaderRegistry.get(kMatTypeToProgramId.at(material.type));
     _context.useProgram(program);
-    for (const auto &[unit, texture] : material.textures) {
-        _context.bindTexture(texture, unit);
+    for (size_t i = 0; i < material.textures.size(); ++i) {
+        if (auto *texture = material.textures[i]) {
+            _context.bindTexture(*texture,
+                                 materialTextureUnit(static_cast<MaterialTextureSlot>(i)));
+        }
     }
     auto prevBlending = _context.blendMode();
     if (material.blending && *material.blending != prevBlending) {
@@ -187,7 +190,7 @@ void RetroRenderPass::executeDrawBillboard(Texture &texture,
 void RetroRenderPass::executeDrawParticles(Material &material,
                                     const glm::ivec2 &gridSize,
                                     const std::vector<ParticleInstance> &particles) {
-    auto &texture = material.textures.at(TextureUnits::mainTex).get();
+    auto &texture = *material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)];
     auto faceCulling = material.faceCulling.value_or(FaceCullMode::Back);
     bool premultipliedAlpha = material.blending == BlendMode::Lighten;
     _context.useProgram(_shaderRegistry.get(ShaderProgramId::oitParticles));
@@ -223,13 +226,13 @@ void RetroRenderPass::executeDrawGrass(float radius,
                                 float quadSize,
                                 Material &material,
                                 const std::vector<GrassInstance> &instances) {
-    auto &texture = material.textures.at(TextureUnits::mainTex).get();
-    auto lightmap = material.textures.find(TextureUnits::lightmap);
-    bool hasLightmap = lightmap != material.textures.end();
+    auto &texture = *material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)];
+    auto *lightmap = material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)];
+    bool hasLightmap = lightmap;
     _context.useProgram(_shaderRegistry.get(ShaderProgramId::retroGrass));
     _context.bindTexture(texture, TextureUnits::mainTex);
     if (hasLightmap) {
-        _context.bindTexture(lightmap->second.get(), TextureUnits::lightmap);
+        _context.bindTexture(*lightmap, TextureUnits::lightmap);
     }
     _uniforms.setLocals([hasLightmap](auto &locals) {
         locals.reset();
@@ -249,7 +252,6 @@ void RetroRenderPass::executeDrawGrass(float radius,
     });
     _meshRegistry.get(MeshName::grass).drawInstanced(instances.size(), _statistic);
 }
-
 void RetroRenderPass::executeDrawAABB(const std::vector<glm::vec4> &corners) {
     auto &program = _shaderRegistry.get(ShaderProgramId::retroAABB);
     _context.useProgram(program);
@@ -271,19 +273,16 @@ void RetroRenderPass::applyMaterialToLocals(const Material &material,
     locals.ambientColor = glm::vec4 {material.ambientColor, 0.0f};
     locals.diffuseColor = glm::vec4 {material.diffuseColor, 0.0f};
     locals.selfIllumColor = glm::vec4(material.selfIllumColor, 1.0f);
-    if (material.textures.count(TextureUnits::mainTex) > 0) {
-        const auto &mainTex = material.textures.at(TextureUnits::mainTex).get();
-        if (mainTex.features().waterAlpha != -1.0f) {
-            locals.waterAlpha = mainTex.features().waterAlpha;
+    if (const auto *mainTex = material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
+        if (mainTex->features().waterAlpha != -1.0f) {
+            locals.waterAlpha = mainTex->features().waterAlpha;
         }
     }
-    if (material.textures.count(TextureUnits::bumpMapArray) > 0) {
-        const auto &bumpmap = material.textures.at(TextureUnits::bumpMapArray).get();
+    if (const auto *bumpmap = material.textures[static_cast<size_t>(MaterialTextureSlot::BumpMapArray)]) {
         locals.bumpMapFrame = material.bumpMapFrame;
-        locals.bumpMapScale = bumpmap.features().bumpMapScaling;
+        locals.bumpMapScale = bumpmap->features().bumpMapScaling;
     }
 }
-
 
 } // namespace scene
 

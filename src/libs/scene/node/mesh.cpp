@@ -254,23 +254,23 @@ void MeshSceneNode::registerRender(RenderRegistry &registry) {
     material.type = isTransparent()
                         ? MaterialType::TransparentModel
                         : MaterialType::OpaqueModel;
-    material.textures.insert({TextureUnits::mainTex, *_nodeTextures.diffuse});
+    material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)] = _nodeTextures.diffuse;
     if (_nodeTextures.lightmap) {
-        material.textures.insert({TextureUnits::lightmap, *_nodeTextures.lightmap});
+        material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)] = _nodeTextures.lightmap;
     }
     if (_nodeTextures.envmap) {
         if (_nodeTextures.envmap->isCubeMap()) {
-            material.textures.insert({TextureUnits::envMapCube, *_nodeTextures.envmap});
+            material.textures[static_cast<size_t>(MaterialTextureSlot::EnvMapCube)] = _nodeTextures.envmap;
         } else {
-            material.textures.insert({TextureUnits::envMap, *_nodeTextures.envmap});
+            material.textures[static_cast<size_t>(MaterialTextureSlot::EnvMap)] = _nodeTextures.envmap;
         }
     }
     if (_nodeTextures.bumpmap) {
         if (_nodeTextures.bumpmap->isGrayscale()) {
-            material.textures.insert({TextureUnits::bumpMapArray, *_nodeTextures.bumpmap});
+            material.textures[static_cast<size_t>(MaterialTextureSlot::BumpMapArray)] = _nodeTextures.bumpmap;
             material.bumpMapFrame = _bumpmapCycleFrame;
         } else {
-            material.textures.insert({TextureUnits::normalMap, *_nodeTextures.bumpmap});
+            material.textures[static_cast<size_t>(MaterialTextureSlot::NormalMap)] = _nodeTextures.bumpmap;
         }
     }
     material.uv = glm::mat3x4(

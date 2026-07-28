@@ -17,6 +17,9 @@
 
 #pragma once
 
+#include <array>
+#include <type_traits>
+
 #include "texture.h"
 #include "types.h"
 #include "uniforms.h"
@@ -37,13 +40,42 @@ enum class MaterialType {
     Particle
 };
 
+enum class MaterialTextureSlot : size_t {
+    MainTex,
+    Lightmap,
+    EnvMap,
+    NormalMap,
+    BumpMapArray,
+    EnvMapCube,
+    Count
+};
+
+constexpr int materialTextureUnit(MaterialTextureSlot slot) {
+    switch (slot) {
+    case MaterialTextureSlot::MainTex:
+        return TextureUnits::mainTex;
+    case MaterialTextureSlot::Lightmap:
+        return TextureUnits::lightmap;
+    case MaterialTextureSlot::EnvMap:
+        return TextureUnits::envMap;
+    case MaterialTextureSlot::NormalMap:
+        return TextureUnits::normalMap;
+    case MaterialTextureSlot::BumpMapArray:
+        return TextureUnits::bumpMapArray;
+    case MaterialTextureSlot::EnvMapCube:
+        return TextureUnits::envMapCube;
+    case MaterialTextureSlot::Count:
+        break;
+    }
+    return 0;
+}
+
 struct Material {
 public:
-    using TextureUnit = int;
-    using TextureUnitToTexture = std::unordered_map<TextureUnit, std::reference_wrapper<Texture>>;
+    static constexpr size_t kNumTextureSlots = static_cast<size_t>(MaterialTextureSlot::Count);
 
     MaterialType type;
-    TextureUnitToTexture textures;
+    std::array<Texture *, kNumTextureSlots> textures {};
     glm::mat3x4 uv {1.0f};
     glm::vec4 color {1.0f};
     int bumpMapFrame {0};
@@ -61,6 +93,8 @@ public:
     std::optional<PolygonMode> polygonMode;
 };
 
+static_assert(std::is_trivially_copyable_v<Material>);
+
 /**
  * Features that describe a material rather than a particular draw path.
  * Keeping this beside Material prevents backend-specific copies from quietly
@@ -69,38 +103,37 @@ public:
 inline int materialFeatureMask(const Material &material) {
     int mask = 0;
     const auto &textures = material.textures;
-    if (auto it = textures.find(TextureUnits::mainTex); it != textures.end()) {
-        const auto &mainTex = it->second.get();
-        switch (mainTex.features().blending) {
+    if (const auto *mainTex = textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
+        switch (mainTex->features().blending) {
         case Texture::Blending::PunchThrough:
             mask |= UniformsFeatureFlags::hashedalphatest;
             break;
         case Texture::Blending::Additive:
-            if (textures.count(TextureUnits::envMap) == 0 &&
-                textures.count(TextureUnits::envMapCube) == 0) {
+            if (!textures[static_cast<size_t>(MaterialTextureSlot::EnvMap)] &&
+                !textures[static_cast<size_t>(MaterialTextureSlot::EnvMapCube)]) {
                 mask |= UniformsFeatureFlags::premulalpha;
             }
             break;
         default:
             break;
         }
-        if (mainTex.features().waterAlpha != -1.0f) {
+        if (mainTex->features().waterAlpha != -1.0f) {
             mask |= UniformsFeatureFlags::water;
         }
     }
-    if (textures.count(TextureUnits::lightmap) > 0) {
+    if (textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)]) {
         mask |= UniformsFeatureFlags::lightmap;
     }
-    if (textures.count(TextureUnits::envMap) > 0) {
+    if (textures[static_cast<size_t>(MaterialTextureSlot::EnvMap)]) {
         mask |= UniformsFeatureFlags::envmap;
     }
-    if (textures.count(TextureUnits::envMapCube) > 0) {
+    if (textures[static_cast<size_t>(MaterialTextureSlot::EnvMapCube)]) {
         mask |= UniformsFeatureFlags::envmap | UniformsFeatureFlags::envmapcube;
     }
-    if (textures.count(TextureUnits::normalMap) > 0) {
+    if (textures[static_cast<size_t>(MaterialTextureSlot::NormalMap)]) {
         mask |= UniformsFeatureFlags::normalmap;
     }
-    if (textures.count(TextureUnits::bumpMapArray) > 0) {
+    if (textures[static_cast<size_t>(MaterialTextureSlot::BumpMapArray)]) {
         mask |= UniformsFeatureFlags::bumpmap;
     }
     if (material.staticObject) {

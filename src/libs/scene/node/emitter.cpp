@@ -309,7 +309,7 @@ void EmitterSceneNode::registerLeafs(RenderRegistry &registry, const std::vector
     bool twosided = _modelNode.emitter()->twosided || _modelNode.emitter()->renderMode == ModelNode::Emitter::RenderMode::MotionBlur;
     Material material;
     material.type = MaterialType::Particle;
-    material.textures.insert({TextureUnits::mainTex, *texture});
+    material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)] = texture.get();
     material.faceCulling = twosided ? FaceCullMode::None : FaceCullMode::Back;
     if (emitter->blendMode == ModelNode::Emitter::BlendMode::Lighten) {
         material.blending = graphics::BlendMode::Lighten;

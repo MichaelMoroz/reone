@@ -173,9 +173,9 @@ void GrassSceneNode::registerLeafs(RenderRegistry &registry, const std::vector<S
     }
     Material material;
     material.type = MaterialType::Grass;
-    material.textures.insert({TextureUnits::mainTex, *_properties.texture});
+    material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)] = _properties.texture;
     if (lightmap) {
-        material.textures.insert({TextureUnits::lightmap, lightmap->get()});
+        material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)] = &lightmap->get();
     }
     material.faceCulling = FaceCullMode::None;
     registry.registerGrass(renderCategory(RenderCategory::Opaque),

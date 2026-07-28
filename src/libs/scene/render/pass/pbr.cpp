@@ -80,23 +80,25 @@ void PBRRenderPass::withMaterialAppliedToContext(const Material &material, std::
     }
     auto &program = _shaderRegistry.get(programId);
     _context.useProgram(program);
-    for (const auto &[unit, texture] : material.textures) {
-        _context.bindTexture(texture, unit);
+    for (size_t i = 0; i < material.textures.size(); ++i) {
+        if (auto *texture = material.textures[i]) {
+            _context.bindTexture(*texture,
+                                 materialTextureUnit(static_cast<MaterialTextureSlot>(i)));
+        }
     }
     _envMapDerivedLayer = 0;
-    auto envMapIt = material.textures.find(TextureUnits::envMapCube);
-    if (envMapIt == material.textures.end()) {
-        envMapIt = material.textures.find(TextureUnits::envMap);
+    auto *envMap = material.textures[static_cast<size_t>(MaterialTextureSlot::EnvMapCube)];
+    if (!envMap) {
+        envMap = material.textures[static_cast<size_t>(MaterialTextureSlot::EnvMap)];
     }
-    if (envMapIt != material.textures.end()) {
-        auto &envMap = envMapIt->second.get();
+    if (envMap) {
         if (_options.pbr) {
-            auto layer = _pbrTextures.findEnvMapDerivedLayer(envMap.name());
+            auto layer = _pbrTextures.findEnvMapDerivedLayer(envMap->name());
             if (layer) {
                 _envMapDerivedLayer = *layer;
             } else {
                 _envMapDerivedLayer = 0;
-                _pbrTextures.requestEnvMapDerived({envMap});
+                _pbrTextures.requestEnvMapDerived({*envMap});
             }
         }
     }
@@ -225,7 +227,7 @@ void PBRRenderPass::executeDrawBillboard(Texture &texture,
 void PBRRenderPass::executeDrawParticles(Material &material,
                                   const glm::ivec2 &gridSize,
                                   const std::vector<ParticleInstance> &particles) {
-    auto &texture = material.textures.at(TextureUnits::mainTex).get();
+    auto &texture = *material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)];
     auto faceCulling = material.faceCulling.value_or(FaceCullMode::Back);
     bool premultipliedAlpha = material.blending == BlendMode::Lighten;
     _context.useProgram(_shaderRegistry.get(ShaderProgramId::oitParticles));
@@ -261,13 +263,13 @@ void PBRRenderPass::executeDrawGrass(float radius,
                               float quadSize,
                               Material &material,
                               const std::vector<GrassInstance> &instances) {
-    auto &texture = material.textures.at(TextureUnits::mainTex).get();
-    auto lightmap = material.textures.find(TextureUnits::lightmap);
-    bool hasLightmap = lightmap != material.textures.end();
+    auto &texture = *material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)];
+    auto *lightmap = material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)];
+    bool hasLightmap = lightmap;
     _context.useProgram(_shaderRegistry.get(ShaderProgramId::pbrGrass));
     _context.bindTexture(texture, TextureUnits::mainTex);
     if (hasLightmap) {
-        _context.bindTexture(lightmap->second.get(), TextureUnits::lightmap);
+        _context.bindTexture(*lightmap, TextureUnits::lightmap);
     }
     _uniforms.setLocals([hasLightmap](auto &locals) {
         locals.reset();
@@ -298,16 +300,14 @@ void PBRRenderPass::applyMaterialToLocals(const Material &material,
     locals.ambientColor = glm::vec4 {material.ambientColor, 0.0f};
     locals.diffuseColor = glm::vec4 {material.diffuseColor, 0.0f};
     locals.selfIllumColor = glm::vec4(material.selfIllumColor, 1.0f);
-    if (material.textures.count(TextureUnits::mainTex) > 0) {
-        const auto &mainTex = material.textures.at(TextureUnits::mainTex).get();
-        if (mainTex.features().waterAlpha != -1.0f) {
-            locals.waterAlpha = mainTex.features().waterAlpha;
+    if (const auto *mainTex = material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
+        if (mainTex->features().waterAlpha != -1.0f) {
+            locals.waterAlpha = mainTex->features().waterAlpha;
         }
     }
-    if (material.textures.count(TextureUnits::bumpMapArray) > 0) {
-        const auto &bumpmap = material.textures.at(TextureUnits::bumpMapArray).get();
+    if (const auto *bumpmap = material.textures[static_cast<size_t>(MaterialTextureSlot::BumpMapArray)]) {
         locals.bumpMapFrame = material.bumpMapFrame;
-        locals.bumpMapScale = bumpmap.features().bumpMapScaling;
+        locals.bumpMapScale = bumpmap->features().bumpMapScaling;
     }
 }
 
@@ -323,7 +323,6 @@ void PBRRenderPass::executeDrawAABB(const std::vector<glm::vec4> &corners) {
         });
     });
 }
-
 
 } // namespace scene
 
