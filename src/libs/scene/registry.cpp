@@ -172,6 +172,7 @@ void RenderRegistry::addDebug(std::function<void()> execute) {
 void RenderRegistry::drawScene(IRenderPassExecutor &executor,
                                RenderFilter filter,
                                const CameraSceneNode *camera) {
+    executor.beginPass(filter.pass);
     auto &passCounts = _drawnCountsByPass[filter.pass];
     auto category = renderCategory(filter.category);
     for (auto &object : _objects) {
@@ -191,7 +192,14 @@ void RenderRegistry::drawScene(IRenderPassExecutor &executor,
                         countMesh(_drawnCounts, entry.deformation);
                         countMesh(passCounts, entry.deformation);
                     }
-                    if (auto skin = std::get_if<RegisteredSkin>(&entry.deformation)) {
+                    bool shadowPass = filter.pass == RenderPassName::DirLightShadowsPass ||
+                                      filter.pass == RenderPassName::PointLightShadows;
+                    if (shadowPass) {
+                        // Shadow shaders only have the plain POSITION vertex path.
+                        executor.executeDraw(
+                            entry.mesh, entry.material, entry.transform, entry.transformInv,
+                            entry.prevTransform);
+                    } else if (auto skin = std::get_if<RegisteredSkin>(&entry.deformation)) {
                         executor.executeDrawSkinned(
                             entry.mesh, entry.material, entry.transform, entry.transformInv,
                             entry.prevTransform, skin->bones, skin->prevBones);

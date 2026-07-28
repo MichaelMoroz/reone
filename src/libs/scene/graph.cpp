@@ -288,9 +288,7 @@ void SceneGraph::updateSounds() {
 }
 
 void SceneGraph::refresh() {
-    _opaqueMeshes.clear();
-    _transparentMeshes.clear();
-    _shadowMeshes.clear();
+    _meshes.clear();
     _lights.clear();
     _emitters.clear();
 
@@ -311,16 +309,8 @@ void SceneGraph::refreshFromNode(SceneNode &node) {
     case SceneNodeType::Mesh: {
         // For model nodes, determine whether they should be rendered and cast shadows
         auto &modelNode = static_cast<MeshSceneNode &>(node);
-        if (modelNode.shouldRender()) {
-            // Sort model nodes into transparent and opaque
-            if (modelNode.isTransparent()) {
-                _transparentMeshes.push_back(&modelNode);
-            } else {
-                _opaqueMeshes.push_back(&modelNode);
-            }
-        }
-        if (modelNode.shouldCastShadows()) {
-            _shadowMeshes.push_back(&modelNode);
+        if (modelNode.shouldRender() || modelNode.shouldCastShadows()) {
+            _meshes.push_back(&modelNode);
         }
         break;
     }
@@ -370,8 +360,10 @@ void SceneGraph::prepareTransparentLeafs() {
 
     // Add meshes and emitters to transparent leafs
     std::vector<SceneNode *> leafs;
-    for (auto &mesh : _transparentMeshes) {
-        leafs.push_back(mesh);
+    for (auto &mesh : _meshes) {
+        if (mesh->shouldRender() && mesh->isTransparent()) {
+            leafs.push_back(mesh);
+        }
     }
     for (auto &emitter : _emitters) {
         for (auto &child : emitter->children()) {
@@ -531,13 +523,7 @@ void SceneGraph::snapshotPreviousFrame() {
     }
 
     ++_frameIndex;
-    for (auto &mesh : _opaqueMeshes) {
-        mesh->snapshotPreviousFrame(_frameIndex);
-    }
-    for (auto &mesh : _transparentMeshes) {
-        mesh->snapshotPreviousFrame(_frameIndex);
-    }
-    for (auto &mesh : _shadowMeshes) {
+    for (auto &mesh : _meshes) {
         mesh->snapshotPreviousFrame(_frameIndex);
     }
     for (auto &[node, leafs] : _opaqueLeafs) {
@@ -560,10 +546,6 @@ void SceneGraph::renderScene(RenderRegistry &registry) {
     }
     registry.beginSceneTraversal();
 
-    for (auto &mesh : _shadowMeshes) {
-        mesh->registerShadow(registry);
-    }
-
     if (_renderWalkmeshes || _renderTriggers) {
         _graphicsSvc.uniforms.setWalkmesh([this](auto &walkmesh) {
             for (int i = 0; i < kMaxWalkmeshMaterials - 1; ++i) {
@@ -573,9 +555,12 @@ void SceneGraph::renderScene(RenderRegistry &registry) {
         });
     }
 
-    // Draw opaque meshes
-    for (auto &mesh : _opaqueMeshes) {
-        mesh->registerRender(registry);
+    for (auto &mesh : _meshes) {
+        // Transparent meshes are registered by their distance-sorted leaf
+        // buckets below. Registering them here as well would duplicate them.
+        if (!mesh->shouldRender() || !mesh->isTransparent()) {
+            mesh->registerRender(registry);
+        }
     }
     // Draw opaque leafs
     for (auto &[node, leafs] : _opaqueLeafs) {

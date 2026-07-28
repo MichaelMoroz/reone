@@ -49,6 +49,8 @@ public:
         _uniforms(uniforms) {
     }
 
+    void beginPass(RenderPassName pass) override { _pass = pass; }
+
     void executeDraw(graphics::Mesh &mesh,
               graphics::Material &material,
               const glm::mat4 &transform,
@@ -123,7 +125,9 @@ private:
     };
 
     GeometryPath _geometryPath {GeometryPath::Static};
+    RenderPassName _pass {RenderPassName::None};
 
+    bool isShadowPass() const;
     void applyMaterialToLocals(const graphics::Material &material, graphics::LocalUniforms &locals);
 
     void withMaterialAppliedToContext(const graphics::Material &material, std::function<void(graphics::ShaderProgram &)> block);

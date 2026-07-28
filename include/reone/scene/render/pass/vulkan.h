@@ -109,6 +109,8 @@ public:
         _kind(kind) {
     }
 
+    void beginPass(RenderPassName pass) override { _pass = pass; }
+
     void executeDraw(graphics::Mesh &mesh,
               graphics::Material &material,
               const glm::mat4 &transform,
@@ -183,6 +185,7 @@ private:
     std::vector<VkFormat> _colorFormats;
     VkFormat _depthFormat;
     Kind _kind;
+    RenderPassName _pass {RenderPassName::None};
     uint32_t _shadowViewMask {0};
     uint32_t _globalsOffset {0};
     int _drawCount {0};
@@ -191,6 +194,7 @@ private:
     std::set<std::string> _warned;
 
     void warnOnce(const std::string &what);
+    bool isShadowPass() const;
 
     /**
      * Offset of the walkmesh block in this frame's arena, pushed on first use.

@@ -53,6 +53,9 @@ class IRenderPassExecutor {
 public:
     virtual ~IRenderPassExecutor() = default;
 
+    /** Called once before this executor walks the entries selected for a pass. */
+    virtual void beginPass(RenderPassName pass) = 0;
+
     virtual void executeDraw(graphics::Mesh &mesh,
                              graphics::Material &material,
                              const glm::mat4 &transform,

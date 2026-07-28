@@ -32,6 +32,11 @@ namespace reone {
 
 namespace scene {
 
+bool RetroRenderPass::isShadowPass() const {
+    return _pass == RenderPassName::DirLightShadowsPass ||
+           _pass == RenderPassName::PointLightShadows;
+}
+
 void RetroRenderPass::executeDraw(Mesh &mesh,
                            Material &material,
                            const glm::mat4 &transform,
@@ -51,43 +56,52 @@ void RetroRenderPass::executeDraw(Mesh &mesh,
 
 void RetroRenderPass::withMaterialAppliedToContext(const Material &material, std::function<void(ShaderProgram &)> block) {
     static const std::unordered_map<MaterialType, std::string> kMatTypeToProgramId {
-        {MaterialType::DirLightShadow, ShaderProgramId::dirLightShadows},     //
-        {MaterialType::PointLightShadow, ShaderProgramId::pointLightShadows}, //
         {MaterialType::OpaqueModel, ShaderProgramId::retroOpaqueModel},       //
         {MaterialType::TransparentModel, ShaderProgramId::oitModel},          //
         {MaterialType::Walkmesh, ShaderProgramId::retroWalkmesh}              //
     };
-    if (kMatTypeToProgramId.count(material.type) == 0) {
+    bool shadowPass = isShadowPass();
+    if (!shadowPass && kMatTypeToProgramId.count(material.type) == 0) {
         throw std::invalid_argument(str(boost::format("Material type %1% is not associated with a shader program") % static_cast<int>(material.type)));
     }
-    auto &program = _shaderRegistry.get(kMatTypeToProgramId.at(material.type));
+    auto programId = shadowPass
+                         ? (_pass == RenderPassName::DirLightShadowsPass
+                                ? ShaderProgramId::dirLightShadows
+                                : ShaderProgramId::pointLightShadows)
+                         : kMatTypeToProgramId.at(material.type);
+    auto &program = _shaderRegistry.get(programId);
     _context.useProgram(program);
-    for (size_t i = 0; i < material.textures.size(); ++i) {
-        if (auto *texture = material.textures[i]) {
-            _context.bindTexture(*texture,
-                                 materialTextureUnit(static_cast<MaterialTextureSlot>(i)));
+    if (!shadowPass) {
+        for (size_t i = 0; i < material.textures.size(); ++i) {
+            if (auto *texture = material.textures[i]) {
+                _context.bindTexture(*texture,
+                                     materialTextureUnit(static_cast<MaterialTextureSlot>(i)));
+            }
         }
     }
     auto prevBlending = _context.blendMode();
-    if (material.blending && *material.blending != prevBlending) {
+    if (!shadowPass && material.blending && *material.blending != prevBlending) {
         _context.pushBlendMode(*material.blending);
     }
     auto prevFaceCulling = _context.faceCullMode();
-    if (material.faceCulling && *material.faceCulling != prevFaceCulling) {
-        _context.pushFaceCullMode(*material.faceCulling);
+    auto faceCulling = shadowPass ? FaceCullMode::Front : material.faceCulling.value_or(prevFaceCulling);
+    if (faceCulling != prevFaceCulling) {
+        // Front faces cast, so that the depth error a surface introduces lands
+        // behind whatever receives the shadow rather than on the caster itself.
+        _context.pushFaceCullMode(faceCulling);
     }
     auto prevPolygonMode = _context.polygonMode();
-    if (material.polygonMode && *material.polygonMode != prevPolygonMode) {
+    if (!shadowPass && material.polygonMode && *material.polygonMode != prevPolygonMode) {
         _context.pushPolygonMode(*material.polygonMode);
     }
     block(program);
-    if (material.blending && *material.blending != prevBlending) {
+    if (!shadowPass && material.blending && *material.blending != prevBlending) {
         _context.popBlendMode();
     }
-    if (material.faceCulling && *material.faceCulling != prevFaceCulling) {
+    if (faceCulling != prevFaceCulling) {
         _context.popFaceCullMode();
     }
-    if (material.polygonMode && *material.polygonMode != prevPolygonMode) {
+    if (!shadowPass && material.polygonMode && *material.polygonMode != prevPolygonMode) {
         _context.popPolygonMode();
     }
 }
@@ -99,6 +113,10 @@ void RetroRenderPass::executeDrawSkinned(Mesh &mesh,
                                   const glm::mat4 &prevTransform,
                                   const std::vector<glm::mat4> &bones,
                                   const std::vector<glm::mat4> &prevBones) {
+    if (isShadowPass()) {
+        executeDraw(mesh, material, transform, transformInv, prevTransform);
+        return;
+    }
     withMaterialAppliedToContext(material, [&](auto &program) {
         _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform](auto &locals) {
             locals.reset();
@@ -122,6 +140,10 @@ void RetroRenderPass::executeDrawDangly(Mesh &mesh,
                                  const glm::mat4 &transformInv,
                                  const glm::mat4 &prevTransform,
                                  const std::vector<glm::vec4> &positions) {
+    if (isShadowPass()) {
+        executeDraw(mesh, material, transform, transformInv, prevTransform);
+        return;
+    }
     withMaterialAppliedToContext(material, [&](auto &program) {
         _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform](auto &locals) {
             locals.reset();
@@ -145,6 +167,10 @@ void RetroRenderPass::executeDrawSaber(Mesh &mesh,
                                 const glm::mat4 &transformInv,
                                 const glm::mat4 &prevTransform,
                                 const glm::vec4 &displacement) {
+    if (isShadowPass()) {
+        executeDraw(mesh, material, transform, transformInv, prevTransform);
+        return;
+    }
     withMaterialAppliedToContext(material, [&](auto &program) {
         _uniforms.setLocals([this, &material, &transform, &transformInv, &prevTransform, &displacement](auto &locals) {
             locals.reset();

@@ -59,6 +59,11 @@ void VulkanRenderPass::warnOnce(const std::string &what) {
          LogChannel::Graphics);
 }
 
+bool VulkanRenderPass::isShadowPass() const {
+    return _pass == RenderPassName::DirLightShadowsPass ||
+           _pass == RenderPassName::PointLightShadows;
+}
+
 void VulkanRenderPass::fillLocals(LocalUniforms &locals,
                                   const Material &material,
                                   const glm::mat4 &transform,
@@ -118,10 +123,8 @@ void VulkanRenderPass::drawGeometry(Mesh &mesh,
     const auto &vkMesh = _resources.get(mesh);
 
     // A shadow draw writes depth from one shared vertex stage and nothing else,
-    // so it ignores the material entirely beyond which kind of light it is for.
-    bool shadow = material.type == MaterialType::DirLightShadow ||
-                  material.type == MaterialType::PointLightShadow;
-    if (shadow) {
+    // so it ignores the material entirely.
+    if (isShadowPass()) {
         drawShadow(mesh, material, transform);
         return;
     }
@@ -211,7 +214,7 @@ void VulkanRenderPass::drawShadow(Mesh &mesh, Material &material, const glm::mat
     key.vertexEntry = "shadowVertex";
     // A directional cascade needs no fragment stage; a point light writes radial
     // distance instead of projected depth.
-    key.fragmentEntry = material.type == MaterialType::DirLightShadow
+    key.fragmentEntry = _pass == RenderPassName::DirLightShadowsPass
                             ? "nullFragment"
                             : "pointFragment";
     key.depthFormat = _depthFormat;
@@ -275,6 +278,10 @@ void VulkanRenderPass::executeDrawSkinned(Mesh &mesh,
                                    const glm::mat4 &prevTransform,
                                    const std::vector<glm::mat4> &bones,
                                    const std::vector<glm::mat4> &prevBones) {
+    if (isShadowPass()) {
+        executeDraw(mesh, material, transform, transformInv, prevTransform);
+        return;
+    }
     BoneUniforms uniforms;
     for (size_t i = 0; i < bones.size() && i < kMaxBones; ++i) {
         uniforms.bones[i] = bones[i];
@@ -295,6 +302,10 @@ void VulkanRenderPass::executeDrawDangly(Mesh &mesh,
                                   const glm::mat4 &transformInv,
                                   const glm::mat4 &prevTransform,
                                   const std::vector<glm::vec4> &positions) {
+    if (isShadowPass()) {
+        executeDraw(mesh, material, transform, transformInv, prevTransform);
+        return;
+    }
     DanglyUniforms uniforms;
     for (size_t i = 0; i < positions.size() && i < kMaxDanglyVertices; ++i) {
         uniforms.positions[i] = positions[i];
@@ -312,6 +323,10 @@ void VulkanRenderPass::executeDrawSaber(Mesh &mesh,
                                  const glm::mat4 &transformInv,
                                  const glm::mat4 &prevTransform,
                                  const glm::vec4 &displacement) {
+    if (isShadowPass()) {
+        executeDraw(mesh, material, transform, transformInv, prevTransform);
+        return;
+    }
     // The displacement rides in LocalUniforms rather than a block of its own.
     drawGeometry(mesh, material, "saberVertex",
                  transform, transformInv, prevTransform,

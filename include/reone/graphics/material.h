@@ -33,8 +33,6 @@ class Texture;
 enum class MaterialType {
     OpaqueModel,
     TransparentModel,
-    DirLightShadow,
-    PointLightShadow,
     Walkmesh,
     Grass,
     Particle

@@ -49,7 +49,6 @@ public:
     void update(float dt) override;
 
     void registerRender(RenderRegistry &registry);
-    void registerShadow(RenderRegistry &registry);
 
     bool shouldRender() const;
     bool shouldCastShadows() const;

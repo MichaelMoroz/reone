@@ -247,30 +247,39 @@ static bool isReceivingShadows(const ModelSceneNode &model, const MeshSceneNode 
 
 void MeshSceneNode::registerRender(RenderRegistry &registry) {
     auto mesh = _modelNode.mesh();
-    if (!mesh || !_nodeTextures.diffuse) {
+    // shouldRender only asks whether the model node names a diffuse map, not
+    // whether that texture resolved. A missing resource leaves the pointer
+    // null while the predicate stays true, and the material below dereferences
+    // it, so the texture itself is part of being renderable.
+    bool render = shouldRender() && _nodeTextures.diffuse;
+    bool castShadows = shouldCastShadows();
+    if (!mesh || (!render && !castShadows)) {
         return;
     }
     Material material;
-    material.type = isTransparent()
+    bool transparent = render && isTransparent();
+    material.type = transparent
                         ? MaterialType::TransparentModel
                         : MaterialType::OpaqueModel;
-    material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)] = _nodeTextures.diffuse;
-    if (_nodeTextures.lightmap) {
-        material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)] = _nodeTextures.lightmap;
-    }
-    if (_nodeTextures.envmap) {
-        if (_nodeTextures.envmap->isCubeMap()) {
-            material.textures[static_cast<size_t>(MaterialTextureSlot::EnvMapCube)] = _nodeTextures.envmap;
-        } else {
-            material.textures[static_cast<size_t>(MaterialTextureSlot::EnvMap)] = _nodeTextures.envmap;
+    if (render) {
+        material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)] = _nodeTextures.diffuse;
+        if (_nodeTextures.lightmap) {
+            material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)] = _nodeTextures.lightmap;
         }
-    }
-    if (_nodeTextures.bumpmap) {
-        if (_nodeTextures.bumpmap->isGrayscale()) {
-            material.textures[static_cast<size_t>(MaterialTextureSlot::BumpMapArray)] = _nodeTextures.bumpmap;
-            material.bumpMapFrame = _bumpmapCycleFrame;
-        } else {
-            material.textures[static_cast<size_t>(MaterialTextureSlot::NormalMap)] = _nodeTextures.bumpmap;
+        if (_nodeTextures.envmap) {
+            if (_nodeTextures.envmap->isCubeMap()) {
+                material.textures[static_cast<size_t>(MaterialTextureSlot::EnvMapCube)] = _nodeTextures.envmap;
+            } else {
+                material.textures[static_cast<size_t>(MaterialTextureSlot::EnvMap)] = _nodeTextures.envmap;
+            }
+        }
+        if (_nodeTextures.bumpmap) {
+            if (_nodeTextures.bumpmap->isGrayscale()) {
+                material.textures[static_cast<size_t>(MaterialTextureSlot::BumpMapArray)] = _nodeTextures.bumpmap;
+                material.bumpMapFrame = _bumpmapCycleFrame;
+            } else {
+                material.textures[static_cast<size_t>(MaterialTextureSlot::NormalMap)] = _nodeTextures.bumpmap;
+            }
         }
     }
     material.uv = glm::mat3x4(
@@ -282,13 +291,22 @@ void MeshSceneNode::registerRender(RenderRegistry &registry) {
     material.diffuseColor = mesh->diffuse;
     material.selfIllumColor = _selfIllumColor;
     material.staticObject = _static;
-    if (_sceneGraph.hasShadowLight() && isReceivingShadows(_model, *this)) {
+    if (render && _sceneGraph.hasShadowLight() && isReceivingShadows(_model, *this)) {
         material.affectedByShadows = true;
     }
-    if (_sceneGraph.isFogEnabled() && _model.model().isAffectedByFog()) {
+    if (render && _sceneGraph.isFogEnabled() && _model.model().isAffectedByFog()) {
         material.affectedByFog = true;
     }
-    material.faceCulling = _nodeTextures.diffuse->features().decal ? FaceCullMode::None : FaceCullMode::Back;
+    if (render) {
+        material.faceCulling = _nodeTextures.diffuse->features().decal ? FaceCullMode::None : FaceCullMode::Back;
+    }
+    auto categories = renderCategory(transparent ? RenderCategory::Transparent : RenderCategory::Opaque);
+    if (!render) {
+        categories = 0;
+    }
+    if (castShadows) {
+        categories |= renderCategory(RenderCategory::ShadowCaster);
+    }
     if (_modelNode.isSkinMesh()) {
         const auto &skin = *mesh->skin;
         _bones.assign(kMaxBones, glm::mat4(1.0f));
@@ -312,7 +330,7 @@ void MeshSceneNode::registerRender(RenderRegistry &registry) {
         if (_prevBones.size() != _bones.size()) {
             _prevBones = _bones;
         }
-        registry.registerMesh(renderCategory(isTransparent() ? RenderCategory::Transparent : RenderCategory::Opaque),
+        registry.registerMesh(categories,
                          *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
                          RegisteredSkin {_bones, _prevBones}, &_model);
     } else if (_modelNode.isDanglymesh()) {
@@ -321,15 +339,15 @@ void MeshSceneNode::registerRender(RenderRegistry &registry) {
         for (const auto &vertex : _dangly.vertices) {
             positions.emplace_back(vertex.position + vertex.displacement, 1.0f);
         }
-        registry.registerMesh(renderCategory(isTransparent() ? RenderCategory::Transparent : RenderCategory::Opaque),
+        registry.registerMesh(categories,
                          *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
                          RegisteredDangly {std::move(positions)}, &_model);
     } else if (_modelNode.isSaberMesh()) {
-        registry.registerMesh(renderCategory(isTransparent() ? RenderCategory::Transparent : RenderCategory::Opaque),
+        registry.registerMesh(categories,
                          *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
                          RegisteredSaber {glm::vec4 {_saber.displacement, 0.0f}}, &_model);
     } else {
-        registry.registerMesh(renderCategory(isTransparent() ? RenderCategory::Transparent : RenderCategory::Opaque),
+        registry.registerMesh(categories,
                          *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, {}, &_model);
     }
 }
@@ -340,25 +358,6 @@ void MeshSceneNode::snapshotPreviousFrame(uint64_t frame) {
     }
     _prevBones = _bones;
     SceneNode::snapshotPreviousFrame(frame);
-}
-
-void MeshSceneNode::registerShadow(RenderRegistry &registry) {
-    std::shared_ptr<ModelNode::TriangleMesh> mesh(_modelNode.mesh());
-    if (!mesh) {
-        return;
-    }
-    Material material;
-    material.type = _sceneGraph.isShadowLightDirectional()
-                        ? MaterialType::DirLightShadow
-                        : MaterialType::PointLightShadow;
-    material.color = glm::vec4(1.0f, 1.0f, 1.0f, _alpha);
-    // Front faces cast, so that the depth error a surface introduces lands
-    // behind whatever receives the shadow rather than on the caster itself.
-    // Carried on the material rather than set as ambient context around the
-    // loop, which was a raw GL call on a path both backends take.
-    material.faceCulling = FaceCullMode::Front;
-    registry.registerMesh(renderCategory(RenderCategory::ShadowCaster),
-                     *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, {}, &_model);
 }
 
 bool MeshSceneNode::isLightingEnabled() const {
