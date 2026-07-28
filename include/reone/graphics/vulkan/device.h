@@ -93,6 +93,18 @@ public:
     /** Whether labels and names actually reach anything. */
     bool debugUtilsAvailable() const { return _debugUtils; }
 
+    /**
+     * Whether this device was created with the optional ray-query acceleration
+     * structure capability. Raster rendering does not depend on it.
+     */
+    bool rayQueryAvailable() const { return _rayQueryAvailable; }
+
+    /** Limits that every later acceleration-structure build must observe. */
+    const VkPhysicalDeviceAccelerationStructurePropertiesKHR &
+    accelerationStructureProperties() const {
+        return _accelerationStructureProperties;
+    }
+
     /** The largest anisotropy this device will accept in a sampler. */
     float maxAnisotropy() const { return _maxAnisotropy; }
 
@@ -113,6 +125,9 @@ private:
     VmaAllocator _allocator {VK_NULL_HANDLE};
 
     bool _debugUtils {false};
+    bool _rayQueryAvailable {false};
+    VkPhysicalDeviceAccelerationStructurePropertiesKHR _accelerationStructureProperties {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
 
     VkQueue _graphicsQueue {VK_NULL_HANDLE};
     uint32_t _graphicsQueueFamily {0};

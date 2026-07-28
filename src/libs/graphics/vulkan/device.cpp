@@ -86,6 +86,28 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     features13.dynamicRendering = VK_TRUE;
     features13.synchronization2 = VK_TRUE;
 
+    // Ray query needs device addresses for geometry and descriptor indexing for
+    // the bindless material textures it will eventually read. Keep this list
+    // explicit: the rest of Vulkan 1.2 is not part of that contract.
+    VkPhysicalDeviceVulkan12Features features12 {};
+    features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    features12.bufferDeviceAddress = VK_TRUE;
+    features12.descriptorIndexing = VK_TRUE;
+    features12.runtimeDescriptorArray = VK_TRUE;
+    features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    features12.descriptorBindingPartiallyBound = VK_TRUE;
+    features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
+    features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures {};
+    accelerationStructureFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    accelerationStructureFeatures.accelerationStructure = VK_TRUE;
+
+    VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures {};
+    rayQueryFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+    rayQueryFeatures.rayQuery = VK_TRUE;
+
     // The resolve samples the derived environment maps as cube arrays, which is
     // not a baseline capability.
     VkPhysicalDeviceFeatures features {};
@@ -95,25 +117,74 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     // this targets has had it for well over a decade.
     features.samplerAnisotropy = VK_TRUE;
 
-    auto physicalResult = vkb::PhysicalDeviceSelector(_instance)
-                              .set_surface(_surface)
-                              .set_minimum_version(1, 3)
-                              .set_required_features(features)
-                              .set_required_features_11(features11)
-                              .set_required_features_13(features13)
-                              .select();
+    // Keep the raster selection independent of ray tracing. The latter is an
+    // optional Vulkan capability, so an otherwise suitable GPU must not become
+    // unselectable just because it cannot trace.
+    auto configureRasterSelector = [&](vkb::PhysicalDeviceSelector &selector) {
+        selector.set_surface(_surface)
+            .set_minimum_version(1, 3)
+            .set_required_features(features)
+            .set_required_features_11(features11)
+            .set_required_features_13(features13);
+    };
+
+    vkb::PhysicalDeviceSelector rasterSelector(_instance);
+    configureRasterSelector(rasterSelector);
+    auto physicalResult = rasterSelector.select();
     if (!physicalResult) {
         throw std::runtime_error("Vulkan: no suitable device: " +
                                  physicalResult.error().message());
     }
 
-    auto deviceResult = vkb::DeviceBuilder(physicalResult.value()).build();
+    auto physicalDevice = physicalResult.value();
+    bool rayQueryEnabled = false;
+
+    // add_required_extension_features gives vk-bootstrap the feature pNext
+    // chain and makes DeviceBuilder enable it with the matching extensions.
+    // Selection is deliberately a second, optional pass: failure leaves the
+    // raster-selected device intact.
+    vkb::PhysicalDeviceSelector rayQuerySelector(_instance);
+    configureRasterSelector(rayQuerySelector);
+    // Do not let an optional feature change the GPU chosen for rasterization.
+    rayQuerySelector.set_name(physicalDevice.name);
+    rayQuerySelector.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
+        .add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
+        .add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
+        .set_required_features_12(features12)
+        .add_required_extension_features(accelerationStructureFeatures)
+        .add_required_extension_features(rayQueryFeatures);
+    auto rayQueryPhysicalResult = rayQuerySelector.select();
+    if (rayQueryPhysicalResult) {
+        physicalDevice = rayQueryPhysicalResult.value();
+        rayQueryEnabled = true;
+    } else {
+        info("Vulkan: ray query unavailable; continuing with raster: " +
+                 rayQueryPhysicalResult.error().message(),
+             LogChannel::Graphics);
+    }
+
+    auto deviceResult = vkb::DeviceBuilder(physicalDevice).build();
     if (!deviceResult) {
         throw std::runtime_error("Vulkan: logical device creation failed: " +
                                  deviceResult.error().message());
     }
     _device = deviceResult.value();
     volkLoadDevice(_device.device);
+
+    // All Vulkan entry points, including KHR acceleration-structure commands,
+    // are resolved by volk. Do not add a second loader here: the project is
+    // intentionally built without linked Vulkan prototypes.
+    _rayQueryAvailable = rayQueryEnabled &&
+                         vkCreateAccelerationStructureKHR != nullptr &&
+                         vkDestroyAccelerationStructureKHR != nullptr &&
+                         vkGetAccelerationStructureBuildSizesKHR != nullptr &&
+                         vkCmdBuildAccelerationStructuresKHR != nullptr &&
+                         vkGetAccelerationStructureDeviceAddressKHR != nullptr;
+    if (rayQueryEnabled && !_rayQueryAvailable) {
+        info("Vulkan: ray query extensions enabled but volk did not load all "
+             "acceleration-structure entry points; continuing with raster",
+             LogChannel::Graphics);
+    }
 
     auto queueResult = _device.get_queue(vkb::QueueType::graphics);
     if (!queueResult) {
@@ -135,6 +206,11 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     allocatorInfo.instance = _instance.instance;
     allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
     allocatorInfo.pVulkanFunctions = &vmaFunctions;
+    if (rayQueryEnabled) {
+        // VMA must know allocations can have device addresses before any later
+        // vkGetBufferDeviceAddress use; validation does not reliably catch it.
+        allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+    }
     if (vmaCreateAllocator(&allocatorInfo, &_allocator) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: allocator creation failed");
     }
@@ -145,6 +221,22 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     _uniformAlignment = props.limits.minUniformBufferOffsetAlignment;
     _maxAnisotropy = props.limits.maxSamplerAnisotropy;
     info("Vulkan device: " + _deviceName);
+    if (_rayQueryAvailable) {
+        VkPhysicalDeviceProperties2 properties2 {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        _accelerationStructureProperties = {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
+        properties2.pNext = &_accelerationStructureProperties;
+        vkGetPhysicalDeviceProperties2(_device.physical_device, &properties2);
+        info("Vulkan ray-query acceleration-structure properties: maxGeometryCount=" +
+                 std::to_string(_accelerationStructureProperties.maxGeometryCount) +
+                 ", maxInstanceCount=" +
+                 std::to_string(_accelerationStructureProperties.maxInstanceCount) +
+                 ", minScratchOffsetAlignment=" +
+                 std::to_string(
+                     _accelerationStructureProperties.minAccelerationStructureScratchOffsetAlignment),
+             LogChannel::Graphics);
+    }
     if (!_debugUtils) {
         info("Vulkan: debug utils unavailable; captures will be unlabelled",
              LogChannel::Graphics);
