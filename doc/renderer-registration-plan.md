@@ -480,6 +480,86 @@ area times luma of selfIllum times diffuseColor, a stated approximation:
 average texel emission is not known CPU-side, while the shader samples the
 true textured emission at the chosen point.
 
+### The calibration programme and the observed-defect ledger
+
+Recorded 2026-07-29 from a live review of the traced image. These are the
+user's observations with technical analysis attached; together they define
+the calibration programme that replaces ad-hoc dial tuning.
+
+**The lighting model this converges on.** The image gets a **tonemapper**,
+and light intensities rise substantially so bounce lighting actually
+registers - the current near-1.0 dials produce first-bounce energy too weak
+to see. Calibration rules: direct light alone should land around **0.3-0.5x
+of the final rgb** in directly-lit areas of real scenes (leaving visible
+headroom for indirect), and direct intensity is set so lit areas match
+**retro**, which stays the reference for "correctly lit". Default bounces:
+2. The sky wants roughly **2x its current intensity**, and the sun should
+ultimately be part of the sky - a job for future HDRI replacements rather
+than the current promoted-directional stopgap. In this frame, brightness
+above the old raster capture is dynamic range, not overshoot; the earlier
+"3.2x ground" reading compared untonemapped traced output against PBR
+raster, which is neither the visual reference (retro is) nor evidence of
+an energy bug by itself. The sky-plus-lightmap double count on outdoor
+statics remains a real accounting question, but its resolution lives inside
+this calibration, not in a clamp.
+
+**Ambient light has no place in path tracing.** The world-ambient term and
+the ambient-only flat irradiance pre-pass are raster survivals; both retire
+as light intensities rise and transport carries the frame. (The
+ambient-only records themselves do not vanish - see the light notes below -
+but their flat, unshadowed application does.)
+
+**Artist-placed lights encode emission intensity.** Odyssey levels fake GI:
+many point lights sit directly at emissive panels. Those pairings are a
+measurement: the point light's intensity estimates the emission strength of
+the panel it fakes, which is exactly the calibration the area-light/NEE
+stage needs. Rules derived: a point light with no emissive surface nearby
+is a real light and stays; **angular size must never be zero** - point
+lights get a relatively wide angular size (soft shadows), the directional
+sun stays fairly sharp; and some directional lights exist purely to emulate
+GI (one of the stunt levels demonstrates this) - reference material for
+what the bounce lighting should reproduce, and candidates for removal once
+it does.
+
+**Sky leaks into fully enclosed scenes** (Taris underground). Two suspect
+mechanisms, both checkable: the sky classification is a selfIllum luma
+test, so any fully self-illuminated *interior* surface - lit panels,
+screens - can be misclassified kTraceSky, which both applies the sky dial
+to it and, worse, moves it to instance-mask bit 2 where **shadow rays pass
+through it**; and module seams can let hemisphere rays escape to the dome.
+The classification needs to be scoped to actual sky geometry (model or
+node identity, not luma), and enclosed scenes are the regression test.
+
+**Some objects do not interact with lighting**: leaves, hair, Manaan
+puddles, doors everywhere, parts of levels. These are the surfaces routed
+through the transparency candidate path - `CandidateLayer` radiance is
+albedo-times-lightmap-ish and never sees the sun, scene lights, or the
+hemisphere. Anything classified punch-through or TransparentModel
+(including doors via material type, hair via blending) shades through that
+unlit path wherever alpha is below the opaque threshold. The layer model
+needs direct lighting, or near-opaque texels need to commit into the full
+shading path far more aggressively.
+
+**Main screen render is incorrectly cropped** - the live window appears to
+render at full resolution and crop rather than scale. Output-extent
+plumbing between the trace target and the presented image; not a capture
+issue.
+
+**Feature ledger** feeding the same programme:
+
+- **Debug view modes**: lights, object bounding boxes, emissives
+  highlighted, object type - selectable from the render-registry ImGui
+  window, which already knows every entry.
+- **Area lights from emissive mesh parts** (triangle granularity):
+  emission removed from the pathtraced direct hit and moved into NEE with
+  importance sampling - the design above, now with the panel-adjacent
+  point lights as its intensity calibration.
+- **Multiple importance sampling** between the specular and diffuse lobes,
+  replacing the current single-lobe russian-roulette split.
+- **Much more ImGui control** over the tracer: per-category material
+  property overrides (roughness, emission, env strength) so calibration
+  hypotheses can be tested live instead of by rebuild.
+
 ### Optimisation: one BLAS for everything static
 
 The table above shares a BLAS between instances of the same mesh. The next step
