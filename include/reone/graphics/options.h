@@ -57,8 +57,12 @@ struct GraphicsOptions {
     float ptEmissiveIntensity {1.0f};
     float ptLightmapIntensity {1.0f};
     float ptDirectIntensity {1.0f};
+    /** Directional sun intensity, independent from the point-light dial. */
+    float ptSunIntensity {1.0f};
     /** Secondary-ray origin offset along the geometric normal, world units. */
     float ptRayOffset {0.01f};
+    /** GPU trace-stats counters; off by default, the atomics cost frame time. */
+    bool ptTraceStats {false};
     /** World ambient scaled by how little sky each pixel's hemisphere saw. */
     float ptWorldAmbient {1.0f};
     bool ssao {true};

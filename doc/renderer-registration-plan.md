@@ -414,10 +414,42 @@ drawn and in which pass.
 ### Optimisation: a light hierarchy, once areas get dense
 
 Direct lighting selects one light per sample by importance - contribution
-estimated as multiplier times attenuation times colour luminance - which makes
-shadow-ray cost constant per sample instead of scaling with the area's light
-count (`kMaxLights` is 32). The selection scan itself is still linear over the
-active list, and the estimate ignores occlusion and orientation.
+estimated as multiplier times attenuation times NdotL times colour luminance -
+which makes shadow-ray cost constant per sample instead of scaling with the
+area's light count (`kMaxLights` is 32). The selection scan itself is still
+linear over the active list, and the estimate ignores occlusion.
+
+Landing that selection took five falsified theories, and the postmortem is
+recorded because the real culprit had been billing this renderer since the
+first traced frame. Ebon Hawk, 4 spp, timed as capture-to-frame-900 minus
+capture-to-frame-300 over 600 frames: 36.3 ms before, 61.1 ms with selection
+walking the light buffer inside the sample loop. Not the shadow rays
+(disabled entirely: 61.5), not a struct copy's register pressure (59.2), not
+per-sample buffer traffic (hoisting the walk to a per-pixel weight table:
+61.3). Pixel scope with multiplicity-deduplicated shading: 53.7. Dropping
+the scratch-resident weight array and batching what was then a per-ray stats
+atomic: 42.8. Putting **all** traceStats counters behind a debug flag,
+default off: **1.68 ms**. The frame was 25x faster than every number ever
+measured for it; the counters - unconditional `InterlockedAdd`s on one
+4-byte word from every thread, serialized by the hardware as global atomic
+contention - were ~95% of "the cost of the path tracer," including the
+36.3 ms baseline, and their per-sample variant is precisely why the
+selection landing looked 25 ms slower. Selection itself: one buffer walk per
+pixel totals the weights and feeds the ambient flat term; each sample draws
+one random number against per-light intervals recomputed bit-identically; a
+light picked by several samples is shaded and shadow-traced once with the
+multiplicity folded into the unbiased estimator, at a warp-uniform light
+index. Shadow rays per pixel: 1.8 at the Hawk, 2.7 in the 18-light cantina.
+
+Directional light records (`position.w == 0`) are promoted to sampled suns in
+the same walk: no attenuation, ambient-only flag overridden, one shadow ray,
+`ptSunIntensity` dial. Raster has no parity target here - its sunlight is
+baked lightmaps plus cascade darkening. The promotion shipped dead the first
+time: the sky dome is opaque TLAS geometry between every surface and the far
+sun origin, so every sun shadow ray committed on it - measured contribution
++0.0000 while costing a full-length traversal. Sky instances now carry TLAS
+instance-mask bit 2 (world is bit 1); camera and bounce rays trace with the
+full mask, shadow rays with bit 1 only. Sky is environment, never occluder.
 
 A flat power CDF is not a usable stage once emitter geometry joins the set:
 importance must be weighted by each light's angular area *from the shading
@@ -604,6 +636,24 @@ reflection strength; the MDL reader reads specular and shininess and discards
 them. A hit shader will be inferring PBR terms in exactly the place the deferred
 resolve infers them today, which is the right place for that to stay.
 
+### The visual target is the retro look, reached physically
+
+The traced image should read like the original renderer's frame - that is what
+the artists lit for - but by physical means only: no clamps, no additive
+grafts, no gamma-space arithmetic. The look lives in the authored data, so the
+tracer honours the data rather than imitating the math. Retro's `min(1, light)
+* albedo` shoulder and gamma-space sums are not reproducible by a physical
+renderer and are not targets; retro captures serve as an *aspect* reference -
+which surfaces sheen, where light comes from, lit-to-shadow balance - not a
+pixel-ratio one. Concretely: the envmap is authored incident radiance, so
+envmapped surfaces sample it through the GGX lobe (later: trace the reflection
+and fall back to the envmap on miss, so near geometry reflects for real).
+Outdoor brightness overshoot is an energy accounting question, not a grading
+dial: lightmaps already bake sun and sky for statics, so live sky at the
+primary hit plus lightmap cache at the bounce can count the same photon twice.
+Which authored source owns which light path must be decided per path, the
+same masking discipline the NEE design already states for emissive panes.
+
 ## What this deletes
 
 Several G-buffer packing tricks exist only because a deferred resolve cannot
@@ -758,6 +808,24 @@ of an id - the mapping is rebuilt with the TLAS.
 Clearing and refilling every frame is correct by construction - there is no
 invalidation contract to get wrong - and it is a stopgap, not the end state.
 Two reasons, and only one of them is cost.
+
+### The performance budget
+
+The traced frame targets **200 fps at 1 spp on simple scenes** - 5 ms of
+frame budget on the development machine's RTX 5090. That hardware traces
+billions of rays per second; at ~1080p and 1 spp the frame needs roughly six
+million rays (primary, bounce, shadow), a fraction of a millisecond of pure
+ray throughput. The target is currently **met at 4 spp**: 1.68 ms at the
+Ebon Hawk, 2.74 ms at the Taris cantina, once the stats-counter atomics
+moved behind a debug flag (see the light-hierarchy section for that
+postmortem - every earlier cost figure for the traced frame was ~95%
+counter serialization). The standing disciplines survive the win: GPU
+timestamps around TLAS build and trace dispatch are still owed so future
+regressions get attributed by facts rather than five falsified theories,
+and every optimisation must name the milliseconds it claims. Headroom work
+when the budget tightens again - denser scenes, more bounces, pane NEE -
+remains the structural list: leaner dispatch shape, merged static BLAS,
+refit-over-rebuild. Feature trims stay off that list.
 
 ### Measured, 2026-07-28
 

@@ -58,6 +58,7 @@ struct TraceStats {
     uint32_t secondaryMisses {0};
     uint32_t survivingLights {0};
     uint32_t primaryHits {0};
+    uint32_t shadowRays {0};
 };
 
 VkDeviceAddress alignedAddress(VkDeviceAddress address, VkDeviceSize alignment) {
@@ -248,7 +249,12 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         VkAccelerationStructureInstanceKHR instance {};
         instance.transform = instanceTransform(mesh->transform);
         instance.instanceCustomIndex = mesh->id.index;
-        instance.mask = 0xff;
+        // Bit 1 is the world, bit 2 the sky. Camera and bounce rays trace
+        // with both; shadow rays cull bit 2, because the sky dome is an
+        // environment, not an occluder - with a plain 0xff mask every sun
+        // shadow ray committed on the dome and the promoted sun lit nothing.
+        // Reassigned below once the material is classified.
+        instance.mask = 0x1;
         instance.instanceShaderBindingTableRecordOffset = 0;
         instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
         VkAccelerationStructureDeviceAddressInfoKHR address {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
@@ -276,6 +282,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         // slang/rayquery.slang.
         if (glm::dot(mesh->material.selfIllumColor, glm::vec3(0.299f, 0.587f, 0.114f)) >= 0.99f) {
             material.featureMask |= 1u << 24;
+            instance.mask = 0x2;
         }
         // Additive-blended diffuse is the other way Odyssey authors a glow:
         // no selfIllum controller, the texture itself is the light, and the
@@ -355,6 +362,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         _lastSecondaryMisses = stats->secondaryMisses;
         _lastSurvivingLights = stats->survivingLights;
         _lastPrimaryHits = stats->primaryHits;
+        _lastShadowRays = stats->shadowRays;
     }
     clearFrame(frame);
     auto &device = _renderer.device();
@@ -497,20 +505,30 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                   std::max(0.0f, _options.ptLightmapIntensity),
                                   std::max(0.0f, _options.ptDirectIntensity),
                                   std::max(0.0001f, _options.ptRayOffset),
-                                  std::max(0.0f, _options.ptWorldAmbient)};
+                                  std::max(0.0f, _options.ptWorldAmbient),
+                                  std::max(0.0f, _options.ptSunIntensity),
+                                  _options.ptTraceStats ? 1u : 0u};
     vkCmdPushConstants(cmd, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), &constants);
     vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8), static_cast<uint32_t>((_extent.y + 7) / 8), 1);
     ++_frameNumber;
     const auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count();
+    // The GPU counters only accumulate while the stats flag is on; printing
+    // their zeros as rates would read as a lighting regression.
+    std::string statsPart =
+        _options.ptTraceStats
+            ? "previous frame secondary misses " + std::to_string(_lastSecondaryMisses) +
+                  "/" + std::to_string(_lastSecondaryRays) + "; " +
+                  std::to_string(_lastPrimaryHits ? static_cast<float>(_lastSurvivingLights) / _lastPrimaryHits : 0.0f) +
+                  " lights past cutoff/primary hit; " +
+                  std::to_string(_lastPrimaryHits ? static_cast<float>(_lastShadowRays) / _lastPrimaryHits : 0.0f) +
+                  " direct shadow rays/primary hit; "
+            : "trace stats off; ";
     info("Vulkan: TLAS " + std::to_string(_lastInstances) + " instances, skipped " +
          std::to_string(_lastDeforming) + " deforming and " +
          std::to_string(_lastOutOfRange) + " out-of-range meshes, build recorded in " +
          std::to_string(microseconds) + " us; " + std::to_string(_lastEmissive) +
           " emissive, " + std::to_string(_lastAdditive) + " additive, " +
-         std::to_string(_lastSabers) + " saber, " + std::to_string(_lastDangly) + " dangly; previous frame secondary misses " + std::to_string(_lastSecondaryMisses) +
-         "/" + std::to_string(_lastSecondaryRays) + "; " +
-         std::to_string(_lastPrimaryHits ? static_cast<float>(_lastSurvivingLights) / _lastPrimaryHits : 0.0f) +
-         " lights past cutoff/primary hit; " +
+         std::to_string(_lastSabers) + " saber, " + std::to_string(_lastDangly) + " dangly; " + statsPart +
          std::to_string(_lastBindlessTextureCount) + " bindless 2D textures; " +
          std::to_string(std::max(1, _options.pathTracingSamples)) + " spp", LogChannel::Graphics);
 }

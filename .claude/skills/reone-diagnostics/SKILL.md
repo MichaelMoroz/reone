@@ -43,6 +43,22 @@ Two runs at the same `--captureframe` produce **byte-identical** images, in the
 menu and in gameplay, on either backend. If they do not, something is genuinely
 nondeterministic and that is the bug, not the harness.
 
+One measured exception: **path-traced** captures can differ by up to ~0.01% of
+pixels (hundreds, not thousands, out of 8M; deltas can be large) between
+identical runs. Driver acceleration-structure builds are not run-reproducible,
+so ray-query candidate *arrival order* varies, and the bounce loop's
+transparency accumulation and early-exit are order-dependent by design (the
+additive-hit cap was too until it became nearest-8-by-distance). Gate traced
+determinism at <0.02% differing pixels; raster stays strictly byte-identical,
+and a traced diff in the thousands of pixels is a real bug, not this.
+
+Two path-tracing capture notes: the engine-log trace rates (shadow rays,
+lights past cutoff, secondary misses) print only when the **Trace stats**
+checkbox in the Path tracing window is on - the GPU counters behind them are
+off by default because their atomics once cost 95% of the traced frame (36 ms
+of a 38 ms frame; see the plan's light-hierarchy postmortem). Leave them off
+for any timing measurement.
+
 Four things buy that, and all four key off the same predicate
 (`Engine::isCaptureRun`, true when `--capture` or `--dumptargets` is given):
 

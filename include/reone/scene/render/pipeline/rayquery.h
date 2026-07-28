@@ -61,6 +61,7 @@ private:
     uint32_t _lastSecondaryMisses {0};
     uint32_t _lastSurvivingLights {0};
     uint32_t _lastPrimaryHits {0};
+    uint32_t _lastShadowRays {0};
     uint32_t _bindlessTextureCapacity {0};
     uint32_t _lastBindlessTextureCount {0};
     /** Must match PushConstants in slang/rayquery.slang. */
@@ -73,6 +74,10 @@ private:
         float directIntensity;
         float rayOriginOffset;
         float worldAmbientIntensity;
+        float sunIntensity;
+        // Bit 0 enables the traceStats counters; must match kTraceFlagStats
+        // in slang/rayquery.slang.
+        uint32_t traceFlags;
     };
 
     uint32_t _frameNumber {0};

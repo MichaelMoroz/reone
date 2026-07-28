@@ -67,7 +67,13 @@ struct PushConstants {
     // World ambient, applied scaled by how little sky the pixel's hemisphere
     // saw - a stand-in for exactly the light the tracer could not find.
     float worldAmbientIntensity;
+    float sunIntensity;
+    // Bit 0 enables the traceStats counters. Off by default: even batched,
+    // the atomics contend on one cache line from every thread in flight,
+    // and the per-sample bounce counter fired millions of times per frame.
+    uint traceFlags;
 };
+static const uint kTraceFlagStats = 1u;
 [[vk::push_constant]] PushConstants pushConstants;
 
 
@@ -342,7 +348,11 @@ float shadowTransmittance(float3 hitPosition, float3 geometricNormal, float3 dir
     shadowRay.TMax = max(0.0, lightDistance - kShadowEpsilon);
 
     RayQuery<RAY_FLAG_NONE> shadow;
-    shadow.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, shadowRay);
+    // Mask bit 2 is the sky dome. It must stay visible to camera and bounce
+    // rays (they shade it as the environment) but must never occlude a
+    // shadow ray: the promoted sun sits beyond the dome, and with the full
+    // mask every sun ray committed on it and the sun lit nothing at all.
+    shadow.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0x1, shadowRay);
     float transmittance = 1.0;
     while (shadow.Proceed()) {
         if (shadow.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
@@ -366,6 +376,30 @@ float shadowTransmittance(float3 hitPosition, float3 geometricNormal, float3 dir
     // because punch-through candidates must stay visible to the loop above;
     // ACCEPT_FIRST_HIT is only valid for the opaque-only fast path.
     return shadow.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : transmittance;
+}
+
+// The direct-light selection weight: receiver-dependent importance, with
+// attenuation pinned to 1 for promoted directionals so distance never erases
+// the sun. Zero for lights the sampler never draws - past raster's
+// radius-squared cutoff quirk, or ambient-only points (those feed the flat
+// irradiance pre-pass instead). Both the totalling walk and the multiplicity
+// pass call this so their float accumulation is bit-identical; that identity
+// is what lets the weights be recomputed instead of stored in a scratch
+// array.
+float directLightWeight(GlobalUniformsLight light, float3 hitPosition, float3 shadingNormal) {
+    bool directional = light.position.w == 0.0;
+    float3 fragToLight = light.position.xyz - hitPosition;
+    float lightDistance = length(fragToLight);
+    if (!directional && lightDistance > light.radius * light.radius) return 0.0;
+    if (!directional && light.ambientOnly != 0) return 0.0;
+    float attenuation = 1.0;
+    if (!directional) {
+        float d = light.radius + lightDistance;
+        attenuation = (light.radius * light.radius) / (d * d);
+    }
+    float NdotL = max(0.0, dot(shadingNormal, fragToLight / max(lightDistance, 1e-4)));
+    return max(0.0, luminance(gammaToLinear(light.color.rgb)) *
+                      light.multiplier * attenuation * NdotL);
 }
 
 [shader("compute")]
@@ -421,11 +455,21 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 // with their distance instead; they are settled against the
                 // segment's committed interval below, which each additive
                 // surface falls into exactly once.
-                if (primaryAdditiveCount < kMaxAdditiveHits) {
-                    primaryAdditiveHits[primaryAdditiveCount] =
-                        float4(additiveRadiance(candidateMaterial, layer),
-                               primary.CandidateTriangleRayT());
-                    ++primaryAdditiveCount;
+                // Kept nearest-first by insertion, not first-come: candidate
+                // arrival order is whatever the driver's BVH build produced,
+                // and builds are not run-reproducible - a first-come cap made
+                // overflow pixels nondeterministic between identical runs.
+                float4 additiveEntry = float4(additiveRadiance(candidateMaterial, layer),
+                                              primary.CandidateTriangleRayT());
+                if (primaryAdditiveCount < kMaxAdditiveHits ||
+                    additiveEntry.w < primaryAdditiveHits[kMaxAdditiveHits - 1].w) {
+                    uint insertAt = min(primaryAdditiveCount, kMaxAdditiveHits - 1);
+                    while (insertAt > 0 && primaryAdditiveHits[insertAt - 1].w > additiveEntry.w) {
+                        primaryAdditiveHits[insertAt] = primaryAdditiveHits[insertAt - 1];
+                        --insertAt;
+                    }
+                    primaryAdditiveHits[insertAt] = additiveEntry;
+                    primaryAdditiveCount = min(primaryAdditiveCount + 1, kMaxAdditiveHits);
                 }
             } else if ((candidateMaterial.featureMask & kTracePunchThrough) != 0) {
                 // Commit anything with meaningful coverage; the query keeps
@@ -503,61 +547,119 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         float a2 = a * a;
         float k = primarySurface.surface.roughness + 1.0;
         k = k * k * (1.0 / 8.0);
-        float3 directD = float3(0.0);
-        float3 directS = float3(0.0);
         float3 irradiance = float3(0.0);
         uint survivingLights = 0;
+        // One walk per pixel serves both light paths: ambient-only points
+        // accumulate raster's cheap flat irradiance (deliberately kept from
+        // the raster resolve), everything else totals a selection weight for
+        // the multiplicity pass below. Directionals are promoted to sampled,
+        // ray-shadowed suns even when authored ambient-only: raster has no
+        // direct sun at all (only baked lightmaps plus cascade-map
+        // darkening), so there is no parity target and the Sun dial grades
+        // it. Weights are recomputed by the second pass instead of stored: a
+        // dynamically indexed local array lives in scratch, not registers,
+        // and removing it was worth 11 ms alongside batching what were then
+        // per-ray stats atomics.
+        float totalLightWeight = 0.0;
         for (int i = 0; i < globalUniforms.numLights; ++i) {
             GlobalUniformsLight light = globalUniforms.lights[i];
+            bool directional = light.position.w == 0.0;
             float3 fragToLight = light.position.xyz - hitPosition;
             float lightDistance = length(fragToLight);
             // Kept exactly as the raster resolve has it: radius squared is
             // compared to un-squared distance, despite the unusual reach.
-            if (lightDistance > light.radius * light.radius) continue;
+            if (!directional && lightDistance > light.radius * light.radius) continue;
             ++survivingLights;
-
-            float d = light.radius + lightDistance;
-            float attenuation = (light.radius * light.radius) / (d * d);
-            float3 radiance = light.multiplier * attenuation * gammaToLinear(light.color.rgb);
-            if (light.ambientOnly != 0) {
-                irradiance += radiance;
+            if (!directional && light.ambientOnly != 0) {
+                float d = light.radius + lightDistance;
+                float attenuation = (light.radius * light.radius) / (d * d);
+                irradiance += light.multiplier * attenuation * gammaToLinear(light.color.rgb);
                 continue;
             }
-
-            float3 L = normalize(fragToLight);
-            float NdotL = max(0.0, dot(primarySurface.surface.normal, L));
-            if (NdotL <= 0.0) continue;
-            radiance *= shadowTransmittance(hitPosition, primarySurface.geometricNormal,
-                                            L, lightDistance) * pushConstants.directIntensity;
-            float3 H = normalize(V + L);
-            float NdotH = max(0.0, dot(primarySurface.surface.normal, H));
-            float VdotH = max(0.0, dot(V, H));
-            float D = distributionGGX(NdotH * NdotH, a2);
-            float G = geometrySmith(NdotL, NdotV, k);
-            float3 lightF = fresnelSchlick(VdotH, F0);
-            float3 spec = (D * G * lightF) / max(1e-4, 4.0 * NdotL * NdotV);
-            float3 kD = (1.0 - lightF) * (1.0 - primarySurface.surface.metallic);
-            directD += kD / kPi * radiance * NdotL;
-            // Raster's dynamic-light specular is meaningful only on the same
-            // env-mapped surfaces that the tracer gives a specular lobe.
-            if (envmapped) directS += spec * radiance * NdotL;
+            totalLightWeight += directLightWeight(light, hitPosition, primarySurface.surface.normal);
         }
-        InterlockedAdd(traceStats[2], survivingLights);
-        InterlockedAdd(traceStats[3], 1);
+        bool statsOn = (pushConstants.traceFlags & kTraceFlagStats) != 0;
+        if (statsOn) {
+            InterlockedAdd(traceStats[2], survivingLights);
+            InterlockedAdd(traceStats[3], 1);
+        }
         float3 ambientF = fresnelSchlickRoughness(NdotV, F0, primarySurface.surface.roughness);
         float3 ambientD = (1.0 - ambientF) * (1.0 - primarySurface.surface.metallic) * irradiance;
         // Raster starts irradiance with worldAmbientColor. The tracer does not:
         // its sky hemisphere integral is that ambient outdoors, and adding both
         // double-counts it. The small missing flat interior term is intentional.
-        float3 directIllumination = ambientD * primarySurface.surface.albedo +
-                                   directD * primarySurface.surface.albedo + directS;
+        float3 directIllumination = ambientD * primarySurface.surface.albedo;
         // The GGX lobe exists only where raster shows this heuristic a
         // specular response: environment-mapped surfaces. Everywhere else the
         // diffuse alpha is coverage or opacity, so the derived roughness is
         // meaningless - grass texels with soft alpha turned glossy and the
         // whole frame sparkled. Non-envmapped surfaces are pure diffuse.
         float specularProbability = envmapped ? clamp(luminance(F), 1e-3, 1.0 - 1e-3) : 0.0;
-            uint sampleCount = max(pushConstants.samplesPerPixel, 1u);
+        uint sampleCount = max(pushConstants.samplesPerPixel, 1u);
+        // Direct lighting stays at pixel scope, touches no scratch array,
+        // and issues no unconditional atomics. Every sample still draws its
+        // own light (the draw is recomputed per light interval from a
+        // dedicated hash chain, one compare each), but a light picked by
+        // several samples is shaded and shadow-traced once with the
+        // multiplicity folded into the estimator, and the light fetch
+        // happens at a warp-uniform index:
+        // (1/spp) sum_s f(L_s)/p_s  =  sum_i (m_i/spp) f(L_i)/p_i.
+        uint shadowRayCount = 0;
+        if (totalLightWeight > 0.0) {
+            float accumBefore = 0.0;
+            for (int i = 0; i < globalUniforms.numLights; ++i) {
+                GlobalUniformsLight light = globalUniforms.lights[i];
+                float w = directLightWeight(light, hitPosition, primarySurface.surface.normal);
+                if (w <= 0.0) continue;
+                float accumAfter = accumBefore + w;
+                // The last positive weight absorbs float rounding at the top
+                // of the table, mirroring the closed lower end at zero.
+                bool lastPositive = accumAfter >= totalLightWeight * (1.0 - 1e-6);
+                uint multiplicity = 0;
+                for (uint s = 0; s < sampleCount; ++s) {
+                    uint pickState = hash(dispatchId.x * 0x9e3779b9u ^ dispatchId.y * 0x85ebca6bu ^
+                                          s * 0xc2b2ae35u ^ pushConstants.frameIndex ^ 0x5bf03635u);
+                    float pick = random01(pickState) * totalLightWeight;
+                    if (pick >= accumBefore && (pick < accumAfter || lastPositive)) ++multiplicity;
+                }
+                accumBefore = accumAfter;
+                if (multiplicity == 0) continue;
+                bool directional = light.position.w == 0.0;
+                float3 fragToLight = light.position.xyz - hitPosition;
+                float lightDistance = length(fragToLight);
+                float3 L = fragToLight / max(lightDistance, 1e-4);
+                float attenuation = 1.0;
+                if (!directional) {
+                    float d = light.radius + lightDistance;
+                    attenuation = (light.radius * light.radius) / (d * d);
+                }
+                float selectionProbability = w / totalLightWeight;
+                float3 radiance = gammaToLinear(light.color.rgb) * light.multiplier;
+                radiance *= directional ? pushConstants.sunIntensity
+                                        : attenuation * pushConstants.directIntensity;
+                // Counted locally: a per-ray InterlockedAdd on this shared
+                // slot serializes every thread on one cache line.
+                ++shadowRayCount;
+                radiance *= shadowTransmittance(hitPosition, primarySurface.geometricNormal,
+                                                L, directional ? 10000.0 : lightDistance) *
+                            (float(multiplicity) / selectionProbability);
+                float NdotL = max(0.0, dot(primarySurface.surface.normal, L));
+                float3 H = normalize(V + L);
+                float NdotH = max(0.0, dot(primarySurface.surface.normal, H));
+                float VdotH = max(0.0, dot(V, H));
+                float D = distributionGGX(NdotH * NdotH, a2);
+                float G = geometrySmith(NdotL, NdotV, k);
+                float3 lightF = fresnelSchlick(VdotH, F0);
+                float3 spec = (D * G * lightF) / max(1e-4, 4.0 * NdotL * NdotV);
+                float3 kD = (1.0 - lightF) * (1.0 - primarySurface.surface.metallic);
+                diffuseIllumination += kD / kPi * radiance * NdotL * primarySurface.surface.albedo;
+                // Raster's dynamic-light specular is meaningful only on the
+                // same env-mapped surfaces that the tracer gives a specular
+                // lobe.
+                if (envmapped) specularIllumination += spec * radiance * NdotL;
+            }
+        }
+        if (statsOn && shadowRayCount != 0) InterlockedAdd(traceStats[4], shadowRayCount);
             for (uint sample = 0; sample < sampleCount; ++sample) {
                 uint state = hash(dispatchId.x * 0x9e3779b9u ^ dispatchId.y * 0x85ebca6bu ^
                                   sample * 0xc2b2ae35u ^ pushConstants.frameIndex);
@@ -598,11 +700,19 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                                                       candidateBarycentrics.x, candidateBarycentrics.y);
                     CandidateLayer layer = sampleCandidateLayer(candidateMaterial, candidateIndices, candidateWeights);
                     if ((candidateMaterial.featureMask & kTraceAdditive) != 0) {
-                        if (bounceAdditiveCount < kMaxAdditiveHits) {
-                            bounceAdditiveHits[bounceAdditiveCount] =
-                                float4(additiveRadiance(candidateMaterial, layer),
-                                       bounce.CandidateTriangleRayT());
-                            ++bounceAdditiveCount;
+                        // Nearest-first under the cap, same as the primary
+                        // loop: arrival order is not run-reproducible.
+                        float4 additiveEntry = float4(additiveRadiance(candidateMaterial, layer),
+                                                      bounce.CandidateTriangleRayT());
+                        if (bounceAdditiveCount < kMaxAdditiveHits ||
+                            additiveEntry.w < bounceAdditiveHits[kMaxAdditiveHits - 1].w) {
+                            uint insertAt = min(bounceAdditiveCount, kMaxAdditiveHits - 1);
+                            while (insertAt > 0 && bounceAdditiveHits[insertAt - 1].w > additiveEntry.w) {
+                                bounceAdditiveHits[insertAt] = bounceAdditiveHits[insertAt - 1];
+                                --insertAt;
+                            }
+                            bounceAdditiveHits[insertAt] = additiveEntry;
+                            bounceAdditiveCount = min(bounceAdditiveCount + 1, kMaxAdditiveHits);
                         }
                     } else if ((candidateMaterial.featureMask & kTracePunchThrough) != 0) {
                         if (layer.alpha >= 0.99) {
@@ -614,7 +724,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                         }
                     }
                 }
-                InterlockedAdd(traceStats[0], 1);
+                if (statsOn) InterlockedAdd(traceStats[0], 1);
                 bool sampleSawSky = false;
                 float bounceCommittedT = bounce.CommittedStatus() == COMMITTED_TRIANGLE_HIT
                                              ? bounce.CommittedRayT()
@@ -669,7 +779,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                         diffuseIllumination += radiance * primarySurface.surface.albedo;
                     }
                 } else {
-                    InterlockedAdd(traceStats[1], 1);
+                    if (statsOn) InterlockedAdd(traceStats[1], 1);
                     sampleSawSky = true;
                     if (sampleSpecular) {
                         specularIllumination += radiance * F / specularProbability;
