@@ -41,6 +41,7 @@ void VulkanBuffer::initHostVisible(VkDeviceSize size, VkBufferUsageFlags usage) 
         throw std::runtime_error("Vulkan: host-visible buffer allocation failed");
     }
     _size = size;
+    _deviceAddressable = (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0;
 }
 
 void VulkanBuffer::initDeviceLocal(VkDeviceSize size, VkBufferUsageFlags usage, const void *data) {
@@ -56,6 +57,7 @@ void VulkanBuffer::initDeviceLocal(VkDeviceSize size, VkBufferUsageFlags usage, 
         throw std::runtime_error("Vulkan: device-local buffer allocation failed");
     }
     _size = size;
+    _deviceAddressable = (bufInfo.usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0;
 
     if (!data) {
         return;
@@ -74,6 +76,16 @@ void VulkanBuffer::initDeviceLocal(VkDeviceSize size, VkBufferUsageFlags usage, 
     });
 }
 
+VkDeviceAddress VulkanBuffer::deviceAddress() const {
+    if (!_deviceAddressable || _buffer == VK_NULL_HANDLE) {
+        return 0;
+    }
+
+    VkBufferDeviceAddressInfo info {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+    info.buffer = _buffer;
+    return vkGetBufferDeviceAddress(_device.handle(), &info);
+}
+
 void VulkanBuffer::deinit() {
     if (_buffer == VK_NULL_HANDLE) {
         return;
@@ -83,6 +95,7 @@ void VulkanBuffer::deinit() {
     _allocation = VK_NULL_HANDLE;
     _info = {};
     _size = 0;
+    _deviceAddressable = false;
 }
 
 } // namespace graphics

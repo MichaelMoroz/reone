@@ -41,6 +41,20 @@ class VulkanDevice;
  */
 class VulkanMesh : boost::noncopyable {
 public:
+    /**
+     * The buffer facts an acceleration-structure builder needs for this
+     * mesh's rigid triangle geometry. vertexAddress starts at position within
+     * the interleaved vertex record, not at the beginning of that record.
+     */
+    struct Geometry {
+        VkDeviceAddress vertexAddress {0};
+        VkDeviceSize vertexStride {0};
+        VkFormat vertexFormat {VK_FORMAT_UNDEFINED};
+        uint32_t maxVertexIndex {0};
+        VkDeviceAddress indexAddress {0};
+        VkIndexType indexType {VK_INDEX_TYPE_UINT16};
+    };
+
     VulkanMesh(VulkanDevice &device) :
         _device(device),
         _vertexBuffer(device),
@@ -83,6 +97,7 @@ public:
     static constexpr uint32_t kZeroBinding = 1;
 
     uint32_t indexCount() const { return _indexCount; }
+    Geometry geometry() const;
 
 private:
     VulkanDevice &_device;
@@ -90,6 +105,9 @@ private:
     VulkanBuffer _vertexBuffer;
     VulkanBuffer _indexBuffer;
     uint32_t _indexCount {0};
+    VkDeviceSize _vertexStride {0};
+    VkDeviceSize _positionOffset {0};
+    uint32_t _maxVertexIndex {0};
 };
 
 } // namespace graphics

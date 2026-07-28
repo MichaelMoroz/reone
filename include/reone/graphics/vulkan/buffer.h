@@ -60,6 +60,12 @@ public:
     VkBuffer handle() const { return _buffer; }
     VkDeviceSize size() const { return _size; }
 
+    /**
+     * GPU address for a buffer created with SHADER_DEVICE_ADDRESS usage, or
+     * zero when this buffer is not addressable.
+     */
+    VkDeviceAddress deviceAddress() const;
+
     /** Null unless host-visible. */
     void *mapped() const { return _info.pMappedData; }
 
@@ -70,6 +76,7 @@ private:
     VmaAllocation _allocation {VK_NULL_HANDLE};
     VmaAllocationInfo _info {};
     VkDeviceSize _size {0};
+    bool _deviceAddressable {false};
 };
 
 } // namespace graphics
