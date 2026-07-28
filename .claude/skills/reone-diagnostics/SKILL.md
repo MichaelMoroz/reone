@@ -1,13 +1,19 @@
 ---
-name: renderdoc-capture
-description: Compare two reone builds or backends empirically, and inspect what the GPU actually received. Covers the deterministic screenshot harness, numeric render-target dumps for localising a difference to a pass, and scripted RenderDoc capture. Use when a shader renders wrongly, when OpenGL and Vulkan disagree, or when you need bound buffers and uniform contents rather than a guess. Triggers on: shader renders wrong, geometry missing, compare backends, GL vs Vulkan, A/B, frame capture, RenderDoc, uniform buffer contents, G-buffer.
+name: reone-diagnostics
+description: Measure and compare reone empirically without fooling yourself. Covers the deterministic screenshot harness for A/B, numeric render-target dumps for localising a difference to a pass, scripted RenderDoc capture, frame-time measurement, and the build and tooling traps that silently invalidate all of the above. Use when a shader renders wrongly, when OpenGL and Vulkan disagree, when something got slower, or when you need bound buffers and uniform contents rather than a guess. Triggers on: shader renders wrong, geometry missing, compare backends, GL vs Vulkan, A/B, frame capture, RenderDoc, uniform buffer contents, G-buffer, frame time, regression, slower, benchmark, validation layers, stale build.
 ---
 
-# Capturing and inspecting a reone frame
+# Measuring a reone frame
 
-Guessing at shader faults from the rendered image is slow and gets it wrong. Two
-tools make it empirical: an unattended screenshot harness for A/B comparison, and
-a scripted RenderDoc capture for seeing what the GPU actually received.
+Guessing at shader faults from the rendered image is slow and gets it wrong.
+Three things make it empirical: an unattended screenshot harness for A/B
+comparison, numeric target dumps for localising a difference to a pass, and a
+scripted RenderDoc capture for seeing what the GPU actually received.
+
+**Most of the time lost here has gone to measurements that were quietly
+invalid** - a stale binary, a splash-screen frame, two different renderers
+compared as if they were two backends, validation left on. The traps at the end
+are not trivia; read them before trusting a number.
 
 ## Screenshot A/B, unattended
 
@@ -114,6 +120,58 @@ the dumps say which pass to look at.
 `--dumptargets` works with or without `--capture`: on Vulkan it flushes the
 current frame before reading targets back. Only the OpenGL **PBR** pipeline
 exposes targets; the retro pipeline exposes none and dumps nothing.
+
+## Frame time, and how to compare two commits
+
+A capture run renders as fast as it can with a fixed 1/60 simulation step, so
+**wall-clock time for a fixed frame count is a direct measure of render cost**.
+That makes the harness a usable stopwatch without any instrumentation.
+
+Time two runs at different frame counts and difference them, so startup and
+module load cancel:
+
+```
+per-frame = (t(900 frames) - t(300 frames)) / 600
+```
+
+**Discard a warm-up run first.** The first run after a build pays a one-time
+shader, pipeline and texture cache cost. Land that inside the 300-frame
+baseline and the difference is deflated - this produced a 1.755 ms/frame
+reading for a build that actually cost 4.5 ms, which read as a *speedup* from
+the commit under test. Take two samples after the warm-up; spread is around 2%.
+
+Numbers from `danm14ab`, OpenGL, `--pbr 1`, for calibration:
+
+| | ms/frame |
+|---|---|
+| before the registry refactor | 4.51 |
+| after it | 5.62 |
+| after material flattening recovered part of it | 5.01 |
+
+### Things that make a timing comparison meaningless
+
+- **Validation layers cost 3x.** 5.37 ms becomes 16.88 ms with `--vkvalidation 1`.
+  Vulkan and OpenGL are otherwise within noise of each other - 5.37 against
+  5.38 - so a "Vulkan is four times slower" result is almost always this.
+  Compare with validation off on both sides.
+- **Window focus.** Outside a capture run the loop idles when the window is in
+  the background, so a live FPS readout depends on focus. Capture runs ignore
+  focus deliberately; live and captured numbers are not comparable.
+- **The in-engine profiler is already bracketed**, which beats guessing at which
+  half moved: `engine.cpp` measures Input, Update, Graphics render and Audio
+  render separately, and `Editor::frameTimes` plots them. Log the per-slot means
+  and compare those first - it halves the search space before any hypothesis.
+- **`checkIdentityStability` fires whenever the Graphics channel is on** and
+  only exists after `296a0474`. It sorts ~1500 ids per frame. Instrumentation
+  that logs through Graphics and compares across that commit measures itself.
+
+### Attribute cost to something you measured
+
+The failure worth naming: culling moved from once-per-model-per-frame to
+once-per-entry-per-pass, roughly 9000 frustum tests where there had been 200.
+Caching it removed the calls and changed frame time by **nothing**, because an
+AABB-frustum test is tens of nanoseconds. A ratio of call counts is not
+evidence; an absolute cost is. Time the thing before optimising it.
 
 ## RenderDoc, scripted
 
@@ -280,6 +338,29 @@ touches, and how far it moves them.
   (`spirv-dis x.spv | grep Decorate`) and confirm the thing you just wrote is
   actually in there. It is a five-second check that beats an hour of suspecting
   descriptors.
+- **A broken `toolkit` trains you into the habit that hides everything else.**
+  The default `cmake --build build --config Release` fails at the end on
+  `toolkit.exe`, on pre-existing unresolved `ImGui_ImplVulkan_AddTexture` /
+  `RemoveTexture` symbols that nobody is fixing. `engine.exe` has already
+  linked by then, so the run is usable and the failure reads as known noise.
+  The natural response is `--target engine` - and that skips the SPIR-V
+  transpile above **and** the `tests` target.
+
+  That is how `tests` stayed broken across four commits without anyone
+  noticing: a full build failing looked exactly like the toolkit failure
+  everyone had learned to ignore, and no named-target build ever compiled the
+  suite. **Build `--target tests` explicitly and run `build/bin/tests.exe`
+  before believing a change is clean** - 350 tests take under a second, and a
+  binary that links is not the same claim as a suite that passes.
+
+  The signature when it happens: `error C2259: cannot instantiate abstract
+  class` on a `NiceMock<...>`, followed by a cascade of unrelated-looking
+  `ReturnRef` / `make_shared` / `WillByDefault` errors that name the wrong
+  function entirely. It means an interface gained a pure virtual and the mock
+  in `test/fixtures/` did not. **Read the C2259 notes** - MSVC lists each
+  unimplemented member and the header line it came from. Grepping the interface
+  for `= 0` and diffing against `MOCK_METHOD` misses multi-line declarations and
+  sends you after the wrong symbol.
 - **Removed OpenGL Slang path.** OpenGL once ran Slang SPIR-V modules, but its
   missing Vulkan draw-parameter builtins silently dropped instanced geometry.
   Measurements made through that path are invalid.
