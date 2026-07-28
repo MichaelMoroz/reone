@@ -62,7 +62,7 @@ struct GraphicsOptions {
         where the Dantooine dusk sun reads as a sun. */
     float ptSunIntensity {2.5f};
     /** Path depth after the primary hit. */
-    int ptBounces {2};
+    int ptBounces {1};
     /** Secondary-ray origin offset along the geometric normal, world units. */
     float ptRayOffset {0.01f};
     /** GPU trace-stats counters; off by default, the atomics cost frame time. */

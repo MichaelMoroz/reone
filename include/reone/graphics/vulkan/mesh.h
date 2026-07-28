@@ -101,6 +101,9 @@ public:
 
     uint32_t indexCount() const { return _indexCount; }
     Geometry geometry() const;
+    /** Source interleaved vertices, also exposed as a storage buffer for skinning. */
+    VkBuffer vertexBuffer() const { return _vertexBuffer.handle(); }
+    VkDeviceSize vertexDataSize() const { return _vertexBuffer.size(); }
 
 private:
     VulkanDevice &_device;

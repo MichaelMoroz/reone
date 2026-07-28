@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "reone/graphics/options.h"
+#include "reone/graphics/uniforms.h"
 
 #include "reone/graphics/vulkan/accelerationstructure.h"
 #include "reone/graphics/vulkan/descriptors.h"
@@ -185,10 +186,67 @@ void RayQueryPipeline::init() {
     }
     vkDestroyShaderModule(device.handle(), module, nullptr);
     device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_pipeline), "rayquery:primaryRay");
+
+    VkDescriptorSetLayoutBinding skinBindings[2] {};
+    for (uint32_t i = 0; i < 2; ++i) {
+        skinBindings[i].binding = i;
+        skinBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        skinBindings[i].descriptorCount = 1;
+        skinBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo skinLayoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    skinLayoutInfo.bindingCount = 2;
+    skinLayoutInfo.pBindings = skinBindings;
+    if (vkCreateDescriptorSetLayout(device.handle(), &skinLayoutInfo, nullptr, &_skinLayout) != VK_SUCCESS)
+        throw std::runtime_error("Vulkan: skin descriptor layout creation failed");
+    constexpr uint32_t kMaxSkinnedInstancesPerFrame = 128;
+    for (auto &pool : _skinPools) {
+        VkDescriptorPoolSize skinPoolSize {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                           2 * kMaxSkinnedInstancesPerFrame};
+        VkDescriptorPoolCreateInfo skinPoolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        skinPoolInfo.maxSets = kMaxSkinnedInstancesPerFrame;
+        skinPoolInfo.poolSizeCount = 1;
+        skinPoolInfo.pPoolSizes = &skinPoolSize;
+        if (vkCreateDescriptorPool(device.handle(), &skinPoolInfo, nullptr, &pool) != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: skin descriptor pool creation failed");
+    }
+    auto skinSpirv = readSpirV(_renderer.shaderDir() / "skin.spv");
+    moduleInfo.codeSize = skinSpirv.size() * sizeof(uint32_t);
+    moduleInfo.pCode = skinSpirv.data();
+    if (vkCreateShaderModule(device.handle(), &moduleInfo, nullptr, &module) != VK_SUCCESS)
+        throw std::runtime_error("Vulkan: skin shader module creation failed");
+    VkDescriptorSetLayout skinLayouts[] {_renderer.descriptors().uniformLayout(), _skinLayout};
+    VkPushConstantRange skinPushConstants {};
+    skinPushConstants.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    skinPushConstants.size = sizeof(SkinPushConstants);
+    VkPipelineLayoutCreateInfo skinPipelineLayoutInfo {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    skinPipelineLayoutInfo.setLayoutCount = 2;
+    skinPipelineLayoutInfo.pSetLayouts = skinLayouts;
+    skinPipelineLayoutInfo.pushConstantRangeCount = 1;
+    skinPipelineLayoutInfo.pPushConstantRanges = &skinPushConstants;
+    if (vkCreatePipelineLayout(device.handle(), &skinPipelineLayoutInfo, nullptr, &_skinPipelineLayout) != VK_SUCCESS) {
+        vkDestroyShaderModule(device.handle(), module, nullptr);
+        throw std::runtime_error("Vulkan: skin pipeline layout creation failed");
+    }
+    stage.module = module;
+    // VkComputePipelineCreateInfo owns a value copy of the stage descriptor;
+    // replacing the module for the skin pipeline must replace that copy too.
+    pipeline.stage = stage;
+    pipeline.layout = _skinPipelineLayout;
+    if (vkCreateComputePipelines(device.handle(), VK_NULL_HANDLE, 1, &pipeline, nullptr, &_skinPipeline) != VK_SUCCESS) {
+        vkDestroyShaderModule(device.handle(), module, nullptr);
+        throw std::runtime_error("Vulkan: skin compute pipeline creation failed");
+    }
+    vkDestroyShaderModule(device.handle(), module, nullptr);
+    device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_skinPipeline), "rayquery:skin");
     _inited = true;
 }
 
 void RayQueryPipeline::clearFrame(Frame &frame) {
+    for (auto &skinned : frame.skinned) {
+        if (skinned.blas) vkDestroyAccelerationStructureKHR(_renderer.device().handle(), skinned.blas, nullptr);
+    }
+    frame.skinned.clear();
     if (frame.tlas) vkDestroyAccelerationStructureKHR(_renderer.device().handle(), frame.tlas, nullptr);
     frame.tlas = VK_NULL_HANDLE; frame.instances.reset(); frame.materials.reset(); frame.traceStats.reset();
     frame.storage.reset(); frame.scratch.reset(); frame.capacity = 0;
@@ -197,14 +255,151 @@ void RayQueryPipeline::clearFrame(Frame &frame) {
 void RayQueryPipeline::deinit() {
     for (auto &frame : _frames) clearFrame(frame);
     auto &device = _renderer.device();
+    if (_skinPipeline) vkDestroyPipeline(device.handle(), _skinPipeline, nullptr);
+    if (_skinPipelineLayout) vkDestroyPipelineLayout(device.handle(), _skinPipelineLayout, nullptr);
+    for (auto &pool : _skinPools) {
+        if (pool) vkDestroyDescriptorPool(device.handle(), pool, nullptr);
+    }
+    if (_skinLayout) vkDestroyDescriptorSetLayout(device.handle(), _skinLayout, nullptr);
     if (_pipeline) vkDestroyPipeline(device.handle(), _pipeline, nullptr);
     if (_pipelineLayout) vkDestroyPipelineLayout(device.handle(), _pipelineLayout, nullptr);
     if (_pool) vkDestroyDescriptorPool(device.handle(), _pool, nullptr);
     if (_layout) vkDestroyDescriptorSetLayout(device.handle(), _layout, nullptr);
     _pipeline = VK_NULL_HANDLE; _pipelineLayout = VK_NULL_HANDLE; _pool = VK_NULL_HANDLE; _layout = VK_NULL_HANDLE;
+    _skinPipeline = VK_NULL_HANDLE; _skinPipelineLayout = VK_NULL_HANDLE; _skinLayout = VK_NULL_HANDLE;
+    _skinPools = {};
     _bindlessTextureCapacity = 0;
     _lastBindlessTextureCount = 0;
     _inited = false;
+}
+
+VulkanMesh::Geometry RayQueryPipeline::skin(VkCommandBuffer cmd,
+                                             Frame &frame,
+                                             const VulkanMesh &source,
+                                             const Mesh::VertexLayout &layout,
+                                             const RegisteredSkin &skin,
+                                             uint32_t globalsOffset) {
+    const auto sourceGeometry = source.geometry();
+    if (sourceGeometry.vertexStride % sizeof(float) != 0) {
+        throw std::runtime_error("Vulkan: skinned vertex stride is not float-aligned");
+    }
+    auto &result = frame.skinned.emplace_back();
+    result.vertices = std::make_unique<VulkanBuffer>(_renderer.device());
+    result.vertices->initDeviceLocal(source.vertexDataSize(),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        nullptr);
+
+    VkDescriptorSetAllocateInfo allocateInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocateInfo.descriptorPool = _skinPools[_renderer.frameIndex()];
+    allocateInfo.descriptorSetCount = 1;
+    allocateInfo.pSetLayouts = &_skinLayout;
+    VkDescriptorSet set {VK_NULL_HANDLE};
+    if (vkAllocateDescriptorSets(_renderer.device().handle(), &allocateInfo, &set) != VK_SUCCESS)
+        throw std::runtime_error("Vulkan: skin descriptor allocation failed");
+    VkDescriptorBufferInfo sourceInfo {source.vertexBuffer(), 0, source.vertexDataSize()};
+    VkDescriptorBufferInfo destinationInfo {result.vertices->handle(), 0, result.vertices->size()};
+    VkWriteDescriptorSet writes[2] {};
+    for (uint32_t i = 0; i < 2; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    }
+    writes[0].pBufferInfo = &sourceInfo;
+    writes[1].pBufferInfo = &destinationInfo;
+    vkUpdateDescriptorSets(_renderer.device().handle(), 2, writes, 0, nullptr);
+
+    BoneUniforms bones;
+    for (size_t i = 0; i < skin.bones.size() && i < kMaxBones; ++i) {
+        bones.bones[i] = skin.bones[i];
+    }
+    const auto bonesOffset = _renderer.uniformRing().push(bones);
+    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    offsets[0] = globalsOffset;
+    offsets[UniformBlockBindingPoints::bones] = bonesOffset;
+    const auto uniformSet = _renderer.uniformSet();
+    SkinPushConstants constants {
+        sourceGeometry.maxVertexIndex + 1,
+        static_cast<uint32_t>(sourceGeometry.vertexStride / sizeof(float)),
+        layout.offPosition / static_cast<int>(sizeof(float)),
+        layout.offNormals / static_cast<int>(sizeof(float)),
+        layout.offBoneIndices / static_cast<int>(sizeof(float)),
+        layout.offBoneWeights / static_cast<int>(sizeof(float)),
+        // -1 must stay -1: integer division would fold "absent" onto the
+        // position offset and skin garbage over it.
+        layout.offTanSpace >= 0 ? layout.offTanSpace / static_cast<int>(sizeof(float)) : -1};
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _skinPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _skinPipelineLayout, 0, 1, &uniformSet,
+                            static_cast<uint32_t>(offsets.size()), offsets.data());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _skinPipelineLayout, 1, 1, &set, 0, nullptr);
+    vkCmdPushConstants(cmd, _skinPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), &constants);
+    vkCmdDispatch(cmd, (constants.vertexCount + 63) / 64, 1, 1);
+
+    VkMemoryBarrier2 skinBarrier {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    skinBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    skinBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+    // Two consumers, not one: the BLAS build reads positions, and the trace
+    // dispatch itself reads UVs, normals, and tangent frames from this buffer
+    // through its device address. Guarding only the build left the trace
+    // racing the skinning writes - striped garbage UVs across every skinned
+    // mesh, different every run.
+    skinBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    skinBarrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                VK_ACCESS_2_SHADER_READ_BIT;
+    VkDependencyInfo skinDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    skinDependency.memoryBarrierCount = 1;
+    skinDependency.pMemoryBarriers = &skinBarrier;
+    vkCmdPipelineBarrier2(cmd, &skinDependency);
+
+    VulkanMesh::Geometry geometry = sourceGeometry;
+    geometry.vertexAddress = result.vertices->deviceAddress();
+    VkAccelerationStructureGeometryTrianglesDataKHR triangles {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
+    triangles.vertexFormat = geometry.vertexFormat;
+    triangles.vertexData.deviceAddress = geometry.vertexAddress + geometry.positionOffset;
+    triangles.vertexStride = geometry.vertexStride;
+    triangles.maxVertex = geometry.maxVertexIndex;
+    triangles.indexType = geometry.indexType;
+    triangles.indexData.deviceAddress = geometry.indexAddress;
+    VkAccelerationStructureGeometryKHR asGeometry {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    asGeometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    asGeometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    asGeometry.geometry.triangles = triangles;
+    const uint32_t primitiveCount = source.indexCount() / 3;
+    VkAccelerationStructureBuildGeometryInfoKHR build {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    build.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    build.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+    build.geometryCount = 1;
+    build.pGeometries = &asGeometry;
+    VkAccelerationStructureBuildSizesInfoKHR sizes {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+    vkGetAccelerationStructureBuildSizesKHR(_renderer.device().handle(),
+        VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &build, &primitiveCount, &sizes);
+    result.storage = std::make_unique<VulkanBuffer>(_renderer.device());
+    result.storage->initDeviceLocal(sizes.accelerationStructureSize,
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, nullptr);
+    VkAccelerationStructureCreateInfoKHR create {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+    create.buffer = result.storage->handle();
+    create.size = sizes.accelerationStructureSize;
+    create.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    if (vkCreateAccelerationStructureKHR(_renderer.device().handle(), &create, nullptr, &result.blas) != VK_SUCCESS)
+        throw std::runtime_error("Vulkan: skinned BLAS creation failed");
+    const auto alignment = _renderer.device().accelerationStructureProperties().minAccelerationStructureScratchOffsetAlignment;
+    result.scratch = std::make_unique<VulkanBuffer>(_renderer.device());
+    result.scratch->initDeviceLocal(sizes.buildScratchSize + alignment,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, nullptr);
+    build.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    build.dstAccelerationStructure = result.blas;
+    build.scratchData.deviceAddress = alignedAddress(result.scratch->deviceAddress(), alignment);
+    VkAccelerationStructureBuildRangeInfoKHR range {};
+    range.primitiveCount = primitiveCount;
+    const VkAccelerationStructureBuildRangeInfoKHR *ranges[] {&range};
+    vkCmdBuildAccelerationStructuresKHR(cmd, 1, &build, ranges);
+    return geometry;
 }
 
 void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uint32_t globalsOffset,
@@ -214,11 +409,27 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     // the documented caller of the no-culling mode.
     const auto visibility = VisibilityPolicy::noCulling();
     (void)visibility;
+    auto &frame = _frames[_renderer.frameIndex()];
+    // The renderer waited this in-flight frame's fence before calling us, so
+    // its previous GPU-written counters are now safe to inspect and every
+    // frame-local skinned BLAS/output buffer may be retired.
+    if (frame.traceStats) {
+        frame.traceStats->invalidateMapped();
+        const auto *stats = static_cast<const TraceStats *>(frame.traceStats->mapped());
+        _lastSecondaryRays = stats->secondaryRays;
+        _lastSecondaryMisses = stats->secondaryMisses;
+        _lastSurvivingLights = stats->survivingLights;
+        _lastPrimaryHits = stats->primaryHits;
+        _lastShadowRays = stats->shadowRays;
+    }
+    clearFrame(frame);
+    vkResetDescriptorPool(_renderer.device().handle(), _skinPools[_renderer.frameIndex()], 0);
     std::vector<VkAccelerationStructureInstanceKHR> instances;
     std::vector<InstanceMaterial> materials;
     instances.reserve(registry.objects().size());
     materials.reserve(registry.objects().size());
     _lastDeforming = 0;
+    _lastSkinned = 0;
     _lastOutOfRange = 0;
     _lastEmissive = 0;
     _lastAdditive = 0;
@@ -227,9 +438,19 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     for (const auto &object : registry.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
         if (!mesh) continue;
+        // Shadow-only entries - render flag off, categories reduced to
+        // ShadowCaster - are the simplified shadow-volume proxies Odyssey
+        // ships inside character models: skin-tight untextured boxes around
+        // the skeleton. Raster only ever draws them into shadow maps; traced
+        // as geometry they render as white patches over the real body, and
+        // traced shadows already test the real surfaces.
+        if ((mesh->categories & (renderCategory(RenderCategory::Opaque) |
+                                 renderCategory(RenderCategory::Transparent))) == 0) {
+            continue;
+        }
         // Saber displacement is a small whole-blade animation. A rigid blade
-        // is much more useful to tracing than no blade at all; skin and dangly
-        // meshes still need a proper deformed BLAS and remain excluded.
+        // is much more useful to tracing than no blade at all. Skinned meshes
+        // take the frame-local compute/BLAS path below.
         const bool saber = std::holds_alternative<RegisteredSaber>(mesh->deformation);
         // Dangly meshes are admitted at their base positions for the same
         // reason sabers are: a static canopy beats an absent one, and the
@@ -237,15 +458,26 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         // rather than only those whose canopy happens to be rigid. The wind
         // arrives with the deformation compute pass, which replaces this.
         const bool dangly = std::holds_alternative<RegisteredDangly>(mesh->deformation);
-        if (!std::holds_alternative<std::monostate>(mesh->deformation) && !saber && !dangly) {
+        const auto *skinned = std::get_if<RegisteredSkin>(&mesh->deformation);
+        if (!std::holds_alternative<std::monostate>(mesh->deformation) && !skinned && !saber && !dangly) {
             ++_lastDeforming;
             continue;
         }
         if (saber) ++_lastSabers;
         if (dangly) ++_lastDangly;
         if (mesh->id.index > 0x00ffffffu) { ++_lastOutOfRange; continue; }
-        const auto &blas = _renderer.resources().blas(mesh->mesh.get());
-        const auto geometry = _renderer.resources().get(mesh->mesh.get()).geometry();
+        const auto &uploaded = _renderer.resources().get(mesh->mesh.get());
+        VulkanMesh::Geometry geometry;
+        VkAccelerationStructureKHR blasHandle {VK_NULL_HANDLE};
+        if (skinned) {
+            geometry = skin(cmd, frame, uploaded, mesh->mesh.get().vertexLayout(), *skinned, globalsOffset);
+            blasHandle = frame.skinned.back().blas;
+            ++_lastSkinned;
+        } else {
+            const auto &blas = _renderer.resources().blas(mesh->mesh.get());
+            geometry = uploaded.geometry();
+            blasHandle = blas.handle();
+        }
         VkAccelerationStructureInstanceKHR instance {};
         instance.transform = instanceTransform(mesh->transform);
         instance.instanceCustomIndex = mesh->id.index;
@@ -258,7 +490,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         instance.instanceShaderBindingTableRecordOffset = 0;
         instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
         VkAccelerationStructureDeviceAddressInfoKHR address {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
-        address.accelerationStructure = blas.handle();
+        address.accelerationStructure = blasHandle;
         instance.accelerationStructureReference = vkGetAccelerationStructureDeviceAddressKHR(_renderer.device().handle(), &address);
         InstanceMaterial material;
         material.selfIllumColor = glm::vec4(mesh->material.selfIllumColor, 0.0f);
@@ -307,11 +539,6 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         }
         if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
             material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
-        } else {
-            // No diffuse at all is not an accident: shadow-proxy meshes
-            // register with render false and empty texture slots, and they are
-            // the only rigid stand-in the TLAS has for a skinned body until
-            // the deformation pass exists. They shade from diffuseColor.
         }
         if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::NormalMap)]) {
             material.normalMap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
@@ -340,6 +567,20 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         }
     }
     _lastInstances = static_cast<uint32_t>(instances.size());
+    if (!frame.skinned.empty()) {
+        // Each dynamic BLAS was written after its compute-to-build barrier.
+        // The TLAS consumes those BLAS addresses next, so make the bottom-level
+        // writes visible to this top-level build before recording it.
+        VkMemoryBarrier2 blasBarrier {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        blasBarrier.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        blasBarrier.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        blasBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        blasBarrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        VkDependencyInfo blasDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        blasDependency.memoryBarrierCount = 1;
+        blasDependency.pMemoryBarriers = &blasBarrier;
+        vkCmdPipelineBarrier2(cmd, &blasDependency);
+    }
     if (instances.empty()) {
         // The splash/menu has no scene snapshot. It is not an error, and must
         // not prevent a later module frame from constructing its TLAS.
@@ -352,19 +593,6 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         return;
     }
 
-    auto &frame = _frames[_renderer.frameIndex()];
-    // The renderer waited this in-flight frame's fence before calling us, so
-    // its previous GPU-written counters are now safe to inspect.
-    if (frame.traceStats) {
-        frame.traceStats->invalidateMapped();
-        const auto *stats = static_cast<const TraceStats *>(frame.traceStats->mapped());
-        _lastSecondaryRays = stats->secondaryRays;
-        _lastSecondaryMisses = stats->secondaryMisses;
-        _lastSurvivingLights = stats->survivingLights;
-        _lastPrimaryHits = stats->primaryHits;
-        _lastShadowRays = stats->shadowRays;
-    }
-    clearFrame(frame);
     auto &device = _renderer.device();
     const auto instanceSize = static_cast<VkDeviceSize>(instances.size() * sizeof(instances[0]));
     frame.instances = std::make_unique<VulkanBuffer>(device);
@@ -524,7 +752,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                   std::to_string(_lastPrimaryHits ? static_cast<float>(_lastShadowRays) / _lastPrimaryHits : 0.0f) +
                   " direct shadow rays/primary hit; "
             : "trace stats off; ";
-    info("Vulkan: TLAS " + std::to_string(_lastInstances) + " instances, skipped " +
+    info("Vulkan: TLAS " + std::to_string(_lastInstances) + " instances, " +
+         std::to_string(_lastSkinned) + " skinned, skipped " +
          std::to_string(_lastDeforming) + " deforming and " +
          std::to_string(_lastOutOfRange) + " out-of-range meshes, build recorded in " +
          std::to_string(microseconds) + " us; " + std::to_string(_lastEmissive) +

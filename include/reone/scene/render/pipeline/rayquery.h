@@ -7,14 +7,17 @@
 #include <volk.h>
 
 #include "reone/graphics/vulkan/buffer.h"
+#include "reone/graphics/vulkan/mesh.h"
 
 namespace reone::graphics {
 class VulkanRenderer;
 class VulkanImage;
+class Mesh;
 struct GraphicsOptions;
 }
 namespace reone::scene {
 class RenderRegistry;
+struct RegisteredSkin;
 
 /** Vulkan-only primary-ray diagnostic. It deliberately owns no raster pass. */
 class RayQueryPipeline : boost::noncopyable {
@@ -30,6 +33,12 @@ public:
 
 private:
     struct Frame {
+        struct Skinned {
+            std::unique_ptr<graphics::VulkanBuffer> vertices;
+            std::unique_ptr<graphics::VulkanBuffer> storage;
+            std::unique_ptr<graphics::VulkanBuffer> scratch;
+            VkAccelerationStructureKHR blas {VK_NULL_HANDLE};
+        };
         std::unique_ptr<graphics::VulkanBuffer> instances;
         // Kept in exactly TLAS instance order. Query.CommittedInstanceID()
         // indexes this dense array; instanceCustomIndex is a SceneNode id.
@@ -39,6 +48,7 @@ private:
         std::unique_ptr<graphics::VulkanBuffer> scratch;
         VkAccelerationStructureKHR tlas {VK_NULL_HANDLE};
         uint32_t capacity {0};
+        std::vector<Skinned> skinned;
     };
 
     graphics::VulkanRenderer &_renderer;
@@ -49,8 +59,13 @@ private:
     std::array<VkDescriptorSet, 2> _sets {};
     VkPipelineLayout _pipelineLayout {VK_NULL_HANDLE};
     VkPipeline _pipeline {VK_NULL_HANDLE};
+    VkDescriptorSetLayout _skinLayout {VK_NULL_HANDLE};
+    std::array<VkDescriptorPool, 2> _skinPools {};
+    VkPipelineLayout _skinPipelineLayout {VK_NULL_HANDLE};
+    VkPipeline _skinPipeline {VK_NULL_HANDLE};
     std::array<Frame, 2> _frames;
     uint32_t _lastInstances {0};
+    uint32_t _lastSkinned {0};
     uint32_t _lastDeforming {0};
     uint32_t _lastOutOfRange {0};
     uint32_t _lastEmissive {0};
@@ -81,9 +96,26 @@ private:
         uint32_t bounceCount;
     };
 
+    /** Must match PushConstants in slang/skin.slang. */
+    struct SkinPushConstants {
+        uint32_t vertexCount;
+        uint32_t vertexStrideFloats;
+        int32_t positionOffsetFloats;
+        int32_t normalOffsetFloats;
+        int32_t boneIndicesOffsetFloats;
+        int32_t boneWeightsOffsetFloats;
+        int32_t tanSpaceOffsetFloats;
+    };
+
     uint32_t _frameNumber {0};
     bool _inited {false};
 
     void clearFrame(Frame &frame);
+    graphics::VulkanMesh::Geometry skin(VkCommandBuffer cmd,
+                                         Frame &frame,
+                                         const graphics::VulkanMesh &source,
+                                         const graphics::Mesh::VertexLayout &layout,
+                                         const RegisteredSkin &skin,
+                                         uint32_t globalsOffset);
 };
 } // namespace reone::scene
