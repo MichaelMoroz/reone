@@ -80,6 +80,16 @@ public:
     const VulkanImage &get(const Texture &texture);
 
     /**
+     * Dense bindless descriptor index assigned when a 2D asset is uploaded.
+     * A texture the upload path cannot represent has no id, so tracing can
+     * deliberately fall back rather than sampling an unrelated descriptor.
+     */
+    std::optional<uint32_t> textureId(const Texture &texture);
+
+    /** Uploaded 2D textures and their stable bindless indices. */
+    std::vector<std::pair<uint32_t, const VulkanImage *>> uploadedTextures() const;
+
+    /**
      * Associate @p texture with an image this cache does not own.
      *
      * Render targets cross the backend seam as a `Texture &` - that is what
@@ -134,7 +144,12 @@ private:
      */
     VulkanSamplers _samplers;
 
-    std::unordered_map<const Texture *, std::unique_ptr<VulkanImage>> _textures;
+    struct UploadedTexture {
+        std::unique_ptr<VulkanImage> image;
+        uint32_t id {0};
+    };
+    std::unordered_map<const Texture *, UploadedTexture> _textures;
+    uint32_t _nextTextureId {0};
     std::unordered_map<const Texture *, const VulkanImage *> _external;
 
     /**

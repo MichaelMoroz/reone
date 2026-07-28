@@ -17,6 +17,8 @@
 
 #include "reone/graphics/vulkan/device.h"
 
+#include <algorithm>
+
 #include <SDL3/SDL_vulkan.h>
 
 #include "reone/system/logutil.h"
@@ -108,14 +110,6 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     rayQueryFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
     rayQueryFeatures.rayQuery = VK_TRUE;
 
-    // Position fetch supplies the three hit-triangle vertices directly from
-    // the acceleration structure. The path tracer uses it for geometric
-    // normals, without making mesh vertex buffers bindless.
-    VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR positionFetchFeatures {};
-    positionFetchFeatures.sType =
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_POSITION_FETCH_FEATURES_KHR;
-    positionFetchFeatures.rayTracingPositionFetch = VK_TRUE;
-
     // The resolve samples the derived environment maps as cube arrays, which is
     // not a baseline capability.
     VkPhysicalDeviceFeatures features {};
@@ -128,16 +122,17 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     // Keep the raster selection independent of ray tracing. The latter is an
     // optional Vulkan capability, so an otherwise suitable GPU must not become
     // unselectable just because it cannot trace.
-    auto configureRasterSelector = [&](vkb::PhysicalDeviceSelector &selector) {
+    auto configureSelector = [&](vkb::PhysicalDeviceSelector &selector,
+                                 const VkPhysicalDeviceFeatures &requiredFeatures) {
         selector.set_surface(_surface)
             .set_minimum_version(1, 3)
-            .set_required_features(features)
+            .set_required_features(requiredFeatures)
             .set_required_features_11(features11)
             .set_required_features_13(features13);
     };
 
     vkb::PhysicalDeviceSelector rasterSelector(_instance);
-    configureRasterSelector(rasterSelector);
+    configureSelector(rasterSelector, features);
     auto physicalResult = rasterSelector.select();
     if (!physicalResult) {
         throw std::runtime_error("Vulkan: no suitable device: " +
@@ -152,17 +147,18 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     // Selection is deliberately a second, optional pass: failure leaves the
     // raster-selected device intact.
     vkb::PhysicalDeviceSelector rayQuerySelector(_instance);
-    configureRasterSelector(rayQuerySelector);
+    VkPhysicalDeviceFeatures rayQueryCoreFeatures = features;
+    // Physical-storage-buffer addresses in the hit shader are uint64_t.
+    rayQueryCoreFeatures.shaderInt64 = VK_TRUE;
+    configureSelector(rayQuerySelector, rayQueryCoreFeatures);
     // Do not let an optional feature change the GPU chosen for rasterization.
     rayQuerySelector.set_name(physicalDevice.name);
     rayQuerySelector.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
         .add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
         .add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
-        .add_required_extension(VK_KHR_RAY_TRACING_POSITION_FETCH_EXTENSION_NAME)
         .set_required_features_12(features12)
         .add_required_extension_features(accelerationStructureFeatures)
-        .add_required_extension_features(rayQueryFeatures)
-        .add_required_extension_features(positionFetchFeatures);
+        .add_required_extension_features(rayQueryFeatures);
     auto rayQueryPhysicalResult = rayQuerySelector.select();
     if (rayQueryPhysicalResult) {
         physicalDevice = rayQueryPhysicalResult.value();
@@ -236,15 +232,26 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         _accelerationStructureProperties = {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
+        VkPhysicalDeviceDescriptorIndexingProperties descriptorIndexingProperties {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES};
+        _accelerationStructureProperties.pNext = &descriptorIndexingProperties;
         properties2.pNext = &_accelerationStructureProperties;
         vkGetPhysicalDeviceProperties2(_device.physical_device, &properties2);
+        _maxBindlessSampledImages = std::min({4096u,
+            descriptorIndexingProperties.maxDescriptorSetUpdateAfterBindSampledImages,
+            descriptorIndexingProperties.maxPerStageDescriptorUpdateAfterBindSampledImages});
+        if (_maxBindlessSampledImages == 0) {
+            throw std::runtime_error("Vulkan: ray-query device has no update-after-bind sampled-image capacity");
+        }
         info("Vulkan ray-query acceleration-structure properties: maxGeometryCount=" +
                  std::to_string(_accelerationStructureProperties.maxGeometryCount) +
                  ", maxInstanceCount=" +
                  std::to_string(_accelerationStructureProperties.maxInstanceCount) +
                  ", minScratchOffsetAlignment=" +
                  std::to_string(
-                     _accelerationStructureProperties.minAccelerationStructureScratchOffsetAlignment),
+                     _accelerationStructureProperties.minAccelerationStructureScratchOffsetAlignment) +
+                 ", bindless sampled images=" +
+                 std::to_string(_maxBindlessSampledImages),
              LogChannel::Graphics);
     }
     if (!_debugUtils) {

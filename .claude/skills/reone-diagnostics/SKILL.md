@@ -398,6 +398,25 @@ touches, and how far it moves them.
   different resolution *and* a different pipeline (`pbr=0` vs the default), so
   92% of the frame differs for reasons that have nothing to do with the change.
   Copy the cfg into the reference bin.
+- **`reone.cfg` wins every flag you do not pass, and anyone can have edited it.**
+  It is untracked, it lives in `build/bin`, `git stash` and `git checkout` do not
+  touch it, and both the launcher and anyone testing a mode will write to it.
+  A capture that omits `--mode` is not "the default mode", it is whatever that
+  file last said.
+
+  This has now cost time twice in one session, in both directions. A leftover
+  `mode=path-tracing` made **OpenGL refuse to start** - exit 3, no window, no
+  message that survived the buffer. Later the same key made five consecutive
+  Vulkan "raster" captures come back **two million pixels** different from their
+  baseline, because they were path-traced frames compared against a rasterised
+  one. Both times the symptom looked exactly like a code regression, and the
+  second time an agent's change was blamed for it before the config was checked.
+
+  **Pass the flags you are comparing on, explicitly, every time** - `--mode`,
+  `--pbr`, `--backend` - rather than trusting any of them to default. And when a
+  frame differs enormously for no reason the diff can explain, read
+  `build/bin/reone.cfg` and check its modification time *before* bisecting
+  anything.
 - **The mouse cursor is in the capture.** It is drawn at whatever position the
   game holds. Input is dropped during a capture, so it no longer wanders
   mid-run, but it is still in the image and still worth ruling out before

@@ -56,6 +56,8 @@ private:
     uint32_t _lastEmissive {0};
     uint32_t _lastSecondaryRays {0};
     uint32_t _lastSecondaryMisses {0};
+    uint32_t _bindlessTextureCapacity {0};
+    uint32_t _lastBindlessTextureCount {0};
     /** Must match PushConstants in slang/rayquery.slang. */
     struct TracePushConstants {
         uint32_t frameIndex;

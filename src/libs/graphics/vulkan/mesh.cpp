@@ -141,8 +141,9 @@ void VulkanMesh::init(const Mesh &mesh) {
 VulkanMesh::Geometry VulkanMesh::geometry() const {
     Geometry geometry;
     VkDeviceAddress vertexAddress = _vertexBuffer.deviceAddress();
-    geometry.vertexAddress = vertexAddress ? vertexAddress + _positionOffset : 0;
+    geometry.vertexAddress = vertexAddress;
     geometry.vertexStride = _vertexStride;
+    geometry.positionOffset = _positionOffset;
     geometry.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
     geometry.maxVertexIndex = _maxVertexIndex;
     geometry.indexAddress = _indexBuffer.deviceAddress();

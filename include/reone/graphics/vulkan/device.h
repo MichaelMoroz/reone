@@ -105,6 +105,9 @@ public:
         return _accelerationStructureProperties;
     }
 
+    /** Maximum sampled images usable by the ray-query bindless descriptor set. */
+    uint32_t maxBindlessSampledImages() const { return _maxBindlessSampledImages; }
+
     /** The largest anisotropy this device will accept in a sampler. */
     float maxAnisotropy() const { return _maxAnisotropy; }
 
@@ -128,6 +131,7 @@ private:
     bool _rayQueryAvailable {false};
     VkPhysicalDeviceAccelerationStructurePropertiesKHR _accelerationStructureProperties {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
+    uint32_t _maxBindlessSampledImages {0};
 
     VkQueue _graphicsQueue {VK_NULL_HANDLE};
     uint32_t _graphicsQueueFamily {0};

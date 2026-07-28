@@ -222,7 +222,7 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
     }
     auto existing = _textures.find(&texture);
     if (existing != _textures.end()) {
-        return *existing->second;
+        return *existing->second.image;
     }
     // Cube map arrays - the irradiance and prefiltered environment maps the GL
     // resolve samples - still have no upload path. Everything else does.
@@ -367,7 +367,9 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
               LogChannel::Graphics);
         image->setSampler(_samplers.get(texture.properties()));
         debug("Vulkan: uploaded texture " + texture.name(), LogChannel::Graphics);
-        return *_textures.insert({&texture, std::move(image)}).first->second;
+        auto [it, inserted] = _textures.emplace(
+            &texture, UploadedTexture {std::move(image), _nextTextureId++});
+        return *it->second.image;
     }
     const auto &layer = texture.layers().front();
     std::vector<VulkanImage::Subresource> subresources;
@@ -435,7 +437,36 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
     }
     image->setSampler(_samplers.get(texture.properties()));
     debug("Vulkan: uploaded texture " + texture.name(), LogChannel::Graphics);
-    return *_textures.insert({&texture, std::move(image)}).first->second;
+    auto [it, inserted] = _textures.emplace(
+        &texture, UploadedTexture {std::move(image), _nextTextureId++});
+    return *it->second.image;
+}
+
+std::optional<uint32_t> VulkanResources::textureId(const Texture &texture) {
+    // get() performs the one-time upload, then the cache entry owns both the
+    // image and its descriptor index. Fallback images deliberately do not get
+    // an id: a material using one is represented as "no texture" to tracing.
+    get(texture);
+    auto it = _textures.find(&texture);
+    if (it == _textures.end()) {
+        return std::nullopt;
+    }
+    return it->second.id;
+}
+
+std::vector<std::pair<uint32_t, const VulkanImage *>> VulkanResources::uploadedTextures() const {
+    std::vector<std::pair<uint32_t, const VulkanImage *>> result;
+    result.reserve(_textures.size());
+    for (const auto &[texture, uploaded] : _textures) {
+        // The ray-query shader's bindless array is Sampler2D. Cube and array
+        // uploads have distinct view types and must not occupy that array;
+        // they are not sampled by the diffuse/normal-map tracing path.
+        if (texture->type() != TextureType::TwoDim) {
+            continue;
+        }
+        result.emplace_back(uploaded.id, uploaded.image.get());
+    }
+    return result;
 }
 
 VkBuffer VulkanResources::zeroBuffer() {
@@ -474,6 +505,7 @@ const VulkanBLAS &VulkanResources::blas(const Mesh &mesh) {
 
 void VulkanResources::clearUploaded() {
     _textures.clear();
+    _nextTextureId = 0;
     _blases.clear();
     _meshes.clear();
 }
@@ -485,6 +517,7 @@ void VulkanResources::deinit() {
     _fallbackCube.reset();
     _external.clear();
     _textures.clear();
+    _nextTextureId = 0;
     _blases.clear();
     _meshes.clear();
     // Explicitly, not from the member destructor: this object outlives

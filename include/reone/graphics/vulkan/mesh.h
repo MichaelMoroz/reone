@@ -43,12 +43,15 @@ class VulkanMesh : boost::noncopyable {
 public:
     /**
      * The buffer facts an acceleration-structure builder needs for this
-     * mesh's rigid triangle geometry. vertexAddress starts at position within
-     * the interleaved vertex record, not at the beginning of that record.
+     * mesh's rigid triangle geometry. vertexAddress starts at the beginning of
+     * an interleaved vertex record; positionOffset is kept separately because
+     * the BLAS only consumes positions while hit shaders consume other
+     * attributes as well.
      */
     struct Geometry {
         VkDeviceAddress vertexAddress {0};
         VkDeviceSize vertexStride {0};
+        VkDeviceSize positionOffset {0};
         VkFormat vertexFormat {VK_FORMAT_UNDEFINED};
         uint32_t maxVertexIndex {0};
         VkDeviceAddress indexAddress {0};

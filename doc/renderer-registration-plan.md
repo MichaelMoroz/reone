@@ -245,6 +245,172 @@ instance and the TLAS carries the transform. Deforming meshes differ per
 *node*, not per mesh - two characters sharing a model are in different poses -
 so each needs its own, refit each frame.
 
+### What the registry is actually made of
+
+Before optimising, the composition. `danm14ab`, frame 310, from
+`formatRegistryCounts`:
+
+| | registered | drawn opaque | drawn transparent |
+|---|---:|---:|---:|
+| rigid | 744 | 237 | 38 |
+| skinned | 61 | 13 | 0 |
+| dangly | **653** | 7 | **544** |
+| saber | 4 | 0 | 4 |
+| emitters / particles | 41 / 55 | - | - |
+| grass | 1 node / 1482 clusters | 1 | - |
+
+**544 of the 586 transparent draws are dangly meshes.** Transparent plus dangly
+is foliage, and it dominates everything: there are ten times more dangly meshes
+than skinned ones, and the transparent pass is very nearly nothing else.
+
+That reorders the deforming-geometry work. Skinning is the interesting problem
+and dangly is the expensive one.
+
+### Optimisation: foliage, not skinning, is the deforming cost
+
+Each of those 653 dangly meshes computes its vertex positions on the CPU every
+frame, allocates a vector for them (`src/libs/scene/node/mesh.cpp:318-326`), and
+under ray tracing would need **its own BLAS refit every frame** because dangly
+positions differ per node. Six hundred refits a frame for leaves.
+
+Three things worth trying, cheapest first:
+
+- **Freeze what is not visibly moving.** A dangly mesh whose positions have
+  barely changed since its last build does not need a refit. A per-node motion
+  threshold turns most of the foliage static for most frames, and the data to
+  decide it is already computed - the displacement is right there in
+  `_dangly.vertices`.
+- **Ask first whether it needs simulating at all.** It is a real spring-damper -
+  per-vertex velocity and displacement integrated across frames
+  (`src/libs/scene/node/mesh.cpp:135-176`) - but look at what drives it. The
+  artist supplies `displacement`, `tightness`, `period` and per-vertex
+  `constraints`. The forcing is only two terms: the object's own motion, and
+  wind. Wind is **not authored** - it is hardcoded as
+  `0.01f * abs(sin(_windTime))` along world X - and `_windTime` starts at zero
+  on every node and advances by the same `dt`, so under a fixed timestep every
+  dangly mesh in the scene sits at the same phase forever.
+
+  For a stationary tree the motion term is zero, so wind is the only input and
+  the response is periodic with a 2π-second loop. **The displacement field is
+  then a pure function of (mesh parameters, orientation, phase)** - not
+  per-instance state in any meaningful sense. The same few answers are being
+  recomputed 653 times.
+
+  That points somewhere better than a faster simulation:
+
+  - **bake the loop.** Precompute the cycle once per distinct mesh and sample
+    it, and the per-frame integration disappears entirely;
+  - **share the result.** Two instances of the same tree at the same
+    orientation have bit-identical geometry, so they can share one BLAS with the
+    TLAS carrying the transform - which is the rigid case again, and collapses
+    hundreds of per-node structures. Orientation is the wrinkle: the wind is
+    rotated into object space, so instances at different rotations diverge.
+    Simulating in world space instead would remove that dependency and widen the
+    sharing to every instance of a model. Worth checking whether it changes the
+    look before assuming it is free.
+  - **the in-phase wind is arguably a bug of its own.** Every tree in the area
+    waves in perfect sync because nothing offsets `_windTime` per node. Seeding
+    it from the node's interned name or id would cost nothing and look better,
+    though it would also destroy the sharing above - so decide which is worth
+    more before doing either.
+
+  Note the CPU cost is *not* the argument here: dangly allocation and fill were
+  measured at 0.065 ms/frame combined. The win is the BLAS count, which is a
+  ray-tracing concern, not a frame-time one.
+
+- **Move the simulation to compute.** Still right for whatever survives the
+  above, and required regardless for skinning. The positions must be
+  GPU-resident for tracing, so computing them on the CPU and uploading is paying
+  twice. It is the same pass skinning needs - both write deformed vertices into
+  a buffer a BLAS can build from - so build the mechanism once and give it two
+  kernels.
+
+  What it needs, and what it breaks:
+
+  - **Per-node persistent state.** The simulation integrates velocity and
+    displacement across frames (`src/libs/scene/node/mesh.cpp:135-176`), so the
+    buffer has to survive between frames and be found again next frame. That is
+    exactly what `SceneNodeId` and the cache-version rule exist for; this is the
+    first thing that genuinely consumes them rather than carrying them.
+  - **Static inputs upload once.** Base positions and per-vertex constraints
+    come from `mesh->danglymesh` and never change; only the transform, previous
+    transform, wind time and timestep vary per frame.
+  - **It will change the rendered image.** Floating-point on the GPU will not
+    reproduce the CPU's results bit for bit, and the simulation integrates, so
+    small differences accumulate rather than cancel. **Every verification in
+    this project so far has rested on bit-identical frames, and this is the
+    first change that cannot meet that bar.** Decide the replacement standard
+    before starting - a bounded per-pixel difference over a foliage region, or a
+    deliberate re-baseline with the old images kept - rather than discovering
+    mid-change that the usual check no longer applies.
+  - **Determinism must survive.** Captures have to stay reproducible run to run
+    even if they no longer match the CPU path, so the kernel must not depend on
+    dispatch order or uninitialised state. Two runs at the same frame must still
+    be byte-identical to each other.
+- **Alpha-tested foliage is a known ray-tracing cliff.** Transparent geometry
+  needs any-hit shader invocations rather than the fixed-function path, and 544
+  alpha-tested quads across the view is exactly the shape that hurts. Decide
+  deliberately whether foliage enters the TLAS at all, the same question the
+  plan already asks about particles.
+
+  **It also has a hard prerequisite and a silent failure mode.** Marking foliage
+  non-opaque makes `RayQuery::Proceed` start returning true on candidates, and
+  the loop in `slang/rayquery.slang` currently has an empty body because every
+  instance is opaque. An empty body neither commits nor ignores a candidate, so
+  the hit is dropped and alpha-tested geometry **disappears from the traced view
+  while still rendering in raster** - which looks like anything except a
+  traversal bug. Resolving a candidate means sampling the alpha at the hit,
+  which needs the texture reachable from the shader, so this cannot land before
+  the bindless material work. Order: material buffer and bindless textures
+  first, then non-opaque foliage, and never the reverse.
+
+### Optimisation: one object per body part
+
+A character is not one mesh. `c_drdwar` registers **30 entries** - `belly`,
+`chest`, `neck`, `head`, `l_upperarm`, `lfngr1` and so on - and `c_khounda`
+registers 23, eight times over. Under rasterisation that is 30 draw calls;
+under ray tracing it is 30 TLAS instances for one droid.
+
+Two distinct cases, and they want opposite things:
+
+- **Rigid characters** - droids are assembled from rigid parts, each with its
+  own transform. Expressing them as a single skinned mesh with bone transforms
+  would collapse 30 instances into one BLAS plus a refit. **The trade is real
+  and needs measuring**: rigid parts currently *share* their BLAS across every
+  instance of the model, so eight `c_khounda` cost 23 structures and 184
+  instances. As skinned they would cost eight structures, eight instances and
+  eight refits per frame. Fewer instances, but sharing is lost.
+- **Genuinely skinned characters** already deform per node, so merging the parts
+  of one character into one BLAS costs nothing and removes instances outright.
+  There is no sharing to lose.
+
+Either way the merge is per *model*, not per node, and wants the model root -
+which registry entries now carry as `cullRoot` and a `SceneNodeId`.
+
+### Optimisation: rebuild only what changed
+
+The current build is per mesh on first use and the TLAS is rebuilt per frame,
+which is right for a first version and wrong afterwards. What each category
+actually needs:
+
+| | when |
+|---|---|
+| static room geometry | once, at load |
+| rigid props | on move, or never |
+| skinned | refit per frame while visible and animating |
+| dangly | refit per frame, subject to the motion threshold above |
+| TLAS | rebuilt per frame regardless - it is cheap and everything moves through it |
+
+**Refit is not rebuild**, and the distinction is the whole optimisation: a refit
+keeps the existing tree and moves its vertices, costing a fraction of a build,
+but degrades traversal quality as the pose drifts from the one the tree was
+built for. So refit per frame, rebuild occasionally - on a large pose change, or
+every N frames staggered across objects so the cost does not land in one frame.
+
+An object that is neither visible nor animating needs neither. That is a
+per-object decision the snapshot can already express, since it knows what was
+drawn and in which pass.
+
 ### Optimisation: one BLAS for everything static
 
 The table above shares a BLAS between instances of the same mesh. The next step
@@ -282,13 +448,16 @@ room model nodes, skipping anything under the room's `"{modelName}a"` subtree,
 which is where its animated geometry lives. So:
 
 - it is a **room** flag - `setStatic` runs inside `Area::loadLYT` over the
-  layout's rooms. Placeables, doors and creatures are never marked, including
-  the footlocker that never moves in the entire game. In practice this matters
-  less than it sounds: in danm14ab the six room models account for roughly 940
-  of the 1508 entries while every placeable and door together is about
-  fourteen, so merging on this flag alone still captures nearly all of the
-  available win. Worth re-checking in an interior area, where the ratio is
-  likely the other way;
+  layout's rooms, and nothing else is ever marked. That reads like an
+  under-count until you ask what else would qualify: a placeable opens, a door
+  swings, a creature walks. Room geometry outside the room's own animated
+  subtree may be exactly the set that never moves, in which case the flag is
+  drawn correctly rather than drawn short. Do not widen it without checking
+  what each candidate does when the player interacts with it - "it has not
+  moved yet" and "it cannot move" are different claims, and only the second one
+  is safe to bake into a BLAS. For scale, danm14ab's six room models are
+  roughly 940 of the 1508 entries against about fourteen for every placeable
+  and door, so the flag already covers the bulk of an outdoor area;
 - it constrains the **transform, not the material**. A static node still runs
   `updateUVAnimation` and `updateBumpmapAnimation`
   (`src/libs/scene/node/mesh.cpp:108-129`), so scrolling water in a room is
@@ -794,9 +963,15 @@ have: it is a prerequisite for *deforming* geometry only.
     retained protocol is that the snapshot *reports* the version rather than
     the scene *announcing* a change. **Lands with 11**, which is its only
     consumer.
-11. **Skinning compute pass and per-node BLAS** for the deforming variants.
-    This is where step 4's ids stop being an investment and start being load
-    bearing.
+11. **A deformation compute pass and per-node BLAS**, with two kernels sharing
+    one mechanism: skinning, and dangly. **Dangly first** - there are 653 of
+    them against 61 skinned, and they are 544 of the 586 transparent draws, so
+    the cost is there rather than where the name suggests. Both kernels write
+    deformed vertices into a buffer a BLAS builds from, and both need per-node
+    state that survives the frame, which is where step 4's ids stop being an
+    investment and start being load bearing. Note this is the first step whose
+    output cannot be verified by bit-identical frames; see "foliage, not
+    skinning" for why and for what to replace the check with.
 12. **GPU material buffer**, indexed by TLAS instance custom index. Needs 1 and
     8; completes what a hit shader reads.
 13. **The rest of the visibility work.** Step 3 already built the seam, so what

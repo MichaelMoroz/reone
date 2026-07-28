@@ -73,6 +73,7 @@ if(SLANGC_EXECUTABLE)
                 ${CMAKE_SOURCE_DIR}/slang/${spv_source}.slang
                 -I ${CMAKE_SOURCE_DIR}/slang
                 -target spirv -matrix-layout-column-major
+                -capability SPV_EXT_physical_storage_buffer
                 ${entry_args} -o ${out}
             DEPENDS ${SLANG_SOURCES}
             COMMENT "slangc ${spv_source}.slang -> ${spv_source}.spv")

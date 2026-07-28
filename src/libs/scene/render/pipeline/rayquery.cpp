@@ -18,17 +18,34 @@
 #include "reone/system/logutil.h"
 
 #include <chrono>
+#include <cstddef>
 #include <cstring>
 
 using namespace reone::graphics;
 
 namespace reone::scene {
 namespace {
-constexpr uint32_t kRayQuerySamplesPerPixel = 16;
 
 struct InstanceMaterial {
     glm::vec4 selfIllumColor {0.0f};
+    glm::vec4 diffuseColor {1.0f};
+    glm::vec4 uv0 {1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec4 uv1 {0.0f, 1.0f, 0.0f, 0.0f};
+    glm::vec4 uv2 {0.0f};
+    uint64_t vertexAddress {0};
+    uint64_t indexAddress {0};
+    uint32_t vertexStride {0};
+    int32_t offPosition {-1};
+    int32_t offNormals {-1};
+    int32_t offUV1 {-1};
+    int32_t offTanSpace {-1};
+    uint32_t mainTex {UINT32_MAX};
+    uint32_t normalMap {UINT32_MAX};
+    uint32_t featureMask {0};
 };
+
+static_assert(offsetof(InstanceMaterial, vertexAddress) == 80);
+static_assert(offsetof(InstanceMaterial, mainTex) == 116);
 
 struct TraceStats {
     uint32_t secondaryRays {0};
@@ -58,7 +75,11 @@ RayQueryPipeline::RayQueryPipeline(VulkanRenderer &renderer,
 void RayQueryPipeline::init() {
     if (_inited) return;
     auto &device = _renderer.device();
-    VkDescriptorSetLayoutBinding bindings[4] {};
+    _bindlessTextureCapacity = device.maxBindlessSampledImages();
+    if (_bindlessTextureCapacity == 0) {
+        throw std::runtime_error("Vulkan: ray-query bindless texture capacity is zero");
+    }
+    VkDescriptorSetLayoutBinding bindings[5] {};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[0].descriptorCount = 1;
@@ -75,21 +96,44 @@ void RayQueryPipeline::init() {
     bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[3].descriptorCount = 1;
     bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[4].binding = 4;
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[4].descriptorCount = _bindlessTextureCapacity;
+    bindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorBindingFlags bindingFlags[5] {};
+    bindingFlags[4] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+                      VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
+                      VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+    VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+    bindingFlagsInfo.bindingCount = 5;
+    bindingFlagsInfo.pBindingFlags = bindingFlags;
     VkDescriptorSetLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layoutInfo.bindingCount = 4;
+    layoutInfo.pNext = &bindingFlagsInfo;
+    layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+    layoutInfo.bindingCount = 5;
     layoutInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device.handle(), &layoutInfo, nullptr, &_layout) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: ray-query descriptor layout creation failed");
 
     VkDescriptorPoolSize sizes[] {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2},
                                   {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 2},
-                                  {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4}};
+                                  {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4},
+                                  {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                   2 * _bindlessTextureCapacity}};
     VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    poolInfo.maxSets = 2; poolInfo.poolSizeCount = 3; poolInfo.pPoolSizes = sizes;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+    poolInfo.maxSets = 2; poolInfo.poolSizeCount = 4; poolInfo.pPoolSizes = sizes;
     if (vkCreateDescriptorPool(device.handle(), &poolInfo, nullptr, &_pool) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: ray-query descriptor pool creation failed");
     VkDescriptorSetAllocateInfo alloc {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     std::array<VkDescriptorSetLayout, 2> setLayouts {_layout, _layout};
+    std::array<uint32_t, 2> variableCounts {_bindlessTextureCapacity, _bindlessTextureCapacity};
+    VkDescriptorSetVariableDescriptorCountAllocateInfo variableCountInfo {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO};
+    variableCountInfo.descriptorSetCount = static_cast<uint32_t>(variableCounts.size());
+    variableCountInfo.pDescriptorCounts = variableCounts.data();
+    alloc.pNext = &variableCountInfo;
     alloc.descriptorPool = _pool; alloc.descriptorSetCount = static_cast<uint32_t>(setLayouts.size());
     alloc.pSetLayouts = setLayouts.data();
     if (vkAllocateDescriptorSets(device.handle(), &alloc, _sets.data()) != VK_SUCCESS)
@@ -140,6 +184,8 @@ void RayQueryPipeline::deinit() {
     if (_pool) vkDestroyDescriptorPool(device.handle(), _pool, nullptr);
     if (_layout) vkDestroyDescriptorSetLayout(device.handle(), _layout, nullptr);
     _pipeline = VK_NULL_HANDLE; _pipelineLayout = VK_NULL_HANDLE; _pool = VK_NULL_HANDLE; _layout = VK_NULL_HANDLE;
+    _bindlessTextureCapacity = 0;
+    _lastBindlessTextureCount = 0;
     _inited = false;
 }
 
@@ -163,6 +209,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         if (!std::holds_alternative<std::monostate>(mesh->deformation)) { ++_lastDeforming; continue; }
         if (mesh->id.index > 0x00ffffffu) { ++_lastOutOfRange; continue; }
         const auto &blas = _renderer.resources().blas(mesh->mesh.get());
+        const auto geometry = _renderer.resources().get(mesh->mesh.get()).geometry();
         VkAccelerationStructureInstanceKHR instance {};
         instance.transform = instanceTransform(mesh->transform);
         instance.instanceCustomIndex = mesh->id.index;
@@ -173,8 +220,33 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         address.accelerationStructure = blas.handle();
         instance.accelerationStructureReference = vkGetAccelerationStructureDeviceAddressKHR(_renderer.device().handle(), &address);
         instances.push_back(instance);
-        materials.push_back({glm::vec4(mesh->material.selfIllumColor, 0.0f)});
-        if (glm::dot(mesh->material.selfIllumColor, glm::vec3(0.299f, 0.587f, 0.114f)) > 0.99f) {
+        InstanceMaterial material;
+        material.selfIllumColor = glm::vec4(mesh->material.selfIllumColor, 0.0f);
+        material.diffuseColor = glm::vec4(mesh->material.diffuseColor, 1.0f);
+        material.uv0 = mesh->material.uv[0];
+        material.uv1 = mesh->material.uv[1];
+        material.uv2 = mesh->material.uv[2];
+        material.vertexAddress = geometry.vertexAddress;
+        material.indexAddress = geometry.indexAddress;
+        material.vertexStride = static_cast<uint32_t>(geometry.vertexStride);
+        const auto &layout = mesh->mesh.get().vertexLayout();
+        material.offPosition = static_cast<int32_t>(geometry.positionOffset);
+        material.offNormals = layout.offNormals;
+        material.offUV1 = layout.offUV1;
+        material.offTanSpace = layout.offTanSpace;
+        material.featureMask = static_cast<uint32_t>(materialFeatureMask(mesh->material));
+        if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
+            material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
+        }
+        if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::NormalMap)]) {
+            material.normalMap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
+        }
+        materials.push_back(material);
+        // Must match isEmitter in slang/rayquery.slang. This was a luma
+        // threshold while the shader used one too; when the shader started
+        // taking the colour directly, this count silently stopped describing
+        // what was actually being traced.
+        if (glm::any(glm::greaterThan(mesh->material.selfIllumColor, glm::vec3(0.0f)))) {
             ++_lastEmissive;
         }
     }
@@ -273,6 +345,34 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[3].dstSet = set; writes[3].dstBinding = 3;
     writes[3].descriptorCount = 1; writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[3].pBufferInfo = &statsBuffer;
     vkUpdateDescriptorSets(device.handle(), 4, writes, 0, nullptr);
+    // Texture ids are assigned by VulkanResources at upload time. The set is
+    // update-after-bind and partially-bound so new assets can take a slot
+    // without rebuilding it or populating unrelated descriptors.
+    const auto uploadedTextures = _renderer.resources().uploadedTextures();
+    std::vector<VkDescriptorImageInfo> textureInfos;
+    std::vector<VkWriteDescriptorSet> textureWrites;
+    textureInfos.reserve(uploadedTextures.size());
+    textureWrites.reserve(uploadedTextures.size());
+    for (const auto &[id, texture] : uploadedTextures) {
+        if (id >= _bindlessTextureCapacity) {
+            throw std::runtime_error("Vulkan: ray-query bindless texture array exhausted");
+        }
+        textureInfos.push_back({texture->sampler(), texture->view(),
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+        VkWriteDescriptorSet textureWrite {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        textureWrite.dstSet = set;
+        textureWrite.dstBinding = 4;
+        textureWrite.dstArrayElement = id;
+        textureWrite.descriptorCount = 1;
+        textureWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        textureWrite.pImageInfo = &textureInfos.back();
+        textureWrites.push_back(textureWrite);
+    }
+    if (!textureWrites.empty()) {
+        vkUpdateDescriptorSets(device.handle(), static_cast<uint32_t>(textureWrites.size()),
+                               textureWrites.data(), 0, nullptr);
+    }
+    _lastBindlessTextureCount = static_cast<uint32_t>(uploadedTextures.size());
     std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
     offsets[0] = globalsOffset;
     auto uniformSet = _renderer.uniformSet();
@@ -294,6 +394,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
          std::to_string(microseconds) + " us; " + std::to_string(_lastEmissive) +
          " emissive; previous frame secondary misses " + std::to_string(_lastSecondaryMisses) +
          "/" + std::to_string(_lastSecondaryRays) + "; " +
-         std::to_string(kRayQuerySamplesPerPixel) + " spp", LogChannel::Graphics);
+         std::to_string(_lastBindlessTextureCount) + " bindless 2D textures; " +
+         std::to_string(std::max(1, _options.pathTracingSamples)) + " spp", LogChannel::Graphics);
 }
 } // namespace reone::scene
