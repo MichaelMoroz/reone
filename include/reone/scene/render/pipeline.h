@@ -56,10 +56,20 @@ namespace scene {
 
 class CameraSceneNode;
 
-enum class RendererType {
+/**
+ * Which renderer to run, independent of which backend runs it.
+ *
+ * These were once one enum with Vulkan sitting beside Retro and PBR, which put
+ * a backend in a list of rendering approaches. The cost was not theoretical:
+ * selection short-circuited on the backend, so `--pbr 0` was silently ignored
+ * on Vulkan and a whole session of OpenGL-versus-Vulkan comparisons was made
+ * between the retro pipeline and the PBR one - two different renderers, not
+ * two backends. The backend is already global state (`graphics::isVulkanBackend`);
+ * this is the other axis, and the factory resolves the pair.
+ */
+enum class RenderMode {
     Retro,
-    PBR,
-    Vulkan
+    PBR
 };
 
 /**
@@ -121,7 +131,7 @@ class IRenderPipelineFactory {
 public:
     virtual ~IRenderPipelineFactory() = default;
 
-    virtual std::unique_ptr<IRenderPipeline> create(RendererType type, glm::ivec2 targetSize) = 0;
+    virtual std::unique_ptr<IRenderPipeline> create(RenderMode mode, glm::ivec2 targetSize) = 0;
 
     /**
      * Hand the factory the Vulkan renderer, so it can build a Vulkan pipeline.
@@ -204,7 +214,7 @@ public:
         _uniforms(uniforms) {
     }
 
-    std::unique_ptr<IRenderPipeline> create(RendererType type, glm::ivec2 targetSize) override;
+    std::unique_ptr<IRenderPipeline> create(RenderMode mode, glm::ivec2 targetSize) override;
 
     void setVulkanRenderer(graphics::VulkanRenderer &renderer) override {
         _vulkanRenderer = &renderer;

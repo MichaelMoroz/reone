@@ -17,6 +17,7 @@
 
 #include "reone/scene/render/pipeline.h"
 
+#include "reone/graphics/backend.h"
 #include "reone/graphics/context.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/npyutil.h"
@@ -222,17 +223,27 @@ void RenderPipelineBase::applySharpen(Texture &tex,
     });
 }
 
-std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RendererType type, glm::ivec2 targetSize) {
-    switch (type) {
+std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode, glm::ivec2 targetSize) {
+    // Backend and mode are separate axes and only some pairs exist. Where one
+    // does not, say so: Vulkan quietly running PBR while the caller asked for
+    // retro is how an entire session of backend comparisons ended up measuring
+    // two different renderers against each other.
 #ifdef R_ENABLE_VULKAN
-    case RendererType::Vulkan:
+    if (graphics::isVulkanBackend()) {
         if (!_vulkanRenderer) {
             throw std::logic_error("Vulkan renderer was not supplied to the pipeline factory");
         }
+        if (mode == RenderMode::Retro) {
+            warn("No retro pipeline on Vulkan; rendering PBR instead. Pass --pbr 1 to "
+                 "silence this, and do not compare this frame against an OpenGL retro one.",
+                 LogChannel::Graphics);
+        }
         return std::make_unique<VulkanRenderPipeline>(
             std::move(targetSize), _options, *_vulkanRenderer, _uniforms, _meshRegistry, _textureRegistry);
+    }
 #endif
-    case RendererType::Retro:
+    switch (mode) {
+    case RenderMode::Retro:
         return std::make_unique<RetroRenderPipeline>(
             std::move(targetSize),
             _options,
@@ -242,7 +253,7 @@ std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RendererType type
             _statistic,
             _textureRegistry,
             _uniforms);
-    case RendererType::PBR:
+    case RenderMode::PBR:
         return std::make_unique<PBRRenderPipeline>(
             std::move(targetSize),
             _options,
@@ -254,7 +265,7 @@ std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RendererType type
             _textureRegistry,
             _uniforms);
     default:
-        throw std::invalid_argument("Unsupported renderer type: " + std::to_string(static_cast<int>(type)));
+        throw std::invalid_argument("Unsupported render mode: " + std::to_string(static_cast<int>(mode)));
     }
 }
 

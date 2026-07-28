@@ -420,10 +420,11 @@ void SceneGraph::prepareTransparentLeafs() {
 
 Texture &SceneGraph::render(const glm::ivec2 &dim) {
     if (!_renderPipeline) {
-        auto rendererType = graphics::isVulkanBackend()
-                               ? RendererType::Vulkan
-                               : (_graphicsOpt.pbr ? RendererType::PBR : RendererType::Retro);
-        _renderPipeline = _renderPipelineFactory.create(rendererType, dim);
+        // The mode is what was asked for; the factory decides what the current
+        // backend can actually give. Deciding here on the backend is what made
+        // --pbr silently inert on Vulkan.
+        auto mode = _graphicsOpt.pbr ? RenderMode::PBR : RenderMode::Retro;
+        _renderPipeline = _renderPipelineFactory.create(mode, dim);
         _renderPipeline->init();
     }
     auto &pipeline = *_renderPipeline;
