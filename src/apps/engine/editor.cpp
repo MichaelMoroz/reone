@@ -622,6 +622,10 @@ void Editor::pathTracingSettings() {
         options.pathTracingSamples = std::max(1, options.pathTracingSamples);
     }
     ImGui::TextDisabled("Cost is near linear; noise falls as sqrt.");
+    if (ImGui::SliderInt("Bounces", &options.ptBounces, 1, 8)) {
+        options.ptBounces = std::clamp(options.ptBounces, 1, 8);
+    }
+    ImGui::TextDisabled("Path depth after the primary hit. Deeper paths\ncarry light around corners; the lightmap cache\nalready answers much of it on static geometry.");
     ImGui::SeparatorText("Source intensities");
     ImGui::SliderFloat("Sky", &options.ptSkyIntensity, 0.0f, 4.0f, "%.2f");
     ImGui::SliderFloat("Emissive", &options.ptEmissiveIntensity, 0.0f, 4.0f, "%.2f");

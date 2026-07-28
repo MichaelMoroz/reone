@@ -78,6 +78,7 @@ private:
         // Bit 0 enables the traceStats counters; must match kTraceFlagStats
         // in slang/rayquery.slang.
         uint32_t traceFlags;
+        uint32_t bounceCount;
     };
 
     uint32_t _frameNumber {0};

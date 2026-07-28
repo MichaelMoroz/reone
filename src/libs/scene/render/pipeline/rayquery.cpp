@@ -507,7 +507,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                   std::max(0.0001f, _options.ptRayOffset),
                                   std::max(0.0f, _options.ptWorldAmbient),
                                   std::max(0.0f, _options.ptSunIntensity),
-                                  _options.ptTraceStats ? 1u : 0u};
+                                  _options.ptTraceStats ? 1u : 0u,
+                                  static_cast<uint32_t>(std::clamp(_options.ptBounces, 1, 8))};
     vkCmdPushConstants(cmd, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), &constants);
     vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8), static_cast<uint32_t>((_extent.y + 7) / 8), 1);
     ++_frameNumber;

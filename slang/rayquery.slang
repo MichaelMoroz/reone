@@ -72,6 +72,10 @@ struct PushConstants {
     // the atomics contend on one cache line from every thread in flight,
     // and the per-sample bounce counter fired millions of times per frame.
     uint traceFlags;
+    // Path depth after the primary hit. 1 is the single bounce the tracer
+    // launched with; deeper paths trade cost and lightmap double-count for
+    // light reaching around corners.
+    uint bounceCount;
 };
 static const uint kTraceFlagStats = 1u;
 [[vk::push_constant]] PushConstants pushConstants;
@@ -530,8 +534,18 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         HitSurface primarySurface = sampleSurface(material, indices, weights, objectToWorld,
                                                   worldToObject, ray.Direction, uv, uv2);
         float3 hitPosition = ray.Origin + ray.Direction * primary.CommittedRayT();
-        // kTraceSky selects only the source-intensity dial. Like raster's
-        // self-illumination, emission is additive; it never replaces shading.
+        // The sky is unlit emissive: the cubemap is the light source itself.
+        // Running it through the surface path tinted it with direct light and
+        // ambient and paid a hemisphere of bounce rays per pixel for nothing.
+        if ((material.featureMask & kTraceSky) != 0) {
+            color += primaryThroughput * primarySurface.surface.emissive *
+                     primarySurface.surface.albedo * pushConstants.skyIntensity;
+            outputImage[dispatchId.xy] = float4(linearToGamma(color), 1.0);
+            return;
+        }
+        // For everything else, kTraceSky-free emission selects the emissive
+        // dial. Like raster's self-illumination, emission is additive; it
+        // never replaces shading.
         float3 diffuseIllumination = 0.0;
         float skySamples = 0.0;
         float3 specularIllumination = 0.0;
@@ -684,58 +698,74 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 }
                 secondary.TMin = 0.001;
                 secondary.TMax = 100000.0;
-                RayQuery<RAY_FLAG_NONE> bounce;
-                bounce.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, secondary);
-                float bounceThroughput = 1.0;
-                float3 bounceLayers = 0.0;
-                float4 bounceAdditiveHits[kMaxAdditiveHits];
-                uint bounceAdditiveCount = 0;
-                while (bounce.Proceed()) {
-                    if (bounce.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
-                    uint candidateInstance = bounce.CandidateInstanceIndex();
-                    InstanceMaterial candidateMaterial = instanceMaterials[candidateInstance];
-                    uint3 candidateIndices = triangleIndices(candidateMaterial, bounce.CandidatePrimitiveIndex());
-                    float2 candidateBarycentrics = bounce.CandidateTriangleBarycentrics();
-                    float3 candidateWeights = float3(1.0 - candidateBarycentrics.x - candidateBarycentrics.y,
-                                                      candidateBarycentrics.x, candidateBarycentrics.y);
-                    CandidateLayer layer = sampleCandidateLayer(candidateMaterial, candidateIndices, candidateWeights);
-                    if ((candidateMaterial.featureMask & kTraceAdditive) != 0) {
-                        // Nearest-first under the cap, same as the primary
-                        // loop: arrival order is not run-reproducible.
-                        float4 additiveEntry = float4(additiveRadiance(candidateMaterial, layer),
-                                                      bounce.CandidateTriangleRayT());
-                        if (bounceAdditiveCount < kMaxAdditiveHits ||
-                            additiveEntry.w < bounceAdditiveHits[kMaxAdditiveHits - 1].w) {
-                            uint insertAt = min(bounceAdditiveCount, kMaxAdditiveHits - 1);
-                            while (insertAt > 0 && bounceAdditiveHits[insertAt - 1].w > additiveEntry.w) {
-                                bounceAdditiveHits[insertAt] = bounceAdditiveHits[insertAt - 1];
-                                --insertAt;
-                            }
-                            bounceAdditiveHits[insertAt] = additiveEntry;
-                            bounceAdditiveCount = min(bounceAdditiveCount + 1, kMaxAdditiveHits);
-                        }
-                    } else if ((candidateMaterial.featureMask & kTracePunchThrough) != 0) {
-                        if (layer.alpha >= 0.99) {
-                            bounce.CommitNonOpaqueTriangleHit();
-                        } else {
-                            bounceLayers += bounceThroughput * layer.alpha * layer.radiance;
-                            bounceThroughput *= 1.0 - layer.alpha;
-                            if (bounceThroughput < 1e-3) break;
-                        }
-                    }
-                }
-                if (statsOn) InterlockedAdd(traceStats[0], 1);
+                // The path continues past the first vertex up to the Bounces
+                // dial: cosine-sampled, throughput multiplied by albedo at
+                // each surface (the cosine/pi of the estimator cancels
+                // against cosine sampling), emission and the lightmap cache
+                // collected at every vertex. The lightmap double-count noted
+                // below therefore grows with depth - the cache answers most
+                // of what deeper bounces would find - so the dial defaults
+                // low and grades, like every other source dial.
+                float3 radiance = 0.0;
+                float3 pathThroughput = 1.0;
                 bool sampleSawSky = false;
-                float bounceCommittedT = bounce.CommittedStatus() == COMMITTED_TRIANGLE_HIT
-                                             ? bounce.CommittedRayT()
-                                             : 1e30;
-                for (uint i = 0; i < bounceAdditiveCount; ++i) {
-                    if (bounceAdditiveHits[i].w < bounceCommittedT) {
-                        bounceLayers += bounceThroughput * bounceAdditiveHits[i].rgb;
+                uint pathBounces = max(pushConstants.bounceCount, 1u);
+                for (uint bounceIndex = 0; bounceIndex < pathBounces; ++bounceIndex) {
+                    RayQuery<RAY_FLAG_NONE> bounce;
+                    bounce.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, secondary);
+                    float bounceThroughput = 1.0;
+                    float3 bounceLayers = 0.0;
+                    float4 bounceAdditiveHits[kMaxAdditiveHits];
+                    uint bounceAdditiveCount = 0;
+                    while (bounce.Proceed()) {
+                        if (bounce.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
+                        uint candidateInstance = bounce.CandidateInstanceIndex();
+                        InstanceMaterial candidateMaterial = instanceMaterials[candidateInstance];
+                        uint3 candidateIndices = triangleIndices(candidateMaterial, bounce.CandidatePrimitiveIndex());
+                        float2 candidateBarycentrics = bounce.CandidateTriangleBarycentrics();
+                        float3 candidateWeights = float3(1.0 - candidateBarycentrics.x - candidateBarycentrics.y,
+                                                          candidateBarycentrics.x, candidateBarycentrics.y);
+                        CandidateLayer layer = sampleCandidateLayer(candidateMaterial, candidateIndices, candidateWeights);
+                        if ((candidateMaterial.featureMask & kTraceAdditive) != 0) {
+                            // Nearest-first under the cap, same as the primary
+                            // loop: arrival order is not run-reproducible.
+                            float4 additiveEntry = float4(additiveRadiance(candidateMaterial, layer),
+                                                          bounce.CandidateTriangleRayT());
+                            if (bounceAdditiveCount < kMaxAdditiveHits ||
+                                additiveEntry.w < bounceAdditiveHits[kMaxAdditiveHits - 1].w) {
+                                uint insertAt = min(bounceAdditiveCount, kMaxAdditiveHits - 1);
+                                while (insertAt > 0 && bounceAdditiveHits[insertAt - 1].w > additiveEntry.w) {
+                                    bounceAdditiveHits[insertAt] = bounceAdditiveHits[insertAt - 1];
+                                    --insertAt;
+                                }
+                                bounceAdditiveHits[insertAt] = additiveEntry;
+                                bounceAdditiveCount = min(bounceAdditiveCount + 1, kMaxAdditiveHits);
+                            }
+                        } else if ((candidateMaterial.featureMask & kTracePunchThrough) != 0) {
+                            if (layer.alpha >= 0.99) {
+                                bounce.CommitNonOpaqueTriangleHit();
+                            } else {
+                                bounceLayers += bounceThroughput * layer.alpha * layer.radiance;
+                                bounceThroughput *= 1.0 - layer.alpha;
+                                if (bounceThroughput < 1e-3) break;
+                            }
+                        }
                     }
-                }
-                float3 radiance = bounceLayers;
-                if (bounce.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+                    if (statsOn) InterlockedAdd(traceStats[0], 1);
+                    float bounceCommittedT = bounce.CommittedStatus() == COMMITTED_TRIANGLE_HIT
+                                                 ? bounce.CommittedRayT()
+                                                 : 1e30;
+                    for (uint i = 0; i < bounceAdditiveCount; ++i) {
+                        if (bounceAdditiveHits[i].w < bounceCommittedT) {
+                            bounceLayers += bounceThroughput * bounceAdditiveHits[i].rgb;
+                        }
+                    }
+                    radiance += pathThroughput * bounceLayers;
+                    if (bounce.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
+                        if (statsOn) InterlockedAdd(traceStats[1], 1);
+                        sampleSawSky = true;
+                        break;
+                    }
                     InstanceMaterial bounceMaterial = instanceMaterials[bounce.CommittedInstanceIndex()];
                     uint3 bounceIndices = triangleIndices(bounceMaterial, bounce.CommittedPrimitiveIndex());
                     float2 bounceBarycentrics = bounce.CommittedTriangleBarycentrics();
@@ -755,40 +785,72 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                                                              bounce.CommittedObjectToWorld3x4(),
                                                              bounce.CommittedWorldToObject3x4(),
                                                              secondary.Direction, bounceUV, bounceUV2);
-                    float bounceScale = (bounceMaterial.featureMask & kTraceSky) != 0
-                                            ? pushConstants.skyIntensity
-                                            : pushConstants.emissiveIntensity;
-                    radiance += bounceThroughput * bounceSurface.surface.emissive *
-                                 bounceSurface.surface.albedo * bounceScale;
-                    if ((bounceMaterial.featureMask & kTraceSky) != 0) sampleSawSky = true;
+                    if ((bounceMaterial.featureMask & kTraceSky) != 0) {
+                        // Unlit emissive, and the end of the path: there is
+                        // nothing behind the environment.
+                        radiance += pathThroughput * bounceThroughput * bounceSurface.surface.emissive *
+                                     bounceSurface.surface.albedo * pushConstants.skyIntensity;
+                        sampleSawSky = true;
+                        break;
+                    }
+                    radiance += pathThroughput * bounceThroughput * bounceSurface.surface.emissive *
+                                 bounceSurface.surface.albedo * pushConstants.emissiveIntensity;
                     if (bounceSurface.surface.hasLightmap) {
                         // A lightmap stores irradiance, not radiance: using it as
                         // an area-light cache loses directionality and is off by pi.
                         // Other lightmapped surfaces can therefore light this one
                         // again through its own traced hemisphere; that bounded
                         // double-count is preferable to unlit interiors.
-                        radiance += bounceThroughput * bounceSurface.surface.albedo *
+                        radiance += pathThroughput * bounceThroughput * bounceSurface.surface.albedo *
                                     bounceSurface.surface.lightmap * pushConstants.lightmapIntensity;
                     }
-                    if (sampleSpecular) {
-                        specularIllumination += radiance * F / specularProbability;
-                    } else if (envmapped) {
-                        diffuseIllumination += radiance * primarySurface.surface.albedo * (1.0 - F) /
-                                               (1.0 - specularProbability);
+                    // The continuation uses the same material model as the
+                    // first bounce: env-mapped surfaces split between the GGX
+                    // lobe and cosine diffuse with the same probabilities and
+                    // weights the primary vertex applies, so a mirror floor
+                    // stays a mirror at every path depth.
+                    bool vertexEnvmapped = (bounceMaterial.featureMask & uint(kFeatureEnvMap)) != 0;
+                    float vertexEnvStrength = vertexEnvmapped ? (1.0 - bounceSurface.surface.alpha) : 0.0;
+                    float3 vertexF0 = lerp(lerp(float3(0.04), bounceSurface.surface.albedo,
+                                                 bounceSurface.surface.metallic),
+                                            float3(1.0), vertexEnvStrength);
+                    float vertexNdotV = max(0.0, dot(bounceSurface.surface.normal, -secondary.Direction));
+                    float3 vertexF = fresnelSchlick(vertexNdotV, vertexF0);
+                    float vertexSpecProb = vertexEnvmapped ? clamp(luminance(vertexF), 1e-3, 1.0 - 1e-3)
+                                                           : 0.0;
+                    pathThroughput *= bounceThroughput;
+                    float3 continueDirection;
+                    if (vertexEnvmapped && random01(state) < vertexSpecProb) {
+                        float3 vertexH = ggxHalfVector(bounceSurface.surface.normal,
+                                                        bounceSurface.surface.roughness,
+                                                        float2(random01(state), random01(state)));
+                        continueDirection = normalize(reflect(secondary.Direction, vertexH));
+                        pathThroughput *= vertexF / vertexSpecProb;
                     } else {
-                        diffuseIllumination += radiance * primarySurface.surface.albedo;
+                        continueDirection = cosineHemisphere(bounceSurface.surface.normal,
+                                                             float2(random01(state), random01(state)));
+                        pathThroughput *= bounceSurface.surface.albedo;
+                        if (vertexEnvmapped) {
+                            pathThroughput *= (1.0 - vertexF) / (1.0 - vertexSpecProb);
+                        }
                     }
+                    if (max(pathThroughput.x, max(pathThroughput.y, pathThroughput.z)) < 1e-3) break;
+                    secondary.Origin = secondary.Origin + secondary.Direction * bounce.CommittedRayT() +
+                                       bounceSurface.geometricNormal * pushConstants.rayOriginOffset;
+                    secondary.Direction = continueDirection;
+                    if (dot(secondary.Direction, bounceSurface.geometricNormal) < 0.0) {
+                        secondary.Direction = normalize(secondary.Direction -
+                            2.0 * dot(secondary.Direction, bounceSurface.geometricNormal) *
+                                bounceSurface.geometricNormal);
+                    }
+                }
+                if (sampleSpecular) {
+                    specularIllumination += radiance * F / specularProbability;
+                } else if (envmapped) {
+                    diffuseIllumination += radiance * primarySurface.surface.albedo * (1.0 - F) /
+                                           (1.0 - specularProbability);
                 } else {
-                    if (statsOn) InterlockedAdd(traceStats[1], 1);
-                    sampleSawSky = true;
-                    if (sampleSpecular) {
-                        specularIllumination += radiance * F / specularProbability;
-                    } else if (envmapped) {
-                        diffuseIllumination += radiance * primarySurface.surface.albedo * (1.0 - F) /
-                                               (1.0 - specularProbability);
-                    } else {
-                        diffuseIllumination += radiance * primarySurface.surface.albedo;
-                    }
+                    diffuseIllumination += radiance * primarySurface.surface.albedo;
                 }
                 if (sampleSawSky) skySamples += 1.0;
             }

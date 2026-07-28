@@ -57,8 +57,12 @@ struct GraphicsOptions {
     float ptEmissiveIntensity {1.0f};
     float ptLightmapIntensity {1.0f};
     float ptDirectIntensity {1.0f};
-    /** Directional sun intensity, independent from the point-light dial. */
-    float ptSunIntensity {1.0f};
+    /** Directional sun intensity, independent from the point-light dial.
+        Graded against the retro look rather than any parity target; 2.5 is
+        where the Dantooine dusk sun reads as a sun. */
+    float ptSunIntensity {2.5f};
+    /** Path depth after the primary hit. */
+    int ptBounces {2};
     /** Secondary-ray origin offset along the geometric normal, world units. */
     float ptRayOffset {0.01f};
     /** GPU trace-stats counters; off by default, the atomics cost frame time. */
