@@ -72,7 +72,9 @@ public:
 
     graphics::Texture &render(RenderRegistry &registry,
                               const CameraSceneNode *camera,
-                              RenderPassName activeShadowPass) override;
+                              RenderPassName activeShadowPass,
+                              const graphics::Frustum *shadowFrusta,
+                              size_t numShadowFrusta) override;
 
     std::vector<RenderTargetInfo> targets() const override;
     void *renderTargetPreview(const std::string &name, int mode, float scale) override;
@@ -177,7 +179,7 @@ private:
     /** Separable blur of the retro highlight buffer, in place. Follows retroGeometryPass. */
     void hilightsBlurPass(VkCommandBuffer cmd);
     void screenSpaceEffectsPass(VkCommandBuffer cmd, uint32_t globalsOffset);
-    void shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    void shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset, VisibilityPolicy visibility);
     void transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset);
     /** Resolve the OIT targets onto the opaque image. Follows transparencyPass. */
     void oitBlendPass(VkCommandBuffer cmd);

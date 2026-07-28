@@ -88,7 +88,9 @@ public:
 
     virtual graphics::Texture &render(RenderRegistry &registry,
                                       const CameraSceneNode *camera,
-                                      RenderPassName shadowPass) = 0;
+                                      RenderPassName shadowPass,
+                                      const graphics::Frustum *shadowFrusta,
+                                      size_t numShadowFrusta) = 0;
 
     /**
      * Intermediate targets, for inspection by development tooling. Empty unless

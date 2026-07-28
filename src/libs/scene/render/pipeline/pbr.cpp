@@ -420,7 +420,9 @@ void PBRRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
 
 Texture &PBRRenderPipeline::render(RenderRegistry &registry,
                                    const CameraSceneNode *camera,
-                                   RenderPassName shadowPass) {
+                                   RenderPassName shadowPass,
+                                   const graphics::Frustum *shadowFrusta,
+                                   size_t numShadowFrusta) {
     _registry = &registry;
     auto pass = PBRRenderPass {_options,
                                _context,
@@ -430,26 +432,31 @@ Texture &PBRRenderPipeline::render(RenderRegistry &registry,
                                _pbrTextures,
                                _textureRegistry,
                                _uniforms};
-    auto drawScene = [&registry, &pass, camera](RenderPassName name, RenderCategory category) {
-        registry.drawScene(pass, {name, category}, camera);
+    auto drawScene = [&registry, &pass](RenderPassName name,
+                                        RenderCategory category,
+                                        VisibilityPolicy visibility) {
+        registry.drawScene(pass, {name, category}, visibility);
     };
+    auto viewVisibility = VisibilityPolicy::viewCamera(camera);
+    auto shadowVisibility = VisibilityPolicy::shadowFrusta(shadowFrusta, numShadowFrusta, camera);
 
     glm::ivec4 screenRect {0, 0, _targetSize.x, _targetSize.y};
-    _context.withViewport(screenRect, [this, &pass, &screenRect, &drawScene, shadowPass]() {
+    _context.withViewport(screenRect, [this, &pass, &screenRect, &drawScene, &viewVisibility,
+                                       &shadowVisibility, shadowPass]() {
         // Shadows pass
         if (shadowPass == RenderPassName::DirLightShadowsPass) {
             beginDirLightShadowsPass();
-            drawScene(RenderPassName::DirLightShadowsPass, RenderCategory::ShadowCaster);
+            drawScene(RenderPassName::DirLightShadowsPass, RenderCategory::ShadowCaster, shadowVisibility);
             endDirLightShadowsPass();
         } else if (shadowPass == RenderPassName::PointLightShadows) {
             beginPointLightShadowsPass();
-            drawScene(RenderPassName::PointLightShadows, RenderCategory::ShadowCaster);
+            drawScene(RenderPassName::PointLightShadows, RenderCategory::ShadowCaster, shadowVisibility);
             endPointLightShadowsPass();
         }
 
         // Opaque geometry pass
         beginOpaqueGeometryPass();
-        drawScene(RenderPassName::OpaqueGeometry, RenderCategory::Opaque);
+        drawScene(RenderPassName::OpaqueGeometry, RenderCategory::Opaque, viewVisibility);
         endOpaqueGeometryPass();
         if (_options.ssao || _options.ssr) {
             auto halfSize = _targetSize / 2;
@@ -504,13 +511,13 @@ Texture &PBRRenderPipeline::render(RenderRegistry &registry,
 
         // Transparent geometry pass
         beginTransparentGeometryPass();
-        drawScene(RenderPassName::TransparentGeometry, RenderCategory::Transparent);
+        drawScene(RenderPassName::TransparentGeometry, RenderCategory::Transparent, viewVisibility);
         endTransparentGeometryPass();
         blendTransparentGeometry();
 
         // Post-processing pass
         beginPostProcessingPass();
-        drawScene(RenderPassName::PostProcessing, RenderCategory::LensFlare);
+        drawScene(RenderPassName::PostProcessing, RenderCategory::LensFlare, viewVisibility);
         endPostProcessingPass();
         if (_options.fxaa && _options.sharpen) {
             applyFXAA(*_targets.cbOutput, *_targets.fbPing, _targetSize);
@@ -529,7 +536,7 @@ Texture &PBRRenderPipeline::render(RenderRegistry &registry,
 
         // Draw debug elements (lines, points, etc.)
         beginDebugPass();
-        drawScene(RenderPassName::Debug, RenderCategory::Debug);
+        drawScene(RenderPassName::Debug, RenderCategory::Debug, viewVisibility);
         endDebugPass();
 
         _context.resetDrawFramebuffer();

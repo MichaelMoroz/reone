@@ -413,12 +413,26 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
     }
     auto &pipeline = *_renderPipeline;
     _registry.resetFrame();
+    std::array<graphics::Frustum, graphics::kNumShadowLightSpace> shadowFrusta;
+    const graphics::Frustum *activeShadowFrusta {nullptr};
+    size_t numActiveShadowFrusta {0};
 
     auto cameraNode = this->camera();
     if (cameraNode) {
         auto camera = cameraNode->get().camera();
         auto jitter = computeJitter();
         auto viewProjection = camera->projection() * camera->view();
+        if (hasShadowLight()) {
+            computeLightSpaceMatrices();
+            int numShadowFrusta = isShadowLightDirectional()
+                                      ? graphics::kNumShadowCascades
+                                      : graphics::kNumCubeFaces;
+            for (int i = 0; i < numShadowFrusta; ++i) {
+                shadowFrusta[i] = graphics::Frustum {_shadowLightSpace[i]};
+            }
+            activeShadowFrusta = shadowFrusta.data();
+            numActiveShadowFrusta = numShadowFrusta;
+        }
         _graphicsSvc.uniforms.setGlobals([this, &camera, &jitter, &viewProjection](auto &globals) {
             if (_graphicsOpt.taaJitter) {
                 // Sub-pixel offset in clip space, applied after the projection so
@@ -449,7 +463,6 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
                 light.dynamicType = _activeLights[i]->modelNode().light()->dynamicType;
             }
             if (hasShadowLight()) {
-                computeLightSpaceMatrices();
                 for (int i = 0; i < kNumShadowLightSpace; ++i) {
                     globals.shadowLightSpace[i] = _shadowLightSpace[i];
                 }
@@ -485,7 +498,8 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
                           : (isShadowLightDirectional()
                                  ? RenderPassName::DirLightShadowsPass
                                  : RenderPassName::PointLightShadows);
-    auto &output = pipeline.render(_registry, _activeCamera, shadowPass);
+    auto &output = pipeline.render(
+        _registry, _activeCamera, shadowPass, activeShadowFrusta, numActiveShadowFrusta);
     snapshotPreviousFrame();
     return output;
 }

@@ -116,7 +116,8 @@ public:
     MOCK_METHOD(void, init, (), (override));
 
     MOCK_METHOD(graphics::Texture &, render,
-                (RenderRegistry &, const CameraSceneNode *, RenderPassName),
+                (RenderRegistry &, const CameraSceneNode *, RenderPassName,
+                 const graphics::Frustum *, size_t),
                 (override));
     MOCK_METHOD(std::vector<RenderTargetInfo>, targets, (), (const override));
 };

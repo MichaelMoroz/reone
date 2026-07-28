@@ -50,7 +50,9 @@ public:
 
     graphics::Texture &render(RenderRegistry &registry,
                               const CameraSceneNode *camera,
-                              RenderPassName shadowPass) override;
+                              RenderPassName shadowPass,
+                              const graphics::Frustum *shadowFrusta,
+                              size_t numShadowFrusta) override;
 
 private:
     struct RenderTargets {

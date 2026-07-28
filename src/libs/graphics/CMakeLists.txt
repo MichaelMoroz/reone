@@ -32,6 +32,7 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/di/services.h
     ${GRAPHICS_INCLUDE_DIR}/dxtutil.h
     ${GRAPHICS_INCLUDE_DIR}/font.h
+    ${GRAPHICS_INCLUDE_DIR}/frustum.h
     ${GRAPHICS_INCLUDE_DIR}/format/bwmreader.h
     ${GRAPHICS_INCLUDE_DIR}/format/curreader.h
     ${GRAPHICS_INCLUDE_DIR}/format/lipreader.h
@@ -88,6 +89,7 @@ set(GRAPHICS_SOURCES
     ${GRAPHICS_SOURCE_DIR}/di/module.cpp
     ${GRAPHICS_SOURCE_DIR}/dxtutil.cpp
     ${GRAPHICS_SOURCE_DIR}/font.cpp
+    ${GRAPHICS_SOURCE_DIR}/frustum.cpp
     ${GRAPHICS_SOURCE_DIR}/format/bwmreader.cpp
     ${GRAPHICS_SOURCE_DIR}/format/curreader.cpp
     ${GRAPHICS_SOURCE_DIR}/format/lipreader.cpp

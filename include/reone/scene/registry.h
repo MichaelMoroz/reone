@@ -19,6 +19,7 @@
 
 #include <variant>
 
+#include "reone/graphics/frustum.h"
 #include "reone/graphics/material.h"
 
 namespace reone {
@@ -64,6 +65,43 @@ constexpr RenderCategories renderCategory(RenderCategory category) {
 struct RenderFilter {
     RenderPassName pass {RenderPassName::None};
     RenderCategory category {RenderCategory::None};
+};
+
+enum class VisibilityPolicyKind {
+    ViewCamera,
+    Frusta,
+    None
+};
+
+/**
+ * Per-pass visibility selection for the frame snapshot.
+ *
+ * The draw-distance limit is orthogonal to which volume is tested: it applies
+ * whenever a camera is supplied, so a shadow pass can cull against the light
+ * while still dropping what is too far away to matter. Measured at frame 900
+ * of danm14ab, the light frusta admit two casters the camera frustum rejected;
+ * dropping draw distance as well admits a hundred, none of which changed a
+ * pixel. Correctness comes from the frusta, so the limit stays.
+ */
+struct VisibilityPolicy {
+    VisibilityPolicyKind kind {VisibilityPolicyKind::ViewCamera};
+    const CameraSceneNode *drawDistanceCamera {nullptr};
+    const graphics::Frustum *lightFrusta {nullptr};
+    size_t numLightFrusta {0};
+
+    static VisibilityPolicy viewCamera(const CameraSceneNode *camera) {
+        return {VisibilityPolicyKind::ViewCamera, camera, nullptr, 0};
+    }
+
+    static VisibilityPolicy shadowFrusta(const graphics::Frustum *frusta,
+                                         size_t numFrusta,
+                                         const CameraSceneNode *drawDistanceCamera) {
+        return {VisibilityPolicyKind::Frusta, drawDistanceCamera, frusta, numFrusta};
+    }
+
+    static VisibilityPolicy noCulling() {
+        return {VisibilityPolicyKind::None, nullptr, nullptr, 0};
+    }
 };
 
 struct ParticleInstance {
@@ -218,7 +256,7 @@ public:
 
     void drawScene(IRenderPassExecutor &executor,
                    RenderFilter filter,
-                   const CameraSceneNode *camera);
+                   VisibilityPolicy visibility);
 
     const RegistryCounts &registeredCounts() const { return _registeredCounts; }
     const RegistryCounts &drawnCounts() const { return _drawnCounts; }

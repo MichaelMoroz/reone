@@ -78,16 +78,65 @@ static void countMesh(RegistryCounts &counts, const RegisteredDeformation &defor
     }
 }
 
-static bool isCulled(ModelSceneNode &root, const CameraSceneNode *camera) {
+static bool isInAnyFrustum(const SceneNode &node, const Frustum *frusta, size_t numFrusta) {
+    for (size_t i = 0; i < numFrusta; ++i) {
+        const auto &frustum = frusta[i];
+        if (node.isPoint() ? frustum.isInFrustum(node.origin())
+                           : frustum.isInFrustum(node.aabb() * node.absoluteTransform())) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool isInAnyFrustum(const glm::vec3 &point, const Frustum *frusta, size_t numFrusta) {
+    for (size_t i = 0; i < numFrusta; ++i) {
+        const auto &frustum = frusta[i];
+        if (frustum.isInFrustum(point)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool isCulled(ModelSceneNode &root, VisibilityPolicy visibility) {
     if (!root.isEnabled()) {
         return true;
     }
-    if (!root.isCullingEnabled() || !camera) {
+    if (!root.isCullingEnabled() || visibility.kind == VisibilityPolicyKind::None) {
         return false;
     }
-    float distanceToCamera = root.getSquareDistanceTo(*camera);
-    float drawDistance = root.drawDistance() * root.drawDistance();
-    return (distanceToCamera > drawDistance) || !camera->isInFrustum(root);
+    // Independent of which volume is tested below: a shadow pass culls against
+    // the light but still drops what is too far away to be worth casting.
+    if (visibility.drawDistanceCamera) {
+        float distanceToCamera = root.getSquareDistanceTo(*visibility.drawDistanceCamera);
+        float drawDistance = root.drawDistance() * root.drawDistance();
+        if (distanceToCamera > drawDistance) {
+            return true;
+        }
+    }
+    switch (visibility.kind) {
+    case VisibilityPolicyKind::ViewCamera:
+        return visibility.drawDistanceCamera && !visibility.drawDistanceCamera->isInFrustum(root);
+    case VisibilityPolicyKind::Frusta:
+        return !isInAnyFrustum(root, visibility.lightFrusta, visibility.numLightFrusta);
+    case VisibilityPolicyKind::None:
+        return false;
+    }
+    return false;
+}
+
+static bool isCulled(const glm::vec3 &point, VisibilityPolicy visibility) {
+    switch (visibility.kind) {
+    case VisibilityPolicyKind::ViewCamera:
+        return visibility.drawDistanceCamera &&
+               !visibility.drawDistanceCamera->camera()->frustum().isInFrustum(point);
+    case VisibilityPolicyKind::Frusta:
+        return !isInAnyFrustum(point, visibility.lightFrusta, visibility.numLightFrusta);
+    case VisibilityPolicyKind::None:
+        return false;
+    }
+    return false;
 }
 
 void RenderRegistry::resetFrame() {
@@ -171,7 +220,7 @@ void RenderRegistry::addDebug(std::function<void()> execute) {
 
 void RenderRegistry::drawScene(IRenderPassExecutor &executor,
                                RenderFilter filter,
-                               const CameraSceneNode *camera) {
+                               VisibilityPolicy visibility) {
     executor.beginPass(filter.pass);
     auto &passCounts = _drawnCountsByPass[filter.pass];
     auto category = renderCategory(filter.category);
@@ -183,7 +232,7 @@ void RenderRegistry::drawScene(IRenderPassExecutor &executor,
                 }
                 using T = std::decay_t<decltype(entry)>;
                 if constexpr (std::is_same_v<T, RegisteredMesh>) {
-                    if (entry.cullRoot && isCulled(*entry.cullRoot, camera)) {
+                    if (entry.cullRoot && isCulled(*entry.cullRoot, visibility)) {
                         return;
                     }
                     ++_drawnCounts.entries;
@@ -217,7 +266,7 @@ void RenderRegistry::drawScene(IRenderPassExecutor &executor,
                             entry.prevTransform);
                     }
                 } else if constexpr (std::is_same_v<T, RegisteredBillboard>) {
-                    if (!entry.cullRoot || !isCulled(*entry.cullRoot, camera)) {
+                    if (!entry.cullRoot || !isCulled(*entry.cullRoot, visibility)) {
                         ++_drawnCounts.entries;
                         ++passCounts.entries;
                         ++_drawnCounts.billboards;
@@ -226,13 +275,13 @@ void RenderRegistry::drawScene(IRenderPassExecutor &executor,
                             entry.texture, entry.color, entry.transform, entry.transformInv, entry.size);
                     }
                 } else if constexpr (std::is_same_v<T, RegisteredParticles>) {
-                    if (entry.cullRoot && isCulled(*entry.cullRoot, camera)) {
+                    if (entry.cullRoot && isCulled(*entry.cullRoot, visibility)) {
                         return;
                     }
                     std::vector<ParticleInstance> visible;
                     visible.reserve(entry.instances.size());
                     for (const auto &instance : entry.instances) {
-                        if (!camera || camera->camera()->isInFrustum(instance.position)) {
+                        if (!isCulled(instance.position, visibility)) {
                             visible.push_back(instance);
                         }
                     }
@@ -249,7 +298,7 @@ void RenderRegistry::drawScene(IRenderPassExecutor &executor,
                     std::vector<GrassInstance> visible;
                     visible.reserve(entry.instances.size());
                     for (const auto &instance : entry.instances) {
-                        if (!camera || camera->camera()->isInFrustum(instance.position)) {
+                        if (!isCulled(instance.position, visibility)) {
                             visible.push_back(instance);
                         }
                     }
@@ -269,7 +318,7 @@ void RenderRegistry::drawScene(IRenderPassExecutor &executor,
                         }
                     }
                 } else if constexpr (std::is_same_v<T, RegisteredAABB>) {
-                    if (!entry.cullRoot || !isCulled(*entry.cullRoot, camera)) {
+                    if (!entry.cullRoot || !isCulled(*entry.cullRoot, visibility)) {
                         ++_drawnCounts.entries;
                         ++passCounts.entries;
                         ++_drawnCounts.aabbs;

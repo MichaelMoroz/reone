@@ -502,7 +502,9 @@ void VulkanRenderPipeline::deinit() {
  * view mask says how many, and the vertex stage picks its matrix by view index.
  * Only one of the two runs; the graph supplies the kind of light it chose.
  */
-void VulkanRenderPipeline::shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset) {
+void VulkanRenderPipeline::shadowPass(VkCommandBuffer cmd,
+                                      uint32_t globalsOffset,
+                                      VisibilityPolicy visibility) {
     if (_shadowPass == RenderPassName::None) {
         return;
     }
@@ -564,7 +566,7 @@ void VulkanRenderPipeline::shadowPass(VkCommandBuffer cmd, uint32_t globalsOffse
     _registry->drawScene(
         pass,
         {_shadowPass, RenderCategory::ShadowCaster},
-        _cullCamera);
+        visibility);
 
     vkCmdEndRendering(cmd);
 
@@ -640,7 +642,7 @@ void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOff
     _registry->drawScene(
         pass,
         {RenderPassName::OpaqueGeometry, RenderCategory::Opaque},
-        _cullCamera);
+        VisibilityPolicy::viewCamera(_cullCamera));
 
     vkCmdEndRendering(cmd);
 }
@@ -686,7 +688,9 @@ void VulkanRenderPipeline::retroGeometryPass(VkCommandBuffer cmd, uint32_t globa
                           _meshRegistry, cmd, {_renderer.swapchain().imageFormat(), _renderer.swapchain().imageFormat()},
                           VulkanGBuffer::depthFormat(), VulkanRenderPass::Kind::Retro);
     pass.setGlobalsOffset(globalsOffset);
-    _registry->drawScene(pass, {RenderPassName::OpaqueGeometry, RenderCategory::Opaque}, _cullCamera);
+    _registry->drawScene(pass,
+                         {RenderPassName::OpaqueGeometry, RenderCategory::Opaque},
+                         VisibilityPolicy::viewCamera(_cullCamera));
     vkCmdEndRendering(cmd);
 
     hilightsBlurPass(cmd);
@@ -1014,7 +1018,7 @@ void VulkanRenderPipeline::drawOntoOutput(VkCommandBuffer cmd,
     auto category = passName == RenderPassName::PostProcessing
                         ? RenderCategory::LensFlare
                         : RenderCategory::Debug;
-    _registry->drawScene(pass, {passName, category}, _cullCamera);
+    _registry->drawScene(pass, {passName, category}, VisibilityPolicy::viewCamera(_cullCamera));
 
     vkCmdEndRendering(cmd);
 }
@@ -1100,7 +1104,7 @@ void VulkanRenderPipeline::transparencyPass(VkCommandBuffer cmd, uint32_t global
     _registry->drawScene(
         pass,
         {RenderPassName::TransparentGeometry, RenderCategory::Transparent},
-        _cullCamera);
+        VisibilityPolicy::viewCamera(_cullCamera));
 
     vkCmdEndRendering(cmd);
 }
@@ -1288,7 +1292,9 @@ void VulkanRenderPipeline::filterChainPass(VkCommandBuffer cmd) {
 
 Texture &VulkanRenderPipeline::render(RenderRegistry &registry,
                                       const CameraSceneNode *camera,
-                                      RenderPassName activeShadowPass) {
+                                      RenderPassName activeShadowPass,
+                                      const graphics::Frustum *shadowFrusta,
+                                      size_t numShadowFrusta) {
     auto cmd = _renderer.commandBuffer();
     _registry = &registry;
     _cullCamera = camera;
@@ -1319,7 +1325,8 @@ Texture &VulkanRenderPipeline::render(RenderRegistry &registry,
         _renderer.pbrTextures().process(cmd, globalsOffset);
     }
 
-    shadowPass(cmd, globalsOffset);
+    shadowPass(cmd, globalsOffset,
+               VisibilityPolicy::shadowFrusta(shadowFrusta, numShadowFrusta, _cullCamera));
     geometryPass(cmd, globalsOffset);
     // Both allocations are sampleable at the end of every frame. The deferred
     // resolve starts a new frame image in the first one; every later full-screen

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2023 The reone project contributors
+ * Copyright (c) 2026 The reone project contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,15 +15,35 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "reone/graphics/camera.h"
+#pragma once
+
+#include "aabb.h"
 
 namespace reone {
 
 namespace graphics {
 
-void Camera::updateFrustum() {
-    _frustum = Frustum {_projection * _view};
-}
+/** A set of clipping planes extracted from a projection-view matrix. */
+class Frustum {
+public:
+    Frustum() = default;
+    explicit Frustum(const glm::mat4 &viewProjection);
+
+    bool isInFrustum(const glm::vec3 &point) const;
+    bool isInFrustum(const AABB &aabb) const;
+
+private:
+    struct Plane {
+        glm::vec3 normal {0.0f};
+        float distance {0.0f};
+
+        float distanceTo(const glm::vec3 &point) const {
+            return glm::dot(normal, point) + distance;
+        }
+    };
+
+    std::array<Plane, 6> _planes;
+};
 
 } // namespace graphics
 
