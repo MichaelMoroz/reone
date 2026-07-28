@@ -281,10 +281,14 @@ is called in exactly one place - `src/libs/game/object/area.cpp:472-488` - over
 room model nodes, skipping anything under the room's `"{modelName}a"` subtree,
 which is where its animated geometry lives. So:
 
-- it is a **room** flag. Placeables, doors and creatures are never marked
-  static, including the footlocker that never moves in the entire game. Merge
-  candidates are under-counted, and a merged BLAS built from this flag alone
-  leaves most immobile objects as separate instances;
+- it is a **room** flag - `setStatic` runs inside `Area::loadLYT` over the
+  layout's rooms. Placeables, doors and creatures are never marked, including
+  the footlocker that never moves in the entire game. In practice this matters
+  less than it sounds: in danm14ab the six room models account for roughly 940
+  of the 1508 entries while every placeable and door together is about
+  fourteen, so merging on this flag alone still captures nearly all of the
+  available win. Worth re-checking in an interior area, where the ratio is
+  likely the other way;
 - it constrains the **transform, not the material**. A static node still runs
   `updateUVAnimation` and `updateBumpmapAnimation`
   (`src/libs/scene/node/mesh.cpp:108-129`), so scrolling water in a room is
