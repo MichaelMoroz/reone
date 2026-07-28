@@ -478,6 +478,65 @@ Clearing and refilling every frame is correct by construction - there is no
 invalidation contract to get wrong - and it is a stopgap, not the end state.
 Two reasons, and only one of them is cost.
 
+### Measured, 2026-07-28
+
+The registration refactor cost real frame time and this is what it was. OpenGL,
+`danm14ab`, `--pbr 1`, capture harness, wall clock differenced between a
+300-frame and a 900-frame run so startup and module load cancel, with a
+warm-up run discarded first.
+
+| commit | ms/frame | |
+|---|---:|---|
+| `a7b2bf0f` | 4.51 | immediately before the registry |
+| `c536ac72` | 5.62 | the registry - **+1.11 ms, +25%** |
+| `72fb544e` | 5.01 | after step 1, which recovered 0.61 ms |
+
+The remaining ~0.5 ms is **snapshot construction**, timed directly rather than
+inferred. Per-slot, `a7b2bf0f` against `c536ac72`: Graphics render +1.146 ms,
+Update +0.544 ms, input and audio unchanged. Inside HEAD's Graphics slot:
+
+| phase | ms/frame |
+|---|---:|
+| snapshot registration (`renderScene`) | **0.445** |
+| the six `drawScene` walks | 1.873 |
+| `_objects.clear()` destruction | 0.020 |
+| `resetFrame` bookkeeping loop | 0.002 |
+
+Registration is a stage that did not previously exist - the old traversal was
+fused into drawing - and it accounts for 85-90% of the residual.
+`RegisteredObject` is **488 bytes**, so 1508 entries are ~0.70 MiB constructed
+and destroyed per frame, and the variant makes a three-entry billboard pay the
+largest alternative's width.
+
+**Ruled out, with numbers**, because negative results are what stop the same
+guesses recurring:
+
+- the 653 dangly position vectors: **0.065 ms/frame** including both allocation
+  and fill - real, and an order of magnitude too small;
+- the dead `drawnPasses` clear in `resetFrame`: **0.002 ms**;
+- **caching the cull test per model root: no effect at all.** Before the
+  registry, `cullModels` computed visibility once per root per frame and
+  culled subtrees wholesale; now `isCulled` runs per entry per pass, ~9000
+  times against ~200. A one-slot cache removed those calls and moved frame time
+  by nothing, because an AABB-frustum test is tens of nanoseconds. **Reasoning
+  from a ratio of call counts is how that hour was lost** - attribute cost to
+  something measured, not to something that merely happens often.
+
+Two traps in measuring this again. A run immediately after a build pays a
+one-time shader and pipeline cache cost that inflates the 300-frame baseline
+and silently deflates the difference; that produced a nonsense 1.755 ms reading
+once. And `checkIdentityStability` fires whenever the Graphics channel is on
+and exists only after `296a0474`, so instrumentation compared across that
+boundary has to log somewhere else.
+
+**Not yet decided:** whether 0.445 ms - about 9% of the frame - is worth
+shrinking the entry for. `RegisteredMesh` carries three `mat4` inline, 192 of
+its 488 bytes, and `transformInv` is derivable while `prevTransform` is read
+only by motion vectors. That is a contained change with no architectural risk,
+and it is the only lever identified so far. Retained registration is *not* the
+answer here for the reasons in "Why the snapshot stays"; the cost is entry
+construction, not the rebuild policy.
+
 ### Where the per-frame cost actually is
 
 Read the copies rather than guessing at them, because the obvious suspect is
