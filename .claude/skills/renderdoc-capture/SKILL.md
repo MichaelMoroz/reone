@@ -23,8 +23,14 @@ engine.exe --game "<GAME_DIR>" \
 - `--commands-file` runs console commands at startup; `warp <module>` is the useful one.
   It runs during init, so the module is loaded before the first frame.
 - `--capture <path>` writes a TGA on frame `--captureframe`, then exits.
-- **Capture the earliest frame that looks settled.** Frame 2 already renders a
-  complete scene in danm14ab; there is no need to wait.
+- **Frames below ~300 are the splash screen.** The logo plays before the module
+  is presented, so `--captureframe 3` writes a perfectly valid, perfectly
+  deterministic TGA of the splash - identical on both backends, identical
+  before and after any renderer change, and therefore evidence of nothing. Two
+  captures matching at a low frame number is the expected result whether the
+  change is correct or catastrophic. **Use `--captureframe 900`**, as the
+  `--dumptargets` examples below do, and look at the image before trusting a
+  comparison built on it.
 ### Capture runs are deterministic, and that is load-bearing
 
 Two runs at the same `--captureframe` produce **byte-identical** images, in the
