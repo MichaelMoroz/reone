@@ -4,6 +4,10 @@
  */
 #include "reone/scene/render/pipeline/rayquery.h"
 
+#include <algorithm>
+
+#include "reone/graphics/options.h"
+
 #include "reone/graphics/vulkan/accelerationstructure.h"
 #include "reone/graphics/vulkan/descriptors.h"
 #include "reone/graphics/vulkan/device.h"
@@ -14,11 +18,23 @@
 #include "reone/system/logutil.h"
 
 #include <chrono>
+#include <cstring>
 
 using namespace reone::graphics;
 
 namespace reone::scene {
 namespace {
+constexpr uint32_t kRayQuerySamplesPerPixel = 16;
+
+struct InstanceMaterial {
+    glm::vec4 selfIllumColor {0.0f};
+};
+
+struct TraceStats {
+    uint32_t secondaryRays {0};
+    uint32_t secondaryMisses {0};
+};
+
 VkDeviceAddress alignedAddress(VkDeviceAddress address, VkDeviceSize alignment) {
     return (address + alignment - 1) & ~(alignment - 1);
 }
@@ -34,13 +50,15 @@ VkTransformMatrixKHR instanceTransform(const glm::mat4 &m) {
 }
 } // namespace
 
-RayQueryPipeline::RayQueryPipeline(VulkanRenderer &renderer, glm::ivec2 extent) :
-    _renderer(renderer), _extent(extent) {}
+RayQueryPipeline::RayQueryPipeline(VulkanRenderer &renderer,
+                                   glm::ivec2 extent,
+                                   GraphicsOptions &options) :
+    _renderer(renderer), _options(options), _extent(extent) {}
 
 void RayQueryPipeline::init() {
     if (_inited) return;
     auto &device = _renderer.device();
-    VkDescriptorSetLayoutBinding bindings[2] {};
+    VkDescriptorSetLayoutBinding bindings[4] {};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[0].descriptorCount = 1;
@@ -49,16 +67,25 @@ void RayQueryPipeline::init() {
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     VkDescriptorSetLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layoutInfo.bindingCount = 2;
+    layoutInfo.bindingCount = 4;
     layoutInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device.handle(), &layoutInfo, nullptr, &_layout) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: ray-query descriptor layout creation failed");
 
     VkDescriptorPoolSize sizes[] {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2},
-                                  {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 2}};
+                                  {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 2},
+                                  {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4}};
     VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    poolInfo.maxSets = 2; poolInfo.poolSizeCount = 2; poolInfo.pPoolSizes = sizes;
+    poolInfo.maxSets = 2; poolInfo.poolSizeCount = 3; poolInfo.pPoolSizes = sizes;
     if (vkCreateDescriptorPool(device.handle(), &poolInfo, nullptr, &_pool) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: ray-query descriptor pool creation failed");
     VkDescriptorSetAllocateInfo alloc {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
@@ -75,8 +102,13 @@ void RayQueryPipeline::init() {
     if (vkCreateShaderModule(device.handle(), &moduleInfo, nullptr, &module) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: ray-query shader module creation failed");
     VkDescriptorSetLayout layouts[] {_renderer.descriptors().uniformLayout(), _layout};
+    VkPushConstantRange pushConstants {};
+    pushConstants.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pushConstants.size = sizeof(TracePushConstants);
     VkPipelineLayoutCreateInfo pipelineLayout {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pipelineLayout.setLayoutCount = 2; pipelineLayout.pSetLayouts = layouts;
+    pipelineLayout.pushConstantRangeCount = 1;
+    pipelineLayout.pPushConstantRanges = &pushConstants;
     if (vkCreatePipelineLayout(device.handle(), &pipelineLayout, nullptr, &_pipelineLayout) != VK_SUCCESS) {
         vkDestroyShaderModule(device.handle(), module, nullptr);
         throw std::runtime_error("Vulkan: ray-query pipeline layout creation failed");
@@ -96,7 +128,8 @@ void RayQueryPipeline::init() {
 
 void RayQueryPipeline::clearFrame(Frame &frame) {
     if (frame.tlas) vkDestroyAccelerationStructureKHR(_renderer.device().handle(), frame.tlas, nullptr);
-    frame.tlas = VK_NULL_HANDLE; frame.instances.reset(); frame.storage.reset(); frame.scratch.reset(); frame.capacity = 0;
+    frame.tlas = VK_NULL_HANDLE; frame.instances.reset(); frame.materials.reset(); frame.traceStats.reset();
+    frame.storage.reset(); frame.scratch.reset(); frame.capacity = 0;
 }
 
 void RayQueryPipeline::deinit() {
@@ -118,9 +151,12 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     const auto visibility = VisibilityPolicy::noCulling();
     (void)visibility;
     std::vector<VkAccelerationStructureInstanceKHR> instances;
+    std::vector<InstanceMaterial> materials;
     instances.reserve(registry.objects().size());
+    materials.reserve(registry.objects().size());
     _lastDeforming = 0;
     _lastOutOfRange = 0;
+    _lastEmissive = 0;
     for (const auto &object : registry.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
         if (!mesh) continue;
@@ -137,6 +173,10 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         address.accelerationStructure = blas.handle();
         instance.accelerationStructureReference = vkGetAccelerationStructureDeviceAddressKHR(_renderer.device().handle(), &address);
         instances.push_back(instance);
+        materials.push_back({glm::vec4(mesh->material.selfIllumColor, 0.0f)});
+        if (glm::dot(mesh->material.selfIllumColor, glm::vec3(0.299f, 0.587f, 0.114f)) > 0.99f) {
+            ++_lastEmissive;
+        }
     }
     _lastInstances = static_cast<uint32_t>(instances.size());
     if (instances.empty()) {
@@ -152,6 +192,14 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     }
 
     auto &frame = _frames[_renderer.frameIndex()];
+    // The renderer waited this in-flight frame's fence before calling us, so
+    // its previous GPU-written counters are now safe to inspect.
+    if (frame.traceStats) {
+        frame.traceStats->invalidateMapped();
+        const auto *stats = static_cast<const TraceStats *>(frame.traceStats->mapped());
+        _lastSecondaryRays = stats->secondaryRays;
+        _lastSecondaryMisses = stats->secondaryMisses;
+    }
     clearFrame(frame);
     auto &device = _renderer.device();
     const auto instanceSize = static_cast<VkDeviceSize>(instances.size() * sizeof(instances[0]));
@@ -159,6 +207,13 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     frame.instances->initHostVisible(instanceSize, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
     std::memcpy(frame.instances->mapped(), instances.data(), static_cast<size_t>(instanceSize));
+    frame.materials = std::make_unique<VulkanBuffer>(device);
+    frame.materials->initHostVisible(static_cast<VkDeviceSize>(materials.size() * sizeof(materials[0])),
+                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    std::memcpy(frame.materials->mapped(), materials.data(), materials.size() * sizeof(materials[0]));
+    frame.traceStats = std::make_unique<VulkanBuffer>(device);
+    frame.traceStats->initHostVisibleReadback(sizeof(TraceStats), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    std::memset(frame.traceStats->mapped(), 0, sizeof(TraceStats));
     VkAccelerationStructureGeometryInstancesDataKHR instanceData {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR};
     instanceData.arrayOfPointers = VK_FALSE; instanceData.data.deviceAddress = frame.instances->deviceAddress();
     VkAccelerationStructureGeometryKHR geometry {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
@@ -201,13 +256,23 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     VkDescriptorImageInfo image {}; image.imageView = output.view(); image.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     VkWriteDescriptorSetAccelerationStructureKHR asWrite {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
     asWrite.accelerationStructureCount = 1; asWrite.pAccelerationStructures = &frame.tlas;
-    VkWriteDescriptorSet writes[2] {};
+    VkDescriptorBufferInfo materialBuffer {};
+    materialBuffer.buffer = frame.materials->handle();
+    materialBuffer.range = frame.materials->size();
+    VkDescriptorBufferInfo statsBuffer {};
+    statsBuffer.buffer = frame.traceStats->handle();
+    statsBuffer.range = frame.traceStats->size();
+    VkWriteDescriptorSet writes[4] {};
     const auto set = _sets[_renderer.frameIndex()];
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[0].dstSet = set; writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; writes[0].pImageInfo = &image;
     writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[1].pNext = &asWrite; writes[1].dstSet = set; writes[1].dstBinding = 1;
     writes[1].descriptorCount = 1; writes[1].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    vkUpdateDescriptorSets(device.handle(), 2, writes, 0, nullptr);
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[2].dstSet = set; writes[2].dstBinding = 2;
+    writes[2].descriptorCount = 1; writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[2].pBufferInfo = &materialBuffer;
+    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[3].dstSet = set; writes[3].dstBinding = 3;
+    writes[3].descriptorCount = 1; writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[3].pBufferInfo = &statsBuffer;
+    vkUpdateDescriptorSets(device.handle(), 4, writes, 0, nullptr);
     std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
     offsets[0] = globalsOffset;
     auto uniformSet = _renderer.uniformSet();
@@ -215,11 +280,20 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineLayout, 0, 1, &uniformSet,
                             static_cast<uint32_t>(offsets.size()), offsets.data());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineLayout, 1, 1, &set, 0, nullptr);
+    // Clamped rather than trusted: the option is user-editable in reone.cfg
+    // and a zero would divide the accumulated radiance by zero.
+    TracePushConstants constants {_frameNumber,
+                                  static_cast<uint32_t>(std::max(1, _options.pathTracingSamples))};
+    vkCmdPushConstants(cmd, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), &constants);
     vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8), static_cast<uint32_t>((_extent.y + 7) / 8), 1);
+    ++_frameNumber;
     const auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count();
     info("Vulkan: TLAS " + std::to_string(_lastInstances) + " instances, skipped " +
          std::to_string(_lastDeforming) + " deforming and " +
          std::to_string(_lastOutOfRange) + " out-of-range meshes, build recorded in " +
-         std::to_string(microseconds) + " us", LogChannel::Graphics);
+         std::to_string(microseconds) + " us; " + std::to_string(_lastEmissive) +
+         " emissive; previous frame secondary misses " + std::to_string(_lastSecondaryMisses) +
+         "/" + std::to_string(_lastSecondaryRays) + "; " +
+         std::to_string(kRayQuerySamplesPerPixel) + " spp", LogChannel::Graphics);
 }
 } // namespace reone::scene

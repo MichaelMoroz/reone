@@ -49,6 +49,12 @@ public:
      */
     void initHostVisible(VkDeviceSize size, VkBufferUsageFlags usage);
 
+    /** Host-visible storage which the GPU writes and the CPU reads next frame. */
+    void initHostVisibleReadback(VkDeviceSize size, VkBufferUsageFlags usage);
+
+    /** Make GPU writes to a mapped readback allocation visible to the CPU. */
+    void invalidateMapped() const;
+
     /**
      * Memory on the device, filled once from @p data through a staging buffer.
      * For vertices, indices and anything else written at load time.

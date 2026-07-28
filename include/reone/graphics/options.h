@@ -33,6 +33,18 @@ struct GraphicsOptions {
     bool pbr {true};
     /** "raster" normally follows pbr; "path-tracing" selects Vulkan ray queries. */
     std::string mode {"raster"};
+
+    // Path tracing
+
+    /**
+     * Hemisphere samples per pixel for the second bounce.
+     *
+     * Cost is very close to linear - measured on a 5090 at 1920x1080 in
+     * danm14ab, 1 sample costs 4.9 ms/frame and 16 costs 38.8. Noise falls as
+     * the square root, so doubling this halves neither. Eight is the point
+     * where the image reads clearly while the frame still moves.
+     */
+    int pathTracingSamples {8};
     bool ssao {true};
     bool ssr {true};
     bool fxaa {true};

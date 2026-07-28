@@ -121,6 +121,21 @@ the dumps say which pass to look at.
 current frame before reading targets back. Only the OpenGL **PBR** pipeline
 exposes targets; the retro pipeline exposes none and dumps nothing.
 
+### Path tracing makes the harness slow, and frame 900 is usually not needed
+
+Every frame of a capture run renders at full cost, so `--captureframe 900` in
+`--mode path-tracing` traces nine hundred frames to keep one. At 32 samples per
+pixel that is well over a minute per capture, and iterating on a shader at that
+rate is miserable.
+
+**Use the lowest frame past the splash screen for iteration** - around 310.
+Frames below ~300 are the logo and are evidence of nothing, but 310 is a settled
+scene, deterministic like any other, and roughly three times cheaper than 900.
+
+Frame 900 is only required when comparing against the existing baselines, which
+were captured there. Keep it for cross-commit checks; do not pay for it while
+tuning a sample count.
+
 ## Frame time, and how to compare two commits
 
 A capture run renders as fast as it can with a fixed 1/60 simulation step, so

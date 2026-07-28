@@ -50,6 +50,9 @@ private:
         bool vsync {false};
         bool grass {true};
         bool pbr {true};
+        /** "raster" or "path-tracing", matching the engine's --mode. */
+        std::string mode {"raster"};
+        int ptspp {8};
         bool ssao {true};
         bool ssr {true};
         bool fxaa {true};
@@ -75,6 +78,7 @@ private:
     wxChoice *_choiceTextureQuality;
     wxChoice *_choiceShadowResolution;
     wxChoice *_choiceAnisoFilter;
+    wxChoice *_choicePathTracingSamples;
     wxSlider *_sliderDrawDistance;
     wxCheckBox *_checkBoxFullscreen;
     wxCheckBox *_checkBoxVSync;

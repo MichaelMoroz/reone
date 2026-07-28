@@ -668,6 +668,19 @@ void Editor::graphicsSettings() {
     }
 
     ImGui::Spacing();
+    ImGui::SeparatorText("Path tracing");
+    // Applies on the next frame rather than needing a rebuild: the count is a
+    // push constant, so nothing has to be reallocated to change it.
+    if (ImGui::SliderInt("Samples per pixel", &options.pathTracingSamples, 1, 64)) {
+        options.pathTracingSamples = std::max(1, options.pathTracingSamples);
+    }
+    if (options.mode != "path-tracing") {
+        ImGui::TextDisabled("Inactive - run with --mode path-tracing");
+    } else {
+        ImGui::TextDisabled("Cost is near linear in this count.");
+    }
+
+    ImGui::Spacing();
     ImGui::TextUnformatted("Requires scene or asset reload");
     ImGui::Separator();
     bool pbr = options.pbr;

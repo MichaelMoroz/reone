@@ -237,7 +237,7 @@ std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode, 
             throw std::logic_error("Vulkan renderer was not supplied to the pipeline factory");
         }
         if (mode == RenderMode::PathTracing && !_vulkanRenderer->device().rayQueryAvailable()) {
-            throw std::runtime_error("Path-tracing mode requires Vulkan ray-query acceleration structures; this device does not provide them");
+            throw std::runtime_error("Path-tracing mode requires Vulkan ray-query acceleration structures and ray-tracing position fetch; this device does not provide them");
         }
         if (mode == RenderMode::Retro) {
             warn("No retro pipeline on Vulkan; rendering PBR instead. Pass --pbr 1 to "

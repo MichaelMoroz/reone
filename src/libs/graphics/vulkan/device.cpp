@@ -108,6 +108,14 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     rayQueryFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
     rayQueryFeatures.rayQuery = VK_TRUE;
 
+    // Position fetch supplies the three hit-triangle vertices directly from
+    // the acceleration structure. The path tracer uses it for geometric
+    // normals, without making mesh vertex buffers bindless.
+    VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR positionFetchFeatures {};
+    positionFetchFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_POSITION_FETCH_FEATURES_KHR;
+    positionFetchFeatures.rayTracingPositionFetch = VK_TRUE;
+
     // The resolve samples the derived environment maps as cube arrays, which is
     // not a baseline capability.
     VkPhysicalDeviceFeatures features {};
@@ -150,9 +158,11 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     rayQuerySelector.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
         .add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
         .add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
+        .add_required_extension(VK_KHR_RAY_TRACING_POSITION_FETCH_EXTENSION_NAME)
         .set_required_features_12(features12)
         .add_required_extension_features(accelerationStructureFeatures)
-        .add_required_extension_features(rayQueryFeatures);
+        .add_required_extension_features(rayQueryFeatures)
+        .add_required_extension_features(positionFetchFeatures);
     auto rayQueryPhysicalResult = rayQuerySelector.select();
     if (rayQueryPhysicalResult) {
         physicalDevice = rayQueryPhysicalResult.value();

@@ -44,6 +44,29 @@ void VulkanBuffer::initHostVisible(VkDeviceSize size, VkBufferUsageFlags usage) 
     _deviceAddressable = (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0;
 }
 
+void VulkanBuffer::initHostVisibleReadback(VkDeviceSize size, VkBufferUsageFlags usage) {
+    VkBufferCreateInfo bufInfo {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufInfo.size = size;
+    bufInfo.usage = usage;
+
+    VmaAllocationCreateInfo allocInfo {};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+    allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                      VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    if (vmaCreateBuffer(_device.allocator(), &bufInfo, &allocInfo,
+                        &_buffer, &_allocation, &_info) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: host-visible readback buffer allocation failed");
+    }
+    _size = size;
+    _deviceAddressable = (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0;
+}
+
+void VulkanBuffer::invalidateMapped() const {
+    if (_allocation != VK_NULL_HANDLE) {
+        vmaInvalidateAllocation(_device.allocator(), _allocation, 0, VK_WHOLE_SIZE);
+    }
+}
+
 void VulkanBuffer::initDeviceLocal(VkDeviceSize size, VkBufferUsageFlags usage, const void *data) {
     VkBufferCreateInfo bufInfo {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bufInfo.size = size;

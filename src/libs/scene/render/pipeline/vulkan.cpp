@@ -178,7 +178,7 @@ void VulkanRenderPipeline::init() {
         _outputHandle = std::make_shared<Texture>(
             "vk_primary_ray_output", TextureType::TwoDim, Texture::Properties());
         _renderer.resources().registerExternal(*_outputHandle, *_output);
-        _rayQuery = std::make_unique<RayQueryPipeline>(_renderer, _targetSize);
+        _rayQuery = std::make_unique<RayQueryPipeline>(_renderer, _targetSize, _options);
         _rayQuery->init();
         _inited = true;
         return;
