@@ -17,6 +17,9 @@
 
 #pragma once
 
+#include <string_view>
+#include <unordered_map>
+
 #include "reone/scene/render/pipeline.h"
 
 #include "fogproperties.h"
@@ -63,6 +66,7 @@ struct Collision;
 
 class IAnimationEventListener;
 class IRenderPipelineFactory;
+class RenderRegistry;
 
 class ISceneGraph {
 public:
@@ -91,6 +95,11 @@ public:
     /** Discard target-sized state before the next render recreates it. */
     virtual void invalidateRenderPipeline() = 0;
     virtual std::optional<std::reference_wrapper<CameraSceneNode>> camera() = 0;
+
+    /** The completed frame snapshot. Editor update intentionally sees frame N-1. */
+    virtual const RenderRegistry &registry() const = 0;
+    virtual uint32_t internName(std::string_view name) = 0;
+    virtual std::string_view nameText(uint32_t id) const = 0;
 
     virtual void setAmbientLightColor(glm::vec3 color) = 0;
     virtual bool hasShadowLight() const = 0;
@@ -166,6 +175,10 @@ public:
     void invalidateRenderPipeline() override { _renderPipeline.reset(); }
 
     void renderScene(RenderRegistry &registry);
+
+    const RenderRegistry &registry() const override { return _registry; }
+    uint32_t internName(std::string_view name) override;
+    std::string_view nameText(uint32_t id) const override;
 
     const std::string &name() const override {
         return _name;
@@ -304,6 +317,15 @@ private:
 
     std::set<std::shared_ptr<SceneNode>> _nodes;
 
+    // Name 0 is the explicit "not applicable" label. Snapshot entries retain
+    // only these compact ids, never an owning string.
+    std::unordered_map<std::string, uint32_t> _nameIds;
+    std::vector<std::string> _names {""};
+
+    // Nodes are retained for the graph lifetime, so indexes are never reused
+    // and generation remains zero until scene-node destruction exists.
+    uint32_t _nextNodeIndex {0};
+
     CameraSceneNode *_activeCamera {nullptr};
     std::vector<LightSceneNode *> _flareLights;
 
@@ -391,6 +413,7 @@ private:
     template <class T, class... Params>
     std::shared_ptr<T> newSceneNode(Params... params) {
         auto node = std::make_shared<T>(params..., *this, _graphicsSvc, _audioSvc, _resourceSvc);
+        node->setId({_nextNodeIndex++, 0});
         _nodes.insert(node);
         return node;
     }

@@ -68,6 +68,8 @@ void ModelSceneNode::buildNodeTree(ModelNode &node, SceneNode &parent) {
     } else {
         sceneNode = _sceneGraph.newDummy(node);
     }
+    sceneNode->setNameIds(
+        {_sceneGraph.internName(_model->name()), _sceneGraph.internName(node.name())});
 
     if (node.isSkinMesh()) {
         // Reparent skin meshes to prevent animation being applied twice
@@ -119,7 +121,7 @@ void ModelSceneNode::registerAABB(RenderRegistry &registry) {
     for (const auto &corner : aabbWorld.corners()) {
         corners.emplace_back(corner, 1.0f);
     }
-    registry.registerAABB(renderCategory(RenderCategory::Debug), corners, this);
+    registry.registerAABB(renderCategory(RenderCategory::Debug), id(), nameIds(), corners, this);
 }
 
 void ModelSceneNode::computeAABB() {

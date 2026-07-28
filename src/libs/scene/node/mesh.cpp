@@ -331,6 +331,8 @@ void MeshSceneNode::registerRender(RenderRegistry &registry) {
             _prevBones = _bones;
         }
         registry.registerMesh(categories,
+                         id(),
+                         nameIds(),
                          *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
                          RegisteredSkin {_bones, _prevBones}, &_model);
     } else if (_modelNode.isDanglymesh()) {
@@ -340,14 +342,20 @@ void MeshSceneNode::registerRender(RenderRegistry &registry) {
             positions.emplace_back(vertex.position + vertex.displacement, 1.0f);
         }
         registry.registerMesh(categories,
+                         id(),
+                         nameIds(),
                          *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
                          RegisteredDangly {std::move(positions)}, &_model);
     } else if (_modelNode.isSaberMesh()) {
         registry.registerMesh(categories,
+                         id(),
+                         nameIds(),
                          *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
                          RegisteredSaber {glm::vec4 {_saber.displacement, 0.0f}}, &_model);
     } else {
         registry.registerMesh(categories,
+                         id(),
+                         nameIds(),
                          *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, {}, &_model);
     }
 }

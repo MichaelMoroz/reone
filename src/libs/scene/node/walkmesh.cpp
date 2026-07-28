@@ -74,7 +74,7 @@ void WalkmeshSceneNode::registerRender(RenderRegistry &registry) {
     material.type = MaterialType::Walkmesh;
     material.faceCulling = FaceCullMode::Back;
     registry.registerMesh(renderCategory(RenderCategory::Debug),
-                     *_mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, {}, nullptr);
+                     id(), nameIds(), *_mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, {}, nullptr);
 }
 
 } // namespace scene

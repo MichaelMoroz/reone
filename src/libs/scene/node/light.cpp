@@ -78,7 +78,7 @@ void LightSceneNode::registerLensFlare(RenderRegistry &registry, const ModelNode
     auto color = glm::vec4(_color, 0.5f);
     auto transform = glm::translate(origin());
     registry.registerBillboard(renderCategory(RenderCategory::LensFlare),
-                          *texture, color, transform, glm::inverse(transform), 0.2f * flare.size, &_model);
+                          id(), nameIds(), *texture, color, transform, glm::inverse(transform), 0.2f * flare.size, &_model);
 }
 
 bool LightSceneNode::isDirectional() const {

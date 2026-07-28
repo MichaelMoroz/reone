@@ -17,6 +17,10 @@
 
 #pragma once
 
+#include <cstdint>
+#include <functional>
+#include <limits>
+
 #include "reone/graphics/aabb.h"
 
 #include "types.h"
@@ -46,6 +50,34 @@ namespace scene {
 class RenderRegistry;
 class ISceneGraph;
 class IUser;
+class SceneGraph;
+
+/**
+ * Stable identity of a scene node.
+ *
+ * The default value is invalid. The generation remains zero while SceneGraph
+ * never destroys nodes; it becomes meaningful once node slots can be reused.
+ */
+struct SceneNodeId {
+    static constexpr uint32_t kInvalid = std::numeric_limits<uint32_t>::max();
+
+    uint32_t index {kInvalid};
+    uint32_t generation {kInvalid};
+
+    constexpr bool operator==(const SceneNodeId &other) const {
+        return index == other.index && generation == other.generation;
+    }
+    constexpr bool isValid() const { return index != kInvalid; }
+};
+
+/**
+ * Interned labels that make a scene-node identity readable in diagnostics.
+ * Zero deliberately means that this node has no model or model-node label.
+ */
+struct SceneNodeNameIds {
+    uint32_t model {0};
+    uint32_t node {0};
+};
 
 class SceneNode : boost::noncopyable {
 public:
@@ -75,6 +107,9 @@ public:
     glm::vec3 getWorldCenterOfAABB() const;
 
     SceneNodeType type() const { return _type; }
+    SceneNodeId id() const { return _id; }
+    SceneNodeNameIds nameIds() const { return _nameIds; }
+    void setNameIds(SceneNodeNameIds ids) { _nameIds = ids; }
     SceneNode *parent() { return _parent; }
     const SceneNode *parent() const { return _parent; }
     const std::vector<SceneNode *> &children() const { return _children; }
@@ -131,6 +166,9 @@ protected:
     graphics::GraphicsServices &_graphicsSvc;
     audio::AudioServices &_audioSvc;
     resource::ResourceServices &_resourceSvc;
+
+    SceneNodeId _id;
+    SceneNodeNameIds _nameIds;
 
     SceneNode *_parent {nullptr};
     /**
@@ -193,8 +231,21 @@ protected:
     void computeAbsoluteTransforms();
 
     virtual void onAbsoluteTransformChanged() {}
+
+private:
+    friend class SceneGraph;
+
+    void setId(SceneNodeId id) { _id = id; }
 };
 
 } // namespace scene
 
 } // namespace reone
+
+template <>
+struct std::hash<reone::scene::SceneNodeId> {
+    size_t operator()(const reone::scene::SceneNodeId &id) const noexcept {
+        auto value = (static_cast<uint64_t>(id.generation) << 32) | id.index;
+        return std::hash<uint64_t> {}(value);
+    }
+};

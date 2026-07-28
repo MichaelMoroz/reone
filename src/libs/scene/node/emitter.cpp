@@ -322,7 +322,7 @@ void EmitterSceneNode::registerLeafs(RenderRegistry &registry, const std::vector
                         ? static_cast<ModelSceneNode *>(root)
                         : nullptr;
     registry.registerParticles(
-        renderCategory(RenderCategory::Transparent), material, emitter->gridSize, particles, cullRoot);
+        renderCategory(RenderCategory::Transparent), id(), nameIds(), material, emitter->gridSize, particles, cullRoot);
 }
 
 } // namespace scene

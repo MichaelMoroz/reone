@@ -50,6 +50,21 @@ namespace reone {
 
 namespace scene {
 
+uint32_t SceneGraph::internName(std::string_view name) {
+    if (name.empty()) {
+        return 0;
+    }
+    auto [it, inserted] = _nameIds.try_emplace(std::string(name), static_cast<uint32_t>(_names.size()));
+    if (inserted) {
+        _names.push_back(it->first);
+    }
+    return it->second;
+}
+
+std::string_view SceneGraph::nameText(uint32_t id) const {
+    return id < _names.size() ? _names[id] : std::string_view {};
+}
+
 static constexpr int kMaxFlareLights = 4;
 static constexpr int kMaxSoundCount = 4;
 
@@ -625,6 +640,7 @@ void SceneGraph::renderScene(RenderRegistry &registry) {
     registry.addDebug([this]() {
         renderDrawDebug(_graphicsSvc, _resourceSvc, name());
     });
+    registry.checkIdentityStability();
 }
 
 static std::vector<glm::vec4> computeFrustumCornersWorldSpace(const glm::mat4 &projection, const glm::mat4 &view) {
@@ -959,12 +975,14 @@ std::shared_ptr<DummySceneNode> SceneGraph::newDummy(ModelNode &modelNode) {
 
 std::shared_ptr<ModelSceneNode> SceneGraph::newModel(Model &model, ModelUsage usage) {
     auto node = newSceneNode<ModelSceneNode, Model &, ModelUsage>(model, usage);
+    node->setNameIds({internName(model.name()), 0});
     node->init();
     return std::move(node);
 }
 
 std::shared_ptr<WalkmeshSceneNode> SceneGraph::newWalkmesh(Walkmesh &walkmesh) {
     auto node = newSceneNode<WalkmeshSceneNode, Walkmesh &>(walkmesh);
+    node->setNameIds({0, internName("walkmesh")});
     node->init();
     return std::move(node);
 }
@@ -988,6 +1006,7 @@ std::shared_ptr<LightSceneNode> SceneGraph::newLight(ModelSceneNode &model, Mode
 
 std::shared_ptr<TriggerSceneNode> SceneGraph::newTrigger(std::vector<glm::vec3> geometry) {
     auto node = newSceneNode<TriggerSceneNode, std::vector<glm::vec3>>(std::move(geometry));
+    node->setNameIds({0, internName("trigger")});
     node->init();
     return std::move(node);
 }

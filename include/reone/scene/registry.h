@@ -21,6 +21,7 @@
 
 #include "reone/graphics/frustum.h"
 #include "reone/graphics/material.h"
+#include "reone/scene/node.h"
 
 namespace reone {
 
@@ -46,6 +47,12 @@ enum class RenderPassName {
     PostProcessing,
     Debug
 };
+
+using RenderPassFlags = uint32_t;
+
+constexpr RenderPassFlags renderPassFlag(RenderPassName pass) {
+    return pass == RenderPassName::None ? 0 : 1u << (static_cast<uint32_t>(pass) - 1);
+}
 
 enum class RenderCategory : uint32_t {
     None = 0,
@@ -137,6 +144,9 @@ using RegisteredDeformation =
 
 struct RegisteredMesh {
     RenderCategories categories {0};
+    SceneNodeId id;
+    SceneNodeNameIds nameIds;
+    RenderPassFlags drawnPasses {0};
     std::reference_wrapper<graphics::Mesh> mesh;
     graphics::Material material;
     glm::mat4 transform {1.0f};
@@ -148,6 +158,9 @@ struct RegisteredMesh {
 
 struct RegisteredBillboard {
     RenderCategories categories {0};
+    SceneNodeId id;
+    SceneNodeNameIds nameIds;
+    RenderPassFlags drawnPasses {0};
     std::reference_wrapper<graphics::Texture> texture;
     glm::vec4 color {1.0f};
     glm::mat4 transform {1.0f};
@@ -158,6 +171,9 @@ struct RegisteredBillboard {
 
 struct RegisteredParticles {
     RenderCategories categories {0};
+    SceneNodeId id;
+    SceneNodeNameIds nameIds;
+    RenderPassFlags drawnPasses {0};
     graphics::Material material;
     glm::ivec2 gridSize {1};
     std::vector<ParticleInstance> instances;
@@ -166,6 +182,9 @@ struct RegisteredParticles {
 
 struct RegisteredGrass {
     RenderCategories categories {0};
+    SceneNodeId id;
+    SceneNodeNameIds nameIds;
+    RenderPassFlags drawnPasses {0};
     graphics::Material material;
     float radius {0.0f};
     float quadSize {0.0f};
@@ -174,6 +193,9 @@ struct RegisteredGrass {
 
 struct RegisteredAABB {
     RenderCategories categories {0};
+    SceneNodeId id;
+    SceneNodeNameIds nameIds;
+    RenderPassFlags drawnPasses {0};
     std::vector<glm::vec4> corners;
     ModelSceneNode *cullRoot {nullptr};
 };
@@ -219,8 +241,11 @@ class RenderRegistry {
 public:
     void resetFrame();
     void beginSceneTraversal();
+    void checkIdentityStability();
 
     void registerMesh(RenderCategories categories,
+                 SceneNodeId id,
+                 SceneNodeNameIds nameIds,
                  graphics::Mesh &mesh,
                  const graphics::Material &material,
                  const glm::mat4 &transform,
@@ -230,6 +255,8 @@ public:
                  ModelSceneNode *cullRoot);
 
     void registerBillboard(RenderCategories categories,
+                      SceneNodeId id,
+                      SceneNodeNameIds nameIds,
                       graphics::Texture &texture,
                       const glm::vec4 &color,
                       const glm::mat4 &transform,
@@ -238,18 +265,24 @@ public:
                       ModelSceneNode *cullRoot);
 
     void registerParticles(RenderCategories categories,
+                      SceneNodeId id,
+                      SceneNodeNameIds nameIds,
                       const graphics::Material &material,
                       const glm::ivec2 &gridSize,
                       const std::vector<ParticleInstance> &instances,
                       ModelSceneNode *cullRoot);
 
     void registerGrass(RenderCategories categories,
+                  SceneNodeId id,
+                  SceneNodeNameIds nameIds,
                   const graphics::Material &material,
                   float radius,
                   float quadSize,
                   const std::vector<GrassInstance> &instances);
 
     void registerAABB(RenderCategories categories,
+                 SceneNodeId id,
+                 SceneNodeNameIds nameIds,
                  const std::vector<glm::vec4> &corners,
                  ModelSceneNode *cullRoot);
     void addDebug(std::function<void()> execute);
@@ -263,6 +296,7 @@ public:
     const std::map<RenderPassName, RegistryCounts> &drawnCountsByPass() const {
         return _drawnCountsByPass;
     }
+    const std::vector<RegisteredObject> &objects() const { return _objects; }
     size_t traversalCount() const { return _traversalCount; }
 
 private:
@@ -271,6 +305,10 @@ private:
     RegistryCounts _registeredCounts;
     RegistryCounts _drawnCounts;
     std::map<RenderPassName, RegistryCounts> _drawnCountsByPass;
+
+    // Retained only while Graphics logging is enabled, for capture diagnostics.
+    std::vector<SceneNodeId> _previousFrameIds;
+    size_t _identitySnapshot {0};
 };
 
 } // namespace scene

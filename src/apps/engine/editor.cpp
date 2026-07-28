@@ -37,6 +37,7 @@
 #include "reone/resource/resources.h"
 #include "reone/scene/graph.h"
 #include "reone/scene/graphs.h"
+#include "reone/scene/registry.h"
 #include "reone/scene/render/pipeline.h"
 #include "reone/system/stringutil.h"
 
@@ -45,9 +46,155 @@
 #include "imgui_stdlib.h"
 
 #include <algorithm>
+#include <cctype>
 #include <numeric>
 
 namespace reone {
+
+namespace {
+
+const char *registryMaterialName(graphics::MaterialType type) {
+    switch (type) {
+    case graphics::MaterialType::OpaqueModel:
+        return "OpaqueModel";
+    case graphics::MaterialType::TransparentModel:
+        return "TransparentModel";
+    case graphics::MaterialType::Walkmesh:
+        return "Walkmesh";
+    case graphics::MaterialType::Grass:
+        return "Grass";
+    case graphics::MaterialType::Particle:
+        return "Particle";
+    }
+    return "-";
+}
+
+/**
+ * One character slot per pass, always in the same position.
+ *
+ * A variable-length list of the passes that drew an entry cannot be read down
+ * a column: "D O" and "O" put the O in different places. A fixed layout with a
+ * dot for absent turns the column into a bitfield the eye can scan, and the
+ * header spells out the order.
+ */
+std::string registryPassSlots(scene::RenderPassFlags flags) {
+    static constexpr scene::RenderPassName kOrder[] {
+        scene::RenderPassName::DirLightShadowsPass,
+        scene::RenderPassName::PointLightShadows,
+        scene::RenderPassName::OpaqueGeometry,
+        scene::RenderPassName::TransparentGeometry,
+        scene::RenderPassName::PostProcessing,
+        scene::RenderPassName::Debug};
+    static constexpr char kLabels[] {'D', 'P', 'O', 'T', 'X', 'G'};
+    std::string result(std::size(kOrder), '.');
+    for (size_t i = 0; i < std::size(kOrder); ++i) {
+        if ((flags & scene::renderPassFlag(kOrder[i])) != 0) {
+            result[i] = kLabels[i];
+        }
+    }
+    return result;
+}
+
+void registryRightAligned(const std::string &text) {
+    float width = ImGui::CalcTextSize(text.c_str()).x;
+    float avail = ImGui::GetContentRegionAvail().x;
+    if (avail > width) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - width);
+    }
+    ImGui::TextUnformatted(text.c_str());
+}
+
+bool containsInsensitive(std::string_view text, std::string_view needle) {
+    if (needle.empty()) {
+        return true;
+    }
+    return std::search(text.begin(), text.end(), needle.begin(), needle.end(),
+                       [](unsigned char a, unsigned char b) {
+                           return std::tolower(a) == std::tolower(b);
+                       }) != text.end();
+}
+
+struct RegistryEntryView {
+    const scene::RegisteredObject *object {nullptr};
+    const scene::ModelSceneNode *root {nullptr};
+    std::string_view modelName;
+    std::string_view nodeName;
+    const char *kind {""};
+    const char *material {"-"};
+    scene::RenderPassFlags drawnPasses {0};
+    size_t particles {0};
+    size_t clusters {0};
+    bool debug {false};
+};
+
+RegistryEntryView makeRegistryEntryView(const scene::ISceneGraph &graph,
+                                        const scene::RegisteredObject &object) {
+    return std::visit(
+        [&graph, &object](const auto &entry) -> RegistryEntryView {
+            using T = std::decay_t<decltype(entry)>;
+            RegistryEntryView result;
+            result.object = &object;
+            if constexpr (std::is_same_v<T, scene::RegisteredMesh>) {
+                result.root = entry.cullRoot;
+                result.modelName = graph.nameText(entry.nameIds.model);
+                result.nodeName = graph.nameText(entry.nameIds.node);
+                result.material = registryMaterialName(entry.material.type);
+                result.drawnPasses = entry.drawnPasses;
+                if (std::holds_alternative<scene::RegisteredSkin>(entry.deformation)) {
+                    result.kind = "skinned";
+                } else if (std::holds_alternative<scene::RegisteredDangly>(entry.deformation)) {
+                    result.kind = "dangly";
+                } else if (std::holds_alternative<scene::RegisteredSaber>(entry.deformation)) {
+                    result.kind = "saber";
+                } else {
+                    result.kind = "rigid";
+                }
+            } else if constexpr (std::is_same_v<T, scene::RegisteredBillboard>) {
+                result.root = entry.cullRoot;
+                result.modelName = graph.nameText(entry.nameIds.model);
+                result.nodeName = graph.nameText(entry.nameIds.node);
+                result.kind = "billboard";
+                result.drawnPasses = entry.drawnPasses;
+            } else if constexpr (std::is_same_v<T, scene::RegisteredParticles>) {
+                result.root = entry.cullRoot;
+                result.modelName = graph.nameText(entry.nameIds.model);
+                result.nodeName = graph.nameText(entry.nameIds.node);
+                result.kind = "particles";
+                result.material = registryMaterialName(entry.material.type);
+                result.drawnPasses = entry.drawnPasses;
+                result.particles = entry.instances.size();
+            } else if constexpr (std::is_same_v<T, scene::RegisteredGrass>) {
+                result.modelName = graph.nameText(entry.nameIds.model);
+                result.nodeName = graph.nameText(entry.nameIds.node);
+                result.kind = "grass";
+                result.material = registryMaterialName(entry.material.type);
+                result.drawnPasses = entry.drawnPasses;
+                result.clusters = entry.instances.size();
+            } else if constexpr (std::is_same_v<T, scene::RegisteredAABB>) {
+                result.root = entry.cullRoot;
+                result.modelName = graph.nameText(entry.nameIds.model);
+                result.nodeName = graph.nameText(entry.nameIds.node);
+                result.kind = "aabb";
+                result.drawnPasses = entry.drawnPasses;
+            } else if constexpr (std::is_same_v<T, scene::RegisteredDebug>) {
+                result.kind = "debug";
+                result.nodeName = "debug";
+                result.debug = true;
+            }
+            return result;
+        },
+        object);
+}
+
+struct RegistryGroupView {
+    const scene::ModelSceneNode *root {nullptr};
+    std::string label;
+    std::vector<RegistryEntryView> entries;
+    size_t particles {0};
+    size_t clusters {0};
+};
+
+} // namespace
 
 // Editor::handle should take priority over ImGui event processing, so it close
 // ImGui when it is in focus.
@@ -577,6 +724,229 @@ void Editor::frameTimes() {
     ImGui::End();
 }
 
+void Editor::drawRegistry() {
+    dockNext();
+    ImGui::SetNextWindowSize(ImVec2(700, 620), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Registry", &_showRegistry, ImGuiWindowFlags_HorizontalScrollbar)) {
+        ImGui::End();
+        return;
+    }
+
+    auto &graphs = _engine._sceneModule->graphs();
+    auto sceneNames = graphs.sceneNames();
+    if (sceneNames.empty()) {
+        ImGui::TextUnformatted("No scenes registered.");
+        ImGui::End();
+        return;
+    }
+    if (_registryScene.empty() || sceneNames.count(_registryScene) == 0) {
+        auto main = sceneNames.find(game::kSceneMain);
+        _registryScene = main != sceneNames.end() ? *main : *sceneNames.begin();
+    }
+    ImGui::SetNextItemWidth(180.0f);
+    if (ImGui::BeginCombo("##registry-scene", _registryScene.c_str())) {
+        for (const auto &name : sceneNames) {
+            if (ImGui::Selectable(name.c_str(), name == _registryScene)) {
+                _registryScene = name;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("scene");
+
+    const auto &graph = graphs.get(_registryScene);
+    // Editor::update runs before SceneGraph::render resets and fills the
+    // registry, so this is deliberately the previous frame's complete
+    // snapshot. Reading it during render would expose a partial frame.
+    const auto &registry = graph.registry();
+    const auto &registered = registry.registeredCounts();
+    const auto &drawnByPass = registry.drawnCountsByPass();
+    auto drawnEntries = [&drawnByPass](scene::RenderPassName pass) {
+        auto it = drawnByPass.find(pass);
+        return it == drawnByPass.end() ? size_t {0} : it->second.entries;
+    };
+    ImGui::Text("registered %zu", registered.entries);
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+    ImGui::Text("drawn  opaque %zu   transparent %zu   dir shadows %zu",
+                drawnEntries(scene::RenderPassName::OpaqueGeometry),
+                drawnEntries(scene::RenderPassName::TransparentGeometry),
+                drawnEntries(scene::RenderPassName::DirLightShadowsPass));
+
+    float controlsRight = ImGui::CalcTextSize("Hide fully culled").x + ImGui::GetFrameHeight() +
+                          ImGui::GetStyle().ItemSpacing.x * 3.0f;
+    ImGui::SetNextItemWidth(-controlsRight);
+    ImGui::InputTextWithHint("##registry-filter", "Filter model or node", _registryFilter, sizeof(_registryFilter));
+    ImGui::SameLine();
+    ImGui::Checkbox("Hide fully culled", &_registryHideFullyCulled);
+    ImGui::TextDisabled("DPOTXG: dir shadows, point shadows, opaque, transparent, post, debug");
+    ImGui::Spacing();
+
+    std::vector<RegistryGroupView> groups;
+    for (const auto &object : registry.objects()) {
+        auto entry = makeRegistryEntryView(graph, object);
+        std::string label;
+        if (entry.root) {
+            label = std::string(graph.nameText(entry.root->nameIds().model));
+            if (label.empty()) {
+                label = "[unnamed model]";
+            }
+        } else if (entry.debug) {
+            label = "[debug]";
+        } else if (entry.kind == std::string_view("grass")) {
+            label = "[grass]";
+        } else if (entry.kind == std::string_view("particles")) {
+            label = "[emitters]";
+        } else {
+            label = "[rootless]";
+        }
+        auto group = std::find_if(groups.begin(), groups.end(), [&](const auto &candidate) {
+            return candidate.root == entry.root && candidate.label == label;
+        });
+        if (group == groups.end()) {
+            groups.push_back({entry.root, std::move(label)});
+            group = std::prev(groups.end());
+        }
+        group->particles += entry.particles;
+        group->clusters += entry.clusters;
+        group->entries.push_back(std::move(entry));
+    }
+    std::sort(groups.begin(), groups.end(), [](const auto &a, const auto &b) {
+        return a.label < b.label;
+    });
+    // A resref names a model, not an instance, and an area places the same one
+    // many times - danm14ab has eight c_khounda. Groups are already distinct,
+    // being keyed on the root node, but on screen they were eight identical
+    // rows. Disambiguate only where it is needed, so the common case stays
+    // clean.
+    for (size_t i = 0; i < groups.size();) {
+        size_t j = i;
+        while (j < groups.size() && groups[j].label == groups[i].label) {
+            ++j;
+        }
+        if (j - i > 1) {
+            for (size_t k = i; k < j; ++k) {
+                if (groups[k].root) {
+                    groups[k].label += " #" + std::to_string(groups[k].root->id().index);
+                }
+            }
+        }
+        i = j;
+    }
+
+    // A table rather than formatted text: entry rows are the thing being
+    // compared against each other, and columns are what make them comparable.
+    // Padded text drifts as soon as a name is longer than the padding.
+    // ScrollX with every column fixed, rather than letting the name column
+    // stretch. Docked narrow, a stretch column is what gives way first, and
+    // the names are the one thing the panel exists to show - a 480px dock
+    // collapsed them to nothing while the count columns kept their width.
+    // Scrolling is the honest response to a window too small for the data.
+    static constexpr ImGuiTableFlags kTableFlags =
+        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
+        ImGuiTableFlags_ScrollX | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingFixedFit;
+    if (!ImGui::BeginTable("##registry-table", 6, kTableFlags)) {
+        ImGui::End();
+        return;
+    }
+    ImGui::TableSetupColumn("Model / node", ImGuiTableColumnFlags_WidthFixed, 250.0f);
+    ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 64.0f);
+    ImGui::TableSetupColumn("DPOTXG", ImGuiTableColumnFlags_WidthFixed, 66.0f);
+    ImGui::TableSetupColumn("Material", ImGuiTableColumnFlags_WidthFixed, 158.0f);
+    ImGui::TableSetupColumn("Entries", ImGuiTableColumnFlags_WidthFixed, 68.0f);
+    ImGui::TableSetupColumn("Drawn", ImGuiTableColumnFlags_WidthFixed, 58.0f);
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableHeadersRow();
+
+    std::string_view filter(_registryFilter);
+    for (size_t groupIndex = 0; groupIndex < groups.size(); ++groupIndex) {
+        auto &group = groups[groupIndex];
+        std::vector<const RegistryEntryView *> visible;
+        visible.reserve(group.entries.size());
+        for (const auto &entry : group.entries) {
+            if (containsInsensitive(entry.modelName, filter) ||
+                containsInsensitive(entry.nodeName, filter)) {
+                visible.push_back(&entry);
+            }
+        }
+        if (visible.empty()) {
+            continue;
+        }
+        const auto drawn = std::count_if(visible.begin(), visible.end(), [](const auto *entry) {
+            return entry->drawnPasses != 0;
+        });
+        if (_registryHideFullyCulled && drawn == 0) {
+            continue;
+        }
+
+        ImGui::PushID(static_cast<int>(groupIndex));
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        const bool open = ImGui::TreeNodeEx(group.label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
+
+        // The instance counts belong on the group, not on its rows: grass is one
+        // entry holding 1482 clusters, so a per-entry column would read "1" and
+        // hide the only number that matters for it.
+        if (group.clusters != 0 || group.particles != 0) {
+            ImGui::TableSetColumnIndex(3);
+            ImGui::TextDisabled("%zu %s",
+                                group.clusters != 0 ? group.clusters : group.particles,
+                                group.clusters != 0 ? "clusters" : "particles");
+        }
+        ImGui::TableSetColumnIndex(4);
+        registryRightAligned(std::to_string(visible.size()));
+        ImGui::TableSetColumnIndex(5);
+        if (drawn == 0) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            registryRightAligned("0");
+            ImGui::PopStyleColor();
+        } else {
+            registryRightAligned(std::to_string(drawn));
+        }
+
+        if (open) {
+            ImGuiListClipper clipper;
+            clipper.Begin(static_cast<int>(visible.size()));
+            while (clipper.Step()) {
+                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+                    const auto &entry = *visible[i];
+                    ImGui::PushID(static_cast<int>(i));
+                    const std::string_view node = entry.nodeName.empty()
+                                                      ? std::string_view("[unnamed]")
+                                                      : entry.nodeName;
+                    // A culled entry is dimmed rather than annotated, so the
+                    // eye finds the drawn ones without reading every row.
+                    const bool culled = entry.drawnPasses == 0;
+                    if (culled) {
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    }
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(node.data(), node.data() + node.size());
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(entry.kind);
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::TextUnformatted(registryPassSlots(entry.drawnPasses).c_str());
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::TextUnformatted(entry.material);
+                    if (culled) {
+                        ImGui::PopStyleColor();
+                    }
+                    ImGui::PopID();
+                }
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
+
+    ImGui::EndTable();
+    ImGui::End();
+}
+
 static constexpr int kPreviewWidth = 640;
 static constexpr int kPreviewHeight = 360;
 
@@ -766,6 +1136,7 @@ void Editor::update(float dt) {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("Tools")) {
             ImGui::MenuItem("2DA", nullptr, &_showTwoDa);
+            ImGui::MenuItem("Registry", nullptr, &_showRegistry);
             ImGui::MenuItem("Render targets", nullptr, &_showRenderTargets);
             ImGui::MenuItem("Graphics settings", nullptr, &_showGraphicsSettings);
             ImGui::MenuItem("Warp", nullptr, &_showWarp);
@@ -805,6 +1176,10 @@ void Editor::update(float dt) {
         renderTargets();
     } else {
         _rtSource = nullptr;
+    }
+
+    if (_showRegistry) {
+        drawRegistry();
     }
 
     if (_showWarp) {

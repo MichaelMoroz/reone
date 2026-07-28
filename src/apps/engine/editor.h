@@ -89,6 +89,14 @@ private:
     std::unique_ptr<graphics::Framebuffer> _rtPreview;
     graphics::Texture *_rtSource {nullptr};
 
+    // Registry viewer. It intentionally reads the last completed render
+    // snapshot from update, before SceneGraph starts filling the next one.
+    void drawRegistry();
+    bool _showRegistry {false};
+    std::string _registryScene;
+    char _registryFilter[128] {};
+    bool _registryHideFullyCulled {false};
+
     void graphicsSettings();
     bool _showGraphicsSettings {false};
     int _pendingWidth {0};

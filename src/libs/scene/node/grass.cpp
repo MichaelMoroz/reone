@@ -46,6 +46,7 @@ static constexpr float kMaxClusterDistance = 32.0f;
 static constexpr float kMaxClusterDistance2 = kMaxClusterDistance * kMaxClusterDistance;
 
 void GrassSceneNode::init() {
+    setNameIds({0, _sceneGraph.internName(_aabbNode.name())});
     // Compute grass faces
     auto faces = _aabbNode.mesh()->mesh->faces();
     for (size_t faceIdx = 0; faceIdx < faces.size(); ++faceIdx) {
@@ -179,6 +180,8 @@ void GrassSceneNode::registerLeafs(RenderRegistry &registry, const std::vector<S
     }
     material.faceCulling = FaceCullMode::None;
     registry.registerGrass(renderCategory(RenderCategory::Opaque),
+                      id(),
+                      nameIds(),
                       material,
                       kMaxClusterDistance,
                       _properties.quadSize,

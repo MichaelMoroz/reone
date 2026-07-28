@@ -114,7 +114,7 @@ void TriggerSceneNode::registerRender(RenderRegistry &registry) {
     material.faceCulling = FaceCullMode::None;
     material.polygonMode = PolygonMode::Line;
     registry.registerMesh(renderCategory(RenderCategory::Debug),
-                     *_mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, {}, nullptr);
+                     id(), nameIds(), *_mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, {}, nullptr);
 }
 
 bool TriggerSceneNode::isIn(const glm::vec2 &pt) const {
