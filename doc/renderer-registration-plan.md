@@ -1,70 +1,220 @@
 # Moving the renderer from submission to registration
 
-Why the current hand-off between the scene and the renderer does not survive
-ray tracing, and what to replace it with. Written from the code as it stands;
+Why the hand-off between the scene and the renderer had to change for ray
+tracing, what has landed, and what is left. Written from the code as it stands;
 every file:line below is a thing to read before changing it.
+
+About half of this plan is now in the tree. `c536ac72` replaced per-pass draw
+submission with one registration pass over a frame registry. The sections below
+keep what that commit settled separate from what it left open, because the
+remainder is where the ray-tracing constraints actually bite.
+
+## Target architecture
+
+Five boundaries. Everything below follows from these, and anything that does not
+fit one of them is out of scope for this plan rather than an oversight.
+
+**Ownership: the scene publishes, the renderer derives.** `SceneGraph` builds a
+complete render snapshot each frame and owns it. The renderer consumes it and
+owns only what it derives - acceleration structures, descriptor state, uploaded
+buffers. The renderer never owns scene objects, and the scene never holds a
+backend handle. This is a decision, not a placeholder; the reasoning is in
+"Why the snapshot stays" below.
+
+**Data model: four separate concepts, deliberately not one.**
+
+| concept | lives on | lifetime | what it is for |
+|---|---|---|---|
+| object identity | `SceneNode` | creation to destruction | keying caches across frames |
+| content version | snapshot entry | changes when the source does | telling a cache its contents are stale |
+| renderable data | snapshot entry | one frame | what a pass draws or a TLAS instances |
+| AS index | backend | one frame | TLAS instance index, 24-bit custom index |
+
+The doc previously blended these into "the handle". They have different
+lifetimes and different owners, and conflating them is what makes retained-mode
+designs fail - in particular identity and version, because an id that is stable
+across a texture swap is doing its job correctly and telling a BLAS cache
+nothing. The debug names ride on identity; the material assignment is keyed by
+name and is a fifth thing again, derived offline rather than per frame.
+
+**Backend: registration is neutral, tracing is not.** The registry, the
+snapshot and visibility live in `scene`, so all three pipelines get them at
+once. Ray tracing is Vulkan-only and consumes the snapshot without any other
+backend knowing it exists. Nothing ray-traced may appear in `IRenderPassExecutor`
+or in the registry's vocabulary.
+
+**Update: the frame boundary is the only consistency point.** There is no
+publish/subscribe, no change notification, no dirty flags. The snapshot is built
+in one traversal and is immutable for the rest of the frame; the renderer reads
+a completed snapshot or nothing. Nothing in the renderer outlives the frame
+except caches, and a cache entry is keyed by **identity plus content version**,
+both reported by the snapshot entry. Disappearance is handled by an id ceasing
+to appear; change is handled by a version mismatch. Neither requires the scene
+to announce anything, which is what keeps destruction and module transitions
+free of synchronisation.
+
+**Visibility: one query, many policies.** Culling is a policy applied to the
+snapshot, not a property of an object. `drawScene` already takes a camera per
+pass; that generalises to a visibility policy - camera frustum, light frustum,
+distance-and-relevance for a TLAS, or none for a full-scene bake. Each new
+consumer selects a policy; none writes its own.
 
 ## What happens today
 
-The 3D scene never reaches `IRenderer`. That interface
-(`include/reone/graphics/renderer.h:39`) is about frames and presentation -
-`beginFrame`, `drawSceneOutput`, `captureFrame`, `endFrame` - and the scene
-arrives as a single finished texture.
+`SceneGraph::renderScene` (`src/libs/scene/graph.cpp:557-629`) walks the scene
+exactly once per frame and records everything it finds into a `RenderRegistry`
+(`include/reone/scene/registry.h:180`). Scene nodes write to the registry
+directly - `MeshSceneNode::registerRender` (`src/libs/scene/node/mesh.cpp:248`)
+and `registerShadow` (`:345`), `EmitterSceneNode::registerRender`,
+`GrassSceneNode::registerLeafs` (`src/libs/scene/node/grass.cpp:159`). There is
+no `IRenderPass` any more.
 
-The scene-shaped interface is `IRenderPass`
-(`include/reone/scene/render/pass.h:69`), in the scene library. The flow is:
+An entry carries what it *is*, not which pass asked for it. `RenderCategory`
+(`include/reone/scene/registry.h:49`) has ShadowCaster, Opaque, Transparent,
+LensFlare and Debug bits, and that is what lets one traversal serve six passes.
 
-1. `SceneGraph` culls and sorts, then calls `pipeline.inRenderPass(name, cb)` -
-   `src/libs/scene/graph.cpp:536-551`, once per pass.
-2. The pipeline binds that pass's targets and invokes the callback with an
-   `IRenderPass &`.
-3. The callback issues per-object draws: `draw`, `drawSkinned`, `drawDangly`,
-   `drawSaber`, `drawBillboard`, `drawParticles`, `drawGrass`, `drawAABB`.
-4. `pipeline.render()` returns the composited `Texture &`.
+Each pass then calls `RenderRegistry::drawScene`
+(`src/libs/scene/registry.cpp:172`) with a filter and a camera. It selects by
+category, culls (`isCulled`, `src/libs/scene/registry.cpp:79`), and hands
+survivors to an `IRenderPassExecutor` (`include/reone/scene/render/pass.h:52`):
+`executeDraw`, `executeDrawSkinned`, `executeDrawDangly`, `executeDrawSaber`,
+`executeDrawBillboard`, `executeDrawParticles`, `executeDrawGrass`,
+`executeDrawAABB`, `executeDrawDebug`. Those are the only things left in the
+renderer named for drawing.
 
-Control is already inverted - the pipeline calls back into the scene rather
-than receiving a list. That part is good and should survive.
+The registry is cleared at the top of every frame (`resetFrame`,
+`src/libs/scene/registry.cpp:90`) and refilled.
 
-## What does not survive
+Three things that settled, which the rest of this plan assumed:
 
-**Culling policy lives in the wrong library.** `SceneGraph` decides visibility
-against the camera frustum and hands over survivors. That is a rasterisation
-policy: rays hit geometry behind the camera, so a TLAS built from the visible
-set has holes in every reflection and every shadow. The shadow passes already
-show the strain, re-walking the graph to cull against a light frustum - the
-same operation on the same set under a different policy.
+- **Culling is no longer a scene-graph decision.** `refreshFromNode`
+  (`src/libs/scene/graph.cpp:302`) sorts meshes into lists but runs no frustum
+  test. The registry holds the whole scene, so a structure built from it has no
+  holes where the camera was not looking - which was the original reason to do
+  any of this.
+- **Instanced geometry has a material.** `registerGrass` and `registerParticles`
+  take a `Material` like everything else, and `MaterialType`
+  (`include/reone/graphics/material.h:31`) has `Grass` and `Particle`. A hit
+  shader has one way of asking what it hit.
+- **Registered and drawn are counted separately.** `RegistryCounts`
+  (`include/reone/scene/registry.h:152`), `drawnCountsByPass` and
+  `formatRegistryCounts` make "was this registered, and did it survive culling"
+  a question with a numeric answer rather than a hunch.
 
-**Nothing has identity between frames.** A TLAS instance index, temporal
-accumulation, a per-node BLAS and a motion vector all need an object to still
-be the same object next frame. `prevTransform` is threaded through every draw
-call precisely because there is nowhere to keep it.
+## What the registry does not yet solve
 
-**Instanced geometry has no material.** `drawParticles` and `drawGrass` take a
-bare `graphics::Texture &` while everything else takes a `Material &`. A hit
-shader cannot have two ways of asking what it hit.
+**Only one culling policy is used.** `drawScene` takes a camera per call, so
+per-pass policy is expressible - but every pipeline hands the *view* camera to
+every pass, shadows included (`src/libs/scene/render/pipeline/pbr.cpp:434`,
+`retro.cpp:188`, `vulkan.cpp:1017`). A shadow caster outside the view frustum is
+dropped from the shadow map. That predates the registry and is not a regression,
+but the registry is what turns fixing it into a one-argument change, and a light
+frustum is the first policy worth adding. Distance-and-relevance for a TLAS, and
+no culling at all for a full-scene bake, are the same seam.
 
-## The shape to move to
+**Entries are still partly pass-shaped.** A shadow-casting mesh registers
+*twice*: once from `registerRender` with its real material, and once from
+`registerShadow` with a `DirLightShadow`/`PointLightShadow` material. The second
+entry passes `{}` for its deformation, so a skinned character casts its shadow
+from the bind pose. Pre-existing, and invisible until the same geometry is asked
+a second question. One object should be one entry; a pass should select a shader,
+not a material. Until then the entry count is inflated by every caster, and any
+per-object structure keyed off entries has to decide which of the two is real.
 
-Registration, with the renderer owning culling:
+**Nothing has identity between frames.** Unchanged by the registry, and now the
+largest gap. See below.
 
-- `registerObject` - one per `MeshSceneNode`. Carries mesh, material,
-  transform, and for the deforming variants their bones or positions.
-- `registerInstancedObject` - one per `GrassSceneNode` or emitter, not one per
-  cluster or particle. Carries a material and the description needed to
-  generate instances.
-- `unregister`, plus update paths. **"Register once" is a lie for anything
-  animated**: bones, dangly positions, transforms and UV scroll all change per
-  frame. The invalidation contract is where retained-mode designs go wrong, and
-  its failure mode - a stale value - is much harder to find than a missing draw
-  call. `invalidateResources`/`invalidateTexture` on `IRenderer` are a preview
-  of this.
+**Visibility is a hardcoded test, not a selectable policy.** `isCulled` moved
+out of `SceneGraph` into `RenderRegistry`, which is enough to unblock a complete
+TLAS, but it is still one function every caller gets rather than a policy a
+caller chooses. Which library the code sits in matters less than that: under the
+visibility boundary above, a consumer picks a policy and none writes its own, and
+that is what is missing.
 
-Culling then becomes per-pass policy over one registry: camera frustum for the
-G-buffer, light frustum for shadows, distance and relevance for the TLAS, and
-nothing at all for a full-scene bake.
+## Why the snapshot stays
 
-`Material::staticObject` stops being advisory and starts selecting BLAS build
-flags - `PREFER_FAST_TRACE` plus compaction against `PREFER_FAST_BUILD`.
+Earlier drafts of this plan treated a per-frame rebuild as a stopgap and fully
+retained registration - `registerObject`, `unregister`, update paths - as the
+inevitable end state. That was asserted, never argued, and it is wrong. The
+snapshot is the architecture. Retained registration is an optimisation that the
+code does not currently justify and probably never will.
+
+Three needs get conflated under "retained":
+
+1. **stable object identity**, so a cache can be keyed across frames;
+2. **persistent renderer caches** - BLAS, uploaded buffers, descriptors;
+3. **a retained scene-to-renderer registration protocol.**
+
+Ray tracing needs the first two. It does not need the third, and each of them is
+satisfied by a snapshot that carries stable ids:
+
+- **Rigid BLAS keys on `graphics::Mesh`, not on a scene node.** The bulk of the
+  scene is rigid, one BLAS serves every instance, and mesh lifetime belongs to
+  the resource layer. This pattern already exists and works:
+  `VulkanResources::_meshes` is an `unordered_map<const Mesh *, ...>`
+  (`include/reone/graphics/vulkan/resources.h:149`), populated on demand
+  (`src/libs/graphics/vulkan/resources.cpp:453-459`) and dropped in bulk. A BLAS
+  cache is the same shape.
+- **Per-node BLAS keys on object identity**, which a snapshot entry can carry as
+  a plain id. The cache lives in the backend; an id that stops appearing ages
+  out. Nothing about that requires the scene to announce a departure.
+- **The TLAS is rebuilt every frame regardless.** The snapshot is already the
+  right input shape for the one structure that is genuinely per-frame.
+- **Temporal accumulation needs motion vectors**, which come from
+  `prevTransform`, already on the entry.
+
+Against that, retained registration costs an invalidation contract - the thing
+this plan has warned about throughout, whose failure mode is a stale value that
+is much harder to find than a missing draw call. `invalidateResources` and
+`invalidateTexture` (`include/reone/graphics/renderer.h:82,91`) are what that
+looks like when it is only guarding a texture cache.
+
+And it costs more than that here, because **the scene graph cannot currently
+emit the events it would need**. Creation is not the problem - every node is
+built through one factory, `SceneGraph::newSceneNode`
+(`include/reone/scene/graph.h:394-398`), including every child built by
+`ModelSceneNode::buildNodeTree` (`src/libs/scene/node/model.cpp:59-80`), so the
+"object entered the graph" hook already exists and is universal. Destruction is
+the problem: `_nodes` (`include/reone/scene/graph.h:305`) holds a `shared_ptr`
+to every node ever created and is *never erased from and never read*. `clear()`
+drops the five root lists and leaves it untouched. Nothing in a scene is ever
+destroyed until the `SceneGraph` itself dies.
+
+So "unregister when the object leaves the scene" has no event to hang on,
+because leaving the scene is not currently a thing that happens. Fully retained
+registration would require centralising attachment and detachment, defining
+ownership of children (`addChild` takes a `SceneNode &` and `_children` is a
+vector of raw pointers, `include/reone/scene/node.h:52,147`), and making
+reparenting and bulk destruction emit correct removals. That is a scene-graph
+ownership project, and it buys nothing the snapshot does not already give.
+
+**The asymmetry is the whole argument.** Under a snapshot, the `_nodes` leak is
+a memory bug to fix on its own schedule. Under retained registration it is a
+hard prerequisite that gates the path tracer. Pick the architecture where the
+scene graph's existing weaknesses stay bugs instead of becoming blockers.
+
+What survives from the retained framing is the part that was always the real
+requirement:
+
+- **Identity is stable** - assigned at `newSceneNode`, carried on every snapshot
+  entry the node produces, and the key for every backend cache.
+- **Everything else is rebuilt** - transform, previous transform, bones, dangly
+  positions, materials, instances. There is no invalidation to get wrong because
+  there is nothing to invalidate.
+- **Backend caches are validated, not notified.** An entry carries a content
+  version alongside its id; the cache rebuilds on a mismatch and releases on an
+  id that has been absent for N frames. Age-out alone is not sufficient - a live
+  object that swaps a texture keeps its id forever - and the difference from a
+  retained protocol is that the snapshot *reports* the version where a retained
+  scene would have to *announce* the change.
+
+`Material::staticObject` still stops being advisory and starts selecting BLAS
+build flags - `PREFER_FAST_TRACE` plus compaction against `PREFER_FAST_BUILD`.
+
+Revisit only on measurement: if snapshot construction shows up in a profile
+after the `Material` copy is gone (see "Registry lifetime" below), reconsider -
+and reconsider by moving specific expensive fields out of the snapshot, not by
+adopting a retained protocol wholesale.
 
 ## Acceleration structures
 
@@ -83,74 +233,74 @@ instance and the TLAS carries the transform. Deforming meshes differ per
 so each needs its own, refit each frame.
 
 Only **skinned** meshes need a compute pass to produce vertices. Dangly
-positions are already computed CPU-side
-(`src/libs/scene/node/mesh.cpp:316-327`) and handed over as an array; saber is
-a single displacement vector and is cheap to apply on the CPU rather than run a
-pass for.
+positions are already computed CPU-side (`src/libs/scene/node/mesh.cpp:135-176`,
+gathered into an array at `:318-326`); saber is a single displacement vector and
+is cheap to apply on the CPU rather than run a pass for.
 
 For grass and particles, prefer **one static unit-quad BLAS plus N TLAS
 instances** over baking instances into a per-frame BLAS. The TLAS is rebuilt
 every frame regardless, so this costs nothing extra and avoids rebuilding a
 BLAS over hundreds of thousands of triangles. The cost is instance-buffer
-bandwidth, 64 bytes each; distance culling that the renderer now owns cuts it.
+bandwidth, 64 bytes each; distance culling cuts it.
 
 ## Two things that break under ray tracing regardless
 
-**Camera-facing geometry.** `ParticleInstance` carries `right` and `up`
-computed per frame from the camera. Correct for the primary view, meaningless
-for a reflection or shadow ray, and edge-on such a quad is invisible. Options:
-a spherical or cross-quad proxy in the AS, or keep particles rasterised and
-composite them over the traced image. Choose deliberately rather than
-discovering that smoke has vanished from a reflection.
+**Camera-facing geometry.** `ParticleInstance`
+(`include/reone/scene/registry.h:69`) carries `right` and `up` computed per
+frame from the camera (`src/libs/scene/node/emitter.cpp:290-308`). Correct for
+the primary view, meaningless for a reflection or shadow ray, and edge-on such a
+quad is invisible. Options: a spherical or cross-quad proxy in the AS, or keep
+particles rasterised and composite them over the traced image. Choose
+deliberately rather than discovering that smoke has vanished from a reflection.
 
 **Grass placement is view-dependent.** See below.
 
 ## What grass actually is
 
-Not an object with an extent and a region. `GrassSceneNode` holds a reference
-to an `aabbNode` - a mesh from the room model - and at
-`src/libs/scene/node/grass.cpp:47` keeps every face of it whose `face.material`
+Not an object with an extent and a region. `GrassSceneNode` holds a reference to
+an `aabbNode` - a mesh from the room model - and at
+`src/libs/scene/node/grass.cpp:53` keeps every face of it whose `face.material`
 appears in `_properties.materials`. The grass region *is* the union of those
 faces, fixed at init. Each cluster inherits the face's lightmap UV via
 `tryFaceUV2`, so grass is lit by the room's lightmap.
 
 `update()` is then pure view-dependent LOD: clusters beyond
-`kMaxClusterDistance2` return to a fixed pool, faces coming into range draw
-from it, count per face derived from area by `getNumClustersInFace`.
+`kMaxClusterDistance2` (`:45`) return to a fixed pool of 2048 (`:42`), faces
+coming into range draw from it, count per face derived from area by
+`getNumClustersInFace` (`:188`).
 
 So "grass everywhere it can go" is already well posed - the tagged faces. What
 is view-dependent is only how many are currently realised, which is exactly the
-policy to move into the renderer. `radius` on `drawGrass`, `kMaxClusterDistance2`
-and the cluster pool all leave the scene node.
+policy to move into the renderer. `radius` on `registerGrass`,
+`kMaxClusterDistance2` and the cluster pool all leave the scene node.
 
-**Check placement determinism first.** If cluster position and variant come
-from a global RNG advanced in materialisation order, the same face yields
-different grass depending on when the camera approached it. Invisible today
-because there is one viewpoint; immediately visible under ray tracing when a
-reflection shows a hillside populated differently from the direct view. Derive
-position and variant from a hash of (face index, cluster index) instead. Worth
-doing on its own - it also makes captures reproducible.
+**Placement is not deterministic today.** `getRandomGrassVariant`
+(`src/libs/scene/node/grass.cpp:192`) draws from a global RNG in materialisation
+order, so the same face yields different grass depending on when the camera
+approached it. Invisible while there is one viewpoint; immediately visible under
+ray tracing when a reflection shows a hillside populated differently from the
+direct view. Derive position and variant from a hash of (face index, cluster
+index) instead. Worth doing on its own - it also makes captures reproducible.
 
 **Measure the total instance count** for a real outdoor area before assuming
 "everywhere" is affordable: grass faces times clusters per face, summed, in
-something like danm14ab.
+something like danm14ab. `registeredCounts().grassClusters` already reports it.
 
 ## Materials
 
-`Material` (`include/reone/graphics/material.h:38`) carries type, a
-`TextureUnit -> Texture &` map, a `mat3x4` UV transform, colour, bump-map
-frame, ambient/diffuse/self-illum colours, the static/shadows/fog flags, and
-optional blend, cull and polygon-mode overrides. Everything else is derived by
-`materialFeatureMask` in the same header.
+`Material` (`include/reone/graphics/material.h:40`) carries type, a
+`TextureUnit -> Texture &` map, a `mat3x4` UV transform, colour, bump-map frame,
+ambient/diffuse/self-illum colours, the static/shadows/fog flags, and optional
+blend, cull and polygon-mode overrides. Everything else is derived by
+`materialFeatureMask` (`:69`).
 
-Three changes:
+Two changes remain:
 
-- Add `Grass` and `Particle` to `MaterialType`, and route
-  `drawParticles`/`drawGrass` through `Material` like everything else.
-- Flatten `textures` from an `unordered_map` of reference wrappers into fixed
-  slot indices into a bindless descriptor array. A hit shader must reach any
-  material and any texture at intersection time; it cannot bind six units
-  before a draw.
+- Flatten `textures` (`:44`) from an `unordered_map` of reference wrappers into
+  fixed slot indices into a bindless descriptor array. A hit shader must reach
+  any material and any texture at intersection time; it cannot bind six units
+  before a draw. **This is also the single biggest per-frame cost in the
+  registry today** - see below - so it pays twice.
 - Serialise the rest into a GPU material buffer indexed by TLAS instance custom
   index.
 
@@ -166,8 +316,9 @@ Several G-buffer packing tricks exist only because a deferred resolve cannot
 reach the material:
 
 - the environment-map derived layer index, smuggled through self-illum alpha as
-  a byte;
-- the geometry feature bits packed into lightmap alpha.
+  a byte (`slang/pbr_resolve.slang:195`);
+- the geometry feature bits packed into lightmap alpha (`:34`, unpacked at
+  `:177`).
 
 A hit shader indexes the material directly, so both stop being load-bearing -
 and with them goes the class of bug where a stale layer index bleeds onto a
@@ -175,7 +326,8 @@ surface that never had an environment map.
 
 ## Objects have no identity yet
 
-Retained identity needs a key, and the scene has none.
+Every backend cache the tracing work needs is keyed on an object still being the
+same object next frame, and the scene has no way to say so.
 
 - `SceneNode` carries no id and no name. It has `IUser *_user`, but `IUser`
   (`include/reone/scene/user.h:24`) is an empty interface - a virtual
@@ -189,7 +341,8 @@ Retained identity needs a key, and the scene has none.
   (`include/reone/graphics/modelnode.h:179`). Useful as half a composite key,
   useless alone.
 - Pointer identity is what is actually used - `VulkanResources` caches by
-  `Mesh *`, and the registry carries a `ModelSceneNode *` for culling.
+  `Mesh *`, and `RegisteredMesh` carries a `ModelSceneNode *cullRoot`
+  (`include/reone/scene/registry.h:108`).
 
 Pointer identity has a failure mode this codebase already knows about.
 `IRenderer::invalidateResources` exists for it, and says so: a backend caching
@@ -199,20 +352,31 @@ is a bulk sledgehammer swung on module transition. Adequate for a texture
 cache; useless for a TLAS instance index, where what matters is knowing *which*
 object went away.
 
-**Give `SceneNode` a generation-stamped handle** - a `uint32_t` index and a
-`uint32_t` generation, or one packed 64-bit value. The scene graph assigns on
-creation and bumps the generation on destruction, so a reused slot yields a
-handle that compares unequal to the stale one.
+**Give `SceneNode` a stable id** - a `uint32_t` index and a `uint32_t`
+generation, or one packed 64-bit value. `SceneGraph::newSceneNode`
+(`include/reone/scene/graph.h:394-398`) is the single point every node passes
+through, so assignment has a home already. The generation bumps on destruction,
+so a reused slot yields an id that compares unequal to the stale one.
 
-That buys three things at once: the registry gets a key that survives a frame,
-a TLAS instance and a per-node BLAS get something to hang off, and
-`invalidateResources` can stop being a sledgehammer because a stale handle
-becomes detectable rather than merely suspected.
+Two caveats, both from the target architecture rather than from taste:
 
-Cheap while the registry is being reshaped. Awkward once things are keyed on
-pointers.
+- **The id is not the AS index.** A TLAS instance index is backend-local and
+  rebuilt every frame; it is derived from the id, not carried in it. The 24-bit
+  custom index constrains the mapping, not the id's width.
+- **The generation cannot advance yet.** Nothing is ever destroyed - `_nodes`
+  never releases - so stale-id detection is a field that will read correct
+  because it never changes, which is worse than not having it. Add the field,
+  do not rely on it, and fix `_nodes` before anything does.
 
-### The handle should carry meaning, not just be unique
+What the id buys: a snapshot entry gets a key that survives a frame, a per-node
+BLAS and a material assignment get something to hang off, and a backend cache
+can be validated per entry instead of cleared wholesale. The id alone is only
+half of that - it says *which* object, not *whether what was derived from it is
+still current* - so the entry carries a content version beside it.
+
+Cheap now. Awkward once things are keyed on pointers.
+
+### Identity should carry meaning, not just be unique
 
 A bare integer identifies an object and tells you nothing about it. Debugging
 this renderer is mostly the question "what is that thing" - most of a night
@@ -232,12 +396,12 @@ from the scene library:
 **Intern them; do not store strings.** A registry entry is copied for every
 object every frame, and a `std::string` per entry would cost more than
 everything else in it. Keep a string table on the scene graph and put a
-`uint32_t` id in the handle. Copying stays a few words, and the text is
-resolved only when something actually displays it.
+`uint32_t` name id beside the object id. Copying stays a few words, and the text
+is resolved only when something actually displays it.
 
-So the handle is roughly an index, a generation, a type, and two interned
-name ids - model and node. Small enough to sit in a registry entry, and
-enough to answer "what is that" without a second lookup structure.
+So a node's identity is roughly an index, a generation, a type, and two interned
+name ids - model and node. Small enough to sit in a snapshot entry, and enough
+to answer "what is that" without a second lookup structure.
 
 The two halves have different jobs, and it is worth being explicit about
 which is which:
@@ -267,7 +431,7 @@ plus node beats model, which beats texture. This is the source of truth, and
 being data means a wrong assignment is a one-line fix by anyone, not a rebuild.
 
 That needs **an editor mode to maintain it**, and the registry is what makes
-one possible: it already knows every object in the frame and, with the handle,
+one possible: it already knows every object in the frame and, with the name ids,
 what each is called. So the mode is a list of what the scene actually contains,
 a material assignment per entry, and a save. The useful part is the inverse
 view - which registered objects have **no** authored entry - because that is
@@ -288,90 +452,217 @@ Where it pays:
 - the render target viewer can name what is under the cursor;
 - a hit record in a path tracer carries an instance index, which resolves to
   `c_drdastro / head_g` rather than to a number;
-- "was this registered, and did it survive culling" becomes a question with a
-  readable answer;
 - material inference gets a place to live that is not a hardcoded constant in
   a resolve shader.
 
-One constraint from the destination: a TLAS instance custom index is 24 bits,
-so whatever part of the handle is used as one has to fit in that.
+One constraint from the destination: a TLAS instance custom index is 24 bits.
+That bounds how many instances one frame's mapping can address, not the width
+of an id - the mapping is rebuilt with the TLAS.
 
-## Registry lifetime: rebuilt per frame, for now
+## What the per-frame rebuild costs
 
-The registry is currently cleared and refilled every frame. That is a stopgap
-chosen because it is correct by construction - there is no invalidation
-contract to get wrong - and not because it is the right end state.
+Clearing and refilling every frame is correct by construction - there is no
+invalidation contract to get wrong - and it is a stopgap, not the end state.
+Two reasons, and only one of them is cost.
 
-Two reasons it does not survive contact with ray tracing.
+### Where the per-frame cost actually is
 
-**Cost.** A frame in danm14ab registers around 1,500 entries, each carrying an
-owned `Material`, and 551 of them are dangly meshes each copying a
-`std::vector<glm::vec4>` of per-vertex positions. Those positions are already
-recomputed on the CPU every frame, so they are computed and then copied.
-Measure this before defending the rebuild; if the dangly copies dominate, that
-alone justifies moving earlier than the schedule below suggests.
+Read the copies rather than guessing at them, because the obvious suspect is
+not the expensive one.
 
-**Identity.** A TLAS instance index, a cached BLAS and temporal accumulation
-all key off an object still being the same object next frame. Nothing can be
-stable if every entry is fresh. Retained identity is a prerequisite there, not
-an optimisation.
+**The `Material` copy dominates, and it is not the geometry.** Every
+`registerRender` builds a `Material` on the stack whose `textures` is an
+`unordered_map`, inserting one to four entries
+(`src/libs/scene/node/mesh.cpp:254-268`) - a bucket array plus a node each. Then
+`registerMesh` takes it by `const &` and the entry copy-initialises it
+(`src/libs/scene/registry.cpp:118`): a second full hash table, built and torn
+down every frame. Two per entry, roughly 1,500 entries in danm14ab, before a
+vertex is touched. Same pattern in `EmitterSceneNode`
+(`src/libs/scene/node/emitter.cpp:309-325`) and `GrassSceneNode`
+(`src/libs/scene/node/grass.cpp:174-180`).
 
-The way out is not "register once and never touch it", which is the promise the
-plan warns against elsewhere. Split by how often a field actually changes:
+Flattening `textures` into fixed slot indices makes `Material` trivially
+copyable and this cost disappears - and that is already the bindless change the
+Materials section wants for unrelated reasons. It is the whole fix; nothing
+about when the registry is filled comes into it.
 
-- **Identity is retained.** An object registers when it enters the scene and
-  unregisters when it leaves. The TLAS instance index and the cached BLAS hang
-  off this.
-- **Volatile state is written every frame** - transform, previous transform,
-  bones, dangly positions. These change every frame regardless, so there is no
-  invalidation to get wrong; they are overwritten, not invalidated.
-- **Only rare, static things need an invalidation hook** - a material change, a
-  texture swap, visibility. `Material::staticObject` already marks most of what
-  never needs one.
+**Dangly positions are moved, not copied.** `registerMesh` takes
+`RegisteredDeformation` by value and `std::move`s it into the entry
+(`src/libs/scene/registry.cpp:111,118`), and the call site passes a prvalue
+`RegisteredDangly {std::move(positions)}` (`src/libs/scene/node/mesh.cpp:326`).
+One allocation per dangly mesh per frame, for the `reserve`, and the positions
+are recomputed every frame anyway - so there is nothing here to save.
 
-That confines the hard part to a small and infrequent set rather than to the
-whole registry, which is what makes the contract tractable.
+**Skinned meshes do copy.** `RegisteredSkin {_bones, _prevBones}`
+(`src/libs/scene/node/mesh.cpp:315`) copies both vectors by value - 2 x
+`kMaxBones`(24) x 64 B and two allocations per skinned node per frame. `_bones`
+is a member whose capacity is already retained across frames, so the copy exists
+only because the entry owns its bones rather than referencing them. Fixed by the
+entry holding a span once ids make the node safe to reference for a frame.
 
-**When.** Keep the per-frame rebuild until BLAS work begins. That is the point
-where identity stops being an efficiency question and becomes a correctness
-one, and it is far enough out that the registry's shape will have settled.
+**A cost in the other walk entirely:** `drawScene` re-copies instance arrays on
+every pass that selects them. Grass instances are copied into `visible` and then
+again into a 256-cluster `batch` per chunk
+(`src/libs/scene/registry.cpp:238-262`); particles into `visible` (`:222-231`).
+That is in the draw walk, not the register walk, so nothing about registration
+affects it - and it scales with the "grass everywhere" plan above. It
+wants a span over the stored vector plus a `(first, count)` pair on
+`executeDrawGrass`.
 
-## Sequencing
+Numbers before defending any of this: `formatRegistryCounts` over
+`registeredCounts()` and `drawnCounts()` in danm14ab, not the estimates here.
 
-Doing this while both backends exist means implementing it twice and
-destabilising the reference the parity work is measured against. Doing it after
-OpenGL is deleted means one implementation.
+### What this does not argue
 
-There is a middle path that does not force the choice. The **Vulkan
-`IRenderPass` implementation can record instead of draw** - same `SceneGraph`
-traversal, same callbacks, but it populates a registry as a side effect. That
-yields the retained structure and the TLAS instance list without touching the
-scene library or OpenGL, and it answers the granularity and update-model
-questions against real data. Flipping ownership afterwards, so the renderer
-culls rather than receiving pre-culled survivors, is a much smaller change
-against a design already validated.
+None of the above is an argument for retained registration; see "Why the
+snapshot stays". The rebuild is the architecture, and the three copies worth
+removing are removed inside it:
 
-Order:
+- the `Material` copy, by the bindless flattening in step 1;
+- the bone copy, by having the entry reference the node's `_bones` rather than
+  own a duplicate, once identity makes that reference safe to hold for a frame;
+- the instance re-copy, by spans, which is not a registration question at all.
 
-1. Record-instead-of-draw in the Vulkan pass. Registry built, nothing else
-   changes.
-2. Material changes: `Grass`/`Particle` types, `Material` on the instanced
-   entry points, bindless flattening.
-3. Grass placement determinism, independent of everything else.
-4. Skinning compute pass and per-node BLAS for the deforming variants.
-5. BLAS/TLAS build and refit off the registry.
-6. Move culling into the renderer; drop `radius` and the cluster pool.
+What the rebuild genuinely cannot supply is a key that survives a frame, and
+that is supplied by putting a stable id on the node - not by changing when the
+registry is filled.
 
-`slang/pbr_resolve.slang` fills `SurfaceParams` from a G-buffer and notes that
-a path tracer fills the same struct from a hit record, everything downstream
-shared. That is the seam all of this hangs off; keep it.
+## o
+
+Doing this while both backends exist means implementing it twice. The
+registration split avoided that: registry and culling live in `scene`, so all
+three pipelines got them at once and the executor interface is the only thing
+each backend implements.
+
+Two tracks, not one list. They share a prerequisite - object identity - and
+diverge after it. Keeping them separate is the point: the material work below
+kept falling out of earlier versions of this plan because a single ordered list
+implies everything in it gates what follows, and that half does not.
+
+Nothing here ends the per-frame rebuild, because the rebuild is the
+architecture. What changes is that entries carry a stable id and the backend
+keeps caches behind it.
+
+Done:
+
+- ~~Record instead of draw. Registry built, nothing else changes.~~ `c536ac72`,
+  and in the scene library rather than behind the Vulkan pass as originally
+  planned - which turned out cheaper, because `IRenderPass` and its per-pass
+  callback map could be deleted outright.
+- ~~`Grass`/`Particle` material types; `Material` on the instanced entry
+  points.~~
+
+### Critical path to a traced frame
+
+1. **Bindless flattening of `Material::textures`.** First, not last: it removes
+   the dominant per-frame allocation cost and it is what a hit shader needs,
+   and it depends on nothing else here.
+2. **One entry per object.** Fold the shadow registration into the primary
+   entry so a pass selects a shader rather than a material, which also fixes
+   skinned shadows casting from the bind pose.
+3. **Light-frustum culling for the shadow passes** - one argument at the
+   `drawScene` call sites, now that per-pass policy is expressible.
+4. **Stable ids on `SceneNode`**, assigned at `newSceneNode` and carried on
+   every snapshot entry the node produces. Index plus generation, even though
+   the generation cannot advance until node destruction exists - the field is
+   free now and awkward to add later. Cheap now, awkward after anything is
+   keyed on pointers. Both tracks below hang off this.
+5. **Backend caches keyed by id *and* content version.** Age-out handles
+   disappearance - an id absent for N frames releases what was derived from it -
+   and nothing else. A live object whose mesh, material, texture or deformation
+   source changes keeps its id, so age-out never fires and steps 6-7 would reuse
+   derived data that no longer matches. This is not hypothetical: `Creature`
+   swaps main texture and environment map on live nodes
+   (`src/libs/game/object/creature.cpp:1239-1248`), and `invalidateTexture`
+   exists precisely for content changing under an unchanged identity
+   (`src/libs/movie/movie.cpp:104`). So a cache entry is keyed by id and carries
+   a version that the snapshot entry also carries; a mismatch rebuilds. Generalises
+   the `VulkanResources::_meshes` pattern (`include/reone/graphics/vulkan/resources.h:149`)
+   and is what replaces retained registration - the difference being that the
+   snapshot *reports* the version rather than the scene *announcing* a change.
+6. **Skinning compute pass and per-node BLAS** for the deforming variants.
+   Needs 5.
+7. **BLAS/TLAS build and refit off the snapshot.** The initial correctness rule
+   is **every eligible snapshot object goes into the TLAS** - no relevance test,
+   no frustum test, and explicitly not routed through `drawScene`'s culling,
+   which would reintroduce the camera-frustum policy this whole plan exists to
+   escape. Relevance and distance culling for the TLAS are a step 9 optimisation
+   applied to a structure that was already correct without them. Build it the
+   expensive way first; a reflection missing geometry is not a performance
+   result you can interpret.
+8. **GPU material buffer**, indexed by TLAS instance custom index. Needs 1 and
+   7; completes what a hit shader reads.
+9. **Visibility policies at the `drawScene` seam** - camera frustum, light
+   frustum, TLAS relevance, none - selected by the consumer rather than
+   hardcoded. Generalises step 3 and drops `radius` and the cluster pool from
+   the scene node.
+
+#### Admission gates on step 7
+
+Two items are parallel work rather than sequenced steps, but they are not
+unconstrained: each gates whether its own geometry may enter the TLAS. Either
+resolve it, or admit the geometry knowingly excluded and say so in the code -
+what is not acceptable is admitting it without having decided.
+
+- **Grass placement determinism** gates grass. Non-deterministic placement means
+  a reflection shows a hillside populated differently from the direct view,
+  which is a correctness bug rather than a nicety, and one that looks like a
+  tracing bug when it is not.
+- **The camera-facing particle decision** - proxy geometry in the AS versus
+  keeping particles rasterised and compositing - gates emitters. Until it is
+  answered, emitters have no defined representation to instance.
+
+#### Genuinely unconstrained
+
+- **The per-pass instance re-copy** in `drawScene` - `visible`, then `batch`.
+  It is in the draw walk, not the register walk, and it scales with the grass
+  plan above.
+- **`SceneGraph::_nodes` never releases anything.** A `shared_ptr` to every node
+  ever created, never erased, never read, untouched by `clear()`
+  (`include/reone/scene/graph.h:305,396`). A module transition leaks the
+  previous module's entire node graph. It is a bug on its own terms, and under
+  the snapshot architecture it stays one - but until it is fixed, no id
+  generation can ever advance, so anything relying on stale-id detection is
+  relying on a field that never changes.
+
+### Material identification
+
+Branches after step 4 and gates nothing above. What it produces is a traced
+frame that looks right and can be debugged, not one that renders at all, so it
+can proceed alongside steps 5-9.
+
+- **a. Interned model and node names beside the object id.** The string table on
+  the scene graph, `uint32_t` name ids. Everything below needs this and nothing
+  above does.
+- **b. The authored name-to-material map**, plus its loader. Data under version
+  control, most specific key wins. This is the source of truth.
+- **c. An editor mode over the registry** to maintain it - the list of what the
+  scene contains, an assignment per entry, a save, and the inverse view of
+  which registered objects have no authored entry.
+- **d. The heuristic tier** for the unmapped tail, tagged as inferred so the
+  editor can show which tier decided a surface.
+
+The order within this track is load-bearing, not incidental: the heuristic
+comes last because it is the fallback, and it needs the authored map to already
+exist as the thing that overrides it. Shipping the guess first makes every
+later authored entry a correction rather than a decision.
+
+`slang/pbr_resolve.slang:8-10` fills `SurfaceParams` from a G-buffer and notes
+that a path tracer fills the same struct from a hit record, everything
+downstream shared. That is the seam both tracks hang off; keep it.
 
 ## Open questions
 
+- What happens to camera-facing particles - a proxy in the AS, or keep them
+  rasterised and composite over the traced image? This is an admission gate on
+  step 7, not a free-floating question: emitters have no defined representation
+  to instance until it is answered.
 - Granularity for emitters: one registered object per emitter, or per particle
   system when an emitter has several?
 - Do walkmeshes and AABB debug geometry register at all, or stay immediate-mode
-  alongside the 2D and GUI layers, which must keep explicit draw order?
+  alongside the 2D and GUI layers, which must keep explicit draw order? They
+  register today, gated on `_renderAABB`/`_renderWalkmeshes`/`_renderTriggers`
+  (`src/libs/scene/graph.cpp:585-605`), which works but was not a decision.
 - Does the render-target viewer's need for backend-neutral target handles fold
   into this, or stay separate? It is currently the reason the Vulkan editor has
   no preview pane.
