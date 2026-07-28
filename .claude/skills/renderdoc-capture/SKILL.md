@@ -233,6 +233,15 @@ touches, and how far it moves them.
   OpenGL had brown was entirely the analysis, not the renderer. If a diff
   suggests a *hue* shift rather than a brightness one, test
   `np.abs(a[..., ::-1] - b)` before believing it.
+- **ImGui persists panel layout, so a changed default does nothing.** Table
+  column widths, window sizes and dock positions are saved to
+  `build/bin/imgui.ini` and win over the values in `TableSetupColumn` and
+  `SetNextWindowSize`, which apply only the first time a widget is seen. Edit a
+  width, rebuild, and the panel looks exactly as before - which reads as the
+  build not having taken. Delete `imgui.ini` to see what a first run actually
+  shows. Related: the same panel is worth capturing at two dock widths, because
+  a stretch column that looks fine at 800px can collapse to nothing at 480 while
+  every fixed column keeps its size.
 - **Two build trees, and the one you want is not the default.** `cmake --build
   build --config Release` writes `build/bin`; `--config Debug` writes
   `build/debug/bin`. Every capture harness path in this file assumes
