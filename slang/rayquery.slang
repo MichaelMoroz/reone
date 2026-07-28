@@ -321,7 +321,10 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     float primaryThroughput = 1.0;
     float3 primaryLayers = 0.0;
     static const uint kMaxTransparentLayers = 8;
+    static const uint kMaxAdditiveHits = 8;
     for (uint segment = 0; segment < kMaxTransparentLayers; ++segment) {
+        float4 primaryAdditiveHits[kMaxAdditiveHits];
+        uint primaryAdditiveCount = 0;
         primary.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, ray);
         while (primary.Proceed()) {
             if (primary.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
@@ -333,11 +336,21 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                                               candidateBarycentrics.x, candidateBarycentrics.y);
             CandidateLayer layer = sampleCandidateLayer(candidateMaterial, candidateIndices, candidateWeights);
             if ((candidateMaterial.featureMask & kTraceAdditive) != 0) {
-                // Addition is commutative, so additive surfaces composite in
-                // candidate order. They see the segment-entry throughput: a
-                // blade behind a leaf in the same segment reads slightly
-                // bright. Bounded, and sabers rarely hide in trees.
-                primaryLayers += primaryThroughput * additiveRadiance(candidateMaterial, layer);
+                // Candidates surface in traversal order, and nothing stops one
+                // arriving beyond what later becomes the nearest hit - or
+                // being re-surfaced by the next restart segment, since TMin
+                // only ever advances past committed layers. Paying additive
+                // light immediately therefore double-counted every blade
+                // behind a leaf and leaked glow through walls. Record them
+                // with their distance instead; they are settled against the
+                // segment's committed interval below, which each additive
+                // surface falls into exactly once.
+                if (primaryAdditiveCount < kMaxAdditiveHits) {
+                    primaryAdditiveHits[primaryAdditiveCount] =
+                        float4(additiveRadiance(candidateMaterial, layer),
+                               primary.CandidateTriangleRayT());
+                    ++primaryAdditiveCount;
+                }
             } else if ((candidateMaterial.featureMask & kTracePunchThrough) != 0) {
                 // Commit anything with meaningful coverage; the query keeps
                 // the nearest. Fully transparent texels never commit and cost
@@ -345,6 +358,18 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 if (layer.alpha > 0.01) {
                     primary.CommitNonOpaqueTriangleHit();
                 }
+            }
+        }
+        // Settle this segment's additive candidates: only those in front of
+        // the committed hit are visible, and the interval [TMin, committedT)
+        // contains no transparent layers - the committed hit is the nearest -
+        // so segment-entry throughput is exact for all of them.
+        float committedT = primary.CommittedStatus() == COMMITTED_TRIANGLE_HIT
+                               ? primary.CommittedRayT()
+                               : 1e30;
+        for (uint i = 0; i < primaryAdditiveCount; ++i) {
+            if (primaryAdditiveHits[i].w < committedT) {
+                primaryLayers += primaryThroughput * primaryAdditiveHits[i].rgb;
             }
         }
         if (primary.CommittedStatus() != COMMITTED_TRIANGLE_HIT) break;
@@ -431,6 +456,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 bounce.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, secondary);
                 float bounceThroughput = 1.0;
                 float3 bounceLayers = 0.0;
+                float4 bounceAdditiveHits[kMaxAdditiveHits];
+                uint bounceAdditiveCount = 0;
                 while (bounce.Proceed()) {
                     if (bounce.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
                     uint candidateInstance = bounce.CandidateInstanceIndex();
@@ -441,7 +468,12 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                                                       candidateBarycentrics.x, candidateBarycentrics.y);
                     CandidateLayer layer = sampleCandidateLayer(candidateMaterial, candidateIndices, candidateWeights);
                     if ((candidateMaterial.featureMask & kTraceAdditive) != 0) {
-                        bounceLayers += bounceThroughput * additiveRadiance(candidateMaterial, layer);
+                        if (bounceAdditiveCount < kMaxAdditiveHits) {
+                            bounceAdditiveHits[bounceAdditiveCount] =
+                                float4(additiveRadiance(candidateMaterial, layer),
+                                       bounce.CandidateTriangleRayT());
+                            ++bounceAdditiveCount;
+                        }
                     } else if ((candidateMaterial.featureMask & kTracePunchThrough) != 0) {
                         if (layer.alpha >= 0.99) {
                             bounce.CommitNonOpaqueTriangleHit();
@@ -453,6 +485,14 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                     }
                 }
                 InterlockedAdd(traceStats[0], 1);
+                float bounceCommittedT = bounce.CommittedStatus() == COMMITTED_TRIANGLE_HIT
+                                             ? bounce.CommittedRayT()
+                                             : 1e30;
+                for (uint i = 0; i < bounceAdditiveCount; ++i) {
+                    if (bounceAdditiveHits[i].w < bounceCommittedT) {
+                        bounceLayers += bounceThroughput * bounceAdditiveHits[i].rgb;
+                    }
+                }
                 float3 radiance = bounceLayers;
                 if (bounce.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
                     InstanceMaterial bounceMaterial = instanceMaterials[bounce.CommittedInstanceIndex()];

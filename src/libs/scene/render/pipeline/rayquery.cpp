@@ -284,7 +284,13 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             if (diffuse->features().blending == Texture::Blending::Additive) {
                 material.featureMask |= 1u << 25;
                 ++_lastAdditive;
-            } else if (diffuse->features().blending == Texture::Blending::PunchThrough) {
+            } else if (diffuse->features().blending == Texture::Blending::PunchThrough ||
+                       mesh->material.type == MaterialType::TransparentModel) {
+                // Not only authored punch-through: any transparent,
+                // non-additive mesh - alpha-blended leaves above all - carries
+                // its coverage in the diffuse alpha and must composite as
+                // layers. Keying only on PunchThrough left Normal-blended
+                // canopies fully opaque in the traced view.
                 // Candidate alpha is composited deterministically in the
                 // shader, so hardware must not accept the triangle first.
                 material.featureMask |= 1u << 26;
