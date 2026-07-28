@@ -43,6 +43,7 @@ set(SPIRV_MODULES
     "pbr_resolve:resolveVertex+resolveFragment"
     "pbr_ssao:ssaoVertex+ssaoFragment"
     "pbr_ssr:ssrVertex+ssrFragment"
+    "rayquery:main"
     "postprocess:postVertex+boxBlur4Fragment+gausBlur9Fragment+gausBlur13Fragment+sharpenFragment+fxaaFragment+oitBlendFragment+debugTextureFragment"
     "vk2d:quadVertex+imageFragment+colorFragment+fullTargetVertex+textVertex+textFragment")
 

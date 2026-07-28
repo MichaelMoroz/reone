@@ -22,6 +22,9 @@
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/npyutil.h"
 #include "reone/graphics/pbrtextures.h"
+#ifdef R_ENABLE_VULKAN
+#include "reone/graphics/vulkan/renderer.h"
+#endif
 #include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/statistic.h"
 #include "reone/graphics/textureregistry.h"
@@ -233,13 +236,17 @@ std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode, 
         if (!_vulkanRenderer) {
             throw std::logic_error("Vulkan renderer was not supplied to the pipeline factory");
         }
+        if (mode == RenderMode::PathTracing && !_vulkanRenderer->device().rayQueryAvailable()) {
+            throw std::runtime_error("Path-tracing mode requires Vulkan ray-query acceleration structures; this device does not provide them");
+        }
         if (mode == RenderMode::Retro) {
             warn("No retro pipeline on Vulkan; rendering PBR instead. Pass --pbr 1 to "
                  "silence this, and do not compare this frame against an OpenGL retro one.",
                  LogChannel::Graphics);
         }
         return std::make_unique<VulkanRenderPipeline>(
-            std::move(targetSize), _options, *_vulkanRenderer, _uniforms, _meshRegistry, _textureRegistry);
+            std::move(targetSize), _options, *_vulkanRenderer, _uniforms, _meshRegistry, _textureRegistry,
+            mode == RenderMode::PathTracing);
     }
 #endif
     switch (mode) {
@@ -264,6 +271,8 @@ std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode, 
             _statistic,
             _textureRegistry,
             _uniforms);
+    case RenderMode::PathTracing:
+        throw std::invalid_argument("Path-tracing mode is only available on the Vulkan backend");
     default:
         throw std::invalid_argument("Unsupported render mode: " + std::to_string(static_cast<int>(mode)));
     }

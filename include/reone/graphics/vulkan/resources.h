@@ -24,6 +24,7 @@
 #include "image.h"
 #include "samplers.h"
 #include "mesh.h"
+#include "accelerationstructure.h"
 
 namespace reone {
 
@@ -113,6 +114,8 @@ public:
 
     /** Upload @p mesh if it has not been seen, and return it. */
     const VulkanMesh &get(const Mesh &mesh);
+    /** Build (once) and return the rigid BLAS for an uploaded mesh. */
+    const VulkanBLAS &blas(const Mesh &mesh);
 
     size_t textureCount() const { return _textures.size(); }
     size_t meshCount() const { return _meshes.size(); }
@@ -147,6 +150,7 @@ private:
 
     const VulkanImage &fallbackFor(const Texture &texture, const std::string &why);
     std::unordered_map<const Mesh *, std::unique_ptr<VulkanMesh>> _meshes;
+    std::unordered_map<const Mesh *, std::unique_ptr<VulkanBLAS>> _blases;
 };
 
 } // namespace graphics

@@ -423,7 +423,14 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
         // The mode is what was asked for; the factory decides what the current
         // backend can actually give. Deciding here on the backend is what made
         // --pbr silently inert on Vulkan.
-        auto mode = _graphicsOpt.pbr ? RenderMode::PBR : RenderMode::Retro;
+        RenderMode mode;
+        if (_graphicsOpt.mode == "raster") {
+            mode = _graphicsOpt.pbr ? RenderMode::PBR : RenderMode::Retro;
+        } else if (_graphicsOpt.mode == "path-tracing") {
+            mode = RenderMode::PathTracing;
+        } else {
+            throw std::invalid_argument("Unsupported render mode: " + _graphicsOpt.mode);
+        }
         _renderPipeline = _renderPipelineFactory.create(mode, dim);
         _renderPipeline->init();
     }

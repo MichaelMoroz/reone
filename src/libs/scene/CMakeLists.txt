@@ -50,6 +50,7 @@ set(SCENE_HEADERS
     ${SCENE_INCLUDE_DIR}/render/pipeline/pbr.h
     ${SCENE_INCLUDE_DIR}/render/pass/vulkan.h
     ${SCENE_INCLUDE_DIR}/render/pipeline/vulkan.h
+    ${SCENE_INCLUDE_DIR}/render/pipeline/rayquery.h
     ${SCENE_INCLUDE_DIR}/types.h
     ${SCENE_INCLUDE_DIR}/user.h)
 
@@ -85,7 +86,8 @@ target_precompile_headers(scene PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 if(ENABLE_VULKAN)
     target_sources(scene PRIVATE
         ${SCENE_SOURCE_DIR}/render/pass/vulkan.cpp
-        ${SCENE_SOURCE_DIR}/render/pipeline/vulkan.cpp)
+        ${SCENE_SOURCE_DIR}/render/pipeline/vulkan.cpp
+        ${SCENE_SOURCE_DIR}/render/pipeline/rayquery.cpp)
     target_link_libraries(scene PUBLIC graphicsvulkan)
     target_compile_definitions(scene PUBLIC R_ENABLE_VULKAN)
 endif()

@@ -1,0 +1,225 @@
+/*
+ * Copyright (c) 2026 The reone project contributors
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+#include "reone/scene/render/pipeline/rayquery.h"
+
+#include "reone/graphics/vulkan/accelerationstructure.h"
+#include "reone/graphics/vulkan/descriptors.h"
+#include "reone/graphics/vulkan/device.h"
+#include "reone/graphics/vulkan/image.h"
+#include "reone/graphics/vulkan/renderer.h"
+#include "reone/graphics/vulkan/resources.h"
+#include "reone/scene/registry.h"
+#include "reone/system/logutil.h"
+
+#include <chrono>
+
+using namespace reone::graphics;
+
+namespace reone::scene {
+namespace {
+VkDeviceAddress alignedAddress(VkDeviceAddress address, VkDeviceSize alignment) {
+    return (address + alignment - 1) & ~(alignment - 1);
+}
+
+VkTransformMatrixKHR instanceTransform(const glm::mat4 &m) {
+    VkTransformMatrixKHR out {};
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 4; ++column) {
+            out.matrix[row][column] = m[column][row];
+        }
+    }
+    return out;
+}
+} // namespace
+
+RayQueryPipeline::RayQueryPipeline(VulkanRenderer &renderer, glm::ivec2 extent) :
+    _renderer(renderer), _extent(extent) {}
+
+void RayQueryPipeline::init() {
+    if (_inited) return;
+    auto &device = _renderer.device();
+    VkDescriptorSetLayoutBinding bindings[2] {};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layoutInfo.bindingCount = 2;
+    layoutInfo.pBindings = bindings;
+    if (vkCreateDescriptorSetLayout(device.handle(), &layoutInfo, nullptr, &_layout) != VK_SUCCESS)
+        throw std::runtime_error("Vulkan: ray-query descriptor layout creation failed");
+
+    VkDescriptorPoolSize sizes[] {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2},
+                                  {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 2}};
+    VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.maxSets = 2; poolInfo.poolSizeCount = 2; poolInfo.pPoolSizes = sizes;
+    if (vkCreateDescriptorPool(device.handle(), &poolInfo, nullptr, &_pool) != VK_SUCCESS)
+        throw std::runtime_error("Vulkan: ray-query descriptor pool creation failed");
+    VkDescriptorSetAllocateInfo alloc {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    std::array<VkDescriptorSetLayout, 2> setLayouts {_layout, _layout};
+    alloc.descriptorPool = _pool; alloc.descriptorSetCount = static_cast<uint32_t>(setLayouts.size());
+    alloc.pSetLayouts = setLayouts.data();
+    if (vkAllocateDescriptorSets(device.handle(), &alloc, _sets.data()) != VK_SUCCESS)
+        throw std::runtime_error("Vulkan: ray-query descriptor allocation failed");
+
+    auto spirv = readSpirV(_renderer.shaderDir() / "rayquery.spv");
+    VkShaderModuleCreateInfo moduleInfo {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    moduleInfo.codeSize = spirv.size() * sizeof(uint32_t); moduleInfo.pCode = spirv.data();
+    VkShaderModule module;
+    if (vkCreateShaderModule(device.handle(), &moduleInfo, nullptr, &module) != VK_SUCCESS)
+        throw std::runtime_error("Vulkan: ray-query shader module creation failed");
+    VkDescriptorSetLayout layouts[] {_renderer.descriptors().uniformLayout(), _layout};
+    VkPipelineLayoutCreateInfo pipelineLayout {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pipelineLayout.setLayoutCount = 2; pipelineLayout.pSetLayouts = layouts;
+    if (vkCreatePipelineLayout(device.handle(), &pipelineLayout, nullptr, &_pipelineLayout) != VK_SUCCESS) {
+        vkDestroyShaderModule(device.handle(), module, nullptr);
+        throw std::runtime_error("Vulkan: ray-query pipeline layout creation failed");
+    }
+    VkPipelineShaderStageCreateInfo stage {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT; stage.module = module; stage.pName = "main";
+    VkComputePipelineCreateInfo pipeline {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    pipeline.stage = stage; pipeline.layout = _pipelineLayout;
+    if (vkCreateComputePipelines(device.handle(), VK_NULL_HANDLE, 1, &pipeline, nullptr, &_pipeline) != VK_SUCCESS) {
+        vkDestroyShaderModule(device.handle(), module, nullptr);
+        throw std::runtime_error("Vulkan: ray-query compute pipeline creation failed");
+    }
+    vkDestroyShaderModule(device.handle(), module, nullptr);
+    device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_pipeline), "rayquery:primaryRay");
+    _inited = true;
+}
+
+void RayQueryPipeline::clearFrame(Frame &frame) {
+    if (frame.tlas) vkDestroyAccelerationStructureKHR(_renderer.device().handle(), frame.tlas, nullptr);
+    frame.tlas = VK_NULL_HANDLE; frame.instances.reset(); frame.storage.reset(); frame.scratch.reset(); frame.capacity = 0;
+}
+
+void RayQueryPipeline::deinit() {
+    for (auto &frame : _frames) clearFrame(frame);
+    auto &device = _renderer.device();
+    if (_pipeline) vkDestroyPipeline(device.handle(), _pipeline, nullptr);
+    if (_pipelineLayout) vkDestroyPipelineLayout(device.handle(), _pipelineLayout, nullptr);
+    if (_pool) vkDestroyDescriptorPool(device.handle(), _pool, nullptr);
+    if (_layout) vkDestroyDescriptorSetLayout(device.handle(), _layout, nullptr);
+    _pipeline = VK_NULL_HANDLE; _pipelineLayout = VK_NULL_HANDLE; _pool = VK_NULL_HANDLE; _layout = VK_NULL_HANDLE;
+    _inited = false;
+}
+
+void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uint32_t globalsOffset,
+                              VulkanImage &output) {
+    // This intentionally bypasses drawScene: its frustum/distance policy must
+    // not decide what a ray can hit. Keep the explicit policy construction as
+    // the documented caller of the no-culling mode.
+    const auto visibility = VisibilityPolicy::noCulling();
+    (void)visibility;
+    std::vector<VkAccelerationStructureInstanceKHR> instances;
+    instances.reserve(registry.objects().size());
+    _lastDeforming = 0;
+    _lastOutOfRange = 0;
+    for (const auto &object : registry.objects()) {
+        const auto *mesh = std::get_if<RegisteredMesh>(&object);
+        if (!mesh) continue;
+        if (!std::holds_alternative<std::monostate>(mesh->deformation)) { ++_lastDeforming; continue; }
+        if (mesh->id.index > 0x00ffffffu) { ++_lastOutOfRange; continue; }
+        const auto &blas = _renderer.resources().blas(mesh->mesh.get());
+        VkAccelerationStructureInstanceKHR instance {};
+        instance.transform = instanceTransform(mesh->transform);
+        instance.instanceCustomIndex = mesh->id.index;
+        instance.mask = 0xff;
+        instance.instanceShaderBindingTableRecordOffset = 0;
+        instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        VkAccelerationStructureDeviceAddressInfoKHR address {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+        address.accelerationStructure = blas.handle();
+        instance.accelerationStructureReference = vkGetAccelerationStructureDeviceAddressKHR(_renderer.device().handle(), &address);
+        instances.push_back(instance);
+    }
+    _lastInstances = static_cast<uint32_t>(instances.size());
+    if (instances.empty()) {
+        // The splash/menu has no scene snapshot. It is not an error, and must
+        // not prevent a later module frame from constructing its TLAS.
+        VkClearColorValue clear {{0.02f, 0.03f, 0.06f, 1.0f}};
+        VkImageSubresourceRange range {};
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.levelCount = 1;
+        range.layerCount = 1;
+        vkCmdClearColorImage(cmd, output.handle(), VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
+        return;
+    }
+
+    auto &frame = _frames[_renderer.frameIndex()];
+    clearFrame(frame);
+    auto &device = _renderer.device();
+    const auto instanceSize = static_cast<VkDeviceSize>(instances.size() * sizeof(instances[0]));
+    frame.instances = std::make_unique<VulkanBuffer>(device);
+    frame.instances->initHostVisible(instanceSize, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
+    std::memcpy(frame.instances->mapped(), instances.data(), static_cast<size_t>(instanceSize));
+    VkAccelerationStructureGeometryInstancesDataKHR instanceData {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR};
+    instanceData.arrayOfPointers = VK_FALSE; instanceData.data.deviceAddress = frame.instances->deviceAddress();
+    VkAccelerationStructureGeometryKHR geometry {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR; geometry.geometry.instances = instanceData;
+    VkAccelerationStructureBuildGeometryInfoKHR build {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    build.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    build.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    build.geometryCount = 1; build.pGeometries = &geometry;
+    const uint32_t count = static_cast<uint32_t>(instances.size());
+    VkAccelerationStructureBuildSizesInfoKHR sizes {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+    vkGetAccelerationStructureBuildSizesKHR(device.handle(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                             &build, &count, &sizes);
+    frame.storage = std::make_unique<VulkanBuffer>(device);
+    frame.storage->initDeviceLocal(sizes.accelerationStructureSize,
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, nullptr);
+    VkAccelerationStructureCreateInfoKHR create {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+    create.buffer = frame.storage->handle(); create.size = sizes.accelerationStructureSize;
+    create.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    if (vkCreateAccelerationStructureKHR(device.handle(), &create, nullptr, &frame.tlas) != VK_SUCCESS)
+        throw std::runtime_error("Vulkan: TLAS creation failed");
+    const auto alignment = device.accelerationStructureProperties().minAccelerationStructureScratchOffsetAlignment;
+    frame.scratch = std::make_unique<VulkanBuffer>(device);
+    frame.scratch->initDeviceLocal(sizes.buildScratchSize + alignment,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, nullptr);
+    build.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    build.dstAccelerationStructure = frame.tlas;
+    build.scratchData.deviceAddress = alignedAddress(frame.scratch->deviceAddress(), alignment);
+    VkAccelerationStructureBuildRangeInfoKHR range {}; range.primitiveCount = count;
+    const VkAccelerationStructureBuildRangeInfoKHR *ranges[] {&range};
+    const auto begin = std::chrono::steady_clock::now();
+    vkCmdBuildAccelerationStructuresKHR(cmd, 1, &build, ranges);
+    VkMemoryBarrier2 barrier {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+    barrier.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; dep.memoryBarrierCount = 1; dep.pMemoryBarriers = &barrier;
+    vkCmdPipelineBarrier2(cmd, &dep);
+
+    VkDescriptorImageInfo image {}; image.imageView = output.view(); image.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkWriteDescriptorSetAccelerationStructureKHR asWrite {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+    asWrite.accelerationStructureCount = 1; asWrite.pAccelerationStructures = &frame.tlas;
+    VkWriteDescriptorSet writes[2] {};
+    const auto set = _sets[_renderer.frameIndex()];
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[0].dstSet = set; writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; writes[0].pImageInfo = &image;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[1].pNext = &asWrite; writes[1].dstSet = set; writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1; writes[1].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    vkUpdateDescriptorSets(device.handle(), 2, writes, 0, nullptr);
+    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    offsets[0] = globalsOffset;
+    auto uniformSet = _renderer.uniformSet();
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineLayout, 0, 1, &uniformSet,
+                            static_cast<uint32_t>(offsets.size()), offsets.data());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineLayout, 1, 1, &set, 0, nullptr);
+    vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8), static_cast<uint32_t>((_extent.y + 7) / 8), 1);
+    const auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count();
+    info("Vulkan: TLAS " + std::to_string(_lastInstances) + " instances, skipped " +
+         std::to_string(_lastDeforming) + " deforming and " +
+         std::to_string(_lastOutOfRange) + " out-of-range meshes, build recorded in " +
+         std::to_string(microseconds) + " us", LogChannel::Graphics);
+}
+} // namespace reone::scene

@@ -90,7 +90,7 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
         // Every block is visible to every stage. The blocks are small, the
         // alternative is tracking which shader reads which, and Slang already
         // declares them all in one module shared by all stages.
-        bindings[i].stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
+        bindings[i].stageFlags = VK_SHADER_STAGE_ALL;
     }
 
     VkDescriptorSetLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};

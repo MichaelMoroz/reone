@@ -172,6 +172,18 @@ void VulkanRenderPipeline::init() {
     }
     auto &device = _renderer.device();
 
+    if (_primaryRayMode) {
+        _output = std::make_unique<VulkanImage>(device);
+        _output->initColorAttachment(_targetSize, _renderer.swapchain().imageFormat());
+        _outputHandle = std::make_shared<Texture>(
+            "vk_primary_ray_output", TextureType::TwoDim, Texture::Properties());
+        _renderer.resources().registerExternal(*_outputHandle, *_output);
+        _rayQuery = std::make_unique<RayQueryPipeline>(_renderer, _targetSize);
+        _rayQuery->init();
+        _inited = true;
+        return;
+    }
+
     _gbuffer = std::make_unique<VulkanGBuffer>(device);
     _gbuffer->init(_targetSize);
 
@@ -479,6 +491,7 @@ void VulkanRenderPipeline::deinit() {
     }
     _frameImage = nullptr;
     _spareImage = nullptr;
+    _rayQuery.reset();
     _output.reset();
     _ping.reset();
     _hilights.reset();
@@ -1317,6 +1330,39 @@ Texture &VulkanRenderPipeline::render(RenderRegistry &registry,
         globals.shadowLightSpace[i] = glToVulkanClip(globals.shadowLightSpace[i]);
     }
     auto globalsOffset = _renderer.uniformRing().push(globals);
+
+    if (_primaryRayMode) {
+        VkImageMemoryBarrier2 toGeneral {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        toGeneral.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        toGeneral.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        toGeneral.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        toGeneral.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        toGeneral.image = _output->handle();
+        toGeneral.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        toGeneral.subresourceRange.levelCount = 1;
+        toGeneral.subresourceRange.layerCount = 1;
+        VkDependencyInfo beginDep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        beginDep.imageMemoryBarrierCount = 1;
+        beginDep.pImageMemoryBarriers = &toGeneral;
+        vkCmdPipelineBarrier2(cmd, &beginDep);
+        _rayQuery->render(cmd, registry, globalsOffset, *_output);
+        VkImageMemoryBarrier2 toRead {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        toRead.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        toRead.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        toRead.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        toRead.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        toRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toRead.image = _output->handle();
+        toRead.subresourceRange = toGeneral.subresourceRange;
+        VkDependencyInfo endDep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        endDep.imageMemoryBarrierCount = 1;
+        endDep.pImageMemoryBarriers = &toRead;
+        vkCmdPipelineBarrier2(cmd, &endDep);
+        _renderer.resources().registerExternal(*_outputHandle, *_output);
+        return *_outputHandle;
+    }
 
     // Before anything else this frame: a newly seen environment map has to be
     // convolved before the resolve can sample it, and this begins its own

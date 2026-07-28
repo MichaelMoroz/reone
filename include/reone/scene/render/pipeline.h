@@ -69,7 +69,9 @@ class CameraSceneNode;
  */
 enum class RenderMode {
     Retro,
-    PBR
+    PBR,
+    /** Vulkan-only primary-ray view. Kept here for the future tracer. */
+    PathTracing
 };
 
 /**

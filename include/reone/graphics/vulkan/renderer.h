@@ -103,6 +103,8 @@ public:
     /** The uniform descriptor set for the frame being recorded. */
     VkDescriptorSet uniformSet() const { return _descriptors.uniformSet(_frameIndex); }
     VulkanSwapchain &swapchain() { return _swapchain; }
+    const std::filesystem::path &shaderDir() const { return _shaderDir; }
+    int frameIndex() const { return _frameIndex; }
 
     /** Whether a frame is open, and so whether recording is legal. */
     bool inFrame() const { return _inFrame; }

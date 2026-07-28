@@ -31,6 +31,8 @@ struct GraphicsOptions {
     bool vsync {true};
     bool grass {true};
     bool pbr {true};
+    /** "raster" normally follows pbr; "path-tracing" selects Vulkan ray queries. */
+    std::string mode {"raster"};
     bool ssao {true};
     bool ssr {true};
     bool fxaa {true};

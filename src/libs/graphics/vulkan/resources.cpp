@@ -459,8 +459,22 @@ const VulkanMesh &VulkanResources::get(const Mesh &mesh) {
     return *_meshes.insert({&mesh, std::move(uploaded)}).first->second;
 }
 
+const VulkanBLAS &VulkanResources::blas(const Mesh &mesh) {
+    auto existing = _blases.find(&mesh);
+    if (existing != _blases.end()) {
+        return *existing->second;
+    }
+    const auto &uploaded = get(mesh);
+    auto blas = std::make_unique<VulkanBLAS>(_device, uploaded);
+    blas->init();
+    info("Vulkan: built rigid BLAS in " + std::to_string(blas->buildMicroseconds()) + " us",
+         LogChannel::Graphics);
+    return *_blases.insert({&mesh, std::move(blas)}).first->second;
+}
+
 void VulkanResources::clearUploaded() {
     _textures.clear();
+    _blases.clear();
     _meshes.clear();
 }
 
@@ -471,6 +485,7 @@ void VulkanResources::deinit() {
     _fallbackCube.reset();
     _external.clear();
     _textures.clear();
+    _blases.clear();
     _meshes.clear();
     // Explicitly, not from the member destructor: this object outlives
     // VulkanDevice::deinit, and destroying a sampler after the device is gone

@@ -21,6 +21,7 @@
 
 #include "reone/graphics/texture.h"
 #include "reone/graphics/vulkan/gbuffer.h"
+#include "rayquery.h"
 
 #include "../../registry.h"
 #include "../pipeline.h"
@@ -56,13 +57,15 @@ public:
                          graphics::VulkanRenderer &renderer,
                          graphics::IUniforms &uniforms,
                          graphics::IMeshRegistry &meshRegistry,
-                         graphics::TextureRegistry &textureRegistry) :
+                         graphics::TextureRegistry &textureRegistry,
+                         bool primaryRayMode = false) :
         _targetSize(std::move(targetSize)),
         _options(options),
         _renderer(renderer),
         _uniforms(uniforms),
         _meshRegistry(meshRegistry),
-        _textureRegistry(textureRegistry) {
+        _textureRegistry(textureRegistry),
+        _primaryRayMode(primaryRayMode) {
     }
 
     ~VulkanRenderPipeline() { deinit(); }
@@ -94,8 +97,10 @@ private:
     RenderPassName _shadowPass {RenderPassName::None};
 
     bool _inited {false};
+    bool _primaryRayMode {false};
 
     std::unique_ptr<graphics::VulkanGBuffer> _gbuffer;
+    std::unique_ptr<RayQueryPipeline> _rayQuery;
     /** The first of two stable scene-colour allocations. */
     std::unique_ptr<graphics::VulkanImage> _output;
     /** Four directional cascades, as a 2D array. */
