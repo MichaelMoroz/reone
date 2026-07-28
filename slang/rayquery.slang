@@ -1,6 +1,7 @@
 // Primary-ray path tracer for Vulkan ray query.  Every hit reads its material
 // and vertex attributes from GPU-resident data; no raster draw state is used.
 import uniforms;
+import lib.surface;
 
 [[vk::binding(0, 1)]] RWTexture2D<float4> outputImage;
 [[vk::binding(1, 1)]] RaytracingAccelerationStructure sceneTLAS;
@@ -19,16 +20,24 @@ struct InstanceMaterial {
     int offPosition;
     int offNormals;
     int offUV1;
+    int offUV2;
     int offTanSpace;
     uint mainTex;
     uint normalMap;
+    uint lightmap;
+    uint bumpMapArray;
     uint featureMask;
+    int bumpMapFrame;
+    float bumpMapScale;
 };
 [[vk::binding(2, 1)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
 [[vk::binding(3, 1)]] RWStructuredBuffer<uint> traceStats;
 // This binding is deliberately both runtime-sized and non-uniformly indexed.
 // The descriptor layout supplies UPDATE_AFTER_BIND and PARTIALLY_BOUND.
 [[vk::binding(4, 1)]] Sampler2D bindlessTextures[];
+// Animated grayscale bump maps are Texture2DArray assets. They cannot share
+// bindlessTextures: a Sampler2D descriptor has a different Vulkan view type.
+[[vk::binding(5, 1)]] Sampler2DArray bindlessTextureArrays[];
 
 struct PushConstants {
     uint frameIndex;
@@ -104,14 +113,6 @@ float2 transformedUV(InstanceMaterial material, float2 uv) {
                   material.uv0.y * h.x + material.uv1.y * h.y + material.uv2.y * h.z);
 }
 
-float3 emission(uint instanceIndex) {
-    return instanceMaterials[instanceIndex].selfIllumColor.rgb;
-}
-
-bool isEmitter(float3 e) {
-    return any(e > 0.0);
-}
-
 float3 cosineHemisphere(float3 normal, float2 xi) {
     float radius = sqrt(xi.x);
     float phi = 6.28318530718 * xi.y;
@@ -122,36 +123,76 @@ float3 cosineHemisphere(float3 normal, float2 xi) {
     return tangent * local.x + bitangent * local.y + normal * local.z;
 }
 
-float3 sampleShadingNormal(InstanceMaterial material, uint3 indices, float3 weights,
-                           float3 geometricNormal, float3 rayDirection, float2 uv) {
-    float3 shadingNormal = geometricNormal;
+struct HitSurface {
+    SurfaceParams surface;
+    float3 geometricNormal;
+};
+
+HitSurface sampleSurface(InstanceMaterial material, uint3 indices, float3 weights,
+                         float3x4 objectToWorld, float3x4 worldToObject,
+                         float3 rayDirection, float2 uv, float2 uv2) {
+    HitSurface hit;
+    float3 p0 = mul(objectToWorld, float4(loadFloat3(attributeAddress(material, indices.x, material.offPosition)), 1.0));
+    float3 p1 = mul(objectToWorld, float4(loadFloat3(attributeAddress(material, indices.y, material.offPosition)), 1.0));
+    float3 p2 = mul(objectToWorld, float4(loadFloat3(attributeAddress(material, indices.z, material.offPosition)), 1.0));
+    hit.geometricNormal = normalize(cross(p1 - p0, p2 - p0));
+    if (dot(hit.geometricNormal, rayDirection) > 0.0) hit.geometricNormal = -hit.geometricNormal;
+
+    SurfaceParams surface = defaultSurface();
+    if (material.mainTex != kNoTexture) {
+        float4 mainTexSample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(uv, 0.0);
+        surface.albedo = mainTexSample.rgb;
+        surface.alpha = mainTexSample.a;
+    }
+
+    float3 shadingNormal = hit.geometricNormal;
     if (material.offNormals != -1) {
         shadingNormal = normalize(interpolateFloat3(material, indices, material.offNormals, weights));
     }
-    if (dot(shadingNormal, rayDirection) > 0.0) shadingNormal = -shadingNormal;
-
-    if (material.offTanSpace == -1 || material.normalMap == kNoTexture ||
-        (material.featureMask & uint(kFeatureNormalMap)) == 0) {
-        return shadingNormal;
+    if (material.offTanSpace != -1) {
+        // offTanSpace is bitangent, tangent, tangent-space normal in that order.
+        float3 interpolatedBitangent = interpolateFloat3(material, indices, material.offTanSpace, weights);
+        float3 tangent = interpolateFloat3(material, indices, material.offTanSpace + 12, weights);
+        float3 tangentSpaceNormal = interpolateFloat3(material, indices, material.offTanSpace + 24, weights);
+        tangent = normalize(tangent - shadingNormal * dot(tangent, shadingNormal));
+        float handedness = dot(cross(shadingNormal, tangent), interpolatedBitangent) < 0.0 ? -1.0 : 1.0;
+        float3 bitangent = cross(shadingNormal, tangent) * handedness;
+        // The third vector is normally the smooth normal. It also guards corrupt
+        // tangent frames before either normal-map variant samples them.
+        if (dot(tangentSpaceNormal, tangentSpaceNormal) >= 1e-10 &&
+            dot(tangent, tangent) >= 1e-10 && dot(bitangent, bitangent) >= 1e-10) {
+            if ((material.featureMask & uint(kFeatureNormalMap)) != 0 && material.normalMap != kNoTexture) {
+                float3 n = bindlessTextures[NonUniformResourceIndex(material.normalMap)].SampleLevel(uv, 0.0).rgb * 2.0 - 1.0;
+                shadingNormal = normalize(tangent * n.x + bitangent * n.y + shadingNormal * n.z);
+            } else if ((material.featureMask & uint(kFeatureBumpMap)) != 0 && material.bumpMapArray != kNoTexture) {
+                uint bumpWidth, bumpHeight, bumpLayers;
+                bindlessTextureArrays[NonUniformResourceIndex(material.bumpMapArray)].GetDimensions(
+                    bumpWidth, bumpHeight, bumpLayers);
+                float2 texel = 1.0 / float2(max(bumpWidth, 1u), max(bumpHeight, 1u));
+                float layer = float(material.bumpMapFrame);
+                float height = bindlessTextureArrays[NonUniformResourceIndex(material.bumpMapArray)].SampleLevel(float3(uv, layer), 0.0).r;
+                // Compute dispatches have no screen-space ddx/ddy. These explicit
+                // texel differences are an approximation of the raster bump path.
+                float dX = material.bumpMapScale * (bindlessTextureArrays[NonUniformResourceIndex(material.bumpMapArray)].SampleLevel(float3(uv + float2(texel.x, 0.0), layer), 0.0).r - height);
+                float dY = material.bumpMapScale * (bindlessTextureArrays[NonUniformResourceIndex(material.bumpMapArray)].SampleLevel(float3(uv + float2(0.0, texel.y), layer), 0.0).r - height);
+                float3 n = normalize(float3(-dX, -dY, 1.0));
+                shadingNormal = normalize(tangent * n.x + bitangent * n.y + shadingNormal * n.z);
+            }
+        }
     }
-
-    // offTanSpace is bitangent, tangent, tangent-space normal in that order.
-    float3 interpolatedBitangent = interpolateFloat3(material, indices, material.offTanSpace, weights);
-    float3 tangent = interpolateFloat3(material, indices, material.offTanSpace + 12, weights);
-    float3 tangentSpaceNormal = interpolateFloat3(material, indices, material.offTanSpace + 24, weights);
-    tangent = normalize(tangent - shadingNormal * dot(tangent, shadingNormal));
-    float handedness = dot(cross(shadingNormal, tangent), interpolatedBitangent) < 0.0 ? -1.0 : 1.0;
-    float3 bitangent = cross(shadingNormal, tangent) * handedness;
-    // The third vector is normally the same smooth normal as offNormals. It
-    // still guards corrupt/degenerate tangent frames before sampling them.
-    if (dot(tangentSpaceNormal, tangentSpaceNormal) < 1e-10 ||
-        dot(tangent, tangent) < 1e-10 || dot(bitangent, bitangent) < 1e-10) {
-        return shadingNormal;
+    // Attributes are object-space; this row-vector product is the inverse
+    // transpose. SurfaceParams always carries a world-space normal.
+    surface.normal = normalize(mul(shadingNormal, (float3x3)worldToObject));
+    if (dot(surface.normal, rayDirection) > 0.0) surface.normal = -surface.normal;
+    if ((material.featureMask & uint(kFeatureLightmap)) != 0) {
+        surface.hasLightmap = true;
+        if (material.lightmap != kNoTexture && material.offUV2 != -1) {
+            surface.lightmap = bindlessTextures[NonUniformResourceIndex(material.lightmap)].SampleLevel(uv2, 0.0).rgb;
+        }
     }
-    // Compute shaders have no screen-space derivatives, so this must select a
-    // level explicitly rather than requesting the compute-derivatives extension.
-    float3 normalTexel = bindlessTextures[NonUniformResourceIndex(material.normalMap)].SampleLevel(uv, 0.0).rgb * 2.0 - 1.0;
-    return normalize(tangent * normalTexel.x + bitangent * normalTexel.y + shadingNormal * normalTexel.z);
+    surface.emissive = material.selfIllumColor.rgb;
+    hit.surface = surface;
+    return hit;
 }
 
 [shader("compute")]
@@ -179,36 +220,30 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     if (primary.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
         uint primaryInstance = primary.CommittedInstanceIndex();
         InstanceMaterial material = instanceMaterials[primaryInstance];
-        float3 primaryEmission = material.selfIllumColor.rgb;
-        if (isEmitter(primaryEmission)) {
-            color = primaryEmission;
+        uint3 indices = triangleIndices(material, primary.CommittedPrimitiveIndex());
+        float2 barycentrics = primary.CommittedTriangleBarycentrics();
+        float3 weights = float3(1.0 - barycentrics.x - barycentrics.y,
+                                barycentrics.x, barycentrics.y);
+        float3x4 objectToWorld = primary.CommittedObjectToWorld3x4();
+        float3x4 worldToObject = primary.CommittedWorldToObject3x4();
+        float2 uv = float2(0.0);
+        if (material.offUV1 != -1) {
+            uv = transformedUV(material, interpolateFloat2(material, indices, material.offUV1, weights));
+        }
+        float2 uv2 = float2(0.0);
+        if (material.offUV2 != -1) {
+            uv2 = interpolateFloat2(material, indices, material.offUV2, weights);
+        }
+        HitSurface primarySurface = sampleSurface(material, indices, weights, objectToWorld,
+                                                  worldToObject, ray.Direction, uv, uv2);
+        float3 hitPosition = ray.Origin + ray.Direction * primary.CommittedRayT();
+        if (any(primarySurface.surface.emissive > 0.0)) {
+            // A self-illuminated surface displays its texture at full
+            // brightness - the flat selfIllumColor is the intensity, not the
+            // image. Discarding albedo here turned every cockpit display and
+            // ceiling strip into a blank block of colour.
+            color = primarySurface.surface.emissive * primarySurface.surface.albedo;
         } else {
-            uint3 indices = triangleIndices(material, primary.CommittedPrimitiveIndex());
-            float2 barycentrics = primary.CommittedTriangleBarycentrics();
-            float3 weights = float3(1.0 - barycentrics.x - barycentrics.y,
-                                    barycentrics.x, barycentrics.y);
-            float3x4 objectToWorld = primary.CommittedObjectToWorld3x4();
-            float3x4 worldToObject = primary.CommittedWorldToObject3x4();
-            float3 p0 = mul(objectToWorld, float4(loadFloat3(attributeAddress(material, indices.x, material.offPosition)), 1.0));
-            float3 p1 = mul(objectToWorld, float4(loadFloat3(attributeAddress(material, indices.y, material.offPosition)), 1.0));
-            float3 p2 = mul(objectToWorld, float4(loadFloat3(attributeAddress(material, indices.z, material.offPosition)), 1.0));
-            float3 geometricNormal = normalize(cross(p1 - p0, p2 - p0));
-            if (dot(geometricNormal, ray.Direction) > 0.0) geometricNormal = -geometricNormal;
-            float2 uv = float2(0.0);
-            if (material.offUV1 != -1) {
-                uv = transformedUV(material, interpolateFloat2(material, indices, material.offUV1, weights));
-            }
-            float3 shadingNormal = sampleShadingNormal(material, indices, weights, geometricNormal,
-                                                       ray.Direction, uv);
-            // Attributes are object-space; transform the interpolated normal
-            // by the inverse-transpose represented as a row-vector multiply.
-            shadingNormal = normalize(mul(shadingNormal, (float3x3)worldToObject));
-            if (dot(shadingNormal, ray.Direction) > 0.0) shadingNormal = -shadingNormal;
-            float3 albedo = material.diffuseColor.rgb;
-            if (material.offUV1 != -1 && material.mainTex != kNoTexture) {
-                albedo *= bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(uv, 0.0).rgb;
-            }
-            float3 hitPosition = ray.Origin + ray.Direction * primary.CommittedRayT();
 
             float3 illumination = 0.0;
             uint sampleCount = max(pushConstants.samplesPerPixel, 1u);
@@ -216,14 +251,14 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 uint state = hash(dispatchId.x * 0x9e3779b9u ^ dispatchId.y * 0x85ebca6bu ^
                                   sample * 0xc2b2ae35u ^ pushConstants.frameIndex);
                 RayDesc secondary;
-                secondary.Origin = hitPosition + geometricNormal * kRayOriginOffset;
-                secondary.Direction = cosineHemisphere(shadingNormal, float2(random01(state), random01(state)));
+                secondary.Origin = hitPosition + primarySurface.geometricNormal * kRayOriginOffset;
+                secondary.Direction = cosineHemisphere(primarySurface.surface.normal, float2(random01(state), random01(state)));
                 // A smooth normal can sample below the geometric surface at a
                 // silhouette. Reflect that lobe into the geometric hemisphere
                 // rather than immediately self-intersecting the same triangle.
-                if (dot(secondary.Direction, geometricNormal) < 0.0) {
+                if (dot(secondary.Direction, primarySurface.geometricNormal) < 0.0) {
                     secondary.Direction = normalize(secondary.Direction -
-                        2.0 * dot(secondary.Direction, geometricNormal) * geometricNormal);
+                        2.0 * dot(secondary.Direction, primarySurface.geometricNormal) * primarySurface.geometricNormal);
                 }
                 secondary.TMin = 0.001;
                 secondary.TMax = 100000.0;
@@ -232,12 +267,40 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 while (bounce.Proceed()) {}
                 InterlockedAdd(traceStats[0], 1);
                 if (bounce.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
-                    illumination += emission(bounce.CommittedInstanceIndex());
+                    InstanceMaterial bounceMaterial = instanceMaterials[bounce.CommittedInstanceIndex()];
+                    uint3 bounceIndices = triangleIndices(bounceMaterial, bounce.CommittedPrimitiveIndex());
+                    float2 bounceBarycentrics = bounce.CommittedTriangleBarycentrics();
+                    float3 bounceWeights = float3(1.0 - bounceBarycentrics.x - bounceBarycentrics.y,
+                                                   bounceBarycentrics.x, bounceBarycentrics.y);
+                    float2 bounceUV = float2(0.0);
+                    if (bounceMaterial.offUV1 != -1) {
+                        bounceUV = transformedUV(bounceMaterial, interpolateFloat2(bounceMaterial, bounceIndices,
+                                                                                     bounceMaterial.offUV1, bounceWeights));
+                    }
+                    float2 bounceUV2 = float2(0.0);
+                    if (bounceMaterial.offUV2 != -1) {
+                        bounceUV2 = interpolateFloat2(bounceMaterial, bounceIndices,
+                                                      bounceMaterial.offUV2, bounceWeights);
+                    }
+                    HitSurface bounceSurface = sampleSurface(bounceMaterial, bounceIndices, bounceWeights,
+                                                             bounce.CommittedObjectToWorld3x4(),
+                                                             bounce.CommittedWorldToObject3x4(),
+                                                             secondary.Direction, bounceUV, bounceUV2);
+                    float3 radiance = bounceSurface.surface.emissive * bounceSurface.surface.albedo;
+                    if (bounceSurface.surface.hasLightmap) {
+                        // A lightmap stores irradiance, not radiance: using it as
+                        // an area-light cache loses directionality and is off by pi.
+                        // Other lightmapped surfaces can therefore light this one
+                        // again through its own traced hemisphere; that bounded
+                        // double-count is preferable to unlit interiors.
+                        radiance += bounceSurface.surface.albedo * bounceSurface.surface.lightmap;
+                    }
+                    illumination += radiance;
                 } else {
                     InterlockedAdd(traceStats[1], 1);
                 }
             }
-            color = albedo * illumination / float(sampleCount);
+            color = primarySurface.surface.albedo * illumination / float(sampleCount);
         }
     }
     outputImage[dispatchId.xy] = float4(color, 1.0);

@@ -26,7 +26,7 @@ using namespace reone::graphics;
 namespace reone::scene {
 namespace {
 
-struct InstanceMaterial {
+struct alignas(16) InstanceMaterial {
     glm::vec4 selfIllumColor {0.0f};
     glm::vec4 diffuseColor {1.0f};
     glm::vec4 uv0 {1.0f, 0.0f, 0.0f, 0.0f};
@@ -38,14 +38,20 @@ struct InstanceMaterial {
     int32_t offPosition {-1};
     int32_t offNormals {-1};
     int32_t offUV1 {-1};
+    int32_t offUV2 {-1};
     int32_t offTanSpace {-1};
     uint32_t mainTex {UINT32_MAX};
     uint32_t normalMap {UINT32_MAX};
+    uint32_t lightmap {UINT32_MAX};
+    uint32_t bumpMapArray {UINT32_MAX};
     uint32_t featureMask {0};
+    int32_t bumpMapFrame {0};
+    float bumpMapScale {1.0f};
 };
 
 static_assert(offsetof(InstanceMaterial, vertexAddress) == 80);
-static_assert(offsetof(InstanceMaterial, mainTex) == 116);
+static_assert(offsetof(InstanceMaterial, mainTex) == 120);
+static_assert(sizeof(InstanceMaterial) == 160);
 
 struct TraceStats {
     uint32_t secondaryRays {0};
@@ -79,7 +85,7 @@ void RayQueryPipeline::init() {
     if (_bindlessTextureCapacity == 0) {
         throw std::runtime_error("Vulkan: ray-query bindless texture capacity is zero");
     }
-    VkDescriptorSetLayoutBinding bindings[5] {};
+    VkDescriptorSetLayoutBinding bindings[6] {};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[0].descriptorCount = 1;
@@ -100,18 +106,27 @@ void RayQueryPipeline::init() {
     bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[4].descriptorCount = _bindlessTextureCapacity;
     bindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    VkDescriptorBindingFlags bindingFlags[5] {};
+    bindings[5].binding = 5;
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[5].descriptorCount = _bindlessTextureCapacity;
+    bindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorBindingFlags bindingFlags[6] {};
     bindingFlags[4] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+                      VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    // Vulkan permits only the highest binding to have a variable descriptor
+    // count. Binding 4 is still a runtime array in the shader, allocated here
+    // at its full capacity; the array-texture binding carries the variable flag.
+    bindingFlags[5] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
                       VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
                       VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo {
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    bindingFlagsInfo.bindingCount = 5;
+    bindingFlagsInfo.bindingCount = 6;
     bindingFlagsInfo.pBindingFlags = bindingFlags;
     VkDescriptorSetLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layoutInfo.pNext = &bindingFlagsInfo;
     layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    layoutInfo.bindingCount = 5;
+    layoutInfo.bindingCount = 6;
     layoutInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device.handle(), &layoutInfo, nullptr, &_layout) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: ray-query descriptor layout creation failed");
@@ -120,7 +135,7 @@ void RayQueryPipeline::init() {
                                   {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 2},
                                   {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4},
                                   {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                   2 * _bindlessTextureCapacity}};
+                                   4 * _bindlessTextureCapacity}};
     VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     poolInfo.maxSets = 2; poolInfo.poolSizeCount = 4; poolInfo.pPoolSizes = sizes;
@@ -233,13 +248,27 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         material.offPosition = static_cast<int32_t>(geometry.positionOffset);
         material.offNormals = layout.offNormals;
         material.offUV1 = layout.offUV1;
+        material.offUV2 = layout.offUV2;
         material.offTanSpace = layout.offTanSpace;
         material.featureMask = static_cast<uint32_t>(materialFeatureMask(mesh->material));
         if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
             material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
+        } else {
+            // No diffuse at all is not an accident: shadow-proxy meshes
+            // register with render false and empty texture slots, and they are
+            // the only rigid stand-in the TLAS has for a skinned body until
+            // the deformation pass exists. They shade from diffuseColor.
         }
         if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::NormalMap)]) {
             material.normalMap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
+        }
+        if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)]) {
+            material.lightmap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
+        }
+        if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::BumpMapArray)]) {
+            material.bumpMapArray = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
+            material.bumpMapFrame = mesh->material.bumpMapFrame;
+            material.bumpMapScale = texture->features().bumpMapScaling;
         }
         materials.push_back(material);
         // Must match isEmitter in slang/rayquery.slang. This was a luma
@@ -362,6 +391,30 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         VkWriteDescriptorSet textureWrite {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         textureWrite.dstSet = set;
         textureWrite.dstBinding = 4;
+        textureWrite.dstArrayElement = id;
+        textureWrite.descriptorCount = 1;
+        textureWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        textureWrite.pImageInfo = &textureInfos.back();
+        textureWrites.push_back(textureWrite);
+    }
+    if (!textureWrites.empty()) {
+        vkUpdateDescriptorSets(device.handle(), static_cast<uint32_t>(textureWrites.size()),
+                               textureWrites.data(), 0, nullptr);
+    }
+    const auto uploadedTextureArrays = _renderer.resources().uploadedTextureArrays();
+    textureInfos.clear();
+    textureWrites.clear();
+    textureInfos.reserve(uploadedTextureArrays.size());
+    textureWrites.reserve(uploadedTextureArrays.size());
+    for (const auto &[id, texture] : uploadedTextureArrays) {
+        if (id >= _bindlessTextureCapacity) {
+            throw std::runtime_error("Vulkan: ray-query bindless texture array exhausted");
+        }
+        textureInfos.push_back({texture->sampler(), texture->view(),
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+        VkWriteDescriptorSet textureWrite {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        textureWrite.dstSet = set;
+        textureWrite.dstBinding = 5;
         textureWrite.dstArrayElement = id;
         textureWrite.descriptorCount = 1;
         textureWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;

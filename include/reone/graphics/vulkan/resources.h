@@ -89,6 +89,9 @@ public:
     /** Uploaded 2D textures and their stable bindless indices. */
     std::vector<std::pair<uint32_t, const VulkanImage *>> uploadedTextures() const;
 
+    /** Uploaded 2D-array textures and their stable bindless indices. */
+    std::vector<std::pair<uint32_t, const VulkanImage *>> uploadedTextureArrays() const;
+
     /**
      * Associate @p texture with an image this cache does not own.
      *

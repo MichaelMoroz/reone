@@ -469,6 +469,21 @@ std::vector<std::pair<uint32_t, const VulkanImage *>> VulkanResources::uploadedT
     return result;
 }
 
+std::vector<std::pair<uint32_t, const VulkanImage *>> VulkanResources::uploadedTextureArrays() const {
+    std::vector<std::pair<uint32_t, const VulkanImage *>> result;
+    result.reserve(_textures.size());
+    for (const auto &[texture, uploaded] : _textures) {
+        // Bump-map frames are a separate descriptor shape from the ordinary
+        // material images. Keeping them out of Sampler2D prevents a valid 2D
+        // image descriptor from being interpreted as a 2D-array image.
+        if (texture->type() != TextureType::TwoDimArray) {
+            continue;
+        }
+        result.emplace_back(uploaded.id, uploaded.image.get());
+    }
+    return result;
+}
+
 VkBuffer VulkanResources::zeroBuffer() {
     if (!_zeroBuffer) {
         // Large enough for the widest attribute any shader declares.
