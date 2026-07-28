@@ -570,15 +570,30 @@ Done:
 1. ~~**Bindless flattening of `Material::textures`.**~~ Done in `96b2d432`:
    `std::array<Texture *, 6>` on a `MaterialTextureSlot` enum, `Material`
    trivially copyable, verified pixel-identical on both backends.
-2. **One entry per object.** Fold the shadow registration into the primary
-   entry, carrying `ShadowCaster` in the categories rather than in a second
-   entry with a `DirLightShadow`/`PointLightShadow` material. The pass supplies
-   the shader and the shadow-specific front-face culling; `MaterialType` keeps
-   only what a surface *is*. Deforming shadows are **not** part of this - see
-   "What the registry does not yet solve" for why they are a shader-variant
-   task instead.
-3. **Light-frustum culling for the shadow passes** - one argument at the
-   `drawScene` call sites, now that per-pass policy is expressible.
+2. ~~**One entry per object.**~~ Done in `6d4a528f`: `ShadowCaster` rides in
+   the categories, `beginPass` tells the executor which pass it is in, and
+   `MaterialType` keeps only what a surface *is*. Deforming shadows were
+   deliberately excluded - see "What the registry does not yet solve".
+3. ~~**Light-frustum culling for the shadow passes.**~~ Done in `49496d2f`, and
+   it is the cautionary entry in this list. It was written as "one argument at
+   the `drawScene` call sites"; it was in fact `graphics::Frustum` extracted out
+   of `Camera` plus a `VisibilityPolicy` on `drawScene`, +191 net lines across
+   16 files, to admit two extra shadow casters that change **zero pixels** at
+   frame 900 of danm14ab.
+
+   The code is right and the frustum extraction removes real duplication. The
+   *sequencing* was wrong: step 9 below says it "generalises step 3", which is
+   the tell that they were always one piece of work. Nothing in steps 4-6 needs
+   light-frustum shadow culling, so the abstraction was paid for four steps
+   before its first consumer and shipped as a bug fix that fixes nothing
+   measurable. `VisibilityPolicy::noCulling()` exists today with **no callers**;
+   it is owed to step 7.
+
+   **Gate the rest of this list on a consumer.** A step that only widens a seam
+   for a later step should land with that step, or immediately before it - not
+   at the position where the idea first occurred. Steps 3 and 4 together are
+   about +256 net lines whose entire justification is steps 5-9; if those stall,
+   that is dead abstraction in a shipping renderer.
 4. **Stable ids on `SceneNode`**, assigned at `newSceneNode` and carried on
    every snapshot entry the node produces. Index plus generation, even though
    the generation cannot advance until node destruction exists - the field is
@@ -609,10 +624,12 @@ Done:
    result you can interpret.
 8. **GPU material buffer**, indexed by TLAS instance custom index. Needs 1 and
    7; completes what a hit shader reads.
-9. **Visibility policies at the `drawScene` seam** - camera frustum, light
-   frustum, TLAS relevance, none - selected by the consumer rather than
-   hardcoded. Generalises step 3 and drops `radius` and the cluster pool from
-   the scene node.
+9. **The rest of the visibility work.** Step 3 already built the seam -
+   `VisibilityPolicy` with camera-frustum, light-frusta and none - so what is
+   left here is the policy step 3 could not justify on its own: **TLAS
+   relevance**, plus dropping `radius` and the cluster pool from the scene node.
+   Step 7 is what finally calls `noCulling()`. Had step 3 waited, this would
+   have been one commit with one consumer instead of two with none.
 
 #### Admission gates on step 7
 
