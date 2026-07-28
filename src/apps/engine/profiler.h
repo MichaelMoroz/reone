@@ -74,11 +74,18 @@ public:
 
     std::array<std::vector<float>, 4> frameTimes(const std::string &threadName) const;
 
+    /** Running per-slot sums since the last reset, for harness runs that need
+        averages over more frames than the display deque keeps. */
+    void resetAccumulation(const std::string &threadName);
+    std::array<std::pair<double, uint64_t>, 4> accumulation(const std::string &threadName) const;
+
 private:
     struct TimedThread {
         std::string name;
         std::vector<glm::vec3> colors;
         std::array<std::deque<float>, 4> times;
+        std::array<double, 4> sums {};
+        std::array<uint64_t, 4> counts {};
         mutable std::mutex mutex;
     };
 

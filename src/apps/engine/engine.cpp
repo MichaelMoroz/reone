@@ -509,6 +509,11 @@ int Engine::run() {
             _commandsRun = true;
             runCommandsFile();
         }
+        if (_frameIndex == 300 && _options.captureFrame > 0) {
+            // The dump below then averages the same 300..captureframe window
+            // the harness wall-clocks end to end, so the two reconcile.
+            _profiler->resetAccumulation(kMainThreadName);
+        }
         _profiler->measure(kMainThreadName, kProfilerUpdateTimeIndex, [this, &frameTime]() {
             imguiBeginFrame();
             _game->update(frameTime);
@@ -539,6 +544,23 @@ int Engine::run() {
         if (_editor) {
             _editor->applyPendingTransition();
         }
+    }
+
+    if (_options.captureFrame > 0) {
+        auto slots = _profiler->accumulation(kMainThreadName);
+        static constexpr const char *kSlotNames[] = {"input", "update", "graphics", "audio"};
+        std::string message = "Frame slot averages since frame 300:";
+        double total = 0.0;
+        for (size_t i = 0; i < slots.size(); ++i) {
+            double average = slots[i].second != 0
+                                 ? slots[i].first / static_cast<double>(slots[i].second) * 1000.0
+                                 : 0.0;
+            total += average;
+            message += " " + std::string(kSlotNames[i]) + " " + std::to_string(average) + " ms;";
+        }
+        message += " slot total " + std::to_string(total) + " ms over " +
+                   std::to_string(slots[0].second) + " frames";
+        info(message);
     }
 
     return 0;

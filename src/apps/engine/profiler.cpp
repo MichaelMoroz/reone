@@ -223,6 +223,33 @@ void Profiler::measure(const std::string &threadName,
         times.pop_front();
     }
     times.push_back((after - before) / 1e6f);
+    thread.sums[timeIndex] += (after - before) / 1e6;
+    ++thread.counts[timeIndex];
+}
+
+void Profiler::resetAccumulation(const std::string &threadName) {
+    auto found = _nameToTimedThread.find(threadName);
+    if (found == _nameToTimedThread.end()) {
+        return;
+    }
+    auto &thread = found->second.get();
+    std::lock_guard<std::mutex> lock {thread.mutex};
+    thread.sums = {};
+    thread.counts = {};
+}
+
+std::array<std::pair<double, uint64_t>, 4> Profiler::accumulation(const std::string &threadName) const {
+    std::array<std::pair<double, uint64_t>, 4> result {};
+    auto found = _nameToTimedThread.find(threadName);
+    if (found == _nameToTimedThread.end()) {
+        return result;
+    }
+    const auto &thread = found->second.get();
+    std::lock_guard<std::mutex> lock {thread.mutex};
+    for (size_t i = 0; i < result.size(); ++i) {
+        result[i] = {thread.sums[i], thread.counts[i]};
+    }
+    return result;
 }
 
 std::array<std::vector<float>, 4> Profiler::frameTimes(const std::string &threadName) const {
