@@ -44,7 +44,7 @@ struct GraphicsOptions {
      * the square root, so doubling this halves neither. Eight is the point
      * where the image reads clearly while the frame still moves.
      */
-    int pathTracingSamples {8};
+    int pathTracingSamples {4};
 
     /**
      * Light-balance knobs for the traced mode, all defaulting to neutral.
@@ -53,9 +53,9 @@ struct GraphicsOptions {
      * emitter, and lightmap scales the baked radiance cache that stands in
      * for light sources the tracer cannot see yet.
      */
-    float ptSkyIntensity {1.0f};
-    float ptEmissiveIntensity {1.0f};
-    float ptLightmapIntensity {1.0f};
+    float ptSkyIntensity {1.5f};
+    float ptEmissiveIntensity {2.0f};
+    float ptLightmapIntensity {0.5f};
     /** Secondary-ray origin offset along the geometric normal, world units. */
     float ptRayOffset {0.01f};
     bool ssao {true};

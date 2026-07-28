@@ -54,6 +54,7 @@ private:
     uint32_t _lastDeforming {0};
     uint32_t _lastOutOfRange {0};
     uint32_t _lastEmissive {0};
+    uint32_t _lastAdditive {0};
     uint32_t _lastSecondaryRays {0};
     uint32_t _lastSecondaryMisses {0};
     uint32_t _bindlessTextureCapacity {0};

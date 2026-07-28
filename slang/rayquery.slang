@@ -41,6 +41,8 @@ struct InstanceMaterial {
 
 // Set CPU-side on fully self-illuminated instances; see rayquery.cpp.
 static const uint kTraceSky = 1u << 24;
+// Additive-blended diffuse: the texture is the light. Set CPU-side.
+static const uint kTraceAdditive = 1u << 25;
 
 struct PushConstants {
     uint frameIndex;
@@ -204,6 +206,11 @@ HitSurface sampleSurface(InstanceMaterial material, uint3 indices, float3 weight
         }
     }
     surface.emissive = material.selfIllumColor.rgb;
+    if ((material.featureMask & kTraceAdditive) != 0) {
+        // Emission of 1 makes the additive texture read at its own brightness
+        // through the emission*albedo path, matching how raster composites it.
+        surface.emissive = max(surface.emissive, float3(1.0));
+    }
     hit.surface = surface;
     return hit;
 }

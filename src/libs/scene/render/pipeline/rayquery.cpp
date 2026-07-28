@@ -218,6 +218,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     _lastDeforming = 0;
     _lastOutOfRange = 0;
     _lastEmissive = 0;
+    _lastAdditive = 0;
     for (const auto &object : registry.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
         if (!mesh) continue;
@@ -257,6 +258,17 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         // slang/rayquery.slang.
         if (glm::dot(mesh->material.selfIllumColor, glm::vec3(0.299f, 0.587f, 0.114f)) >= 0.99f) {
             material.featureMask |= 1u << 24;
+        }
+        // Additive-blended diffuse is the other way Odyssey authors a glow:
+        // no selfIllum controller, the texture itself is the light, and the
+        // raster path treats it as unlit for the same reason. Without this
+        // bit every indicator lamp and glow decal traces as a dark surface.
+        // Must match kTraceAdditive in slang/rayquery.slang.
+        if (const auto *diffuse = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
+            if (diffuse->features().blending == Texture::Blending::Additive) {
+                material.featureMask |= 1u << 25;
+                ++_lastAdditive;
+            }
         }
         if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
             material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
@@ -456,7 +468,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
          std::to_string(_lastDeforming) + " deforming and " +
          std::to_string(_lastOutOfRange) + " out-of-range meshes, build recorded in " +
          std::to_string(microseconds) + " us; " + std::to_string(_lastEmissive) +
-         " emissive; previous frame secondary misses " + std::to_string(_lastSecondaryMisses) +
+         " emissive, " + std::to_string(_lastAdditive) + " additive; previous frame secondary misses " + std::to_string(_lastSecondaryMisses) +
          "/" + std::to_string(_lastSecondaryRays) + "; " +
          std::to_string(_lastBindlessTextureCount) + " bindless 2D textures; " +
          std::to_string(std::max(1, _options.pathTracingSamples)) + " spp", LogChannel::Graphics);
