@@ -587,51 +587,89 @@ Done:
    light-frustum shadow culling, so the abstraction was paid for four steps
    before its first consumer and shipped as a bug fix that fixes nothing
    measurable. `VisibilityPolicy::noCulling()` exists today with **no callers**;
-   it is owed to step 7.
+   it is owed to step 8.
 
    **Gate the rest of this list on a consumer.** A step that only widens a seam
    for a later step should land with that step, or immediately before it - not
    at the position where the idea first occurred. Steps 3 and 4 together are
    about +256 net lines whose entire justification is steps 5-9; if those stall,
    that is dead abstraction in a shipping renderer.
-4. **Stable ids on `SceneNode`**, assigned at `newSceneNode` and carried on
-   every snapshot entry the node produces. Index plus generation, even though
-   the generation cannot advance until node destruction exists - the field is
-   free now and awkward to add later. Cheap now, awkward after anything is
-   keyed on pointers. Both tracks below hang off this.
-5. **Backend caches keyed by id *and* content version.** Age-out handles
-   disappearance - an id absent for N frames releases what was derived from it -
-   and nothing else. A live object whose mesh, material, texture or deformation
-   source changes keeps its id, so age-out never fires and steps 6-7 would reuse
-   derived data that no longer matches. This is not hypothetical: `Creature`
-   swaps main texture and environment map on live nodes
-   (`src/libs/game/object/creature.cpp:1239-1248`), and `invalidateTexture`
-   exists precisely for content changing under an unchanged identity
-   (`src/libs/movie/movie.cpp:104`). So a cache entry is keyed by id and carries
-   a version that the snapshot entry also carries; a mismatch rebuilds. Generalises
-   the `VulkanResources::_meshes` pattern (`include/reone/graphics/vulkan/resources.h:149`)
-   and is what replaces retained registration - the difference being that the
-   snapshot *reports* the version rather than the scene *announcing* a change.
-6. **Skinning compute pass and per-node BLAS** for the deforming variants.
-   Needs 5.
-7. **BLAS/TLAS build and refit off the snapshot.** The initial correctness rule
-   is **every eligible snapshot object goes into the TLAS** - no relevance test,
-   no frustum test, and explicitly not routed through `drawScene`'s culling,
-   which would reintroduce the camera-frustum policy this whole plan exists to
-   escape. Relevance and distance culling for the TLAS are a step 9 optimisation
-   applied to a structure that was already correct without them. Build it the
-   expensive way first; a reflection missing geometry is not a performance
-   result you can interpret.
-8. **GPU material buffer**, indexed by TLAS instance custom index. Needs 1 and
-   7; completes what a hit shader reads.
-9. **The rest of the visibility work.** Step 3 already built the seam -
-   `VisibilityPolicy` with camera-frustum, light-frusta and none - so what is
-   left here is the policy step 3 could not justify on its own: **TLAS
-   relevance**, plus dropping `radius` and the cluster pool from the scene node.
-   Step 7 is what finally calls `noCulling()`. Had step 3 waited, this would
-   have been one commit with one consumer instead of two with none.
+4. ~~**Stable ids on `SceneNode`.**~~ Done in `296a0474`, together with interned
+   model and node names, per-entry pass flags, and the registry panel that
+   reads all three. They landed as one change because the panel is their only
+   consumer, which is the gating rule applied rather than bent. The generation
+   field is present and inert; `_nodes` never releases, so no index is reused.
 
-#### Admission gates on step 7
+#### Rigid geometry traces first
+
+The order below changed after reading the backend. `doc/vulkan-rt-backend.md`
+§10.1 wants ray *query* before a ray-tracing pipeline - no shader binding
+table, no new pipeline type, a visible result early - and two facts move
+everything else:
+
+- **There is no ray-tracing groundwork at all.** `device.cpp` requests features
+  11 and 13 and no device extensions of its own: no
+  `VK_KHR_acceleration_structure`, no `VK_KHR_deferred_host_operations`, no
+  ray query, no `features12`, so no buffer device address and no descriptor
+  indexing. Nothing can build an acceleration structure today.
+- **A rigid BLAS keys on `graphics::Mesh`, not on scene-node identity.** The
+  bulk of the scene is rigid, mesh lifetime belongs to the resource layer, and
+  `VulkanResources::_meshes` is already that cache's shape. So the first
+  acceleration-structure work needs neither the ids from step 4 nor the
+  versioning below.
+
+That is why identity came before tracing in earlier drafts and should not
+have: it is a prerequisite for *deforming* geometry only.
+
+5. **Device groundwork.** `VK_KHR_acceleration_structure`,
+   `VK_KHR_deferred_host_operations`, `VK_KHR_ray_query`, plus `features12`
+   for buffer device address and descriptor indexing, and the VMA allocator
+   created with the buffer-device-address flag. Self-contained and
+   independently verifiable: the device either creates with the validation
+   layers silent or it does not.
+6. **Geometry addressable by the builder.** Mesh buffers need shader device
+   address and acceleration-structure-build-input usage. Suballocating every
+   mesh into one buffer (`vulkan-rt-backend.md` §9) is the eventual shape but
+   is not required to build a BLAS from per-mesh buffers, so defer it.
+7. **Rigid BLAS**, keyed on `Mesh` and built once, `PREFER_FAST_TRACE` with
+   compaction where `Material::staticObject` says so.
+8. **TLAS per frame from the snapshot.** The correctness rule is **every
+   eligible snapshot object goes in** - no relevance test, no frustum test, and
+   explicitly not routed through `drawScene`'s culling, which would reintroduce
+   the camera-frustum policy this whole plan exists to escape. This is what
+   finally calls `VisibilityPolicy::noCulling()`. Build it the expensive way
+   first; a reflection missing geometry is not a performance result you can
+   interpret.
+9. **A ray-query shader that proves it** - a traced shadow or ambient-occlusion
+   term, composited over the raster frame. First visible evidence any of this
+   works, and what steps 5-8 should be judged against.
+
+#### Then deforming geometry
+
+10. **Backend caches keyed by id *and* content version.** Age-out handles
+    disappearance - an id absent for N frames releases what was derived from
+    it - and nothing else. A live object whose mesh, material, texture or
+    deformation source changes keeps its id, so age-out never fires and a
+    per-node BLAS would reuse derived data that no longer matches. Not
+    hypothetical: `Creature` swaps main texture and environment map on live
+    nodes (`src/libs/game/object/creature.cpp:1239-1248`), and
+    `invalidateTexture` exists precisely for content changing under an
+    unchanged identity (`src/libs/movie/movie.cpp:104`). Generalises the
+    `VulkanResources::_meshes` pattern
+    (`include/reone/graphics/vulkan/resources.h:149`); the difference from a
+    retained protocol is that the snapshot *reports* the version rather than
+    the scene *announcing* a change. **Lands with 11**, which is its only
+    consumer.
+11. **Skinning compute pass and per-node BLAS** for the deforming variants.
+    This is where step 4's ids stop being an investment and start being load
+    bearing.
+12. **GPU material buffer**, indexed by TLAS instance custom index. Needs 1 and
+    8; completes what a hit shader reads.
+13. **The rest of the visibility work.** Step 3 already built the seam, so what
+    remains is the policy it could not justify on its own: **TLAS relevance**,
+    plus dropping `radius` and the cluster pool from the scene node.
+
+#### Admission gates on step 8
 
 Two items are parallel work rather than sequenced steps, but they are not
 unconstrained: each gates whether its own geometry may enter the TLAS. Either
@@ -689,7 +727,7 @@ downstream shared. That is the seam both tracks hang off; keep it.
 
 - What happens to camera-facing particles - a proxy in the AS, or keep them
   rasterised and composite over the traced image? This is an admission gate on
-  step 7, not a free-floating question: emitters have no defined representation
+  step 8, not a free-floating question: emitters have no defined representation
   to instance until it is answered.
 - Granularity for emitters: one registered object per emitter, or per particle
   system when an emitter has several?
