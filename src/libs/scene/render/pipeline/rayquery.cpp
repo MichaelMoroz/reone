@@ -219,10 +219,27 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     _lastOutOfRange = 0;
     _lastEmissive = 0;
     _lastAdditive = 0;
+    _lastSabers = 0;
+    _lastDangly = 0;
     for (const auto &object : registry.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
         if (!mesh) continue;
-        if (!std::holds_alternative<std::monostate>(mesh->deformation)) { ++_lastDeforming; continue; }
+        // Saber displacement is a small whole-blade animation. A rigid blade
+        // is much more useful to tracing than no blade at all; skin and dangly
+        // meshes still need a proper deformed BLAS and remain excluded.
+        const bool saber = std::holds_alternative<RegisteredSaber>(mesh->deformation);
+        // Dangly meshes are admitted at their base positions for the same
+        // reason sabers are: a static canopy beats an absent one, and the
+        // per-frame displacement is small. This is why every tree has leaves
+        // rather than only those whose canopy happens to be rigid. The wind
+        // arrives with the deformation compute pass, which replaces this.
+        const bool dangly = std::holds_alternative<RegisteredDangly>(mesh->deformation);
+        if (!std::holds_alternative<std::monostate>(mesh->deformation) && !saber && !dangly) {
+            ++_lastDeforming;
+            continue;
+        }
+        if (saber) ++_lastSabers;
+        if (dangly) ++_lastDangly;
         if (mesh->id.index > 0x00ffffffu) { ++_lastOutOfRange; continue; }
         const auto &blas = _renderer.resources().blas(mesh->mesh.get());
         const auto geometry = _renderer.resources().get(mesh->mesh.get()).geometry();
@@ -235,7 +252,6 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         VkAccelerationStructureDeviceAddressInfoKHR address {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
         address.accelerationStructure = blas.handle();
         instance.accelerationStructureReference = vkGetAccelerationStructureDeviceAddressKHR(_renderer.device().handle(), &address);
-        instances.push_back(instance);
         InstanceMaterial material;
         material.selfIllumColor = glm::vec4(mesh->material.selfIllumColor, 0.0f);
         material.diffuseColor = glm::vec4(mesh->material.diffuseColor, 1.0f);
@@ -268,6 +284,10 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             if (diffuse->features().blending == Texture::Blending::Additive) {
                 material.featureMask |= 1u << 25;
                 ++_lastAdditive;
+            } else if (diffuse->features().blending == Texture::Blending::PunchThrough) {
+                // Candidate alpha is composited deterministically in the
+                // shader, so hardware must not accept the triangle first.
+                material.featureMask |= 1u << 26;
             }
         }
         if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
@@ -289,6 +309,12 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             material.bumpMapFrame = mesh->material.bumpMapFrame;
             material.bumpMapScale = texture->features().bumpMapScaling;
         }
+        if ((material.featureMask & ((1u << 25) | (1u << 26))) != 0) {
+            // Additive surfaces always transmit; punch-through surfaces decide
+            // per texel in Proceed(). Both must therefore reach candidates.
+            instance.flags |= VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR;
+        }
+        instances.push_back(instance);
         materials.push_back(material);
         // Must match isEmitter in slang/rayquery.slang. This was a luma
         // threshold while the shader used one too; when the shader started
@@ -468,7 +494,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
          std::to_string(_lastDeforming) + " deforming and " +
          std::to_string(_lastOutOfRange) + " out-of-range meshes, build recorded in " +
          std::to_string(microseconds) + " us; " + std::to_string(_lastEmissive) +
-         " emissive, " + std::to_string(_lastAdditive) + " additive; previous frame secondary misses " + std::to_string(_lastSecondaryMisses) +
+          " emissive, " + std::to_string(_lastAdditive) + " additive, " +
+          std::to_string(_lastSabers) + " saber, " + std::to_string(_lastDangly) + " dangly; previous frame secondary misses " + std::to_string(_lastSecondaryMisses) +
          "/" + std::to_string(_lastSecondaryRays) + "; " +
          std::to_string(_lastBindlessTextureCount) + " bindless 2D textures; " +
          std::to_string(std::max(1, _options.pathTracingSamples)) + " spp", LogChannel::Graphics);

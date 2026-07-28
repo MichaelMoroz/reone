@@ -43,6 +43,9 @@ struct InstanceMaterial {
 static const uint kTraceSky = 1u << 24;
 // Additive-blended diffuse: the texture is the light. Set CPU-side.
 static const uint kTraceAdditive = 1u << 25;
+// Punch-through diffuse uses deterministic multi-layer transparency in
+// ray-query candidates.
+static const uint kTracePunchThrough = 1u << 26;
 
 struct PushConstants {
     uint frameIndex;
@@ -138,6 +141,75 @@ float3 cosineHemisphere(float3 normal, float2 xi) {
     return tangent * local.x + bitangent * local.y + normal * local.z;
 }
 
+float3 tangentToWorld(float3 normal, float3 local) {
+    float3 reference = abs(normal.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(0.0, 1.0, 0.0);
+    float3 tangent = normalize(cross(reference, normal));
+    float3 bitangent = cross(normal, tangent);
+    return tangent * local.x + bitangent * local.y + normal * local.z;
+}
+
+// Importance sample the GGX normal-distribution function. a is alpha in the
+// raster resolve's notation (roughness squared), not perceptual roughness.
+float3 ggxHalfVector(float3 normal, float roughness, float2 xi) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float phi = 6.28318530718 * xi.x;
+    float cosTheta = sqrt((1.0 - xi.y) / max(1e-6, 1.0 + (a2 - 1.0) * xi.y));
+    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+    return tangentToWorld(normal, float3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta));
+}
+
+float3 fresnelSchlick(float cosTheta, float3 F0) {
+    return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
+}
+
+float luminance(float3 color) {
+    return dot(color, float3(0.299, 0.587, 0.114));
+}
+
+struct CandidateLayer {
+    float3 albedo;
+    float alpha;
+    float3 radiance;
+};
+
+// Candidate handling deliberately stays cheap: its only job is to composite a
+// translucent leaf layer while traversal continues to a solid surface. It does
+// not launch another hemisphere from every candidate.
+CandidateLayer sampleCandidateLayer(InstanceMaterial material, uint3 indices, float3 weights) {
+    CandidateLayer layer;
+    layer.albedo = material.diffuseColor.rgb;
+    layer.alpha = 1.0;
+    float2 uv = float2(0.0);
+    if (material.offUV1 != -1) {
+        uv = transformedUV(material, interpolateFloat2(material, indices, material.offUV1, weights));
+    }
+    if (material.mainTex != kNoTexture) {
+        float4 sample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(uv, 0.0);
+        layer.albedo = sample.rgb;
+        layer.alpha = sample.a;
+    }
+    float emissionScale = (material.featureMask & kTraceSky) != 0
+                              ? pushConstants.skyIntensity
+                              : pushConstants.emissiveIntensity;
+    layer.radiance = material.selfIllumColor.rgb * layer.albedo * emissionScale;
+    if ((material.featureMask & uint(kFeatureLightmap)) != 0 &&
+        material.lightmap != kNoTexture && material.offUV2 != -1) {
+        float2 uv2 = interpolateFloat2(material, indices, material.offUV2, weights);
+        float3 lightmap = bindlessTextures[NonUniformResourceIndex(material.lightmap)].SampleLevel(uv2, 0.0).rgb;
+        layer.radiance += layer.albedo * lightmap * pushConstants.lightmapIntensity;
+    }
+    return layer;
+}
+
+float3 additiveRadiance(InstanceMaterial material, CandidateLayer layer) {
+    // Additive diffuse textures are authored as light even when no self-illum
+    // controller is present. This is the same emission*albedo convention used
+    // by sampleSurface for kTraceAdditive.
+    return max(material.selfIllumColor.rgb, float3(1.0)) * layer.albedo *
+           pushConstants.emissiveIntensity;
+}
+
 struct HitSurface {
     SurfaceParams surface;
     float3 geometricNormal;
@@ -159,6 +231,11 @@ HitSurface sampleSurface(InstanceMaterial material, uint3 indices, float3 weight
         surface.albedo = mainTexSample.rgb;
         surface.alpha = mainTexSample.a;
     }
+    // Keep the tracer's stand-ins exactly aligned with pbr_resolve.slang:
+    // alpha is only a reflectance control on env-mapped materials, never
+    // metalness, and roughness still uses alpha for every material.
+    surface.metallic = 0.0;
+    surface.roughness = clamp(surface.alpha, 0.2, 1.0);
 
     float3 shadingNormal = hit.geometricNormal;
     if (material.offNormals != -1) {
@@ -232,11 +309,62 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     ray.TMin = 0.01;
     ray.TMax = 100000.0;
 
+    // Transparency composites strictly nearest-first. Ray-query candidates
+    // arrive in BVH traversal order, not distance order, so compositing inside
+    // one Proceed loop layers surfaces in whatever order the tree yields -
+    // wrong whenever two transparent surfaces overlap. Each segment instead
+    // commits the NEAREST surface with meaningful coverage, composites exactly
+    // that one, and re-traces with TMin advanced just past it. The origin
+    // never moves, so CommittedRayT stays in the original parameterisation and
+    // the shading block below needs no special cases.
     RayQuery<RAY_FLAG_NONE> primary;
-    primary.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, ray);
-    while (primary.Proceed()) {}
+    float primaryThroughput = 1.0;
+    float3 primaryLayers = 0.0;
+    static const uint kMaxTransparentLayers = 8;
+    for (uint segment = 0; segment < kMaxTransparentLayers; ++segment) {
+        primary.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, ray);
+        while (primary.Proceed()) {
+            if (primary.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
+            uint candidateInstance = primary.CandidateInstanceIndex();
+            InstanceMaterial candidateMaterial = instanceMaterials[candidateInstance];
+            uint3 candidateIndices = triangleIndices(candidateMaterial, primary.CandidatePrimitiveIndex());
+            float2 candidateBarycentrics = primary.CandidateTriangleBarycentrics();
+            float3 candidateWeights = float3(1.0 - candidateBarycentrics.x - candidateBarycentrics.y,
+                                              candidateBarycentrics.x, candidateBarycentrics.y);
+            CandidateLayer layer = sampleCandidateLayer(candidateMaterial, candidateIndices, candidateWeights);
+            if ((candidateMaterial.featureMask & kTraceAdditive) != 0) {
+                // Addition is commutative, so additive surfaces composite in
+                // candidate order. They see the segment-entry throughput: a
+                // blade behind a leaf in the same segment reads slightly
+                // bright. Bounded, and sabers rarely hide in trees.
+                primaryLayers += primaryThroughput * additiveRadiance(candidateMaterial, layer);
+            } else if ((candidateMaterial.featureMask & kTracePunchThrough) != 0) {
+                // Commit anything with meaningful coverage; the query keeps
+                // the nearest. Fully transparent texels never commit and cost
+                // nothing further.
+                if (layer.alpha > 0.01) {
+                    primary.CommitNonOpaqueTriangleHit();
+                }
+            }
+        }
+        if (primary.CommittedStatus() != COMMITTED_TRIANGLE_HIT) break;
+        InstanceMaterial committedMaterial = instanceMaterials[primary.CommittedInstanceIndex()];
+        if ((committedMaterial.featureMask & kTracePunchThrough) == 0) break;
+        uint3 committedIndices = triangleIndices(committedMaterial, primary.CommittedPrimitiveIndex());
+        float2 committedBarycentrics = primary.CommittedTriangleBarycentrics();
+        float3 committedWeights = float3(1.0 - committedBarycentrics.x - committedBarycentrics.y,
+                                          committedBarycentrics.x, committedBarycentrics.y);
+        CandidateLayer committedLayer = sampleCandidateLayer(committedMaterial, committedIndices, committedWeights);
+        // An effectively opaque texel is a real surface and deserves the full
+        // shading path rather than the cheap layer formula.
+        if (committedLayer.alpha >= 0.99) break;
+        primaryLayers += primaryThroughput * committedLayer.alpha * committedLayer.radiance;
+        primaryThroughput *= 1.0 - committedLayer.alpha;
+        if (primaryThroughput < 1e-3) break;
+        ray.TMin = primary.CommittedRayT() + 1e-3;
+    }
 
-    float3 color = 0.0;
+    float3 color = primaryLayers;
     if (primary.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
         uint primaryInstance = primary.CommittedInstanceIndex();
         InstanceMaterial material = instanceMaterials[primaryInstance];
@@ -257,25 +385,39 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         HitSurface primarySurface = sampleSurface(material, indices, weights, objectToWorld,
                                                   worldToObject, ray.Direction, uv, uv2);
         float3 hitPosition = ray.Origin + ray.Direction * primary.CommittedRayT();
-        if ((material.featureMask & kTraceSky) != 0) {
-            // The sky is its own light; tracing a hemisphere from it buys
-            // nothing. Everything else falls through and gets shaded, because
-            // in the raster resolve self-illumination is a term *added to* the
-            // light reaching a surface, not a replacement for being lit. The
-            // old exclusive branch here made any faintly self-illuminated
-            // surface - doors, notably - skip shading and render full-bright.
-            color = primarySurface.surface.emissive * primarySurface.surface.albedo *
-                    pushConstants.skyIntensity;
-        } else {
-
-            float3 illumination = 0.0;
+        // kTraceSky selects only the source-intensity dial. Like raster's
+        // self-illumination, emission is additive; it never replaces shading.
+        float3 diffuseIllumination = 0.0;
+        float3 specularIllumination = 0.0;
+        float3 V = -ray.Direction;
+        bool envmapped = (material.featureMask & uint(kFeatureEnvMap)) != 0;
+        float envMapStrength = envmapped ? (1.0 - primarySurface.surface.alpha) : 0.0;
+        float3 F0 = lerp(lerp(float3(0.04), primarySurface.surface.albedo,
+                               primarySurface.surface.metallic),
+                          float3(1.0), envMapStrength);
+        float3 F = fresnelSchlick(max(0.0, dot(primarySurface.surface.normal, V)), F0);
+        // The GGX lobe exists only where raster shows this heuristic a
+        // specular response: environment-mapped surfaces. Everywhere else the
+        // diffuse alpha is coverage or opacity, so the derived roughness is
+        // meaningless - grass texels with soft alpha turned glossy and the
+        // whole frame sparkled. Non-envmapped surfaces are pure diffuse.
+        float specularProbability = envmapped ? clamp(luminance(F), 1e-3, 1.0 - 1e-3) : 0.0;
             uint sampleCount = max(pushConstants.samplesPerPixel, 1u);
             for (uint sample = 0; sample < sampleCount; ++sample) {
                 uint state = hash(dispatchId.x * 0x9e3779b9u ^ dispatchId.y * 0x85ebca6bu ^
                                   sample * 0xc2b2ae35u ^ pushConstants.frameIndex);
                 RayDesc secondary;
                 secondary.Origin = hitPosition + primarySurface.geometricNormal * pushConstants.rayOriginOffset;
-                secondary.Direction = cosineHemisphere(primarySurface.surface.normal, float2(random01(state), random01(state)));
+                bool sampleSpecular = envmapped && random01(state) < specularProbability;
+                if (sampleSpecular) {
+                    float3 H = ggxHalfVector(primarySurface.surface.normal,
+                                              primarySurface.surface.roughness,
+                                              float2(random01(state), random01(state)));
+                    secondary.Direction = normalize(reflect(-V, H));
+                } else {
+                    secondary.Direction = cosineHemisphere(primarySurface.surface.normal,
+                                                           float2(random01(state), random01(state)));
+                }
                 // A smooth normal can sample below the geometric surface at a
                 // silhouette. Reflect that lobe into the geometric hemisphere
                 // rather than immediately self-intersecting the same triangle.
@@ -287,8 +429,31 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 secondary.TMax = 100000.0;
                 RayQuery<RAY_FLAG_NONE> bounce;
                 bounce.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, secondary);
-                while (bounce.Proceed()) {}
+                float bounceThroughput = 1.0;
+                float3 bounceLayers = 0.0;
+                while (bounce.Proceed()) {
+                    if (bounce.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
+                    uint candidateInstance = bounce.CandidateInstanceIndex();
+                    InstanceMaterial candidateMaterial = instanceMaterials[candidateInstance];
+                    uint3 candidateIndices = triangleIndices(candidateMaterial, bounce.CandidatePrimitiveIndex());
+                    float2 candidateBarycentrics = bounce.CandidateTriangleBarycentrics();
+                    float3 candidateWeights = float3(1.0 - candidateBarycentrics.x - candidateBarycentrics.y,
+                                                      candidateBarycentrics.x, candidateBarycentrics.y);
+                    CandidateLayer layer = sampleCandidateLayer(candidateMaterial, candidateIndices, candidateWeights);
+                    if ((candidateMaterial.featureMask & kTraceAdditive) != 0) {
+                        bounceLayers += bounceThroughput * additiveRadiance(candidateMaterial, layer);
+                    } else if ((candidateMaterial.featureMask & kTracePunchThrough) != 0) {
+                        if (layer.alpha >= 0.99) {
+                            bounce.CommitNonOpaqueTriangleHit();
+                        } else {
+                            bounceLayers += bounceThroughput * layer.alpha * layer.radiance;
+                            bounceThroughput *= 1.0 - layer.alpha;
+                            if (bounceThroughput < 1e-3) break;
+                        }
+                    }
+                }
                 InterlockedAdd(traceStats[0], 1);
+                float3 radiance = bounceLayers;
                 if (bounce.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
                     InstanceMaterial bounceMaterial = instanceMaterials[bounce.CommittedInstanceIndex()];
                     uint3 bounceIndices = triangleIndices(bounceMaterial, bounce.CommittedPrimitiveIndex());
@@ -312,25 +477,42 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                     float bounceScale = (bounceMaterial.featureMask & kTraceSky) != 0
                                             ? pushConstants.skyIntensity
                                             : pushConstants.emissiveIntensity;
-                    float3 radiance = bounceSurface.surface.emissive * bounceSurface.surface.albedo * bounceScale;
+                    radiance += bounceThroughput * bounceSurface.surface.emissive *
+                                 bounceSurface.surface.albedo * bounceScale;
                     if (bounceSurface.surface.hasLightmap) {
                         // A lightmap stores irradiance, not radiance: using it as
                         // an area-light cache loses directionality and is off by pi.
                         // Other lightmapped surfaces can therefore light this one
                         // again through its own traced hemisphere; that bounded
                         // double-count is preferable to unlit interiors.
-                        radiance += bounceSurface.surface.albedo * bounceSurface.surface.lightmap *
-                                    pushConstants.lightmapIntensity;
+                        radiance += bounceThroughput * bounceSurface.surface.albedo *
+                                    bounceSurface.surface.lightmap * pushConstants.lightmapIntensity;
                     }
-                    illumination += radiance;
+                    if (sampleSpecular) {
+                        specularIllumination += radiance * F / specularProbability;
+                    } else if (envmapped) {
+                        diffuseIllumination += radiance * primarySurface.surface.albedo * (1.0 - F) /
+                                               (1.0 - specularProbability);
+                    } else {
+                        diffuseIllumination += radiance * primarySurface.surface.albedo;
+                    }
                 } else {
                     InterlockedAdd(traceStats[1], 1);
+                    if (sampleSpecular) {
+                        specularIllumination += radiance * F / specularProbability;
+                    } else if (envmapped) {
+                        diffuseIllumination += radiance * primarySurface.surface.albedo * (1.0 - F) /
+                                               (1.0 - specularProbability);
+                    } else {
+                        diffuseIllumination += radiance * primarySurface.surface.albedo;
+                    }
                 }
             }
-            color = primarySurface.surface.albedo *
-                    (illumination / float(sampleCount) +
-                     primarySurface.surface.emissive * pushConstants.emissiveIntensity);
-        }
+        float emissionScale = (material.featureMask & kTraceSky) != 0
+                                  ? pushConstants.skyIntensity
+                                  : pushConstants.emissiveIntensity;
+        color += primaryThroughput * ((diffuseIllumination + specularIllumination) / float(sampleCount) +
+                                      primarySurface.surface.emissive * primarySurface.surface.albedo * emissionScale);
     }
     outputImage[dispatchId.xy] = float4(color, 1.0);
 }
