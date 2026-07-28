@@ -276,6 +276,42 @@ What it costs, and what has to exist first:
   was advisory until it started selecting build flags, and this makes it
   load-bearing in a second way.
 
+**Check what the flag actually means before relying on it.** `setStatic(true)`
+is called in exactly one place - `src/libs/game/object/area.cpp:472-488` - over
+room model nodes, skipping anything under the room's `"{modelName}a"` subtree,
+which is where its animated geometry lives. So:
+
+- it is a **room** flag. Placeables, doors and creatures are never marked
+  static, including the footlocker that never moves in the entire game. Merge
+  candidates are under-counted, and a merged BLAS built from this flag alone
+  leaves most immobile objects as separate instances;
+- it constrains the **transform, not the material**. A static node still runs
+  `updateUVAnimation` and `updateBumpmapAnimation`
+  (`src/libs/scene/node/mesh.cpp:108-129`), so scrolling water in a room is
+  static by this flag while its `uv` and `bumpMapFrame` change every frame.
+
+### The same question, applied to registration
+
+If an object cannot change, re-registering it every frame is waste, and
+registration is the measured 0.445 ms - so this looks like the lever. It is,
+but not through `staticObject`, which as above says nothing about the material.
+
+What would work is a stricter, computed test: a node is **invariant** when its
+transform is fixed *and* nothing feeding its material moves - no UV animation
+(`mesh.uvAnimation.dir` zero), no cycling bumpmap, no alpha or self-illum
+controller. That is decidable once, at init, from data already loaded, and it
+partitions the snapshot into a part that could be built once and a part that
+must be rebuilt.
+
+Two cautions before building it. The invariant part still needs to be *in* the
+snapshot every frame, because passes select from it - so this saves the
+building, not the walking, and the walking is the larger half. And it
+reintroduces exactly the invalidation contract this plan chose the snapshot to
+avoid; the difference is that the predicate is computed from immutable data
+rather than maintained by hand, which is what makes it tractable. Measure the
+invariant fraction of a real area first: if it is not most of the 1508 entries,
+the complexity is not worth 0.4 ms.
+
 Worth doing after the traced image is correct and measured, not before: it is
 an optimisation whose whole benefit is traversal cost, and there is no traversal
 cost worth optimising until the thing renders what it should.
