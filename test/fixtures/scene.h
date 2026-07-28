@@ -101,6 +101,10 @@ public:
     MOCK_METHOD(float, shadowStrength, (), (const override));
     MOCK_METHOD(float, shadowRadius, (), (const override));
     MOCK_METHOD(void, invalidateRenderPipeline, (), (override));
+
+    MOCK_METHOD(uint32_t, internName, (std::string_view), (override));
+    MOCK_METHOD(std::string_view, nameText, (uint32_t), (const override));
+    MOCK_METHOD(const RenderRegistry &, registry, (), (const override));
 };
 
 class MockSceneGraphs : public ISceneGraphs, boost::noncopyable {
@@ -124,7 +128,7 @@ public:
 
 class MockRenderPipelineFactory : public IRenderPipelineFactory, boost::noncopyable {
 public:
-    MOCK_METHOD(std::unique_ptr<IRenderPipeline>, create, (RendererType, glm::ivec2), (override));
+    MOCK_METHOD(std::unique_ptr<IRenderPipeline>, create, (RenderMode, glm::ivec2), (override));
     MOCK_METHOD(void, setVulkanRenderer, (graphics::VulkanRenderer &), (override));
 };
 
