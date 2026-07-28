@@ -245,6 +245,41 @@ instance and the TLAS carries the transform. Deforming meshes differ per
 *node*, not per mesh - two characters sharing a model are in different poses -
 so each needs its own, refit each frame.
 
+### Optimisation: one BLAS for everything static
+
+The table above shares a BLAS between instances of the same mesh. The next step
+is to stop having instances at all for geometry that never moves: bake every
+static object into **a single BLAS with world-space vertices**, leaving one TLAS
+instance for the whole static world plus one per dynamic object.
+
+danm14ab currently builds 484 structures for 744 instances. Most of that is
+room and placeable geometry that will never move, so the traced frame is asking
+the hardware to traverse a top-level structure of hundreds of boxes to reach
+what is really one rigid scene. Merging gives the builder the whole static set
+at once, which is where it can do its best work, and collapses the top level to
+almost nothing.
+
+What it costs, and what has to exist first:
+
+- **Vertices must be pre-transformed to world space**, so nothing is shared and
+  the merged buffer is as large as the static set. That is the trade: memory
+  and a build, against traversal.
+- **The material lookup changes.** Today the instance custom index carries a
+  `SceneNodeId` and one instance is one object; merged, a hit lands somewhere
+  inside one instance and needs the geometry index or a primitive-to-material
+  table to say what it hit. That has to be built before the merge, not after.
+- **It has to be rebuilt when the static set changes** - module transition,
+  a door that is really animated, anything toggled by a script. Cheap if it is
+  genuinely rare, and a correctness bug if the set is less static than
+  `Material::staticObject` claims. Check that flag against reality first.
+- Distinguish static-and-never-moves from static-and-currently-still. The flag
+  was advisory until it started selecting build flags, and this makes it
+  load-bearing in a second way.
+
+Worth doing after the traced image is correct and measured, not before: it is
+an optimisation whose whole benefit is traversal cost, and there is no traversal
+cost worth optimising until the thing renders what it should.
+
 Only **skinned** meshes need a compute pass to produce vertices. Dangly
 positions are already computed CPU-side (`src/libs/scene/node/mesh.cpp:135-176`,
 gathered into an array at `:318-326`); saber is a single displacement vector and

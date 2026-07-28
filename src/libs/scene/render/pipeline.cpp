@@ -237,7 +237,13 @@ std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode, 
             throw std::logic_error("Vulkan renderer was not supplied to the pipeline factory");
         }
         if (mode == RenderMode::PathTracing && !_vulkanRenderer->device().rayQueryAvailable()) {
-            throw std::runtime_error("Path-tracing mode requires Vulkan ray-query acceleration structures and ray-tracing position fetch; this device does not provide them");
+            // Also a substitution rather than a hard stop: this is a property
+            // of the GPU, and a mode= left in reone.cfg must not make the
+            // engine refuse to start on hardware that cannot trace.
+            warn("Path tracing needs ray-query acceleration structures and position fetch, "
+                 "which this device does not provide; rendering PBR instead.",
+                 LogChannel::Graphics);
+            mode = RenderMode::PBR;
         }
         if (mode == RenderMode::Retro) {
             warn("No retro pipeline on Vulkan; rendering PBR instead. Pass --pbr 1 to "
@@ -272,7 +278,23 @@ std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode, 
             _textureRegistry,
             _uniforms);
     case RenderMode::PathTracing:
-        throw std::invalid_argument("Path-tracing mode is only available on the Vulkan backend");
+        // Substituted rather than fatal, for the same reason retro-on-Vulkan is:
+        // mode= lives in reone.cfg, so a config written while running Vulkan
+        // would otherwise stop OpenGL from starting at all. Loud, and it still
+        // renders.
+        warn("Path tracing needs the Vulkan backend; rendering PBR instead. "
+             "Pass --backend vulkan for the traced image.",
+             LogChannel::Graphics);
+        return std::make_unique<PBRRenderPipeline>(
+            std::move(targetSize),
+            _options,
+            _context,
+            _meshRegistry,
+            _pbrTextures,
+            _shaderRegistry,
+            _statistic,
+            _textureRegistry,
+            _uniforms);
     default:
         throw std::invalid_argument("Unsupported render mode: " + std::to_string(static_cast<int>(mode)));
     }

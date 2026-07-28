@@ -1360,6 +1360,10 @@ Texture &VulkanRenderPipeline::render(RenderRegistry &registry,
         endDep.imageMemoryBarrierCount = 1;
         endDep.pImageMemoryBarriers = &toRead;
         vkCmdPipelineBarrier2(cmd, &endDep);
+        // The traced image is sampleable by now, so the preview can read it
+        // like any other target. Without this the window would offer a target
+        // it never draws, which is only marginally better than crashing.
+        previewPass(cmd, globalsOffset);
         _renderer.resources().registerExternal(*_outputHandle, *_output);
         return *_outputHandle;
     }
@@ -1493,6 +1497,16 @@ std::vector<VulkanRenderPipeline::Target> VulkanRenderPipeline::targetEntries() 
         return {};
     }
     std::vector<Target> entries;
+    // Report what this mode actually produced, not what the pipeline can
+    // produce in general. Tracing returns from render() before any raster pass
+    // and init() returns before the G-buffer is even allocated, so describing
+    // the G-buffer here dereferenced a null _gbuffer the moment the render
+    // target window was opened.
+    if (_primaryRayMode) {
+        entries.push_back({"Traced output", "traced_output", RenderTargetKind::Color,
+                           _output.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
+        return entries;
+    }
     if (!_options.pbr) {
         entries.push_back({"Output", "output", RenderTargetKind::Color,
                            _frameImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
