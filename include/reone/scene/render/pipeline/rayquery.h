@@ -44,6 +44,7 @@ private:
         // indexes this dense array; instanceCustomIndex is a SceneNode id.
         std::unique_ptr<graphics::VulkanBuffer> materials;
         std::unique_ptr<graphics::VulkanBuffer> traceStats;
+        std::unique_ptr<graphics::VulkanBuffer> overrides;
         std::unique_ptr<graphics::VulkanBuffer> storage;
         std::unique_ptr<graphics::VulkanBuffer> scratch;
         VkAccelerationStructureKHR tlas {VK_NULL_HANDLE};

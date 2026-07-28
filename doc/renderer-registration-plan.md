@@ -557,8 +557,12 @@ issue.
 - **Multiple importance sampling** between the specular and diffuse lobes,
   replacing the current single-lobe russian-roulette split.
 - **Much more ImGui control** over the tracer: per-category material
-  property overrides (roughness, emission, env strength) so calibration
-  hypotheses can be tested live instead of by rebuild.
+  property overrides - including a **material color override per object
+  category** (rooms, doors, placeables, creatures, grass, ...) alongside
+  roughness, emission, and env strength - so calibration hypotheses can be
+  tested live instead of by rebuild. A flat-color override per category is
+  also the quickest visual isolator: paint every door magenta and the
+  "doors don't interact with lighting" class of bug identifies itself.
 
 ### Optimisation: one BLAS for everything static
 

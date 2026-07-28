@@ -15,6 +15,7 @@
 #include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/graphics/vulkan/resources.h"
+#include "reone/scene/node/model.h"
 #include "reone/scene/registry.h"
 #include "reone/system/logutil.h"
 
@@ -89,7 +90,7 @@ void RayQueryPipeline::init() {
     if (_bindlessTextureCapacity == 0) {
         throw std::runtime_error("Vulkan: ray-query bindless texture capacity is zero");
     }
-    VkDescriptorSetLayoutBinding bindings[6] {};
+    VkDescriptorSetLayoutBinding bindings[7] {};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[0].descriptorCount = 1;
@@ -106,38 +107,43 @@ void RayQueryPipeline::init() {
     bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[3].descriptorCount = 1;
     bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    // Per-category material overrides.
     bindings[4].binding = 4;
-    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[4].descriptorCount = _bindlessTextureCapacity;
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[4].descriptorCount = 1;
     bindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     bindings[5].binding = 5;
     bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[5].descriptorCount = _bindlessTextureCapacity;
     bindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    VkDescriptorBindingFlags bindingFlags[6] {};
-    bindingFlags[4] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+    bindings[6].binding = 6;
+    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[6].descriptorCount = _bindlessTextureCapacity;
+    bindings[6].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorBindingFlags bindingFlags[7] {};
+    bindingFlags[5] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
                       VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     // Vulkan permits only the highest binding to have a variable descriptor
-    // count. Binding 4 is still a runtime array in the shader, allocated here
+    // count. Binding 5 is still a runtime array in the shader, allocated here
     // at its full capacity; the array-texture binding carries the variable flag.
-    bindingFlags[5] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+    bindingFlags[6] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
                       VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
                       VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo {
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    bindingFlagsInfo.bindingCount = 6;
+    bindingFlagsInfo.bindingCount = 7;
     bindingFlagsInfo.pBindingFlags = bindingFlags;
     VkDescriptorSetLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layoutInfo.pNext = &bindingFlagsInfo;
     layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    layoutInfo.bindingCount = 6;
+    layoutInfo.bindingCount = 7;
     layoutInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device.handle(), &layoutInfo, nullptr, &_layout) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: ray-query descriptor layout creation failed");
 
     VkDescriptorPoolSize sizes[] {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2},
                                   {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 2},
-                                  {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4},
+                                  {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6},
                                   {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                                    4 * _bindlessTextureCapacity}};
     VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -508,6 +514,14 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         material.offUV2 = layout.offUV2;
         material.offTanSpace = layout.offTanSpace;
         material.featureMask = static_cast<uint32_t>(materialFeatureMask(mesh->material));
+        // Bits 27-30 carry the object category - a scene::ModelUsage value,
+        // 8 for meshes without a model root - so per-category material
+        // overrides resolve at hit time without touching the layout. Must
+        // match kTraceCategoryShift/Mask in slang/rayquery.slang.
+        uint32_t categoryIndex = mesh->cullRoot
+                                     ? static_cast<uint32_t>(mesh->cullRoot->usage())
+                                     : 8u;
+        material.featureMask |= (categoryIndex & 0xFu) << 27;
         // Sky is fully self-illuminated geometry - the same luma test
         // isTransparent uses. A tracing-local bit, deliberately above the
         // shared UniformsFeatureFlags range; must match kTraceSky in
@@ -606,6 +620,24 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     frame.traceStats = std::make_unique<VulkanBuffer>(device);
     frame.traceStats->initHostVisibleReadback(sizeof(TraceStats), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     std::memset(frame.traceStats->mapped(), 0, sizeof(TraceStats));
+    // Per-category overrides, refreshed every frame so the ImGui dials are
+    // live. Layout must match CategoryOverride in slang/rayquery.slang.
+    struct CategoryOverrideGpu {
+        float color[4];
+        float params[4];
+    };
+    std::array<CategoryOverrideGpu, 9> overrideData {};
+    for (size_t i = 0; i < overrideData.size(); ++i) {
+        const auto &src = _options.ptCategoryOverrides[i];
+        overrideData[i] = {{src.color[0], src.color[1], src.color[2],
+                            std::clamp(src.colorWeight, 0.0f, 1.0f)},
+                           {src.roughness,
+                            std::max(0.0f, src.emissionScale),
+                            std::max(0.0f, src.envScale), 0.0f}};
+    }
+    frame.overrides = std::make_unique<VulkanBuffer>(device);
+    frame.overrides->initHostVisible(sizeof(overrideData), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    std::memcpy(frame.overrides->mapped(), overrideData.data(), sizeof(overrideData));
     VkAccelerationStructureGeometryInstancesDataKHR instanceData {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR};
     instanceData.arrayOfPointers = VK_FALSE; instanceData.data.deviceAddress = frame.instances->deviceAddress();
     VkAccelerationStructureGeometryKHR geometry {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
@@ -654,7 +686,10 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     VkDescriptorBufferInfo statsBuffer {};
     statsBuffer.buffer = frame.traceStats->handle();
     statsBuffer.range = frame.traceStats->size();
-    VkWriteDescriptorSet writes[4] {};
+    VkDescriptorBufferInfo overridesBuffer {};
+    overridesBuffer.buffer = frame.overrides->handle();
+    overridesBuffer.range = frame.overrides->size();
+    VkWriteDescriptorSet writes[5] {};
     const auto set = _sets[_renderer.frameIndex()];
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[0].dstSet = set; writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; writes[0].pImageInfo = &image;
@@ -664,7 +699,9 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     writes[2].descriptorCount = 1; writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[2].pBufferInfo = &materialBuffer;
     writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[3].dstSet = set; writes[3].dstBinding = 3;
     writes[3].descriptorCount = 1; writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[3].pBufferInfo = &statsBuffer;
-    vkUpdateDescriptorSets(device.handle(), 4, writes, 0, nullptr);
+    writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[4].dstSet = set; writes[4].dstBinding = 4;
+    writes[4].descriptorCount = 1; writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[4].pBufferInfo = &overridesBuffer;
+    vkUpdateDescriptorSets(device.handle(), 5, writes, 0, nullptr);
     // Texture ids are assigned by VulkanResources at upload time. The set is
     // update-after-bind and partially-bound so new assets can take a slot
     // without rebuilding it or populating unrelated descriptors.
@@ -681,7 +718,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
         VkWriteDescriptorSet textureWrite {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         textureWrite.dstSet = set;
-        textureWrite.dstBinding = 4;
+        textureWrite.dstBinding = 5;
         textureWrite.dstArrayElement = id;
         textureWrite.descriptorCount = 1;
         textureWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -705,7 +742,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
         VkWriteDescriptorSet textureWrite {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         textureWrite.dstSet = set;
-        textureWrite.dstBinding = 5;
+        textureWrite.dstBinding = 6;
         textureWrite.dstArrayElement = id;
         textureWrite.descriptorCount = 1;
         textureWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;

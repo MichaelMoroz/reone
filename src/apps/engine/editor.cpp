@@ -637,6 +637,32 @@ void Editor::pathTracingSettings() {
     ImGui::SliderFloat("Origin offset", &options.ptRayOffset, 0.0001f, 0.1f, "%.4f",
                        ImGuiSliderFlags_Logarithmic);
     ImGui::TextDisabled("Too small: acne and black speckling.\nToo large: light leaks at contact edges.");
+    ImGui::SeparatorText("Category overrides");
+    static constexpr const char *kCategoryNames[] = {
+        "GUI", "Rooms", "Creatures", "Placeables", "Doors",
+        "Equipment", "Projectiles", "Cameras", "Uncategorized"};
+    for (int i = 0; i < 9; ++i) {
+        // GUI, projectile and camera models never reach the TLAS.
+        if (i == 0 || i == 6 || i == 7) {
+            continue;
+        }
+        auto &override = options.ptCategoryOverrides[i];
+        if (ImGui::TreeNode(kCategoryNames[i])) {
+            ImGui::ColorEdit3("Color", override.color);
+            ImGui::SliderFloat("Color weight", &override.colorWeight, 0.0f, 1.0f, "%.2f");
+            bool overrideRoughness = override.roughness >= 0.0f;
+            if (ImGui::Checkbox("Override roughness", &overrideRoughness)) {
+                override.roughness = overrideRoughness ? 0.5f : -1.0f;
+            }
+            if (overrideRoughness) {
+                ImGui::SliderFloat("Roughness", &override.roughness, 0.0f, 1.0f, "%.2f");
+            }
+            ImGui::SliderFloat("Emission scale", &override.emissionScale, 0.0f, 8.0f, "%.2f");
+            ImGui::SliderFloat("Env strength scale", &override.envScale, 0.0f, 4.0f, "%.2f");
+            ImGui::TreePop();
+        }
+    }
+    ImGui::TextDisabled("Applied at trace time to every surface of the category.\nColor weight 1 flat-paints for bug isolation.");
     ImGui::SeparatorText("Diagnostics");
     ImGui::Checkbox("Trace stats", &options.ptTraceStats);
     ImGui::TextDisabled("GPU counters in the engine log. Costs frame time;\nleave off when measuring.");

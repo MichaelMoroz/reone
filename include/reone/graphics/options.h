@@ -67,6 +67,21 @@ struct GraphicsOptions {
     float ptRayOffset {0.01f};
     /** GPU trace-stats counters; off by default, the atomics cost frame time. */
     bool ptTraceStats {false};
+    /**
+     * Live per-category material overrides for the traced image - the
+     * calibration programme's primary instrument, ImGui-driven. Indexed by
+     * scene::ModelUsage (0-7) plus 8 for meshes without a model root. A
+     * colorWeight of 1 flat-paints the category, which makes
+     * lighting-interaction bugs self-identifying.
+     */
+    struct PtCategoryOverride {
+        float color[3] {1.0f, 1.0f, 1.0f};
+        float colorWeight {0.0f};
+        float roughness {-1.0f}; /**< negative: no override */
+        float emissionScale {1.0f};
+        float envScale {1.0f};
+    };
+    PtCategoryOverride ptCategoryOverrides[9] {};
     /** World ambient scaled by how little sky each pixel's hemisphere saw. */
     float ptWorldAmbient {1.0f};
     bool ssao {true};

@@ -34,12 +34,32 @@ struct InstanceMaterial {
 };
 [[vk::binding(2, 1)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
 [[vk::binding(3, 1)]] RWStructuredBuffer<uint> traceStats;
+// Per-category material overrides - the calibration programme's live
+// instrument. The category index rides featureMask bits 27-30 and is a
+// scene::ModelUsage value, with 8 meaning "no model root".
+struct CategoryOverride {
+    // rgb plus blend weight in w; weight 1 flat-paints the category.
+    float4 color;
+    // x: roughness override, negative disables; y: emission scale;
+    // z: env-map strength scale; w: reserved.
+    float4 params;
+};
+[[vk::binding(4, 1)]] StructuredBuffer<CategoryOverride> categoryOverrides;
 // This binding is deliberately both runtime-sized and non-uniformly indexed.
 // The descriptor layout supplies UPDATE_AFTER_BIND and PARTIALLY_BOUND.
-[[vk::binding(4, 1)]] Sampler2D bindlessTextures[];
+// The bindless arrays sit above every scalar binding because the variable
+// descriptor count is only legal on the set's highest binding.
+[[vk::binding(5, 1)]] Sampler2D bindlessTextures[];
 // Animated grayscale bump maps are Texture2DArray assets. They cannot share
 // bindlessTextures: a Sampler2D descriptor has a different Vulkan view type.
-[[vk::binding(5, 1)]] Sampler2DArray bindlessTextureArrays[];
+[[vk::binding(6, 1)]] Sampler2DArray bindlessTextureArrays[];
+
+static const uint kTraceCategoryShift = 27;
+static const uint kTraceCategoryMask = 0xFu;
+
+CategoryOverride categoryOverrideFor(uint featureMask) {
+    return categoryOverrides[(featureMask >> kTraceCategoryShift) & kTraceCategoryMask];
+}
 
 // Set CPU-side on fully self-illuminated instances; see rayquery.cpp.
 static const uint kTraceSky = 1u << 24;
@@ -533,6 +553,12 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         }
         HitSurface primarySurface = sampleSurface(material, indices, weights, objectToWorld,
                                                   worldToObject, ray.Direction, uv, uv2);
+        CategoryOverride primaryOverride = categoryOverrideFor(material.featureMask);
+        primarySurface.surface.albedo = lerp(primarySurface.surface.albedo,
+                                             gammaToLinear(primaryOverride.color.rgb),
+                                             primaryOverride.color.w);
+        if (primaryOverride.params.x >= 0.0) primarySurface.surface.roughness = primaryOverride.params.x;
+        primarySurface.surface.emissive *= primaryOverride.params.y;
         float3 hitPosition = ray.Origin + ray.Direction * primary.CommittedRayT();
         // The sky is unlit emissive: the cubemap is the light source itself.
         // Running it through the surface path tinted it with direct light and
@@ -551,7 +577,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         float3 specularIllumination = 0.0;
         float3 V = -ray.Direction;
         bool envmapped = (material.featureMask & uint(kFeatureEnvMap)) != 0;
-        float envMapStrength = envmapped ? (1.0 - primarySurface.surface.alpha) : 0.0;
+        float envMapStrength = (envmapped ? (1.0 - primarySurface.surface.alpha) : 0.0) *
+                               primaryOverride.params.z;
         float3 F0 = lerp(lerp(float3(0.04), primarySurface.surface.albedo,
                                primarySurface.surface.metallic),
                           float3(1.0), envMapStrength);
@@ -785,6 +812,12 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                                                              bounce.CommittedObjectToWorld3x4(),
                                                              bounce.CommittedWorldToObject3x4(),
                                                              secondary.Direction, bounceUV, bounceUV2);
+                    CategoryOverride bounceOverride = categoryOverrideFor(bounceMaterial.featureMask);
+                    bounceSurface.surface.albedo = lerp(bounceSurface.surface.albedo,
+                                                        gammaToLinear(bounceOverride.color.rgb),
+                                                        bounceOverride.color.w);
+                    if (bounceOverride.params.x >= 0.0) bounceSurface.surface.roughness = bounceOverride.params.x;
+                    bounceSurface.surface.emissive *= bounceOverride.params.y;
                     if ((bounceMaterial.featureMask & kTraceSky) != 0) {
                         // Unlit emissive, and the end of the path: there is
                         // nothing behind the environment.
@@ -810,7 +843,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                     // weights the primary vertex applies, so a mirror floor
                     // stays a mirror at every path depth.
                     bool vertexEnvmapped = (bounceMaterial.featureMask & uint(kFeatureEnvMap)) != 0;
-                    float vertexEnvStrength = vertexEnvmapped ? (1.0 - bounceSurface.surface.alpha) : 0.0;
+                    float vertexEnvStrength = (vertexEnvmapped ? (1.0 - bounceSurface.surface.alpha) : 0.0) *
+                                              bounceOverride.params.z;
                     float3 vertexF0 = lerp(lerp(float3(0.04), bounceSurface.surface.albedo,
                                                  bounceSurface.surface.metallic),
                                             float3(1.0), vertexEnvStrength);
