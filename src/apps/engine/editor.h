@@ -99,6 +99,9 @@ private:
 
     void graphicsSettings();
     bool _showGraphicsSettings {false};
+
+    void pathTracingSettings();
+    bool _showPathTracing {false};
     int _pendingWidth {0};
     int _pendingHeight {0};
     int _pendingShadowResolution {0};

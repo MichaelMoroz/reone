@@ -62,6 +62,10 @@ private:
     struct TracePushConstants {
         uint32_t frameIndex;
         uint32_t samplesPerPixel;
+        float skyIntensity;
+        float emissiveIntensity;
+        float lightmapIntensity;
+        float rayOriginOffset;
     };
 
     uint32_t _frameNumber {0};

@@ -601,6 +601,38 @@ void Editor::warp() {
     }
 }
 
+void Editor::pathTracingSettings() {
+    dockNext();
+    ImGui::SetNextWindowSize(ImVec2(360, 300), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Path tracing", &_showPathTracing)) {
+        ImGui::End();
+        return;
+    }
+    auto &options = _engine._options.graphics;
+    if (options.mode != "path-tracing") {
+        ImGui::TextDisabled("Inactive - run with --mode path-tracing.");
+        ImGui::TextDisabled("Settings still save and apply when it is.");
+        ImGui::Separator();
+    }
+    // Everything here rides in push constants, so a change applies on the next
+    // frame with nothing rebuilt. These are deliberately not command-line
+    // options: they are tuning dials, and the place to turn a dial is next to
+    // the picture it changes.
+    if (ImGui::SliderInt("Samples per pixel", &options.pathTracingSamples, 1, 64)) {
+        options.pathTracingSamples = std::max(1, options.pathTracingSamples);
+    }
+    ImGui::TextDisabled("Cost is near linear; noise falls as sqrt.");
+    ImGui::SeparatorText("Source intensities");
+    ImGui::SliderFloat("Sky", &options.ptSkyIntensity, 0.0f, 4.0f, "%.2f");
+    ImGui::SliderFloat("Emissive", &options.ptEmissiveIntensity, 0.0f, 4.0f, "%.2f");
+    ImGui::SliderFloat("Lightmap cache", &options.ptLightmapIntensity, 0.0f, 4.0f, "%.2f");
+    ImGui::SeparatorText("Ray setup");
+    ImGui::SliderFloat("Origin offset", &options.ptRayOffset, 0.0001f, 0.1f, "%.4f",
+                       ImGuiSliderFlags_Logarithmic);
+    ImGui::TextDisabled("Too small: acne and black speckling.\nToo large: light leaks at contact edges.");
+    ImGui::End();
+}
+
 void Editor::graphicsSettings() {
     dockNext();
     ImGui::SetNextWindowSize(ImVec2(410, 520), ImGuiCond_FirstUseEver);
@@ -665,19 +697,6 @@ void Editor::graphicsSettings() {
         options.shadowResolution = _pendingShadowResolution;
         options.vsync = _pendingVsync;
         _engine.requestGraphicsRebuild();
-    }
-
-    ImGui::Spacing();
-    ImGui::SeparatorText("Path tracing");
-    // Applies on the next frame rather than needing a rebuild: the count is a
-    // push constant, so nothing has to be reallocated to change it.
-    if (ImGui::SliderInt("Samples per pixel", &options.pathTracingSamples, 1, 64)) {
-        options.pathTracingSamples = std::max(1, options.pathTracingSamples);
-    }
-    if (options.mode != "path-tracing") {
-        ImGui::TextDisabled("Inactive - run with --mode path-tracing");
-    } else {
-        ImGui::TextDisabled("Cost is near linear in this count.");
     }
 
     ImGui::Spacing();
@@ -1152,6 +1171,7 @@ void Editor::update(float dt) {
             ImGui::MenuItem("Registry", nullptr, &_showRegistry);
             ImGui::MenuItem("Render targets", nullptr, &_showRenderTargets);
             ImGui::MenuItem("Graphics settings", nullptr, &_showGraphicsSettings);
+            ImGui::MenuItem("Path tracing", nullptr, &_showPathTracing);
             ImGui::MenuItem("Warp", nullptr, &_showWarp);
             ImGui::MenuItem("Frame times", nullptr, &_showFrameTimes);
             ImGui::EndMenu();
@@ -1200,6 +1220,9 @@ void Editor::update(float dt) {
     }
     if (_showGraphicsSettings) {
         graphicsSettings();
+    }
+    if (_showPathTracing) {
+        pathTracingSettings();
     }
 
     if (_showFrameTimes) {

@@ -39,13 +39,26 @@ struct InstanceMaterial {
 // bindlessTextures: a Sampler2D descriptor has a different Vulkan view type.
 [[vk::binding(5, 1)]] Sampler2DArray bindlessTextureArrays[];
 
+// Set CPU-side on fully self-illuminated instances; see rayquery.cpp.
+static const uint kTraceSky = 1u << 24;
+
 struct PushConstants {
     uint frameIndex;
     uint samplesPerPixel;
+    // Source intensities, not an image exposure: sky, other emitters, and the
+    // baked radiance cache each get their own dial so the traced light balance
+    // can be tuned live against raster without a shader rebuild.
+    float skyIntensity;
+    float emissiveIntensity;
+    float lightmapIntensity;
+    // World-space offset of a secondary ray's origin along the geometric
+    // normal. Too small self-intersects and speckles black; too large leaks
+    // light through contact edges. A dial because the right value is
+    // scene-scale-dependent and staring at acne beats recompiling.
+    float rayOriginOffset;
 };
 [[vk::push_constant]] PushConstants pushConstants;
 
-static const float kRayOriginOffset = 0.01;
 
 uint hash(uint x) {
     x ^= x >> 16;
@@ -237,12 +250,15 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         HitSurface primarySurface = sampleSurface(material, indices, weights, objectToWorld,
                                                   worldToObject, ray.Direction, uv, uv2);
         float3 hitPosition = ray.Origin + ray.Direction * primary.CommittedRayT();
-        if (any(primarySurface.surface.emissive > 0.0)) {
-            // A self-illuminated surface displays its texture at full
-            // brightness - the flat selfIllumColor is the intensity, not the
-            // image. Discarding albedo here turned every cockpit display and
-            // ceiling strip into a blank block of colour.
-            color = primarySurface.surface.emissive * primarySurface.surface.albedo;
+        if ((material.featureMask & kTraceSky) != 0) {
+            // The sky is its own light; tracing a hemisphere from it buys
+            // nothing. Everything else falls through and gets shaded, because
+            // in the raster resolve self-illumination is a term *added to* the
+            // light reaching a surface, not a replacement for being lit. The
+            // old exclusive branch here made any faintly self-illuminated
+            // surface - doors, notably - skip shading and render full-bright.
+            color = primarySurface.surface.emissive * primarySurface.surface.albedo *
+                    pushConstants.skyIntensity;
         } else {
 
             float3 illumination = 0.0;
@@ -251,7 +267,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 uint state = hash(dispatchId.x * 0x9e3779b9u ^ dispatchId.y * 0x85ebca6bu ^
                                   sample * 0xc2b2ae35u ^ pushConstants.frameIndex);
                 RayDesc secondary;
-                secondary.Origin = hitPosition + primarySurface.geometricNormal * kRayOriginOffset;
+                secondary.Origin = hitPosition + primarySurface.geometricNormal * pushConstants.rayOriginOffset;
                 secondary.Direction = cosineHemisphere(primarySurface.surface.normal, float2(random01(state), random01(state)));
                 // A smooth normal can sample below the geometric surface at a
                 // silhouette. Reflect that lobe into the geometric hemisphere
@@ -286,21 +302,27 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                                                              bounce.CommittedObjectToWorld3x4(),
                                                              bounce.CommittedWorldToObject3x4(),
                                                              secondary.Direction, bounceUV, bounceUV2);
-                    float3 radiance = bounceSurface.surface.emissive * bounceSurface.surface.albedo;
+                    float bounceScale = (bounceMaterial.featureMask & kTraceSky) != 0
+                                            ? pushConstants.skyIntensity
+                                            : pushConstants.emissiveIntensity;
+                    float3 radiance = bounceSurface.surface.emissive * bounceSurface.surface.albedo * bounceScale;
                     if (bounceSurface.surface.hasLightmap) {
                         // A lightmap stores irradiance, not radiance: using it as
                         // an area-light cache loses directionality and is off by pi.
                         // Other lightmapped surfaces can therefore light this one
                         // again through its own traced hemisphere; that bounded
                         // double-count is preferable to unlit interiors.
-                        radiance += bounceSurface.surface.albedo * bounceSurface.surface.lightmap;
+                        radiance += bounceSurface.surface.albedo * bounceSurface.surface.lightmap *
+                                    pushConstants.lightmapIntensity;
                     }
                     illumination += radiance;
                 } else {
                     InterlockedAdd(traceStats[1], 1);
                 }
             }
-            color = primarySurface.surface.albedo * illumination / float(sampleCount);
+            color = primarySurface.surface.albedo *
+                    (illumination / float(sampleCount) +
+                     primarySurface.surface.emissive * pushConstants.emissiveIntensity);
         }
     }
     outputImage[dispatchId.xy] = float4(color, 1.0);

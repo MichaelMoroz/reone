@@ -251,6 +251,13 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         material.offUV2 = layout.offUV2;
         material.offTanSpace = layout.offTanSpace;
         material.featureMask = static_cast<uint32_t>(materialFeatureMask(mesh->material));
+        // Sky is fully self-illuminated geometry - the same luma test
+        // isTransparent uses. A tracing-local bit, deliberately above the
+        // shared UniformsFeatureFlags range; must match kTraceSky in
+        // slang/rayquery.slang.
+        if (glm::dot(mesh->material.selfIllumColor, glm::vec3(0.299f, 0.587f, 0.114f)) >= 0.99f) {
+            material.featureMask |= 1u << 24;
+        }
         if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
             material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
         } else {
@@ -436,7 +443,11 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     // Clamped rather than trusted: the option is user-editable in reone.cfg
     // and a zero would divide the accumulated radiance by zero.
     TracePushConstants constants {_frameNumber,
-                                  static_cast<uint32_t>(std::max(1, _options.pathTracingSamples))};
+                                  static_cast<uint32_t>(std::max(1, _options.pathTracingSamples)),
+                                  std::max(0.0f, _options.ptSkyIntensity),
+                                  std::max(0.0f, _options.ptEmissiveIntensity),
+                                  std::max(0.0f, _options.ptLightmapIntensity),
+                                  std::max(0.0001f, _options.ptRayOffset)};
     vkCmdPushConstants(cmd, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), &constants);
     vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8), static_cast<uint32_t>((_extent.y + 7) / 8), 1);
     ++_frameNumber;
