@@ -119,6 +119,15 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.fxaa = vars["fxaa"].as<bool>();
     options->graphics.sharpen = vars["sharpen"].as<bool>();
     options->graphics.taaJitter = vars["taajitter"].as<bool>();
+#ifdef R_ENABLE_NRD
+    // Jitter feeds NRD's temporal accumulation, and the tracer picks it up
+    // through the jittered projection for free. On by default for path
+    // tracing in NRD builds - deliberately, it changes every screenshot -
+    // while an explicit --taajitter flag still wins.
+    if (vars["mode"].as<std::string>() == "path-tracing" && vars["taajitter"].defaulted()) {
+        options->graphics.taaJitter = true;
+    }
+#endif
     options->graphics.textureQuality = static_cast<TextureQuality>(vars["texquality"].as<int>());
     options->graphics.shadowResolution = 1 << (10 + vars["shadowres"].as<int>());
     options->graphics.anisotropicFiltering = vars["anisofilter"].as<int>();

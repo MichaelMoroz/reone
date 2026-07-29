@@ -67,12 +67,23 @@ struct alignas(16) InstanceMaterial {
     glm::vec4 curatedMetalA {0.0f};
     glm::vec4 curatedMetalB {0.0f};
     glm::vec4 curatedEmission {0.0f}; /**< rgb + mode in w: 0 none, 1 mul, 2 override */
+    // The previous frame's world transform as explicit columns, so the
+    // shader's reconstruction is layout-unambiguous. Motion vectors come
+    // from it: previous world position of the hit minus the current one.
+    // For skinned meshes this is the model root's motion - per-bone previous
+    // positions would need a second deformed buffer and are the remaining
+    // ghosting limitation.
+    glm::vec4 prevTransform0 {1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec4 prevTransform1 {0.0f, 1.0f, 0.0f, 0.0f};
+    glm::vec4 prevTransform2 {0.0f, 0.0f, 1.0f, 0.0f};
+    glm::vec4 prevTransform3 {0.0f, 0.0f, 0.0f, 1.0f};
 };
 
 static_assert(offsetof(InstanceMaterial, vertexAddress) == 80);
 static_assert(offsetof(InstanceMaterial, mainTex) == 120);
 static_assert(offsetof(InstanceMaterial, curatedAlbedoMul) == 160);
-static_assert(sizeof(InstanceMaterial) == 256);
+static_assert(offsetof(InstanceMaterial, prevTransform0) == 256);
+static_assert(sizeof(InstanceMaterial) == 320);
 
 struct TraceStats {
     uint32_t secondaryRays {0};
@@ -605,7 +616,8 @@ VulkanMesh::Geometry RayQueryPipeline::skin(VkCommandBuffer cmd,
 
 void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uint32_t globalsOffset,
                               VulkanImage &output,
-                              const glm::mat4 &view, const glm::mat4 &projection) {
+                              const glm::mat4 &view, const glm::mat4 &projection,
+                              const glm::vec4 &jitter) {
     // This intentionally bypasses drawScene: its frustum/distance policy must
     // not decide what a ray can hit. Keep the explicit policy construction as
     // the documented caller of the no-culling mode.
@@ -833,6 +845,10 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             material.curatedEmission = glm::vec4(curated->emissionValue,
                                                  static_cast<float>(curated->emissionMode));
         }
+        material.prevTransform0 = mesh->prevTransform[0];
+        material.prevTransform1 = mesh->prevTransform[1];
+        material.prevTransform2 = mesh->prevTransform[2];
+        material.prevTransform3 = mesh->prevTransform[3];
         // Additive-blended diffuse is the other way Odyssey authors a glow:
         // no selfIllum controller, the texture itself is the light, and the
         // raster path treats it as unlit for the same reason. Without this
@@ -1130,8 +1146,15 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         inputs.normalRoughness = aux[2]->view();
         inputs.viewZ = aux[3]->view();
         inputs.motion = aux[4]->view();
-        _nrdDenoiser->denoise(cmd, _renderer.frameIndex(), inputs, view, projection,
-                              glm::vec2(0.0f), _frameNumber, _frameNumber == 0);
+        // The projection arrives carrying the TAA jitter (applied as a clip
+        // translate); NRD is owed the unjittered matrix and the sub-pixel
+        // offset separately, the latter in pixels with UV-down y.
+        glm::mat4 unjitteredProjection =
+            glm::translate(glm::vec3(-jitter.x, -jitter.y, 0.0f)) * projection;
+        glm::vec2 jitterPixels {jitter.x * 0.5f * static_cast<float>(_extent.x),
+                                -jitter.y * 0.5f * static_cast<float>(_extent.y)};
+        _nrdDenoiser->denoise(cmd, _renderer.frameIndex(), inputs, view, unjitteredProjection,
+                              jitterPixels, _frameNumber, _frameNumber == 0);
         if (_options.ptDenoise && _options.ptDebugView == 0) {
             // The assembly from denoised channels, overwriting the trace
             // kernel's own write. Debug views keep the kernel's output.

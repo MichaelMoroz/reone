@@ -83,6 +83,11 @@ struct InstanceMaterial {
     float4 curatedMetalA;
     float4 curatedMetalB;
     float4 curatedEmission;
+    // Previous world transform, explicit columns; motion vectors only.
+    float4 prevTransform0;
+    float4 prevTransform1;
+    float4 prevTransform2;
+    float4 prevTransform3;
 };
 [[vk::binding(2, 1)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
 [[vk::binding(3, 1)]] RWStructuredBuffer<uint> traceStats;
@@ -811,6 +816,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     float4 auxSpecular = float4(0.0, 0.0, 0.0, 0.0);
     float4 auxNormalRoughness = float4(0.0, 0.0, 0.0, 1.0);
     float auxViewZ = kTraceInfDistance;
+    float4 auxMotion = float4(0.0);
     float3 auxNoiseFree = primaryLayers;
     float3 auxAlbedo = float3(1.0);
     if (primary.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
@@ -1264,6 +1270,16 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         auxNormalRoughness = float4(primarySurface.surface.normal, primarySurface.surface.roughness);
         auxViewZ = mul(globalUniforms.view, float4(hitPosition, 1.0)).z;
         auxAlbedo = primarySurface.surface.albedo;
+        // World-space motion, previous minus current: the hit point taken
+        // back to object space and pushed through the instance's previous
+        // transform. Rigid motion exact; skinned meshes get their model
+        // root's motion, per-bone history being the remaining limitation.
+        float3 objectPosition = mul(worldToObject, float4(hitPosition, 1.0));
+        float3 prevWorldPosition = material.prevTransform0.xyz * objectPosition.x +
+                                   material.prevTransform1.xyz * objectPosition.y +
+                                   material.prevTransform2.xyz * objectPosition.z +
+                                   material.prevTransform3.xyz;
+        auxMotion = float4(prevWorldPosition - hitPosition, 0.0);
         auxNoiseFree = color + primaryThroughput * primarySurface.surface.emissive *
                                    primarySurface.surface.albedo * pushConstants.emissiveIntensity;
         color = auxNoiseFree + auxDiffuse.rgb * auxAlbedo + auxSpecular.rgb;
@@ -1271,7 +1287,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     writeTraceOutputs(dispatchId.xy, float4(linearToYCoCg(auxDiffuse.rgb), auxDiffuse.a),
                       float4(linearToYCoCg(auxSpecular.rgb), auxSpecular.a),
                       auxNormalRoughness, auxViewZ,
-                      float4(0.0), auxNoiseFree, auxAlbedo);
+                      auxMotion, auxNoiseFree, auxAlbedo);
     // The channel views inspect the split without replacing shading upstream.
     uint tailDebugView = (pushConstants.traceFlags >> kTraceDebugViewShift) & kTraceDebugViewMask;
     if (tailDebugView == kDebugViewDiffuseChannel) {

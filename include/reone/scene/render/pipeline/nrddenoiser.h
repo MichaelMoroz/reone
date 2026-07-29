@@ -108,6 +108,7 @@ private:
     glm::mat4 _prevView {1.0f};
     glm::mat4 _prevProjection {1.0f};
     glm::vec2 _prevJitter {0.0f};
+    glm::vec3 _prevCameraPosition {0.0f};
     bool _hasHistory {false};
     bool _poolTransitioned {false};
 

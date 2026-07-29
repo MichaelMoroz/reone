@@ -320,6 +320,16 @@ void NrdDenoiser::denoise(VkCommandBuffer cmd,
         _poolTransitioned = true;
     }
 
+    // A warp is not camera motion: reprojecting across it drags the previous
+    // module's history over the new scene. A teleport-sized jump resets the
+    // accumulation instead. Twenty units comfortably exceeds any legitimate
+    // per-frame camera move and is far under any warp.
+    const glm::vec3 cameraPosition = glm::vec3(glm::inverse(view)[3]);
+    if (_hasHistory && glm::distance(cameraPosition, _prevCameraPosition) > 20.0f) {
+        restartHistory = true;
+    }
+    _prevCameraPosition = cameraPosition;
+
     nrd::CommonSettings common {};
     std::memcpy(common.viewToClipMatrix, &projection[0][0], sizeof(float) * 16);
     std::memcpy(common.worldToViewMatrix, &view[0][0], sizeof(float) * 16);

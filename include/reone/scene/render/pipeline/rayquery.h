@@ -38,7 +38,8 @@ public:
      */
     void render(VkCommandBuffer cmd, RenderRegistry &registry, uint32_t globalsOffset,
                 graphics::VulkanImage &output,
-                const glm::mat4 &view, const glm::mat4 &projection);
+                const glm::mat4 &view, const glm::mat4 &projection,
+                const glm::vec4 &jitter);
 
 private:
     struct Frame {
