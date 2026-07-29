@@ -77,13 +77,17 @@ struct alignas(16) InstanceMaterial {
     glm::vec4 prevTransform1 {0.0f, 1.0f, 0.0f, 0.0f};
     glm::vec4 prevTransform2 {0.0f, 0.0f, 1.0f, 0.0f};
     glm::vec4 prevTransform3 {0.0f, 0.0f, 0.0f, 1.0f};
+    /** Previous-pose skinned positions by device address, 0 when not skinned. */
+    uint64_t prevPositionsAddress {0};
+    uint64_t prevPositionsPad {0};
 };
 
 static_assert(offsetof(InstanceMaterial, vertexAddress) == 80);
 static_assert(offsetof(InstanceMaterial, mainTex) == 120);
 static_assert(offsetof(InstanceMaterial, curatedAlbedoMul) == 160);
 static_assert(offsetof(InstanceMaterial, prevTransform0) == 256);
-static_assert(sizeof(InstanceMaterial) == 320);
+static_assert(offsetof(InstanceMaterial, prevPositionsAddress) == 320);
+static_assert(sizeof(InstanceMaterial) == 336);
 
 struct TraceStats {
     uint32_t secondaryRays {0};
@@ -286,15 +290,15 @@ void RayQueryPipeline::init() {
     vkDestroyShaderModule(device.handle(), module, nullptr);
     device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_pipeline), "rayquery:primaryRay");
 
-    VkDescriptorSetLayoutBinding skinBindings[2] {};
-    for (uint32_t i = 0; i < 2; ++i) {
+    VkDescriptorSetLayoutBinding skinBindings[3] {};
+    for (uint32_t i = 0; i < 3; ++i) {
         skinBindings[i].binding = i;
         skinBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         skinBindings[i].descriptorCount = 1;
         skinBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     VkDescriptorSetLayoutCreateInfo skinLayoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    skinLayoutInfo.bindingCount = 2;
+    skinLayoutInfo.bindingCount = 3;
     skinLayoutInfo.pBindings = skinBindings;
     if (vkCreateDescriptorSetLayout(device.handle(), &skinLayoutInfo, nullptr, &_skinLayout) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: skin descriptor layout creation failed");
@@ -304,7 +308,7 @@ void RayQueryPipeline::init() {
     constexpr uint32_t kMaxSkinnedInstancesPerFrame = 1024;
     for (auto &pool : _skinPools) {
         VkDescriptorPoolSize skinPoolSize {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                           2 * kMaxSkinnedInstancesPerFrame};
+                                           3 * kMaxSkinnedInstancesPerFrame};
         VkDescriptorPoolCreateInfo skinPoolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         skinPoolInfo.maxSets = kMaxSkinnedInstancesPerFrame;
         skinPoolInfo.poolSizeCount = 1;
@@ -364,19 +368,23 @@ void RayQueryPipeline::init() {
             _nrdDenoiser = std::make_unique<NrdDenoiser>(device, *instance, _extent);
             _nrdDenoiser->init();
 
-            VkDescriptorSetLayoutBinding compositeBindings[5] {};
-            for (uint32_t i = 0; i < 5; ++i) {
+            for (auto &history : _taaHistory) {
+                history = std::make_unique<VulkanImage>(device);
+                history->initColorAttachment(_extent, VK_FORMAT_R16G16B16A16_SFLOAT);
+            }
+            VkDescriptorSetLayoutBinding compositeBindings[9] {};
+            for (uint32_t i = 0; i < 9; ++i) {
                 compositeBindings[i].binding = i;
                 compositeBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 compositeBindings[i].descriptorCount = 1;
                 compositeBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
             }
             VkDescriptorSetLayoutCreateInfo compositeLayoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-            compositeLayoutInfo.bindingCount = 5;
+            compositeLayoutInfo.bindingCount = 9;
             compositeLayoutInfo.pBindings = compositeBindings;
             if (vkCreateDescriptorSetLayout(device.handle(), &compositeLayoutInfo, nullptr, &_compositeLayout) != VK_SUCCESS)
                 throw std::runtime_error("Vulkan: NRD composite layout creation failed");
-            VkDescriptorPoolSize compositePoolSize {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 10};
+            VkDescriptorPoolSize compositePoolSize {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 18};
             VkDescriptorPoolCreateInfo compositePoolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
             compositePoolInfo.maxSets = 2;
             compositePoolInfo.poolSizeCount = 1;
@@ -392,10 +400,13 @@ void RayQueryPipeline::init() {
                 throw std::runtime_error("Vulkan: NRD composite set allocation failed");
             VkPushConstantRange compositePush {};
             compositePush.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            compositePush.size = 2 * sizeof(uint32_t);
+            compositePush.size = 3 * sizeof(uint32_t);
+            // Set 0 is the shared uniform block: the TAA reprojection reads
+            // the same matrices the trace pass does.
+            VkDescriptorSetLayout compositeLayouts[] {_renderer.descriptors().uniformLayout(), _compositeLayout};
             VkPipelineLayoutCreateInfo compositePipelineLayout {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-            compositePipelineLayout.setLayoutCount = 1;
-            compositePipelineLayout.pSetLayouts = &_compositeLayout;
+            compositePipelineLayout.setLayoutCount = 2;
+            compositePipelineLayout.pSetLayouts = compositeLayouts;
             compositePipelineLayout.pushConstantRangeCount = 1;
             compositePipelineLayout.pPushConstantRanges = &compositePush;
             if (vkCreatePipelineLayout(device.handle(), &compositePipelineLayout, nullptr, &_compositePipelineLayout) != VK_SUCCESS)
@@ -445,6 +456,9 @@ void RayQueryPipeline::deinit() {
     if (_compositeLayout) vkDestroyDescriptorSetLayout(_renderer.device().handle(), _compositeLayout, nullptr);
     _compositePipeline = VK_NULL_HANDLE; _compositePipelineLayout = VK_NULL_HANDLE;
     _compositePool = VK_NULL_HANDLE; _compositeLayout = VK_NULL_HANDLE; _compositeSets = {};
+    for (auto &history : _taaHistory) history.reset();
+    _taaHistoryTransitioned = false;
+    _taaHistoryValid = false;
     _nrdDenoiser.reset();
     if (_nrdInstance) {
         nrd::DestroyInstance(*static_cast<nrd::Instance *>(_nrdInstance));
@@ -482,7 +496,9 @@ VulkanMesh::Geometry RayQueryPipeline::skin(VkCommandBuffer cmd,
                                              const VulkanMesh &source,
                                              const Mesh::VertexLayout &layout,
                                              const RegisteredSkin &skin,
-                                             uint32_t globalsOffset) {
+                                             uint32_t globalsOffset,
+                                             uint64_t &prevPositionsAddress) {
+    prevPositionsAddress = 0;
     const auto sourceGeometry = source.geometry();
     if (sourceGeometry.vertexStride % sizeof(float) != 0) {
         throw std::runtime_error("Vulkan: skinned vertex stride is not float-aligned");
@@ -510,10 +526,19 @@ VulkanMesh::Geometry RayQueryPipeline::skin(VkCommandBuffer cmd,
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
         nullptr);
+    // The previous pose, one float4 per vertex: the same skinning evaluated
+    // with the previous frame's palette, read by the trace kernel through its
+    // device address for per-bone motion vectors.
+    result.prevPositions = std::make_unique<VulkanBuffer>(_renderer.device());
+    result.prevPositions->initDeviceLocal(
+        static_cast<VkDeviceSize>(sourceGeometry.maxVertexIndex + 1) * 4 * sizeof(float),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        nullptr);
     VkDescriptorBufferInfo sourceInfo {source.vertexBuffer(), 0, source.vertexDataSize()};
     VkDescriptorBufferInfo destinationInfo {result.vertices->handle(), 0, result.vertices->size()};
-    VkWriteDescriptorSet writes[2] {};
-    for (uint32_t i = 0; i < 2; ++i) {
+    VkDescriptorBufferInfo prevPositionsInfo {result.prevPositions->handle(), 0, result.prevPositions->size()};
+    VkWriteDescriptorSet writes[3] {};
+    for (uint32_t i = 0; i < 3; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = set;
         writes[i].dstBinding = i;
@@ -522,11 +547,16 @@ VulkanMesh::Geometry RayQueryPipeline::skin(VkCommandBuffer cmd,
     }
     writes[0].pBufferInfo = &sourceInfo;
     writes[1].pBufferInfo = &destinationInfo;
-    vkUpdateDescriptorSets(_renderer.device().handle(), 2, writes, 0, nullptr);
+    writes[2].pBufferInfo = &prevPositionsInfo;
+    vkUpdateDescriptorSets(_renderer.device().handle(), 3, writes, 0, nullptr);
+    prevPositionsAddress = result.prevPositions->deviceAddress();
 
     BoneUniforms bones;
     for (size_t i = 0; i < skin.bones.size() && i < kMaxBones; ++i) {
         bones.bones[i] = skin.bones[i];
+    }
+    for (size_t i = 0; i < skin.prevBones.size() && i < kMaxBones; ++i) {
+        bones.prevBones[i] = skin.prevBones[i];
     }
     const auto bonesOffset = _renderer.uniformRing().push(bones);
     std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
@@ -742,8 +772,10 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         const auto &uploaded = _renderer.resources().get(mesh->mesh.get());
         VulkanMesh::Geometry geometry;
         VkAccelerationStructureKHR blasHandle {VK_NULL_HANDLE};
+        uint64_t prevPositionsAddress = 0;
         if (skinned) {
-            geometry = skin(cmd, frame, uploaded, mesh->mesh.get().vertexLayout(), *skinned, globalsOffset);
+            geometry = skin(cmd, frame, uploaded, mesh->mesh.get().vertexLayout(), *skinned, globalsOffset,
+                            prevPositionsAddress);
             blasHandle = frame.skinned.back().blas;
             ++_lastSkinned;
         } else {
@@ -849,6 +881,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         material.prevTransform1 = mesh->prevTransform[1];
         material.prevTransform2 = mesh->prevTransform[2];
         material.prevTransform3 = mesh->prevTransform[3];
+        material.prevPositionsAddress = prevPositionsAddress;
         // Additive-blended diffuse is the other way Odyssey authors a glow:
         // no selfIllum controller, the texture itself is the light, and the
         // raster path treats it as unlit for the same reason. Without this
@@ -1119,7 +1152,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                   std::max(0.0001f, _options.ptRayOffset),
                                   std::max(0.0f, _options.ptSunIntensity),
                                   (_options.ptTraceStats ? 1u : 0u) |
-                                      (static_cast<uint32_t>(std::clamp(_options.ptDebugView, 0, 10)) << 4) |
+                                      (static_cast<uint32_t>(std::clamp(_options.ptDebugView, 0, 11)) << 4) |
                                       (static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)) << 8),
                                   static_cast<uint32_t>(std::clamp(_options.ptBounces, 1, 8)),
                                   glm::radians(std::clamp(_options.ptPointAngularSize, 0.05f, 45.0f)),
@@ -1156,18 +1189,52 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         _nrdDenoiser->denoise(cmd, _renderer.frameIndex(), inputs, view, unjitteredProjection,
                               jitterPixels, _frameNumber, _frameNumber == 0);
         if (_options.ptDenoise && _options.ptDebugView == 0) {
+            if (!_taaHistoryTransitioned) {
+                std::array<VkImageMemoryBarrier2, 2> historyBarriers {};
+                for (int i = 0; i < 2; ++i) {
+                    auto &barrier = historyBarriers[i];
+                    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    barrier.image = _taaHistory[i]->handle();
+                    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                }
+                VkDependencyInfo historyDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                historyDependency.imageMemoryBarrierCount = 2;
+                historyDependency.pImageMemoryBarriers = historyBarriers.data();
+                vkCmdPipelineBarrier2(cmd, &historyDependency);
+                _taaHistoryTransitioned = true;
+            }
+            // The noise-free history resets whenever NRD's would: first
+            // frame, or a teleport-sized camera jump.
+            const auto cameraPosition = glm::vec3(glm::inverse(view)[3]);
+            if (_frameNumber == 0 ||
+                glm::distance(cameraPosition, _prevCameraPosition) > 20.0f) {
+                _taaHistoryValid = false;
+            }
+            _prevCameraPosition = cameraPosition;
+
             // The assembly from denoised channels, overwriting the trace
             // kernel's own write. Debug views keep the kernel's output.
-            const auto compositeSet = _compositeSets[_renderer.frameIndex()];
-            std::array<VkDescriptorImageInfo, 5> compositeImages {{
+            // History ping-pong: the frame at index i reads what the previous
+            // frame (index 1-i) wrote into slot i, and writes slot 1-i.
+            const auto frameIndex = _renderer.frameIndex();
+            const auto compositeSet = _compositeSets[frameIndex];
+            std::array<VkDescriptorImageInfo, 9> compositeImages {{
                 {VK_NULL_HANDLE, output.view(), VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, aux[5]->view(), VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, aux[6]->view(), VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, _nrdDenoiser->denoisedDiffuse().view(), VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, _nrdDenoiser->denoisedSpecular().view(), VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, aux[3]->view(), VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, aux[4]->view(), VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, _taaHistory[frameIndex]->view(), VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, _taaHistory[1 - frameIndex]->view(), VK_IMAGE_LAYOUT_GENERAL},
             }};
-            std::array<VkWriteDescriptorSet, 5> compositeWrites {};
-            for (uint32_t i = 0; i < 5; ++i) {
+            std::array<VkWriteDescriptorSet, 9> compositeWrites {};
+            for (uint32_t i = 0; i < 9; ++i) {
                 compositeWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 compositeWrites[i].dstSet = compositeSet;
                 compositeWrites[i].dstBinding = i;
@@ -1175,19 +1242,24 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                 compositeWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 compositeWrites[i].pImageInfo = &compositeImages[i];
             }
-            vkUpdateDescriptorSets(device.handle(), 5, compositeWrites.data(), 0, nullptr);
+            vkUpdateDescriptorSets(device.handle(), 9, compositeWrites.data(), 0, nullptr);
             struct CompositePush {
                 uint32_t tonemap;
                 float exposure;
+                float historyBlend;
             } compositePush {static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)),
-                             std::max(0.01f, _options.ptExposure)};
+                             std::max(0.01f, _options.ptExposure),
+                             _taaHistoryValid ? 0.9f : 0.0f};
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _compositePipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _compositePipelineLayout, 0, 1,
+                                    &uniformSet, static_cast<uint32_t>(offsets.size()), offsets.data());
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _compositePipelineLayout,
-                                    0, 1, &compositeSet, 0, nullptr);
+                                    1, 1, &compositeSet, 0, nullptr);
             vkCmdPushConstants(cmd, _compositePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                sizeof(compositePush), &compositePush);
             vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8),
                           static_cast<uint32_t>((_extent.y + 7) / 8), 1);
+            _taaHistoryValid = true;
         }
     }
 #endif

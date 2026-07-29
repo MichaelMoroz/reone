@@ -88,6 +88,9 @@ struct InstanceMaterial {
     float4 prevTransform1;
     float4 prevTransform2;
     float4 prevTransform3;
+    // Previous-pose skinned positions, float4 per vertex; 0 when not skinned.
+    uint64_t prevPositionsAddress;
+    uint64_t prevPositionsPad;
 };
 [[vk::binding(2, 1)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
 [[vk::binding(3, 1)]] RWStructuredBuffer<uint> traceStats;
@@ -129,6 +132,7 @@ static const uint kDebugViewDiffuseChannel = 7;
 static const uint kDebugViewSpecularChannel = 8;
 static const uint kDebugViewViewZ = 9;
 static const uint kDebugViewNoiseFree = 10;
+static const uint kDebugViewMotion = 11;
 
 static const float3 kCategoryPalette[9] = {
     float3(0.5, 0.5, 0.5),  // GUI - never traced
@@ -1270,11 +1274,21 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         auxNormalRoughness = float4(primarySurface.surface.normal, primarySurface.surface.roughness);
         auxViewZ = mul(globalUniforms.view, float4(hitPosition, 1.0)).z;
         auxAlbedo = primarySurface.surface.albedo;
-        // World-space motion, previous minus current: the hit point taken
-        // back to object space and pushed through the instance's previous
-        // transform. Rigid motion exact; skinned meshes get their model
-        // root's motion, per-bone history being the remaining limitation.
-        float3 objectPosition = mul(worldToObject, float4(hitPosition, 1.0));
+        // World-space motion, previous minus current. Rigid meshes: the hit
+        // point back to object space through the instance's previous
+        // transform. Skinned meshes: the previous-pose positions the skin
+        // compute wrote with last frame's bone palette, interpolated at the
+        // same barycentrics, then through the previous transform - full
+        // per-bone motion.
+        float3 objectPosition;
+        if (material.prevPositionsAddress != 0) {
+            float3 pp0 = loadFloat3(material.prevPositionsAddress + uint64_t(indices.x) * 16);
+            float3 pp1 = loadFloat3(material.prevPositionsAddress + uint64_t(indices.y) * 16);
+            float3 pp2 = loadFloat3(material.prevPositionsAddress + uint64_t(indices.z) * 16);
+            objectPosition = pp0 * weights.x + pp1 * weights.y + pp2 * weights.z;
+        } else {
+            objectPosition = mul(worldToObject, float4(hitPosition, 1.0));
+        }
         float3 prevWorldPosition = material.prevTransform0.xyz * objectPosition.x +
                                    material.prevTransform1.xyz * objectPosition.y +
                                    material.prevTransform2.xyz * objectPosition.z +
@@ -1299,6 +1313,13 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         return;
     } else if (tailDebugView == kDebugViewNoiseFree) {
         color = auxNoiseFree;
+    } else if (tailDebugView == kDebugViewMotion) {
+        // World motion, xy as red/green around mid-grey, magnitude in blue:
+        // static geometry reads flat 0.5/0.5/0, movers light up.
+        outputImage[dispatchId.xy] = float4(saturate(auxMotion.x * 4.0 + 0.5),
+                                            saturate(auxMotion.y * 4.0 + 0.5),
+                                            saturate(length(auxMotion.xyz) * 4.0), 1.0);
+        return;
     }
     // One display transform, at the very end: exposure, tonemap, encode.
     outputImage[dispatchId.xy] = float4(displayTransform(color), 1.0);

@@ -45,6 +45,8 @@ private:
     struct Frame {
         struct Skinned {
             std::unique_ptr<graphics::VulkanBuffer> vertices;
+            /** Previous-pose positions, float4 per vertex, for motion vectors. */
+            std::unique_ptr<graphics::VulkanBuffer> prevPositions;
             std::unique_ptr<graphics::VulkanBuffer> storage;
             std::unique_ptr<graphics::VulkanBuffer> scratch;
             VkAccelerationStructureKHR blas {VK_NULL_HANDLE};
@@ -139,6 +141,11 @@ private:
     std::array<VkDescriptorSet, 2> _compositeSets {};
     VkPipelineLayout _compositePipelineLayout {VK_NULL_HANDLE};
     VkPipeline _compositePipeline {VK_NULL_HANDLE};
+    /** Ping-pong history for the noise-free channel's TAA in the composite. */
+    std::array<std::unique_ptr<graphics::VulkanImage>, 2> _taaHistory;
+    bool _taaHistoryTransitioned {false};
+    bool _taaHistoryValid {false};
+    glm::vec3 _prevCameraPosition {0.0f};
 #endif
 
     /**
@@ -162,6 +169,7 @@ private:
                                          const graphics::VulkanMesh &source,
                                          const graphics::Mesh::VertexLayout &layout,
                                          const RegisteredSkin &skin,
-                                         uint32_t globalsOffset);
+                                         uint32_t globalsOffset,
+                                         uint64_t &prevPositionsAddress);
 };
 } // namespace reone::scene

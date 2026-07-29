@@ -6,6 +6,11 @@ import lib.geometry;
 
 [[vk::binding(0, 1)]] StructuredBuffer<float> sourceVertices;
 [[vk::binding(1, 1)]] RWStructuredBuffer<float> skinnedVertices;
+// Previous-pose positions, one float4 per vertex: the same deformation
+// evaluated with the previous frame's bone palette. The tracer reads it by
+// device address to emit per-bone motion vectors; without it a walk cycle's
+// limbs ghost, carrying only the model root's motion.
+[[vk::binding(2, 1)]] RWStructuredBuffer<float4> prevPositions;
 
 struct PushConstants {
     uint vertexCount;
@@ -56,12 +61,14 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                           sourceVertices[base + weightsOffset + 2],
                           sourceVertices[base + weightsOffset + 3]);
 
-    float4 position = skinPosition(float4(sourceVertices[base + positionOffset],
-                                          sourceVertices[base + positionOffset + 1],
-                                          sourceVertices[base + positionOffset + 2], 1.0), skin, false);
+    float4 restPosition = float4(sourceVertices[base + positionOffset],
+                                 sourceVertices[base + positionOffset + 1],
+                                 sourceVertices[base + positionOffset + 2], 1.0);
+    float4 position = skinPosition(restPosition, skin, false);
     skinnedVertices[base + positionOffset] = position.x;
     skinnedVertices[base + positionOffset + 1] = position.y;
     skinnedVertices[base + positionOffset + 2] = position.z;
+    prevPositions[vertex] = skinPosition(restPosition, skin, true);
 
     if (pushConstants.normalOffsetFloats >= 0) {
         uint normalOffset = uint(pushConstants.normalOffsetFloats);

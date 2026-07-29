@@ -712,8 +712,8 @@ void Editor::pathTracingSettings() {
         "Off", "Object categories", "Emissive highlight", "Normals",
         "Roughness", "Lightmap", "Albedo",
         "Denoiser: diffuse channel", "Denoiser: specular channel",
-        "Denoiser: viewZ", "Denoiser: noise-free"};
-    ImGui::Combo("View", &options.ptDebugView, kDebugViewNames, 11);
+        "Denoiser: viewZ", "Denoiser: noise-free", "Denoiser: motion"};
+    ImGui::Combo("View", &options.ptDebugView, kDebugViewNames, 12);
     ImGui::TextDisabled("Replaces shading at the primary hit. Categories:\nblue rooms, red creatures, green placeables,\nmagenta doors, yellow equipment, cyan sky.\nDenoiser views show the NRD output split.");
     ImGui::SeparatorText("Category overrides");
     static constexpr const char *kCategoryNames[] = {
