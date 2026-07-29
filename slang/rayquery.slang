@@ -88,6 +88,10 @@ CategoryOverride categoryOverrideFor(uint featureMask) {
 // texture as prelit radiance, terminates paths, and never occludes
 // shadow rays.
 static const uint kTraceSky = 1u << 24;
+// Curated prelit: fullbright authored texture - Odyssey's actual selfIllum
+// semantics. Occludes, casts nothing, ends the path. Set CPU-side from the
+// manual per-name classification table.
+static const uint kTracePrelit = 1u << 23;
 // Additive-blended diffuse: the texture is the light. Set CPU-side.
 static const uint kTraceAdditive = 1u << 25;
 // Punch-through diffuse uses deterministic multi-layer transparency in
@@ -742,6 +746,11 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
             outputImage[dispatchId.xy] = float4(displayTransform(color), 1.0);
             return;
         }
+        if ((material.featureMask & kTracePrelit) != 0) {
+            color += primaryThroughput * primarySurface.surface.albedo;
+            outputImage[dispatchId.xy] = float4(displayTransform(color), 1.0);
+            return;
+        }
         // For everything else, kTraceSky-free emission selects the emissive
         // dial. Like raster's self-illumination, emission is additive; it
         // never replaces shading.
@@ -991,6 +1000,11 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                         // there is nothing behind the environment.
                         radiance += pathThroughput * bounceThroughput *
                                      bounceSurface.surface.albedo * pushConstants.skyIntensity;
+                        break;
+                    }
+                    if ((bounceMaterial.featureMask & kTracePrelit) != 0) {
+                        radiance += pathThroughput * bounceThroughput *
+                                     bounceSurface.surface.albedo;
                         break;
                     }
                     radiance += pathThroughput * bounceThroughput * bounceSurface.surface.emissive *

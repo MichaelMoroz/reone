@@ -87,6 +87,10 @@ public:
         Tracing keys its sky classification on this identity rather than on
         emission luma, which misclassified interior lit panels as sky. */
     bool backgroundGeometry {false};
+    /** Curated trace classification, resolved from the registry's manual
+        per-name table at registration: 0 default, 1 prelit, 2 emissive,
+        3 none. See RenderRegistry::TraceClass. */
+    int traceClass {0};
     bool affectedByShadows {false};
     bool affectedByFog {false};
 

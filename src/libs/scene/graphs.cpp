@@ -17,6 +17,8 @@
 
 #include "reone/scene/graphs.h"
 
+#include <filesystem>
+
 namespace reone {
 
 namespace scene {
@@ -32,6 +34,10 @@ void SceneGraphs::reserve(std::string name) {
         _graphicsSvc,
         _audioSvc,
         _resourceSvc);
+    // The manually curated trace classifications, one shared file beside
+    // reone.cfg. Every scene loads the same table; the registry panel
+    // writes back to it.
+    scene->registry().loadTraceClasses(std::filesystem::current_path() / "trace-classes.txt");
 
     _scenes.insert(std::make_pair(name, std::move(scene)));
 }

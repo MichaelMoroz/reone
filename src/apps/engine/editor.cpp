@@ -187,6 +187,21 @@ RegistryEntryView makeRegistryEntryView(const scene::ISceneGraph &graph,
                 if (result.classification.empty()) {
                     result.classification = "-";
                 }
+                // A curated override supersedes the derived tags on screen,
+                // starred so hand-classified rows are visually distinct.
+                switch (entry.material.traceClass) {
+                case 1:
+                    result.classification = "prelit*";
+                    break;
+                case 2:
+                    result.classification = "emissive*";
+                    break;
+                case 3:
+                    result.classification = "none*";
+                    break;
+                default:
+                    break;
+                }
             } else if constexpr (std::is_same_v<T, scene::RegisteredBillboard>) {
                 result.root = entry.cullRoot;
                 result.modelName = graph.nameText(entry.nameIds.model);
@@ -1069,6 +1084,27 @@ void Editor::drawRegistry() {
                     }
                     ImGui::TableSetColumnIndex(1);
                     ImGui::TextUnformatted(node.data(), node.data() + node.size());
+                    // Right-click classifies: the mechanical per-level pass,
+                    // written straight to trace-classes.txt.
+                    if (!entry.debug && ImGui::BeginPopupContextItem("##classify")) {
+                        auto current = registry.traceClass(std::string(entry.modelName),
+                                                           std::string(entry.nodeName));
+                        auto item = [&](const char *label, scene::RenderRegistry::TraceClass klass) {
+                            if (ImGui::MenuItem(label, nullptr, current == klass)) {
+                                registry.setTraceClass(std::string(entry.modelName),
+                                                       std::string(entry.nodeName),
+                                                       current == klass
+                                                           ? scene::RenderRegistry::TraceClass::Default
+                                                           : klass);
+                            }
+                        };
+                        ImGui::TextDisabled("Classify");
+                        ImGui::Separator();
+                        item("Prelit (fullbright, casts nothing)", scene::RenderRegistry::TraceClass::Prelit);
+                        item("Emissive (glows and casts)", scene::RenderRegistry::TraceClass::Emissive);
+                        item("None (strip selfIllum)", scene::RenderRegistry::TraceClass::None);
+                        ImGui::EndPopup();
+                    }
                     ImGui::TableSetColumnIndex(2);
                     ImGui::TextUnformatted(entry.kind);
                     ImGui::TableSetColumnIndex(3);

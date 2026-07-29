@@ -595,6 +595,15 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             instance.mask = 0x2;
             ++_lastSky;
         }
+        // The curated per-name classification - the manual level pass.
+        // Prelit is Odyssey's actual selfIllum semantics: fullbright
+        // authored texture, occluding, casting nothing. None strips a wrong
+        // selfIllum outright.
+        if (mesh->material.traceClass == 1) {
+            material.featureMask |= 1u << 23;
+        } else if (mesh->material.traceClass == 3) {
+            material.selfIllumColor = glm::vec4(0.0f);
+        }
         // Additive-blended diffuse is the other way Odyssey authors a glow:
         // no selfIllum controller, the texture itself is the light, and the
         // raster path treats it as unlit for the same reason. Without this
@@ -641,7 +650,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         // threshold while the shader used one too; when the shader started
         // taking the colour directly, this count silently stopped describing
         // what was actually being traced.
-        if (glm::any(glm::greaterThan(mesh->material.selfIllumColor, glm::vec3(0.0f)))) {
+        if (mesh->material.traceClass == 0 &&
+            glm::any(glm::greaterThan(mesh->material.selfIllumColor, glm::vec3(0.0f)))) {
             ++_lastEmissive;
         }
     }

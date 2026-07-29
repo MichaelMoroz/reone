@@ -18,6 +18,8 @@
 #pragma once
 
 #include <variant>
+#include <filesystem>
+#include <map>
 #include <unordered_set>
 
 #include "reone/graphics/frustum.h"
@@ -251,6 +253,23 @@ public:
     const ModelSceneNode *skyRoom() const { return _skyRoom; }
     void setSkyRoom(const ModelSceneNode *room) { _skyRoom = room; }
 
+    /** Manually curated trace classification, keyed "model/node" with
+        "model/*" as a model-wide fallback. The mechanical per-level pass
+        the automatic heuristics cannot replace: authored selfIllum means
+        fullbright in Odyssey, and only a person can say which surfaces are
+        real luminaires. Edited from the registry panel, persisted to
+        trace-classes.json beside reone.cfg. */
+    enum class TraceClass {
+        Default,
+        Prelit,   /**< fullbright authored texture; occludes; casts nothing */
+        Emissive, /**< glows and casts, regardless of heuristics */
+        None,     /**< selfIllum stripped entirely */
+    };
+    TraceClass traceClass(const std::string &model, const std::string &node) const;
+    void setTraceClass(const std::string &model, const std::string &node, TraceClass klass);
+    void loadTraceClasses(const std::filesystem::path &path);
+    const std::map<std::string, TraceClass> &traceClasses() const { return _traceClasses; }
+
     bool isObjectEnabled(uint32_t idIndex) const {
         return _disabledObjects.find(idIndex) == _disabledObjects.end();
     }
@@ -324,6 +343,10 @@ private:
     std::vector<RegisteredObject> _objects;
     std::unordered_set<uint32_t> _disabledObjects;
     const ModelSceneNode *_skyRoom {nullptr};
+    std::map<std::string, TraceClass> _traceClasses;
+    std::filesystem::path _traceClassesPath;
+
+    void saveTraceClasses() const;
     size_t _traversalCount {0};
     RegistryCounts _registeredCounts;
     RegistryCounts _drawnCounts;

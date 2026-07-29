@@ -17,6 +17,7 @@
 
 #include "reone/scene/registry.h"
 
+#include <fstream>
 #include <algorithm>
 
 #include "reone/graphics/camera.h"
@@ -271,6 +272,98 @@ void RenderRegistry::registerAABB(RenderCategories categories,
 void RenderRegistry::addDebug(std::function<void()> execute) {
     ++_registeredCounts.entries;
     _objects.push_back(RegisteredDebug {renderCategory(RenderCategory::Debug), std::move(execute)});
+}
+
+namespace {
+
+const char *traceClassName(RenderRegistry::TraceClass klass) {
+    switch (klass) {
+    case RenderRegistry::TraceClass::Prelit:
+        return "prelit";
+    case RenderRegistry::TraceClass::Emissive:
+        return "emissive";
+    case RenderRegistry::TraceClass::None:
+        return "none";
+    default:
+        return "default";
+    }
+}
+
+RenderRegistry::TraceClass traceClassFromName(const std::string &name) {
+    if (name == "prelit") return RenderRegistry::TraceClass::Prelit;
+    if (name == "emissive") return RenderRegistry::TraceClass::Emissive;
+    if (name == "none") return RenderRegistry::TraceClass::None;
+    return RenderRegistry::TraceClass::Default;
+}
+
+} // namespace
+
+RenderRegistry::TraceClass RenderRegistry::traceClass(const std::string &model,
+                                                      const std::string &node) const {
+    auto exact = _traceClasses.find(model + "/" + node);
+    if (exact != _traceClasses.end()) {
+        return exact->second;
+    }
+    auto wildcard = _traceClasses.find(model + "/*");
+    if (wildcard != _traceClasses.end()) {
+        return wildcard->second;
+    }
+    return TraceClass::Default;
+}
+
+void RenderRegistry::setTraceClass(const std::string &model, const std::string &node,
+                                   TraceClass klass) {
+    auto key = model + "/" + node;
+    if (klass == TraceClass::Default) {
+        _traceClasses.erase(key);
+    } else {
+        _traceClasses[key] = klass;
+    }
+    saveTraceClasses();
+}
+
+void RenderRegistry::loadTraceClasses(const std::filesystem::path &path) {
+    _traceClassesPath = path;
+    _traceClasses.clear();
+    std::ifstream in(path);
+    if (!in) {
+        return;
+    }
+    // One entry per line: "model/node = class". Trivially hand-editable and
+    // diffable, which a per-level curation file has to be.
+    std::string line;
+    while (std::getline(in, line)) {
+        auto eq = line.find('=');
+        if (eq == std::string::npos) {
+            continue;
+        }
+        auto key = line.substr(0, eq);
+        auto value = line.substr(eq + 1);
+        auto trim = [](std::string &text) {
+            auto begin = text.find_first_not_of(" 	");
+            auto end = text.find_last_not_of(" 	");
+            text = begin == std::string::npos ? "" : text.substr(begin, end - begin + 1);
+        };
+        trim(key);
+        trim(value);
+        if (key.empty()) {
+            continue;
+        }
+        auto klass = traceClassFromName(value);
+        if (klass != TraceClass::Default) {
+            _traceClasses[key] = klass;
+        }
+    }
+}
+
+void RenderRegistry::saveTraceClasses() const {
+    if (_traceClassesPath.empty()) {
+        return;
+    }
+    std::ofstream out(_traceClassesPath);
+    for (const auto &[key, klass] : _traceClasses) {
+        out << key << " = " << traceClassName(klass) << "\n";
+    }
 }
 
 void RenderRegistry::drawScene(IRenderPassExecutor &executor,

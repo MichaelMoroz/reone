@@ -298,6 +298,10 @@ void MeshSceneNode::registerRender(RenderRegistry &registry) {
     // authored lighting. Never color-based.
     material.backgroundGeometry = mesh->backgroundGeometry ||
                                   (_model.isBackgroundScenery() && !_nodeTextures.lightmap);
+    // The manually curated per-name classification - the mechanical
+    // level-by-level pass that heuristics cannot replace.
+    material.traceClass = static_cast<int>(_sceneGraph.registry().traceClass(
+        _model.model().name(), _modelNode.name()));
     if (render && _sceneGraph.hasShadowLight() && isReceivingShadows(_model, *this)) {
         material.affectedByShadows = true;
     }
