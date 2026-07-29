@@ -265,10 +265,33 @@ public:
         Emissive, /**< glows and casts, regardless of heuristics */
         None,     /**< selfIllum stripped entirely */
     };
-    TraceClass traceClass(const std::string &model, const std::string &node) const;
-    void setTraceClass(const std::string &model, const std::string &node, TraceClass klass);
+    /** One curated record per model/node key. Channel modes: 0 leaves the
+        derived value untouched, 1 overrides with a constant, 2 evaluates
+        lerp(base, smoothstep(a, b, dot(albedo, weights)), t) - the simple
+        and the expressive tier of the same dial. */
+    struct CuratedMaterial {
+        TraceClass klass {TraceClass::Default};
+        glm::vec3 albedoMul {1.0f};
+        int roughnessMode {0};
+        glm::vec4 roughnessParams {0.5f, 0.2f, 0.8f, 1.0f}; /**< base/value, a, b, t */
+        glm::vec3 roughnessWeights {0.299f, 0.587f, 0.114f};
+        int metallicMode {0};
+        glm::vec4 metallicParams {0.0f, 0.2f, 0.8f, 1.0f};
+        glm::vec3 metallicWeights {0.299f, 0.587f, 0.114f};
+        int emissionMode {0}; /**< 0 none, 1 multiplier, 2 override */
+        glm::vec3 emissionValue {1.0f};
+
+        bool isDefault() const;
+    };
+
+    /** Index into curatedMaterials() for this key, or -1. Registration
+        resolves it into the material once per frame. */
+    int curatedIndex(const std::string &model, const std::string &node) const;
+    const CuratedMaterial *curatedByIndex(int index) const;
+    const std::vector<CuratedMaterial> &curatedMaterials() const { return _curatedMaterials; }
+    CuratedMaterial curatedFor(const std::string &model, const std::string &node) const;
+    void setCurated(const std::string &model, const std::string &node, CuratedMaterial curated);
     void loadTraceClasses(const std::filesystem::path &path);
-    const std::map<std::string, TraceClass> &traceClasses() const { return _traceClasses; }
 
     bool isObjectEnabled(uint32_t idIndex) const {
         return _disabledObjects.find(idIndex) == _disabledObjects.end();
@@ -343,7 +366,8 @@ private:
     std::vector<RegisteredObject> _objects;
     std::unordered_set<uint32_t> _disabledObjects;
     const ModelSceneNode *_skyRoom {nullptr};
-    std::map<std::string, TraceClass> _traceClasses;
+    std::map<std::string, int> _curatedIndexByKey;
+    std::vector<CuratedMaterial> _curatedMaterials;
     std::filesystem::path _traceClassesPath;
 
     void saveTraceClasses() const;

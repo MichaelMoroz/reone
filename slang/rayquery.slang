@@ -31,6 +31,13 @@ struct InstanceMaterial {
     uint featureMask;
     int bumpMapFrame;
     float bumpMapScale;
+    // Curated material operations; see rayquery.cpp for the encoding.
+    float4 curatedAlbedoMul;
+    float4 curatedRoughA;
+    float4 curatedRoughB;
+    float4 curatedMetalA;
+    float4 curatedMetalB;
+    float4 curatedEmission;
 };
 [[vk::binding(2, 1)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
 [[vk::binding(3, 1)]] RWStructuredBuffer<uint> traceStats;
@@ -345,6 +352,15 @@ struct HitSurface {
     float3 geometricNormal;
 };
 
+// Curated channel op: mode 0 passes the derived value through, mode 1
+// overrides with a constant, mode 2 evaluates
+// lerp(base, smoothstep(a, b, dot(albedo, weights)), t).
+float curatedChannel(float4 A, float4 B, float3 albedo, float current) {
+    if (A.x < 0.5) return current;
+    if (A.x < 1.5) return A.y;
+    return lerp(A.y, smoothstep(A.z, A.w, dot(albedo, B.yzw)), B.x);
+}
+
 HitSurface sampleSurface(InstanceMaterial material, uint3 indices, float3 weights,
                          float3x4 objectToWorld, float3x4 worldToObject,
                          float3 rayDirection, float2 uv, float2 uv2) {
@@ -370,6 +386,13 @@ HitSurface sampleSurface(InstanceMaterial material, uint3 indices, float3 weight
     // metalness, and roughness still uses alpha for every material.
     surface.metallic = 0.0;
     surface.roughness = clamp(surface.alpha, 0.2, 1.0);
+    // Curated per-object operations, applied to the derived values so the
+    // manual pass edits the same quantities the heuristics produce.
+    surface.albedo *= material.curatedAlbedoMul.rgb;
+    surface.roughness = curatedChannel(material.curatedRoughA, material.curatedRoughB,
+                                       surface.albedo, surface.roughness);
+    surface.metallic = curatedChannel(material.curatedMetalA, material.curatedMetalB,
+                                      surface.albedo, surface.metallic);
 
     float3 shadingNormal = hit.geometricNormal;
     if (material.offNormals != -1) {
@@ -417,6 +440,11 @@ HitSurface sampleSurface(InstanceMaterial material, uint3 indices, float3 weight
         }
     }
     surface.emissive = gammaToLinear(material.selfIllumColor.rgb);
+    if (material.curatedEmission.w > 1.5) {
+        surface.emissive = material.curatedEmission.rgb;
+    } else if (material.curatedEmission.w > 0.5) {
+        surface.emissive *= material.curatedEmission.rgb;
+    }
     if ((material.featureMask & kTraceAdditive) != 0) {
         // Emission of 1 makes the additive texture read at its own brightness
         // through the emission*albedo path, matching how raster composites it.

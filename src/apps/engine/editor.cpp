@@ -187,20 +187,23 @@ RegistryEntryView makeRegistryEntryView(const scene::ISceneGraph &graph,
                 if (result.classification.empty()) {
                     result.classification = "-";
                 }
-                // A curated override supersedes the derived tags on screen,
-                // starred so hand-classified rows are visually distinct.
-                switch (entry.material.traceClass) {
-                case 1:
-                    result.classification = "prelit*";
-                    break;
-                case 2:
-                    result.classification = "emissive*";
-                    break;
-                case 3:
-                    result.classification = "none*";
-                    break;
-                default:
-                    break;
+                // A curated record supersedes the derived tags on screen,
+                // starred so hand-curated rows are visually distinct.
+                if (const auto *curated = registry.curatedByIndex(entry.material.curatedIndex)) {
+                    switch (curated->klass) {
+                    case scene::RenderRegistry::TraceClass::Prelit:
+                        result.classification = "prelit*";
+                        break;
+                    case scene::RenderRegistry::TraceClass::Emissive:
+                        result.classification = "emissive*";
+                        break;
+                    case scene::RenderRegistry::TraceClass::None:
+                        result.classification = "none*";
+                        break;
+                    default:
+                        result.classification += "*";
+                        break;
+                    }
                 }
             } else if constexpr (std::is_same_v<T, scene::RegisteredBillboard>) {
                 result.root = entry.cullRoot;
@@ -1087,15 +1090,15 @@ void Editor::drawRegistry() {
                     // Right-click classifies: the mechanical per-level pass,
                     // written straight to trace-classes.txt.
                     if (!entry.debug && ImGui::BeginPopupContextItem("##classify")) {
-                        auto current = registry.traceClass(std::string(entry.modelName),
-                                                           std::string(entry.nodeName));
+                        auto model = std::string(entry.modelName);
+                        auto nodeName2 = std::string(entry.nodeName);
+                        auto curated = registry.curatedFor(model, nodeName2);
                         auto item = [&](const char *label, scene::RenderRegistry::TraceClass klass) {
-                            if (ImGui::MenuItem(label, nullptr, current == klass)) {
-                                registry.setTraceClass(std::string(entry.modelName),
-                                                       std::string(entry.nodeName),
-                                                       current == klass
-                                                           ? scene::RenderRegistry::TraceClass::Default
-                                                           : klass);
+                            if (ImGui::MenuItem(label, nullptr, curated.klass == klass)) {
+                                curated.klass = curated.klass == klass
+                                                    ? scene::RenderRegistry::TraceClass::Default
+                                                    : klass;
+                                registry.setCurated(model, nodeName2, curated);
                             }
                         };
                         ImGui::TextDisabled("Classify");
@@ -1103,6 +1106,13 @@ void Editor::drawRegistry() {
                         item("Prelit (fullbright, casts nothing)", scene::RenderRegistry::TraceClass::Prelit);
                         item("Emissive (glows and casts)", scene::RenderRegistry::TraceClass::Emissive);
                         item("None (strip selfIllum)", scene::RenderRegistry::TraceClass::None);
+                        ImGui::Separator();
+                        if (ImGui::MenuItem("Edit material...")) {
+                            _showMaterialEditor = true;
+                            _materialEditModel = model;
+                            _materialEditNode = nodeName2;
+                            _materialEdit = curated;
+                        }
                         ImGui::EndPopup();
                     }
                     ImGui::TableSetColumnIndex(2);
@@ -1125,6 +1135,75 @@ void Editor::drawRegistry() {
     }
 
     ImGui::EndTable();
+    ImGui::End();
+
+    drawMaterialEditor(registry);
+}
+
+void Editor::drawMaterialEditor(scene::RenderRegistry &registry) {
+    if (!_showMaterialEditor) {
+        return;
+    }
+    ImGui::SetNextWindowSize(ImVec2(380, 460), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Curated material", &_showMaterialEditor)) {
+        ImGui::End();
+        return;
+    }
+    ImGui::Text("%s / %s", _materialEditModel.c_str(), _materialEditNode.c_str());
+    ImGui::TextDisabled("Every change applies live and saves to trace-classes.txt.");
+    ImGui::Separator();
+
+    bool changed = false;
+    static constexpr const char *kClassNames[] = {"Default", "Prelit", "Emissive", "None"};
+    int klass = static_cast<int>(_materialEdit.klass);
+    if (ImGui::Combo("Class", &klass, kClassNames, 4)) {
+        _materialEdit.klass = static_cast<scene::RenderRegistry::TraceClass>(klass);
+        changed = true;
+    }
+
+    ImGui::SeparatorText("Albedo");
+    changed |= ImGui::DragFloat3("Multiplier", &_materialEdit.albedoMul.x, 0.01f, 0.0f, 4.0f, "%.2f");
+
+    // Both derived channels share the mode ladder: leave the heuristic
+    // alone, override with a constant, or drive it from albedo with
+    // lerp(base, smoothstep(a, b, dot(albedo, weights)), t).
+    static constexpr const char *kModeNames[] = {"Derived (default)", "Constant", "Albedo curve"};
+    auto channel = [&changed](const char *label, int &mode, glm::vec4 &params, glm::vec3 &weights) {
+        ImGui::PushID(label);
+        ImGui::SeparatorText(label);
+        changed |= ImGui::Combo("Mode", &mode, kModeNames, 3);
+        if (mode == 1) {
+            changed |= ImGui::SliderFloat("Value", &params.x, 0.0f, 1.0f, "%.2f");
+        } else if (mode == 2) {
+            changed |= ImGui::SliderFloat("Base", &params.x, 0.0f, 1.0f, "%.2f");
+            changed |= ImGui::SliderFloat("Edge a", &params.y, 0.0f, 1.0f, "%.2f");
+            changed |= ImGui::SliderFloat("Edge b", &params.z, 0.0f, 1.0f, "%.2f");
+            changed |= ImGui::SliderFloat("Blend t", &params.w, 0.0f, 1.0f, "%.2f");
+            changed |= ImGui::DragFloat3("Weights", &weights.x, 0.01f, 0.0f, 1.0f, "%.2f");
+        }
+        ImGui::PopID();
+    };
+    channel("Roughness", _materialEdit.roughnessMode, _materialEdit.roughnessParams,
+            _materialEdit.roughnessWeights);
+    channel("Metallic", _materialEdit.metallicMode, _materialEdit.metallicParams,
+            _materialEdit.metallicWeights);
+
+    ImGui::SeparatorText("Emission");
+    static constexpr const char *kEmissionModes[] = {"Untouched", "Multiplier", "Override"};
+    changed |= ImGui::Combo("Emission mode", &_materialEdit.emissionMode, kEmissionModes, 3);
+    if (_materialEdit.emissionMode != 0) {
+        changed |= ImGui::DragFloat3("Emission value", &_materialEdit.emissionValue.x, 0.02f,
+                                     0.0f, 16.0f, "%.2f");
+    }
+
+    ImGui::Separator();
+    if (ImGui::Button("Reset to default")) {
+        _materialEdit = scene::RenderRegistry::CuratedMaterial();
+        changed = true;
+    }
+    if (changed) {
+        registry.setCurated(_materialEditModel, _materialEditNode, _materialEdit);
+    }
     ImGui::End();
 }
 

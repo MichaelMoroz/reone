@@ -50,11 +50,25 @@ struct alignas(16) InstanceMaterial {
     uint32_t featureMask {0};
     int32_t bumpMapFrame {0};
     float bumpMapScale {1.0f};
+    // Explicit pad from 148 to 160: std430 aligns the following float4 to
+    // 16, glm::vec4 does not, and the shader-side offsets must match.
+    float curatedPad[3] {};
+    // Curated material operations, neutral by default. Channel encoding:
+    // A = (mode, base/value, a, b), B = (t, wr, wg, wb) evaluating
+    // lerp(base, smoothstep(a, b, dot(albedo, w)), t) at mode 2, the
+    // constant at mode 1, and nothing at mode 0.
+    glm::vec4 curatedAlbedoMul {1.0f, 1.0f, 1.0f, 0.0f};
+    glm::vec4 curatedRoughA {0.0f};
+    glm::vec4 curatedRoughB {0.0f};
+    glm::vec4 curatedMetalA {0.0f};
+    glm::vec4 curatedMetalB {0.0f};
+    glm::vec4 curatedEmission {0.0f}; /**< rgb + mode in w: 0 none, 1 mul, 2 override */
 };
 
 static_assert(offsetof(InstanceMaterial, vertexAddress) == 80);
 static_assert(offsetof(InstanceMaterial, mainTex) == 120);
-static_assert(sizeof(InstanceMaterial) == 160);
+static_assert(offsetof(InstanceMaterial, curatedAlbedoMul) == 160);
+static_assert(sizeof(InstanceMaterial) == 256);
 
 struct TraceStats {
     uint32_t secondaryRays {0};
@@ -595,14 +609,41 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             instance.mask = 0x2;
             ++_lastSky;
         }
-        // The curated per-name classification - the manual level pass.
-        // Prelit is Odyssey's actual selfIllum semantics: fullbright
-        // authored texture, occluding, casting nothing. None strips a wrong
-        // selfIllum outright.
-        if (mesh->material.traceClass == 1) {
-            material.featureMask |= 1u << 23;
-        } else if (mesh->material.traceClass == 3) {
-            material.selfIllumColor = glm::vec4(0.0f);
+        // The curated per-name record - the manual level pass. Prelit is
+        // Odyssey's actual selfIllum semantics: fullbright authored
+        // texture, occluding, casting nothing. None strips a wrong
+        // selfIllum outright. Material operations ride the same record.
+        const auto *curated = registry.curatedByIndex(mesh->material.curatedIndex);
+        if (curated) {
+            switch (curated->klass) {
+            case RenderRegistry::TraceClass::Prelit:
+                material.featureMask |= 1u << 23;
+                break;
+            case RenderRegistry::TraceClass::None:
+                material.selfIllumColor = glm::vec4(0.0f);
+                break;
+            default:
+                break;
+            }
+            material.curatedAlbedoMul = glm::vec4(curated->albedoMul, 0.0f);
+            material.curatedRoughA = glm::vec4(static_cast<float>(curated->roughnessMode),
+                                               curated->roughnessParams.x,
+                                               curated->roughnessParams.y,
+                                               curated->roughnessParams.z);
+            material.curatedRoughB = glm::vec4(curated->roughnessParams.w,
+                                               curated->roughnessWeights.x,
+                                               curated->roughnessWeights.y,
+                                               curated->roughnessWeights.z);
+            material.curatedMetalA = glm::vec4(static_cast<float>(curated->metallicMode),
+                                               curated->metallicParams.x,
+                                               curated->metallicParams.y,
+                                               curated->metallicParams.z);
+            material.curatedMetalB = glm::vec4(curated->metallicParams.w,
+                                               curated->metallicWeights.x,
+                                               curated->metallicWeights.y,
+                                               curated->metallicWeights.z);
+            material.curatedEmission = glm::vec4(curated->emissionValue,
+                                                 static_cast<float>(curated->emissionMode));
         }
         // Additive-blended diffuse is the other way Odyssey authors a glow:
         // no selfIllum controller, the texture itself is the light, and the
@@ -650,7 +691,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         // threshold while the shader used one too; when the shader started
         // taking the colour directly, this count silently stopped describing
         // what was actually being traced.
-        if (mesh->material.traceClass == 0 &&
+        if ((!curated || curated->klass == RenderRegistry::TraceClass::Default) &&
             glm::any(glm::greaterThan(mesh->material.selfIllumColor, glm::vec3(0.0f)))) {
             ++_lastEmissive;
         }

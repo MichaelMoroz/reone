@@ -19,6 +19,7 @@
 
 #include "reone/graphics/framebuffer.h"
 #include "reone/graphics/texture.h"
+#include "reone/scene/registry.h"
 #include "reone/resource/id.h"
 
 #include "imgui.h" // ImGuiID
@@ -92,9 +93,15 @@ private:
     // Registry viewer. It intentionally reads the last completed render
     // snapshot from update, before SceneGraph starts filling the next one.
     void drawRegistry();
+    void drawMaterialEditor(scene::RenderRegistry &registry);
     bool _showRegistry {false};
     std::string _registryScene;
     char _registryFilter[128] {};
+    // Curated-material editor state: which key is open, live working copy.
+    bool _showMaterialEditor {false};
+    std::string _materialEditModel;
+    std::string _materialEditNode;
+    scene::RenderRegistry::CuratedMaterial _materialEdit;
     bool _registryHideFullyCulled {false};
 
     void graphicsSettings();
