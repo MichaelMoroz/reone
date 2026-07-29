@@ -91,3 +91,7 @@ if(ENABLE_VULKAN)
     target_link_libraries(scene PUBLIC graphicsvulkan)
     target_compile_definitions(scene PUBLIC R_ENABLE_VULKAN)
 endif()
+
+if(ENABLE_NRD)
+    target_link_libraries(scene PUBLIC NRD)
+endif()

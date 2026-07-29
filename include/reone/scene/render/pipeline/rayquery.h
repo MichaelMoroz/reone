@@ -114,6 +114,14 @@ private:
     uint32_t _frameNumber {0};
     bool _inited {false};
 
+    /**
+     * The NRD denoiser instance, opaque so the header stays NRD-free: the
+     * library is an optional local-only toggle (see ENABLE_NRD in the root
+     * CMakeLists) and everything referencing it compiles away without it.
+     * Null when NRD is not built in or instance creation failed.
+     */
+    void *_nrdInstance {nullptr};
+
     void clearFrame(Frame &frame);
     graphics::VulkanMesh::Geometry skin(VkCommandBuffer cmd,
                                          Frame &frame,

@@ -32,6 +32,12 @@ option(ENABLE_MOVIE "enable movie playback" ON)
 option(ENABLE_VULKAN "build the Vulkan backend" OFF)
 option(ENABLE_ASAN "enable address sanitizer" OFF)
 
+# NRD ships under the proprietary NVIDIA RTX SDKs license, which both forbids
+# and is forbidden by GPL-3 in a distributed binary. It is therefore strictly
+# a local developer toggle: OFF by default, fetched and linked only when
+# enabled, and builds without it must remain fully functional.
+option(ENABLE_NRD "fetch and link the NVIDIA Real-time Denoisers SDK (local builds only)" OFF)
+
 # END Options
 
 # Dependencies
@@ -74,6 +80,28 @@ if(ENABLE_VULKAN)
     find_package(volk CONFIG REQUIRED)
     find_package(VulkanMemoryAllocator CONFIG REQUIRED)
     find_package(vk-bootstrap CONFIG REQUIRED)
+endif()
+
+if(ENABLE_NRD)
+    if(NOT ENABLE_VULKAN)
+        message(FATAL_ERROR "ENABLE_NRD requires ENABLE_VULKAN")
+    endif()
+    # NRD is GAPI-free: it embeds SPIRV compute shaders and hands back dispatch
+    # descriptions that the ray-query pipeline records itself. No NRI - its own
+    # Vulkan entry-point resolution would collide with volk's ownership of the
+    # vk* symbols, the same silent-crash class as the VMA case.
+    include(FetchContent)
+    FetchContent_Declare(NRD
+        GIT_REPOSITORY https://github.com/NVIDIA-RTX/NRD.git
+        GIT_TAG v4.17.3
+        GIT_SHALLOW TRUE)
+    set(NRD_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
+    set(NRD_EMBEDS_SPIRV_SHADERS ON CACHE BOOL "" FORCE)
+    set(NRD_EMBEDS_DXIL_SHADERS OFF CACHE BOOL "" FORCE)
+    set(NRD_EMBEDS_DXBC_SHADERS OFF CACHE BOOL "" FORCE)
+    set(NRD_DISABLE_SHADER_COMPILATION OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(NRD)
+    add_compile_definitions(R_ENABLE_NRD)
 endif()
 
 # Compiles slang/ to SPIR-V for Vulkan and regenerates the uniform layout

@@ -17,6 +17,10 @@
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/scene/node/model.h"
 #include "reone/scene/registry.h"
+
+#ifdef R_ENABLE_NRD
+#include <NRD.h>
+#endif
 #include "reone/system/logutil.h"
 
 #include <chrono>
@@ -263,6 +267,31 @@ void RayQueryPipeline::init() {
     }
     vkDestroyShaderModule(device.handle(), module, nullptr);
     device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_skinPipeline), "rayquery:skin");
+#ifdef R_ENABLE_NRD
+    {
+        // Stage 1 of the NRD integration: prove the library is linked, its
+        // instance comes up, and its resource demands are known. The
+        // dispatches themselves arrive with the output split.
+        const nrd::LibraryDesc &libraryDesc = *nrd::GetLibraryDesc();
+        nrd::DenoiserDesc denoiserDesc {0, nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR};
+        nrd::InstanceCreationDesc creationDesc {};
+        creationDesc.denoisers = &denoiserDesc;
+        creationDesc.denoisersNum = 1;
+        nrd::Instance *instance = nullptr;
+        if (nrd::CreateInstance(creationDesc, instance) == nrd::Result::SUCCESS) {
+            _nrdInstance = instance;
+            const nrd::InstanceDesc &instanceDesc = *nrd::GetInstanceDesc(*instance);
+            info("NRD " + std::to_string(libraryDesc.versionMajor) + "." +
+                 std::to_string(libraryDesc.versionMinor) + "." +
+                 std::to_string(libraryDesc.versionBuild) + " up: " +
+                 std::to_string(instanceDesc.pipelinesNum) + " pipelines, " +
+                 std::to_string(instanceDesc.permanentPoolSize) + " permanent + " +
+                 std::to_string(instanceDesc.transientPoolSize) + " transient pool textures");
+        } else {
+            warn("NRD instance creation failed; denoising stays unavailable");
+        }
+    }
+#endif
     _inited = true;
 }
 
@@ -278,6 +307,12 @@ void RayQueryPipeline::clearFrame(Frame &frame) {
 
 void RayQueryPipeline::deinit() {
     for (auto &frame : _frames) clearFrame(frame);
+#ifdef R_ENABLE_NRD
+    if (_nrdInstance) {
+        nrd::DestroyInstance(*static_cast<nrd::Instance *>(_nrdInstance));
+        _nrdInstance = nullptr;
+    }
+#endif
     auto &device = _renderer.device();
     if (_skinPipeline) vkDestroyPipeline(device.handle(), _skinPipeline, nullptr);
     if (_skinPipelineLayout) vkDestroyPipelineLayout(device.handle(), _skinPipelineLayout, nullptr);
