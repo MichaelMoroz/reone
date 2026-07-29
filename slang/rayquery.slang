@@ -267,6 +267,34 @@ float2 interpolateFloat2(InstanceMaterial material, uint3 indices, int offset, f
            loadFloat2(attributeAddress(material, indices.z, offset)) * weights.z;
 }
 
+/**
+ * Ray-cone texture LOD (Moller et al., Ray Tracing Gems ch. 20, simplified):
+ * half of log2 of the triangle's texel-per-world-area density, plus log2 of
+ * the cone width at the hit. Point-sampling mip 0 everywhere was the
+ * dominant "noise": under TAA jitter every ray hit a different texel of a
+ * minified texture, grass most of all, and the aliasing poisoned the albedo
+ * demodulation guide and the noise-free TAA clamp alike. Positions are
+ * object-space - Odyssey instances are uniformly scaled near one, and the
+ * error is a fraction of a mip. Isotropic: the obliquity term is applied by
+ * the caller where a geometric normal exists; anisotropic filtering would
+ * sharpen grazing angles further and is future work.
+ */
+float rayConeLod(InstanceMaterial material, uint3 indices, float coneWidth) {
+    if (material.offUV1 == -1 || material.mainTex == kNoTexture) return 0.0;
+    float3 q0 = loadFloat3(attributeAddress(material, indices.x, material.offPosition));
+    float3 q1 = loadFloat3(attributeAddress(material, indices.y, material.offPosition));
+    float3 q2 = loadFloat3(attributeAddress(material, indices.z, material.offPosition));
+    float2 uv0 = loadFloat2(attributeAddress(material, indices.x, material.offUV1));
+    float2 uv1 = loadFloat2(attributeAddress(material, indices.y, material.offUV1));
+    float2 uv2 = loadFloat2(attributeAddress(material, indices.z, material.offUV1));
+    float ta = abs((uv1.x - uv0.x) * (uv2.y - uv0.y) - (uv2.x - uv0.x) * (uv1.y - uv0.y));
+    float pa = length(cross(q1 - q0, q2 - q0));
+    uint texWidth, texHeight;
+    bindlessTextures[NonUniformResourceIndex(material.mainTex)].GetDimensions(texWidth, texHeight);
+    float density = ta * float(texWidth) * float(texHeight) / max(pa, 1e-9);
+    return max(0.0, 0.5 * log2(max(density, 1e-12)) + log2(max(coneWidth, 1e-9)));
+}
+
 float3 interpolateFloat3(InstanceMaterial material, uint3 indices, int offset, float3 weights) {
     return loadFloat3(attributeAddress(material, indices.x, offset)) * weights.x +
            loadFloat3(attributeAddress(material, indices.y, offset)) * weights.y +
@@ -373,7 +401,8 @@ struct CandidateLayer {
 // Candidate handling deliberately stays cheap: its only job is to composite a
 // translucent leaf layer while traversal continues to a solid surface. It does
 // not launch another hemisphere from every candidate.
-CandidateLayer sampleCandidateLayer(InstanceMaterial material, uint3 indices, float3 weights) {
+CandidateLayer sampleCandidateLayer(InstanceMaterial material, uint3 indices, float3 weights,
+                                    float coneWidth) {
     CandidateLayer layer;
     layer.albedo = gammaToLinear(material.diffuseColor.rgb);
     layer.alpha = 1.0;
@@ -382,7 +411,8 @@ CandidateLayer sampleCandidateLayer(InstanceMaterial material, uint3 indices, fl
         uv = transformedUV(material, interpolateFloat2(material, indices, material.offUV1, weights));
     }
     if (material.mainTex != kNoTexture) {
-        float4 sample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(uv, 0.0);
+        float lod = rayConeLod(material, indices, coneWidth);
+        float4 sample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(uv, lod);
         layer.albedo = gammaToLinear(sample.rgb);
         layer.alpha = sample.a;
     }
@@ -433,7 +463,8 @@ float curatedChannel(float4 A, float4 B, float3 albedo, float current) {
 
 HitSurface sampleSurface(InstanceMaterial material, uint3 indices, float3 weights,
                          float3x4 objectToWorld, float3x4 worldToObject,
-                         float3 rayDirection, float3 hitPosition, float2 uv, float2 uv2) {
+                         float3 rayDirection, float3 hitPosition, float coneWidth,
+                         float2 uv, float2 uv2) {
     HitSurface hit;
     float3 p0 = mul(objectToWorld, float4(loadFloat3(attributeAddress(material, indices.x, material.offPosition)), 1.0));
     float3 p1 = mul(objectToWorld, float4(loadFloat3(attributeAddress(material, indices.y, material.offPosition)), 1.0));
@@ -442,9 +473,13 @@ HitSurface sampleSurface(InstanceMaterial material, uint3 indices, float3 weight
     if (dot(hit.geometricNormal, rayDirection) > 0.0) hit.geometricNormal = -hit.geometricNormal;
     hit.shadowOrigin = hitPosition;
 
+    // Obliquity widens the footprint at grazing angles; the clamp bounds the
+    // over-blur isotropic filtering pays there.
+    float lod = rayConeLod(material, indices, coneWidth) -
+                log2(clamp(abs(dot(hit.geometricNormal, rayDirection)), 0.25, 1.0));
     SurfaceParams surface = defaultSurface();
     if (material.mainTex != kNoTexture) {
-        float4 mainTexSample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(uv, 0.0);
+        float4 mainTexSample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(uv, lod);
         // Textures are stored gamma-encoded; every term this shader computes is
         // linear, exactly as the raster resolve does it. Missing this halved
         // every light-driven (dark) region: linear 0.1 displayed raw is 25 of
@@ -506,7 +541,7 @@ HitSurface sampleSurface(InstanceMaterial material, uint3 indices, float3 weight
         if (dot(tangentSpaceNormal, tangentSpaceNormal) >= 1e-10 &&
             dot(tangent, tangent) >= 1e-10 && dot(bitangent, bitangent) >= 1e-10) {
             if ((material.featureMask & uint(kFeatureNormalMap)) != 0 && material.normalMap != kNoTexture) {
-                float3 n = bindlessTextures[NonUniformResourceIndex(material.normalMap)].SampleLevel(uv, 0.0).rgb * 2.0 - 1.0;
+                float3 n = bindlessTextures[NonUniformResourceIndex(material.normalMap)].SampleLevel(uv, lod).rgb * 2.0 - 1.0;
                 shadingNormal = normalize(tangent * n.x + bitangent * n.y + shadingNormal * n.z);
             } else if ((material.featureMask & uint(kFeatureBumpMap)) != 0 && material.bumpMapArray != kNoTexture) {
                 uint bumpWidth, bumpHeight, bumpLayers;
@@ -588,7 +623,9 @@ float shadowTransmittance(float3 hitPosition, float3 geometricNormal, float3 dir
             float2 barycentrics = shadow.CandidateTriangleBarycentrics();
             float3 weights = float3(1.0 - barycentrics.x - barycentrics.y,
                                     barycentrics.x, barycentrics.y);
-            CandidateLayer layer = sampleCandidateLayer(candidateMaterial, candidateIndices, weights);
+            // Shadow rays keep mip 0: their footprint is the light cone's,
+            // not the pixel's, and alpha at base level is the sharper test.
+            CandidateLayer layer = sampleCandidateLayer(candidateMaterial, candidateIndices, weights, 0.0);
             transmittance = clamp(transmittance * (1.0 - layer.alpha), 0.0, 1.0);
             if (transmittance < kShadowEpsilon) break;
         }
@@ -731,6 +768,13 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     // that one, and re-traces with TMin advanced just past it. The origin
     // never moves, so CommittedRayT stays in the original parameterisation and
     // the shading block below needs no special cases.
+    // Ray-cone spread: the angle one pixel subtends. Zero for orthographic
+    // GUI scenes, where projection[1][1] is a world scale, not a tangent -
+    // their content is authored near-field and mip 0 is right anyway.
+    float spreadAngle = globalUniforms.projection[3][3] == 0.0
+                            ? 2.0 / (float(height) * globalUniforms.projection[1][1])
+                            : 0.0;
+
     RayQuery<RAY_FLAG_NONE> primary;
     float primaryThroughput = 1.0;
     float3 primaryLayers = 0.0;
@@ -748,7 +792,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
             float2 candidateBarycentrics = primary.CandidateTriangleBarycentrics();
             float3 candidateWeights = float3(1.0 - candidateBarycentrics.x - candidateBarycentrics.y,
                                               candidateBarycentrics.x, candidateBarycentrics.y);
-            CandidateLayer layer = sampleCandidateLayer(candidateMaterial, candidateIndices, candidateWeights);
+            CandidateLayer layer = sampleCandidateLayer(candidateMaterial, candidateIndices, candidateWeights,
+                                                        spreadAngle * primary.CandidateTriangleRayT());
             if ((candidateMaterial.featureMask & kTraceAdditive) != 0) {
                 // Candidates surface in traversal order, and nothing stops one
                 // arriving beyond what later becomes the nearest hit - or
@@ -803,7 +848,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         float2 committedBarycentrics = primary.CommittedTriangleBarycentrics();
         float3 committedWeights = float3(1.0 - committedBarycentrics.x - committedBarycentrics.y,
                                           committedBarycentrics.x, committedBarycentrics.y);
-        CandidateLayer committedLayer = sampleCandidateLayer(committedMaterial, committedIndices, committedWeights);
+        CandidateLayer committedLayer = sampleCandidateLayer(committedMaterial, committedIndices, committedWeights,
+                                                             spreadAngle * primary.CommittedRayT());
         // An effectively opaque texel is a real surface and deserves the full
         // shading path rather than the cheap layer formula.
         if (committedLayer.alpha >= kOpaqueCommitAlpha) break;
@@ -842,7 +888,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         }
         float3 hitPosition = ray.Origin + ray.Direction * primary.CommittedRayT();
         HitSurface primarySurface = sampleSurface(material, indices, weights, objectToWorld,
-                                                  worldToObject, ray.Direction, hitPosition, uv, uv2);
+                                                  worldToObject, ray.Direction, hitPosition,
+                                                  spreadAngle * primary.CommittedRayT(), uv, uv2);
         CategoryOverride primaryOverride = categoryOverrideFor(material.featureMask);
         primarySurface.surface.albedo = lerp(primarySurface.surface.albedo,
                                              gammaToLinear(primaryOverride.color.rgb),
@@ -1077,6 +1124,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 float3 radiance = 0.0;
                 float3 pathThroughput = 1.0;
                 float firstBounceT = kTraceInfDistance;
+                // Cone width grows with total path length; roughness-driven
+                // spread would widen it further and is left to future work.
+                float pathDistance = primary.CommittedRayT();
                 uint pathBounces = max(pushConstants.bounceCount, 1u);
                 for (uint bounceIndex = 0; bounceIndex < pathBounces; ++bounceIndex) {
                     RayQuery<RAY_FLAG_NONE> bounce;
@@ -1093,7 +1143,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                         float2 candidateBarycentrics = bounce.CandidateTriangleBarycentrics();
                         float3 candidateWeights = float3(1.0 - candidateBarycentrics.x - candidateBarycentrics.y,
                                                           candidateBarycentrics.x, candidateBarycentrics.y);
-                        CandidateLayer layer = sampleCandidateLayer(candidateMaterial, candidateIndices, candidateWeights);
+                        CandidateLayer layer = sampleCandidateLayer(
+                            candidateMaterial, candidateIndices, candidateWeights,
+                            spreadAngle * (pathDistance + bounce.CandidateTriangleRayT()));
                         if ((candidateMaterial.featureMask & kTraceAdditive) != 0) {
                             // Nearest-first under the cap, same as the primary
                             // loop: arrival order is not run-reproducible.
@@ -1157,6 +1209,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                                                              bounce.CommittedObjectToWorld3x4(),
                                                              bounce.CommittedWorldToObject3x4(),
                                                              secondary.Direction, bounceHitPosition,
+                                                             spreadAngle * (pathDistance + bounce.CommittedRayT()),
                                                              bounceUV, bounceUV2);
                     CategoryOverride bounceOverride = categoryOverrideFor(bounceMaterial.featureMask);
                     bounceSurface.surface.albedo = lerp(bounceSurface.surface.albedo,
@@ -1231,6 +1284,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                         }
                     }
                     if (max(pathThroughput.x, max(pathThroughput.y, pathThroughput.z)) < 1e-3) break;
+                    pathDistance += bounce.CommittedRayT();
                     secondary.Origin = bounceHitPosition +
                                        bounceSurface.geometricNormal * pushConstants.rayOriginOffset;
                     secondary.Direction = continueDirection;
