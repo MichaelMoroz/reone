@@ -20,6 +20,7 @@
 #include "reone/system/logutil.h"
 
 #include <chrono>
+#include <map>
 #include <cstddef>
 #include <cstring>
 
@@ -442,6 +443,56 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     _lastSabers = 0;
     _lastSky = 0;
     _lastDangly = 0;
+    // Sky detection: there is exactly ONE sky per scene - the room whose
+    // geometry overlaps the scene itself. Candidates are rooms without a
+    // walkmesh (background scenery, the K1 skybox convention - a walkable
+    // room can never be the sky, so a one-room interior never qualifies);
+    // among them, the room whose union bounds cover the scene on all three
+    // axes above a relative threshold wins, and every mesh of that room
+    // classifies. Modules stitch the dome from several pieces of one sky
+    // room, which is why the test is per room, not per mesh. Semantic and
+    // geometric, never color-based.
+    static constexpr float kSkyOverlapThreshold = 0.5f;
+    glm::vec3 sceneMin(std::numeric_limits<float>::max());
+    glm::vec3 sceneMax(std::numeric_limits<float>::lowest());
+    struct SkyRoomCandidate {
+        glm::vec3 boundsMin {std::numeric_limits<float>::max()};
+        glm::vec3 boundsMax {std::numeric_limits<float>::lowest()};
+    };
+    std::map<const ModelSceneNode *, SkyRoomCandidate> sceneryRooms;
+    for (const auto &object : registry.objects()) {
+        const auto *mesh = std::get_if<RegisteredMesh>(&object);
+        if (!mesh || !mesh->cullRoot || mesh->cullRoot->usage() != ModelUsage::Room) continue;
+        if ((mesh->categories & (renderCategory(RenderCategory::Opaque) |
+                                 renderCategory(RenderCategory::Transparent))) == 0) {
+            continue;
+        }
+        auto worldAabb = mesh->mesh.get().aabb() * mesh->transform;
+        sceneMin = glm::min(sceneMin, worldAabb.min());
+        sceneMax = glm::max(sceneMax, worldAabb.max());
+        if (mesh->cullRoot->isBackgroundScenery()) {
+            auto &candidate = sceneryRooms[mesh->cullRoot];
+            candidate.boundsMin = glm::min(candidate.boundsMin, worldAabb.min());
+            candidate.boundsMax = glm::max(candidate.boundsMax, worldAabb.max());
+        }
+    }
+    const ModelSceneNode *skyRoom = nullptr;
+    if (!sceneryRooms.empty()) {
+        glm::vec3 sceneExtent = glm::max(sceneMax - sceneMin, glm::vec3(1e-3f));
+        float bestVolume = 0.0f;
+        for (const auto &[room, candidate] : sceneryRooms) {
+            glm::vec3 extent = candidate.boundsMax - candidate.boundsMin;
+            glm::vec3 ratios = extent / sceneExtent;
+            if (glm::min(ratios.x, glm::min(ratios.y, ratios.z)) < kSkyOverlapThreshold) {
+                continue;
+            }
+            float volume = extent.x * extent.y * extent.z;
+            if (volume > bestVolume) {
+                bestVolume = volume;
+                skyRoom = room;
+            }
+        }
+    }
     for (const auto &object : registry.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
         if (!mesh) continue;
@@ -523,24 +574,15 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                      ? static_cast<uint32_t>(mesh->cullRoot->usage())
                                      : 8u;
         material.featureMask |= (categoryIndex & 0xFu) << 27;
-        // Sky is authored background geometry that is also fully
-        // self-illuminated. The luma test alone misclassified interior lit
-        // panels as sky, which both mis-dialed them and - worse - put them
-        // on the shadow-transparent instance mask, leaking light into fully
-        // enclosed scenes like the Taris underground. A tracing-local bit,
+        // The one sky room, detected by the scene-overlap pre-pass above.
+        // Its meshes render their texture as prelit radiance, terminate
+        // paths, take the sky dial, and ride instance-mask bit 2,
+        // transparent to shadow rays: the environment never occludes the
+        // sun. Everything else - lit panels, backdrop strips, vista rooms -
+        // is plain geometry with real occlusion. The bit is tracing-local,
         // deliberately above the shared UniformsFeatureFlags range; must
         // match kTraceSky in slang/rayquery.slang.
-        // Sky classification is semantic, never color-based: the authored
-        // MDL background-geometry flag alone. That is also what the original
-        // engine keyed on - background geometry rendered unlit, its texture
-        // being the authored radiance - so the dome and the backdrop ring
-        // both group as sky (unlit, sky dial, path-terminating) and both
-        // ride instance-mask bit 2, transparent to shadow rays: the
-        // environment never occludes the sun. Interior lit panels are plain
-        // emissive geometry - they take the emissive dial and they occlude,
-        // as real luminaires do. The earlier selfIllum-luma test sat in for
-        // this flag and misclassified in both directions.
-        if (mesh->material.backgroundGeometry) {
+        if (skyRoom && mesh->cullRoot == skyRoom) {
             material.featureMask |= 1u << 24;
             instance.mask = 0x2;
             ++_lastSky;

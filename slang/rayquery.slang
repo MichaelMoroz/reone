@@ -83,9 +83,10 @@ CategoryOverride categoryOverrideFor(uint featureMask) {
     return categoryOverrides[(featureMask >> kTraceCategoryShift) & kTraceCategoryMask];
 }
 
-// Set CPU-side on authored background geometry - semantic, never
-// color-based; see rayquery.cpp. Sky surfaces render their texture as
-// prelit radiance, terminate paths, and never occlude shadow rays.
+// Set CPU-side on the scene's one sky - the room-owned box mesh whose
+// bounds overlap the whole scene; see rayquery.cpp. Sky renders its
+// texture as prelit radiance, terminates paths, and never occludes
+// shadow rays.
 static const uint kTraceSky = 1u << 24;
 // Additive-blended diffuse: the texture is the light. Set CPU-side.
 static const uint kTraceAdditive = 1u << 25;
