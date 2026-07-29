@@ -291,6 +291,7 @@ void MeshSceneNode::registerRender(RenderRegistry &registry) {
     material.diffuseColor = mesh->diffuse;
     material.selfIllumColor = _selfIllumColor;
     material.staticObject = _static;
+    material.backgroundGeometry = mesh->backgroundGeometry;
     if (render && _sceneGraph.hasShadowLight() && isReceivingShadows(_model, *this)) {
         material.affectedByShadows = true;
     }

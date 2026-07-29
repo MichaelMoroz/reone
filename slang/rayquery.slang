@@ -123,8 +123,19 @@ struct PushConstants {
     // launched with; deeper paths trade cost and lightmap double-count for
     // light reaching around corners.
     uint bounceCount;
+    // Angular radius of light sources, radians. Never zero - a light source
+    // is never a point (calibration rule): points wide for soft penumbras,
+    // the sun fairly sharp.
+    float pointAngularRadius;
+    float sunAngularRadius;
+    // Scene-referred exposure applied before the tonemap.
+    float exposure;
 };
 static const uint kTraceFlagStats = 1u;
+// traceFlags bits 8-9: tonemap operator. 0 passes through.
+static const uint kTraceTonemapShift = 8;
+static const uint kTraceTonemapMask = 0x3u;
+static const uint kTonemapAces = 1;
 [[vk::push_constant]] PushConstants pushConstants;
 
 
@@ -224,6 +235,29 @@ float3 ggxHalfVector(float3 normal, float roughness, float2 xi) {
 
 float3 fresnelSchlick(float cosTheta, float3 F0) {
     return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
+}
+
+// Uniform direction inside a cone: light sources are never points, so every
+// shadow ray samples the source's angular extent and shadows get penumbra.
+float3 coneSample(float3 direction, float angularRadius, float2 xi) {
+    float cosTheta = lerp(1.0, cos(angularRadius), xi.x);
+    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+    float phi = 6.28318530718 * xi.y;
+    return tangentToWorld(direction, float3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta));
+}
+
+// Narkowicz's ACES fit. Scene-referred in, display-referred out; the
+// calibration rule is that direct light alone lands around 0.3-0.5 of the
+// final value in lit areas, leaving headroom that bounce light fills.
+float3 acesTonemap(float3 x) {
+    return saturate((x * (2.51 * x + 0.03)) / (x * (x * 2.43 + 0.59) + 0.14));
+}
+
+float3 displayTransform(float3 linearColor) {
+    float3 mapped = linearColor * pushConstants.exposure;
+    uint tonemap = (pushConstants.traceFlags >> kTraceTonemapShift) & kTraceTonemapMask;
+    if (tonemap == kTonemapAces) mapped = acesTonemap(mapped);
+    return pow(max(mapped, 0.0), 1.0 / 2.2);
 }
 
 float3 linearToGamma(float3 rgb) {
@@ -453,6 +487,76 @@ float directLightWeight(GlobalUniformsLight light, float3 hitPosition, float3 sh
                       light.multiplier * attenuation * NdotL);
 }
 
+// One light sample at a path vertex - the same weighted single-draw
+// estimator the primary hit uses, shaded with the vertex's own material
+// model. Without this the Bounces dial was a no-op for analytic lights:
+// their energy died at the first surface it touched.
+float3 vertexDirectLight(float3 position, float3 shadingNormal, float3 geometricNormal,
+                         float3 V, float3 albedo, float metallic, float roughness,
+                         bool envmapped, float envMapStrength, inout uint state) {
+    float totalWeight = 0.0;
+    for (int i = 0; i < globalUniforms.numLights; ++i) {
+        GlobalUniformsLight light = globalUniforms.lights[i];
+        bool directional = light.position.w == 0.0;
+        if (!directional && light.ambientOnly != 0) continue;
+        float lightDistance = length(light.position.xyz - position);
+        if (!directional && lightDistance > light.radius * light.radius) continue;
+        totalWeight += directLightWeight(light, position, shadingNormal);
+    }
+    if (totalWeight <= 0.0) return float3(0.0);
+    float pick = random01(state) * totalWeight;
+    int selectedIndex = -1;
+    float selectedWeight = 0.0;
+    float accum = 0.0;
+    for (int i = 0; i < globalUniforms.numLights; ++i) {
+        GlobalUniformsLight light = globalUniforms.lights[i];
+        float w = directLightWeight(light, position, shadingNormal);
+        if (w <= 0.0) continue;
+        accum += w;
+        selectedIndex = i;
+        selectedWeight = w;
+        if (pick <= accum) break;
+    }
+    if (selectedIndex < 0) return float3(0.0);
+    GlobalUniformsLight light = globalUniforms.lights[selectedIndex];
+    bool directional = light.position.w == 0.0;
+    float3 fragToLight = light.position.xyz - position;
+    float lightDistance = length(fragToLight);
+    float3 L = fragToLight / max(lightDistance, 1e-4);
+    float attenuation = 1.0;
+    if (!directional) {
+        float d = light.radius + lightDistance;
+        attenuation = (light.radius * light.radius) / (d * d);
+    }
+    float3 radiance = gammaToLinear(light.color.rgb) * light.multiplier;
+    radiance *= directional ? pushConstants.sunIntensity
+                            : attenuation * pushConstants.directIntensity;
+    float angular = directional ? pushConstants.sunAngularRadius
+                                : pushConstants.pointAngularRadius;
+    float3 shadowDirection = coneSample(L, angular, float2(random01(state), random01(state)));
+    radiance *= shadowTransmittance(position, geometricNormal, shadowDirection,
+                                    directional ? 10000.0 : lightDistance) *
+                (totalWeight / max(selectedWeight, 1e-6));
+    float NdotL = max(0.0, dot(shadingNormal, L));
+    float NdotV = max(0.0, dot(shadingNormal, V));
+    float3 F0 = lerp(lerp(float3(0.04), albedo, metallic), float3(1.0), envMapStrength);
+    float3 H = normalize(V + L);
+    float NdotH = max(0.0, dot(shadingNormal, H));
+    float VdotH = max(0.0, dot(V, H));
+    float ggxAlpha = roughness * roughness;
+    float ggxAlpha2 = ggxAlpha * ggxAlpha;
+    float geomK = roughness + 1.0;
+    geomK = geomK * geomK * (1.0 / 8.0);
+    float D = distributionGGX(NdotH * NdotH, ggxAlpha2);
+    float G = geometrySmith(NdotL, NdotV, geomK);
+    float3 lightF = fresnelSchlick(VdotH, F0);
+    float3 spec = (D * G * lightF) / max(1e-4, 4.0 * NdotL * NdotV);
+    float3 kD = (1.0 - lightF) * (1.0 - metallic);
+    float3 contribution = kD / kPi * radiance * NdotL * albedo;
+    if (envmapped) contribution += spec * radiance * NdotL;
+    return contribution;
+}
+
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void main(uint3 dispatchId : SV_DispatchThreadID) {
@@ -622,7 +726,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         if ((material.featureMask & kTraceSky) != 0) {
             color += primaryThroughput * primarySurface.surface.emissive *
                      primarySurface.surface.albedo * pushConstants.skyIntensity;
-            outputImage[dispatchId.xy] = float4(linearToGamma(color), 1.0);
+            outputImage[dispatchId.xy] = float4(displayTransform(color), 1.0);
             return;
         }
         // For everything else, kTraceSky-free emission selects the emissive
@@ -690,6 +794,10 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         // happens at a warp-uniform index:
         // (1/spp) sum_s f(L_s)/p_s  =  sum_i (m_i/spp) f(L_i)/p_i.
         uint shadowRayCount = 0;
+        // Light sources are never points: primary shadow rays jitter inside
+        // each light's angular cone from a dedicated per-pixel chain.
+        uint shadowJitterState = hash(dispatchId.x * 0x9e3779b9u ^ dispatchId.y * 0x85ebca6bu ^
+                                      pushConstants.frameIndex ^ 0x0c0ffee0u);
         if (totalLightWeight > 0.0) {
             float accumBefore = 0.0;
             for (int i = 0; i < globalUniforms.numLights; ++i) {
@@ -725,8 +833,13 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 // Counted locally: a per-ray InterlockedAdd on this shared
                 // slot serializes every thread on one cache line.
                 ++shadowRayCount;
+                float shadowAngular = directional ? pushConstants.sunAngularRadius
+                                                  : pushConstants.pointAngularRadius;
+                float3 shadowDirection = coneSample(L, shadowAngular,
+                                                    float2(random01(shadowJitterState),
+                                                           random01(shadowJitterState)));
                 radiance *= shadowTransmittance(hitPosition, primarySurface.geometricNormal,
-                                                L, directional ? 10000.0 : lightDistance) *
+                                                shadowDirection, directional ? 10000.0 : lightDistance) *
                             (float(multiplicity) / selectionProbability);
                 float NdotL = max(0.0, dot(primarySurface.surface.normal, L));
                 float3 H = normalize(V + L);
@@ -886,6 +999,18 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                     bool vertexEnvmapped = (bounceMaterial.featureMask & uint(kFeatureEnvMap)) != 0;
                     float vertexEnvStrength = (vertexEnvmapped ? (1.0 - bounceSurface.surface.alpha) : 0.0) *
                                               bounceOverride.params.z;
+                    // Analytic lights sampled at this vertex: the step that
+                    // makes deeper bounces carry their light at all.
+                    float3 vertexPosition = secondary.Origin +
+                                            secondary.Direction * bounce.CommittedRayT() +
+                                            bounceSurface.geometricNormal * pushConstants.rayOriginOffset;
+                    radiance += pathThroughput * bounceThroughput *
+                                vertexDirectLight(vertexPosition, bounceSurface.surface.normal,
+                                                  bounceSurface.geometricNormal, -secondary.Direction,
+                                                  bounceSurface.surface.albedo,
+                                                  bounceSurface.surface.metallic,
+                                                  bounceSurface.surface.roughness,
+                                                  vertexEnvmapped, vertexEnvStrength, state);
                     float3 vertexF0 = lerp(lerp(float3(0.04), bounceSurface.surface.albedo,
                                                  bounceSurface.surface.metallic),
                                             float3(1.0), vertexEnvStrength);
@@ -935,6 +1060,6 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                                       primarySurface.surface.emissive * primarySurface.surface.albedo *
                                           pushConstants.emissiveIntensity);
     }
-    // Encode exactly once, at the very end, like the raster resolve.
-    outputImage[dispatchId.xy] = float4(linearToGamma(color), 1.0);
+    // One display transform, at the very end: exposure, tonemap, encode.
+    outputImage[dispatchId.xy] = float4(displayTransform(color), 1.0);
 }

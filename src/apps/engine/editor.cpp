@@ -636,6 +636,15 @@ void Editor::pathTracingSettings() {
     ImGui::SliderFloat("Origin offset", &options.ptRayOffset, 0.0001f, 0.1f, "%.4f",
                        ImGuiSliderFlags_Logarithmic);
     ImGui::TextDisabled("Too small: acne and black speckling.\nToo large: light leaks at contact edges.");
+    ImGui::SeparatorText("Display");
+    static constexpr const char *kTonemapNames[] = {"Off (linear)", "ACES"};
+    ImGui::Combo("Tonemap", &options.ptTonemap, kTonemapNames, 2);
+    ImGui::SliderFloat("Exposure", &options.ptExposure, 0.05f, 8.0f, "%.2f",
+                       ImGuiSliderFlags_Logarithmic);
+    ImGui::SeparatorText("Light shape");
+    ImGui::SliderFloat("Point angular size", &options.ptPointAngularSize, 0.05f, 45.0f, "%.1f deg");
+    ImGui::SliderFloat("Sun angular size", &options.ptSunAngularSize, 0.05f, 10.0f, "%.2f deg");
+    ImGui::TextDisabled("A light source is never a point. Wide points give\nsoft penumbras; the sun stays fairly sharp.");
     ImGui::SeparatorText("Debug view");
     static constexpr const char *kDebugViewNames[] = {
         "Off", "Object categories", "Emissive highlight", "Normals",

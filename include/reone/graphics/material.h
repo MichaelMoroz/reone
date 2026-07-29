@@ -83,6 +83,10 @@ public:
     glm::vec3 selfIllumColor {0.0f};
 
     bool staticObject {false};
+    /** The authored MDL background-geometry flag: sky domes and backdrops.
+        Tracing keys its sky classification on this identity rather than on
+        emission luma, which misclassified interior lit panels as sky. */
+    bool backgroundGeometry {false};
     bool affectedByShadows {false};
     bool affectedByFog {false};
 

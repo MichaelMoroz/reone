@@ -72,6 +72,15 @@ struct GraphicsOptions {
     /** Debug view: 0 off, then categories, emissive, normals, roughness,
         lightmap, albedo - matches kDebugView* in slang/rayquery.slang. */
     int ptDebugView {0};
+    /** Display transform: 0 off, 1 ACES. On by default - the calibration
+        programme is defined in tonemapped terms. */
+    int ptTonemap {1};
+    /** Scene-referred exposure ahead of the tonemap. */
+    float ptExposure {1.0f};
+    /** Angular radius of light sources, degrees. Never zero: a light source
+        is never a point. Points wide for soft penumbras, the sun sharp. */
+    float ptPointAngularSize {8.0f};
+    float ptSunAngularSize {1.0f};
     /**
      * Live per-category material overrides for the traced image - the
      * calibration programme's primary instrument, ImGui-driven. Indexed by

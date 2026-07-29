@@ -522,11 +522,15 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                      ? static_cast<uint32_t>(mesh->cullRoot->usage())
                                      : 8u;
         material.featureMask |= (categoryIndex & 0xFu) << 27;
-        // Sky is fully self-illuminated geometry - the same luma test
-        // isTransparent uses. A tracing-local bit, deliberately above the
-        // shared UniformsFeatureFlags range; must match kTraceSky in
-        // slang/rayquery.slang.
-        if (glm::dot(mesh->material.selfIllumColor, glm::vec3(0.299f, 0.587f, 0.114f)) >= 0.99f) {
+        // Sky is authored background geometry that is also fully
+        // self-illuminated. The luma test alone misclassified interior lit
+        // panels as sky, which both mis-dialed them and - worse - put them
+        // on the shadow-transparent instance mask, leaking light into fully
+        // enclosed scenes like the Taris underground. A tracing-local bit,
+        // deliberately above the shared UniformsFeatureFlags range; must
+        // match kTraceSky in slang/rayquery.slang.
+        if (mesh->material.backgroundGeometry &&
+            glm::dot(mesh->material.selfIllumColor, glm::vec3(0.299f, 0.587f, 0.114f)) >= 0.99f) {
             material.featureMask |= 1u << 24;
             instance.mask = 0x2;
         }
@@ -772,8 +776,12 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                   std::max(0.0001f, _options.ptRayOffset),
                                   std::max(0.0f, _options.ptSunIntensity),
                                   (_options.ptTraceStats ? 1u : 0u) |
-                                      (static_cast<uint32_t>(std::clamp(_options.ptDebugView, 0, 6)) << 4),
-                                  static_cast<uint32_t>(std::clamp(_options.ptBounces, 1, 8))};
+                                      (static_cast<uint32_t>(std::clamp(_options.ptDebugView, 0, 6)) << 4) |
+                                      (static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)) << 8),
+                                  static_cast<uint32_t>(std::clamp(_options.ptBounces, 1, 8)),
+                                  glm::radians(std::clamp(_options.ptPointAngularSize, 0.05f, 45.0f)),
+                                  glm::radians(std::clamp(_options.ptSunAngularSize, 0.05f, 10.0f)),
+                                  std::max(0.01f, _options.ptExposure)};
     vkCmdPushConstants(cmd, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), &constants);
     vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8), static_cast<uint32_t>((_extent.y + 7) / 8), 1);
     ++_frameNumber;
