@@ -286,6 +286,13 @@ void RenderRegistry::drawScene(IRenderPassExecutor &executor,
                     return;
                 }
                 using T = std::decay_t<decltype(entry)>;
+                // The registry panel's per-object kill switch. Debug draws
+                // carry no id and stay.
+                if constexpr (!std::is_same_v<T, RegisteredDebug>) {
+                    if (!isObjectEnabled(entry.id.index)) {
+                        return;
+                    }
+                }
                 if constexpr (std::is_same_v<T, RegisteredMesh>) {
                     if (entry.cullRoot && isCulled(*entry.cullRoot, visibility)) {
                         return;

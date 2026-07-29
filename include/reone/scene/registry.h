@@ -18,6 +18,7 @@
 #pragma once
 
 #include <variant>
+#include <unordered_set>
 
 #include "reone/graphics/frustum.h"
 #include "reone/graphics/material.h"
@@ -240,6 +241,21 @@ std::string renderPassName(RenderPassName pass);
 class RenderRegistry {
 public:
     void resetFrame();
+
+    /** Per-object debug kill switch, driven from the registry panel. Keyed
+        by SceneNodeId index so it survives the per-frame re-registration;
+        enforced by drawScene and the TLAS admission alike, so a disabled
+        object vanishes from every render mode. */
+    bool isObjectEnabled(uint32_t idIndex) const {
+        return _disabledObjects.find(idIndex) == _disabledObjects.end();
+    }
+    void setObjectEnabled(uint32_t idIndex, bool enabled) {
+        if (enabled) {
+            _disabledObjects.erase(idIndex);
+        } else {
+            _disabledObjects.insert(idIndex);
+        }
+    }
     void beginSceneTraversal();
     void checkIdentityStability();
 
@@ -301,6 +317,7 @@ public:
 
 private:
     std::vector<RegisteredObject> _objects;
+    std::unordered_set<uint32_t> _disabledObjects;
     size_t _traversalCount {0};
     RegistryCounts _registeredCounts;
     RegistryCounts _drawnCounts;

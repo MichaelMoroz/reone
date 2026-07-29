@@ -105,6 +105,7 @@ public:
     MOCK_METHOD(uint32_t, internName, (std::string_view), (override));
     MOCK_METHOD(std::string_view, nameText, (uint32_t), (const override));
     MOCK_METHOD(const RenderRegistry &, registry, (), (const override));
+    MOCK_METHOD(RenderRegistry &, registry, (), (override));
 };
 
 class MockSceneGraphs : public ISceneGraphs, boost::noncopyable {

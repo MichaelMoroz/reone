@@ -98,6 +98,7 @@ public:
 
     /** The completed frame snapshot. Editor update intentionally sees frame N-1. */
     virtual const RenderRegistry &registry() const = 0;
+    virtual RenderRegistry &registry() = 0;
     virtual uint32_t internName(std::string_view name) = 0;
     virtual std::string_view nameText(uint32_t id) const = 0;
 
@@ -177,6 +178,7 @@ public:
     void renderScene(RenderRegistry &registry);
 
     const RenderRegistry &registry() const override { return _registry; }
+    RenderRegistry &registry() override { return _registry; }
     uint32_t internName(std::string_view name) override;
     std::string_view nameText(uint32_t id) const override;
 

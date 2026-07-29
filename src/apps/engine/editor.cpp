@@ -125,6 +125,7 @@ struct RegistryEntryView {
     size_t particles {0};
     size_t clusters {0};
     bool debug {false};
+    uint32_t id {UINT32_MAX};
 };
 
 RegistryEntryView makeRegistryEntryView(const scene::ISceneGraph &graph,
@@ -134,6 +135,9 @@ RegistryEntryView makeRegistryEntryView(const scene::ISceneGraph &graph,
             using T = std::decay_t<decltype(entry)>;
             RegistryEntryView result;
             result.object = &object;
+            if constexpr (!std::is_same_v<T, scene::RegisteredDebug>) {
+                result.id = entry.id.index;
+            }
             if constexpr (std::is_same_v<T, scene::RegisteredMesh>) {
                 result.root = entry.cullRoot;
                 result.modelName = graph.nameText(entry.nameIds.model);
@@ -837,11 +841,11 @@ void Editor::drawRegistry() {
     ImGui::SameLine();
     ImGui::TextDisabled("scene");
 
-    const auto &graph = graphs.get(_registryScene);
+    auto &graph = graphs.get(_registryScene);
     // Editor::update runs before SceneGraph::render resets and fills the
     // registry, so this is deliberately the previous frame's complete
     // snapshot. Reading it during render would expose a partial frame.
-    const auto &registry = graph.registry();
+    auto &registry = graph.registry();
     const auto &registered = registry.registeredCounts();
     const auto &drawnByPass = registry.drawnCountsByPass();
     auto drawnEntries = [&drawnByPass](scene::RenderPassName pass) {
@@ -929,10 +933,11 @@ void Editor::drawRegistry() {
     static constexpr ImGuiTableFlags kTableFlags =
         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
         ImGuiTableFlags_ScrollX | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingFixedFit;
-    if (!ImGui::BeginTable("##registry-table", 6, kTableFlags)) {
+    if (!ImGui::BeginTable("##registry-table", 7, kTableFlags)) {
         ImGui::End();
         return;
     }
+    ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 26.0f);
     ImGui::TableSetupColumn("Model / node", ImGuiTableColumnFlags_WidthFixed, 250.0f);
     ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 64.0f);
     ImGui::TableSetupColumn("DPOTXG", ImGuiTableColumnFlags_WidthFixed, 66.0f);
@@ -966,20 +971,34 @@ void Editor::drawRegistry() {
         ImGui::PushID(static_cast<int>(groupIndex));
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
+        // The kill switch: unticking removes the object from every render
+        // mode - raster walks and the TLAS alike. The group box drives all
+        // of its entries at once.
+        bool groupEnabled = std::all_of(visible.begin(), visible.end(), [&](const auto *entry) {
+            return entry->debug || registry.isObjectEnabled(entry->id);
+        });
+        if (ImGui::Checkbox("##group-on", &groupEnabled)) {
+            for (const auto *entry : visible) {
+                if (!entry->debug) {
+                    registry.setObjectEnabled(entry->id, groupEnabled);
+                }
+            }
+        }
+        ImGui::TableSetColumnIndex(1);
         const bool open = ImGui::TreeNodeEx(group.label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
 
         // The instance counts belong on the group, not on its rows: grass is one
         // entry holding 1482 clusters, so a per-entry column would read "1" and
         // hide the only number that matters for it.
         if (group.clusters != 0 || group.particles != 0) {
-            ImGui::TableSetColumnIndex(3);
+            ImGui::TableSetColumnIndex(4);
             ImGui::TextDisabled("%zu %s",
                                 group.clusters != 0 ? group.clusters : group.particles,
                                 group.clusters != 0 ? "clusters" : "particles");
         }
-        ImGui::TableSetColumnIndex(4);
-        registryRightAligned(std::to_string(visible.size()));
         ImGui::TableSetColumnIndex(5);
+        registryRightAligned(std::to_string(visible.size()));
+        ImGui::TableSetColumnIndex(6);
         if (drawn == 0) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             registryRightAligned("0");
@@ -1007,12 +1026,19 @@ void Editor::drawRegistry() {
                     }
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
-                    ImGui::TextUnformatted(node.data(), node.data() + node.size());
+                    if (!entry.debug) {
+                        bool enabled = registry.isObjectEnabled(entry.id);
+                        if (ImGui::Checkbox("##on", &enabled)) {
+                            registry.setObjectEnabled(entry.id, enabled);
+                        }
+                    }
                     ImGui::TableSetColumnIndex(1);
-                    ImGui::TextUnformatted(entry.kind);
+                    ImGui::TextUnformatted(node.data(), node.data() + node.size());
                     ImGui::TableSetColumnIndex(2);
-                    ImGui::TextUnformatted(registryPassSlots(entry.drawnPasses).c_str());
+                    ImGui::TextUnformatted(entry.kind);
                     ImGui::TableSetColumnIndex(3);
+                    ImGui::TextUnformatted(registryPassSlots(entry.drawnPasses).c_str());
+                    ImGui::TableSetColumnIndex(4);
                     ImGui::TextUnformatted(entry.material);
                     if (culled) {
                         ImGui::PopStyleColor();

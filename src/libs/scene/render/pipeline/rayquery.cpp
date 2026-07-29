@@ -463,6 +463,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     for (const auto &object : registry.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
         if (!mesh || !mesh->cullRoot || mesh->cullRoot->usage() != ModelUsage::Room) continue;
+        if (!registry.isObjectEnabled(mesh->id.index)) continue;
         if ((mesh->categories & (renderCategory(RenderCategory::Opaque) |
                                  renderCategory(RenderCategory::Transparent))) == 0) {
             continue;
@@ -492,10 +493,14 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                 skyRoom = room;
             }
         }
+        if (skyRoom && _frameNumber == 0) {
+            info("Vulkan: sky room is '" + skyRoom->model().name() + "'", LogChannel::Graphics);
+        }
     }
     for (const auto &object : registry.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
         if (!mesh) continue;
+        if (!registry.isObjectEnabled(mesh->id.index)) continue;
         // Shadow-only entries - render flag off, categories reduced to
         // ShadowCaster - are the simplified shadow-volume proxies Odyssey
         // ships inside character models: skin-tight untextured boxes around
