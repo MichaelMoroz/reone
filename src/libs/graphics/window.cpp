@@ -37,6 +37,9 @@ void Window::init() {
         if (_options.fullscreen) {
             flags |= SDL_WINDOW_FULLSCREEN;
         }
+        if (_options.headless) {
+            flags |= SDL_WINDOW_HIDDEN;
+        }
         _window = SDL_CreateWindow(
             "reone",
             _options.width * _options.winScale / 100,
@@ -57,6 +60,9 @@ void Window::init() {
     int flags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (_options.fullscreen) {
         flags |= SDL_WINDOW_FULLSCREEN;
+    }
+    if (_options.headless) {
+        flags |= SDL_WINDOW_HIDDEN;
     }
     _window = SDL_CreateWindow(
         "reone",

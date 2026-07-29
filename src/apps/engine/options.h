@@ -62,6 +62,14 @@ struct Options {
     std::string capturePath;
     /** Where to write the scene render targets, or empty not to. */
     std::string dumpTargetsPath;
+    /**
+     * Append the traced-emissive candidates of the loaded module to this file
+     * on the capture frame: everything still classified emissive by default,
+     * one "module TAB model/node TAB texture TAB selfIllum" line each. Feeds
+     * the curation pass - a warp loop over every module collects the game-wide
+     * list for name-based classification.
+     */
+    std::string dumpObjectsPath;
     int captureFrame {3};
 
     /**

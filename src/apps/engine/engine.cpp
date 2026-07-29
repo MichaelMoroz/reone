@@ -47,7 +47,10 @@
 #include "editor.h"
 
 #include <algorithm>
+#include <fstream>
+#include <set>
 #include <sstream>
+#include <variant>
 
 using namespace reone::audio;
 using namespace reone::game;
@@ -632,7 +635,53 @@ void Engine::captureIfRequested(bool &quit) {
     }
     _captured = true;
     dumpTargetsIfRequested();
+    dumpObjectsIfRequested();
     quit = true;
+}
+
+/**
+ * The raw material for the curation pass: every object the tracer still
+ * classifies emissive by default, appended as one tab-separated line so a warp
+ * loop over the module list accumulates the game-wide candidate set in one
+ * file. Danglies are out (stripped by default already), the sky room is out,
+ * and anything already curated is out - what remains is exactly the set a
+ * name-based classifier has to rule on.
+ */
+void Engine::dumpObjectsIfRequested() {
+    if (_options.dumpObjectsPath.empty()) {
+        return;
+    }
+    auto &graph = _services->scene.graphs.get(kSceneMain);
+    auto &registry = graph.registry();
+    auto module = _game->module();
+    std::string moduleName = module ? module->name() : "?";
+    std::set<std::string> lines;
+    for (const auto &object : registry.objects()) {
+        const auto *mesh = std::get_if<scene::RegisteredMesh>(&object);
+        if (!mesh ||
+            !glm::any(glm::greaterThan(mesh->material.selfIllumColor, glm::vec3(0.0f))) ||
+            std::holds_alternative<scene::RegisteredDangly>(mesh->deformation) ||
+            (mesh->cullRoot && mesh->cullRoot == registry.skyRoom()) ||
+            registry.curatedByIndex(mesh->material.curatedIndex)) {
+            continue;
+        }
+        std::string model {graph.nameText(mesh->nameIds.model)};
+        std::string node {graph.nameText(mesh->nameIds.node)};
+        const auto *diffuse =
+            mesh->material.textures[static_cast<size_t>(graphics::MaterialTextureSlot::MainTex)];
+        const auto &illum = mesh->material.selfIllumColor;
+        std::ostringstream line;
+        line << moduleName << "\t" << model << "/" << node << "\t"
+             << (diffuse ? diffuse->name() : "-") << "\t"
+             << illum.r << " " << illum.g << " " << illum.b;
+        lines.insert(line.str());
+    }
+    std::ofstream out(_options.dumpObjectsPath, std::ios::app);
+    for (const auto &line : lines) {
+        out << line << "\n";
+    }
+    info("Dumped " + std::to_string(lines.size()) + " emissive candidates of " + moduleName +
+         " to " + _options.dumpObjectsPath);
 }
 
 void Engine::dumpTargetsIfRequested() {

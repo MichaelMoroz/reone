@@ -28,6 +28,13 @@ struct GraphicsOptions {
     int height {768};
     int winScale {100};
     bool fullscreen {false};
+    /**
+     * Never show the window. For scripted batch runs - a warp loop launching
+     * one process per module must not pop a window on the desktop every few
+     * seconds. Rendering and capture work as usual; only presentation goes to
+     * a hidden surface.
+     */
+    bool headless {false};
     bool vsync {true};
     bool grass {true};
     bool pbr {true};

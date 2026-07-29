@@ -128,11 +128,13 @@ private:
      * time and on either backend, which costs it live input and focus handling.
      */
     bool isCaptureRun() const {
-        return !_options.capturePath.empty() || !_options.dumpTargetsPath.empty();
+        return !_options.capturePath.empty() || !_options.dumpTargetsPath.empty() ||
+               !_options.dumpObjectsPath.empty();
     }
 
     void captureIfRequested(bool &quit);
     void dumpTargetsIfRequested();
+    void dumpObjectsIfRequested();
 
     void showCursor(bool show);
     void setRelativeMouseMode(bool relative);

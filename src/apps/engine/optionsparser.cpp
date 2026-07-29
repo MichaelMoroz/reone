@@ -46,6 +46,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("input-script", value<std::string>()->default_value(""), "run frame-indexed SDL mouse input script")                  //
         ("capture", value<std::string>()->default_value(""), "write a screenshot to this path and exit")                        //
         ("dumptargets", value<std::string>()->default_value(""), "write the scene render targets to this directory as .npy")   //
+        ("dumpobjects", value<std::string>()->default_value(""), "append the module's traced-emissive candidates to this file") //
         ("captureframe", value<int>()->default_value(3), "frame to capture on, counted from the first rendered frame")         //
         ("randomseed", value<int>()->default_value(-1), "seed the random generator, or -1 to seed from the clock")             //
         ("backend", value<std::string>()->default_value("gl"), "graphics backend: gl or vulkan")                              //
@@ -56,6 +57,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("height", value<int>()->default_value(options->graphics.height), "render height")                                      //
         ("winscale", value<int>()->default_value(options->graphics.winScale), "window scale")                                   //
         ("fullscreen", value<bool>()->default_value(options->graphics.fullscreen), "enable fullscreen")                         //
+        ("headless", value<bool>()->default_value(false), "never show the window; for scripted batch runs")                     //
         ("vsync", value<bool>()->default_value(options->graphics.vsync), "enable v-sync")                                       //
         ("grass", value<bool>()->default_value(options->graphics.grass), "enable grass")                                        //
         ("pbr", value<bool>()->default_value(options->graphics.pbr), "enable physically-based rendering")                       //
@@ -95,11 +97,13 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->game.developer = vars["dev"].as<bool>();
     options->capturePath = vars["capture"].as<std::string>();
     options->dumpTargetsPath = vars["dumptargets"].as<std::string>();
+    options->dumpObjectsPath = vars["dumpobjects"].as<std::string>();
     options->captureFrame = vars["captureframe"].as<int>();
     options->randomSeed = vars["randomseed"].as<int>();
     options->backend = vars["backend"].as<std::string>();
     options->vulkanValidation = vars["vkvalidation"].as<bool>();
     options->renderdoc = vars["renderdoc"].as<bool>();
+    options->graphics.headless = vars["headless"].as<bool>();
     options->graphics.width = vars["width"].as<int>();
     options->graphics.height = vars["height"].as<int>();
     options->graphics.winScale = vars["winscale"].as<int>();
