@@ -126,12 +126,14 @@ struct RegistryEntryView {
     size_t clusters {0};
     bool debug {false};
     uint32_t id {UINT32_MAX};
+    std::string classification;
 };
 
 RegistryEntryView makeRegistryEntryView(const scene::ISceneGraph &graph,
+                                        const scene::RenderRegistry &registry,
                                         const scene::RegisteredObject &object) {
     return std::visit(
-        [&graph, &object](const auto &entry) -> RegistryEntryView {
+        [&graph, &registry, &object](const auto &entry) -> RegistryEntryView {
             using T = std::decay_t<decltype(entry)>;
             RegistryEntryView result;
             result.object = &object;
@@ -152,6 +154,38 @@ RegistryEntryView makeRegistryEntryView(const scene::ISceneGraph &graph,
                     result.kind = "saber";
                 } else {
                     result.kind = "rigid";
+                }
+                // The traced material classification, matching what the TLAS
+                // admission decides: the actual sky room comes from the
+                // tracer itself, everything else re-derives from the same
+                // authored data the admission reads.
+                std::vector<const char *> tags;
+                if (entry.cullRoot && entry.cullRoot == registry.skyRoom()) {
+                    tags.push_back("sky");
+                } else if (entry.material.backgroundGeometry ||
+                           (entry.cullRoot && entry.cullRoot->isBackgroundScenery())) {
+                    tags.push_back("scenery");
+                }
+                if (glm::any(glm::greaterThan(entry.material.selfIllumColor, glm::vec3(0.0f)))) {
+                    tags.push_back("emissive");
+                }
+                if (const auto *diffuse = entry.material.textures[static_cast<size_t>(
+                        graphics::MaterialTextureSlot::MainTex)]) {
+                    if (diffuse->features().blending == graphics::Texture::Blending::Additive) {
+                        tags.push_back("additive");
+                    } else if (diffuse->features().blending == graphics::Texture::Blending::PunchThrough ||
+                               entry.material.type == graphics::MaterialType::TransparentModel) {
+                        tags.push_back("punch-through");
+                    }
+                }
+                for (const auto *tag : tags) {
+                    if (!result.classification.empty()) {
+                        result.classification += "+";
+                    }
+                    result.classification += tag;
+                }
+                if (result.classification.empty()) {
+                    result.classification = "-";
                 }
             } else if constexpr (std::is_same_v<T, scene::RegisteredBillboard>) {
                 result.root = entry.cullRoot;
@@ -872,7 +906,7 @@ void Editor::drawRegistry() {
 
     std::vector<RegistryGroupView> groups;
     for (const auto &object : registry.objects()) {
-        auto entry = makeRegistryEntryView(graph, object);
+        auto entry = makeRegistryEntryView(graph, registry, object);
         std::string label;
         if (entry.root) {
             label = std::string(graph.nameText(entry.root->nameIds().model));
@@ -933,7 +967,7 @@ void Editor::drawRegistry() {
     static constexpr ImGuiTableFlags kTableFlags =
         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
         ImGuiTableFlags_ScrollX | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingFixedFit;
-    if (!ImGui::BeginTable("##registry-table", 7, kTableFlags)) {
+    if (!ImGui::BeginTable("##registry-table", 8, kTableFlags)) {
         ImGui::End();
         return;
     }
@@ -942,6 +976,7 @@ void Editor::drawRegistry() {
     ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 64.0f);
     ImGui::TableSetupColumn("DPOTXG", ImGuiTableColumnFlags_WidthFixed, 66.0f);
     ImGui::TableSetupColumn("Material", ImGuiTableColumnFlags_WidthFixed, 158.0f);
+    ImGui::TableSetupColumn("Class", ImGuiTableColumnFlags_WidthFixed, 130.0f);
     ImGui::TableSetupColumn("Entries", ImGuiTableColumnFlags_WidthFixed, 68.0f);
     ImGui::TableSetupColumn("Drawn", ImGuiTableColumnFlags_WidthFixed, 58.0f);
     ImGui::TableSetupScrollFreeze(0, 1);
@@ -996,9 +1031,9 @@ void Editor::drawRegistry() {
                                 group.clusters != 0 ? group.clusters : group.particles,
                                 group.clusters != 0 ? "clusters" : "particles");
         }
-        ImGui::TableSetColumnIndex(5);
-        registryRightAligned(std::to_string(visible.size()));
         ImGui::TableSetColumnIndex(6);
+        registryRightAligned(std::to_string(visible.size()));
+        ImGui::TableSetColumnIndex(7);
         if (drawn == 0) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             registryRightAligned("0");
@@ -1040,6 +1075,8 @@ void Editor::drawRegistry() {
                     ImGui::TextUnformatted(registryPassSlots(entry.drawnPasses).c_str());
                     ImGui::TableSetColumnIndex(4);
                     ImGui::TextUnformatted(entry.material);
+                    ImGui::TableSetColumnIndex(5);
+                    ImGui::TextUnformatted(entry.classification.c_str());
                     if (culled) {
                         ImGui::PopStyleColor();
                     }

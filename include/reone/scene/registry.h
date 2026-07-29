@@ -246,6 +246,11 @@ public:
         by SceneNodeId index so it survives the per-frame re-registration;
         enforced by drawScene and the TLAS admission alike, so a disabled
         object vanishes from every render mode. */
+    /** The winning sky room of the last traced frame, published by the
+        ray-query admission for the registry panel. Null when not tracing. */
+    const ModelSceneNode *skyRoom() const { return _skyRoom; }
+    void setSkyRoom(const ModelSceneNode *room) { _skyRoom = room; }
+
     bool isObjectEnabled(uint32_t idIndex) const {
         return _disabledObjects.find(idIndex) == _disabledObjects.end();
     }
@@ -318,6 +323,7 @@ public:
 private:
     std::vector<RegisteredObject> _objects;
     std::unordered_set<uint32_t> _disabledObjects;
+    const ModelSceneNode *_skyRoom {nullptr};
     size_t _traversalCount {0};
     RegistryCounts _registeredCounts;
     RegistryCounts _drawnCounts;

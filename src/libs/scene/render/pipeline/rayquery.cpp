@@ -497,6 +497,9 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             info("Vulkan: sky room is '" + skyRoom->model().name() + "'", LogChannel::Graphics);
         }
     }
+    // Published for the registry panel's classification column: the panel
+    // reports the actual decision, not a re-derivation of it.
+    registry.setSkyRoom(skyRoom);
     for (const auto &object : registry.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
         if (!mesh) continue;
