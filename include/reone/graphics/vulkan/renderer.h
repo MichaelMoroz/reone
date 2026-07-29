@@ -136,6 +136,11 @@ private:
 
     SDL_Window *_window;
     glm::ivec2 _extent;
+    /** Last extent beginFrame was asked for. Compared instead of the
+        swapchain's own extent, which the surface may have clamped smaller -
+        comparing against the clamped value recreated the swapchain every
+        frame whenever the OS shrank the window. */
+    glm::ivec2 _requestedExtent {0};
     bool _vsync;
     bool _validation;
     glm::vec4 _clearColor {0.0f, 0.0f, 0.0f, 1.0f};

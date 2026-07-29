@@ -715,17 +715,22 @@ void Engine::renderVulkanFrame(bool &quit) {
     attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
+    // The swapchain clamps to the actual window client size, which can be
+    // smaller than the configured resolution (taskbar, DPI). Render area,
+    // viewport, and scissor are physical; the 2D projection stays logical so
+    // the frame scales to fit instead of presenting a 1:1 crop.
+    glm::ivec2 physicalExtent = _vulkanRenderer->swapchain().extent();
     VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
-    rendering.renderArea.extent = {static_cast<uint32_t>(extent.x),
-                                   static_cast<uint32_t>(extent.y)};
+    rendering.renderArea.extent = {static_cast<uint32_t>(physicalExtent.x),
+                                   static_cast<uint32_t>(physicalExtent.y)};
     rendering.layerCount = 1;
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachments = &attachment;
 
-    VkViewport viewport {0.0f, 0.0f, static_cast<float>(extent.x),
-                         static_cast<float>(extent.y), 0.0f, 1.0f};
-    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(extent.x),
-                               static_cast<uint32_t>(extent.y)}};
+    VkViewport viewport {0.0f, 0.0f, static_cast<float>(physicalExtent.x),
+                         static_cast<float>(physicalExtent.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(physicalExtent.x),
+                               static_cast<uint32_t>(physicalExtent.y)}};
 
     {
         // Closed before endFrame ends the command buffer: a label scope that
@@ -739,7 +744,7 @@ void Engine::renderVulkanFrame(bool &quit) {
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
         auto &renderer2d = _vulkanRenderer->renderer2d();
-        renderer2d.begin(cmd, extent, _vulkanRenderer->swapchain().imageFormat());
+        renderer2d.begin(cmd, extent, physicalExtent, _vulkanRenderer->swapchain().imageFormat());
         _game->render();
         _console->render();
         renderer2d.end();

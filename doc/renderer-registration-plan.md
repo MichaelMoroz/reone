@@ -530,6 +530,21 @@ through it**; and module seams can let hemisphere rays escape to the dome.
 The classification needs to be scoped to actual sky geometry (model or
 node identity, not luma), and enclosed scenes are the regression test.
 
+**Bounce lighting does not exist for analytic lights** - with a single
+direct light as the only source, the Bounces dial changes nothing, which
+means the renderer is not yet a path tracer for exactly the light type
+scenes are lit by. Mechanism: next-event estimation (the light
+selection/shadow-ray machinery) runs at the primary hit only; path vertices
+collect emissive surfaces and the lightmap cache but never sample lights,
+so an analytic light's energy terminates at the first surface it touches.
+The "shadow rays at every bounce is not its budget" comment that justified
+this predates the atomics discovery and is obsolete at 1.7 ms frames. Fix:
+run the per-vertex light selection (same weighted single-sample estimator,
+same multiplicity dedup where applicable) at every path vertex, folded
+into pathThroughput. This is a prerequisite for the calibration
+programme - "raise lights until bounce light is visible" requires bounce
+light to exist.
+
 **Some objects do not interact with lighting**: leaves, hair, Manaan
 puddles, doors everywhere, parts of levels. These are the surfaces routed
 through the transparency candidate path - `CandidateLayer` radiance is

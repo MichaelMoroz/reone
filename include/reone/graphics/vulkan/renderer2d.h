@@ -71,7 +71,12 @@ public:
      * Bind this renderer to the command buffer being recorded. @p extent sets
      * the orthographic projection, in pixels with y down from the top left.
      */
-    void begin(VkCommandBuffer cmd, glm::ivec2 extent, VkFormat colorFormat);
+    /** extent is the logical 2D coordinate space (the configured resolution);
+        physicalExtent is the actual swapchain size the viewport covers. They
+        differ when the OS clamps the window, and conflating them cropped the
+        whole frame at 1:1 instead of scaling it. */
+    void begin(VkCommandBuffer cmd, glm::ivec2 extent, glm::ivec2 physicalExtent,
+               VkFormat colorFormat);
     void end();
 
     void drawImage(Texture &texture,
@@ -113,6 +118,7 @@ private:
 
     VkCommandBuffer _cmd {VK_NULL_HANDLE};
     glm::ivec2 _extent {0};
+    glm::ivec2 _physicalExtent {0};
     VkFormat _colorFormat {VK_FORMAT_UNDEFINED};
     BlendMode _blend {BlendMode::Normal};
     /** Offset of the projection pushed once per begin(), reused by every draw. */

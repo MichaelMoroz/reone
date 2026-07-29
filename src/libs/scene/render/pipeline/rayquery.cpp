@@ -770,7 +770,6 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                   std::max(0.0f, _options.ptLightmapIntensity),
                                   std::max(0.0f, _options.ptDirectIntensity),
                                   std::max(0.0001f, _options.ptRayOffset),
-                                  std::max(0.0f, _options.ptWorldAmbient),
                                   std::max(0.0f, _options.ptSunIntensity),
                                   (_options.ptTraceStats ? 1u : 0u) |
                                       (static_cast<uint32_t>(std::clamp(_options.ptDebugView, 0, 6)) << 4),

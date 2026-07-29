@@ -53,7 +53,9 @@ struct GraphicsOptions {
      * emitter, and lightmap scales the baked radiance cache that stands in
      * for light sources the tracer cannot see yet.
      */
-    float ptSkyIntensity {1.0f};
+    /** Calibration programme: the sky reads correctly at about twice the
+        cubemap's raw value. */
+    float ptSkyIntensity {2.0f};
     float ptEmissiveIntensity {1.0f};
     float ptLightmapIntensity {1.0f};
     float ptDirectIntensity {1.0f};
@@ -85,8 +87,6 @@ struct GraphicsOptions {
         float envScale {1.0f};
     };
     PtCategoryOverride ptCategoryOverrides[9] {};
-    /** World ambient scaled by how little sky each pixel's hemisphere saw. */
-    float ptWorldAmbient {1.0f};
     bool ssao {true};
     bool ssr {true};
     bool fxaa {true};

@@ -89,7 +89,6 @@ private:
         float lightmapIntensity;
         float directIntensity;
         float rayOriginOffset;
-        float worldAmbientIntensity;
         float sunIntensity;
         // Bit 0 enables the traceStats counters; must match kTraceFlagStats
         // in slang/rayquery.slang.

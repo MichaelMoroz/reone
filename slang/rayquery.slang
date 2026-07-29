@@ -91,6 +91,14 @@ static const uint kTraceAdditive = 1u << 25;
 // ray-query candidates.
 static const uint kTracePunchThrough = 1u << 26;
 
+// Coverage at or above this commits as a real surface and takes the full
+// shading path - lights, sun, hemisphere. Below it, texels composite as
+// transparency layers, which currently receive no direct lighting at all
+// (a recorded defect). It sat at 0.99 and left leaves, hair, doors and
+// puddles effectively unlit; half-coverage routes their substance through
+// real shading while keeping soft edges layered.
+static const float kOpaqueCommitAlpha = 0.5;
+
 struct PushConstants {
     uint frameIndex;
     uint samplesPerPixel;
@@ -106,9 +114,6 @@ struct PushConstants {
     // light through contact edges. A dial because the right value is
     // scene-scale-dependent and staring at acne beats recompiling.
     float rayOriginOffset;
-    // World ambient, applied scaled by how little sky the pixel's hemisphere
-    // saw - a stand-in for exactly the light the tracer could not find.
-    float worldAmbientIntensity;
     float sunIntensity;
     // Bit 0 enables the traceStats counters. Off by default: even batched,
     // the atomics contend on one cache line from every thread in flight,
@@ -548,7 +553,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         CandidateLayer committedLayer = sampleCandidateLayer(committedMaterial, committedIndices, committedWeights);
         // An effectively opaque texel is a real surface and deserves the full
         // shading path rather than the cheap layer formula.
-        if (committedLayer.alpha >= 0.99) break;
+        if (committedLayer.alpha >= kOpaqueCommitAlpha) break;
         primaryLayers += primaryThroughput * committedLayer.alpha * committedLayer.radiance;
         primaryThroughput *= 1.0 - committedLayer.alpha;
         if (primaryThroughput < 1e-3) break;
@@ -624,7 +629,6 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         // dial. Like raster's self-illumination, emission is additive; it
         // never replaces shading.
         float3 diffuseIllumination = 0.0;
-        float skySamples = 0.0;
         float3 specularIllumination = 0.0;
         float3 V = -ray.Direction;
         bool envmapped = (material.featureMask & uint(kFeatureEnvMap)) != 0;
@@ -639,12 +643,12 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         float a2 = a * a;
         float k = primarySurface.surface.roughness + 1.0;
         k = k * k * (1.0 / 8.0);
-        float3 irradiance = float3(0.0);
         uint survivingLights = 0;
-        // One walk per pixel serves both light paths: ambient-only points
-        // accumulate raster's cheap flat irradiance (deliberately kept from
-        // the raster resolve), everything else totals a selection weight for
-        // the multiplicity pass below. Directionals are promoted to sampled,
+        // One walk per pixel totals a selection weight for the multiplicity
+        // pass below. Ambient light has no place in path tracing: ambient-only
+        // point lights are inert here (their records survive as calibration
+        // reference for the area-light stage), and the raster world-ambient
+        // term is gone with them. Directionals are promoted to sampled,
         // ray-shadowed suns even when authored ambient-only: raster has no
         // direct sun at all (only baked lightmaps plus cascade-map
         // darkening), so there is no parity target and the Sun dial grades
@@ -662,12 +666,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
             // compared to un-squared distance, despite the unusual reach.
             if (!directional && lightDistance > light.radius * light.radius) continue;
             ++survivingLights;
-            if (!directional && light.ambientOnly != 0) {
-                float d = light.radius + lightDistance;
-                float attenuation = (light.radius * light.radius) / (d * d);
-                irradiance += light.multiplier * attenuation * gammaToLinear(light.color.rgb);
-                continue;
-            }
+            if (!directional && light.ambientOnly != 0) continue;
             totalLightWeight += directLightWeight(light, hitPosition, primarySurface.surface.normal);
         }
         bool statsOn = (pushConstants.traceFlags & kTraceFlagStats) != 0;
@@ -675,12 +674,6 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
             InterlockedAdd(traceStats[2], survivingLights);
             InterlockedAdd(traceStats[3], 1);
         }
-        float3 ambientF = fresnelSchlickRoughness(NdotV, F0, primarySurface.surface.roughness);
-        float3 ambientD = (1.0 - ambientF) * (1.0 - primarySurface.surface.metallic) * irradiance;
-        // Raster starts irradiance with worldAmbientColor. The tracer does not:
-        // its sky hemisphere integral is that ambient outdoors, and adding both
-        // double-counts it. The small missing flat interior term is intentional.
-        float3 directIllumination = ambientD * primarySurface.surface.albedo;
         // The GGX lobe exists only where raster shows this heuristic a
         // specular response: environment-mapped surfaces. Everywhere else the
         // diffuse alpha is coverage or opacity, so the derived roughness is
@@ -786,7 +779,6 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 // low and grades, like every other source dial.
                 float3 radiance = 0.0;
                 float3 pathThroughput = 1.0;
-                bool sampleSawSky = false;
                 uint pathBounces = max(pushConstants.bounceCount, 1u);
                 for (uint bounceIndex = 0; bounceIndex < pathBounces; ++bounceIndex) {
                     RayQuery<RAY_FLAG_NONE> bounce;
@@ -820,7 +812,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                                 bounceAdditiveCount = min(bounceAdditiveCount + 1, kMaxAdditiveHits);
                             }
                         } else if ((candidateMaterial.featureMask & kTracePunchThrough) != 0) {
-                            if (layer.alpha >= 0.99) {
+                            if (layer.alpha >= kOpaqueCommitAlpha) {
                                 bounce.CommitNonOpaqueTriangleHit();
                             } else {
                                 bounceLayers += bounceThroughput * layer.alpha * layer.radiance;
@@ -841,7 +833,6 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                     radiance += pathThroughput * bounceLayers;
                     if (bounce.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
                         if (statsOn) InterlockedAdd(traceStats[1], 1);
-                        sampleSawSky = true;
                         break;
                     }
                     InstanceMaterial bounceMaterial = instanceMaterials[bounce.CommittedInstanceIndex()];
@@ -874,7 +865,6 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                         // nothing behind the environment.
                         radiance += pathThroughput * bounceThroughput * bounceSurface.surface.emissive *
                                      bounceSurface.surface.albedo * pushConstants.skyIntensity;
-                        sampleSawSky = true;
                         break;
                     }
                     radiance += pathThroughput * bounceThroughput * bounceSurface.surface.emissive *
@@ -937,27 +927,13 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 } else {
                     diffuseIllumination += radiance * primarySurface.surface.albedo;
                 }
-                if (sampleSawSky) skySamples += 1.0;
             }
-        float emissionScale = (material.featureMask & kTraceSky) != 0
-                                  ? pushConstants.skyIntensity
-                                  : pushConstants.emissiveIntensity;
-        color += primaryThroughput * (directIllumination +
-                                      // Direct-light shadow rays are primary-hit only. Bounce
-                                      // hits use the lightmap radiance cache below; tracing one
-                                      // shadow ray per light at every bounce is not its budget.
-                                      // The revision of the earlier omit-world-ambient
-                                      // decision: windowless interiors measured at a third
-                                      // of raster because this flat term dominates them.
-                                      // (1 - skyFraction) keeps it out of open ground, so
-                                      // the outdoor double-count that motivated the
-                                      // omission still cannot happen.
-                                      gammaToLinear(globalUniforms.worldAmbientColor.rgb) *
-                                          (1.0 - skySamples / float(sampleCount)) *
-                                          pushConstants.worldAmbientIntensity *
-                                          primarySurface.surface.albedo +
-                                      (diffuseIllumination + specularIllumination) / float(sampleCount) +
-                                      primarySurface.surface.emissive * primarySurface.surface.albedo * emissionScale);
+        // Sky never reaches here (unlit-emissive early-out above), so emission
+        // takes the emissive dial. No ambient: lightmaps already are better
+        // than ambient in all ways, and the transport carries the rest.
+        color += primaryThroughput * ((diffuseIllumination + specularIllumination) / float(sampleCount) +
+                                      primarySurface.surface.emissive * primarySurface.surface.albedo *
+                                          pushConstants.emissiveIntensity);
     }
     // Encode exactly once, at the very end, like the raster resolve.
     outputImage[dispatchId.xy] = float4(linearToGamma(color), 1.0);

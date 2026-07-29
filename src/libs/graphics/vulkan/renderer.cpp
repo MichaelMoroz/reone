@@ -52,6 +52,7 @@ void VulkanRenderer::init() {
     }
     _device.init(_window, _validation);
     _swapchain.init(_extent, _vsync);
+    _requestedExtent = _extent;
     initFrames();
     initImageSemaphores();
     // 16 MB per frame. The original 1 MB was a guess and a Dantooine exterior
@@ -185,7 +186,7 @@ void VulkanRenderer::beginFrame(glm::ivec2 extent) {
     if (_inFrame) {
         throw std::logic_error("Renderer: frame already begun");
     }
-    if (_needsRecreate || extent != _swapchain.extent()) {
+    if (_needsRecreate || extent != _requestedExtent) {
         _swapchain.recreate(extent);
         // The image count can change with the swapchain, and any pending
         // present on the old semaphores is finished by the wait inside
@@ -195,6 +196,7 @@ void VulkanRenderer::beginFrame(glm::ivec2 extent) {
         _depth = std::make_unique<VulkanImage>(_device);
         _depth->initDepth(_swapchain.extent(), kDepthFormat);
         _needsRecreate = false;
+        _requestedExtent = extent;
     }
     _extent = extent;
 

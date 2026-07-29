@@ -40,9 +40,11 @@ void Vulkan2DRenderer::init() {
 void Vulkan2DRenderer::deinit() {
 }
 
-void Vulkan2DRenderer::begin(VkCommandBuffer cmd, glm::ivec2 extent, VkFormat colorFormat) {
+void Vulkan2DRenderer::begin(VkCommandBuffer cmd, glm::ivec2 extent, glm::ivec2 physicalExtent,
+                             VkFormat colorFormat) {
     _cmd = cmd;
     _extent = extent;
+    _physicalExtent = physicalExtent;
     _colorFormat = colorFormat;
     _blend = BlendMode::Normal;
     _drawCount = 0;
@@ -226,14 +228,22 @@ void Vulkan2DRenderer::withScissor(const glm::ivec4 &bounds, const std::function
     if (_cmd == VK_NULL_HANDLE) {
         throw std::logic_error("Vulkan 2D: no frame begun");
     }
+    // Caller bounds are logical coordinates; the scissor is physical pixels.
+    // The two differ when the OS clamps the window below the configured
+    // resolution and the viewport scales to fit.
+    float scaleX = _extent.x > 0 ? static_cast<float>(_physicalExtent.x) / _extent.x : 1.0f;
+    float scaleY = _extent.y > 0 ? static_cast<float>(_physicalExtent.y) / _extent.y : 1.0f;
     VkRect2D scissor {};
-    scissor.offset = {bounds[0], bounds[1]};
-    scissor.extent = {static_cast<uint32_t>(bounds[2]), static_cast<uint32_t>(bounds[3])};
+    scissor.offset = {static_cast<int32_t>(bounds[0] * scaleX),
+                      static_cast<int32_t>(bounds[1] * scaleY)};
+    scissor.extent = {static_cast<uint32_t>(bounds[2] * scaleX + 0.5f),
+                      static_cast<uint32_t>(bounds[3] * scaleY + 0.5f)};
     vkCmdSetScissor(_cmd, 0, 1, &scissor);
 
     block();
 
-    VkRect2D full {{0, 0}, {static_cast<uint32_t>(_extent.x), static_cast<uint32_t>(_extent.y)}};
+    VkRect2D full {{0, 0}, {static_cast<uint32_t>(_physicalExtent.x),
+                            static_cast<uint32_t>(_physicalExtent.y)}};
     vkCmdSetScissor(_cmd, 0, 1, &full);
 }
 

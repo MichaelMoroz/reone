@@ -632,7 +632,6 @@ void Editor::pathTracingSettings() {
     ImGui::SliderFloat("Lightmap cache", &options.ptLightmapIntensity, 0.0f, 4.0f, "%.2f");
     ImGui::SliderFloat("Direct light", &options.ptDirectIntensity, 0.0f, 4.0f, "%.2f");
     ImGui::SliderFloat("Sun", &options.ptSunIntensity, 0.0f, 4.0f, "%.2f");
-    ImGui::SliderFloat("World ambient", &options.ptWorldAmbient, 0.0f, 4.0f, "%.2f");
     ImGui::SeparatorText("Ray setup");
     ImGui::SliderFloat("Origin offset", &options.ptRayOffset, 0.0001f, 0.1f, "%.4f",
                        ImGuiSliderFlags_Logarithmic);
