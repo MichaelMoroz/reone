@@ -109,12 +109,15 @@ void GUI::stretchControl(Control &control) {
 }
 
 glm::vec2 GUI::scaledFactors() const {
-    // Three quarters of the full stretch: the authored layout grows with the
-    // screen without pinning to its edges. The remaining quarter becomes the
-    // centering margin.
+    // Three quarters of the full fit, uniform on both axes: the authored
+    // layout grows with the screen at its original aspect ratio, and the
+    // remaining margin centers it. Non-uniform factors stretched every 4:3
+    // layout into 16:9 distortion.
     static constexpr float kScaledModeFactor = 0.75f;
-    return {kScaledModeFactor * _options.width / static_cast<float>(_resolutionX),
-            kScaledModeFactor * _options.height / static_cast<float>(_resolutionY)};
+    float fit = std::min(_options.width / static_cast<float>(_resolutionX),
+                         _options.height / static_cast<float>(_resolutionY));
+    float s = kScaledModeFactor * fit;
+    return {s, s};
 }
 
 void GUI::loadControl(const resource::generated::GUI_CONTROLS &gui) {
@@ -160,13 +163,27 @@ void GUI::loadControl(const resource::generated::GUI_CONTROLS &gui) {
 }
 
 void GUI::positionRelativeToCenter(Control &control) {
+    // Anchored controls - HUD icons, portraits, the minimap - scale like
+    // everything else, uniformly and aspect-preserved, while keeping their
+    // authored screen-edge attachment: the inset from the anchored edge
+    // scales with the same factor as the control itself. Before this they
+    // kept their native 800x600-era pixel sizes on any screen.
+    float s = scaledFactors().x;
     Control::Extent extent(control.extent());
-    if (extent.left >= 0.5f * _resolutionX) {
-        extent.left = extent.left - _resolutionX + _options.width;
+    bool anchorRight = extent.left >= 0.5f * _resolutionX;
+    bool anchorBottom = extent.top >= 0.5f * _resolutionY;
+    int left = static_cast<int>(extent.left * s);
+    int top = static_cast<int>(extent.top * s);
+    if (anchorRight) {
+        left = _options.width - static_cast<int>((_resolutionX - extent.left) * s);
     }
-    if (extent.top >= 0.5f * _resolutionY) {
-        extent.top = extent.top - _resolutionY + _options.height;
+    if (anchorBottom) {
+        top = _options.height - static_cast<int>((_resolutionY - extent.top) * s);
     }
+    extent.left = left;
+    extent.top = top;
+    extent.width = static_cast<int>(extent.width * s);
+    extent.height = static_cast<int>(extent.height * s);
     control.setExtent(std::move(extent));
 }
 

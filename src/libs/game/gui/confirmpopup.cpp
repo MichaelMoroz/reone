@@ -33,10 +33,10 @@ static constexpr int kIconPadding = 6;
 void ConfirmPopup::preload(IGUI &gui) {
     GameGUI::preload(gui);
 
-    // The confirmation dialog is authored for 640x480 in both games. Center
-    // it on the screen.
+    // The confirmation dialog is authored for 640x480 in both games. It
+    // scales and centers with the game-wide Scaled default from the base
+    // preload; an explicit Center here kept it at native size.
     gui.setResolution(640, 480);
-    gui.setScaling(GUI::ScalingMode::Center);
 }
 
 void ConfirmPopup::onGUILoaded() {
