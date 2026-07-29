@@ -263,6 +263,14 @@ void Engine::init() {
         // asset objects consult this when deciding whether to make GL calls.
         setCurrentBackend(GraphicsBackend::Vulkan);
     }
+    if (isCaptureRun()) {
+        // Fullscreen-capture behavior, as pbr/retro always had: a capture run
+        // renders, presents, and captures at the full configured resolution,
+        // whatever window scale a developer plays at. The Vulkan capture
+        // reads the swapchain, so the window must be full-size for the
+        // capture to be.
+        _options.graphics.winScale = 100;
+    }
     _window = std::make_unique<Window>(_options.graphics);
     _window->init();
 
