@@ -62,14 +62,14 @@ public:
      * Defaults match GraphicsOptions - the user-graded 2026-07-29 values.
      */
     struct Tuning {
-        int maxAccumulatedFrames {10};
-        int maxFastAccumulatedFrames {2};
+        int maxAccumulatedFrames {6};
+        int maxFastAccumulatedFrames {1};
         int maxStabilizedFrames {30};
         int historyFixFrames {4};
         float diffusePrepassBlurRadius {1.0f};
         float specularPrepassBlurRadius {1.0f};
         float minBlurRadius {0.5f};
-        float maxBlurRadius {3.0f};
+        float maxBlurRadius {32.0f};
         float lobeAngleFraction {0.77f};
         float roughnessFraction {0.74f};
         float planeDistanceSensitivity {0.099f};

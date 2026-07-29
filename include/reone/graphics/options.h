@@ -51,7 +51,7 @@ struct GraphicsOptions {
      * the square root, so doubling this halves neither. Eight is the point
      * where the image reads clearly while the frame still moves.
      */
-    int pathTracingSamples {4};
+    int pathTracingSamples {3};
 
     /**
      * Light-balance knobs for the traced mode. They scale sources, not the
@@ -88,14 +88,14 @@ struct GraphicsOptions {
      * 2026-07-29 session: minimal spatial filtering, moderate accumulation,
      * rejection opened wide so foliage accumulates.
      */
-    int ptNrdMaxAccumulatedFrames {10};
-    int ptNrdMaxFastAccumulatedFrames {2};
+    int ptNrdMaxAccumulatedFrames {6};
+    int ptNrdMaxFastAccumulatedFrames {1};
     int ptNrdMaxStabilizedFrames {30};
     int ptNrdHistoryFixFrames {4};
     float ptNrdDiffusePrepassBlurRadius {1.0f};
     float ptNrdSpecularPrepassBlurRadius {1.0f};
     float ptNrdMinBlurRadius {0.5f};
-    float ptNrdMaxBlurRadius {3.0f};
+    float ptNrdMaxBlurRadius {32.0f};
     float ptNrdLobeAngleFraction {0.77f};
     float ptNrdRoughnessFraction {0.74f};
     float ptNrdPlaneDistanceSensitivity {0.099f};
