@@ -433,6 +433,10 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
         }
         _renderPipeline = _renderPipelineFactory.create(mode, dim);
         _renderPipeline->init();
+        info("Scene '" + _name + "': render pipeline created, mode=" +
+                 std::to_string(static_cast<int>(mode)) + " dim=" +
+                 std::to_string(dim.x) + "x" + std::to_string(dim.y),
+             LogChannel::Graphics);
     }
     auto &pipeline = *_renderPipeline;
     _registry.resetFrame();

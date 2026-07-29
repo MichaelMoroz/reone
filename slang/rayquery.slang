@@ -566,11 +566,19 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
 
     float2 ndc = ((float2(dispatchId.xy) + 0.5) / float2(width, height)) * 2.0 - 1.0;
     ndc.y = -ndc.y;
-    float4 eye = mul(globalUniforms.projectionInv, float4(ndc, 1.0, 1.0));
-    eye /= eye.w;
+    // Unproject both depth-range ends rather than assuming a perspective
+    // frustum: GUI scenes render through orthographic cameras, whose rays
+    // are parallel with per-pixel origins. Firing perspective rays from an
+    // ortho camera's position zoomed and cropped every menu 3D view. For a
+    // perspective camera this is the same ray, origin moved to the near
+    // plane.
+    float4 nearH = mul(globalUniforms.projectionInv, float4(ndc, 0.0, 1.0));
+    float4 farH = mul(globalUniforms.projectionInv, float4(ndc, 1.0, 1.0));
+    float3 nearPoint = nearH.xyz / nearH.w;
+    float3 farPoint = farH.xyz / farH.w;
     RayDesc ray;
-    ray.Origin = globalUniforms.cameraPosition.xyz;
-    ray.Direction = normalize(mul(globalUniforms.viewInv, float4(eye.xyz, 0.0)).xyz);
+    ray.Origin = mul(globalUniforms.viewInv, float4(nearPoint, 1.0)).xyz;
+    ray.Direction = normalize(mul(globalUniforms.viewInv, float4(farPoint - nearPoint, 0.0)).xyz);
     ray.TMin = 0.01;
     ray.TMax = 100000.0;
 
