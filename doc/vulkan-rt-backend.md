@@ -398,19 +398,109 @@ Everything then depends on the denoiser, which is why §12 is not optional.
 
 ## 12. Denoising and FSR
 
-### 12.1 Denoising
+### 12.1 Denoising — NRD, investigated (2026-07-29)
 
-One to two samples per pixel is unusable raw. Options:
+The choice is made: **NRD**, starting with `REBLUR_DIFFUSE_SPECULAR`. The
+tracer produces real input now, and the investigation below is against NRD
+v4.17.4.
 
-- **NRD** (NVIDIA Real-Time Denoisers) — mature, vendor-neutral in practice,
-  designed for exactly this input. The pragmatic default.
-- **Hand-rolled SVGF** — more work, fully understood, a reasonable fallback if
-  NRD's licensing or integration proves awkward.
-- **ReSTIR** for direct lighting is a larger change but the right answer for
-  many-light interiors, and KotOR interiors are exactly that.
+**What NRD is, operationally.** A GAPI-free library: it never touches Vulkan.
+`CreateInstance` with the wanted denoisers, then per frame `SetCommonSettings`
+/ `SetDenoiserSettings` / `GetComputeDispatches`, and NRD hands back a list of
+compute dispatches — pipeline index, embedded SPIRV, descriptor contents,
+constants — that *we* record into our command buffer with our own barriers.
+`NRD_EMBEDS_SPIRV_SHADERS=ON` bakes the shader binaries into the library at
+its own build time (ShaderMake + dxc toolchain, vendored — it is not in
+vcpkg). Internal history textures are described by the instance; we allocate
+them once and own them.
 
-Defer the choice until §10.3 produces real traced input. Choosing now would be
-choosing without data.
+**Integration layer: manual dispatch, not NRI.** NRD offers an NRI-based
+helper that wraps an existing VkDevice, but NRI brings its own Vulkan entry
+point resolution into a process where volk owns the entry points — exactly
+the `vk*` data-symbol collision class that silently crashed before (§16, and
+the VMA case). nvpro's `vk_denoise_nrd` sample demonstrates the manual path
+end to end: create the pipelines from NRD's SPIRV, keep a texture pool,
+translate `DispatchDesc` to `vkCmdDispatch`. More code (~600–900 lines,
+lives beside the ray-query pipeline), zero new Vulkan-loading dependencies.
+
+**License — the one real caveat.** NRD is *not* open source: it ships under
+the proprietary "NVIDIA RTX SDKs LICENSE". reone is GPL-3; a distributed
+binary linking NRD is a license conflict. The standard resolution: NRD is an
+**optional CMake component, OFF by default** — the build fetches and links it
+only when the developer flips it on, and release builds without it fall back
+to the raw accumulation we have today (or, eventually, a hand-rolled A-SVGF,
+which stays on the books as the distributable fallback). Local development
+builds are unaffected.
+
+**Inputs REBLUR needs, and what already exists:**
+
+| Input | Status |
+| --- | --- |
+| `IN_VIEWZ` — linear view depth at primary hit | new output, trivial (`CommittedRayT` projected) |
+| `IN_NORMAL_ROUGHNESS` — world normal + roughness, oct-packed R10G10B10A2 | data exists at every primary hit; new packed output. Encoding is fixed at NRD build time (`NRD_NORMAL_ENCODING`) and must match the packing shader |
+| `IN_MV` — motion vectors | camera part: **exists** (`viewProjection` / `prevViewProjection`, kept unjittered for exactly this). Object part: `RegisteredMesh.prevTransform` is already in the registry — the TLAS admission just doesn't upload it to `InstanceMaterial` yet. Skinned: `RegisteredSkin.prevBones` exists; the skin compute can emit prev-frame positions into a second buffer later. Stage it: camera-only first, rigid instances second, skinned last |
+| `IN_DIFF_RADIANCE_HITDIST`, `IN_SPEC_RADIANCE_HITDIST` | the restructure (below) |
+| Camera jitter | **exists**: Halton (2,3) behind `--taajitter`, `jitter` uniform carries this and previous frame's NDC offset. The tracer's ray gen must apply it (offset the NDC sample position); matrices handed to NRD stay unjittered, which ours already are |
+| `frameIndex`, `accumulationMode` | warp/module load must send RESTART — the capture harness's fixed frame indexing already gives determinism here |
+
+**The tracer restructure.** Today `rayquery.slang` is one mega-kernel ending
+in `displayTransform()` into a single storage image. NRD forces the healthy
+split:
+
+1. **Trace pass** writes, instead of final color: demodulated noisy diffuse
+   radiance + normalized hit distance (RGBA16F, packed with
+   `REBLUR_FrontEnd_PackRadianceAndNormHitDist`), same for specular, plus the
+   guides (normal/roughness, viewZ, MV) and a **noise-free** target holding
+   what must not be denoised: emission, sky, prelit, lightmap-modulated
+   texture. Demodulation divides albedo out of the diffuse channel (and the
+   Fresnel-ish factor out of specular) so the denoiser sees transport, not
+   texture; an albedo/F guide texture carries the factors to the composite.
+   The existing per-sample lobe split (specular probability) already
+   separates the two channels statistically — the estimator weights fold in
+   as they do today, just accumulated into two images instead of one.
+   Direct NEE light goes into the same diffuse/specular channels (its cone
+   jitter is noise too); SIGMA as a dedicated shadow denoiser is a later
+   experiment, not the first integration.
+2. **NRD dispatches** — recorded straight from `GetComputeDispatches`.
+3. **Composite pass** (new, small): remodulate, add the noise-free target,
+   then tonemap. `displayTransform` moves here and out of the trace kernel;
+   the Path tracing panel's Display section drives this pass from then on.
+
+**Interactions worth pre-deciding:**
+
+- REBLUR *is* the temporal accumulation — the tracer has none today, so
+  nothing is displaced; spp stays a quality dial feeding cleaner single-frame
+  input.
+- Hit distance: first-bounce ray length, normalized via
+  `REBLUR_FrontEnd_GetNormHitDist`; miss/sky = `NRD_INF`, absorbed = 0. The
+  same value doubles as NRD's ambient/specular occlusion output later.
+- `--taajitter` flips on for the tracer as part of this work — deliberately,
+  since it changes every screenshot comparison (already flagged in §12.2 for
+  FSR; NRD becomes the first consumer instead).
+- Cost reference: `REBLUR_DIFFUSE_SPECULAR` ≈ 2.5 ms @1440p on a 4080 —
+  budget-compatible with the 1.7 ms frame floor.
+- FSR (§12.2) composes downstream of the composite: NRD at render
+  resolution, FSR after, GUI last. The render-vs-swapchain resolution
+  decoupling lands with FSR, not with NRD.
+
+**Staging:**
+
+1. Vendor NRD, optional CMake component; build static, smoke-test
+   `CreateInstance`/`GetInstanceDesc` from the engine.
+2. Tracer output split + guides behind a debug view (inspect each channel in
+   the render-target viewer before NRD ever runs).
+3. Manual-dispatch wrapper: pipeline/pool creation from `GetInstanceDesc`,
+   `DispatchDesc` translation, barriers; `REBLUR_DIFFUSE_SPECULAR` with
+   camera-only MV.
+4. Composite pass; move tonemap; enable jitter; RESTART on warp.
+5. MV quality: rigid instance prev transforms into `InstanceMaterial`,
+   skinned prev positions from `prevBones`; then confidence inputs, SIGMA
+   and RELAX as comparative experiments.
+
+**Fallbacks unchanged:** hand-rolled A-SVGF if the license posture ever needs
+a distributable denoiser; ReSTIR stays the right long-term answer for
+many-light interiors and is orthogonal — it cleans the signal before the
+denoiser rather than replacing it.
 
 ### 12.2 FSR
 
