@@ -1186,7 +1186,21 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             glm::translate(glm::vec3(-jitter.x, -jitter.y, 0.0f)) * projection;
         glm::vec2 jitterPixels {jitter.x * 0.5f * static_cast<float>(_extent.x),
                                 -jitter.y * 0.5f * static_cast<float>(_extent.y)};
-        _nrdDenoiser->denoise(cmd, _renderer.frameIndex(), inputs, view, unjitteredProjection,
+        NrdDenoiser::Tuning tuning;
+        tuning.maxAccumulatedFrames = _options.ptNrdMaxAccumulatedFrames;
+        tuning.maxFastAccumulatedFrames = _options.ptNrdMaxFastAccumulatedFrames;
+        tuning.maxStabilizedFrames = _options.ptNrdMaxStabilizedFrames;
+        tuning.historyFixFrames = _options.ptNrdHistoryFixFrames;
+        tuning.diffusePrepassBlurRadius = _options.ptNrdDiffusePrepassBlurRadius;
+        tuning.specularPrepassBlurRadius = _options.ptNrdSpecularPrepassBlurRadius;
+        tuning.minBlurRadius = _options.ptNrdMinBlurRadius;
+        tuning.maxBlurRadius = _options.ptNrdMaxBlurRadius;
+        tuning.lobeAngleFraction = _options.ptNrdLobeAngleFraction;
+        tuning.roughnessFraction = _options.ptNrdRoughnessFraction;
+        tuning.planeDistanceSensitivity = _options.ptNrdPlaneDistanceSensitivity;
+        tuning.disocclusionThreshold = _options.ptNrdDisocclusionThreshold;
+        tuning.antiFirefly = _options.ptNrdAntiFirefly;
+        _nrdDenoiser->denoise(cmd, _renderer.frameIndex(), inputs, tuning, view, unjitteredProjection,
                               jitterPixels, _frameNumber, _frameNumber == 0);
         if (_options.ptDenoise && _options.ptDebugView == 0) {
             if (!_taaHistoryTransitioned) {
@@ -1249,7 +1263,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                 float historyBlend;
             } compositePush {static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)),
                              std::max(0.01f, _options.ptExposure),
-                             _taaHistoryValid ? 0.9f : 0.0f};
+                             _taaHistoryValid ? glm::clamp(_options.ptTaaBlend, 0.0f, 0.98f) : 0.0f};
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _compositePipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _compositePipelineLayout, 0, 1,
                                     &uniformSet, static_cast<uint32_t>(offsets.size()), offsets.data());

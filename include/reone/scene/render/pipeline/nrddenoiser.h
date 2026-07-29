@@ -57,6 +57,23 @@ public:
         VkImageView specRadianceHitDist {VK_NULL_HANDLE};
     };
 
+    /** Live REBLUR tuning, mirrored from the Path tracing panel's dials. */
+    struct Tuning {
+        int maxAccumulatedFrames {12};
+        int maxFastAccumulatedFrames {4};
+        int maxStabilizedFrames {8};
+        int historyFixFrames {2};
+        float diffusePrepassBlurRadius {8.0f};
+        float specularPrepassBlurRadius {16.0f};
+        float minBlurRadius {1.0f};
+        float maxBlurRadius {10.0f};
+        float lobeAngleFraction {0.25f};
+        float roughnessFraction {0.15f};
+        float planeDistanceSensitivity {0.05f};
+        float disocclusionThreshold {0.01f};
+        bool antiFirefly {true};
+    };
+
     NrdDenoiser(graphics::VulkanDevice &device, nrd::Instance &instance, glm::ivec2 extent) :
         _device(device), _instance(instance), _extent(extent) {}
 
@@ -74,6 +91,7 @@ public:
     void denoise(VkCommandBuffer cmd,
                  int frameIndex,
                  const Inputs &inputs,
+                 const Tuning &tuning,
                  const glm::mat4 &view,
                  const glm::mat4 &projection,
                  const glm::vec2 &jitter,

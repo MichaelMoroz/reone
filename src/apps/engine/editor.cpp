@@ -702,6 +702,28 @@ void Editor::pathTracingSettings() {
 #ifdef R_ENABLE_NRD
     ImGui::Checkbox("NRD denoiser", &options.ptDenoise);
     ImGui::TextDisabled("REBLUR diffuse+specular. Off shows the raw\ntraced frame; debug views always bypass it.");
+    if (ImGui::TreeNode("Denoiser tuning")) {
+        ImGui::TextDisabled("Temporal accumulation");
+        ImGui::SliderInt("Max frames", &options.ptNrdMaxAccumulatedFrames, 0, 63);
+        ImGui::SliderInt("Fast frames", &options.ptNrdMaxFastAccumulatedFrames, 0, 32);
+        ImGui::SliderInt("Stabilized frames", &options.ptNrdMaxStabilizedFrames, 0, 63);
+        ImGui::SliderInt("History fix frames", &options.ptNrdHistoryFixFrames, 0, 8);
+        ImGui::SliderFloat("Noise-free TAA blend", &options.ptTaaBlend, 0.0f, 0.98f, "%.2f");
+        ImGui::TextDisabled("Spatial filtering (pixels)");
+        ImGui::SliderFloat("Diffuse prepass radius", &options.ptNrdDiffusePrepassBlurRadius, 0.0f, 60.0f, "%.0f");
+        ImGui::SliderFloat("Specular prepass radius", &options.ptNrdSpecularPrepassBlurRadius, 0.0f, 60.0f, "%.0f");
+        ImGui::SliderFloat("Min blur radius", &options.ptNrdMinBlurRadius, 0.0f, 10.0f, "%.1f");
+        ImGui::SliderFloat("Max blur radius", &options.ptNrdMaxBlurRadius, 0.0f, 60.0f, "%.0f");
+        ImGui::TextDisabled("History rejection: larger = more tolerant.\nGrass and foliage reject on normals and plane\ndistance; raise these if they stay noisy.");
+        ImGui::SliderFloat("Lobe angle fraction", &options.ptNrdLobeAngleFraction, 0.01f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Roughness fraction", &options.ptNrdRoughnessFraction, 0.01f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Plane sensitivity", &options.ptNrdPlaneDistanceSensitivity, 0.005f, 0.5f, "%.3f",
+                           ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("Disocclusion threshold", &options.ptNrdDisocclusionThreshold, 0.001f, 0.2f, "%.3f",
+                           ImGuiSliderFlags_Logarithmic);
+        ImGui::Checkbox("Anti-firefly", &options.ptNrdAntiFirefly);
+        ImGui::TreePop();
+    }
 #endif
     ImGui::SeparatorText("Light shape");
     ImGui::SliderFloat("Point angular size", &options.ptPointAngularSize, 0.05f, 45.0f, "%.1f deg");

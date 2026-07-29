@@ -290,6 +290,7 @@ VkImageView NrdDenoiser::viewFor(const nrd::ResourceDesc &resource, const Inputs
 void NrdDenoiser::denoise(VkCommandBuffer cmd,
                           int frameIndex,
                           const Inputs &inputs,
+                          const Tuning &tuning,
                           const glm::mat4 &view,
                           const glm::mat4 &projection,
                           const glm::vec2 &jitter,
@@ -356,11 +357,24 @@ void NrdDenoiser::denoise(VkCommandBuffer cmd,
     common.frameIndex = frameNumber;
     common.accumulationMode = (restartHistory || !_hasHistory) ? nrd::AccumulationMode::CLEAR_AND_RESTART
                                                                : nrd::AccumulationMode::CONTINUE;
+    common.disocclusionThreshold = glm::clamp(tuning.disocclusionThreshold, 0.001f, 0.2f);
     if (nrd::SetCommonSettings(_instance, common) != nrd::Result::SUCCESS) {
         warn("NRD: SetCommonSettings failed");
         return;
     }
     nrd::ReblurSettings reblur {};
+    reblur.maxAccumulatedFrameNum = static_cast<uint32_t>(glm::max(0, tuning.maxAccumulatedFrames));
+    reblur.maxFastAccumulatedFrameNum = static_cast<uint32_t>(glm::max(0, tuning.maxFastAccumulatedFrames));
+    reblur.maxStabilizedFrameNum = static_cast<uint32_t>(glm::max(0, tuning.maxStabilizedFrames));
+    reblur.historyFixFrameNum = static_cast<uint32_t>(glm::max(0, tuning.historyFixFrames));
+    reblur.diffusePrepassBlurRadius = glm::max(0.0f, tuning.diffusePrepassBlurRadius);
+    reblur.specularPrepassBlurRadius = glm::max(0.0f, tuning.specularPrepassBlurRadius);
+    reblur.minBlurRadius = glm::max(0.0f, tuning.minBlurRadius);
+    reblur.maxBlurRadius = glm::max(tuning.minBlurRadius, tuning.maxBlurRadius);
+    reblur.lobeAngleFraction = glm::clamp(tuning.lobeAngleFraction, 0.0f, 1.0f);
+    reblur.roughnessFraction = glm::clamp(tuning.roughnessFraction, 0.0f, 1.0f);
+    reblur.planeDistanceSensitivity = glm::clamp(tuning.planeDistanceSensitivity, 0.001f, 1.0f);
+    reblur.enableAntiFirefly = tuning.antiFirefly;
     if (nrd::SetDenoiserSettings(_instance, 0, &reblur) != nrd::Result::SUCCESS) {
         warn("NRD: SetDenoiserSettings failed");
         return;

@@ -81,6 +81,26 @@ struct GraphicsOptions {
      * point of the split. Without NRD in the build the dial is inert.
      */
     bool ptDenoise {true};
+    /**
+     * REBLUR tuning, exposed 1:1 in the Path tracing panel. NRD's defaults
+     * are graded for 0.5-1 spp production signals; at 4 spp they over-blur
+     * both spatially and temporally, so the local defaults land softer.
+     */
+    int ptNrdMaxAccumulatedFrames {12};
+    int ptNrdMaxFastAccumulatedFrames {4};
+    int ptNrdMaxStabilizedFrames {8};
+    int ptNrdHistoryFixFrames {2};
+    float ptNrdDiffusePrepassBlurRadius {8.0f};
+    float ptNrdSpecularPrepassBlurRadius {16.0f};
+    float ptNrdMinBlurRadius {1.0f};
+    float ptNrdMaxBlurRadius {10.0f};
+    float ptNrdLobeAngleFraction {0.25f};
+    float ptNrdRoughnessFraction {0.15f};
+    float ptNrdPlaneDistanceSensitivity {0.05f};
+    float ptNrdDisocclusionThreshold {0.01f};
+    bool ptNrdAntiFirefly {true};
+    /** History weight of the composite's noise-free TAA. */
+    float ptTaaBlend {0.85f};
     /** Debug view: 0 off, then categories, emissive, normals, roughness,
         lightmap, albedo - matches kDebugView* in slang/rayquery.slang. */
     int ptDebugView {0};
