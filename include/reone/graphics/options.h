@@ -60,18 +60,17 @@ struct GraphicsOptions {
      * the baked radiance cache that stands in for light sources the tracer
      * cannot see yet.
      */
-    /** Calibration programme: the sky reads correctly at about twice the
-        cubemap's raw value. */
-    float ptSkyIntensity {2.0f};
-    float ptEmissiveIntensity {1.0f};
-    float ptLightmapIntensity {1.0f};
+    /** Calibration session of 2026-07-29: sky and emissive at 2.5, the
+        lightmap cache retired to zero - two bounces of real transport
+        replace it - and the sun at 2.5 where the Dantooine dusk reads as a
+        sun. All still dials; these are the graded defaults. */
+    float ptSkyIntensity {2.5f};
+    float ptEmissiveIntensity {2.5f};
+    float ptLightmapIntensity {0.0f};
     float ptDirectIntensity {1.0f};
-    /** Directional sun intensity, independent from the point-light dial.
-        Graded against the retro look rather than any parity target; 2.5 is
-        where the Dantooine dusk sun reads as a sun. */
     float ptSunIntensity {2.5f};
     /** Path depth after the primary hit. */
-    int ptBounces {1};
+    int ptBounces {2};
     /** Secondary-ray origin offset along the geometric normal, world units. */
     float ptRayOffset {0.01f};
     /** GPU trace-stats counters; off by default, the atomics cost frame time. */
