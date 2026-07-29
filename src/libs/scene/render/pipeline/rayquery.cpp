@@ -529,8 +529,17 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         // enclosed scenes like the Taris underground. A tracing-local bit,
         // deliberately above the shared UniformsFeatureFlags range; must
         // match kTraceSky in slang/rayquery.slang.
-        if (mesh->material.backgroundGeometry &&
-            glm::dot(mesh->material.selfIllumColor, glm::vec3(0.299f, 0.587f, 0.114f)) >= 0.99f) {
+        // Sky classification is semantic, never color-based: the authored
+        // MDL background-geometry flag alone. That is also what the original
+        // engine keyed on - background geometry rendered unlit, its texture
+        // being the authored radiance - so the dome and the backdrop ring
+        // both group as sky (unlit, sky dial, path-terminating) and both
+        // ride instance-mask bit 2, transparent to shadow rays: the
+        // environment never occludes the sun. Interior lit panels are plain
+        // emissive geometry - they take the emissive dial and they occlude,
+        // as real luminaires do. The earlier selfIllum-luma test sat in for
+        // this flag and misclassified in both directions.
+        if (mesh->material.backgroundGeometry) {
             material.featureMask |= 1u << 24;
             instance.mask = 0x2;
         }

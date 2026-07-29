@@ -47,11 +47,11 @@ struct GraphicsOptions {
     int pathTracingSamples {4};
 
     /**
-     * Light-balance knobs for the traced mode, all defaulting to neutral.
-     * They scale sources, not the image: sky is fully self-illuminated
-     * geometry (luma >= 0.99, the engine's own test), emissive is every other
-     * emitter, and lightmap scales the baked radiance cache that stands in
-     * for light sources the tracer cannot see yet.
+     * Light-balance knobs for the traced mode. They scale sources, not the
+     * image: sky is authored background geometry (semantic, never
+     * color-based), emissive is every other emitter, and lightmap scales
+     * the baked radiance cache that stands in for light sources the tracer
+     * cannot see yet.
      */
     /** Calibration programme: the sky reads correctly at about twice the
         cubemap's raw value. */

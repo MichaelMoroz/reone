@@ -83,7 +83,9 @@ CategoryOverride categoryOverrideFor(uint featureMask) {
     return categoryOverrides[(featureMask >> kTraceCategoryShift) & kTraceCategoryMask];
 }
 
-// Set CPU-side on fully self-illuminated instances; see rayquery.cpp.
+// Set CPU-side on authored background geometry - semantic, never
+// color-based; see rayquery.cpp. Sky surfaces render their texture as
+// prelit radiance, terminate paths, and never occlude shadow rays.
 static const uint kTraceSky = 1u << 24;
 // Additive-blended diffuse: the texture is the light. Set CPU-side.
 static const uint kTraceAdditive = 1u << 25;
@@ -732,8 +734,10 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         // Running it through the surface path tinted it with direct light and
         // ambient and paid a hemisphere of bounce rays per pixel for nothing.
         if ((material.featureMask & kTraceSky) != 0) {
-            color += primaryThroughput * primarySurface.surface.emissive *
-                     primarySurface.surface.albedo * pushConstants.skyIntensity;
+            // Background geometry is authored, prelit imagery: its texture
+            // is the radiance. No emissive factor - backdrop rings carry no
+            // selfIllum and would render black through one.
+            color += primaryThroughput * primarySurface.surface.albedo * pushConstants.skyIntensity;
             outputImage[dispatchId.xy] = float4(displayTransform(color), 1.0);
             return;
         }
@@ -982,9 +986,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                     if (bounceOverride.params.x >= 0.0) bounceSurface.surface.roughness = bounceOverride.params.x;
                     bounceSurface.surface.emissive *= bounceOverride.params.y;
                     if ((bounceMaterial.featureMask & kTraceSky) != 0) {
-                        // Unlit emissive, and the end of the path: there is
-                        // nothing behind the environment.
-                        radiance += pathThroughput * bounceThroughput * bounceSurface.surface.emissive *
+                        // Authored prelit imagery, and the end of the path:
+                        // there is nothing behind the environment.
+                        radiance += pathThroughput * bounceThroughput *
                                      bounceSurface.surface.albedo * pushConstants.skyIntensity;
                         break;
                     }
