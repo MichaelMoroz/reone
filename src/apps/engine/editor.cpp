@@ -166,7 +166,9 @@ RegistryEntryView makeRegistryEntryView(const scene::ISceneGraph &graph,
                            (entry.cullRoot && entry.cullRoot->isBackgroundScenery())) {
                     tags.push_back("scenery");
                 }
-                if (glm::any(glm::greaterThan(entry.material.selfIllumColor, glm::vec3(0.0f)))) {
+                bool dangly = std::holds_alternative<scene::RegisteredDangly>(entry.deformation);
+                if (!dangly &&
+                    glm::any(glm::greaterThan(entry.material.selfIllumColor, glm::vec3(0.0f)))) {
                     tags.push_back("emissive");
                 }
                 if (const auto *diffuse = entry.material.textures[static_cast<size_t>(

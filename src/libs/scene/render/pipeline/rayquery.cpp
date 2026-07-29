@@ -614,6 +614,13 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         // texture, occluding, casting nothing. None strips a wrong
         // selfIllum outright. Material operations ride the same record.
         const auto *curated = registry.curatedByIndex(mesh->material.curatedIndex);
+        // Dangly selfIllum is Odyssey's fullbright trick for foliage, not
+        // emission - danm14ab carries 653 dangly canopies that were glowing
+        // and casting. Stripped by default; the curated emissive class
+        // restores it for any plant that genuinely glows.
+        if (dangly && (!curated || curated->klass != RenderRegistry::TraceClass::Emissive)) {
+            material.selfIllumColor = glm::vec4(0.0f);
+        }
         if (curated) {
             switch (curated->klass) {
             case RenderRegistry::TraceClass::Prelit:
@@ -691,7 +698,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         // threshold while the shader used one too; when the shader started
         // taking the colour directly, this count silently stopped describing
         // what was actually being traced.
-        if ((!curated || curated->klass == RenderRegistry::TraceClass::Default) &&
+        if (!dangly &&
+            (!curated || curated->klass == RenderRegistry::TraceClass::Default) &&
             glm::any(glm::greaterThan(mesh->material.selfIllumColor, glm::vec3(0.0f)))) {
             ++_lastEmissive;
         }
