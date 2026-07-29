@@ -132,6 +132,12 @@ private:
     void *_nrdInstance {nullptr};
 #ifdef R_ENABLE_NRD
     std::unique_ptr<NrdDenoiser> _nrdDenoiser;
+    /** The post-denoise assembly pass; overwrites the trace kernel's write. */
+    VkDescriptorSetLayout _compositeLayout {VK_NULL_HANDLE};
+    VkDescriptorPool _compositePool {VK_NULL_HANDLE};
+    std::array<VkDescriptorSet, 2> _compositeSets {};
+    VkPipelineLayout _compositePipelineLayout {VK_NULL_HANDLE};
+    VkPipeline _compositePipeline {VK_NULL_HANDLE};
 #endif
 
     /**

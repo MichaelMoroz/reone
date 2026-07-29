@@ -27,6 +27,19 @@ import lib.surface;
 /** Environment / miss distance: beyond any scene, inside NRD's defaults. */
 static const float kTraceInfDistance = 1.0e6;
 
+/**
+ * REBLUR filters radiance in YCoCg; its front end expects the conversion
+ * already applied to the noisy channels, and the composite undoes it on the
+ * denoised result. Mirrors _NRD_LinearToYCoCg in NRD.hlsli.
+ */
+float3 linearToYCoCg(float3 color) {
+    float Co = color.x - color.z;
+    float t = color.z + Co * 0.5;
+    float Cg = color.y - t;
+    float Y = t + Cg * 0.5;
+    return float3(Y, Co, Cg);
+}
+
 void writeTraceOutputs(uint2 pixel, float4 diffuse, float4 specular, float4 normalRoughness,
                        float viewZ, float4 motion, float3 noiseFree, float3 albedo) {
     outDiffuse[pixel] = diffuse;
@@ -1255,7 +1268,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                                    primarySurface.surface.albedo * pushConstants.emissiveIntensity;
         color = auxNoiseFree + auxDiffuse.rgb * auxAlbedo + auxSpecular.rgb;
     }
-    writeTraceOutputs(dispatchId.xy, auxDiffuse, auxSpecular, auxNormalRoughness, auxViewZ,
+    writeTraceOutputs(dispatchId.xy, float4(linearToYCoCg(auxDiffuse.rgb), auxDiffuse.a),
+                      float4(linearToYCoCg(auxSpecular.rgb), auxSpecular.a),
+                      auxNormalRoughness, auxViewZ,
                       float4(0.0), auxNoiseFree, auxAlbedo);
     // The channel views inspect the split without replacing shading upstream.
     uint tailDebugView = (pushConstants.traceFlags >> kTraceDebugViewShift) & kTraceDebugViewMask;

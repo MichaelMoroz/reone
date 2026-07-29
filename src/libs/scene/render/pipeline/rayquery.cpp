@@ -352,6 +352,61 @@ void RayQueryPipeline::init() {
                  std::to_string(instanceDesc.transientPoolSize) + " transient pool textures");
             _nrdDenoiser = std::make_unique<NrdDenoiser>(device, *instance, _extent);
             _nrdDenoiser->init();
+
+            VkDescriptorSetLayoutBinding compositeBindings[5] {};
+            for (uint32_t i = 0; i < 5; ++i) {
+                compositeBindings[i].binding = i;
+                compositeBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                compositeBindings[i].descriptorCount = 1;
+                compositeBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            VkDescriptorSetLayoutCreateInfo compositeLayoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            compositeLayoutInfo.bindingCount = 5;
+            compositeLayoutInfo.pBindings = compositeBindings;
+            if (vkCreateDescriptorSetLayout(device.handle(), &compositeLayoutInfo, nullptr, &_compositeLayout) != VK_SUCCESS)
+                throw std::runtime_error("Vulkan: NRD composite layout creation failed");
+            VkDescriptorPoolSize compositePoolSize {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 10};
+            VkDescriptorPoolCreateInfo compositePoolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            compositePoolInfo.maxSets = 2;
+            compositePoolInfo.poolSizeCount = 1;
+            compositePoolInfo.pPoolSizes = &compositePoolSize;
+            if (vkCreateDescriptorPool(device.handle(), &compositePoolInfo, nullptr, &_compositePool) != VK_SUCCESS)
+                throw std::runtime_error("Vulkan: NRD composite pool creation failed");
+            std::array<VkDescriptorSetLayout, 2> compositeSetLayouts {_compositeLayout, _compositeLayout};
+            VkDescriptorSetAllocateInfo compositeAlloc {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            compositeAlloc.descriptorPool = _compositePool;
+            compositeAlloc.descriptorSetCount = 2;
+            compositeAlloc.pSetLayouts = compositeSetLayouts.data();
+            if (vkAllocateDescriptorSets(device.handle(), &compositeAlloc, _compositeSets.data()) != VK_SUCCESS)
+                throw std::runtime_error("Vulkan: NRD composite set allocation failed");
+            VkPushConstantRange compositePush {};
+            compositePush.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            compositePush.size = 2 * sizeof(uint32_t);
+            VkPipelineLayoutCreateInfo compositePipelineLayout {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+            compositePipelineLayout.setLayoutCount = 1;
+            compositePipelineLayout.pSetLayouts = &_compositeLayout;
+            compositePipelineLayout.pushConstantRangeCount = 1;
+            compositePipelineLayout.pPushConstantRanges = &compositePush;
+            if (vkCreatePipelineLayout(device.handle(), &compositePipelineLayout, nullptr, &_compositePipelineLayout) != VK_SUCCESS)
+                throw std::runtime_error("Vulkan: NRD composite pipeline layout creation failed");
+            auto compositeSpirv = readSpirV(_renderer.shaderDir() / "nrd_composite.spv");
+            VkShaderModuleCreateInfo compositeModuleInfo {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+            compositeModuleInfo.codeSize = compositeSpirv.size() * sizeof(uint32_t);
+            compositeModuleInfo.pCode = compositeSpirv.data();
+            VkShaderModule compositeModule;
+            if (vkCreateShaderModule(device.handle(), &compositeModuleInfo, nullptr, &compositeModule) != VK_SUCCESS)
+                throw std::runtime_error("Vulkan: NRD composite shader module creation failed");
+            VkComputePipelineCreateInfo compositePipeline {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+            compositePipeline.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            compositePipeline.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            compositePipeline.stage.module = compositeModule;
+            compositePipeline.stage.pName = "main";
+            compositePipeline.layout = _compositePipelineLayout;
+            const auto compositeResult = vkCreateComputePipelines(device.handle(), VK_NULL_HANDLE, 1,
+                                                                  &compositePipeline, nullptr, &_compositePipeline);
+            vkDestroyShaderModule(device.handle(), compositeModule, nullptr);
+            if (compositeResult != VK_SUCCESS)
+                throw std::runtime_error("Vulkan: NRD composite pipeline creation failed");
         } else {
             warn("NRD instance creation failed; denoising stays unavailable");
         }
@@ -373,6 +428,12 @@ void RayQueryPipeline::clearFrame(Frame &frame) {
 void RayQueryPipeline::deinit() {
     for (auto &frame : _frames) clearFrame(frame);
 #ifdef R_ENABLE_NRD
+    if (_compositePipeline) vkDestroyPipeline(_renderer.device().handle(), _compositePipeline, nullptr);
+    if (_compositePipelineLayout) vkDestroyPipelineLayout(_renderer.device().handle(), _compositePipelineLayout, nullptr);
+    if (_compositePool) vkDestroyDescriptorPool(_renderer.device().handle(), _compositePool, nullptr);
+    if (_compositeLayout) vkDestroyDescriptorSetLayout(_renderer.device().handle(), _compositeLayout, nullptr);
+    _compositePipeline = VK_NULL_HANDLE; _compositePipelineLayout = VK_NULL_HANDLE;
+    _compositePool = VK_NULL_HANDLE; _compositeLayout = VK_NULL_HANDLE; _compositeSets = {};
     _nrdDenoiser.reset();
     if (_nrdInstance) {
         nrd::DestroyInstance(*static_cast<nrd::Instance *>(_nrdInstance));
@@ -1071,6 +1132,40 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         inputs.motion = aux[4]->view();
         _nrdDenoiser->denoise(cmd, _renderer.frameIndex(), inputs, view, projection,
                               glm::vec2(0.0f), _frameNumber, _frameNumber == 0);
+        if (_options.ptDenoise && _options.ptDebugView == 0) {
+            // The assembly from denoised channels, overwriting the trace
+            // kernel's own write. Debug views keep the kernel's output.
+            const auto compositeSet = _compositeSets[_renderer.frameIndex()];
+            std::array<VkDescriptorImageInfo, 5> compositeImages {{
+                {VK_NULL_HANDLE, output.view(), VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, aux[5]->view(), VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, aux[6]->view(), VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, _nrdDenoiser->denoisedDiffuse().view(), VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, _nrdDenoiser->denoisedSpecular().view(), VK_IMAGE_LAYOUT_GENERAL},
+            }};
+            std::array<VkWriteDescriptorSet, 5> compositeWrites {};
+            for (uint32_t i = 0; i < 5; ++i) {
+                compositeWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                compositeWrites[i].dstSet = compositeSet;
+                compositeWrites[i].dstBinding = i;
+                compositeWrites[i].descriptorCount = 1;
+                compositeWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                compositeWrites[i].pImageInfo = &compositeImages[i];
+            }
+            vkUpdateDescriptorSets(device.handle(), 5, compositeWrites.data(), 0, nullptr);
+            struct CompositePush {
+                uint32_t tonemap;
+                float exposure;
+            } compositePush {static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)),
+                             std::max(0.01f, _options.ptExposure)};
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _compositePipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _compositePipelineLayout,
+                                    0, 1, &compositeSet, 0, nullptr);
+            vkCmdPushConstants(cmd, _compositePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                               sizeof(compositePush), &compositePush);
+            vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8),
+                          static_cast<uint32_t>((_extent.y + 7) / 8), 1);
+        }
     }
 #endif
     ++_frameNumber;

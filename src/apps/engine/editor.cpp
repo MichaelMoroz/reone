@@ -699,6 +699,10 @@ void Editor::pathTracingSettings() {
     ImGui::Combo("Tonemap", &options.ptTonemap, kTonemapNames, 2);
     ImGui::SliderFloat("Exposure", &options.ptExposure, 0.05f, 8.0f, "%.2f",
                        ImGuiSliderFlags_Logarithmic);
+#ifdef R_ENABLE_NRD
+    ImGui::Checkbox("NRD denoiser", &options.ptDenoise);
+    ImGui::TextDisabled("REBLUR diffuse+specular. Off shows the raw\ntraced frame; debug views always bypass it.");
+#endif
     ImGui::SeparatorText("Light shape");
     ImGui::SliderFloat("Point angular size", &options.ptPointAngularSize, 0.05f, 45.0f, "%.1f deg");
     ImGui::SliderFloat("Sun angular size", &options.ptSunAngularSize, 0.05f, 10.0f, "%.2f deg");

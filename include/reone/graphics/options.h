@@ -75,6 +75,12 @@ struct GraphicsOptions {
     float ptRayOffset {0.01f};
     /** GPU trace-stats counters; off by default, the atomics cost frame time. */
     bool ptTraceStats {false};
+    /**
+     * REBLUR through NRD, when the build carries it (ENABLE_NRD - a local
+     * developer toggle for license reasons). On by default there: the whole
+     * point of the split. Without NRD in the build the dial is inert.
+     */
+    bool ptDenoise {true};
     /** Debug view: 0 off, then categories, emissive, normals, roughness,
         lightmap, albedo - matches kDebugView* in slang/rayquery.slang. */
     int ptDebugView {0};
