@@ -1346,7 +1346,7 @@ Texture &VulkanRenderPipeline::render(RenderRegistry &registry,
         beginDep.imageMemoryBarrierCount = 1;
         beginDep.pImageMemoryBarriers = &toGeneral;
         vkCmdPipelineBarrier2(cmd, &beginDep);
-        _rayQuery->render(cmd, registry, globalsOffset, *_output);
+        _rayQuery->render(cmd, registry, globalsOffset, *_output, globals.view, globals.projection);
         VkImageMemoryBarrier2 toRead {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
         toRead.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
         toRead.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;

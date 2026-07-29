@@ -1237,10 +1237,17 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         // Assembly is the composite contract in miniature: noise-free first,
         // then the demodulated diffuse channel remodulated by albedo, then
         // specular as-is.
+        // REBLUR wants hit distance normalized by its distance parameters
+        // (the defaults: 3.0, 0.1, 20.0, -25.0), roughness-dependent for the
+        // specular channel and evaluated at roughness 1 for diffuse.
+        float hitViewZ = mul(globalUniforms.view, float4(hitPosition, 1.0)).z;
+        float diffHitNorm = 3.0 + abs(hitViewZ) * 0.1;
+        float specRough2 = primarySurface.surface.roughness * primarySurface.surface.roughness;
+        float specHitNorm = diffHitNorm * lerp(1.0, 20.0, saturate(exp2(-25.0 * specRough2)));
         auxDiffuse = float4(primaryThroughput * diffuseIllumination / float(sampleCount),
-                            diffHitCount > 0.0 ? diffHitSum / diffHitCount : 0.0);
+                            diffHitCount > 0.0 ? saturate(diffHitSum / diffHitCount / diffHitNorm) : 0.0);
         auxSpecular = float4(primaryThroughput * specularIllumination / float(sampleCount),
-                             specHitCount > 0.0 ? specHitSum / specHitCount : 0.0);
+                             specHitCount > 0.0 ? saturate(specHitSum / specHitCount / specHitNorm) : 0.0);
         auxNormalRoughness = float4(primarySurface.surface.normal, primarySurface.surface.roughness);
         auxViewZ = mul(globalUniforms.view, float4(hitPosition, 1.0)).z;
         auxAlbedo = primarySurface.surface.albedo;

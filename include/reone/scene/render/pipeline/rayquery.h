@@ -9,6 +9,10 @@
 #include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/mesh.h"
 
+#ifdef R_ENABLE_NRD
+#include "reone/scene/render/pipeline/nrddenoiser.h"
+#endif
+
 namespace reone::graphics {
 class VulkanRenderer;
 class VulkanImage;
@@ -28,8 +32,13 @@ public:
     ~RayQueryPipeline() { deinit(); }
     void init();
     void deinit();
+    /**
+     * View and projection ride along for the denoiser: NRD reprojects from
+     * the matrix pair, and only the caller has the camera.
+     */
     void render(VkCommandBuffer cmd, RenderRegistry &registry, uint32_t globalsOffset,
-                graphics::VulkanImage &output);
+                graphics::VulkanImage &output,
+                const glm::mat4 &view, const glm::mat4 &projection);
 
 private:
     struct Frame {
@@ -121,6 +130,9 @@ private:
      * Null when NRD is not built in or instance creation failed.
      */
     void *_nrdInstance {nullptr};
+#ifdef R_ENABLE_NRD
+    std::unique_ptr<NrdDenoiser> _nrdDenoiser;
+#endif
 
     /**
      * The NRD-facing output split, set 2 in the trace pipeline: diffuse and

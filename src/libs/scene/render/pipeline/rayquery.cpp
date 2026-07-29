@@ -350,6 +350,8 @@ void RayQueryPipeline::init() {
                  std::to_string(instanceDesc.pipelinesNum) + " pipelines, " +
                  std::to_string(instanceDesc.permanentPoolSize) + " permanent + " +
                  std::to_string(instanceDesc.transientPoolSize) + " transient pool textures");
+            _nrdDenoiser = std::make_unique<NrdDenoiser>(device, *instance, _extent);
+            _nrdDenoiser->init();
         } else {
             warn("NRD instance creation failed; denoising stays unavailable");
         }
@@ -371,6 +373,7 @@ void RayQueryPipeline::clearFrame(Frame &frame) {
 void RayQueryPipeline::deinit() {
     for (auto &frame : _frames) clearFrame(frame);
 #ifdef R_ENABLE_NRD
+    _nrdDenoiser.reset();
     if (_nrdInstance) {
         nrd::DestroyInstance(*static_cast<nrd::Instance *>(_nrdInstance));
         _nrdInstance = nullptr;
@@ -540,7 +543,8 @@ VulkanMesh::Geometry RayQueryPipeline::skin(VkCommandBuffer cmd,
 }
 
 void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uint32_t globalsOffset,
-                              VulkanImage &output) {
+                              VulkanImage &output,
+                              const glm::mat4 &view, const glm::mat4 &projection) {
     // This intentionally bypasses drawScene: its frustum/distance policy must
     // not decide what a ray can hit. Keep the explicit policy construction as
     // the documented caller of the no-culling mode.
@@ -1038,7 +1042,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                   std::max(0.0001f, _options.ptRayOffset),
                                   std::max(0.0f, _options.ptSunIntensity),
                                   (_options.ptTraceStats ? 1u : 0u) |
-                                      (static_cast<uint32_t>(std::clamp(_options.ptDebugView, 0, 6)) << 4) |
+                                      (static_cast<uint32_t>(std::clamp(_options.ptDebugView, 0, 10)) << 4) |
                                       (static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)) << 8),
                                   static_cast<uint32_t>(std::clamp(_options.ptBounces, 1, 8)),
                                   glm::radians(std::clamp(_options.ptPointAngularSize, 0.05f, 45.0f)),
@@ -1046,6 +1050,29 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                   std::max(0.01f, _options.ptExposure)};
     vkCmdPushConstants(cmd, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), &constants);
     vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8), static_cast<uint32_t>((_extent.y + 7) / 8), 1);
+#ifdef R_ENABLE_NRD
+    if (_nrdDenoiser) {
+        // The trace pass's storage writes feed NRD's sampled reads.
+        VkMemoryBarrier2 traceToDenoise {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        traceToDenoise.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        traceToDenoise.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        traceToDenoise.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        traceToDenoise.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+        VkDependencyInfo traceDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        traceDependency.memoryBarrierCount = 1;
+        traceDependency.pMemoryBarriers = &traceToDenoise;
+        vkCmdPipelineBarrier2(cmd, &traceDependency);
+        const auto &aux = _auxImages[_renderer.frameIndex()];
+        NrdDenoiser::Inputs inputs;
+        inputs.diffRadianceHitDist = aux[0]->view();
+        inputs.specRadianceHitDist = aux[1]->view();
+        inputs.normalRoughness = aux[2]->view();
+        inputs.viewZ = aux[3]->view();
+        inputs.motion = aux[4]->view();
+        _nrdDenoiser->denoise(cmd, _renderer.frameIndex(), inputs, view, projection,
+                              glm::vec2(0.0f), _frameNumber, _frameNumber == 0);
+    }
+#endif
     ++_frameNumber;
     const auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count();
     // The GPU counters only accumulate while the stats flag is on; printing

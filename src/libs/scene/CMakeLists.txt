@@ -93,5 +93,6 @@ if(ENABLE_VULKAN)
 endif()
 
 if(ENABLE_NRD)
+    target_sources(scene PRIVATE ${SCENE_SOURCE_DIR}/render/pipeline/nrddenoiser.cpp)
     target_link_libraries(scene PUBLIC NRD)
 endif()
