@@ -220,7 +220,10 @@ void RayQueryPipeline::init() {
     skinLayoutInfo.pBindings = skinBindings;
     if (vkCreateDescriptorSetLayout(device.handle(), &skinLayoutInfo, nullptr, &_skinLayout) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: skin descriptor layout creation failed");
-    constexpr uint32_t kMaxSkinnedInstancesPerFrame = 128;
+    // Sized for the worst modules, not the typical ones: Taris streets hold
+    // hundreds of skinned parts (every NPC is a body and a head at least),
+    // and 128 killed the engine on nine modules of the sweep.
+    constexpr uint32_t kMaxSkinnedInstancesPerFrame = 1024;
     for (auto &pool : _skinPools) {
         VkDescriptorPoolSize skinPoolSize {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                            2 * kMaxSkinnedInstancesPerFrame};
@@ -304,6 +307,22 @@ VulkanMesh::Geometry RayQueryPipeline::skin(VkCommandBuffer cmd,
     if (sourceGeometry.vertexStride % sizeof(float) != 0) {
         throw std::runtime_error("Vulkan: skinned vertex stride is not float-aligned");
     }
+    // Allocate the descriptor before anything else this mesh would own: past
+    // the per-frame pool cap, the honest degradation is the bind pose, not an
+    // engine failure - a crowd scene with a few unposed extras beats a crash.
+    VkDescriptorSetAllocateInfo allocateInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocateInfo.descriptorPool = _skinPools[_renderer.frameIndex()];
+    allocateInfo.descriptorSetCount = 1;
+    allocateInfo.pSetLayouts = &_skinLayout;
+    VkDescriptorSet set {VK_NULL_HANDLE};
+    if (vkAllocateDescriptorSets(_renderer.device().handle(), &allocateInfo, &set) != VK_SUCCESS) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            warn("Vulkan: skin descriptor pool exhausted; excess skinned meshes stay in bind pose");
+        }
+        return sourceGeometry;
+    }
     auto &result = frame.skinned.emplace_back();
     result.vertices = std::make_unique<VulkanBuffer>(_renderer.device());
     result.vertices->initDeviceLocal(source.vertexDataSize(),
@@ -311,14 +330,6 @@ VulkanMesh::Geometry RayQueryPipeline::skin(VkCommandBuffer cmd,
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
         nullptr);
-
-    VkDescriptorSetAllocateInfo allocateInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    allocateInfo.descriptorPool = _skinPools[_renderer.frameIndex()];
-    allocateInfo.descriptorSetCount = 1;
-    allocateInfo.pSetLayouts = &_skinLayout;
-    VkDescriptorSet set {VK_NULL_HANDLE};
-    if (vkAllocateDescriptorSets(_renderer.device().handle(), &allocateInfo, &set) != VK_SUCCESS)
-        throw std::runtime_error("Vulkan: skin descriptor allocation failed");
     VkDescriptorBufferInfo sourceInfo {source.vertexBuffer(), 0, source.vertexDataSize()};
     VkDescriptorBufferInfo destinationInfo {result.vertices->handle(), 0, result.vertices->size()};
     VkWriteDescriptorSet writes[2] {};
