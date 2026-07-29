@@ -440,6 +440,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     _lastEmissive = 0;
     _lastAdditive = 0;
     _lastSabers = 0;
+    _lastSky = 0;
     _lastDangly = 0;
     for (const auto &object : registry.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
@@ -542,6 +543,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         if (mesh->material.backgroundGeometry) {
             material.featureMask |= 1u << 24;
             instance.mask = 0x2;
+            ++_lastSky;
         }
         // Additive-blended diffuse is the other way Odyssey authors a glow:
         // no selfIllum controller, the texture itself is the light, and the
@@ -812,7 +814,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
          std::to_string(_lastOutOfRange) + " out-of-range meshes, build recorded in " +
          std::to_string(microseconds) + " us; " + std::to_string(_lastEmissive) +
           " emissive, " + std::to_string(_lastAdditive) + " additive, " +
-         std::to_string(_lastSabers) + " saber, " + std::to_string(_lastDangly) + " dangly; " + statsPart +
+         std::to_string(_lastSabers) + " saber, " + std::to_string(_lastDangly) + " dangly, " +
+         std::to_string(_lastSky) + " sky; " + statsPart +
          std::to_string(_lastBindlessTextureCount) + " bindless 2D textures; " +
          std::to_string(std::max(1, _options.pathTracingSamples)) + " spp", LogChannel::Graphics);
 }

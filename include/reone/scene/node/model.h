@@ -118,6 +118,12 @@ public:
     ModelUsage usage() const { return _usage; }
     float drawDistance() const { return _drawDistance; }
 
+    /** Background scenery: a room without a walkmesh, the K1 skybox
+        convention. Grouped as sky by tracing alongside the authored per-mesh
+        background-geometry flag, which K1 area models do not carry. */
+    bool isBackgroundScenery() const { return _backgroundScenery; }
+    void setBackgroundScenery(bool background) { _backgroundScenery = background; }
+
     void setModel(graphics::Model &model);
     void setDrawDistance(float distance) { _drawDistance = distance; }
     void setMainTexture(graphics::Texture *texture);
@@ -154,6 +160,7 @@ public:
 private:
     graphics::Model *_model;
     ModelUsage _usage;
+    bool _backgroundScenery {false};
 
     IAnimationEventListener *_animEventListener {nullptr};
     float _drawDistance {std::numeric_limits<float>::max()};

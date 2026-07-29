@@ -500,6 +500,12 @@ void Area::loadLYT() {
         if (walkmesh) {
             walkmeshSceneNode = sceneGraph.newWalkmesh(*walkmesh);
             sceneGraph.addRoot(walkmeshSceneNode);
+        } else {
+            // A room without a walkmesh is background scenery - the K1
+            // skybox convention, and the semantic signal tracing keys its
+            // sky classification on (K1 area models do not author the
+            // per-mesh background-geometry flag).
+            modelSceneNode->setBackgroundScenery(true);
         }
 
         // Grass

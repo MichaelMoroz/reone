@@ -291,7 +291,13 @@ void MeshSceneNode::registerRender(RenderRegistry &registry) {
     material.diffuseColor = mesh->diffuse;
     material.selfIllumColor = _selfIllumColor;
     material.staticObject = _static;
-    material.backgroundGeometry = mesh->backgroundGeometry;
+    // Semantic sky, two authored sources: the per-mesh MDL background flag
+    // (TSL and some models), or membership in a background-scenery room -
+    // one without a walkmesh, the K1 skybox convention - refined by the
+    // absence of a lightmap so decorative-but-lit geometry keeps its
+    // authored lighting. Never color-based.
+    material.backgroundGeometry = mesh->backgroundGeometry ||
+                                  (_model.isBackgroundScenery() && !_nodeTextures.lightmap);
     if (render && _sceneGraph.hasShadowLight() && isReceivingShadows(_model, *this)) {
         material.affectedByShadows = true;
     }
