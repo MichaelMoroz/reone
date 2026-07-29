@@ -350,6 +350,16 @@ float3 additiveRadiance(InstanceMaterial material, CandidateLayer layer) {
 struct HitSurface {
     SurfaceParams surface;
     float3 geometricNormal;
+    /**
+     * Shadow-ray origin on the virtual smooth surface (Hanika, RT Gems II):
+     * the hit point lifted onto the interpolation of the three vertex tangent
+     * planes. Low-poly geometry with aggressively smoothed normals - all of
+     * KotOR - otherwise shows the shadow terminator as faceted polygon-shaped
+     * bands, because the shading normal promises a curved surface the shadow
+     * ray immediately contradicts. Falls back to the raw hit point on meshes
+     * without authored normals.
+     */
+    float3 shadowOrigin;
 };
 
 // Curated channel op: mode 0 passes the derived value through, mode 1
@@ -363,13 +373,14 @@ float curatedChannel(float4 A, float4 B, float3 albedo, float current) {
 
 HitSurface sampleSurface(InstanceMaterial material, uint3 indices, float3 weights,
                          float3x4 objectToWorld, float3x4 worldToObject,
-                         float3 rayDirection, float2 uv, float2 uv2) {
+                         float3 rayDirection, float3 hitPosition, float2 uv, float2 uv2) {
     HitSurface hit;
     float3 p0 = mul(objectToWorld, float4(loadFloat3(attributeAddress(material, indices.x, material.offPosition)), 1.0));
     float3 p1 = mul(objectToWorld, float4(loadFloat3(attributeAddress(material, indices.y, material.offPosition)), 1.0));
     float3 p2 = mul(objectToWorld, float4(loadFloat3(attributeAddress(material, indices.z, material.offPosition)), 1.0));
     hit.geometricNormal = normalize(cross(p1 - p0, p2 - p0));
     if (dot(hit.geometricNormal, rayDirection) > 0.0) hit.geometricNormal = -hit.geometricNormal;
+    hit.shadowOrigin = hitPosition;
 
     SurfaceParams surface = defaultSurface();
     if (material.mainTex != kNoTexture) {
@@ -394,9 +405,33 @@ HitSurface sampleSurface(InstanceMaterial material, uint3 indices, float3 weight
     surface.metallic = curatedChannel(material.curatedMetalA, material.curatedMetalB,
                                       surface.albedo, surface.metallic);
 
+    // The two normals have different jobs. The geometric normal owns every
+    // geometry decision: ray-origin offsets, sidedness, hemisphere validity.
+    // The interpolated (material) normal exists only inside the BRDF, where
+    // smooth shading lives. hasAuthoredNormals tracks which space
+    // shadingNormal is in: authored normals are object-space and need the
+    // inverse-transpose below; the geometric fallback is already world-space
+    // and transforming it again would bend it under any rotated instance.
+    bool hasAuthoredNormals = material.offNormals != -1;
     float3 shadingNormal = hit.geometricNormal;
-    if (material.offNormals != -1) {
+    if (hasAuthoredNormals) {
         shadingNormal = normalize(interpolateFloat3(material, indices, material.offNormals, weights));
+        // The terminator shift: lift the shadow-ray origin onto the smooth
+        // surface the vertex normals describe, projecting the hit point onto
+        // each vertex tangent plane (only when below it) and interpolating.
+        float3 n0 = normalize(mul(loadFloat3(attributeAddress(material, indices.x, material.offNormals)),
+                                  (float3x3)worldToObject));
+        float3 n1 = normalize(mul(loadFloat3(attributeAddress(material, indices.y, material.offNormals)),
+                                  (float3x3)worldToObject));
+        float3 n2 = normalize(mul(loadFloat3(attributeAddress(material, indices.z, material.offNormals)),
+                                  (float3x3)worldToObject));
+        float3 u0 = hitPosition - p0;
+        float3 u1 = hitPosition - p1;
+        float3 u2 = hitPosition - p2;
+        u0 -= min(0.0, dot(u0, n0)) * n0;
+        u1 -= min(0.0, dot(u1, n1)) * n1;
+        u2 -= min(0.0, dot(u2, n2)) * n2;
+        hit.shadowOrigin = weights.x * (p0 + u0) + weights.y * (p1 + u1) + weights.z * (p2 + u2);
     }
     if (material.offTanSpace != -1) {
         // offTanSpace is bitangent, tangent, tangent-space normal in that order.
@@ -431,8 +466,14 @@ HitSurface sampleSurface(InstanceMaterial material, uint3 indices, float3 weight
     }
     // Attributes are object-space; this row-vector product is the inverse
     // transpose. SurfaceParams always carries a world-space normal.
-    surface.normal = normalize(mul(shadingNormal, (float3x3)worldToObject));
-    if (dot(surface.normal, rayDirection) > 0.0) surface.normal = -surface.normal;
+    surface.normal = hasAuthoredNormals
+                         ? normalize(mul(shadingNormal, (float3x3)worldToObject))
+                         : shadingNormal;
+    // Flip into the geometric hemisphere, not merely toward the viewer: the
+    // geometric normal is already face-forward, so agreement with it implies
+    // facing the ray too, and it guarantees the BRDF's smooth normal and the
+    // hemisphere tests below never contradict each other at a silhouette.
+    if (dot(surface.normal, hit.geometricNormal) < 0.0) surface.normal = -surface.normal;
     if ((material.featureMask & uint(kFeatureLightmap)) != 0) {
         surface.hasLightmap = true;
         if (material.lightmap != kNoTexture && material.offUV2 != -1) {
@@ -526,7 +567,8 @@ float directLightWeight(GlobalUniformsLight light, float3 hitPosition, float3 sh
 // estimator the primary hit uses, shaded with the vertex's own material
 // model. Without this the Bounces dial was a no-op for analytic lights:
 // their energy died at the first surface it touched.
-float3 vertexDirectLight(float3 position, float3 shadingNormal, float3 geometricNormal,
+float3 vertexDirectLight(float3 position, float3 shadowOrigin,
+                         float3 shadingNormal, float3 geometricNormal,
                          float3 V, float3 albedo, float metallic, float roughness,
                          bool envmapped, float envMapStrength, inout uint state) {
     float totalWeight = 0.0;
@@ -558,6 +600,10 @@ float3 vertexDirectLight(float3 position, float3 shadingNormal, float3 geometric
     float3 fragToLight = light.position.xyz - position;
     float lightDistance = length(fragToLight);
     float3 L = fragToLight / max(lightDistance, 1e-4);
+    // The smooth normal may claim this surface sees the light while the
+    // actual triangle faces away. Trust the geometry: a shadow ray fired
+    // from below the real surface only leaks or self-shadows noisily.
+    if (dot(L, geometricNormal) <= 0.0) return float3(0.0);
     float attenuation = 1.0;
     if (!directional) {
         float d = light.radius + lightDistance;
@@ -569,7 +615,7 @@ float3 vertexDirectLight(float3 position, float3 shadingNormal, float3 geometric
     float angular = directional ? pushConstants.sunAngularRadius
                                 : pushConstants.pointAngularRadius;
     float3 shadowDirection = coneSample(L, angular, float2(random01(state), random01(state)));
-    radiance *= shadowTransmittance(position, geometricNormal, shadowDirection,
+    radiance *= shadowTransmittance(shadowOrigin, geometricNormal, shadowDirection,
                                     directional ? 10000.0 : lightDistance) *
                 (totalWeight / max(selectedWeight, 1e-6));
     float NdotL = max(0.0, dot(shadingNormal, L));
@@ -725,8 +771,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         if (material.offUV2 != -1) {
             uv2 = interpolateFloat2(material, indices, material.offUV2, weights);
         }
+        float3 hitPosition = ray.Origin + ray.Direction * primary.CommittedRayT();
         HitSurface primarySurface = sampleSurface(material, indices, weights, objectToWorld,
-                                                  worldToObject, ray.Direction, uv, uv2);
+                                                  worldToObject, ray.Direction, hitPosition, uv, uv2);
         CategoryOverride primaryOverride = categoryOverrideFor(material.featureMask);
         primarySurface.surface.albedo = lerp(primarySurface.surface.albedo,
                                              gammaToLinear(primaryOverride.color.rgb),
@@ -762,7 +809,6 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
             outputImage[dispatchId.xy] = float4(debugColor, 1.0);
             return;
         }
-        float3 hitPosition = ray.Origin + ray.Direction * primary.CommittedRayT();
         // The sky is unlit emissive: the cubemap is the light source itself.
         // Running it through the surface path tinted it with direct light and
         // ambient and paid a hemisphere of bounce rays per pixel for nothing.
@@ -871,6 +917,10 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 float3 fragToLight = light.position.xyz - hitPosition;
                 float lightDistance = length(fragToLight);
                 float3 L = fragToLight / max(lightDistance, 1e-4);
+                // Geometry decides visibility, the smooth normal only shades:
+                // a light below the actual triangle cannot reach it, however
+                // curved the interpolated normal pretends the surface is.
+                if (dot(L, primarySurface.geometricNormal) <= 0.0) continue;
                 float attenuation = 1.0;
                 if (!directional) {
                     float d = light.radius + lightDistance;
@@ -888,7 +938,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 float3 shadowDirection = coneSample(L, shadowAngular,
                                                     float2(random01(shadowJitterState),
                                                            random01(shadowJitterState)));
-                radiance *= shadowTransmittance(hitPosition, primarySurface.geometricNormal,
+                radiance *= shadowTransmittance(primarySurface.shadowOrigin, primarySurface.geometricNormal,
                                                 shadowDirection, directional ? 10000.0 : lightDistance) *
                             (float(multiplicity) / selectionProbability);
                 float NdotL = max(0.0, dot(primarySurface.surface.normal, L));
@@ -1013,10 +1063,13 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                         bounceUV2 = interpolateFloat2(bounceMaterial, bounceIndices,
                                                       bounceMaterial.offUV2, bounceWeights);
                     }
+                    float3 bounceHitPosition = secondary.Origin +
+                                               secondary.Direction * bounce.CommittedRayT();
                     HitSurface bounceSurface = sampleSurface(bounceMaterial, bounceIndices, bounceWeights,
                                                              bounce.CommittedObjectToWorld3x4(),
                                                              bounce.CommittedWorldToObject3x4(),
-                                                             secondary.Direction, bounceUV, bounceUV2);
+                                                             secondary.Direction, bounceHitPosition,
+                                                             bounceUV, bounceUV2);
                     CategoryOverride bounceOverride = categoryOverrideFor(bounceMaterial.featureMask);
                     bounceSurface.surface.albedo = lerp(bounceSurface.surface.albedo,
                                                         gammaToLinear(bounceOverride.color.rgb),
@@ -1056,11 +1109,11 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                                               bounceOverride.params.z;
                     // Analytic lights sampled at this vertex: the step that
                     // makes deeper bounces carry their light at all.
-                    float3 vertexPosition = secondary.Origin +
-                                            secondary.Direction * bounce.CommittedRayT() +
+                    float3 vertexPosition = bounceHitPosition +
                                             bounceSurface.geometricNormal * pushConstants.rayOriginOffset;
                     radiance += pathThroughput * bounceThroughput *
-                                vertexDirectLight(vertexPosition, bounceSurface.surface.normal,
+                                vertexDirectLight(vertexPosition, bounceSurface.shadowOrigin,
+                                                  bounceSurface.surface.normal,
                                                   bounceSurface.geometricNormal, -secondary.Direction,
                                                   bounceSurface.surface.albedo,
                                                   bounceSurface.surface.metallic,
@@ -1090,7 +1143,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                         }
                     }
                     if (max(pathThroughput.x, max(pathThroughput.y, pathThroughput.z)) < 1e-3) break;
-                    secondary.Origin = secondary.Origin + secondary.Direction * bounce.CommittedRayT() +
+                    secondary.Origin = bounceHitPosition +
                                        bounceSurface.geometricNormal * pushConstants.rayOriginOffset;
                     secondary.Direction = continueDirection;
                     if (dot(secondary.Direction, bounceSurface.geometricNormal) < 0.0) {
