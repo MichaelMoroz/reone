@@ -104,6 +104,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->vulkanValidation = vars["vkvalidation"].as<bool>();
     options->renderdoc = vars["renderdoc"].as<bool>();
     options->graphics.headless = vars["headless"].as<bool>();
+    options->audio.muted = options->graphics.headless;
     options->graphics.width = vars["width"].as<int>();
     options->graphics.height = vars["height"].as<int>();
     options->graphics.winScale = vars["winscale"].as<int>();

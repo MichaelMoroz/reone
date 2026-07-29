@@ -680,6 +680,13 @@ void Engine::dumpObjectsIfRequested() {
     for (const auto &line : lines) {
         out << line << "\n";
     }
+    // The completion header, written last: its presence proves this module's
+    // block is whole (a killed run leaves lines but no header), and the
+    // registry object count is the evidence the module actually loaded -
+    // "0 candidates" from a real scene holds hundreds of objects, from a
+    // failed warp near none.
+    out << "# " << moduleName << " objects=" << registry.objects().size()
+        << " candidates=" << lines.size() << "\n";
     info("Dumped " + std::to_string(lines.size()) + " emissive candidates of " + moduleName +
          " to " + _options.dumpObjectsPath);
 }
