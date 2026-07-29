@@ -26,6 +26,9 @@
 #include "reone/game/action/unlockobject.h"
 #include "reone/game/game.h"
 #include "reone/game/gui/areatransition.h"
+#include "reone/game/gui/ingame.h"
+#include "reone/game/gui/loadscreen.h"
+#include "reone/game/gui/mainmenu.h"
 #include "reone/game/gui/conversation.h"
 #include "reone/game/gui/dialog.h"
 #include "reone/game/gui/hud.h"
@@ -135,6 +138,24 @@ class TestAreaTransition : public AreaTransition {
 public:
     using AreaTransition::AreaTransition;
     using AreaTransition::preload;
+};
+
+class TestInGameMenu : public InGameMenu {
+public:
+    using InGameMenu::InGameMenu;
+    using InGameMenu::preload;
+};
+
+class TestLoadingScreen : public LoadingScreen {
+public:
+    using LoadingScreen::LoadingScreen;
+    using LoadingScreen::preload;
+};
+
+class TestMainMenu : public MainMenu {
+public:
+    using MainMenu::MainMenu;
+    using MainMenu::preload;
 };
 
 class PresentationLifecycleConversation : public Conversation {
@@ -1046,6 +1067,48 @@ TEST(TransitionPresentationLayout, should_top_anchor_and_horizontally_center_aut
     EXPECT_CALL(gui, setScaling(gui::GUI::ScalingMode::CenterHorizontal));
 
     presentation.preload(gui);
+}
+
+// Every game GUI must receive the scaled-mode default from the base preload.
+// The in-game menu forgot to chain it, which left its top navigation icon
+// strip unscaled and floating over the correctly scaled subscreens - the
+// regression these lock out.
+
+TEST(GameGUIScaledDefault, should_apply_scaled_mode_to_in_game_menu) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    TestInGameMenu menu(game, engine.services());
+    NiceMock<gui::MockGUI> gui;
+
+    EXPECT_CALL(gui, setScaling(gui::GUI::ScalingMode::Scaled));
+
+    menu.preload(gui);
+}
+
+TEST(GameGUIScaledDefault, should_apply_scaled_mode_to_loading_screen) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    TestLoadingScreen screen(game, engine.services());
+    NiceMock<gui::MockGUI> gui;
+
+    EXPECT_CALL(gui, setScaling(gui::GUI::ScalingMode::Scaled));
+
+    screen.preload(gui);
+}
+
+TEST(GameGUIScaledDefault, should_apply_scaled_mode_to_main_menu) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    TestMainMenu menu(game, engine.services());
+    NiceMock<gui::MockGUI> gui;
+
+    EXPECT_CALL(gui, setScaling(gui::GUI::ScalingMode::Scaled));
+    EXPECT_CALL(gui, setResolution(800, 600));
+
+    menu.preload(gui);
 }
 
 TEST(TransitionPresentationPortals, should_expose_authored_transitions_without_touching_state) {
