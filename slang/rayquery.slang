@@ -473,13 +473,39 @@ HitSurface sampleSurface(InstanceMaterial material, uint3 indices, float3 weight
     if (dot(hit.geometricNormal, rayDirection) > 0.0) hit.geometricNormal = -hit.geometricNormal;
     hit.shadowOrigin = hitPosition;
 
-    // Obliquity widens the footprint at grazing angles; the clamp bounds the
-    // over-blur isotropic filtering pays there.
-    float lod = rayConeLod(material, indices, coneWidth) -
-                log2(clamp(abs(dot(hit.geometricNormal, rayDirection)), 0.25, 1.0));
+    // True anisotropic footprint, not an obliquity-widened cone: the circular
+    // ray cone projected onto the triangle plane along the ray is an ellipse,
+    // its two axes converted to UV space through the triangle's affine
+    // world-to-UV map and handed to the hardware as gradients. Any basis
+    // perpendicular to the ray serves - a circular cone has no preferred
+    // orientation - which keeps the same math correct at bounce hits.
+    float2 uvGradX = float2(0.0);
+    float2 uvGradY = float2(0.0);
+    if (material.offUV1 != -1 && coneWidth > 0.0) {
+        float3 basis1 = normalize(cross(rayDirection, abs(rayDirection.z) < 0.99 ? float3(0.0, 0.0, 1.0)
+                                                                                 : float3(0.0, 1.0, 0.0)));
+        float3 basis2 = cross(rayDirection, basis1);
+        float3 e1 = p1 - p0;
+        float3 e2 = p2 - p0;
+        float3 planeNormal = cross(e1, e2);
+        float planeNormal2 = dot(planeNormal, planeNormal);
+        float ndotd = dot(planeNormal, rayDirection);
+        if (planeNormal2 > 1e-18 && abs(ndotd) > 1e-6) {
+            float3 axisX = (basis1 - rayDirection * (dot(planeNormal, basis1) / ndotd)) * coneWidth;
+            float3 axisY = (basis2 - rayDirection * (dot(planeNormal, basis2) / ndotd)) * coneWidth;
+            float2 uvA = loadFloat2(attributeAddress(material, indices.x, material.offUV1));
+            float2 duv1 = loadFloat2(attributeAddress(material, indices.y, material.offUV1)) - uvA;
+            float2 duv2 = loadFloat2(attributeAddress(material, indices.z, material.offUV1)) - uvA;
+            float invPlane = 1.0 / planeNormal2;
+            uvGradX = (dot(cross(axisX, e2), planeNormal) * invPlane) * duv1 +
+                      (dot(cross(e1, axisX), planeNormal) * invPlane) * duv2;
+            uvGradY = (dot(cross(axisY, e2), planeNormal) * invPlane) * duv1 +
+                      (dot(cross(e1, axisY), planeNormal) * invPlane) * duv2;
+        }
+    }
     SurfaceParams surface = defaultSurface();
     if (material.mainTex != kNoTexture) {
-        float4 mainTexSample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(uv, lod);
+        float4 mainTexSample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleGrad(uv, uvGradX, uvGradY);
         // Textures are stored gamma-encoded; every term this shader computes is
         // linear, exactly as the raster resolve does it. Missing this halved
         // every light-driven (dark) region: linear 0.1 displayed raw is 25 of
@@ -541,7 +567,7 @@ HitSurface sampleSurface(InstanceMaterial material, uint3 indices, float3 weight
         if (dot(tangentSpaceNormal, tangentSpaceNormal) >= 1e-10 &&
             dot(tangent, tangent) >= 1e-10 && dot(bitangent, bitangent) >= 1e-10) {
             if ((material.featureMask & uint(kFeatureNormalMap)) != 0 && material.normalMap != kNoTexture) {
-                float3 n = bindlessTextures[NonUniformResourceIndex(material.normalMap)].SampleLevel(uv, lod).rgb * 2.0 - 1.0;
+                float3 n = bindlessTextures[NonUniformResourceIndex(material.normalMap)].SampleGrad(uv, uvGradX, uvGradY).rgb * 2.0 - 1.0;
                 shadingNormal = normalize(tangent * n.x + bitangent * n.y + shadingNormal * n.z);
             } else if ((material.featureMask & uint(kFeatureBumpMap)) != 0 && material.bumpMapArray != kNoTexture) {
                 uint bumpWidth, bumpHeight, bumpLayers;

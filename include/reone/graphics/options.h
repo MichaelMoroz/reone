@@ -83,24 +83,30 @@ struct GraphicsOptions {
     bool ptDenoise {true};
     /**
      * REBLUR tuning, exposed 1:1 in the Path tracing panel. NRD's defaults
-     * are graded for 0.5-1 spp production signals; at 4 spp they over-blur
-     * both spatially and temporally, so the local defaults land softer.
+     * are graded for 0.5-1 spp production signals and over-commit against
+     * this tracer's 4 spp; these are the user-graded values from the
+     * 2026-07-29 session: minimal spatial filtering, moderate accumulation,
+     * rejection opened wide so foliage accumulates.
      */
-    int ptNrdMaxAccumulatedFrames {12};
-    int ptNrdMaxFastAccumulatedFrames {4};
-    int ptNrdMaxStabilizedFrames {8};
-    int ptNrdHistoryFixFrames {2};
-    float ptNrdDiffusePrepassBlurRadius {8.0f};
-    float ptNrdSpecularPrepassBlurRadius {16.0f};
-    float ptNrdMinBlurRadius {1.0f};
-    float ptNrdMaxBlurRadius {10.0f};
-    float ptNrdLobeAngleFraction {0.25f};
-    float ptNrdRoughnessFraction {0.15f};
-    float ptNrdPlaneDistanceSensitivity {0.05f};
-    float ptNrdDisocclusionThreshold {0.01f};
+    int ptNrdMaxAccumulatedFrames {10};
+    int ptNrdMaxFastAccumulatedFrames {2};
+    int ptNrdMaxStabilizedFrames {30};
+    int ptNrdHistoryFixFrames {4};
+    float ptNrdDiffusePrepassBlurRadius {1.0f};
+    float ptNrdSpecularPrepassBlurRadius {1.0f};
+    float ptNrdMinBlurRadius {0.5f};
+    float ptNrdMaxBlurRadius {3.0f};
+    float ptNrdLobeAngleFraction {0.77f};
+    float ptNrdRoughnessFraction {0.74f};
+    float ptNrdPlaneDistanceSensitivity {0.099f};
+    float ptNrdDisocclusionThreshold {0.003f};
     bool ptNrdAntiFirefly {true};
-    /** History weight of the composite's noise-free TAA. */
-    float ptTaaBlend {0.85f};
+    /**
+     * History weight of the composite's noise-free TAA. Graded to zero while
+     * mip-0 aliasing made history clamping useless; with ray-cone LOD in,
+     * worth re-grading upward.
+     */
+    float ptTaaBlend {0.0f};
     /** Debug view: 0 off, then categories, emissive, normals, roughness,
         lightmap, albedo - matches kDebugView* in slang/rayquery.slang. */
     int ptDebugView {0};

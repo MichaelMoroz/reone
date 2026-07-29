@@ -57,20 +57,23 @@ public:
         VkImageView specRadianceHitDist {VK_NULL_HANDLE};
     };
 
-    /** Live REBLUR tuning, mirrored from the Path tracing panel's dials. */
+    /**
+     * Live REBLUR tuning, mirrored from the Path tracing panel's dials.
+     * Defaults match GraphicsOptions - the user-graded 2026-07-29 values.
+     */
     struct Tuning {
-        int maxAccumulatedFrames {12};
-        int maxFastAccumulatedFrames {4};
-        int maxStabilizedFrames {8};
-        int historyFixFrames {2};
-        float diffusePrepassBlurRadius {8.0f};
-        float specularPrepassBlurRadius {16.0f};
-        float minBlurRadius {1.0f};
-        float maxBlurRadius {10.0f};
-        float lobeAngleFraction {0.25f};
-        float roughnessFraction {0.15f};
-        float planeDistanceSensitivity {0.05f};
-        float disocclusionThreshold {0.01f};
+        int maxAccumulatedFrames {10};
+        int maxFastAccumulatedFrames {2};
+        int maxStabilizedFrames {30};
+        int historyFixFrames {4};
+        float diffusePrepassBlurRadius {1.0f};
+        float specularPrepassBlurRadius {1.0f};
+        float minBlurRadius {0.5f};
+        float maxBlurRadius {3.0f};
+        float lobeAngleFraction {0.77f};
+        float roughnessFraction {0.74f};
+        float planeDistanceSensitivity {0.099f};
+        float disocclusionThreshold {0.003f};
         bool antiFirefly {true};
     };
 
