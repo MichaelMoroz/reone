@@ -97,6 +97,10 @@ if(ENABLE_NRD)
         GIT_SHALLOW TRUE)
     set(NRD_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
     set(NRD_EMBEDS_SPIRV_SHADERS ON CACHE BOOL "" FORCE)
+    # RGBA16_SNORM normal encoding (nrd::NormalEncoding), chosen because it
+    # accepts plain FP textures: the tracer writes world normal and linear
+    # roughness into RGBA16F unpacked, no oct-encoding shader helpers needed.
+    set(NRD_NORMAL_ENCODING "4" CACHE STRING "" FORCE)
     set(NRD_EMBEDS_DXIL_SHADERS OFF CACHE BOOL "" FORCE)
     set(NRD_EMBEDS_DXBC_SHADERS OFF CACHE BOOL "" FORCE)
     set(NRD_DISABLE_SHADER_COMPILATION OFF CACHE BOOL "" FORCE)

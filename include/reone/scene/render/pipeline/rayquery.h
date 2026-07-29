@@ -122,6 +122,21 @@ private:
      */
     void *_nrdInstance {nullptr};
 
+    /**
+     * The NRD-facing output split, set 2 in the trace pipeline: diffuse and
+     * specular radiance with hit distance, normal/roughness, viewZ, motion,
+     * the noise-free target, and the albedo demodulation guide. Written
+     * every traced frame whether or not NRD is built in - the channels
+     * double as debug views - and double-buffered like every other per-frame
+     * resource, since two frames are in flight.
+     */
+    static constexpr int kNumAuxImages = 7;
+    std::array<std::array<std::unique_ptr<graphics::VulkanImage>, kNumAuxImages>, 2> _auxImages;
+    VkDescriptorSetLayout _auxLayout {VK_NULL_HANDLE};
+    VkDescriptorPool _auxPool {VK_NULL_HANDLE};
+    std::array<VkDescriptorSet, 2> _auxSets {};
+    bool _auxImagesTransitioned {false};
+
     void clearFrame(Frame &frame);
     graphics::VulkanMesh::Geometry skin(VkCommandBuffer cmd,
                                          Frame &frame,

@@ -183,18 +183,81 @@ void RayQueryPipeline::init() {
     if (vkAllocateDescriptorSets(device.handle(), &alloc, _sets.data()) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: ray-query descriptor allocation failed");
 
+    // The NRD output split: seven storage images in their own set, because
+    // the main set's bindless arrays hold the variable-descriptor-count slot
+    // and Vulkan allows nothing above it. Plain pool, static writes - the
+    // images never change identity within a pipeline lifetime.
+    {
+        std::array<VkDescriptorSetLayoutBinding, kNumAuxImages> auxBindings {};
+        for (uint32_t i = 0; i < kNumAuxImages; ++i) {
+            auxBindings[i].binding = i;
+            auxBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            auxBindings[i].descriptorCount = 1;
+            auxBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo auxLayoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        auxLayoutInfo.bindingCount = kNumAuxImages;
+        auxLayoutInfo.pBindings = auxBindings.data();
+        if (vkCreateDescriptorSetLayout(device.handle(), &auxLayoutInfo, nullptr, &_auxLayout) != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: trace output descriptor layout creation failed");
+        VkDescriptorPoolSize auxPoolSize {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * kNumAuxImages};
+        VkDescriptorPoolCreateInfo auxPoolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        auxPoolInfo.maxSets = 2;
+        auxPoolInfo.poolSizeCount = 1;
+        auxPoolInfo.pPoolSizes = &auxPoolSize;
+        if (vkCreateDescriptorPool(device.handle(), &auxPoolInfo, nullptr, &_auxPool) != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: trace output descriptor pool creation failed");
+        std::array<VkDescriptorSetLayout, 2> auxSetLayouts {_auxLayout, _auxLayout};
+        VkDescriptorSetAllocateInfo auxAlloc {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        auxAlloc.descriptorPool = _auxPool;
+        auxAlloc.descriptorSetCount = 2;
+        auxAlloc.pSetLayouts = auxSetLayouts.data();
+        if (vkAllocateDescriptorSets(device.handle(), &auxAlloc, _auxSets.data()) != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: trace output descriptor allocation failed");
+        // Formats mirror the shader's declarations; normal/roughness rides
+        // RGBA16F, the FP form NRD's RGBA16_SNORM encoding accepts.
+        static constexpr VkFormat kAuxFormats[kNumAuxImages] {
+            VK_FORMAT_R16G16B16A16_SFLOAT, // diffuse radiance + hit dist
+            VK_FORMAT_R16G16B16A16_SFLOAT, // specular radiance + hit dist
+            VK_FORMAT_R16G16B16A16_SFLOAT, // normal + roughness
+            VK_FORMAT_R32_SFLOAT,          // viewZ
+            VK_FORMAT_R16G16B16A16_SFLOAT, // motion
+            VK_FORMAT_R16G16B16A16_SFLOAT, // noise-free
+            VK_FORMAT_R16G16B16A16_SFLOAT, // albedo guide
+        };
+        std::array<VkDescriptorImageInfo, 2 * kNumAuxImages> auxImageInfos {};
+        std::array<VkWriteDescriptorSet, 2 * kNumAuxImages> auxWrites {};
+        for (int frame = 0; frame < 2; ++frame) {
+            for (int i = 0; i < kNumAuxImages; ++i) {
+                auto image = std::make_unique<VulkanImage>(device);
+                image->initColorAttachment(_extent, kAuxFormats[i]);
+                const auto flatIndex = frame * kNumAuxImages + i;
+                auxImageInfos[flatIndex] = {VK_NULL_HANDLE, image->view(), VK_IMAGE_LAYOUT_GENERAL};
+                auxWrites[flatIndex].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                auxWrites[flatIndex].dstSet = _auxSets[frame];
+                auxWrites[flatIndex].dstBinding = i;
+                auxWrites[flatIndex].descriptorCount = 1;
+                auxWrites[flatIndex].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                auxWrites[flatIndex].pImageInfo = &auxImageInfos[flatIndex];
+                _auxImages[frame][i] = std::move(image);
+            }
+        }
+        vkUpdateDescriptorSets(device.handle(), static_cast<uint32_t>(auxWrites.size()),
+                               auxWrites.data(), 0, nullptr);
+    }
+
     auto spirv = readSpirV(_renderer.shaderDir() / "rayquery.spv");
     VkShaderModuleCreateInfo moduleInfo {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     moduleInfo.codeSize = spirv.size() * sizeof(uint32_t); moduleInfo.pCode = spirv.data();
     VkShaderModule module;
     if (vkCreateShaderModule(device.handle(), &moduleInfo, nullptr, &module) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: ray-query shader module creation failed");
-    VkDescriptorSetLayout layouts[] {_renderer.descriptors().uniformLayout(), _layout};
+    VkDescriptorSetLayout layouts[] {_renderer.descriptors().uniformLayout(), _layout, _auxLayout};
     VkPushConstantRange pushConstants {};
     pushConstants.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     pushConstants.size = sizeof(TracePushConstants);
     VkPipelineLayoutCreateInfo pipelineLayout {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    pipelineLayout.setLayoutCount = 2; pipelineLayout.pSetLayouts = layouts;
+    pipelineLayout.setLayoutCount = 3; pipelineLayout.pSetLayouts = layouts;
     pipelineLayout.pushConstantRangeCount = 1;
     pipelineLayout.pPushConstantRanges = &pushConstants;
     if (vkCreatePipelineLayout(device.handle(), &pipelineLayout, nullptr, &_pipelineLayout) != VK_SUCCESS) {
@@ -324,6 +387,13 @@ void RayQueryPipeline::deinit() {
     if (_pipelineLayout) vkDestroyPipelineLayout(device.handle(), _pipelineLayout, nullptr);
     if (_pool) vkDestroyDescriptorPool(device.handle(), _pool, nullptr);
     if (_layout) vkDestroyDescriptorSetLayout(device.handle(), _layout, nullptr);
+    if (_auxPool) vkDestroyDescriptorPool(device.handle(), _auxPool, nullptr);
+    if (_auxLayout) vkDestroyDescriptorSetLayout(device.handle(), _auxLayout, nullptr);
+    _auxPool = VK_NULL_HANDLE; _auxLayout = VK_NULL_HANDLE; _auxSets = {};
+    for (auto &frame : _auxImages) {
+        for (auto &image : frame) image.reset();
+    }
+    _auxImagesTransitioned = false;
     _pipeline = VK_NULL_HANDLE; _pipelineLayout = VK_NULL_HANDLE; _pool = VK_NULL_HANDLE; _layout = VK_NULL_HANDLE;
     _skinPipeline = VK_NULL_HANDLE; _skinPipelineLayout = VK_NULL_HANDLE; _skinLayout = VK_NULL_HANDLE;
     _skinPools = {};
@@ -924,6 +994,30 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                textureWrites.data(), 0, nullptr);
     }
     _lastBindlessTextureCount = static_cast<uint32_t>(uploadedTextures.size());
+    if (!_auxImagesTransitioned) {
+        // Once, at the first traced frame: every aux image moves from
+        // UNDEFINED to GENERAL, both in-flight copies at a stroke.
+        std::array<VkImageMemoryBarrier2, 2 * kNumAuxImages> auxBarriers {};
+        for (int frameIndex = 0; frameIndex < 2; ++frameIndex) {
+            for (int i = 0; i < kNumAuxImages; ++i) {
+                auto &barrier = auxBarriers[frameIndex * kNumAuxImages + i];
+                barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                barrier.image = _auxImages[frameIndex][i]->handle();
+                barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                barrier.subresourceRange.levelCount = 1;
+                barrier.subresourceRange.layerCount = 1;
+            }
+        }
+        VkDependencyInfo auxDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        auxDependency.imageMemoryBarrierCount = static_cast<uint32_t>(auxBarriers.size());
+        auxDependency.pImageMemoryBarriers = auxBarriers.data();
+        vkCmdPipelineBarrier2(cmd, &auxDependency);
+        _auxImagesTransitioned = true;
+    }
     std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
     offsets[0] = globalsOffset;
     auto uniformSet = _renderer.uniformSet();
@@ -931,6 +1025,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineLayout, 0, 1, &uniformSet,
                             static_cast<uint32_t>(offsets.size()), offsets.data());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineLayout, 1, 1, &set, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineLayout, 2, 1,
+                            &_auxSets[_renderer.frameIndex()], 0, nullptr);
     // Clamped rather than trusted: the option is user-editable in reone.cfg
     // and a zero would divide the accumulated radiance by zero.
     TracePushConstants constants {_frameNumber,

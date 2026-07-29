@@ -5,6 +5,38 @@ import lib.math;
 import lib.surface;
 
 [[vk::binding(0, 1)]] RWTexture2D<float4> outputImage;
+
+// The NRD-facing output split, set 2. The trace pass separates what is noise
+// from what is signal so a denoiser can tell them apart:
+//   final = noiseFree + diffuse.rgb * albedoGuide + specular.rgb
+// Diffuse is demodulated - primary albedo divided out so the denoiser sees
+// transport, not texture - and each radiance channel carries its average
+// first-bounce hit distance in alpha. Normal/roughness match NRD's
+// RGBA16_SNORM-with-FP encoding: world normal and linear roughness, stored
+// plain. Motion is world-space and zero until per-instance previous
+// transforms are uploaded - exactly correct for static geometry, which NRD
+// reprojects from the unjittered matrix pair alone.
+[[vk::binding(0, 2)]] RWTexture2D<float4> outDiffuse;
+[[vk::binding(1, 2)]] RWTexture2D<float4> outSpecular;
+[[vk::binding(2, 2)]] RWTexture2D<float4> outNormalRoughness;
+[[vk::binding(3, 2)]] RWTexture2D<float> outViewZ;
+[[vk::binding(4, 2)]] RWTexture2D<float4> outMotion;
+[[vk::binding(5, 2)]] RWTexture2D<float4> outNoiseFree;
+[[vk::binding(6, 2)]] RWTexture2D<float4> outAlbedo;
+
+/** Environment / miss distance: beyond any scene, inside NRD's defaults. */
+static const float kTraceInfDistance = 1.0e6;
+
+void writeTraceOutputs(uint2 pixel, float4 diffuse, float4 specular, float4 normalRoughness,
+                       float viewZ, float4 motion, float3 noiseFree, float3 albedo) {
+    outDiffuse[pixel] = diffuse;
+    outSpecular[pixel] = specular;
+    outNormalRoughness[pixel] = normalRoughness;
+    outViewZ[pixel] = viewZ;
+    outMotion[pixel] = motion;
+    outNoiseFree[pixel] = float4(noiseFree, 1.0);
+    outAlbedo[pixel] = float4(albedo, 1.0);
+}
 [[vk::binding(1, 1)]] RaytracingAccelerationStructure sceneTLAS;
 
 static const uint kNoTexture = 0xffffffffu;
@@ -73,6 +105,12 @@ static const uint kDebugViewNormals = 3;
 static const uint kDebugViewRoughness = 4;
 static const uint kDebugViewLightmap = 5;
 static const uint kDebugViewAlbedo = 6;
+// The NRD channel views inspect the output split at the end of the kernel,
+// after the channels exist, unlike 1-6 which replace shading entirely.
+static const uint kDebugViewDiffuseChannel = 7;
+static const uint kDebugViewSpecularChannel = 8;
+static const uint kDebugViewViewZ = 9;
+static const uint kDebugViewNoiseFree = 10;
 
 static const float3 kCategoryPalette[9] = {
     float3(0.5, 0.5, 0.5),  // GUI - never traced
@@ -754,6 +792,14 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     }
 
     float3 color = primaryLayers;
+    // Aux defaults describe a miss: empty channels, environment depth. The
+    // opaque path below overwrites them; sky and prelit write their own.
+    float4 auxDiffuse = float4(0.0, 0.0, 0.0, 0.0);
+    float4 auxSpecular = float4(0.0, 0.0, 0.0, 0.0);
+    float4 auxNormalRoughness = float4(0.0, 0.0, 0.0, 1.0);
+    float auxViewZ = kTraceInfDistance;
+    float3 auxNoiseFree = primaryLayers;
+    float3 auxAlbedo = float3(1.0);
     if (primary.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
         uint primaryInstance = primary.CommittedInstanceIndex();
         InstanceMaterial material = instanceMaterials[primaryInstance];
@@ -783,7 +829,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         // Debug views replace shading entirely; they sit before the sky
         // early-out so the dome is inspectable like everything else.
         uint debugView = (pushConstants.traceFlags >> kTraceDebugViewShift) & kTraceDebugViewMask;
-        if (debugView != 0) {
+        if (debugView != 0 && debugView <= kDebugViewAlbedo) {
             float shape = 0.35 + 0.65 * abs(dot(primarySurface.surface.normal, -ray.Direction));
             float3 debugColor;
             if (debugView == kDebugViewCategories) {
@@ -817,11 +863,17 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
             // is the radiance. No emissive factor - backdrop rings carry no
             // selfIllum and would render black through one.
             color += primaryThroughput * primarySurface.surface.albedo * pushConstants.skyIntensity;
+            // The environment is background to the denoiser: nothing to
+            // denoise, depth beyond the denoising range.
+            writeTraceOutputs(dispatchId.xy, float4(0.0), float4(0.0), float4(0.0, 0.0, 0.0, 1.0),
+                              kTraceInfDistance, float4(0.0), color, float3(1.0));
             outputImage[dispatchId.xy] = float4(displayTransform(color), 1.0);
             return;
         }
         if ((material.featureMask & kTracePrelit) != 0) {
             color += primaryThroughput * primarySurface.surface.albedo;
+            writeTraceOutputs(dispatchId.xy, float4(0.0), float4(0.0), float4(0.0, 0.0, 0.0, 1.0),
+                              kTraceInfDistance, float4(0.0), color, float3(1.0));
             outputImage[dispatchId.xy] = float4(displayTransform(color), 1.0);
             return;
         }
@@ -890,6 +942,12 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         // happens at a warp-uniform index:
         // (1/spp) sum_s f(L_s)/p_s  =  sum_i (m_i/spp) f(L_i)/p_i.
         uint shadowRayCount = 0;
+        // Per-channel first-bounce hit distances, averaged over the samples
+        // that fed each lobe - REBLUR's reprojection guide.
+        float diffHitSum = 0.0;
+        float diffHitCount = 0.0;
+        float specHitSum = 0.0;
+        float specHitCount = 0.0;
         // Light sources are never points: primary shadow rays jitter inside
         // each light's angular cone from a dedicated per-pixel chain.
         uint shadowJitterState = hash(dispatchId.x * 0x9e3779b9u ^ dispatchId.y * 0x85ebca6bu ^
@@ -950,7 +1008,10 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 float3 lightF = fresnelSchlick(VdotH, F0);
                 float3 spec = (D * G * lightF) / max(1e-4, 4.0 * NdotL * NdotV);
                 float3 kD = (1.0 - lightF) * (1.0 - primarySurface.surface.metallic);
-                diffuseIllumination += kD / kPi * radiance * NdotL * primarySurface.surface.albedo;
+                // Demodulated: the primary albedo multiplies back in at the
+                // final assembly (and, once NRD runs, at the composite), so
+                // the diffuse channel carries transport rather than texture.
+                diffuseIllumination += kD / kPi * radiance * NdotL;
                 // Raster's dynamic-light specular is meaningful only on the
                 // same env-mapped surfaces that the tracer gives a specular
                 // lobe.
@@ -992,6 +1053,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 // low and grades, like every other source dial.
                 float3 radiance = 0.0;
                 float3 pathThroughput = 1.0;
+                float firstBounceT = kTraceInfDistance;
                 uint pathBounces = max(pushConstants.bounceCount, 1u);
                 for (uint bounceIndex = 0; bounceIndex < pathBounces; ++bounceIndex) {
                     RayQuery<RAY_FLAG_NONE> bounce;
@@ -1047,6 +1109,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                     if (bounce.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
                         if (statsOn) InterlockedAdd(traceStats[1], 1);
                         break;
+                    }
+                    if (bounceIndex == 0) {
+                        firstBounceT = bounce.CommittedRayT();
                     }
                     InstanceMaterial bounceMaterial = instanceMaterials[bounce.CommittedInstanceIndex()];
                     uint3 bounceIndices = triangleIndices(bounceMaterial, bounce.CommittedPrimitiveIndex());
@@ -1154,19 +1219,48 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 }
                 if (sampleSpecular) {
                     specularIllumination += radiance * F / specularProbability;
+                    specHitSum += firstBounceT;
+                    specHitCount += 1.0;
                 } else if (envmapped) {
-                    diffuseIllumination += radiance * primarySurface.surface.albedo * (1.0 - F) /
-                                           (1.0 - specularProbability);
+                    diffuseIllumination += radiance * (1.0 - F) / (1.0 - specularProbability);
+                    diffHitSum += firstBounceT;
+                    diffHitCount += 1.0;
                 } else {
-                    diffuseIllumination += radiance * primarySurface.surface.albedo;
+                    diffuseIllumination += radiance;
+                    diffHitSum += firstBounceT;
+                    diffHitCount += 1.0;
                 }
             }
         // Sky never reaches here (unlit-emissive early-out above), so emission
         // takes the emissive dial. No ambient: lightmaps already are better
         // than ambient in all ways, and the transport carries the rest.
-        color += primaryThroughput * ((diffuseIllumination + specularIllumination) / float(sampleCount) +
-                                      primarySurface.surface.emissive * primarySurface.surface.albedo *
-                                          pushConstants.emissiveIntensity);
+        // Assembly is the composite contract in miniature: noise-free first,
+        // then the demodulated diffuse channel remodulated by albedo, then
+        // specular as-is.
+        auxDiffuse = float4(primaryThroughput * diffuseIllumination / float(sampleCount),
+                            diffHitCount > 0.0 ? diffHitSum / diffHitCount : 0.0);
+        auxSpecular = float4(primaryThroughput * specularIllumination / float(sampleCount),
+                             specHitCount > 0.0 ? specHitSum / specHitCount : 0.0);
+        auxNormalRoughness = float4(primarySurface.surface.normal, primarySurface.surface.roughness);
+        auxViewZ = mul(globalUniforms.view, float4(hitPosition, 1.0)).z;
+        auxAlbedo = primarySurface.surface.albedo;
+        auxNoiseFree = color + primaryThroughput * primarySurface.surface.emissive *
+                                   primarySurface.surface.albedo * pushConstants.emissiveIntensity;
+        color = auxNoiseFree + auxDiffuse.rgb * auxAlbedo + auxSpecular.rgb;
+    }
+    writeTraceOutputs(dispatchId.xy, auxDiffuse, auxSpecular, auxNormalRoughness, auxViewZ,
+                      float4(0.0), auxNoiseFree, auxAlbedo);
+    // The channel views inspect the split without replacing shading upstream.
+    uint tailDebugView = (pushConstants.traceFlags >> kTraceDebugViewShift) & kTraceDebugViewMask;
+    if (tailDebugView == kDebugViewDiffuseChannel) {
+        color = auxDiffuse.rgb;
+    } else if (tailDebugView == kDebugViewSpecularChannel) {
+        color = auxSpecular.rgb;
+    } else if (tailDebugView == kDebugViewViewZ) {
+        outputImage[dispatchId.xy] = float4(float3(saturate(abs(auxViewZ) / 100.0)), 1.0);
+        return;
+    } else if (tailDebugView == kDebugViewNoiseFree) {
+        color = auxNoiseFree;
     }
     // One display transform, at the very end: exposure, tonemap, encode.
     outputImage[dispatchId.xy] = float4(displayTransform(color), 1.0);
