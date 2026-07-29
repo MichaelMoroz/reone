@@ -68,6 +68,11 @@ void GameGUI::init() {
 }
 
 void GameGUI::preload(IGUI &gui) {
+    // Every game GUI defaults to the scaled mode - authored layouts grow
+    // with the screen at three quarters of the full stretch, centered.
+    // Subclasses that need edge anchoring or a full stretch override this
+    // after the base call.
+    gui.setScaling(IGUI::ScalingMode::Scaled);
     if (_game.isTSL()) {
         gui.setResolution(800, 600);
     } else {

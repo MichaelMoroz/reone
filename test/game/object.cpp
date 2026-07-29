@@ -1039,6 +1039,9 @@ TEST(TransitionPresentationLayout, should_top_anchor_and_horizontally_center_aut
     TestAreaTransition presentation(game, engine.services());
     NiceMock<gui::MockGUI> gui;
 
+    // The game-GUI base applies the scaled-mode default first; the
+    // transition presentation then overrides it with its own anchoring.
+    EXPECT_CALL(gui, setScaling(gui::GUI::ScalingMode::Scaled));
     EXPECT_CALL(gui, setResolution(640, 480));
     EXPECT_CALL(gui, setScaling(gui::GUI::ScalingMode::CenterHorizontal));
 

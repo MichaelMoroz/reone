@@ -73,6 +73,13 @@ void GUI::load(const Gff &gui) {
     case ScalingMode::Stretch:
         stretchControl(*_rootControl);
         break;
+    case ScalingMode::Scaled: {
+        auto factors = scaledFactors();
+        _rootControl->get().stretch(factors.x, factors.y);
+        _rootOffset.x = (_options.width - static_cast<int>(_resolutionX * factors.x)) / 2;
+        _rootOffset.y = (_options.height - static_cast<int>(_resolutionY * factors.y)) / 2;
+        break;
+    }
     default:
         break;
     }
@@ -99,6 +106,15 @@ void GUI::stretchControl(Control &control) {
     float aspectX = _options.width / static_cast<float>(_resolutionX);
     float aspectY = _options.height / static_cast<float>(_resolutionY);
     control.stretch(aspectX, aspectY);
+}
+
+glm::vec2 GUI::scaledFactors() const {
+    // Three quarters of the full stretch: the authored layout grows with the
+    // screen without pinning to its edges. The remaining quarter becomes the
+    // centering margin.
+    static constexpr float kScaledModeFactor = 0.75f;
+    return {kScaledModeFactor * _options.width / static_cast<float>(_resolutionX),
+            kScaledModeFactor * _options.height / static_cast<float>(_resolutionY)};
 }
 
 void GUI::loadControl(const resource::generated::GUI_CONTROLS &gui) {
@@ -129,6 +145,11 @@ void GUI::loadControl(const resource::generated::GUI_CONTROLS &gui) {
     case ScalingMode::Stretch:
         stretchControl(*control);
         break;
+    case ScalingMode::Scaled: {
+        auto factors = scaledFactors();
+        control->stretch(factors.x, factors.y);
+        break;
+    }
     default:
         break;
     }

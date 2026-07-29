@@ -52,7 +52,11 @@ public:
         Center,
         CenterHorizontal,
         PositionRelativeToCenter,
-        Stretch
+        Stretch,
+        /** Three quarters of the full stretch, centered: the authored layout
+            grows with the screen without pinning to its edges. The game-GUI
+            default. */
+        Scaled
     };
 
     virtual ~IGUI() = default;
@@ -220,6 +224,7 @@ private:
 
     void positionRelativeToCenter(Control &control);
     void stretchControl(Control &control);
+    glm::vec2 scaledFactors() const;
     void updateSelection(int x, int y);
 
     void renderBackground();
