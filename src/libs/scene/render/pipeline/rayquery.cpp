@@ -79,7 +79,22 @@ struct alignas(16) InstanceMaterial {
     glm::vec4 prevTransform3 {0.0f, 0.0f, 0.0f, 1.0f};
     /** Previous-pose skinned positions by device address, 0 when not skinned. */
     uint64_t prevPositionsAddress {0};
-    uint64_t prevPositionsPad {0};
+    /**
+     * The surface model, decided here at admission - material assignment is
+     * CPU registry work, the shader only evaluates. 0 = PBR (everything,
+     * with optional emission), 1 = unlit transparent (additive: saber
+     * blades, glow decals), 2 = unlit emissive (sky and prelit; path ends).
+     */
+    uint32_t surfaceType {0};
+    uint32_t surfacePad {0};
+    /**
+     * The per-category calibration overrides, baked per instance so the
+     * shader never reads a category table: rgb + lerp weight flat-paints
+     * albedo; params are roughness override (negative disables), emission
+     * scale, env-map strength scale.
+     */
+    glm::vec4 overrideColor {1.0f, 1.0f, 1.0f, 0.0f};
+    glm::vec4 overrideParams {-1.0f, 1.0f, 1.0f, 0.0f};
 };
 
 static_assert(offsetof(InstanceMaterial, vertexAddress) == 80);
@@ -87,7 +102,8 @@ static_assert(offsetof(InstanceMaterial, mainTex) == 120);
 static_assert(offsetof(InstanceMaterial, curatedAlbedoMul) == 160);
 static_assert(offsetof(InstanceMaterial, prevTransform0) == 256);
 static_assert(offsetof(InstanceMaterial, prevPositionsAddress) == 320);
-static_assert(sizeof(InstanceMaterial) == 336);
+static_assert(offsetof(InstanceMaterial, overrideColor) == 336);
+static_assert(sizeof(InstanceMaterial) == 368);
 
 struct TraceStats {
     uint32_t secondaryRays {0};
@@ -400,7 +416,7 @@ void RayQueryPipeline::init() {
                 throw std::runtime_error("Vulkan: NRD composite set allocation failed");
             VkPushConstantRange compositePush {};
             compositePush.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            compositePush.size = 3 * sizeof(uint32_t);
+            compositePush.size = 5 * sizeof(uint32_t);
             // Set 0 is the shared uniform block: the TAA reprojection reads
             // the same matrices the trace pass does.
             VkDescriptorSetLayout compositeLayouts[] {_renderer.descriptors().uniformLayout(), _compositeLayout};
@@ -847,15 +863,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             material.selfIllumColor = glm::vec4(0.0f);
         }
         if (curated) {
-            switch (curated->klass) {
-            case RenderRegistry::TraceClass::Prelit:
-                material.featureMask |= 1u << 23;
-                break;
-            case RenderRegistry::TraceClass::None:
+            if (curated->klass == RenderRegistry::TraceClass::None) {
                 material.selfIllumColor = glm::vec4(0.0f);
-                break;
-            default:
-                break;
             }
             material.curatedAlbedoMul = glm::vec4(curated->albedoMul, 0.0f);
             material.curatedRoughA = glm::vec4(static_cast<float>(curated->roughnessMode),
@@ -882,26 +891,36 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         material.prevTransform2 = mesh->prevTransform[2];
         material.prevTransform3 = mesh->prevTransform[3];
         material.prevPositionsAddress = prevPositionsAddress;
-        // Additive-blended diffuse is the other way Odyssey authors a glow:
-        // no selfIllum controller, the texture itself is the light, and the
-        // raster path treats it as unlit for the same reason. Without this
-        // bit every indicator lamp and glow decal traces as a dark surface.
-        // Must match kTraceAdditive in slang/rayquery.slang.
+        // The surface model, assigned here - the shader never classifies.
+        // Additive-blended diffuse is Odyssey's other authored glow: no
+        // selfIllum controller, the texture is the light, and the ray passes
+        // through it (saber blades, glow decals). The sky room and curated
+        // prelit imagery are unlit emissive: radiance as authored, path
+        // ends. Everything else is PBR; transparent non-additive meshes -
+        // alpha-blended leaves above all - carry their coverage in diffuse
+        // alpha and resolve stochastically in the surface model.
         if (const auto *diffuse = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
             if (diffuse->features().blending == Texture::Blending::Additive) {
-                material.featureMask |= 1u << 25;
+                material.surfaceType = 1;
                 ++_lastAdditive;
             } else if (diffuse->features().blending == Texture::Blending::PunchThrough ||
                        mesh->material.type == MaterialType::TransparentModel) {
-                // Not only authored punch-through: any transparent,
-                // non-additive mesh - alpha-blended leaves above all - carries
-                // its coverage in the diffuse alpha and must composite as
-                // layers. Keying only on PunchThrough left Normal-blended
-                // canopies fully opaque in the traced view.
-                // Candidate alpha is composited deterministically in the
-                // shader, so hardware must not accept the triangle first.
                 material.featureMask |= 1u << 26;
             }
+        }
+        if ((material.featureMask & (1u << 24)) != 0 ||
+            (curated && curated->klass == RenderRegistry::TraceClass::Prelit)) {
+            material.surfaceType = 2;
+        }
+        // The per-category calibration override, baked per instance so the
+        // dials stay live through the per-frame admission - no GPU table.
+        {
+            const auto &src = _options.ptCategoryOverrides[std::min<uint32_t>(categoryIndex, 8u)];
+            material.overrideColor = glm::vec4(src.color[0], src.color[1], src.color[2],
+                                               std::clamp(src.colorWeight, 0.0f, 1.0f));
+            material.overrideParams = glm::vec4(src.roughness,
+                                                std::max(0.0f, src.emissionScale),
+                                                std::max(0.0f, src.envScale), 0.0f);
         }
         if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
             material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
@@ -974,24 +993,9 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     frame.traceStats = std::make_unique<VulkanBuffer>(device);
     frame.traceStats->initHostVisibleReadback(sizeof(TraceStats), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     std::memset(frame.traceStats->mapped(), 0, sizeof(TraceStats));
-    // Per-category overrides, refreshed every frame so the ImGui dials are
-    // live. Layout must match CategoryOverride in slang/rayquery.slang.
-    struct CategoryOverrideGpu {
-        float color[4];
-        float params[4];
-    };
-    std::array<CategoryOverrideGpu, 9> overrideData {};
-    for (size_t i = 0; i < overrideData.size(); ++i) {
-        const auto &src = _options.ptCategoryOverrides[i];
-        overrideData[i] = {{src.color[0], src.color[1], src.color[2],
-                            std::clamp(src.colorWeight, 0.0f, 1.0f)},
-                           {src.roughness,
-                            std::max(0.0f, src.emissionScale),
-                            std::max(0.0f, src.envScale), 0.0f}};
-    }
-    frame.overrides = std::make_unique<VulkanBuffer>(device);
-    frame.overrides->initHostVisible(sizeof(overrideData), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    std::memcpy(frame.overrides->mapped(), overrideData.data(), sizeof(overrideData));
+    // The per-category calibration overrides are baked into each instance's
+    // material record at admission above: the dials stay live through the
+    // per-frame rebuild, and no GPU-side category table exists.
     VkAccelerationStructureGeometryInstancesDataKHR instanceData {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR};
     instanceData.arrayOfPointers = VK_FALSE; instanceData.data.deviceAddress = frame.instances->deviceAddress();
     VkAccelerationStructureGeometryKHR geometry {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
@@ -1040,10 +1044,10 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     VkDescriptorBufferInfo statsBuffer {};
     statsBuffer.buffer = frame.traceStats->handle();
     statsBuffer.range = frame.traceStats->size();
-    VkDescriptorBufferInfo overridesBuffer {};
-    overridesBuffer.buffer = frame.overrides->handle();
-    overridesBuffer.range = frame.overrides->size();
-    VkWriteDescriptorSet writes[5] {};
+    // Binding 4 held the category-override table; it is baked into the
+    // material records now and the layout slot goes unwritten - legal, since
+    // the shader no longer statically uses it.
+    VkWriteDescriptorSet writes[4] {};
     const auto set = _sets[_renderer.frameIndex()];
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[0].dstSet = set; writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; writes[0].pImageInfo = &image;
@@ -1053,9 +1057,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     writes[2].descriptorCount = 1; writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[2].pBufferInfo = &materialBuffer;
     writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[3].dstSet = set; writes[3].dstBinding = 3;
     writes[3].descriptorCount = 1; writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[3].pBufferInfo = &statsBuffer;
-    writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[4].dstSet = set; writes[4].dstBinding = 4;
-    writes[4].descriptorCount = 1; writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[4].pBufferInfo = &overridesBuffer;
-    vkUpdateDescriptorSets(device.handle(), 5, writes, 0, nullptr);
+    vkUpdateDescriptorSets(device.handle(), 4, writes, 0, nullptr);
     // Texture ids are assigned by VulkanResources at upload time. The set is
     // update-after-bind and partially-bound so new assets can take a slot
     // without rebuilding it or populating unrelated descriptors.
@@ -1261,9 +1263,12 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                 uint32_t tonemap;
                 float exposure;
                 float historyBlend;
+                float jitterX;
+                float jitterY;
             } compositePush {static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)),
                              std::max(0.01f, _options.ptExposure),
-                             _taaHistoryValid ? glm::clamp(_options.ptTaaBlend, 0.0f, 0.98f) : 0.0f};
+                             _taaHistoryValid ? glm::clamp(_options.ptTaaBlend, 0.0f, 0.98f) : 0.0f,
+                             jitterPixels.x, jitterPixels.y};
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _compositePipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _compositePipelineLayout, 0, 1,
                                     &uniformSet, static_cast<uint32_t>(offsets.size()), offsets.data());
@@ -1280,15 +1285,13 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     ++_frameNumber;
     const auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count();
     // The GPU counters only accumulate while the stats flag is on; printing
-    // their zeros as rates would read as a lighting regression.
+    // their zeros as rates would read as a lighting regression. Only the
+    // secondary ray counters survive the module refactor - the per-light
+    // rates belonged to the retired multiplicity estimator.
     std::string statsPart =
         _options.ptTraceStats
             ? "previous frame secondary misses " + std::to_string(_lastSecondaryMisses) +
-                  "/" + std::to_string(_lastSecondaryRays) + "; " +
-                  std::to_string(_lastPrimaryHits ? static_cast<float>(_lastSurvivingLights) / _lastPrimaryHits : 0.0f) +
-                  " lights past cutoff/primary hit; " +
-                  std::to_string(_lastPrimaryHits ? static_cast<float>(_lastShadowRays) / _lastPrimaryHits : 0.0f) +
-                  " direct shadow rays/primary hit; "
+                  "/" + std::to_string(_lastSecondaryRays) + "; "
             : "trace stats off; ";
     info("Vulkan: TLAS " + std::to_string(_lastInstances) + " instances, " +
          std::to_string(_lastSkinned) + " skinned, skipped " +

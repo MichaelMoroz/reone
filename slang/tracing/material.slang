@@ -1,0 +1,483 @@
+/*
+ * Copyright (c) 2026 The reone project contributors
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+// The surface model. Three material kinds exist, chosen CPU-side at TLAS
+// admission and read from InstanceMaterial::surfaceType:
+//
+//   PbrSurface             - parametrized PBR with optional emission and
+//                            lightmap; partial alpha is stochastic coverage
+//   UnlitTransparentSurface - additive radiance (saber blades, glow decals);
+//                            the ray passes through unattenuated
+//   UnlitEmissiveSurface   - sky and prelit imagery; radiance, path ends
+//
+// Each conforms to ISurfaceModel: one shading function gathering parameters,
+// one ray sampling function producing the continuation. ptShade/ptSampleRay
+// dispatch on the type; everything downstream is type-blind.
+
+import uniforms;
+import tracing.rng;
+import tracing.brdf;
+import tracing.resources;
+import tracing.trace;
+
+/** Everything about the hit point the surface model needs. */
+public struct HitGeometry {
+    public InstanceMaterial material;
+    public uint3 indices;
+    public float3 weights;
+    public float3 rayDirection;
+    public float hitT;
+    public float coneWidth;
+    public float3 position;        // world
+    public float3 p0, p1, p2;      // world triangle corners
+    public float3 geometricNormal; // world, face-forward to the ray
+    public float3 shadowOrigin;    // Hanika terminator shift
+    public float2 uv, uv2;
+    public float3x4 objectToWorld;
+    public float3x4 worldToObject;
+};
+
+/** The gathered surface parameters, uniform across surface types. */
+public struct SurfaceShading {
+    public float3 albedo;
+    public float alpha;
+    public float3 normal;    // material (shading) normal - BRDF only
+    public float roughness;
+    public float metallic;
+    public float3 emission;  // radiance added at this vertex, dial-scaled
+    public float3 lightmap;
+    public bool hasLightmap;
+    public bool envmapped;
+    public float envStrength;
+    public bool terminatesPath;
+};
+
+/** A sampled continuation ray. */
+public struct PathSample {
+    public float3 direction;
+    public float3 weight;      // throughput multiplier for this lobe choice
+    public bool specularLobe;
+    public bool passThrough;   // continuation, not a scattering event
+    public bool terminate;
+};
+
+public interface ISurfaceModel {
+    public SurfaceShading shade(HitGeometry hit);
+    public PathSample sampleRay(HitGeometry hit, SurfaceShading shading, float3 view, inout uint rng);
+};
+
+/** Builds the HitGeometry for a committed hit. */
+public HitGeometry ptMakeHitGeometry(TraceHit trace, RayDesc ray, float coneWidth) {
+    InstanceMaterial material = trace.material;
+    uint3 indices = trace.indices;
+    float3 weights = trace.weights;
+    float3x4 objectToWorld = trace.objectToWorld;
+    float3x4 worldToObject = trace.worldToObject;
+    float3 rayDirection = ray.Direction;
+    HitGeometry hit;
+    hit.material = material;
+    hit.indices = indices;
+    hit.weights = weights;
+    hit.rayDirection = rayDirection;
+    hit.hitT = trace.hitT;
+    hit.coneWidth = coneWidth;
+    hit.position = ray.Origin + rayDirection * trace.hitT;
+    hit.p0 = mul(objectToWorld, float4(ptLoadFloat3(ptAttributeAddress(material, indices.x, material.offPosition)), 1.0));
+    hit.p1 = mul(objectToWorld, float4(ptLoadFloat3(ptAttributeAddress(material, indices.y, material.offPosition)), 1.0));
+    hit.p2 = mul(objectToWorld, float4(ptLoadFloat3(ptAttributeAddress(material, indices.z, material.offPosition)), 1.0));
+    hit.geometricNormal = normalize(cross(hit.p1 - hit.p0, hit.p2 - hit.p0));
+    if (dot(hit.geometricNormal, rayDirection) > 0.0) hit.geometricNormal = -hit.geometricNormal;
+    hit.objectToWorld = objectToWorld;
+    hit.worldToObject = worldToObject;
+    hit.uv = float2(0.0);
+    if (material.offUV1 != -1) {
+        hit.uv = ptTransformedUV(material, ptInterpolateFloat2(material, indices, material.offUV1, weights));
+    }
+    hit.uv2 = float2(0.0);
+    if (material.offUV2 != -1) {
+        hit.uv2 = ptInterpolateFloat2(material, indices, material.offUV2, weights);
+    }
+    // The terminator shift (Hanika, RT Gems II): the shadow-ray origin lifted
+    // onto the smooth surface the vertex normals describe. Low-poly geometry
+    // with aggressively smoothed normals - all of KotOR - otherwise shows the
+    // shadow terminator as faceted bands.
+    hit.shadowOrigin = hit.position;
+    if (material.offNormals != -1) {
+        float3 n0 = normalize(mul(ptLoadFloat3(ptAttributeAddress(material, indices.x, material.offNormals)),
+                                  (float3x3)worldToObject));
+        float3 n1 = normalize(mul(ptLoadFloat3(ptAttributeAddress(material, indices.y, material.offNormals)),
+                                  (float3x3)worldToObject));
+        float3 n2 = normalize(mul(ptLoadFloat3(ptAttributeAddress(material, indices.z, material.offNormals)),
+                                  (float3x3)worldToObject));
+        float3 u0 = hit.position - hit.p0;
+        float3 u1 = hit.position - hit.p1;
+        float3 u2 = hit.position - hit.p2;
+        u0 -= min(0.0, dot(u0, n0)) * n0;
+        u1 -= min(0.0, dot(u1, n1)) * n1;
+        u2 -= min(0.0, dot(u2, n2)) * n2;
+        hit.shadowOrigin = weights.x * (hit.p0 + u0) + weights.y * (hit.p1 + u1) + weights.z * (hit.p2 + u2);
+    }
+    return hit;
+}
+
+/**
+ * True anisotropic footprint: the circular ray cone projected onto the
+ * triangle plane along the ray is an ellipse, its axes taken through the
+ * triangle's affine world-to-UV map and handed to the hardware as SampleGrad
+ * gradients. Any basis perpendicular to the ray serves - a circular cone has
+ * no preferred orientation - so the same math holds at bounce hits.
+ */
+struct UvGradients {
+    float2 x;
+    float2 y;
+};
+
+UvGradients anisotropicGradients(HitGeometry hit) {
+    UvGradients gradients;
+    gradients.x = float2(0.0);
+    gradients.y = float2(0.0);
+    if (hit.material.offUV1 == -1 || hit.coneWidth <= 0.0) return gradients;
+    float3 basis1 = normalize(cross(hit.rayDirection,
+                                    abs(hit.rayDirection.z) < 0.99 ? float3(0.0, 0.0, 1.0)
+                                                                   : float3(0.0, 1.0, 0.0)));
+    float3 basis2 = cross(hit.rayDirection, basis1);
+    float3 e1 = hit.p1 - hit.p0;
+    float3 e2 = hit.p2 - hit.p0;
+    float3 planeNormal = cross(e1, e2);
+    float planeNormal2 = dot(planeNormal, planeNormal);
+    float ndotd = dot(planeNormal, hit.rayDirection);
+    if (planeNormal2 < 1e-18 || abs(ndotd) < 1e-6) return gradients;
+    float3 axisX = (basis1 - hit.rayDirection * (dot(planeNormal, basis1) / ndotd)) * hit.coneWidth;
+    float3 axisY = (basis2 - hit.rayDirection * (dot(planeNormal, basis2) / ndotd)) * hit.coneWidth;
+    float2 uvA = ptLoadFloat2(ptAttributeAddress(hit.material, hit.indices.x, hit.material.offUV1));
+    float2 duv1 = ptLoadFloat2(ptAttributeAddress(hit.material, hit.indices.y, hit.material.offUV1)) - uvA;
+    float2 duv2 = ptLoadFloat2(ptAttributeAddress(hit.material, hit.indices.z, hit.material.offUV1)) - uvA;
+    float invPlane = 1.0 / planeNormal2;
+    gradients.x = (dot(cross(axisX, e2), planeNormal) * invPlane) * duv1 +
+                  (dot(cross(e1, axisX), planeNormal) * invPlane) * duv2;
+    gradients.y = (dot(cross(axisY, e2), planeNormal) * invPlane) * duv1 +
+                  (dot(cross(e1, axisY), planeNormal) * invPlane) * duv2;
+    return gradients;
+}
+
+/**
+ * Isotropic ray-cone LOD (RT Gems ch. 20, simplified) for call sites that
+ * cannot afford gradients: transparency candidates during traversal.
+ */
+public float ptRayConeLod(InstanceMaterial material, uint3 indices, float coneWidth) {
+    if (material.offUV1 == -1 || material.mainTex == kPtNoTexture) return 0.0;
+    float3 q0 = ptLoadFloat3(ptAttributeAddress(material, indices.x, material.offPosition));
+    float3 q1 = ptLoadFloat3(ptAttributeAddress(material, indices.y, material.offPosition));
+    float3 q2 = ptLoadFloat3(ptAttributeAddress(material, indices.z, material.offPosition));
+    float2 uv0 = ptLoadFloat2(ptAttributeAddress(material, indices.x, material.offUV1));
+    float2 uv1 = ptLoadFloat2(ptAttributeAddress(material, indices.y, material.offUV1));
+    float2 uv2 = ptLoadFloat2(ptAttributeAddress(material, indices.z, material.offUV1));
+    float ta = abs((uv1.x - uv0.x) * (uv2.y - uv0.y) - (uv2.x - uv0.x) * (uv1.y - uv0.y));
+    float pa = length(cross(q1 - q0, q2 - q0));
+    uint texWidth, texHeight;
+    bindlessTextures[NonUniformResourceIndex(material.mainTex)].GetDimensions(texWidth, texHeight);
+    float density = ta * float(texWidth) * float(texHeight) / max(pa, 1e-9);
+    return max(0.0, 0.5 * log2(max(density, 1e-12)) + log2(max(coneWidth, 1e-9)));
+}
+
+// Curated channel op: mode 0 passes the derived value through, mode 1
+// overrides with a constant, mode 2 evaluates
+// lerp(base, smoothstep(a, b, dot(albedo, weights)), t).
+float curatedChannel(float4 A, float4 B, float3 albedo, float current) {
+    if (A.x < 0.5) return current;
+    if (A.x < 1.5) return A.y;
+    return lerp(A.y, smoothstep(A.z, A.w, dot(albedo, B.yzw)), B.x);
+}
+
+public struct PbrSurface : ISurfaceModel {
+    public SurfaceShading shade(HitGeometry hit) {
+        InstanceMaterial material = hit.material;
+        SurfaceShading shading;
+        shading.terminatesPath = false;
+        shading.albedo = float3(1.0);
+        shading.alpha = 1.0;
+        if (material.mainTex != kPtNoTexture) {
+            UvGradients gradients = anisotropicGradients(hit);
+            // Textures are stored gamma-encoded; every term this shader
+            // computes is linear, exactly as the raster resolve does it.
+            float4 sample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleGrad(hit.uv, gradients.x, gradients.y);
+            shading.albedo = ptGammaToLinear(sample.rgb);
+            shading.alpha = sample.a;
+        }
+        // Keep the tracer's stand-ins exactly aligned with pbr_resolve.slang:
+        // alpha is only a reflectance control on env-mapped materials, never
+        // metalness, and roughness still uses alpha for every material.
+        shading.metallic = 0.0;
+        shading.roughness = clamp(shading.alpha, 0.2, 1.0);
+        // Curated per-object operations, then the per-category calibration
+        // override - both baked into the material record CPU-side; the
+        // shader only evaluates.
+        shading.albedo *= material.curatedAlbedoMul.rgb;
+        shading.roughness = curatedChannel(material.curatedRoughA, material.curatedRoughB,
+                                           shading.albedo, shading.roughness);
+        shading.metallic = curatedChannel(material.curatedMetalA, material.curatedMetalB,
+                                          shading.albedo, shading.metallic);
+        shading.albedo = lerp(shading.albedo, ptGammaToLinear(material.overrideColor.rgb),
+                              material.overrideColor.w);
+        if (material.overrideParams.x >= 0.0) shading.roughness = material.overrideParams.x;
+
+        shading.normal = materialNormal(hit);
+        shading.envmapped = (material.featureMask & uint(kFeatureEnvMap)) != 0;
+        shading.envStrength = (shading.envmapped ? (1.0 - shading.alpha) : 0.0) *
+                              material.overrideParams.z;
+        shading.hasLightmap = (material.featureMask & uint(kFeatureLightmap)) != 0;
+        shading.lightmap = float3(0.0);
+        if (shading.hasLightmap && material.lightmap != kPtNoTexture && material.offUV2 != -1) {
+            shading.lightmap = ptGammaToLinear(
+                bindlessTextures[NonUniformResourceIndex(material.lightmap)].SampleLevel(hit.uv2, 0.0).rgb);
+        }
+        float3 emission = ptGammaToLinear(material.selfIllumColor.rgb);
+        if (material.curatedEmission.w > 1.5) {
+            emission = material.curatedEmission.rgb;
+        } else if (material.curatedEmission.w > 0.5) {
+            emission *= material.curatedEmission.rgb;
+        }
+        // Emission is additive over shading, like raster self-illumination;
+        // the dial and the category emission scale ride along here.
+        shading.emission = emission * shading.albedo * pushConstants.emissiveIntensity *
+                           material.overrideParams.y;
+        return shading;
+    }
+
+    public PathSample sampleRay(HitGeometry hit, SurfaceShading shading, float3 view, inout uint rng) {
+        PathSample sample;
+        sample.terminate = false;
+        sample.passThrough = false;
+        sample.specularLobe = false;
+        // Partial coverage was already resolved stochastically inside the
+        // traversal: a committed texel is substance. No re-roll, no re-trace.
+        // The GGX lobe exists only where raster shows this heuristic a
+        // specular response: environment-mapped surfaces. Everywhere else the
+        // diffuse alpha is coverage or opacity, so the derived roughness is
+        // meaningless. Non-envmapped surfaces are pure diffuse.
+        float3 F0 = lerp(lerp(float3(0.04), shading.albedo, shading.metallic), float3(1.0),
+                         shading.envStrength);
+        float NdotV = max(0.0, dot(shading.normal, view));
+        float3 F = ptFresnelSchlick(NdotV, F0);
+        float specularProbability = shading.envmapped
+                                        ? clamp(luminanceOf(F), 1e-3, 1.0 - 1e-3)
+                                        : 0.0;
+        if (shading.envmapped && ptRandom01(rng) < specularProbability) {
+            float3 half = ptGgxHalfVector(shading.normal, shading.roughness,
+                                          float2(ptRandom01(rng), ptRandom01(rng)));
+            sample.direction = normalize(reflect(-view, half));
+            sample.weight = F / specularProbability;
+            sample.specularLobe = true;
+        } else {
+            sample.direction = ptCosineHemisphere(shading.normal,
+                                                  float2(ptRandom01(rng), ptRandom01(rng)));
+            sample.weight = shading.albedo;
+            if (shading.envmapped) {
+                sample.weight *= (1.0 - F) / (1.0 - specularProbability);
+            }
+        }
+        // A smooth normal can sample below the geometric surface at a
+        // silhouette. Reflect that lobe into the geometric hemisphere rather
+        // than immediately self-intersecting the same triangle.
+        if (dot(sample.direction, hit.geometricNormal) < 0.0) {
+            sample.direction = normalize(sample.direction -
+                2.0 * dot(sample.direction, hit.geometricNormal) * hit.geometricNormal);
+        }
+        return sample;
+    }
+
+    float3 materialNormal(HitGeometry hit) {
+        InstanceMaterial material = hit.material;
+        // The two normals have different jobs: the geometric normal owns
+        // every geometry decision, the interpolated material normal exists
+        // only inside the BRDF. Authored normals are object-space and take
+        // the inverse-transpose; the geometric fallback is already world.
+        bool hasAuthoredNormals = material.offNormals != -1;
+        float3 shadingNormal = hit.geometricNormal;
+        if (hasAuthoredNormals) {
+            shadingNormal = normalize(ptInterpolateFloat3(material, hit.indices, material.offNormals, hit.weights));
+        }
+        if (material.offTanSpace != -1) {
+            // offTanSpace is bitangent, tangent, tangent-space normal in that
+            // order. The third vector also guards corrupt tangent frames.
+            float3 interpolatedBitangent = ptInterpolateFloat3(material, hit.indices, material.offTanSpace, hit.weights);
+            float3 tangent = ptInterpolateFloat3(material, hit.indices, material.offTanSpace + 12, hit.weights);
+            float3 tangentSpaceNormal = ptInterpolateFloat3(material, hit.indices, material.offTanSpace + 24, hit.weights);
+            tangent = normalize(tangent - shadingNormal * dot(tangent, shadingNormal));
+            float handedness = dot(cross(shadingNormal, tangent), interpolatedBitangent) < 0.0 ? -1.0 : 1.0;
+            float3 bitangent = cross(shadingNormal, tangent) * handedness;
+            if (dot(tangentSpaceNormal, tangentSpaceNormal) >= 1e-10 &&
+                dot(tangent, tangent) >= 1e-10 && dot(bitangent, bitangent) >= 1e-10) {
+                UvGradients gradients = anisotropicGradients(hit);
+                if ((material.featureMask & uint(kFeatureNormalMap)) != 0 && material.normalMap != kPtNoTexture) {
+                    float3 n = bindlessTextures[NonUniformResourceIndex(material.normalMap)].SampleGrad(hit.uv, gradients.x, gradients.y).rgb * 2.0 - 1.0;
+                    shadingNormal = normalize(tangent * n.x + bitangent * n.y + shadingNormal * n.z);
+                } else if ((material.featureMask & uint(kFeatureBumpMap)) != 0 && material.bumpMapArray != kPtNoTexture) {
+                    uint bumpWidth, bumpHeight, bumpLayers;
+                    bindlessTextureArrays[NonUniformResourceIndex(material.bumpMapArray)].GetDimensions(bumpWidth, bumpHeight, bumpLayers);
+                    float2 texel = 1.0 / float2(max(bumpWidth, 1u), max(bumpHeight, 1u));
+                    float layer = float(material.bumpMapFrame);
+                    float height = bindlessTextureArrays[NonUniformResourceIndex(material.bumpMapArray)].SampleLevel(float3(hit.uv, layer), 0.0).r;
+                    // Compute dispatches have no screen-space ddx/ddy; these
+                    // explicit texel differences approximate the raster path.
+                    float dX = material.bumpMapScale * (bindlessTextureArrays[NonUniformResourceIndex(material.bumpMapArray)].SampleLevel(float3(hit.uv + float2(texel.x, 0.0), layer), 0.0).r - height);
+                    float dY = material.bumpMapScale * (bindlessTextureArrays[NonUniformResourceIndex(material.bumpMapArray)].SampleLevel(float3(hit.uv + float2(0.0, texel.y), layer), 0.0).r - height);
+                    float3 n = normalize(float3(-dX, -dY, 1.0));
+                    shadingNormal = normalize(tangent * n.x + bitangent * n.y + shadingNormal * n.z);
+                }
+            }
+        }
+        float3 worldNormal = hasAuthoredNormals
+                                 ? normalize(mul(shadingNormal, (float3x3)hit.worldToObject))
+                                 : shadingNormal;
+        // Flip into the geometric hemisphere, not merely toward the viewer:
+        // the geometric normal is already face-forward, so agreement with it
+        // implies facing the ray, and the BRDF and the hemisphere tests can
+        // never contradict each other at a silhouette.
+        if (dot(worldNormal, hit.geometricNormal) < 0.0) worldNormal = -worldNormal;
+        return worldNormal;
+    }
+};
+
+public struct UnlitTransparentSurface : ISurfaceModel {
+    public SurfaceShading shade(HitGeometry hit) {
+        InstanceMaterial material = hit.material;
+        SurfaceShading shading;
+        shading.terminatesPath = false;
+        shading.albedo = ptGammaToLinear(material.diffuseColor.rgb);
+        shading.alpha = 1.0;
+        if (material.mainTex != kPtNoTexture) {
+            float lod = ptRayConeLod(material, hit.indices, hit.coneWidth);
+            float4 sample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(hit.uv, lod);
+            shading.albedo = ptGammaToLinear(sample.rgb);
+            shading.alpha = sample.a;
+        }
+        shading.normal = hit.geometricNormal;
+        shading.roughness = 1.0;
+        shading.metallic = 0.0;
+        shading.hasLightmap = false;
+        shading.lightmap = float3(0.0);
+        shading.envmapped = false;
+        shading.envStrength = 0.0;
+        // Additive diffuse textures are authored as light even when no
+        // self-illum controller is present.
+        shading.emission = max(material.selfIllumColor.rgb, float3(1.0)) * shading.albedo *
+                           pushConstants.emissiveIntensity * material.overrideParams.y;
+        return shading;
+    }
+
+    public PathSample sampleRay(HitGeometry hit, SurfaceShading shading, float3 view, inout uint rng) {
+        // Additive light occupies no volume: the ray continues as if the
+        // surface were not there. Its radiance was already paid in shade().
+        PathSample sample;
+        sample.direction = hit.rayDirection;
+        sample.weight = float3(1.0);
+        sample.specularLobe = false;
+        sample.passThrough = true;
+        sample.terminate = false;
+        return sample;
+    }
+};
+
+public struct UnlitEmissiveSurface : ISurfaceModel {
+    public SurfaceShading shade(HitGeometry hit) {
+        InstanceMaterial material = hit.material;
+        SurfaceShading shading;
+        shading.albedo = float3(1.0);
+        shading.alpha = 1.0;
+        if (material.mainTex != kPtNoTexture) {
+            float lod = ptRayConeLod(material, hit.indices, hit.coneWidth);
+            shading.albedo = ptGammaToLinear(
+                bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(hit.uv, lod).rgb);
+        }
+        shading.normal = hit.geometricNormal;
+        shading.roughness = 1.0;
+        shading.metallic = 0.0;
+        shading.hasLightmap = false;
+        shading.lightmap = float3(0.0);
+        shading.envmapped = false;
+        shading.envStrength = 0.0;
+        // The texture is the radiance: the sky takes its own dial, prelit
+        // imagery renders as authored. Nothing exists behind either.
+        bool sky = (material.featureMask & kPtMaskSky) != 0;
+        shading.emission = shading.albedo * (sky ? pushConstants.skyIntensity : 1.0);
+        shading.terminatesPath = true;
+        return shading;
+    }
+
+    public PathSample sampleRay(HitGeometry hit, SurfaceShading shading, float3 view, inout uint rng) {
+        PathSample sample;
+        sample.direction = hit.rayDirection;
+        sample.weight = float3(0.0);
+        sample.specularLobe = false;
+        sample.passThrough = false;
+        sample.terminate = true;
+        return sample;
+    }
+};
+
+float luminanceOf(float3 rgb) {
+    return dot(rgb, float3(0.2126, 0.7152, 0.0722));
+}
+
+/**
+ * World-space motion, previous minus current. Rigid meshes: the hit point
+ * back to object space through the instance's previous transform. Skinned
+ * meshes: the previous-pose positions the skin compute wrote with last
+ * frame's bone palette, interpolated at the same barycentrics - full
+ * per-bone motion.
+ */
+public float3 ptMotionVector(HitGeometry hit) {
+    InstanceMaterial material = hit.material;
+    float3 objectPosition;
+    if (material.prevPositionsAddress != 0) {
+        float3 pp0 = ptLoadFloat3(material.prevPositionsAddress + uint64_t(hit.indices.x) * 16);
+        float3 pp1 = ptLoadFloat3(material.prevPositionsAddress + uint64_t(hit.indices.y) * 16);
+        float3 pp2 = ptLoadFloat3(material.prevPositionsAddress + uint64_t(hit.indices.z) * 16);
+        objectPosition = pp0 * hit.weights.x + pp1 * hit.weights.y + pp2 * hit.weights.z;
+    } else {
+        objectPosition = mul(hit.worldToObject, float4(hit.position, 1.0));
+    }
+    float3 prevWorldPosition = material.prevTransform0.xyz * objectPosition.x +
+                               material.prevTransform1.xyz * objectPosition.y +
+                               material.prevTransform2.xyz * objectPosition.z +
+                               material.prevTransform3.xyz;
+    return prevWorldPosition - hit.position;
+}
+
+/** Type dispatch: the one switch in the system. */
+public SurfaceShading ptShade(HitGeometry hit) {
+    switch (hit.material.surfaceType) {
+    case kPtSurfaceUnlitTransparent: {
+        UnlitTransparentSurface surface;
+        return surface.shade(hit);
+    }
+    case kPtSurfaceUnlitEmissive: {
+        UnlitEmissiveSurface surface;
+        return surface.shade(hit);
+    }
+    default: {
+        PbrSurface surface;
+        return surface.shade(hit);
+    }
+    }
+}
+
+public PathSample ptSampleRay(HitGeometry hit, SurfaceShading shading, float3 view, inout uint rng) {
+    switch (hit.material.surfaceType) {
+    case kPtSurfaceUnlitTransparent: {
+        UnlitTransparentSurface surface;
+        return surface.sampleRay(hit, shading, view, rng);
+    }
+    case kPtSurfaceUnlitEmissive: {
+        UnlitEmissiveSurface surface;
+        return surface.sampleRay(hit, shading, view, rng);
+    }
+    default: {
+        PbrSurface surface;
+        return surface.sampleRay(hit, shading, view, rng);
+    }
+    }
+}

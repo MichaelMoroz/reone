@@ -32,8 +32,28 @@ struct PushConstants {
     uint tonemap;       /**< 0 none, 1 ACES - mirrors the trace kernel's dial */
     float exposure;
     float historyBlend; /**< 0 on the first frame and across teleports */
+    /**
+     * This frame's sub-pixel jitter in pixels, UV-down y. The trace pass
+     * renders on the jittered grid; the composite is the resolve that puts
+     * the image back on the stable display grid - without the compensation
+     * the whole frame vibrates by the jitter sequence.
+     */
+    float jitterX;
+    float jitterY;
 };
 [[vk::push_constant]] PushConstants pushConstants;
+
+/** Manual bilinear over a storage image at a fractional pixel position. */
+float4 bilinear(RWTexture2D<float4> image, float2 position, int2 size) {
+    float2 base = position - 0.5;
+    int2 p0 = int2(floor(base));
+    float2 f = base - float2(p0);
+    int2 p1 = clamp(p0 + int2(1, 0), int2(0), size - 1);
+    int2 p2 = clamp(p0 + int2(0, 1), int2(0), size - 1);
+    int2 p3 = clamp(p0 + int2(1, 1), int2(0), size - 1);
+    p0 = clamp(p0, int2(0), size - 1);
+    return lerp(lerp(image[p0], image[p1], f.x), lerp(image[p2], image[p3], f.x), f.y);
+}
 
 /** Denoised channels are undefined beyond NRD's denoising range. */
 static const float kDenoisedRange = 1.0e5;
@@ -64,15 +84,21 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     if (dispatchId.x >= width || dispatchId.y >= height) return;
     uint2 pixel = dispatchId.xy;
 
-    float viewZ = inViewZ[pixel];
-    float3 noiseFree = inNoiseFree[pixel].rgb;
+    // The resolve: this display pixel's content was rendered at the jittered
+    // sample position. All fetches below use it; the write stays on the
+    // stable grid.
+    int2 size = int2(width, height);
+    float2 samplePos = float2(pixel) + 0.5 + float2(pushConstants.jitterX, pushConstants.jitterY);
+    int2 samplePixel = clamp(int2(samplePos), int2(0), size - 1);
+    float viewZ = inViewZ[samplePixel];
+    float3 noiseFree = bilinear(inNoiseFree, samplePos, size).rgb;
 
     // Reproject: the pixel's world position reconstructed from viewZ along
     // the (jittered, matching the rays) camera ray, moved by the world-space
     // motion vector, projected by the unjittered previous-frame matrix.
     // A sky pixel reconstructs a point far along the ray, which reprojects
     // as a pure direction - exactly what a shifting camera needs.
-    float2 uv = (float2(pixel) + 0.5) / float2(width, height);
+    float2 uv = samplePos / float2(width, height);
     float2 ndc = uv * 2.0 - 1.0;
     ndc.y = -ndc.y;
     float4 nearH = mul(globalUniforms.projectionInv, float4(ndc, 0.0, 1.0));
@@ -83,7 +109,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     float t = (viewZ - nearView.z) / (abs(dirView.z) > 1e-9 ? dirView.z : 1e-9);
     float3 viewPos = nearView + dirView * t;
     float3 worldPos = mul(globalUniforms.viewInv, float4(viewPos, 1.0)).xyz;
-    float3 prevWorldPos = worldPos + inMotion[pixel].xyz;
+    float3 prevWorldPos = worldPos + inMotion[samplePixel].xyz;
     float4 prevClip = mul(globalUniforms.prevViewProjection, float4(prevWorldPos, 1.0));
     float3 history = noiseFree;
     bool historyValid = pushConstants.historyBlend > 0.0 && prevClip.w > 1e-4;
@@ -99,7 +125,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
             float3 boxMax = noiseFree;
             for (int dy = -1; dy <= 1; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
-                    int2 q = clamp(int2(pixel) + int2(dx, dy), int2(0), int2(width - 1, height - 1));
+                    int2 q = clamp(samplePixel + int2(dx, dy), int2(0), size - 1);
                     float3 c = inNoiseFree[q].rgb;
                     boxMin = min(boxMin, c);
                     boxMax = max(boxMax, c);
@@ -115,8 +141,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
 
     float3 color = stabilized;
     if (abs(viewZ) < kDenoisedRange) {
-        color += yCoCgToLinear(inDenoisedDiffuse[pixel].rgb) * inAlbedo[pixel].rgb +
-                 yCoCgToLinear(inDenoisedSpecular[pixel].rgb);
+        color += yCoCgToLinear(bilinear(inDenoisedDiffuse, samplePos, size).rgb) *
+                     bilinear(inAlbedo, samplePos, size).rgb +
+                 yCoCgToLinear(bilinear(inDenoisedSpecular, samplePos, size).rgb);
     }
     outputImage[pixel] = float4(displayTransform(color), 1.0);
 }
