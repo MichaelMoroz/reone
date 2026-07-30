@@ -48,6 +48,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iomanip>
 #include <set>
 #include <sstream>
 #include <variant>
@@ -492,6 +493,26 @@ int Engine::run() {
             // captured.
             frameTime = 1.0f / 60.0f;
         }
+        if (_options.freezeFrame > 0 && _frameIndex >= _options.freezeFrame) {
+            // The world stops; the renderer does not. Everything temporal -
+            // the jitter sequence, the tracer's frame index, NRD's history,
+            // the TAA history - keeps advancing on a scene that no longer
+            // moves, so whatever still changes between frames is the filters
+            // failing to converge rather than the camera or an animation.
+            frameTime = 0.0f;
+            if (!_historyRestarted) {
+                // Start the temporal filters cold on the first frozen frame.
+                // A blend-factor filter settles at a small non-zero residual
+                // rather than reaching zero, so the settled value alone proves
+                // nothing; restarting here makes the approach to it visible,
+                // and that geometric decay is the actual evidence.
+                _historyRestarted = true;
+                if (auto *pipeline = _services->scene.graphs.get(kSceneMain).renderPipeline()) {
+                    pipeline->restartTemporalHistory();
+                    info("Temporal history restarted at frame " + std::to_string(_frameIndex));
+                }
+            }
+        }
         _profiler->measure(kMainThreadName, kProfilerInputTimeIndex, [this, &quit]() {
             while (!_events.empty()) {
                 auto event = _events.front();
@@ -629,14 +650,35 @@ void Engine::captureIfRequested(bool &quit) {
     if (!_options.capturePath.empty()) {
         // Read before endFrame, while the finished frame is still readable.
         auto screenshot = _services->graphics.renderer.captureFrame();
-        auto stream = FileOutputStream(_options.capturePath);
+        auto path = capturePathForFrame(_frameIndex);
+        auto stream = FileOutputStream(path);
         TgaWriter(screenshot).save(stream);
-        info("Wrote screenshot: " + _options.capturePath);
+        info("Wrote screenshot: " + path.string());
+    }
+    // A sequence keeps going: only the last frame of it ends the run, and the
+    // target dump describes that same frame.
+    if (_frameIndex + 1 < _options.captureFrame + _options.captureFrames) {
+        return;
     }
     _captured = true;
     dumpTargetsIfRequested();
     dumpObjectsIfRequested();
     quit = true;
+}
+
+/**
+ * Where frame N of a capture goes. One frame keeps the path as given, so every
+ * existing harness and baseline is untouched; a sequence numbers each frame
+ * into the stem so the files sort in render order.
+ */
+std::filesystem::path Engine::capturePathForFrame(int frame) const {
+    std::filesystem::path path {_options.capturePath};
+    if (_options.captureFrames <= 1) {
+        return path;
+    }
+    std::ostringstream stem;
+    stem << path.stem().string() << "_" << std::setfill('0') << std::setw(4) << frame;
+    return path.parent_path() / (stem.str() + path.extension().string());
 }
 
 /**

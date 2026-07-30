@@ -102,13 +102,25 @@ struct GraphicsOptions {
     float ptNrdDisocclusionThreshold {0.003f};
     bool ptNrdAntiFirefly {true};
     /**
-     * History weight of the composite's noise-free TAA. Graded to zero while
-     * mip-0 aliasing made history clamping useless; with ray-cone LOD in,
-     * worth re-grading upward.
+     * Anti-alias with FidelityFX Super Resolution at NativeAA.
+     *
+     * This is the only temporal resolve left. The composite used to carry a
+     * hand-rolled TAA behind a blend dial; FSR measured 4.6x better on edges,
+     * so that one is gone rather than kept as a switchable alternative. With
+     * FSR on the composite stops at linear HDR for it to resolve and
+     * pt_tonemap to finish; with it off, or in a build without FSR, the
+     * composite tonemaps directly and the frame has no anti-aliasing.
      */
-    float ptTaaBlend {0.0f};
-    /** Debug view: 0 off, then categories, emissive, normals, roughness,
-        lightmap, albedo - matches kDebugView* in slang/rayquery.slang. */
+    bool ptFsr {true};
+    /**
+     * FSR's built-in RCAS sharpening, 0 to skip the pass entirely.
+     *
+     * RCAS exists to claw back the softness of upscaling, and at NativeAA there
+     * is no upscaling to compensate for - hence the conservative default. Do
+     * not stack a separate sharpen pass on top of it.
+     */
+    float ptFsrSharpness {0.0f};
+    /** Debug view: 0 off, then the values in tracing/debug.slang. */
     int ptDebugView {0};
     /** Display transform: 0 off, 1 ACES. On by default - the calibration
         programme is defined in tonemapped terms. */
@@ -130,8 +142,17 @@ struct GraphicsOptions {
         float color[3] {1.0f, 1.0f, 1.0f};
         float colorWeight {0.0f};
         float roughness {-1.0f}; /**< negative: no override */
+        float roughnessScale {1.0f};
         float emissionScale {1.0f};
         float envScale {1.0f};
+        /**
+         * Scales curated metalness rather than overriding it, so curation
+         * still decides which surfaces are metal. The reason it exists: Rf0
+         * only becomes chromatic where metalness is non-zero, and every KotOR
+         * material is dielectric, so the specular demodulation factor is grey
+         * everywhere and that path is untestable without a way to force it.
+         */
+        float metallicScale {1.0f};
     };
     PtCategoryOverride ptCategoryOverrides[9] {};
     bool ssao {true};

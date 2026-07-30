@@ -113,6 +113,11 @@ private:
     int _pendingHeight {0};
     int _pendingShadowResolution {0};
     bool _pendingVsync {true};
+    /** Staged until Apply: the upscaler is built in the pipeline's init. */
+    bool _pendingFsr {true};
+    bool _pendingFsrInitialized {false};
+    std::string _settingsSaveStatus;
+    bool _settingsSaveSucceeded {false};
 
     void frameTimes();
     bool _showFrameTimes {false};

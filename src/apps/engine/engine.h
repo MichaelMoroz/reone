@@ -38,6 +38,7 @@
 #include "options.h"
 #include "profiler.h"
 
+#include <filesystem>
 #include <vector>
 
 namespace reone {
@@ -110,6 +111,7 @@ private:
     bool _commandsRun {false};
     bool _inFrame {false};
     bool _renderdocTriggered {false};
+    bool _historyRestarted {false};
     bool _graphicsRebuildRequested {false};
 
     bool _showCursor {true};
@@ -133,6 +135,7 @@ private:
     }
 
     void captureIfRequested(bool &quit);
+    std::filesystem::path capturePathForFrame(int frame) const;
     void dumpTargetsIfRequested();
     void dumpObjectsIfRequested();
 

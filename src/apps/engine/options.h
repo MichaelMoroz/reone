@@ -71,6 +71,28 @@ struct Options {
      */
     std::string dumpObjectsPath;
     int captureFrame {3};
+    /**
+     * Capture this many consecutive frames ending the run, rather than one.
+     * Each gets its frame number appended to the stem, so capturePath
+     * "out.tga" with captureFrame 350 writes out_0350.tga, out_0351.tga...
+     *
+     * A single frame says nothing about whether a temporal filter converges.
+     * A run of them does: with the simulation frozen, the only thing still
+     * moving is the accumulation, so the difference between consecutive
+     * frames is the residual the denoiser and TAA have not yet removed, and
+     * it must fall towards zero.
+     */
+    int captureFrames {1};
+    /**
+     * Stop advancing the simulation from this frame on, or 0 not to.
+     *
+     * Rendering continues untouched - the jitter sequence, the tracer's frame
+     * index, NRD's accumulation and the TAA history all keep advancing - while
+     * the camera, animations and AI hold still. That separates temporal
+     * convergence from scene motion, which is the only way to say whether a
+     * residual is the filter failing or the world moving under it.
+     */
+    int freezeFrame {0};
 
     /**
      * Seed for the shared random generator, or -1 to seed from the wall clock.

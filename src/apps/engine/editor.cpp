@@ -47,11 +47,126 @@
 
 #include <algorithm>
 #include <cctype>
+#include <fstream>
+#include <iomanip>
+#include <limits>
 #include <numeric>
+#include <set>
+#include <sstream>
 
 namespace reone {
 
 namespace {
+
+constexpr char kConfigFilename[] = "reone.cfg";
+
+std::string formatConfigFloat(float value) {
+    std::ostringstream stream;
+    stream << std::setprecision(std::numeric_limits<float>::max_digits10) << value;
+    return stream.str();
+}
+
+bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &error) {
+    std::vector<std::pair<std::string, std::string>> values {
+        {"width", std::to_string(options.width)},
+        {"height", std::to_string(options.height)},
+        {"vsync", std::to_string(options.vsync)},
+        {"grass", std::to_string(options.grass)},
+        {"ptspp", std::to_string(options.pathTracingSamples)},
+        {"ptskyintensity", formatConfigFloat(options.ptSkyIntensity)},
+        {"ptemissiveintensity", formatConfigFloat(options.ptEmissiveIntensity)},
+        {"ptlightmapintensity", formatConfigFloat(options.ptLightmapIntensity)},
+        {"ptdirectintensity", formatConfigFloat(options.ptDirectIntensity)},
+        {"ptsunintensity", formatConfigFloat(options.ptSunIntensity)},
+        {"ptbounces", std::to_string(options.ptBounces)},
+        {"ptrayoffset", formatConfigFloat(options.ptRayOffset)},
+        {"pttracestats", std::to_string(options.ptTraceStats)},
+        {"ptdenoise", std::to_string(options.ptDenoise)},
+        {"ptdebugview", std::to_string(options.ptDebugView)},
+        {"pttonemap", std::to_string(options.ptTonemap)},
+        {"ptexposure", formatConfigFloat(options.ptExposure)},
+        {"ptpointangularsize", formatConfigFloat(options.ptPointAngularSize)},
+        {"ptsunangularsize", formatConfigFloat(options.ptSunAngularSize)},
+        {"ptnrdstabilized", std::to_string(options.ptNrdMaxStabilizedFrames)},
+        {"ptnrdaccum", std::to_string(options.ptNrdMaxAccumulatedFrames)},
+        {"ptnrdfastaccum", std::to_string(options.ptNrdMaxFastAccumulatedFrames)},
+        {"ptnrdhistoryfix", std::to_string(options.ptNrdHistoryFixFrames)},
+        {"ptnrddiffuseprepassblurradius", formatConfigFloat(options.ptNrdDiffusePrepassBlurRadius)},
+        {"ptnrdspecularprepassblurradius", formatConfigFloat(options.ptNrdSpecularPrepassBlurRadius)},
+        {"ptnrdminblurradius", formatConfigFloat(options.ptNrdMinBlurRadius)},
+        {"ptnrdmaxblurradius", formatConfigFloat(options.ptNrdMaxBlurRadius)},
+        {"ptnrdlobeanglefraction", formatConfigFloat(options.ptNrdLobeAngleFraction)},
+        {"ptnrdroughnessfraction", formatConfigFloat(options.ptNrdRoughnessFraction)},
+        {"ptnrdplanedistancesensitivity", formatConfigFloat(options.ptNrdPlaneDistanceSensitivity)},
+        {"ptnrddisocclusionthreshold", formatConfigFloat(options.ptNrdDisocclusionThreshold)},
+        {"ptnrdantifirefly", std::to_string(options.ptNrdAntiFirefly)},
+        {"ptfsr", std::to_string(options.ptFsr)},
+        {"ptfsrsharpness", formatConfigFloat(options.ptFsrSharpness)},
+        {"ssao", std::to_string(options.ssao)},
+        {"ssr", std::to_string(options.ssr)},
+        {"fxaa", std::to_string(options.fxaa)},
+        {"sharpen", std::to_string(options.sharpen)},
+        {"taajitter", std::to_string(options.taaJitter)},
+        {"texquality", std::to_string(static_cast<int>(options.textureQuality))},
+        {"shadowres", std::to_string(std::max(0, static_cast<int>(glm::log2(options.shadowResolution)) - 10))},
+        {"anisofilter", std::to_string(options.anisotropicFiltering)},
+        {"drawdist", formatConfigFloat(options.drawDistance)}};
+
+    for (int i = 0; i < 9; ++i) {
+        const auto &override = options.ptCategoryOverrides[i];
+        auto key = "ptcat" + std::to_string(i);
+        values.emplace_back(key + "color0", formatConfigFloat(override.color[0]));
+        values.emplace_back(key + "color1", formatConfigFloat(override.color[1]));
+        values.emplace_back(key + "color2", formatConfigFloat(override.color[2]));
+        values.emplace_back(key + "colorweight", formatConfigFloat(override.colorWeight));
+        values.emplace_back(key + "roughness", formatConfigFloat(override.roughness));
+        values.emplace_back(key + "roughnessscale", formatConfigFloat(override.roughnessScale));
+        values.emplace_back(key + "emission", formatConfigFloat(override.emissionScale));
+        values.emplace_back(key + "env", formatConfigFloat(override.envScale));
+        values.emplace_back(key + "metallic", formatConfigFloat(override.metallicScale));
+    }
+
+    std::ifstream input(kConfigFilename);
+    if (!input && std::filesystem::exists(kConfigFilename)) {
+        error = "Could not read reone.cfg.";
+        return false;
+    }
+
+    // Launcher, game and editor settings share this file, so only owned keys
+    // are replaced while every foreign line keeps its position and contents.
+    std::vector<std::string> lines;
+    std::set<std::string> written;
+    for (std::string line; std::getline(input, line);) {
+        auto separator = line.find('=');
+        auto key = separator == std::string::npos ? std::string() : line.substr(0, separator);
+        auto value = std::find_if(values.begin(), values.end(), [&key](const auto &entry) { return entry.first == key; });
+        if (value == values.end()) {
+            lines.push_back(std::move(line));
+        } else if (written.insert(key).second) {
+            lines.push_back(value->first + "=" + value->second);
+        }
+    }
+
+    for (const auto &[key, value] : values) {
+        if (written.insert(key).second) {
+            lines.push_back(key + "=" + value);
+        }
+    }
+
+    std::ofstream output(kConfigFilename);
+    if (!output) {
+        error = "Could not write reone.cfg.";
+        return false;
+    }
+    for (const auto &line : lines) {
+        output << line << '\n';
+    }
+    if (!output) {
+        error = "Could not finish writing reone.cfg.";
+        return false;
+    }
+    return true;
+}
 
 const char *registryMaterialName(graphics::MaterialType type) {
     switch (type) {
@@ -667,15 +782,18 @@ void Editor::pathTracingSettings() {
         return;
     }
     auto &options = _engine._options.graphics;
+    if (!_pendingFsrInitialized) {
+        _pendingFsr = options.ptFsr;
+        _pendingFsrInitialized = true;
+    }
     if (options.mode != "path-tracing") {
         ImGui::TextDisabled("Inactive - run with --mode path-tracing.");
         ImGui::TextDisabled("Settings still save and apply when it is.");
         ImGui::Separator();
     }
     // Everything here rides in push constants, so a change applies on the next
-    // frame with nothing rebuilt. These are deliberately not command-line
-    // options: they are tuning dials, and the place to turn a dial is next to
-    // the picture it changes.
+    // frame with nothing rebuilt. The editor remains the place to tune beside
+    // the picture; config and command-line values make a calibration repeatable.
     if (ImGui::SliderInt("Samples per pixel", &options.pathTracingSamples, 1, 64)) {
         options.pathTracingSamples = std::max(1, options.pathTracingSamples);
     }
@@ -699,6 +817,26 @@ void Editor::pathTracingSettings() {
     ImGui::Combo("Tonemap", &options.ptTonemap, kTonemapNames, 2);
     ImGui::SliderFloat("Exposure", &options.ptExposure, 0.05f, 8.0f, "%.2f",
                        ImGuiSliderFlags_Logarithmic);
+#ifdef R_ENABLE_FSR
+    ImGui::SeparatorText("Anti-aliasing");
+    // The toggle is deferred: the upscaler builds its context and its two
+    // images in the pipeline's init, so it cannot be switched mid-frame.
+    if (ImGui::Checkbox("FSR 2 upscaler (NativeAA)", &_pendingFsr)) {
+        // no-op until the rebuild below; the checkbox only stages the choice
+    }
+    ImGui::TextDisabled("The only temporal resolve in the frame. Off means\nno anti-aliasing at all. Needs a graphics rebuild\nto take effect.");
+    if (_pendingFsr != options.ptFsr) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Apply##fsr")) {
+            options.ptFsr = _pendingFsr;
+            _engine.requestGraphicsRebuild();
+        }
+    }
+    ImGui::BeginDisabled(!options.ptFsr);
+    ImGui::SliderFloat("FSR sharpness", &options.ptFsrSharpness, 0.0f, 1.0f, "%.2f");
+    ImGui::TextDisabled("RCAS, inside FSR. Compensates for upscaling\nsoftness, of which NativeAA has none - keep it\nlow. Never stack the postprocess sharpen on top.");
+    ImGui::EndDisabled();
+#endif
 #ifdef R_ENABLE_NRD
     ImGui::Checkbox("NRD denoiser", &options.ptDenoise);
     ImGui::TextDisabled("REBLUR diffuse+specular. Off shows the raw\ntraced frame; debug views always bypass it.");
@@ -708,7 +846,6 @@ void Editor::pathTracingSettings() {
         ImGui::SliderInt("Fast frames", &options.ptNrdMaxFastAccumulatedFrames, 0, 32);
         ImGui::SliderInt("Stabilized frames", &options.ptNrdMaxStabilizedFrames, 0, 63);
         ImGui::SliderInt("History fix frames", &options.ptNrdHistoryFixFrames, 0, 8);
-        ImGui::SliderFloat("Noise-free TAA blend", &options.ptTaaBlend, 0.0f, 0.98f, "%.2f");
         ImGui::TextDisabled("Spatial filtering (pixels)");
         ImGui::SliderFloat("Diffuse prepass radius", &options.ptNrdDiffusePrepassBlurRadius, 0.0f, 60.0f, "%.0f");
         ImGui::SliderFloat("Specular prepass radius", &options.ptNrdSpecularPrepassBlurRadius, 0.0f, 60.0f, "%.0f");
@@ -730,13 +867,15 @@ void Editor::pathTracingSettings() {
     ImGui::SliderFloat("Sun angular size", &options.ptSunAngularSize, 0.05f, 10.0f, "%.2f deg");
     ImGui::TextDisabled("A light source is never a point. Wide points give\nsoft penumbras; the sun stays fairly sharp.");
     ImGui::SeparatorText("Debug view");
+    // Order must match kPtDebug* in slang/tracing/debug.slang.
     static constexpr const char *kDebugViewNames[] = {
         "Off", "Object categories", "Emissive highlight", "Normals",
-        "Roughness", "Lightmap", "Albedo",
+        "Roughness", "Metallic", "Lightmap", "Albedo",
         "Denoiser: diffuse channel", "Denoiser: specular channel",
         "Denoiser: viewZ", "Denoiser: noise-free", "Denoiser: motion"};
-    ImGui::Combo("View", &options.ptDebugView, kDebugViewNames, 12);
-    ImGui::TextDisabled("Replaces shading at the primary hit. Categories:\nblue rooms, red creatures, green placeables,\nmagenta doors, yellow equipment, cyan sky.\nDenoiser views show the NRD output split.");
+    ImGui::Combo("View", &options.ptDebugView, kDebugViewNames,
+                 static_cast<int>(std::size(kDebugViewNames)));
+    ImGui::TextDisabled("Replaces shading at the primary hit. Categories:\nblue rooms, red creatures, green placeables,\nmagenta doors, yellow equipment, cyan sky.\nRoughness and metallic are raw, not shaded.\nDenoiser views show the NRD output split, with\ndiffuse demodulated - it is transport, not colour.");
     ImGui::SeparatorText("Category overrides");
     static constexpr const char *kCategoryNames[] = {
         "GUI", "Rooms", "Creatures", "Placeables", "Doors",
@@ -757,8 +896,11 @@ void Editor::pathTracingSettings() {
             if (overrideRoughness) {
                 ImGui::SliderFloat("Roughness", &override.roughness, 0.0f, 1.0f, "%.2f");
             }
+            ImGui::SliderFloat("Roughness scale", &override.roughnessScale, 0.0f, 8.0f, "%.2f");
             ImGui::SliderFloat("Emission scale", &override.emissionScale, 0.0f, 8.0f, "%.2f");
             ImGui::SliderFloat("Env strength scale", &override.envScale, 0.0f, 4.0f, "%.2f");
+            ImGui::SliderFloat("Metalness scale", &override.metallicScale, 0.0f, 8.0f, "%.2f");
+            ImGui::TextDisabled("Scales curated metalness, not an override.\nAbove zero it tints Rf0 toward albedo, which is\nwhat makes the specular factor chromatic - every\nstock material here is dielectric.");
             ImGui::TreePop();
         }
     }
@@ -766,6 +908,23 @@ void Editor::pathTracingSettings() {
     ImGui::SeparatorText("Diagnostics");
     ImGui::Checkbox("Trace stats", &options.ptTraceStats);
     ImGui::TextDisabled("GPU counters in the engine log. Costs frame time;\nleave off when measuring.");
+    ImGui::Separator();
+    if (ImGui::Button("Save settings")) {
+#ifdef R_ENABLE_FSR
+        if (_pendingFsr != options.ptFsr) {
+            options.ptFsr = _pendingFsr;
+            _engine.requestGraphicsRebuild();
+        }
+#endif
+        _settingsSaveSucceeded = saveGraphicsOptions(options, _settingsSaveStatus);
+        if (_settingsSaveSucceeded) {
+            _settingsSaveStatus = "Settings saved to reone.cfg.";
+        }
+    }
+    if (!_settingsSaveStatus.empty()) {
+        ImGui::TextColored(_settingsSaveSucceeded ? ImVec4(0.3f, 0.9f, 0.4f, 1.0f) : ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
+                           "%s", _settingsSaveStatus.c_str());
+    }
     ImGui::End();
 }
 
@@ -847,6 +1006,27 @@ void Editor::graphicsSettings() {
     ImGui::SliderInt("Anisotropic filtering", &anisotropic, 1, 16);
     ImGui::EndDisabled();
     ImGui::TextDisabled("These settings take effect after reloading.");
+    ImGui::Separator();
+    if (ImGui::Button("Save settings")) {
+        if (options.width != std::max(1, _pendingWidth) ||
+            options.height != std::max(1, _pendingHeight) ||
+            options.shadowResolution != _pendingShadowResolution ||
+            options.vsync != _pendingVsync) {
+            options.width = std::max(1, _pendingWidth);
+            options.height = std::max(1, _pendingHeight);
+            options.shadowResolution = _pendingShadowResolution;
+            options.vsync = _pendingVsync;
+            _engine.requestGraphicsRebuild();
+        }
+        _settingsSaveSucceeded = saveGraphicsOptions(options, _settingsSaveStatus);
+        if (_settingsSaveSucceeded) {
+            _settingsSaveStatus = "Settings saved to reone.cfg.";
+        }
+    }
+    if (!_settingsSaveStatus.empty()) {
+        ImGui::TextColored(_settingsSaveSucceeded ? ImVec4(0.3f, 0.9f, 0.4f, 1.0f) : ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
+                           "%s", _settingsSaveStatus.c_str());
+    }
     ImGui::End();
 }
 
