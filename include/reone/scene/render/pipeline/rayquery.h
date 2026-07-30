@@ -128,7 +128,7 @@ private:
         // in slang/rayquery.slang.
         uint32_t traceFlags;
         uint32_t bounceCount;
-        float pointAngularRadius;
+        float emitterRadiusRatio;
         float sunAngularRadius;
         float exposure;
     };

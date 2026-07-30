@@ -85,7 +85,7 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"ptdebugview", std::to_string(options.ptDebugView)},
         {"pttonemap", std::to_string(options.ptTonemap)},
         {"ptexposure", formatConfigFloat(options.ptExposure)},
-        {"ptpointangularsize", formatConfigFloat(options.ptPointAngularSize)},
+        {"ptpointemitterratio", formatConfigFloat(options.ptPointEmitterRatio)},
         {"ptsunangularsize", formatConfigFloat(options.ptSunAngularSize)},
         {"ptnrdstabilized", std::to_string(options.ptNrdMaxStabilizedFrames)},
         {"ptnrdaccum", std::to_string(options.ptNrdMaxAccumulatedFrames)},
@@ -863,9 +863,9 @@ void Editor::pathTracingSettings() {
     }
 #endif
     ImGui::SeparatorText("Light shape");
-    ImGui::SliderFloat("Point angular size", &options.ptPointAngularSize, 0.05f, 45.0f, "%.1f deg");
+    ImGui::SliderFloat("Point emitter radius", &options.ptPointEmitterRatio, 0.01f, 0.5f, "%.2f x radius");
     ImGui::SliderFloat("Sun angular size", &options.ptSunAngularSize, 0.05f, 10.0f, "%.2f deg");
-    ImGui::TextDisabled("A light source is never a point. Wide points give\nsoft penumbras; the sun stays fairly sharp.");
+    ImGui::TextDisabled("Point lights are spheres sized as a fraction of their\ninfluence radius, so falloff and penumbra are one\nquantity: the solid angle the emitter subtends.\nBrightness-neutral - this grades how soft shadows are\nand how hot a surface gets against a lamp, not the\noverall level. The sun keeps an authored angle.");
     ImGui::SeparatorText("Debug view");
     // Order must match kPtDebug* in slang/tracing/debug.slang.
     static constexpr const char *kDebugViewNames[] = {

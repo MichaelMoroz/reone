@@ -107,9 +107,14 @@ public struct PtPushConstants {
     public float sunIntensity;
     public uint traceFlags;
     public uint bounceCount;
-    // Angular radius of light sources, radians. Never zero - a light source
-    // is never a point: points wide for soft penumbras, the sun fairly sharp.
-    public float pointAngularRadius;
+    // A point light's emitter radius as a fraction of its authored influence
+    // radius. KotOR authored no emitter size and the influence radius is a
+    // range, so the fraction is a dial. It is brightness-neutral by
+    // construction - see ptSphereLight - and moves only penumbra width and
+    // how bright a surface can get right against the lamp.
+    public float emitterRadiusRatio;
+    // The sun is not placed at a physical distance, so its angular radius
+    // stays an authored number rather than falling out of a solid angle.
     public float sunAngularRadius;
     /** Scene-referred exposure applied before the tonemap. */
     public float exposure;

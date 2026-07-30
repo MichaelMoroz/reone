@@ -77,7 +77,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("pttracestats", value<bool>()->default_value(options->graphics.ptTraceStats), "enable path tracing statistics")       //
         ("pttonemap", value<int>()->default_value(options->graphics.ptTonemap), "path tracing display transform")              //
         ("ptexposure", value<float>()->default_value(options->graphics.ptExposure), "path tracing exposure")                   //
-        ("ptpointangularsize", value<float>()->default_value(options->graphics.ptPointAngularSize), "path tracing point-light angular size") //
+        ("ptpointemitterratio", value<float>()->default_value(options->graphics.ptPointEmitterRatio), "path tracing point-light emitter radius, as a fraction of influence radius") //
         ("ptsunangularsize", value<float>()->default_value(options->graphics.ptSunAngularSize), "path tracing sun angular size") //
         ("ssao", value<bool>()->default_value(options->graphics.ssao), "enable screen-space ambient occlusion")                 //
         ("ssr", value<bool>()->default_value(options->graphics.ssr), "enable screen-space reflections")                         //
@@ -190,7 +190,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptTraceStats = vars["pttracestats"].as<bool>();
     options->graphics.ptTonemap = std::clamp(vars["pttonemap"].as<int>(), 0, 1);
     options->graphics.ptExposure = std::max(0.05f, vars["ptexposure"].as<float>());
-    options->graphics.ptPointAngularSize = std::max(0.05f, vars["ptpointangularsize"].as<float>());
+    options->graphics.ptPointEmitterRatio = std::clamp(vars["ptpointemitterratio"].as<float>(), 0.01f, 0.5f);
     options->graphics.ptSunAngularSize = std::max(0.05f, vars["ptsunangularsize"].as<float>());
     options->graphics.ssao = vars["ssao"].as<bool>();
     options->graphics.ssr = vars["ssr"].as<bool>();

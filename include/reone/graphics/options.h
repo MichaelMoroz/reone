@@ -127,9 +127,22 @@ struct GraphicsOptions {
     int ptTonemap {1};
     /** Scene-referred exposure ahead of the tonemap. */
     float ptExposure {1.0f};
-    /** Angular radius of light sources, degrees. Never zero: a light source
-        is never a point. Points wide for soft penumbras, the sun sharp. */
-    float ptPointAngularSize {8.0f};
+    /**
+     * A point light's emitter radius as a fraction of its authored influence
+     * radius - it is a sphere, so its subtended solid angle is both its
+     * falloff and its penumbra.
+     *
+     * The influence radius cannot be the emitter radius: it is a range, culled
+     * at radius + 64 and promoted to a directional sun past 100, so a lamp
+     * would be a room-sized ball. KotOR authored no emitter size, hence a
+     * fraction. Brightness-neutral by construction, so this grades penumbra
+     * width and how hot a surface can get right against a lamp, nothing else.
+     * At 0.2 a radius-5 ceiling panel is a 1-unit fixture subtending 11.5
+     * degrees at its own influence radius, against the 8 degrees the old
+     * fixed cone gave every light at every distance.
+     */
+    float ptPointEmitterRatio {0.2f};
+    /** The sun is not at a physical distance, so it keeps an angle. Degrees. */
     float ptSunAngularSize {1.0f};
     /**
      * Live per-category material overrides for the traced image - the

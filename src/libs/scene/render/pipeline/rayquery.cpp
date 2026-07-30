@@ -1322,7 +1322,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                       (static_cast<uint32_t>(std::clamp(_options.ptDebugView, 0, 12)) << 4) |
                                       (static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)) << 8),
                                   static_cast<uint32_t>(std::clamp(_options.ptBounces, 1, 8)),
-                                  glm::radians(std::clamp(_options.ptPointAngularSize, 0.05f, 45.0f)),
+                                  std::clamp(_options.ptPointEmitterRatio, 0.01f, 0.5f),
                                   glm::radians(std::clamp(_options.ptSunAngularSize, 0.05f, 10.0f)),
                                   std::max(0.01f, _options.ptExposure)};
     vkCmdPushConstants(cmd, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), &constants);
