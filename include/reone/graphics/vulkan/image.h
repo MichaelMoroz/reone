@@ -148,6 +148,12 @@ public:
      */
     VkImageView renderView(int cube, int mip);
 
+    /** A cube view of one cube in a cube-compatible image, for SamplerCube. */
+    VkImageView cubeView(int cube);
+
+    /** One face of a cube, suitable for a per-face dynamic-rendering pass. */
+    VkImageView faceRenderView(int cube, int face, int mip = 0);
+
     int mipLevels() const { return _mipLevels; }
 
     /**
@@ -218,6 +224,8 @@ private:
     int _mipLevels {1};
     /** Keyed on cube * mipLevels + mip; see renderView. */
     std::unordered_map<int, VkImageView> _renderViews;
+    std::unordered_map<int, VkImageView> _cubeViews;
+    std::unordered_map<int, VkImageView> _faceRenderViews;
     VmaAllocation _allocation {VK_NULL_HANDLE};
     glm::ivec2 _extent {0};
     VkFormat _format {VK_FORMAT_UNDEFINED};

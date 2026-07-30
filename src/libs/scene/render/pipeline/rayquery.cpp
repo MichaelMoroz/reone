@@ -7,12 +7,17 @@
 #include <algorithm>
 
 #include "reone/graphics/options.h"
+#include "reone/graphics/texture.h"
+#include "reone/graphics/textureutil.h"
 #include "reone/graphics/uniforms.h"
 
 #include "reone/graphics/vulkan/accelerationstructure.h"
 #include "reone/graphics/vulkan/descriptors.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/image.h"
+#include "reone/graphics/vulkan/mesh.h"
+#include "reone/graphics/vulkan/pipeline.h"
+#include "reone/graphics/vulkan/pipelinecache.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/scene/node/model.h"
@@ -27,6 +32,8 @@
 #include <map>
 #include <cstddef>
 #include <cstring>
+
+#include <glm/gtc/matrix_transform.hpp>
 
 using namespace reone::graphics;
 
@@ -155,6 +162,14 @@ static_assert(offsetof(SceneObject, srcVertexAddress) == 96);
 static_assert(offsetof(SceneObject, vertexCount) == 144);
 static_assert(sizeof(SceneObject) == 176);
 
+// Sky cubemap face resolution. Measured on danm14ab against the geometry sky
+// it replaces, as a ratio of surviving horizontal detail: 512 keeps 0.59,
+// 1024 keeps 0.73, 2048 keeps 0.77 for four times the memory. The curve is
+// already flattening at 1024, so the rest of the gap is resampling and
+// filtering rather than resolution, and paying 192 MB for it buys little.
+// Frame time is flat across all three.
+static constexpr uint32_t kSkyCubeSize = 1024;
+
 Matrix3x4 matrix3x4(const glm::mat4 &m) {
     return {{m[0][0], m[1][0], m[2][0], m[3][0]},
             {m[0][1], m[1][1], m[2][1], m[3][1]},
@@ -264,7 +279,7 @@ void RayQueryPipeline::init() {
     if (_bindlessTextureCapacity == 0) {
         throw std::runtime_error("Vulkan: ray-query bindless texture capacity is zero");
     }
-    VkDescriptorSetLayoutBinding bindings[9] {};
+    VkDescriptorSetLayoutBinding bindings[10] {};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[0].descriptorCount = 1;
@@ -296,23 +311,26 @@ void RayQueryPipeline::init() {
     bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[8].descriptorCount = _bindlessTextureCapacity;
     bindings[8].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    VkDescriptorBindingFlags bindingFlags[9] {};
+    bindings[9].binding = 9;
+    bindings[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[9].descriptorCount = 1;
+    bindings[9].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorBindingFlags bindingFlags[10] {};
     bindingFlags[7] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
                       VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-    // Vulkan permits only the highest binding to have a variable descriptor
-    // count. Binding 8 is the array-texture runtime array and therefore owns
-    // that flag; bindings 4 through 7 must remain below it.
+    // The sky cube occupies binding 9, so the two bindless ranges keep their
+    // fixed device-limit allocation rather than using Vulkan's highest-binding
+    // variable-descriptor-count rule.
     bindingFlags[8] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
-                      VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
-                      VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+                      VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo {
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    bindingFlagsInfo.bindingCount = 9;
+    bindingFlagsInfo.bindingCount = 10;
     bindingFlagsInfo.pBindingFlags = bindingFlags;
     VkDescriptorSetLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layoutInfo.pNext = &bindingFlagsInfo;
     layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    layoutInfo.bindingCount = 9;
+    layoutInfo.bindingCount = 10;
     layoutInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device.handle(), &layoutInfo, nullptr, &_layout) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: ray-query descriptor layout creation failed");
@@ -321,7 +339,7 @@ void RayQueryPipeline::init() {
                                   {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 2},
                                   {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12},
                                   {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                   4 * _bindlessTextureCapacity}};
+                                   4 * _bindlessTextureCapacity + 2}};
     VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     poolInfo.maxSets = 2; poolInfo.poolSizeCount = 4; poolInfo.pPoolSizes = sizes;
@@ -329,16 +347,19 @@ void RayQueryPipeline::init() {
         throw std::runtime_error("Vulkan: ray-query descriptor pool creation failed");
     VkDescriptorSetAllocateInfo alloc {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     std::array<VkDescriptorSetLayout, 2> setLayouts {_layout, _layout};
-    std::array<uint32_t, 2> variableCounts {_bindlessTextureCapacity, _bindlessTextureCapacity};
-    VkDescriptorSetVariableDescriptorCountAllocateInfo variableCountInfo {
-        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO};
-    variableCountInfo.descriptorSetCount = static_cast<uint32_t>(variableCounts.size());
-    variableCountInfo.pDescriptorCounts = variableCounts.data();
-    alloc.pNext = &variableCountInfo;
     alloc.descriptorPool = _pool; alloc.descriptorSetCount = static_cast<uint32_t>(setLayouts.size());
     alloc.pSetLayouts = setLayouts.data();
     if (vkAllocateDescriptorSets(device.handle(), &alloc, _sets.data()) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: ray-query descriptor allocation failed");
+
+    // A descriptor is required even when no room qualifies. Sampling is gated
+    // in the shader, but this black cube keeps the descriptor type valid.
+    const float black[4] {0.0f, 0.0f, 0.0f, 1.0f};
+    _skyFallbackCube = std::make_unique<VulkanImage>(device);
+    _skyFallbackCube->initSampledLayered({1, 1}, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                         kNumCubeFaces, true, black);
+    _skyFallbackCube->setSampler(
+        _renderer.resources().samplers().get(getTextureProperties(TextureUsage::ColorBuffer)));
 
     // The NRD output split: seven storage images in their own set, because
     // the main set's bindless arrays hold the variable-descriptor-count slot
@@ -661,6 +682,198 @@ void RayQueryPipeline::clearFrame(Frame &frame) {
     frame.instances.reset(); frame.materials.reset(); frame.traceStats.reset();
 }
 
+bool RayQueryPipeline::bakeSkyRoom(VkCommandBuffer cmd,
+                                   RenderRegistry &registry,
+                                   const ModelSceneNode &room,
+                                   const glm::vec3 &origin) {
+    // A failed bake is deliberately sticky for this detected room: geometry is
+    // the safe fallback, and retrying a known-invalid asset every frame would
+    // turn that safety path into a standing cost.
+    if (_skyCubeRoom == &room) {
+        return _skyCubeReady;
+    }
+    _skyCubeRoom = &room;
+    _skyCubeReady = false;
+
+    std::vector<const RegisteredMesh *> skyMeshes;
+    for (const auto &object : registry.objects()) {
+        const auto *mesh = std::get_if<RegisteredMesh>(&object);
+        if (!mesh || mesh->cullRoot != &room || !registry.isObjectEnabled(mesh->id.index)) continue;
+        if ((mesh->categories & (renderCategory(RenderCategory::Opaque) |
+                                 renderCategory(RenderCategory::Transparent))) == 0) {
+            continue;
+        }
+        // The bake is a fixed, module-load snapshot. Do not silently freeze a
+        // deforming room or substitute a missing texture for its backdrop.
+        if (!std::holds_alternative<std::monostate>(mesh->deformation)) return false;
+        const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)];
+        if (!texture || !VulkanResources::supported(texture->pixelFormat())) return false;
+        skyMeshes.push_back(mesh);
+    }
+    if (skyMeshes.empty()) return false;
+
+    auto &device = _renderer.device();
+    auto &resources = _renderer.resources();
+    auto &ring = _renderer.uniformRing();
+    auto &descriptors = _renderer.descriptors();
+    const bool hadCube = _skyCube != nullptr;
+    if (!_skyCube) {
+        _skyCube = std::make_unique<VulkanImage>(device);
+        _skyCube->initCubeArrayAttachment({kSkyCubeSize, kSkyCubeSize}, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1);
+        _skyCube->setSampler(
+            resources.samplers().get(getTextureProperties(TextureUsage::ColorBuffer)));
+        device.setObjectName(VK_OBJECT_TYPE_IMAGE,
+                             reinterpret_cast<uint64_t>(_skyCube->handle()), "Path-traced sky cube");
+    }
+    bool createDepth = !_skyDepth[0];
+    if (createDepth) {
+        for (auto &depth : _skyDepth) {
+            depth = std::make_unique<VulkanImage>(device);
+            depth->initDepth({kSkyCubeSize, kSkyCubeSize}, VK_FORMAT_D32_SFLOAT);
+        }
+    }
+
+    auto transition = [&](VkImageLayout from, VkImageLayout to,
+                          VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+                          VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
+        VkImageMemoryBarrier2 barrier {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        barrier.srcStageMask = srcStage;
+        barrier.srcAccessMask = srcAccess;
+        barrier.dstStageMask = dstStage;
+        barrier.dstAccessMask = dstAccess;
+        barrier.oldLayout = from;
+        barrier.newLayout = to;
+        barrier.image = _skyCube->handle();
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.layerCount = kNumCubeFaces;
+        VkDependencyInfo dependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.imageMemoryBarrierCount = 1;
+        dependency.pImageMemoryBarriers = &barrier;
+        vkCmdPipelineBarrier2(cmd, &dependency);
+    };
+    transition(hadCube ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+               hadCube ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+               hadCube ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
+               VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+               VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    if (createDepth) {
+        std::array<VkImageMemoryBarrier2, kNumCubeFaces> depthBarriers {};
+        for (int face = 0; face < kNumCubeFaces; ++face) {
+            auto &barrier = depthBarriers[face];
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                   VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            barrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            barrier.image = _skyDepth[face]->handle();
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.layerCount = 1;
+        }
+        VkDependencyInfo dependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.imageMemoryBarrierCount = static_cast<uint32_t>(depthBarriers.size());
+        dependency.pImageMemoryBarriers = depthBarriers.data();
+        vkCmdPipelineBarrier2(cmd, &dependency);
+    }
+
+    static const glm::vec3 kDirections[kNumCubeFaces] {
+        { 1.0f,  0.0f,  0.0f}, {-1.0f,  0.0f,  0.0f},
+        { 0.0f,  1.0f,  0.0f}, { 0.0f, -1.0f,  0.0f},
+        { 0.0f,  0.0f,  1.0f}, { 0.0f,  0.0f, -1.0f},
+    };
+    static const glm::vec3 kUps[kNumCubeFaces] {
+        {0.0f, -1.0f,  0.0f}, {0.0f, -1.0f,  0.0f},
+        {0.0f,  0.0f,  1.0f}, {0.0f,  0.0f, -1.0f},
+        {0.0f, -1.0f,  0.0f}, {0.0f, -1.0f,  0.0f},
+    };
+    const glm::mat4 projection = glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 10000.0f);
+    const VkViewport viewport {0.0f, 0.0f, static_cast<float>(kSkyCubeSize), static_cast<float>(kSkyCubeSize), 0.0f, 1.0f};
+    const VkRect2D scissor {{0, 0}, {kSkyCubeSize, kSkyCubeSize}};
+    const auto uniformSet = _renderer.uniformSet();
+
+    for (int face = 0; face < kNumCubeFaces; ++face) {
+        VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        attachment.imageView = _skyCube->faceRenderView(0, face);
+        attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+        VkRenderingAttachmentInfo depthAttachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        depthAttachment.imageView = _skyDepth[face]->view();
+        depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.clearValue.depthStencil = {1.0f, 0};
+        VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+        rendering.renderArea.extent = {kSkyCubeSize, kSkyCubeSize};
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &attachment;
+        rendering.pDepthAttachment = &depthAttachment;
+
+        GlobalUniforms globals;
+        globals.reset();
+        globals.projection = projection;
+        globals.projectionInv = glm::inverse(projection);
+        globals.view = glm::lookAt(origin, origin + kDirections[face], kUps[face]);
+        globals.viewInv = glm::inverse(globals.view);
+        globals.viewProjection = globals.projection * globals.view;
+        globals.prevViewProjection = globals.viewProjection;
+        globals.cameraPosition = glm::vec4(origin, 1.0f);
+        std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+        offsets[UniformBlockBindingPoints::globals] = ring.push(globals);
+
+        vkCmdBeginRendering(cmd, &rendering);
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        for (const auto *mesh : skyMeshes) {
+            const auto &vkMesh = resources.get(mesh->mesh.get());
+            VulkanPipelineCache::Key key;
+            key.module = "pbr_model";
+            key.vertexEntry = "staticVertex";
+            key.fragmentEntry = "skyBakeFragment";
+            key.colorFormats = {_skyCube->format()};
+            key.depthFormat = VK_FORMAT_D32_SFLOAT;
+            key.depthTest = true;
+            key.depthWrite = true;
+            key.cull = FaceCullMode::None;
+            key.vertexBindings = VulkanMesh::bindingDescriptions(mesh->mesh.get().vertexLayout());
+            key.vertexAttributes = VulkanMesh::attributeDescriptions(mesh->mesh.get().vertexLayout());
+            auto &pipeline = _renderer.pipelines().get(key);
+
+            LocalUniforms locals;
+            locals.reset();
+            locals.model = mesh->transform;
+            locals.modelInv = mesh->transformInv;
+            locals.prevModel = mesh->prevTransform;
+            locals.uv = mesh->material.uv;
+            offsets[UniformBlockBindingPoints::locals] = ring.push(locals);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                                    VulkanDescriptors::kUniformSet, 1, &uniformSet,
+                                    static_cast<uint32_t>(offsets.size()), offsets.data());
+            const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)];
+            auto textureSet = descriptors.acquireTextureSet(
+                _renderer.frameIndex(), {{TextureUnits::mainTex, &resources.get(*texture)}});
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                                    VulkanDescriptors::kTextureSet, 1, &textureSet, 0, nullptr);
+            vkMesh.draw(cmd, resources.zeroBuffer());
+        }
+        vkCmdEndRendering(cmd);
+    }
+
+    transition(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+               VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    _skyCubeReady = true;
+    info("Vulkan: baked sky room '" + room.model().name() + "' into a " + std::to_string(kSkyCubeSize) + "px cubemap",
+         LogChannel::Graphics);
+    return true;
+}
+
 void RayQueryPipeline::deinit() {
     for (auto &frame : _frames) {
         clearFrame(frame);
@@ -730,6 +943,11 @@ void RayQueryPipeline::deinit() {
 #endif
     _bindlessTextureCapacity = 0;
     _lastBindlessTextureCount = 0;
+    _skyCube.reset();
+    for (auto &depth : _skyDepth) depth.reset();
+    _skyFallbackCube.reset();
+    _skyCubeRoom = nullptr;
+    _skyCubeReady = false;
     _lastAuxFrame = -1;
     _inited = false;
 }
@@ -848,6 +1066,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         }
     }
     const ModelSceneNode *skyRoom = nullptr;
+    glm::vec3 skyOrigin(0.0f);
     if (!sceneryRooms.empty()) {
         glm::vec3 sceneExtent = glm::max(sceneMax - sceneMin, glm::vec3(1e-3f));
         float bestVolume = 0.0f;
@@ -861,6 +1080,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             if (volume > bestVolume) {
                 bestVolume = volume;
                 skyRoom = room;
+                skyOrigin = 0.5f * (candidate.boundsMin + candidate.boundsMax);
             }
         }
         if (skyRoom && _frameNumber == 0) {
@@ -870,6 +1090,22 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     // Published for the registry panel's classification column: the panel
     // reports the actual decision, not a re-derivation of it.
     registry.setSkyRoom(skyRoom);
+    bool skyBaked = false;
+    if (skyRoom) {
+        try {
+            skyBaked = bakeSkyRoom(cmd, registry, *skyRoom, skyOrigin);
+        } catch (const std::exception &e) {
+            // Never trade a heuristic misfire or a broken bake for removed
+            // scene geometry. Keep the room in the merged BLAS this frame.
+            _skyCubeReady = false;
+            warn("Vulkan: sky bake failed for '" + skyRoom->model().name() + "': " + e.what() +
+                     "; keeping sky geometry",
+                 LogChannel::Graphics);
+        }
+    } else {
+        _skyCubeRoom = nullptr;
+        _skyCubeReady = false;
+    }
     for (const auto &object : registry.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
         if (!mesh) continue;
@@ -882,6 +1118,13 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         // traced shadows already test the real surfaces.
         if ((mesh->categories & (renderCategory(RenderCategory::Opaque) |
                                  renderCategory(RenderCategory::Transparent))) == 0) {
+            continue;
+        }
+        // The cubemap is ready only after the room's complete textured raster
+        // bake. Until then preserve the old geometry path exactly, including
+        // its candidate rejection for shadow rays.
+        if (skyBaked && mesh->cullRoot == skyRoom) {
+            ++_lastSky;
             continue;
         }
         // Saber displacement is a small whole-blade animation. A rigid blade
@@ -1449,6 +1692,17 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[6].dstSet = set; writes[6].dstBinding = 6;
     writes[6].descriptorCount = 1; writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[6].pBufferInfo = &mergedMaterialIds;
     vkUpdateDescriptorSets(device.handle(), 7, writes, 0, nullptr);
+    const VulkanImage &skyImage = skyBaked ? *_skyCube : *_skyFallbackCube;
+    VkDescriptorImageInfo skyInfo {
+        skyImage.sampler(), skyBaked ? _skyCube->cubeView(0) : _skyFallbackCube->view(),
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet skyWrite {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    skyWrite.dstSet = set;
+    skyWrite.dstBinding = 9;
+    skyWrite.descriptorCount = 1;
+    skyWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    skyWrite.pImageInfo = &skyInfo;
+    vkUpdateDescriptorSets(device.handle(), 1, &skyWrite, 0, nullptr);
     // Texture ids are assigned by VulkanResources at upload time. The set is
     // update-after-bind and partially-bound so new assets can take a slot
     // without rebuilding it or populating unrelated descriptors.
@@ -1552,7 +1806,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                   glm::radians(std::clamp(_options.ptSunAngularSize, 0.05f, 10.0f)),
                                   std::max(0.01f, _options.ptExposure),
                                   0,
-                                  static_cast<uint32_t>(opaqueTriangleCount)};
+                                  static_cast<uint32_t>(opaqueTriangleCount),
+                                  skyBaked ? 1u : 0u};
     vkCmdPushConstants(cmd, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), &constants);
     vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8), static_cast<uint32_t>((_extent.y + 7) / 8), 1);
 #ifdef R_ENABLE_NRD

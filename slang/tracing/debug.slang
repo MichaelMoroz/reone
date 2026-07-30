@@ -58,6 +58,9 @@ public struct PtDebug {
     /** Views 7-11 inspect the output split at the end of the kernel. */
     public bool wantsChannelView() { return view >= kPtDebugDiffuseChannel; }
 
+    /** A baked background has no hit record but remains the sky category. */
+    public float3 skyMissColor() { return float3(0.1, 0.8, 0.9); }
+
     public float3 surfaceColor(HitGeometry hit, SurfaceShading shading, float3 rayDirection) {
         float shape = 0.35 + 0.65 * abs(dot(shading.normal, -rayDirection));
         switch (view) {

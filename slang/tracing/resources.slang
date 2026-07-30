@@ -82,6 +82,10 @@ public struct MergedVertex {
 // Animated grayscale bump maps are Texture2DArray assets. They cannot share
 // bindlessTextures: a Sampler2D descriptor has a different Vulkan view type.
 [[vk::binding(8, 1)]] public Sampler2DArray bindlessTextureArrays[];
+// The baked room background is an environment only for visibility rays. It is
+// deliberately a single cube rather than a bindless resource: there is at
+// most one selected sky room per module.
+[[vk::binding(9, 1)]] public SamplerCube skyCube;
 
 public struct PtPushConstants {
     public uint frameIndex;
@@ -113,6 +117,8 @@ public struct PtPushConstants {
     public float exposure;
     public uint geometryBase0;
     public uint geometryBase1;
+    /** A successful sky-room bake exists; otherwise geometry remains admitted. */
+    public uint skyAvailable;
 };
 [[vk::push_constant]] public PtPushConstants pushConstants;
 
@@ -169,6 +175,10 @@ public float2 ptTransformedUV(InstanceMaterial material, float2 uv) {
     float3 h = float3(uv, 1.0);
     return float2(material.uv0.x * h.x + material.uv1.x * h.y + material.uv2.x * h.z,
                   material.uv0.y * h.x + material.uv1.y * h.y + material.uv2.y * h.z);
+}
+
+public float3 ptSkyRadiance(float3 direction) {
+    return skyCube.SampleLevel(normalize(direction), 0.0).rgb * pushConstants.skyIntensity;
 }
 
 /** Narrow material-buffer fetch for alpha-tested traversal. */

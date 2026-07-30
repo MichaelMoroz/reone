@@ -23,6 +23,7 @@ struct GraphicsOptions;
 }
 namespace reone::scene {
 class RenderRegistry;
+class ModelSceneNode;
 
 /** Vulkan-only primary-ray diagnostic. It deliberately owns no raster pass. */
 class RayQueryPipeline : boost::noncopyable {
@@ -114,6 +115,12 @@ private:
     uint32_t _lastShadowRays {0};
     uint32_t _bindlessTextureCapacity {0};
     uint32_t _lastBindlessTextureCount {0};
+    /** The detected room baked from its own bounds centre, or null on fallback. */
+    const ModelSceneNode *_skyCubeRoom {nullptr};
+    bool _skyCubeReady {false};
+    std::unique_ptr<graphics::VulkanImage> _skyCube;
+    std::array<std::unique_ptr<graphics::VulkanImage>, 6> _skyDepth;
+    std::unique_ptr<graphics::VulkanImage> _skyFallbackCube;
     /** Must match PushConstants in slang/rayquery.slang. */
     struct TracePushConstants {
         uint32_t frameIndex;
@@ -133,6 +140,7 @@ private:
         float exposure;
         uint32_t geometryBase0;
         uint32_t geometryBase1;
+        uint32_t skyAvailable;
     };
 
     /** Must match PushConstants in slang/skin.slang. */
@@ -218,5 +226,9 @@ private:
                             uint32_t boneCount,
                             uint32_t vertexCount,
                             uint32_t triangleCount);
+    bool bakeSkyRoom(VkCommandBuffer cmd,
+                     RenderRegistry &registry,
+                     const ModelSceneNode &room,
+                     const glm::vec3 &origin);
 };
 } // namespace reone::scene

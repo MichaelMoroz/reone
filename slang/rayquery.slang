@@ -140,6 +140,13 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     }
     outputs.noiseFree = layerEmission;
     if (!primary.hit) {
+        if (pushConstants.skyAvailable != 0) {
+            outputs.noiseFree += ptSkyRadiance(ray.Direction);
+            if (debug.wantsSurfaceView()) {
+                outputImage[pixel] = float4(debug.skyMissColor(), 1.0);
+                return;
+            }
+        }
         finishPixel(pixel, outputs, debug);
         return;
     }
@@ -265,6 +272,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
             if (!bounce.hit) {
                 if (statsOn) ++secondaryMisses;
                 if (firstScatterT < 0.0 && scatters > 0) firstScatterT = kPtInfDistance;
+                if (pushConstants.skyAvailable != 0) {
+                    pathRadiance += pathWeight * ptSkyRadiance(path.Direction);
+                }
                 break;
             }
             if (firstScatterT < 0.0 && scatters > 0) firstScatterT = bounce.hitT;

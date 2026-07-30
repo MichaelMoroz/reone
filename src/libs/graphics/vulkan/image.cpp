@@ -738,6 +738,50 @@ VkImageView VulkanImage::renderView(int cube, int mip) {
     return view;
 }
 
+VkImageView VulkanImage::cubeView(int cube) {
+    auto existing = _cubeViews.find(cube);
+    if (existing != _cubeViews.end()) {
+        return existing->second;
+    }
+    VkImageViewCreateInfo viewInfo {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = _image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+    viewInfo.format = _format;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.levelCount = static_cast<uint32_t>(_mipLevels);
+    viewInfo.subresourceRange.baseArrayLayer = static_cast<uint32_t>(cube * kNumCubeFaces);
+    viewInfo.subresourceRange.layerCount = kNumCubeFaces;
+    VkImageView view {VK_NULL_HANDLE};
+    if (vkCreateImageView(_device.handle(), &viewInfo, nullptr, &view) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: cube image view creation failed");
+    }
+    _cubeViews.insert({cube, view});
+    return view;
+}
+
+VkImageView VulkanImage::faceRenderView(int cube, int face, int mip) {
+    int key = (cube * _mipLevels + mip) * kNumCubeFaces + face;
+    auto existing = _faceRenderViews.find(key);
+    if (existing != _faceRenderViews.end()) {
+        return existing->second;
+    }
+    VkImageViewCreateInfo viewInfo {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = _image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = _format;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = static_cast<uint32_t>(mip);
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = static_cast<uint32_t>(cube * kNumCubeFaces + face);
+    viewInfo.subresourceRange.layerCount = 1;
+    VkImageView view {VK_NULL_HANDLE};
+    if (vkCreateImageView(_device.handle(), &viewInfo, nullptr, &view) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: cube-face render view creation failed");
+    }
+    _faceRenderViews.insert({key, view});
+    return view;
+}
+
 void VulkanImage::initColorAttachment(glm::ivec2 extent, VkFormat format) {
     _extent = extent;
     _format = format;
@@ -922,6 +966,14 @@ void VulkanImage::deinit() {
         vkDestroyImageView(_device.handle(), view, nullptr);
     }
     _renderViews.clear();
+    for (auto &[key, view] : _cubeViews) {
+        vkDestroyImageView(_device.handle(), view, nullptr);
+    }
+    _cubeViews.clear();
+    for (auto &[key, view] : _faceRenderViews) {
+        vkDestroyImageView(_device.handle(), view, nullptr);
+    }
+    _faceRenderViews.clear();
     if (_view != VK_NULL_HANDLE) {
         vkDestroyImageView(_device.handle(), _view, nullptr);
         _view = VK_NULL_HANDLE;

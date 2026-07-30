@@ -132,8 +132,11 @@ public float ptShadowTransmittance(float3 origin, float3 geometricNormal, float3
         if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
         uint geometryIndex = query.CandidateGeometryIndex();
         uint materialIndex = materialIndexFor(geometryIndex, query.CandidatePrimitiveIndex());
+        // Baked sky triangles are absent. This preserves the old sky-room
+        // shadow behavior only when the safety fallback keeps them in the TLAS.
+        if (pushConstants.skyAvailable == 0 &&
+            (instanceMaterials[materialIndex].featureMask & kPtMaskSky) != 0) continue;
         if (instanceMaterials[materialIndex].surfaceType == kPtSurfaceUnlitTransparent) continue;
-        if ((instanceMaterials[materialIndex].featureMask & kPtMaskSky) != 0) continue;
         if ((instanceMaterials[materialIndex].featureMask & kPtMaskPunchThrough) != 0) {
             uint3 indices = ptTriangleIndices(geometryIndex, query.CandidatePrimitiveIndex());
             float2 barycentrics = query.CandidateTriangleBarycentrics();
