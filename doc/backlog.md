@@ -208,7 +208,36 @@ noise, and it buys optimal traversal, no refit drift, no static/dynamic split, n
 threshold and a top level of one instance. **Rebuild everything, every frame, one structure** —
 unless the two caveats below bite.
 
-Two things in the same data matter as much as the headline:
+### Memory cost: also a non-issue, which removes the other objection
+
+zeux.io, *Measuring acceleration structures* (2025-03-31), measures BLAS **memory** on Bistro
+(1.754M triangles, fp16 positions, `PREFER_FAST_TRACE`, compacted, Vulkan 1.4) across a wide
+spread of hardware:
+
+| | bytes / triangle | our 86k scene |
+|---|---|---|
+| NVIDIA RTX 3050 / 4090 | 25.7 - 26.5 | **~2.2 MB** |
+| AMD RDNA4 | 47.9 | ~4.1 MB |
+| AMD RDNA3 | 57.0 | ~4.9 MB |
+
+The registration plan's stated cost for merging is memory — "vertices must be pre-transformed to
+world space, so nothing is shared and the merged buffer is as large as the static set… memory and
+a build, against traversal". At this scale that trade does not exist: the structure is single-digit
+megabytes even on the worst hardware in the table, and the un-shared world-space vertex buffer is
+of the same order. Merging costs essentially nothing in memory here.
+
+Two further notes from that source: **compaction is worth doing** (those figures are post-compaction,
+via `VK_KHR_acceleration_structure`, and `vulkan-rt-backend.md` already lists it as "worth it, and
+cheap once the build path works"); and **AMD spends roughly twice NVIDIA's memory per triangle**,
+which is a hardware format difference rather than anything actionable, but is worth knowing before
+sizing pools on an AMD target.
+
+**Do not conflate the two sources.** zeux measures memory only — it covers neither build time,
+granularity overhead, refit, nor Vulkan-versus-D3D12 — so the build figures above remain Tellusim's,
+at a different scene and scale, and both are extrapolations rather than measurements of this
+renderer. Item 2.5 (GPU timing) is still what turns any of this into fact.
+
+Two things in the Tellusim data matter as much as its headline:
 
 - **Many small structures are worse, and measurably.** 2401 BLAS of 1.5K triangles refit in
   7.0 ms, while 81 BLAS of 52K — *more* total geometry — refit in 3.7 ms. Per-structure overhead
