@@ -17,8 +17,6 @@
 
 #include "reone/graphics/uniforms.h"
 
-#include "reone/graphics/backend.h"
-
 #include "reone/graphics/context.h"
 
 // Compiles the generated std140 assertions. Included here rather than from the
@@ -31,13 +29,9 @@ namespace reone {
 namespace graphics {
 
 void Uniforms::init() {
-    if (isVulkanBackend()) {
-        // These are OpenGL uniform buffers, never initialised on the Vulkan
-        // path. Vulkan writes its uniforms into a per-frame arena instead
-        // (VulkanUniformRing), so callers shared with the GL path can keep
-        // calling these and have them do nothing.
-        return;
-    }
+}
+
+void Uniforms::initGL() {
     if (_inited) {
         return;
     }
@@ -99,122 +93,42 @@ void Uniforms::deinit() {
 
 void Uniforms::setGlobals(const std::function<void(GlobalUniforms &)> &block) {
     block(_globals);
-    if (isVulkanBackend()) {
-        // The mirror above is still wanted - the Vulkan pipeline reads it and
-        // pushes it into that frame's arena - but these are OpenGL buffers that
-        // were never initialised, so the upload is skipped.
-        return;
-    }
-    _context.bindUniformBuffer(*_ubGlobals, UniformBlockBindingPoints::globals);
-    _ubGlobals->setData(&_globals, sizeof(GlobalUniforms));
 }
 
 void Uniforms::setLocals(const std::function<void(LocalUniforms &)> &block) {
     block(_locals);
-    if (isVulkanBackend()) {
-        // The mirror above is still wanted - the Vulkan pipeline reads it and
-        // pushes it into that frame's arena - but these are OpenGL buffers that
-        // were never initialised, so the upload is skipped.
-        return;
-    }
-    _context.bindUniformBuffer(*_ubLocals, UniformBlockBindingPoints::locals);
-    _ubLocals->setData(&_locals, sizeof(LocalUniforms));
 }
 
 void Uniforms::setBones(const std::function<void(BoneUniforms &)> &block) {
     block(_bones);
-    if (isVulkanBackend()) {
-        // The mirror above is still wanted - the Vulkan pipeline reads it and
-        // pushes it into that frame's arena - but these are OpenGL buffers that
-        // were never initialised, so the upload is skipped.
-        return;
-    }
-    _context.bindUniformBuffer(*_ubBones, UniformBlockBindingPoints::bones);
-    _ubBones->setData(&_bones, sizeof(BoneUniforms));
 }
 
 void Uniforms::setDangly(const std::function<void(DanglyUniforms &)> &block) {
     block(_dangly);
-    if (isVulkanBackend()) {
-        // The mirror above is still wanted - the Vulkan pipeline reads it and
-        // pushes it into that frame's arena - but these are OpenGL buffers that
-        // were never initialised, so the upload is skipped.
-        return;
-    }
-    _context.bindUniformBuffer(*_ubDangly, UniformBlockBindingPoints::dangly);
-    _ubDangly->setData(&_dangly, sizeof(DanglyUniforms));
 }
 
 void Uniforms::setParticles(const std::function<void(ParticleUniforms &)> &block) {
     block(_particles);
-    if (isVulkanBackend()) {
-        // The mirror above is still wanted - the Vulkan pipeline reads it and
-        // pushes it into that frame's arena - but these are OpenGL buffers that
-        // were never initialised, so the upload is skipped.
-        return;
-    }
-    _context.bindUniformBuffer(*_ubParticles, UniformBlockBindingPoints::particles);
-    _ubParticles->setData(&_particles, sizeof(ParticleUniforms));
 }
 
 void Uniforms::setGrass(const std::function<void(GrassUniforms &)> &block) {
     block(_grass);
-    if (isVulkanBackend()) {
-        // The mirror above is still wanted - the Vulkan pipeline reads it and
-        // pushes it into that frame's arena - but these are OpenGL buffers that
-        // were never initialised, so the upload is skipped.
-        return;
-    }
-    _context.bindUniformBuffer(*_ubGrass, UniformBlockBindingPoints::grass);
-    _ubGrass->setData(&_grass, sizeof(GrassUniforms));
 }
 
 void Uniforms::setWalkmesh(const std::function<void(WalkmeshUniforms &)> &block) {
     block(_walkmesh);
-    if (isVulkanBackend()) {
-        // The mirror above is still wanted - the Vulkan pipeline reads it and
-        // pushes it into that frame's arena - but these are OpenGL buffers that
-        // were never initialised, so the upload is skipped.
-        return;
-    }
-    _context.bindUniformBuffer(*_ubWalkmesh, UniformBlockBindingPoints::walkmesh);
-    _ubWalkmesh->setData(&_walkmesh, sizeof(WalkmeshUniforms));
 }
 
 void Uniforms::setAABB(const std::function<void(AABBUniforms &)> &block) {
     block(_aabb);
-    if (isVulkanBackend()) {
-        // The mirror above is still wanted - the Vulkan pipeline reads it and
-        // pushes it into that frame's arena - but these are OpenGL buffers that
-        // were never initialised, so the upload is skipped.
-        return;
-    }
-    _context.bindUniformBuffer(*_ubAABB, UniformBlockBindingPoints::aabb);
-    _ubAABB->setData(&_aabb, sizeof(AABBUniforms));
 }
 
 void Uniforms::setText(const std::function<void(TextUniforms &)> &block) {
     block(_text);
-    if (isVulkanBackend()) {
-        // The mirror above is still wanted - the Vulkan pipeline reads it and
-        // pushes it into that frame's arena - but these are OpenGL buffers that
-        // were never initialised, so the upload is skipped.
-        return;
-    }
-    _context.bindUniformBuffer(*_ubText, UniformBlockBindingPoints::text);
-    _ubText->setData(&_text, sizeof(TextUniforms));
 }
 
 void Uniforms::setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block) {
     block(_screenEffect);
-    if (isVulkanBackend()) {
-        // The mirror above is still wanted - the Vulkan pipeline reads it and
-        // pushes it into that frame's arena - but these are OpenGL buffers that
-        // were never initialised, so the upload is skipped.
-        return;
-    }
-    _context.bindUniformBuffer(*_ubScreenEffect, UniformBlockBindingPoints::screenEffect);
-    _ubScreenEffect->setData(&_screenEffect, sizeof(ScreenEffectUniforms));
 }
 
 std::unique_ptr<UniformBuffer> Uniforms::initBuffer(const void *data, ptrdiff_t size) {

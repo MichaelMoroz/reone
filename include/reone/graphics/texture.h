@@ -210,6 +210,7 @@ private:
 
     void configure();
     void refresh();
+    void initGL();
 
     void configure2D();
     void configureCubeMap();

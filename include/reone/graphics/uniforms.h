@@ -326,6 +326,7 @@ private:
 
     // END Uniform Buffers
 
+    void initGL();
     std::unique_ptr<UniformBuffer> initBuffer(const void *data, ptrdiff_t size);
 };
 

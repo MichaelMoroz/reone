@@ -56,12 +56,8 @@ public:
     void resize(int width, int height);
     void setVsync(bool enabled);
 
-    /**
-     * Exposed for Dear ImGui, whose SDL and OpenGL backends need the raw
-     * handles. Nothing else should reach for these.
-     */
+    /** Exposed for the Vulkan renderer and Dear ImGui's SDL backend. */
     SDL_Window *sdlWindow() { return _window; }
-    SDL_GLContext sdlContext() { return _context; }
 
 private:
     GraphicsOptions &_options;
@@ -69,7 +65,6 @@ private:
     bool _inited {false};
 
     SDL_Window *_window {nullptr};
-    SDL_GLContext _context {nullptr};
 
     uint32_t _windowID {0};
 

@@ -53,7 +53,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("captureframes", value<int>()->default_value(1), "capture this many consecutive frames, numbered into the filename") //
         ("freezeframe", value<int>()->default_value(0), "stop advancing the simulation from this frame on, or 0 not to")      //
         ("randomseed", value<int>()->default_value(-1), "seed the random generator, or -1 to seed from the clock")             //
-        ("backend", value<std::string>()->default_value("gl"), "graphics backend: gl or vulkan")                              //
         ("vkvalidation", value<bool>()->default_value(false), "enable Vulkan validation layers")                              //
         ("renderdoc", value<bool>()->default_value(false), "trigger a RenderDoc frame capture with the screenshot")            //
         ("dev", value<bool>()->default_value(options->game.developer), "enable developer mode")                                 //
@@ -166,7 +165,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->captureFrames = std::max(1, vars["captureframes"].as<int>());
     options->freezeFrame = vars["freezeframe"].as<int>();
     options->randomSeed = vars["randomseed"].as<int>();
-    options->backend = vars["backend"].as<std::string>();
     options->vulkanValidation = vars["vkvalidation"].as<bool>();
     options->renderdoc = vars["renderdoc"].as<bool>();
     options->graphics.headless = vars["headless"].as<bool>();

@@ -17,8 +17,6 @@
 
 #include "reone/graphics/mesh.h"
 
-#include "reone/graphics/backend.h"
-
 #include "reone/graphics/barycentricutil.h"
 #include "reone/graphics/statistic.h"
 #include "reone/graphics/triangleutil.h"
@@ -30,15 +28,13 @@ namespace reone {
 namespace graphics {
 
 void Mesh::init() {
+    // Vulkan builds device buffers from _vertexData and _faces on first use.
+}
+
+void Mesh::initGL() {
     if (_inited) {
         return;
     }
-    if (isVulkanBackend()) {
-        // As with Texture: the Vulkan backend builds its own buffers from
-        // _vertexData and _faces, which stay valid either way.
-        return;
-    }
-
     checkMainThread();
 
     std::vector<uint16_t> indices;

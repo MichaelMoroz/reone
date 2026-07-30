@@ -17,8 +17,6 @@
 
 #include "reone/graphics/window.h"
 
-#include "reone/graphics/backend.h"
-
 #include "SDL3/SDL.h"
 
 #include "reone/system/checkutil.h"
@@ -32,32 +30,7 @@ void Window::init() {
     checkThat(!_inited, "Must not be initialized");
     checkMainThread();
 
-    if (isVulkanBackend()) {
-        int flags = SDL_WINDOW_VULKAN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-        if (_options.fullscreen) {
-            flags |= SDL_WINDOW_FULLSCREEN;
-        }
-        if (_options.headless) {
-            flags |= SDL_WINDOW_HIDDEN;
-        }
-        _window = SDL_CreateWindow(
-            "reone",
-            _options.width * _options.winScale / 100,
-            _options.height * _options.winScale / 100,
-            flags);
-        if (!_window) {
-            throw std::runtime_error("SDL_CreateWindow failed: " + std::string(SDL_GetError()));
-        }
-        _windowID = SDL_GetWindowID(_window);
-        // No GL context, and no swap: the Vulkan renderer presents.
-        _inited = true;
-        return;
-    }
-
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    int flags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    int flags = SDL_WINDOW_VULKAN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (_options.fullscreen) {
         flags |= SDL_WINDOW_FULLSCREEN;
     }
@@ -73,12 +46,6 @@ void Window::init() {
         throw std::runtime_error("SDL_CreateWindow failed: " + std::string(SDL_GetError()));
     }
     _windowID = SDL_GetWindowID(_window);
-    _context = SDL_GL_CreateContext(_window);
-    if (!_context) {
-        throw std::runtime_error("SDL_GL_CreateContext failed: " + std::string(SDL_GetError()));
-    }
-    SDL_GL_SetSwapInterval(_options.vsync ? 1 : 0);
-
     _inited = true;
 }
 
@@ -86,7 +53,6 @@ void Window::deinit() {
     if (!_inited) {
         return;
     }
-    SDL_GL_DestroyContext(_context);
     SDL_DestroyWindow(_window);
     _inited = false;
 }
@@ -151,10 +117,6 @@ bool Window::handleKeyDownEvent(const SDL_KeyboardEvent &event) {
 }
 
 void Window::swap() {
-    if (isVulkanBackend()) {
-        return;
-    }
-    SDL_GL_SwapWindow(_window);
 }
 
 void Window::setRelativeMouseMode(bool isRelative) {
@@ -167,9 +129,6 @@ void Window::resize(int width, int height) {
 }
 
 void Window::setVsync(bool enabled) {
-    if (!isVulkanBackend()) {
-        SDL_GL_SetSwapInterval(enabled ? 1 : 0);
-    }
 }
 
 } // namespace graphics

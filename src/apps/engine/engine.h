@@ -21,11 +21,8 @@
 #include "reone/game/di/module.h"
 #include "reone/game/game.h"
 #include "reone/graphics/di/module.h"
-#include "reone/graphics/backend.h"
 #include "reone/graphics/window.h"
-#ifdef R_ENABLE_VULKAN
 #include "reone/graphics/vulkan/renderer.h"
-#endif
 #include "reone/gui/di/module.h"
 #include "reone/input/event.h"
 #include "reone/movie/di/module.h"
@@ -73,10 +70,7 @@ private:
 
     std::unique_ptr<game::OptionsView> _optionsView;
     std::unique_ptr<graphics::Window> _window;
-#ifdef R_ENABLE_VULKAN
     std::unique_ptr<graphics::VulkanRenderer> _vulkanRenderer;
-#endif
-    bool _vulkan {false};
 
     std::unique_ptr<Clock> _clock;
     std::unique_ptr<SystemModule> _systemModule;
@@ -122,12 +116,11 @@ private:
     void runCommandsFile();
     /** Records the GUI through the 2D renderer, in its own rendering scope. */
     void renderFrame(bool &quit);
-    void renderGLFrame(bool &quit);
     void renderVulkanFrame(bool &quit);
     /**
      * Whether this run exists to produce a comparable frame, rather than to be
      * played. Such a run has to see exactly the same sequence of frames every
-     * time and on either backend, which costs it live input and focus handling.
+     * time, which costs it live input and focus handling.
      */
     bool isCaptureRun() const {
         return !_options.capturePath.empty() || !_options.dumpTargetsPath.empty() ||
@@ -142,7 +135,6 @@ private:
     void showCursor(bool show);
     void setRelativeMouseMode(bool relative);
     void requestGraphicsRebuild() { _graphicsRebuildRequested = true; }
-    void applyGraphicsRebuildGL();
     void applyGraphicsRebuildVulkan();
 
     std::optional<input::Event> eventFromSDLEvent(const SDL_Event &sdlEvent) const;

@@ -17,7 +17,6 @@
 
 #include "reone/scene/graph.h"
 
-#include "reone/graphics/backend.h"
 
 #include "reone/audio/di/services.h"
 #include "reone/graphics/camera/perspective.h"
@@ -643,11 +642,6 @@ void SceneGraph::renderScene(RenderRegistry &registry) {
             }
             light->registerLensFlare(registry, light->modelNode().light()->flares.front());
         }
-    }
-    // Preflighting preserves the backend state seen by the first pass while
-    // the actual debug draws remain deferred to their tagged pass.
-    if (!graphics::isVulkanBackend()) {
-        prepareDrawDebug(_graphicsSvc, _resourceSvc);
     }
     registry.addDebug([this]() {
         renderDrawDebug(_graphicsSvc, _resourceSvc, name());

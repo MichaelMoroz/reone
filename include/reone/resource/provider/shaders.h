@@ -67,6 +67,7 @@ private:
 
     std::map<std::string, ByteBuffer> _sourceResRefToData;
 
+    void initGL();
     std::shared_ptr<graphics::Shader> initShader(graphics::ShaderType type, std::string resRef);
 
     bool hasSource(const std::string &resRef) const;

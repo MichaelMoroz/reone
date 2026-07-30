@@ -42,10 +42,7 @@ target_include_directories(engine PRIVATE ${CMAKE_SOURCE_DIR}/extern)
 target_precompile_headers(engine PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(engine PRIVATE game ${Boost_PROGRAM_OPTIONS_LIBRARY} imgui::imgui)
 
-if(ENABLE_VULKAN)
-    target_link_libraries(engine PRIVATE graphicsvulkan)
-    target_compile_definitions(engine PRIVATE R_ENABLE_VULKAN)
-endif()
+target_link_libraries(engine PRIVATE graphicsvulkan)
 
 # The engine reads its shaders from shaderpack.erf, not from glsl/, so building
 # only this target left edits to the GLSL sitting on disk while the run used

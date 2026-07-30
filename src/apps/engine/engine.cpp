@@ -20,12 +20,9 @@
 #include "SDL3/SDL.h"
 
 #include "imgui.h"
-#include "imgui_impl_opengl3.h"
-#ifdef R_ENABLE_VULKAN
 #include "imgui_impl_vulkan.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/graphics/vulkan/swapchain.h"
-#endif
 #include "imgui_impl_sdl3.h"
 
 #ifdef _WIN32
@@ -36,9 +33,7 @@
 
 #include "reone/graphics/format/tgawriter.h"
 #include "reone/graphics/window.h"
-#ifdef R_ENABLE_VULKAN
 #include "reone/graphics/vulkan/debugscope.h"
-#endif
 #include "reone/system/randomutil.h"
 #include "reone/system/stream/fileoutput.h"
 #include "reone/resource/exception/notfound.h"
@@ -83,7 +78,6 @@ static void imguiInit() {
     ImGui::GetStyle().FontScaleMain = 1.5f;
 }
 
-#ifdef R_ENABLE_VULKAN
 static VulkanRenderer *g_vulkanRenderer = nullptr;
 
 static void imguiInitVulkan(Window &window, VulkanRenderer &renderer) {
@@ -147,19 +141,6 @@ static void imguiRenderVulkan(ImDrawData *drawData) {
     ImGui_ImplVulkan_RenderDrawData(drawData, cmd);
     vkCmdEndRendering(cmd);
 }
-#endif
-
-static void imguiInitWindow(Window &window) {
-    if (!ImGui_ImplSDL3_InitForOpenGL(window.sdlWindow(), window.sdlContext())) {
-        ImGui::DestroyContext();
-        throw std::runtime_error("ImGui: SDL OpenGL backend initialization failed");
-    }
-    if (!ImGui_ImplOpenGL3_Init()) {
-        ImGui_ImplSDL3_Shutdown();
-        ImGui::DestroyContext();
-        throw std::runtime_error("ImGui: OpenGL backend initialization failed");
-    }
-}
 
 /**
  * Feed an event to ImGui and report whether ImGui consumed it.
@@ -195,12 +176,7 @@ static void imguiBeginFrame() {
     if (g_imguiFrameOpen) {
         return;
     }
-#ifdef R_ENABLE_VULKAN
-    if (isVulkanBackend()) {
-        ImGui_ImplVulkan_NewFrame();
-    } else
-#endif
-        ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplVulkan_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
     g_imguiFrameOpen = true;
@@ -213,13 +189,7 @@ static void imguiBeginFrame() {
 static void imguiRender() {
     ImGui::Render();
     g_imguiFrameOpen = false;
-#ifdef R_ENABLE_VULKAN
-    if (isVulkanBackend()) {
-        imguiRenderVulkan(ImGui::GetDrawData());
-        return;
-    }
-#endif
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    imguiRenderVulkan(ImGui::GetDrawData());
 }
 
 static void imguiShutdown() {
@@ -232,16 +202,11 @@ static void imguiShutdown() {
         ImGui::EndFrame();
         g_imguiFrameOpen = false;
     }
-#ifdef R_ENABLE_VULKAN
-    if (isVulkanBackend()) {
-        // The last submitted frame may still reference the font texture,
-        // descriptor sets, and pipeline owned by the backend.
-        g_vulkanRenderer->device().waitIdle();
-        ImGui_ImplVulkan_Shutdown();
-        g_vulkanRenderer = nullptr;
-    } else
-#endif
-        ImGui_ImplOpenGL3_Shutdown();
+    // The last submitted frame may still reference the font texture,
+    // descriptor sets, and pipeline owned by the backend.
+    g_vulkanRenderer->device().waitIdle();
+    ImGui_ImplVulkan_Shutdown();
+    g_vulkanRenderer = nullptr;
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
 }
@@ -258,15 +223,6 @@ void Engine::init() {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         throw std::runtime_error("SDL_Init failed: " + std::string(SDL_GetError()));
     }
-    _vulkan = _options.backend == "vulkan";
-    if (_vulkan) {
-#ifndef R_ENABLE_VULKAN
-        throw std::runtime_error("--backend vulkan requires a build with ENABLE_VULKAN");
-#endif
-        // Before the window: the two backends need different window flags, and
-        // asset objects consult this when deciding whether to make GL calls.
-        setCurrentBackend(GraphicsBackend::Vulkan);
-    }
     if (isCaptureRun()) {
         // Fullscreen-capture behavior, as pbr/retro always had: a capture run
         // renders, presents, and captures at the full configured resolution,
@@ -279,9 +235,6 @@ void Engine::init() {
     _window->init();
 
     imguiInit();
-    if (!_vulkan) {
-        imguiInitWindow(*_window);
-    }
 
     if (_options.randomSeed >= 0) {
         seedRandom(static_cast<uint32_t>(_options.randomSeed));
@@ -299,19 +252,15 @@ void Engine::init() {
     _clock->init();
 
     _systemModule = std::make_unique<SystemModule>(*_clock);
-    _graphicsModule = std::make_unique<GraphicsModule>(_options.graphics, _window.get());
-#ifdef R_ENABLE_VULKAN
-    if (_vulkan) {
-        _vulkanRenderer = std::make_unique<VulkanRenderer>(
-            _window->sdlWindow(),
-            glm::ivec2 {_options.graphics.width, _options.graphics.height},
-            _options.graphics.vsync,
-            _options.vulkanValidation);
-        _vulkanRenderer->init();
-        _graphicsModule->setRenderers(*_vulkanRenderer, _vulkanRenderer->renderer2d());
-        imguiInitVulkan(*_window, *_vulkanRenderer);
-    }
-#endif
+    _graphicsModule = std::make_unique<GraphicsModule>(_options.graphics);
+    _vulkanRenderer = std::make_unique<VulkanRenderer>(
+        _window->sdlWindow(),
+        glm::ivec2 {_options.graphics.width, _options.graphics.height},
+        _options.graphics.vsync,
+        _options.vulkanValidation);
+    _vulkanRenderer->init();
+    _graphicsModule->setRenderers(*_vulkanRenderer, _vulkanRenderer->renderer2d());
+    imguiInitVulkan(*_window, *_vulkanRenderer);
     _audioModule = std::make_unique<AudioModule>(_options.audio);
     _movieModule = std::make_unique<MovieModule>();
     _scriptModule = std::make_unique<ScriptModule>();
@@ -351,13 +300,9 @@ void Engine::init() {
     _guiModule->init();
     _gameModule->init();
 
-#ifdef R_ENABLE_VULKAN
-    if (_vulkan) {
-        // The scene library cannot reach the renderer on its own; the engine
-        // owns it and hands it over so a Vulkan pipeline can be built.
-        _sceneModule->renderPipelineFactory().setVulkanRenderer(*_vulkanRenderer);
-    }
-#endif
+    // The scene library cannot reach the renderer on its own; the engine owns
+    // it and hands it over so the Vulkan pipeline can be built.
+    _sceneModule->renderPipelineFactory().setVulkanRenderer(*_vulkanRenderer);
 
     _services = std::make_unique<ServicesView>(
         _gameModule->services(),
@@ -419,13 +364,11 @@ void Engine::init() {
 void Engine::deinit() {
     _editor.reset();
 
-#ifdef R_ENABLE_VULKAN
     if (_vulkanRenderer) {
         // Pipelines own images sampled by the last submitted command buffer;
         // release them only after that work has completed.
         _vulkanRenderer->device().waitIdle();
     }
-#endif
 
     // Before ImGui goes away. A render pipeline holds an ImGui descriptor set
     // for its target preview, allocated from a pool that ImGui's shutdown
@@ -743,16 +686,8 @@ void Engine::dumpTargetsIfRequested() {
         return;
     }
     // The frame this describes has to be finished before its targets are read.
-    // Vulkan needs its recorded commands submitted first; OpenGL may still be
-    // several frames behind. Both are settled here rather than inside the dump,
-    // because only the caller knows which frame it means.
-    if (_vulkan) {
-#ifdef R_ENABLE_VULKAN
-        _vulkanRenderer->flushFrame();
-#endif
-    } else {
-        glFinish();
-    }
+    // Vulkan needs its recorded commands submitted before the targets are read.
+    _vulkanRenderer->flushFrame();
     pipeline->dumpTargets(_options.dumpTargetsPath);
 }
 
@@ -765,41 +700,11 @@ void Engine::renderFrame(bool &quit) {
     }
     _inFrame = true;
     _services->graphics.statistic.resetDrawCalls();
-    if (_vulkan) {
-        renderVulkanFrame(quit);
-    } else {
-        renderGLFrame(quit);
-    }
+    renderVulkanFrame(quit);
     _inFrame = false;
 }
 
-void Engine::renderGLFrame(bool &quit) {
-    applyGraphicsRebuildGL();
-    if (_options.graphics.pbr) {
-        _services->graphics.pbrTextures.refresh();
-    }
-    _services->graphics.renderer.beginFrame(
-        {_options.graphics.width, _options.graphics.height});
-    // Loading may request a present before the main loop reaches update(). The
-    // frame owner starts ImGui here so every path that renders its draw data has
-    // first opened the matching frame.
-    imguiBeginFrame();
-    // Scene targets are produced before anything 2D is drawn, on both backends,
-    // so the two paths agree on when a scene may be rendered.
-    _game->renderSceneOffscreen();
-    _game->render();
-    _profiler->render();
-    _console->render();
-    if (_editor) {
-        _editor->render();
-    }
-    imguiRender();
-    captureIfRequested(quit);
-    _services->graphics.renderer.endFrame();
-}
-
 void Engine::renderVulkanFrame(bool &quit) {
-#ifdef R_ENABLE_VULKAN
     glm::ivec2 extent {_options.graphics.width, _options.graphics.height};
     if (_graphicsRebuildRequested) {
         _window->resize(_options.graphics.width, _options.graphics.height);
@@ -861,24 +766,9 @@ void Engine::renderVulkanFrame(bool &quit) {
     imguiRender();
     captureIfRequested(quit);
     _vulkanRenderer->endFrame();
-#endif
-}
-
-void Engine::applyGraphicsRebuildGL() {
-    if (!_graphicsRebuildRequested) {
-        return;
-    }
-    // The preceding frame may still be sampling its targets when this is
-    // called, so wait before letting their owners release them.
-    glFinish();
-    _window->resize(_options.graphics.width, _options.graphics.height);
-    _window->setVsync(_options.graphics.vsync);
-    _sceneModule->graphs().invalidateRenderPipelines();
-    _graphicsRebuildRequested = false;
 }
 
 void Engine::applyGraphicsRebuildVulkan() {
-#ifdef R_ENABLE_VULKAN
     if (!_graphicsRebuildRequested) {
         return;
     }
@@ -886,7 +776,6 @@ void Engine::applyGraphicsRebuildVulkan() {
     // point, which makes releasing the old scene images safe.
     _sceneModule->graphs().invalidateRenderPipelines();
     _graphicsRebuildRequested = false;
-#endif
 }
 
 void Engine::runCommandsFile() {

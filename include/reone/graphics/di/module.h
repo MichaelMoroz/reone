@@ -20,9 +20,8 @@
 #include "../context.h"
 #include "../meshregistry.h"
 #include "../pbrtextures.h"
-#include "../backend.h"
-#include "../renderer/gl.h"
-#include "../renderer/gl2d.h"
+#include "../renderer.h"
+#include "../renderer2d.h"
 #include "../shaderregistry.h"
 #include "../statistic.h"
 #include "../textureregistry.h"
@@ -36,22 +35,11 @@ namespace graphics {
 
 class GraphicsModule : boost::noncopyable {
 public:
-    /**
-     * @param window presents finished frames. Null in hosts that own
-     *               presentation themselves, such as the wxWidgets toolkit.
-     */
-    GraphicsModule(GraphicsOptions &options, Window *window = nullptr) :
-        _options(options),
-        _window(window) {
+    GraphicsModule(GraphicsOptions &options) :
+        _options(options) {
     }
 
-    /**
-     * Supply the renderers instead of building the OpenGL pair.
-     *
-     * The Vulkan backend is a separate library that links against this one, so
-     * this library cannot construct it. The host, which links both, does that
-     * and hands the result in. Must be called before init().
-     */
+    /** Supply the Vulkan renderers. Must be called before init(). */
     void setRenderers(IRenderer &renderer, I2DRenderer &renderer2d) {
         _externalRenderer = &renderer;
         _externalRenderer2d = &renderer2d;
@@ -65,8 +53,8 @@ public:
     Context &context() { return *_context; }
     MeshRegistry &meshRegistry() { return *_meshRegistry; }
     PBRTextures &pbrTextures() { return *_pbrTextures; }
-    IRenderer &renderer() { return _externalRenderer ? *_externalRenderer : *_renderer; }
-    I2DRenderer &renderer2d() { return _externalRenderer2d ? *_externalRenderer2d : *_renderer2d; }
+    IRenderer &renderer() { return *_externalRenderer; }
+    I2DRenderer &renderer2d() { return *_externalRenderer2d; }
     ShaderRegistry &shaderRegistry() { return *_shaderRegistry; }
     Statistic &statistic() { return *_statistic; }
     TextureRegistry &textureRegistry() { return *_textureRegistry; }
@@ -76,13 +64,10 @@ public:
 
 private:
     GraphicsOptions &_options;
-    Window *_window;
 
     std::unique_ptr<Context> _context;
     std::unique_ptr<MeshRegistry> _meshRegistry;
     std::unique_ptr<PBRTextures> _pbrTextures;
-    std::unique_ptr<GLRenderer> _renderer;
-    std::unique_ptr<GL2DRenderer> _renderer2d;
     IRenderer *_externalRenderer {nullptr};
     I2DRenderer *_externalRenderer2d {nullptr};
     std::unique_ptr<ShaderRegistry> _shaderRegistry;

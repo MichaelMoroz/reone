@@ -41,8 +41,6 @@ private:
     struct Configuration {
         std::string gameDir;
         bool devMode {true};
-        /** "gl" or "vulkan", matching the engine's --backend. */
-        std::string backend {"gl"};
         int width {1024};
         int height {768};
         int winscale {100};
@@ -72,7 +70,6 @@ private:
     wxTextCtrl *_textCtrlGameDir;
     wxCheckBox *_checkBoxDev;
     wxChoice *_choiceResolution;
-    wxChoice *_choiceBackend;
     wxChoice *_choiceWinScale;
     wxChoice *_choiceRenderer;
     wxChoice *_choiceTextureQuality;
@@ -98,7 +95,7 @@ private:
     void OnSaveConfig(wxCommandEvent &event);
     void OnGameDirLeftDown(wxMouseEvent &event);
 
-    /** Grey out the options the chosen backend ignores. */
+    /** Grey out the options unavailable to the chosen renderer. */
     void UpdateRendererDependentControls();
 
     void LoadConfiguration();

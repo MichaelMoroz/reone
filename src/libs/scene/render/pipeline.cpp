@@ -17,22 +17,17 @@
 
 #include "reone/scene/render/pipeline.h"
 
-#include "reone/graphics/backend.h"
 #include "reone/graphics/context.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/npyutil.h"
 #include "reone/graphics/pbrtextures.h"
-#ifdef R_ENABLE_VULKAN
 #include "reone/graphics/vulkan/renderer.h"
-#endif
 #include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/statistic.h"
 #include "reone/graphics/textureregistry.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/scene/render/pipeline/pbr.h"
-#ifdef R_ENABLE_VULKAN
 #include "reone/scene/render/pipeline/vulkan.h"
-#endif
 #include "reone/scene/render/pipeline/retro.h"
 #include "reone/system/logutil.h"
 
@@ -227,77 +222,20 @@ void RenderPipelineBase::applySharpen(Texture &tex,
 }
 
 std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode, glm::ivec2 targetSize) {
-    // Backend and mode are separate axes and only some pairs exist. Where one
-    // does not, say so: Vulkan quietly running PBR while the caller asked for
-    // retro is how an entire session of backend comparisons ended up measuring
-    // two different renderers against each other.
-#ifdef R_ENABLE_VULKAN
-    if (graphics::isVulkanBackend()) {
-        if (!_vulkanRenderer) {
-            throw std::logic_error("Vulkan renderer was not supplied to the pipeline factory");
-        }
-        if (mode == RenderMode::PathTracing && !_vulkanRenderer->device().rayQueryAvailable()) {
-            // Also a substitution rather than a hard stop: this is a property
-            // of the GPU, and a mode= left in reone.cfg must not make the
-            // engine refuse to start on hardware that cannot trace.
-            warn("Path tracing needs ray-query acceleration structures and position fetch, "
-                 "which this device does not provide; rendering PBR instead.",
-                 LogChannel::Graphics);
-            mode = RenderMode::PBR;
-        }
-        if (mode == RenderMode::Retro) {
-            warn("No retro pipeline on Vulkan; rendering PBR instead. Pass --pbr 1 to "
-                 "silence this, and do not compare this frame against an OpenGL retro one.",
-                 LogChannel::Graphics);
-        }
-        return std::make_unique<VulkanRenderPipeline>(
-            std::move(targetSize), _options, *_vulkanRenderer, _uniforms, _meshRegistry, _textureRegistry,
-            mode == RenderMode::PathTracing);
+    if (!_vulkanRenderer) {
+        throw std::logic_error("Vulkan renderer was not supplied to the pipeline factory");
     }
-#endif
-    switch (mode) {
-    case RenderMode::Retro:
-        return std::make_unique<RetroRenderPipeline>(
-            std::move(targetSize),
-            _options,
-            _context,
-            _meshRegistry,
-            _shaderRegistry,
-            _statistic,
-            _textureRegistry,
-            _uniforms);
-    case RenderMode::PBR:
-        return std::make_unique<PBRRenderPipeline>(
-            std::move(targetSize),
-            _options,
-            _context,
-            _meshRegistry,
-            _pbrTextures,
-            _shaderRegistry,
-            _statistic,
-            _textureRegistry,
-            _uniforms);
-    case RenderMode::PathTracing:
-        // Substituted rather than fatal, for the same reason retro-on-Vulkan is:
-        // mode= lives in reone.cfg, so a config written while running Vulkan
-        // would otherwise stop OpenGL from starting at all. Loud, and it still
-        // renders.
-        warn("Path tracing needs the Vulkan backend; rendering PBR instead. "
-             "Pass --backend vulkan for the traced image.",
+    if (mode == RenderMode::PathTracing && !_vulkanRenderer->device().rayQueryAvailable()) {
+        // A mode left in reone.cfg must not make the engine refuse to start on
+        // hardware that cannot trace.
+        warn("Path tracing needs ray-query acceleration structures and position fetch, "
+             "which this device does not provide; rendering PBR instead.",
              LogChannel::Graphics);
-        return std::make_unique<PBRRenderPipeline>(
-            std::move(targetSize),
-            _options,
-            _context,
-            _meshRegistry,
-            _pbrTextures,
-            _shaderRegistry,
-            _statistic,
-            _textureRegistry,
-            _uniforms);
-    default:
-        throw std::invalid_argument("Unsupported render mode: " + std::to_string(static_cast<int>(mode)));
+        mode = RenderMode::PBR;
     }
+    return std::make_unique<VulkanRenderPipeline>(
+        std::move(targetSize), _options, *_vulkanRenderer, _uniforms, _meshRegistry, _textureRegistry,
+        mode == RenderMode::PathTracing);
 }
 
 } // namespace scene

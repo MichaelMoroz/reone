@@ -26,7 +26,6 @@
 #include "reone/system/fileutil.h"
 #include "reone/system/stream/fileinput.h"
 #include "reone/system/stream/memoryinput.h"
-#include "reone/graphics/backend.h"
 #include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/mesh.h"
@@ -936,11 +935,6 @@ void Editor::graphicsSettings() {
         return;
     }
     auto &options = _engine._options.graphics;
-
-    // Which backend is running is decided by a command line flag before any of
-    // this exists, so it is shown rather than offered.
-    ImGui::Text("Backend: %s", graphics::isVulkanBackend() ? "Vulkan" : "OpenGL");
-    ImGui::Spacing();
 
     ImGui::TextUnformatted("Live (applies next frame)");
     ImGui::Separator();

@@ -57,15 +57,7 @@ namespace scene {
 class CameraSceneNode;
 
 /**
- * Which renderer to run, independent of which backend runs it.
- *
- * These were once one enum with Vulkan sitting beside Retro and PBR, which put
- * a backend in a list of rendering approaches. The cost was not theoretical:
- * selection short-circuited on the backend, so `--pbr 0` was silently ignored
- * on Vulkan and a whole session of OpenGL-versus-Vulkan comparisons was made
- * between the retro pipeline and the PBR one - two different renderers, not
- * two backends. The backend is already global state (`graphics::isVulkanBackend`);
- * this is the other axis, and the factory resolves the pair.
+ * Which renderer to run.
  */
 enum class RenderMode {
     Retro,

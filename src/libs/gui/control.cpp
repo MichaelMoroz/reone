@@ -19,7 +19,6 @@
 
 #include "reone/system/logutil.h"
 
-#include "reone/graphics/backend.h"
 #include "reone/graphics/context.h"
 #include "reone/graphics/renderer2d.h"
 #include "reone/graphics/mesh.h"

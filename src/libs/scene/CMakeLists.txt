@@ -83,14 +83,11 @@ set_target_properties(scene PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_D
 set_target_properties(scene PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(scene PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 
-if(ENABLE_VULKAN)
-    target_sources(scene PRIVATE
-        ${SCENE_SOURCE_DIR}/render/pass/vulkan.cpp
-        ${SCENE_SOURCE_DIR}/render/pipeline/vulkan.cpp
-        ${SCENE_SOURCE_DIR}/render/pipeline/rayquery.cpp)
-    target_link_libraries(scene PUBLIC graphicsvulkan)
-    target_compile_definitions(scene PUBLIC R_ENABLE_VULKAN)
-endif()
+target_sources(scene PRIVATE
+    ${SCENE_SOURCE_DIR}/render/pass/vulkan.cpp
+    ${SCENE_SOURCE_DIR}/render/pipeline/vulkan.cpp
+    ${SCENE_SOURCE_DIR}/render/pipeline/rayquery.cpp)
+target_link_libraries(scene PUBLIC graphicsvulkan)
 
 if(ENABLE_NRD)
     target_sources(scene PRIVATE ${SCENE_SOURCE_DIR}/render/pipeline/nrddenoiser.cpp)

@@ -100,7 +100,6 @@ private:
 };
 
 ResourceExplorerViewModel::ResourceExplorerViewModel() {
-    setCurrentBackend(GraphicsBackend::Vulkan);
     _graphicsOpt.grass = false;
     _graphicsOpt.pbr = false;
     _graphicsOpt.ssao = false;

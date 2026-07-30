@@ -22,7 +22,6 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/animation.h
     ${GRAPHICS_INCLUDE_DIR}/attachment.h
     ${GRAPHICS_INCLUDE_DIR}/barycentricutil.h
-    ${GRAPHICS_INCLUDE_DIR}/backend.h
     ${GRAPHICS_INCLUDE_DIR}/camera.h
     ${GRAPHICS_INCLUDE_DIR}/camera/orthographic.h
     ${GRAPHICS_INCLUDE_DIR}/camera/perspective.h
@@ -80,7 +79,6 @@ set(GRAPHICS_SOURCES
     ${CMAKE_SOURCE_DIR}/extern/glad/src/gl.c
     ${GRAPHICS_SOURCE_DIR}/aabb.cpp
     ${GRAPHICS_SOURCE_DIR}/animation.cpp
-    ${GRAPHICS_SOURCE_DIR}/backend.cpp
     ${GRAPHICS_SOURCE_DIR}/camera.cpp
     ${GRAPHICS_SOURCE_DIR}/context.cpp
     ${GRAPHICS_SOURCE_DIR}/renderer/gl.cpp

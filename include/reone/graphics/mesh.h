@@ -285,6 +285,7 @@ private:
     void computeVerticesFromVertexData();
     void computeFaceData();
     void computeAABB();
+    void initGL();
 };
 
 } // namespace graphics
