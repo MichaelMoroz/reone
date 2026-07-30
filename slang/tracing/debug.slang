@@ -62,9 +62,9 @@ public struct PtDebug {
         float shape = 0.35 + 0.65 * abs(dot(shading.normal, -rayDirection));
         switch (view) {
         case kPtDebugCategories: {
-            uint category = (hit.material.featureMask >> kPtCategoryShift) & kPtCategoryMask;
+            uint category = (instanceMaterials[hit.materialIndex].featureMask >> kPtCategoryShift) & kPtCategoryMask;
             float3 color = kCategoryPalette[min(category, 8u)] * shape;
-            if ((hit.material.featureMask & kPtMaskSky) != 0) color = float3(0.1, 0.8, 0.9);
+            if ((instanceMaterials[hit.materialIndex].featureMask & kPtMaskSky) != 0) color = float3(0.1, 0.8, 0.9);
             return color;
         }
         case kPtDebugEmissive: {

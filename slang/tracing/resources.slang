@@ -170,3 +170,14 @@ public float2 ptTransformedUV(InstanceMaterial material, float2 uv) {
     return float2(material.uv0.x * h.x + material.uv1.x * h.y + material.uv2.x * h.z,
                   material.uv0.y * h.x + material.uv1.y * h.y + material.uv2.y * h.z);
 }
+
+/** Narrow material-buffer fetch for alpha-tested traversal. */
+public float2 ptTransformedUV(uint materialIndex, float2 uv) {
+    float3 h = float3(uv, 1.0);
+    return float2(instanceMaterials[materialIndex].uv0.x * h.x +
+                      instanceMaterials[materialIndex].uv1.x * h.y +
+                      instanceMaterials[materialIndex].uv2.x * h.z,
+                  instanceMaterials[materialIndex].uv0.y * h.x +
+                      instanceMaterials[materialIndex].uv1.y * h.y +
+                      instanceMaterials[materialIndex].uv2.y * h.z);
+}

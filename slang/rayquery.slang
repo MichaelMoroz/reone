@@ -128,7 +128,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         primaryDistance += primary.hitT;
         primaryHit = ptMakeHitGeometry(primary, probe, spreadAngle * primaryDistance);
         primaryShading = ptShade(primaryHit);
-        if (primaryHit.material.surfaceType != kPtSurfaceUnlitTransparent) break;
+        if (instanceMaterials[primaryHit.materialIndex].surfaceType != kPtSurfaceUnlitTransparent) break;
         layerEmission += primaryShading.emission;
         if (++layers > kMaxPassThroughSteps) {
             primary.hit = false;
@@ -152,7 +152,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     // The sky sits at environment depth for the denoiser; every real surface
     // reports its own depth and motion. An unlit primary keeps a white albedo
     // guide: its radiance is emission, and nothing is behind it to remodulate.
-    bool pbrPrimary = primaryHit.material.surfaceType == kPtSurfacePbr;
+    bool pbrPrimary = instanceMaterials[primaryHit.materialIndex].surfaceType == kPtSurfacePbr;
     outputs.normal = primaryShading.normal;
     outputs.roughness = primaryShading.roughness;
     outputs.viewZ = primaryShading.terminatesPath

@@ -24,7 +24,7 @@ import tracing.trace;
 
 /** Everything about the hit point the surface model needs. */
 public struct HitGeometry {
-    public InstanceMaterial material;
+    public uint materialIndex;
     public uint3 indices;
     public float3 weights;
     public float3 rayDirection;
@@ -76,12 +76,11 @@ public interface ISurfaceModel {
 
 /** Builds the HitGeometry for a committed hit. */
 public HitGeometry ptMakeHitGeometry(TraceHit trace, RayDesc ray, float coneWidth) {
-    InstanceMaterial material = trace.material;
     uint3 indices = trace.indices;
     float3 weights = trace.weights;
     float3 rayDirection = ray.Direction;
     HitGeometry hit;
-    hit.material = material;
+    hit.materialIndex = trace.materialIndex;
     hit.indices = indices;
     hit.weights = weights;
     hit.rayDirection = rayDirection;
@@ -93,7 +92,7 @@ public HitGeometry ptMakeHitGeometry(TraceHit trace, RayDesc ray, float coneWidt
     hit.p2 = mergedVertices[indices.z].position;
     hit.geometricNormal = normalize(cross(hit.p1 - hit.p0, hit.p2 - hit.p0));
     if (dot(hit.geometricNormal, rayDirection) > 0.0) hit.geometricNormal = -hit.geometricNormal;
-    hit.uv = ptTransformedUV(material, mergedVertices[indices.x].uv1 * weights.x + mergedVertices[indices.y].uv1 * weights.y + mergedVertices[indices.z].uv1 * weights.z);
+    hit.uv = ptTransformedUV(trace.materialIndex, mergedVertices[indices.x].uv1 * weights.x + mergedVertices[indices.y].uv1 * weights.y + mergedVertices[indices.z].uv1 * weights.z);
     hit.uv2 = mergedVertices[indices.x].uv2 * weights.x + mergedVertices[indices.y].uv2 * weights.y + mergedVertices[indices.z].uv2 * weights.z;
     // The terminator shift (Hanika, RT Gems II): the shadow-ray origin lifted
     // onto the smooth surface the vertex normals describe. Low-poly geometry
@@ -186,7 +185,7 @@ float curatedChannel(float4 A, float4 B, float3 albedo, float current) {
 
 public struct PbrSurface : ISurfaceModel {
     public SurfaceShading shade(HitGeometry hit) {
-        InstanceMaterial material = hit.material;
+        InstanceMaterial material = instanceMaterials[hit.materialIndex];
         SurfaceShading shading;
         shading.terminatesPath = false;
         shading.albedo = float3(1.0);
@@ -223,7 +222,7 @@ public struct PbrSurface : ISurfaceModel {
         if (material.overrideParams.x >= 0.0) shading.roughness = material.overrideParams.x;
         shading.roughness = clamp(shading.roughness * material.roughnessScale, 0.2, 1.0);
 
-        shading.normal = materialNormal(hit);
+        shading.normal = materialNormal(hit, hit.materialIndex);
         shading.envmapped = (material.featureMask & uint(kFeatureEnvMap)) != 0;
         shading.envStrength = (shading.envmapped ? (1.0 - shading.alpha) : 0.0) *
                               material.overrideParams.z;
@@ -296,8 +295,7 @@ public struct PbrSurface : ISurfaceModel {
         return sample;
     }
 
-    float3 materialNormal(HitGeometry hit) {
-        InstanceMaterial material = hit.material;
+    float3 materialNormal(HitGeometry hit, uint materialIndex) {
         // The two normals have different jobs: the geometric normal owns
         // every geometry decision, the interpolated material normal exists
         // only inside the BRDF. Authored normals are object-space and take
@@ -319,19 +317,19 @@ public struct PbrSurface : ISurfaceModel {
             if (dot(tangentSpaceNormal, tangentSpaceNormal) >= 1e-10 &&
                 dot(tangent, tangent) >= 1e-10 && dot(bitangent, bitangent) >= 1e-10) {
                 UvGradients gradients = anisotropicGradients(hit);
-                if ((material.featureMask & uint(kFeatureNormalMap)) != 0 && material.normalMap != kPtNoTexture) {
-                    float3 n = bindlessTextures[NonUniformResourceIndex(material.normalMap)].SampleGrad(hit.uv, gradients.x, gradients.y).rgb * 2.0 - 1.0;
+                if ((instanceMaterials[materialIndex].featureMask & uint(kFeatureNormalMap)) != 0 && instanceMaterials[materialIndex].normalMap != kPtNoTexture) {
+                    float3 n = bindlessTextures[NonUniformResourceIndex(instanceMaterials[materialIndex].normalMap)].SampleGrad(hit.uv, gradients.x, gradients.y).rgb * 2.0 - 1.0;
                     shadingNormal = normalize(tangent * n.x + bitangent * n.y + shadingNormal * n.z);
-                } else if ((material.featureMask & uint(kFeatureBumpMap)) != 0 && material.bumpMapArray != kPtNoTexture) {
+                } else if ((instanceMaterials[materialIndex].featureMask & uint(kFeatureBumpMap)) != 0 && instanceMaterials[materialIndex].bumpMapArray != kPtNoTexture) {
                     uint bumpWidth, bumpHeight, bumpLayers;
-                    bindlessTextureArrays[NonUniformResourceIndex(material.bumpMapArray)].GetDimensions(bumpWidth, bumpHeight, bumpLayers);
+                    bindlessTextureArrays[NonUniformResourceIndex(instanceMaterials[materialIndex].bumpMapArray)].GetDimensions(bumpWidth, bumpHeight, bumpLayers);
                     float2 texel = 1.0 / float2(max(bumpWidth, 1u), max(bumpHeight, 1u));
-                    float layer = float(material.bumpMapFrame);
-                    float height = bindlessTextureArrays[NonUniformResourceIndex(material.bumpMapArray)].SampleLevel(float3(hit.uv, layer), 0.0).r;
+                    float layer = float(instanceMaterials[materialIndex].bumpMapFrame);
+                    float height = bindlessTextureArrays[NonUniformResourceIndex(instanceMaterials[materialIndex].bumpMapArray)].SampleLevel(float3(hit.uv, layer), 0.0).r;
                     // Compute dispatches have no screen-space ddx/ddy; these
                     // explicit texel differences approximate the raster path.
-                    float dX = material.bumpMapScale * (bindlessTextureArrays[NonUniformResourceIndex(material.bumpMapArray)].SampleLevel(float3(hit.uv + float2(texel.x, 0.0), layer), 0.0).r - height);
-                    float dY = material.bumpMapScale * (bindlessTextureArrays[NonUniformResourceIndex(material.bumpMapArray)].SampleLevel(float3(hit.uv + float2(0.0, texel.y), layer), 0.0).r - height);
+                    float dX = instanceMaterials[materialIndex].bumpMapScale * (bindlessTextureArrays[NonUniformResourceIndex(instanceMaterials[materialIndex].bumpMapArray)].SampleLevel(float3(hit.uv + float2(texel.x, 0.0), layer), 0.0).r - height);
+                    float dY = instanceMaterials[materialIndex].bumpMapScale * (bindlessTextureArrays[NonUniformResourceIndex(instanceMaterials[materialIndex].bumpMapArray)].SampleLevel(float3(hit.uv + float2(0.0, texel.y), layer), 0.0).r - height);
                     float3 n = normalize(float3(-dX, -dY, 1.0));
                     shadingNormal = normalize(tangent * n.x + bitangent * n.y + shadingNormal * n.z);
                 }
@@ -349,7 +347,7 @@ public struct PbrSurface : ISurfaceModel {
 
 public struct UnlitTransparentSurface : ISurfaceModel {
     public SurfaceShading shade(HitGeometry hit) {
-        InstanceMaterial material = hit.material;
+        InstanceMaterial material = instanceMaterials[hit.materialIndex];
         SurfaceShading shading;
         shading.terminatesPath = false;
         shading.albedo = ptGammaToLinear(material.diffuseColor.rgb);
@@ -390,7 +388,7 @@ public struct UnlitTransparentSurface : ISurfaceModel {
 
 public struct UnlitEmissiveSurface : ISurfaceModel {
     public SurfaceShading shade(HitGeometry hit) {
-        InstanceMaterial material = hit.material;
+        InstanceMaterial material = instanceMaterials[hit.materialIndex];
         SurfaceShading shading;
         shading.albedo = float3(1.0);
         shading.alpha = 1.0;
@@ -444,7 +442,7 @@ public float3 ptMotionVector(HitGeometry hit) {
 
 /** Type dispatch: the one switch in the system. */
 public SurfaceShading ptShade(HitGeometry hit) {
-    switch (hit.material.surfaceType) {
+    switch (instanceMaterials[hit.materialIndex].surfaceType) {
     case kPtSurfaceUnlitTransparent: {
         UnlitTransparentSurface surface;
         return surface.shade(hit);
@@ -461,7 +459,7 @@ public SurfaceShading ptShade(HitGeometry hit) {
 }
 
 public PathSample ptSampleRay(HitGeometry hit, SurfaceShading shading, float3 view, inout uint rng) {
-    switch (hit.material.surfaceType) {
+    switch (instanceMaterials[hit.materialIndex].surfaceType) {
     case kPtSurfaceUnlitTransparent: {
         UnlitTransparentSurface surface;
         return surface.sampleRay(hit, shading, view, rng);
