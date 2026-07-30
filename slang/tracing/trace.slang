@@ -8,6 +8,9 @@
 //   ptTraceNearest - the normal ray: commits the nearest surface whose
 //                    coverage passes the alpha test, transparent or not.
 //                    Compositing is the path's job, not the traversal's.
+//                    Two coverage modes: the visibility ray alpha-tests
+//                    against a fixed threshold, fully deterministic; bounce
+//                    rays roll coverage stochastically.
 //   ptShadowTransmittance - the shadow ray: accumulates transmittance to a
 //                    light, attenuated by punch-through coverage; additive
 //                    surfaces cast nothing and the sky never occludes.
@@ -37,13 +40,58 @@ float candidateAlpha(InstanceMaterial material, uint3 indices, float3 weights) {
     return bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(uv, 0.0).a;
 }
 
+TraceHit committedHit(inout RayQuery<RAY_FLAG_NONE> query) {
+    TraceHit result;
+    result.hit = query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+    if (result.hit) {
+        result.instanceIndex = query.CommittedInstanceIndex();
+        result.material = instanceMaterials[result.instanceIndex];
+        result.indices = ptTriangleIndices(result.material, query.CommittedPrimitiveIndex());
+        float2 barycentrics = query.CommittedTriangleBarycentrics();
+        result.weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
+        result.hitT = query.CommittedRayT();
+        result.objectToWorld = query.CommittedObjectToWorld3x4();
+        result.worldToObject = query.CommittedWorldToObject3x4();
+    }
+    return result;
+}
+
+/** The visibility ray commits at half coverage: in or out, nothing between. */
+static const float kAlphaTestThreshold = 0.5;
+
 /**
- * The normal ray. Opaque geometry commits in hardware. Non-opaque PBR
- * candidates alpha-test STOCHASTICALLY: a texel commits with probability
- * equal to its coverage, which resolves partial transparency inside the one
- * traversal - unbiased, and never a re-trace. The committed surface is
- * substance; whatever passes was never there. Additive surfaces always
- * commit (nearest wins) and the path passes through them explicitly.
+ * The visibility ray. Opaque geometry commits in hardware. Non-opaque PBR
+ * candidates alpha-test against a fixed threshold: fully deterministic, no
+ * dither of any kind - TAA jitter is the frame's only stochastic input, and
+ * the hard coverage edge is exactly what it antialiases. Additive surfaces
+ * always commit (nearest wins); the path passes through them explicitly.
+ */
+public TraceHit ptTraceNearest(RayDesc ray) {
+    RayQuery<RAY_FLAG_NONE> query;
+    query.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, ray);
+    while (query.Proceed()) {
+        if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
+        InstanceMaterial material = instanceMaterials[query.CandidateInstanceIndex()];
+        if (material.surfaceType == kPtSurfaceUnlitTransparent) {
+            query.CommitNonOpaqueTriangleHit();
+            continue;
+        }
+        uint3 indices = ptTriangleIndices(material, query.CandidatePrimitiveIndex());
+        float2 barycentrics = query.CandidateTriangleBarycentrics();
+        float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
+        if (candidateAlpha(material, indices, weights) >= kAlphaTestThreshold) {
+            query.CommitNonOpaqueTriangleHit();
+        }
+    }
+    return committedHit(query);
+}
+
+/**
+ * The bounce ray. Same traversal, but coverage rolls STOCHASTICALLY: a texel
+ * commits with probability equal to its coverage, which resolves partial
+ * transparency inside the one traversal - unbiased, never a re-trace, and
+ * the denoiser integrates the noise with the rest of the lighting. The
+ * committed surface is substance; whatever passes was never there.
  */
 public TraceHit ptTraceNearest(RayDesc ray, inout uint rng) {
     RayQuery<RAY_FLAG_NONE> query;
@@ -62,19 +110,7 @@ public TraceHit ptTraceNearest(RayDesc ray, inout uint rng) {
             query.CommitNonOpaqueTriangleHit();
         }
     }
-    TraceHit result;
-    result.hit = query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
-    if (result.hit) {
-        result.instanceIndex = query.CommittedInstanceIndex();
-        result.material = instanceMaterials[result.instanceIndex];
-        result.indices = ptTriangleIndices(result.material, query.CommittedPrimitiveIndex());
-        float2 barycentrics = query.CommittedTriangleBarycentrics();
-        result.weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
-        result.hitT = query.CommittedRayT();
-        result.objectToWorld = query.CommittedObjectToWorld3x4();
-        result.worldToObject = query.CommittedWorldToObject3x4();
-    }
-    return result;
+    return committedHit(query);
 }
 
 /**

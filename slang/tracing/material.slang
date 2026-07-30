@@ -58,6 +58,14 @@ public struct SurfaceShading {
 public struct PathSample {
     public float3 direction;
     public float3 weight;      // throughput multiplier for this lobe choice
+    /**
+     * weight with the surface's own material response divided out, in closed
+     * form. The primary vertex needs exactly this, and computing it as a
+     * ratio of two nearly-equal small numbers produces fireflies wherever the
+     * response approaches zero - a black texel divides a tiny numerator by a
+     * tiny guard. The lobe knows the answer analytically, so it says so.
+     */
+    public float3 demodulatedWeight;
     public bool specularLobe;
     public bool passThrough;   // continuation, not a scattering event
     public bool terminate;
@@ -219,9 +227,16 @@ public struct PbrSurface : ISurfaceModel {
                                            shading.albedo, shading.roughness);
         shading.metallic = curatedChannel(material.curatedMetalA, material.curatedMetalB,
                                           shading.albedo, shading.metallic);
+        // A scale rather than an override, so curation stays in charge of which
+        // surfaces are metal and this only says how far. Above 0 it tints Rf0
+        // toward albedo, which is the only thing that makes the specular
+        // demodulation factor chromatic - KotOR's own materials are all
+        // dielectric, so without this dial that path cannot be exercised.
+        shading.metallic = saturate(shading.metallic * material.overrideParams.w);
         shading.albedo = lerp(shading.albedo, ptGammaToLinear(material.overrideColor.rgb),
                               material.overrideColor.w);
         if (material.overrideParams.x >= 0.0) shading.roughness = material.overrideParams.x;
+        shading.roughness = clamp(shading.roughness * material.roughnessScale, 0.2, 1.0);
 
         shading.normal = materialNormal(hit);
         shading.envmapped = (material.featureMask & uint(kFeatureEnvMap)) != 0;
@@ -241,8 +256,7 @@ public struct PbrSurface : ISurfaceModel {
         }
         // Emission is additive over shading, like raster self-illumination;
         // the dial and the category emission scale ride along here.
-        shading.emission = emission * shading.albedo * pushConstants.emissiveIntensity *
-                           material.overrideParams.y;
+        shading.emission = emission * shading.albedo * pushConstants.emissiveIntensity;
         return shading;
     }
 
@@ -250,6 +264,7 @@ public struct PbrSurface : ISurfaceModel {
         PathSample sample;
         sample.terminate = false;
         sample.passThrough = false;
+        sample.demodulatedWeight = sample.weight;
         sample.specularLobe = false;
         // Partial coverage was already resolved stochastically inside the
         // traversal: a committed texel is substance. No re-roll, no re-trace.
@@ -269,13 +284,21 @@ public struct PbrSurface : ISurfaceModel {
                                           float2(ptRandom01(rng), ptRandom01(rng)));
             sample.direction = normalize(reflect(-view, half));
             sample.weight = F / specularProbability;
+            sample.demodulatedWeight = sample.weight;
             sample.specularLobe = true;
         } else {
             sample.direction = ptCosineHemisphere(shading.normal,
-                                                  float2(ptRandom01(rng), ptRandom01(rng)));
+                                                   float2(ptRandom01(rng), ptRandom01(rng)));
             sample.weight = shading.albedo;
+            // Keep the diffuse lobe sampleable for blended metals while using
+            // the same metallic energy split as next-event estimation.
+            sample.weight *= 1.0 - shading.metallic;
+            // The albedo and metallic split cancel against the material
+            // response exactly; only the lobe-selection probability survives.
+            sample.demodulatedWeight = float3(1.0);
             if (shading.envmapped) {
                 sample.weight *= (1.0 - F) / (1.0 - specularProbability);
+                sample.demodulatedWeight = float3(1.0 / (1.0 - specularProbability));
             }
         }
         // A smooth normal can sample below the geometric surface at a
@@ -374,6 +397,7 @@ public struct UnlitTransparentSurface : ISurfaceModel {
         PathSample sample;
         sample.direction = hit.rayDirection;
         sample.weight = float3(1.0);
+        sample.demodulatedWeight = sample.weight;
         sample.specularLobe = false;
         sample.passThrough = true;
         sample.terminate = false;
@@ -411,6 +435,7 @@ public struct UnlitEmissiveSurface : ISurfaceModel {
         PathSample sample;
         sample.direction = hit.rayDirection;
         sample.weight = float3(0.0);
+        sample.demodulatedWeight = sample.weight;
         sample.specularLobe = false;
         sample.passThrough = false;
         sample.terminate = true;

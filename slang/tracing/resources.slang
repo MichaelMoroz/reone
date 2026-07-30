@@ -66,7 +66,9 @@ public struct InstanceMaterial {
     public uint64_t prevPositionsAddress;
     /** kPtSurface*, decided at admission. */
     public uint surfaceType;
-    public uint surfacePad;
+    // This occupies the scalar slot before the override vectors so category
+    // tuning does not change the storage-buffer array stride.
+    public float roughnessScale;
     // The per-category calibration overrides, baked at admission so the
     // shader never touches a category table: rgb + lerp weight flat-paints
     // the albedo; params are roughness override (negative disables),

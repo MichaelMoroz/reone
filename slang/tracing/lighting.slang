@@ -40,7 +40,7 @@ float directLightWeight(GlobalUniformsLight light, float3 position, float3 shadi
 }
 
 public struct DirectLight {
-    /** Diffuse radiance WITHOUT the albedo factor - demodulated. */
+    /** Diffuse irradiance transport before the surface response. */
     public float3 diffuse;
     public float3 specular;
 };
@@ -113,12 +113,11 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
     float G = ptGeometrySmith(NdotL, NdotV, geomK);
     float3 F = ptFresnelSchlick(VdotH, F0);
     float3 spec = (D * G * F) / max(1e-4, 4.0 * NdotL * NdotV);
-    float3 kD = (1.0 - F) * (1.0 - shading.metallic);
-    // Demodulated: the caller multiplies albedo back in at assembly, so the
-    // diffuse channel carries transport rather than texture. Raster's
-    // dynamic-light specular is meaningful only on the same env-mapped
-    // surfaces the tracer gives a specular lobe.
-    result.diffuse = kD / kPtPi * radiance * NdotL;
+    // The primary diffuse channel has no material response; its one shared
+    // NRD factor restores the whole lobe after denoising. Raster's dynamic-
+    // light specular is meaningful only on the same env-mapped surfaces the
+    // tracer gives a specular lobe.
+    result.diffuse = radiance * NdotL / kPtPi;
     if (shading.envmapped) {
         result.specular = spec * radiance * NdotL;
     }

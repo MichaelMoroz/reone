@@ -2,10 +2,12 @@
 // attributes from GPU-resident data; no raster draw state is used.
 //
 // The structure is exactly: visibility ray -> SPP loop -> bounce loop.
-// There is no separate transparency handling - transparent materials are
-// surfaces like any other, committed nearest and resolved by their surface
-// model: additive light passes the ray through, partial PBR coverage is a
-// stochastic substance roll, sky and prelit imagery terminate. Modules:
+// Transparent materials are surfaces like any other, committed nearest and
+// resolved by their surface model: additive light passes the ray through,
+// sky and prelit imagery terminate. The one exception is the visibility ray,
+// which walks past additive layers rather than letting them own the pixel -
+// see the walk below for why the guides cannot come from a glow plane.
+// Modules:
 //
 //   tracing.resources - bindings, the instance material record, fetches
 //   tracing.rng       - hashing and directional sampling
@@ -30,7 +32,41 @@ import tracing.outputs;
 import tracing.debug;
 
 /** Pass-through steps (additive layers, coverage misses) per path. */
-static const uint kMaxPassThroughSteps = 8;
+static const uint kMaxPassThroughSteps = 16;
+
+/**
+ * The one exit: write the split, then the image - a channel debug view when
+ * one is active, the assembled color otherwise. Every path out of the kernel
+ * ends here, so the debug views see sky and miss pixels too.
+ */
+void finishPixel(uint2 pixel, TraceOutputs outputs, PtDebug debug) {
+    outputs.write(pixel);
+    float3 color;
+    if (debug.wantsChannelView() && debug.channelColor(outputs, color)) {
+        if (!debug.rawChannelView()) {
+            color = ptDisplayTransform(color, pushConstants.exposure, ptTonemapOperator());
+        }
+        outputImage[pixel] = float4(color, 1.0);
+        return;
+    }
+    outputImage[pixel] = float4(ptDisplayTransform(outputs.assemble(), pushConstants.exposure,
+                                                   ptTonemapOperator()), 1.0);
+}
+
+/**
+ * Deeper vertices are part of the transport seen through the primary lobe,
+ * where an environment integral is neither available nor appropriate. This
+ * view-direction Schlick split matches the continuation sampler.
+ */
+float3 diffuseMaterialResponse(SurfaceShading shading, float3 view) {
+    float3 F0 = lerp(lerp(float3(0.04), shading.albedo, shading.metallic), float3(1.0),
+                     shading.envStrength);
+    float3 response = shading.albedo * (1.0 - shading.metallic);
+    if (shading.envmapped) {
+        response *= 1.0 - ptFresnelSchlick(max(0.0, dot(shading.normal, view)), F0);
+    }
+    return response;
+}
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
@@ -67,54 +103,78 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     PtDebug debug = PtDebug.make();
 
     // ---- The visibility ray ----
-    // Unlit-transparent surfaces occupy no volume: the visibility phase pays
-    // their radiance deterministically - a saber blade's plane stack
-    // composites identically every frame - and settles on the first
-    // substantial surface, which owns the pixel's guides and anchors every
-    // sample path. Without this, blade pixels carried environment guides and
-    // the denoiser dropped everything behind them.
-    // Coverage commits are stochastic per frame; TAA jitter and the denoiser
-    // own the reconstruction, exactly as they do for the lighting.
-    uint visibilityRng = ptHash(dispatchId.x * 0x9e3779b9u ^ dispatchId.y * 0x85ebca6bu ^
-                                pushConstants.frameIndex ^ 0x9d2c5681u);
+    // Coverage is a plain fixed-threshold alpha test: no RNG, no dither, so
+    // the surface never flickers and the TAA jitter is the frame's only
+    // stochastic input.
+    //
+    // Additive layers own nothing but their own light. A saber blade or a
+    // glow plane in front of a wall contributes emission and nothing else -
+    // it must not publish depth, motion, normal, roughness or albedo, because
+    // those guides belong to the wall behind it. Letting the blade write them
+    // reprojects the pixel along the blade's motion and drags the background
+    // through TAA and the denoiser as a smear. So the ray walks the additive
+    // layers, paying each one's emission into the noise-free channel, until a
+    // surface with substance commits. That surface is the pixel.
+    float3 layerEmission = float3(0.0);
+    RayDesc probe = ray;
     TraceHit primary;
-    float visibilityDistance = 0.0;
-    for (uint layer = 0; ; ++layer) {
-        primary = ptTraceNearest(ray, visibilityRng);
+    HitGeometry primaryHit;
+    SurfaceShading primaryShading;
+    float primaryDistance = 0.0;
+    uint layers = 0;
+    while (true) {
+        primary = ptTraceNearest(probe);
         if (!primary.hit) break;
-        visibilityDistance += primary.hitT;
-        if (primary.material.surfaceType != kPtSurfaceUnlitTransparent || layer >= 8) break;
-        HitGeometry layerHit = ptMakeHitGeometry(primary, ray, spreadAngle * visibilityDistance);
-        outputs.noiseFree += ptShade(layerHit).emission;
-        ray.Origin = layerHit.position + ray.Direction * 1e-3;
+        primaryDistance += primary.hitT;
+        primaryHit = ptMakeHitGeometry(primary, probe, spreadAngle * primaryDistance);
+        primaryShading = ptShade(primaryHit);
+        if (primaryHit.material.surfaceType != kPtSurfaceUnlitTransparent) break;
+        layerEmission += primaryShading.emission;
+        if (++layers > kMaxPassThroughSteps) {
+            primary.hit = false;
+            break;
+        }
+        // Continue through the layer, not off it.
+        probe.Origin = primaryHit.position + probe.Direction * 1e-3;
+        probe.TMin = 0.001;
     }
+    outputs.noiseFree = layerEmission;
     if (!primary.hit) {
-        outputs.write(pixel);
-        outputImage[pixel] = float4(ptDisplayTransform(outputs.assemble(), pushConstants.exposure,
-                                                       ptTonemapOperator()), 1.0);
+        finishPixel(pixel, outputs, debug);
         return;
     }
-    HitGeometry primaryHit = ptMakeHitGeometry(primary, ray, spreadAngle * visibilityDistance);
-    SurfaceShading primaryShading = ptShade(primaryHit);
 
     if (debug.wantsSurfaceView()) {
         outputImage[pixel] = float4(debug.surfaceColor(primaryHit, primaryShading, ray.Direction), 1.0);
         return;
     }
 
+    // The sky sits at environment depth for the denoiser; every real surface
+    // reports its own depth and motion. An unlit primary keeps a white albedo
+    // guide: its radiance is emission, and nothing is behind it to remodulate.
+    bool pbrPrimary = primaryHit.material.surfaceType == kPtSurfacePbr;
     outputs.normal = primaryShading.normal;
     outputs.roughness = primaryShading.roughness;
     outputs.viewZ = primaryShading.terminatesPath
                         ? kPtInfDistance
                         : mul(globalUniforms.view, float4(primaryHit.position, 1.0)).z;
     outputs.motion = primaryShading.terminatesPath ? float3(0.0) : ptMotionVector(primaryHit);
-    outputs.albedo = primaryShading.terminatesPath ? float3(1.0) : primaryShading.albedo;
-    outputs.noiseFree += primaryShading.emission;
+    if (pbrPrimary) {
+        float3 Rf0 = lerp(lerp(float3(0.04), primaryShading.albedo, primaryShading.metallic),
+                          float3(1.0), primaryShading.envStrength);
+        ptNrdMaterialFactors(primaryShading.normal, -probe.Direction, primaryShading.albedo,
+                             primaryShading.metallic, Rf0, primaryShading.roughness,
+                             outputs.diffFactor, outputs.specFactor);
+    }
+    outputs.noiseFree = layerEmission + primaryShading.emission;
+    // The sky keeps the far-plane defaults: it has no position to reproject and
+    // an upscaler must not try to chase one.
+    if (!primaryShading.terminatesPath) {
+        outputs.setUpscalerGuides(pixel, uint2(width, height), primaryHit.position, outputs.motion);
+    }
 
     if (primaryShading.terminatesPath) {
-        outputs.write(pixel);
-        outputImage[pixel] = float4(ptDisplayTransform(outputs.assemble(), pushConstants.exposure,
-                                                       ptTonemapOperator()), 1.0);
+        finishPixel(pixel, outputs, debug);
         return;
     }
 
@@ -133,13 +193,13 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                           sampleIndex * 0xc2b2ae35u ^ pushConstants.frameIndex);
         HitGeometry hit = primaryHit;
         SurfaceShading shading = primaryShading;
-        RayDesc path = ray;
+        RayDesc path = probe;
         float3 pathWeight = float3(1.0);
         float3 pathRadiance = float3(0.0);
-        float pathDistance = visibilityDistance;
+        float pathDistance = primaryDistance;
         // Channel routing: decided by the first scattering lobe. The primary
-        // vertex's diffuse weight is demodulated (albedo lives in the guide);
-        // deeper vertices carry full weights.
+        // vertex's material factors are demodulated; deeper vertices carry
+        // full weights.
         bool pathDecided = false;
         bool specularPath = false;
         bool primaryScatter = true;
@@ -154,26 +214,42 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
             if (sample.terminate) break;
             if (!sample.passThrough) {
                 DirectLight nee = ptDirectLight(hit, shading, view, rng);
+                if (!pathDecided) {
+                    pathDecided = true;
+                    specularPath = sample.specularLobe;
+                }
                 if (primaryScatter) {
+                    // Invariant: channel * diffFactor equals the primary
+                    // diffuse radiance, so direct irradiance stays unscaled.
                     diffuseChannel += nee.diffuse;
-                    specularChannel += nee.specular;
-                    if (!pathDecided) {
-                        pathDecided = true;
-                        specularPath = sample.specularLobe;
+                    specularChannel += nee.specular / outputs.specFactor;
+                    if (sample.specularLobe) {
+                        pathWeight *= sample.weight / outputs.specFactor;
+                    } else {
+                        // Sampling remains importance-weighted by the lobe,
+                        // while the path channel must retain only transport
+                        // after the primary factor is stripped. The lobe hands
+                        // back that ratio in closed form rather than us
+                        // dividing weight by the response: both go to zero on a
+                        // black texel, and the quotient of two vanishing
+                        // numbers is where the fireflies came from.
+                        pathWeight *= sample.demodulatedWeight;
                     }
-                    // Demodulate the primary diffuse lobe: the albedo guide
-                    // multiplies back in at assembly and at the composite.
-                    pathWeight *= sample.specularLobe
-                                      ? sample.weight
-                                      : sample.weight / max(shading.albedo, float3(1e-3));
-                    primaryScatter = false;
                 } else {
-                    pathRadiance += pathWeight * (nee.diffuse * shading.albedo + nee.specular);
+                    pathRadiance += pathWeight *
+                                    (nee.diffuse * diffuseMaterialResponse(shading, view) +
+                                     nee.specular);
                     pathWeight *= sample.weight;
                 }
+                primaryScatter = false;
                 if (++scatters > scatterBudget) break;
                 path.Origin = hit.position + hit.geometricNormal * pushConstants.rayOriginOffset;
             } else {
+                // Only additive layers pass through, and the visibility walk
+                // already stepped past every one in front of the guide
+                // surface - so this is always a deeper vertex, and whatever
+                // lies behind it carries full, undemodulated weights.
+                primaryScatter = false;
                 if (++passThroughs > kMaxPassThroughSteps) break;
                 pathWeight *= sample.weight;
                 // Continue through the surface, not off it.
@@ -188,17 +264,23 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
             if (statsOn) ++secondaryRays;
             if (!bounce.hit) {
                 if (statsOn) ++secondaryMisses;
-                if (firstScatterT < 0.0 && !primaryScatter) firstScatterT = kPtInfDistance;
+                if (firstScatterT < 0.0 && scatters > 0) firstScatterT = kPtInfDistance;
                 break;
             }
-            if (firstScatterT < 0.0 && !primaryScatter) firstScatterT = bounce.hitT;
+            if (firstScatterT < 0.0 && scatters > 0) firstScatterT = bounce.hitT;
             pathDistance += bounce.hitT;
             hit = ptMakeHitGeometry(bounce, path, spreadAngle * pathDistance);
             shading = ptShade(hit);
-            // Every vertex past the first pays its emission - additive
-            // glows, emissive panels, the sky - plus the lightmap radiance
-            // cache on PBR surfaces (a bounded double-count preferred to
-            // unlit interiors; the dial grades it).
+            // Every vertex past the first pays its emission - plus the
+            // lightmap radiance cache on PBR surfaces (a bounded
+            // double-count preferred to unlit interiors; the dial grades
+            // it). Additive emission included, with no special case: this
+            // is a scattered ray, so which blade plane it happens to find
+            // is a sampling outcome and varies per sample and per frame.
+            // Routing that to the noise-free target - as this did - put raw
+            // path-tracer noise in the one channel that bypasses the
+            // denoiser, and TAA alone was left to average it. Only the
+            // visibility ray's deterministic layer walk earns that channel.
             pathRadiance += pathWeight * shading.emission;
             if (shading.terminatesPath) break;
             if (shading.hasLightmap) {
@@ -237,16 +319,5 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                                   ? ptNormalizeHitDist(specHitSum / specHitCount, outputs.viewZ,
                                                        primaryShading.roughness)
                                   : 0.0;
-    outputs.write(pixel);
-
-    float3 color;
-    if (debug.wantsChannelView() && debug.channelColor(outputs, color)) {
-        if (!debug.rawChannelView()) {
-            color = ptDisplayTransform(color, pushConstants.exposure, ptTonemapOperator());
-        }
-        outputImage[pixel] = float4(color, 1.0);
-        return;
-    }
-    outputImage[pixel] = float4(ptDisplayTransform(outputs.assemble(), pushConstants.exposure,
-                                                   ptTonemapOperator()), 1.0);
+    finishPixel(pixel, outputs, debug);
 }

@@ -11,6 +11,8 @@
 import tracing.rng;
 
 public static const float kPtGamma = 2.2;
+public static const float kDemodulationFloor = 0.02;
+public static const float kNrdRoughnessFactorMinScale = 0.1;
 
 public float3 ptGammaToLinear(float3 rgb) {
     return pow(rgb, float3(kPtGamma));
@@ -35,6 +37,42 @@ public float ptGeometrySchlick(float NdotV, float k) {
 
 public float ptGeometrySmith(float NdotL, float NdotV, float k) {
     return ptGeometrySchlick(NdotL, k) * ptGeometrySchlick(NdotV, k);
+}
+
+/**
+ * Port of _NRD_EnvironmentTerm_Rtg from NRD v4.17.3 Shaders/NRD.hlsli.
+ * Keep this fit and ptNrdMaterialFactors aligned with the NRD front end:
+ * the factors are stored at the primary hit and used unchanged after NRD.
+ */
+float3 ptNrdEnvironmentTermRtg(float3 Rf0, float NoV, float roughness) {
+    float m = saturate(roughness * roughness);
+    float4 X = float4(1.0, NoV, NoV * NoV, NoV * NoV * NoV);
+    float4 Y = float4(1.0, m, m * m, m * m * m);
+    const float2x2 M1 = float2x2(0.99044, -1.28514, 1.29678, -0.755907);
+    const float3x3 M2 = float3x3(1.0, 2.92338, 59.4188, 20.3225, -27.0302, 222.592,
+                                 121.563, 626.13, 316.627);
+    const float2x2 M3 = float2x2(0.0365463, 3.32707, 9.0632, -9.04756);
+    const float3x3 M4 = float3x3(1.0, 3.59685, -1.36772, 9.04401, -16.3174, 9.22949,
+                                 5.56589, 19.7886, -20.2123);
+    float bias = dot(mul(M1, X.xy), Y.xy) /
+                 max(dot(mul(M2, X.xyw), Y.xyw), 1e-6);
+    float scale = dot(mul(M3, X.xy), Y.xy) /
+                  max(dot(mul(M4, X.xzw), Y.xyw), 1e-6);
+    return saturate(Rf0 * scale + bias);
+}
+
+public void ptNrdMaterialFactors(float3 N, float3 V, float3 albedo, float metallic, float3 Rf0,
+                                  float roughness, out float3 diffFactor,
+                                  out float3 specFactor) {
+    float3 Fenv = ptNrdEnvironmentTermRtg(Rf0, abs(dot(N, V)), roughness);
+    // Unfloored, unlike NRD's own helper. NRD raises this off zero because it
+    // DIVIDES the signal by it; our diffuse channel holds transport and is
+    // never divided, so the floor stops being protection and becomes bias -
+    // the composite would multiply back 0.02 + 0.98x where the correct
+    // multiplier is x, brightening dark materials by construction.
+    diffFactor = (1.0 - Fenv) * (1.0 - metallic) * albedo;
+    specFactor = Fenv * lerp(kNrdRoughnessFactorMinScale, 1.0, roughness);
+    specFactor = lerp(float3(kDemodulationFloor), float3(1.0), specFactor);
 }
 
 // Narkowicz's ACES fit. Scene-referred in, display-referred out; the

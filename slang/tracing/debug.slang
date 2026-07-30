@@ -18,13 +18,14 @@ public static const uint kPtDebugCategories = 1;
 public static const uint kPtDebugEmissive = 2;
 public static const uint kPtDebugNormals = 3;
 public static const uint kPtDebugRoughness = 4;
-public static const uint kPtDebugLightmap = 5;
-public static const uint kPtDebugAlbedo = 6;
-public static const uint kPtDebugDiffuseChannel = 7;
-public static const uint kPtDebugSpecularChannel = 8;
-public static const uint kPtDebugViewZ = 9;
-public static const uint kPtDebugNoiseFree = 10;
-public static const uint kPtDebugMotion = 11;
+public static const uint kPtDebugMetallic = 5;
+public static const uint kPtDebugLightmap = 6;
+public static const uint kPtDebugAlbedo = 7;
+public static const uint kPtDebugDiffuseChannel = 8;
+public static const uint kPtDebugSpecularChannel = 9;
+public static const uint kPtDebugViewZ = 10;
+public static const uint kPtDebugNoiseFree = 11;
+public static const uint kPtDebugMotion = 12;
 
 static const float3 kCategoryPalette[9] = {
     float3(0.5, 0.5, 0.5),  // GUI - never traced
@@ -74,8 +75,16 @@ public struct PtDebug {
         }
         case kPtDebugNormals:
             return shading.normal * 0.5 + 0.5;
+        // Raw, deliberately: these two are the values NRD is handed, and the
+        // point of looking at them is to read the number off the screen.
+        // Multiplying by `shape` - as roughness used to - turns a data channel
+        // into a lit render and makes a wrong value indistinguishable from a
+        // steep surface. Normals and albedo above are unshaded for the same
+        // reason; only the categorical views get the shape cue.
         case kPtDebugRoughness:
-            return float3(shading.roughness * shape);
+            return float3(shading.roughness);
+        case kPtDebugMetallic:
+            return float3(shading.metallic);
         case kPtDebugLightmap:
             return shading.hasLightmap ? ptLinearToGamma(shading.lightmap)
                                        : float3(0.9, 0.0, 0.9) * shape * 0.4;
