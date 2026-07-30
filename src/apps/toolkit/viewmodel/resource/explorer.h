@@ -43,6 +43,9 @@
 #include "image.h"
 #include "model.h"
 
+class wxWindow;
+struct SDL_Window;
+
 namespace reone {
 
 struct ResourcesItemId {
@@ -124,6 +127,7 @@ struct Progress {
 class ResourceExplorerViewModel : public ResourceViewModel {
 public:
     ResourceExplorerViewModel();
+    ~ResourceExplorerViewModel();
 
     resource::GameID gameId() const {
         return _gameId;
@@ -211,6 +215,7 @@ public:
 
     void onViewCreated();
     void onViewDestroyed();
+    void setRenderPanel(wxWindow &panel);
 
     void onNotebookPageClose(int page);
 
@@ -266,6 +271,9 @@ private:
     std::unique_ptr<audio::AudioModule> _audioModule;
     std::unique_ptr<scene::SceneModule> _sceneModule;
     std::unique_ptr<script::ScriptModule> _scriptModule;
+    std::unique_ptr<graphics::VulkanRenderer> _vulkanRenderer;
+    SDL_Window *_sdlWindow {nullptr};
+    wxWindow *_renderPanel {nullptr};
 
     bool _engineLoaded {false};
 
@@ -274,6 +282,7 @@ private:
     void loadResources();
     void loadTools();
     void loadEngine();
+    void deinitEngine();
 
     void openFile(const ResourcesItem &item);
     void openResource(const resource::ResourceId &id, IInputStream &data);

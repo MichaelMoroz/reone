@@ -42,8 +42,6 @@ bool ToolkitApp::OnInit() {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         throw std::runtime_error("SDL_Init failed: " + std::string(SDL_GetError()));
     }
-    SDL_GL_LoadLibrary(NULL);
-
     wxImage::AddHandler(new wxTGAHandler);
     m_viewModel = std::make_unique<ResourceExplorerViewModel>();
     auto frame = new ResourceExplorerFrame {*m_viewModel};

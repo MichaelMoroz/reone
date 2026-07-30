@@ -25,7 +25,6 @@
 
 #include <wx/aui/auibook.h>
 #include <wx/dataview.h>
-#include <wx/glcanvas.h>
 #include <wx/progdlg.h>
 #include <wx/splitter.h>
 #include <wx/stc/stc.h>

@@ -112,7 +112,7 @@ void ModelResourceViewModel::render3D(int w, int h) {
     auto &scene = _sceneSvc.graphs().get(kSceneMain);
     auto &output = scene.render(glm::ivec2(w, h));
     auto &renderer = _graphicsModule.renderer();
-    // No presentation here: wxWidgets owns the canvas and swaps it.
+    // Vulkan presents the completed frame to the wxWidgets child window.
     renderer.beginFrame(glm::ivec2(w, h));
     renderer.drawSceneOutput(output);
     renderer.endFrame();

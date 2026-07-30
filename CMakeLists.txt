@@ -72,7 +72,7 @@ if(ENABLE_MOVIE)
 endif()
 
 if(BUILD_LAUNCHER OR BUILD_TOOLKIT)
-    find_package(wxWidgets REQUIRED core base adv stc gl aui)
+    find_package(wxWidgets REQUIRED core base adv stc aui)
     include(${wxWidgets_USE_FILE})
 endif()
 

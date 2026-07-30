@@ -285,10 +285,26 @@ at commit `90319515` in `scratchpad/vkbase/`.)*
 
    - **The wx toolkit drives the full GL pipeline through `wxGLCanvas`**
      (`toolkit/view/resource/modelpanel.cpp:43`, `:125-129`). Backlog 5.5 sizes
-     porting it as **L**. This is not a checkbox at the end of Phase A — it is
-     either its own phase, or the toolkit's 3D preview is deleted and the app
-     keeps its non-rendering functions. **Decide before starting A2**, because
-     "delete GL" cannot land while an application still requires it.
+     porting it as **L**. **Decided: port it, and port it first**, before any
+     GL deletion — the preview is one of the toolkit's eight viewers, and the
+     other seven (GFF editor, 2DA tables, script decompiler, texture and audio
+     preview, text) plus the batch tools are pure data work that never touches
+     graphics. Deleting the renderer to spare a port would take the one viewer
+     that cannot be replaced by reading the file.
+
+     It is smaller than the L suggests, because every seam already exists:
+     `VulkanRenderer` is constructed from an `SDL_Window*` and nothing else
+     (`apps/engine/engine.cpp:305-311`), `GraphicsModule` already documents its
+     window as "null in hosts that own presentation themselves, such as the
+     wxWidgets toolkit" (`graphics/di/module.h:39-46`), `setRenderers` is the
+     injection point, and swapchain recreate on resize is already handled
+     (`vulkan/renderer.cpp:210-219`, `:425-429`). The missing piece is only an
+     `SDL_Window` for a wx panel, which SDL3 builds from a native handle via
+     `SDL_CreateWindowWithProperties` and `SDL_PROP_WINDOW_CREATE_WIN32_HWND_POINTER`.
+     So: `wxGLCanvas` becomes a plain `wxPanel`, the toolkit constructs a
+     `VulkanRenderer` over its handle and injects it, and `InitGL`/`SwapBuffers`
+     go. Presenting into a child window keeps the render path identical to the
+     engine's — no offscreen readback, no second code path to maintain.
    - **The profiler calls `context.useProgram`** at
      `apps/engine/profiler.cpp:121` and `:135`, outside any backend branch.
      Deleting `Context` breaks it.
@@ -529,8 +545,34 @@ Harness rules, all load-bearing:
 - Two numbers differing by less than the spread of either are not a result;
   noise runs to about 12% on one module.
 
-Steps 2, 3 and 5 must be pixel-identical against a **Vulkan** baseline. Step 4
-cannot be, and should be measured rather than compared.
+**"Pixel-identical" is not available, and assuming it was cost this phase its
+first false alarm.** Captures are no longer reproducible run to run, measured
+here on `danm14ab` at frame 310 with two runs of one unmodified binary:
+
+| | differing pixels | mean abs error | mean luminance |
+|---|---:|---:|---|
+| retro raster | 0.0245% | 0.022 | 77.314 vs 77.317 |
+| path tracing | 13.40% | 0.118 | 111.724 both |
+
+The images are the same image — mean luminance agrees to three decimals and
+the mean absolute error is a fiftieth of a grey level — but individual pixels
+move, by up to 219 in a channel. This is backlog **7.1**, already open at P1 —
+not something this phase introduced. What is new is the measurement: 7.1
+described the effect as bimodal and intermittent, and these figures show it is
+present on every run, small in magnitude, and different between raster and
+tracing. It also contradicts the diagnostics skill, which still documents
+raster as byte-identical and tracing as bounded at 0.02%; that text is wrong
+and should be corrected before it misleads another comparison.
+
+So the bar becomes **the change must be indistinguishable from run-to-run
+noise**: capture the baseline module twice, and require the
+baseline-versus-candidate difference to be no larger than the
+baseline-versus-baseline difference, on all three of differing-pixel share,
+mean absolute error and mean luminance. A candidate that lands inside that
+spread has not changed the image. Comparing a single run against a single
+stored baseline reports failure at 12% for a build that changed nothing.
+
+Step 4 cannot be compared at all, and should be measured rather than compared.
 
 ## Not in scope
 

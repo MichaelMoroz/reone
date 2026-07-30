@@ -163,6 +163,7 @@ void ResourceExplorerFrame::InitControls() {
 
     m_imagePanel = new ImageResourcePanel(m_viewModel.imageResViewModel(), m_notebook);
     m_modelPanel = new ModelResourcePanel(m_viewModel.modelResViewModel(), m_notebook);
+    m_viewModel.setRenderPanel(m_modelPanel->renderCanvas());
     m_audioPanel = new AudioResourcePanel(m_viewModel.audioResViewModel(), m_notebook);
 
     m_splitter->SplitVertically(resourcesPanel, m_notebook, 1);
@@ -243,11 +244,6 @@ void ResourceExplorerFrame::BindViewModel() {
                     }
                     page->dirty = true;
                 });
-            }
-            if (page->type == PageType::Model || page->type == PageType::Audio) {
-                m_modelPanel->Show();
-                m_modelPanel->InitGL();
-                m_modelPanel->Hide();
             }
             window->SetClientData(new PageClientData {page->resourceId});
             window->Show();
@@ -362,7 +358,7 @@ void ResourceExplorerFrame::OnIdle(wxIdleEvent &event) {
     bool renderEnabled = *m_viewModel.renderEnabled();
     if (renderEnabled) {
         m_viewModel.modelResViewModel().update3D();
-        m_modelPanel->RefreshGL();
+        m_modelPanel->RefreshCanvas();
     }
     bool hasAudio = m_audioPanel->HasAudioSource();
     if (hasAudio) {

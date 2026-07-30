@@ -18,12 +18,16 @@
 #include "explorer.h"
 
 #include <wx/stopwatch.h>
+#include <wx/window.h>
+
+#include <SDL3/SDL.h>
 
 #include "reone/audio/format/mp3reader.h"
 #include "reone/graphics/format/lipreader.h"
 #include "reone/graphics/format/lipwriter.h"
 #include "reone/graphics/format/mdlmdxreader.h"
 #include "reone/graphics/lipanimation.h"
+#include "reone/graphics/vulkan/renderer.h"
 #include "reone/resource/format/2dareader.h"
 #include "reone/resource/format/2dawriter.h"
 #include "reone/resource/format/gffreader.h"
@@ -96,6 +100,7 @@ private:
 };
 
 ResourceExplorerViewModel::ResourceExplorerViewModel() {
+    setCurrentBackend(GraphicsBackend::Vulkan);
     _graphicsOpt.grass = false;
     _graphicsOpt.pbr = false;
     _graphicsOpt.ssao = false;
@@ -123,6 +128,10 @@ ResourceExplorerViewModel::ResourceExplorerViewModel() {
         g_lipShapeToName.insert({shape, name});
         g_nameToLipShape.insert({name, shape});
     }
+}
+
+ResourceExplorerViewModel::~ResourceExplorerViewModel() {
+    deinitEngine();
 }
 
 void ResourceExplorerViewModel::openFile(const ResourcesItem &item) {
@@ -427,11 +436,40 @@ void ResourceExplorerViewModel::loadEngine() {
     }
     info("Loading engine");
 
+    if (!_renderPanel || !_renderPanel->GetHandle()) {
+        throw std::runtime_error("Model preview panel has no native window handle");
+    }
+
+    auto props = SDL_CreateProperties();
+    if (!props ||
+        !SDL_SetPointerProperty(props, SDL_PROP_WINDOW_CREATE_WIN32_HWND_POINTER, _renderPanel->GetHandle()) ||
+        !SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true)) {
+        if (props) {
+            SDL_DestroyProperties(props);
+        }
+        throw std::runtime_error("Failed to configure SDL window for Vulkan: " + std::string(SDL_GetError()));
+    }
+    _sdlWindow = SDL_CreateWindowWithProperties(props);
+    SDL_DestroyProperties(props);
+    if (!_sdlWindow) {
+        throw std::runtime_error("Failed to wrap model preview panel with SDL: " + std::string(SDL_GetError()));
+    }
+
+    auto size = _renderPanel->GetClientSize();
+    _vulkanRenderer = std::make_unique<VulkanRenderer>(
+        _sdlWindow,
+        glm::ivec2 {std::max(1, size.x), std::max(1, size.y)},
+        _graphicsOpt.vsync,
+        false);
+    _vulkanRenderer->init();
+    _graphicsModule->setRenderers(*_vulkanRenderer, _vulkanRenderer->renderer2d());
+
     _systemModule->init();
     _graphicsModule->init();
     _audioModule->init();
     _resourceModule->init();
     _sceneModule->init();
+    _sceneModule->renderPipelineFactory().setVulkanRenderer(*_vulkanRenderer);
 
     auto keyPath = findFileIgnoreCase(_resourcesPath, "chitin.key");
     if (!keyPath) {
@@ -441,6 +479,27 @@ void ResourceExplorerViewModel::loadEngine() {
     _modelResViewModel->initScene();
 
     _engineLoaded = true;
+}
+
+void ResourceExplorerViewModel::deinitEngine() {
+    if (!_engineLoaded && !_vulkanRenderer) {
+        return;
+    }
+
+    _renderEnabled = false;
+    _modelResViewModel.reset();
+    _sceneModule.reset();
+    _resourceModule.reset();
+    _scriptModule.reset();
+    _audioModule.reset();
+    _vulkanRenderer.reset();
+    _graphicsModule.reset();
+    _systemModule.reset();
+    if (_sdlWindow) {
+        SDL_DestroyWindow(_sdlWindow);
+        _sdlWindow = nullptr;
+    }
+    _engineLoaded = false;
 }
 
 void ResourceExplorerViewModel::decompile(ResourcesItemId itemId, bool optimize) {
@@ -788,6 +847,11 @@ void ResourceExplorerViewModel::onViewCreated() {
 
 void ResourceExplorerViewModel::onViewDestroyed() {
     _audioResViewModel->audioStream() = nullptr;
+    deinitEngine();
+}
+
+void ResourceExplorerViewModel::setRenderPanel(wxWindow &panel) {
+    _renderPanel = &panel;
 }
 
 void ResourceExplorerViewModel::onNotebookPageClose(int page) {
