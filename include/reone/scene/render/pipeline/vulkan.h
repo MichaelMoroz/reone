@@ -82,6 +82,7 @@ public:
     std::vector<RenderTargetInfo> targets() const override;
     void *renderTargetPreview(const std::string &name, int mode, float scale) override;
     void dumpTargets(const std::filesystem::path &dir) override;
+    void restartTemporalHistory() override;
 
     const RenderRegistry &registry() const { return *_registry; }
 

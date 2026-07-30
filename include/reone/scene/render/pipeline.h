@@ -127,6 +127,19 @@ public:
      * has to be idle before this is called; the caller owns that.
      */
     virtual void dumpTargets(const std::filesystem::path &dir) = 0;
+
+    /**
+     * Throw away every temporal history the pipeline holds, so the next frame
+     * accumulates from nothing.
+     *
+     * A temporal filter with a blend factor never reaches zero residual - it
+     * settles at a small steady state - so a measurement that only sees the
+     * settled value cannot tell a working filter from a broken one. Restarting
+     * the history at a known frame makes the approach itself observable: the
+     * residual must fall geometrically from its cold value to that steady
+     * state, and a filter that is not accumulating shows no decay at all.
+     */
+    virtual void restartTemporalHistory() {}
 };
 
 class IRenderPipelineFactory {

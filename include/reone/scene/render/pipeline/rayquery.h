@@ -9,6 +9,9 @@
 #include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/mesh.h"
 
+#ifdef R_ENABLE_FSR
+#include "reone/scene/render/pipeline/fsrupscaler.h"
+#endif
 #ifdef R_ENABLE_NRD
 #include "reone/scene/render/pipeline/nrddenoiser.h"
 #endif
@@ -40,6 +43,23 @@ public:
                 graphics::VulkanImage &output,
                 const glm::mat4 &view, const glm::mat4 &projection,
                 const glm::vec4 &jitter);
+
+    /** One channel of the trace split, for the render-target viewer and dumps. */
+    struct Channel {
+        const char *name;
+        const char *dumpName;
+        graphics::VulkanImage *image;
+    };
+    /**
+     * The split as the frame just rendered left it. This is what makes a claim
+     * about a single channel checkable - whether the noise-free target really
+     * is free of noise, whether the albedo guide matches the surface - instead
+     * of inferring it from the assembled image.
+     */
+    std::vector<Channel> channels();
+
+    /** Drop the TAA history and NRD's accumulation; the next frame starts cold. */
+    void restartTemporalHistory();
 
 private:
     struct Frame {
@@ -123,6 +143,8 @@ private:
     };
 
     uint32_t _frameNumber {0};
+    /** Set by restartTemporalHistory, consumed by the next denoise. */
+    bool _restartHistoryRequested {false};
     bool _inited {false};
 
     /**
@@ -140,27 +162,53 @@ private:
     std::array<VkDescriptorSet, 2> _compositeSets {};
     VkPipelineLayout _compositePipelineLayout {VK_NULL_HANDLE};
     VkPipeline _compositePipeline {VK_NULL_HANDLE};
-    /** Ping-pong history for the noise-free channel's TAA in the composite. */
-    std::array<std::unique_ptr<graphics::VulkanImage>, 2> _taaHistory;
-    bool _taaHistoryTransitioned {false};
-    bool _taaHistoryValid {false};
+    /**
+     * Camera position last frame, for the teleport check that restarts NRD's
+     * accumulation and the upscaler's history together.
+     */
     glm::vec3 _prevCameraPosition {0.0f};
+    bool _temporalHistoryValid {false};
+#endif
+
+#ifdef R_ENABLE_FSR
+    /**
+     * The upscaler and the two images it needs either side of itself: the
+     * composite's linear-HDR handoff, and FSR's resolved output before the
+     * display transform. Both single-buffered - FSR keeps its own history
+     * internally and neither image outlives the frame that writes it.
+     */
+    std::unique_ptr<FsrUpscaler> _fsr;
+    std::unique_ptr<graphics::VulkanImage> _fsrColor;
+    std::unique_ptr<graphics::VulkanImage> _fsrOutput;
+    bool _fsrImagesTransitioned {false};
+    /** The display transform, moved after the upscaler. */
+    VkDescriptorSetLayout _tonemapLayout {VK_NULL_HANDLE};
+    VkDescriptorPool _tonemapPool {VK_NULL_HANDLE};
+    std::array<VkDescriptorSet, 2> _tonemapSets {};
+    VkPipelineLayout _tonemapPipelineLayout {VK_NULL_HANDLE};
+    VkPipeline _tonemapPipeline {VK_NULL_HANDLE};
 #endif
 
     /**
      * The NRD-facing output split, set 2 in the trace pipeline: diffuse and
      * specular radiance with hit distance, normal/roughness, viewZ, motion,
-     * the noise-free target, and the albedo demodulation guide. Written
+      * the noise-free target, and the two material factors. Written
      * every traced frame whether or not NRD is built in - the channels
      * double as debug views - and double-buffered like every other per-frame
      * resource, since two frames are in flight.
      */
-    static constexpr int kNumAuxImages = 7;
+    static constexpr int kNumAuxImages = 10;
     std::array<std::array<std::unique_ptr<graphics::VulkanImage>, kNumAuxImages>, 2> _auxImages;
     VkDescriptorSetLayout _auxLayout {VK_NULL_HANDLE};
     VkDescriptorPool _auxPool {VK_NULL_HANDLE};
     std::array<VkDescriptorSet, 2> _auxSets {};
     bool _auxImagesTransitioned {false};
+    /**
+     * Which of the two in-flight copies the last render() wrote. A dump runs
+     * after the frame, by which point the renderer's own index may already
+     * have moved on to the next one.
+     */
+    int _lastAuxFrame {-1};
 
     void clearFrame(Frame &frame);
     graphics::VulkanMesh::Geometry skin(VkCommandBuffer cmd,

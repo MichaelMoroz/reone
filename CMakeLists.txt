@@ -38,6 +38,11 @@ option(ENABLE_ASAN "enable address sanitizer" OFF)
 # enabled, and builds without it must remain fully functional.
 option(ENABLE_NRD "fetch and link the NVIDIA Real-time Denoisers SDK (local builds only)" OFF)
 
+# FidelityFX is MIT, so unlike NRD this one is distributable. It stays off by
+# default because its committed shader compiler is Windows-only; builds without
+# it must remain fully functional.
+option(ENABLE_FSR "fetch and link the AMD FidelityFX Super Resolution 2 upscaler" OFF)
+
 # END Options
 
 # Dependencies
@@ -106,6 +111,101 @@ if(ENABLE_NRD)
     set(NRD_DISABLE_SHADER_COMPILATION OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(NRD)
     add_compile_definitions(R_ENABLE_NRD)
+endif()
+
+if(ENABLE_FSR)
+    if(NOT ENABLE_VULKAN)
+        message(FATAL_ERROR "ENABLE_FSR requires ENABLE_VULKAN")
+    endif()
+    if(NOT MSVC)
+        message(FATAL_ERROR "ENABLE_FSR requires MSVC: FSR2's committed shader compiler is Windows-only")
+    endif()
+
+    # FSR2's project assumes it is the top-level project and writes archives to
+    # CMAKE_HOME_DIRECTORY. Fetch only its source and own the small static
+    # library here so generated data remains in the build tree.
+    include(FetchContent)
+    FetchContent_Declare(FSR2
+        GIT_REPOSITORY https://github.com/GPUOpen-Effects/FidelityFX-FSR2.git
+        GIT_TAG v2.2.1
+        GIT_SHALLOW TRUE)
+    FetchContent_GetProperties(FSR2)
+    if(NOT fsr2_POPULATED)
+        FetchContent_Populate(FSR2)
+    endif()
+
+    set(FSR2_SHADER_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/fsr2)
+    set(FSR2_API_DIR ${fsr2_SOURCE_DIR}/src/ffx-fsr2-api)
+    set(FSR2_SHADER_DIR ${FSR2_API_DIR}/shaders)
+    file(GLOB FSR2_SHADER_DEPENDENCIES ${FSR2_SHADER_DIR}/*.glsl ${FSR2_SHADER_DIR}/*.h)
+
+    # These argument sets are upstream's, reproduced rather than invented: see
+    # FFX_SC_BASE_ARGS / FFX_SC_VK_BASE_ARGS / FFX_SC_PERMUTATION_ARGS in the
+    # SDK's own src/ffx-fsr2-api CMakeLists. The half-precision sampler dials
+    # are not permutation axes - only reprojection does half - and omitting any
+    # of them, or the -name= the generated header keys off, makes the compiler
+    # fail with an empty error message.
+    set(FSR2_SC_BASE_ARGS
+        -reflection -deps=gcc -DFFX_GPU=1
+        -DFFX_FSR2_OPTION_UPSAMPLE_SAMPLERS_USE_DATA_HALF=0
+        -DFFX_FSR2_OPTION_ACCUMULATE_SAMPLERS_USE_DATA_HALF=0
+        -DFFX_FSR2_OPTION_REPROJECT_SAMPLERS_USE_DATA_HALF=1
+        -DFFX_FSR2_OPTION_POSTPROCESSLOCKSTATUS_SAMPLERS_USE_DATA_HALF=0
+        -DFFX_FSR2_OPTION_UPSAMPLE_USE_LANCZOS_TYPE=2)
+    set(FSR2_SC_VK_ARGS -compiler=glslang -e main --target-env vulkan1.1 -S comp -Os -DFFX_GLSL=1)
+    set(FSR2_SC_PERMUTATION_ARGS
+        -DFFX_FSR2_OPTION_REPROJECT_USE_LANCZOS_TYPE={0,1}
+        -DFFX_FSR2_OPTION_HDR_COLOR_INPUT={0,1}
+        -DFFX_FSR2_OPTION_LOW_RESOLUTION_MOTION_VECTORS={0,1}
+        -DFFX_FSR2_OPTION_JITTERED_MOTION_VECTORS={0,1}
+        -DFFX_FSR2_OPTION_INVERTED_DEPTH={0,1}
+        -DFFX_FSR2_OPTION_APPLY_SHARPENING={0,1})
+
+    set(FSR2_SHADER_HEADERS)
+    function(add_fsr2_shader_permutations pass)
+        set(name ffx_fsr2_${pass}_pass)
+        set(source ${FSR2_SHADER_DIR}/${name}.glsl)
+        set(output ${FSR2_SHADER_OUTPUT_DIR}/${name}_permutations.h)
+        # The luminance pyramid pass has no half-precision variant.
+        set(half -DFFX_HALF={0,1})
+        if(pass STREQUAL "compute_luminance_pyramid")
+            set(half -DFFX_HALF=0)
+        endif()
+        add_custom_command(
+            OUTPUT ${output}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${FSR2_SHADER_OUTPUT_DIR}
+            COMMAND ${fsr2_SOURCE_DIR}/tools/sc/FidelityFX_SC.exe
+                ${FSR2_SC_BASE_ARGS} ${FSR2_SC_VK_ARGS} ${FSR2_SC_PERMUTATION_ARGS} ${half}
+                -name=${name} -I${FSR2_SHADER_DIR}
+                -output=${FSR2_SHADER_OUTPUT_DIR} ${source}
+            DEPENDS ${source} ${FSR2_SHADER_DEPENDENCIES}
+            COMMENT "FidelityFX_SC ${name}"
+            VERBATIM)
+        list(APPEND FSR2_SHADER_HEADERS ${output})
+        set(FSR2_SHADER_HEADERS ${FSR2_SHADER_HEADERS} PARENT_SCOPE)
+    endfunction()
+    foreach(pass tcr_autogen autogen_reactive accumulate compute_luminance_pyramid depth_clip lock
+                 reconstruct_previous_depth rcas)
+        add_fsr2_shader_permutations(${pass})
+    endforeach()
+
+    add_custom_target(fsr2_shaders DEPENDS ${FSR2_SHADER_HEADERS})
+    add_library(fsr2 STATIC
+        ${fsr2_SOURCE_DIR}/src/ffx-fsr2-api/ffx_fsr2.cpp
+        ${fsr2_SOURCE_DIR}/src/ffx-fsr2-api/ffx_assert.cpp
+        ${fsr2_SOURCE_DIR}/src/ffx-fsr2-api/vk/ffx_fsr2_vk.cpp
+        ${fsr2_SOURCE_DIR}/src/ffx-fsr2-api/vk/shaders/ffx_fsr2_shaders_vk.cpp
+        ${FSR2_SHADER_HEADERS})
+    add_dependencies(fsr2 fsr2_shaders)
+    # The public headers live beside the sources, not in a separate include/.
+    target_include_directories(fsr2 PUBLIC ${FSR2_API_DIR} ${FSR2_API_DIR}/vk
+                                  PRIVATE ${FSR2_SHADER_OUTPUT_DIR})
+    # volk owns Vulkan entry points in this process. Force it in before FSR2's
+    # Vulkan header so direct backend calls resolve through volk's loaded table.
+    target_compile_definitions(fsr2 PRIVATE FFX_GCC VK_NO_PROTOTYPES VOLK_NAMESPACE)
+    target_compile_options(fsr2 PRIVATE /FIvolk.h)
+    target_link_libraries(fsr2 PRIVATE Vulkan::Headers volk::volk_headers)
+    add_compile_definitions(R_ENABLE_FSR)
 endif()
 
 # Compiles slang/ to SPIR-V for Vulkan and regenerates the uniform layout

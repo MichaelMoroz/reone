@@ -18,6 +18,8 @@
 #include "reone/graphics/vulkan/device.h"
 
 #include <algorithm>
+#include <cstring>
+#include <vector>
 
 #include <SDL3/SDL_vulkan.h>
 
@@ -142,6 +144,20 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     auto physicalDevice = physicalResult.value();
     bool rayQueryEnabled = false;
 
+#ifdef R_ENABLE_FSR
+    uint32_t extensionCount = 0;
+    vkEnumerateDeviceExtensionProperties(physicalDevice.physical_device, nullptr, &extensionCount,
+                                         nullptr);
+    std::vector<VkExtensionProperties> extensions(extensionCount);
+    vkEnumerateDeviceExtensionProperties(physicalDevice.physical_device, nullptr, &extensionCount,
+                                         extensions.data());
+    const bool subgroupSizeControlAvailable = std::any_of(
+        extensions.begin(), extensions.end(), [](const VkExtensionProperties &extension) {
+            return std::strcmp(extension.extensionName,
+                               VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME) == 0;
+        });
+#endif
+
     // add_required_extension_features gives vk-bootstrap the feature pNext
     // chain and makes DeviceBuilder enable it with the matching extensions.
     // Selection is deliberately a second, optional pass: failure leaves the
@@ -159,6 +175,19 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
         .set_required_features_12(features12)
         .add_required_extension_features(accelerationStructureFeatures)
         .add_required_extension_features(rayQueryFeatures);
+#ifdef R_ENABLE_FSR
+    // FSR2 requests an explicit subgroup size whenever this extension is
+    // advertised. Its pipeline pNext is only legal when the matching feature
+    // was enabled at device creation.
+    VkPhysicalDeviceSubgroupSizeControlFeaturesEXT subgroupSizeControlFeatures {};
+    if (subgroupSizeControlAvailable) {
+        subgroupSizeControlFeatures.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
+        subgroupSizeControlFeatures.subgroupSizeControl = VK_TRUE;
+        rayQuerySelector.add_required_extension(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME)
+            .add_required_extension_features(subgroupSizeControlFeatures);
+    }
+#endif
     auto rayQueryPhysicalResult = rayQuerySelector.select();
     if (rayQueryPhysicalResult) {
         physicalDevice = rayQueryPhysicalResult.value();

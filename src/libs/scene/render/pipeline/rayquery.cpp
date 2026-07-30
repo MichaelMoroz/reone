@@ -86,7 +86,9 @@ struct alignas(16) InstanceMaterial {
      * blades, glow decals), 2 = unlit emissive (sky and prelit; path ends).
      */
     uint32_t surfaceType {0};
-    uint32_t surfacePad {0};
+    // Keep this scalar in the existing std430 slot: growing this record
+    // changes the stride every shader uses to index material addresses.
+    float roughnessScale {1.0f};
     /**
      * The per-category calibration overrides, baked per instance so the
      * shader never reads a category table: rgb + lerp weight flat-paints
@@ -94,7 +96,10 @@ struct alignas(16) InstanceMaterial {
      * scale, env-map strength scale.
      */
     glm::vec4 overrideColor {1.0f, 1.0f, 1.0f, 0.0f};
-    glm::vec4 overrideParams {-1.0f, 1.0f, 1.0f, 0.0f};
+    // roughness -1 means "no override"; the other three are multipliers and
+    // must default to identity, not zero - a material that never receives a
+    // category override still reads them.
+    glm::vec4 overrideParams {-1.0f, 1.0f, 1.0f, 1.0f};
 };
 
 static_assert(offsetof(InstanceMaterial, vertexAddress) == 80);
@@ -102,6 +107,7 @@ static_assert(offsetof(InstanceMaterial, mainTex) == 120);
 static_assert(offsetof(InstanceMaterial, curatedAlbedoMul) == 160);
 static_assert(offsetof(InstanceMaterial, prevTransform0) == 256);
 static_assert(offsetof(InstanceMaterial, prevPositionsAddress) == 320);
+static_assert(offsetof(InstanceMaterial, roughnessScale) == 332);
 static_assert(offsetof(InstanceMaterial, overrideColor) == 336);
 static_assert(sizeof(InstanceMaterial) == 368);
 
@@ -254,7 +260,10 @@ void RayQueryPipeline::init() {
             VK_FORMAT_R32_SFLOAT,          // viewZ
             VK_FORMAT_R16G16B16A16_SFLOAT, // motion
             VK_FORMAT_R16G16B16A16_SFLOAT, // noise-free
-            VK_FORMAT_R16G16B16A16_SFLOAT, // albedo guide
+            VK_FORMAT_R16G16B16A16_SFLOAT, // diffuse material factor
+            VK_FORMAT_R32_SFLOAT,          // device depth, for the upscaler
+            VK_FORMAT_R16G16B16A16_SFLOAT, // screen-space motion, for the upscaler
+            VK_FORMAT_R16G16B16A16_SFLOAT, // specular material factor
         };
         std::array<VkDescriptorImageInfo, 2 * kNumAuxImages> auxImageInfos {};
         std::array<VkWriteDescriptorSet, 2 * kNumAuxImages> auxWrites {};
@@ -384,23 +393,22 @@ void RayQueryPipeline::init() {
             _nrdDenoiser = std::make_unique<NrdDenoiser>(device, *instance, _extent);
             _nrdDenoiser->init();
 
-            for (auto &history : _taaHistory) {
-                history = std::make_unique<VulkanImage>(device);
-                history->initColorAttachment(_extent, VK_FORMAT_R16G16B16A16_SFLOAT);
-            }
-            VkDescriptorSetLayoutBinding compositeBindings[9] {};
-            for (uint32_t i = 0; i < 9; ++i) {
+            // Seven: output, noise-free, diffuse and specular factors, denoised diffuse and specular,
+            // viewZ. Must match the binding list in slang/nrd_composite.slang.
+            constexpr uint32_t kCompositeBindingCount = 7;
+            VkDescriptorSetLayoutBinding compositeBindings[kCompositeBindingCount] {};
+            for (uint32_t i = 0; i < kCompositeBindingCount; ++i) {
                 compositeBindings[i].binding = i;
                 compositeBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 compositeBindings[i].descriptorCount = 1;
                 compositeBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
             }
             VkDescriptorSetLayoutCreateInfo compositeLayoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-            compositeLayoutInfo.bindingCount = 9;
+            compositeLayoutInfo.bindingCount = kCompositeBindingCount;
             compositeLayoutInfo.pBindings = compositeBindings;
             if (vkCreateDescriptorSetLayout(device.handle(), &compositeLayoutInfo, nullptr, &_compositeLayout) != VK_SUCCESS)
                 throw std::runtime_error("Vulkan: NRD composite layout creation failed");
-            VkDescriptorPoolSize compositePoolSize {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 18};
+            VkDescriptorPoolSize compositePoolSize {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * kCompositeBindingCount};
             VkDescriptorPoolCreateInfo compositePoolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
             compositePoolInfo.maxSets = 2;
             compositePoolInfo.poolSizeCount = 1;
@@ -416,9 +424,9 @@ void RayQueryPipeline::init() {
                 throw std::runtime_error("Vulkan: NRD composite set allocation failed");
             VkPushConstantRange compositePush {};
             compositePush.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            compositePush.size = 5 * sizeof(uint32_t);
-            // Set 0 is the shared uniform block: the TAA reprojection reads
-            // the same matrices the trace pass does.
+            compositePush.size = 3 * sizeof(uint32_t);
+            // Set 0 is the shared uniform block, kept because the pipeline
+            // layout is shared with the rest of the traced passes.
             VkDescriptorSetLayout compositeLayouts[] {_renderer.descriptors().uniformLayout(), _compositeLayout};
             VkPipelineLayoutCreateInfo compositePipelineLayout {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
             compositePipelineLayout.setLayoutCount = 2;
@@ -450,6 +458,82 @@ void RayQueryPipeline::init() {
         }
     }
 #endif
+#ifdef R_ENABLE_FSR
+    if (_options.ptFsr) {
+        // Both at render resolution: NativeAA does not change the size, and the
+        // composite/tonemap pair either side of FSR work on the same grid.
+        _fsrColor = std::make_unique<VulkanImage>(device);
+        _fsrColor->initColorAttachment(_extent, VK_FORMAT_R16G16B16A16_SFLOAT);
+        _fsrOutput = std::make_unique<VulkanImage>(device);
+        _fsrOutput->initColorAttachment(_extent, VK_FORMAT_R16G16B16A16_SFLOAT);
+
+        std::array<VkDescriptorSetLayoutBinding, 2> tonemapBindings {};
+        for (uint32_t i = 0; i < 2; ++i) {
+            tonemapBindings[i].binding = i;
+            tonemapBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            tonemapBindings[i].descriptorCount = 1;
+            tonemapBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo tonemapLayoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        tonemapLayoutInfo.bindingCount = 2;
+        tonemapLayoutInfo.pBindings = tonemapBindings.data();
+        if (vkCreateDescriptorSetLayout(device.handle(), &tonemapLayoutInfo, nullptr, &_tonemapLayout) != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: tonemap descriptor layout creation failed");
+        VkDescriptorPoolSize tonemapPoolSize {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * 2};
+        VkDescriptorPoolCreateInfo tonemapPoolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        tonemapPoolInfo.maxSets = 2;
+        tonemapPoolInfo.poolSizeCount = 1;
+        tonemapPoolInfo.pPoolSizes = &tonemapPoolSize;
+        if (vkCreateDescriptorPool(device.handle(), &tonemapPoolInfo, nullptr, &_tonemapPool) != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: tonemap descriptor pool creation failed");
+        std::array<VkDescriptorSetLayout, 2> tonemapSetLayouts {_tonemapLayout, _tonemapLayout};
+        VkDescriptorSetAllocateInfo tonemapAlloc {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        tonemapAlloc.descriptorPool = _tonemapPool;
+        tonemapAlloc.descriptorSetCount = 2;
+        tonemapAlloc.pSetLayouts = tonemapSetLayouts.data();
+        if (vkAllocateDescriptorSets(device.handle(), &tonemapAlloc, _tonemapSets.data()) != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: tonemap set allocation failed");
+        VkPushConstantRange tonemapPush {};
+        tonemapPush.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        tonemapPush.size = 2 * sizeof(uint32_t);
+        VkDescriptorSetLayout tonemapLayouts[] {_renderer.descriptors().uniformLayout(), _tonemapLayout};
+        VkPipelineLayoutCreateInfo tonemapPipelineLayout {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        tonemapPipelineLayout.setLayoutCount = 2;
+        tonemapPipelineLayout.pSetLayouts = tonemapLayouts;
+        tonemapPipelineLayout.pushConstantRangeCount = 1;
+        tonemapPipelineLayout.pPushConstantRanges = &tonemapPush;
+        if (vkCreatePipelineLayout(device.handle(), &tonemapPipelineLayout, nullptr, &_tonemapPipelineLayout) != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: tonemap pipeline layout creation failed");
+        auto tonemapSpirv = readSpirV(_renderer.shaderDir() / "pt_tonemap.spv");
+        VkShaderModuleCreateInfo tonemapModuleInfo {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        tonemapModuleInfo.codeSize = tonemapSpirv.size() * sizeof(uint32_t);
+        tonemapModuleInfo.pCode = tonemapSpirv.data();
+        VkShaderModule tonemapModule;
+        if (vkCreateShaderModule(device.handle(), &tonemapModuleInfo, nullptr, &tonemapModule) != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: tonemap shader module creation failed");
+        VkComputePipelineCreateInfo tonemapPipeline {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        tonemapPipeline.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        tonemapPipeline.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        tonemapPipeline.stage.module = tonemapModule;
+        tonemapPipeline.stage.pName = "main";
+        tonemapPipeline.layout = _tonemapPipelineLayout;
+        const auto tonemapResult = vkCreateComputePipelines(device.handle(), VK_NULL_HANDLE, 1,
+                                                            &tonemapPipeline, nullptr, &_tonemapPipeline);
+        vkDestroyShaderModule(device.handle(), tonemapModule, nullptr);
+        if (tonemapResult != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: tonemap pipeline creation failed");
+
+        try {
+            _fsr = std::make_unique<FsrUpscaler>(device, _extent);
+            _fsr->init();
+        } catch (const std::exception &e) {
+            // Losing the upscaler must not lose the frame; it costs the
+            // anti-aliasing, since FSR is the only temporal resolve left.
+            warn(std::string("FSR unavailable, rendering without anti-aliasing: ") + e.what());
+            _fsr.reset();
+        }
+    }
+#endif
     _inited = true;
 }
 
@@ -472,9 +556,7 @@ void RayQueryPipeline::deinit() {
     if (_compositeLayout) vkDestroyDescriptorSetLayout(_renderer.device().handle(), _compositeLayout, nullptr);
     _compositePipeline = VK_NULL_HANDLE; _compositePipelineLayout = VK_NULL_HANDLE;
     _compositePool = VK_NULL_HANDLE; _compositeLayout = VK_NULL_HANDLE; _compositeSets = {};
-    for (auto &history : _taaHistory) history.reset();
-    _taaHistoryTransitioned = false;
-    _taaHistoryValid = false;
+    _temporalHistoryValid = false;
     _nrdDenoiser.reset();
     if (_nrdInstance) {
         nrd::DestroyInstance(*static_cast<nrd::Instance *>(_nrdInstance));
@@ -502,9 +584,63 @@ void RayQueryPipeline::deinit() {
     _pipeline = VK_NULL_HANDLE; _pipelineLayout = VK_NULL_HANDLE; _pool = VK_NULL_HANDLE; _layout = VK_NULL_HANDLE;
     _skinPipeline = VK_NULL_HANDLE; _skinPipelineLayout = VK_NULL_HANDLE; _skinLayout = VK_NULL_HANDLE;
     _skinPools = {};
+#ifdef R_ENABLE_FSR
+    // Before the device goes: the upscaler owns Vulkan objects of its own, and
+    // the two images own VMA allocations that must not outlive the allocator.
+    _fsr.reset();
+    _fsrColor.reset();
+    _fsrOutput.reset();
+    _fsrImagesTransitioned = false;
+    if (_tonemapPipeline) vkDestroyPipeline(device.handle(), _tonemapPipeline, nullptr);
+    if (_tonemapPipelineLayout) vkDestroyPipelineLayout(device.handle(), _tonemapPipelineLayout, nullptr);
+    if (_tonemapPool) vkDestroyDescriptorPool(device.handle(), _tonemapPool, nullptr);
+    if (_tonemapLayout) vkDestroyDescriptorSetLayout(device.handle(), _tonemapLayout, nullptr);
+    _tonemapPipeline = VK_NULL_HANDLE; _tonemapPipelineLayout = VK_NULL_HANDLE;
+    _tonemapPool = VK_NULL_HANDLE; _tonemapLayout = VK_NULL_HANDLE; _tonemapSets = {};
+#endif
     _bindlessTextureCapacity = 0;
     _lastBindlessTextureCount = 0;
+    _lastAuxFrame = -1;
     _inited = false;
+}
+
+void RayQueryPipeline::restartTemporalHistory() {
+    _restartHistoryRequested = true;
+#ifdef R_ENABLE_NRD
+    _temporalHistoryValid = false;
+#endif
+}
+
+std::vector<RayQueryPipeline::Channel> RayQueryPipeline::channels() {
+    if (!_inited || _lastAuxFrame < 0) {
+        return {};
+    }
+    // Order and names follow the aux bindings in tracing/outputs.slang.
+    static constexpr const char *kNames[kNumAuxImages] {
+        "Traced diffuse", "Traced specular", "Traced normal/roughness",
+        "Traced viewZ", "Traced motion", "Traced noise-free", "Traced diffuse factor",
+        "Traced device depth", "Traced screen motion", "Traced specular factor"};
+    static constexpr const char *kDumpNames[kNumAuxImages] {
+        "traced_diffuse", "traced_specular", "traced_normal_roughness",
+        "traced_view_z", "traced_motion", "traced_noise_free", "traced_diff_factor",
+        "traced_device_depth", "traced_screen_motion", "traced_spec_factor"};
+    const auto &aux = _auxImages[_lastAuxFrame];
+    std::vector<Channel> result;
+    for (int i = 0; i < kNumAuxImages; ++i) {
+        if (aux[i]) {
+            result.push_back({kNames[i], kDumpNames[i], aux[i].get()});
+        }
+    }
+#ifdef R_ENABLE_NRD
+    // What NRD made of the two radiance channels. Comparing these against the
+    // raw pair above is the difference between "the tracer is noisy" and "the
+    // denoiser is not removing it".
+    if (_nrdDenoiser) {
+        result.push_back({"Denoised diffuse", "denoised_diffuse", &_nrdDenoiser->denoisedDiffuse()});
+        result.push_back({"Denoised specular", "denoised_specular", &_nrdDenoiser->denoisedSpecular()});
+    }
+#endif
+    return result;
 }
 
 VulkanMesh::Geometry RayQueryPipeline::skin(VkCommandBuffer cmd,
@@ -920,7 +1056,26 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                                std::clamp(src.colorWeight, 0.0f, 1.0f));
             material.overrideParams = glm::vec4(src.roughness,
                                                 std::max(0.0f, src.emissionScale),
-                                                std::max(0.0f, src.envScale), 0.0f);
+                                                std::max(0.0f, src.envScale),
+                                                std::max(0.0f, src.metallicScale));
+            material.roughnessScale = std::max(0.0f, src.roughnessScale);
+            // Baked into the emission values here rather than left for the
+            // shader to multiply. Emission reaches the surface models by two
+            // routes - the self-illum controller and the curated override -
+            // and only one of them passed through a scale, so the dial moved
+            // some emitters and not others.
+            // Additive surfaces are the exception: their emission is
+            // max(selfIllum, 1) * albedo, so a scale folded into selfIllum
+            // vanishes below 1 and would double up above it. That model keeps
+            // reading overrideParams.y directly.
+            const float emissionScale = std::max(0.0f, src.emissionScale);
+            if (material.surfaceType != 1) {
+                material.selfIllumColor *= emissionScale;
+            }
+            if (curated && curated->emissionMode != 0) {
+                material.curatedEmission = glm::vec4(glm::vec3(material.curatedEmission) * emissionScale,
+                                                     material.curatedEmission.w);
+            }
         }
         if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
             material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
@@ -1154,7 +1309,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                   std::max(0.0001f, _options.ptRayOffset),
                                   std::max(0.0f, _options.ptSunIntensity),
                                   (_options.ptTraceStats ? 1u : 0u) |
-                                      (static_cast<uint32_t>(std::clamp(_options.ptDebugView, 0, 11)) << 4) |
+                                      (static_cast<uint32_t>(std::clamp(_options.ptDebugView, 0, 12)) << 4) |
                                       (static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)) << 8),
                                   static_cast<uint32_t>(std::clamp(_options.ptBounces, 1, 8)),
                                   glm::radians(std::clamp(_options.ptPointAngularSize, 0.05f, 45.0f)),
@@ -1202,35 +1357,20 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         tuning.planeDistanceSensitivity = _options.ptNrdPlaneDistanceSensitivity;
         tuning.disocclusionThreshold = _options.ptNrdDisocclusionThreshold;
         tuning.antiFirefly = _options.ptNrdAntiFirefly;
+        const bool restartHistory = _frameNumber == 0 || _restartHistoryRequested;
+        _restartHistoryRequested = false;
         _nrdDenoiser->denoise(cmd, _renderer.frameIndex(), inputs, tuning, view, unjitteredProjection,
-                              jitterPixels, _frameNumber, _frameNumber == 0);
+                              jitterPixels, _frameNumber, restartHistory);
         if (_options.ptDenoise && _options.ptDebugView == 0) {
-            if (!_taaHistoryTransitioned) {
-                std::array<VkImageMemoryBarrier2, 2> historyBarriers {};
-                for (int i = 0; i < 2; ++i) {
-                    auto &barrier = historyBarriers[i];
-                    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    barrier.image = _taaHistory[i]->handle();
-                    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                }
-                VkDependencyInfo historyDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                historyDependency.imageMemoryBarrierCount = 2;
-                historyDependency.pImageMemoryBarriers = historyBarriers.data();
-                vkCmdPipelineBarrier2(cmd, &historyDependency);
-                _taaHistoryTransitioned = true;
-            }
             // The noise-free history resets whenever NRD's would: first
             // frame, or a teleport-sized camera jump.
             const auto cameraPosition = glm::vec3(glm::inverse(view)[3]);
             if (_frameNumber == 0 ||
                 glm::distance(cameraPosition, _prevCameraPosition) > 20.0f) {
-                _taaHistoryValid = false;
+                _temporalHistoryValid = false;
             }
             _prevCameraPosition = cameraPosition;
+            const bool temporalReset = !_temporalHistoryValid;
 
             // The assembly from denoised channels, overwriting the trace
             // kernel's own write. Debug views keep the kernel's output.
@@ -1238,19 +1378,54 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             // frame (index 1-i) wrote into slot i, and writes slot 1-i.
             const auto frameIndex = _renderer.frameIndex();
             const auto compositeSet = _compositeSets[frameIndex];
-            std::array<VkDescriptorImageInfo, 9> compositeImages {{
-                {VK_NULL_HANDLE, output.view(), VK_IMAGE_LAYOUT_GENERAL},
+            // With FSR the composite hands off linear HDR to the upscaler
+            // instead of writing the finished frame; the display transform
+            // happens after, in pt_tonemap.
+            bool fsrActive = false;
+#ifdef R_ENABLE_FSR
+            fsrActive = _fsr && _fsr->inited();
+#endif
+            VkImageView compositeTarget = output.view();
+#ifdef R_ENABLE_FSR
+            if (fsrActive) {
+                if (!_fsrImagesTransitioned) {
+                    std::array<VkImageMemoryBarrier2, 2> fsrBarriers {};
+                    VulkanImage *fsrImages[] {_fsrColor.get(), _fsrOutput.get()};
+                    for (int i = 0; i < 2; ++i) {
+                        auto &barrier = fsrBarriers[i];
+                        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                        barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        barrier.image = fsrImages[i]->handle();
+                        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                        barrier.subresourceRange.levelCount = 1;
+                        barrier.subresourceRange.layerCount = 1;
+                    }
+                    VkDependencyInfo fsrDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    fsrDependency.imageMemoryBarrierCount = 2;
+                    fsrDependency.pImageMemoryBarriers = fsrBarriers.data();
+                    vkCmdPipelineBarrier2(cmd, &fsrDependency);
+                    _fsrImagesTransitioned = true;
+                }
+                compositeTarget = _fsrColor->view();
+            }
+#endif
+            // Motion is not among them: it existed only for the removed TAA's
+            // reprojection. NRD still consumes it directly.
+            constexpr uint32_t kCompositeBindings = 7;
+            std::array<VkDescriptorImageInfo, kCompositeBindings> compositeImages {{
+                {VK_NULL_HANDLE, compositeTarget, VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, aux[5]->view(), VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, aux[6]->view(), VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, aux[9]->view(), VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, _nrdDenoiser->denoisedDiffuse().view(), VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, _nrdDenoiser->denoisedSpecular().view(), VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, aux[3]->view(), VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, aux[4]->view(), VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, _taaHistory[frameIndex]->view(), VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, _taaHistory[1 - frameIndex]->view(), VK_IMAGE_LAYOUT_GENERAL},
             }};
-            std::array<VkWriteDescriptorSet, 9> compositeWrites {};
-            for (uint32_t i = 0; i < 9; ++i) {
+            std::array<VkWriteDescriptorSet, kCompositeBindings> compositeWrites {};
+            for (uint32_t i = 0; i < kCompositeBindings; ++i) {
                 compositeWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 compositeWrites[i].dstSet = compositeSet;
                 compositeWrites[i].dstBinding = i;
@@ -1258,17 +1433,14 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                 compositeWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 compositeWrites[i].pImageInfo = &compositeImages[i];
             }
-            vkUpdateDescriptorSets(device.handle(), 9, compositeWrites.data(), 0, nullptr);
+            vkUpdateDescriptorSets(device.handle(), kCompositeBindings, compositeWrites.data(), 0, nullptr);
             struct CompositePush {
                 uint32_t tonemap;
                 float exposure;
-                float historyBlend;
-                float jitterX;
-                float jitterY;
+                uint32_t linearOutput;
             } compositePush {static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)),
                              std::max(0.01f, _options.ptExposure),
-                             _taaHistoryValid ? glm::clamp(_options.ptTaaBlend, 0.0f, 0.98f) : 0.0f,
-                             jitterPixels.x, jitterPixels.y};
+                             fsrActive ? 1u : 0u};
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _compositePipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _compositePipelineLayout, 0, 1,
                                     &uniformSet, static_cast<uint32_t>(offsets.size()), offsets.data());
@@ -1278,10 +1450,116 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                sizeof(compositePush), &compositePush);
             vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8),
                           static_cast<uint32_t>((_extent.y + 7) / 8), 1);
-            _taaHistoryValid = true;
+            _temporalHistoryValid = true;
+#ifdef R_ENABLE_FSR
+            if (fsrActive) {
+                // Composite writes, FSR reads. FSR's backend barriers its own
+                // internal resources but not ours, so the handoff is ours.
+                VkMemoryBarrier2 toUpscaler {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+                toUpscaler.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                toUpscaler.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                toUpscaler.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                toUpscaler.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                           VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                VkDependencyInfo upscalerDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                upscalerDependency.memoryBarrierCount = 1;
+                upscalerDependency.pMemoryBarriers = &toUpscaler;
+                vkCmdPipelineBarrier2(cmd, &upscalerDependency);
+
+                FsrUpscaler::Inputs fsrInputs;
+                fsrInputs.color = _fsrColor.get();
+                fsrInputs.depth = aux[7].get();
+                fsrInputs.motion = aux[8].get();
+                fsrInputs.output = _fsrOutput.get();
+                // The same sub-pixel offset NRD is given: FSR's jitter
+                // convention and ours already agree, both being a pixel-space
+                // Halton(2,3) with y negated for the UV-down axis.
+                const float verticalFov =
+                    2.0f * std::atan(1.0f / std::max(1e-4f, projection[1][1]));
+                // Read the planes back out of the matrix rather than plumbing
+                // them down: unprojecting both ends of the depth range is
+                // convention-agnostic, which matters because this projection
+                // has already been through glToVulkanClip.
+                const glm::mat4 projectionInv = glm::inverse(projection);
+                const glm::vec4 nearH = projectionInv * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+                const glm::vec4 farH = projectionInv * glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+                const float cameraNear = std::abs(nearH.z / nearH.w);
+                const float cameraFar = std::abs(farH.z / farH.w);
+                _fsr->dispatch(cmd, fsrInputs, jitterPixels, 1.0f / 60.0f,
+                               cameraNear, cameraFar, verticalFov, _options.ptFsrSharpness,
+                               _frameNumber == 0 || temporalReset);
+
+                // The backend deliberately leaves its inputs ready for sampled
+                // reads. The trace and composite passes write these images as
+                // storage images again on the next frame, so restore GENERAL.
+                std::array<VkImageMemoryBarrier2, 3> restoreFsrInputs {};
+                VulkanImage *fsrInputsToRestore[] {_fsrColor.get(), aux[7].get(), aux[8].get()};
+                for (uint32_t i = 0; i < restoreFsrInputs.size(); ++i) {
+                    auto &barrier = restoreFsrInputs[i];
+                    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    barrier.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    barrier.image = fsrInputsToRestore[i]->handle();
+                    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    barrier.subresourceRange.levelCount = 1;
+                    barrier.subresourceRange.layerCount = 1;
+                }
+                VkDependencyInfo restoreFsrDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                restoreFsrDependency.imageMemoryBarrierCount =
+                    static_cast<uint32_t>(restoreFsrInputs.size());
+                restoreFsrDependency.pImageMemoryBarriers = restoreFsrInputs.data();
+                vkCmdPipelineBarrier2(cmd, &restoreFsrDependency);
+
+                VkMemoryBarrier2 toTonemap {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+                toTonemap.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                toTonemap.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                toTonemap.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                toTonemap.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                VkDependencyInfo tonemapDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                tonemapDependency.memoryBarrierCount = 1;
+                tonemapDependency.pMemoryBarriers = &toTonemap;
+                vkCmdPipelineBarrier2(cmd, &tonemapDependency);
+
+                const auto tonemapSet = _tonemapSets[frameIndex];
+                std::array<VkDescriptorImageInfo, 2> tonemapImages {{
+                    {VK_NULL_HANDLE, output.view(), VK_IMAGE_LAYOUT_GENERAL},
+                    {VK_NULL_HANDLE, _fsrOutput->view(), VK_IMAGE_LAYOUT_GENERAL},
+                }};
+                std::array<VkWriteDescriptorSet, 2> tonemapWrites {};
+                for (uint32_t i = 0; i < 2; ++i) {
+                    tonemapWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    tonemapWrites[i].dstSet = tonemapSet;
+                    tonemapWrites[i].dstBinding = i;
+                    tonemapWrites[i].descriptorCount = 1;
+                    tonemapWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    tonemapWrites[i].pImageInfo = &tonemapImages[i];
+                }
+                vkUpdateDescriptorSets(device.handle(), 2, tonemapWrites.data(), 0, nullptr);
+                struct TonemapPush {
+                    uint32_t tonemap;
+                    float exposure;
+                } tonemapPush {static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)),
+                               std::max(0.01f, _options.ptExposure)};
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _tonemapPipeline);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _tonemapPipelineLayout,
+                                        0, 1, &uniformSet,
+                                        static_cast<uint32_t>(offsets.size()), offsets.data());
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _tonemapPipelineLayout,
+                                        1, 1, &tonemapSet, 0, nullptr);
+                vkCmdPushConstants(cmd, _tonemapPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                   sizeof(tonemapPush), &tonemapPush);
+                vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8),
+                              static_cast<uint32_t>((_extent.y + 7) / 8), 1);
+            }
+#endif
         }
     }
 #endif
+    _lastAuxFrame = static_cast<int>(_renderer.frameIndex());
     ++_frameNumber;
     const auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count();
     // The GPU counters only accumulate while the stats flag is on; printing

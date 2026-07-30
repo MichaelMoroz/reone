@@ -36,6 +36,9 @@
 
 #include "imgui_impl_vulkan.h"
 
+#include <string_view>
+
+
 using namespace reone::graphics;
 
 namespace reone {
@@ -1506,6 +1509,17 @@ std::vector<VulkanRenderPipeline::Target> VulkanRenderPipeline::targetEntries() 
     if (_primaryRayMode) {
         entries.push_back({"Traced output", "traced_output", RenderTargetKind::Color,
                            _output.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false});
+        // The split behind that image. Without these a traced frame can only
+        // be judged as a whole, which cannot separate a noisy channel from a
+        // denoiser that is not clearing it. They live in GENERAL: the trace
+        // and composite passes read and write them as storage images and
+        // nothing transitions them afterwards.
+        if (_rayQuery) {
+            for (const auto &channel : _rayQuery->channels()) {
+                entries.push_back({channel.name, channel.dumpName, RenderTargetKind::Color,
+                                   channel.image, VK_IMAGE_LAYOUT_GENERAL, false});
+            }
+        }
         return entries;
     }
     if (!_options.pbr) {
@@ -1636,6 +1650,12 @@ void VulkanRenderPipeline::previewPass(VkCommandBuffer cmd, uint32_t globalsOffs
                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
+void VulkanRenderPipeline::restartTemporalHistory() {
+    if (_rayQuery) {
+        _rayQuery->restartTemporalHistory();
+    }
+}
+
 void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
     if (!_inited) {
         return;
@@ -1674,6 +1694,11 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
                 std::swap(raw[i], raw[i + 2]);
             }
         }
+        const std::string_view dumpName(entry.dumpName);
+        const bool yCoCgRadiance = dumpName == "traced_diffuse" ||
+                                   dumpName == "traced_specular" ||
+                                   dumpName == "denoised_diffuse" ||
+                                   dumpName == "denoised_specular";
         auto path = dir / (std::string(entry.dumpName) + ".npy");
         if (format->halfToFloat) {
             size_t count = raw.size() / sizeof(uint16_t);
@@ -1682,6 +1707,19 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
                 uint16_t half;
                 std::memcpy(&half, raw.data() + i * sizeof(uint16_t), sizeof(half));
                 widened[i] = halfToFloat(half);
+            }
+            // NRD consumes its radiance targets in YCoCg, but diagnostics use
+            // one colour space across every dumped target.
+            if (yCoCgRadiance) {
+                for (size_t i = 0; i + 3 < widened.size(); i += 4) {
+                    const float y = widened[i];
+                    const float co = widened[i + 1];
+                    const float cg = widened[i + 2];
+                    const float t = y - cg * 0.5f;
+                    widened[i] = std::max(t - co * 0.5f + co, 0.0f);
+                    widened[i + 1] = std::max(cg + t, 0.0f);
+                    widened[i + 2] = std::max(t - co * 0.5f, 0.0f);
+                }
             }
             writeNpy(path, widened.data(), extent.x, extent.y, format->channels, format->type);
         } else {

@@ -46,6 +46,7 @@ set(SPIRV_MODULES
     "rayquery:main"
     "skin:main"
     "nrd_composite:main"
+    "pt_tonemap:main"
     "postprocess:postVertex+boxBlur4Fragment+gausBlur9Fragment+gausBlur13Fragment+sharpenFragment+fxaaFragment+oitBlendFragment+debugTextureFragment"
     "vk2d:quadVertex+imageFragment+colorFragment+fullTargetVertex+textVertex+textFragment")
 
