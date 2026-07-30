@@ -117,11 +117,6 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
     rayTracingPipelineFeatures.rayTracingPipeline = VK_TRUE;
 
-    VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV reorderFeatures {};
-    reorderFeatures.sType =
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV;
-    reorderFeatures.rayTracingInvocationReorder = VK_TRUE;
-
     // The resolve samples the derived environment maps as cube arrays, which is
     // not a baseline capability.
     VkPhysicalDeviceFeatures features {};
@@ -154,45 +149,18 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     auto physicalDevice = physicalResult.value();
     bool rayQueryEnabled = false;
 
+#ifdef R_ENABLE_FSR
     uint32_t extensionCount = 0;
     vkEnumerateDeviceExtensionProperties(physicalDevice.physical_device, nullptr, &extensionCount,
                                          nullptr);
     std::vector<VkExtensionProperties> extensions(extensionCount);
     vkEnumerateDeviceExtensionProperties(physicalDevice.physical_device, nullptr, &extensionCount,
                                          extensions.data());
-    const auto hasExtension = [&](const char *name) {
-        return std::any_of(extensions.begin(), extensions.end(),
-                           [&](const VkExtensionProperties &extension) {
-            return std::strcmp(extension.extensionName, name) == 0;
+    const bool subgroupSizeControlAvailable = std::any_of(
+        extensions.begin(), extensions.end(), [](const VkExtensionProperties &extension) {
+            return std::strcmp(extension.extensionName,
+                               VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME) == 0;
         });
-    };
-
-    // Reordering is a refinement of ray query, not a ray-query requirement.
-    // Do not request it from the selector unless this physical device both
-    // exposes the feature and reports a real reordering mode.
-    bool rayTracingInvocationReorderSupported = false;
-    if (hasExtension(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME)) {
-        VkPhysicalDeviceRayTracingInvocationReorderPropertiesNV reorderProperties {
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_PROPERTIES_NV};
-        VkPhysicalDeviceProperties2 properties {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-        properties.pNext = &reorderProperties;
-        vkGetPhysicalDeviceProperties2(physicalDevice.physical_device, &properties);
-
-        VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV supportedReorderFeatures {
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV};
-        VkPhysicalDeviceFeatures2 supportedFeatures {
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
-        supportedFeatures.pNext = &supportedReorderFeatures;
-        vkGetPhysicalDeviceFeatures2(physicalDevice.physical_device, &supportedFeatures);
-        rayTracingInvocationReorderSupported =
-            supportedReorderFeatures.rayTracingInvocationReorder == VK_TRUE &&
-            reorderProperties.rayTracingInvocationReorderReorderingHint ==
-                VK_RAY_TRACING_INVOCATION_REORDER_MODE_REORDER_NV;
-    }
-
-#ifdef R_ENABLE_FSR
-    const bool subgroupSizeControlAvailable =
-        hasExtension(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
 #endif
 
     // add_required_extension_features gives vk-bootstrap the feature pNext
@@ -214,11 +182,6 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
         .add_required_extension_features(accelerationStructureFeatures)
         .add_required_extension_features(rayQueryFeatures)
         .add_required_extension_features(rayTracingPipelineFeatures);
-    if (rayTracingInvocationReorderSupported) {
-        rayQuerySelector
-            .add_required_extension(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME)
-            .add_required_extension_features(reorderFeatures);
-    }
 #ifdef R_ENABLE_FSR
     // FSR2 requests an explicit subgroup size whenever this extension is
     // advertised. Its pipeline pNext is only legal when the matching feature
@@ -236,7 +199,6 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     if (rayQueryPhysicalResult) {
         physicalDevice = rayQueryPhysicalResult.value();
         rayQueryEnabled = true;
-        _rayTracingInvocationReorderAvailable = rayTracingInvocationReorderSupported;
     } else {
         info("Vulkan: ray query unavailable; continuing with raster: " +
                  rayQueryPhysicalResult.error().message(),
@@ -267,9 +229,6 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
         info("Vulkan: ray tracing extensions enabled but volk did not load all "
              "required entry points; continuing with raster",
              LogChannel::Graphics);
-    }
-    if (!_rayQueryAvailable) {
-        _rayTracingInvocationReorderAvailable = false;
     }
 
     auto queueResult = _device.get_queue(vkb::QueueType::graphics);
@@ -333,9 +292,6 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
                  ", bindless sampled images=" +
                  std::to_string(_maxBindlessSampledImages),
              LogChannel::Graphics);
-        if (_rayTracingInvocationReorderAvailable) {
-            info("Vulkan: NV ray tracing invocation reordering enabled", LogChannel::Graphics);
-        }
     }
     if (!_debugUtils) {
         info("Vulkan: debug utils unavailable; captures will be unlabelled",

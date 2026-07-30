@@ -427,10 +427,7 @@ void RayQueryPipeline::init() {
                                auxWrites.data(), 0, nullptr);
     }
 
-    auto spirv = readSpirV(_renderer.shaderDir() /
-                           (device.rayTracingInvocationReorderAvailable()
-                                ? "rayquery_ser.spv"
-                                : "rayquery.spv"));
+    auto spirv = readSpirV(_renderer.shaderDir() / "rayquery.spv");
     VkShaderModuleCreateInfo moduleInfo {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     moduleInfo.codeSize = spirv.size() * sizeof(uint32_t); moduleInfo.pCode = spirv.data();
     VkShaderModule module;

@@ -34,25 +34,6 @@ import tracing.debug;
 /** Pass-through steps (additive layers, coverage misses) per path. */
 static const uint kMaxPassThroughSteps = 16;
 
-#if R_ENABLE_SER
-/**
- * SER only changes which invocations make progress together. Keep this at the
- * primary split, after traversal has produced the material key and before any
- * material-specific shading or guide writes begin.
- */
-void reorderPrimary(TraceHit hit) {
-#if R_SER_HINT_MODE == 1
-    ReorderThread(hit.hit ? 1u : 0u, 1u);
-#elif R_SER_HINT_MODE == 2
-    ReorderThread(hit.hit ? hit.materialIndex : 0u, 8u);
-#elif R_SER_HINT_MODE == 3
-    ReorderThread(hit.hit ? ((hit.materialIndex << 1u) | 1u) : 0u, 9u);
-#else
-#error R_SER_HINT_MODE must be 1 (hit), 2 (material), or 3 (material plus hit)
-#endif
-}
-#endif
-
 /**
  * The one exit: write the split, then the image - a channel debug view when
  * one is active, the assembled color otherwise. Every path out of the kernel
@@ -143,9 +124,6 @@ void main() {
     uint layers = 0;
     while (true) {
         primary = ptTraceNearest(probe);
-#if R_ENABLE_SER
-        reorderPrimary(primary);
-#endif
         if (!primary.hit) break;
         primaryDistance += primary.hitT;
         primaryHit = ptMakeHitGeometry(primary, probe, spreadAngle * primaryDistance);
