@@ -35,14 +35,6 @@ public struct InstanceMaterial {
     public float4 uv0;
     public float4 uv1;
     public float4 uv2;
-    public uint64_t vertexAddress;
-    public uint64_t indexAddress;
-    public uint vertexStride;
-    public int offPosition;
-    public int offNormals;
-    public int offUV1;
-    public int offUV2;
-    public int offTanSpace;
     public uint mainTex;
     public uint normalMap;
     public uint lightmap;
@@ -57,13 +49,6 @@ public struct InstanceMaterial {
     public float4 curatedMetalA;
     public float4 curatedMetalB;
     public float4 curatedEmission;
-    // Previous world transform, explicit columns; motion vectors only.
-    public float4 prevTransform0;
-    public float4 prevTransform1;
-    public float4 prevTransform2;
-    public float4 prevTransform3;
-    // Previous-pose skinned positions, float4 per vertex; 0 when not skinned.
-    public uint64_t prevPositionsAddress;
     /** kPtSurface*, decided at admission. */
     public uint surfaceType;
     // This occupies the scalar slot before the override vectors so category
@@ -81,14 +66,22 @@ public struct InstanceMaterial {
 [[vk::binding(1, 1)]] public RaytracingAccelerationStructure sceneTLAS;
 [[vk::binding(2, 1)]] public StructuredBuffer<InstanceMaterial> instanceMaterials;
 [[vk::binding(3, 1)]] public RWStructuredBuffer<uint> traceStats;
+public struct MergedVertex {
+    public float3 position; public float3 normal; public float2 uv1; public float2 uv2;
+    public float3 tangent; public float3 bitangent; public float3 tanSpaceNormal;
+    public float3 prevPosition; public float2 pad;
+};
+[[vk::binding(4, 1)]] public StructuredBuffer<MergedVertex> mergedVertices;
+[[vk::binding(5, 1)]] public StructuredBuffer<uint> mergedIndices;
+[[vk::binding(6, 1)]] public StructuredBuffer<uint> mergedMaterialIds;
 // This binding is deliberately both runtime-sized and non-uniformly indexed.
 // The descriptor layout supplies UPDATE_AFTER_BIND and PARTIALLY_BOUND.
 // The bindless arrays sit above every scalar binding because the variable
 // descriptor count is only legal on the set's highest binding.
-[[vk::binding(5, 1)]] public Sampler2D bindlessTextures[];
+[[vk::binding(7, 1)]] public Sampler2D bindlessTextures[];
 // Animated grayscale bump maps are Texture2DArray assets. They cannot share
 // bindlessTextures: a Sampler2D descriptor has a different Vulkan view type.
-[[vk::binding(6, 1)]] public Sampler2DArray bindlessTextureArrays[];
+[[vk::binding(8, 1)]] public Sampler2DArray bindlessTextureArrays[];
 
 public struct PtPushConstants {
     public uint frameIndex;
@@ -118,6 +111,8 @@ public struct PtPushConstants {
     public float sunAngularRadius;
     /** Scene-referred exposure applied before the tonemap. */
     public float exposure;
+    public uint geometryBase0;
+    public uint geometryBase1;
 };
 [[vk::push_constant]] public PtPushConstants pushConstants;
 
@@ -163,27 +158,11 @@ public uint ptLoadIndex16(uint64_t indexAddress, uint index) {
     return (packed >> (uint(address & 2) * 8)) & 0xffffu;
 }
 
-public uint3 ptTriangleIndices(InstanceMaterial material, uint primitive) {
-    uint first = primitive * 3;
-    return uint3(ptLoadIndex16(material.indexAddress, first),
-                 ptLoadIndex16(material.indexAddress, first + 1),
-                 ptLoadIndex16(material.indexAddress, first + 2));
-}
-
-public uint64_t ptAttributeAddress(InstanceMaterial material, uint vertex, int offset) {
-    return material.vertexAddress + uint64_t(vertex) * uint64_t(material.vertexStride) + uint64_t(offset);
-}
-
-public float2 ptInterpolateFloat2(InstanceMaterial material, uint3 indices, int offset, float3 weights) {
-    return ptLoadFloat2(ptAttributeAddress(material, indices.x, offset)) * weights.x +
-           ptLoadFloat2(ptAttributeAddress(material, indices.y, offset)) * weights.y +
-           ptLoadFloat2(ptAttributeAddress(material, indices.z, offset)) * weights.z;
-}
-
-public float3 ptInterpolateFloat3(InstanceMaterial material, uint3 indices, int offset, float3 weights) {
-    return ptLoadFloat3(ptAttributeAddress(material, indices.x, offset)) * weights.x +
-           ptLoadFloat3(ptAttributeAddress(material, indices.y, offset)) * weights.y +
-           ptLoadFloat3(ptAttributeAddress(material, indices.z, offset)) * weights.z;
+public uint geometryBase(uint geometryIndex) { return geometryIndex == 0 ? pushConstants.geometryBase0 : pushConstants.geometryBase1; }
+public uint materialIndexFor(uint geometryIndex, uint primitive) { return mergedMaterialIds[geometryBase(geometryIndex) + primitive]; }
+public uint3 ptTriangleIndices(uint geometryIndex, uint primitive) {
+    uint first = (geometryBase(geometryIndex) + primitive) * 3;
+    return uint3(mergedIndices[first], mergedIndices[first + 1], mergedIndices[first + 2]);
 }
 
 public float2 ptTransformedUV(InstanceMaterial material, float2 uv) {

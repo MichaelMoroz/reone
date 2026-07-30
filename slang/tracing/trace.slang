@@ -20,21 +20,15 @@ import tracing.rng;
 
 public struct TraceHit {
     public bool hit;
-    public uint instanceIndex;
     public InstanceMaterial material;
     public uint3 indices;
     public float3 weights;
     public float hitT;
-    public float3x4 objectToWorld;
-    public float3x4 worldToObject;
 };
 
 float candidateAlpha(InstanceMaterial material, uint3 indices, float3 weights) {
     if (material.mainTex == kPtNoTexture) return 1.0;
-    float2 uv = float2(0.0);
-    if (material.offUV1 != -1) {
-        uv = ptTransformedUV(material, ptInterpolateFloat2(material, indices, material.offUV1, weights));
-    }
+    float2 uv = ptTransformedUV(material, mergedVertices[indices.x].uv1 * weights.x + mergedVertices[indices.y].uv1 * weights.y + mergedVertices[indices.z].uv1 * weights.z);
     // Base level: coverage is a yes/no on the authored texel, and the alpha
     // test is sharper unfiltered.
     return bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(uv, 0.0).a;
@@ -44,14 +38,12 @@ TraceHit committedHit(inout RayQuery<RAY_FLAG_NONE> query) {
     TraceHit result;
     result.hit = query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
     if (result.hit) {
-        result.instanceIndex = query.CommittedInstanceIndex();
-        result.material = instanceMaterials[result.instanceIndex];
-        result.indices = ptTriangleIndices(result.material, query.CommittedPrimitiveIndex());
+        uint geometryIndex = query.CommittedGeometryIndex();
+        result.material = instanceMaterials[materialIndexFor(geometryIndex, query.CommittedPrimitiveIndex())];
+        result.indices = ptTriangleIndices(geometryIndex, query.CommittedPrimitiveIndex());
         float2 barycentrics = query.CommittedTriangleBarycentrics();
         result.weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
         result.hitT = query.CommittedRayT();
-        result.objectToWorld = query.CommittedObjectToWorld3x4();
-        result.worldToObject = query.CommittedWorldToObject3x4();
     }
     return result;
 }
@@ -71,12 +63,13 @@ public TraceHit ptTraceNearest(RayDesc ray) {
     query.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, ray);
     while (query.Proceed()) {
         if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
-        InstanceMaterial material = instanceMaterials[query.CandidateInstanceIndex()];
+        uint geometryIndex = query.CandidateGeometryIndex();
+        InstanceMaterial material = instanceMaterials[materialIndexFor(geometryIndex, query.CandidatePrimitiveIndex())];
         if (material.surfaceType == kPtSurfaceUnlitTransparent) {
             query.CommitNonOpaqueTriangleHit();
             continue;
         }
-        uint3 indices = ptTriangleIndices(material, query.CandidatePrimitiveIndex());
+        uint3 indices = ptTriangleIndices(geometryIndex, query.CandidatePrimitiveIndex());
         float2 barycentrics = query.CandidateTriangleBarycentrics();
         float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
         if (candidateAlpha(material, indices, weights) >= kAlphaTestThreshold) {
@@ -98,12 +91,13 @@ public TraceHit ptTraceNearest(RayDesc ray, inout uint rng) {
     query.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, ray);
     while (query.Proceed()) {
         if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
-        InstanceMaterial material = instanceMaterials[query.CandidateInstanceIndex()];
+        uint geometryIndex = query.CandidateGeometryIndex();
+        InstanceMaterial material = instanceMaterials[materialIndexFor(geometryIndex, query.CandidatePrimitiveIndex())];
         if (material.surfaceType == kPtSurfaceUnlitTransparent) {
             query.CommitNonOpaqueTriangleHit();
             continue;
         }
-        uint3 indices = ptTriangleIndices(material, query.CandidatePrimitiveIndex());
+        uint3 indices = ptTriangleIndices(geometryIndex, query.CandidatePrimitiveIndex());
         float2 barycentrics = query.CandidateTriangleBarycentrics();
         float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
         if (ptRandom01(rng) < candidateAlpha(material, indices, weights)) {
@@ -132,14 +126,16 @@ public float ptShadowTransmittance(float3 origin, float3 geometricNormal, float3
     // A generic query, not ACCEPT_FIRST_HIT: punch-through candidates must
     // stay visible to the loop; opaque geometry still commits in hardware.
     RayQuery<RAY_FLAG_NONE> query;
-    query.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0x1, ray);
+    query.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, ray);
     float transmittance = 1.0;
     while (query.Proceed()) {
         if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
-        InstanceMaterial material = instanceMaterials[query.CandidateInstanceIndex()];
+        uint geometryIndex = query.CandidateGeometryIndex();
+        InstanceMaterial material = instanceMaterials[materialIndexFor(geometryIndex, query.CandidatePrimitiveIndex())];
         if (material.surfaceType == kPtSurfaceUnlitTransparent) continue;
+        if ((material.featureMask & kPtMaskSky) != 0) continue;
         if ((material.featureMask & kPtMaskPunchThrough) != 0) {
-            uint3 indices = ptTriangleIndices(material, query.CandidatePrimitiveIndex());
+            uint3 indices = ptTriangleIndices(geometryIndex, query.CandidatePrimitiveIndex());
             float2 barycentrics = query.CandidateTriangleBarycentrics();
             float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
             transmittance = clamp(transmittance * (1.0 - candidateAlpha(material, indices, weights)), 0.0, 1.0);

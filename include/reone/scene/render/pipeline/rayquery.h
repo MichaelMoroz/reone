@@ -7,7 +7,6 @@
 #include <volk.h>
 
 #include "reone/graphics/vulkan/buffer.h"
-#include "reone/graphics/vulkan/mesh.h"
 
 #ifdef R_ENABLE_FSR
 #include "reone/scene/render/pipeline/fsrupscaler.h"
@@ -24,7 +23,6 @@ struct GraphicsOptions;
 }
 namespace reone::scene {
 class RenderRegistry;
-struct RegisteredSkin;
 
 /** Vulkan-only primary-ray diagnostic. It deliberately owns no raster pass. */
 class RayQueryPipeline : boost::noncopyable {
@@ -63,24 +61,25 @@ public:
 
 private:
     struct Frame {
-        struct Skinned {
-            std::unique_ptr<graphics::VulkanBuffer> vertices;
-            /** Previous-pose positions, float4 per vertex, for motion vectors. */
-            std::unique_ptr<graphics::VulkanBuffer> prevPositions;
-            std::unique_ptr<graphics::VulkanBuffer> storage;
-            std::unique_ptr<graphics::VulkanBuffer> scratch;
-            VkAccelerationStructureKHR blas {VK_NULL_HANDLE};
-        };
+        /** SceneObject records followed by the current/previous bone pool. */
+        std::unique_ptr<graphics::VulkanBuffer> scene;
+        /** Canonical vertices, then uint indices, then per-triangle material ids. */
+        std::unique_ptr<graphics::VulkanBuffer> geometry;
         std::unique_ptr<graphics::VulkanBuffer> instances;
-        // Kept in exactly TLAS instance order. Query.CommittedInstanceID()
-        // indexes this dense array; instanceCustomIndex is a SceneNode id.
         std::unique_ptr<graphics::VulkanBuffer> materials;
         std::unique_ptr<graphics::VulkanBuffer> traceStats;
-        std::unique_ptr<graphics::VulkanBuffer> storage;
+        std::unique_ptr<graphics::VulkanBuffer> blasStorage;
+        std::unique_ptr<graphics::VulkanBuffer> tlasStorage;
         std::unique_ptr<graphics::VulkanBuffer> scratch;
+        VkAccelerationStructureKHR blas {VK_NULL_HANDLE};
         VkAccelerationStructureKHR tlas {VK_NULL_HANDLE};
-        uint32_t capacity {0};
-        std::vector<Skinned> skinned;
+        uint32_t sceneObjectCapacity {0};
+        uint32_t boneCapacity {0};
+        uint32_t vertexCapacity {0};
+        uint32_t triangleCapacity {0};
+        VkDeviceSize blasStorageCapacity {0};
+        VkDeviceSize tlasStorageCapacity {0};
+        VkDeviceSize scratchCapacity {0};
     };
 
     graphics::VulkanRenderer &_renderer;
@@ -91,10 +90,11 @@ private:
     std::array<VkDescriptorSet, 2> _sets {};
     VkPipelineLayout _pipelineLayout {VK_NULL_HANDLE};
     VkPipeline _pipeline {VK_NULL_HANDLE};
-    VkDescriptorSetLayout _skinLayout {VK_NULL_HANDLE};
-    std::array<VkDescriptorPool, 2> _skinPools {};
-    VkPipelineLayout _skinPipelineLayout {VK_NULL_HANDLE};
-    VkPipeline _skinPipeline {VK_NULL_HANDLE};
+    VkDescriptorSetLayout _mergeLayout {VK_NULL_HANDLE};
+    VkDescriptorPool _mergePool {VK_NULL_HANDLE};
+    std::array<VkDescriptorSet, 2> _mergeSets {};
+    VkPipelineLayout _mergePipelineLayout {VK_NULL_HANDLE};
+    VkPipeline _mergePipeline {VK_NULL_HANDLE};
     std::array<Frame, 2> _frames;
     uint32_t _lastInstances {0};
     uint32_t _lastTriangles {0};
@@ -131,17 +131,17 @@ private:
         float emitterRadiusRatio;
         float sunAngularRadius;
         float exposure;
+        uint32_t geometryBase0;
+        uint32_t geometryBase1;
     };
 
     /** Must match PushConstants in slang/skin.slang. */
-    struct SkinPushConstants {
+    struct MergePushConstants {
+        uint32_t objectCount;
+        uint32_t opaqueObjectCount;
         uint32_t vertexCount;
-        uint32_t vertexStrideFloats;
-        int32_t positionOffsetFloats;
-        int32_t normalOffsetFloats;
-        int32_t boneIndicesOffsetFloats;
-        int32_t boneWeightsOffsetFloats;
-        int32_t tanSpaceOffsetFloats;
+        uint32_t triangleCount;
+        uint32_t opaqueTriangleCount;
     };
 
     uint32_t _frameNumber {0};
@@ -213,12 +213,10 @@ private:
     int _lastAuxFrame {-1};
 
     void clearFrame(Frame &frame);
-    graphics::VulkanMesh::Geometry skin(VkCommandBuffer cmd,
-                                         Frame &frame,
-                                         const graphics::VulkanMesh &source,
-                                         const graphics::Mesh::VertexLayout &layout,
-                                         const RegisteredSkin &skin,
-                                         uint32_t globalsOffset,
-                                         uint64_t &prevPositionsAddress);
+    void ensureMergeBuffers(Frame &frame,
+                            uint32_t objectCount,
+                            uint32_t boneCount,
+                            uint32_t vertexCount,
+                            uint32_t triangleCount);
 };
 } // namespace reone::scene

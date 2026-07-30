@@ -35,8 +35,6 @@ public struct HitGeometry {
     public float3 geometricNormal; // world, face-forward to the ray
     public float3 shadowOrigin;    // Hanika terminator shift
     public float2 uv, uv2;
-    public float3x4 objectToWorld;
-    public float3x4 worldToObject;
 };
 
 /** The gathered surface parameters, uniform across surface types. */
@@ -81,8 +79,6 @@ public HitGeometry ptMakeHitGeometry(TraceHit trace, RayDesc ray, float coneWidt
     InstanceMaterial material = trace.material;
     uint3 indices = trace.indices;
     float3 weights = trace.weights;
-    float3x4 objectToWorld = trace.objectToWorld;
-    float3x4 worldToObject = trace.worldToObject;
     float3 rayDirection = ray.Direction;
     HitGeometry hit;
     hit.material = material;
@@ -92,33 +88,22 @@ public HitGeometry ptMakeHitGeometry(TraceHit trace, RayDesc ray, float coneWidt
     hit.hitT = trace.hitT;
     hit.coneWidth = coneWidth;
     hit.position = ray.Origin + rayDirection * trace.hitT;
-    hit.p0 = mul(objectToWorld, float4(ptLoadFloat3(ptAttributeAddress(material, indices.x, material.offPosition)), 1.0));
-    hit.p1 = mul(objectToWorld, float4(ptLoadFloat3(ptAttributeAddress(material, indices.y, material.offPosition)), 1.0));
-    hit.p2 = mul(objectToWorld, float4(ptLoadFloat3(ptAttributeAddress(material, indices.z, material.offPosition)), 1.0));
+    hit.p0 = mergedVertices[indices.x].position;
+    hit.p1 = mergedVertices[indices.y].position;
+    hit.p2 = mergedVertices[indices.z].position;
     hit.geometricNormal = normalize(cross(hit.p1 - hit.p0, hit.p2 - hit.p0));
     if (dot(hit.geometricNormal, rayDirection) > 0.0) hit.geometricNormal = -hit.geometricNormal;
-    hit.objectToWorld = objectToWorld;
-    hit.worldToObject = worldToObject;
-    hit.uv = float2(0.0);
-    if (material.offUV1 != -1) {
-        hit.uv = ptTransformedUV(material, ptInterpolateFloat2(material, indices, material.offUV1, weights));
-    }
-    hit.uv2 = float2(0.0);
-    if (material.offUV2 != -1) {
-        hit.uv2 = ptInterpolateFloat2(material, indices, material.offUV2, weights);
-    }
+    hit.uv = ptTransformedUV(material, mergedVertices[indices.x].uv1 * weights.x + mergedVertices[indices.y].uv1 * weights.y + mergedVertices[indices.z].uv1 * weights.z);
+    hit.uv2 = mergedVertices[indices.x].uv2 * weights.x + mergedVertices[indices.y].uv2 * weights.y + mergedVertices[indices.z].uv2 * weights.z;
     // The terminator shift (Hanika, RT Gems II): the shadow-ray origin lifted
     // onto the smooth surface the vertex normals describe. Low-poly geometry
     // with aggressively smoothed normals - all of KotOR - otherwise shows the
     // shadow terminator as faceted bands.
     hit.shadowOrigin = hit.position;
-    if (material.offNormals != -1) {
-        float3 n0 = normalize(mul(ptLoadFloat3(ptAttributeAddress(material, indices.x, material.offNormals)),
-                                  (float3x3)worldToObject));
-        float3 n1 = normalize(mul(ptLoadFloat3(ptAttributeAddress(material, indices.y, material.offNormals)),
-                                  (float3x3)worldToObject));
-        float3 n2 = normalize(mul(ptLoadFloat3(ptAttributeAddress(material, indices.z, material.offNormals)),
-                                  (float3x3)worldToObject));
+    if (dot(mergedVertices[indices.x].normal, mergedVertices[indices.x].normal) > 1e-10) {
+        float3 n0 = normalize(mergedVertices[indices.x].normal);
+        float3 n1 = normalize(mergedVertices[indices.y].normal);
+        float3 n2 = normalize(mergedVertices[indices.z].normal);
         float3 u0 = hit.position - hit.p0;
         float3 u1 = hit.position - hit.p1;
         float3 u2 = hit.position - hit.p2;
@@ -146,7 +131,7 @@ UvGradients anisotropicGradients(HitGeometry hit) {
     UvGradients gradients;
     gradients.x = float2(0.0);
     gradients.y = float2(0.0);
-    if (hit.material.offUV1 == -1 || hit.coneWidth <= 0.0) return gradients;
+    if (hit.coneWidth <= 0.0) return gradients;
     float3 basis1 = normalize(cross(hit.rayDirection,
                                     abs(hit.rayDirection.z) < 0.99 ? float3(0.0, 0.0, 1.0)
                                                                    : float3(0.0, 1.0, 0.0)));
@@ -159,9 +144,9 @@ UvGradients anisotropicGradients(HitGeometry hit) {
     if (planeNormal2 < 1e-18 || abs(ndotd) < 1e-6) return gradients;
     float3 axisX = (basis1 - hit.rayDirection * (dot(planeNormal, basis1) / ndotd)) * hit.coneWidth;
     float3 axisY = (basis2 - hit.rayDirection * (dot(planeNormal, basis2) / ndotd)) * hit.coneWidth;
-    float2 uvA = ptLoadFloat2(ptAttributeAddress(hit.material, hit.indices.x, hit.material.offUV1));
-    float2 duv1 = ptLoadFloat2(ptAttributeAddress(hit.material, hit.indices.y, hit.material.offUV1)) - uvA;
-    float2 duv2 = ptLoadFloat2(ptAttributeAddress(hit.material, hit.indices.z, hit.material.offUV1)) - uvA;
+    float2 uvA = mergedVertices[hit.indices.x].uv1;
+    float2 duv1 = mergedVertices[hit.indices.y].uv1 - uvA;
+    float2 duv2 = mergedVertices[hit.indices.z].uv1 - uvA;
     float invPlane = 1.0 / planeNormal2;
     gradients.x = (dot(cross(axisX, e2), planeNormal) * invPlane) * duv1 +
                   (dot(cross(e1, axisX), planeNormal) * invPlane) * duv2;
@@ -175,13 +160,13 @@ UvGradients anisotropicGradients(HitGeometry hit) {
  * cannot afford gradients: transparency candidates during traversal.
  */
 public float ptRayConeLod(InstanceMaterial material, uint3 indices, float coneWidth) {
-    if (material.offUV1 == -1 || material.mainTex == kPtNoTexture) return 0.0;
-    float3 q0 = ptLoadFloat3(ptAttributeAddress(material, indices.x, material.offPosition));
-    float3 q1 = ptLoadFloat3(ptAttributeAddress(material, indices.y, material.offPosition));
-    float3 q2 = ptLoadFloat3(ptAttributeAddress(material, indices.z, material.offPosition));
-    float2 uv0 = ptLoadFloat2(ptAttributeAddress(material, indices.x, material.offUV1));
-    float2 uv1 = ptLoadFloat2(ptAttributeAddress(material, indices.y, material.offUV1));
-    float2 uv2 = ptLoadFloat2(ptAttributeAddress(material, indices.z, material.offUV1));
+    if (material.mainTex == kPtNoTexture) return 0.0;
+    float3 q0 = mergedVertices[indices.x].position;
+    float3 q1 = mergedVertices[indices.y].position;
+    float3 q2 = mergedVertices[indices.z].position;
+    float2 uv0 = mergedVertices[indices.x].uv1;
+    float2 uv1 = mergedVertices[indices.y].uv1;
+    float2 uv2 = mergedVertices[indices.z].uv1;
     float ta = abs((uv1.x - uv0.x) * (uv2.y - uv0.y) - (uv2.x - uv0.x) * (uv1.y - uv0.y));
     float pa = length(cross(q1 - q0, q2 - q0));
     uint texWidth, texHeight;
@@ -244,7 +229,7 @@ public struct PbrSurface : ISurfaceModel {
                               material.overrideParams.z;
         shading.hasLightmap = (material.featureMask & uint(kFeatureLightmap)) != 0;
         shading.lightmap = float3(0.0);
-        if (shading.hasLightmap && material.lightmap != kPtNoTexture && material.offUV2 != -1) {
+        if (shading.hasLightmap && material.lightmap != kPtNoTexture) {
             shading.lightmap = ptGammaToLinear(
                 bindlessTextures[NonUniformResourceIndex(material.lightmap)].SampleLevel(hit.uv2, 0.0).rgb);
         }
@@ -317,17 +302,17 @@ public struct PbrSurface : ISurfaceModel {
         // every geometry decision, the interpolated material normal exists
         // only inside the BRDF. Authored normals are object-space and take
         // the inverse-transpose; the geometric fallback is already world.
-        bool hasAuthoredNormals = material.offNormals != -1;
+        bool hasAuthoredNormals = dot(mergedVertices[hit.indices.x].normal, mergedVertices[hit.indices.x].normal) > 1e-10;
         float3 shadingNormal = hit.geometricNormal;
         if (hasAuthoredNormals) {
-            shadingNormal = normalize(ptInterpolateFloat3(material, hit.indices, material.offNormals, hit.weights));
+            shadingNormal = normalize(mergedVertices[hit.indices.x].normal * hit.weights.x + mergedVertices[hit.indices.y].normal * hit.weights.y + mergedVertices[hit.indices.z].normal * hit.weights.z);
         }
-        if (material.offTanSpace != -1) {
+        if (dot(mergedVertices[hit.indices.x].tanSpaceNormal, mergedVertices[hit.indices.x].tanSpaceNormal) > 1e-10) {
             // offTanSpace is bitangent, tangent, tangent-space normal in that
             // order. The third vector also guards corrupt tangent frames.
-            float3 interpolatedBitangent = ptInterpolateFloat3(material, hit.indices, material.offTanSpace, hit.weights);
-            float3 tangent = ptInterpolateFloat3(material, hit.indices, material.offTanSpace + 12, hit.weights);
-            float3 tangentSpaceNormal = ptInterpolateFloat3(material, hit.indices, material.offTanSpace + 24, hit.weights);
+            float3 interpolatedBitangent = mergedVertices[hit.indices.x].bitangent * hit.weights.x + mergedVertices[hit.indices.y].bitangent * hit.weights.y + mergedVertices[hit.indices.z].bitangent * hit.weights.z;
+            float3 tangent = mergedVertices[hit.indices.x].tangent * hit.weights.x + mergedVertices[hit.indices.y].tangent * hit.weights.y + mergedVertices[hit.indices.z].tangent * hit.weights.z;
+            float3 tangentSpaceNormal = mergedVertices[hit.indices.x].tanSpaceNormal * hit.weights.x + mergedVertices[hit.indices.y].tanSpaceNormal * hit.weights.y + mergedVertices[hit.indices.z].tanSpaceNormal * hit.weights.z;
             tangent = normalize(tangent - shadingNormal * dot(tangent, shadingNormal));
             float handedness = dot(cross(shadingNormal, tangent), interpolatedBitangent) < 0.0 ? -1.0 : 1.0;
             float3 bitangent = cross(shadingNormal, tangent) * handedness;
@@ -352,9 +337,7 @@ public struct PbrSurface : ISurfaceModel {
                 }
             }
         }
-        float3 worldNormal = hasAuthoredNormals
-                                 ? normalize(mul(shadingNormal, (float3x3)hit.worldToObject))
-                                 : shadingNormal;
+        float3 worldNormal = shadingNormal;
         // Flip into the geometric hemisphere, not merely toward the viewer:
         // the geometric normal is already face-forward, so agreement with it
         // implies facing the ray, and the BRDF and the hemisphere tests can
@@ -455,20 +438,7 @@ float luminanceOf(float3 rgb) {
  * per-bone motion.
  */
 public float3 ptMotionVector(HitGeometry hit) {
-    InstanceMaterial material = hit.material;
-    float3 objectPosition;
-    if (material.prevPositionsAddress != 0) {
-        float3 pp0 = ptLoadFloat3(material.prevPositionsAddress + uint64_t(hit.indices.x) * 16);
-        float3 pp1 = ptLoadFloat3(material.prevPositionsAddress + uint64_t(hit.indices.y) * 16);
-        float3 pp2 = ptLoadFloat3(material.prevPositionsAddress + uint64_t(hit.indices.z) * 16);
-        objectPosition = pp0 * hit.weights.x + pp1 * hit.weights.y + pp2 * hit.weights.z;
-    } else {
-        objectPosition = mul(hit.worldToObject, float4(hit.position, 1.0));
-    }
-    float3 prevWorldPosition = material.prevTransform0.xyz * objectPosition.x +
-                               material.prevTransform1.xyz * objectPosition.y +
-                               material.prevTransform2.xyz * objectPosition.z +
-                               material.prevTransform3.xyz;
+    float3 prevWorldPosition = mergedVertices[hit.indices.x].prevPosition * hit.weights.x + mergedVertices[hit.indices.y].prevPosition * hit.weights.y + mergedVertices[hit.indices.z].prevPosition * hit.weights.z;
     return prevWorldPosition - hit.position;
 }
 
