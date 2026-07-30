@@ -189,11 +189,37 @@ BLAS over it.**
     geometry costs none.
 
   One BLAS rebuilt in full every frame keeps traversal optimal and deletes the refit-quality
-  problem outright — a rebuild never drifts from the pose it was built for. **The deciding
-  measurement is the cost of a full 86k-triangle rebuild with `PREFER_FAST_TRACE`.** The TLAS
-  build over 1048 instances is already only 56-60 us, and 86k triangles is small, so this may
-  simply be affordable — in which case take the simpler and faster-to-trace option. Measure it
-  before choosing.
+  problem outright — a rebuild never drifts from the pose it was built for.
+
+### Build cost: published figures say rebuild-everything is affordable
+
+Tellusim's acceleration-structure benchmarks, linearly scaled to our 86k triangles:
+
+| GPU / API | Their 4.21M build | Scaled to 86k | Their refit | Scaled to 86k |
+|---|---|---|---|---|
+| 2080 Ti (D3D12) | 16.9 ms | **0.35 ms** | 3.7 ms | 0.076 ms |
+| 6700 XT (D3D12) | 30.2 ms | 0.62 ms | 4.6 ms | 0.094 ms |
+| 6700 XT (Vulkan) | 223 ms | **4.6 ms** | 4.6 ms | 0.094 ms |
+| Apple M1 (Metal) | 395 ms | 8.1 ms | 29.8 ms | 0.61 ms |
+
+**A full `PREFER_FAST_TRACE` rebuild of the entire scene costs about a third of a millisecond on
+a 2080 Ti**, several generations behind the development 5090. Against a 5 ms frame target that is
+noise, and it buys optimal traversal, no refit drift, no static/dynamic split, no motion
+threshold and a top level of one instance. **Rebuild everything, every frame, one structure** —
+unless the two caveats below bite.
+
+Two things in the same data matter as much as the headline:
+
+- **Many small structures are worse, and measurably.** 2401 BLAS of 1.5K triangles refit in
+  7.0 ms, while 81 BLAS of 52K — *more* total geometry — refit in 3.7 ms. Per-structure overhead
+  dominates at fine granularity, and at 714 structures we are squarely in the bad regime. This is
+  independent evidence for merging beyond the traversal argument.
+- **AMD's Vulkan build path is pathological in this data: 223 ms against 30.2 ms for the same
+  work on the same GPU under D3D12, a 7.4x gap.** Scaled to our scene that is 4.6 ms, which would
+  consume the entire frame budget. We are Vulkan-only, so this is a real risk and not a footnote.
+  Verify it on current drivers before committing to per-frame full rebuilds; if it holds, AMD
+  needs the static/dynamic split even where NVIDIA does not, and the design must keep that option
+  open rather than assuming one structure everywhere.
 - The per-triangle material table partitions the same way — static half uploaded once, dynamic
   half only where it actually changes.
 - The material records themselves get the same treatment. Today all 1048 are pushed and uploaded
