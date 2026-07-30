@@ -235,13 +235,45 @@ never measured, is unresolved and worth settling before optimising anything: the
 that every earlier traced-frame figure was ~95% stats-counter serialisation, so this codebase has
 form for measuring the wrong thing.
 
+### Session of 2026-07-30: danm14ab went 14.66 → 5.38 ms, and 8.2–8.6 are gone
+
+Five commits, each measured either side. The wall-clock harness is
+`(t(900) − t(300)) / 600` after a discarded warm-up, three samples.
+
+| commit | change | danm14ab | ebo_m12aa |
+|---|---|---:|---:|
+| — | before | 14.66 | 10.06 |
+| `9b98c37c` | one BLAS, one dispatch, two buffers | 7.91 | 8.54 |
+| `363c8770` | material record out of the traversal registers | 6.79 | 7.08 |
+| `0079b2d8` | sky becomes the ray-miss case | 5.79 | 6.87 |
+| `791363fe` | raygen ray tracing pipeline | 5.31 | 6.98 |
+| `395a7afe` | Shader Execution Reordering | 5.38 | **6.20** |
+
+**8.2, 8.3, 8.4, 8.5 and 8.6 no longer exist as work.** They were all about the
+shape of the per-mesh loop — batching its builds, hoisting its binds, scheduling
+its refits. There is no per-mesh loop: one dispatch builds the whole scene mesh
+and one BLAS is rebuilt from it. 8.1 is also stale, since the 12 ms of command
+submission it asks about was that loop.
+
+**Occupancy is the lever that keeps paying.** Nsight, frame-level, headless via
+`ngfx --activity "GPU Trace Profiler" --auto-export`: compute warp occupancy
+17.44% → 22.68% for the register change alone, with warps launched and average
+warp latency both flat to within 0.2%. Nothing got faster; more warps fit. The
+same lever is why the RT pipeline helped and why SER helped on interiors.
+
+**Workgroup size is not a lever — measured, null.** 8×8 (64 threads) beats every
+256-thread shape by 20–40% on all three modules, and 16×16, 32×8 and 8×32 are
+within noise of each other, so it is thread count and not aspect ratio. That is
+consistent with register-limited scheduling: a 256-thread block must reserve
+eight warps of registers before it can be scheduled and cannot retire until its
+slowest ray finishes.
+
 | # | Task | Why it matters | Pri | Eff |
 |---|---|---|---|---|
-| 8.1 | Account for the 12 ms outside the trace | Reconcile against the 1.68/2.74 ms figures in the registration plan. Same scene, same spp, or the numbers are not comparable. Everything else here is premature until this is understood | P0 | S |
-| 8.2 | Batch acceleration-structure builds | `vkCmdBuildAccelerationStructuresKHR(cmd, 1, &build, ranges)` at both `rayquery.cpp:795` and `:1184` builds exactly one per call. The API takes an array so the driver can overlap them; one at a time forbids that | P1 | S |
-| 8.3 | One barrier after all skinning, not one per mesh | The per-mesh `vkCmdPipelineBarrier2` serialises every skin against every other. They are independent — only the BLAS builds and the trace need to wait, and they can wait once | P1 | S |
-| 8.4 | Hoist redundant binds out of the per-mesh loop | `vkCmdBindPipeline` rebinds the same skin pipeline every iteration, and set 0 (the shared uniform block) with it. Only set 1 and the push constants vary | P1 | S |
-| 8.5 | Batch the skinning dispatches themselves | A 2000-vertex mesh is 32 workgroups, and there are hundreds. One dispatch over all skinned vertices through a per-mesh table, or an indirect dispatch | P1 | M |
+| 8.10 | `spirv-val` rejects capability 5388 (`ShaderInvocationReorderNV`) | Three VUIDs now fire every run because the SDK validator is older than the extension the driver implements. Benign, but it is noise that can hide a real error. Should clear with a newer SDK | P2 | S |
+| 8.11 | Sky cubemap keeps only 0.73 of the geometry sky's horizontal detail | 1024/face; 2048 only reaches 0.77 for 4× the memory, so the residual is resampling and filtering, not resolution. The sky is visibly softer than it was | P2 | M |
+| 8.12 | The merge dispatch evaluates a binary search per vertex and per triangle | `findVertexObject` / `findTriangleObject` in `skin.slang`. A precomputed per-vertex object id would remove both | P3 | S |
+| 8.13 | `HitGeometry` and `SurfaceShading` are the remaining large live state | The material record is out of the traversal registers; these two are what is left across the bounce loop. Occupancy is still only 22.7% | P2 | M |
 | 8.6 | Implement the refit schedule the plan already specifies | Deforming BLAS are rebuilt every frame where the plan calls for refit per frame plus occasional staggered rebuild, and for dangly a motion threshold using displacement already computed in `_dangly.vertices`. Design is done; this is execution | P1 | M |
 | 8.7 | Explain 7.2% occupancy on the primary-ray dispatch | Even the 5.70 ms trace leaves most of the machine idle. Register pressure, bounce-loop divergence, or the ray-cone LOD path. Needs Nsight's shader profiler, not a guess | P2 | M |
 | 8.8 | Frame floor outside the renderer | The update slot is a flat ~2.03-2.07 ms across every backend and pipeline, and raster adds ~1.3 ms of queued CPU work. Neither moves with renderer changes | P2 | M |
