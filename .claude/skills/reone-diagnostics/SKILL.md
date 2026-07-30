@@ -1,14 +1,15 @@
 ---
 name: reone-diagnostics
-description: Measure and compare reone empirically without fooling yourself. Covers the deterministic screenshot harness for A/B, numeric render-target dumps for localising a difference to a pass, scripted RenderDoc capture, frame-time measurement, and the build and tooling traps that silently invalidate all of the above. Use when a shader renders wrongly, when OpenGL and Vulkan disagree, when something got slower, or when you need bound buffers and uniform contents rather than a guess. Triggers on: shader renders wrong, geometry missing, compare backends, GL vs Vulkan, A/B, frame capture, RenderDoc, uniform buffer contents, G-buffer, frame time, regression, slower, benchmark, validation layers, stale build.
+description: Measure and compare reone empirically without fooling yourself. Covers the deterministic screenshot harness for A/B, numeric render-target dumps for localising a difference to a pass, the frozen-scene sequence capture for scoring temporal filters, scripted RenderDoc capture, frame-time measurement, and the build and tooling traps that silently invalidate all of the above. Use when a shader renders wrongly, when OpenGL and Vulkan disagree, when a denoiser or TAA is not converging, when something got slower, or when you need bound buffers and uniform contents rather than a guess. Triggers on: shader renders wrong, geometry missing, compare backends, GL vs Vulkan, A/B, frame capture, RenderDoc, uniform buffer contents, G-buffer, frame time, regression, slower, benchmark, validation layers, stale build, path tracing, denoiser, NRD, TAA, ghosting, shimmer, noise, does not converge, flicker, temporal.
 ---
 
 # Measuring a reone frame
 
 Guessing at shader faults from the rendered image is slow and gets it wrong.
-Three things make it empirical: an unattended screenshot harness for A/B
-comparison, numeric target dumps for localising a difference to a pass, and a
-scripted RenderDoc capture for seeing what the GPU actually received.
+Four things make it empirical: an unattended screenshot harness for A/B
+comparison, numeric target dumps for localising a difference to a pass, a
+frozen-scene sequence capture for anything temporal, and a scripted RenderDoc
+capture for seeing what the GPU actually received.
 
 **Most of the time lost here has gone to measurements that were quietly
 invalid** - a stale binary, a splash-screen frame, two different renderers
@@ -137,6 +138,22 @@ the dumps say which pass to look at.
 current frame before reading targets back. Only the OpenGL **PBR** pipeline
 exposes targets; the retro pipeline exposes none and dumps nothing.
 
+### The path tracer dumps its whole split, not just the image
+
+In `--mode path-tracing` the dump carries every channel behind the assembled
+frame: `traced_noise_free`, `traced_albedo`, `traced_normal_roughness`,
+`traced_view_z`, `traced_motion`, `traced_diffuse`, `traced_specular`, and
+NRD's `denoised_diffuse` / `denoised_specular`, alongside `traced_output`.
+
+That distinction is what separates *the tracer is noisy* from *the denoiser is
+not clearing it*, and neither is visible in the final image. It is also the only
+way to check a claim about one channel. "Noise-free" contained raw path-tracer
+noise for as long as it existed - the bounce loop routed additive-surface
+emission there on a comment asserting it was deterministic along the view ray,
+when a scattered ray finding a blade plane is a sampling outcome that changes
+every frame. The channel bypasses the denoiser by definition, so that noise
+reached the screen unfiltered and no amount of NRD tuning could touch it.
+
 ### Path tracing makes the harness slow, and frame 900 is usually not needed
 
 Every frame of a capture run renders at full cost, so `--captureframe 900` in
@@ -151,6 +168,76 @@ scene, deterministic like any other, and roughly three times cheaper than 900.
 Frame 900 is only required when comparing against the existing baselines, which
 were captured there. Keep it for cross-commit checks; do not pay for it while
 tuning a sample count.
+
+## Temporal filters: freeze the world and watch the residual decay
+
+A denoiser or a TAA cannot be judged from one frame. The measurement that works
+is to stop the simulation, restart the temporal history, and capture a run of
+frames: with nothing in the world moving, whatever still changes between
+consecutive frames is exactly the residual the filters have not removed.
+
+```
+engine.exe --game "<GAME_DIR>" --backend vulkan --pbr 1 --mode path-tracing \
+    --headless 1 --commands-file warp.txt \
+    --capture <SCRATCH>\seq\f.tga --captureframe 350 --captureframes 51 \
+    --freezeframe 350 --pttaablend 0.9
+```
+
+- `--freezeframe N` holds the simulation from frame N (`frameTime` becomes 0) and
+  restarts every temporal history once. Rendering is untouched: the jitter
+  sequence, the tracer's frame index, NRD's accumulation and the TAA history all
+  keep advancing over a scene that no longer moves.
+- `--captureframes K` writes K consecutive frames as `f_0350.tga`, `f_0351.tga`…
+  A count of 1 keeps the path exactly as given, so old baselines still match.
+- `--pttaablend` and `--ptdenoise` set the two dials from the command line.
+
+**The pass criterion is geometric decay to a floor, not convergence to zero.**
+A blend-factor filter is an exponential moving average: it settles at a small
+non-zero residual and stays there, because the jitter cycles and the tracer
+reseeds every frame. Scoring it against zero marks a working filter as broken.
+Restarting the history at the freeze frame is what makes the *approach*
+measurable, and the decay from cold to settled is the evidence:
+
+| | cold step | settled | decay |
+|---|---|---|---|
+| `--pttaablend 0.9` | 5.57 | 0.88 | 6.3x - accumulating |
+| `--pttaablend 0` | 5.34 | 3.14 | 1.7x - flat, no history at all |
+
+Without the restart the sequence is already settled by the first captured frame
+and reads as flat in both cases, which says nothing.
+
+**Mask to edges.** A whole-frame mean is dominated by large flat areas that
+converge immediately. Take the spatial gradient of the last frame, threshold at
+the 97th percentile, and report that subset separately - it ran 7.4 against a
+frame mean of 0.95 here, and foliage alone was 3.4x the frame mean.
+
+**Then look at an amplified diff of the last two frames** (`v*20`), max-pooled
+rather than box-downscaled so a one-pixel edge survives the resize. The numbers
+say how much is left; only the image says *where*, and the answer was entirely
+alpha-cutout foliage, character silhouettes and the saber blade, over an almost
+black floor. `scripts/analyze.py <dir>` (per-step residual, edge-masked,
+verdict), `scripts/channels.py <dirA> <dirB>` (per-channel determinism) and
+`scripts/diffimg.py <dir> <out.png> <gain>` (amplified diff, max-pooled) beside
+this file do all three.
+
+### Determinism is the sharper test, and jitter has to be off for it
+
+With the scene frozen **and `--taajitter 0`**, every visibility-ray output is a
+pure function of the camera and must come back bit-identical between frames:
+
+```
+traced_noise_free        0.00000   0.000%  identical
+traced_albedo            0.00000   0.000%  identical
+traced_normal_roughness  0.00000   0.000%  identical
+traced_motion            0.00000   0.000%  identical
+traced_diffuse           0.07709  60.845%  VARIES    <- sampled, correct
+```
+
+Anything deterministic that *varies* is a bug, located to one channel, with no
+image interpretation involved. Leave the jitter on and this test is worthless:
+the primary ray lands on a different sub-pixel every frame, so `traced_albedo`
+differed on 57% of pixels for entirely legitimate reasons and the real signal
+was invisible.
 
 ## Frame time, and how to compare two commits
 
@@ -299,6 +386,18 @@ touches, and how far it moves them.
 
 ## Traps that cost real time here
 
+- **Check the feature is switched on before debugging why it does not work.**
+  `ptTaaBlend` defaults to **0**, which disables the composite's TAA entirely -
+  `historyValid` goes false in the shader and the output is the raw jittered
+  frame. It was graded to zero deliberately, years of commits ago, while mip-0
+  aliasing made history clamping useless, and nothing since put it back. A
+  session went into reading the reprojection maths for a filter that was never
+  running. The tell was in the numbers before it was in the code: the
+  frame-to-frame residual repeated with **period 8**, exactly `kJitterPhases`,
+  which means the output was a pure function of the jitter phase and no history
+  was being mixed in at all. A periodic residual is not noise - it is a filter
+  that is not accumulating. Read the default in `GraphicsOptions` and log the
+  effective value before forming any hypothesis about the shader.
 - **Vulkan readback before submission returns the previous frame.** The target
   images still contain frame N-1 while frame N is only recorded, so a dump can
   look correct wherever the scene is static while every moving thing is one

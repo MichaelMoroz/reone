@@ -826,6 +826,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     materials.reserve(registry.objects().size());
     _lastDeforming = 0;
     _lastSkinned = 0;
+    _lastTriangles = 0;
+    _lastDynamicTriangles = 0;
     _lastOutOfRange = 0;
     _lastEmissive = 0;
     _lastAdditive = 0;
@@ -1098,6 +1100,14 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         }
         instances.push_back(instance);
         materials.push_back(material);
+        // Summed over instances, not over distinct meshes: a shared BLAS is
+        // traversed once per instance, so this is the number that decides
+        // whether merging the static set into one structure is even sensible.
+        _lastTriangles += uploaded.indexCount() / 3;
+        // The split that decides whether a merged static BLAS is worth building:
+        // foliage is instance-heavy but low-poly, so the dynamic share of
+        // triangles can be far smaller than its share of instances.
+        if (skinned || dangly || saber) _lastDynamicTriangles += uploaded.indexCount() / 3;
         // Must match isEmitter in slang/rayquery.slang. This was a luma
         // threshold while the shader used one too; when the shader started
         // taking the colour directly, this count silently stopped describing
@@ -1572,6 +1582,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                   "/" + std::to_string(_lastSecondaryRays) + "; "
             : "trace stats off; ";
     info("Vulkan: TLAS " + std::to_string(_lastInstances) + " instances, " +
+         std::to_string(_lastTriangles / 1000) + "k triangles (" +
+         std::to_string(_lastDynamicTriangles / 1000) + "k dynamic), " +
          std::to_string(_lastSkinned) + " skinned, skipped " +
          std::to_string(_lastDeforming) + " deforming and " +
          std::to_string(_lastOutOfRange) + " out-of-range meshes, build recorded in " +

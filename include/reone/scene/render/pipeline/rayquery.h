@@ -97,6 +97,8 @@ private:
     VkPipeline _skinPipeline {VK_NULL_HANDLE};
     std::array<Frame, 2> _frames;
     uint32_t _lastInstances {0};
+    uint32_t _lastTriangles {0};
+    uint32_t _lastDynamicTriangles {0};
     uint32_t _lastSkinned {0};
     uint32_t _lastDeforming {0};
     uint32_t _lastOutOfRange {0};

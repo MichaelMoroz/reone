@@ -2,3 +2,6 @@
 .vs/
 .vscode/
 build/
+/.scratch
+# Written beside whatever binary is run, including the repo root.
+engine.log
