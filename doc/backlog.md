@@ -246,8 +246,32 @@ Five commits, each measured either side. The wall-clock harness is
 | `9b98c37c` | one BLAS, one dispatch, two buffers | 7.91 | 8.54 |
 | `363c8770` | material record out of the traversal registers | 6.79 | 7.08 |
 | `0079b2d8` | sky becomes the ray-miss case | 5.79 | 6.87 |
-| `791363fe` | raygen ray tracing pipeline | 5.31 | 6.98 |
-| `395a7afe` | Shader Execution Reordering | 5.38 | **6.20** |
+| `791363fe` | raygen ray tracing pipeline | **5.31** | **6.98** |
+| ~~`395a7afe`~~ | ~~Shader Execution Reordering~~ — reverted, `b3fe1f3b` | — | — |
+
+### SER does not work with the pinned compiler, and the win was noise
+
+Recorded because everything about this failure looked like success.
+
+**vcpkg slangc 2026.7.1 — the compiler the build actually uses — accepts `ReorderThread`, warns
+that it is upgrading the profile to include `spvShaderInvocationReorderNV`, exits 0, and emits the
+capability with no `OpReorderThreadWithHintNV` in the module.** The Vulkan SDK's *older* slangc
+2025.17.2 emits both from identical source and flags. Two slangc binaries on this machine disagree
+and the newer one is the broken one, so testing with the wrong binary proves the opposite.
+
+The only thing that shipped was three extra validation VUIDs: `spirv-val` rejects capability 5388
+because it does not know the extension, and the module declared a capability nothing used.
+
+**The measured speedup was noise.** One unchanged build measures ebo_m12aa across 6.26–7.09 ms over
+five samples — a 12.2% spread containing both the 6.98 "before" and the 6.20 "after". Three samples
+either side could not see it. **Two numbers differing by less than the spread of either are not a
+result**, which applies to the rest of this table too: treat a difference under about 10% on a
+single module as unproven.
+
+**`spirv-dis` cannot be trusted on these modules.** It aborts at word 4 with `Invalid capability
+operand: 5388`, so any disassembly-based check reads a truncated module and confirms whatever
+absence it was testing for. Walking the instruction stream is what settled it. `OpReorderThreadWithHintNV`
+is **5280**; 5279 is the HitObject form.
 
 **8.2, 8.3, 8.4, 8.5 and 8.6 no longer exist as work.** They were all about the
 shape of the per-mesh loop — batching its builds, hoisting its binds, scheduling
@@ -270,7 +294,7 @@ slowest ray finishes.
 
 | # | Task | Why it matters | Pri | Eff |
 |---|---|---|---|---|
-| 8.10 | `spirv-val` rejects capability 5388 (`ShaderInvocationReorderNV`) | Three VUIDs now fire every run because the SDK validator is older than the extension the driver implements. Benign, but it is noise that can hide a real error. Should clear with a newer SDK | P2 | S |
+| 8.10 | SER, once a Slang release emits the instruction again | The raygen pipeline is already the right shape and the device reports real reordering. Blocked on the toolchain, not the design — see above | P2 | M |
 | 8.11 | Sky cubemap keeps only 0.73 of the geometry sky's horizontal detail | 1024/face; 2048 only reaches 0.77 for 4× the memory, so the residual is resampling and filtering, not resolution. The sky is visibly softer than it was | P2 | M |
 | 8.12 | The merge dispatch evaluates a binary search per vertex and per triangle | `findVertexObject` / `findTriangleObject` in `skin.slang`. A precomputed per-vertex object id would remove both | P3 | S |
 | 8.13 | `HitGeometry` and `SurfaceShading` are the remaining large live state | The material record is out of the traversal registers; these two are what is left across the bounce loop. Occupancy is still only 22.7% | P2 | M |
