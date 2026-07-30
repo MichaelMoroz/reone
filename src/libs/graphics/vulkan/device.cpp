@@ -112,6 +112,11 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     rayQueryFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
     rayQueryFeatures.rayQuery = VK_TRUE;
 
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures {};
+    rayTracingPipelineFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+    rayTracingPipelineFeatures.rayTracingPipeline = VK_TRUE;
+
     // The resolve samples the derived environment maps as cube arrays, which is
     // not a baseline capability.
     VkPhysicalDeviceFeatures features {};
@@ -164,7 +169,7 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     // raster-selected device intact.
     vkb::PhysicalDeviceSelector rayQuerySelector(_instance);
     VkPhysicalDeviceFeatures rayQueryCoreFeatures = features;
-    // Physical-storage-buffer addresses in the hit shader are uint64_t.
+    // Physical-storage-buffer addresses in the trace shader are uint64_t.
     rayQueryCoreFeatures.shaderInt64 = VK_TRUE;
     configureSelector(rayQuerySelector, rayQueryCoreFeatures);
     // Do not let an optional feature change the GPU chosen for rasterization.
@@ -172,9 +177,11 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     rayQuerySelector.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
         .add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
         .add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
+        .add_required_extension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)
         .set_required_features_12(features12)
         .add_required_extension_features(accelerationStructureFeatures)
-        .add_required_extension_features(rayQueryFeatures);
+        .add_required_extension_features(rayQueryFeatures)
+        .add_required_extension_features(rayTracingPipelineFeatures);
 #ifdef R_ENABLE_FSR
     // FSR2 requests an explicit subgroup size whenever this extension is
     // advertised. Its pipeline pNext is only legal when the matching feature
@@ -214,10 +221,13 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
                          vkDestroyAccelerationStructureKHR != nullptr &&
                          vkGetAccelerationStructureBuildSizesKHR != nullptr &&
                          vkCmdBuildAccelerationStructuresKHR != nullptr &&
-                         vkGetAccelerationStructureDeviceAddressKHR != nullptr;
+                         vkGetAccelerationStructureDeviceAddressKHR != nullptr &&
+                         vkCreateRayTracingPipelinesKHR != nullptr &&
+                         vkGetRayTracingShaderGroupHandlesKHR != nullptr &&
+                         vkCmdTraceRaysKHR != nullptr;
     if (rayQueryEnabled && !_rayQueryAvailable) {
-        info("Vulkan: ray query extensions enabled but volk did not load all "
-             "acceleration-structure entry points; continuing with raster",
+        info("Vulkan: ray tracing extensions enabled but volk did not load all "
+             "required entry points; continuing with raster",
              LogChannel::Graphics);
     }
 

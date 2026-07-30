@@ -283,38 +283,38 @@ void RayQueryPipeline::init() {
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[0].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
     bindings[1].binding = 1;
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[1].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
     bindings[2].binding = 2;
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[2].descriptorCount = 1;
-    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[2].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
     bindings[3].binding = 3;
     bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[3].descriptorCount = 1;
-    bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[3].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
     // Ranges into the one merged geometry buffer: vertices, indices, material ids.
     for (uint32_t i = 4; i <= 6; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        bindings[i].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
     }
     bindings[7].binding = 7;
     bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[7].descriptorCount = _bindlessTextureCapacity;
-    bindings[7].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[7].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
     bindings[8].binding = 8;
     bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[8].descriptorCount = _bindlessTextureCapacity;
-    bindings[8].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[8].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
     bindings[9].binding = 9;
     bindings[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[9].descriptorCount = 1;
-    bindings[9].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[9].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
     VkDescriptorBindingFlags bindingFlags[10] {};
     bindingFlags[7] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
                       VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
@@ -371,7 +371,7 @@ void RayQueryPipeline::init() {
             auxBindings[i].binding = i;
             auxBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             auxBindings[i].descriptorCount = 1;
-            auxBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            auxBindings[i].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
         }
         VkDescriptorSetLayoutCreateInfo auxLayoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         auxLayoutInfo.bindingCount = kNumAuxImages;
@@ -435,7 +435,7 @@ void RayQueryPipeline::init() {
         throw std::runtime_error("Vulkan: ray-query shader module creation failed");
     VkDescriptorSetLayout layouts[] {_renderer.descriptors().uniformLayout(), _layout, _auxLayout};
     VkPushConstantRange pushConstants {};
-    pushConstants.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pushConstants.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
     pushConstants.size = sizeof(TracePushConstants);
     VkPipelineLayoutCreateInfo pipelineLayout {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pipelineLayout.setLayoutCount = 3; pipelineLayout.pSetLayouts = layouts;
@@ -446,13 +446,56 @@ void RayQueryPipeline::init() {
         throw std::runtime_error("Vulkan: ray-query pipeline layout creation failed");
     }
     VkPipelineShaderStageCreateInfo stage {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT; stage.module = module; stage.pName = "main";
-    VkComputePipelineCreateInfo pipeline {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-    pipeline.stage = stage; pipeline.layout = _pipelineLayout;
-    if (vkCreateComputePipelines(device.handle(), VK_NULL_HANDLE, 1, &pipeline, nullptr, &_pipeline) != VK_SUCCESS) {
+    stage.stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR; stage.module = module; stage.pName = "main";
+    VkRayTracingShaderGroupCreateInfoKHR group {
+        VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR};
+    group.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+    group.generalShader = 0;
+    group.closestHitShader = VK_SHADER_UNUSED_KHR;
+    group.anyHitShader = VK_SHADER_UNUSED_KHR;
+    group.intersectionShader = VK_SHADER_UNUSED_KHR;
+    VkRayTracingPipelineCreateInfoKHR pipeline {
+        VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
+    pipeline.stageCount = 1;
+    pipeline.pStages = &stage;
+    pipeline.groupCount = 1;
+    pipeline.pGroups = &group;
+    pipeline.maxPipelineRayRecursionDepth = 1;
+    pipeline.layout = _pipelineLayout;
+    if (vkCreateRayTracingPipelinesKHR(device.handle(), VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipeline,
+                                        nullptr, &_pipeline) != VK_SUCCESS) {
         vkDestroyShaderModule(device.handle(), module, nullptr);
-        throw std::runtime_error("Vulkan: ray-query compute pipeline creation failed");
+        throw std::runtime_error("Vulkan: ray-query ray-tracing pipeline creation failed");
     }
+    VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtProperties {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR};
+    VkPhysicalDeviceProperties2 properties {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    properties.pNext = &rtProperties;
+    vkGetPhysicalDeviceProperties2(device.physicalDevice(), &properties);
+    const auto alignUp = [](VkDeviceSize value, VkDeviceSize alignment) {
+        return (value + alignment - 1) & ~(alignment - 1);
+    };
+    const VkDeviceSize recordSize = alignUp(rtProperties.shaderGroupHandleSize,
+                                            rtProperties.shaderGroupHandleAlignment);
+    const VkDeviceSize allocationSize = recordSize + rtProperties.shaderGroupBaseAlignment - 1;
+    std::vector<uint8_t> handle(rtProperties.shaderGroupHandleSize);
+    if (vkGetRayTracingShaderGroupHandlesKHR(device.handle(), _pipeline, 0, 1, handle.size(),
+                                             handle.data()) != VK_SUCCESS) {
+        vkDestroyShaderModule(device.handle(), module, nullptr);
+        throw std::runtime_error("Vulkan: raygen shader-group handle query failed");
+    }
+    _raygenSbt = std::make_unique<VulkanBuffer>(device);
+    _raygenSbt->initHostVisible(
+        allocationSize, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+    const VkDeviceAddress sbtAddress = alignUp(_raygenSbt->deviceAddress(),
+                                               rtProperties.shaderGroupBaseAlignment);
+    const VkDeviceSize sbtOffset = sbtAddress - _raygenSbt->deviceAddress();
+    std::memcpy(static_cast<uint8_t *>(_raygenSbt->mapped()) + sbtOffset, handle.data(),
+                handle.size());
+    _raygenSbtRegion.deviceAddress = sbtAddress;
+    _raygenSbtRegion.stride = recordSize;
+    _raygenSbtRegion.size = recordSize;
     vkDestroyShaderModule(device.handle(), module, nullptr);
     device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_pipeline), "rayquery:primaryRay");
 
@@ -499,10 +542,15 @@ void RayQueryPipeline::init() {
         vkDestroyShaderModule(device.handle(), module, nullptr);
         throw std::runtime_error("Vulkan: merge pipeline layout creation failed");
     }
-    stage.module = module;
-    pipeline.stage = stage;
-    pipeline.layout = _mergePipelineLayout;
-    if (vkCreateComputePipelines(device.handle(), VK_NULL_HANDLE, 1, &pipeline, nullptr, &_mergePipeline) != VK_SUCCESS) {
+    VkPipelineShaderStageCreateInfo mergeStage {
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    mergeStage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    mergeStage.module = module;
+    mergeStage.pName = "main";
+    VkComputePipelineCreateInfo mergePipeline {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    mergePipeline.stage = mergeStage;
+    mergePipeline.layout = _mergePipelineLayout;
+    if (vkCreateComputePipelines(device.handle(), VK_NULL_HANDLE, 1, &mergePipeline, nullptr, &_mergePipeline) != VK_SUCCESS) {
         vkDestroyShaderModule(device.handle(), module, nullptr);
         throw std::runtime_error("Vulkan: merge compute pipeline creation failed");
     }
@@ -754,7 +802,7 @@ bool RayQueryPipeline::bakeSkyRoom(VkCommandBuffer cmd,
     };
     transition(hadCube ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-               hadCube ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+               hadCube ? VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
                hadCube ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
@@ -867,7 +915,7 @@ bool RayQueryPipeline::bakeSkyRoom(VkCommandBuffer cmd,
 
     transition(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     _skyCubeReady = true;
     info("Vulkan: baked sky room '" + room.model().name() + "' into a " + std::to_string(kSkyCubeSize) + "px cubemap",
          LogChannel::Graphics);
@@ -914,6 +962,7 @@ void RayQueryPipeline::deinit() {
     if (_mergePool) vkDestroyDescriptorPool(device.handle(), _mergePool, nullptr);
     if (_mergeLayout) vkDestroyDescriptorSetLayout(device.handle(), _mergeLayout, nullptr);
     if (_pipeline) vkDestroyPipeline(device.handle(), _pipeline, nullptr);
+    _raygenSbt.reset();
     if (_pipelineLayout) vkDestroyPipelineLayout(device.handle(), _pipelineLayout, nullptr);
     if (_pool) vkDestroyDescriptorPool(device.handle(), _pool, nullptr);
     if (_layout) vkDestroyDescriptorSetLayout(device.handle(), _layout, nullptr);
@@ -925,6 +974,7 @@ void RayQueryPipeline::deinit() {
     }
     _auxImagesTransitioned = false;
     _pipeline = VK_NULL_HANDLE; _pipelineLayout = VK_NULL_HANDLE; _pool = VK_NULL_HANDLE; _layout = VK_NULL_HANDLE;
+    _raygenSbtRegion = {};
     _mergePipeline = VK_NULL_HANDLE; _mergePipelineLayout = VK_NULL_HANDLE;
     _mergePool = VK_NULL_HANDLE; _mergeLayout = VK_NULL_HANDLE; _mergeSets = {};
 #ifdef R_ENABLE_FSR
@@ -1469,7 +1519,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     // UVs and normals from the same buffer. Both consumers must wait here:
     // guarding only the build produced striped, frame-varying skinned UVs.
     mergeBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
     mergeBarrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
                                  VK_ACCESS_2_SHADER_READ_BIT;
     VkDependencyInfo mergeDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
@@ -1645,7 +1695,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     VkMemoryBarrier2 tlasToTrace {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
     tlasToTrace.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
     tlasToTrace.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-    tlasToTrace.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    tlasToTrace.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
     tlasToTrace.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
     VkDependencyInfo tlasToTraceDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     tlasToTraceDependency.memoryBarrierCount = 1;
@@ -1763,7 +1813,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             for (int i = 0; i < kNumAuxImages; ++i) {
                 auto &barrier = auxBarriers[frameIndex * kNumAuxImages + i];
                 barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                barrier.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
                 barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
                 barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
                 barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -1782,11 +1832,12 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
     offsets[0] = globalsOffset;
     auto uniformSet = _renderer.uniformSet();
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineLayout, 0, 1, &uniformSet,
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipelineLayout, 0, 1, &uniformSet,
                             static_cast<uint32_t>(offsets.size()), offsets.data());
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineLayout, 1, 1, &set, 0, nullptr);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineLayout, 2, 1,
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipelineLayout,
+                            1, 1, &set, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipelineLayout, 2, 1,
                             &_auxSets[_renderer.frameIndex()], 0, nullptr);
     // Clamped rather than trusted: the option is user-editable in reone.cfg
     // and a zero would divide the accumulated radiance by zero.
@@ -1808,13 +1859,15 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                   0,
                                   static_cast<uint32_t>(opaqueTriangleCount),
                                   skyBaked ? 1u : 0u};
-    vkCmdPushConstants(cmd, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), &constants);
-    vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8), static_cast<uint32_t>((_extent.y + 7) / 8), 1);
+    vkCmdPushConstants(cmd, _pipelineLayout, VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, sizeof(constants), &constants);
+    const VkStridedDeviceAddressRegionKHR emptySbt {};
+    vkCmdTraceRaysKHR(cmd, &_raygenSbtRegion, &emptySbt, &emptySbt, &emptySbt,
+                      static_cast<uint32_t>(_extent.x), static_cast<uint32_t>(_extent.y), 1);
 #ifdef R_ENABLE_NRD
     if (_nrdDenoiser) {
         // The trace pass's storage writes feed NRD's sampled reads.
         VkMemoryBarrier2 traceToDenoise {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-        traceToDenoise.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        traceToDenoise.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
         traceToDenoise.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
         traceToDenoise.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
         traceToDenoise.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT;

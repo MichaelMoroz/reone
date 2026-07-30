@@ -68,12 +68,12 @@ float3 diffuseMaterialResponse(SurfaceShading shading, float3 view) {
     return response;
 }
 
-[shader("compute")]
-[numthreads(8, 8, 1)]
-void main(uint3 dispatchId : SV_DispatchThreadID) {
-    uint width, height;
-    outputImage.GetDimensions(width, height);
-    if (dispatchId.x >= width || dispatchId.y >= height) return;
+[shader("raygeneration")]
+void main() {
+    uint3 dispatchId = DispatchRaysIndex();
+    uint3 dispatchDimensions = DispatchRaysDimensions();
+    uint width = dispatchDimensions.x;
+    uint height = dispatchDimensions.y;
     uint2 pixel = dispatchId.xy;
 
     // Unproject both depth-range ends rather than assuming a perspective

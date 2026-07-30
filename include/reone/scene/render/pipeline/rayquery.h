@@ -91,6 +91,8 @@ private:
     std::array<VkDescriptorSet, 2> _sets {};
     VkPipelineLayout _pipelineLayout {VK_NULL_HANDLE};
     VkPipeline _pipeline {VK_NULL_HANDLE};
+    std::unique_ptr<graphics::VulkanBuffer> _raygenSbt;
+    VkStridedDeviceAddressRegionKHR _raygenSbtRegion {};
     VkDescriptorSetLayout _mergeLayout {VK_NULL_HANDLE};
     VkDescriptorPool _mergePool {VK_NULL_HANDLE};
     std::array<VkDescriptorSet, 2> _mergeSets {};
