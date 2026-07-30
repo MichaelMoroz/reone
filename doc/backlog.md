@@ -74,59 +74,74 @@ elsewhere.
 | 1.6 | Grass placement determinism (hash of face + cluster index) | A reflection showing a differently-populated hillside reads as a tracing bug | P2 | M |
 | 1.7 | Camera-facing particles: AS proxy vs rasterised composite | Undecided, and gates emitter admission to the TLAS | P2 | M |
 | 1.8 | Lightmaps treated as albedo where physically wrong | Revisit once real GI exists; `ptLightmapIntensity` is already graded to 0 | P3 | M |
-| 1.9 | Point lights are neither spheres nor inverse-square: raster "area of effect", raster falloff, and a fixed-angle shadow cone | See below. One quantity — the subtended solid angle — fixes all three, but it rebases the light calibration, so it is a deliberate change, not a fix to slip in | P1 | M |
+| 1.10 | The light selection table is evaluated twice per path vertex over all 32 slots | `ptDirectLight` runs `directLightWeight` once to total and again to select. Now that the cutoff no longer short-circuits distant lights, both passes run in full. Caching 32 weights would halve it | P2 | S |
+| 1.11 | Sphere lights are sampled over the whole subtended cone, not the visible cap | Directions on the far hemisphere of the emitter are sampled and shadowed as if they lit the surface. Correct for a small emitter, increasingly wrong as the ratio dial grows | P3 | M |
 
-### 1.9 — point lights should be spheres
+### 1.9 — point lights became spheres *(done, `085c5893`)*
 
-`slang/tracing/lighting.slang` inherits two raster behaviours, one outright bug, and one hack of
-our own:
+Kept because the reasoning is the calibration's justification, and because the fitted constant is
+worth being able to re-derive.
 
-- **A hard cutoff.** `if (!directional && lightDistance > light.radius * light.radius) return 0.0;`
-  A light simply stops existing past a distance. Physically there is no such boundary, and it is
-  visible as a terminator on large surfaces lit by a small lamp.
-- **The comparison is dimensionally wrong.** `lightDistance` is a length; `radius * radius` is an
-  area. The comment calls it "raster's radius-squared cutoff quirk, kept for parity", so it is a
-  faithful port of an original bug rather than an accident here — but the consequence is that the
-  effective range is `radius²`, so a radius-10 lamp reaches 100 units and a radius-0.5 lamp reaches
-  0.25. Range scales quadratically with an artist-authored number that was never meant to be
-  squared.
-- **The falloff is not inverse-square.** `d = radius + distance; attenuation = radius² / d²`
-  normalises to 1 at the source and decays softly, which is Odyssey's look, not physics. A sphere
-  light of a given radius and radiance should attenuate by the solid angle it subtends, which gives
-  1/d² in the far field and saturates correctly up close.
-- **The shadow cone has a fixed opening angle, so the light is not sphere-like at all.** Every
-  point light samples `ptConeSample(L, pushConstants.pointAngularRadius, ...)` with one global
-  `ptPointAngularSize`, defaulting to 8° and clamped to [0.05°, 45°]. The cone sampling itself is
-  right — uniform in solid angle, which *is* the standard way to sample a sphere — but the
-  half-angle is a constant instead of `asin(R/d)`, so the source has no size and no position in the
-  softness calculation. Consequences: penumbra does not sharpen with distance or widen as you
-  approach a lamp; a ceiling panel overhead and a distant glow cast identically soft shadows; and
-  8° is enormous — a 10 cm bulb at 3 m subtends about 2° — so every shadow in the game is
-  uniformly over-soft. The shadow ray also runs to `lightDistance`, the distance to the centre,
-  rather than to the sampled point on the sphere.
+`slang/tracing/lighting.slang` had inherited two raster behaviours, one outright bug, and one hack
+of our own — and they turned out to be a single fix:
 
-An earlier revision of this section claimed `ptPointAngularSize` "treats these as sphere lights for
-shadow sampling". It does not; it is a constant, and that is the point.
+- **A hard cutoff**, `lightDistance > light.radius * light.radius`, so a light stopped existing past
+  a boundary, visible as a terminator on large surfaces lit by a small lamp.
+- **Dimensionally wrong**: a length compared against an area, so the effective range was `radius²`.
+  A faithful port of an Odyssey bug — the comment said as much — but it meant range scaled
+  quadratically with a number never meant to be squared.
+- **Falloff was not inverse-square**: `radius²/(radius+d)²` normalises to 1 at the source and decays
+  softly. Odyssey's look, not physics.
+- **The shadow cone had a fixed opening angle**, one global 8° for every light at every distance, so
+  the emitter had neither a size nor a position in the softness calculation. The cone *sampling* was
+  right — uniform in solid angle is the standard way to sample a sphere — but a constant half-angle
+  meant penumbra never sharpened with range, and 8° is enormous (a 10 cm bulb at 3 m subtends ~2°),
+  so every shadow in the game was uniformly over-soft.
 
-**These are one fix, not four.** The solid angle a sphere of radius R subtends at distance d,
-Ω = 2π(1 − cos θ) with θ = asin(saturate(R/d)), is simultaneously the correct falloff and the
-correct shadow cone. Derive intensity from radiance × Ω × cos θ and the inverse-square law falls
-out of the far-field limit for free, with correct saturation up close and no singularity at d = 0.
-Drop the cutoff in favour of importance sampling — the selection CDF already exists, so a distant
-light becomes improbable rather than clamped out. Cost should not change much, because NEE picks
-one light per vertex either way.
+**The unification.** Ω = 2π(1 − cos θ) with θ = asin(saturate(R/d)) is simultaneously the falloff
+and the shadow cone, and inverse-square falls out of its far field with correct saturation up close
+and no singularity at d = 0 — Ω caps at 2π.
 
-**The blocker is that there is no R to use.** `light.radius` is the influence *range*, not the
-emitter's size: `graph.cpp` culls with `radius + 64` and `light.cpp` promotes anything at radius
-≥ 100 to a directional sun. Feeding it to `asin(R/d)` would make every lamp a room-sized glowing
-ball. A physical emitter radius has to come from somewhere — a global world-units dial replacing
-the current angular one, a per-category override, or a heuristic keyed to the light's category —
-and that choice should be made before any of the maths above is written.
+**R is a fraction of the influence radius** (`ptPointEmitterRatio`, default 0.2). The influence
+radius cannot be used directly: `graph.cpp` culls at `radius + 64` and `light.cpp` promotes past 100
+to a directional sun, so it is a range, and using it would make every lamp a room-sized ball. KotOR
+authored no emitter size, hence a dial.
 
-**And it is not a quick fix even then:** every light dial in the calibration — `ptDirectIntensity`,
-`ptPointAngularSize`, the per-category overrides — was graded against the current falloff and the
-current fixed cone. Changing them rebases all of them at once, so it wants doing deliberately with
-a re-grade, not slipped in.
+**Dividing by the emitter's own projected solid angle makes that dial brightness-neutral.** It reads
+the authored colour as an intensity rather than a radiance, so the far field stays at
+`budget·radius²/d²` however large the emitter — verified invariant to three decimals from ratio 0.05
+to 0.4 — and the dial grades penumbra width and near-field saturation only.
+
+**The scale was fitted on paper, and closes exactly.** Substituting x = d/radius makes the problem
+scale-free: Odyssey's curve collapses to 1/(1+x)² and Ω to a function of x and the ratio alone, so
+one constant serves every light at every authored radius. The constant preserving light delivered
+inside the bounding radius is ∫₀¹ x²/(1+x)² dx = **3/2 − 2ln2 ≈ 0.1137056**. Exact as the emitter
+shrinks to a point, ~1% off at ratio 0.2.
+
+A free two-parameter fit was tried first and is instructive: it returns ratio ≈ 0.59 with 29% rms
+error, because reproducing Odyssey's *flat near field* requires an emitter nearly as large as the
+influence radius. Fitting the shape is the wrong objective — the shape is the bug. Only the scale
+should be fitted.
+
+**Measured**, Ebon Hawk `ebo_m12aa` frame 310, against the same frame before:
+
+| | before | after |
+|---|---|---|
+| mean luma | 0.13408 | 0.13602 |
+| p99 luma | 0.51930 | 0.56772 |
+| blown pixels | 0.016% | 0.016% |
+| ms/frame | 8.90 | 10.06 |
+
+55% of pixels moved, in the predicted direction: the 64–128 band gains 6–9 levels, the 32–64
+midtones give up half a level. Visually the ceiling lamp stops being a broad flat wash and becomes a
+hotspot with a locatable source. Sun-lit Dantooine barely moves, 0.44378 → 0.44369.
+
+**The cost is the feature.** +1.16 ms is lights that used to vanish now lighting and shadowing;
+splitting the attenuation out of `SphereLight`, so the selection table does not compute an `asin` it
+discards, recovered a further 0.21 ms. See 1.10 for the remaining halving available.
+
+**An earlier revision of this section claimed** `ptPointAngularSize` "treats these as sphere lights
+for shadow sampling". It did not; it was a constant, and that was the whole point.
 
 ## 2. Path tracing — quality levers not yet pulled
 
