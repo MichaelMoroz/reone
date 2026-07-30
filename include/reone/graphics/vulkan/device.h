@@ -99,6 +99,11 @@ public:
      */
     bool rayQueryAvailable() const { return _rayQueryAvailable; }
 
+    /** Whether ray-query shaders may use NV shader invocation reordering. */
+    bool rayTracingInvocationReorderAvailable() const {
+        return _rayTracingInvocationReorderAvailable;
+    }
+
     /** Limits that every later acceleration-structure build must observe. */
     const VkPhysicalDeviceAccelerationStructurePropertiesKHR &
     accelerationStructureProperties() const {
@@ -129,6 +134,7 @@ private:
 
     bool _debugUtils {false};
     bool _rayQueryAvailable {false};
+    bool _rayTracingInvocationReorderAvailable {false};
     VkPhysicalDeviceAccelerationStructurePropertiesKHR _accelerationStructureProperties {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
     uint32_t _maxBindlessSampledImages {0};

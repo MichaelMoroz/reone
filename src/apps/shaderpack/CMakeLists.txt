@@ -31,6 +31,14 @@ set(SHADER_STAGE_DIR ${CMAKE_BINARY_DIR}/shaders)
 # GLSL used by OpenGL.
 set(SPIRV_OUT_DIR ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin/spirv)
 
+# The SER binary is separate: its SPIR-V requires the NV extension, while the
+# ordinary ray-query binary must remain loadable on devices without it.
+set(R_SER_HINT_MODE "2" CACHE STRING "SER hint: 1=hit, 2=material low 8 bits, 3=material plus hit")
+set_property(CACHE R_SER_HINT_MODE PROPERTY STRINGS 1 2 3)
+if(NOT R_SER_HINT_MODE MATCHES "^[123]$")
+    message(FATAL_ERROR "R_SER_HINT_MODE must be 1, 2, or 3")
+endif()
+
 # <source>:<entry>[+<entry>...]
 set(SPIRV_MODULES
     "pbr_model:staticVertex+skinnedVertex+danglyVertex+saberVertex+opaqueFragment+retroOpaqueFragment+transparentFragment+oitModelFragment+skyBakeFragment"
@@ -82,6 +90,20 @@ if(SLANGC_EXECUTABLE)
             COMMENT "slangc ${spv_source}.slang -> ${spv_source}.spv")
         list(APPEND SPIRV_OUTPUTS ${out})
     endforeach()
+    set(rayquery_ser_out ${SPIRV_OUT_DIR}/rayquery_ser.spv)
+    add_custom_command(
+        OUTPUT ${rayquery_ser_out}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${SPIRV_OUT_DIR}
+        COMMAND ${SLANGC_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/slang/rayquery.slang
+            -I ${CMAKE_SOURCE_DIR}/slang
+            -target spirv -matrix-layout-column-major
+            -capability SPV_EXT_physical_storage_buffer
+            -D R_ENABLE_SER=1 -D R_SER_HINT_MODE=${R_SER_HINT_MODE}
+            -entry main -o ${rayquery_ser_out}
+        DEPENDS ${SLANG_SOURCES}
+        COMMENT "slangc rayquery.slang -> rayquery_ser.spv (SER hint ${R_SER_HINT_MODE})")
+    list(APPEND SPIRV_OUTPUTS ${rayquery_ser_out})
     add_custom_target(compile_spirv ALL DEPENDS ${SPIRV_OUTPUTS})
 else()
     add_custom_target(compile_spirv)
