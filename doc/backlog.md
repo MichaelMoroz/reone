@@ -71,11 +71,15 @@ elsewhere.
 | 1.3 | Diffuse channel outliers: max 25.3 while p99.99 is 1.30 | `1/(1-p)` is unbounded as specular probability approaches 1 at grazing angles. Bounded, unlike the 0/0 it replaced, but a firefly candidate under motion | P2 | S |
 | 1.4 | FSR reactive and transparency-and-composition masks are null | AMD: without them FSR "handles these cases as best it can". Additive saber blades and particles are precisely those cases | P1 | M |
 | 1.5 | Next-event estimation against the full scene light list | KotOR interiors are many small point lights; pure PT is unusably noisy there | P1 | L |
-| 1.9 | Lights carry a raster "area of effect"; neither the cutoff nor the falloff is physical | See below. Rebases the light calibration, so it is a deliberate change, not a fix to slip in | P1 | M |
+| 1.6 | Grass placement determinism (hash of face + cluster index) | A reflection showing a differently-populated hillside reads as a tracing bug | P2 | M |
+| 1.7 | Camera-facing particles: AS proxy vs rasterised composite | Undecided, and gates emitter admission to the TLAS | P2 | M |
+| 1.8 | Lightmaps treated as albedo where physically wrong | Revisit once real GI exists; `ptLightmapIntensity` is already graded to 0 | P3 | M |
+| 1.9 | Point lights are neither spheres nor inverse-square: raster "area of effect", raster falloff, and a fixed-angle shadow cone | See below. One quantity — the subtended solid angle — fixes all three, but it rebases the light calibration, so it is a deliberate change, not a fix to slip in | P1 | M |
 
-### 1.9 — the light bounding volume
+### 1.9 — point lights should be spheres
 
-`slang/tracing/lighting.slang` inherits two raster behaviours and one outright bug:
+`slang/tracing/lighting.slang` inherits two raster behaviours, one outright bug, and one hack of
+our own:
 
 - **A hard cutoff.** `if (!directional && lightDistance > light.radius * light.radius) return 0.0;`
   A light simply stops existing past a distance. Physically there is no such boundary, and it is
@@ -88,21 +92,41 @@ elsewhere.
   squared.
 - **The falloff is not inverse-square.** `d = radius + distance; attenuation = radius² / d²`
   normalises to 1 at the source and decays softly, which is Odyssey's look, not physics. A sphere
-  light of a given radius and radiance should attenuate by the solid angle it subtends — which
-  gives 1/d² in the far field and saturates correctly up close, and which the tracer is already
-  half-way to, since `ptPointAngularSize` treats these as sphere lights for shadow sampling.
+  light of a given radius and radiance should attenuate by the solid angle it subtends, which gives
+  1/d² in the far field and saturates correctly up close.
+- **The shadow cone has a fixed opening angle, so the light is not sphere-like at all.** Every
+  point light samples `ptConeSample(L, pushConstants.pointAngularRadius, ...)` with one global
+  `ptPointAngularSize`, defaulting to 8° and clamped to [0.05°, 45°]. The cone sampling itself is
+  right — uniform in solid angle, which *is* the standard way to sample a sphere — but the
+  half-angle is a constant instead of `asin(R/d)`, so the source has no size and no position in the
+  softness calculation. Consequences: penumbra does not sharpen with distance or widen as you
+  approach a lamp; a ceiling panel overhead and a distant glow cast identically soft shadows; and
+  8° is enormous — a 10 cm bulb at 3 m subtends about 2° — so every shadow in the game is
+  uniformly over-soft. The shadow ray also runs to `lightDistance`, the distance to the centre,
+  rather than to the sampled point on the sphere.
 
-Doing this properly means deriving intensity from radiance and the emitter's solid angle, and
-dropping the cutoff in favour of importance sampling — the selection CDF already exists, so a
-distant light simply becomes improbable rather than being clamped out. Cost should not change much
-because NEE picks one light per vertex either way.
+An earlier revision of this section claimed `ptPointAngularSize` "treats these as sphere lights for
+shadow sampling". It does not; it is a constant, and that is the point.
 
-**The reason this is not a quick fix:** every light dial in the calibration - `ptDirectIntensity`,
-`ptPointAngularSize`, the per-category overrides - was graded against the current falloff. Changing
-it rebases all of them at once, so it wants doing deliberately with a re-grade, not slipped in.
-| 1.6 | Grass placement determinism (hash of face + cluster index) | A reflection showing a differently-populated hillside reads as a tracing bug | P2 | M |
-| 1.7 | Camera-facing particles: AS proxy vs rasterised composite | Undecided, and gates emitter admission to the TLAS | P2 | M |
-| 1.8 | Lightmaps treated as albedo where physically wrong | Revisit once real GI exists; `ptLightmapIntensity` is already graded to 0 | P3 | M |
+**These are one fix, not four.** The solid angle a sphere of radius R subtends at distance d,
+Ω = 2π(1 − cos θ) with θ = asin(saturate(R/d)), is simultaneously the correct falloff and the
+correct shadow cone. Derive intensity from radiance × Ω × cos θ and the inverse-square law falls
+out of the far-field limit for free, with correct saturation up close and no singularity at d = 0.
+Drop the cutoff in favour of importance sampling — the selection CDF already exists, so a distant
+light becomes improbable rather than clamped out. Cost should not change much, because NEE picks
+one light per vertex either way.
+
+**The blocker is that there is no R to use.** `light.radius` is the influence *range*, not the
+emitter's size: `graph.cpp` culls with `radius + 64` and `light.cpp` promotes anything at radius
+≥ 100 to a directional sun. Feeding it to `asin(R/d)` would make every lamp a room-sized glowing
+ball. A physical emitter radius has to come from somewhere — a global world-units dial replacing
+the current angular one, a per-category override, or a heuristic keyed to the light's category —
+and that choice should be made before any of the maths above is written.
+
+**And it is not a quick fix even then:** every light dial in the calibration — `ptDirectIntensity`,
+`ptPointAngularSize`, the per-category overrides — was graded against the current falloff and the
+current fixed cone. Changing them rebases all of them at once, so it wants doing deliberately with
+a re-grade, not slipped in.
 
 ## 2. Path tracing — quality levers not yet pulled
 
