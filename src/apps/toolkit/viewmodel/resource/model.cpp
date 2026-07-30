@@ -106,15 +106,24 @@ void ModelResourceViewModel::update3D() {
 }
 
 void ModelResourceViewModel::render3D(int w, int h) {
+    // The wx page is made visible before openResource has finished loading the
+    // engine and model. Its first paint must not dereference the as-yet-unset
+    // external renderer; the idle refresh after openModel will draw it.
+    if (!_modelNode) {
+        return;
+    }
+
     float aspect = w / static_cast<float>(h);
     _cameraNode->setPerspectiveProjection(glm::radians(55.0f), aspect, kDefaultClipPlaneNear, kDefaultClipPlaneFar);
 
-    auto &scene = _sceneSvc.graphs().get(kSceneMain);
-    auto &output = scene.render(glm::ivec2(w, h));
     auto &renderer = _graphicsModule.renderer();
     // Vulkan presents the completed frame to the wxWidgets child window.
     renderer.beginFrame(glm::ivec2(w, h));
-    renderer.drawSceneOutput(output);
+    // Scene pipelines open render passes of their own, so they must record
+    // after the frame starts but before the renderer opens its 2D composite.
+    auto &scene = _sceneSvc.graphs().get(kSceneMain);
+    auto &output = scene.render(glm::ivec2(w, h));
+    renderer.presentSceneOutput(output);
     renderer.endFrame();
 }
 

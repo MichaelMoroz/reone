@@ -256,11 +256,71 @@ void VulkanRenderer::drawSceneOutput(Texture &output) {
     if (!_inFrame) {
         throw std::logic_error("Renderer: no frame begun");
     }
+    if (!_in2DRendering) {
+        throw std::logic_error("Renderer: no 2D rendering scope begun");
+    }
     // The scene pipeline registered its output image against this Texture, so
     // the 2D path composites it like any other full-target image, orientation
-    // included. Called from inside the 2D rendering scope, which is where the
-    // GUI is drawn.
+    // included.
     _renderer2d.drawFullTargetImage(output);
+}
+
+void VulkanRenderer::begin2DRendering(glm::ivec2 logicalExtent) {
+    if (!_inFrame) {
+        throw std::logic_error("Renderer: no frame begun");
+    }
+    if (_in2DRendering) {
+        throw std::logic_error("Renderer: 2D rendering scope already begun");
+    }
+
+    auto cmd = commandBuffer();
+    auto physicalExtent = _swapchain.extent();
+    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    attachment.imageView = currentImageView();
+    attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    // The swapchain can be smaller than the requested client extent. Dynamic
+    // rendering targets physical pixels, while Vulkan2DRenderer keeps its
+    // projection in the logical extent so the result scales rather than crops.
+    rendering.renderArea.extent = {static_cast<uint32_t>(physicalExtent.x),
+                                   static_cast<uint32_t>(physicalExtent.y)};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &attachment;
+
+    VkViewport viewport {0.0f, 0.0f, static_cast<float>(physicalExtent.x),
+                         static_cast<float>(physicalExtent.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(physicalExtent.x),
+                               static_cast<uint32_t>(physicalExtent.y)}};
+
+    _scope2d = std::make_unique<VulkanDebugScope>(
+        _device, cmd, "2D (scene composite, GUI, console)",
+        glm::vec3 {0.9f, 0.9f, 0.4f});
+    vkCmdBeginRendering(cmd, &rendering);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    _renderer2d.begin(cmd, logicalExtent, physicalExtent, _swapchain.imageFormat());
+    _in2DRendering = true;
+}
+
+void VulkanRenderer::end2DRendering() {
+    if (!_in2DRendering) {
+        throw std::logic_error("Renderer: no 2D rendering scope begun");
+    }
+
+    _renderer2d.end();
+    vkCmdEndRendering(commandBuffer());
+    _scope2d.reset();
+    _in2DRendering = false;
+}
+
+void VulkanRenderer::presentSceneOutput(Texture &output) {
+    begin2DRendering(_extent);
+    drawSceneOutput(output);
+    end2DRendering();
 }
 
 std::shared_ptr<Texture> VulkanRenderer::captureFrame() {
@@ -382,6 +442,9 @@ void VulkanRenderer::invalidateTexture(Texture &texture) {
 void VulkanRenderer::endFrame() {
     if (!_inFrame) {
         throw std::logic_error("Renderer: no frame begun");
+    }
+    if (_in2DRendering) {
+        throw std::logic_error("Renderer: 2D rendering scope not ended");
     }
     auto &frame = _frames[_frameIndex];
 

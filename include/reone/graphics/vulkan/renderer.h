@@ -22,6 +22,7 @@
 #include "../renderer.h"
 
 #include "descriptors.h"
+#include "debugscope.h"
 #include "device.h"
 #include "swapchain.h"
 #include "pipelinecache.h"
@@ -71,7 +72,10 @@ public:
     void deinit() override;
 
     void beginFrame(glm::ivec2 extent) override;
+    void begin2DRendering(glm::ivec2 logicalExtent) override;
+    void end2DRendering() override;
     void drawSceneOutput(Texture &output) override;
+    void presentSceneOutput(Texture &output) override;
     std::shared_ptr<Texture> captureFrame() override;
     /** Submit completed recording so a synchronous readback can see this frame. */
     void flushFrame();
@@ -158,6 +162,8 @@ private:
 
     bool _inited {false};
     bool _inFrame {false};
+    bool _in2DRendering {false};
+    std::unique_ptr<VulkanDebugScope> _scope2d;
     /**
      * Set when acquire or present reports the swapchain no longer matches the
      * window. Acted on at the start of the next frame rather than immediately,

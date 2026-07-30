@@ -717,51 +717,13 @@ void Engine::renderVulkanFrame(bool &quit) {
     imguiBeginFrame();
     _game->renderSceneOffscreen();
 
-    // One rendering scope for the whole frame. Everything the game draws at
-    // this point is 2D; the scene pipeline is not on Vulkan yet.
-    auto cmd = _vulkanRenderer->commandBuffer();
-    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    attachment.imageView = _vulkanRenderer->currentImageView();
-    attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-
-    // The swapchain clamps to the actual window client size, which can be
-    // smaller than the configured resolution (taskbar, DPI). Render area,
-    // viewport, and scissor are physical; the 2D projection stays logical so
-    // the frame scales to fit instead of presenting a 1:1 crop.
-    glm::ivec2 physicalExtent = _vulkanRenderer->swapchain().extent();
-    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
-    rendering.renderArea.extent = {static_cast<uint32_t>(physicalExtent.x),
-                                   static_cast<uint32_t>(physicalExtent.y)};
-    rendering.layerCount = 1;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachments = &attachment;
-
-    VkViewport viewport {0.0f, 0.0f, static_cast<float>(physicalExtent.x),
-                         static_cast<float>(physicalExtent.y), 0.0f, 1.0f};
-    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(physicalExtent.x),
-                               static_cast<uint32_t>(physicalExtent.y)}};
-
-    {
-        // Closed before endFrame ends the command buffer: a label scope that
-        // outlives recording is a validation error, not a stray marker.
-        graphics::VulkanDebugScope scope2d(_vulkanRenderer->device(), cmd,
-                                           "2D (scene composite, GUI, console)",
-                                           {0.9f, 0.9f, 0.4f});
-
-        vkCmdBeginRendering(cmd, &rendering);
-        vkCmdSetViewport(cmd, 0, 1, &viewport);
-        vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-        auto &renderer2d = _vulkanRenderer->renderer2d();
-        renderer2d.begin(cmd, extent, physicalExtent, _vulkanRenderer->swapchain().imageFormat());
-        _game->render();
-        _console->render();
-        renderer2d.end();
-
-        vkCmdEndRendering(cmd);
-    }
+    // The renderer owns the Vulkan dynamic-rendering scaffolding, including
+    // the physical swapchain extent. Keep scene composite, GUI, and console
+    // in one scope so their 2D batch may share it.
+    _vulkanRenderer->begin2DRendering(extent);
+    _game->render();
+    _console->render();
+    _vulkanRenderer->end2DRendering();
 
     imguiRender();
     captureIfRequested(quit);
