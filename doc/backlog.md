@@ -39,6 +39,35 @@ because it compiled, which this session repeatedly proved is not evidence.
 | 1.3 | Diffuse channel outliers: max 25.3 while p99.99 is 1.30 | `1/(1-p)` is unbounded as specular probability approaches 1 at grazing angles. Bounded, unlike the 0/0 it replaced, but a firefly candidate under motion | P2 | S |
 | 1.4 | FSR reactive and transparency-and-composition masks are null | AMD: without them FSR "handles these cases as best it can". Additive saber blades and particles are precisely those cases | P1 | M |
 | 1.5 | Next-event estimation against the full scene light list | KotOR interiors are many small point lights; pure PT is unusably noisy there | P1 | L |
+| 1.9 | Lights carry a raster "area of effect"; neither the cutoff nor the falloff is physical | See below. Rebases the light calibration, so it is a deliberate change, not a fix to slip in | P1 | M |
+
+### 1.9 — the light bounding volume
+
+`slang/tracing/lighting.slang` inherits two raster behaviours and one outright bug:
+
+- **A hard cutoff.** `if (!directional && lightDistance > light.radius * light.radius) return 0.0;`
+  A light simply stops existing past a distance. Physically there is no such boundary, and it is
+  visible as a terminator on large surfaces lit by a small lamp.
+- **The comparison is dimensionally wrong.** `lightDistance` is a length; `radius * radius` is an
+  area. The comment calls it "raster's radius-squared cutoff quirk, kept for parity", so it is a
+  faithful port of an original bug rather than an accident here — but the consequence is that the
+  effective range is `radius²`, so a radius-10 lamp reaches 100 units and a radius-0.5 lamp reaches
+  0.25. Range scales quadratically with an artist-authored number that was never meant to be
+  squared.
+- **The falloff is not inverse-square.** `d = radius + distance; attenuation = radius² / d²`
+  normalises to 1 at the source and decays softly, which is Odyssey's look, not physics. A sphere
+  light of a given radius and radiance should attenuate by the solid angle it subtends — which
+  gives 1/d² in the far field and saturates correctly up close, and which the tracer is already
+  half-way to, since `ptPointAngularSize` treats these as sphere lights for shadow sampling.
+
+Doing this properly means deriving intensity from radiance and the emitter's solid angle, and
+dropping the cutoff in favour of importance sampling — the selection CDF already exists, so a
+distant light simply becomes improbable rather than being clamped out. Cost should not change much
+because NEE picks one light per vertex either way.
+
+**The reason this is not a quick fix:** every light dial in the calibration - `ptDirectIntensity`,
+`ptPointAngularSize`, the per-category overrides - was graded against the current falloff. Changing
+it rebases all of them at once, so it wants doing deliberately with a re-grade, not slipped in.
 | 1.6 | Grass placement determinism (hash of face + cluster index) | A reflection showing a differently-populated hillside reads as a tracing bug | P2 | M |
 | 1.7 | Camera-facing particles: AS proxy vs rasterised composite | Undecided, and gates emitter admission to the TLAS | P2 | M |
 | 1.8 | Lightmaps treated as albedo where physically wrong | Revisit once real GI exists; `ptLightmapIntensity` is already graded to 0 | P3 | M |
