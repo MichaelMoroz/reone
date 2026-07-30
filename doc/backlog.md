@@ -29,6 +29,38 @@ because it compiled, which this session repeatedly proved is not evidence.
 | 0.4 | Rebuild and smoke-test the Debug configuration | Last built before the demodulation and FSR work. Debug links the checked VMA that catches allocations outliving the device — the one thing that would catch FSR's image lifetimes | P0 | S |
 | 0.5 | Verify specular demodulation on chromatic `Rf0` | Untestable until now: every stock material is dielectric, so `specFactor` has zero chroma. The new metalness scale forces it | P1 | S |
 | 0.6 | Measure a clean build before/after the build-speed work | Only an incremental number (5.1 s) exists, so the actual saving is unknown | P2 | S |
+| 0.7 | Verify the additive shadow-occlusion fix | Fix is written but **not built or rendered** — the link failed on a locked `engine.exe` and the capture that followed used the stale binary. See below | P0 | S |
+
+### 0.7 — additive surfaces were casting solid shadows
+
+`ptShadowTransmittance` skips additive surfaces correctly:
+`if (material.surfaceType == kPtSurfaceUnlitTransparent) continue;`. But that line only executes
+for surfaces the ray query yields as *candidates*, and a candidate is only yielded when the TLAS
+instance is non-opaque. The gate for that was
+
+```cpp
+if ((material.featureMask & ((1u << 25) | (1u << 26))) != 0)
+    instance.flags |= VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR;
+```
+
+and **bit 25 is never set anywhere** — that test was its only reference in the codebase. Bit 26 is
+punch-through. Additive surfaces are identified by `surfaceType = 1` and carry no feature bit, so
+any additive surface that was not also punch-through stayed opaque in the TLAS: the hardware
+committed it without consulting the shader, `CommittedStatus()` returned `COMMITTED_TRIANGLE_HIT`,
+and the function returned 0.0. A saber blade cast a solid black shadow.
+
+The comment above the gate already stated the correct intent — "Additive surfaces always transmit…
+Both must therefore reach candidates" — so the logic was right and the predicate was testing a dead
+bit. Now keyed on `surfaceType == 1`.
+
+Why it stayed hidden: the primary ray was unaffected. `ptTraceNearest` handles additive from the
+*committed* hit, so the visibility walk stepped past blades correctly either way. Only shadow rays,
+which depend on the candidate loop, were wrong.
+
+**Worth a sweep for the same shape.** A feature bit that nothing sets, guarding behaviour that
+looks correct in the source, is invisible to review and to any test that does not exercise the
+exact path. Check whether bits 25 and any other unset bits in `featureMask` are referenced
+elsewhere.
 
 ## 1. Path tracing — correctness
 
