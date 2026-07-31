@@ -40,18 +40,66 @@ engine.exe --game "<GAME_DIR>" \
   comparison built on it.
 ### Capture runs are deterministic, and that is load-bearing
 
-Two runs at the same `--captureframe` produce **byte-identical** images, in the
-menu and in gameplay, on either backend. If they do not, something is genuinely
-nondeterministic and that is the bug, not the harness.
+### Always pass `--dev 0`, or the FPS counter forges a regression
 
-One measured exception: **path-traced** captures can differ by up to ~0.01% of
-pixels (hundreds, not thousands, out of 8M; deltas can be large) between
-identical runs. Driver acceleration-structure builds are not run-reproducible,
-so ray-query candidate *arrival order* varies, and the bounce loop's
-transparency accumulation and early-exit are order-dependent by design (the
-additive-hit cap was too until it became nearest-8-by-distance). Gate traced
-determinism at <0.02% differing pixels; raster stays strictly byte-identical,
-and a traced diff in the thousands of pixels is a real bug, not this.
+**Raster captures are byte-identical — but only with the debug UI off.** With
+developer mode on, the editor draws a live frame-time readout into the top-right
+of the frame (`editor.cpp:1583-1588`), and it lands *inside* the captured TGA:
+
+```
+run 1:  234.4 FPS  4.27 ms
+run 2:  241.3 FPS  4.14 ms
+```
+
+That is ~500 pixels in one 153x13 box, with channel deltas up to 219 — which
+reads exactly like a renderer regression. Mask that box, or pass `--dev 0`, and
+three runs each of `danm14ab`, `ebo_m12aa` and `danm13`, in **both** PBR and
+retro, hash the same. Six groups, no exceptions:
+
+```
+engine.exe --game ... --dev 0 --mode raster --pbr 0 \
+           --commands-file warp.txt --capture out.tga --captureframe 310
+```
+
+`dev` defaults to whatever `build/bin/reone.cfg` says, and that file has
+`dev=1`, so **the trap fires by default**. It cost this project four false
+regression reports across the OpenGL removal, and an elaborate statistical
+comparison method built to tolerate noise that was never there. No code change
+is needed — it is a flag.
+
+So the bar for any raster change is **hash equality**, not a tolerance. If two
+raster captures differ by a single pixel outside that HUD box, something is
+genuinely nondeterministic and that is the bug.
+
+**Path tracing is a different matter and is genuinely nondeterministic.** Not
+the ~0.01% once recorded here: measured over three runs per module with the HUD
+excluded, `danm14ab` differs by 8.4-13.9% of pixels, `danm13` by 12.2-13.5%,
+and `ebo_m12aa` by **53-64%**. Driver acceleration-structure builds are not
+run-reproducible, so ray-query candidate *arrival order* varies, and the bounce
+loop's transparency accumulation and early-exit are order-dependent by design
+(the additive-hit cap was too until it became nearest-8-by-distance).
+
+The image is nevertheless the same image: mean luminance holds to three
+decimals and mean absolute error is a fiftieth of a grey level. So compare
+traced frames by **distribution, not by pixels** — see below.
+
+### Comparing a traced change: distributions on both sides
+
+Two mistakes here have produced every false failure in this project:
+
+1. **A single run-pair is not a noise floor.** It varies 1.6x on raster and
+   8.4→16.3% on tracing. A floor estimated from one pair condemns changes that
+   altered nothing.
+2. **A stored baseline image is one sample**, not ground truth. Comparing fresh
+   runs against it is bounded by wherever that single draw landed. In one case
+   every post-change run fell on the same side of the stored image — a 1.6%
+   coincidence that looked like a systematic regression and was not.
+
+So capture N times *before* the change and N times *after*, and ask whether the
+cross-boundary spread exceeds the within-group spread. One measured example: an
+apparent 0.009 luminance shift sat inside the 0.017 scatter of the unmodified
+build measured against itself. Stored baselines remain a smoke test for gross
+breakage and are not evidence at this precision.
 
 Two path-tracing capture notes: the engine-log trace rates (shadow rays,
 lights past cutoff, secondary misses) print only when the **Trace stats**
@@ -78,8 +126,12 @@ however long the frame actually took, so it looks fast on a light scene and slow
 on a heavy one. That is exactly what makes frame N the same simulated moment
 every time, and it does not affect what is captured.
 
-Run it twice with whatever you are comparing - for example, `--backend gl`
-against `--backend vulkan` - then diff. TGA here is BGR and bottom-up:
+Run it twice with whatever you are comparing - two commits, two settings - then
+diff. **There is no `--backend` any more**: OpenGL was deleted in `df1aa375`,
+Vulkan is the only backend, and any example below that still passes `--backend`
+predates that and will fail to parse. Cross-backend comparison is history; what
+remains is comparing a change against the commit before it. TGA here is BGR and
+bottom-up:
 
 ```python
 from PIL import Image, ImageChops
@@ -104,8 +156,9 @@ nothing about where. `--dumptargets <dir>` writes every target the scene
 pipeline exposes as a `.npy`, on the same frame as the screenshot:
 
 ```
-engine.exe --backend vulkan --pbr 1 --dumptargets out_vk --captureframe 900 ...
-engine.exe --backend gl     --pbr 1 --dumptargets out_gl --captureframe 900 ...
+engine.exe --dev 0 --pbr 1 --dumptargets out_a --captureframe 900 ...
+# rebuild the other commit, then:
+engine.exe --dev 0 --pbr 1 --dumptargets out_b --captureframe 900 ...
 ```
 
 ```python
@@ -177,7 +230,7 @@ frames: with nothing in the world moving, whatever still changes between
 consecutive frames is exactly the residual the filters have not removed.
 
 ```
-engine.exe --game "<GAME_DIR>" --backend vulkan --pbr 1 --mode path-tracing \
+engine.exe --game "<GAME_DIR>" --dev 0 --pbr 1 --mode path-tracing \
     --headless 1 --commands-file warp.txt \
     --capture <SCRATCH>\seq\f.tga --captureframe 350 --captureframes 51 \
     --freezeframe 350 --pttaablend 0.9
@@ -528,8 +581,10 @@ touches, and how far it moves them.
   second time an agent's change was blamed for it before the config was checked.
 
   **Pass the flags you are comparing on, explicitly, every time** - `--mode`,
-  `--pbr`, `--backend` - rather than trusting any of them to default. And when a
-  frame differs enormously for no reason the diff can explain, read
+  `--pbr`, and `--dev 0` - rather than trusting any of them to default. That cuts
+  both ways: `reone.cfg` supplies `mode=path-tracing`, `pbr=1` *and* `dev=1`, so
+  omitting `--dev 0` silently puts a live FPS counter in every captured image.
+  And when a frame differs enormously for no reason the diff can explain, read
   `build/bin/reone.cfg` and check its modification time *before* bisecting
   anything.
 - **The mouse cursor is in the capture.** It is drawn at whatever position the
@@ -542,11 +597,13 @@ touches, and how far it moves them.
   reasons. This mattered more when runs were noisy; it still matters, because a
   large uniform difference in the sky will drown a small wrong one on a
   character.
-- **Compare the same renderer.** `reone.cfg` here has `pbr=0`, so plain
-  `--backend gl` runs the *retro* pipeline while Vulkan always runs PBR
-  deferred - two different renderers, not two backends. Every comparison in one
-  whole session was made this way before a zero-target dump gave it away. Pass
-  `--pbr 1` explicitly on both sides.
+- **Compare the same renderer.** `--pbr` selects between two genuinely
+  different renderers - PBR deferred and retro - and they are 77% of pixels and
+  26 levels of mean luminance apart on the same module. An entire session's
+  comparisons were once made across that boundary before a zero-target dump gave
+  it away. Pass `--pbr` explicitly on both sides. (Retro *does* work on Vulkan,
+  whatever the older notes say: `VulkanRenderPipeline` branches on
+  `options.pbr` internally.)
 - **Graphics warnings are off by default.** `--logch 9` enables the Graphics
   channel alongside Global. Missing textures, unsupported formats and
   unimplemented render-pass stubs all announce themselves there and nowhere

@@ -574,24 +574,22 @@ Harness rules, all load-bearing:
 - Two numbers differing by less than the spread of either are not a result;
   noise runs to about 12% on one module.
 
-**"Pixel-identical" is not available, and assuming it was cost this phase its
-first false alarm.** Captures are no longer reproducible run to run, measured
-here on `danm14ab` at frame 310 with two runs of one unmodified binary:
+**Raster is bit-exact; path tracing is not.** These need different bars, and
+conflating them produced most of this refactor's false alarms.
 
-| | differing pixels | mean abs error | mean luminance |
-|---|---:|---:|---|
-| retro raster | 0.0245% | 0.022 | 77.314 vs 77.317 |
-| path tracing | 13.40% | 0.118 | 111.724 both |
+**Raster: byte-identical, full stop.** The apparent 0.02% of differing pixels
+was entirely the frame-time readout drawn into the corner of the captured image
+("234.4 FPS 4.27 ms" against "241.3 FPS 4.14 ms"). Exclude it and three runs
+each of danm14ab, ebo_m12aa and danm13, in both PBR and retro, hash the same —
+six groups, no exceptions. Wall-clock readouts are now suppressed under
+`isCaptureRun`, alongside the fixed timestep and the seeded generator, so the
+bar for any raster change is **hash equality, and anything else is a
+regression.**
 
-The images are the same image — mean luminance agrees to three decimals and
-the mean absolute error is a fiftieth of a grey level — but individual pixels
-move, by up to 219 in a channel. This is backlog **7.1**, already open at P1 —
-not something this phase introduced. What is new is the measurement: 7.1
-described the effect as bimodal and intermittent, and these figures show it is
-present on every run, small in magnitude, and different between raster and
-tracing. It also contradicts the diagnostics skill, which still documents
-raster as byte-identical and tracing as bounded at 0.02%; that text is wrong
-and should be corrected before it misleads another comparison.
+**Path tracing: genuinely nondeterministic**, 8–64% of pixels between identical
+runs, because acceleration-structure build order is not reproducible and the
+bounce loop's accumulation is order-dependent by design. No masking fixes that,
+and it is why the rest of this section exists.
 
 So the bar becomes **the change must be indistinguishable from run-to-run
 noise** — but getting that right took four false failures, and the method
