@@ -622,6 +622,58 @@ saved layout, size and dock position reset to the code defaults. That reads as
 the panel breaking. Delete `build/bin/imgui.ini` and check what a first run
 actually shows before believing a layout regression.
 
+## Phase E's five breakages, revisited 2026-07-31
+
+Four of the five below are not Phase E blockers. Three are **current tracer
+correctness bugs** that belong in Phase D, and the fourth dissolves with the
+mega-draw. Taking them in the plan's numbering:
+
+**1. Shadow proxies — use the actual scene.** Shadow-only proxies exist because
+drawing real geometry into four cascades and six cube faces was expensive on
+2003 hardware. It is not expensive now. Trace and raster should shadow from the
+same geometry, and the proxies should go rather than be plumbed through the
+merge.
+
+**2. "The merge is unculled, so merged shadow draws lose frustum rejection."**
+Dissolves with 1 and with the culling measurement: caching culling once removed
+~9000 frustum tests per frame and moved frame time by *nothing*. Rejecting
+geometry the GPU would have discarded anyway is not a saving worth a second
+geometry path.
+
+**3. Dangly and saber are frozen at base pose — and that is a live bug, not a
+Phase E blocker.** `rayquery.cpp:808-818` admits them at base positions, with a
+comment conceding "the wind arrives with the deformation compute pass, which
+replaces this". So the traced image has 653 static canopies on danm14ab and
+rigid saber blades *today*, while raster animates both. The two renderers
+disagree and the tracer is the wrong one.
+
+It is also cheap to fix, because the data already exists: `updateDanglyAnimation`
+runs every frame on the CPU (`node/mesh.cpp:133-174`) and its displaced
+positions are already copied into `RegisteredDangly` (`:353-363`);
+`RegisteredSaber` likewise carries its displacement. **The tracer is ignoring
+values that are already being handed to it.** Consuming them is admission work,
+not simulation work.
+
+Evaluating dangly on the GPU is then an optimisation, and a legitimate one: the
+"simulation" is fully deterministic — a spring response to transform deltas —
+so the merge kernel can evaluate it from the same inputs and the CPU pass and
+its per-frame upload both disappear. Correctness first, GPU evaluation second.
+
+**5. `offMaterial` has no field in `SceneObject`.** Real, and it needs fixing
+rather than avoiding — unless walkmesh debug geometry is deleted first, which
+removes the only consumer. Deletion was Phase A's plan and did not happen
+because walkmeshes belong to the room, door and placeable game APIs.
+
+**4 is the one that survives as stated.** Hashed alpha test hashes object-space
+position (`pbr_model.slang:280, 335`), and `MergedVertex` carries no
+object-space position, so world-space vertices make foliage dither swim under
+motion. That is a raster lowering problem for Phase E proper.
+
+**So Phase D grows and Phase E shrinks.** Phase D is "everything the tracer
+should see, seen correctly": grass, particles, dangly, saber. Phase E is then
+raster's lowering — alpha hashing, blend ordering, material binding — over a
+scene that is already right.
+
 ## Phase E — raster consumes `GpuScene` where it can
 
 Not a switchover. The second review lists five concrete breakages, and each is
