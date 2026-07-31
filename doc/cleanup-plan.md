@@ -515,6 +515,113 @@ inspected against the traced image while the raster baseline stays untouched.
 Phase E then accepts that raster keeps a non-merged path for
 whatever stays out.
 
+## `RenderRegistry` goes away, and that reshapes what follows
+
+Decided 2026-07-31, and it supersedes the phase list below.
+
+`RenderRegistry` was always temporary — a per-frame copy of the scene made for
+rendering, which is precisely the job `GpuScene` now does. Keeping both means
+building the same snapshot twice a frame: nodes push `RegisteredMesh` records
+carrying a copied `Material` and copied bone vectors, and admission then reads
+them to build `SceneObject`. So **nodes should admit into `GpuScene` directly**
+and the registry should disappear rather than be demoted.
+
+The objection to that was that the registry is not only a copy: `drawScene`
+(`registry.cpp:519`) owns raster's frustum and distance policy, pass and
+category filtering, ordering, and the debug kill switch. **A mega-draw dissolves
+most of it.** One draw over the merged buffer has no per-object selection to
+make; the tracer already bypasses `drawScene` entirely and says so
+(`rayquery.cpp:968`). What survives is smaller than a registry:
+
+- **pass partitioning** — shadow, opaque, transparent are *ranges*, which is
+  what `Region` and Phase C's residency classes already describe
+- **transparency ordering** — a sort over ranges, not per-draw selection
+- **the debug kill switch** — an admission filter, one flag
+
+**Culling is not what is being given up.** This project already measured it:
+caching culling removed roughly 9000 frustum tests per frame and changed frame
+time by *nothing*, because an AABB-frustum test costs tens of nanoseconds. At
+86k triangles the GPU does not need the help. **CPU overhead is raster's actual
+problem** — per-draw material binding, descriptor churn, and the registry copy
+itself — and that is what one draw removes.
+
+And this is not a bet on the mega-draw winning. Phase B0 already put source
+geometry in one buffer addressed by offsets, which the plan noted is "what a
+raster mega-draw wants anyway — a shared buffer bound once with per-draw
+offsets". So if the merge does not pay on weak hardware, the fallback is N draws
+over **the same `GpuScene` records**, not a resurrected registry. Raster staying
+permanent for old hardware needs per-object *records*, which `GpuScene` has; it
+does not need the selection machinery.
+
+```
+SceneGraph  --nodes admit-->  GpuScene   (records + merged buffers + regions)
+                                 |
+                    +------------+------------+
+                    |                         |
+              tracer: BLAS/TLAS        raster: one draw over ranges
+                                       (or N draws over the same records)
+```
+
+Sequencing is open on one measurement: `RegisteredMesh` copies a full `Material`
+and bone vectors per object, roughly a thousand objects a frame, against a
+2.3 ms update slot. If that copy is a visible slice, this jumps ahead of Phase D;
+if it is 0.1 ms, it lands with Phase E's front half. Phase C is a prerequisite
+either way — ranges only mean something once residency is in the contract.
+
+### Where the registry's other jobs go
+
+The registry panel and the per-object overrides look like blockers and are not.
+The code already half-agrees:
+
+| | lives where afterwards |
+|---|---|
+| display names, hierarchy | **SceneGraph, already** — the panel resolves `graph.nameText(entry.nameIds.model)`; the registry only carries the ids |
+| what exists this frame, and where | `GpuScene` records; `RegistryCounts` becomes counts over admission |
+| per-object debug state — disable, overrides | a side table keyed by **stable id**, consulted at admission |
+| per-category material overrides | `PtCategoryOverride[9]` in graphics options (`options.h:154-170`), applied during the tracer's material lowering — never registry state, unaffected |
+
+**The kill switch is the one that proves the point.** Its own comment says it is
+keyed by `SceneNodeId` index "so it survives the per-frame re-registration" —
+which is an admission that the state belongs to the object's identity, not to
+the snapshot, and sits in the registry only because that is where admission
+happens today. Moving it to a stable-id table is a correction, not a
+workaround.
+
+**So Phase C's stable identity is load-bearing for the tooling, not only for the
+tracer.** If the audit concludes identity cannot be made stable across a module
+transition, this is where it bites first: the kill switch already requires an
+identity that outlives re-registration, so the requirement predates the
+refactor.
+
+**Curated materials are the third resident, and the largest.**
+`RenderRegistry::CuratedMaterial` (`registry.h:272-294`) holds the per-node
+`TraceClass`, albedo multiplier, roughness and metallic modes with their
+parameters and weights, and emission mode — keyed by *model and node name*
+(`curatedFor`, `setCurated`), persisted through `loadTraceClasses`, and edited
+by `Editor::drawMaterialEditor(RenderRegistry &)`. Name-keyed, not
+snapshot-keyed, so like the kill switch it is identity state boarding in the
+wrong house. It moves beside the kill switch; the tracer keeps consuming it
+during material lowering, which is where it is already applied.
+
+### The tool gets renamed with it
+
+"Registry" is the name of a thing that will not exist. The panel shows what was
+admitted this frame, per object, with a kill switch and a material editor — so
+it is an **Objects** panel, matching `isObjectEnabled`/`setObjectEnabled`, which
+already use that word. The renames that follow:
+
+| now | after |
+|---|---|
+| `ImGui::Begin("Registry")`, the menu item | "Objects" |
+| `Editor::drawRegistry`, `_showRegistry`, `_registryScene`, `_registryFilter` | `drawObjects`, `_showObjects`, … |
+| `RegistryCounts`, `formatRegistryCounts` | admission counts |
+| `registeredCounts()`, `drawnCounts()`, `drawnCountsByPass()` | keep the admitted/drawn distinction; it is still real once raster draws ranges |
+
+Practical note: renaming an ImGui window changes its `imgui.ini` key, so the
+saved layout, size and dock position reset to the code defaults. That reads as
+the panel breaking. Delete `build/bin/imgui.ini` and check what a first run
+actually shows before believing a layout regression.
+
 ## Phase E — raster consumes `GpuScene` where it can
 
 Not a switchover. The second review lists five concrete breakages, and each is

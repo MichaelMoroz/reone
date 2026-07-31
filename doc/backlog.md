@@ -210,6 +210,8 @@ Largely untouched by renderer work, and by volume the biggest block of deferred 
 | 7.3 | Whole-frame parity baseline for danm14ab frame 900 is invalid | Stale dump plus the removed Slang GL path; no replacement figure exists | P2 | S |
 | 7.4 | Open design questions | Emitter granularity (per emitter vs per particle system); whether walkmeshes and AABB debug geometry should register at all; compute-skinning ownership; whether grass and particles are ever traced | P2 | — |
 
+| 7.5 | `GpuScene` widened traced run-to-run variance slightly | Sixteen runs each of `danm13` path tracing, `--dev 0`, frame 310: baseline sd 0.00619 / range 0.01983, after `6fed967b` sd 0.01002 / range 0.03063. Variance ratio 2.62 against F-crit 2.40 at df 15,15, so marginal at p≈0.04; mean unchanged to four decimals (+0.00264). The gross version of this — spread 0.094, one bad run in eight — was a `Mesh*` cache outliving `invalidateResources()` and is fixed. What remains is small and may be sampling. Worth one bounded look at capacity-growth timing, since growth is the obvious binary-per-run condition left; not worth blocking on | P3 | S |
+
 ## 8. Performance — from the Nsight trace of 2026-07-30
 
 Read the trace before picking anything here. Frame 17.75 ms, of which
