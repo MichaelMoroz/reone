@@ -981,6 +981,46 @@ void ResourceExplorerViewModel::onResourcesListBoxDoubleClick(const ResourcesIte
     _goToParentEnabled = true;
 }
 
+void ResourceExplorerViewModel::openModelByResRef(std::string resRef) {
+    boost::to_lower(resRef);
+
+    auto findItem = [this](const std::function<bool(const ResourcesItem &)> &predicate) -> ResourcesItem * {
+        auto item = std::find_if(_allResItems.begin(), _allResItems.end(), [&predicate](const auto &candidate) {
+            return predicate(*candidate);
+        });
+        return item != _allResItems.end() ? item->get() : nullptr;
+    };
+
+    // Keep this traversal in terms of the public double-click command. Apart
+    // from making command-line opening behave exactly like the UI, it keeps
+    // archive stream handling in one place.
+    auto *data = findItem([](const auto &item) {
+        return item.container && boost::iequals(item.id.path.filename().string(), "data");
+    });
+    if (!data) {
+        throw std::runtime_error("Game data directory not found: " + _resourcesPath.string());
+    }
+    onResourcesListBoxDoubleClick(data->id);
+
+    auto *models = findItem([data](const auto &item) {
+        return item.parentId && *item.parentId == data->id && item.container &&
+               boost::iequals(item.id.path.filename().string(), "models.bif");
+    });
+    if (!models) {
+        throw std::runtime_error("Model archive not found: " + (data->id.path / "models.bif").string());
+    }
+    onResourcesListBoxDoubleClick(models->id);
+
+    auto *model = findItem([models, &resRef](const auto &item) {
+        return item.parentId && *item.parentId == models->id && item.id.resId &&
+               item.id.resId->type == ResType::Mdl && item.id.resId->resRef.value() == resRef;
+    });
+    if (!model) {
+        throw std::runtime_error("Model resource not found in data/models.bif: " + resRef);
+    }
+    onResourcesListBoxDoubleClick(model->id);
+}
+
 void ResourceExplorerViewModel::onGoToParentButton() {
     if (!_expandedItemId) {
         return;

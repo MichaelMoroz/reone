@@ -74,7 +74,10 @@ public:
     void openModel(const resource::ResourceId &id, IInputStream &mdl);
 
     void update3D();
-    void render3D(int w, int h);
+    /** Advance an unattended capture by the engine's fixed timestep. */
+    void update3D(float delta);
+    /** If capturePath is set, read the preview swapchain before presenting it. */
+    void render3D(int w, int h, const std::filesystem::path *capturePath = nullptr);
 
     void playAnimation(std::string anim, std::shared_ptr<graphics::LipAnimation> lipAnim = nullptr);
     void pauseAnimation();

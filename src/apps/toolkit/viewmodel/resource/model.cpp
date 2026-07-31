@@ -21,6 +21,7 @@
 #include "reone/graphics/animation.h"
 #include "reone/graphics/di/module.h"
 #include "reone/graphics/format/mdlmdxreader.h"
+#include "reone/graphics/format/tgawriter.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/resource/di/module.h"
@@ -30,7 +31,9 @@
 #include "reone/scene/graphs.h"
 #include "reone/system/clock.h"
 #include "reone/system/di/module.h"
+#include "reone/system/logutil.h"
 #include "reone/system/stream/memoryinput.h"
+#include "reone/system/stream/fileoutput.h"
 
 using namespace reone::game;
 using namespace reone::graphics;
@@ -88,6 +91,10 @@ void ModelResourceViewModel::update3D() {
     float delta = (ticks - _lastTicks) / 1000.0f;
     _lastTicks = ticks;
 
+    update3D(delta);
+}
+
+void ModelResourceViewModel::update3D(float delta) {
     auto &scene = _sceneSvc.graphs().get(kSceneMain);
     scene.update(delta);
 
@@ -103,7 +110,7 @@ void ModelResourceViewModel::update3D() {
     _animationProgress = std::move(progress);
 }
 
-void ModelResourceViewModel::render3D(int w, int h) {
+void ModelResourceViewModel::render3D(int w, int h, const std::filesystem::path *capturePath) {
     // The wx page is made visible before openResource has finished loading the
     // engine and model. Its first paint must not dereference the as-yet-unset
     // external renderer; the idle refresh after openModel will draw it.
@@ -122,6 +129,13 @@ void ModelResourceViewModel::render3D(int w, int h) {
     auto &scene = _sceneSvc.graphs().get(kSceneMain);
     auto &output = scene.render(glm::ivec2(w, h));
     renderer.presentSceneOutput(output);
+    if (capturePath) {
+        // captureFrame reads this child canvas's swapchain, not the whole
+        // toolkit window. Its RGB8 output is already what TgaWriter expects.
+        auto stream = FileOutputStream(*capturePath);
+        TgaWriter(renderer.captureFrame()).save(stream);
+        info("Wrote preview screenshot: " + capturePath->string());
+    }
     renderer.endFrame();
 }
 

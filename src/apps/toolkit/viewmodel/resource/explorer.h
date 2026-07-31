@@ -222,6 +222,8 @@ public:
     void onResourcesDirectoryChanged(resource::GameID gameId, std::filesystem::path path);
     void onResourcesListBoxDoubleClick(const ResourcesItemId &id);
     void onGoToParentButton();
+    /** Open an MDL by following the same explorer double-click path as the UI. */
+    void openModelByResRef(std::string resRef);
 
 private:
     resource::GameID _gameId {resource::GameID::KotOR};
