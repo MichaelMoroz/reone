@@ -356,11 +356,15 @@ void MeshSceneNode::registerRender(RenderRegistry &registry) {
         for (const auto &vertex : _dangly.vertices) {
             positions.emplace_back(vertex.position + vertex.displacement, 1.0f);
         }
+        auto prevPositions = _prevDanglyPositions;
+        if (prevPositions.size() != positions.size()) {
+            prevPositions = positions;
+        }
         registry.registerMesh(categories,
                          id(),
                          nameIds(),
                          *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
-                         RegisteredDangly {std::move(positions)}, &_model);
+                         RegisteredDangly {std::move(positions), std::move(prevPositions)}, &_model);
     } else if (_modelNode.isSaberMesh()) {
         registry.registerMesh(categories,
                          id(),
@@ -380,6 +384,11 @@ void MeshSceneNode::snapshotPreviousFrame(uint64_t frame) {
         return;
     }
     _prevBones = _bones;
+    _prevDanglyPositions.clear();
+    _prevDanglyPositions.reserve(_dangly.vertices.size());
+    for (const auto &vertex : _dangly.vertices) {
+        _prevDanglyPositions.emplace_back(vertex.position + vertex.displacement, 1.0f);
+    }
     SceneNode::snapshotPreviousFrame(frame);
 }
 

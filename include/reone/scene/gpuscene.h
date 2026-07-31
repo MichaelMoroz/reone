@@ -111,6 +111,8 @@ public:
         uint32_t dstVertexBase {0}; uint32_t dstTriangleBase {0};
         uint32_t geometryIndex {0}; uint32_t boneBase {UINT32_MAX};
         uint32_t boneCount {0}; uint32_t materialIndex {0};
+        uint32_t danglyBase {UINT32_MAX}; uint32_t danglyCount {0};
+        alignas(16) glm::vec4 saberDisplacement {0.0f};
     };
     static_assert(sizeof(Matrix3x4) == 48);
     static_assert(offsetof(SceneObject, srcVertexOffset) == 96);
@@ -119,7 +121,9 @@ public:
     static_assert(offsetof(SceneObject, offPosition) == 108);
     static_assert(offsetof(SceneObject, vertexCount) == 136);
     static_assert(offsetof(SceneObject, materialIndex) == 164);
-    static_assert(sizeof(SceneObject) == 176);
+    static_assert(offsetof(SceneObject, danglyBase) == 168);
+    static_assert(offsetof(SceneObject, saberDisplacement) == 176);
+    static_assert(sizeof(SceneObject) == 192);
 
     /** A consumer-defined intersection property, not an acceleration-structure policy. */
     enum class PrimitiveClass { Opaque, NonOpaque };
@@ -250,7 +254,7 @@ private:
     uint64_t _revision {0};
     bool _inited {false};
 
-    void ensureMergeBuffers(Frame &, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+    void ensureMergeBuffers(Frame &, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
     void clearSourceGeometry();
     const SourceGeometry &appendSourceGeometry(const graphics::Mesh &mesh);
 };

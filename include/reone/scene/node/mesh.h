@@ -83,6 +83,7 @@ private:
         std::vector<DanglyVertex> vertices;
         glm::vec3 prevWorldPos {0.0f};
     } _dangly;
+    std::vector<glm::vec4> _prevDanglyPositions;
 
     struct SaberVertex {
         glm::vec3 position {0.0f};

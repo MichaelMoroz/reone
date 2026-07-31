@@ -34,6 +34,9 @@ struct SceneObject {
     uint boneBase;
     uint boneCount;
     uint materialIndex;
+    uint danglyBase;
+    uint danglyCount;
+    float4 saberDisplacement;
 };
 
 struct MergedVertex {
@@ -65,6 +68,7 @@ struct GrassCluster {
 };
 
 [[vk::binding(7, 0)]] StructuredBuffer<GrassCluster> grassClusters;
+[[vk::binding(8, 0)]] StructuredBuffer<float4> danglyPositions;
 
 struct PushConstants {
     uint objectCount;
@@ -201,6 +205,18 @@ void main(uint3 tid : SV_DispatchThreadID) {
             sourceVertices[sourceVertex + object.offPosition / 4 + 1],
             sourceVertices[sourceVertex + object.offPosition / 4 + 2]);
         float3 prevPosition = position;
+        bool dangly = object.danglyBase != 0xffffffffu
+            && object.danglyCount == object.vertexCount;
+        if (dangly) {
+            position = danglyPositions[object.danglyBase + vertexId].xyz;
+            prevPosition = danglyPositions[object.danglyBase + object.danglyCount + vertexId].xyz;
+        }
+        float saberSignum = 2.0 * float(vertexId / 88) - 1.0;
+        float saberHdist = float((vertexId % 88) / 4) / 21.0;
+        float saberVdist = float(vertexId % 4) / 3.0;
+        float3 saberOffset = 0.5 * saberSignum * saberHdist * saberVdist * object.saberDisplacement.xyz;
+        position += saberOffset;
+        prevPosition += saberOffset;
         float4 boneIndices = float4(0);
         float4 boneWeights = float4(0);
         bool skinned = object.boneBase != 0xffffffffu

@@ -50,6 +50,7 @@ struct GpuScene::Frame {
     std::unique_ptr<VulkanBuffer> materials;
     uint32_t sceneObjectCapacity {0};
     uint32_t boneCapacity {0};
+    uint32_t danglyPositionCapacity {0};
     uint32_t vertexCapacity {0};
     uint32_t triangleCapacity {0};
     uint32_t grassClusterCapacity {0};
@@ -73,19 +74,19 @@ GpuScene::PrimitiveId GpuScene::PrimitiveIdView::operator[](uint32_t index) cons
 void GpuScene::init() {
     if (_inited) return;
     auto &device = _renderer.device();
-    VkDescriptorSetLayoutBinding bindings[8] {};
-    for (uint32_t i = 0; i < 8; ++i) {
+    VkDescriptorSetLayoutBinding bindings[9] {};
+    for (uint32_t i = 0; i < 9; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
         bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     VkDescriptorSetLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layoutInfo.bindingCount = 8;
+    layoutInfo.bindingCount = 9;
     layoutInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device.handle(), &layoutInfo, nullptr, &_mergeLayout) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: merge descriptor layout creation failed");
-    VkDescriptorPoolSize poolSize {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16};
+    VkDescriptorPoolSize poolSize {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 18};
     VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.maxSets = 2;
     poolInfo.poolSizeCount = 1;
@@ -163,17 +164,21 @@ void GpuScene::clearSourceGeometry() {
 
 void GpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount, uint32_t boneCount,
                                   uint32_t vertexCount, uint32_t triangleCount,
-                                  uint32_t grassClusterCount) {
+                                  uint32_t grassClusterCount, uint32_t danglyPositionCount) {
     constexpr uint32_t kInitialObjectCapacity = 64, kInitialBoneCapacity = 256;
     constexpr uint32_t kInitialVertexCapacity = 4096, kInitialTriangleCapacity = 4096;
     const auto objectCapacity = grownCapacity(frame.sceneObjectCapacity, objectCount, kInitialObjectCapacity);
     const auto boneCapacity = grownCapacity(frame.boneCapacity, boneCount, kInitialBoneCapacity);
-    if (!frame.scene || objectCapacity != frame.sceneObjectCapacity || boneCapacity != frame.boneCapacity) {
+    const auto danglyPositionCapacity = grownCapacity(frame.danglyPositionCapacity, danglyPositionCount, 256);
+    if (!frame.scene || objectCapacity != frame.sceneObjectCapacity || boneCapacity != frame.boneCapacity ||
+        danglyPositionCapacity != frame.danglyPositionCapacity) {
         frame.sceneObjectCapacity = objectCapacity;
         frame.boneCapacity = boneCapacity;
+        frame.danglyPositionCapacity = danglyPositionCapacity;
         frame.scene = std::make_unique<VulkanBuffer>(_renderer.device());
         frame.scene->initHostVisible(static_cast<VkDeviceSize>(objectCapacity) * sizeof(SceneObject) +
-                                     static_cast<VkDeviceSize>(boneCapacity) * sizeof(Matrix3x4),
+                                     static_cast<VkDeviceSize>(boneCapacity) * sizeof(Matrix3x4) +
+                                     static_cast<VkDeviceSize>(danglyPositionCapacity) * sizeof(glm::vec4),
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     }
     const auto vertexCapacity = grownCapacity(frame.vertexCapacity, vertexCount, kInitialVertexCapacity);
@@ -274,6 +279,7 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
     std::vector<SceneObject> opaqueObjects, nonOpaqueObjects;
     std::vector<SceneNodeId> opaqueObjectIds, nonOpaqueObjectIds;
     std::vector<Matrix3x4> bones;
+    std::vector<glm::vec4> danglyPositions;
     struct alignas(16) GrassCluster {
         glm::vec4 positionVariant {0.0f};
         glm::vec4 right {0.0f};
@@ -333,6 +339,21 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
                 sceneObject.boneCount = static_cast<uint32_t>(skin.bones.size());
                 for (const auto &bone : skin.bones) bones.push_back(matrix3x4(bone));
                 for (const auto &bone : skin.prevBones) bones.push_back(matrix3x4(bone));
+            }
+            if (const auto *dangly = std::get_if<RegisteredDangly>(&mesh->deformation)) {
+                if (dangly->positions.size() != sceneObject.vertexCount ||
+                    dangly->prevPositions.size() != sceneObject.vertexCount)
+                    throw std::runtime_error("Vulkan: dangly mesh has mismatched position streams");
+                if (danglyPositions.size() + dangly->positions.size() + dangly->prevPositions.size() >
+                    std::numeric_limits<uint32_t>::max())
+                    throw std::runtime_error("Vulkan: merged dangly position pool exceeds shader index range");
+                sceneObject.danglyBase = static_cast<uint32_t>(danglyPositions.size());
+                sceneObject.danglyCount = sceneObject.vertexCount;
+                danglyPositions.insert(danglyPositions.end(), dangly->positions.begin(), dangly->positions.end());
+                danglyPositions.insert(danglyPositions.end(), dangly->prevPositions.begin(), dangly->prevPositions.end());
+            }
+            if (const auto *saber = std::get_if<RegisteredSaber>(&mesh->deformation)) {
+                sceneObject.saberDisplacement = saber->displacement;
             }
             sceneObject.geometryIndex = admission->primitiveClass == PrimitiveClass::Opaque ? 0 : 1;
             materials.push_back(admission->material);
@@ -411,17 +432,21 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
     }
     if (objects.size() > std::numeric_limits<uint32_t>::max() || vertexCount > std::numeric_limits<uint32_t>::max() ||
         triangleCount > std::numeric_limits<uint32_t>::max() || opaqueTriangleCount > std::numeric_limits<uint32_t>::max() ||
-        bones.size() > std::numeric_limits<uint32_t>::max()) throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
+        bones.size() > std::numeric_limits<uint32_t>::max() || danglyPositions.size() > std::numeric_limits<uint32_t>::max())
+        throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
     ensureMergeBuffers(frame, static_cast<uint32_t>(objects.size()), static_cast<uint32_t>(bones.size()),
                        static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount),
-                       static_cast<uint32_t>(grassClusters.size()));
+                       static_cast<uint32_t>(grassClusters.size()), static_cast<uint32_t>(danglyPositions.size()));
     const VkDeviceSize sceneObjectBytes = static_cast<VkDeviceSize>(frame.sceneObjectCapacity) * sizeof(SceneObject);
     const VkDeviceSize sceneBoneBytes = static_cast<VkDeviceSize>(frame.boneCapacity) * sizeof(Matrix3x4);
+    const VkDeviceSize danglyPositionBytes = static_cast<VkDeviceSize>(frame.danglyPositionCapacity) * sizeof(glm::vec4);
     const VkDeviceSize vertexBytes = static_cast<VkDeviceSize>(frame.vertexCapacity) * sizeof(MergedVertex);
     const VkDeviceSize indexBytes = static_cast<VkDeviceSize>(frame.triangleCapacity) * 3 * sizeof(uint32_t);
     std::memcpy(frame.scene->mapped(), objects.data(), objects.size() * sizeof(SceneObject));
     if (!bones.empty()) std::memcpy(static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes,
                                     bones.data(), bones.size() * sizeof(Matrix3x4));
+    if (!danglyPositions.empty()) std::memcpy(static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes + sceneBoneBytes,
+                                              danglyPositions.data(), danglyPositions.size() * sizeof(glm::vec4));
     if (!grassClusters.empty()) std::memcpy(frame.grassClusters->mapped(), grassClusters.data(),
                                             grassClusters.size() * sizeof(GrassCluster));
     // A grass-only scene never appends mesh source data. Bind the procedural
@@ -429,12 +454,13 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
     // complete descriptor set remains valid without inventing mesh records.
     const auto *sourceVertices = _sourceVertices ? _sourceVertices.get() : frame.grassClusters.get();
     const auto *sourceIndices = _sourceIndices ? _sourceIndices.get() : frame.grassClusters.get();
-    std::array<VkDescriptorBufferInfo, 8> buffers {{{frame.scene->handle(), 0, sceneObjectBytes},
+    std::array<VkDescriptorBufferInfo, 9> buffers {{{frame.scene->handle(), 0, sceneObjectBytes},
         {frame.scene->handle(), sceneObjectBytes, sceneBoneBytes}, {frame.geometry->handle(), 0, vertexBytes},
         {frame.geometry->handle(), vertexBytes, indexBytes}, {frame.geometry->handle(), vertexBytes + indexBytes,
         static_cast<VkDeviceSize>(frame.triangleCapacity) * sizeof(uint32_t)}, {sourceVertices->handle(), 0, sourceVertices->size()},
-        {sourceIndices->handle(), 0, sourceIndices->size()}, {frame.grassClusters->handle(), 0, frame.grassClusters->size()}}};
-    std::array<VkWriteDescriptorSet, 8> writes {};
+        {sourceIndices->handle(), 0, sourceIndices->size()}, {frame.grassClusters->handle(), 0, frame.grassClusters->size()},
+        {frame.scene->handle(), sceneObjectBytes + sceneBoneBytes, danglyPositionBytes}}};
+    std::array<VkWriteDescriptorSet, 9> writes {};
     const auto set = _mergeSets[_renderer.frameIndex()];
     for (uint32_t i = 0; i < writes.size(); ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[i].dstSet = set; writes[i].dstBinding = i;

@@ -136,6 +136,7 @@ struct RegisteredSkin {
 
 struct RegisteredDangly {
     std::vector<glm::vec4> positions;
+    std::vector<glm::vec4> prevPositions;
 };
 
 struct RegisteredSaber {

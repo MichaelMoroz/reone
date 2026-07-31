@@ -805,15 +805,7 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyMesh(RenderRegistry
         ++_lastSky;
         return std::nullopt;
     }
-    // Saber displacement is a small whole-blade animation. A rigid blade
-    // is much more useful to tracing than no blade at all. Skinned meshes
-    // take the frame-local compute/BLAS path below.
     const bool saber = std::holds_alternative<RegisteredSaber>(mesh->deformation);
-    // Dangly meshes are admitted at their base positions for the same
-    // reason sabers are: a static canopy beats an absent one, and the
-    // per-frame displacement is small. This is why every tree has leaves
-    // rather than only those whose canopy happens to be rigid. The wind
-    // arrives with the deformation compute pass, which replaces this.
     const bool dangly = std::holds_alternative<RegisteredDangly>(mesh->deformation);
     const auto *skinned = std::get_if<RegisteredSkin>(&mesh->deformation);
     if (!std::holds_alternative<std::monostate>(mesh->deformation) && !skinned && !saber && !dangly) {
