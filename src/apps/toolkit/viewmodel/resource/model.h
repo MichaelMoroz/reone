@@ -102,6 +102,9 @@ private:
     std::shared_ptr<graphics::Model> _model;
     std::shared_ptr<scene::ModelSceneNode> _modelNode;
     glm::vec3 _cameraPosition {0.0f};
+    glm::vec3 _cameraTarget {0.0f};
+    float _cameraFramingDistance {8.0f};
+    bool _cameraNeedsFraming {false};
     float _modelHeading {0.0f};
     float _modelPitch {0.0f};
     int _lastMouseX {0};
@@ -111,6 +114,7 @@ private:
 
     void updateModelTransform();
     void updateCameraTransform();
+    void frameCamera(float aspect);
 };
 
 } // namespace reone

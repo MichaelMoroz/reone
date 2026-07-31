@@ -17,6 +17,8 @@
 
 #include "model.h"
 
+#include <cmath>
+
 #include "reone/game/types.h"
 #include "reone/graphics/animation.h"
 #include "reone/graphics/di/module.h"
@@ -79,8 +81,10 @@ void ModelResourceViewModel::openModel(const ResourceId &id, IInputStream &mdl) 
     updateModelTransform();
     scene.addRoot(_modelNode);
 
-    _cameraPosition = glm::vec3(0.0f, 8.0f, 0.0f);
-    updateCameraTransform();
+    // Use a valid provisional aspect until the canvas supplies its actual size
+    // on the first render.
+    frameCamera(1.0f);
+    _cameraNeedsFraming = true;
 }
 
 void ModelResourceViewModel::update3D() {
@@ -118,7 +122,15 @@ void ModelResourceViewModel::render3D(int w, int h, const std::filesystem::path 
         return;
     }
 
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+
     float aspect = w / static_cast<float>(h);
+    if (_cameraNeedsFraming) {
+        frameCamera(aspect);
+        _cameraNeedsFraming = false;
+    }
     _cameraNode->setPerspectiveProjection(glm::radians(55.0f), aspect, kDefaultClipPlaneNear, kDefaultClipPlaneFar);
 
     auto &renderer = _graphicsModule.renderer();
@@ -186,6 +198,49 @@ void ModelResourceViewModel::updateCameraTransform() {
     _cameraNode->setLocalTransform(cameraTransform);
 }
 
+void ModelResourceViewModel::frameCamera(float aspect) {
+    constexpr float kVerticalFov = glm::radians(55.0f);
+    constexpr float kFrameMargin = 1.12f;
+    constexpr float kFallbackDistance = 8.0f;
+
+    _cameraTarget = glm::vec3(0.0f);
+    _cameraFramingDistance = kFallbackDistance;
+
+    const auto &aabb = _model->aabb();
+    const glm::vec3 min = aabb.min();
+    const glm::vec3 max = aabb.max();
+    const glm::vec3 extent = max - min;
+    const bool validBounds = !aabb.isDegenerate() &&
+        std::isfinite(min.x) && std::isfinite(min.y) && std::isfinite(min.z) &&
+        std::isfinite(max.x) && std::isfinite(max.y) && std::isfinite(max.z) &&
+        extent.x >= 0.0f && extent.y >= 0.0f && extent.z >= 0.0f;
+
+    if (validBounds) {
+        // The camera sits at target + (0, d, 0) and looks back along -Y, and
+        // heading rotates the model about Z. So Z is screen-up and invariant
+        // under heading, while X and Y trade places as the model spins: their
+        // combined radius is what stays constant, and it serves as both the
+        // half-width and the half-depth.
+        const float halfHeight = 0.5f * extent.z;
+        const float halfRadius = 0.5f * glm::length(glm::vec2(extent.x, extent.y));
+        const float tanV = std::tan(kVerticalFov * 0.5f);
+        const float tanH = tanV * glm::max(aspect, 0.01f);
+        // Fit each axis to its own field of view, then step back by the radius
+        // because the model reaches that far toward the camera from its centre.
+        const float distance = kFrameMargin * glm::max(halfHeight / tanV, halfRadius / tanH) + halfRadius;
+        if (std::isfinite(halfHeight) && std::isfinite(halfRadius) &&
+            (halfHeight > 0.001f || halfRadius > 0.001f) &&
+            std::isfinite(distance) && distance > kDefaultClipPlaneNear &&
+            distance < kDefaultClipPlaneFar * 0.9f) {
+            _cameraTarget = 0.5f * (min + max);
+            _cameraFramingDistance = distance;
+        }
+    }
+
+    _cameraPosition = _cameraTarget + glm::vec3(0.0f, _cameraFramingDistance, 0.0f);
+    updateCameraTransform();
+}
+
 void ModelResourceViewModel::onGLCanvasMouseMotion(int x, int y, bool leftDown, bool rightDown) {
     int dx = x - _lastMouseX;
     int dy = y - _lastMouseY;
@@ -195,8 +250,10 @@ void ModelResourceViewModel::onGLCanvasMouseMotion(int x, int y, bool leftDown, 
         //_modelPitch += dy / glm::pi<float>() / 64.0f;
         updateModelTransform();
     } else if (rightDown) {
-        _cameraPosition.x += dx / static_cast<float>(256.0f);
-        _cameraPosition.z += dy / static_cast<float>(256.0f);
+        float distance = glm::max(_cameraPosition.y - _cameraTarget.y, kDefaultClipPlaneNear);
+        float panScale = distance / 2048.0f;
+        _cameraPosition.x += dx * panScale;
+        _cameraPosition.z += dy * panScale;
         updateCameraTransform();
     }
 
@@ -205,7 +262,11 @@ void ModelResourceViewModel::onGLCanvasMouseMotion(int x, int y, bool leftDown, 
 }
 
 void ModelResourceViewModel::onGLCanvasMouseWheel(int delta) {
-    _cameraPosition.y = glm::max(0.0f, _cameraPosition.y - glm::clamp(delta, -1, 1));
+    float distance = _cameraPosition.y - _cameraTarget.y;
+    float step = glm::max(_cameraFramingDistance * 0.1f, kDefaultClipPlaneNear);
+    float minDistance = kDefaultClipPlaneNear * 1.1f;
+    distance = glm::max(minDistance, distance - glm::clamp(delta, -1, 1) * step);
+    _cameraPosition.y = _cameraTarget.y + distance;
     updateCameraTransform();
 }
 
