@@ -169,8 +169,6 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     // raster-selected device intact.
     vkb::PhysicalDeviceSelector rayQuerySelector(_instance);
     VkPhysicalDeviceFeatures rayQueryCoreFeatures = features;
-    // Physical-storage-buffer addresses in the trace shader are uint64_t.
-    rayQueryCoreFeatures.shaderInt64 = VK_TRUE;
     configureSelector(rayQuerySelector, rayQueryCoreFeatures);
     // Do not let an optional feature change the GPU chosen for rasterization.
     rayQuerySelector.set_name(physicalDevice.name);

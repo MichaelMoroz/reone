@@ -86,14 +86,23 @@ void VulkanBuffer::initDeviceLocal(VkDeviceSize size, VkBufferUsageFlags usage, 
         return;
     }
 
+    uploadDeviceLocal(0, size, data);
+}
+
+void VulkanBuffer::uploadDeviceLocal(VkDeviceSize offset, VkDeviceSize size, const void *data) {
+    if (_buffer == VK_NULL_HANDLE || !data || size == 0 || offset + size > _size) {
+        throw std::invalid_argument("Vulkan: invalid device-local buffer upload");
+    }
     VulkanBuffer staging(_device);
     staging.initHostVisible(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
     std::memcpy(staging.mapped(), data, static_cast<size_t>(size));
 
     auto src = staging.handle();
     auto dst = _buffer;
-    _device.immediateSubmit([src, dst, size](VkCommandBuffer cmd) {
+    _device.immediateSubmit([src, dst, offset, size](VkCommandBuffer cmd) {
         VkBufferCopy copy {};
+        copy.srcOffset = 0;
+        copy.dstOffset = offset;
         copy.size = size;
         vkCmdCopyBuffer(cmd, src, dst, 1, &copy);
     });

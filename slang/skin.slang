@@ -14,8 +14,10 @@ struct Matrix3x4 {
 struct SceneObject {
     Matrix3x4 transform;
     Matrix3x4 prevTransform;
-    uint64_t srcVertexAddress;
-    uint64_t srcIndexAddress;
+    // Element offsets: floats in sourceVertices and uints in sourceIndices.
+    // Attribute offsets below remain byte offsets inside each vertex record.
+    uint srcVertexOffset;
+    uint srcIndexOffset;
     uint srcVertexStride;
     int offPosition;
     int offNormals;
@@ -51,6 +53,8 @@ struct MergedVertex {
 [[vk::binding(2, 0)]] RWStructuredBuffer<MergedVertex> vertices;
 [[vk::binding(3, 0)]] RWStructuredBuffer<uint> indices;
 [[vk::binding(4, 0)]] RWStructuredBuffer<uint> materialIds;
+[[vk::binding(5, 0)]] StructuredBuffer<float> sourceVertices;
+[[vk::binding(6, 0)]] StructuredBuffer<uint> sourceIndices;
 
 struct PushConstants {
     uint objectCount;
@@ -61,32 +65,6 @@ struct PushConstants {
 };
 
 [[vk::push_constant]] PushConstants pushConstants;
-
-float loadFloat(uint64_t address) {
-    ConstBufferPointer<uint, 4> pointer = ConstBufferPointer<uint, 4>(address);
-    return asfloat(pointer[0]);
-}
-
-float3 load3(uint64_t address) {
-    return float3(
-        loadFloat(address),
-        loadFloat(address + 4),
-        loadFloat(address + 8));
-}
-
-float2 load2(uint64_t address) {
-    return float2(loadFloat(address), loadFloat(address + 4));
-}
-
-uint loadIndex16(uint64_t address, uint index) {
-    uint64_t byteAddress = address + uint64_t(index) * 2;
-
-    // The source index stream is 16-bit, but raw loads are dwords.  Aligning
-    // down and selecting the low or high half handles either unaligned index
-    // address without assuming that the source buffer itself is dword-aligned.
-    ConstBufferPointer<uint, 4> pointer = ConstBufferPointer<uint, 4>(byteAddress & ~uint64_t(3));
-    return (pointer[0] >> (uint(byteAddress & 2) * 8)) & 0xffffu;
-}
 
 float3 transformPoint(Matrix3x4 matrix, float3 point) {
     return float3(
@@ -188,8 +166,11 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if (id < pushConstants.vertexCount) {
         SceneObject object = objects[findVertexObject(id)];
         uint vertexId = id - object.dstVertexBase;
-        uint64_t address = object.srcVertexAddress + uint64_t(vertexId) * object.srcVertexStride;
-        float3 position = load3(address + uint64_t(object.offPosition));
+        uint sourceVertex = object.srcVertexOffset + vertexId * (object.srcVertexStride / 4);
+        float3 position = float3(
+            sourceVertices[sourceVertex + object.offPosition / 4],
+            sourceVertices[sourceVertex + object.offPosition / 4 + 1],
+            sourceVertices[sourceVertex + object.offPosition / 4 + 2]);
         float3 prevPosition = position;
         float4 boneIndices = float4(0);
         float4 boneWeights = float4(0);
@@ -200,15 +181,15 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
         if (skinned) {
             boneIndices = float4(
-                loadFloat(address + uint64_t(object.offBoneIndices)),
-                loadFloat(address + uint64_t(object.offBoneIndices + 4)),
-                loadFloat(address + uint64_t(object.offBoneIndices + 8)),
-                loadFloat(address + uint64_t(object.offBoneIndices + 12)));
+                sourceVertices[sourceVertex + object.offBoneIndices / 4],
+                sourceVertices[sourceVertex + object.offBoneIndices / 4 + 1],
+                sourceVertices[sourceVertex + object.offBoneIndices / 4 + 2],
+                sourceVertices[sourceVertex + object.offBoneIndices / 4 + 3]);
             boneWeights = float4(
-                loadFloat(address + uint64_t(object.offBoneWeights)),
-                loadFloat(address + uint64_t(object.offBoneWeights + 4)),
-                loadFloat(address + uint64_t(object.offBoneWeights + 8)),
-                loadFloat(address + uint64_t(object.offBoneWeights + 12)));
+                sourceVertices[sourceVertex + object.offBoneWeights / 4],
+                sourceVertices[sourceVertex + object.offBoneWeights / 4 + 1],
+                sourceVertices[sourceVertex + object.offBoneWeights / 4 + 2],
+                sourceVertices[sourceVertex + object.offBoneWeights / 4 + 3]);
 
             // Positions have w = 1, so the bone's translation deforms them.
             // Directions have w = 0 below, so normals and tangent-frame axes
@@ -236,7 +217,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
         // avoids sending a zero vector into material or BRDF evaluation.
         float3 normal = object.offNormals < 0
             ? float3(0, 0, 1)
-            : load3(address + uint64_t(object.offNormals));
+            : float3(
+                sourceVertices[sourceVertex + object.offNormals / 4],
+                sourceVertices[sourceVertex + object.offNormals / 4 + 1],
+                sourceVertices[sourceVertex + object.offNormals / 4 + 2]);
 
         if (skinned) {
             normal = skinVertex(
@@ -252,18 +236,31 @@ void main(uint3 tid : SV_DispatchThreadID) {
             float3(0, 0, 1));
         mergedVertex.uv1 = object.offUV1 < 0
             ? float2(0)
-            : load2(address + uint64_t(object.offUV1));
+            : float2(
+                sourceVertices[sourceVertex + object.offUV1 / 4],
+                sourceVertices[sourceVertex + object.offUV1 / 4 + 1]);
         mergedVertex.uv2 = object.offUV2 < 0
             ? float2(0)
-            : load2(address + uint64_t(object.offUV2));
+            : float2(
+                sourceVertices[sourceVertex + object.offUV2 / 4],
+                sourceVertices[sourceVertex + object.offUV2 / 4 + 1]);
         mergedVertex.bitangent = float3(0);
         mergedVertex.tangent = float3(0);
         mergedVertex.tanSpaceNormal = float3(0);
 
         if (object.offTanSpace >= 0) {
-            float3 bitangent = load3(address + uint64_t(object.offTanSpace));
-            float3 tangent = load3(address + uint64_t(object.offTanSpace + 12));
-            float3 tanSpaceNormal = load3(address + uint64_t(object.offTanSpace + 24));
+            float3 bitangent = float3(
+                sourceVertices[sourceVertex + object.offTanSpace / 4],
+                sourceVertices[sourceVertex + object.offTanSpace / 4 + 1],
+                sourceVertices[sourceVertex + object.offTanSpace / 4 + 2]);
+            float3 tangent = float3(
+                sourceVertices[sourceVertex + object.offTanSpace / 4 + 3],
+                sourceVertices[sourceVertex + object.offTanSpace / 4 + 4],
+                sourceVertices[sourceVertex + object.offTanSpace / 4 + 5]);
+            float3 tanSpaceNormal = float3(
+                sourceVertices[sourceVertex + object.offTanSpace / 4 + 6],
+                sourceVertices[sourceVertex + object.offTanSpace / 4 + 7],
+                sourceVertices[sourceVertex + object.offTanSpace / 4 + 8]);
 
             if (skinned) {
                 bitangent = skinVertex(
@@ -309,11 +306,11 @@ void main(uint3 tid : SV_DispatchThreadID) {
         uint firstIndex = localId * 3;
         uint destinationIndex = id * 3;
 
-        indices[destinationIndex] = loadIndex16(object.srcIndexAddress, firstIndex)
+        indices[destinationIndex] = sourceIndices[object.srcIndexOffset + firstIndex]
             + object.dstVertexBase;
-        indices[destinationIndex + 1] = loadIndex16(object.srcIndexAddress, firstIndex + 1)
+        indices[destinationIndex + 1] = sourceIndices[object.srcIndexOffset + firstIndex + 1]
             + object.dstVertexBase;
-        indices[destinationIndex + 2] = loadIndex16(object.srcIndexAddress, firstIndex + 2)
+        indices[destinationIndex + 2] = sourceIndices[object.srcIndexOffset + firstIndex + 2]
             + object.dstVertexBase;
         materialIds[id] = object.materialIndex;
     }

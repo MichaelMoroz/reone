@@ -4,8 +4,7 @@
  */
 
 // The path tracer's GPU-resident scene: bindings, the per-instance material
-// record, push constants, and the raw-address vertex fetch helpers. Every
-// other tracing module imports this one.
+// record, and push constants. Every other tracing module imports this one.
 //
 // Material assignment policy lives on the CPU: the TLAS admission in
 // rayquery.cpp decides each instance's surface type and bakes the curated
@@ -138,30 +137,6 @@ public uint ptTonemapOperator() {
 
 public bool ptStatsEnabled() {
     return (pushConstants.traceFlags & kPtFlagStats) != 0;
-}
-
-// Raw-address vertex fetches. This Slang version exposes physical storage
-// through ConstBufferPointer rather than DXC's vk::RawBufferLoad; the
-// explicit 4-byte alignment is the same raw-address operation.
-
-public float ptLoadFloat(uint64_t address) {
-    ConstBufferPointer<uint, 4> pointer = ConstBufferPointer<uint, 4>(address);
-    return asfloat(pointer[0]);
-}
-
-public float2 ptLoadFloat2(uint64_t address) {
-    return float2(ptLoadFloat(address), ptLoadFloat(address + 4));
-}
-
-public float3 ptLoadFloat3(uint64_t address) {
-    return float3(ptLoadFloat(address), ptLoadFloat(address + 4), ptLoadFloat(address + 8));
-}
-
-public uint ptLoadIndex16(uint64_t indexAddress, uint index) {
-    uint64_t address = indexAddress + uint64_t(index) * 2;
-    ConstBufferPointer<uint, 4> pointer = ConstBufferPointer<uint, 4>(address & ~uint64_t(3));
-    uint packed = pointer[0];
-    return (packed >> (uint(address & 2) * 8)) & 0xffffu;
 }
 
 public uint geometryBase(uint geometryIndex) { return geometryIndex == 0 ? pushConstants.geometryBase0 : pushConstants.geometryBase1; }

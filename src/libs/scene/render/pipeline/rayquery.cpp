@@ -11,7 +11,6 @@
 #include "reone/graphics/textureutil.h"
 #include "reone/graphics/uniforms.h"
 
-#include "reone/graphics/vulkan/accelerationstructure.h"
 #include "reone/graphics/vulkan/descriptors.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/image.h"
@@ -138,8 +137,10 @@ static_assert(sizeof(MergedVertex) == 128);
 struct alignas(16) SceneObject {
     Matrix3x4 transform;
     Matrix3x4 prevTransform;
-    uint64_t srcVertexAddress {0};
-    uint64_t srcIndexAddress {0};
+    // Element offsets: floats in sourceVertices, uints in sourceIndices.
+    // The vertex attributes below remain byte offsets within each record.
+    uint32_t srcVertexOffset {0};
+    uint32_t srcIndexOffset {0};
     uint32_t srcVertexStride {0};
     int32_t offPosition {-1};
     int32_t offNormals {-1};
@@ -158,8 +159,12 @@ struct alignas(16) SceneObject {
     uint32_t materialIndex {0};
 };
 static_assert(sizeof(Matrix3x4) == 48);
-static_assert(offsetof(SceneObject, srcVertexAddress) == 96);
-static_assert(offsetof(SceneObject, vertexCount) == 144);
+static_assert(offsetof(SceneObject, srcVertexOffset) == 96);
+static_assert(offsetof(SceneObject, srcIndexOffset) == 100);
+static_assert(offsetof(SceneObject, srcVertexStride) == 104);
+static_assert(offsetof(SceneObject, offPosition) == 108);
+static_assert(offsetof(SceneObject, vertexCount) == 136);
+static_assert(offsetof(SceneObject, materialIndex) == 164);
 static_assert(sizeof(SceneObject) == 176);
 
 // Sky cubemap face resolution. Measured on danm14ab against the geometry sky
@@ -499,19 +504,19 @@ void RayQueryPipeline::init() {
     vkDestroyShaderModule(device.handle(), module, nullptr);
     device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_pipeline), "rayquery:primaryRay");
 
-    VkDescriptorSetLayoutBinding mergeBindings[5] {};
-    for (uint32_t i = 0; i < 5; ++i) {
+    VkDescriptorSetLayoutBinding mergeBindings[7] {};
+    for (uint32_t i = 0; i < 7; ++i) {
         mergeBindings[i].binding = i;
         mergeBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         mergeBindings[i].descriptorCount = 1;
         mergeBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     VkDescriptorSetLayoutCreateInfo mergeLayoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    mergeLayoutInfo.bindingCount = 5;
+    mergeLayoutInfo.bindingCount = 7;
     mergeLayoutInfo.pBindings = mergeBindings;
     if (vkCreateDescriptorSetLayout(device.handle(), &mergeLayoutInfo, nullptr, &_mergeLayout) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: merge descriptor layout creation failed");
-    VkDescriptorPoolSize mergePoolSize {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10};
+    VkDescriptorPoolSize mergePoolSize {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 14};
     VkDescriptorPoolCreateInfo mergePoolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     mergePoolInfo.maxSets = 2;
     mergePoolInfo.poolSizeCount = 1;
@@ -1327,14 +1332,24 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             material.bumpMapScale = texture->features().bumpMapScaling;
         }
         materials.push_back(material);
-        const auto sourceGeometry = uploaded.geometry();
+        const auto &sourceGeometry = _renderer.resources().sourceGeometry(mesh->mesh.get());
         const auto &layout = mesh->mesh.get().vertexLayout();
         SceneObject sceneObject;
         sceneObject.transform = matrix3x4(mesh->transform);
         sceneObject.prevTransform = matrix3x4(mesh->prevTransform);
-        sceneObject.srcVertexAddress = sourceGeometry.vertexAddress;
-        sceneObject.srcIndexAddress = sourceGeometry.indexAddress;
-        sceneObject.srcVertexStride = static_cast<uint32_t>(sourceGeometry.vertexStride);
+        if (layout.stride % sizeof(float) != 0 ||
+            layout.offPosition % static_cast<int>(sizeof(float)) != 0 ||
+            (layout.offNormals >= 0 && layout.offNormals % static_cast<int>(sizeof(float)) != 0) ||
+            (layout.offUV1 >= 0 && layout.offUV1 % static_cast<int>(sizeof(float)) != 0) ||
+            (layout.offUV2 >= 0 && layout.offUV2 % static_cast<int>(sizeof(float)) != 0) ||
+            (layout.offTanSpace >= 0 && layout.offTanSpace % static_cast<int>(sizeof(float)) != 0) ||
+            (layout.offBoneIndices >= 0 && layout.offBoneIndices % static_cast<int>(sizeof(float)) != 0) ||
+            (layout.offBoneWeights >= 0 && layout.offBoneWeights % static_cast<int>(sizeof(float)) != 0)) {
+            throw std::runtime_error("Vulkan: source vertex attributes must be float-aligned");
+        }
+        sceneObject.srcVertexOffset = sourceGeometry.vertexOffset;
+        sceneObject.srcIndexOffset = sourceGeometry.indexOffset;
+        sceneObject.srcVertexStride = static_cast<uint32_t>(layout.stride);
         sceneObject.offPosition = layout.offPosition;
         sceneObject.offNormals = layout.offNormals;
         sceneObject.offUV1 = layout.offUV1;
@@ -1463,15 +1478,19 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         auto *boneDestination = static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes;
         std::memcpy(boneDestination, bones.data(), bones.size() * sizeof(Matrix3x4));
     }
-    std::array<VkDescriptorBufferInfo, 5> mergeBuffers {{
+    const auto &sourceVertices = _renderer.resources().sourceVertices();
+    const auto &sourceIndices = _renderer.resources().sourceIndices();
+    std::array<VkDescriptorBufferInfo, 7> mergeBuffers {{
         {frame.scene->handle(), 0, sceneObjectBytes},
         {frame.scene->handle(), sceneObjectBytes, sceneBoneBytes},
         {frame.geometry->handle(), 0, mergeVertexBytes},
         {frame.geometry->handle(), mergeVertexBytes, mergeIndexBytes},
         {frame.geometry->handle(), mergeVertexBytes + mergeIndexBytes,
          static_cast<VkDeviceSize>(frame.triangleCapacity) * sizeof(uint32_t)},
+        {sourceVertices.handle(), 0, sourceVertices.size()},
+        {sourceIndices.handle(), 0, sourceIndices.size()},
     }};
-    std::array<VkWriteDescriptorSet, 5> mergeWrites {};
+    std::array<VkWriteDescriptorSet, 7> mergeWrites {};
     const auto mergeSet = _mergeSets[_renderer.frameIndex()];
     for (uint32_t i = 0; i < mergeWrites.size(); ++i) {
         mergeWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1502,6 +1521,26 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         static_cast<uint32_t>(mergeTriangleCount),
         static_cast<uint32_t>(opaqueTriangleCount),
     };
+    // Source uploads use immediate transfer submissions. Queue order alone is
+    // not a memory dependency for the following compute read, especially when
+    // a pooled buffer was replaced while this frame was being assembled.
+    // Make those writes available to this merge explicitly before binding the
+    // descriptor generation selected above.
+    std::array<VkBufferMemoryBarrier2, 2> sourceBarriers {};
+    for (size_t i = 0; i < sourceBarriers.size(); ++i) {
+        sourceBarriers[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        sourceBarriers[i].srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+        sourceBarriers[i].srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        sourceBarriers[i].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        sourceBarriers[i].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        sourceBarriers[i].buffer = mergeBuffers[5 + i].buffer;
+        sourceBarriers[i].offset = 0;
+        sourceBarriers[i].size = VK_WHOLE_SIZE;
+    }
+    VkDependencyInfo sourceDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    sourceDependency.bufferMemoryBarrierCount = static_cast<uint32_t>(sourceBarriers.size());
+    sourceDependency.pBufferMemoryBarriers = sourceBarriers.data();
+    vkCmdPipelineBarrier2(cmd, &sourceDependency);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _mergePipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _mergePipelineLayout,
                             0, 1, &mergeSet, 0, nullptr);

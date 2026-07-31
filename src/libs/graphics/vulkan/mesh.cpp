@@ -95,20 +95,11 @@ void VulkanMesh::init(const Mesh &mesh) {
     if (layout.stride <= 0 || layout.offPosition < 0) {
         throw std::invalid_argument("Vulkan: mesh has no position data");
     }
-    _vertexStride = layout.stride;
-    _positionOffset = static_cast<VkDeviceSize>(layout.offPosition);
-    _maxVertexIndex = static_cast<uint32_t>(mesh.vertexCount() - 1);
-
     VkBufferUsageFlags vertexUsage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     VkBufferUsageFlags indexUsage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
     if (_device.rayQueryAvailable()) {
-        vertexUsage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-                       // The skin compute pass reads the original interleaved
-                       // record before writing its frame-local deformed copy.
-                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        indexUsage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+        // Source data for the merge lives in VulkanResources' shared buffers.
+        // These per-mesh buffers are now raster-only.
     }
     _vertexBuffer.initDeviceLocal(vertexData.size() * sizeof(float),
                                   vertexUsage,
@@ -130,37 +121,12 @@ void VulkanMesh::init(const Mesh &mesh) {
                                  indices.data());
     _indexCount = static_cast<uint32_t>(indices.size());
 
-    static bool loggedFirstMeshAddress = false;
-    if (_device.rayQueryAvailable() && !loggedFirstMeshAddress) {
-        loggedFirstMeshAddress = true;
-        info("Vulkan: first mesh vertex buffer address=" +
-                 std::to_string(_vertexBuffer.deviceAddress()) +
-                 ", stride=" + std::to_string(_vertexStride) +
-                 ", position offset=" + std::to_string(_positionOffset),
-             LogChannel::Graphics);
-    }
-}
-
-VulkanMesh::Geometry VulkanMesh::geometry() const {
-    Geometry geometry;
-    VkDeviceAddress vertexAddress = _vertexBuffer.deviceAddress();
-    geometry.vertexAddress = vertexAddress;
-    geometry.vertexStride = _vertexStride;
-    geometry.positionOffset = _positionOffset;
-    geometry.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-    geometry.maxVertexIndex = _maxVertexIndex;
-    geometry.indexAddress = _indexBuffer.deviceAddress();
-    geometry.indexType = VK_INDEX_TYPE_UINT16;
-    return geometry;
 }
 
 void VulkanMesh::deinit() {
     _vertexBuffer.deinit();
     _indexBuffer.deinit();
     _indexCount = 0;
-    _vertexStride = 0;
-    _positionOffset = 0;
-    _maxVertexIndex = 0;
 }
 
 void VulkanMesh::draw(VkCommandBuffer cmd, VkBuffer zeros, int instances) const {

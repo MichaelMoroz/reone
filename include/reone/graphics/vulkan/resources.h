@@ -24,7 +24,6 @@
 #include "image.h"
 #include "samplers.h"
 #include "mesh.h"
-#include "accelerationstructure.h"
 
 namespace reone {
 
@@ -48,6 +47,11 @@ class VulkanDevice;
  */
 class VulkanResources : boost::noncopyable {
 public:
+    struct SourceGeometry {
+        /** Element offsets: float elements for vertices, uint elements for indices. */
+        uint32_t vertexOffset {0};
+        uint32_t indexOffset {0};
+    };
     VulkanResources(VulkanDevice &device) :
         _device(device),
         _samplers(device) {
@@ -127,8 +131,11 @@ public:
 
     /** Upload @p mesh if it has not been seen, and return it. */
     const VulkanMesh &get(const Mesh &mesh);
-    /** Build (once) and return the rigid BLAS for an uploaded mesh. */
-    const VulkanBLAS &blas(const Mesh &mesh);
+    /** Shared merge-source location assigned when this mesh is lazily uploaded. */
+    const SourceGeometry &sourceGeometry(const Mesh &mesh);
+    /** Plain StructuredBuffer<float> / StructuredBuffer<uint> source pools. */
+    const VulkanBuffer &sourceVertices() const { return *_sourceVertices; }
+    const VulkanBuffer &sourceIndices() const { return *_sourceIndices; }
 
     size_t textureCount() const { return _textures.size(); }
     size_t meshCount() const { return _meshes.size(); }
@@ -168,7 +175,19 @@ private:
 
     const VulkanImage &fallbackFor(const Texture &texture, const std::string &why);
     std::unordered_map<const Mesh *, std::unique_ptr<VulkanMesh>> _meshes;
-    std::unordered_map<const Mesh *, std::unique_ptr<VulkanBLAS>> _blases;
+    std::unordered_map<const Mesh *, SourceGeometry> _sourceGeometry;
+    std::vector<float> _sourceVertexData;
+    std::vector<uint32_t> _sourceIndexData;
+    std::unique_ptr<VulkanBuffer> _sourceVertices;
+    std::unique_ptr<VulkanBuffer> _sourceIndices;
+    // A command buffer already recorded this frame may still name an old pool.
+    // Keep retired generations until the cache is cleared after the renderer's
+    // idle wait, rather than relying on descriptor updates to keep them alive.
+    std::vector<std::unique_ptr<VulkanBuffer>> _retiredSourceBuffers;
+    uint32_t _sourceVertexCapacity {0};
+    uint32_t _sourceIndexCapacity {0};
+
+    void appendSourceGeometry(const Mesh &mesh);
 };
 
 } // namespace graphics

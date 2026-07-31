@@ -61,6 +61,9 @@ public:
      */
     void initDeviceLocal(VkDeviceSize size, VkBufferUsageFlags usage, const void *data);
 
+    /** Copy a byte range into an existing device-local buffer and wait for it. */
+    void uploadDeviceLocal(VkDeviceSize offset, VkDeviceSize size, const void *data);
+
     void deinit();
 
     VkBuffer handle() const { return _buffer; }
