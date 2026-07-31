@@ -166,6 +166,26 @@ void main() {
                         ? kPtInfDistance
                         : mul(globalUniforms.view, float4(primaryHit.position, 1.0)).z;
     outputs.motion = primaryShading.terminatesPath ? float3(0.0) : ptMotionVector(primaryHit);
+    // The comparison G-buffer follows raster exactly: diffuse is pre-lighting
+    // albedo, eye normal is signed view-space normal packed into [0,1], depth
+    // is positive linear view distance, and motion is current-minus-previous
+    // UV displacement from the unjittered matrices.
+    // VulkanGBuffer stores the authored gamma-encoded texture colour (the
+    // deferred resolve converts it later), whereas tracing shades in linear.
+    outputs.gBufferDiffuse = float4(ptLinearToGamma(primaryShading.albedo), primaryShading.alpha);
+    outputs.gBufferEyeNormal = 0.5 * mul(primaryShading.normal,
+                                         (float3x3)globalUniforms.viewInv) + 0.5;
+    float viewZ = mul(globalUniforms.view, float4(primaryHit.position, 1.0)).z;
+    outputs.gBufferDepth = max(0.0, -viewZ);
+    if (!primaryShading.terminatesPath) {
+        float4 currentClip = mul(globalUniforms.viewProjection, float4(primaryHit.position, 1.0));
+        float4 previousClip = mul(globalUniforms.prevViewProjection,
+                                  float4(primaryHit.position + outputs.motion, 1.0));
+        if (currentClip.w > 1e-6 && previousClip.w > 1e-6) {
+            outputs.gBufferMotion = 0.5 * (currentClip.xy / currentClip.w -
+                                           previousClip.xy / previousClip.w);
+        }
+    }
     if (pbrPrimary) {
         float3 Rf0 = lerp(lerp(float3(0.04), primaryShading.albedo, primaryShading.metallic),
                           float3(1.0), primaryShading.envStrength);

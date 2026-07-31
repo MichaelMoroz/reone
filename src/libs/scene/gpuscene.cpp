@@ -199,7 +199,9 @@ void GpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount, uint32_t b
         frame.grassClusterCapacity = grassClusterCapacity;
         frame.grassClusters = std::make_unique<VulkanBuffer>(_renderer.device());
         frame.grassClusters->initHostVisible(
-            static_cast<VkDeviceSize>(grassClusterCapacity) * sizeof(glm::vec4) * 4,
+            // ProceduralQuad is six vec4s (the last two carry lightmap UV and
+            // per-quad colour); keep this in lockstep with skin.slang.
+            static_cast<VkDeviceSize>(grassClusterCapacity) * sizeof(glm::vec4) * 6,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     }
 }
@@ -262,6 +264,8 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
                                 RenderRegistry &registry,
                                 const Classifier &classifier,
                                 const GrassClassifier &grassClassifier,
+                                const ParticleClassifier &particleClassifier,
+                                const BillboardClassifier &billboardClassifier,
                                 const glm::mat4 &cameraView) {
     const auto resourceGeneration = _renderer.resources().generation();
     if (resourceGeneration != _sourceResourceGeneration) {
@@ -280,15 +284,17 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
     std::vector<SceneNodeId> opaqueObjectIds, nonOpaqueObjectIds;
     std::vector<Matrix3x4> bones;
     std::vector<glm::vec4> danglyPositions;
-    struct alignas(16) GrassCluster {
+    struct alignas(16) ProceduralQuad {
         glm::vec4 positionVariant {0.0f};
         glm::vec4 right {0.0f};
         glm::vec4 up {0.0f};
+        glm::vec4 uvOffsetScale {0.0f, 0.0f, 1.0f, 1.0f};
         glm::vec2 lightmapUV {0.0f};
         glm::vec2 pad {0.0f};
+        glm::vec4 color {1.0f};
     };
-    static_assert(sizeof(GrassCluster) == sizeof(glm::vec4) * 4);
-    std::vector<GrassCluster> grassClusters;
+    static_assert(sizeof(ProceduralQuad) == sizeof(glm::vec4) * 6);
+    std::vector<ProceduralQuad> proceduralQuads;
     materials.reserve(registry.objects().size());
     opaqueObjects.reserve(registry.objects().size());
     nonOpaqueObjects.reserve(registry.objects().size());
@@ -372,10 +378,10 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
         auto admission = grassClassifier(*grass);
         if (!admission) continue;
         if (grass->instances.size() > std::numeric_limits<uint32_t>::max() / 4 ||
-            grassClusters.size() > std::numeric_limits<uint32_t>::max() - grass->instances.size())
+            proceduralQuads.size() > std::numeric_limits<uint32_t>::max() - grass->instances.size())
             throw std::runtime_error("Vulkan: merged grass scene exceeds shader index range");
         SceneObject sceneObject;
-        sceneObject.srcVertexOffset = static_cast<uint32_t>(grassClusters.size());
+        sceneObject.srcVertexOffset = static_cast<uint32_t>(proceduralQuads.size());
         // A zero source stride tags a procedural grass-cluster list. The merge
         // shader expands it directly, avoiding one CPU SceneObject per blade.
         sceneObject.srcVertexStride = 0;
@@ -391,8 +397,12 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
             // error is preferable to grass being absent from the BLAS entirely.
             const glm::vec3 right = viewRow0 * grass->quadSize;
             const glm::vec3 up = (glm::cos(angle) * viewRow1 - glm::sin(angle) * viewRow2) * grass->quadSize;
-            grassClusters.push_back({glm::vec4(instance.position, static_cast<float>(instance.variant)),
-                                     glm::vec4(right, 0.0f), glm::vec4(up, 0.0f), instance.lightmapUV, {0.0f, 0.0f}});
+            const glm::vec2 uvOffset {0.5f * (instance.variant % 2),
+                                      0.5f * (instance.variant / 2)};
+            proceduralQuads.push_back({glm::vec4(instance.position, static_cast<float>(instance.variant)),
+                                       glm::vec4(right, 0.0f), glm::vec4(up, 0.0f),
+                                       glm::vec4(uvOffset, glm::vec2(0.5f)), instance.lightmapUV,
+                                       {0.0f, 0.0f}, glm::vec4(1.0f)});
         }
         materials.push_back(admission->material);
         if (sceneObject.geometryIndex == 0) {
@@ -401,6 +411,78 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
         } else {
             nonOpaqueObjects.push_back(sceneObject);
             nonOpaqueObjectIds.push_back(grass->id);
+        }
+    }
+    for (const auto &object : registry.objects()) {
+        const auto *particles = std::get_if<RegisteredParticles>(&object);
+        if (!particles || !registry.isObjectEnabled(particles->id.index) || particles->instances.empty()) continue;
+        if ((particles->categories & (renderCategory(RenderCategory::Opaque) |
+                                      renderCategory(RenderCategory::Transparent))) == 0) continue;
+        auto admission = particleClassifier(*particles);
+        if (!admission) continue;
+        if (particles->instances.size() > std::numeric_limits<uint32_t>::max() / 4 ||
+            proceduralQuads.size() > std::numeric_limits<uint32_t>::max() - particles->instances.size())
+            throw std::runtime_error("Vulkan: merged particle scene exceeds shader index range");
+        SceneObject sceneObject;
+        sceneObject.srcVertexOffset = static_cast<uint32_t>(proceduralQuads.size());
+        // One is the centered billboard tag. As with grass (zero), the merge
+        // expands this compact emitter list into quads rather than receiving
+        // one CPU SceneObject per particle.
+        sceneObject.srcVertexStride = 1;
+        sceneObject.vertexCount = static_cast<uint32_t>(particles->instances.size()) * 4;
+        sceneObject.triangleCount = static_cast<uint32_t>(particles->instances.size()) * 2;
+        sceneObject.materialIndex = static_cast<uint32_t>(materials.size());
+        sceneObject.geometryIndex = admission->primitiveClass == PrimitiveClass::Opaque ? 0 : 1;
+        const glm::ivec2 grid = glm::max(particles->gridSize, glm::ivec2(1));
+        for (const auto &instance : particles->instances) {
+            const int frame = std::max(0, instance.frame);
+            const glm::vec2 uvScale {1.0f / grid.x, 1.0f / grid.y};
+            const glm::vec2 uvOffset {(frame % grid.x) * uvScale.x, (frame / grid.x) * uvScale.y};
+            proceduralQuads.push_back({glm::vec4(instance.position, static_cast<float>(frame)),
+                                       glm::vec4(instance.right * instance.size.x, 0.0f),
+                                       glm::vec4(instance.up * instance.size.y, 0.0f),
+                                       glm::vec4(uvOffset, uvScale), glm::vec2(0.0f), {0.0f, 0.0f},
+                                       instance.color});
+        }
+        materials.push_back(admission->material);
+        if (sceneObject.geometryIndex == 0) {
+            opaqueObjects.push_back(sceneObject);
+            opaqueObjectIds.push_back(particles->id);
+        } else {
+            nonOpaqueObjects.push_back(sceneObject);
+            nonOpaqueObjectIds.push_back(particles->id);
+        }
+    }
+    for (const auto &object : registry.objects()) {
+        const auto *billboard = std::get_if<RegisteredBillboard>(&object);
+        if (!billboard || !registry.isObjectEnabled(billboard->id.index)) continue;
+        if ((billboard->categories & (renderCategory(RenderCategory::Opaque) |
+                                      renderCategory(RenderCategory::Transparent))) == 0) continue;
+        auto admission = billboardClassifier(*billboard);
+        if (!admission) continue;
+        SceneObject sceneObject;
+        sceneObject.srcVertexOffset = static_cast<uint32_t>(proceduralQuads.size());
+        sceneObject.srcVertexStride = 1;
+        sceneObject.vertexCount = 4;
+        sceneObject.triangleCount = 2;
+        sceneObject.materialIndex = static_cast<uint32_t>(materials.size());
+        sceneObject.geometryIndex = admission->primitiveClass == PrimitiveClass::Opaque ? 0 : 1;
+        // Billboard rasterization gets its axes from the primary camera. The
+        // tracer bakes that same primary-camera approximation into the merged
+        // quad; reflections and shadows therefore see a fixed pose.
+        const float width = glm::length(glm::vec3(billboard->transform[0]));
+        const float height = glm::length(glm::vec3(billboard->transform[1]));
+        proceduralQuads.push_back({glm::vec4(glm::vec3(billboard->transform[3]), 0.0f),
+                                   glm::vec4(viewRow0 * width, 0.0f), glm::vec4(viewRow1 * height, 0.0f),
+                                   glm::vec4(0.0f, 0.0f, 1.0f, 1.0f), glm::vec2(0.0f), {0.0f, 0.0f},
+                                   billboard->color});
+        materials.push_back(admission->material);
+        if (sceneObject.geometryIndex == 0) {
+            opaqueObjects.push_back(sceneObject);
+            opaqueObjectIds.push_back(billboard->id);
+        } else {
+            nonOpaqueObjects.push_back(sceneObject);
+            nonOpaqueObjectIds.push_back(billboard->id);
         }
     }
     std::vector<SceneObject> objects;
@@ -436,7 +518,7 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
         throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
     ensureMergeBuffers(frame, static_cast<uint32_t>(objects.size()), static_cast<uint32_t>(bones.size()),
                        static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount),
-                       static_cast<uint32_t>(grassClusters.size()), static_cast<uint32_t>(danglyPositions.size()));
+                       static_cast<uint32_t>(proceduralQuads.size()), static_cast<uint32_t>(danglyPositions.size()));
     const VkDeviceSize sceneObjectBytes = static_cast<VkDeviceSize>(frame.sceneObjectCapacity) * sizeof(SceneObject);
     const VkDeviceSize sceneBoneBytes = static_cast<VkDeviceSize>(frame.boneCapacity) * sizeof(Matrix3x4);
     const VkDeviceSize danglyPositionBytes = static_cast<VkDeviceSize>(frame.danglyPositionCapacity) * sizeof(glm::vec4);
@@ -447,8 +529,8 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
                                     bones.data(), bones.size() * sizeof(Matrix3x4));
     if (!danglyPositions.empty()) std::memcpy(static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes + sceneBoneBytes,
                                               danglyPositions.data(), danglyPositions.size() * sizeof(glm::vec4));
-    if (!grassClusters.empty()) std::memcpy(frame.grassClusters->mapped(), grassClusters.data(),
-                                            grassClusters.size() * sizeof(GrassCluster));
+    if (!proceduralQuads.empty()) std::memcpy(frame.grassClusters->mapped(), proceduralQuads.data(),
+                                              proceduralQuads.size() * sizeof(ProceduralQuad));
     // A grass-only scene never appends mesh source data. Bind the procedural
     // cluster buffer to the otherwise-unused source slots in that case so the
     // complete descriptor set remains valid without inventing mesh records.

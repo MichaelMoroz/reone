@@ -52,6 +52,12 @@ public struct SurfaceShading {
     public bool terminatesPath;
 };
 
+float4 vertexColor(HitGeometry hit) {
+    return mergedVertices[hit.indices.x].color * hit.weights.x +
+           mergedVertices[hit.indices.y].color * hit.weights.y +
+           mergedVertices[hit.indices.z].color * hit.weights.z;
+}
+
 /** A sampled continuation ray. */
 public struct PathSample {
     public float3 direction;
@@ -219,6 +225,9 @@ public struct PbrSurface : ISurfaceModel {
         shading.metallic = saturate(shading.metallic * material.overrideParams.w);
         shading.albedo = lerp(shading.albedo, ptGammaToLinear(material.overrideColor.rgb),
                               material.overrideColor.w);
+        float4 color = vertexColor(hit);
+        shading.albedo *= color.rgb;
+        shading.alpha *= color.a;
         if (material.overrideParams.x >= 0.0) shading.roughness = material.overrideParams.x;
         shading.roughness = clamp(shading.roughness * material.roughnessScale, 0.2, 1.0);
 
@@ -358,6 +367,9 @@ public struct UnlitTransparentSurface : ISurfaceModel {
             shading.albedo = ptGammaToLinear(sample.rgb);
             shading.alpha = sample.a;
         }
+        float4 color = vertexColor(hit);
+        shading.albedo *= color.rgb;
+        shading.alpha *= color.a;
         shading.normal = hit.geometricNormal;
         shading.roughness = 1.0;
         shading.metallic = 0.0;

@@ -49,6 +49,7 @@ struct MergedVertex {
     float3 tanSpaceNormal;
     float3 prevPosition;
     float2 pad;
+    float4 color;
 };
 
 [[vk::binding(0, 0)]] StructuredBuffer<SceneObject> objects;
@@ -63,8 +64,10 @@ struct GrassCluster {
     float4 positionVariant;
     float4 right;
     float4 up;
+    float4 uvOffsetScale;
     float2 lightmapUV;
     float2 pad;
+    float4 color;
 };
 
 [[vk::binding(7, 0)]] StructuredBuffer<GrassCluster> grassClusters;
@@ -180,23 +183,27 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if (id < pushConstants.vertexCount) {
         SceneObject object = objects[findVertexObject(id)];
         uint vertexId = id - object.dstVertexBase;
-        if (object.srcVertexStride == 0) {
+        if (object.srcVertexStride <= 1) {
             GrassCluster cluster = grassClusters[object.srcVertexOffset + vertexId / 4];
             uint quadVertex = vertexId % 4;
             float x = (quadVertex == 0 || quadVertex == 3) ? -0.5 : 0.5;
-            float y = quadVertex < 2 ? 0.0 : 1.0;
+            // Stride zero is the bottom-anchored grass mesh. Stride one is a
+            // centered particle/billboard mesh, tagged by GpuScene so neither
+            // needs thousands of CPU-side SceneObject records.
+            float y = object.srcVertexStride == 0 ? (quadVertex < 2 ? 0.0 : 1.0)
+                                                   : (quadVertex < 2 ? -0.5 : 0.5);
             MergedVertex mergedVertex;
             mergedVertex.position = cluster.positionVariant.xyz + cluster.right.xyz * x + cluster.up.xyz * y;
             mergedVertex.prevPosition = mergedVertex.position;
             mergedVertex.normal = safeNormalize(cross(cluster.right.xyz, cluster.up.xyz), float3(0, 0, 1));
-            float2 uv = float2(x + 0.5, y);
-            int variant = int(cluster.positionVariant.w);
-            mergedVertex.uv1 = 0.5 * uv + float2(0.5 * (variant % 2), 0.5 * (variant / 2));
+            float2 uv = float2(x + 0.5, object.srcVertexStride == 0 ? y : y + 0.5);
+            mergedVertex.uv1 = cluster.uvOffsetScale.xy + uv * cluster.uvOffsetScale.zw;
             mergedVertex.uv2 = cluster.lightmapUV;
             mergedVertex.bitangent = float3(0);
             mergedVertex.tangent = float3(0);
             mergedVertex.tanSpaceNormal = float3(0);
             mergedVertex.pad = float2(0);
+            mergedVertex.color = cluster.color;
             vertices[id] = mergedVertex;
         } else {
         uint sourceVertex = object.srcVertexOffset + vertexId * (object.srcVertexStride / 4);
@@ -256,6 +263,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         MergedVertex mergedVertex;
         mergedVertex.position = transformPoint(object.transform, position);
         mergedVertex.prevPosition = transformPoint(object.prevTransform, prevPosition);
+        mergedVertex.color = float4(1.0);
 
         // Some legacy meshes omit normals.  A stable axis is less faithful
         // than a face normal, but it is a documented, finite fallback and
@@ -350,7 +358,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
             - (object.geometryIndex == 0 ? 0 : pushConstants.opaqueTriangleCount)
             - object.dstTriangleBase;
         uint destinationIndex = id * 3;
-        if (object.srcVertexStride == 0) {
+        if (object.srcVertexStride <= 1) {
             uint clusterBase = object.dstVertexBase + (localId / 2) * 4;
             if ((localId % 2) == 0) {
                 indices[destinationIndex] = clusterBase;

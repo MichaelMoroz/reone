@@ -34,6 +34,12 @@ import tracing.resources;
 [[vk::binding(7, 2)]] RWTexture2D<float> outDeviceDepth;
 [[vk::binding(8, 2)]] RWTexture2D<float4> outScreenMotion;
 [[vk::binding(9, 2)]] RWTexture2D<float4> outSpecFactor;
+// Canonical primary-hit G-buffer for direct raster/tracer comparison. These
+// formats and encodings deliberately match VulkanGBuffer, not NRD's guides.
+[[vk::binding(10, 2)]] RWTexture2D<float4> outGBufferDiffuse;
+[[vk::binding(11, 2)]] RWTexture2D<float4> outGBufferEyeNormal;
+[[vk::binding(12, 2)]] RWTexture2D<float> outGBufferDepth;
+[[vk::binding(13, 2)]] RWTexture2D<float2> outGBufferMotion;
 
 /** Environment / miss distance: beyond any scene, inside NRD's defaults. */
 public static const float kPtInfDistance = 1.0e6;
@@ -60,6 +66,10 @@ public struct TraceOutputs {
      */
     public float deviceDepth;
     public float2 screenMotion;
+    public float4 gBufferDiffuse;
+    public float3 gBufferEyeNormal;
+    public float gBufferDepth;
+    public float2 gBufferMotion;
 
     /** Miss / environment defaults; the shaded path overwrites. */
     public static TraceOutputs makeDefault() {
@@ -78,6 +88,10 @@ public struct TraceOutputs {
         // A miss is the far plane, standing still.
         outputs.deviceDepth = 1.0;
         outputs.screenMotion = float2(0.0);
+        outputs.gBufferDiffuse = float4(0.0);
+        outputs.gBufferEyeNormal = float3(0.5);
+        outputs.gBufferDepth = kPtInfDistance;
+        outputs.gBufferMotion = float2(0.0);
         return outputs;
     }
 
@@ -120,6 +134,12 @@ public struct TraceOutputs {
         outDeviceDepth[pixel] = deviceDepth;
         outScreenMotion[pixel] = float4(screenMotion, 0.0, 0.0);
         outSpecFactor[pixel] = float4(specFactor, 1.0);
+        outGBufferDiffuse[pixel] = gBufferDiffuse;
+        outGBufferEyeNormal[pixel] = float4(gBufferEyeNormal, 0.0);
+        // Raster clears depth to its far plane. Make misses comparable rather
+        // than using NRD's large environment sentinel.
+        outGBufferDepth[pixel] = min(gBufferDepth, globalUniforms.clipFar);
+        outGBufferMotion[pixel] = gBufferMotion;
     }
 };
 

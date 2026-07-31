@@ -1449,6 +1449,7 @@ static std::optional<DumpFormat> dumpFormatFor(VkFormat format) {
         return DumpFormat {2, NpyType::Float32, true};
     case VK_FORMAT_R16G16B16A16_SFLOAT:
         return DumpFormat {4, NpyType::Float32, true};
+    case VK_FORMAT_R32_SFLOAT:
     case VK_FORMAT_D32_SFLOAT:
         return DumpFormat {1, NpyType::Float32, false};
     default:
@@ -1695,6 +1696,27 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
             }
         }
         const std::string_view dumpName(entry.dumpName);
+        if (dumpName == "g_buffer_depth" && entry.depth) {
+            // A depth attachment is a projective device-depth value. Dumps
+            // compare scene representations, so publish positive linear
+            // view-space distance in world units, matching the traced target.
+            const float near = _uniforms.globals().clipNear;
+            const float far = _uniforms.globals().clipFar;
+            const size_t count = raw.size() / sizeof(float);
+            std::vector<float> linearDepth(count);
+            for (size_t i = 0; i < count; ++i) {
+                float deviceDepth;
+                std::memcpy(&deviceDepth, raw.data() + i * sizeof(float), sizeof(deviceDepth));
+                // The scene projection is corrected into Vulkan's [0,1]
+                // depth range before rasterization (glToVulkanClip), so this
+                // is the Vulkan form, not OpenGL's 2*n*f denominator.
+                linearDepth[i] = near * far /
+                    std::max(far - deviceDepth * (far - near), 1e-6f);
+            }
+            writeNpy(dir / "g_buffer_depth.npy", linearDepth.data(), extent.x, extent.y, 1,
+                     NpyType::Float32);
+            continue;
+        }
         const bool yCoCgRadiance = dumpName == "traced_diffuse" ||
                                    dumpName == "traced_specular" ||
                                    dumpName == "denoised_diffuse" ||

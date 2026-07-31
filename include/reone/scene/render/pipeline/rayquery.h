@@ -27,6 +27,8 @@ class RenderRegistry;
 class ModelSceneNode;
 struct RegisteredMesh;
 struct RegisteredGrass;
+struct RegisteredParticles;
+struct RegisteredBillboard;
 
 /** Vulkan-only primary-ray diagnostic. It deliberately owns no raster pass. */
 class RayQueryPipeline : boost::noncopyable {
@@ -190,7 +192,7 @@ private:
      * double as debug views - and double-buffered like every other per-frame
      * resource, since two frames are in flight.
      */
-    static constexpr int kNumAuxImages = 10;
+    static constexpr int kNumAuxImages = 14;
     std::array<std::array<std::unique_ptr<graphics::VulkanImage>, kNumAuxImages>, 2> _auxImages;
     VkDescriptorSetLayout _auxLayout {VK_NULL_HANDLE};
     VkDescriptorPool _auxPool {VK_NULL_HANDLE};
@@ -209,6 +211,8 @@ private:
                                                      const ModelSceneNode *skyRoom,
                                                      bool skyBaked);
     std::optional<GpuScene::Admission> classifyGrass(const RegisteredGrass &grass);
+    std::optional<GpuScene::Admission> classifyParticles(const RegisteredParticles &particles);
+    std::optional<GpuScene::Admission> classifyBillboard(const RegisteredBillboard &billboard);
     bool bakeSkyRoom(VkCommandBuffer cmd,
                      RenderRegistry &registry,
                      const ModelSceneNode &room,

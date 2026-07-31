@@ -224,6 +224,10 @@ void RayQueryPipeline::init() {
             VK_FORMAT_R32_SFLOAT,          // device depth, for the upscaler
             VK_FORMAT_R16G16B16A16_SFLOAT, // screen-space motion, for the upscaler
             VK_FORMAT_R16G16B16A16_SFLOAT, // specular material factor
+            VK_FORMAT_R8G8B8A8_UNORM,      // canonical raster/tracer diffuse
+            VK_FORMAT_R8G8B8A8_UNORM,      // canonical packed eye normal
+            VK_FORMAT_R32_SFLOAT,          // canonical positive linear view depth
+            VK_FORMAT_R16G16_SFLOAT,       // canonical current-minus-previous UV motion
         };
         std::array<VkDescriptorImageInfo, 2 * kNumAuxImages> auxImageInfos {};
         std::array<VkWriteDescriptorSet, 2 * kNumAuxImages> auxWrites {};
@@ -769,11 +773,13 @@ std::vector<RayQueryPipeline::Channel> RayQueryPipeline::channels() {
     static constexpr const char *kNames[kNumAuxImages] {
         "Traced diffuse", "Traced specular", "Traced normal/roughness",
         "Traced viewZ", "Traced motion", "Traced noise-free", "Traced diffuse factor",
-        "Traced device depth", "Traced screen motion", "Traced specular factor"};
+        "Traced device depth", "Traced screen motion", "Traced specular factor",
+        "G-buffer diffuse", "G-buffer eye normal", "G-buffer depth", "G-buffer motion"};
     static constexpr const char *kDumpNames[kNumAuxImages] {
         "traced_diffuse", "traced_specular", "traced_normal_roughness",
         "traced_view_z", "traced_motion", "traced_noise_free", "traced_diff_factor",
-        "traced_device_depth", "traced_screen_motion", "traced_spec_factor"};
+        "traced_device_depth", "traced_screen_motion", "traced_spec_factor",
+        "g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_depth", "g_buffer_motion"};
     const auto &aux = _auxImages[_lastAuxFrame];
     std::vector<Channel> result;
     for (int i = 0; i < kNumAuxImages; ++i) {
@@ -985,6 +991,46 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyGrass(const Registe
              GpuScene::ResidencyClass::Dynamic, nullptr}};
 }
 
+std::optional<GpuScene::Admission> RayQueryPipeline::classifyParticles(const RegisteredParticles &particles) {
+    InstanceMaterial material;
+    material.diffuseColor = glm::vec4(particles.material.diffuseColor, 1.0f);
+    material.uv0 = particles.material.uv[0];
+    material.uv1 = particles.material.uv[1];
+    material.uv2 = particles.material.uv[2];
+    material.featureMask = static_cast<uint32_t>(materialFeatureMask(particles.material));
+    if (const auto *texture = particles.material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
+        material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
+    }
+    // Particle OIT is a coverage layer. The tracer has no OIT compositing
+    // path, so ordinary particles use its non-opaque alpha candidate path;
+    // additive emitters retain their existing pass-through emission semantics.
+    if (particles.material.blending == BlendMode::Lighten) {
+        material.surfaceType = 1;
+    }
+    const auto &src = _options.ptCategoryOverrides[8];
+    material.overrideColor = glm::vec4(src.color[0], src.color[1], src.color[2],
+                                       std::clamp(src.colorWeight, 0.0f, 1.0f));
+    material.overrideParams = glm::vec4(src.roughness,
+                                        std::max(0.0f, src.emissionScale),
+                                        std::max(0.0f, src.envScale),
+                                        std::max(0.0f, src.metallicScale));
+    material.roughnessScale = std::max(0.0f, src.roughnessScale);
+    return {{material, GpuScene::PrimitiveClass::NonOpaque,
+             GpuScene::ResidencyClass::Dynamic, nullptr}};
+}
+
+std::optional<GpuScene::Admission> RayQueryPipeline::classifyBillboard(const RegisteredBillboard &billboard) {
+    InstanceMaterial material;
+    material.diffuseColor = billboard.color;
+    material.mainTex = _renderer.resources().textureId(billboard.texture.get()).value_or(UINT32_MAX);
+    // Registered billboards are lens flares: raster draws them additively with
+    // no depth test. They are nevertheless represented in the BLAS so rays
+    // can see their emitted contribution, while remaining non-occluding.
+    material.surfaceType = 1;
+    return {{material, GpuScene::PrimitiveClass::NonOpaque,
+             GpuScene::ResidencyClass::Dynamic, nullptr}};
+}
+
 void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uint32_t globalsOffset,
                               VulkanImage &output,
                               const glm::mat4 &view, const glm::mat4 &projection,
@@ -1100,6 +1146,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             return classifyMesh(registry, mesh, skyRoom, skyBaked);
         },
         [this](const RegisteredGrass &grass) { return classifyGrass(grass); },
+        [this](const RegisteredParticles &particles) { return classifyParticles(particles); },
+        [this](const RegisteredBillboard &billboard) { return classifyBillboard(billboard); },
         view);
     if (!scene.vertices.buffer) {
         VkClearColorValue clear {{0.02f, 0.03f, 0.06f, 1.0f}};

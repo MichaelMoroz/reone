@@ -31,7 +31,11 @@ float candidateAlpha(uint materialIndex, uint3 indices, float3 weights) {
     float2 uv = ptTransformedUV(materialIndex, mergedVertices[indices.x].uv1 * weights.x + mergedVertices[indices.y].uv1 * weights.y + mergedVertices[indices.z].uv1 * weights.z);
     // Base level: coverage is a yes/no on the authored texel, and the alpha
     // test is sharper unfiltered.
-    return bindlessTextures[NonUniformResourceIndex(instanceMaterials[materialIndex].mainTex)].SampleLevel(uv, 0.0).a;
+    float alpha = bindlessTextures[NonUniformResourceIndex(instanceMaterials[materialIndex].mainTex)].SampleLevel(uv, 0.0).a;
+    float vertexAlpha = mergedVertices[indices.x].color.a * weights.x +
+                        mergedVertices[indices.y].color.a * weights.y +
+                        mergedVertices[indices.z].color.a * weights.z;
+    return alpha * vertexAlpha;
 }
 
 TraceHit committedHit(inout RayQuery<RAY_FLAG_NONE> query) {

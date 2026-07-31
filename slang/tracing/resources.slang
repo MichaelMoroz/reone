@@ -68,7 +68,7 @@ public struct InstanceMaterial {
 public struct MergedVertex {
     public float3 position; public float3 normal; public float2 uv1; public float2 uv2;
     public float3 tangent; public float3 bitangent; public float3 tanSpaceNormal;
-    public float3 prevPosition; public float2 pad;
+    public float3 prevPosition; public float2 pad; public float4 color;
 };
 [[vk::binding(4, 1)]] public StructuredBuffer<MergedVertex> mergedVertices;
 [[vk::binding(5, 1)]] public StructuredBuffer<uint> mergedIndices;

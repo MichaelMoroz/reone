@@ -600,7 +600,16 @@ void RenderRegistry::drawScene(IRenderPassExecutor &executor,
                         ++passCounts.particleEmitters;
                         passCounts.particles += visible.size();
                         entry.drawnPasses |= renderPassFlag(filter.pass);
-                        executor.executeDrawParticles(entry.material, entry.gridSize, visible);
+                        // kMaxParticles is the uniform-block capacity, not a
+                        // scene limit. Keep the complete registered list in
+                        // lockstep with the tracer by issuing uniform-sized
+                        // raster batches, exactly as grass does below.
+                        for (size_t first = 0; first < visible.size(); first += kMaxParticles) {
+                            auto last = std::min(first + kMaxParticles, visible.size());
+                            std::vector<ParticleInstance> batch(
+                                visible.begin() + first, visible.begin() + last);
+                            executor.executeDrawParticles(entry.material, entry.gridSize, batch);
+                        }
                     }
                 } else if constexpr (std::is_same_v<T, RegisteredGrass>) {
                     std::vector<GrassInstance> visible;

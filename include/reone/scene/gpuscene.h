@@ -27,6 +27,8 @@ namespace reone::scene {
 class RenderRegistry;
 struct RegisteredMesh;
 struct RegisteredGrass;
+struct RegisteredParticles;
+struct RegisteredBillboard;
 struct RegisteredSkin;
 
 /**
@@ -88,6 +90,8 @@ public:
         glm::vec3 tanSpaceNormal {0.0f}; float tanSpaceNormalPad {0.0f};
         glm::vec3 prevPosition {0.0f}; float prevPositionPad {0.0f};
         glm::vec2 pad {0.0f}; float tailPad[2] {};
+        // Per-quad particle/billboard tint. Meshes and grass write white.
+        glm::vec4 color {1.0f};
     };
     static_assert(offsetof(MergedVertex, position) == 0);
     static_assert(offsetof(MergedVertex, normal) == 16);
@@ -98,7 +102,8 @@ public:
     static_assert(offsetof(MergedVertex, tanSpaceNormal) == 80);
     static_assert(offsetof(MergedVertex, prevPosition) == 96);
     static_assert(offsetof(MergedVertex, pad) == 112);
-    static_assert(sizeof(MergedVertex) == 128);
+    static_assert(offsetof(MergedVertex, color) == 128);
+    static_assert(sizeof(MergedVertex) == 144);
 
     struct alignas(16) SceneObject {
         Matrix3x4 transform;
@@ -144,6 +149,8 @@ public:
     };
     using Classifier = std::function<std::optional<Admission>(const RegisteredMesh &)>;
     using GrassClassifier = std::function<std::optional<Admission>(const RegisteredGrass &)>;
+    using ParticleClassifier = std::function<std::optional<Admission>(const RegisteredParticles &)>;
+    using BillboardClassifier = std::function<std::optional<Admission>(const RegisteredBillboard &)>;
 
     struct BufferView {
         const graphics::VulkanBuffer *buffer {nullptr};
@@ -224,6 +231,8 @@ public:
                 RenderRegistry &registry,
                 const Classifier &classifier,
                 const GrassClassifier &grassClassifier,
+                const ParticleClassifier &particleClassifier,
+                const BillboardClassifier &billboardClassifier,
                 const glm::mat4 &cameraView);
 
 private:
