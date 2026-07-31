@@ -26,6 +26,7 @@ namespace reone::scene {
 class RenderRegistry;
 class ModelSceneNode;
 struct RegisteredMesh;
+struct RegisteredGrass;
 
 /** Vulkan-only primary-ray diagnostic. It deliberately owns no raster pass. */
 class RayQueryPipeline : boost::noncopyable {
@@ -207,6 +208,7 @@ private:
                                                      const RegisteredMesh &mesh,
                                                      const ModelSceneNode *skyRoom,
                                                      bool skyBaked);
+    std::optional<GpuScene::Admission> classifyGrass(const RegisteredGrass &grass);
     bool bakeSkyRoom(VkCommandBuffer cmd,
                      RenderRegistry &registry,
                      const ModelSceneNode &room,

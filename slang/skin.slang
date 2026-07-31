@@ -56,6 +56,16 @@ struct MergedVertex {
 [[vk::binding(5, 0)]] StructuredBuffer<float> sourceVertices;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> sourceIndices;
 
+struct GrassCluster {
+    float4 positionVariant;
+    float4 right;
+    float4 up;
+    float2 lightmapUV;
+    float2 pad;
+};
+
+[[vk::binding(7, 0)]] StructuredBuffer<GrassCluster> grassClusters;
+
 struct PushConstants {
     uint objectCount;
     uint opaqueObjectCount;
@@ -166,6 +176,25 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if (id < pushConstants.vertexCount) {
         SceneObject object = objects[findVertexObject(id)];
         uint vertexId = id - object.dstVertexBase;
+        if (object.srcVertexStride == 0) {
+            GrassCluster cluster = grassClusters[object.srcVertexOffset + vertexId / 4];
+            uint quadVertex = vertexId % 4;
+            float x = (quadVertex == 0 || quadVertex == 3) ? -0.5 : 0.5;
+            float y = quadVertex < 2 ? 0.0 : 1.0;
+            MergedVertex mergedVertex;
+            mergedVertex.position = cluster.positionVariant.xyz + cluster.right.xyz * x + cluster.up.xyz * y;
+            mergedVertex.prevPosition = mergedVertex.position;
+            mergedVertex.normal = safeNormalize(cross(cluster.right.xyz, cluster.up.xyz), float3(0, 0, 1));
+            float2 uv = float2(x + 0.5, y);
+            int variant = int(cluster.positionVariant.w);
+            mergedVertex.uv1 = 0.5 * uv + float2(0.5 * (variant % 2), 0.5 * (variant / 2));
+            mergedVertex.uv2 = cluster.lightmapUV;
+            mergedVertex.bitangent = float3(0);
+            mergedVertex.tangent = float3(0);
+            mergedVertex.tanSpaceNormal = float3(0);
+            mergedVertex.pad = float2(0);
+            vertices[id] = mergedVertex;
+        } else {
         uint sourceVertex = object.srcVertexOffset + vertexId * (object.srcVertexStride / 4);
         float3 position = float3(
             sourceVertices[sourceVertex + object.offPosition / 4],
@@ -296,6 +325,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
         mergedVertex.pad = float2(0);
         vertices[id] = mergedVertex;
+        }
     }
 
     if (id < pushConstants.triangleCount) {
@@ -303,15 +333,27 @@ void main(uint3 tid : SV_DispatchThreadID) {
         uint localId = id
             - (object.geometryIndex == 0 ? 0 : pushConstants.opaqueTriangleCount)
             - object.dstTriangleBase;
-        uint firstIndex = localId * 3;
         uint destinationIndex = id * 3;
-
-        indices[destinationIndex] = sourceIndices[object.srcIndexOffset + firstIndex]
-            + object.dstVertexBase;
-        indices[destinationIndex + 1] = sourceIndices[object.srcIndexOffset + firstIndex + 1]
-            + object.dstVertexBase;
-        indices[destinationIndex + 2] = sourceIndices[object.srcIndexOffset + firstIndex + 2]
-            + object.dstVertexBase;
+        if (object.srcVertexStride == 0) {
+            uint clusterBase = object.dstVertexBase + (localId / 2) * 4;
+            if ((localId % 2) == 0) {
+                indices[destinationIndex] = clusterBase;
+                indices[destinationIndex + 1] = clusterBase + 1;
+                indices[destinationIndex + 2] = clusterBase + 2;
+            } else {
+                indices[destinationIndex] = clusterBase + 2;
+                indices[destinationIndex + 1] = clusterBase + 3;
+                indices[destinationIndex + 2] = clusterBase;
+            }
+        } else {
+            uint firstIndex = localId * 3;
+            indices[destinationIndex] = sourceIndices[object.srcIndexOffset + firstIndex]
+                + object.dstVertexBase;
+            indices[destinationIndex + 1] = sourceIndices[object.srcIndexOffset + firstIndex + 1]
+                + object.dstVertexBase;
+            indices[destinationIndex + 2] = sourceIndices[object.srcIndexOffset + firstIndex + 2]
+                + object.dstVertexBase;
+        }
         materialIds[id] = object.materialIndex;
     }
 }

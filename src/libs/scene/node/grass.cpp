@@ -43,6 +43,23 @@ static constexpr float kGrassDensityFactor = 0.25f;
 static constexpr float kMaxClusterDistance = 32.0f;
 static constexpr float kMaxClusterDistance2 = kMaxClusterDistance * kMaxClusterDistance;
 
+uint32_t grassHash(uint32_t faceIndex, uint32_t clusterIndex, uint32_t stream) {
+    uint32_t value = faceIndex * 0x9e3779b9u ^ clusterIndex * 0x85ebca6bu ^ stream * 0xc2b2ae35u;
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16);
+}
+
+float grassRandom01(int faceIndex, int clusterIndex, uint32_t stream) {
+    // Keep 24 random mantissa bits, matching the useful precision of the old
+    // randomFloat path while making placement independent of the shared RNG.
+    return static_cast<float>(grassHash(static_cast<uint32_t>(faceIndex),
+                                        static_cast<uint32_t>(clusterIndex), stream) >> 8) /
+           16777216.0f;
+}
+
 void GrassSceneNode::init() {
     setNameIds({0, _sceneGraph.internName(_aabbNode.name())});
     // Compute grass faces
@@ -138,7 +155,9 @@ void GrassSceneNode::update(float dt) {
             if (_clusterPool.empty()) {
                 return;
             }
-            glm::vec3 baryPosition(getRandomBarycentric());
+            const float r1sqrt = glm::sqrt(grassRandom01(faceIdx, i, 0));
+            const float r2 = grassRandom01(faceIdx, i, 1);
+            glm::vec3 baryPosition(1.0f - r1sqrt, r1sqrt * (1.0f - r2), r2 * r1sqrt);
             glm::vec3 position(barycentricToCartesian(verts[0], verts[1], verts[2], baryPosition));
             glm::vec2 lightmapUV {0.0f};
             if (_hasLightmapUV) {
@@ -147,7 +166,7 @@ void GrassSceneNode::update(float dt) {
             auto cluster = _clusterPool.top();
             _clusterPool.pop();
             cluster->setLocalTransform(glm::translate(position));
-            cluster->setVariant(getRandomGrassVariant());
+            cluster->setVariant(getGrassVariant(faceIdx, i));
             cluster->setLightmapUV(std::move(lightmapUV));
             addChild(*cluster);
             _materializedClusters[faceIdx].push_back(cluster);
@@ -190,9 +209,9 @@ int GrassSceneNode::getNumClustersInFace(float area) const {
     return static_cast<int>(glm::round(kGrassDensityFactor * _properties.density * area));
 }
 
-int GrassSceneNode::getRandomGrassVariant() const {
+int GrassSceneNode::getGrassVariant(int faceIndex, int clusterIndex) const {
     float sum = _properties.probabilities[0] + _properties.probabilities[1] + _properties.probabilities[2] + _properties.probabilities[3];
-    float val = randomFloat(0.0f, 1.0f) * sum;
+    float val = grassRandom01(faceIndex, clusterIndex, 2) * sum;
     float upper = 0.0f;
     for (int i = 0; i < 3; ++i) {
         upper += _properties.probabilities[i];

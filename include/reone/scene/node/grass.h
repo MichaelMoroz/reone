@@ -61,7 +61,7 @@ public:
     void registerLeafs(RenderRegistry &registry, const std::vector<SceneNode *> &leafs) override;
 
     int getNumClustersInFace(float area) const;
-    int getRandomGrassVariant() const;
+    int getGrassVariant(int faceIndex, int clusterIndex) const;
 
 private:
     GrassProperties _properties;

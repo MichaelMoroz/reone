@@ -26,6 +26,7 @@ class VulkanRenderer;
 namespace reone::scene {
 class RenderRegistry;
 struct RegisteredMesh;
+struct RegisteredGrass;
 struct RegisteredSkin;
 
 /**
@@ -138,6 +139,7 @@ public:
         const RegisteredSkin *skin {nullptr};
     };
     using Classifier = std::function<std::optional<Admission>(const RegisteredMesh &)>;
+    using GrassClassifier = std::function<std::optional<Admission>(const RegisteredGrass &)>;
 
     struct BufferView {
         const graphics::VulkanBuffer *buffer {nullptr};
@@ -214,7 +216,11 @@ public:
     ~GpuScene();
     void init();
     void deinit();
-    View update(VkCommandBuffer cmd, RenderRegistry &registry, const Classifier &classifier);
+    View update(VkCommandBuffer cmd,
+                RenderRegistry &registry,
+                const Classifier &classifier,
+                const GrassClassifier &grassClassifier,
+                const glm::mat4 &cameraView);
 
 private:
     struct Frame;
@@ -244,7 +250,7 @@ private:
     uint64_t _revision {0};
     bool _inited {false};
 
-    void ensureMergeBuffers(Frame &, uint32_t, uint32_t, uint32_t, uint32_t);
+    void ensureMergeBuffers(Frame &, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
     void clearSourceGeometry();
     const SourceGeometry &appendSourceGeometry(const graphics::Mesh &mesh);
 };

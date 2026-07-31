@@ -46,11 +46,13 @@ uint32_t grownCapacity(uint32_t current, uint32_t required, uint32_t minimum) {
 struct GpuScene::Frame {
     std::unique_ptr<VulkanBuffer> scene;
     std::unique_ptr<VulkanBuffer> geometry;
+    std::unique_ptr<VulkanBuffer> grassClusters;
     std::unique_ptr<VulkanBuffer> materials;
     uint32_t sceneObjectCapacity {0};
     uint32_t boneCapacity {0};
     uint32_t vertexCapacity {0};
     uint32_t triangleCapacity {0};
+    uint32_t grassClusterCapacity {0};
     std::vector<PrimitiveIdRange> primitiveIds;
 };
 
@@ -71,19 +73,19 @@ GpuScene::PrimitiveId GpuScene::PrimitiveIdView::operator[](uint32_t index) cons
 void GpuScene::init() {
     if (_inited) return;
     auto &device = _renderer.device();
-    VkDescriptorSetLayoutBinding bindings[7] {};
-    for (uint32_t i = 0; i < 7; ++i) {
+    VkDescriptorSetLayoutBinding bindings[8] {};
+    for (uint32_t i = 0; i < 8; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
         bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     VkDescriptorSetLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layoutInfo.bindingCount = 7;
+    layoutInfo.bindingCount = 8;
     layoutInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device.handle(), &layoutInfo, nullptr, &_mergeLayout) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: merge descriptor layout creation failed");
-    VkDescriptorPoolSize poolSize {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 14};
+    VkDescriptorPoolSize poolSize {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16};
     VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.maxSets = 2;
     poolInfo.poolSizeCount = 1;
@@ -160,7 +162,8 @@ void GpuScene::clearSourceGeometry() {
 }
 
 void GpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount, uint32_t boneCount,
-                                  uint32_t vertexCount, uint32_t triangleCount) {
+                                  uint32_t vertexCount, uint32_t triangleCount,
+                                  uint32_t grassClusterCount) {
     constexpr uint32_t kInitialObjectCapacity = 64, kInitialBoneCapacity = 256;
     constexpr uint32_t kInitialVertexCapacity = 4096, kInitialTriangleCapacity = 4096;
     const auto objectCapacity = grownCapacity(frame.sceneObjectCapacity, objectCount, kInitialObjectCapacity);
@@ -185,6 +188,14 @@ void GpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount, uint32_t b
         frame.geometry->initDeviceLocal(vertexBytes + indexBytes + materialIdBytes,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                 VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, nullptr);
+    }
+    const auto grassClusterCapacity = grownCapacity(frame.grassClusterCapacity, grassClusterCount, 64);
+    if (!frame.grassClusters || grassClusterCapacity != frame.grassClusterCapacity) {
+        frame.grassClusterCapacity = grassClusterCapacity;
+        frame.grassClusters = std::make_unique<VulkanBuffer>(_renderer.device());
+        frame.grassClusters->initHostVisible(
+            static_cast<VkDeviceSize>(grassClusterCapacity) * sizeof(glm::vec4) * 4,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     }
 }
 
@@ -242,7 +253,11 @@ const GpuScene::SourceGeometry &GpuScene::appendSourceGeometry(const Mesh &mesh)
     return location;
 }
 
-GpuScene::View GpuScene::update(VkCommandBuffer cmd, RenderRegistry &registry, const Classifier &classifier) {
+GpuScene::View GpuScene::update(VkCommandBuffer cmd,
+                                RenderRegistry &registry,
+                                const Classifier &classifier,
+                                const GrassClassifier &grassClassifier,
+                                const glm::mat4 &cameraView) {
     const auto resourceGeneration = _renderer.resources().generation();
     if (resourceGeneration != _sourceResourceGeneration) {
         // invalidateResources() has waited for the GPU and discarded the
@@ -259,60 +274,112 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd, RenderRegistry &registry, c
     std::vector<SceneObject> opaqueObjects, nonOpaqueObjects;
     std::vector<SceneNodeId> opaqueObjectIds, nonOpaqueObjectIds;
     std::vector<Matrix3x4> bones;
+    struct alignas(16) GrassCluster {
+        glm::vec4 positionVariant {0.0f};
+        glm::vec4 right {0.0f};
+        glm::vec4 up {0.0f};
+        glm::vec2 lightmapUV {0.0f};
+        glm::vec2 pad {0.0f};
+    };
+    static_assert(sizeof(GrassCluster) == sizeof(glm::vec4) * 4);
+    std::vector<GrassCluster> grassClusters;
     materials.reserve(registry.objects().size());
     opaqueObjects.reserve(registry.objects().size());
     nonOpaqueObjects.reserve(registry.objects().size());
     opaqueObjectIds.reserve(registry.objects().size());
     nonOpaqueObjectIds.reserve(registry.objects().size());
+    const glm::vec3 cameraPosition = glm::vec3(glm::inverse(cameraView)[3]);
+    const glm::vec3 viewRow0 = glm::vec3(cameraView[0]);
+    const glm::vec3 viewRow1 = glm::vec3(cameraView[1]);
+    const glm::vec3 viewRow2 = glm::vec3(cameraView[2]);
     for (const auto &object : registry.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
-        if (!mesh || !registry.isObjectEnabled(mesh->id.index)) continue;
-        if ((mesh->categories & (renderCategory(RenderCategory::Opaque) | renderCategory(RenderCategory::Transparent))) == 0) continue;
-        auto admission = classifier(*mesh);
-        if (!admission) continue;
-        _renderer.resources().get(mesh->mesh.get());
-        const auto &source = appendSourceGeometry(mesh->mesh.get());
-        const auto &layout = mesh->mesh.get().vertexLayout();
-        if (layout.stride % sizeof(float) != 0 || layout.offPosition % static_cast<int>(sizeof(float)) != 0 ||
-            (layout.offNormals >= 0 && layout.offNormals % static_cast<int>(sizeof(float)) != 0) ||
-            (layout.offUV1 >= 0 && layout.offUV1 % static_cast<int>(sizeof(float)) != 0) ||
-            (layout.offUV2 >= 0 && layout.offUV2 % static_cast<int>(sizeof(float)) != 0) ||
-            (layout.offTanSpace >= 0 && layout.offTanSpace % static_cast<int>(sizeof(float)) != 0) ||
-            (layout.offBoneIndices >= 0 && layout.offBoneIndices % static_cast<int>(sizeof(float)) != 0) ||
-            (layout.offBoneWeights >= 0 && layout.offBoneWeights % static_cast<int>(sizeof(float)) != 0))
-            throw std::runtime_error("Vulkan: source vertex attributes must be float-aligned");
-        SceneObject sceneObject;
-        sceneObject.transform = matrix3x4(mesh->transform);
-        sceneObject.prevTransform = matrix3x4(mesh->prevTransform);
-        sceneObject.srcVertexOffset = source.vertexOffset;
-        sceneObject.srcIndexOffset = source.indexOffset;
-        sceneObject.srcVertexStride = static_cast<uint32_t>(layout.stride);
-        sceneObject.offPosition = layout.offPosition; sceneObject.offNormals = layout.offNormals;
-        sceneObject.offUV1 = layout.offUV1; sceneObject.offUV2 = layout.offUV2;
-        sceneObject.offTanSpace = layout.offTanSpace; sceneObject.offBoneIndices = layout.offBoneIndices;
-        sceneObject.offBoneWeights = layout.offBoneWeights;
-        sceneObject.vertexCount = static_cast<uint32_t>(mesh->mesh.get().vertexCount());
-        sceneObject.triangleCount = static_cast<uint32_t>(mesh->mesh.get().faces().size());
-        sceneObject.materialIndex = static_cast<uint32_t>(materials.size());
-        if (admission->skin) {
-            const auto &skin = *admission->skin;
-            if (skin.bones.size() != skin.prevBones.size())
-                throw std::runtime_error("Vulkan: skinned mesh has mismatched bone palettes");
-            if (bones.size() + skin.bones.size() + skin.prevBones.size() > std::numeric_limits<uint32_t>::max())
-                throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
-            sceneObject.boneBase = static_cast<uint32_t>(bones.size());
-            sceneObject.boneCount = static_cast<uint32_t>(skin.bones.size());
-            for (const auto &bone : skin.bones) bones.push_back(matrix3x4(bone));
-            for (const auto &bone : skin.prevBones) bones.push_back(matrix3x4(bone));
+        if (mesh) {
+            if (!registry.isObjectEnabled(mesh->id.index)) continue;
+            if ((mesh->categories & (renderCategory(RenderCategory::Opaque) | renderCategory(RenderCategory::Transparent))) == 0) continue;
+            auto admission = classifier(*mesh);
+            if (!admission) continue;
+            _renderer.resources().get(mesh->mesh.get());
+            const auto &source = appendSourceGeometry(mesh->mesh.get());
+            const auto &layout = mesh->mesh.get().vertexLayout();
+            if (layout.stride % sizeof(float) != 0 || layout.offPosition % static_cast<int>(sizeof(float)) != 0 ||
+                (layout.offNormals >= 0 && layout.offNormals % static_cast<int>(sizeof(float)) != 0) ||
+                (layout.offUV1 >= 0 && layout.offUV1 % static_cast<int>(sizeof(float)) != 0) ||
+                (layout.offUV2 >= 0 && layout.offUV2 % static_cast<int>(sizeof(float)) != 0) ||
+                (layout.offTanSpace >= 0 && layout.offTanSpace % static_cast<int>(sizeof(float)) != 0) ||
+                (layout.offBoneIndices >= 0 && layout.offBoneIndices % static_cast<int>(sizeof(float)) != 0) ||
+                (layout.offBoneWeights >= 0 && layout.offBoneWeights % static_cast<int>(sizeof(float)) != 0))
+                throw std::runtime_error("Vulkan: source vertex attributes must be float-aligned");
+            SceneObject sceneObject;
+            sceneObject.transform = matrix3x4(mesh->transform);
+            sceneObject.prevTransform = matrix3x4(mesh->prevTransform);
+            sceneObject.srcVertexOffset = source.vertexOffset;
+            sceneObject.srcIndexOffset = source.indexOffset;
+            sceneObject.srcVertexStride = static_cast<uint32_t>(layout.stride);
+            sceneObject.offPosition = layout.offPosition; sceneObject.offNormals = layout.offNormals;
+            sceneObject.offUV1 = layout.offUV1; sceneObject.offUV2 = layout.offUV2;
+            sceneObject.offTanSpace = layout.offTanSpace; sceneObject.offBoneIndices = layout.offBoneIndices;
+            sceneObject.offBoneWeights = layout.offBoneWeights;
+            sceneObject.vertexCount = static_cast<uint32_t>(mesh->mesh.get().vertexCount());
+            sceneObject.triangleCount = static_cast<uint32_t>(mesh->mesh.get().faces().size());
+            sceneObject.materialIndex = static_cast<uint32_t>(materials.size());
+            if (admission->skin) {
+                const auto &skin = *admission->skin;
+                if (skin.bones.size() != skin.prevBones.size())
+                    throw std::runtime_error("Vulkan: skinned mesh has mismatched bone palettes");
+                if (bones.size() + skin.bones.size() + skin.prevBones.size() > std::numeric_limits<uint32_t>::max())
+                    throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
+                sceneObject.boneBase = static_cast<uint32_t>(bones.size());
+                sceneObject.boneCount = static_cast<uint32_t>(skin.bones.size());
+                for (const auto &bone : skin.bones) bones.push_back(matrix3x4(bone));
+                for (const auto &bone : skin.prevBones) bones.push_back(matrix3x4(bone));
+            }
+            sceneObject.geometryIndex = admission->primitiveClass == PrimitiveClass::Opaque ? 0 : 1;
+            materials.push_back(admission->material);
+            if (sceneObject.geometryIndex == 0) {
+                opaqueObjects.push_back(sceneObject);
+                opaqueObjectIds.push_back(mesh->id);
+            } else {
+                nonOpaqueObjects.push_back(sceneObject);
+                nonOpaqueObjectIds.push_back(mesh->id);
+            }
+            continue;
         }
+        const auto *grass = std::get_if<RegisteredGrass>(&object);
+        if (!grass || !registry.isObjectEnabled(grass->id.index) || grass->instances.empty()) continue;
+        if ((grass->categories & (renderCategory(RenderCategory::Opaque) | renderCategory(RenderCategory::Transparent))) == 0) continue;
+        auto admission = grassClassifier(*grass);
+        if (!admission) continue;
+        if (grass->instances.size() > std::numeric_limits<uint32_t>::max() / 4 ||
+            grassClusters.size() > std::numeric_limits<uint32_t>::max() - grass->instances.size())
+            throw std::runtime_error("Vulkan: merged grass scene exceeds shader index range");
+        SceneObject sceneObject;
+        sceneObject.srcVertexOffset = static_cast<uint32_t>(grassClusters.size());
+        // A zero source stride tags a procedural grass-cluster list. The merge
+        // shader expands it directly, avoiding one CPU SceneObject per blade.
+        sceneObject.srcVertexStride = 0;
+        sceneObject.vertexCount = static_cast<uint32_t>(grass->instances.size()) * 4;
+        sceneObject.triangleCount = static_cast<uint32_t>(grass->instances.size()) * 2;
+        sceneObject.materialIndex = static_cast<uint32_t>(materials.size());
         sceneObject.geometryIndex = admission->primitiveClass == PrimitiveClass::Opaque ? 0 : 1;
+        for (const auto &instance : grass->instances) {
+            const float angle = glm::asin(glm::smoothstep(0.5f * grass->radius, grass->radius,
+                                                          glm::distance(instance.position, cameraPosition)));
+            // This uses the primary camera's billboard axes at merge time. A
+            // bounce ray has a different ideal pose, but that small orientation
+            // error is preferable to grass being absent from the BLAS entirely.
+            const glm::vec3 right = viewRow0 * grass->quadSize;
+            const glm::vec3 up = (glm::cos(angle) * viewRow1 - glm::sin(angle) * viewRow2) * grass->quadSize;
+            grassClusters.push_back({glm::vec4(instance.position, static_cast<float>(instance.variant)),
+                                     glm::vec4(right, 0.0f), glm::vec4(up, 0.0f), instance.lightmapUV, {0.0f, 0.0f}});
+        }
         materials.push_back(admission->material);
         if (sceneObject.geometryIndex == 0) {
             opaqueObjects.push_back(sceneObject);
-            opaqueObjectIds.push_back(mesh->id);
+            opaqueObjectIds.push_back(grass->id);
         } else {
             nonOpaqueObjects.push_back(sceneObject);
-            nonOpaqueObjectIds.push_back(mesh->id);
+            nonOpaqueObjectIds.push_back(grass->id);
         }
     }
     std::vector<SceneObject> objects;
@@ -346,7 +413,8 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd, RenderRegistry &registry, c
         triangleCount > std::numeric_limits<uint32_t>::max() || opaqueTriangleCount > std::numeric_limits<uint32_t>::max() ||
         bones.size() > std::numeric_limits<uint32_t>::max()) throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
     ensureMergeBuffers(frame, static_cast<uint32_t>(objects.size()), static_cast<uint32_t>(bones.size()),
-                       static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount));
+                       static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount),
+                       static_cast<uint32_t>(grassClusters.size()));
     const VkDeviceSize sceneObjectBytes = static_cast<VkDeviceSize>(frame.sceneObjectCapacity) * sizeof(SceneObject);
     const VkDeviceSize sceneBoneBytes = static_cast<VkDeviceSize>(frame.boneCapacity) * sizeof(Matrix3x4);
     const VkDeviceSize vertexBytes = static_cast<VkDeviceSize>(frame.vertexCapacity) * sizeof(MergedVertex);
@@ -354,12 +422,19 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd, RenderRegistry &registry, c
     std::memcpy(frame.scene->mapped(), objects.data(), objects.size() * sizeof(SceneObject));
     if (!bones.empty()) std::memcpy(static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes,
                                     bones.data(), bones.size() * sizeof(Matrix3x4));
-    std::array<VkDescriptorBufferInfo, 7> buffers {{{frame.scene->handle(), 0, sceneObjectBytes},
+    if (!grassClusters.empty()) std::memcpy(frame.grassClusters->mapped(), grassClusters.data(),
+                                            grassClusters.size() * sizeof(GrassCluster));
+    // A grass-only scene never appends mesh source data. Bind the procedural
+    // cluster buffer to the otherwise-unused source slots in that case so the
+    // complete descriptor set remains valid without inventing mesh records.
+    const auto *sourceVertices = _sourceVertices ? _sourceVertices.get() : frame.grassClusters.get();
+    const auto *sourceIndices = _sourceIndices ? _sourceIndices.get() : frame.grassClusters.get();
+    std::array<VkDescriptorBufferInfo, 8> buffers {{{frame.scene->handle(), 0, sceneObjectBytes},
         {frame.scene->handle(), sceneObjectBytes, sceneBoneBytes}, {frame.geometry->handle(), 0, vertexBytes},
         {frame.geometry->handle(), vertexBytes, indexBytes}, {frame.geometry->handle(), vertexBytes + indexBytes,
-        static_cast<VkDeviceSize>(frame.triangleCapacity) * sizeof(uint32_t)}, {_sourceVertices->handle(), 0, _sourceVertices->size()},
-        {_sourceIndices->handle(), 0, _sourceIndices->size()}}};
-    std::array<VkWriteDescriptorSet, 7> writes {};
+        static_cast<VkDeviceSize>(frame.triangleCapacity) * sizeof(uint32_t)}, {sourceVertices->handle(), 0, sourceVertices->size()},
+        {sourceIndices->handle(), 0, sourceIndices->size()}, {frame.grassClusters->handle(), 0, frame.grassClusters->size()}}};
+    std::array<VkWriteDescriptorSet, 8> writes {};
     const auto set = _mergeSets[_renderer.frameIndex()];
     for (uint32_t i = 0; i < writes.size(); ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[i].dstSet = set; writes[i].dstBinding = i;

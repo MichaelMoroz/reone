@@ -71,7 +71,7 @@ elsewhere.
 | 1.3 | Diffuse channel outliers: max 25.3 while p99.99 is 1.30 | `1/(1-p)` is unbounded as specular probability approaches 1 at grazing angles. Bounded, unlike the 0/0 it replaced, but a firefly candidate under motion | P2 | S |
 | 1.4 | FSR reactive and transparency-and-composition masks are null | AMD: without them FSR "handles these cases as best it can". Additive saber blades and particles are precisely those cases | P1 | M |
 | 1.5 | Next-event estimation against the full scene light list | KotOR interiors are many small point lights; pure PT is unusably noisy there | P1 | L |
-| 1.6 | Grass placement determinism (hash of face + cluster index) | A reflection showing a differently-populated hillside reads as a tracing bug | P2 | M |
+| 1.6 | ~~Grass placement determinism~~ *(done with grass admission)* | Placement and variant now hash `(faceIndex, clusterIndex)` instead of drawing from the shared generator, so they no longer depend on how many times anything else consumed it first. Forced by admission: once grass is in the BLAS, an RNG-order change is a traced-image change | — | — |
 | 1.7 | Camera-facing particles: AS proxy vs rasterised composite | Undecided, and gates emitter admission to the TLAS | P2 | M |
 | 1.8 | Lightmaps treated as albedo where physically wrong | Revisit once real GI exists; `ptLightmapIntensity` is already graded to 0 | P3 | M |
 | 1.10 | The light selection table is evaluated twice per path vertex over all 32 slots | `ptDirectLight` runs `directLightWeight` once to total and again to select. Now that the cutoff no longer short-circuits distant lights, both passes run in full. Caching 32 weights would halve it | P2 | S |

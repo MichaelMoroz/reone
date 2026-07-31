@@ -965,6 +965,34 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyMesh(RenderRegistry
              GpuScene::ResidencyClass::Dynamic, skinned}};
 }
 
+std::optional<GpuScene::Admission> RayQueryPipeline::classifyGrass(const RegisteredGrass &grass) {
+    InstanceMaterial material;
+    material.diffuseColor = glm::vec4(grass.material.diffuseColor, 1.0f);
+    material.uv0 = grass.material.uv[0];
+    material.uv1 = grass.material.uv[1];
+    material.uv2 = grass.material.uv[2];
+    // Raster grass always uses hashed coverage, irrespective of the texture's
+    // blending metadata. Preserve that same candidate semantics for the BLAS.
+    material.featureMask = static_cast<uint32_t>(materialFeatureMask(grass.material)) |
+                           UniformsFeatureFlags::hashedalphatest | (1u << 26) | (8u << 27);
+    if (const auto *texture = grass.material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
+        material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
+    }
+    if (const auto *texture = grass.material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)]) {
+        material.lightmap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
+    }
+    const auto &src = _options.ptCategoryOverrides[8];
+    material.overrideColor = glm::vec4(src.color[0], src.color[1], src.color[2],
+                                       std::clamp(src.colorWeight, 0.0f, 1.0f));
+    material.overrideParams = glm::vec4(src.roughness,
+                                        std::max(0.0f, src.emissionScale),
+                                        std::max(0.0f, src.envScale),
+                                        std::max(0.0f, src.metallicScale));
+    material.roughnessScale = std::max(0.0f, src.roughnessScale);
+    return {{material, GpuScene::PrimitiveClass::NonOpaque,
+             GpuScene::ResidencyClass::Dynamic, nullptr}};
+}
+
 void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uint32_t globalsOffset,
                               VulkanImage &output,
                               const glm::mat4 &view, const glm::mat4 &projection,
@@ -1073,9 +1101,14 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         _skyCubeRoom = nullptr;
         _skyCubeReady = false;
     }
-    const auto scene = _gpuScene->update(cmd, registry, [this, &registry, skyRoom, skyBaked](const RegisteredMesh &mesh) {
-        return classifyMesh(registry, mesh, skyRoom, skyBaked);
-    });
+    const auto scene = _gpuScene->update(
+        cmd,
+        registry,
+        [this, &registry, skyRoom, skyBaked](const RegisteredMesh &mesh) {
+            return classifyMesh(registry, mesh, skyRoom, skyBaked);
+        },
+        [this](const RegisteredGrass &grass) { return classifyGrass(grass); },
+        view);
     if (!scene.vertices.buffer) {
         VkClearColorValue clear {{0.02f, 0.03f, 0.06f, 1.0f}};
         VkImageSubresourceRange range {};
