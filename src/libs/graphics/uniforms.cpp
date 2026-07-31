@@ -17,11 +17,6 @@
 
 #include "reone/graphics/uniforms.h"
 
-#include "reone/graphics/context.h"
-
-// Compiles the generated std140 assertions. Included here rather than from the
-// header so that the check runs exactly once, in the translation unit that owns
-// the uploads.
 #include "reone/graphics/uniformlayout.generated.h"
 
 namespace reone {
@@ -29,66 +24,6 @@ namespace reone {
 namespace graphics {
 
 void Uniforms::init() {
-}
-
-void Uniforms::initGL() {
-    if (_inited) {
-        return;
-    }
-
-    static GlobalUniforms defaultGlobals;
-    static LocalUniforms defaultLocals;
-    static BoneUniforms defaultBones;
-    static DanglyUniforms defaultDangly;
-    static ParticleUniforms defaultParticles;
-    static GrassUniforms defaultGrass;
-    static WalkmeshUniforms defaultWalkmesh;
-    static AABBUniforms defaultAABB;
-    static TextUniforms defaultText;
-    static ScreenEffectUniforms defaultScreenEffect;
-
-    _ubGlobals = initBuffer(&defaultGlobals, sizeof(GlobalUniforms));
-    _ubLocals = initBuffer(&defaultLocals, sizeof(LocalUniforms));
-    _ubBones = initBuffer(&defaultBones, sizeof(BoneUniforms));
-    _ubDangly = initBuffer(&defaultDangly, sizeof(DanglyUniforms));
-    _ubParticles = initBuffer(&defaultParticles, sizeof(ParticleUniforms));
-    _ubGrass = initBuffer(&defaultGrass, sizeof(GrassUniforms));
-    _ubWalkmesh = initBuffer(&defaultWalkmesh, sizeof(WalkmeshUniforms));
-    _ubAABB = initBuffer(&defaultAABB, sizeof(AABBUniforms));
-    _ubText = initBuffer(&defaultText, sizeof(TextUniforms));
-    _ubScreenEffect = initBuffer(&defaultScreenEffect, sizeof(ScreenEffectUniforms));
-
-    _context.bindUniformBuffer(*_ubGlobals, UniformBlockBindingPoints::globals);
-    _context.bindUniformBuffer(*_ubLocals, UniformBlockBindingPoints::locals);
-    _context.bindUniformBuffer(*_ubBones, UniformBlockBindingPoints::bones);
-    _context.bindUniformBuffer(*_ubDangly, UniformBlockBindingPoints::dangly);
-    _context.bindUniformBuffer(*_ubParticles, UniformBlockBindingPoints::particles);
-    _context.bindUniformBuffer(*_ubGrass, UniformBlockBindingPoints::grass);
-    _context.bindUniformBuffer(*_ubWalkmesh, UniformBlockBindingPoints::walkmesh);
-    _context.bindUniformBuffer(*_ubAABB, UniformBlockBindingPoints::aabb);
-    _context.bindUniformBuffer(*_ubText, UniformBlockBindingPoints::text);
-    _context.bindUniformBuffer(*_ubScreenEffect, UniformBlockBindingPoints::screenEffect);
-
-    _inited = true;
-}
-
-void Uniforms::deinit() {
-    if (!_inited) {
-        return;
-    }
-
-    _ubGlobals.reset();
-    _ubLocals.reset();
-    _ubBones.reset();
-    _ubDangly.reset();
-    _ubParticles.reset();
-    _ubGrass.reset();
-    _ubWalkmesh.reset();
-    _ubAABB.reset();
-    _ubText.reset();
-    _ubScreenEffect.reset();
-
-    _inited = false;
 }
 
 void Uniforms::setGlobals(const std::function<void(GlobalUniforms &)> &block) {
@@ -129,13 +64,6 @@ void Uniforms::setText(const std::function<void(TextUniforms &)> &block) {
 
 void Uniforms::setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block) {
     block(_screenEffect);
-}
-
-std::unique_ptr<UniformBuffer> Uniforms::initBuffer(const void *data, ptrdiff_t size) {
-    auto buf = std::make_unique<UniformBuffer>();
-    buf->setData(data, size, false);
-    buf->init();
-    return buf;
 }
 
 } // namespace graphics

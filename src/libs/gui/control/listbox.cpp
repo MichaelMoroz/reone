@@ -22,8 +22,6 @@
 
 #include "reone/graphics/font.h"
 #include "reone/graphics/meshregistry.h"
-#include "reone/graphics/renderbuffer.h"
-#include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/textutil.h"
 #include "reone/gui/control/button.h"
 #include "reone/gui/control/imagebutton.h"

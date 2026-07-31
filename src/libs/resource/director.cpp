@@ -59,7 +59,6 @@ static constexpr char kTexturePackFilenameLow[] = "swpc_tex_tpc.erf";
 static constexpr char kExeFilenameKotor[] = "swkotor.exe";
 static constexpr char kExeFilenameTsl[] = "swkotor2.exe";
 
-static constexpr char kShaderPackFilename[] = "shaderpack.erf";
 
 static const std::vector<std::string> g_globalLipFiles {"global.mod", "localization.mod"};
 
@@ -117,8 +116,6 @@ std::set<std::string> ResourceDirector::saveNames() {
 }
 
 void ResourceDirector::loadGlobalResources() {
-    _resources.addERF(getFileIgnoreCase(std::filesystem::current_path(), kShaderPackFilename));
-
     auto keyPath = findFileIgnoreCase(_gamePath, kKeyFilename);
     if (keyPath) {
         _resources.addKEY(*keyPath);

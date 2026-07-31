@@ -48,7 +48,6 @@ option(ENABLE_FSR "fetch and link the AMD FidelityFX Super Resolution 2 upscaler
 
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 find_package(Boost REQUIRED COMPONENTS program_options exception json)
-find_package(OpenGL REQUIRED)
 find_package(MAD REQUIRED)
 
 if(MSVC)
@@ -212,8 +211,7 @@ else()
 endif()
 
 set(REONE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
-set(GLAD_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/extern/glad/include)
-include_directories(${Boost_INCLUDE_DIRS} ${SDL3_INCLUDE_DIRS} ${MAD_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/extern/glm ${REONE_INCLUDE_DIR} ${GLAD_INCLUDE_DIR})
+include_directories(${Boost_INCLUDE_DIRS} ${SDL3_INCLUDE_DIRS} ${MAD_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/extern/glm ${REONE_INCLUDE_DIR})
 
 add_compile_definitions(BOOST_BIND_GLOBAL_PLACEHOLDERS)
 

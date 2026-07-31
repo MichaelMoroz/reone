@@ -17,16 +17,7 @@
 
 #include "profiler.h"
 
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
-#include "reone/graphics/mesh.h"
-#include "reone/graphics/meshregistry.h"
-#include "reone/graphics/shaderregistry.h"
-#include "reone/graphics/statistic.h"
-#include "reone/graphics/textutil.h"
-#include "reone/graphics/uniforms.h"
-#include "reone/resource/di/services.h"
-#include "reone/resource/provider/fonts.h"
 #include "reone/system/checkutil.h"
 #include "reone/system/clock.h"
 #include "reone/system/di/services.h"
@@ -37,14 +28,11 @@ using namespace reone::graphics;
 
 namespace reone {
 
-static constexpr char kFontResRef[] = "fnt_console";
-static constexpr float kTextOffset = 3.0f;
 static constexpr int kNumTimedFrames = 100;
 static constexpr float kFrameTimesScale = 2.0f;
 
 void Profiler::init() {
     checkThat(!_inited, "Must not be initialized");
-    _font = _resourceSvc.fonts.get(kFontResRef);
     _inited = true;
 }
 
@@ -52,7 +40,6 @@ void Profiler::deinit() {
     if (!_inited) {
         return;
     }
-    _font.reset();
     _inited = false;
 }
 
@@ -90,110 +77,6 @@ void Profiler::update(float dt) {
     if (!_enabled.load(std::memory_order::memory_order_acquire)) {
         return;
     }
-}
-
-void Profiler::render() {
-    if (!_enabled.load(std::memory_order::memory_order_acquire)) {
-        return;
-    }
-    _graphicsSvc.uniforms.setGlobals([this](auto &globals) {
-        globals.reset();
-        globals.projection = glm::ortho(
-            0.0f, static_cast<float>(_graphicsOpt.width),
-            static_cast<float>(_graphicsOpt.height), 0.0f,
-            0.0f, 100.0f);
-    });
-    _graphicsSvc.context.withBlendMode(BlendMode::Normal, [this]() {
-        renderBackground();
-        int xOffset = 0;
-        for (int i = 0; i < _numTimedThreads; ++i) {
-            auto &thread = _timedThreads[i];
-            std::lock_guard<std::mutex> lock {thread.mutex};
-            renderFrameTimes(thread, xOffset);
-            xOffset += kNumTimedFrames * kFrameTimesScale + kTextOffset;
-        }
-        renderStatistic(xOffset);
-    });
-}
-
-void Profiler::renderBackground() {
-    auto &shader = _graphicsSvc.shaderRegistry.get(ShaderProgramId::mvpColor);
-    _graphicsSvc.context.useProgram(shader);
-    float height = kNumTimedFrames * kFrameTimesScale + 2 * kTextOffset;
-    auto transform = glm::scale(glm::vec3(_graphicsOpt.width, height, 1.0f));
-    _graphicsSvc.uniforms.setLocals([this, transform](auto &locals) {
-        locals.reset();
-        locals.model = std::move(transform);
-        locals.color = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-        locals.color.a = 0.5f;
-    });
-    _graphicsSvc.meshRegistry.get(MeshName::quad).draw(_graphicsSvc.statistic);
-}
-
-void Profiler::renderFrameTimes(const TimedThread &thread, int xOffset) {
-    auto &program = _graphicsSvc.shaderRegistry.get(ShaderProgramId::profiler);
-    _graphicsSvc.context.useProgram(program);
-
-    std::vector<glm::vec4> seriesColors {4, glm::vec4 {1.0f}};
-    for (size_t i = 0; i < 4; ++i) {
-        if (thread.colors.size() <= i) {
-            break;
-        }
-        seriesColors[i] = glm::vec4 {thread.colors[i], 1.0f};
-    }
-    program.setUniform("uSeriesColors", seriesColors);
-
-    std::vector<glm::vec4> vecTimes;
-    vecTimes.resize(kNumTimedFrames / 4, glm::vec4 {0.0f});
-    float oneOverFpsTarget = 1.0f / _fpsTarget;
-    for (int slot = 0; slot < 4; ++slot) {
-        if (thread.times[slot].size() >= kNumTimedFrames) {
-            for (int i = 0; i < kNumTimedFrames / 4; ++i) {
-                for (int j = 0; j < 4; ++j) {
-                    vecTimes[i][j] = thread.times[slot][4 * i + j] / oneOverFpsTarget;
-                    vecTimes[i][j] = thread.times[slot][4 * i + j] / oneOverFpsTarget;
-                    vecTimes[i][j] = thread.times[slot][4 * i + j] / oneOverFpsTarget;
-                    vecTimes[i][j] = thread.times[slot][4 * i + j] / oneOverFpsTarget;
-                }
-            }
-        } else {
-            std::memset(&vecTimes[0], 0, vecTimes.size() * sizeof(glm::vec4));
-        }
-        program.setUniform("uSeriesValues" + std::to_string(slot + 1), vecTimes);
-    }
-
-    float size = kNumTimedFrames * kFrameTimesScale;
-    auto transform = glm::scale(
-        glm::translate(glm::vec3 {kTextOffset + xOffset, kTextOffset, 0.0f}),
-        glm::vec3 {size, size, 1.0f});
-    _graphicsSvc.uniforms.setLocals([this, transform](auto &locals) {
-        locals.reset();
-        locals.model = std::move(transform);
-    });
-    _graphicsSvc.meshRegistry.get(MeshName::quad).draw(_graphicsSvc.statistic);
-
-    auto targetTime = str(boost::format("%.04fs (%dfps)") % oneOverFpsTarget % static_cast<int>(_fpsTarget));
-    _font->render(
-        targetTime,
-        glm::vec3 {kTextOffset + xOffset, kTextOffset, 0.0f},
-        glm::vec3 {1.0f},
-        TextGravity::RightBottom);
-
-    auto halfTargetTime = str(boost::format("%.04fs (%dfps)") % (0.5f * oneOverFpsTarget) % (2 * static_cast<int>(_fpsTarget)));
-    _font->render(
-        halfTargetTime,
-        glm::vec3 {kTextOffset + xOffset, kTextOffset + 0.5f * size, 0.0f},
-        glm::vec3 {0.5f},
-        TextGravity::RightBottom);
-}
-
-void Profiler::renderStatistic(int xOffset) {
-    auto text = str(boost::format("%d draw calls") % _graphicsSvc.statistic.numDrawCalls());
-    _font->render(
-        text,
-        glm::vec3 {kTextOffset + xOffset, kTextOffset, 0.0f},
-        glm::vec3 {1.0f},
-        TextGravity::RightBottom);
 }
 
 void Profiler::reserveThread(std::string name, std::vector<glm::vec3> colors) {

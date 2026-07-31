@@ -17,6 +17,11 @@
 
 #include "reone/scene/di/module.h"
 
+#include "reone/scene/render/pipeline/vulkan.h"
+
+#include "reone/graphics/vulkan/renderer.h"
+#include "reone/system/logutil.h"
+
 #include "reone/game/types.h"
 
 using namespace reone::game;
@@ -28,11 +33,7 @@ namespace scene {
 void SceneModule::init() {
     _renderPipelineFactory = std::make_unique<RenderPipelineFactory>(
         _graphicsOpt,
-        _graphics.context(),
         _graphics.meshRegistry(),
-        _graphics.pbrTextures(),
-        _graphics.shaderRegistry(),
-        _graphics.statistic(),
         _graphics.textureRegistry(),
         _graphics.uniforms());
     _graphs = std::make_unique<SceneGraphs>(
@@ -53,6 +54,21 @@ void SceneModule::init() {
     }
     _graphs->reserve(kScenePortraitSelect);
     _graphs->reserve(kSceneCharacter);
+}
+
+std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode, glm::ivec2 targetSize) {
+    if (!_vulkanRenderer) {
+        throw std::logic_error("Vulkan renderer was not supplied to the pipeline factory");
+    }
+    if (mode == RenderMode::PathTracing && !_vulkanRenderer->device().rayQueryAvailable()) {
+        warn("Path tracing needs ray-query acceleration structures and position fetch, "
+             "which this device does not provide; rendering PBR instead.",
+             LogChannel::Graphics);
+        mode = RenderMode::PBR;
+    }
+    return std::make_unique<VulkanRenderPipeline>(
+        std::move(targetSize), _options, *_vulkanRenderer, _uniforms, _meshRegistry, _textureRegistry,
+        mode == RenderMode::PathTracing);
 }
 
 void SceneModule::deinit() {

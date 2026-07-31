@@ -18,7 +18,6 @@
 #pragma once
 
 #include "types.h"
-#include "uniformbuffer.h"
 
 namespace reone {
 
@@ -238,8 +237,6 @@ struct alignas(16) ScreenEffectUniforms {
     float sharpenAmount {0.25f};
 };
 
-class Context;
-
 class IUniforms {
 public:
     virtual ~IUniforms() = default;
@@ -268,14 +265,7 @@ public:
 
 class Uniforms : public IUniforms, boost::noncopyable {
 public:
-    Uniforms(Context &context) :
-        _context(context) {
-    }
-
-    ~Uniforms() { deinit(); }
-
     void init();
-    void deinit();
 
     void setGlobals(const std::function<void(GlobalUniforms &)> &block) override;
     void setLocals(const std::function<void(LocalUniforms &)> &block) override;
@@ -292,10 +282,6 @@ public:
     const WalkmeshUniforms &walkmesh() const override { return _walkmesh; }
 
 private:
-    bool _inited {false};
-
-    Context &_context;
-
     // Uniforms
 
     GlobalUniforms _globals;
@@ -311,23 +297,6 @@ private:
 
     // END Uniforms
 
-    // Uniform Buffers
-
-    std::shared_ptr<UniformBuffer> _ubGlobals;
-    std::shared_ptr<UniformBuffer> _ubLocals;
-    std::shared_ptr<UniformBuffer> _ubBones;
-    std::shared_ptr<UniformBuffer> _ubDangly;
-    std::shared_ptr<UniformBuffer> _ubParticles;
-    std::shared_ptr<UniformBuffer> _ubGrass;
-    std::shared_ptr<UniformBuffer> _ubWalkmesh;
-    std::shared_ptr<UniformBuffer> _ubAABB;
-    std::shared_ptr<UniformBuffer> _ubText;
-    std::shared_ptr<UniformBuffer> _ubScreenEffect;
-
-    // END Uniform Buffers
-
-    void initGL();
-    std::unique_ptr<UniformBuffer> initBuffer(const void *data, ptrdiff_t size);
 };
 
 } // namespace graphics

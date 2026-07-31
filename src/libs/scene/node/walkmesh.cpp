@@ -17,14 +17,9 @@
 
 #include "reone/scene/node/walkmesh.h"
 
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/material.h"
-#include "reone/graphics/shaderregistry.h"
-#include "reone/graphics/statistic.h"
-#include "reone/graphics/uniforms.h"
-#include "reone/scene/graph.h"
-#include "reone/scene/render/pipeline.h"
+#include "reone/scene/registry.h"
 
 using namespace reone::graphics;
 

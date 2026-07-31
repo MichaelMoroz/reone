@@ -19,7 +19,6 @@
 
 #include "reone/system/types.h"
 
-#include "attachment.h"
 #include "types.h"
 
 namespace reone {
@@ -33,7 +32,7 @@ enum class TextureType {
     CubeMapArray
 };
 
-class Texture : public IAttachment, boost::noncopyable {
+class Texture : boost::noncopyable {
 public:
     enum class Filtering {
         Nearest,
@@ -133,15 +132,7 @@ public:
         _properties(std::move(properties)) {
     }
 
-    ~Texture() { deinit(); }
-
     void init();
-    void deinit();
-
-    void bind();
-    void unbind();
-
-    void flushGPUToCPU();
 
     bool is2D() const { return _type == TextureType::TwoDim; }
     bool is2DArray() const { return _type == TextureType::TwoDimArray; }
@@ -149,9 +140,6 @@ public:
     bool isCubeMapArray() const { return _type == TextureType::CubeMapArray; };
 
     bool isGrayscale() const { return _pixelFormat == PixelFormat::R8; }
-
-    bool isTexture() const override { return true; }
-    bool isRenderbuffer() const override { return false; }
 
     const std::string &name() const { return _name; }
     TextureType type() const { return _type; }
@@ -176,25 +164,17 @@ public:
 
     // Pixels
 
-    void clear(int w, int h, PixelFormat format, int numLayers = 1, bool refresh = false);
+    void clear(int w, int h, PixelFormat format, int numLayers = 1);
 
-    void setPixels(int w, int h, PixelFormat format, Layer layer, bool refresh = false);
-    void setPixels(int w, int h, PixelFormat format, std::vector<Layer> layers, bool refresh = false);
+    void setPixels(int w, int h, PixelFormat format, Layer layer);
+    void setPixels(int w, int h, PixelFormat format, std::vector<Layer> layers);
 
     // END Pixels
-
-    // OpenGL
-
-    uint32_t nameGL() const { return _nameGL; }
-
-    // END OpenGL
 
 private:
     std::string _name;
     TextureType _type;
     Properties _properties;
-
-    bool _inited {false};
 
     int _width {0};
     int _height {0};
@@ -202,31 +182,6 @@ private:
     std::vector<Layer> _layers; /**< either one for 2D textures, or six for cube maps */
     Features _features;
 
-    // OpenGL
-
-    uint32_t _nameGL {0};
-
-    // END OpenGL
-
-    void configure();
-    void refresh();
-    void initGL();
-
-    void configure2D();
-    void configureCubeMap();
-
-    void refresh2D();
-    /** One mip level of a 2D texture, compressed or not. */
-    void uploadLevel2D(int level, int width, int height,
-                       const void *pixelsData, size_t pixelsSize);
-    void refresh2DArray();
-    void refreshCubeMap();
-    /** One mip level of one cube face. */
-    void uploadLevelCubeFace(int face, int level, int width, int height,
-                             const void *pixelsData, size_t pixelsSize);
-    void refreshCubeMapArray();
-
-    uint32_t getTargetGL() const;
 };
 
 } // namespace graphics

@@ -17,12 +17,10 @@
 
 #include "reone/scene/node/light.h"
 
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/material.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
-#include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/resource/di/services.h"

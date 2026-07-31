@@ -17,8 +17,6 @@
 
 #pragma once
 
-#include "framebuffer.h"
-#include "renderbuffer.h"
 #include "texture.h"
 
 namespace reone {
@@ -49,12 +47,6 @@ namespace reone {
 
 namespace graphics {
 
-class IContext;
-class IMeshRegistry;
-class IShaderRegistry;
-class IStatistic;
-class IUniforms;
-
 class IPBRTextures {
 public:
     virtual ~IPBRTextures() = default;
@@ -64,81 +56,6 @@ public:
     virtual std::optional<int> findEnvMapDerivedLayer(const std::string &name) = 0;
 
     virtual Texture &brdf() = 0;
-};
-
-class PBRTextures : public IPBRTextures, boost::noncopyable {
-public:
-    PBRTextures(IContext &context,
-                IMeshRegistry &meshRegistry,
-                IShaderRegistry &shaderRegistry,
-                IStatistic &statistic,
-                IUniforms &uniforms) :
-        _context(context),
-        _meshRegistry(meshRegistry),
-        _shaderRegistry(shaderRegistry),
-        _statistic(statistic),
-        _uniforms(uniforms) {
-    }
-
-    void refresh();
-
-    void requestEnvMapDerived(EnvMapDerivedRequest request) {
-        _envMapDerivedRequests.insert(std::move(request));
-    }
-
-    std::optional<int> findEnvMapDerivedLayer(const std::string &name) {
-        auto it = _envMapToDerivedLayer.find(name);
-        if (it == _envMapToDerivedLayer.end()) {
-            return std::nullopt;
-        }
-        return it->second;
-    }
-
-    Texture &brdf() {
-        return *_brdfLUT;
-    }
-
-    Texture &irradianceMapArray() {
-        return *_irradianceMapArray;
-    }
-
-    Texture &prefilteredEnvMapArray() {
-        return *_prefilteredEnvMapArray;
-    }
-
-    /** Source textures currently occupying the derived-map ring, for diagnostics. */
-    const std::map<int, Texture *> &sourceEnvMaps() const { return _envMapSources; }
-
-private:
-    IContext &_context;
-    IMeshRegistry &_meshRegistry;
-    IShaderRegistry &_shaderRegistry;
-    IStatistic &_statistic;
-    IUniforms &_uniforms;
-
-    std::shared_ptr<Texture> _brdfLUT;
-    std::shared_ptr<Renderbuffer> _brdfDepthBuffer;
-    std::shared_ptr<Framebuffer> _brdfFramebuffer;
-
-    std::set<EnvMapDerivedRequest> _envMapDerivedRequests;
-    std::shared_ptr<Texture> _irradianceMapArray;
-    std::shared_ptr<Renderbuffer> _irradianceDepthBuffer;
-    std::shared_ptr<Framebuffer> _irradianceFramebuffer;
-    std::shared_ptr<Texture> _prefilteredEnvMapArray;
-    std::vector<std::shared_ptr<Renderbuffer>> _prefilterDepthBuffers;
-    std::shared_ptr<Framebuffer> _prefilterFramebuffer;
-    std::map<std::string, int> _envMapToDerivedLayer;
-    std::map<int, Texture *> _envMapSources;
-
-    int _envMapDerivedLayer {0};
-
-    void initBRDFLUT();
-    void initIrradianceMapArray();
-    void initPrefilteredEnvMapArray();
-
-    void refreshEnvMapDerived(const EnvMapDerivedRequest &request);
-    void refreshIrradianceMap(const EnvMapDerivedRequest &request, int layer);
-    void refreshPrefilteredEnvMap(const EnvMapDerivedRequest &request, int layer);
 };
 
 } // namespace graphics

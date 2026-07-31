@@ -19,11 +19,9 @@
 
 #include "reone/game/di/services.h"
 #include "reone/game/game.h"
-#include "reone/graphics/context.h"
 #include "reone/graphics/renderer2d.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/meshregistry.h"
-#include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/resource/gff.h"
 #include "reone/resource/provider/textures.h"

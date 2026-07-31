@@ -17,7 +17,6 @@
 
 #pragma once
 
-#include "reone/graphics/framebuffer.h"
 #include "reone/graphics/texture.h"
 #include "reone/scene/registry.h"
 #include "reone/resource/id.h"
@@ -64,7 +63,6 @@ public:
         _enabled(enabled) {};
     bool handle(const input::Event &event);
     void update(float dt);
-    void render();
     // Module loads present loading-screen frames. Run them only after the
     // regular ImGui frame has been rendered and closed.
     void applyPendingTransition();
@@ -86,9 +84,6 @@ private:
     int _rtMode {0};
     float _rtScale {1.0f};
     bool _rtAutoMode {true};
-    std::shared_ptr<graphics::Texture> _rtPreviewColor;
-    std::unique_ptr<graphics::Framebuffer> _rtPreview;
-    graphics::Texture *_rtSource {nullptr};
 
     // Registry viewer. It intentionally reads the last completed render
     // snapshot from update, before SceneGraph starts filling the next one.

@@ -36,7 +36,6 @@ void ResourceModule::init() {
     _strings = std::make_unique<Strings>();
     _twoDas = std::make_unique<TwoDAs>(*_resources);
     _gffs = std::make_unique<Gffs>(*_resources);
-    _shaders = std::make_unique<Shaders>(_graphicsOpt, _graphics.shaderRegistry(), *_resources);
     _textures = std::make_unique<Textures>(_graphicsOpt, *_resources);
     _models = std::make_unique<Models>(*_textures, *_resources, _graphics.statistic());
     _walkmeshes = std::make_unique<Walkmeshes>(*_resources);
@@ -67,7 +66,6 @@ void ResourceModule::init() {
 
     _director->init();
     _strings->init(_gamePath);
-    _shaders->init();
     _textures->init();
 
     _services = std::make_unique<ResourceServices>(
@@ -90,7 +88,6 @@ void ResourceModule::init() {
         *_soundSets,
         *_visibilities,
         *_ltrs,
-        *_shaders,
         *_director);
 }
 
@@ -113,7 +110,6 @@ void ResourceModule::deinit() {
     _walkmeshes.reset();
     _models.reset();
     _textures.reset();
-    _shaders.reset();
     _gffs.reset();
     _twoDas.reset();
     _strings.reset();

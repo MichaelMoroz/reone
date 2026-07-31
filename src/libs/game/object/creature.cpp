@@ -29,7 +29,6 @@
 #include "reone/game/portraits.h"
 #include "reone/game/script/runner.h"
 #include "reone/game/surfaces.h"
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/textureregistry.h"
 #include "reone/resource/2da.h"

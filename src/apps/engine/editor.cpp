@@ -26,12 +26,9 @@
 #include "reone/system/fileutil.h"
 #include "reone/system/stream/fileinput.h"
 #include "reone/system/stream/memoryinput.h"
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
-#include "reone/graphics/shaderprogram.h"
-#include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/textureutil.h"
 #include "reone/resource/resources.h"
 #include "reone/scene/graph.h"
@@ -1447,7 +1444,6 @@ void Editor::renderTargets() {
         ImGui::End();
         return;
     }
-    _rtSource = nullptr;
 
     auto &graphs = _engine._sceneModule->graphs();
     auto sceneNames = graphs.sceneNames();
@@ -1519,51 +1515,12 @@ void Editor::renderTargets() {
             "background.");
     }
 
-    _rtSource = selected->texture;
     auto preview = pipeline->renderTargetPreview(selected->name, _rtMode, _rtScale);
     if (preview) {
         ImGui::Image(reinterpret_cast<ImTextureID>(preview),
                      ImVec2(kPreviewWidth, kPreviewHeight));
-    } else if (_rtPreviewColor) {
-        // Flipped vertically: OpenGL's origin is bottom-left, ImGui's is top-left.
-        ImGui::Image(
-            static_cast<ImTextureID>(_rtPreviewColor->nameGL()),
-            ImVec2(kPreviewWidth, kPreviewHeight),
-            ImVec2(0.0f, 1.0f),
-            ImVec2(1.0f, 0.0f));
     }
     ImGui::End();
-}
-
-void Editor::render() {
-    if (!_enabled || !_rtSource) {
-        return;
-    }
-    auto &graphicsSvc = _engine._services->graphics;
-
-    if (!_rtPreview) {
-        _rtPreviewColor = std::make_shared<graphics::Texture>(
-            "editor_rt_preview",
-            graphics::TextureType::TwoDim,
-            graphics::getTextureProperties(graphics::TextureUsage::ColorBuffer));
-        _rtPreviewColor->clear(kPreviewWidth, kPreviewHeight, graphics::PixelFormat::RGBA8);
-        _rtPreviewColor->init();
-
-        _rtPreview = std::make_unique<graphics::Framebuffer>();
-        _rtPreview->attachColorDepth(_rtPreviewColor, nullptr);
-        _rtPreview->init();
-    }
-
-    auto &program = graphicsSvc.shaderRegistry.get(graphics::ShaderProgramId::postDebugTexture);
-    graphicsSvc.context.useProgram(program);
-    program.setUniform("uDebugMode", _rtMode);
-    program.setUniform("uDebugScale", _rtScale);
-    graphicsSvc.context.bindDrawFramebuffer(*_rtPreview, {0});
-    graphicsSvc.context.bindTexture(*_rtSource);
-    graphicsSvc.context.withViewport(glm::ivec4(0, 0, kPreviewWidth, kPreviewHeight), [&graphicsSvc]() {
-        graphicsSvc.meshRegistry.get(graphics::MeshName::quadNDC).draw(graphicsSvc.statistic);
-    });
-    graphicsSvc.context.resetDrawFramebuffer();
 }
 
 void Editor::applyPendingTransition() {
@@ -1572,7 +1529,6 @@ void Editor::applyPendingTransition() {
         _pendingWarp.clear();
         // The render-target viewer keeps a raw scene texture pointer. Loading
         // a module destroys that scene before its loading screen presents.
-        _rtSource = nullptr;
         if (_engine._game) {
             _engine._game->loadModule(target);
         }
@@ -1581,7 +1537,6 @@ void Editor::applyPendingTransition() {
     if (!_pendingLoadGame.empty()) {
         auto target = std::move(_pendingLoadGame);
         _pendingLoadGame.clear();
-        _rtSource = nullptr;
         if (_engine._game) {
             _engine._game->loadGame(target);
         }
@@ -1640,7 +1595,6 @@ void Editor::update(float dt) {
     if (_showRenderTargets) {
         renderTargets();
     } else {
-        _rtSource = nullptr;
     }
 
     if (_showRegistry) {

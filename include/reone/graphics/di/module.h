@@ -17,12 +17,10 @@
 
 #pragma once
 
-#include "../context.h"
 #include "../meshregistry.h"
-#include "../pbrtextures.h"
+#include "../options.h"
 #include "../renderer.h"
 #include "../renderer2d.h"
-#include "../shaderregistry.h"
 #include "../statistic.h"
 #include "../textureregistry.h"
 #include "../uniforms.h"
@@ -50,12 +48,9 @@ public:
     void init();
     void deinit();
 
-    Context &context() { return *_context; }
     MeshRegistry &meshRegistry() { return *_meshRegistry; }
-    PBRTextures &pbrTextures() { return *_pbrTextures; }
     IRenderer &renderer() { return *_externalRenderer; }
     I2DRenderer &renderer2d() { return *_externalRenderer2d; }
-    ShaderRegistry &shaderRegistry() { return *_shaderRegistry; }
     Statistic &statistic() { return *_statistic; }
     TextureRegistry &textureRegistry() { return *_textureRegistry; }
     Uniforms &uniforms() { return *_uniforms; }
@@ -65,12 +60,9 @@ public:
 private:
     GraphicsOptions &_options;
 
-    std::unique_ptr<Context> _context;
     std::unique_ptr<MeshRegistry> _meshRegistry;
-    std::unique_ptr<PBRTextures> _pbrTextures;
     IRenderer *_externalRenderer {nullptr};
     I2DRenderer *_externalRenderer2d {nullptr};
-    std::unique_ptr<ShaderRegistry> _shaderRegistry;
     std::unique_ptr<Statistic> _statistic;
     std::unique_ptr<TextureRegistry> _textureRegistry;
     std::unique_ptr<Uniforms> _uniforms;

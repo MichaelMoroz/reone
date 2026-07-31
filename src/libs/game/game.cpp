@@ -40,17 +40,14 @@
 #include "reone/game/room.h"
 #include "reone/game/script/routines.h"
 #include "reone/game/surfaces.h"
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/font.h"
 #include "reone/graphics/format/tgawriter.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/model.h"
 #include "reone/graphics/modelnode.h"
-#include "reone/graphics/renderbuffer.h"
 #include "reone/graphics/renderer.h"
 #include "reone/graphics/renderer2d.h"
-#include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/gui/gui.h"
 #include "reone/movie/format/bikreader.h"
@@ -79,7 +76,6 @@
 #include "reone/resource/provider/walkmeshes.h"
 #include "reone/resource/resources.h"
 #include "reone/scene/di/services.h"
-#include "reone/scene/drawdebug.h"
 #include "reone/scene/graphs.h"
 #include "reone/scene/render/pipeline.h"
 #include "reone/script/di/services.h"
@@ -417,9 +413,6 @@ void Game::update(float frameTime) {
         gui->update(dt);
     }
     updateSceneGraph(dt);
-    if (!_paused) {
-        updateDrawDebug(dt);
-    }
 }
 
 void Game::render() {

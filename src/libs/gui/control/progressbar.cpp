@@ -17,13 +17,10 @@
 
 #include "reone/gui/control/progressbar.h"
 
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/renderer2d.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
-#include "reone/graphics/renderbuffer.h"
-#include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/gui/gui.h"

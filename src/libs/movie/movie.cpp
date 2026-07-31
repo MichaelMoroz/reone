@@ -19,15 +19,10 @@
 
 #include "reone/audio/di/services.h"
 #include "reone/audio/mixer.h"
-#include "reone/graphics/context.h"
 #include "reone/graphics/renderer.h"
 #include "reone/graphics/renderer2d.h"
 #include "reone/graphics/di/services.h"
-#include "reone/graphics/mesh.h"
-#include "reone/graphics/meshregistry.h"
-#include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/textureutil.h"
-#include "reone/graphics/uniforms.h"
 
 using namespace reone::audio;
 using namespace reone::graphics;
@@ -92,8 +87,7 @@ void Movie::render() {
     }
     auto &frame = _videoStream->frame();
     if (frame.pixels) {
-        _texture->setPixels(_width, _height, PixelFormat::RGB8, Texture::Layer {frame.pixels},
-                            false);
+        _texture->setPixels(_width, _height, PixelFormat::RGB8, Texture::Layer {frame.pixels});
         // VulkanResources keys its immutable uploads by Texture address. A
         // movie deliberately keeps that address while replacing its pixels,
         // so discard just this image before the 2D renderer asks for it again.

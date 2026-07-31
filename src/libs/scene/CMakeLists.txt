@@ -22,7 +22,6 @@ set(SCENE_HEADERS
     ${SCENE_INCLUDE_DIR}/collision.h
     ${SCENE_INCLUDE_DIR}/di/module.h
     ${SCENE_INCLUDE_DIR}/di/services.h
-    ${SCENE_INCLUDE_DIR}/drawdebug.h
     ${SCENE_INCLUDE_DIR}/fogproperties.h
     ${SCENE_INCLUDE_DIR}/graph.h
     ${SCENE_INCLUDE_DIR}/graphs.h
@@ -43,11 +42,7 @@ set(SCENE_HEADERS
     ${SCENE_INCLUDE_DIR}/node/walkmesh.h
     ${SCENE_INCLUDE_DIR}/registry.h
     ${SCENE_INCLUDE_DIR}/render/pass.h
-    ${SCENE_INCLUDE_DIR}/render/pass/retro.h
-    ${SCENE_INCLUDE_DIR}/render/pass/pbr.h
     ${SCENE_INCLUDE_DIR}/render/pipeline.h
-    ${SCENE_INCLUDE_DIR}/render/pipeline/retro.h
-    ${SCENE_INCLUDE_DIR}/render/pipeline/pbr.h
     ${SCENE_INCLUDE_DIR}/render/pass/vulkan.h
     ${SCENE_INCLUDE_DIR}/render/pipeline/vulkan.h
     ${SCENE_INCLUDE_DIR}/render/pipeline/rayquery.h
@@ -56,7 +51,6 @@ set(SCENE_HEADERS
 
 set(SCENE_SOURCES
     ${SCENE_SOURCE_DIR}/di/module.cpp
-    ${SCENE_SOURCE_DIR}/drawdebug.cpp
     ${SCENE_SOURCE_DIR}/graph.cpp
     ${SCENE_SOURCE_DIR}/graphs.cpp
     ${SCENE_SOURCE_DIR}/node.cpp
@@ -72,11 +66,7 @@ set(SCENE_SOURCES
     ${SCENE_SOURCE_DIR}/node/trigger.cpp
     ${SCENE_SOURCE_DIR}/node/walkmesh.cpp
     ${SCENE_SOURCE_DIR}/registry.cpp
-    ${SCENE_SOURCE_DIR}/render/pass/retro.cpp
-    ${SCENE_SOURCE_DIR}/render/pass/pbr.cpp
-    ${SCENE_SOURCE_DIR}/render/pipeline.cpp
-    ${SCENE_SOURCE_DIR}/render/pipeline/retro.cpp
-    ${SCENE_SOURCE_DIR}/render/pipeline/pbr.cpp)
+)
 
 add_library(scene STATIC ${SCENE_HEADERS} ${SCENE_SOURCES} ${CLANG_FORMAT_PATH})
 set_target_properties(scene PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/lib)

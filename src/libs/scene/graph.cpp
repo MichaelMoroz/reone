@@ -20,15 +20,13 @@
 
 #include "reone/audio/di/services.h"
 #include "reone/graphics/camera/perspective.h"
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
-#include "reone/graphics/shaderregistry.h"
+#include "reone/graphics/options.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/walkmesh.h"
 #include "reone/scene/collision.h"
-#include "reone/scene/drawdebug.h"
 #include "reone/scene/node/camera.h"
 #include "reone/scene/node/emitter.h"
 #include "reone/scene/node/grass.h"
@@ -643,9 +641,6 @@ void SceneGraph::renderScene(RenderRegistry &registry) {
             light->registerLensFlare(registry, light->modelNode().light()->flares.front());
         }
     }
-    registry.addDebug([this]() {
-        renderDrawDebug(_graphicsSvc, _resourceSvc, name());
-    });
     registry.checkIdentityStability();
 }
 

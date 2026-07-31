@@ -19,11 +19,9 @@
 
 #include "reone/game/types.h"
 #include "reone/graphics/animation.h"
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/module.h"
 #include "reone/graphics/format/mdlmdxreader.h"
 #include "reone/graphics/meshregistry.h"
-#include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/resource/di/module.h"
 #include "reone/resource/exception/notfound.h"

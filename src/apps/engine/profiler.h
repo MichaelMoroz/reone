@@ -18,8 +18,6 @@
 #pragma once
 
 #include "reone/game/profiler.h"
-#include "reone/graphics/font.h"
-#include "reone/graphics/uniformbuffer.h"
 #include "reone/input/event.h"
 #include "reone/system/timer.h"
 
@@ -63,7 +61,6 @@ public:
 
     bool handle(const input::Event &event);
     void update(float dt);
-    void render();
 
     void reserveThread(std::string name,
                        std::vector<glm::vec3> colors = {}) override;
@@ -102,11 +99,6 @@ private:
     int _numTimedThreads {0};
     std::map<std::string, std::reference_wrapper<TimedThread>> _nameToTimedThread;
 
-    std::shared_ptr<graphics::Font> _font;
-
-    void renderBackground();
-    void renderFrameTimes(const TimedThread &thread, int xOffset);
-    void renderStatistic(int xOffset);
 };
 
 } // namespace reone

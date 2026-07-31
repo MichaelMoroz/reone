@@ -17,8 +17,6 @@
 
 #pragma once
 
-#include "reone/graphics/framebuffer.h"
-#include "reone/graphics/renderbuffer.h"
 #include "reone/graphics/texture.h"
 
 #include "../registry.h"
@@ -42,8 +40,6 @@ class IStatistic;
 
 class Context;
 class MeshRegistry;
-class PBRTextures;
-class ShaderRegistry;
 class TextureRegistry;
 class Uniforms;
 class VulkanRenderer;
@@ -147,76 +143,14 @@ public:
     virtual void setVulkanRenderer(graphics::VulkanRenderer &renderer) = 0;
 };
 
-class RenderPipelineBase : public IRenderPipeline, boost::noncopyable {
-public:
-    std::vector<RenderTargetInfo> targets() const override {
-        return {};
-    }
-
-    void dumpTargets(const std::filesystem::path &dir) override;
-
-protected:
-    struct GaussianBlurParams {
-        bool vertical {false};
-        bool strong {false};
-    };
-
-    glm::ivec2 _targetSize;
-    graphics::GraphicsOptions &_options;
-    graphics::Context &_context;
-    graphics::MeshRegistry &_meshRegistry;
-    graphics::ShaderRegistry &_shaderRegistry;
-    graphics::IStatistic &_statistic;
-    graphics::TextureRegistry &_textureRegistry;
-    graphics::Uniforms &_uniforms;
-
-    bool _inited {false};
-    RenderRegistry *_registry {nullptr};
-
-    glm::mat4 _shadowLightSpace[graphics::kNumShadowLightSpace] {glm::mat4(1.0f)};
-    glm::vec4 _shadowCascadeFarPlanes {glm::vec4(0.0f)};
-
-    RenderPipelineBase(glm::ivec2 targetSize,
-                       graphics::GraphicsOptions &options,
-                       graphics::Context &context,
-                       graphics::MeshRegistry &meshRegistry,
-                       graphics::ShaderRegistry &shaderRegistry,
-                       graphics::IStatistic &statistic,
-                       graphics::TextureRegistry &textureRegistry,
-                       graphics::Uniforms &uniforms) :
-        _targetSize(std::move(targetSize)),
-        _options(options),
-        _context(context),
-        _meshRegistry(meshRegistry),
-        _shaderRegistry(shaderRegistry),
-        _statistic(statistic),
-        _textureRegistry(textureRegistry),
-        _uniforms(uniforms) {
-    }
-
-    void applyBoxBlur(graphics::Texture &tex, graphics::Framebuffer &dst, const glm::ivec2 &size);
-    void applyGaussianBlur(graphics::Texture &tex, graphics::Framebuffer &dst, const glm::ivec2 &size, const GaussianBlurParams &params);
-    void applyMedianFilter(graphics::Texture &tex, graphics::Framebuffer &dst, const glm::ivec2 &size, bool strong = false);
-    void applyFXAA(graphics::Texture &tex, graphics::Framebuffer &dst, const glm::ivec2 &size);
-    void applySharpen(graphics::Texture &tex, graphics::Framebuffer &dst, const glm::ivec2 &size, float amount);
-};
-
 class RenderPipelineFactory : public IRenderPipelineFactory, boost::noncopyable {
 public:
     RenderPipelineFactory(graphics::GraphicsOptions &options,
-                          graphics::Context &context,
                           graphics::MeshRegistry &meshRegistry,
-                          graphics::PBRTextures &pbrTextures,
-                          graphics::ShaderRegistry &shaderRegistry,
-                          graphics::IStatistic &statistic,
                           graphics::TextureRegistry &textureRegistry,
                           graphics::Uniforms &uniforms) :
         _options(options),
-        _context(context),
         _meshRegistry(meshRegistry),
-        _pbrTextures(pbrTextures),
-        _shaderRegistry(shaderRegistry),
-        _statistic(statistic),
         _textureRegistry(textureRegistry),
         _uniforms(uniforms) {
     }
@@ -229,11 +163,7 @@ public:
 
 private:
     graphics::GraphicsOptions &_options;
-    graphics::Context &_context;
     graphics::MeshRegistry &_meshRegistry;
-    graphics::PBRTextures &_pbrTextures;
-    graphics::ShaderRegistry &_shaderRegistry;
-    graphics::IStatistic &_statistic;
     graphics::TextureRegistry &_textureRegistry;
     graphics::Uniforms &_uniforms;
     graphics::VulkanRenderer *_vulkanRenderer {nullptr};
