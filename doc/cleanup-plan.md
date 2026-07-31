@@ -594,12 +594,24 @@ raster as byte-identical and tracing as bounded at 0.02%; that text is wrong
 and should be corrected before it misleads another comparison.
 
 So the bar becomes **the change must be indistinguishable from run-to-run
-noise**: capture the baseline module twice, and require the
-baseline-versus-candidate difference to be no larger than the
-baseline-versus-baseline difference, on all three of differing-pixel share,
-mean absolute error and mean luminance. A candidate that lands inside that
-spread has not changed the image. Comparing a single run against a single
-stored baseline reports failure at 12% for a build that changed nothing.
+noise** — but getting that right took four false failures, and the method
+matters more than the bar:
+
+1. **A single run-pair is not a noise floor.** It varies 1.6× on raster and
+   8.4→16.3% on tracing. Estimating the floor from one pair reported failure
+   three times for changes that altered nothing.
+2. **A stored baseline is one sample of a wide distribution.** Comparing runs
+   against it is bounded by wherever that single draw landed. In B0 every new
+   run fell on the same side of the stored image, which looked like a
+   systematic regression at 1.6% probability by chance — and wasn't.
+3. So compare **distribution against distribution**: capture N times before the
+   change and N times after, and ask whether the cross-boundary spread exceeds
+   the within-group spread. B0's apparent 0.009 luminance shift sat inside the
+   0.017 scatter of the *unmodified* build measured against itself.
+
+Mean luminance is still the metric that would catch a real change, but only
+against a distribution. Stored baselines remain useful as a smoke test — a
+gross regression will show — and are not evidence at this precision.
 
 Step 4 cannot be compared at all, and should be measured rather than compared.
 
