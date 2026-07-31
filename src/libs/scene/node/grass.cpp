@@ -37,8 +37,8 @@ namespace reone {
 
 namespace scene {
 
-static constexpr int kNumClustersInPool = 2048;
-static constexpr float kGrassDensityFactor = 0.25f;
+static constexpr int kNumClustersInPool = 4096;
+static constexpr float kGrassDensityFactor = 0.5f;
 
 static constexpr float kMaxClusterDistance = 32.0f;
 static constexpr float kMaxClusterDistance2 = kMaxClusterDistance * kMaxClusterDistance;
@@ -167,6 +167,9 @@ void GrassSceneNode::update(float dt) {
             _clusterPool.pop();
             cluster->setLocalTransform(glm::translate(position));
             cluster->setVariant(getGrassVariant(faceIdx, i));
+            // Stream 3 extends the deterministic (face, cluster) placement
+            // hash. This yaw is the sole pose input for both raster and trace.
+            cluster->setYaw(glm::two_pi<float>() * grassRandom01(faceIdx, i, 3));
             cluster->setLightmapUV(std::move(lightmapUV));
             addChild(*cluster);
             _materializedClusters[faceIdx].push_back(cluster);
@@ -188,6 +191,7 @@ void GrassSceneNode::registerLeafs(RenderRegistry &registry, const std::vector<S
         instances[i].position = cluster->origin();
         instances[i].variant = cluster->variant();
         instances[i].lightmapUV = cluster->lightmapUV();
+        instances[i].yaw = cluster->yaw();
     }
     Material material;
     material.type = MaterialType::Grass;

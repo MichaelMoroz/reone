@@ -41,13 +41,16 @@ public:
 
     const glm::vec2 &lightmapUV() const { return _lightmapUV; }
     int variant() const { return _variant; }
+    float yaw() const { return _yaw; }
 
     void setLightmapUV(glm::vec2 uv) { _lightmapUV = std::move(uv); }
     void setVariant(int variant) { _variant = variant; }
+    void setYaw(float yaw) { _yaw = yaw; }
 
 private:
     glm::vec2 _lightmapUV {0.0f};
     int _variant {0};
+    float _yaw {0.0f};
 };
 
 } // namespace scene

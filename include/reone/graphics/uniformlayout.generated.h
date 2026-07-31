@@ -131,6 +131,7 @@ static_assert(sizeof(ParticleUniformsParticle) == 80, "ParticleUniformsParticle 
 // GrassUniformsCluster, an array element - its size is the array stride
 static_assert(offsetof(GrassUniformsCluster, positionVariant) == 0, "GrassUniformsCluster::positionVariant moved; shader layout disagrees");
 static_assert(offsetof(GrassUniformsCluster, lightmapUV) == 16, "GrassUniformsCluster::lightmapUV moved; shader layout disagrees");
+static_assert(offsetof(GrassUniformsCluster, yaw) == 24, "GrassUniformsCluster::yaw moved; shader layout disagrees");
 static_assert(sizeof(GrassUniformsCluster) == 32, "GrassUniformsCluster does not match the std140 array stride");
 
 // TextUniformsCharacter, an array element - its size is the array stride

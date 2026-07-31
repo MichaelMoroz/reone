@@ -300,13 +300,8 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
     nonOpaqueObjects.reserve(registry.objects().size());
     opaqueObjectIds.reserve(registry.objects().size());
     nonOpaqueObjectIds.reserve(registry.objects().size());
-    const glm::vec3 cameraPosition = glm::vec3(glm::inverse(cameraView)[3]);
-    // ROWS, not columns. glm is column-major, so cameraView[i] is column i,
-    // while grass.slang and particles.slang read globalUniforms.view[i] as row
-    // i and build their billboard axes from it. Taking columns here hands the
-    // merge the transpose - right, up and forward permuted - which looks
-    // plausible only while the camera is axis-aligned and rotates grass and
-    // billboards wrongly everywhere else.
+    // ROWS, not columns. glm is column-major, so cameraView[i] is column i.
+    // Billboards still use the primary-camera approximation; grass does not.
     const glm::mat3 viewRows = glm::transpose(glm::mat3(cameraView));
     const glm::vec3 viewRow0 = viewRows[0];
     const glm::vec3 viewRow1 = viewRows[1];
@@ -397,13 +392,12 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
         sceneObject.materialIndex = static_cast<uint32_t>(materials.size());
         sceneObject.geometryIndex = admission->primitiveClass == PrimitiveClass::Opaque ? 0 : 1;
         for (const auto &instance : grass->instances) {
-            const float angle = glm::asin(glm::smoothstep(0.5f * grass->radius, grass->radius,
-                                                          glm::distance(instance.position, cameraPosition)));
-            // This uses the primary camera's billboard axes at merge time. A
-            // bounce ray has a different ideal pose, but that small orientation
-            // error is preferable to grass being absent from the BLAS entirely.
-            const glm::vec3 right = viewRow0 * grass->quadSize;
-            const glm::vec3 up = (glm::cos(angle) * viewRow1 - glm::sin(angle) * viewRow2) * grass->quadSize;
+            // The same yaw raster receives in GrassUniforms. A blade stands on
+            // world +Z and is invariant under primary, reflection and shadow
+            // ray direction.
+            const glm::vec3 right {glm::cos(instance.yaw) * grass->quadSize,
+                                   glm::sin(instance.yaw) * grass->quadSize, 0.0f};
+            const glm::vec3 up {0.0f, 0.0f, grass->quadSize};
             const glm::vec2 uvOffset {0.5f * (instance.variant % 2),
                                       0.5f * (instance.variant / 2)};
             proceduralQuads.push_back({glm::vec4(instance.position, static_cast<float>(instance.variant)),

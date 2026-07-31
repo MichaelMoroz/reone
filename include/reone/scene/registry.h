@@ -127,6 +127,7 @@ struct GrassInstance {
     int variant {0};
     glm::vec3 position {0.0f};
     glm::vec2 lightmapUV {0.0f};
+    float yaw {0.0f};
 };
 
 struct RegisteredSkin {

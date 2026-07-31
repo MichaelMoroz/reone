@@ -452,9 +452,8 @@ void VulkanRenderPass::executeDrawGrass(float radius,
     auto &texture = *material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)];
     auto *lightmap = material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)];
     bool hasLightmap = lightmap;
-    // One instanced quad per cluster, billboarded in the vertex shader from the
-    // cluster positions in the uniform block. This is the case SV_InstanceID
-    // broke on OpenGL; see section 14.4 of the plan.
+    // One instanced, world-upright quad per cluster. The uniform carries the
+    // deterministic per-cluster yaw shared with the traced merged quad.
     const auto &quad = _resources.get(_meshRegistry.get(MeshName::grass));
 
     VulkanPipelineCache::Key key;
@@ -487,6 +486,7 @@ void VulkanRenderPass::executeDrawGrass(float radius,
         grass.clusters[i].positionVariant =
             glm::vec4(instances[i].position, static_cast<float>(instances[i].variant));
         grass.clusters[i].lightmapUV = instances[i].lightmapUV;
+        grass.clusters[i].yaw = instances[i].yaw;
     }
 
     std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};

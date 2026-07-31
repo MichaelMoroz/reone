@@ -193,6 +193,7 @@ struct ParticleUniforms {
 struct alignas(16) GrassUniformsCluster {
     glm::vec4 positionVariant {0.0f}; /**< fourth component is a variant (0-3) */
     glm::vec2 lightmapUV {0.0f};
+    float yaw {0.0f};
 };
 
 struct GrassUniforms {

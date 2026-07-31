@@ -37,24 +37,12 @@ Varyings grassVertex(
     int instanceIndex = int(instanceId + startInstance);
     Varyings output;
 
-    float3 clusterToCamera = grassUniforms.clusters[instanceIndex].positionVariant.xyz -
-                             globalUniforms.cameraPosition.xyz;
-    float A = asin(smoothstep(0.5 * grassUniforms.radius, grassUniforms.radius, length(clusterToCamera)));
-
-    // The original builds a pitch rotation about X, multiplies it by the view
-    // matrix, and takes the first two rows as the billboard axes. The product is
-    // expanded here rather than written as a matrix multiply: only mul(matrix,
-    // vector) has been verified against the reference renderer, and a
-    // matrix-matrix product would additionally depend on how the row-major
-    // storage qualifier interacts with row extraction.
-    //
-    // For a rotation about X, row 0 is untouched and row 1 is a blend of the
-    // view's rows 1 and 2.
-    float3 viewRow0 = globalUniforms.view[0].xyz;
-    float3 viewRow1 = globalUniforms.view[1].xyz;
-    float3 viewRow2 = globalUniforms.view[2].xyz;
-    float3 right = viewRow0;
-    float3 up = cos(A) * viewRow1 - sin(A) * viewRow2;
+    // Grass geometry is world-upright. The deterministic yaw was generated
+    // once from its placement hash and is shared with the trace merge, so no
+    // camera or secondary-ray direction can change this blade's pose.
+    float yaw = grassUniforms.clusters[instanceIndex].yaw;
+    float3 right = float3(cos(yaw), sin(yaw), 0.0);
+    float3 up = float3(0.0, 0.0, 1.0);
 
     output.objectPos = float4(position, 1.0);
     output.worldPos = float4(
@@ -63,8 +51,7 @@ Varyings grassVertex(
             up * position.y * grassUniforms.quadSize.y,
         1.0);
 
-    // Clusters are static, so only the camera contributes motion. The billboard
-    // turning to face it is deliberately not tracked.
+    // Clusters are static, so only the camera contributes motion.
     output.curClipPos = mul(globalUniforms.viewProjection, output.worldPos);
     output.prevClipPos = mul(globalUniforms.prevViewProjection, output.worldPos);
 

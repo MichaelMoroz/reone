@@ -105,6 +105,7 @@ struct ParticleUniforms {
 struct GrassUniformsCluster {
     float4 positionVariant; // fourth component is a variant (0-3)
     float2 lightmapUV;
+    float yaw;
 };
 
 struct GrassUniforms {
