@@ -71,17 +71,37 @@ So the bar for any raster change is **hash equality**, not a tolerance. If two
 raster captures differ by a single pixel outside that HUD box, something is
 genuinely nondeterministic and that is the bug.
 
-**Path tracing is a different matter and is genuinely nondeterministic.** Not
-the ~0.01% once recorded here: measured over three runs per module with the HUD
-excluded, `danm14ab` differs by 8.4-13.9% of pixels, `danm13` by 12.2-13.5%,
-and `ebo_m12aa` by **53-64%**. Driver acceleration-structure builds are not
-run-reproducible, so ray-query candidate *arrival order* varies, and the bounce
-loop's transparency accumulation and early-exit are order-dependent by design
-(the additive-hit cap was too until it became nearest-8-by-distance).
+**Path tracing varies per pixel, and that part is genuine.** Measured over three
+runs per module with the HUD excluded, `danm14ab` differs by 8.4-13.9% of
+pixels, `danm13` by 12.2-13.5%, `ebo_m12aa` by **53-64%**. Driver
+acceleration-structure builds are not run-reproducible, so ray-query candidate
+*arrival order* varies, and the bounce loop's transparency accumulation and
+early-exit are order-dependent by design (the additive-hit cap was too until it
+became nearest-8-by-distance).
 
-The image is nevertheless the same image: mean luminance holds to three
-decimals and mean absolute error is a fiftieth of a grey level. So compare
-traced frames by **distribution, not by pixels** — see below.
+### But the traced *energy* is deterministic — add `--ptdenoise 0`
+
+Mean luminance over repeated runs of `danm13`, frame 310:
+
+| | sd | range |
+|---|---:|---:|
+| denoiser and FSR both off | **0.00063** | 0.00176 |
+| FSR alone on | 0.00051 | 0.00154 |
+| **NRD alone on** | **0.14043** | 0.41438 |
+| both on | 0.01283 | 0.03936, and bistable |
+
+**NRD is the whole of it.** FSR contributes nothing and partly *masks* NRD's
+excursions, which is why both-on looks tamer than NRD-on. With `--ptdenoise 0`
+the traced mean is stable to six decimals, so a traced change can be judged from
+a handful of runs instead of sixteen a side.
+
+That is also a real bug and not only a harness nuisance — REBLUR returning a
+different result from identical input is temporal instability. It is backlog
+7.5; measuring around it is the workaround, not the fix.
+
+So: **compare traced changes with the denoiser off.** Reach for the
+distribution machinery below only when the denoised image is itself what is
+under test.
 
 ### Comparing a traced change: distributions on both sides
 
