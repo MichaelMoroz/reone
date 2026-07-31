@@ -1,0 +1,6 @@
+warp danm14ab
+scene empty
+spawn fx_part_04 0 0 0
+camera free
+campos 0 -1 0.3
+camlook 0 0 0

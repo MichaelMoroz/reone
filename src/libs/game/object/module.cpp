@@ -89,6 +89,12 @@ void Module::load(std::string name, const Gff &ifo, bool fromSave) {
     }
 }
 
+void Module::initEmpty() {
+    _name = "empty";
+    _area = _game.newArea();
+    _area->initCameras(/*entryPosition=*/ {}, /*entryFacing=*/ 0.0f);
+}
+
 void Module::activate() {
     _area->activate();
 }

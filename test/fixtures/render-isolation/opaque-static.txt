@@ -1,0 +1,6 @@
+warp danm14ab
+scene empty
+spawn plc_crate 0 0 0
+camera free
+campos 0 -5 1.5
+camlook 0 0 0.8

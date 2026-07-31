@@ -253,6 +253,11 @@ void Game::initConsole() {
     registerConsoleCommand("listanim", "list animations of selected object", &Game::consoleListAnim);
     registerConsoleCommand("playanim", "play animation on selected object", &Game::consolePlayAnim);
     registerConsoleCommand("warp", "warp to a module", &Game::consoleWarp);
+    registerConsoleCommand("scene", "create a synthetic scene (empty)", &Game::consoleScene);
+    registerConsoleCommand("spawn", "spawn a UTC, UTP, or model at x y z", &Game::consoleSpawn);
+    registerConsoleCommand("grass", "spawn grass on a room model: model texture x y z", &Game::consoleGrass);
+    registerConsoleCommand("emit", "detonate emitters in the last spawned model", &Game::consoleEmit);
+    registerConsoleCommand("ignite", "play powerup on the last spawned model", &Game::consoleIgnite);
     registerConsoleCommand("camera", "select camera (free)", &Game::consoleCamera);
     registerConsoleCommand("campos", "set free camera position", &Game::consoleCamPos);
     registerConsoleCommand("camlook", "aim free camera at a point", &Game::consoleCamLook);
@@ -412,6 +417,13 @@ void Game::update(float frameTime) {
     if (updModule && !_paused) {
         _module->update(dt);
         _combat.update(dt);
+    }
+
+    // Fixture emitters are restarted each simulated frame. This keeps a
+    // single transparent particle live at an arbitrary capture frame without
+    // adding wall-clock timing or a general effects editor.
+    if (_consoleEmittersEnabled && _consoleSpawnedModel) {
+        _consoleSpawnedModel->signalEvent("detonate");
     }
 
     auto gui = getScreenGUI();
@@ -2545,6 +2557,162 @@ void Game::consoleGiveGold(const ConsoleArgs &args) {
 void Game::consoleWarp(const ConsoleArgs &args) {
     consoleCheckUsage(args, 1, 1, "module");
     loadModule(std::string(args[1].value()));
+}
+
+void Game::consoleScene(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "empty");
+    if (args[1].value() != "empty") {
+        throw std::runtime_error("Unknown scene: " + std::string(args[1].value()));
+    }
+
+    // This is intentionally a command rather than a resource-backed module.
+    // An isolation fixture should need no synthetic IFO/ARE/GIT files, and
+    // must not inherit a room, party, sky, scripts, or the previous graph.
+    if (_module && _module->area()) {
+        _module->area()->unloadParty();
+    }
+    _party.reset();
+    _module.reset();
+    _loadedModules.clear();
+    _services.graphics.renderer.invalidateResources();
+    auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
+    sceneGraph.clear();
+    sceneGraph.setAmbientLightColor(glm::vec3 {0.0f});
+    sceneGraph.setFog({});
+    _consoleSpawnedModel.reset();
+    _consoleEmittersEnabled = false;
+
+    _module = newModule();
+    _module->initEmpty();
+    _cameraType = CameraType::Free;
+    setRelativeMouseMode(true);
+    openInGame();
+}
+
+void Game::consoleSpawn(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 4, 4, "resref x y z");
+
+    std::string resRef(args[1].value());
+    glm::vec3 position {args.get<float>(2).value(), args.get<float>(3).value(), args.get<float>(4).value()};
+    auto area = getConsoleArea();
+    _consoleEmittersEnabled = false;
+
+    // Blueprints are preferred so a caller can use a creature or placeable
+    // exactly as the game does.  A bare MDL is also useful for renderer-only
+    // classes (dangly, saber, emitters and billboards), so it is the fallback.
+    if (_services.resource.gffs.get(resRef, ResType::Utc)) {
+        auto creature = newCreature();
+        creature->loadFromBlueprint(resRef);
+        creature->setPosition(position);
+        area->add(creature);
+        _consoleSpawnedModel.reset();
+        return;
+    }
+    if (_services.resource.gffs.get(resRef, ResType::Utp)) {
+        auto placeable = newPlaceable();
+        placeable->loadFromBlueprint(resRef);
+        placeable->setPosition(position);
+        area->add(placeable);
+        _consoleSpawnedModel.reset();
+        return;
+    }
+
+    auto model = _services.resource.models.get(resRef);
+    if (!model) {
+        throw ResourceNotFoundException("UTC, UTP, or model not found: " + resRef);
+    }
+    auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
+    _consoleSpawnedModel = sceneGraph.newModel(*model, ModelUsage::Placeable);
+    _consoleSpawnedModel->setLocalTransform(glm::translate(position));
+    sceneGraph.addRoot(_consoleSpawnedModel);
+}
+
+void Game::consoleGrass(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 5, 5, "surface_model grass_texture x y z");
+
+    std::string surfaceResRef(args[1].value());
+    std::string textureResRef(args[2].value());
+    auto model = _services.resource.models.get(surfaceResRef);
+    if (!model) {
+        throw ResourceNotFoundException("Grass surface model not found: " + surfaceResRef);
+    }
+    auto texture = _services.resource.textures.get(textureResRef, TextureUsage::MainTex);
+    if (!texture) {
+        throw ResourceNotFoundException("Grass texture not found: " + textureResRef);
+    }
+
+    graphics::ModelNode *surface = nullptr;
+    graphics::ModelNode *firstMesh = nullptr;
+    std::function<void(graphics::ModelNode &)> findSurface = [&](graphics::ModelNode &node) {
+        if (!firstMesh && node.isMesh()) {
+            firstMesh = &node;
+        }
+        if (!surface && node.isAABBMesh()) {
+            surface = &node;
+        }
+        for (auto &child : node.children()) {
+            findSurface(*child);
+        }
+    };
+    if (model->rootNode()) {
+        findSurface(*model->rootNode());
+    }
+    if (!surface) {
+        surface = firstMesh;
+    }
+    if (!surface) {
+        throw std::runtime_error("Grass surface model has no mesh");
+    }
+
+    auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
+    auto surfaceModel = sceneGraph.newModel(*model, ModelUsage::Room);
+    surfaceModel->setLocalTransform(glm::translate(glm::vec3 {
+        args.get<float>(3).value(), args.get<float>(4).value(), args.get<float>(5).value()}));
+
+    GrassProperties properties;
+    // Room collision meshes are often highly tessellated. Use a deliberately
+    // dense test patch so each small face yields coverage instead of rounding
+    // every per-face cluster count down to zero.
+    properties.density = 64.0f;
+    properties.quadSize = 0.5f;
+    properties.probabilities = {1.0f, 0.0f, 0.0f, 0.0f};
+    // The command turns this whole supplied surface into grass.  Real areas
+    // filter by 2DA surface type; test fixtures need the deterministic surface
+    // they named, without an otherwise invisible material-ID prerequisite.
+    for (const auto &face : surface->mesh()->mesh->faces()) {
+        properties.materials.insert(face.material);
+    }
+    auto sourceAABB = surface->mesh()->mesh->aabb() * surface->absoluteTransform();
+    info(str(boost::format("grass fixture source: %d faces, %d materials, AABB (%.1f %.1f %.1f)-(%.1f %.1f %.1f)") %
+             surface->mesh()->mesh->faces().size() % properties.materials.size() %
+             sourceAABB.min().x % sourceAABB.min().y % sourceAABB.min().z %
+             sourceAABB.max().x % sourceAABB.max().y % sourceAABB.max().z));
+    properties.texture = texture.get();
+    auto grass = sceneGraph.newGrass(properties, *surface);
+    grass->setLocalTransform(glm::translate(glm::vec3 {
+        args.get<float>(3).value(), args.get<float>(4).value(), args.get<float>(5).value()}) *
+                             surface->absoluteTransform());
+    sceneGraph.addRoot(grass);
+    // Keep the source model alive for GrassSceneNode, but do not add it as a
+    // root: this command's frame is grass-only, not grass plus its terrain.
+    _consoleSpawnedModel = std::move(surfaceModel);
+    _consoleEmittersEnabled = false;
+}
+
+void Game::consoleEmit(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    if (!_consoleSpawnedModel) {
+        throw std::runtime_error("Spawn a model with emitters first");
+    }
+    _consoleEmittersEnabled = true;
+}
+
+void Game::consoleIgnite(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    if (!_consoleSpawnedModel) {
+        throw std::runtime_error("Spawn a saber model first");
+    }
+    _consoleSpawnedModel->playAnimation("powerup");
 }
 
 void Game::consoleCamera(const ConsoleArgs &args) {

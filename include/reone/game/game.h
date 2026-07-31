@@ -660,6 +660,11 @@ private:
     void consoleGiveXP(const ConsoleArgs &tokens);
     void consoleGiveGold(const ConsoleArgs &tokens);
     void consoleWarp(const ConsoleArgs &tokens);
+    void consoleScene(const ConsoleArgs &tokens);
+    void consoleSpawn(const ConsoleArgs &tokens);
+    void consoleGrass(const ConsoleArgs &tokens);
+    void consoleEmit(const ConsoleArgs &tokens);
+    void consoleIgnite(const ConsoleArgs &tokens);
     void consoleCamera(const ConsoleArgs &tokens);
     void consoleCamPos(const ConsoleArgs &tokens);
     void consoleCamLook(const ConsoleArgs &tokens);
@@ -696,6 +701,12 @@ private:
     void consoleSwoopState(const ConsoleArgs &tokens);
     void consoleStartSwoopRace(const ConsoleArgs &tokens);
     void consoleFinishSwoop(const ConsoleArgs &tokens);
+
+    // The raw model most recently admitted by `spawn`.  Emitter and saber
+    // fixtures use this deliberately narrow handle rather than an editor-wide
+    // object selection model.
+    std::shared_ptr<scene::ModelSceneNode> _consoleSpawnedModel;
+    bool _consoleEmittersEnabled {false};
 
     // END Console commands
 };

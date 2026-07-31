@@ -1047,7 +1047,14 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     // the documented caller of the no-culling mode.
     const auto visibility = VisibilityPolicy::noCulling();
     (void)visibility;
-    auto &frame = _frames[_renderer.frameIndex()];
+    const int frameIndex = _renderer.frameIndex();
+    // A valid traced frame can contain no merged geometry. That path clears
+    // the output and returns below, but its auxiliary images are still useful
+    // diagnostics (and must not disappear from --dumptargets just because the
+    // scene is empty). Record the selected double-buffer slot before that
+    // early return, rather than only after the trace dispatch.
+    _lastAuxFrame = frameIndex;
+    auto &frame = _frames[frameIndex];
     // The renderer waited this in-flight frame's fence before calling us, so
     // its previous GPU-written counters are now safe to inspect and every
     // frame-local skinned BLAS/output buffer may be retired.
@@ -1742,7 +1749,6 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         }
     }
 #endif
-    _lastAuxFrame = static_cast<int>(_renderer.frameIndex());
     ++_frameNumber;
     const auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count();
     // The GPU counters only accumulate while the stats flag is on; printing

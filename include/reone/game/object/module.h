@@ -69,6 +69,8 @@ public:
     }
 
     void load(std::string name, const resource::Gff &ifo, bool fromSave = false);
+    /** Create the camera-only scene used by render-isolation console fixtures. */
+    void initEmpty();
     void activate();
     void loadParty(const std::string &entry = "", bool fromSave = false);
     void runOnLoadScript();
