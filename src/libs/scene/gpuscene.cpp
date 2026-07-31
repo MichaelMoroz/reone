@@ -301,9 +301,16 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
     opaqueObjectIds.reserve(registry.objects().size());
     nonOpaqueObjectIds.reserve(registry.objects().size());
     const glm::vec3 cameraPosition = glm::vec3(glm::inverse(cameraView)[3]);
-    const glm::vec3 viewRow0 = glm::vec3(cameraView[0]);
-    const glm::vec3 viewRow1 = glm::vec3(cameraView[1]);
-    const glm::vec3 viewRow2 = glm::vec3(cameraView[2]);
+    // ROWS, not columns. glm is column-major, so cameraView[i] is column i,
+    // while grass.slang and particles.slang read globalUniforms.view[i] as row
+    // i and build their billboard axes from it. Taking columns here hands the
+    // merge the transpose - right, up and forward permuted - which looks
+    // plausible only while the camera is axis-aligned and rotates grass and
+    // billboards wrongly everywhere else.
+    const glm::mat3 viewRows = glm::transpose(glm::mat3(cameraView));
+    const glm::vec3 viewRow0 = viewRows[0];
+    const glm::vec3 viewRow1 = viewRows[1];
+    const glm::vec3 viewRow2 = viewRows[2];
     for (const auto &object : registry.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
         if (mesh) {
