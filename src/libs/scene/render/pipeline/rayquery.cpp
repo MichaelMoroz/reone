@@ -39,133 +39,8 @@ using namespace reone::graphics;
 namespace reone::scene {
 namespace {
 
-struct alignas(16) InstanceMaterial {
-    glm::vec4 selfIllumColor {0.0f};
-    glm::vec4 diffuseColor {1.0f};
-    glm::vec4 uv0 {1.0f, 0.0f, 0.0f, 0.0f};
-    glm::vec4 uv1 {0.0f, 1.0f, 0.0f, 0.0f};
-    glm::vec4 uv2 {0.0f};
-    uint32_t mainTex {UINT32_MAX};
-    uint32_t normalMap {UINT32_MAX};
-    uint32_t lightmap {UINT32_MAX};
-    uint32_t bumpMapArray {UINT32_MAX};
-    uint32_t featureMask {0};
-    int32_t bumpMapFrame {0};
-    float bumpMapScale {1.0f};
-    // Explicit pad from 108 to 112. The GPU consumes curatedAlbedoMul at
-    // byte 112; glm's host layout must not introduce an extra vec4 slot.
-    float curatedPad[1] {};
-    // Curated material operations, neutral by default. Channel encoding:
-    // A = (mode, base/value, a, b), B = (t, wr, wg, wb) evaluating
-    // lerp(base, smoothstep(a, b, dot(albedo, w)), t) at mode 2, the
-    // constant at mode 1, and nothing at mode 0.
-    glm::vec4 curatedAlbedoMul {1.0f, 1.0f, 1.0f, 0.0f};
-    glm::vec4 curatedRoughA {0.0f};
-    glm::vec4 curatedRoughB {0.0f};
-    glm::vec4 curatedMetalA {0.0f};
-    glm::vec4 curatedMetalB {0.0f};
-    glm::vec4 curatedEmission {0.0f}; /**< rgb + mode in w: 0 none, 1 mul, 2 override */
-    /**
-     * The surface model, decided here at admission - material assignment is
-     * CPU registry work, the shader only evaluates. 0 = PBR (everything,
-     * with optional emission), 1 = unlit transparent (additive: saber
-     * blades, glow decals), 2 = unlit emissive (sky and prelit; path ends).
-     */
-    uint32_t surfaceType {0};
-    float roughnessScale {1.0f};
-    // Explicit pad from 216 to 224 before the GPU's following float4.
-    float overridePad[2] {};
-    /**
-     * The per-category calibration overrides, baked per instance so the
-     * shader never reads a category table: rgb + lerp weight flat-paints
-     * albedo; params are roughness override (negative disables), emission
-     * scale, env-map strength scale.
-     */
-    glm::vec4 overrideColor {1.0f, 1.0f, 1.0f, 0.0f};
-    // roughness -1 means "no override"; the other three are multipliers and
-    // must default to identity, not zero - a material that never receives a
-    // category override still reads them.
-    glm::vec4 overrideParams {-1.0f, 1.0f, 1.0f, 1.0f};
-};
-
-static_assert(offsetof(InstanceMaterial, mainTex) == 80);
-static_assert(offsetof(InstanceMaterial, curatedAlbedoMul) == 112);
-static_assert(offsetof(InstanceMaterial, curatedEmission) == 192);
-static_assert(offsetof(InstanceMaterial, surfaceType) == 208);
-static_assert(offsetof(InstanceMaterial, roughnessScale) == 212);
-static_assert(offsetof(InstanceMaterial, overrideColor) == 224);
-static_assert(offsetof(InstanceMaterial, overrideParams) == 240);
-static_assert(sizeof(InstanceMaterial) == 256);
-
-/** Three row vectors encode a float3x4 exactly as the merge shader reads it. */
-struct alignas(16) Matrix3x4 {
-    glm::vec4 row0 {1.0f, 0.0f, 0.0f, 0.0f};
-    glm::vec4 row1 {0.0f, 1.0f, 0.0f, 0.0f};
-    glm::vec4 row2 {0.0f, 0.0f, 1.0f, 0.0f};
-};
-
-/** std430-compatible canonical vertex used by skin.slang and the tracer. */
-struct alignas(16) MergedVertex {
-    glm::vec3 position {0.0f};
-    float positionPad {0.0f};
-    glm::vec3 normal {0.0f};
-    float normalPad {0.0f};
-    glm::vec2 uv1 {0.0f};
-    glm::vec2 uv2 {0.0f};
-    glm::vec3 tangent {0.0f};
-    float tangentPad {0.0f};
-    glm::vec3 bitangent {0.0f};
-    float bitangentPad {0.0f};
-    glm::vec3 tanSpaceNormal {0.0f};
-    float tanSpaceNormalPad {0.0f};
-    glm::vec3 prevPosition {0.0f};
-    float prevPositionPad {0.0f};
-    glm::vec2 pad {0.0f};
-    float tailPad[2] {};
-};
-static_assert(offsetof(MergedVertex, position) == 0);
-static_assert(offsetof(MergedVertex, normal) == 16);
-static_assert(offsetof(MergedVertex, uv1) == 32);
-static_assert(offsetof(MergedVertex, uv2) == 40);
-static_assert(offsetof(MergedVertex, tangent) == 48);
-static_assert(offsetof(MergedVertex, bitangent) == 64);
-static_assert(offsetof(MergedVertex, tanSpaceNormal) == 80);
-static_assert(offsetof(MergedVertex, prevPosition) == 96);
-static_assert(offsetof(MergedVertex, pad) == 112);
-static_assert(sizeof(MergedVertex) == 128);
-
-struct alignas(16) SceneObject {
-    Matrix3x4 transform;
-    Matrix3x4 prevTransform;
-    // Element offsets: floats in sourceVertices, uints in sourceIndices.
-    // The vertex attributes below remain byte offsets within each record.
-    uint32_t srcVertexOffset {0};
-    uint32_t srcIndexOffset {0};
-    uint32_t srcVertexStride {0};
-    int32_t offPosition {-1};
-    int32_t offNormals {-1};
-    int32_t offUV1 {-1};
-    int32_t offUV2 {-1};
-    int32_t offTanSpace {-1};
-    int32_t offBoneIndices {-1};
-    int32_t offBoneWeights {-1};
-    uint32_t vertexCount {0};
-    uint32_t triangleCount {0};
-    uint32_t dstVertexBase {0};
-    uint32_t dstTriangleBase {0};
-    uint32_t geometryIndex {0};
-    uint32_t boneBase {UINT32_MAX};
-    uint32_t boneCount {0};
-    uint32_t materialIndex {0};
-};
-static_assert(sizeof(Matrix3x4) == 48);
-static_assert(offsetof(SceneObject, srcVertexOffset) == 96);
-static_assert(offsetof(SceneObject, srcIndexOffset) == 100);
-static_assert(offsetof(SceneObject, srcVertexStride) == 104);
-static_assert(offsetof(SceneObject, offPosition) == 108);
-static_assert(offsetof(SceneObject, vertexCount) == 136);
-static_assert(offsetof(SceneObject, materialIndex) == 164);
-static_assert(sizeof(SceneObject) == 176);
+using InstanceMaterial = GpuScene::InstanceMaterial;
+using MergedVertex = GpuScene::MergedVertex;
 
 // Sky cubemap face resolution. Measured on danm14ab against the geometry sky
 // it replaces, as a ratio of surviving horizontal detail: 512 keeps 0.59,
@@ -174,12 +49,6 @@ static_assert(sizeof(SceneObject) == 176);
 // filtering rather than resolution, and paying 192 MB for it buys little.
 // Frame time is flat across all three.
 static constexpr uint32_t kSkyCubeSize = 1024;
-
-Matrix3x4 matrix3x4(const glm::mat4 &m) {
-    return {{m[0][0], m[1][0], m[2][0], m[3][0]},
-            {m[0][1], m[1][1], m[2][1], m[3][1]},
-            {m[0][2], m[1][2], m[2][2], m[3][2]}};
-}
 
 struct TraceStats {
     uint32_t secondaryRays {0};
@@ -203,16 +72,6 @@ VkTransformMatrixKHR instanceTransform(const glm::mat4 &m) {
     return out;
 }
 
-uint32_t grownCapacity(uint32_t current, uint32_t required, uint32_t minimum) {
-    if (current != 0 && required <= current) return current;
-    uint64_t capacity = std::max<uint32_t>(current, minimum);
-    while (capacity < required) capacity *= 2;
-    if (capacity > std::numeric_limits<uint32_t>::max()) {
-        throw std::runtime_error("Vulkan: merged scene capacity exceeds uint32 range");
-    }
-    return static_cast<uint32_t>(capacity);
-}
-
 VkDeviceSize grownCapacity(VkDeviceSize current, VkDeviceSize required, VkDeviceSize minimum) {
     if (current != 0 && required <= current) return current;
     VkDeviceSize capacity = std::max(current, minimum);
@@ -227,55 +86,10 @@ VkDeviceSize grownCapacity(VkDeviceSize current, VkDeviceSize required, VkDevice
 } // namespace
 
 RayQueryPipeline::RayQueryPipeline(VulkanRenderer &renderer,
-                                   glm::ivec2 extent,
-                                   GraphicsOptions &options) :
-    _renderer(renderer), _options(options), _extent(extent) {}
-
-void RayQueryPipeline::ensureMergeBuffers(Frame &frame,
-                                          uint32_t objectCount,
-                                          uint32_t boneCount,
-                                          uint32_t vertexCount,
-                                          uint32_t triangleCount) {
-    constexpr uint32_t kInitialObjectCapacity = 64;
-    constexpr uint32_t kInitialBoneCapacity = 256;
-    constexpr uint32_t kInitialVertexCapacity = 4096;
-    constexpr uint32_t kInitialTriangleCapacity = 4096;
-
-    const uint32_t sceneObjectCapacity = grownCapacity(frame.sceneObjectCapacity, objectCount,
-                                                        kInitialObjectCapacity);
-    const uint32_t boneCapacity = grownCapacity(frame.boneCapacity, boneCount,
-                                                kInitialBoneCapacity);
-    if (!frame.scene || sceneObjectCapacity != frame.sceneObjectCapacity ||
-        boneCapacity != frame.boneCapacity) {
-        frame.sceneObjectCapacity = sceneObjectCapacity;
-        frame.boneCapacity = boneCapacity;
-        const VkDeviceSize objectBytes = static_cast<VkDeviceSize>(sceneObjectCapacity) * sizeof(SceneObject);
-        const VkDeviceSize boneBytes = static_cast<VkDeviceSize>(boneCapacity) * sizeof(Matrix3x4);
-        frame.scene = std::make_unique<VulkanBuffer>(_renderer.device());
-        frame.scene->initHostVisible(objectBytes + boneBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    }
-
-    const uint32_t vertexCapacity = grownCapacity(frame.vertexCapacity, vertexCount,
-                                                   kInitialVertexCapacity);
-    const uint32_t triangleCapacity = grownCapacity(frame.triangleCapacity, triangleCount,
-                                                     kInitialTriangleCapacity);
-    if (!frame.geometry || vertexCapacity != frame.vertexCapacity ||
-        triangleCapacity != frame.triangleCapacity) {
-        frame.vertexCapacity = vertexCapacity;
-        frame.triangleCapacity = triangleCapacity;
-        const VkDeviceSize vertexBytes = static_cast<VkDeviceSize>(vertexCapacity) * sizeof(MergedVertex);
-        const VkDeviceSize indexBytes = static_cast<VkDeviceSize>(triangleCapacity) * 3 * sizeof(uint32_t);
-        const VkDeviceSize materialIdBytes = static_cast<VkDeviceSize>(triangleCapacity) * sizeof(uint32_t);
-        frame.geometry = std::make_unique<VulkanBuffer>(_renderer.device());
-        frame.geometry->initDeviceLocal(
-            vertexBytes + indexBytes + materialIdBytes,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-            nullptr);
-    }
-
-}
+                                    glm::ivec2 extent,
+                                    GraphicsOptions &options) :
+    _renderer(renderer), _options(options), _extent(extent),
+    _gpuScene(std::make_unique<GpuScene>(renderer)) {}
 
 void RayQueryPipeline::init() {
     if (_inited) return;
@@ -504,63 +318,7 @@ void RayQueryPipeline::init() {
     vkDestroyShaderModule(device.handle(), module, nullptr);
     device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_pipeline), "rayquery:primaryRay");
 
-    VkDescriptorSetLayoutBinding mergeBindings[7] {};
-    for (uint32_t i = 0; i < 7; ++i) {
-        mergeBindings[i].binding = i;
-        mergeBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        mergeBindings[i].descriptorCount = 1;
-        mergeBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    }
-    VkDescriptorSetLayoutCreateInfo mergeLayoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    mergeLayoutInfo.bindingCount = 7;
-    mergeLayoutInfo.pBindings = mergeBindings;
-    if (vkCreateDescriptorSetLayout(device.handle(), &mergeLayoutInfo, nullptr, &_mergeLayout) != VK_SUCCESS)
-        throw std::runtime_error("Vulkan: merge descriptor layout creation failed");
-    VkDescriptorPoolSize mergePoolSize {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 14};
-    VkDescriptorPoolCreateInfo mergePoolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    mergePoolInfo.maxSets = 2;
-    mergePoolInfo.poolSizeCount = 1;
-    mergePoolInfo.pPoolSizes = &mergePoolSize;
-    if (vkCreateDescriptorPool(device.handle(), &mergePoolInfo, nullptr, &_mergePool) != VK_SUCCESS)
-        throw std::runtime_error("Vulkan: merge descriptor pool creation failed");
-    std::array<VkDescriptorSetLayout, 2> mergeSetLayouts {_mergeLayout, _mergeLayout};
-    VkDescriptorSetAllocateInfo mergeAlloc {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    mergeAlloc.descriptorPool = _mergePool;
-    mergeAlloc.descriptorSetCount = static_cast<uint32_t>(mergeSetLayouts.size());
-    mergeAlloc.pSetLayouts = mergeSetLayouts.data();
-    if (vkAllocateDescriptorSets(device.handle(), &mergeAlloc, _mergeSets.data()) != VK_SUCCESS)
-        throw std::runtime_error("Vulkan: merge descriptor allocation failed");
-    auto mergeSpirv = readSpirV(_renderer.shaderDir() / "skin.spv");
-    moduleInfo.codeSize = mergeSpirv.size() * sizeof(uint32_t);
-    moduleInfo.pCode = mergeSpirv.data();
-    if (vkCreateShaderModule(device.handle(), &moduleInfo, nullptr, &module) != VK_SUCCESS)
-        throw std::runtime_error("Vulkan: merge shader module creation failed");
-    VkPushConstantRange mergePushConstants {};
-    mergePushConstants.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    mergePushConstants.size = sizeof(MergePushConstants);
-    VkPipelineLayoutCreateInfo mergePipelineLayoutInfo {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    mergePipelineLayoutInfo.setLayoutCount = 1;
-    mergePipelineLayoutInfo.pSetLayouts = &_mergeLayout;
-    mergePipelineLayoutInfo.pushConstantRangeCount = 1;
-    mergePipelineLayoutInfo.pPushConstantRanges = &mergePushConstants;
-    if (vkCreatePipelineLayout(device.handle(), &mergePipelineLayoutInfo, nullptr, &_mergePipelineLayout) != VK_SUCCESS) {
-        vkDestroyShaderModule(device.handle(), module, nullptr);
-        throw std::runtime_error("Vulkan: merge pipeline layout creation failed");
-    }
-    VkPipelineShaderStageCreateInfo mergeStage {
-        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-    mergeStage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    mergeStage.module = module;
-    mergeStage.pName = "main";
-    VkComputePipelineCreateInfo mergePipeline {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-    mergePipeline.stage = mergeStage;
-    mergePipeline.layout = _mergePipelineLayout;
-    if (vkCreateComputePipelines(device.handle(), VK_NULL_HANDLE, 1, &mergePipeline, nullptr, &_mergePipeline) != VK_SUCCESS) {
-        vkDestroyShaderModule(device.handle(), module, nullptr);
-        throw std::runtime_error("Vulkan: merge compute pipeline creation failed");
-    }
-    vkDestroyShaderModule(device.handle(), module, nullptr);
-    device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_mergePipeline), "rayquery:merge");
+    _gpuScene->init();
 #ifdef R_ENABLE_NRD
     {
         // Stage 1 of the NRD integration: prove the library is linked, its
@@ -732,7 +490,7 @@ void RayQueryPipeline::clearFrame(Frame &frame) {
     // The merge and acceleration-structure buffers are capacity-managed. The
     // renderer has waited this in-flight frame's fence before reuse, so a full
     // BLAS/TLAS rebuild may overwrite them, but their allocations survive it.
-    frame.instances.reset(); frame.materials.reset(); frame.traceStats.reset();
+    frame.instances.reset(); frame.traceStats.reset();
 }
 
 bool RayQueryPipeline::bakeSkyRoom(VkCommandBuffer cmd,
@@ -934,15 +692,9 @@ void RayQueryPipeline::deinit() {
         if (frame.tlas) vkDestroyAccelerationStructureKHR(_renderer.device().handle(), frame.tlas, nullptr);
         frame.blas = VK_NULL_HANDLE;
         frame.tlas = VK_NULL_HANDLE;
-        frame.scene.reset();
-        frame.geometry.reset();
         frame.blasStorage.reset();
         frame.tlasStorage.reset();
         frame.scratch.reset();
-        frame.sceneObjectCapacity = 0;
-        frame.boneCapacity = 0;
-        frame.vertexCapacity = 0;
-        frame.triangleCapacity = 0;
         frame.blasStorageCapacity = 0;
         frame.tlasStorageCapacity = 0;
         frame.scratchCapacity = 0;
@@ -962,10 +714,7 @@ void RayQueryPipeline::deinit() {
     }
 #endif
     auto &device = _renderer.device();
-    if (_mergePipeline) vkDestroyPipeline(device.handle(), _mergePipeline, nullptr);
-    if (_mergePipelineLayout) vkDestroyPipelineLayout(device.handle(), _mergePipelineLayout, nullptr);
-    if (_mergePool) vkDestroyDescriptorPool(device.handle(), _mergePool, nullptr);
-    if (_mergeLayout) vkDestroyDescriptorSetLayout(device.handle(), _mergeLayout, nullptr);
+    _gpuScene->deinit();
     if (_pipeline) vkDestroyPipeline(device.handle(), _pipeline, nullptr);
     _raygenSbt.reset();
     if (_pipelineLayout) vkDestroyPipelineLayout(device.handle(), _pipelineLayout, nullptr);
@@ -980,8 +729,6 @@ void RayQueryPipeline::deinit() {
     _auxImagesTransitioned = false;
     _pipeline = VK_NULL_HANDLE; _pipelineLayout = VK_NULL_HANDLE; _pool = VK_NULL_HANDLE; _layout = VK_NULL_HANDLE;
     _raygenSbtRegion = {};
-    _mergePipeline = VK_NULL_HANDLE; _mergePipelineLayout = VK_NULL_HANDLE;
-    _mergePool = VK_NULL_HANDLE; _mergeLayout = VK_NULL_HANDLE; _mergeSets = {};
 #ifdef R_ENABLE_FSR
     // Before the device goes: the upscaler owns Vulkan objects of its own, and
     // the two images own VMA allocations that must not outlive the allocator.
@@ -1046,6 +793,174 @@ std::vector<RayQueryPipeline::Channel> RayQueryPipeline::channels() {
     return result;
 }
 
+std::optional<GpuScene::Admission> RayQueryPipeline::classifyMesh(RenderRegistry &registry,
+                                                                    const RegisteredMesh &registeredMesh,
+                                                                    const ModelSceneNode *skyRoom,
+                                                                    bool skyBaked) {
+    const auto *mesh = &registeredMesh;
+    // The cubemap is ready only after the room's complete textured raster
+    // bake. Until then preserve the old geometry path exactly, including
+    // its candidate rejection for shadow rays.
+    if (skyBaked && mesh->cullRoot == skyRoom) {
+        ++_lastSky;
+        return std::nullopt;
+    }
+    // Saber displacement is a small whole-blade animation. A rigid blade
+    // is much more useful to tracing than no blade at all. Skinned meshes
+    // take the frame-local compute/BLAS path below.
+    const bool saber = std::holds_alternative<RegisteredSaber>(mesh->deformation);
+    // Dangly meshes are admitted at their base positions for the same
+    // reason sabers are: a static canopy beats an absent one, and the
+    // per-frame displacement is small. This is why every tree has leaves
+    // rather than only those whose canopy happens to be rigid. The wind
+    // arrives with the deformation compute pass, which replaces this.
+    const bool dangly = std::holds_alternative<RegisteredDangly>(mesh->deformation);
+    const auto *skinned = std::get_if<RegisteredSkin>(&mesh->deformation);
+    if (!std::holds_alternative<std::monostate>(mesh->deformation) && !skinned && !saber && !dangly) {
+        ++_lastDeforming;
+        return std::nullopt;
+    }
+    if (saber) ++_lastSabers;
+    if (dangly) ++_lastDangly;
+    if (mesh->id.index > 0x00ffffffu) { ++_lastOutOfRange; return std::nullopt; }
+    if (skinned) {
+        ++_lastSkinned;
+    }
+    InstanceMaterial material;
+    material.selfIllumColor = glm::vec4(mesh->material.selfIllumColor, 0.0f);
+    material.diffuseColor = glm::vec4(mesh->material.diffuseColor, 1.0f);
+    material.uv0 = mesh->material.uv[0];
+    material.uv1 = mesh->material.uv[1];
+    material.uv2 = mesh->material.uv[2];
+    material.featureMask = static_cast<uint32_t>(materialFeatureMask(mesh->material));
+    // Bits 27-30 carry the object category - a scene::ModelUsage value,
+    // 8 for meshes without a model root - so per-category material
+    // overrides resolve at hit time without touching the layout. Must
+    // match kTraceCategoryShift/Mask in slang/rayquery.slang.
+    uint32_t categoryIndex = mesh->cullRoot
+                                 ? static_cast<uint32_t>(mesh->cullRoot->usage())
+                                 : 8u;
+    material.featureMask |= (categoryIndex & 0xFu) << 27;
+    // The one sky room, detected by the scene-overlap pre-pass above.
+    // Its meshes render their texture as prelit radiance, terminate
+    // paths, take the sky dial, and stay transparent to shadow rays in
+    // the candidate shader: the environment never occludes the sun.
+    // Everything else - lit panels, backdrop strips, vista rooms - is
+    // plain geometry with real occlusion. The bit is tracing-local,
+    // deliberately above the shared UniformsFeatureFlags range; must
+    // match kTraceSky in slang/rayquery.slang.
+    if (skyRoom && mesh->cullRoot == skyRoom) {
+        material.featureMask |= 1u << 24;
+        ++_lastSky;
+    }
+    // The curated per-name record - the manual level pass. Prelit is
+    // Odyssey's actual selfIllum semantics: fullbright authored
+    // texture, occluding, casting nothing. None strips a wrong
+    // selfIllum outright. Material operations ride the same record.
+    const auto *curated = registry.curatedByIndex(mesh->material.curatedIndex);
+    // Dangly selfIllum is Odyssey's fullbright trick for foliage, not
+    // emission - danm14ab carries 653 dangly canopies that were glowing
+    // and casting. Stripped by default; the curated emissive class
+    // restores it for any plant that genuinely glows.
+    if (dangly && (!curated || curated->klass != RenderRegistry::TraceClass::Emissive)) {
+        material.selfIllumColor = glm::vec4(0.0f);
+    }
+    if (curated) {
+        if (curated->klass == RenderRegistry::TraceClass::None) {
+            material.selfIllumColor = glm::vec4(0.0f);
+        }
+        material.curatedAlbedoMul = glm::vec4(curated->albedoMul, 0.0f);
+        material.curatedRoughA = glm::vec4(static_cast<float>(curated->roughnessMode),
+                                           curated->roughnessParams.x,
+                                           curated->roughnessParams.y,
+                                           curated->roughnessParams.z);
+        material.curatedRoughB = glm::vec4(curated->roughnessParams.w,
+                                           curated->roughnessWeights.x,
+                                           curated->roughnessWeights.y,
+                                           curated->roughnessWeights.z);
+        material.curatedMetalA = glm::vec4(static_cast<float>(curated->metallicMode),
+                                           curated->metallicParams.x,
+                                           curated->metallicParams.y,
+                                           curated->metallicParams.z);
+        material.curatedMetalB = glm::vec4(curated->metallicParams.w,
+                                           curated->metallicWeights.x,
+                                           curated->metallicWeights.y,
+                                           curated->metallicWeights.z);
+        material.curatedEmission = glm::vec4(curated->emissionValue,
+                                             static_cast<float>(curated->emissionMode));
+    }
+    // The surface model, assigned here - the shader never classifies.
+    // Additive-blended diffuse is Odyssey's other authored glow: no
+    // selfIllum controller, the texture is the light, and the ray passes
+    // through it (saber blades, glow decals). The sky room and curated
+    // prelit imagery are unlit emissive: radiance as authored, path
+    // ends. Everything else is PBR; transparent non-additive meshes -
+    // alpha-blended leaves above all - carry their coverage in diffuse
+    // alpha and resolve stochastically in the surface model.
+    if (const auto *diffuse = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
+        if (diffuse->features().blending == Texture::Blending::Additive) {
+            material.surfaceType = 1;
+            ++_lastAdditive;
+        } else if (diffuse->features().blending == Texture::Blending::PunchThrough ||
+                   mesh->material.type == MaterialType::TransparentModel) {
+            material.featureMask |= 1u << 26;
+        }
+    }
+    if ((material.featureMask & (1u << 24)) != 0 ||
+        (curated && curated->klass == RenderRegistry::TraceClass::Prelit)) {
+        material.surfaceType = 2;
+    }
+    // The per-category calibration override, baked per instance so the
+    // dials stay live through the per-frame admission - no GPU table.
+    {
+        const auto &src = _options.ptCategoryOverrides[std::min<uint32_t>(categoryIndex, 8u)];
+        material.overrideColor = glm::vec4(src.color[0], src.color[1], src.color[2],
+                                           std::clamp(src.colorWeight, 0.0f, 1.0f));
+        material.overrideParams = glm::vec4(src.roughness,
+                                            std::max(0.0f, src.emissionScale),
+                                            std::max(0.0f, src.envScale),
+                                            std::max(0.0f, src.metallicScale));
+        material.roughnessScale = std::max(0.0f, src.roughnessScale);
+        // Baked into the emission values here rather than left for the
+        // shader to multiply. Emission reaches the surface models by two
+        // routes - the self-illum controller and the curated override -
+        // and only one of them passed through a scale, so the dial moved
+        // some emitters and not others.
+        // Additive surfaces are the exception: their emission is
+        // max(selfIllum, 1) * albedo, so a scale folded into selfIllum
+        // vanishes below 1 and would double up above it. That model keeps
+        // reading overrideParams.y directly.
+        const float emissionScale = std::max(0.0f, src.emissionScale);
+        if (material.surfaceType != 1) {
+            material.selfIllumColor *= emissionScale;
+        }
+        if (curated && curated->emissionMode != 0) {
+            material.curatedEmission = glm::vec4(glm::vec3(material.curatedEmission) * emissionScale,
+                                                 material.curatedEmission.w);
+        }
+    }
+    if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
+        material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
+    }
+    if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::NormalMap)]) {
+        material.normalMap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
+    }
+    if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)]) {
+        material.lightmap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
+    }
+    if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::BumpMapArray)]) {
+        material.bumpMapArray = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
+        material.bumpMapFrame = mesh->material.bumpMapFrame;
+        material.bumpMapScale = texture->features().bumpMapScaling;
+    }
+    const bool nonOpaque = material.surfaceType == 1 ||
+                           (material.featureMask & ((1u << 24) | (1u << 26))) != 0;
+    _lastDynamicTriangles += (skinned || dangly || saber) ? static_cast<uint32_t>(mesh->mesh.get().faces().size()) : 0;
+    if (!dangly && (!curated || curated->klass == RenderRegistry::TraceClass::Default) &&
+        glm::any(glm::greaterThan(mesh->material.selfIllumColor, glm::vec3(0.0f)))) ++_lastEmissive;
+    return {{material, nonOpaque ? GpuScene::PrimitiveClass::NonOpaque : GpuScene::PrimitiveClass::Opaque, skinned}};
+}
+
 void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uint32_t globalsOffset,
                               VulkanImage &output,
                               const glm::mat4 &view, const glm::mat4 &projection,
@@ -1069,13 +984,6 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         _lastShadowRays = stats->shadowRays;
     }
     clearFrame(frame);
-    std::vector<InstanceMaterial> materials;
-    std::vector<SceneObject> opaqueObjects;
-    std::vector<SceneObject> nonOpaqueObjects;
-    std::vector<Matrix3x4> bones;
-    materials.reserve(registry.objects().size());
-    opaqueObjects.reserve(registry.objects().size());
-    nonOpaqueObjects.reserve(registry.objects().size());
     _lastDeforming = 0;
     _lastSkinned = 0;
     _lastTriangles = 0;
@@ -1161,287 +1069,10 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         _skyCubeRoom = nullptr;
         _skyCubeReady = false;
     }
-    for (const auto &object : registry.objects()) {
-        const auto *mesh = std::get_if<RegisteredMesh>(&object);
-        if (!mesh) continue;
-        if (!registry.isObjectEnabled(mesh->id.index)) continue;
-        // Shadow-only entries - render flag off, categories reduced to
-        // ShadowCaster - are the simplified shadow-volume proxies Odyssey
-        // ships inside character models: skin-tight untextured boxes around
-        // the skeleton. Raster only ever draws them into shadow maps; traced
-        // as geometry they render as white patches over the real body, and
-        // traced shadows already test the real surfaces.
-        if ((mesh->categories & (renderCategory(RenderCategory::Opaque) |
-                                 renderCategory(RenderCategory::Transparent))) == 0) {
-            continue;
-        }
-        // The cubemap is ready only after the room's complete textured raster
-        // bake. Until then preserve the old geometry path exactly, including
-        // its candidate rejection for shadow rays.
-        if (skyBaked && mesh->cullRoot == skyRoom) {
-            ++_lastSky;
-            continue;
-        }
-        // Saber displacement is a small whole-blade animation. A rigid blade
-        // is much more useful to tracing than no blade at all. Skinned meshes
-        // take the frame-local compute/BLAS path below.
-        const bool saber = std::holds_alternative<RegisteredSaber>(mesh->deformation);
-        // Dangly meshes are admitted at their base positions for the same
-        // reason sabers are: a static canopy beats an absent one, and the
-        // per-frame displacement is small. This is why every tree has leaves
-        // rather than only those whose canopy happens to be rigid. The wind
-        // arrives with the deformation compute pass, which replaces this.
-        const bool dangly = std::holds_alternative<RegisteredDangly>(mesh->deformation);
-        const auto *skinned = std::get_if<RegisteredSkin>(&mesh->deformation);
-        if (!std::holds_alternative<std::monostate>(mesh->deformation) && !skinned && !saber && !dangly) {
-            ++_lastDeforming;
-            continue;
-        }
-        if (saber) ++_lastSabers;
-        if (dangly) ++_lastDangly;
-        if (mesh->id.index > 0x00ffffffu) { ++_lastOutOfRange; continue; }
-        const auto &uploaded = _renderer.resources().get(mesh->mesh.get());
-        if (skinned) {
-            ++_lastSkinned;
-        }
-        InstanceMaterial material;
-        material.selfIllumColor = glm::vec4(mesh->material.selfIllumColor, 0.0f);
-        material.diffuseColor = glm::vec4(mesh->material.diffuseColor, 1.0f);
-        material.uv0 = mesh->material.uv[0];
-        material.uv1 = mesh->material.uv[1];
-        material.uv2 = mesh->material.uv[2];
-        material.featureMask = static_cast<uint32_t>(materialFeatureMask(mesh->material));
-        // Bits 27-30 carry the object category - a scene::ModelUsage value,
-        // 8 for meshes without a model root - so per-category material
-        // overrides resolve at hit time without touching the layout. Must
-        // match kTraceCategoryShift/Mask in slang/rayquery.slang.
-        uint32_t categoryIndex = mesh->cullRoot
-                                     ? static_cast<uint32_t>(mesh->cullRoot->usage())
-                                     : 8u;
-        material.featureMask |= (categoryIndex & 0xFu) << 27;
-        // The one sky room, detected by the scene-overlap pre-pass above.
-        // Its meshes render their texture as prelit radiance, terminate
-        // paths, take the sky dial, and stay transparent to shadow rays in
-        // the candidate shader: the environment never occludes the sun.
-        // Everything else - lit panels, backdrop strips, vista rooms - is
-        // plain geometry with real occlusion. The bit is tracing-local,
-        // deliberately above the shared UniformsFeatureFlags range; must
-        // match kTraceSky in slang/rayquery.slang.
-        if (skyRoom && mesh->cullRoot == skyRoom) {
-            material.featureMask |= 1u << 24;
-            ++_lastSky;
-        }
-        // The curated per-name record - the manual level pass. Prelit is
-        // Odyssey's actual selfIllum semantics: fullbright authored
-        // texture, occluding, casting nothing. None strips a wrong
-        // selfIllum outright. Material operations ride the same record.
-        const auto *curated = registry.curatedByIndex(mesh->material.curatedIndex);
-        // Dangly selfIllum is Odyssey's fullbright trick for foliage, not
-        // emission - danm14ab carries 653 dangly canopies that were glowing
-        // and casting. Stripped by default; the curated emissive class
-        // restores it for any plant that genuinely glows.
-        if (dangly && (!curated || curated->klass != RenderRegistry::TraceClass::Emissive)) {
-            material.selfIllumColor = glm::vec4(0.0f);
-        }
-        if (curated) {
-            if (curated->klass == RenderRegistry::TraceClass::None) {
-                material.selfIllumColor = glm::vec4(0.0f);
-            }
-            material.curatedAlbedoMul = glm::vec4(curated->albedoMul, 0.0f);
-            material.curatedRoughA = glm::vec4(static_cast<float>(curated->roughnessMode),
-                                               curated->roughnessParams.x,
-                                               curated->roughnessParams.y,
-                                               curated->roughnessParams.z);
-            material.curatedRoughB = glm::vec4(curated->roughnessParams.w,
-                                               curated->roughnessWeights.x,
-                                               curated->roughnessWeights.y,
-                                               curated->roughnessWeights.z);
-            material.curatedMetalA = glm::vec4(static_cast<float>(curated->metallicMode),
-                                               curated->metallicParams.x,
-                                               curated->metallicParams.y,
-                                               curated->metallicParams.z);
-            material.curatedMetalB = glm::vec4(curated->metallicParams.w,
-                                               curated->metallicWeights.x,
-                                               curated->metallicWeights.y,
-                                               curated->metallicWeights.z);
-            material.curatedEmission = glm::vec4(curated->emissionValue,
-                                                 static_cast<float>(curated->emissionMode));
-        }
-        // The surface model, assigned here - the shader never classifies.
-        // Additive-blended diffuse is Odyssey's other authored glow: no
-        // selfIllum controller, the texture is the light, and the ray passes
-        // through it (saber blades, glow decals). The sky room and curated
-        // prelit imagery are unlit emissive: radiance as authored, path
-        // ends. Everything else is PBR; transparent non-additive meshes -
-        // alpha-blended leaves above all - carry their coverage in diffuse
-        // alpha and resolve stochastically in the surface model.
-        if (const auto *diffuse = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
-            if (diffuse->features().blending == Texture::Blending::Additive) {
-                material.surfaceType = 1;
-                ++_lastAdditive;
-            } else if (diffuse->features().blending == Texture::Blending::PunchThrough ||
-                       mesh->material.type == MaterialType::TransparentModel) {
-                material.featureMask |= 1u << 26;
-            }
-        }
-        if ((material.featureMask & (1u << 24)) != 0 ||
-            (curated && curated->klass == RenderRegistry::TraceClass::Prelit)) {
-            material.surfaceType = 2;
-        }
-        // The per-category calibration override, baked per instance so the
-        // dials stay live through the per-frame admission - no GPU table.
-        {
-            const auto &src = _options.ptCategoryOverrides[std::min<uint32_t>(categoryIndex, 8u)];
-            material.overrideColor = glm::vec4(src.color[0], src.color[1], src.color[2],
-                                               std::clamp(src.colorWeight, 0.0f, 1.0f));
-            material.overrideParams = glm::vec4(src.roughness,
-                                                std::max(0.0f, src.emissionScale),
-                                                std::max(0.0f, src.envScale),
-                                                std::max(0.0f, src.metallicScale));
-            material.roughnessScale = std::max(0.0f, src.roughnessScale);
-            // Baked into the emission values here rather than left for the
-            // shader to multiply. Emission reaches the surface models by two
-            // routes - the self-illum controller and the curated override -
-            // and only one of them passed through a scale, so the dial moved
-            // some emitters and not others.
-            // Additive surfaces are the exception: their emission is
-            // max(selfIllum, 1) * albedo, so a scale folded into selfIllum
-            // vanishes below 1 and would double up above it. That model keeps
-            // reading overrideParams.y directly.
-            const float emissionScale = std::max(0.0f, src.emissionScale);
-            if (material.surfaceType != 1) {
-                material.selfIllumColor *= emissionScale;
-            }
-            if (curated && curated->emissionMode != 0) {
-                material.curatedEmission = glm::vec4(glm::vec3(material.curatedEmission) * emissionScale,
-                                                     material.curatedEmission.w);
-            }
-        }
-        if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
-            material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
-        }
-        if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::NormalMap)]) {
-            material.normalMap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
-        }
-        if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)]) {
-            material.lightmap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
-        }
-        if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::BumpMapArray)]) {
-            material.bumpMapArray = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
-            material.bumpMapFrame = mesh->material.bumpMapFrame;
-            material.bumpMapScale = texture->features().bumpMapScaling;
-        }
-        materials.push_back(material);
-        const auto &sourceGeometry = _renderer.resources().sourceGeometry(mesh->mesh.get());
-        const auto &layout = mesh->mesh.get().vertexLayout();
-        SceneObject sceneObject;
-        sceneObject.transform = matrix3x4(mesh->transform);
-        sceneObject.prevTransform = matrix3x4(mesh->prevTransform);
-        if (layout.stride % sizeof(float) != 0 ||
-            layout.offPosition % static_cast<int>(sizeof(float)) != 0 ||
-            (layout.offNormals >= 0 && layout.offNormals % static_cast<int>(sizeof(float)) != 0) ||
-            (layout.offUV1 >= 0 && layout.offUV1 % static_cast<int>(sizeof(float)) != 0) ||
-            (layout.offUV2 >= 0 && layout.offUV2 % static_cast<int>(sizeof(float)) != 0) ||
-            (layout.offTanSpace >= 0 && layout.offTanSpace % static_cast<int>(sizeof(float)) != 0) ||
-            (layout.offBoneIndices >= 0 && layout.offBoneIndices % static_cast<int>(sizeof(float)) != 0) ||
-            (layout.offBoneWeights >= 0 && layout.offBoneWeights % static_cast<int>(sizeof(float)) != 0)) {
-            throw std::runtime_error("Vulkan: source vertex attributes must be float-aligned");
-        }
-        sceneObject.srcVertexOffset = sourceGeometry.vertexOffset;
-        sceneObject.srcIndexOffset = sourceGeometry.indexOffset;
-        sceneObject.srcVertexStride = static_cast<uint32_t>(layout.stride);
-        sceneObject.offPosition = layout.offPosition;
-        sceneObject.offNormals = layout.offNormals;
-        sceneObject.offUV1 = layout.offUV1;
-        sceneObject.offUV2 = layout.offUV2;
-        sceneObject.offTanSpace = layout.offTanSpace;
-        sceneObject.offBoneIndices = layout.offBoneIndices;
-        sceneObject.offBoneWeights = layout.offBoneWeights;
-        sceneObject.vertexCount = static_cast<uint32_t>(mesh->mesh.get().vertexCount());
-        sceneObject.triangleCount = static_cast<uint32_t>(mesh->mesh.get().faces().size());
-        sceneObject.materialIndex = static_cast<uint32_t>(materials.size() - 1);
-        if (skinned) {
-            if (skinned->bones.size() != skinned->prevBones.size()) {
-                throw std::runtime_error("Vulkan: skinned mesh has mismatched bone palettes");
-            }
-            if (bones.size() + skinned->bones.size() + skinned->prevBones.size() >
-                std::numeric_limits<uint32_t>::max()) {
-                throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
-            }
-            sceneObject.boneBase = static_cast<uint32_t>(bones.size());
-            sceneObject.boneCount = static_cast<uint32_t>(skinned->bones.size());
-            for (const auto &bone : skinned->bones) bones.push_back(matrix3x4(bone));
-            for (const auto &bone : skinned->prevBones) bones.push_back(matrix3x4(bone));
-        }
-        // The merge kernel binary-searches geometry 0 and 1 in two separate
-        // object ranges. Keep the ranges contiguous by construction: sorting
-        // all objects with a comparator is fragile when equal elements arrive
-        // from unrelated registry paths.
-        // The merged TLAS will have one mask per instance, so the sky cannot
-        // stay out of shadow rays by mask. It belongs in geometry 1, where
-        // the candidate path can reject it instead of committing it opaque.
-        const bool nonOpaque = material.surfaceType == 1 ||
-                               (material.featureMask & ((1u << 24) | (1u << 26))) != 0;
-        sceneObject.geometryIndex = nonOpaque ? 1 : 0;
-        (nonOpaque ? nonOpaqueObjects : opaqueObjects).push_back(sceneObject);
-        // Summed over instances, not over distinct meshes: a shared BLAS is
-        // traversed once per instance, so this is the number that decides
-        // whether merging the static set into one structure is even sensible.
-        _lastTriangles += uploaded.indexCount() / 3;
-        // The split that decides whether a merged static BLAS is worth building:
-        // foliage is instance-heavy but low-poly, so the dynamic share of
-        // triangles can be far smaller than its share of instances.
-        if (skinned || dangly || saber) _lastDynamicTriangles += uploaded.indexCount() / 3;
-        // Must match isEmitter in slang/rayquery.slang. This was a luma
-        // threshold while the shader used one too; when the shader started
-        // taking the colour directly, this count silently stopped describing
-        // what was actually being traced.
-        if (!dangly &&
-            (!curated || curated->klass == RenderRegistry::TraceClass::Default) &&
-            glm::any(glm::greaterThan(mesh->material.selfIllumColor, glm::vec3(0.0f)))) {
-            ++_lastEmissive;
-        }
-    }
-    // findTriangleObject() searches geometry 0 in [0, opaqueObjectCount) and
-    // geometry 1 in the remaining range. Concatenating the two admission
-    // streams, rather than sorting the combined list, makes that load-bearing
-    // ordering explicit and immune to a later comparator change.
-    std::vector<SceneObject> sceneObjects;
-    sceneObjects.reserve(opaqueObjects.size() + nonOpaqueObjects.size());
-    sceneObjects.insert(sceneObjects.end(), opaqueObjects.begin(), opaqueObjects.end());
-    sceneObjects.insert(sceneObjects.end(), nonOpaqueObjects.begin(), nonOpaqueObjects.end());
-
-    uint64_t mergeVertexCount = 0;
-    uint64_t opaqueTriangleCount = 0;
-    uint64_t nonOpaqueTriangleCount = 0;
-    for (auto &object : sceneObjects) {
-        if (mergeVertexCount + object.vertexCount > std::numeric_limits<uint32_t>::max()) {
-            throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
-        }
-        const uint64_t triangleBase = object.geometryIndex == 0
-            ? opaqueTriangleCount
-            : nonOpaqueTriangleCount;
-        if (triangleBase + object.triangleCount > std::numeric_limits<uint32_t>::max()) {
-            throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
-        }
-        // Vertices share one merged buffer, so this base is global across the
-        // final concatenated object order. Triangle bases instead name a
-        // location inside their geometry stream: geometry 1 starts again at
-        // zero after geometry 0's triangles.
-        object.dstVertexBase = static_cast<uint32_t>(mergeVertexCount);
-        object.dstTriangleBase = static_cast<uint32_t>(triangleBase);
-        mergeVertexCount += object.vertexCount;
-        if (object.geometryIndex == 0) {
-            opaqueTriangleCount += object.triangleCount;
-        } else {
-            nonOpaqueTriangleCount += object.triangleCount;
-        }
-    }
-    const uint64_t mergeTriangleCount = opaqueTriangleCount + nonOpaqueTriangleCount;
-    const uint64_t mergeBoneCount = bones.size();
-    if (sceneObjects.empty() || mergeVertexCount == 0 || mergeTriangleCount == 0) {
-        // The splash/menu has no scene snapshot. It is not an error, and must
-        // not prevent a later module frame from constructing its TLAS.
+    const auto scene = _gpuScene->update(cmd, registry, [this, &registry, skyRoom, skyBaked](const RegisteredMesh &mesh) {
+        return classifyMesh(registry, mesh, skyRoom, skyBaked);
+    });
+    if (!scene.vertices.buffer) {
         VkClearColorValue clear {{0.02f, 0.03f, 0.06f, 1.0f}};
         VkImageSubresourceRange range {};
         range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -1450,144 +1081,24 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         vkCmdClearColorImage(cmd, output.handle(), VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
         return;
     }
-
-    if (sceneObjects.size() > std::numeric_limits<uint32_t>::max() ||
-        mergeVertexCount > std::numeric_limits<uint32_t>::max() ||
-        mergeTriangleCount > std::numeric_limits<uint32_t>::max() ||
-        opaqueTriangleCount > std::numeric_limits<uint32_t>::max() ||
-        mergeBoneCount > std::numeric_limits<uint32_t>::max()) {
-        throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
-    }
-    // The trace structure is one world-space BLAS underneath one identity
-    // instance; retain the counters as the structure actually built, rather
-    // than the retired per-mesh instance count.
     _lastInstances = 1;
-    _lastTriangles = static_cast<uint32_t>(mergeTriangleCount);
-    ensureMergeBuffers(frame, static_cast<uint32_t>(sceneObjects.size()),
-                       static_cast<uint32_t>(mergeBoneCount),
-                       static_cast<uint32_t>(mergeVertexCount),
-                       static_cast<uint32_t>(mergeTriangleCount));
-
+    _lastTriangles = scene.triangleCount;
     auto &device = _renderer.device();
-    const VkDeviceSize sceneObjectBytes = static_cast<VkDeviceSize>(frame.sceneObjectCapacity) * sizeof(SceneObject);
-    const VkDeviceSize sceneBoneBytes = static_cast<VkDeviceSize>(frame.boneCapacity) * sizeof(Matrix3x4);
-    const VkDeviceSize mergeVertexBytes = static_cast<VkDeviceSize>(frame.vertexCapacity) * sizeof(MergedVertex);
-    const VkDeviceSize mergeIndexBytes = static_cast<VkDeviceSize>(frame.triangleCapacity) * 3 * sizeof(uint32_t);
-    std::memcpy(frame.scene->mapped(), sceneObjects.data(), sceneObjects.size() * sizeof(SceneObject));
-    if (!bones.empty()) {
-        auto *boneDestination = static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes;
-        std::memcpy(boneDestination, bones.data(), bones.size() * sizeof(Matrix3x4));
-    }
-    const auto &sourceVertices = _renderer.resources().sourceVertices();
-    const auto &sourceIndices = _renderer.resources().sourceIndices();
-    std::array<VkDescriptorBufferInfo, 7> mergeBuffers {{
-        {frame.scene->handle(), 0, sceneObjectBytes},
-        {frame.scene->handle(), sceneObjectBytes, sceneBoneBytes},
-        {frame.geometry->handle(), 0, mergeVertexBytes},
-        {frame.geometry->handle(), mergeVertexBytes, mergeIndexBytes},
-        {frame.geometry->handle(), mergeVertexBytes + mergeIndexBytes,
-         static_cast<VkDeviceSize>(frame.triangleCapacity) * sizeof(uint32_t)},
-        {sourceVertices.handle(), 0, sourceVertices.size()},
-        {sourceIndices.handle(), 0, sourceIndices.size()},
-    }};
-    std::array<VkWriteDescriptorSet, 7> mergeWrites {};
-    const auto mergeSet = _mergeSets[_renderer.frameIndex()];
-    for (uint32_t i = 0; i < mergeWrites.size(); ++i) {
-        mergeWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        mergeWrites[i].dstSet = mergeSet;
-        mergeWrites[i].dstBinding = i;
-        mergeWrites[i].descriptorCount = 1;
-        mergeWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        mergeWrites[i].pBufferInfo = &mergeBuffers[i];
-    }
-    vkUpdateDescriptorSets(device.handle(), static_cast<uint32_t>(mergeWrites.size()),
-                           mergeWrites.data(), 0, nullptr);
-
-    if (_frameNumber == 0) {
-        info("Vulkan: merge frame: " + std::to_string(sceneObjects.size()) + " objects (" +
-                 std::to_string(opaqueObjects.size()) + " opaque), " +
-                 std::to_string(mergeVertexCount) + " vertices, " +
-                 std::to_string(opaqueTriangleCount) + " / " +
-                 std::to_string(nonOpaqueTriangleCount) + " triangles (geometry 0 / 1), scene " +
-                 std::to_string(frame.scene->size()) + " bytes, geometry " +
-                 std::to_string(frame.geometry->size()) + " bytes",
-             LogChannel::Graphics);
-    }
-
-    const MergePushConstants mergeConstants {
-        static_cast<uint32_t>(sceneObjects.size()),
-        static_cast<uint32_t>(opaqueObjects.size()),
-        static_cast<uint32_t>(mergeVertexCount),
-        static_cast<uint32_t>(mergeTriangleCount),
-        static_cast<uint32_t>(opaqueTriangleCount),
-    };
-    // Source uploads use immediate transfer submissions. Queue order alone is
-    // not a memory dependency for the following compute read, especially when
-    // a pooled buffer was replaced while this frame was being assembled.
-    // Make those writes available to this merge explicitly before binding the
-    // descriptor generation selected above.
-    std::array<VkBufferMemoryBarrier2, 2> sourceBarriers {};
-    for (size_t i = 0; i < sourceBarriers.size(); ++i) {
-        sourceBarriers[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        sourceBarriers[i].srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
-        sourceBarriers[i].srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        sourceBarriers[i].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        sourceBarriers[i].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-        sourceBarriers[i].buffer = mergeBuffers[5 + i].buffer;
-        sourceBarriers[i].offset = 0;
-        sourceBarriers[i].size = VK_WHOLE_SIZE;
-    }
-    VkDependencyInfo sourceDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    sourceDependency.bufferMemoryBarrierCount = static_cast<uint32_t>(sourceBarriers.size());
-    sourceDependency.pBufferMemoryBarriers = sourceBarriers.data();
-    vkCmdPipelineBarrier2(cmd, &sourceDependency);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _mergePipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _mergePipelineLayout,
-                            0, 1, &mergeSet, 0, nullptr);
-    vkCmdPushConstants(cmd, _mergePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                       sizeof(mergeConstants), &mergeConstants);
-    const uint32_t mergeThreadCount = std::max(mergeConstants.vertexCount, mergeConstants.triangleCount);
-    if (mergeThreadCount != 0) {
-        vkCmdDispatch(cmd, (mergeThreadCount + 63) / 64, 1, 1);
-    }
-
-    VkMemoryBarrier2 mergeBarrier {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-    mergeBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    mergeBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-    // The merged positions feed the BLAS build, while the trace dispatch reads
-    // UVs and normals from the same buffer. Both consumers must wait here:
-    // guarding only the build produced striped, frame-varying skinned UVs.
-    mergeBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-    mergeBarrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                 VK_ACCESS_2_SHADER_READ_BIT;
-    VkDependencyInfo mergeDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    mergeDependency.memoryBarrierCount = 1;
-    mergeDependency.pMemoryBarriers = &mergeBarrier;
-    vkCmdPipelineBarrier2(cmd, &mergeDependency);
-
-    frame.materials = std::make_unique<VulkanBuffer>(device);
-    frame.materials->initHostVisible(static_cast<VkDeviceSize>(materials.size() * sizeof(materials[0])),
-                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    std::memcpy(frame.materials->mapped(), materials.data(), materials.size() * sizeof(materials[0]));
     frame.traceStats = std::make_unique<VulkanBuffer>(device);
     frame.traceStats->initHostVisibleReadback(sizeof(TraceStats), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     std::memset(frame.traceStats->mapped(), 0, sizeof(TraceStats));
-    // The per-category calibration overrides are baked into each triangle's
-    // material record at admission above: the dials stay live through the
-    // per-frame rebuild, and no GPU-side category table exists.
 
-    const VkDeviceAddress geometryAddress = frame.geometry->deviceAddress();
+    const VkDeviceAddress geometryAddress = scene.vertices.buffer->deviceAddress() + scene.vertices.offset;
     std::array<VkAccelerationStructureGeometryTrianglesDataKHR, 2> triangleData {};
     std::array<VkAccelerationStructureGeometryKHR, 2> blasGeometries {};
     for (auto &triangles : triangleData) {
         triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
         triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
         triangles.vertexData.deviceAddress = geometryAddress;
-        triangles.vertexStride = sizeof(MergedVertex);
-        triangles.maxVertex = static_cast<uint32_t>(mergeVertexCount - 1);
+        triangles.vertexStride = sizeof(GpuScene::MergedVertex);
+        triangles.maxVertex = scene.vertexCount - 1;
         triangles.indexType = VK_INDEX_TYPE_UINT32;
-        triangles.indexData.deviceAddress = geometryAddress + mergeVertexBytes;
+        triangles.indexData.deviceAddress = scene.indices.buffer->deviceAddress() + scene.indices.offset;
     }
     for (uint32_t i = 0; i < blasGeometries.size(); ++i) {
         auto &geometry = blasGeometries[i];
@@ -1607,8 +1118,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     blasBuild.geometryCount = static_cast<uint32_t>(blasGeometries.size());
     blasBuild.pGeometries = blasGeometries.data();
     const std::array<uint32_t, 2> blasPrimitiveCounts {{
-        static_cast<uint32_t>(opaqueTriangleCount),
-        static_cast<uint32_t>(nonOpaqueTriangleCount),
+        scene.opaqueTriangleCount,
+        scene.triangleCount - scene.opaqueTriangleCount,
     }};
     VkAccelerationStructureBuildSizesInfoKHR blasSizes {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
@@ -1709,7 +1220,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     std::array<VkAccelerationStructureBuildRangeInfoKHR, 2> blasRanges {};
     blasRanges[0].primitiveCount = blasPrimitiveCounts[0];
     blasRanges[1].primitiveCount = blasPrimitiveCounts[1];
-    blasRanges[1].primitiveOffset = static_cast<uint32_t>(opaqueTriangleCount * 3 * sizeof(uint32_t));
+    blasRanges[1].primitiveOffset = static_cast<uint32_t>(scene.opaqueTriangleCount * 3 * sizeof(uint32_t));
     const VkAccelerationStructureBuildRangeInfoKHR *blasRangePointers[] {
         &blasRanges[0], &blasRanges[1]};
     const auto begin = std::chrono::steady_clock::now();
@@ -1745,25 +1256,25 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     VkWriteDescriptorSetAccelerationStructureKHR asWrite {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
     asWrite.accelerationStructureCount = 1; asWrite.pAccelerationStructures = &frame.tlas;
     VkDescriptorBufferInfo materialBuffer {};
-    materialBuffer.buffer = frame.materials->handle();
-    materialBuffer.range = frame.materials->size();
+    materialBuffer.buffer = scene.materials.buffer->handle();
+    materialBuffer.range = scene.materials.size;
     VkDescriptorBufferInfo statsBuffer {};
     statsBuffer.buffer = frame.traceStats->handle();
     statsBuffer.range = frame.traceStats->size();
-    const VkDeviceSize vertexBytes = static_cast<VkDeviceSize>(frame.vertexCapacity) * sizeof(MergedVertex);
-    const VkDeviceSize indexBytes = static_cast<VkDeviceSize>(frame.triangleCapacity) * 3 * sizeof(uint32_t);
+    const VkDeviceSize vertexBytes = scene.vertices.size;
+    const VkDeviceSize indexBytes = scene.indices.size;
     VkDescriptorBufferInfo mergedVertices {};
-    mergedVertices.buffer = frame.geometry->handle();
-    mergedVertices.offset = 0;
-    mergedVertices.range = vertexBytes;
+    mergedVertices.buffer = scene.vertices.buffer->handle();
+    mergedVertices.offset = scene.vertices.offset;
+    mergedVertices.range = scene.vertices.size;
     VkDescriptorBufferInfo mergedIndices {};
-    mergedIndices.buffer = frame.geometry->handle();
-    mergedIndices.offset = vertexBytes;
-    mergedIndices.range = indexBytes;
+    mergedIndices.buffer = scene.vertices.buffer->handle();
+    mergedIndices.offset = scene.indices.offset;
+    mergedIndices.range = scene.indices.size;
     VkDescriptorBufferInfo mergedMaterialIds {};
-    mergedMaterialIds.buffer = frame.geometry->handle();
-    mergedMaterialIds.offset = vertexBytes + indexBytes;
-    mergedMaterialIds.range = static_cast<VkDeviceSize>(frame.triangleCapacity) * sizeof(uint32_t);
+    mergedMaterialIds.buffer = scene.materialIds.buffer->handle();
+    mergedMaterialIds.offset = scene.materialIds.offset;
+    mergedMaterialIds.range = scene.materialIds.size;
     VkWriteDescriptorSet writes[7] {};
     const auto set = _sets[_renderer.frameIndex()];
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[0].dstSet = set; writes[0].dstBinding = 0;
@@ -1896,7 +1407,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                                   glm::radians(std::clamp(_options.ptSunAngularSize, 0.05f, 10.0f)),
                                   std::max(0.01f, _options.ptExposure),
                                   0,
-                                  static_cast<uint32_t>(opaqueTriangleCount),
+                                  scene.opaqueTriangleCount,
                                   skyBaked ? 1u : 0u};
     vkCmdPushConstants(cmd, _pipelineLayout, VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, sizeof(constants), &constants);
     const VkStridedDeviceAddressRegionKHR emptySbt {};

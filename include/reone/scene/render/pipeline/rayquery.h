@@ -7,6 +7,7 @@
 #include <volk.h>
 
 #include "reone/graphics/vulkan/buffer.h"
+#include "reone/scene/gpuscene.h"
 
 #ifdef R_ENABLE_FSR
 #include "reone/scene/render/pipeline/fsrupscaler.h"
@@ -24,6 +25,7 @@ struct GraphicsOptions;
 namespace reone::scene {
 class RenderRegistry;
 class ModelSceneNode;
+struct RegisteredMesh;
 
 /** Vulkan-only primary-ray diagnostic. It deliberately owns no raster pass. */
 class RayQueryPipeline : boost::noncopyable {
@@ -62,22 +64,13 @@ public:
 
 private:
     struct Frame {
-        /** SceneObject records followed by the current/previous bone pool. */
-        std::unique_ptr<graphics::VulkanBuffer> scene;
-        /** Canonical vertices, then uint indices, then per-triangle material ids. */
-        std::unique_ptr<graphics::VulkanBuffer> geometry;
         std::unique_ptr<graphics::VulkanBuffer> instances;
-        std::unique_ptr<graphics::VulkanBuffer> materials;
         std::unique_ptr<graphics::VulkanBuffer> traceStats;
         std::unique_ptr<graphics::VulkanBuffer> blasStorage;
         std::unique_ptr<graphics::VulkanBuffer> tlasStorage;
         std::unique_ptr<graphics::VulkanBuffer> scratch;
         VkAccelerationStructureKHR blas {VK_NULL_HANDLE};
         VkAccelerationStructureKHR tlas {VK_NULL_HANDLE};
-        uint32_t sceneObjectCapacity {0};
-        uint32_t boneCapacity {0};
-        uint32_t vertexCapacity {0};
-        uint32_t triangleCapacity {0};
         VkDeviceSize blasStorageCapacity {0};
         VkDeviceSize tlasStorageCapacity {0};
         VkDeviceSize scratchCapacity {0};
@@ -93,11 +86,7 @@ private:
     VkPipeline _pipeline {VK_NULL_HANDLE};
     std::unique_ptr<graphics::VulkanBuffer> _raygenSbt;
     VkStridedDeviceAddressRegionKHR _raygenSbtRegion {};
-    VkDescriptorSetLayout _mergeLayout {VK_NULL_HANDLE};
-    VkDescriptorPool _mergePool {VK_NULL_HANDLE};
-    std::array<VkDescriptorSet, 2> _mergeSets {};
-    VkPipelineLayout _mergePipelineLayout {VK_NULL_HANDLE};
-    VkPipeline _mergePipeline {VK_NULL_HANDLE};
+    std::unique_ptr<GpuScene> _gpuScene;
     std::array<Frame, 2> _frames;
     uint32_t _lastInstances {0};
     uint32_t _lastTriangles {0};
@@ -143,15 +132,6 @@ private:
         uint32_t geometryBase0;
         uint32_t geometryBase1;
         uint32_t skyAvailable;
-    };
-
-    /** Must match PushConstants in slang/skin.slang. */
-    struct MergePushConstants {
-        uint32_t objectCount;
-        uint32_t opaqueObjectCount;
-        uint32_t vertexCount;
-        uint32_t triangleCount;
-        uint32_t opaqueTriangleCount;
     };
 
     uint32_t _frameNumber {0};
@@ -223,11 +203,10 @@ private:
     int _lastAuxFrame {-1};
 
     void clearFrame(Frame &frame);
-    void ensureMergeBuffers(Frame &frame,
-                            uint32_t objectCount,
-                            uint32_t boneCount,
-                            uint32_t vertexCount,
-                            uint32_t triangleCount);
+    std::optional<GpuScene::Admission> classifyMesh(RenderRegistry &registry,
+                                                     const RegisteredMesh &mesh,
+                                                     const ModelSceneNode *skyRoom,
+                                                     bool skyBaked);
     bool bakeSkyRoom(VkCommandBuffer cmd,
                      RenderRegistry &registry,
                      const ModelSceneNode &room,

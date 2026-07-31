@@ -503,91 +503,14 @@ const VulkanMesh &VulkanResources::get(const Mesh &mesh) {
     auto uploaded = std::make_unique<VulkanMesh>(_device);
     uploaded->init(mesh);
     auto &result = *_meshes.insert({&mesh, std::move(uploaded)}).first->second;
-    if (_device.rayQueryAvailable()) appendSourceGeometry(mesh);
     return result;
 }
 
-const VulkanResources::SourceGeometry &VulkanResources::sourceGeometry(const Mesh &mesh) {
-    get(mesh);
-    auto it = _sourceGeometry.find(&mesh);
-    if (it == _sourceGeometry.end()) {
-        throw std::runtime_error("Vulkan: ray-query source geometry unavailable");
-    }
-    return it->second;
-}
-
-void VulkanResources::appendSourceGeometry(const Mesh &mesh) {
-    const auto [existing, inserted] = _sourceGeometry.emplace(&mesh, SourceGeometry {});
-    if (!inserted) return;
-
-    const auto &vertices = mesh.vertexData();
-    const auto &faces = mesh.faces();
-    if (vertices.size() > std::numeric_limits<uint32_t>::max() - _sourceVertexData.size() ||
-        faces.size() > (std::numeric_limits<uint32_t>::max() - _sourceIndexData.size()) / 3) {
-        throw std::runtime_error("Vulkan: source geometry pool exceeds shader index range");
-    }
-    auto &location = _sourceGeometry.at(&mesh);
-    location.vertexOffset = static_cast<uint32_t>(_sourceVertexData.size());
-    location.indexOffset = static_cast<uint32_t>(_sourceIndexData.size());
-    _sourceVertexData.insert(_sourceVertexData.end(), vertices.begin(), vertices.end());
-    _sourceIndexData.reserve(_sourceIndexData.size() + faces.size() * 3);
-    for (const auto &face : faces) {
-        _sourceIndexData.push_back(face.vertices[0]);
-        _sourceIndexData.push_back(face.vertices[1]);
-        _sourceIndexData.push_back(face.vertices[2]);
-    }
-
-    auto grow = [](uint32_t current, uint32_t required, uint32_t initial) {
-        uint64_t capacity = std::max(current, initial);
-        while (capacity < required) capacity *= 2;
-        if (capacity > std::numeric_limits<uint32_t>::max())
-            throw std::runtime_error("Vulkan: source geometry pool capacity exceeds uint32 range");
-        return static_cast<uint32_t>(capacity);
-    };
-    const uint32_t vertexCapacity = grow(_sourceVertexCapacity,
-        static_cast<uint32_t>(_sourceVertexData.size()), 256 * 1024);
-    const uint32_t indexCapacity = grow(_sourceIndexCapacity,
-        static_cast<uint32_t>(_sourceIndexData.size()), 256 * 1024);
-    const bool reallocate = !_sourceVertices || !_sourceIndices ||
-        vertexCapacity != _sourceVertexCapacity || indexCapacity != _sourceIndexCapacity;
-    if (reallocate) {
-        auto verticesBuffer = std::make_unique<VulkanBuffer>(_device);
-        auto indicesBuffer = std::make_unique<VulkanBuffer>(_device);
-        verticesBuffer->initDeviceLocal(static_cast<VkDeviceSize>(vertexCapacity) * sizeof(float),
-                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, nullptr);
-        indicesBuffer->initDeviceLocal(static_cast<VkDeviceSize>(indexCapacity) * sizeof(uint32_t),
-                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, nullptr);
-        verticesBuffer->uploadDeviceLocal(0, static_cast<VkDeviceSize>(_sourceVertexData.size()) * sizeof(float),
-                                          _sourceVertexData.data());
-        indicesBuffer->uploadDeviceLocal(0, static_cast<VkDeviceSize>(_sourceIndexData.size()) * sizeof(uint32_t),
-                                         _sourceIndexData.data());
-        if (_sourceVertices) _retiredSourceBuffers.push_back(std::move(_sourceVertices));
-        if (_sourceIndices) _retiredSourceBuffers.push_back(std::move(_sourceIndices));
-        _sourceVertices = std::move(verticesBuffer);
-        _sourceIndices = std::move(indicesBuffer);
-        _sourceVertexCapacity = vertexCapacity;
-        _sourceIndexCapacity = indexCapacity;
-    } else {
-        _sourceVertices->uploadDeviceLocal(static_cast<VkDeviceSize>(location.vertexOffset) * sizeof(float),
-                                           static_cast<VkDeviceSize>(vertices.size()) * sizeof(float), vertices.data());
-        _sourceIndices->uploadDeviceLocal(static_cast<VkDeviceSize>(location.indexOffset) * sizeof(uint32_t),
-                                          static_cast<VkDeviceSize>(faces.size()) * 3 * sizeof(uint32_t),
-                                          _sourceIndexData.data() + location.indexOffset);
-    }
-}
-
 void VulkanResources::clearUploaded() {
+    ++_generation;
     _textures.clear();
     _nextTextureId = 0;
     _meshes.clear();
-    _sourceGeometry.clear();
-    _sourceVertexData.clear();
-    _sourceIndexData.clear();
-    _sourceVertices.reset();
-    _sourceIndices.reset();
-    _retiredSourceBuffers.clear();
-    _sourceVertexCapacity = 0;
-    _sourceIndexCapacity = 0;
 }
 
 void VulkanResources::deinit() {
@@ -599,14 +522,6 @@ void VulkanResources::deinit() {
     _textures.clear();
     _nextTextureId = 0;
     _meshes.clear();
-    _sourceGeometry.clear();
-    _sourceVertexData.clear();
-    _sourceIndexData.clear();
-    _sourceVertices.reset();
-    _sourceIndices.reset();
-    _retiredSourceBuffers.clear();
-    _sourceVertexCapacity = 0;
-    _sourceIndexCapacity = 0;
     // Explicitly, not from the member destructor: this object outlives
     // VulkanDevice::deinit, and destroying a sampler after the device is gone
     // is a use-after-free.
