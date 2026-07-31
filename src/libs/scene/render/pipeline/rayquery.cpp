@@ -958,7 +958,11 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyMesh(RenderRegistry
     _lastDynamicTriangles += (skinned || dangly || saber) ? static_cast<uint32_t>(mesh->mesh.get().faces().size()) : 0;
     if (!dangly && (!curated || curated->klass == RenderRegistry::TraceClass::Default) &&
         glm::any(glm::greaterThan(mesh->material.selfIllumColor, glm::vec3(0.0f)))) ++_lastEmissive;
-    return {{material, nonOpaque ? GpuScene::PrimitiveClass::NonOpaque : GpuScene::PrimitiveClass::Opaque, skinned}};
+    // Material::staticObject is an authored room hint, not the admission
+    // proof required to retain geometry. Until a stronger classifier exists,
+    // publish this consumer's objects as dynamic.
+    return {{material, nonOpaque ? GpuScene::PrimitiveClass::NonOpaque : GpuScene::PrimitiveClass::Opaque,
+             GpuScene::ResidencyClass::Dynamic, skinned}};
 }
 
 void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uint32_t globalsOffset,

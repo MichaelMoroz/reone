@@ -17,6 +17,7 @@
 #include <glm/glm.hpp>
 
 #include "reone/graphics/vulkan/buffer.h"
+#include "reone/scene/node.h"
 
 namespace reone::graphics {
 class Mesh;
@@ -122,10 +123,18 @@ public:
     /** A consumer-defined intersection property, not an acceleration-structure policy. */
     enum class PrimitiveClass { Opaque, NonOpaque };
 
+    /**
+     * The requested lifetime of admitted geometry. The implementation may put
+     * several objects with the same residency into one region, but it may not
+     * infer this classification from a material or a Mesh pointer.
+     */
+    enum class ResidencyClass { Static, Dynamic };
+
     /** Trace-specific material lowering is supplied by the current consumer. */
     struct Admission {
         InstanceMaterial material;
         PrimitiveClass primitiveClass {PrimitiveClass::Opaque};
+        ResidencyClass residency {ResidencyClass::Dynamic};
         const RegisteredSkin *skin {nullptr};
     };
     using Classifier = std::function<std::optional<Admission>(const RegisteredMesh &)>;
@@ -135,13 +144,53 @@ public:
         VkDeviceSize offset {0};
         VkDeviceSize size {0};
     };
+    /**
+     * Stable identity of one source triangle within a scene scope. The local
+     * primitive is the mesh-face index, not a merged-stream address.
+     */
+    struct PrimitiveId {
+        uint64_t sceneScope {0};
+        SceneNodeId object;
+        uint32_t localPrimitive {0};
+    };
+    struct PrimitiveIdRange {
+        uint32_t firstTriangle {0};
+        uint32_t triangleCount {0};
+        PrimitiveId first;
+    };
+    struct PrimitiveIdView {
+        const PrimitiveIdRange *ranges {nullptr};
+        uint32_t rangeCount {0};
+
+        /** Resolves a frame-local triangle address without making it an identity. */
+        PrimitiveId operator[](uint32_t index) const;
+    };
+
     struct Region {
+        ResidencyClass residency {ResidencyClass::Dynamic};
+        /**
+         * Bumps whenever this region's published geometry or materials change.
+         * A retained Static region must bump for an admitted-object transform,
+         * admission/removal, material lowering change, or scene-scope change.
+         */
+        uint64_t revision {0};
         uint32_t firstVertex {0};
         uint32_t vertexCount {0};
         uint32_t firstTriangle {0};
         uint32_t triangleCount {0};
     };
     struct View {
+        /**
+         * Explicit lifetime scope for PrimitiveId. It changes when GPU scene
+         * resources are invalidated, including a module transition; keys from
+         * different scopes must never be compared or retained together.
+         */
+        uint64_t sceneScope {0};
+        /**
+         * Bumps on every publication in the all-dynamic implementation. This
+         * conservatively satisfies every Region invalidation listed above.
+         */
+        uint64_t revision {0};
         BufferView vertices;
         BufferView indices;
         BufferView materialIds;
@@ -151,6 +200,12 @@ public:
         uint32_t vertexCount {0};
         uint32_t opaqueTriangleCount {0};
         uint32_t triangleCount {0};
+        /**
+         * Frame-local lookup indexed by Region::firstTriangle + local triangle.
+         * Primitive indices remain a fast address only; this is the identity a
+         * consumer may retain, subject to PrimitiveId::sceneScope and revision.
+         */
+        PrimitiveIdView primitiveIds;
         /** Frame-local addresses only: admission order may change next frame. */
         std::vector<Region> regions;
     };
@@ -185,6 +240,8 @@ private:
     uint32_t _sourceVertexCapacity {0};
     uint32_t _sourceIndexCapacity {0};
     uint64_t _sourceResourceGeneration {0};
+    uint64_t _sceneScope {1};
+    uint64_t _revision {0};
     bool _inited {false};
 
     void ensureMergeBuffers(Frame &, uint32_t, uint32_t, uint32_t, uint32_t);

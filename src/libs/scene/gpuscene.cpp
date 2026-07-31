@@ -51,10 +51,22 @@ struct GpuScene::Frame {
     uint32_t boneCapacity {0};
     uint32_t vertexCapacity {0};
     uint32_t triangleCapacity {0};
+    std::vector<PrimitiveIdRange> primitiveIds;
 };
 
 GpuScene::GpuScene(VulkanRenderer &renderer) : _renderer(renderer) {}
 GpuScene::~GpuScene() { deinit(); }
+
+GpuScene::PrimitiveId GpuScene::PrimitiveIdView::operator[](uint32_t index) const {
+    for (uint32_t rangeIndex = 0; rangeIndex < rangeCount; ++rangeIndex) {
+        const auto &range = ranges[rangeIndex];
+        if (index < range.firstTriangle || index - range.firstTriangle >= range.triangleCount) continue;
+        auto id = range.first;
+        id.localPrimitive += index - range.firstTriangle;
+        return id;
+    }
+    throw std::out_of_range("Vulkan: frame-local primitive address is not published");
+}
 
 void GpuScene::init() {
     if (_inited) return;
@@ -239,14 +251,19 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd, RenderRegistry &registry, c
         // reuse an address with unrelated geometry.
         clearSourceGeometry();
         _sourceResourceGeneration = resourceGeneration;
+        if (++_sceneScope == 0) ++_sceneScope;
     }
+    if (++_revision == 0) ++_revision;
     auto &frame = *_frames[_renderer.frameIndex()];
     std::vector<InstanceMaterial> materials;
     std::vector<SceneObject> opaqueObjects, nonOpaqueObjects;
+    std::vector<SceneNodeId> opaqueObjectIds, nonOpaqueObjectIds;
     std::vector<Matrix3x4> bones;
     materials.reserve(registry.objects().size());
     opaqueObjects.reserve(registry.objects().size());
     nonOpaqueObjects.reserve(registry.objects().size());
+    opaqueObjectIds.reserve(registry.objects().size());
+    nonOpaqueObjectIds.reserve(registry.objects().size());
     for (const auto &object : registry.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
         if (!mesh || !registry.isObjectEnabled(mesh->id.index)) continue;
@@ -290,12 +307,22 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd, RenderRegistry &registry, c
         }
         sceneObject.geometryIndex = admission->primitiveClass == PrimitiveClass::Opaque ? 0 : 1;
         materials.push_back(admission->material);
-        (sceneObject.geometryIndex == 0 ? opaqueObjects : nonOpaqueObjects).push_back(sceneObject);
+        if (sceneObject.geometryIndex == 0) {
+            opaqueObjects.push_back(sceneObject);
+            opaqueObjectIds.push_back(mesh->id);
+        } else {
+            nonOpaqueObjects.push_back(sceneObject);
+            nonOpaqueObjectIds.push_back(mesh->id);
+        }
     }
     std::vector<SceneObject> objects;
+    std::vector<SceneNodeId> objectIds;
     objects.reserve(opaqueObjects.size() + nonOpaqueObjects.size());
+    objectIds.reserve(opaqueObjectIds.size() + nonOpaqueObjectIds.size());
     objects.insert(objects.end(), opaqueObjects.begin(), opaqueObjects.end());
     objects.insert(objects.end(), nonOpaqueObjects.begin(), nonOpaqueObjects.end());
+    objectIds.insert(objectIds.end(), opaqueObjectIds.begin(), opaqueObjectIds.end());
+    objectIds.insert(objectIds.end(), nonOpaqueObjectIds.begin(), nonOpaqueObjectIds.end());
     uint64_t vertexCount = 0, opaqueTriangleCount = 0, nonOpaqueTriangleCount = 0;
     for (auto &object : objects) {
         if (vertexCount + object.vertexCount > std::numeric_limits<uint32_t>::max())
@@ -309,7 +336,12 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd, RenderRegistry &registry, c
         triangleBase += object.triangleCount;
     }
     const uint64_t triangleCount = opaqueTriangleCount + nonOpaqueTriangleCount;
-    if (objects.empty() || vertexCount == 0 || triangleCount == 0) return {};
+    if (objects.empty() || vertexCount == 0 || triangleCount == 0) {
+        View empty;
+        empty.sceneScope = _sceneScope;
+        empty.revision = _revision;
+        return empty;
+    }
     if (objects.size() > std::numeric_limits<uint32_t>::max() || vertexCount > std::numeric_limits<uint32_t>::max() ||
         triangleCount > std::numeric_limits<uint32_t>::max() || opaqueTriangleCount > std::numeric_limits<uint32_t>::max() ||
         bones.size() > std::numeric_limits<uint32_t>::max()) throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
@@ -363,11 +395,30 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd, RenderRegistry &registry, c
     const VkDeviceSize writtenVertexBytes = static_cast<VkDeviceSize>(vertexCount) * sizeof(MergedVertex);
     const VkDeviceSize writtenIndexBytes = static_cast<VkDeviceSize>(triangleCount) * 3 * sizeof(uint32_t);
     const VkDeviceSize writtenMaterialIdBytes = static_cast<VkDeviceSize>(triangleCount) * sizeof(uint32_t);
-    return {{frame.geometry.get(), 0, writtenVertexBytes}, {frame.geometry.get(), vertexBytes, writtenIndexBytes},
-            {frame.geometry.get(), vertexBytes + indexBytes, writtenMaterialIdBytes},
-            {frame.materials.get(), 0, frame.materials->size()}, static_cast<uint32_t>(objects.size()),
-            static_cast<uint32_t>(opaqueObjects.size()), static_cast<uint32_t>(vertexCount),
-            static_cast<uint32_t>(opaqueTriangleCount), static_cast<uint32_t>(triangleCount),
-            {{0, static_cast<uint32_t>(vertexCount), 0, static_cast<uint32_t>(triangleCount)}}};
+    frame.primitiveIds.resize(objects.size());
+    for (size_t objectIndex = 0; objectIndex < objects.size(); ++objectIndex) {
+        const auto &object = objects[objectIndex];
+        const uint32_t first = (object.geometryIndex == 0 ? 0 : static_cast<uint32_t>(opaqueTriangleCount)) +
+                               object.dstTriangleBase;
+        frame.primitiveIds[objectIndex] = {first, object.triangleCount, {_sceneScope, objectIds[objectIndex], 0}};
+    }
+    View view;
+    view.sceneScope = _sceneScope;
+    view.revision = _revision;
+    view.vertices = {frame.geometry.get(), 0, writtenVertexBytes};
+    view.indices = {frame.geometry.get(), vertexBytes, writtenIndexBytes};
+    view.materialIds = {frame.geometry.get(), vertexBytes + indexBytes, writtenMaterialIdBytes};
+    view.materials = {frame.materials.get(), 0, frame.materials->size()};
+    view.objectCount = static_cast<uint32_t>(objects.size());
+    view.opaqueObjectCount = static_cast<uint32_t>(opaqueObjects.size());
+    view.vertexCount = static_cast<uint32_t>(vertexCount);
+    view.opaqueTriangleCount = static_cast<uint32_t>(opaqueTriangleCount);
+    view.triangleCount = static_cast<uint32_t>(triangleCount);
+    view.primitiveIds = {frame.primitiveIds.data(), static_cast<uint32_t>(frame.primitiveIds.size())};
+    // Rebuild-every-frame remains deliberately all-dynamic. Future retained
+    // regions can use Admission::residency without changing this publication.
+    view.regions = {{ResidencyClass::Dynamic, _revision, 0, static_cast<uint32_t>(vertexCount),
+                     0, static_cast<uint32_t>(triangleCount)}};
+    return view;
 }
 } // namespace reone::scene
