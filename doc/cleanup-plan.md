@@ -214,7 +214,36 @@ being checkable.
 | **D** | extend admission: grass, particles, the rest | traced image changes deliberately, inspected per class; raster baseline untouched |
 | **E** | raster switches to `GpuScene` | pixel-identical vs the raster baseline |
 
-## Phase A — remove OpenGL
+## Phase A — remove OpenGL *(done: `3445fdc1`, `6a681168`, `f14d7dae`, `df1aa375`)*
+
+**184 files, 13,420 lines deleted against 346 added.** Four commits, not the
+three planned: porting the toolkit turned up a fourth. Presenting a scene
+needed forty lines of Vulkan scaffolding that only `engine.cpp` knew how to
+write, so a second host could not present at all; that moved into the renderer
+as `begin2DRendering`/`end2DRendering`/`presentSceneOutput`, and the engine now
+calls the same code it used to inline.
+
+Two estimates in this section were wrong in the same direction. The toolkit
+port was sized **L** and took one commit, because every seam already existed.
+The deletion was sized at 3537 lines and came to 10,043, because the counts
+here were taken from an older tree. Both errors came from reading the plan
+instead of the code.
+
+One thing did not survive contact: **walkmesh geometry is still here.** It is
+owned by the room, door and placeable game APIs, so deleting it is a game-model
+refactor rather than the debug-geometry cleanup this phase assumed. That
+matters downstream — it was named as the highest-leverage deletion precisely
+because it carries the one attribute `MergedVertex` structurally cannot, so
+Phase D inherits the problem rather than finding it solved.
+
+**And the toolkit preview renders exploded geometry on some models** (backlog
+5.6). It is not the port, not the selector removal, and not retro-on-Vulkan;
+past that, nobody knows, including whether GL was ever correct. The real
+blocker is that the toolkit takes no arguments, so the failing draw cannot be
+reached by RenderDoc or any harness — only by a person clicking. Fix that
+first.
+
+
 
 GL removal goes first. The review argued against this — the extraction is
 entirely inside the Vulkan tracer and gains nothing from GL being gone, so

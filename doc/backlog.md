@@ -179,11 +179,12 @@ for shadow sampling". It did not; it was a constant, and that was the whole poin
 
 | # | Task | Why it matters | Pri | Eff |
 |---|---|---|---|---|
-| 5.1 | Retro pipeline has no Vulkan counterpart | `--pbr 0 --backend vulkan` renders nothing; needs 4 fragment shaders ported | P2 | M |
+| 5.1 | ~~Retro pipeline has no Vulkan counterpart~~ **wrong, closed** | It always had one: `VulkanRenderPipeline` branches on `options.pbr`. Retro and PBR captures of the same module differ by 77% of pixels and 26 levels of mean luminance, and the retro image is correct down to skinned characters and weapons. The factory used to warn "No retro pipeline on Vulkan" and then build the same pipeline anyway; that warning is deleted (`6a681168`) | — | — |
 | 5.2 | Movie playback, profiler and console unported to `I2DRenderer` | Also the 3D sub-scene behind menu panels, skipped because passes cannot nest | P2 | L |
 | 5.3 | Debug AABBs never drawn on Vulkan | `retroAABBFragment` exists but nothing selects it and `aabbVertex` is not in the shaderpack list | P3 | S |
 | 5.4 | Resolve alpha and retro post-processing order differ from GL | Invisible to RGB diffs but feeds compositing | P3 | S |
-| 5.5 | Retire the OpenGL backend | Move the wx toolkit to offscreen Vulkan + readback, then delete GL and its 71 GLSL shaders | P2 | L |
+| 5.5 | ~~Retire the OpenGL backend~~ *(done, `3445fdc1`..`df1aa375`)* | 184 files, 13,420 lines deleted against 346 added. The toolkit was ported by presenting into its wx panel directly rather than the offscreen-plus-readback this entry assumed — SDL3 adopts the panel's native handle, so there is no second render path | — | — |
+| 5.6 | Toolkit model preview renders exploded geometry | Some models draw correctly, others have parts blown into stretched triangles, at rest with no animation playing. Not the port and not the selector removal: bones bypass the `Uniforms` object entirely (`pass/vulkan.cpp:279-296`), retro renders correctly in the engine, and the supermodel *is* resolved (`toolkit/viewmodel/resource/model.cpp:66-69`). Unknown whether the GL preview was ever correct — nobody had tried it. **Blocked on making the preview reachable without a human**: the toolkit takes no arguments, so every iteration costs a GUI click and neither RenderDoc nor a screenshot harness can reach the failing draw | P2 | M |
 
 ## 6. Engine and game systems
 
