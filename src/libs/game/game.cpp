@@ -138,6 +138,8 @@ static const char *cameraTypeName(CameraType type) {
     switch (type) {
     case CameraType::FirstPerson:
         return "FirstPerson";
+    case CameraType::Free:
+        return "Free";
     case CameraType::ThirdPerson:
         return "ThirdPerson";
     case CameraType::Static:
@@ -251,6 +253,10 @@ void Game::initConsole() {
     registerConsoleCommand("listanim", "list animations of selected object", &Game::consoleListAnim);
     registerConsoleCommand("playanim", "play animation on selected object", &Game::consolePlayAnim);
     registerConsoleCommand("warp", "warp to a module", &Game::consoleWarp);
+    registerConsoleCommand("camera", "select camera (free)", &Game::consoleCamera);
+    registerConsoleCommand("campos", "set free camera position", &Game::consoleCamPos);
+    registerConsoleCommand("camlook", "aim free camera at a point", &Game::consoleCamLook);
+    registerConsoleCommand("camstatus", "print free camera viewpoint commands", &Game::consoleCamStatus);
     registerConsoleCommand("kill", "kill selected object", &Game::consoleKill);
     registerConsoleCommand("additem", "add item to selected object", &Game::consoleAddItem);
     registerConsoleCommand("givexp", "give experience to selected creature", &Game::consoleGiveXP);
@@ -978,7 +984,7 @@ void Game::toggleInGameCameraType() {
         break;
     }
 
-    setRelativeMouseMode(_cameraType == CameraType::FirstPerson);
+    setRelativeMouseMode(_cameraType == CameraType::FirstPerson || _cameraType == CameraType::Free);
 
     _module->area()->updateRoomVisibility();
 }
@@ -1452,7 +1458,8 @@ void Game::updateCamera(float dt) {
         break;
     }
     case Screen::InGame:
-        if (_cameraType != CameraType::FirstPerson && _cameraType != CameraType::ThirdPerson) {
+        if (_cameraType != CameraType::FirstPerson && _cameraType != CameraType::Free &&
+            _cameraType != CameraType::ThirdPerson) {
             _cameraType = CameraType::ThirdPerson;
         }
         break;
@@ -1942,7 +1949,7 @@ void Game::closeSwoopRace() {
     _swoopRace.stop();
     setPartyVisible(true);
     _cameraType = _savedCameraType;
-    setRelativeMouseMode(_cameraType == CameraType::FirstPerson);
+    setRelativeMouseMode(_cameraType == CameraType::FirstPerson || _cameraType == CameraType::Free);
     openInGame();
     debug("swoop: stopped (race ended, party restored, camera reset)");
 }
@@ -2538,6 +2545,46 @@ void Game::consoleGiveGold(const ConsoleArgs &args) {
 void Game::consoleWarp(const ConsoleArgs &args) {
     consoleCheckUsage(args, 1, 1, "module");
     loadModule(std::string(args[1].value()));
+}
+
+void Game::consoleCamera(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "free");
+    if (args[1].value() != "free") {
+        throw std::runtime_error("Unknown camera: " + std::string(args[1].value()));
+    }
+    auto camera = getConsoleArea()->getCamera<FreeCamera>(CameraType::Free);
+    if (!camera) {
+        throw std::runtime_error("Free camera is not available");
+    }
+    _cameraType = CameraType::Free;
+    setRelativeMouseMode(true);
+    getConsoleArea()->updateRoomVisibility();
+}
+
+void Game::consoleCamPos(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 3, 3, "x y z");
+    auto camera = getConsoleArea()->getCamera<FreeCamera>(CameraType::Free);
+    camera->setPosition({args.get<float>(1).value(), args.get<float>(2).value(), args.get<float>(3).value()});
+}
+
+void Game::consoleCamLook(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 3, 3, "x y z");
+    auto camera = getConsoleArea()->getCamera<FreeCamera>(CameraType::Free);
+    camera->setLookAt({args.get<float>(1).value(), args.get<float>(2).value(), args.get<float>(3).value()});
+}
+
+void Game::consoleCamStatus(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    auto camera = getConsoleArea()->getCamera<FreeCamera>(CameraType::Free);
+    glm::vec3 pos = camera->position();
+    glm::vec3 forward(-glm::sin(camera->facing()) * glm::cos(camera->pitch()),
+                      glm::cos(camera->facing()) * glm::cos(camera->pitch()),
+                      glm::sin(camera->pitch()));
+    glm::vec3 target = pos + forward;
+    std::string result = str(boost::format("camera free; campos %.6f %.6f %.6f; camlook %.6f %.6f %.6f") %
+                             pos.x % pos.y % pos.z % target.x % target.y % target.z);
+    _console.printLine(result);
+    info(result);
 }
 
 void Game::consoleRunScript(const ConsoleArgs &args) {

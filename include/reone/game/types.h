@@ -130,7 +130,8 @@ enum class CameraType {
     ThirdPerson,
     Static,
     Animated,
-    Dialog
+    Dialog,
+    Free
 };
 
 enum class EffectType {

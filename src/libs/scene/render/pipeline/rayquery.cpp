@@ -964,6 +964,11 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyMesh(RenderRegistry
 }
 
 std::optional<GpuScene::Admission> RayQueryPipeline::classifyGrass(const RegisteredGrass &grass) {
+    // Clusters, not entries: one RegisteredGrass carries a whole hillside, so
+    // counting entries reported 1 where 1482 quads were admitted. The point of
+    // this counter is to answer "is it actually there", which a count of
+    // registrations cannot.
+    _lastGrass += static_cast<uint32_t>(grass.instances.size());
     InstanceMaterial material;
     material.diffuseColor = glm::vec4(grass.material.diffuseColor, 1.0f);
     material.uv0 = grass.material.uv[0];
@@ -992,6 +997,7 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyGrass(const Registe
 }
 
 std::optional<GpuScene::Admission> RayQueryPipeline::classifyParticles(const RegisteredParticles &particles) {
+    _lastParticles += static_cast<uint32_t>(particles.instances.size());
     InstanceMaterial material;
     material.diffuseColor = glm::vec4(particles.material.diffuseColor, 1.0f);
     material.uv0 = particles.material.uv[0];
@@ -1020,6 +1026,7 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyParticles(const Reg
 }
 
 std::optional<GpuScene::Admission> RayQueryPipeline::classifyBillboard(const RegisteredBillboard &billboard) {
+    ++_lastBillboards;
     InstanceMaterial material;
     material.diffuseColor = billboard.color;
     material.mainTex = _renderer.resources().textureId(billboard.texture.get()).value_or(UINT32_MAX);
@@ -1064,6 +1071,9 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     _lastSabers = 0;
     _lastSky = 0;
     _lastDangly = 0;
+    _lastGrass = 0;
+    _lastParticles = 0;
+    _lastBillboards = 0;
     // Sky detection: there is exactly ONE sky per scene - the room whose
     // geometry overlaps the scene itself. Candidates are rooms without a
     // walkmesh (background scenery, the K1 skybox convention - a walkable
@@ -1753,7 +1763,8 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
          std::to_string(microseconds) + " us; " + std::to_string(_lastEmissive) +
           " emissive, " + std::to_string(_lastAdditive) + " additive, " +
          std::to_string(_lastSabers) + " saber, " + std::to_string(_lastDangly) + " dangly, " +
-         std::to_string(_lastSky) + " sky; " + statsPart +
+         std::to_string(_lastGrass) + " grass clusters, " + std::to_string(_lastParticles) + " particles, " +
+         std::to_string(_lastBillboards) + " billboards, " + std::to_string(_lastSky) + " sky; " + statsPart +
          std::to_string(_lastBindlessTextureCount) + " bindless 2D textures; " +
          std::to_string(std::max(1, _options.pathTracingSamples)) + " spp", LogChannel::Graphics);
 }

@@ -48,6 +48,7 @@
 #include "object/area.h"
 #include "object/camera/animated.h"
 #include "object/camera/dialog.h"
+#include "object/camera/free.h"
 #include "object/camera/firstperson.h"
 #include "object/camera/static.h"
 #include "object/camera/thirdperson.h"
@@ -319,6 +320,10 @@ public:
 
     inline std::shared_ptr<FirstPersonCamera> newFirstPersonCamera(float fovy, float aspect, std::string sceneName = kSceneMain) {
         return newObject<FirstPersonCamera>(fovy, aspect, std::move(sceneName), *this, _services);
+    }
+
+    inline std::shared_ptr<FreeCamera> newFreeCamera(float fovy, float aspect, std::string sceneName = kSceneMain) {
+        return newObject<FreeCamera>(fovy, aspect, std::move(sceneName), *this, _services);
     }
 
     inline std::shared_ptr<StaticCamera> newStaticCamera(float aspect, std::string sceneName = kSceneMain) {
@@ -655,6 +660,10 @@ private:
     void consoleGiveXP(const ConsoleArgs &tokens);
     void consoleGiveGold(const ConsoleArgs &tokens);
     void consoleWarp(const ConsoleArgs &tokens);
+    void consoleCamera(const ConsoleArgs &tokens);
+    void consoleCamPos(const ConsoleArgs &tokens);
+    void consoleCamLook(const ConsoleArgs &tokens);
+    void consoleCamStatus(const ConsoleArgs &tokens);
     void consoleRunScript(const ConsoleArgs &tokens);
     void consoleShowAABB(const ConsoleArgs &tokens);
     void consoleShowWalkmesh(const ConsoleArgs &tokens);

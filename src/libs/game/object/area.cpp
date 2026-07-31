@@ -581,6 +581,11 @@ void Area::initCameras(const glm::vec3 &entryPosition, float entryFacing) {
     _firstPersonCamera->setPosition(position);
     _firstPersonCamera->setFacing(entryFacing);
 
+    _freeCamera = _game.newFreeCamera(glm::radians(kDefaultFieldOfView), _cameraAspect, _sceneName);
+    _freeCamera->load();
+    _freeCamera->setPosition(position);
+    _freeCamera->setFacing(entryFacing);
+
     _thirdPersonCamera = _game.newThirdPersonCamera(_camStyleDefault, _cameraAspect, _sceneName);
     _thirdPersonCamera->load();
     _thirdPersonCamera->setTargetPosition(position);
@@ -1288,6 +1293,8 @@ Camera *Area::getCamera(CameraType type) {
     switch (type) {
     case CameraType::FirstPerson:
         return _firstPersonCamera.get();
+    case CameraType::Free:
+        return _freeCamera.get();
     case CameraType::ThirdPerson:
         return _thirdPersonCamera.get();
     case CameraType::Static:

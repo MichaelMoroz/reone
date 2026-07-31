@@ -19,6 +19,8 @@
 
 #include "reone/game/object/camera/firstperson.h"
 
+#include <limits>
+
 #include "reone/game/di/services.h"
 #include "reone/graphics/types.h"
 #include "reone/scene/di/services.h"
@@ -228,6 +230,23 @@ void FirstPersonCamera::setPosition(const glm::vec3 &pos) {
 
 void FirstPersonCamera::setFacing(float facing) {
     _facing = facing;
+    updateSceneNode();
+}
+
+void FirstPersonCamera::setPitch(float pitch) {
+    _pitch = glm::clamp(pitch, -glm::quarter_pi<float>(), glm::quarter_pi<float>());
+    updateSceneNode();
+}
+
+void FirstPersonCamera::setLookAt(const glm::vec3 &target) {
+    glm::vec3 direction = target - _position;
+    float length = glm::length(direction);
+    if (length <= std::numeric_limits<float>::epsilon()) {
+        throw std::invalid_argument("Camera look target must differ from its position");
+    }
+    direction /= length;
+    _facing = glm::atan(-direction.x, direction.y);
+    _pitch = glm::clamp(glm::asin(direction.z), -glm::quarter_pi<float>(), glm::quarter_pi<float>());
     updateSceneNode();
 }
 

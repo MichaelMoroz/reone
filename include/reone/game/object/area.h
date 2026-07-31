@@ -32,6 +32,7 @@
 #include "../object.h"
 #include "../object/camera/animated.h"
 #include "../object/camera/dialog.h"
+#include "../object/camera/free.h"
 #include "../object/camera/firstperson.h"
 #include "../object/camera/static.h"
 #include "../object/camera/thirdperson.h"
@@ -271,6 +272,7 @@ private:
 
     float _cameraAspect {0.0f};
     std::shared_ptr<FirstPersonCamera> _firstPersonCamera;
+    std::shared_ptr<FreeCamera> _freeCamera;
     std::shared_ptr<ThirdPersonCamera> _thirdPersonCamera;
     std::shared_ptr<DialogCamera> _dialogCamera;
     std::shared_ptr<AnimatedCamera> _animatedCamera;

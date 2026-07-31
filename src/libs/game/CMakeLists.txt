@@ -300,6 +300,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/object/camera.h
     ${GAME_INCLUDE_DIR}/object/camera/animated.h
     ${GAME_INCLUDE_DIR}/object/camera/dialog.h
+    ${GAME_INCLUDE_DIR}/object/camera/free.h
     ${GAME_INCLUDE_DIR}/object/camera/firstperson.h
     ${GAME_INCLUDE_DIR}/object/camera/static.h
     ${GAME_INCLUDE_DIR}/object/camera/thirdperson.h

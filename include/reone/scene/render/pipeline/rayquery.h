@@ -102,6 +102,9 @@ private:
     uint32_t _lastSabers {0};
     uint32_t _lastSky {0};
     uint32_t _lastDangly {0};
+    uint32_t _lastGrass {0};
+    uint32_t _lastParticles {0};
+    uint32_t _lastBillboards {0};
     uint32_t _lastSecondaryRays {0};
     uint32_t _lastSecondaryMisses {0};
     uint32_t _lastSurvivingLights {0};
