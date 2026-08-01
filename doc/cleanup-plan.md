@@ -206,13 +206,58 @@ Five phases, A to E. Each has its own verification bar, stated with it, because
 they are not the same bar and pretending otherwise is how a refactor stops
 being checkable.
 
-| phase | work | bar |
-|---|---|---|
-| **A** | remove OpenGL | pixel-identical vs the Vulkan baseline |
-| **B** | extract `GpuScene`, tracer as only consumer | pixel-identical |
-| **C** | residency in the contract, not the implementation | pixel-identical |
-| **D** | extend admission: grass, particles, the rest | traced image changes deliberately, inspected per class; raster baseline untouched |
-| **E** | raster switches to `GpuScene` | pixel-identical vs the raster baseline |
+| phase | work | bar | state |
+|---|---|---|---|
+| **A** | remove OpenGL | pixel-identical vs the Vulkan baseline | **done** `3445fdc1`…`df1aa375` |
+| **B0** | one source buffer, offsets not addresses | pixel-identical | **done** `a24b1bd3` |
+| **B** | extract `GpuScene`, tracer as only consumer | pixel-identical | **done** `6fed967b` |
+| **C** | residency in the contract, not the implementation | pixel-identical | **done** `badd9c5f` |
+| **D** | admit everything, and see it correctly | traced image changes deliberately, inspected per class; raster untouched except where stated | grass, dangly, saber, particles **done**; shadows + smoke open |
+| **E** | raster consumes `GpuScene` | raster hash-identical where geometry is unchanged | not started, and smaller than written |
+
+### What happens next, in order
+
+Written down 2026-08-01 because the correctness work in D pulled a long way
+from the phase list and the way back should not have to be rediscovered.
+
+**1. Close Phase D.** Grass casts no shadow, and blended smoke is invisible to
+primary rays. Both are the same fix — see "coverage is transmission" under
+Phase D. Everything built alongside it (the free camera, the TLAS content
+counts, the traced G-buffer dump) exists to make these two checkable and is
+not separate work.
+
+**2. Measure the registry copy. Ten minutes, and it sequences everything
+after.** `RegisteredMesh` copies a full `Material` and bone vectors per object,
+roughly a thousand objects a frame, against a 2.3 ms update slot. If that is a
+visible slice, deleting `RenderRegistry` jumps ahead of Phase E; if it is
+0.1 ms, it lands with E's front half. Do not guess this — the last three
+sequencing arguments in this document were settled by a measurement, and the
+ones that were not were wrong.
+
+**3. Delete `RenderRegistry`, and fold three things into that one change**
+because they all touch the same code and doing them separately means doing
+admission three times:
+
+  - **the removal itself** — `SceneGraph` admits into `GpuScene` directly,
+    `drawScene`'s selection becomes ranges, the kill switch and curated
+    materials move to stable-id tables, the panel is renamed Objects
+  - **the `GpuScene` split and relocation.** It cannot simply move to
+    `graphics/vulkan`: `update()` takes a `RenderRegistry &`, and graphics
+    knowing about scene types inverts the library dependency. Removing the
+    registry is exactly what unblocks it — Vulkan-typed storage goes down into
+    `graphics/vulkan`, registry-reading admission stays above. Doing this
+    before step 3 means writing admission twice.
+  - **backlog 7.7, the isolation fixtures that render nothing.** Not
+    housekeeping: per-class isolation is what would have caught the grass
+    transpose, and it cannot run today. `--commands-frame` looks like the fix,
+    since the cause is `warp` completing its module load after the commands
+    file has run.
+
+**4. Phase E**, which is now much smaller than the section below describes.
+Three of its five listed breakages turned out to be current tracer bugs and
+were fixed in D; what remains is raster's own lowering — hashed alpha against
+world-space vertices, blend ordering, material binding — over a scene that is
+already correct.
 
 ## Phase A — remove OpenGL *(done: `3445fdc1`, `6a681168`, `f14d7dae`, `df1aa375`)*
 
