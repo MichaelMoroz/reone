@@ -22,6 +22,7 @@ set(VULKAN_HEADERS
     ${VULKAN_INCLUDE_DIR}/debugscope.h
     ${VULKAN_INCLUDE_DIR}/device.h
     ${VULKAN_INCLUDE_DIR}/gbuffer.h
+    ${VULKAN_INCLUDE_DIR}/gpuscene.h
     ${VULKAN_INCLUDE_DIR}/image.h
     ${VULKAN_INCLUDE_DIR}/mesh.h
     ${VULKAN_INCLUDE_DIR}/pbrtextures.h
@@ -29,8 +30,11 @@ set(VULKAN_HEADERS
     ${VULKAN_INCLUDE_DIR}/pipelinecache.h
     ${VULKAN_INCLUDE_DIR}/renderer.h
     ${VULKAN_INCLUDE_DIR}/renderer2d.h
+    ${VULKAN_INCLUDE_DIR}/renderpass.h
+    ${VULKAN_INCLUDE_DIR}/rayquery.h
     ${VULKAN_INCLUDE_DIR}/resources.h
     ${VULKAN_INCLUDE_DIR}/samplers.h
+    ${VULKAN_INCLUDE_DIR}/scenepipeline.h
     ${VULKAN_INCLUDE_DIR}/swapchain.h
     ${VULKAN_INCLUDE_DIR}/uniformring.h)
 
@@ -39,6 +43,7 @@ set(VULKAN_SOURCES
     ${VULKAN_SOURCE_DIR}/descriptors.cpp
     ${VULKAN_SOURCE_DIR}/device.cpp
     ${VULKAN_SOURCE_DIR}/gbuffer.cpp
+    ${VULKAN_SOURCE_DIR}/gpuscene.cpp
     ${VULKAN_SOURCE_DIR}/image.cpp
     ${VULKAN_SOURCE_DIR}/mesh.cpp
     ${VULKAN_SOURCE_DIR}/pbrtextures.cpp
@@ -46,8 +51,11 @@ set(VULKAN_SOURCES
     ${VULKAN_SOURCE_DIR}/pipelinecache.cpp
     ${VULKAN_SOURCE_DIR}/renderer.cpp
     ${VULKAN_SOURCE_DIR}/renderer2d.cpp
+    ${VULKAN_SOURCE_DIR}/renderpass.cpp
+    ${VULKAN_SOURCE_DIR}/rayquery.cpp
     ${VULKAN_SOURCE_DIR}/resources.cpp
     ${VULKAN_SOURCE_DIR}/samplers.cpp
+    ${VULKAN_SOURCE_DIR}/scenepipeline.cpp
     ${VULKAN_SOURCE_DIR}/swapchain.cpp
     ${VULKAN_SOURCE_DIR}/uniformring.cpp
     ${VULKAN_SOURCE_DIR}/volk.cpp
@@ -56,6 +64,11 @@ set(VULKAN_SOURCES
 if(ENABLE_FSR)
     list(APPEND VULKAN_HEADERS ${VULKAN_INCLUDE_DIR}/fsrupscaler.h)
     list(APPEND VULKAN_SOURCES ${VULKAN_SOURCE_DIR}/fsrupscaler.cpp)
+endif()
+
+if(ENABLE_NRD)
+    list(APPEND VULKAN_HEADERS ${VULKAN_INCLUDE_DIR}/nrddenoiser.h)
+    list(APPEND VULKAN_SOURCES ${VULKAN_SOURCE_DIR}/nrddenoiser.cpp)
 endif()
 
 add_library(graphicsvulkan STATIC ${VULKAN_HEADERS} ${VULKAN_SOURCES} ${CLANG_FORMAT_PATH})
@@ -79,6 +92,10 @@ target_compile_definitions(graphicsvulkan PUBLIC
 
 if(ENABLE_FSR)
     target_link_libraries(graphicsvulkan PUBLIC fsr2)
+endif()
+
+if(ENABLE_NRD)
+    target_link_libraries(graphicsvulkan PUBLIC NRD)
 endif()
 
 target_link_libraries(graphicsvulkan PUBLIC

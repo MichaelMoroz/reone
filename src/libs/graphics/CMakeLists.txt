@@ -29,6 +29,8 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/dxtutil.h
     ${GRAPHICS_INCLUDE_DIR}/font.h
     ${GRAPHICS_INCLUDE_DIR}/frustum.h
+    ${GRAPHICS_INCLUDE_DIR}/gpuscene.h
+    ${GRAPHICS_INCLUDE_DIR}/rayquery.h
     ${GRAPHICS_INCLUDE_DIR}/format/bwmreader.h
     ${GRAPHICS_INCLUDE_DIR}/format/curreader.h
     ${GRAPHICS_INCLUDE_DIR}/format/lipreader.h

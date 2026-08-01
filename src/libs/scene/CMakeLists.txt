@@ -80,9 +80,3 @@ target_sources(scene PRIVATE
     ${SCENE_SOURCE_DIR}/render/pipeline/vulkan.cpp
     ${SCENE_SOURCE_DIR}/render/pipeline/rayquery.cpp)
 target_link_libraries(scene PUBLIC graphicsvulkan)
-
-if(ENABLE_NRD)
-    target_sources(scene PRIVATE ${SCENE_SOURCE_DIR}/render/pipeline/nrddenoiser.cpp)
-    target_link_libraries(scene PUBLIC NRD)
-endif()
-

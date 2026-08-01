@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "reone/scene/render/pipeline/nrddenoiser.h"
+#include "reone/graphics/vulkan/nrddenoiser.h"
 
 #ifdef R_ENABLE_NRD
 
@@ -29,7 +29,7 @@ using namespace reone::graphics;
 
 namespace reone {
 
-namespace scene {
+namespace graphics {
 
 /**
  * Generous and unmeasured on purpose: a REBLUR_DIFFUSE_SPECULAR frame is
@@ -495,7 +495,7 @@ void NrdDenoiser::denoise(VkCommandBuffer cmd,
     vkCmdPipelineBarrier2(cmd, &computeDependency);
 }
 
-} // namespace scene
+} // namespace graphics
 
 } // namespace reone
 

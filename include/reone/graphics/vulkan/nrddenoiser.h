@@ -30,10 +30,6 @@ namespace graphics {
 
 class VulkanDevice;
 
-}
-
-namespace scene {
-
 /**
  * Records NRD's denoising passes into the frame's command buffer, GAPI-free
  * on NRD's side: the library hands back compute dispatch descriptions -
@@ -77,7 +73,7 @@ public:
         bool antiFirefly {true};
     };
 
-    NrdDenoiser(graphics::VulkanDevice &device, nrd::Instance &instance, glm::ivec2 extent) :
+    NrdDenoiser(VulkanDevice &device, nrd::Instance &instance, glm::ivec2 extent) :
         _device(device), _instance(instance), _extent(extent) {}
 
     ~NrdDenoiser() { deinit(); }
@@ -101,11 +97,11 @@ public:
                  uint32_t frameNumber,
                  bool restartHistory);
 
-    graphics::VulkanImage &denoisedDiffuse() { return *_outDiffuse; }
-    graphics::VulkanImage &denoisedSpecular() { return *_outSpecular; }
+    VulkanImage &denoisedDiffuse() { return *_outDiffuse; }
+    VulkanImage &denoisedSpecular() { return *_outSpecular; }
 
 private:
-    graphics::VulkanDevice &_device;
+    VulkanDevice &_device;
     nrd::Instance &_instance;
     glm::ivec2 _extent;
 
@@ -117,13 +113,13 @@ private:
     };
 
     std::vector<Pipeline> _pipelines;
-    std::vector<std::unique_ptr<graphics::VulkanImage>> _permanentPool;
-    std::vector<std::unique_ptr<graphics::VulkanImage>> _transientPool;
-    std::unique_ptr<graphics::VulkanImage> _outDiffuse;
-    std::unique_ptr<graphics::VulkanImage> _outSpecular;
+    std::vector<std::unique_ptr<VulkanImage>> _permanentPool;
+    std::vector<std::unique_ptr<VulkanImage>> _transientPool;
+    std::unique_ptr<VulkanImage> _outDiffuse;
+    std::unique_ptr<VulkanImage> _outSpecular;
     std::array<VkSampler, 2> _samplers {};
     std::array<VkDescriptorPool, 2> _descriptorPools {};
-    std::unique_ptr<graphics::VulkanBuffer> _constants;
+    std::unique_ptr<VulkanBuffer> _constants;
     VkDeviceSize _constantSlotSize {0};
     uint32_t _constantSlotsPerFrame {0};
     glm::mat4 _prevView {1.0f};
@@ -136,7 +132,7 @@ private:
     VkImageView viewFor(const nrd::ResourceDesc &resource, const Inputs &inputs) const;
 };
 
-} // namespace scene
+} // namespace graphics
 
 } // namespace reone
 
