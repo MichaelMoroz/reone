@@ -84,16 +84,29 @@ branches: `engine.cpp:199-268`, `window.cpp:31-91`, `di/module.cpp:68-91`,
 
 ## The target, stated as an end state
 
-Three modules, and **one path by which scene geometry becomes GPU data**:
+**One renderer, four render modes, and one path by which scene geometry becomes
+GPU data.** Corrected 2026-08-01: an earlier revision drew PathTracing and the
+Rasterizer as sibling modules, which the hybrid decision
+(`vulkan-rt-backend.md` §11.2) makes wrong. Raster owns primary visibility in
+every mode, so path tracing is a *mode* of the one renderer rather than a peer
+of it.
 
 ```
+SceneGraph → GpuScene → Rasterizer → RenderMode ┬→ Retro ──────────────┐
+                                                ├→ PBR ────────────────┤
+                                                ├→ PathTrace → Denoise ┤→ AA (FXAA | FSR)
+                                                └→ RTDebug ────────────┘
+
 GpuScene — the ONE compute scene-mesh creation path
-    registry -> admission -> one compute dispatch -> merged world-space geometry
+    admission -> one compute dispatch -> merged world-space geometry
     stable primitive -> object/material identity, residency, lifetime
-
-  PathTracing module        BLAS/TLAS, trace, sky environment, NRD, FSR
-  Rasterizer module         ONE module, configured as PBR or Retro
 ```
+
+`RTDebug` is the ray-traced G-buffer kept as a validation instrument
+(backlog 7.9), and it is the only surviving piece of the traced primary path.
+BLAS/TLAS, the sky environment, NRD and FSR do not disappear — they become
+what the PathTrace mode owns, rather than a second renderer's private
+machinery.
 
 **And one condition on all three: no Vulkan API outside `graphics/vulkan`.**
 This was an unstated assumption until 2026-08-01 and the tree is a long way from

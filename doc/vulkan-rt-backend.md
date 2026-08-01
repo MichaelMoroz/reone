@@ -4,13 +4,46 @@ Goal: run reone entirely on Vulkan, reach parity with the OpenGL renderer, then
 go past it — hardware ray tracing, real-time path tracing, FSR upscaling, and a
 material model that can feed a physically based BSDF.
 
-**Status, 2026-07-26.** The engine runs on Vulkan as far as the main menu:
-`engine --backend vulkan` renders it correctly, matching the OpenGL frame except
-for the 3D model behind the panel. The backend has a device, swapchain, memory,
-descriptors, a pipeline cache, resource upload, a complete 2D renderer, and a
-G-buffer with a deferred resolve. The shipping model and grass shaders have been
-shown to render through it. What does not exist is the scene pipeline — so
-nothing in the game world draws on Vulkan yet.
+## THE RENDERER STRUCTURE
+
+**Read this before anything else in this document.** Stated 2026-08-01. Where
+any other section disagrees with it, this wins.
+
+```
+SceneGraph → GpuScene → Rasterizer → RenderMode ┬→ Retro ──────────────┐
+                                                ├→ PBR ────────────────┤
+                                                ├→ PathTrace → Denoise ┤→ AA (FXAA | FSR)
+                                                └→ RTDebug ────────────┘
+```
+
+**There is one renderer: the Rasterizer.** Path tracing is a *render mode* of
+it, not a sibling module. That falls out of §11.2 — raster owns primary
+visibility and produces the G-buffer in every mode, so every frame goes through
+the rasterizer and the modes differ only in how shading and transport are
+computed from what it produced.
+
+| mode | what it is |
+|---|---|
+| **Retro** | the original Odyssey look. Not a fallback — an art-direction choice, available on any hardware |
+| **PBR** | deferred physically based raster |
+| **PathTrace** | traced transport from the raster G-buffer, then Denoise (NRD). Denoise exists only on this branch |
+| **RTDebug** | the ray-traced G-buffer, kept as the validation instrument proving both renderers describe the same scene (backlog 7.9). The only surviving piece of the traced primary path |
+
+Anti-aliasing — FXAA or FSR — is the common tail and applies to every mode.
+
+Two consequences that catch people out. **`GpuScene` must not require ray
+tracing**, because three of the four modes do not use it; the merge is a plain
+compute dispatch and acceleration structures sit on top of its output. And
+**"path traced" is not a separate pipeline to keep in step with the raster one**
+— there is one geometry path, one G-buffer, and a choice of how to light it.
+
+**Status, 2026-08-01.** The engine runs entirely on Vulkan; OpenGL was deleted
+in `df1aa375` and there is no `--backend` option. The scene pipeline exists and
+the game world draws, in raster (PBR and Retro) and in path tracing with NRD and
+FSR. `GpuScene` owns merged world-space geometry with residency and stable
+identity, and the tracer consumes it. What is in flight is the rest of the
+structure above: `RenderRegistry`'s removal, Vulkan containment, and raster
+consuming `GpuScene` — see `doc/cleanup-plan.md`.
 
 This document is the whole road, not just the next step. Part I is what stands
 today, Part II is parity, Part III is what parity is *for*, and Part IV is
