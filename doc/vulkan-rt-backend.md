@@ -385,11 +385,53 @@ the scene, materials and acceleration structures.
   by many small point lights, and pure path tracing without NEE will be unusably
   noisy in exactly the scenes people care about.
 
-### 11.2 What it replaces, and what it keeps
+### 11.2 The renderer is hybrid — raster owns primary visibility
 
-Keeps the raster path for GUI, text, particles and movies; none of those has any
-business being traced. The 2D renderer is already backend-clean, so this costs
-nothing.
+**Decided 2026-08-01, and it supersedes the ray-generation shape above.** Raster
+produces the G-buffer; the tracer does transport from it. Camera rays are not
+traced.
+
+**Of the traced primary path, exactly one thing survives: a debug shader that
+emits a ray-traced G-buffer, for validation.** If the two renderers describe the
+same scene, their G-buffers must match — so the traced one becomes a permanent
+instrument for proving that, and the merged-geometry work has a check that does
+not depend on judging an image. Everything else in the traced visibility walk
+goes.
+
+What that buys, beyond the obvious sample-count saving:
+
+- **The denoiser guides stop being wrong.** viewZ, normal-roughness, motion and
+  the demodulation factors come from raster's opaque pass, so a transmissive
+  quad can never write them. That is backlog 1.12 solved by construction rather
+  than by teaching the tracer to skip transmissive hits.
+- **Motion vectors become exact.** Raster already computes `prevClipPos` per
+  vertex; the traced ones are reconstructed.
+- **Depth exists in every mode**, which is what a world-space depth-tested debug
+  pass needs (backlog 7.8) and what a traced frame otherwise has to fake from
+  `traced_view_z`.
+- **Cutouts and hashed alpha resolve once**, in the pass that already does them.
+
+What it costs:
+
+- **Coverage-as-transmission was a primary-ray model** and the primary ray is
+  gone. Shading a blended surface, weighting by alpha and continuing with
+  `1 - alpha` describes a camera ray walking a stack of smoke quads. A raster
+  G-buffer is opaque-only, so **transmissive surfaces have to be re-homed** —
+  and how they are lit once raster composites them is the open question this
+  decision creates. The model itself survives where it is still needed: shadow
+  rays and secondary bounces still cross smoke.
+- **The black-band defect on menu smoke largely dissolves** rather than being
+  fixed. Its truncation half — the primary path capping transmission at twelve
+  layers and discarding the background behind them — cannot happen when the
+  background *is* the G-buffer. The self-shadowing half is a real lighting
+  problem and remains.
+- **Raster consuming `GpuScene` stops being optional.** It was justified by CPU
+  overhead on weak hardware; under hybrid it is the shared primary-visibility
+  path for both renderers, so one geometry pipeline is a requirement rather than
+  a preference.
+
+Keeps the raster path for GUI, text and movies; none of those has any business
+being traced. The 2D renderer is already backend-clean, so this costs nothing.
 
 ### 11.3 Realistic expectations
 
