@@ -1012,6 +1012,13 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyParticles(const Reg
     // additive emitters retain their existing pass-through emission semantics.
     if (particles.material.blending == BlendMode::Lighten) {
         material.surfaceType = 1;
+    } else {
+        // Particle OIT represents continuous coverage. It is a real PBR
+        // surface in the tracer, with the unoccluded portion transmitted.
+        // Without this bit ptTraceNearest commits the quad unconditionally
+        // and never reads its alpha at all, which renders smoke as solid
+        // black blocks.
+        material.featureMask |= 1u << 25;
     }
     const auto &src = _options.ptCategoryOverrides[8];
     material.overrideColor = glm::vec4(src.color[0], src.color[1], src.color[2],

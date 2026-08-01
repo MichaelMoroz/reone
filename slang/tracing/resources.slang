@@ -21,6 +21,17 @@ public static const uint kPtSurfaceUnlitEmissive = 2;    // sky and prelit: radi
 // featureMask bits the tracer consumes. Kept bit-compatible with the raster
 // feature mask below bit 23; the tracer-only bits sit above.
 public static const uint kPtMaskSky = 1u << 24;          // selects the sky dial over the emissive one
+// Continuous alpha coverage: shade this surface and transmit the remainder
+// of the ray. Kept separate from punch-through because a smoke ramp is not a
+// stochastic cutout mask.
+public static const uint kPtMaskBlendedCoverage = 1u << 25;
+// Bit-compatible with the raster feature mask. These textures carry colour
+// already multiplied by coverage and NO usable alpha channel, so reading .a
+// yields a meaningless constant - for KotOR's smoke that reads as opaque
+// everywhere the puff is not, which renders the plume as its own negative.
+// particles.slang:64-71 recovers coverage from luma; the tracer must do the
+// same or it is shading a different surface than raster is.
+public static const uint kPtMaskPremulAlpha = 1u << 12;
 public static const uint kPtMaskPunchThrough = 1u << 26; // alpha-tested coverage in traversal
 public static const uint kPtCategoryShift = 27;
 public static const uint kPtCategoryMask = 0xFu;

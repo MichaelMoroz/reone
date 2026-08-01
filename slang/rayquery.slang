@@ -31,8 +31,14 @@ import tracing.lighting;
 import tracing.outputs;
 import tracing.debug;
 
-/** Pass-through steps (additive layers, coverage misses) per path. */
+/** Additive layers (sabers, glow planes) per path. */
 static const uint kMaxPassThroughSteps = 16;
+/**
+ * Real transmitting hits (smoke) per path. This is independent of ptBounces:
+ * a short stack of puffs must not consume the two scattering vertices, but a
+ * malformed overlapping emitter stack must never spin a GPU ray forever.
+ */
+static const uint kMaxTransmissionSteps = 12;
 
 /**
  * The one exit: write the split, then the image - a channel debug view when
@@ -160,6 +166,8 @@ void main() {
     // reports its own depth and motion. An unlit primary keeps a white albedo
     // guide: its radiance is emission, and nothing is behind it to remodulate.
     bool pbrPrimary = instanceMaterials[primaryHit.materialIndex].surfaceType == kPtSurfacePbr;
+    bool primaryBlendedCoverage =
+        (instanceMaterials[primaryHit.materialIndex].featureMask & kPtMaskBlendedCoverage) != 0;
     outputs.normal = primaryShading.normal;
     outputs.roughness = primaryShading.roughness;
     outputs.viewZ = primaryShading.terminatesPath
@@ -186,14 +194,20 @@ void main() {
                                            previousClip.xy / previousClip.w);
         }
     }
-    if (pbrPrimary) {
+    // A transmitting primary carries radiance from surfaces behind it. That
+    // mixed signal cannot be demodulated by the particle's material factor:
+    // multiplying it back at composite would tint and darken the transmitted
+    // background. Keep the channel in radiance space and apply the smoke's
+    // response only to its own local contribution below.
+    if (pbrPrimary && !primaryBlendedCoverage) {
         float3 Rf0 = lerp(lerp(float3(0.04), primaryShading.albedo, primaryShading.metallic),
                           float3(1.0), primaryShading.envStrength);
         ptNrdMaterialFactors(primaryShading.normal, -probe.Direction, primaryShading.albedo,
                              primaryShading.metallic, Rf0, primaryShading.roughness,
                              outputs.diffFactor, outputs.specFactor);
     }
-    outputs.noiseFree = layerEmission + primaryShading.emission;
+    float primaryOpacity = primaryBlendedCoverage ? primaryShading.alpha : 1.0;
+    outputs.noiseFree = layerEmission + primaryShading.emission * primaryOpacity;
     // The sky keeps the far-plane defaults: it has no position to reproject and
     // an upscaler must not try to chase one.
     if (!primaryShading.terminatesPath) {
@@ -233,12 +247,15 @@ void main() {
         float firstScatterT = -1.0;
         uint scatters = 0;
         uint passThroughs = 0;
+        uint transmissions = 0;
 
         // ---- The bounce loop ----
         while (true) {
             float3 view = -path.Direction;
             PathSample sample = ptSampleRay(hit, shading, view, rng);
             if (sample.terminate) break;
+            bool blendedCoverage =
+                (instanceMaterials[hit.materialIndex].featureMask & kPtMaskBlendedCoverage) != 0;
             if (!sample.passThrough) {
                 DirectLight nee = ptDirectLight(hit, shading, view, rng);
                 if (!pathDecided) {
@@ -271,23 +288,57 @@ void main() {
                 primaryScatter = false;
                 if (++scatters > scatterBudget) break;
                 path.Origin = hit.position + hit.geometricNormal * pushConstants.rayOriginOffset;
-            } else {
-                // Only additive layers pass through, and the visibility walk
-                // already stepped past every one in front of the guide
-                // surface - so this is always a deeper vertex, and whatever
-                // lies behind it carries full, undemodulated weights.
+            } else if (!blendedCoverage) {
+                // Additive layers pass through unattenuated. The visibility
+                // walk already stepped past primary layers, so this is always
+                // a deeper vertex.
                 primaryScatter = false;
                 if (++passThroughs > kMaxPassThroughSteps) break;
                 pathWeight *= sample.weight;
                 // Continue through the surface, not off it.
                 path.Origin = hit.position + path.Direction * 1e-3;
+            } else {
+                // Blended coverage is a real, lit surface plus straight
+                // transmission. Its scatter contribution is alpha-weighted;
+                // only the transmitted remainder continues, and this does
+                // not spend a scattering bounce.
+                DirectLight nee = ptDirectLight(hit, shading, view, rng);
+                float opacity = shading.alpha;
+                if (!pathDecided) {
+                    pathDecided = true;
+                    specularPath = false;
+                }
+                if (primaryScatter) {
+                    // Transmitted background and the particle's local light
+                    // share one radiance-space channel. Demodulating both by
+                    // the particle response makes a 2%-opaque puff multiply
+                    // the entire background by its dark texture.
+                    diffuseChannel += opacity *
+                                      (nee.diffuse * diffuseMaterialResponse(shading, view) +
+                                       nee.specular);
+                } else {
+                    pathRadiance += pathWeight * opacity *
+                                    (nee.diffuse * diffuseMaterialResponse(shading, view) +
+                                     nee.specular);
+                }
+                primaryScatter = false;
+                // This is a hard termination condition. Retain every local
+                // contribution accumulated above, but never trace a 13th
+                // transmitting hit along this path.
+                if (++transmissions > kMaxTransmissionSteps) break;
+                pathWeight *= sample.weight;
+                // Offset along the outgoing ray: a transmissive surface must
+                // begin beyond the triangle it just hit, otherwise it can
+                // repeatedly re-hit itself and hang the device.
+                path.Origin = hit.position + path.Direction *
+                              max(pushConstants.rayOriginOffset, 1e-3);
             }
             if (max(pathWeight.x, max(pathWeight.y, pathWeight.z)) < 1e-3) break;
             path.Direction = sample.direction;
             path.TMin = 0.001;
             path.TMax = 100000.0;
 
-            TraceHit bounce = ptTraceNearest(path, rng);
+            TraceHit bounce = ptTraceNearest(path);
             if (statsOn) ++secondaryRays;
             if (!bounce.hit) {
                 if (statsOn) ++secondaryMisses;
@@ -311,7 +362,11 @@ void main() {
             // path-tracer noise in the one channel that bypasses the
             // denoiser, and TAA alone was left to average it. Only the
             // visibility ray's deterministic layer walk earns that channel.
-            pathRadiance += pathWeight * shading.emission;
+            float hitOpacity =
+                (instanceMaterials[hit.materialIndex].featureMask & kPtMaskBlendedCoverage) != 0
+                    ? shading.alpha
+                    : 1.0;
+            pathRadiance += pathWeight * shading.emission * hitOpacity;
             if (shading.terminatesPath) break;
             if (shading.hasLightmap) {
                 pathRadiance += pathWeight * shading.albedo * shading.lightmap *

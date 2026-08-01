@@ -7,7 +7,7 @@
 // admission and read from InstanceMaterial::surfaceType:
 //
 //   PbrSurface             - parametrized PBR with optional emission and
-//                            lightmap; partial alpha is stochastic coverage
+//                            lightmap; blended alpha transmits continuously
 //   UnlitTransparentSurface - additive radiance (saber blades, glow decals);
 //                            the ray passes through unattenuated
 //   UnlitEmissiveSurface   - sky and prelit imagery; radiance, path ends
@@ -16,6 +16,7 @@
 // one ray sampling function producing the continuation. ptShade/ptSampleRay
 // dispatch on the type; everything downstream is type-blind.
 
+import lib.math;
 import uniforms;
 import tracing.rng;
 import tracing.brdf;
@@ -203,6 +204,16 @@ public struct PbrSurface : ISurfaceModel {
             float4 sample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleGrad(hit.uv, gradients.x, gradients.y);
             shading.albedo = ptGammaToLinear(sample.rgb);
             shading.alpha = sample.a;
+            if ((material.featureMask & kPtMaskPremulAlpha) != 0) {
+                // Colour is already multiplied by coverage and the alpha
+                // channel is unusable, so luma recovers the coverage and
+                // dividing it back out gives the unpremultiplied colour.
+                // Reading .a here instead renders KotOR's smoke as its own
+                // negative: opaque wherever the plume is thin. Same recovery
+                // as particles.slang:64-71.
+                shading.alpha = rgbToLuma(sample.rgb);
+                shading.albedo *= 1.0 / max(1e-4, shading.alpha);
+            }
         }
         // Keep the tracer's stand-ins exactly aligned with pbr_resolve.slang:
         // alpha is only a reflectance control on env-mapped materials, never
@@ -255,12 +266,24 @@ public struct PbrSurface : ISurfaceModel {
 
     public PathSample sampleRay(HitGeometry hit, SurfaceShading shading, float3 view, inout uint rng) {
         PathSample sample;
+        // Coverage is transport, not traversal roulette. A blended particle
+        // shades at this vertex, then carries the unoccluded ray onward in
+        // the same direction. Cutout and ordinary opaque PBR still scatter.
+        if ((instanceMaterials[hit.materialIndex].featureMask & kPtMaskBlendedCoverage) != 0) {
+            sample.direction = hit.rayDirection;
+            sample.weight = float3(1.0 - shading.alpha);
+            sample.demodulatedWeight = sample.weight;
+            sample.specularLobe = false;
+            sample.passThrough = true;
+            sample.terminate = false;
+            return sample;
+        }
         sample.terminate = false;
         sample.passThrough = false;
         sample.demodulatedWeight = sample.weight;
         sample.specularLobe = false;
-        // Partial coverage was already resolved stochastically inside the
-        // traversal: a committed texel is substance. No re-roll, no re-trace.
+        // Cutout coverage was resolved deterministically in traversal: a
+        // committed texel is solid substance. No re-roll, no re-trace.
         // The GGX lobe exists only where raster shows this heuristic a
         // specular response: environment-mapped surfaces. Everywhere else the
         // diffuse alpha is coverage or opacity, so the derived roughness is

@@ -6,15 +6,14 @@
 // Ray traversal. Exactly two kinds of ray exist:
 //
 //   ptTraceNearest - the normal ray: commits the nearest surface whose
-//                    coverage passes the alpha test, transparent or not.
-//                    Compositing is the path's job, not the traversal's.
-//                    Two coverage modes: the visibility ray alpha-tests
-//                    against a fixed threshold, fully deterministic; bounce
-//                    rays roll coverage stochastically.
+//                    has nonzero coverage. Compositing is the path's job,
+//                    not traversal's: punch-through coverage is binary,
+//                    blended coverage is a transmitting surface.
 //   ptShadowTransmittance - the shadow ray: accumulates transmittance to a
 //                    light, attenuated by punch-through coverage; additive
 //                    surfaces cast nothing and the sky never occludes.
 
+import lib.math;
 import tracing.resources;
 import tracing.rng;
 
@@ -31,7 +30,12 @@ float candidateAlpha(uint materialIndex, uint3 indices, float3 weights) {
     float2 uv = ptTransformedUV(materialIndex, mergedVertices[indices.x].uv1 * weights.x + mergedVertices[indices.y].uv1 * weights.y + mergedVertices[indices.z].uv1 * weights.z);
     // Base level: coverage is a yes/no on the authored texel, and the alpha
     // test is sharper unfiltered.
-    float alpha = bindlessTextures[NonUniformResourceIndex(instanceMaterials[materialIndex].mainTex)].SampleLevel(uv, 0.0).a;
+    float4 texel = bindlessTextures[NonUniformResourceIndex(instanceMaterials[materialIndex].mainTex)].SampleLevel(uv, 0.0);
+    // Premultiplied textures have no usable alpha channel; coverage lives in
+    // the luma, exactly as particles.slang recovers it.
+    float alpha = (instanceMaterials[materialIndex].featureMask & kPtMaskPremulAlpha) != 0
+                      ? rgbToLuma(texel.rgb)
+                      : texel.a;
     float vertexAlpha = mergedVertices[indices.x].color.a * weights.x +
                         mergedVertices[indices.y].color.a * weights.y +
                         mergedVertices[indices.z].color.a * weights.z;
@@ -52,15 +56,27 @@ TraceHit committedHit(inout RayQuery<RAY_FLAG_NONE> query) {
     return result;
 }
 
-/** The visibility ray commits at half coverage: in or out, nothing between. */
+/** Cutout coverage is binary: in or out, nothing between. */
 static const float kAlphaTestThreshold = 0.5;
 
+bool isCutout(uint materialIndex) {
+    return (instanceMaterials[materialIndex].featureMask & kPtMaskPunchThrough) != 0;
+}
+
+bool isBlendedCoverage(uint materialIndex) {
+    return (instanceMaterials[materialIndex].featureMask & kPtMaskBlendedCoverage) != 0;
+}
+
+bool commitsCoverage(uint materialIndex, float alpha) {
+    if (alpha < kPtAlphaTestEpsilon) return false;
+    return !isCutout(materialIndex) || alpha >= kAlphaTestThreshold;
+}
+
 /**
- * The visibility ray. Opaque geometry commits in hardware. Non-opaque PBR
- * candidates alpha-test against a fixed threshold: fully deterministic, no
- * dither of any kind - TAA jitter is the frame's only stochastic input, and
- * the hard coverage edge is exactly what it antialiases. Additive surfaces
- * always commit (nearest wins); the path passes through them explicitly.
+ * The nearest ray. Opaque geometry commits in hardware. For non-opaque
+ * coverage candidates, clear texels are skipped outright; cutouts commit at
+ * their binary threshold and blended surfaces commit at every remaining
+ * coverage value. Additive surfaces always commit and pass through later.
  */
 public TraceHit ptTraceNearest(RayDesc ray) {
     RayQuery<RAY_FLAG_NONE> query;
@@ -73,38 +89,14 @@ public TraceHit ptTraceNearest(RayDesc ray) {
             query.CommitNonOpaqueTriangleHit();
             continue;
         }
-        uint3 indices = ptTriangleIndices(geometryIndex, query.CandidatePrimitiveIndex());
-        float2 barycentrics = query.CandidateTriangleBarycentrics();
-        float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
-        if (candidateAlpha(materialIndex, indices, weights) >= kAlphaTestThreshold) {
-            query.CommitNonOpaqueTriangleHit();
-        }
-    }
-    return committedHit(query);
-}
-
-/**
- * The bounce ray. Same traversal, but coverage rolls STOCHASTICALLY: a texel
- * commits with probability equal to its coverage, which resolves partial
- * transparency inside the one traversal - unbiased, never a re-trace, and
- * the denoiser integrates the noise with the rest of the lighting. The
- * committed surface is substance; whatever passes was never there.
- */
-public TraceHit ptTraceNearest(RayDesc ray, inout uint rng) {
-    RayQuery<RAY_FLAG_NONE> query;
-    query.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, ray);
-    while (query.Proceed()) {
-        if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
-        uint geometryIndex = query.CandidateGeometryIndex();
-        uint materialIndex = materialIndexFor(geometryIndex, query.CandidatePrimitiveIndex());
-        if (instanceMaterials[materialIndex].surfaceType == kPtSurfaceUnlitTransparent) {
+        if (!isCutout(materialIndex) && !isBlendedCoverage(materialIndex)) {
             query.CommitNonOpaqueTriangleHit();
             continue;
         }
         uint3 indices = ptTriangleIndices(geometryIndex, query.CandidatePrimitiveIndex());
         float2 barycentrics = query.CandidateTriangleBarycentrics();
         float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
-        if (ptRandom01(rng) < candidateAlpha(materialIndex, indices, weights)) {
+        if (commitsCoverage(materialIndex, candidateAlpha(materialIndex, indices, weights))) {
             query.CommitNonOpaqueTriangleHit();
         }
     }
@@ -116,7 +108,8 @@ public TraceHit ptTraceNearest(RayDesc ray, inout uint rng) {
  * normal rays that shade it as the environment but never an occluder - the
  * promoted sun sits beyond the dome, and with the full mask every sun ray
  * committed on it and the sun lit nothing at all. Additive surfaces are
- * emitters, not occluders; punch-through attenuates by coverage.
+ * emitters, not occluders. Cutouts above their threshold fully block; blended
+ * coverage attenuates continuously. Clear texels do neither.
  */
 public float ptShadowTransmittance(float3 origin, float3 geometricNormal, float3 direction,
                                    float lightDistance) {
@@ -141,11 +134,20 @@ public float ptShadowTransmittance(float3 origin, float3 geometricNormal, float3
         if (pushConstants.skyAvailable == 0 &&
             (instanceMaterials[materialIndex].featureMask & kPtMaskSky) != 0) continue;
         if (instanceMaterials[materialIndex].surfaceType == kPtSurfaceUnlitTransparent) continue;
-        if ((instanceMaterials[materialIndex].featureMask & kPtMaskPunchThrough) != 0) {
+        if (isCutout(materialIndex) || isBlendedCoverage(materialIndex)) {
             uint3 indices = ptTriangleIndices(geometryIndex, query.CandidatePrimitiveIndex());
             float2 barycentrics = query.CandidateTriangleBarycentrics();
             float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
-            transmittance = clamp(transmittance * (1.0 - candidateAlpha(materialIndex, indices, weights)), 0.0, 1.0);
+            float alpha = candidateAlpha(materialIndex, indices, weights);
+            if (alpha < kPtAlphaTestEpsilon) continue;
+            if (isCutout(materialIndex)) {
+                if (alpha >= kAlphaTestThreshold) {
+                    transmittance = 0.0;
+                    break;
+                }
+            } else {
+                transmittance = clamp(transmittance * (1.0 - alpha), 0.0, 1.0);
+            }
             if (transmittance < kShadowEpsilon) break;
         }
     }
