@@ -680,15 +680,33 @@ void Engine::dumpTargetsIfRequested() {
     if (_options.dumpTargetsPath.empty()) {
         return;
     }
-    auto *pipeline = _services->scene.graphs.get(kSceneMain).renderPipeline();
-    if (!pipeline) {
-        warn("--dumptargets given but the main scene has not been rendered");
+    // Every scene that has rendered, not just "main". The main menu draws into
+    // the "mainmenu" graph, so asking only for kSceneMain made --dumptargets
+    // silently produce nothing there - which is exactly the scene whose smoke
+    // is under investigation. Each scene gets its own subdirectory so a
+    // multi-scene frame does not overwrite itself.
+    std::vector<std::pair<std::string, IRenderPipeline *>> rendered;
+    for (const auto &name : _services->scene.graphs.sceneNames()) {
+        if (auto *pipeline = _services->scene.graphs.get(name).renderPipeline()) {
+            rendered.push_back({name, pipeline});
+        }
+    }
+    if (rendered.empty()) {
+        warn("--dumptargets given but no scene has been rendered");
         return;
     }
     // The frame this describes has to be finished before its targets are read.
     // Vulkan needs its recorded commands submitted before the targets are read.
     _vulkanRenderer->flushFrame();
-    pipeline->dumpTargets(_options.dumpTargetsPath);
+    for (const auto &[name, pipeline] : rendered) {
+        std::filesystem::path dir = _options.dumpTargetsPath;
+        if (rendered.size() > 1) {
+            dir /= name;
+        }
+        std::filesystem::create_directories(dir);
+        pipeline->dumpTargets(dir);
+        info("Dumped targets for scene '" + name + "' to " + dir.string());
+    }
 }
 
 void Engine::renderFrame(bool &quit) {
