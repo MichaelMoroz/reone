@@ -61,6 +61,7 @@ public:
     void collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) override;
 
     int getNumClustersInFace(float area) const;
+    void growClusterPool(int target);
     int getGrassVariant(int faceIndex, int clusterIndex) const;
 
 private:
@@ -68,6 +69,8 @@ private:
     graphics::ModelNode &_aabbNode;
 
     std::vector<int> _grassFaces;
+    uint64_t _grassGeneration {0};
+    int _poolCapacity {0};
     std::stack<GrassClusterSceneNode *> _clusterPool;                          /**< pre-allocated pool of clusters */
     std::map<int, std::vector<GrassClusterSceneNode *>> _materializedClusters; /**< materialized clusters grouped by face */
     bool _hasLightmapUV {true};

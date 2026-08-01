@@ -101,6 +101,7 @@ private:
 
     void graphicsSettings();
     bool _showGraphicsSettings {false};
+    float _pendingGrassDensity {-1.0f};
 
     void pathTracingSettings();
     bool _showPathTracing {false};

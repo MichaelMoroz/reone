@@ -63,6 +63,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("headless", value<bool>()->default_value(false), "never show the window; for scripted batch runs")                     //
         ("vsync", value<bool>()->default_value(options->graphics.vsync), "enable v-sync")                                       //
         ("grass", value<bool>()->default_value(options->graphics.grass), "enable grass")                                        //
+        ("grassdensity", value<float>()->default_value(options->graphics.grassDensity), "grass density multiplier")           //
         ("pbr", value<bool>()->default_value(options->graphics.pbr), "enable physically-based rendering")                       //
         ("mode", value<std::string>()->default_value(options->graphics.mode), "render mode: raster or path-tracing")            //
         ("ptspp", value<int>()->default_value(options->graphics.pathTracingSamples), "path tracing samples per pixel")          //
@@ -175,6 +176,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.fullscreen = vars["fullscreen"].as<bool>();
     options->graphics.vsync = vars["vsync"].as<bool>();
     options->graphics.grass = vars["grass"].as<bool>();
+    options->graphics.grassDensity = vars["grassdensity"].as<float>();
     options->graphics.pbr = vars["pbr"].as<bool>();
     options->graphics.mode = vars["mode"].as<std::string>();
     options->graphics.pathTracingSamples = std::max(1, vars["ptspp"].as<int>());

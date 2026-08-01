@@ -37,6 +37,8 @@ struct GraphicsOptions {
     bool headless {false};
     bool vsync {true};
     bool grass {true};
+    /** Multiplier on the area's authored Grass_Density, so areas keep their variation. */
+    float grassDensity {1.0f};
     bool pbr {true};
     /** "raster" normally follows pbr; "path-tracing" selects Vulkan ray queries. */
     std::string mode {"raster"};

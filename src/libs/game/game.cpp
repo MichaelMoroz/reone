@@ -256,6 +256,7 @@ void Game::initConsole() {
     registerConsoleCommand("scene", "create a synthetic scene (empty)", &Game::consoleScene);
     registerConsoleCommand("spawn", "spawn a UTC, UTP, or model at x y z", &Game::consoleSpawn);
     registerConsoleCommand("grass", "spawn grass on a room model: model texture x y z", &Game::consoleGrass);
+    registerConsoleCommand("grassdensity", "set the grass density multiplier", &Game::consoleGrassDensity);
     registerConsoleCommand("emit", "detonate emitters in the last spawned model", &Game::consoleEmit);
     registerConsoleCommand("ignite", "play powerup on the last spawned model", &Game::consoleIgnite);
     registerConsoleCommand("camera", "select camera (free)", &Game::consoleCamera);
@@ -1496,6 +1497,7 @@ void Game::updateSceneGraph(float dt) {
     auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
     sceneGraph.setActiveCamera(camera->cameraSceneNode().get());
     sceneGraph.setUpdateRoots(!_paused);
+    sceneGraph.setGrass(_options.graphics.grass, _options.graphics.grassDensity);
     sceneGraph.update(dt);
 }
 
@@ -2796,6 +2798,12 @@ void Game::consoleSpawn(const ConsoleArgs &args) {
     _consoleSpawnedModel = sceneGraph.newModel(*model, ModelUsage::Placeable);
     _consoleSpawnedModel->setLocalTransform(glm::translate(position));
     sceneGraph.addRoot(_consoleSpawnedModel);
+}
+
+void Game::consoleGrassDensity(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "multiplier");
+    _options.graphics.grassDensity = std::max(0.0f, args.get<float>(1).value());
+    _console.printLine("grass density " + std::to_string(_options.graphics.grassDensity));
 }
 
 void Game::consoleGrass(const ConsoleArgs &args) {

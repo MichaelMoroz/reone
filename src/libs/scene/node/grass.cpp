@@ -38,6 +38,11 @@ namespace reone {
 namespace scene {
 
 static constexpr int kNumClustersInPool = 4096;
+// The pool has to grow with the density dial or raising it does the opposite of
+// what it says: the nearest faces consume a fixed pool, materialisation stops
+// dead, and grass gains density in a shrinking radius with a hard empty edge
+// beyond it. Capped so a careless drag cannot allocate scene nodes without end.
+static constexpr int kMaxClustersInPool = 32768;
 static constexpr float kGrassDensityFactor = 0.5f;
 
 static constexpr float kMaxClusterDistance = 32.0f;
@@ -77,14 +82,47 @@ void GrassSceneNode::init() {
     }
 
     // Pre-allocate grass clusters
-    for (int i = 0; i < kNumClustersInPool; ++i) {
+    growClusterPool(kNumClustersInPool);
+}
+
+void GrassSceneNode::growClusterPool(int target) {
+    target = std::min(target, kMaxClustersInPool);
+    for (; _poolCapacity < target; ++_poolCapacity) {
         _clusterPool.push(_sceneGraph.newGrassCluster(*this).get());
     }
 }
 
 void GrassSceneNode::update(float dt) {
-    if (!_enabled) {
+    if (!_enabled || !_sceneGraph.grassEnabled()) {
         return;
+    }
+    // Density is a live dial, and clusters are materialised once per face and
+    // then cached. Without dropping the cache a change would only affect faces
+    // the camera has not reached yet, which reads as the slider half-working.
+    if (_grassGeneration != _sceneGraph.grassGeneration()) {
+        _grassGeneration = _sceneGraph.grassGeneration();
+        // Returning a cluster to the pool is not enough: it has to leave
+        // _children too, exactly as the out-of-distance sweep below does.
+        // Without this the node keeps every cluster it has ever materialised
+        // as a child, re-adds them on the next materialisation, and the child
+        // list grows on every density change - so the frame cost stays high
+        // afterwards and climbs with each further change.
+        std::unordered_set<SceneNode *> returning;
+        for (auto &entry : _materializedClusters) {
+            for (auto *cluster : entry.second) {
+                returning.insert(cluster);
+                _clusterPool.push(cluster);
+            }
+        }
+        _materializedClusters.clear();
+        if (!returning.empty()) {
+            _children.erase(
+                std::remove_if(_children.begin(), _children.end(),
+                               [&returning](auto *child) { return returning.count(child) > 0; }),
+                _children.end());
+        }
+        growClusterPool(static_cast<int>(
+            glm::round(kNumClustersInPool * _sceneGraph.grassDensityScale())));
     }
     auto camera = _sceneGraph.camera();
     if (!camera) {
@@ -211,7 +249,8 @@ void GrassSceneNode::collectLeafs(GpuScene &scene, const std::vector<SceneNode *
 }
 
 int GrassSceneNode::getNumClustersInFace(float area) const {
-    return static_cast<int>(glm::round(kGrassDensityFactor * _properties.density * area));
+    return static_cast<int>(glm::round(kGrassDensityFactor * _sceneGraph.grassDensityScale() *
+                                       _properties.density * area));
 }
 
 int GrassSceneNode::getGrassVariant(int faceIndex, int clusterIndex) const {

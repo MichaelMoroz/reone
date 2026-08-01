@@ -109,6 +109,16 @@ public:
     virtual bool isFogEnabled() const = 0;
     virtual void setFog(FogProperties fog) = 0;
 
+    /**
+     * Grass toggle and density multiplier, pushed per frame from graphics
+     * options. Density scales the area's authored value rather than replacing
+     * it; a change re-materialises clusters, so it applies live.
+     */
+    virtual void setGrass(bool enabled, float densityScale) = 0;
+    virtual bool grassEnabled() const = 0;
+    virtual float grassDensityScale() const = 0;
+    virtual uint64_t grassGeneration() const = 0;
+
     virtual void setWalkableSurfaces(std::set<uint32_t> surfaces) = 0;
     virtual void setWalkcheckSurfaces(std::set<uint32_t> surfaces) = 0;
     virtual void setLineOfSightSurfaces(std::set<uint32_t> surfaces) = 0;
@@ -196,6 +206,17 @@ public:
 
     void setActiveCamera(CameraSceneNode *camera) override { _activeCamera = camera; }
     void setUpdateRoots(bool update) override { _updateRoots = update; }
+    void setGrass(bool enabled, float densityScale) override {
+        if (enabled == _grassEnabled && densityScale == _grassDensityScale) {
+            return;
+        }
+        _grassEnabled = enabled;
+        _grassDensityScale = densityScale;
+        ++_grassGeneration;
+    }
+    bool grassEnabled() const override { return _grassEnabled; }
+    float grassDensityScale() const override { return _grassDensityScale; }
+    uint64_t grassGeneration() const override { return _grassGeneration; }
 
     // Roots
 
@@ -355,6 +376,9 @@ private:
     // Lighting
 
     glm::vec3 _ambientLightColor {0.5f};
+    bool _grassEnabled {true};
+    float _grassDensityScale {1.0f};
+    uint64_t _grassGeneration {0};
 
     std::vector<LightSceneNode *> _activeLights;
 

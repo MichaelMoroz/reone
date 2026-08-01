@@ -68,6 +68,7 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"height", std::to_string(options.height)},
         {"vsync", std::to_string(options.vsync)},
         {"grass", std::to_string(options.grass)},
+        {"grassdensity", formatConfigFloat(options.grassDensity)},
         {"ptspp", std::to_string(options.pathTracingSamples)},
         {"ptskyintensity", formatConfigFloat(options.ptSkyIntensity)},
         {"ptemissiveintensity", formatConfigFloat(options.ptEmissiveIntensity)},
@@ -786,11 +787,18 @@ void Editor::pathTracingSettings() {
     }
     ImGui::TextDisabled("Path depth after the primary hit. Deeper paths\ncarry light around corners; the lightmap cache\nalready answers much of it on static geometry.");
     ImGui::SeparatorText("Source intensities");
-    ImGui::SliderFloat("Sky", &options.ptSkyIntensity, 0.0f, 4.0f, "%.2f");
-    ImGui::SliderFloat("Emissive", &options.ptEmissiveIntensity, 0.0f, 4.0f, "%.2f");
-    ImGui::SliderFloat("Lightmap cache", &options.ptLightmapIntensity, 0.0f, 4.0f, "%.2f");
-    ImGui::SliderFloat("Direct light", &options.ptDirectIntensity, 0.0f, 4.0f, "%.2f");
-    ImGui::SliderFloat("Sun", &options.ptSunIntensity, 0.0f, 4.0f, "%.2f");
+    // Logarithmic, and to 32 rather than 4. The defaults sit at 2.5, so the old
+    // ceiling gave 1.6x of headroom and no way to push a source hard enough to
+    // see what it actually contributes. Log keeps the fine control where the
+    // graded values live instead of squeezing 0-4 into a tenth of the track.
+    static constexpr float kIntensityMax = 32.0f;
+    static constexpr ImGuiSliderFlags kIntensityFlags = ImGuiSliderFlags_Logarithmic;
+    ImGui::SliderFloat("Sky", &options.ptSkyIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::SliderFloat("Emissive", &options.ptEmissiveIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::SliderFloat("Lightmap cache", &options.ptLightmapIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::SliderFloat("Direct light", &options.ptDirectIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::SliderFloat("Sun", &options.ptSunIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::TextDisabled("Ctrl+click to type a value.");
     ImGui::SeparatorText("Ray setup");
     ImGui::SliderFloat("Origin offset", &options.ptRayOffset, 0.0001f, 0.1f, "%.4f",
                        ImGuiSliderFlags_Logarithmic);
@@ -927,6 +935,22 @@ void Editor::graphicsSettings() {
     ImGui::Checkbox("SSAO", &options.ssao);
     ImGui::Checkbox("SSR", &options.ssr);
     ImGui::Checkbox("Grass", &options.grass);
+    // Bound to a pending value, committed on release. Every change of the
+    // committed value re-materialises every cluster, so a slider wired
+    // straight to it rebuilds the whole grass set on each mouse-move - the
+    // init cost once per frame for as long as you drag, which reads as the
+    // density itself being ruinous when it is only the dragging.
+    if (_pendingGrassDensity < 0.0f) {
+        _pendingGrassDensity = options.grassDensity;
+    }
+    ImGui::SliderFloat("Grass density", &_pendingGrassDensity, 0.0f, 8.0f, "%.2fx",
+                       ImGuiSliderFlags_Logarithmic);
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        options.grassDensity = _pendingGrassDensity;
+    }
+    ImGui::TextDisabled("Multiplies the area's authored density, so areas keep\n"
+                        "their relative variation. Applies on release: every\n"
+                        "change re-materialises every cluster.");
     ImGui::Checkbox("TAA jitter", &options.taaJitter);
     ImGui::SliderFloat("Draw distance", &options.drawDistance, 1.0f, 1000.0f, "%.0f");
 

@@ -666,6 +666,7 @@ private:
     void consoleScene(const ConsoleArgs &tokens);
     void consoleSpawn(const ConsoleArgs &tokens);
     void consoleGrass(const ConsoleArgs &tokens);
+    void consoleGrassDensity(const ConsoleArgs &tokens);
     void consoleEmit(const ConsoleArgs &tokens);
     void consoleIgnite(const ConsoleArgs &tokens);
     void consoleCamera(const ConsoleArgs &tokens);

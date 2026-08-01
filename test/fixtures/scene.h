@@ -67,6 +67,10 @@ public:
 
     MOCK_METHOD(void, setActiveCamera, (CameraSceneNode *), (override));
     MOCK_METHOD(void, setUpdateRoots, (bool), (override));
+    MOCK_METHOD(void, setGrass, (bool, float), (override));
+    MOCK_METHOD(bool, grassEnabled, (), (const override));
+    MOCK_METHOD(float, grassDensityScale, (), (const override));
+    MOCK_METHOD(uint64_t, grassGeneration, (), (const override));
 
     MOCK_METHOD(std::shared_ptr<CameraSceneNode>, newCamera, (), (override));
     MOCK_METHOD(std::shared_ptr<ModelSceneNode>, newModel, (graphics::Model &, ModelUsage), (override));
