@@ -12,8 +12,9 @@ struct Matrix3x4 {
 };
 
 struct SceneObject {
-    Matrix3x4 transform;
-    Matrix3x4 prevTransform;
+    float4x4 transform;
+    float4x4 prevTransform;
+    float4x4 transformInv;
     // Element offsets: floats in sourceVertices and uints in sourceIndices.
     // Attribute offsets below remain byte offsets inside each vertex record.
     uint srcVertexOffset;
@@ -50,6 +51,7 @@ struct MergedVertex {
     float3 prevPosition;
     float2 pad;
     float4 color;
+    float3 objectPosition;
 };
 
 [[vk::binding(0, 0)]] StructuredBuffer<SceneObject> objects;
@@ -83,18 +85,12 @@ struct PushConstants {
 
 [[vk::push_constant]] PushConstants pushConstants;
 
-float3 transformPoint(Matrix3x4 matrix, float3 point) {
-    return float3(
-        dot(matrix.row0, float4(point, 1)),
-        dot(matrix.row1, float4(point, 1)),
-        dot(matrix.row2, float4(point, 1)));
+float3 transformPoint(float4x4 matrix, float4 point) {
+    return mul(matrix, point).xyz;
 }
 
-float3 transformDir(Matrix3x4 matrix, float3 direction) {
-    return float3(
-        dot(matrix.row0.xyz, direction),
-        dot(matrix.row1.xyz, direction),
-        dot(matrix.row2.xyz, direction));
+float3 transformNormal(float4x4 matrixInv, float3 normal) {
+    return mul(normal, (float3x3)matrixInv);
 }
 
 float3 safeNormalize(float3 value, float3 fallback) {
@@ -107,14 +103,14 @@ float3 safeNormalize(float3 value, float3 fallback) {
 // bones[boneBase + boneCount + b] is previous.  Keeping that addressing,
 // weight application, and index clamping in one helper makes position and
 // shading-frame skinning impossible to drift apart.
-float3 skinVertex(
+float4 skinVertex(
     SceneObject object,
     float4 boneIndices,
     float4 boneWeights,
     float4 value,
     bool previous) {
     uint paletteBase = object.boneBase + (previous ? object.boneCount : 0);
-    float3 result = float3(0);
+    float4 result = float4(0);
 
     [unroll]
     for (uint influence = 0; influence < 4; ++influence) {
@@ -122,10 +118,11 @@ float3 skinVertex(
             uint(max(0, int(boneIndices[influence]))),
             object.boneCount - 1);
         Matrix3x4 matrix = bones[paletteBase + bone];
-        float3 transformed = float3(
+        float4 transformed = float4(
             dot(matrix.row0, value),
             dot(matrix.row1, value),
-            dot(matrix.row2, value));
+            dot(matrix.row2, value),
+            value.w);
         result += transformed * boneWeights[influence];
     }
 
@@ -204,26 +201,28 @@ void main(uint3 tid : SV_DispatchThreadID) {
             mergedVertex.tanSpaceNormal = float3(0);
             mergedVertex.pad = float2(0);
             mergedVertex.color = cluster.color;
+            mergedVertex.objectPosition = float3(0);
             vertices[id] = mergedVertex;
         } else {
         uint sourceVertex = object.srcVertexOffset + vertexId * (object.srcVertexStride / 4);
-        float3 position = float3(
+        float4 position = float4(
             sourceVertices[sourceVertex + object.offPosition / 4],
             sourceVertices[sourceVertex + object.offPosition / 4 + 1],
-            sourceVertices[sourceVertex + object.offPosition / 4 + 2]);
-        float3 prevPosition = position;
+            sourceVertices[sourceVertex + object.offPosition / 4 + 2],
+            1.0);
+        float4 prevPosition = position;
         bool dangly = object.danglyBase != 0xffffffffu
             && object.danglyCount == object.vertexCount;
         if (dangly) {
-            position = danglyPositions[object.danglyBase + vertexId].xyz;
-            prevPosition = danglyPositions[object.danglyBase + object.danglyCount + vertexId].xyz;
+            position = danglyPositions[object.danglyBase + vertexId];
+            prevPosition = danglyPositions[object.danglyBase + object.danglyCount + vertexId];
         }
         float saberSignum = 2.0 * float(vertexId / 88) - 1.0;
         float saberHdist = float((vertexId % 88) / 4) / 21.0;
         float saberVdist = float(vertexId % 4) / 3.0;
         float3 saberOffset = 0.5 * saberSignum * saberHdist * saberVdist * object.saberDisplacement.xyz;
-        position += saberOffset;
-        prevPosition += saberOffset;
+        position.xyz += saberOffset;
+        prevPosition.xyz += saberOffset;
         float4 boneIndices = float4(0);
         float4 boneWeights = float4(0);
         bool skinned = object.boneBase != 0xffffffffu
@@ -250,13 +249,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
                 object,
                 boneIndices,
                 boneWeights,
-                float4(position, 1),
+                position,
                 false);
             prevPosition = skinVertex(
                 object,
                 boneIndices,
                 boneWeights,
-                float4(prevPosition, 1),
+                prevPosition,
                 true);
         }
 
@@ -264,6 +263,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         mergedVertex.position = transformPoint(object.transform, position);
         mergedVertex.prevPosition = transformPoint(object.prevTransform, prevPosition);
         mergedVertex.color = float4(1.0);
+        mergedVertex.objectPosition = position.xyz;
 
         // Some legacy meshes omit normals.  A stable axis is less faithful
         // than a face normal, but it is a documented, finite fallback and
@@ -281,11 +281,11 @@ void main(uint3 tid : SV_DispatchThreadID) {
                 boneIndices,
                 boneWeights,
                 float4(normal, 0),
-                false);
+                false).xyz;
         }
 
         mergedVertex.normal = safeNormalize(
-            transformDir(object.transform, normal),
+            transformNormal(object.transformInv, normal),
             float3(0, 0, 1));
         mergedVertex.uv1 = object.offUV1 < 0
             ? float2(0)
@@ -321,29 +321,29 @@ void main(uint3 tid : SV_DispatchThreadID) {
                     boneIndices,
                     boneWeights,
                     float4(bitangent, 0),
-                    false);
+                    false).xyz;
                 tangent = skinVertex(
                     object,
                     boneIndices,
                     boneWeights,
                     float4(tangent, 0),
-                    false);
+                    false).xyz;
                 tanSpaceNormal = skinVertex(
                     object,
                     boneIndices,
                     boneWeights,
                     float4(tanSpaceNormal, 0),
-                    false);
+                    false).xyz;
             }
 
             mergedVertex.bitangent = safeNormalize(
-                transformDir(object.transform, bitangent),
+                transformNormal(object.transformInv, bitangent),
                 float3(0, 1, 0));
             mergedVertex.tangent = safeNormalize(
-                transformDir(object.transform, tangent),
+                transformNormal(object.transformInv, tangent),
                 float3(1, 0, 0));
             mergedVertex.tanSpaceNormal = safeNormalize(
-                transformDir(object.transform, tanSpaceNormal),
+                transformNormal(object.transformInv, tanSpaceNormal),
                 float3(0, 0, 1));
         }
 

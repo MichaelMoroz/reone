@@ -345,8 +345,9 @@ graphics::GpuSceneUpload GpuScene::prepare(
             input.sourceMesh = &mesh->mesh.get();
             input.objectIndex = mesh->id.index;
             input.objectGeneration = mesh->id.generation;
-            sceneObject.transform = matrix3x4(mesh->transform);
-            sceneObject.prevTransform = matrix3x4(mesh->prevTransform);
+            sceneObject.transform = mesh->transform;
+            sceneObject.prevTransform = mesh->prevTransform;
+            sceneObject.transformInv = mesh->transformInv;
             sceneObject.materialIndex = static_cast<uint32_t>(upload.materials.size());
             if (classification->skin) {
                 const auto &skin = *classification->skin;

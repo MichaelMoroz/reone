@@ -76,6 +76,8 @@ struct alignas(16) GpuSceneMergedVertex {
     glm::vec2 pad {0.0f};
     float tailPad[2] {};
     glm::vec4 color {1.0f};
+    glm::vec3 objectPosition {0.0f};
+    float objectPositionPad {0.0f};
 };
 static_assert(offsetof(GpuSceneMergedVertex, position) == 0);
 static_assert(offsetof(GpuSceneMergedVertex, normal) == 16);
@@ -87,11 +89,13 @@ static_assert(offsetof(GpuSceneMergedVertex, tanSpaceNormal) == 80);
 static_assert(offsetof(GpuSceneMergedVertex, prevPosition) == 96);
 static_assert(offsetof(GpuSceneMergedVertex, pad) == 112);
 static_assert(offsetof(GpuSceneMergedVertex, color) == 128);
-static_assert(sizeof(GpuSceneMergedVertex) == 144);
+static_assert(offsetof(GpuSceneMergedVertex, objectPosition) == 144);
+static_assert(sizeof(GpuSceneMergedVertex) == 160);
 
 struct alignas(16) GpuSceneObjectData {
-    GpuSceneMatrix3x4 transform;
-    GpuSceneMatrix3x4 prevTransform;
+    glm::mat4 transform {1.0f};
+    glm::mat4 prevTransform {1.0f};
+    glm::mat4 transformInv {1.0f};
     uint32_t srcVertexOffset {0};
     uint32_t srcIndexOffset {0};
     uint32_t srcVertexStride {0};
@@ -114,15 +118,15 @@ struct alignas(16) GpuSceneObjectData {
     uint32_t danglyCount {0};
     alignas(16) glm::vec4 saberDisplacement {0.0f};
 };
-static_assert(offsetof(GpuSceneObjectData, srcVertexOffset) == 96);
-static_assert(offsetof(GpuSceneObjectData, srcIndexOffset) == 100);
-static_assert(offsetof(GpuSceneObjectData, srcVertexStride) == 104);
-static_assert(offsetof(GpuSceneObjectData, offPosition) == 108);
-static_assert(offsetof(GpuSceneObjectData, vertexCount) == 136);
-static_assert(offsetof(GpuSceneObjectData, materialIndex) == 164);
-static_assert(offsetof(GpuSceneObjectData, danglyBase) == 168);
-static_assert(offsetof(GpuSceneObjectData, saberDisplacement) == 176);
-static_assert(sizeof(GpuSceneObjectData) == 192);
+static_assert(offsetof(GpuSceneObjectData, srcVertexOffset) == 192);
+static_assert(offsetof(GpuSceneObjectData, srcIndexOffset) == 196);
+static_assert(offsetof(GpuSceneObjectData, srcVertexStride) == 200);
+static_assert(offsetof(GpuSceneObjectData, offPosition) == 204);
+static_assert(offsetof(GpuSceneObjectData, vertexCount) == 232);
+static_assert(offsetof(GpuSceneObjectData, materialIndex) == 260);
+static_assert(offsetof(GpuSceneObjectData, danglyBase) == 264);
+static_assert(offsetof(GpuSceneObjectData, saberDisplacement) == 272);
+static_assert(sizeof(GpuSceneObjectData) == 288);
 
 struct alignas(16) GpuSceneProceduralQuad {
     glm::vec4 positionVariant {0.0f};
