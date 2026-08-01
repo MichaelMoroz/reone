@@ -95,6 +95,14 @@ GpuScene — the ONE compute scene-mesh creation path
   Rasterizer module         ONE module, configured as PBR or Retro
 ```
 
+**And one condition on all three: no Vulkan API outside `graphics/vulkan`.**
+This was an unstated assumption until 2026-08-01 and the tree is a long way from
+it — 575 `Vk`/`vk` references live in `libs/scene`, four public headers under
+`include/reone/scene/` include `volk.h`, and `scene/render/` is in practice a
+second Vulkan renderer hosted in the scene library. The measurement and the rule
+for new code are under Phase E, which is the phase that would otherwise deepen
+it. The existing references move in Phase F.
+
 **"One path" means one canonical output, not one upload.** An earlier revision
 of this section said the merge was an alternative to per-mesh `VulkanMesh`
 uploads and that collapsing to one path would make them stop existing. That is
@@ -202,9 +210,14 @@ Two more things the review surfaced that the draft missed entirely:
 
 ## Order of work
 
-Five phases, A to E. Each has its own verification bar, stated with it, because
-they are not the same bar and pretending otherwise is how a refactor stops
-being checkable.
+Each has its own verification bar, stated with it, because they are not the same
+bar and pretending otherwise is how a refactor stops being checkable.
+
+The table is the index, so it lists every phase-sized piece of work in
+**execution order** — including the two that were carrying real weight without a
+letter. `RenderRegistry`'s removal runs between D and E and keeps no letter,
+because A to E are already in commit messages and renumbering them would break
+every reference for the sake of tidiness.
 
 | phase | work | bar | state |
 |---|---|---|---|
@@ -212,27 +225,35 @@ being checkable.
 | **B0** | one source buffer, offsets not addresses | pixel-identical | **done** `a24b1bd3` |
 | **B** | extract `GpuScene`, tracer as only consumer | pixel-identical | **done** `6fed967b` |
 | **C** | residency in the contract, not the implementation | pixel-identical | **done** `badd9c5f` |
-| **D** | admit everything, and see it correctly | traced image changes deliberately, inspected per class; raster untouched except where stated | grass, dangly, saber, particles **done**; shadows + smoke open |
-| **E** | raster consumes `GpuScene` | raster hash-identical where geometry is unchanged | not started, and smaller than written |
+| **D** | admit everything, and see it correctly | traced image changes deliberately, inspected per class; raster untouched except where stated | grass, dangly, saber, particles **done**; blended transparency open |
+| *(registry)* | delete `RenderRegistry` whole — it is branch-only; `SceneGraph` admits directly | **full raster image hash-identical, shadows included**; traced within noise | not started |
+| **E** | raster consumes `GpuScene` | **G-buffer byte-identical**; shadows change deliberately and are judged by eye | not started |
+| **F** | Vulkan containment: no Vulkan API outside `graphics/vulkan` | pixel-identical — it is a relocation, so raster hash-identical and traced within noise | not started |
+| **G** | the mega-draw: bindless raster, one draw per cull mode | pixel-identical **and measurably faster** — the only phase that fails by changing nothing | not started; gated on a measurement that may cancel it |
 
 ### What happens next, in order
 
 Written down 2026-08-01 because the correctness work in D pulled a long way
 from the phase list and the way back should not have to be rediscovered.
 
-**1. Close Phase D.** Grass casts no shadow, and blended smoke is invisible to
-primary rays. Both are the same fix — see "coverage is transmission" under
-Phase D. Everything built alongside it (the free camera, the TLAS content
-counts, the traced G-buffer dump) exists to make these two checkable and is
-not separate work.
+**1. Close Phase D.** One open question remains, and it is narrower than the two
+defects this step originally named. **Grass shadows work** — the blades were
+sub-pixel at distance, not absent, which took a purpose-built test module to
+establish and cost an afternoon of arguing with a screenshot first. **Smoke is
+admitted, traced, and wrong**: a solid black band on the main menu where retro
+renders soft grey fog. The suspect is the transparency model rather than
+admission — see "Coverage is transmission" under Phase D, which also records
+the model itself. Everything built alongside this (the free camera, the TLAS
+content counts, the traced G-buffer dump, the testbed module) exists to make it
+checkable and is not separate work.
 
-**2. Measure the registry copy. Ten minutes, and it sequences everything
-after.** `RegisteredMesh` copies a full `Material` and bone vectors per object,
-roughly a thousand objects a frame, against a 2.3 ms update slot. If that is a
-visible slice, deleting `RenderRegistry` jumps ahead of Phase E; if it is
-0.1 ms, it lands with E's front half. Do not guess this — the last three
-sequencing arguments in this document were settled by a measurement, and the
-ones that were not were wrong.
+**2. ~~Measure the registry copy.~~ It was already measured, on 2026-07-28, and
+this plan asked for it again for a year's worth of paragraphs.** The numbers are
+in `renderer-registration-plan.md:929` and they change the argument — see
+"What the registry actually costs" below. The short version: registration is
+**0.445 ms/frame** and the six `drawScene` walks are **1.873 ms/frame**, so the
+copy this plan kept pointing at is the *smaller* half by four times. Nothing is
+gated on a new measurement.
 
 **3. Delete `RenderRegistry`, and fold three things into that one change**
 because they all touch the same code and doing them separately means doing
@@ -253,11 +274,25 @@ admission three times:
     since the cause is `warp` completing its module load after the commands
     file has run.
 
-**4. Phase E**, which is now much smaller than the section below describes.
-Three of its five listed breakages turned out to be current tracer bugs and
-were fixed in D; what remains is raster's own lowering — hashed alpha against
-world-space vertices, blend ordering, material binding — over a scene that is
-already correct.
+**4. Phase E**, rewritten below against a byte-identical G-buffer bar. Three of
+its five original breakages turned out to be current tracer bugs and were fixed
+in D. What remains is raster's own lowering over a scene that is already
+correct — but the hard bar promotes two things the earlier draft deferred into
+prerequisites, and the phase opens with a probe rather than a change, because
+raster and the merge compute world position and normals by different
+expressions and one of those is a different vector rather than a different
+rounding.
+
+**5. Phase F, the Vulkan containment sweep**, which this plan had never named:
+575 `Vk`/`vk` references in `libs/scene` and four public headers including
+`volk.h`. Phase E is held to writing its *new* code into `graphics/vulkan`; the
+existing surface moves in F, on its own, because relocating `rayquery.cpp`
+mid-E would break the very bar E is verified by.
+
+**6. Phase G, the mega-draw**, which the plan had argued for in three places
+and planned in none. It needs bindless textures in raster, which today exist
+only inside the tracer, so it follows F rather than E. It is also the one phase
+gated on a measurement that may cancel it outright.
 
 ## Phase A — remove OpenGL *(done: `3445fdc1`, `6a681168`, `f14d7dae`, `df1aa375`)*
 
@@ -283,10 +318,11 @@ Phase D inherits the problem rather than finding it solved.
 
 **And the toolkit preview renders exploded geometry on some models** (backlog
 5.6). It is not the port, not the selector removal, and not retro-on-Vulkan;
-past that, nobody knows, including whether GL was ever correct. The real
-blocker is that the toolkit takes no arguments, so the failing draw cannot be
-reached by RenderDoc or any harness — only by a person clicking. Fix that
-first.
+past that, nobody knows, including whether GL was ever correct. The blocker was
+that the toolkit took no arguments, so the failing draw could be reached only by
+a person clicking — **fixed** (`a89c6eeb`, `44e11344`): it opens a model and
+frames it from the command line, so RenderDoc and the capture harness can both
+reach the draw. The defect itself is still open and now diagnosable.
 
 
 
@@ -477,20 +513,21 @@ change offsets, primitive ids, material indices and AS lifetime.
 it is not an immutability proof — so the audit is part of this phase, not an
 assumption.
 
-## Phase D — admit grass and particles, because the BLAS needs them
+## Phase D — everything the tracer should see, seen correctly
 
-The second review argued these should all stay out and this plan briefly
-agreed. That was wrong, and the reason is worth naming because it is the same
-mistake twice: **the review treated current behaviour as a constraint when it
-is a known bug.**
+Grass and particles first, since admitting them is what forced everything else
+in this phase. The second review argued they should stay out and this plan
+briefly agreed. That was wrong, and the reason is worth naming because it is the
+same mistake twice: **the review treated current behaviour as a constraint when
+it was a known bug.**
 
 The decisive fact is that the tracer matches only `RegisteredMesh` — three
 `std::get_if<RegisteredMesh>` sites in `rayquery.cpp`, and no handling of
 `RegisteredGrass`, `RegisteredParticles` or `RegisteredBillboard` anywhere
-(`registry.h:148`, `:162`, `:175`, `:186`). So today **grass and particles are
-invisible to the path tracer**: they cast no shadow, appear in no reflection,
-occlude nothing, and a ray passes straight through a hillside of grass. That is
-a correctness gap, not a design choice.
+(`registry.h:148`, `:162`, `:175`, `:186`). So when this was written, **grass and
+particles were invisible to the path tracer**: they cast no shadow, appeared in
+no reflection, occluded nothing, and a ray passed straight through a hillside of
+grass. That is a correctness gap, not a design choice.
 
 They have to be in the BLAS, and the merged scene *is* the BLAS input. There is
 no other way in — so they must be admitted.
@@ -521,16 +558,17 @@ principle.
   (`node/grass.cpp:42`) is **4,096 triangles** — 86k becomes ~90k, about +4.8%.
   Raster does not cap at 256; it frustum-culls and batches in 256s
   (`registry.cpp:605-626`), where 256 is only the uniform-block limit.
-- **Particles: budget 1000.** At a quad each that is 2,000 triangles, so with
-  grass the frame goes 86k → ~92k, about **+7%**. Not a scale problem.
+- **Particles are smaller than this section first estimated.** The pool is
+  `kMaxParticles = 64` per emitter (`graphics/types.h:39`), not a scene budget of
+  1000, and danm14ab measures **232 live quads** at frame 1200 with the vents
+  filled — 464 triangles. With grass the frame goes 86k → ~90k. The 1000 figure
+  was carried in from nowhere and is deleted rather than corrected.
 
-  This forces a second decision. Raster silently draws only the first **64** in
-  one call (`pass/vulkan.cpp:420-442`) while the registry can pass more
-  (`registry.cpp:584-603`). If the tracer admits 1000 and raster keeps drawing
-  64, the two renderers disagree about what is in the scene — and since this
-  plan verifies by comparing traced and raster captures, that divergence
-  quietly breaks the check itself. **Raise the raster bound to match.** Whatever
-  number is chosen, one number, both consumers.
+  The divergence it implied is closed. Raster used to draw only the first 64 in
+  one call while the registry could pass more; it now issues uniform-sized
+  batches over the complete list (`registry.cpp:603-608`), so both renderers see
+  the same particles. 64 is the uniform-block capacity, not a scene limit — the
+  distinction the earlier text missed.
 - **The 0.35 ms figure is not a measurement of this renderer.** It is an
   external single-operation linear extrapolation, and the backlog says so
   itself while naming GPU timings as the missing gate. It omits the merge
@@ -560,9 +598,101 @@ inspected against the traced image while the raster baseline stays untouched.
 Phase E then accepts that raster keeps a non-merged path for
 whatever stays out.
 
+### Coverage is transmission
+
+Admitting a class and seeing it correctly turned out to be different jobs, and
+transparency is where they came apart. This is the model the tracer now runs,
+written down because it was decided in code and three of its constants disagree
+with each other.
+
+**A blended surface is glass with an IOR of 1.0.** Not a composite and not a
+special case in the integrator: a material that lets rays pass straight through,
+weighted by coverage. Shade it, weight the result by alpha, continue the ray
+with `1 - alpha`, and skip it entirely below an epsilon. That is what makes
+smoke *lit* rather than pasted on, it is what the tracer already does for any
+transmitting surface, and it needs no ordering, no blend state and no second
+pass. The alternative — a rasterised composite over the traced image — cannot be
+in the BLAS at all, which settles backlog 1.7 the same way admission settled the
+rest.
+
+Coverage arrives in three flavours and traversal has to tell them apart
+(`slang/tracing/trace.slang`):
+
+| kind | traversal | why |
+|---|---|---|
+| cutout, `kPtMaskPunchThrough` | binary, commits at 0.5 | a leaf either is there or is not |
+| blended, `kPtMaskBlendedCoverage` | commits at any nonzero coverage, transmits the remainder | smoke, and anything raster would have alpha-blended |
+| additive, `kPtSurfaceUnlitTransparent` | always commits, passes through, casts no shadow | sabers and glow are emitters, not occluders |
+
+Two details cost real time and neither is guessable from the shader. **Premultiplied
+textures carry no usable alpha channel** — coverage lives in the luma and has to be
+recovered exactly as `slang/particles.slang:64-71` already does for raster; a
+tracer reading `.a` on one of those samples zero and the surface disappears.
+And **the classification happens at admission**, in `classifyParticles`
+(`rayquery.cpp`): additive blending takes the unlit path, everything else is
+given blended coverage. Lose that else branch and every particle commits
+unconditionally as a black block — which happened once, from a careless
+`git checkout --`, and read convincingly as a shading bug.
+
+**The open question is how many transmitting hits a ray may cross, and the three
+answers do not agree:**
+
+| path | limit |
+|---|---|
+| additive pass-through | `kMaxPassThroughSteps = 16` |
+| blended transmission, primary and bounce | `kMaxTransmissionSteps = 12` |
+| shadow ray | **uncapped** — every candidate, until transmittance < 1e-3 |
+
+A camera ray through the Dantooine plume stops after twelve layers. A shadow ray
+from the same point walks all 232, multiplying `(1 - alpha)` at each one, and
+reports the surface fully occluded. So the smoke is lit by rays that see a
+twelfth of the volume and shadowed by rays that see the whole of it — the
+leading explanation for the black band, and consistent with the measurement:
+`diff_factor` 1.0 and a valid `view_z` in that band, with traced diffuse at
+0.00003 against 0.05318 on the character beside it.
+
+Underneath the asymmetry sits a question the caps cannot answer. Single
+scattering with exact attenuation and nothing scattering back in gives black by
+construction; real smoke reads bright because of multiple scattering this
+integrator does not have. Making the three limits agree is necessary. It may not
+be sufficient, and if it is not, the answer is a scattering approximation rather
+than a larger number.
+
+Two consequences live in the backlog rather than here, and both are worse than
+they look: blended hits must not write the denoiser guides (**1.12**), because a
+thin quad has neither the depth nor the motion of the surface behind it, so NRD
+reprojects from the wrong place; and the non-finite values in **1.13** compound
+with that, since a NaN written into a guide spreads across the frame instead of
+staying in its pixel.
+
 ## `RenderRegistry` goes away, and that reshapes what follows
 
 Decided 2026-07-31, and it supersedes the phase list below.
+
+**The scope rule, decided 2026-08-01: anything called a registry that is not on
+`master` is removed.** `scene/registry.{h,cpp}` is branch-only — created by
+`c536ac72` on `path-tracing`, 1,047 lines, absent from `master` — so it goes
+whole rather than being pared down. `graphics/meshregistry` and
+`graphics/textureregistry` are master's and are untouched;
+`graphics/shaderregistry` already went with OpenGL.
+
+That rule settles five consumers this section had not accounted for, which an
+audit turned up before any code was written:
+
+| consumer | where it goes |
+|---|---|
+| `WalkmeshSceneNode` and `TriggerSceneNode` registering `RegisteredMesh` under `RenderCategory::Debug` (`node/walkmesh.cpp:71`, `node/trigger.cpp:114`) | **deleted with the registry.** Phase A's note that walkmeshes "belong to the room, door and placeable game APIs" is about the walkmesh *data*, which is untouched — the debug *render* path is branch-only and carries no game state |
+| `RegisteredAABB`, `RegisteredDebug` (`registry.cpp:270`, `:275`) | deleted with it, as this plan already assumed but had not verified were gone |
+| `traversalCount` (`registry.h:365`, logged at `pipeline/vulkan.cpp:1666`) | a statistic about the registry; dies with the thing it counts |
+| `IRenderPipeline` taking `RenderRegistry &` (`render/pipeline.h`) | the parameter drops from the interface and both implementations |
+| **`RenderRegistry::TraceClass`** | **the one that must survive.** A nested type of the doomed class, read by the tracer (`rayquery.cpp`) and the editor (~10 sites), and *persisted* through `loadTraceClasses` as an integer. It moves to the tracer beside curated materials, and the persisted values must keep resolving or be migrated deliberately |
+
+**The bar.** Nothing in this change alters a draw: raster keeps drawing the same
+meshes with the same matrices, only the records come from `GpuScene` instead of
+the registry. So no arithmetic changes and the bar is the strongest in this
+document — **the full raster image hash-identical, shadows included**, and the
+traced image within noise. Anything less means something moved that should not
+have.
 
 `RenderRegistry` was always temporary — a per-frame copy of the scene made for
 rendering, which is precisely the job `GpuScene` now does. Keeping both means
@@ -607,11 +737,133 @@ SceneGraph  --nodes admit-->  GpuScene   (records + merged buffers + regions)
                                        (or N draws over the same records)
 ```
 
-Sequencing is open on one measurement: `RegisteredMesh` copies a full `Material`
-and bone vectors per object, roughly a thousand objects a frame, against a
-2.3 ms update slot. If that copy is a visible slice, this jumps ahead of Phase D;
-if it is 0.1 ms, it lands with Phase E's front half. Phase C is a prerequisite
-either way — ranges only mean something once residency is in the contract.
+Sequencing rests on one measurement, which is step 2 of "What happens next"
+above and is not restated here. Phase C was the other prerequisite and is done —
+ranges only mean something once residency is in the contract.
+
+### What the registry actually costs — measured 2026-07-28, not estimated
+
+Folded in from `renderer-registration-plan.md:905-1049` on 2026-08-01, because
+this plan spent four revisions calling for a measurement that already existed
+and reasoning from the wrong half of it. OpenGL, `danm14ab`, `--pbr 1`, wall
+clock differenced between 300- and 900-frame runs with a warm-up discarded.
+
+| | ms/frame |
+|---|---:|
+| `a7b2bf0f`, immediately before the registry | 4.51 |
+| `c536ac72`, the registry | 5.62 — **+1.11 ms, +25%** |
+| `72fb544e`, after material flattening | 5.01 — recovered 0.61 ms |
+
+And inside the Graphics slot at that HEAD:
+
+| phase | ms/frame |
+|---|---:|
+| snapshot registration (`renderScene`) | 0.445 |
+| **the six `drawScene` walks** | **1.873** |
+| `_objects.clear()` destruction | 0.020 |
+| `resetFrame` bookkeeping | 0.002 |
+
+**The draw walk is four times the registration, and this plan had it backwards.**
+Every version of this document argued the *copy* was the thing worth deleting —
+"roughly a thousand objects a frame, against a 2.3 ms update slot". The copy is
+0.445 ms. The six walks over `_objects`, one per pass, are 1.873 ms. So the
+prize is deleting `drawScene`, not deleting the copy, and that is an argument
+for ranges over per-object selection rather than an argument about snapshot
+construction.
+
+`RegisteredObject` is **488 bytes**, so 1508 entries are ~0.70 MiB built and
+destroyed per frame, and the variant makes a three-field billboard pay the
+largest alternative's width.
+
+**Ruled out, with numbers.** These are recorded because negative results are
+what stop a guess recurring:
+
+- the 653 dangly position vectors: **0.065 ms** — real, and an order of
+  magnitude too small
+- the dead `drawnPasses` clear: **0.002 ms**
+- **caching the per-root cull test: no effect at all.** The pre-registry code
+  culled once per root per frame; the registry tests per entry per pass, ~9000
+  against ~200. Removing those calls moved frame time by nothing, because an
+  AABB-frustum test costs tens of nanoseconds. *Reasoning from a ratio of call
+  counts is how that hour was lost.*
+
+### Which copies are real, and which this plan invented
+
+Also from the registration plan (`:988-1034`), and it corrects a second thing
+this document repeats:
+
+- **The `Material` copy is real and dominates** — but not because of geometry.
+  `Material::textures` is an `unordered_map`, so `registerRender` builds one
+  hash table on the stack and the entry copy-initialises a second
+  (`node/mesh.cpp:254-268`, `registry.cpp:118`). Two per entry, ~1500 entries.
+  **The fix is flattening `textures` into fixed slot indices, which is the
+  bindless change Phase G wants anyway — not a change to when the registry is
+  filled.**
+- **Dangly positions are moved, not copied.** `RegisteredDeformation` is taken
+  by value and `std::move`d, and the call site passes a prvalue. There is
+  nothing here to save, despite 653 of them.
+- **Skinned bones do copy** — `RegisteredSkin {_bones, _prevBones}`, two
+  vectors, two allocations per skinned node per frame. The entry owns its bones
+  rather than referencing them; a span fixes it once stable ids make a node safe
+  to reference for a frame.
+- **`drawScene` re-copies instance arrays on every pass that selects them** —
+  grass into `visible` and again into 256-cluster batches, particles into
+  `visible`. That is in the *draw* walk, and it scales with the denser grass
+  Phase D just landed. Wants a span plus a `(first, count)` pair.
+
+### Structural facts the removal has to handle
+
+Four things in the registration plan that this document never carried, and each
+is a decision the removal cannot avoid:
+
+- **A shadow-casting mesh registers twice.** Once from `registerRender` with its
+  real material, once from `registerShadow` with a `DirLightShadow` /
+  `PointLightShadow` material (`node/mesh.cpp:345-362`) — *a pass wearing a
+  material's clothes*. Entry count is inflated by every caster, and anything
+  keyed off entries must decide which of the two is real. One object should be
+  one entry, with the pass selecting a shader.
+- **Skinned meshes never cast shadows at all.** `shouldCastShadows`
+  (`node/mesh.cpp:201-213`) excludes skin meshes on creatures, so no character
+  is shadowed. What *does* silently lose its deformation is a dangly or saber
+  caster. Fixing it is not admission work: `slang/shadow.slang:25-33` has a
+  single vertex stage taking `POSITION` and `localUniforms.model`, so deforming
+  shadows need new entry points and pipeline keys. **Phase E4 shadows from real
+  geometry inherits this.**
+- **Only one culling policy exists.** Every pipeline hands the *view* camera to
+  every pass, shadows included (`pipeline/vulkan.cpp:1017`), so a shadow caster
+  outside the view frustum is dropped from the shadow map. It predates the
+  registry and must not be silently reproduced when selection becomes ranges.
+- **`SceneGraph::_nodes` never shrinks.** It holds a `shared_ptr` to every node
+  ever created, is never erased from and never read; `clear()` leaves it
+  untouched. Nothing in a scene is destroyed until the `SceneGraph` dies. Under
+  a snapshot that is a memory bug on its own schedule — under retained
+  registration it would be a hard prerequisite. It is also why "nodes admit
+  directly" must not quietly become a retained protocol.
+
+**And the snapshot stays a snapshot.** The registration plan argues this at
+length (`:147-231`) and it is the load-bearing conclusion: retained
+registration conflates stable identity, persistent backend caches, and a
+registration protocol. Ray tracing needs the first two, which Phase C delivered;
+the third buys nothing and costs an invalidation contract the scene graph cannot
+currently honour. Backend caches are **validated, not notified** — an entry
+carries a content version, the cache rebuilds on mismatch and releases after N
+absent frames.
+
+### Composition, for sizing anything here
+
+`danm14ab`, frame 310, from `formatRegistryCounts`:
+
+| | registered | drawn opaque | drawn transparent |
+|---|---:|---:|---:|
+| rigid | 744 | 237 | 38 |
+| skinned | 61 | 13 | 0 |
+| dangly | **653** | 7 | **544** |
+| saber | 4 | 0 | 4 |
+| emitters / particles | 41 / 55 | — | — |
+| grass | 1 node / 1482 clusters | 1 | — |
+
+**544 of the 586 transparent draws are dangly**, so the transparent pass is very
+nearly nothing but foliage, and dangly outnumbers skinned ten to one.
 
 ### Where the registry's other jobs go
 
@@ -624,6 +876,40 @@ The code already half-agrees:
 | what exists this frame, and where | `GpuScene` records; `RegistryCounts` becomes counts over admission |
 | per-object debug state — disable, overrides | a side table keyed by **stable id**, consulted at admission |
 | per-category material overrides | `PtCategoryOverride[9]` in graphics options (`options.h:154-170`), applied during the tracer's material lowering — never registry state, unaffected |
+
+### The panel is far more coupled than that table admits
+
+Audited 2026-08-01. `editor.cpp` carries **64** registry references and the
+table above accounts for about four of them. Six couplings that the removal has
+to answer, one of which contradicts the table:
+
+- **`drawnPasses` exists only because `drawScene` writes it.** Five sites
+  (`registry.cpp:545`…`:644`), cleared in `resetFrame`, read by the panel as
+  pass slots and by the "Hide fully culled" filter. **Ranges produce no
+  per-object drawn state, and a mega-draw produces none at all.** The table
+  claims "keep the admitted/drawn distinction; it is still real once raster
+  draws ranges" — that is asserted without a mechanism, and the mechanism is
+  exactly what is being deleted. Either the panel loses the distinction, or
+  something reconstructs it deliberately. **Decide before deleting, not after.**
+- **`graphics::Material::curatedIndex`** (`material.h:93`) is an `int` indexing
+  the *scene* layer's curated storage, resolved through
+  `RenderRegistry::curatedIndex` with exact and `model/*` wildcard keys. A
+  graphics type holding an index into a scene-owned table is a layering
+  inversion that predates all of this and comes due now.
+- **`Editor::_materialEdit` is a `RenderRegistry::CuratedMaterial` by value**
+  (`editor.h:99`), a live working copy held across frames, and `editor.h`
+  includes `scene/registry.h`. Editor state is typed on the doomed class — the
+  same problem as `TraceClass` and it needs the same answer.
+- **`drawMaterialEditor(scene::RenderRegistry &)`** takes the class by
+  reference; the signature changes with it.
+- **`registry.skyRoom()`** is read by the panel (`editor.cpp:274`) to mark the
+  sky room. The corrected-shape section moves sky classification out, but never
+  notes the panel is a consumer.
+- **The panel deliberately reads the previous frame's completed snapshot**
+  (`editor.cpp:1099`), and it iterates `registry.objects()` as raw variants,
+  rendering per-alternative detail — material name, pass slots, cull root, sky
+  flag, curated class, per-entry enable. It needs an equivalent enumeration over
+  `GpuScene` records with the same completed-frame semantics, not a count.
 
 **The kill switch is the one that proves the point.** Its own comment says it is
 keyed by `SceneNodeId` index "so it survives the per-frame re-registration" —
@@ -650,106 +936,354 @@ during material lowering, which is where it is already applied.
 
 ### The tool gets renamed with it
 
-"Registry" is the name of a thing that will not exist. The panel shows what was
-admitted this frame, per object, with a kill switch and a material editor — so
-it is an **Objects** panel, matching `isObjectEnabled`/`setObjectEnabled`, which
-already use that word. The renames that follow:
+"Registry" is the name of a thing that will not exist. **Decided 2026-08-01: it
+becomes the Scene viewer.** An earlier revision proposed "Objects", on the
+grounds that `isObjectEnabled`/`setObjectEnabled` already use that word — but
+once `SceneGraph` admits directly, what the panel shows *is* the scene, and
+naming it after the objects it happens to list describes the old snapshot rather
+than the new source. The renames that follow:
 
 | now | after |
 |---|---|
-| `ImGui::Begin("Registry")`, the menu item | "Objects" |
-| `Editor::drawRegistry`, `_showRegistry`, `_registryScene`, `_registryFilter` | `drawObjects`, `_showObjects`, … |
+| `ImGui::Begin("Registry")`, the menu item | **"Scene"** |
+| `Editor::drawRegistry`, `_showRegistry`, `_registryFilter`, `_registryHideFullyCulled` | `drawSceneViewer`, `_showSceneViewer`, `_sceneViewerFilter`, … |
+| `_registryScene` — which scene graph the panel is looking at | `_sceneViewerGraph`, because "scene" now means the panel and the old name would read as its own selector |
 | `RegistryCounts`, `formatRegistryCounts` | admission counts |
-| `registeredCounts()`, `drawnCounts()`, `drawnCountsByPass()` | keep the admitted/drawn distinction; it is still real once raster draws ranges |
+| `registeredCounts()`, `drawnCounts()`, `drawnCountsByPass()` | see the coupling audit above — the admitted/drawn distinction has no mechanism once `drawScene` goes, and that has to be decided rather than renamed |
+
+The rename also changes what the panel *is*, not just what it is called. Reading
+"the previous frame's completed render snapshot" was a property of the registry;
+a scene viewer reads the scene, which is live. Whether the panel keeps the
+one-frame lag deliberately or stops needing it is part of the same decision.
 
 Practical note: renaming an ImGui window changes its `imgui.ini` key, so the
 saved layout, size and dock position reset to the code defaults. That reads as
 the panel breaking. Delete `build/bin/imgui.ini` and check what a first run
 actually shows before believing a layout regression.
 
-## Phase E's five breakages, revisited 2026-07-31
+## Phase E — raster consumes `GpuScene`
 
-Four of the five below are not Phase E blockers. Three are **current tracer
-correctness bugs** that belong in Phase D, and the fourth dissolves with the
-mega-draw. Taking them in the plan's numbering:
+Rewritten 2026-08-01, for two reasons. The bar hardened to a byte-identical
+G-buffer, which turns several things the earlier draft deferred into
+prerequisites. And the Vulkan containment condition, which this document had
+never stated, turns out to govern *where* the phase's new code may be written.
 
-**1. Shadow proxies — use the actual scene.** Shadow-only proxies exist because
-drawing real geometry into four cascades and six cube faces was expensive on
-2003 hardware. It is not expensive now. Trace and raster should shadow from the
-same geometry, and the proxies should go rather than be plumbed through the
-merge.
+Of the five breakages the first draft listed, four are gone. Three were tracer
+correctness bugs fixed in Phase D — dangly and saber frozen at base pose
+(`c1469287`) chief among them, a bug that had stood since the tracer existed and
+took one commit once someone noticed the displaced positions were already being
+handed to it. The fourth, "merged shadow draws lose frustum rejection", stopped
+mattering when caching culling removed ~9000 frustum tests per frame and moved
+frame time by *nothing*. What remains is raster's own lowering over a scene that
+is already correct.
 
-**2. "The merge is unculled, so merged shadow draws lose frustum rejection."**
-Dissolves with 1 and with the culling measurement: caching culling once removed
-~9000 frustum tests per frame and moved frame time by *nothing*. Rejecting
-geometry the GPU would have discarded anyway is not a saving worth a second
-geometry path.
+### The bar, and why it has two halves
 
-**3. Dangly and saber are frozen at base pose — and that is a live bug, not a
-Phase E blocker.** `rayquery.cpp:808-818` admits them at base positions, with a
-comment conceding "the wind arrives with the deformation compute pass, which
-replaces this". So the traced image has 653 static canopies on danm14ab and
-rigid saber blades *today*, while raster animates both. The two renderers
-disagree and the tracer is the wrong one.
+**The rasterised G-buffer must be byte-identical before and after.**
+`np.array_equal` on the `--dumptargets` `.npy` files: `g_buffer_diffuse`,
+`g_buffer_eye_normal`, `g_buffer_lightmap`, `g_buffer_self_illum`,
+`g_buffer_depth`, and motion. Raster is bit-exact by construction once `--dev 0`
+suppresses the frame-time readout, so there is no tolerance to negotiate here —
+a differing pixel is a real difference and the change is wrong.
 
-It is also cheap to fix, because the data already exists: `updateDanglyAnimation`
-runs every frame on the CPU (`node/mesh.cpp:133-174`) and its displaced
-positions are already copied into `RegisteredDangly` (`:353-363`);
-`RegisteredSaber` likewise carries its displacement. **The tracer is ignoring
-values that are already being handed to it.** Consuming them is admission work,
-not simulation work.
+**Shadows are the deliberate exception.** Proxies go away and shadowing moves to
+real geometry, so shadow maps and everything lit through them change on purpose.
+Shadows are judged by eye, the G-buffer by hash. Keeping the two bars apart is
+what makes the phase checkable; one combined "looks right" bar would hide a
+G-buffer regression behind an intended shadow change.
 
-Evaluating dangly on the GPU is then an optimisation, and a legitimate one: the
-"simulation" is fully deterministic — a spring response to transform deltas —
-so the merge kernel can evaluate it from the same inputs and the CPU pass and
-its per-frame upload both disappear. Correctness first, GPU evaluation second.
+### Vulkan containment, which this plan had missed
 
-**5. `offMaterial` has no field in `SceneObject`.** Real, and it needs fixing
-rather than avoiding — unless walkmesh debug geometry is deleted first, which
-removes the only consumer. Deletion was Phase A's plan and did not happen
-because walkmeshes belong to the room, door and placeable game APIs.
+**No Vulkan API outside `graphics/vulkan`.** Stated here as an architectural
+condition because it was never written down, and because Phase E is the phase
+that would otherwise make it worse.
 
-**4 is the one that survives as stated.** Hashed alpha test hashes object-space
-position (`pbr_model.slang:280, 335`), and `MergedVertex` carries no
-object-space position, so world-space vertices make foliage dither swim under
-motion. That is a raster lowering problem for Phase E proper.
+The current position, measured 2026-08-01:
 
-**So Phase D grows and Phase E shrinks.** Phase D is "everything the tracer
-should see, seen correctly": grass, particles, dangly, saber. Phase E is then
-raster's lowering — alpha hashing, blend ordering, material binding — over a
-scene that is already right.
+| file | `Vk`/`vk` references |
+|---|---:|
+| `scene/render/pipeline/rayquery.cpp` | 243 |
+| `scene/render/pipeline/vulkan.cpp` | 191 |
+| `scene/gpuscene.cpp` | 73 |
+| `scene/render/pipeline/nrddenoiser.cpp` | 59 |
+| `scene/render/pass/vulkan.cpp` | 7 |
+| `scene/render/pipeline/fsrupscaler.cpp` | 2 |
 
-## Phase E — raster consumes `GpuScene` where it can
+575 references inside `libs/scene`, against 4,652 lines of actual
+`graphics/vulkan`. Four public headers under `include/reone/scene/` include
+`volk.h` directly, so the leak is in the *interface*, not only the
+implementation. `scene/render/` is in practice a second Vulkan renderer living
+in the scene library, and `GpuScene`'s 73 references are 13% of the problem —
+the earlier note about relocating `GpuScene` was addressing the smallest part.
 
-Not a switchover. The second review lists five concrete breakages, and each is
-a prerequisite rather than a detail:
+**The operational rule for this phase**: new Vulkan code goes into
+`graphics/vulkan` from the start. Raster consuming merged geometry means buffer
+binding, descriptor plumbing and a widened barrier, all of it Vulkan; writing
+that into `libs/scene` in order to move it out a month later is the expensive
+mistake. **The existing 575 references are explicitly not this phase's job** —
+relocating `rayquery.cpp` mid-Phase-E would change far too much at once and
+destroy the byte-identical bar. They move in Phase F.
 
-1. **Shadow-only proxies are excluded from the merge by category**
-   (`rayquery.cpp:1169-1172`) and are exactly what the shadow pass draws.
-2. **The merge is unculled by design** (`:1048-1051`). Merged shadow draws would
-   lose frustum rejection across four cascades and six cube faces — a large
-   regression, not a wash.
-3. **Dangly and saber are frozen at base pose.** The merge does bone skinning
-   only, so raster consuming it would freeze 653 canopies on danm14ab.
-4. **Hashed alpha test hashes object-space position**
-   (`pbr_model.slang:280, 335`). World-space vertices make foliage dither swim
-   under motion.
-5. **`offMaterial` has no field in `SceneObject`**, which walkmesh geometry
-   needs.
+### E0 — is byte-identical reachable at all? Answer before building anything
 
-Motion vectors are the one thing merged geometry straightforwardly improves.
+Three places where raster and the merge compute the same quantity differently.
+Two are possible rounding differences; **one is a different vector**. Probe all
+three in the existing vertex stage — compute both forms, `asuint` XOR them,
+write a flag to a target — and count nonzero pixels on danm14ab before writing
+any of the switchover.
 
-The honest scope is therefore: raster consumes the merged stream for the static
-and skinned opaque set where all five are resolved, and keeps its own path for
-shadows, dangly, saber, grass, particles and walkmesh until each is separately
-answered. **Claiming a full switchover here would be claiming a rewrite.**
+| quantity | raster | the merge | kind of difference |
+|---|---|---|---|
+| world position | `mul(localUniforms.model, objectPos)` (`pbr_model.slang:59`) | three `dot(row, float4(p,1))` (`skin.slang:86-90`) | summation order and FMA contraction — possibly bits |
+| **normal** | **inverse transpose**, `mul(n, (float3x3)modelInv)` (`lib/geometry.slang:64-66`) | **plain `M * n`**, `transformDir` (`skin.slang:287-289`) | **a different vector under any non-uniform scale or shear** |
+| normalisation | `normalize()` | `safeNormalize`, `v * rsqrt(dot(v,v))` (`skin.slang:99-103`) | `rsqrt` may lower to an approximate instruction |
 
-`pipeline/vulkan.cpp` is not a later isolated payoff: it owns frame ordering and
-returns before every raster pass in path-tracing mode (`:1337-1373`). A core
-consumed by both needs a precise update point and per-consumer barriers. Its
+Plus one shape difference: raster's tangent frame is computed **only** when the
+normal-map or bump-map feature bit is set and is `float3(0)` otherwise
+(`pbr_model.slang:64-70`), while the merge fills it unconditionally. Wherever
+those disagree, `g_buffer_eye_normal` differs on every normal-mapped surface.
+
+**When a probe is nonzero, the merge moves — not the bar.** The tracer has no
+bit-exactness requirement and the merge is the newer code. For the normal that
+means `SceneObject` gains the inverse (or its 3x3 transpose) and the merge
+adopts the inverse transpose. If a probe cannot be driven to zero, that is a
+finding worth stopping on, not something to work around by loosening the
+comparison.
+
+**A tracer correctness question falls out of the normal row, and it is not a
+Phase E question.** If `M * n` is wrong for non-uniformly-scaled objects, then
+the path tracer has been shading those objects with wrong normals for as long as
+the merge has existed. Measure whether any admitted object actually has
+non-uniform scale before claiming it either way: if every transform is a rigid
+motion plus uniform scale the two conventions agree and this is only about bits.
+Either way it belongs to Phase D correctness, recorded here because Phase E is
+what exposed it.
+
+### E1 — `MergedVertex` must carry object-space position
+
+`opaqueFragment` — the G-buffer writer itself — hashes object-space position for
+the hashed alpha test (`pbr_model.slang:280`). `MergedVertex` has no such field.
+The earlier draft called this "a raster lowering problem for Phase E proper" and
+left it late; under a byte-identical bar it blocks the first step, because any
+dithered surface differs immediately.
+
+144 → 160 bytes. `skin.slang` declares the struct independently of the C++ header
+and the `static_assert`s are the only ABI guard, so both sides and every assert
+move together.
+
+### E2 — getting merged geometry into a raster draw
+
+The merged buffers carry `VK_BUFFER_USAGE_STORAGE_BUFFER_BIT` only
+(`gpuscene.cpp:243-244`), and the post-merge barrier names AS-build and
+ray-tracing reads. Both need widening for a raster consumer.
+
+**Prefer programmable vertex pulling** — bind the merged buffer as a
+`StructuredBuffer<MergedVertex>` and index by `SV_VertexID` — over adding
+`VERTEX`/`INDEX` usage and going through vertex input. No binding descriptions,
+no attribute descriptions, no format plumbing in the pipeline key, one
+declaration of the vertex layout instead of two, and the mega-draw becomes
+trivial later.
+
+### E3 — the static opaque set, and nothing else yet
+
+World-space vertices, `model` = identity, every other part of `LocalUniforms`,
+the material path and texture binding unchanged. This step changes **where
+vertices come from and nothing else**, which is exactly what makes a
+byte-identical result meaningful.
+
+**Do not let merged raster draws cover grass and particles.** Phase D admitted
+them for the tracer, while raster draws them through `executeDrawGrass` and
+`executeDrawParticles` with their own shaders — cover them here and they render
+twice.
+
+**Skinned geometry is a separate later step.** Raster skins in the vertex shader
+from a bone palette; the merge skins in compute. Those must also be shown
+bit-identical, and the same rule applies when they are not. Attempting static
+and skinned together makes a failure impossible to localise.
+
+Motion vectors carry the same question: the VS builds `prevClipPos` as
+`prevViewProjection * (prevModel * prevObjectPos)` (`pbr_model.slang:75-76`)
+while the merge already holds `prevPosition` in world space.
+
+### E4 — shadows from real geometry
+
+Only once the G-buffer is byte-identical. Admission takes Opaque and Transparent
+only (`rayquery.cpp:517`, `:1112`), so shadow-only proxies sit outside the merge
+while raster's shadow pass draws exactly them. Shadow from real geometry and
+delete the proxies rather than plumbing them through. Proxies exist because four
+cascades and six cube faces of real geometry were expensive on 2003 hardware,
+which is no longer a constraint.
+
+This is where the image changes on purpose.
+
+### Not in this phase
+
+- **The mega-draw** — that is Phase G, and it depends on F for bindless. Phase E
+  does per-object draws over merged ranges and produces the numbers that decide
+  whether G happens at all.
+- **`offMaterial`**, which still has no `SceneObject` field. Walkmesh debug
+  geometry is its only consumer and deleting that remains the better answer than
+  widening the vertex.
+- **The 575-reference containment sweep** — that is Phase F.
+
+`pipeline/vulkan.cpp` remains the awkward one: it owns frame ordering and returns
+before every raster pass in path-tracing mode (`:1337-1373`), so a core consumed
+by both needs a precise update point and per-consumer barriers. Its
 `glToVulkanClip` rewrite (`:1319-1334`) and the negative-height viewport
-(`:627-634`) are real Vulkan cleanups but cannot be bundled into a
-no-pixel-change GL deletion.
+(`:627-634`) are real Vulkan cleanups that belong with Phase F.
+
+## Phase F — Vulkan containment
+
+**No Vulkan API outside `graphics/vulkan`**, as stated in the end state. The
+measurement and the reason it is a separate phase are under Phase E; this is
+what actually has to move.
+
+It comes last for one reason: it is a **pure relocation**, so its bar is
+pixel-identical — raster hash-identical, traced within noise — and that bar is
+only meaningful over code that has stopped changing. Running it before E would
+mean relocating `rayquery.cpp` and `pipeline/vulkan.cpp` while E is still
+editing them, which destroys both phases' verification at once.
+
+### It is not a file move, and that is the whole difficulty
+
+The obvious version — drag `scene/render/*` into `graphics/vulkan` — **inverts
+the library dependency**. Those files read `RenderRegistry`, `SceneNode`,
+`Material` and the scene graph; graphics knowing about scene types is precisely
+what the layering forbids. So each file splits the same way `GpuScene` already
+has to:
+
+```
+scene/            reads scene types, decides what to draw and with what
+  |  (a plain, Vulkan-free interface)
+  v
+graphics/vulkan/  owns buffers, descriptors, pipelines, barriers, commands
+```
+
+The split is the work; the move is the easy part. Sized by where the references
+sit:
+
+| file | refs | shape of the split |
+|---|---:|---|
+| `render/pipeline/rayquery.cpp` | 243 | the largest. Trace resources, AS build and dispatch go down; admission, classification and curated material lowering stay up |
+| `render/pipeline/vulkan.cpp` | 191 | frame ordering and pass structure stay up; images, render passes and barriers go down |
+| `gpuscene.cpp` | 73 | already identified — Vulkan-typed storage down, registry-reading admission up. Unblocked by the registry removal, which is why that runs first |
+| `render/pipeline/nrddenoiser.cpp` | 59 | NRD wrapper; almost entirely a graphics concern already |
+| `render/pass/vulkan.cpp` | 7 | nearly clean |
+| `render/pipeline/fsrupscaler.cpp` | 2 | nearly clean |
+
+**The four public headers are the real test.** `include/reone/scene/gpuscene.h`,
+`render/pass/vulkan.h`, `render/pipeline/rayquery.h` and
+`render/pipeline/vulkan.h` include `volk.h`, so the leak is in the interface and
+every translation unit that touches scene rendering inherits it. The phase is
+done when no header under `include/reone/scene/` includes a Vulkan header —
+that is a grep, which makes it the one bar here that cannot be argued with.
+
+### Order, and what makes it safe
+
+Smallest first, so the mechanism is proven on files where a mistake is cheap:
+`fsrupscaler`, `pass/vulkan`, `nrddenoiser`, then `gpuscene`, then
+`pipeline/vulkan`, then `rayquery`. One file per commit, pixel-identical each
+time. Anything else makes a failure impossible to localise, and this is a phase
+where a subtle barrier or lifetime mistake will present as an intermittent
+corruption rather than a clean break — see the hazard note about VMA
+allocations outliving the device.
+
+Fold in here rather than earlier: `glToVulkanClip` (`pipeline/vulkan.cpp:1319-1334`)
+and the negative-height viewport (`:627-634`), both Vulkan-native cleanups that
+change matrices, so each is its own commit with its own capture check.
+
+## Phase G — the mega-draw
+
+The payoff the rest of this document is justified by, and until now the only
+part of it never planned. The opening section argues raster consuming `GpuScene`
+"matters most exactly where the machine is weakest: a mega-draw over merged
+geometry against 1048 per-mesh draws", the registry section argues a mega-draw
+dissolves `drawScene`, and Phase E excludes it — so it has been the motivation
+for three sections and the subject of none.
+
+**It goes last because it depends on both phases before it.** E puts merged
+geometry into a raster draw at all; F is what makes bindless reachable. Doing it
+earlier means doing it twice.
+
+### The gate: measure before building
+
+**This project has already been wrong about exactly this.** Culling moved from
+~200 frustum tests per frame to ~9000; caching it removed the calls and changed
+frame time by *nothing*. A ratio of call counts is not evidence. So the gate is
+two measurements, not an argument:
+
+- step 2 of the ordered list — is the per-object `Material` and bone copy a
+  visible slice of the 2.3 ms update slot?
+- what does 1048 draws actually cost in CPU time? Per-draw descriptor writes,
+  uniform ring pushes and pipeline binds are the claim; time them.
+
+If the answer is that per-draw CPU cost is small, **this phase should not
+happen**, and "raster keeps per-object draws over merged ranges" is a correct
+outcome rather than a failure. The low-end note in the opening section says the
+same thing from the other direction: a per-frame compute merge on weak compute
+may cost more than the draws it saves.
+
+### What one draw actually requires
+
+**1. Per-primitive materials, which means bindless — and raster has none.**
+Today each draw binds its own texture set (`acquireTextureSet`, per draw) and
+pushes its own `LocalUniforms`. One draw covering many materials means the
+fragment stage looks the material up per primitive and indexes textures by id.
+The tracer already does this, and **it is the only thing in the tree that does**:
+`VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT` with a variable descriptor count
+appears at `rayquery.cpp:138-143` and nowhere else. Raster adopting it is the
+bulk of this phase, and it is another argument for F first — the machinery has
+to live somewhere shareable rather than inside the tracer's pipeline.
+
+**2. `InstanceMaterial` is not the table raster needs.** The corrected-shape
+section already settled this: it carries trace-only surface types and curated
+trace operations, and lacks `color`, `ambientColor`, the env-map slots, fog and
+blend/cull state that raster reads from the original `Material`. So either
+raster gets its own per-primitive table or the shared one widens. **Decide
+explicitly** — sharing it by default is how the first draft of this plan went
+wrong.
+
+**3. Feature bits stop being uniform across a draw.** `pbr_model.slang` says so
+in its own header comment: *"Material features remain runtime branches — they
+are uniform across a draw."* That stops being true. They become per-primitive
+loads, and whether the resulting divergence costs more than the draws saved is
+an empirical question belonging to the gate above.
+
+**4. Pipeline state cannot vary within a draw, and this is the part that
+actually determines the draw count.** Blend and cull are pipeline state, not
+shader state. But with merged geometry and vertex pulling, most of the current
+key collapses: the vertex bindings and attributes vanish (one layout), and the
+vertex entry vanishes with them (everything is already transformed, so `static`,
+`skinned`, `dangly` and `saber` stop being separate stages). For the opaque
+G-buffer pass the fragment entry is fixed and blend is fixed, so **only cull
+varies** — `material.faceCulling.value_or(FaceCullMode::Back)`.
+
+That is the concrete claim to test: **1048 draws becomes one per cull mode, a
+handful.** Not literally one, and the section that says "one draw" everywhere
+should be read as "a handful" from here.
+
+**5. Transparents do not collapse the same way.** Blend mode varies per material
+there, so they partition by (blend, cull) and keep the ordering sort over ranges.
+The mega-draw is an opaque-pass claim; transparents get whatever falls out.
+
+### Bar
+
+Pixel-identical for the opaque G-buffer: same geometry, same materials, only the
+binding model changed. Shadows are already settled by then.
+
+**And a second bar this phase alone has: frame time must actually improve.**
+Every other phase in this document is verified by things *not* changing. This
+one exists solely to make something faster, so a version that is
+pixel-identical and no quicker has failed and should be reverted rather than
+kept for tidiness.
+
+### What it deletes
+
+Per-draw texture sets, per-draw `LocalUniforms` pushes, and — once skinned
+geometry consumes the merged stream — the per-draw bone palette upload
+(`pass/vulkan.cpp:274-297`) together with the CPU palette build
+(`node/mesh.cpp:327-354`). That last deletion is the one the target section
+promised and is the clearest signal the phase worked.
 
 ## Hazards
 
@@ -819,6 +1353,15 @@ Step 4 cannot be compared at all, and should be measured rather than compared.
 
 ## Not in scope
 
-No behaviour changes, no features, no performance work. If something looks
+**For the pixel-identical phases — A, B0, B, C, and Phase E's raster half —
+no behaviour changes, no features, no performance work.** If something looks
 wrong mid-refactor, write it down rather than fixing it: a refactor that also
-changes behaviour cannot be verified by comparing images.
+changes behaviour cannot be verified by comparing images, and the whole
+verification scheme above depends on that separation holding.
+
+**Phase D is the deliberate exception, and it is not a loophole.** Admitting a
+class the tracer could not see changes the traced image by definition, so its
+bar is different in kind: each class lands in its own commit, is inspected
+against the traced image, and leaves the raster baseline hash-identical. That
+last clause is what keeps D checkable — a phase that changed both renderers at
+once would be verifiable by nothing.

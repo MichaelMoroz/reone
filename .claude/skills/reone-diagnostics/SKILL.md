@@ -1,15 +1,16 @@
 ---
 name: reone-diagnostics
-description: Measure and compare reone empirically without fooling yourself. Covers the deterministic screenshot harness for A/B, numeric render-target dumps for localising a difference to a pass, the frozen-scene sequence capture for scoring temporal filters, scripted RenderDoc capture, frame-time measurement, and the build and tooling traps that silently invalidate all of the above. Use when a shader renders wrongly, when OpenGL and Vulkan disagree, when a denoiser or TAA is not converging, when something got slower, or when you need bound buffers and uniform contents rather than a guess. Triggers on: shader renders wrong, geometry missing, compare backends, GL vs Vulkan, A/B, frame capture, RenderDoc, uniform buffer contents, G-buffer, frame time, regression, slower, benchmark, validation layers, stale build, path tracing, denoiser, NRD, TAA, ghosting, shimmer, noise, does not converge, flicker, temporal.
+description: Measure and compare reone empirically without fooling yourself. Covers the deterministic screenshot harness for A/B, the synthetic testbed and free-camera commands for isolating one class of geometry, numeric render-target dumps for localising a difference to a pass, the frozen-scene sequence capture for scoring temporal filters, scripted RenderDoc capture, frame-time measurement, and the build and tooling traps that silently invalidate all of the above. Use when a shader renders wrongly, when a renderer disagrees with another, when a denoiser or TAA is not converging, when something got slower, when you need a scene simple enough to judge by eye, or when you need bound buffers and uniform contents rather than a guess. Triggers on: shader renders wrong, geometry missing, grass, particles, smoke, emitter, testbed, isolation fixture, synthetic scene, free camera, camstatus, spawn, reproducible viewpoint, compare renderers, A/B, frame capture, RenderDoc, uniform buffer contents, G-buffer, frame time, regression, slower, benchmark, validation layers, stale build, path tracing, denoiser, NRD, TAA, ghosting, shimmer, noise, does not converge, flicker, temporal.
 ---
 
 # Measuring a reone frame
 
 Guessing at shader faults from the rendered image is slow and gets it wrong.
-Four things make it empirical: an unattended screenshot harness for A/B
-comparison, numeric target dumps for localising a difference to a pass, a
-frozen-scene sequence capture for anything temporal, and a scripted RenderDoc
-capture for seeing what the GPU actually received.
+Five things make it empirical: an unattended screenshot harness for A/B
+comparison, a synthetic testbed and a scriptable camera so the image is simple
+enough to judge at all, numeric target dumps for localising a difference to a
+pass, a frozen-scene sequence capture for anything temporal, and a scripted
+RenderDoc capture for seeing what the GPU actually received.
 
 **Most of the time lost here has gone to measurements that were quietly
 invalid** - a stale binary, a splash-screen frame, two different renderers
@@ -168,6 +169,92 @@ def load(p):
 
 Amplify the difference (`v*10`) before viewing it, then read the PNG directly -
 the difference image localises the fault far better than the two frames do.
+
+## Isolation fixtures: stop judging a shader against a game module
+
+**A game frame is the wrong place to check whether one class of geometry
+renders.** `danm14ab` carries a sky, lightmaps, a few hundred objects and no
+ground truth, so "does grass cast a shadow" becomes an argument about a
+screenshot. It was reported absent twice when the shadows were present and
+merely sub-pixel, and neither report could be settled by looking harder. Build a
+scene where the answer is unmistakable instead.
+
+### `warp testbed [grass|smoke|smoke-control|none]`
+
+No sky, a flat white plane, one object at the origin, the camera looking at it,
+one directional light. It is code-built in `Game::loadTestbed` rather than a
+synthetic IFO/ARE/GIT, so it needs no assets and cannot inherit a room, a party,
+scripts or the previous graph. A shadow either is in that picture or is not.
+
+Note the command word: it is **`warp testbed`**, not `scene testbed`.
+`scene` takes only `empty`.
+
+The `smoke` variant emits `fx_smoke01` — deliberately the same texture the main
+menu and the Dantooine vents use, so the fixture exercises the asset actually
+under investigation. **An emitter resolves its texture by name through the
+registry** (`node/emitter.cpp:255`), so a runtime-generated texture returns null
+and the emitter registers *nothing at all* — which reads as "the tracer cannot
+see particles" rather than as a missing asset. Do not point a fixture emitter at
+a texture you built in memory.
+
+### `scene empty`, and the other scene commands
+
+| command | what it does |
+|---|---|
+| `scene empty` | tears down module, party and graph; leaves an empty scene and a free camera |
+| `spawn <resref> x y z` | UTC or UTP blueprint if one exists, otherwise a bare MDL — the fallback is what reaches renderer-only classes (dangly, saber, emitters, billboards) |
+| `grass <surface_model> <grass_texture> x y z` | turns a whole supplied surface into grass at density 64 |
+| `emit` | detonates the emitters in the last spawned model |
+| `ignite` | plays powerup on the last spawned model — the saber path |
+
+**`scene empty` really is empty, and the sky is not a counter-example.** The sky
+is baked at startup and is not an object in the graph, so seeing one does not
+mean the command failed.
+
+**Emitters take time to fill and this invalidates early captures.** At frame 310
+the Dantooine vents hold 55 particles; at frame 1200 they hold 232. A particle
+change measured at 310 is measured against a quarter of the geometry, and the
+overlap-dependent behaviour — transmission, self-shadowing, denoiser guides — is
+exactly what the missing three quarters would have exercised. Capture late.
+
+### The camera, which is what makes any of it reproducible
+
+| command | what it does |
+|---|---|
+| `camera free` | switch to the free camera |
+| `campos x y z` | put it at a point |
+| `camlook x y z` | aim it at a point |
+| `camstatus` | **print the `campos`/`camlook` pair for the current viewpoint** |
+
+`camstatus` is the one that matters. Fly to the thing you are investigating by
+hand, run it, and paste the two lines it prints into a commands file — the
+viewpoint is now reproducible across builds, across commits and inside an
+unattended capture. Framing a defect by editing coordinates blind does not work;
+this took several rounds of a subject drifting off-screen before it existed.
+
+```
+warp danm14ab
+camera free
+campos 320.481415 106.536171 8.482998
+camlook 326.0 118.0 13.0
+```
+
+### `--commands-frame N`, because `warp` finishes after the file does
+
+A commands file runs during init by default, and `warp` completes its module
+load *after* that — so `camera free` and `campos` in the same file are applied
+to a scene that is then replaced. Run the file on a later frame instead:
+
+```
+engine.exe --game "<GAME_DIR>" --dev 0 --mode path-tracing --ptdenoise 0 \
+    --commands-file "<ABSOLUTE PATH>\cam.txt" --commands-frame 120 \
+    --capture out.tga --captureframe 1200
+```
+
+The path must be absolute; a relative one resolves against the working
+directory, not the file. This is also the missing piece for the per-class
+isolation fixtures in `test/fixtures/render-isolation/`, which render nothing
+today for exactly this reason (backlog 7.7).
 
 ## Render target dumps, for localising a difference to a pass
 

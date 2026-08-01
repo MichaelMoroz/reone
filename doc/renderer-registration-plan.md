@@ -225,7 +225,8 @@ requirement:
 build flags - `PREFER_FAST_TRACE` plus compaction against `PREFER_FAST_BUILD`.
 
 Revisit only on measurement: if snapshot construction shows up in a profile
-after the `Material` copy is gone (see "Registry lifetime" below), reconsider -
+after the `Material` copy is gone (see "Where the per-frame cost actually is"
+below), reconsider -
 and reconsider by moving specific expensive fields out of the snapshot, not by
 adopting a retained protocol wholesale.
 
@@ -1047,7 +1048,7 @@ What the rebuild genuinely cannot supply is a key that survives a frame, and
 that is supplied by putting a stable id on the node - not by changing when the
 registry is filled.
 
-## o
+## Doing this once, not twice
 
 Doing this while both backends exist means implementing it twice. The
 registration split avoided that: registry and culling live in `scene`, so all
