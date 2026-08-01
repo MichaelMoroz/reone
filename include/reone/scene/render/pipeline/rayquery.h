@@ -10,7 +10,7 @@
 #include "reone/scene/gpuscene.h"
 
 #ifdef R_ENABLE_FSR
-#include "reone/scene/render/pipeline/fsrupscaler.h"
+#include "reone/graphics/vulkan/fsrupscaler.h"
 #endif
 #ifdef R_ENABLE_NRD
 #include "reone/scene/render/pipeline/nrddenoiser.h"
@@ -175,7 +175,7 @@ private:
      * display transform. Both single-buffered - FSR keeps its own history
      * internally and neither image outlives the frame that writes it.
      */
-    std::unique_ptr<FsrUpscaler> _fsr;
+    std::unique_ptr<graphics::FsrUpscaler> _fsr;
     std::unique_ptr<graphics::VulkanImage> _fsrColor;
     std::unique_ptr<graphics::VulkanImage> _fsrOutput;
     bool _fsrImagesTransitioned {false};

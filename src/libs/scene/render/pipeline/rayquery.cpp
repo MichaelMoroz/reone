@@ -486,7 +486,7 @@ void RayQueryPipeline::init() {
             throw std::runtime_error("Vulkan: tonemap pipeline creation failed");
 
         try {
-            _fsr = std::make_unique<FsrUpscaler>(device, _extent);
+            _fsr = std::make_unique<graphics::FsrUpscaler>(device, _extent);
             _fsr->init();
         } catch (const std::exception &e) {
             // Losing the upscaler must not lose the frame; it costs the
@@ -1750,7 +1750,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, uint32_t globalsOffset,
                 upscalerDependency.pMemoryBarriers = &toUpscaler;
                 vkCmdPipelineBarrier2(cmd, &upscalerDependency);
 
-                FsrUpscaler::Inputs fsrInputs;
+                graphics::FsrUpscaler::Inputs fsrInputs;
                 fsrInputs.color = _fsrColor.get();
                 fsrInputs.depth = aux[7].get();
                 fsrInputs.motion = aux[8].get();

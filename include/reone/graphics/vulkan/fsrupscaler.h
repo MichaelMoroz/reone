@@ -20,10 +20,6 @@ namespace reone::graphics {
 
 class VulkanDevice;
 
-}
-
-namespace reone::scene {
-
 /**
  * AMD FidelityFX Super Resolution 2.2.1, at NativeAA (1.0x).
  *
@@ -85,4 +81,4 @@ private:
     bool _contextCreated {false};
 };
 
-} // namespace reone::scene
+} // namespace reone::graphics

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "reone/scene/render/pipeline/fsrupscaler.h"
+#include "reone/graphics/vulkan/fsrupscaler.h"
 
 #include <stdexcept>
 #include <string>
@@ -16,7 +16,7 @@
 
 using namespace reone::graphics;
 
-namespace reone::scene {
+namespace reone::graphics {
 
 namespace {
 
@@ -150,4 +150,4 @@ void FsrUpscaler::dispatch(VkCommandBuffer cmd, const Inputs &inputs, const glm:
     }
 }
 
-} // namespace reone::scene
+} // namespace reone::graphics

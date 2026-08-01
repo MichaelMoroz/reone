@@ -53,6 +53,11 @@ set(VULKAN_SOURCES
     ${VULKAN_SOURCE_DIR}/volk.cpp
     ${VULKAN_SOURCE_DIR}/vma.cpp)
 
+if(ENABLE_FSR)
+    list(APPEND VULKAN_HEADERS ${VULKAN_INCLUDE_DIR}/fsrupscaler.h)
+    list(APPEND VULKAN_SOURCES ${VULKAN_SOURCE_DIR}/fsrupscaler.cpp)
+endif()
+
 add_library(graphicsvulkan STATIC ${VULKAN_HEADERS} ${VULKAN_SOURCES} ${CLANG_FORMAT_PATH})
 set_target_properties(graphicsvulkan PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(graphicsvulkan PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
@@ -71,6 +76,10 @@ target_compile_definitions(graphicsvulkan PUBLIC
     # through null pointers and dies inside vmaCreateAllocator.
     VMA_STATIC_VULKAN_FUNCTIONS=0
     VMA_DYNAMIC_VULKAN_FUNCTIONS=1)
+
+if(ENABLE_FSR)
+    target_link_libraries(graphicsvulkan PUBLIC fsr2)
+endif()
 
 target_link_libraries(graphicsvulkan PUBLIC
     graphics

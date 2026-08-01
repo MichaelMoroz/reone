@@ -86,7 +86,3 @@ if(ENABLE_NRD)
     target_link_libraries(scene PUBLIC NRD)
 endif()
 
-if(ENABLE_FSR)
-    target_sources(scene PRIVATE ${SCENE_SOURCE_DIR}/render/pipeline/fsrupscaler.cpp)
-    target_link_libraries(scene PUBLIC fsr2)
-endif()
