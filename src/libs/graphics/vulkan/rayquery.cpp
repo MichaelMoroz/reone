@@ -647,9 +647,9 @@ bool VulkanRayQuery::bakeSkyRoom(VkCommandBuffer cmd,
         for (const auto &mesh : room.meshes) {
             const auto &vkMesh = resources.get(*mesh.mesh);
             VulkanPipelineCache::Key key;
-            key.module = "pbr_model";
-            key.vertexEntry = "staticVertex";
-            key.fragmentEntry = "skyBakeFragment";
+            key.module = "sky";
+            key.vertexEntry = "skyVertex";
+            key.fragmentEntry = "skyFragment";
             key.colorFormats = {_skyCube->format()};
             key.depthFormat = VK_FORMAT_D32_SFLOAT;
             key.depthTest = true;
@@ -657,6 +657,12 @@ bool VulkanRayQuery::bakeSkyRoom(VkCommandBuffer cmd,
             key.cull = FaceCullMode::None;
             key.vertexBindings = VulkanMesh::bindingDescriptions(mesh.mesh->vertexLayout());
             key.vertexAttributes = VulkanMesh::attributeDescriptions(mesh.mesh->vertexLayout());
+            key.vertexAttributes.erase(
+                std::remove_if(key.vertexAttributes.begin(), key.vertexAttributes.end(),
+                               [](const auto &attribute) {
+                                   return attribute.location != 0 && attribute.location != 2;
+                               }),
+                key.vertexAttributes.end());
             auto &pipeline = _renderer.pipelines().get(key);
 
             LocalUniforms locals;

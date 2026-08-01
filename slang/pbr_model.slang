@@ -127,19 +127,6 @@ float2 transformedUV(float2 uv1) {
 }
 
 /**
- * Sky-room bake target. The traced sky model is texture radiance just like
- * UnlitEmissiveSurface, so preserve the raster path's transformed UV lookup,
- * hardware gamma conversion and zero-alpha coverage without applying any
- * lighting or source-intensity dial here.
- */
-[shader("fragment")]
-float4 skyBakeFragment(Varyings input) : SV_Target {
-    float4 sample = sMainTex.Sample(transformedUV(input.uv1));
-    if (sample.a == 0.0) discard;
-    return float4(pow(sample.rgb, float3(2.2)), sample.a);
-}
-
-/**
  * Builds the surface description from the Odyssey texture slots. This is the
  * function that moves into the material buffer of section 5.6 - a path tracer
  * will fill SurfaceParams from a hit record instead, and everything downstream
