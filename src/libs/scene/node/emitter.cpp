@@ -247,7 +247,7 @@ void EmitterSceneNode::detonate() {
     doSpawnParticle();
 }
 
-void EmitterSceneNode::registerLeafs(RenderRegistry &registry, const std::vector<SceneNode *> &leafs) {
+void EmitterSceneNode::collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) {
     if (leafs.empty()) {
         return;
     }
@@ -319,7 +319,7 @@ void EmitterSceneNode::registerLeafs(RenderRegistry &registry, const std::vector
     auto cullRoot = root->type() == SceneNodeType::Model
                         ? static_cast<ModelSceneNode *>(root)
                         : nullptr;
-    registry.registerParticles(
+    scene.addParticles(
         renderCategory(RenderCategory::Transparent), id(), nameIds(), material, emitter->gridSize, particles, cullRoot);
 }
 

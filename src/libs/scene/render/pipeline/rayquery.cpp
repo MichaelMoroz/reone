@@ -20,7 +20,6 @@
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/scene/node/model.h"
-#include "reone/scene/registry.h"
 
 #ifdef R_ENABLE_NRD
 #include <NRD.h>
@@ -28,9 +27,9 @@
 #include "reone/system/logutil.h"
 
 #include <chrono>
-#include <map>
 #include <cstddef>
 #include <cstring>
+#include <map>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -73,7 +72,8 @@ VkTransformMatrixKHR instanceTransform(const glm::mat4 &m) {
 }
 
 VkDeviceSize grownCapacity(VkDeviceSize current, VkDeviceSize required, VkDeviceSize minimum) {
-    if (current != 0 && required <= current) return current;
+    if (current != 0 && required <= current)
+        return current;
     VkDeviceSize capacity = std::max(current, minimum);
     while (capacity < required) {
         if (capacity > std::numeric_limits<VkDeviceSize>::max() / 2) {
@@ -86,13 +86,15 @@ VkDeviceSize grownCapacity(VkDeviceSize current, VkDeviceSize required, VkDevice
 } // namespace
 
 RayQueryPipeline::RayQueryPipeline(VulkanRenderer &renderer,
-                                    glm::ivec2 extent,
-                                    GraphicsOptions &options) :
+                                   glm::ivec2 extent,
+                                   GraphicsOptions &options,
+                                   GpuScene &gpuScene) :
     _renderer(renderer), _options(options), _extent(extent),
-    _gpuScene(std::make_unique<GpuScene>(renderer)) {}
+    _gpuScene(gpuScene) {}
 
 void RayQueryPipeline::init() {
-    if (_inited) return;
+    if (_inited)
+        return;
     auto &device = _renderer.device();
     _bindlessTextureCapacity = device.maxBindlessSampledImages();
     if (_bindlessTextureCapacity == 0) {
@@ -161,12 +163,15 @@ void RayQueryPipeline::init() {
                                    4 * _bindlessTextureCapacity + 2}};
     VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
-    poolInfo.maxSets = 2; poolInfo.poolSizeCount = 4; poolInfo.pPoolSizes = sizes;
+    poolInfo.maxSets = 2;
+    poolInfo.poolSizeCount = 4;
+    poolInfo.pPoolSizes = sizes;
     if (vkCreateDescriptorPool(device.handle(), &poolInfo, nullptr, &_pool) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: ray-query descriptor pool creation failed");
     VkDescriptorSetAllocateInfo alloc {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     std::array<VkDescriptorSetLayout, 2> setLayouts {_layout, _layout};
-    alloc.descriptorPool = _pool; alloc.descriptorSetCount = static_cast<uint32_t>(setLayouts.size());
+    alloc.descriptorPool = _pool;
+    alloc.descriptorSetCount = static_cast<uint32_t>(setLayouts.size());
     alloc.pSetLayouts = setLayouts.data();
     if (vkAllocateDescriptorSets(device.handle(), &alloc, _sets.data()) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: ray-query descriptor allocation failed");
@@ -252,7 +257,8 @@ void RayQueryPipeline::init() {
 
     auto spirv = readSpirV(_renderer.shaderDir() / "rayquery.spv");
     VkShaderModuleCreateInfo moduleInfo {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-    moduleInfo.codeSize = spirv.size() * sizeof(uint32_t); moduleInfo.pCode = spirv.data();
+    moduleInfo.codeSize = spirv.size() * sizeof(uint32_t);
+    moduleInfo.pCode = spirv.data();
     VkShaderModule module;
     if (vkCreateShaderModule(device.handle(), &moduleInfo, nullptr, &module) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: ray-query shader module creation failed");
@@ -261,7 +267,8 @@ void RayQueryPipeline::init() {
     pushConstants.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
     pushConstants.size = sizeof(TracePushConstants);
     VkPipelineLayoutCreateInfo pipelineLayout {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    pipelineLayout.setLayoutCount = 3; pipelineLayout.pSetLayouts = layouts;
+    pipelineLayout.setLayoutCount = 3;
+    pipelineLayout.pSetLayouts = layouts;
     pipelineLayout.pushConstantRangeCount = 1;
     pipelineLayout.pPushConstantRanges = &pushConstants;
     if (vkCreatePipelineLayout(device.handle(), &pipelineLayout, nullptr, &_pipelineLayout) != VK_SUCCESS) {
@@ -269,7 +276,9 @@ void RayQueryPipeline::init() {
         throw std::runtime_error("Vulkan: ray-query pipeline layout creation failed");
     }
     VkPipelineShaderStageCreateInfo stage {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-    stage.stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR; stage.module = module; stage.pName = "main";
+    stage.stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+    stage.module = module;
+    stage.pName = "main";
     VkRayTracingShaderGroupCreateInfoKHR group {
         VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR};
     group.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
@@ -286,7 +295,7 @@ void RayQueryPipeline::init() {
     pipeline.maxPipelineRayRecursionDepth = 1;
     pipeline.layout = _pipelineLayout;
     if (vkCreateRayTracingPipelinesKHR(device.handle(), VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipeline,
-                                        nullptr, &_pipeline) != VK_SUCCESS) {
+                                       nullptr, &_pipeline) != VK_SUCCESS) {
         vkDestroyShaderModule(device.handle(), module, nullptr);
         throw std::runtime_error("Vulkan: ray-query ray-tracing pipeline creation failed");
     }
@@ -322,7 +331,7 @@ void RayQueryPipeline::init() {
     vkDestroyShaderModule(device.handle(), module, nullptr);
     device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_pipeline), "rayquery:primaryRay");
 
-    _gpuScene->init();
+    _gpuScene.init(_renderer);
 #ifdef R_ENABLE_NRD
     {
         // Stage 1 of the NRD integration: prove the library is linked, its
@@ -494,11 +503,11 @@ void RayQueryPipeline::clearFrame(Frame &frame) {
     // The merge and acceleration-structure buffers are capacity-managed. The
     // renderer has waited this in-flight frame's fence before reuse, so a full
     // BLAS/TLAS rebuild may overwrite them, but their allocations survive it.
-    frame.instances.reset(); frame.traceStats.reset();
+    frame.instances.reset();
+    frame.traceStats.reset();
 }
 
 bool RayQueryPipeline::bakeSkyRoom(VkCommandBuffer cmd,
-                                   RenderRegistry &registry,
                                    const ModelSceneNode &room,
                                    const glm::vec3 &origin) {
     // A failed bake is deliberately sticky for this detected room: geometry is
@@ -511,21 +520,25 @@ bool RayQueryPipeline::bakeSkyRoom(VkCommandBuffer cmd,
     _skyCubeReady = false;
 
     std::vector<const RegisteredMesh *> skyMeshes;
-    for (const auto &object : registry.objects()) {
+    for (const auto &object : _gpuScene.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
-        if (!mesh || mesh->cullRoot != &room || !registry.isObjectEnabled(mesh->id.index)) continue;
+        if (!mesh || mesh->cullRoot != &room || !_gpuScene.isObjectEnabled(mesh->id.index))
+            continue;
         if ((mesh->categories & (renderCategory(RenderCategory::Opaque) |
                                  renderCategory(RenderCategory::Transparent))) == 0) {
             continue;
         }
         // The bake is a fixed, module-load snapshot. Do not silently freeze a
         // deforming room or substitute a missing texture for its backdrop.
-        if (!std::holds_alternative<std::monostate>(mesh->deformation)) return false;
+        if (!std::holds_alternative<std::monostate>(mesh->deformation))
+            return false;
         const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)];
-        if (!texture || !VulkanResources::supported(texture->pixelFormat())) return false;
+        if (!texture || !VulkanResources::supported(texture->pixelFormat()))
+            return false;
         skyMeshes.push_back(mesh);
     }
-    if (skyMeshes.empty()) return false;
+    if (skyMeshes.empty())
+        return false;
 
     auto &device = _renderer.device();
     auto &resources = _renderer.resources();
@@ -595,14 +608,20 @@ bool RayQueryPipeline::bakeSkyRoom(VkCommandBuffer cmd,
     }
 
     static const glm::vec3 kDirections[kNumCubeFaces] {
-        { 1.0f,  0.0f,  0.0f}, {-1.0f,  0.0f,  0.0f},
-        { 0.0f,  1.0f,  0.0f}, { 0.0f, -1.0f,  0.0f},
-        { 0.0f,  0.0f,  1.0f}, { 0.0f,  0.0f, -1.0f},
+        {1.0f, 0.0f, 0.0f},
+        {-1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+        {0.0f, -1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, -1.0f},
     };
     static const glm::vec3 kUps[kNumCubeFaces] {
-        {0.0f, -1.0f,  0.0f}, {0.0f, -1.0f,  0.0f},
-        {0.0f,  0.0f,  1.0f}, {0.0f,  0.0f, -1.0f},
-        {0.0f, -1.0f,  0.0f}, {0.0f, -1.0f,  0.0f},
+        {0.0f, -1.0f, 0.0f},
+        {0.0f, -1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, -1.0f},
+        {0.0f, -1.0f, 0.0f},
+        {0.0f, -1.0f, 0.0f},
     };
     const glm::mat4 projection = glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 10000.0f);
     const VkViewport viewport {0.0f, 0.0f, static_cast<float>(kSkyCubeSize), static_cast<float>(kSkyCubeSize), 0.0f, 1.0f};
@@ -692,8 +711,10 @@ bool RayQueryPipeline::bakeSkyRoom(VkCommandBuffer cmd,
 void RayQueryPipeline::deinit() {
     for (auto &frame : _frames) {
         clearFrame(frame);
-        if (frame.blas) vkDestroyAccelerationStructureKHR(_renderer.device().handle(), frame.blas, nullptr);
-        if (frame.tlas) vkDestroyAccelerationStructureKHR(_renderer.device().handle(), frame.tlas, nullptr);
+        if (frame.blas)
+            vkDestroyAccelerationStructureKHR(_renderer.device().handle(), frame.blas, nullptr);
+        if (frame.tlas)
+            vkDestroyAccelerationStructureKHR(_renderer.device().handle(), frame.tlas, nullptr);
         frame.blas = VK_NULL_HANDLE;
         frame.tlas = VK_NULL_HANDLE;
         frame.blasStorage.reset();
@@ -704,12 +725,19 @@ void RayQueryPipeline::deinit() {
         frame.scratchCapacity = 0;
     }
 #ifdef R_ENABLE_NRD
-    if (_compositePipeline) vkDestroyPipeline(_renderer.device().handle(), _compositePipeline, nullptr);
-    if (_compositePipelineLayout) vkDestroyPipelineLayout(_renderer.device().handle(), _compositePipelineLayout, nullptr);
-    if (_compositePool) vkDestroyDescriptorPool(_renderer.device().handle(), _compositePool, nullptr);
-    if (_compositeLayout) vkDestroyDescriptorSetLayout(_renderer.device().handle(), _compositeLayout, nullptr);
-    _compositePipeline = VK_NULL_HANDLE; _compositePipelineLayout = VK_NULL_HANDLE;
-    _compositePool = VK_NULL_HANDLE; _compositeLayout = VK_NULL_HANDLE; _compositeSets = {};
+    if (_compositePipeline)
+        vkDestroyPipeline(_renderer.device().handle(), _compositePipeline, nullptr);
+    if (_compositePipelineLayout)
+        vkDestroyPipelineLayout(_renderer.device().handle(), _compositePipelineLayout, nullptr);
+    if (_compositePool)
+        vkDestroyDescriptorPool(_renderer.device().handle(), _compositePool, nullptr);
+    if (_compositeLayout)
+        vkDestroyDescriptorSetLayout(_renderer.device().handle(), _compositeLayout, nullptr);
+    _compositePipeline = VK_NULL_HANDLE;
+    _compositePipelineLayout = VK_NULL_HANDLE;
+    _compositePool = VK_NULL_HANDLE;
+    _compositeLayout = VK_NULL_HANDLE;
+    _compositeSets = {};
     _temporalHistoryValid = false;
     _nrdDenoiser.reset();
     if (_nrdInstance) {
@@ -718,20 +746,32 @@ void RayQueryPipeline::deinit() {
     }
 #endif
     auto &device = _renderer.device();
-    _gpuScene->deinit();
-    if (_pipeline) vkDestroyPipeline(device.handle(), _pipeline, nullptr);
+    _gpuScene.deinit();
+    if (_pipeline)
+        vkDestroyPipeline(device.handle(), _pipeline, nullptr);
     _raygenSbt.reset();
-    if (_pipelineLayout) vkDestroyPipelineLayout(device.handle(), _pipelineLayout, nullptr);
-    if (_pool) vkDestroyDescriptorPool(device.handle(), _pool, nullptr);
-    if (_layout) vkDestroyDescriptorSetLayout(device.handle(), _layout, nullptr);
-    if (_auxPool) vkDestroyDescriptorPool(device.handle(), _auxPool, nullptr);
-    if (_auxLayout) vkDestroyDescriptorSetLayout(device.handle(), _auxLayout, nullptr);
-    _auxPool = VK_NULL_HANDLE; _auxLayout = VK_NULL_HANDLE; _auxSets = {};
+    if (_pipelineLayout)
+        vkDestroyPipelineLayout(device.handle(), _pipelineLayout, nullptr);
+    if (_pool)
+        vkDestroyDescriptorPool(device.handle(), _pool, nullptr);
+    if (_layout)
+        vkDestroyDescriptorSetLayout(device.handle(), _layout, nullptr);
+    if (_auxPool)
+        vkDestroyDescriptorPool(device.handle(), _auxPool, nullptr);
+    if (_auxLayout)
+        vkDestroyDescriptorSetLayout(device.handle(), _auxLayout, nullptr);
+    _auxPool = VK_NULL_HANDLE;
+    _auxLayout = VK_NULL_HANDLE;
+    _auxSets = {};
     for (auto &frame : _auxImages) {
-        for (auto &image : frame) image.reset();
+        for (auto &image : frame)
+            image.reset();
     }
     _auxImagesTransitioned = false;
-    _pipeline = VK_NULL_HANDLE; _pipelineLayout = VK_NULL_HANDLE; _pool = VK_NULL_HANDLE; _layout = VK_NULL_HANDLE;
+    _pipeline = VK_NULL_HANDLE;
+    _pipelineLayout = VK_NULL_HANDLE;
+    _pool = VK_NULL_HANDLE;
+    _layout = VK_NULL_HANDLE;
     _raygenSbtRegion = {};
 #ifdef R_ENABLE_FSR
     // Before the device goes: the upscaler owns Vulkan objects of its own, and
@@ -740,17 +780,25 @@ void RayQueryPipeline::deinit() {
     _fsrColor.reset();
     _fsrOutput.reset();
     _fsrImagesTransitioned = false;
-    if (_tonemapPipeline) vkDestroyPipeline(device.handle(), _tonemapPipeline, nullptr);
-    if (_tonemapPipelineLayout) vkDestroyPipelineLayout(device.handle(), _tonemapPipelineLayout, nullptr);
-    if (_tonemapPool) vkDestroyDescriptorPool(device.handle(), _tonemapPool, nullptr);
-    if (_tonemapLayout) vkDestroyDescriptorSetLayout(device.handle(), _tonemapLayout, nullptr);
-    _tonemapPipeline = VK_NULL_HANDLE; _tonemapPipelineLayout = VK_NULL_HANDLE;
-    _tonemapPool = VK_NULL_HANDLE; _tonemapLayout = VK_NULL_HANDLE; _tonemapSets = {};
+    if (_tonemapPipeline)
+        vkDestroyPipeline(device.handle(), _tonemapPipeline, nullptr);
+    if (_tonemapPipelineLayout)
+        vkDestroyPipelineLayout(device.handle(), _tonemapPipelineLayout, nullptr);
+    if (_tonemapPool)
+        vkDestroyDescriptorPool(device.handle(), _tonemapPool, nullptr);
+    if (_tonemapLayout)
+        vkDestroyDescriptorSetLayout(device.handle(), _tonemapLayout, nullptr);
+    _tonemapPipeline = VK_NULL_HANDLE;
+    _tonemapPipelineLayout = VK_NULL_HANDLE;
+    _tonemapPool = VK_NULL_HANDLE;
+    _tonemapLayout = VK_NULL_HANDLE;
+    _tonemapSets = {};
 #endif
     _bindlessTextureCapacity = 0;
     _lastBindlessTextureCount = 0;
     _skyCube.reset();
-    for (auto &depth : _skyDepth) depth.reset();
+    for (auto &depth : _skyDepth)
+        depth.reset();
     _skyFallbackCube.reset();
     _skyCubeRoom = nullptr;
     _skyCubeReady = false;
@@ -799,10 +847,9 @@ std::vector<RayQueryPipeline::Channel> RayQueryPipeline::channels() {
     return result;
 }
 
-std::optional<GpuScene::Admission> RayQueryPipeline::classifyMesh(RenderRegistry &registry,
-                                                                    const RegisteredMesh &registeredMesh,
-                                                                    const ModelSceneNode *skyRoom,
-                                                                    bool skyBaked) {
+std::optional<GpuScene::Classification> RayQueryPipeline::classifyMesh(const RegisteredMesh &registeredMesh,
+                                                                  const ModelSceneNode *skyRoom,
+                                                                  bool skyBaked) {
     const auto *mesh = &registeredMesh;
     // The cubemap is ready only after the room's complete textured raster
     // bake. Until then preserve the old geometry path exactly, including
@@ -818,9 +865,14 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyMesh(RenderRegistry
         ++_lastDeforming;
         return std::nullopt;
     }
-    if (saber) ++_lastSabers;
-    if (dangly) ++_lastDangly;
-    if (mesh->id.index > 0x00ffffffu) { ++_lastOutOfRange; return std::nullopt; }
+    if (saber)
+        ++_lastSabers;
+    if (dangly)
+        ++_lastDangly;
+    if (mesh->id.index > 0x00ffffffu) {
+        ++_lastOutOfRange;
+        return std::nullopt;
+    }
     if (skinned) {
         ++_lastSkinned;
     }
@@ -855,16 +907,16 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyMesh(RenderRegistry
     // Odyssey's actual selfIllum semantics: fullbright authored
     // texture, occluding, casting nothing. None strips a wrong
     // selfIllum outright. Material operations ride the same record.
-    const auto *curated = registry.curatedByIndex(mesh->material.curatedIndex);
+    const auto *curated = _gpuScene.traceMaterials().curatedByIndex(mesh->material.curatedIndex);
     // Dangly selfIllum is Odyssey's fullbright trick for foliage, not
     // emission - danm14ab carries 653 dangly canopies that were glowing
     // and casting. Stripped by default; the curated emissive class
     // restores it for any plant that genuinely glows.
-    if (dangly && (!curated || curated->klass != RenderRegistry::TraceClass::Emissive)) {
+    if (dangly && (!curated || curated->klass != TraceClass::Emissive)) {
         material.selfIllumColor = glm::vec4(0.0f);
     }
     if (curated) {
-        if (curated->klass == RenderRegistry::TraceClass::None) {
+        if (curated->klass == TraceClass::None) {
             material.selfIllumColor = glm::vec4(0.0f);
         }
         material.curatedAlbedoMul = glm::vec4(curated->albedoMul, 0.0f);
@@ -905,7 +957,7 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyMesh(RenderRegistry
         }
     }
     if ((material.featureMask & (1u << 24)) != 0 ||
-        (curated && curated->klass == RenderRegistry::TraceClass::Prelit)) {
+        (curated && curated->klass == TraceClass::Prelit)) {
         material.surfaceType = 2;
     }
     // The per-category calibration override, baked per instance so the
@@ -954,8 +1006,9 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyMesh(RenderRegistry
     const bool nonOpaque = material.surfaceType == 1 ||
                            (material.featureMask & ((1u << 24) | (1u << 26))) != 0;
     _lastDynamicTriangles += (skinned || dangly || saber) ? static_cast<uint32_t>(mesh->mesh.get().faces().size()) : 0;
-    if (!dangly && (!curated || curated->klass == RenderRegistry::TraceClass::Default) &&
-        glm::any(glm::greaterThan(mesh->material.selfIllumColor, glm::vec3(0.0f)))) ++_lastEmissive;
+    if (!dangly && (!curated || curated->klass == TraceClass::Default) &&
+        glm::any(glm::greaterThan(mesh->material.selfIllumColor, glm::vec3(0.0f))))
+        ++_lastEmissive;
     // Material::staticObject is an authored room hint, not the admission
     // proof required to retain geometry. Until a stronger classifier exists,
     // publish this consumer's objects as dynamic.
@@ -963,7 +1016,7 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyMesh(RenderRegistry
              GpuScene::ResidencyClass::Dynamic, skinned}};
 }
 
-std::optional<GpuScene::Admission> RayQueryPipeline::classifyGrass(const RegisteredGrass &grass) {
+std::optional<GpuScene::Classification> RayQueryPipeline::classifyGrass(const RegisteredGrass &grass) {
     // Clusters, not entries: one RegisteredGrass carries a whole hillside, so
     // counting entries reported 1 where 1482 quads were admitted. The point of
     // this counter is to answer "is it actually there", which a count of
@@ -996,7 +1049,7 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyGrass(const Registe
              GpuScene::ResidencyClass::Dynamic, nullptr}};
 }
 
-std::optional<GpuScene::Admission> RayQueryPipeline::classifyParticles(const RegisteredParticles &particles) {
+std::optional<GpuScene::Classification> RayQueryPipeline::classifyParticles(const RegisteredParticles &particles) {
     _lastParticles += static_cast<uint32_t>(particles.instances.size());
     InstanceMaterial material;
     material.diffuseColor = glm::vec4(particles.material.diffuseColor, 1.0f);
@@ -1032,7 +1085,7 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyParticles(const Reg
              GpuScene::ResidencyClass::Dynamic, nullptr}};
 }
 
-std::optional<GpuScene::Admission> RayQueryPipeline::classifyBillboard(const RegisteredBillboard &billboard) {
+std::optional<GpuScene::Classification> RayQueryPipeline::classifyBillboard(const RegisteredBillboard &billboard) {
     ++_lastBillboards;
     InstanceMaterial material;
     material.diffuseColor = billboard.color;
@@ -1045,7 +1098,7 @@ std::optional<GpuScene::Admission> RayQueryPipeline::classifyBillboard(const Reg
              GpuScene::ResidencyClass::Dynamic, nullptr}};
 }
 
-void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uint32_t globalsOffset,
+void RayQueryPipeline::render(VkCommandBuffer cmd, uint32_t globalsOffset,
                               VulkanImage &output,
                               const glm::mat4 &view, const glm::mat4 &projection,
                               const glm::vec4 &jitter) {
@@ -1105,10 +1158,12 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         glm::vec3 boundsMax {std::numeric_limits<float>::lowest()};
     };
     std::map<const ModelSceneNode *, SkyRoomCandidate> sceneryRooms;
-    for (const auto &object : registry.objects()) {
+    for (const auto &object : _gpuScene.objects()) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
-        if (!mesh || !mesh->cullRoot || mesh->cullRoot->usage() != ModelUsage::Room) continue;
-        if (!registry.isObjectEnabled(mesh->id.index)) continue;
+        if (!mesh || !mesh->cullRoot || mesh->cullRoot->usage() != ModelUsage::Room)
+            continue;
+        if (!_gpuScene.isObjectEnabled(mesh->id.index))
+            continue;
         if ((mesh->categories & (renderCategory(RenderCategory::Opaque) |
                                  renderCategory(RenderCategory::Transparent))) == 0) {
             continue;
@@ -1144,13 +1199,13 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
             info("Vulkan: sky room is '" + skyRoom->model().name() + "'", LogChannel::Graphics);
         }
     }
-    // Published for the registry panel's classification column: the panel
+    // Published for the Objects panel's classification column: the panel
     // reports the actual decision, not a re-derivation of it.
-    registry.setSkyRoom(skyRoom);
+    _gpuScene.setSkyRoom(skyRoom);
     bool skyBaked = false;
     if (skyRoom) {
         try {
-            skyBaked = bakeSkyRoom(cmd, registry, *skyRoom, skyOrigin);
+            skyBaked = bakeSkyRoom(cmd, *skyRoom, skyOrigin);
         } catch (const std::exception &e) {
             // Never trade a heuristic misfire or a broken bake for removed
             // scene geometry. Keep the room in the merged BLAS this frame.
@@ -1163,11 +1218,10 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         _skyCubeRoom = nullptr;
         _skyCubeReady = false;
     }
-    const auto scene = _gpuScene->update(
+    const auto scene = _gpuScene.update(
         cmd,
-        registry,
-        [this, &registry, skyRoom, skyBaked](const RegisteredMesh &mesh) {
-            return classifyMesh(registry, mesh, skyRoom, skyBaked);
+        [this, skyRoom, skyBaked](const RegisteredMesh &mesh) {
+            return classifyMesh(mesh, skyRoom, skyBaked);
         },
         [this](const RegisteredGrass &grass) { return classifyGrass(grass); },
         [this](const RegisteredParticles &particles) { return classifyParticles(particles); },
@@ -1225,18 +1279,19 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     VkAccelerationStructureBuildSizesInfoKHR blasSizes {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
     vkGetAccelerationStructureBuildSizesKHR(device.handle(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                                             &blasBuild, blasPrimitiveCounts.data(), &blasSizes);
+                                            &blasBuild, blasPrimitiveCounts.data(), &blasSizes);
     if (!frame.blas || blasSizes.accelerationStructureSize > frame.blasStorageCapacity) {
-        if (frame.blas) vkDestroyAccelerationStructureKHR(device.handle(), frame.blas, nullptr);
+        if (frame.blas)
+            vkDestroyAccelerationStructureKHR(device.handle(), frame.blas, nullptr);
         frame.blas = VK_NULL_HANDLE;
         frame.blasStorage.reset();
         frame.blasStorageCapacity = grownCapacity(frame.blasStorageCapacity,
-                                                   blasSizes.accelerationStructureSize, 64 * 1024);
+                                                  blasSizes.accelerationStructureSize, 64 * 1024);
         frame.blasStorage = std::make_unique<VulkanBuffer>(device);
         frame.blasStorage->initDeviceLocal(frame.blasStorageCapacity,
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-            nullptr);
+                                           VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                           nullptr);
         VkAccelerationStructureCreateInfoKHR create {
             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
         create.buffer = frame.blasStorage->handle();
@@ -1259,7 +1314,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         vkGetAccelerationStructureDeviceAddressKHR(device.handle(), &blasAddressInfo);
     frame.instances = std::make_unique<VulkanBuffer>(device);
     frame.instances->initHostVisible(sizeof(instance), VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
+                                                           VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
     std::memcpy(frame.instances->mapped(), &instance, sizeof(instance));
 
     VkAccelerationStructureGeometryInstancesDataKHR instanceData {
@@ -1281,18 +1336,19 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     VkAccelerationStructureBuildSizesInfoKHR tlasSizes {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
     vkGetAccelerationStructureBuildSizesKHR(device.handle(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                                             &tlasBuild, &kTlasInstanceCount, &tlasSizes);
+                                            &tlasBuild, &kTlasInstanceCount, &tlasSizes);
     if (!frame.tlas || tlasSizes.accelerationStructureSize > frame.tlasStorageCapacity) {
-        if (frame.tlas) vkDestroyAccelerationStructureKHR(device.handle(), frame.tlas, nullptr);
+        if (frame.tlas)
+            vkDestroyAccelerationStructureKHR(device.handle(), frame.tlas, nullptr);
         frame.tlas = VK_NULL_HANDLE;
         frame.tlasStorage.reset();
         frame.tlasStorageCapacity = grownCapacity(frame.tlasStorageCapacity,
-                                                   tlasSizes.accelerationStructureSize, 64 * 1024);
+                                                  tlasSizes.accelerationStructureSize, 64 * 1024);
         frame.tlasStorage = std::make_unique<VulkanBuffer>(device);
         frame.tlasStorage->initDeviceLocal(frame.tlasStorageCapacity,
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-            nullptr);
+                                           VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                           nullptr);
         VkAccelerationStructureCreateInfoKHR create {
             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
         create.buffer = frame.tlasStorage->handle();
@@ -1313,7 +1369,7 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
         frame.scratchCapacity = grownCapacity(frame.scratchCapacity, scratchAllocationSize, 64 * 1024);
         frame.scratch = std::make_unique<VulkanBuffer>(device);
         frame.scratch->initDeviceLocal(frame.scratchCapacity,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, nullptr);
+                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, nullptr);
     }
     const VkDeviceAddress scratchAddress = alignedAddress(frame.scratch->deviceAddress(), alignment);
     blasBuild.dstAccelerationStructure = frame.blas;
@@ -1353,9 +1409,12 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     tlasToTraceDependency.pMemoryBarriers = &tlasToTrace;
     vkCmdPipelineBarrier2(cmd, &tlasToTraceDependency);
 
-    VkDescriptorImageInfo image {}; image.imageView = output.view(); image.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkDescriptorImageInfo image {};
+    image.imageView = output.view();
+    image.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     VkWriteDescriptorSetAccelerationStructureKHR asWrite {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
-    asWrite.accelerationStructureCount = 1; asWrite.pAccelerationStructures = &frame.tlas;
+    asWrite.accelerationStructureCount = 1;
+    asWrite.pAccelerationStructures = &frame.tlas;
     VkDescriptorBufferInfo materialBuffer {};
     materialBuffer.buffer = scene.materials.buffer->handle();
     materialBuffer.range = scene.materials.size;
@@ -1378,20 +1437,48 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
     mergedMaterialIds.range = scene.materialIds.size;
     VkWriteDescriptorSet writes[7] {};
     const auto set = _sets[_renderer.frameIndex()];
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[0].dstSet = set; writes[0].dstBinding = 0;
-    writes[0].descriptorCount = 1; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; writes[0].pImageInfo = &image;
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[1].pNext = &asWrite; writes[1].dstSet = set; writes[1].dstBinding = 1;
-    writes[1].descriptorCount = 1; writes[1].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[2].dstSet = set; writes[2].dstBinding = 2;
-    writes[2].descriptorCount = 1; writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[2].pBufferInfo = &materialBuffer;
-    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[3].dstSet = set; writes[3].dstBinding = 3;
-    writes[3].descriptorCount = 1; writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[3].pBufferInfo = &statsBuffer;
-    writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[4].dstSet = set; writes[4].dstBinding = 4;
-    writes[4].descriptorCount = 1; writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[4].pBufferInfo = &mergedVertices;
-    writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[5].dstSet = set; writes[5].dstBinding = 5;
-    writes[5].descriptorCount = 1; writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[5].pBufferInfo = &mergedIndices;
-    writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[6].dstSet = set; writes[6].dstBinding = 6;
-    writes[6].descriptorCount = 1; writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[6].pBufferInfo = &mergedMaterialIds;
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = set;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[0].pImageInfo = &image;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].pNext = &asWrite;
+    writes[1].dstSet = set;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = set;
+    writes[2].dstBinding = 2;
+    writes[2].descriptorCount = 1;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[2].pBufferInfo = &materialBuffer;
+    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[3].dstSet = set;
+    writes[3].dstBinding = 3;
+    writes[3].descriptorCount = 1;
+    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[3].pBufferInfo = &statsBuffer;
+    writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[4].dstSet = set;
+    writes[4].dstBinding = 4;
+    writes[4].descriptorCount = 1;
+    writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[4].pBufferInfo = &mergedVertices;
+    writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[5].dstSet = set;
+    writes[5].dstBinding = 5;
+    writes[5].descriptorCount = 1;
+    writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[5].pBufferInfo = &mergedIndices;
+    writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[6].dstSet = set;
+    writes[6].dstBinding = 6;
+    writes[6].descriptorCount = 1;
+    writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[6].pBufferInfo = &mergedMaterialIds;
     vkUpdateDescriptorSets(device.handle(), 7, writes, 0, nullptr);
     const VulkanImage &skyImage = skyBaked ? *_skyCube : *_skyFallbackCube;
     VkDescriptorImageInfo skyInfo {
@@ -1768,17 +1855,18 @@ void RayQueryPipeline::render(VkCommandBuffer cmd, RenderRegistry &registry, uin
                   "/" + std::to_string(_lastSecondaryRays) + "; "
             : "trace stats off; ";
     info("Vulkan: TLAS " + std::to_string(_lastInstances) + " instances, " +
-         std::to_string(_lastTriangles / 1000) + "k triangles (" +
-         std::to_string(_lastDynamicTriangles / 1000) + "k dynamic), " +
-         std::to_string(_lastSkinned) + " skinned, skipped " +
-         std::to_string(_lastDeforming) + " deforming and " +
-         std::to_string(_lastOutOfRange) + " out-of-range meshes, build recorded in " +
-         std::to_string(microseconds) + " us; " + std::to_string(_lastEmissive) +
-          " emissive, " + std::to_string(_lastAdditive) + " additive, " +
-         std::to_string(_lastSabers) + " saber, " + std::to_string(_lastDangly) + " dangly, " +
-         std::to_string(_lastGrass) + " grass clusters, " + std::to_string(_lastParticles) + " particles, " +
-         std::to_string(_lastBillboards) + " billboards, " + std::to_string(_lastSky) + " sky; " + statsPart +
-         std::to_string(_lastBindlessTextureCount) + " bindless 2D textures; " +
-         std::to_string(std::max(1, _options.pathTracingSamples)) + " spp", LogChannel::Graphics);
+             std::to_string(_lastTriangles / 1000) + "k triangles (" +
+             std::to_string(_lastDynamicTriangles / 1000) + "k dynamic), " +
+             std::to_string(_lastSkinned) + " skinned, skipped " +
+             std::to_string(_lastDeforming) + " deforming and " +
+             std::to_string(_lastOutOfRange) + " out-of-range meshes, build recorded in " +
+             std::to_string(microseconds) + " us; " + std::to_string(_lastEmissive) +
+             " emissive, " + std::to_string(_lastAdditive) + " additive, " +
+             std::to_string(_lastSabers) + " saber, " + std::to_string(_lastDangly) + " dangly, " +
+             std::to_string(_lastGrass) + " grass clusters, " + std::to_string(_lastParticles) + " particles, " +
+             std::to_string(_lastBillboards) + " billboards, " + std::to_string(_lastSky) + " sky; " + statsPart +
+             std::to_string(_lastBindlessTextureCount) + " bindless 2D textures; " +
+             std::to_string(std::max(1, _options.pathTracingSamples)) + " spp",
+         LogChannel::Graphics);
 }
 } // namespace reone::scene

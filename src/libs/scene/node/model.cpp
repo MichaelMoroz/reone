@@ -106,20 +106,10 @@ void ModelSceneNode::update(float dt) {
     updateAnimations(dt);
 }
 
-void ModelSceneNode::registerLeafs(RenderRegistry &registry, const std::vector<SceneNode *> &leafs) {
+void ModelSceneNode::collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) {
     for (auto &leaf : leafs) {
-        static_cast<MeshSceneNode *>(leaf)->registerRender(registry);
+        static_cast<MeshSceneNode *>(leaf)->collectInto(scene);
     }
-}
-
-void ModelSceneNode::registerAABB(RenderRegistry &registry) {
-    auto aabbWorld = _aabb * _absTransform;
-    std::vector<glm::vec4> corners;
-    corners.reserve(8);
-    for (const auto &corner : aabbWorld.corners()) {
-        corners.emplace_back(corner, 1.0f);
-    }
-    registry.registerAABB(renderCategory(RenderCategory::Debug), id(), nameIds(), corners, this);
 }
 
 void ModelSceneNode::computeAABB() {

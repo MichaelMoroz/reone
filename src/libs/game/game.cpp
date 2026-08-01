@@ -30,7 +30,6 @@
 #include "reone/game/action/startconversation.h"
 #include "reone/game/combat.h"
 #include "reone/game/d20/spells.h"
-#include "reone/game/debug.h"
 #include "reone/game/di/services.h"
 #include "reone/game/gui/hud.h"
 #include "reone/game/gui/sounds.h"
@@ -42,8 +41,8 @@
 #include "reone/game/surfaces.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/font.h"
-#include "reone/graphics/mesh.h"
 #include "reone/graphics/format/tgawriter.h"
+#include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/model.h"
 #include "reone/graphics/modelnode.h"
@@ -267,9 +266,6 @@ void Game::initConsole() {
     registerConsoleCommand("additem", "add item to selected object", &Game::consoleAddItem);
     registerConsoleCommand("givexp", "give experience to selected creature", &Game::consoleGiveXP);
     registerConsoleCommand("givegold", "give credits to the party", &Game::consoleGiveGold);
-    registerConsoleCommand("showaabb", "toggle rendering AABB", &Game::consoleShowAABB);
-    registerConsoleCommand("showwalkmesh", "toggle rendering walkmesh", &Game::consoleShowWalkmesh);
-    registerConsoleCommand("showtriggers", "toggle rendering triggers", &Game::consoleShowTriggers);
     registerConsoleCommand("spawncreature", "spawn a creature", &Game::consoleSpawnCreature);
     registerConsoleCommand("spawncompanion", "spawn a companion", &Game::consoleSpawnCompanion);
     registerConsoleCommand("selectobjectbyid", "select an object by id", &Game::consoleSelectObjectById);
@@ -406,10 +402,7 @@ void Game::update(float frameTime) {
         // threshold, force success and return to the origin module. Plain dev
         // races (no lifecycle) keep riding so the dev stays in control.
         if (_swoopLifecycle.active && _swoopRace.finishReached()) {
-            debug(str(boost::format("swoop: auto-finish progress=%.1f finish=%.1f forcedSuccess=yes returning=%s")
-                      % _swoopRace.progress()
-                      % _swoopRace.finishProgress()
-                      % _swoopLifecycle.originModule));
+            debug(str(boost::format("swoop: auto-finish progress=%.1f finish=%.1f forcedSuccess=yes returning=%s") % _swoopRace.progress() % _swoopRace.finishProgress() % _swoopLifecycle.originModule));
             finishSwoopLifecycle(/*success=*/true);
         }
     }
@@ -1394,8 +1387,7 @@ void Game::loadNextModule() {
         _swoopLifecycle.originPosition = originPosition;
         _swoopLifecycle.originFacing = originFacing;
         _swoopLifecycle.forcedSuccess = true;
-        debug(str(boost::format("swoop: script lifecycle start origin=%s target=%s forcedSuccess=yes hook=StartNewModule")
-                  % originModule % target));
+        debug(str(boost::format("swoop: script lifecycle start origin=%s target=%s forcedSuccess=yes hook=StartNewModule") % originModule % target));
     }
 }
 
@@ -1504,13 +1496,6 @@ void Game::updateSceneGraph(float dt) {
     auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
     sceneGraph.setActiveCamera(camera->cameraSceneNode().get());
     sceneGraph.setUpdateRoots(!_paused);
-    sceneGraph.setRenderAABB(isShowAABBEnabled());
-    sceneGraph.setRenderWalkmeshes(isShowWalkmeshEnabled());
-    bool renderDeveloperTriggers = _options.game.developer &&
-                                   _screen == Screen::InGame &&
-                                   _developerOverlay.visible &&
-                                   _developerOverlay.triggers;
-    sceneGraph.setRenderTriggers(isShowTriggersEnabled() || renderDeveloperTriggers);
     sceneGraph.update(dt);
 }
 
@@ -1696,8 +1681,7 @@ SwoopTrackFrame deriveSwoopTrackFrame(const std::shared_ptr<graphics::Model> &tr
     auto hook = trackModel->getNodeByNameRecursive("modelhook");
     if (!hook) {
         frame.reason = "no-modelhook";
-        frame.info = str(boost::format("modelhook=no placement=%s anims=%zu")
-                         % (lytTrackPos ? "yes" : "no") % animCount);
+        frame.info = str(boost::format("modelhook=no placement=%s anims=%zu") % (lytTrackPos ? "yes" : "no") % animCount);
         return frame;
     }
 
@@ -1716,17 +1700,12 @@ SwoopTrackFrame deriveSwoopTrackFrame(const std::shared_ptr<graphics::Model> &tr
         frame.position = start;
         frame.facing = facing;
         frame.mode = "lyt-track";
-        frame.info = str(boost::format("modelhook=yes placement=yes anims=%zu lyt=[%.1f,%.1f,%.1f] hook=[%.1f,%.1f,%.1f] start=[%.1f,%.1f,%.1f]")
-                         % animCount
-                         % lytTrackPos->x % lytTrackPos->y % lytTrackPos->z
-                         % hookLocal.x % hookLocal.y % hookLocal.z
-                         % start.x % start.y % start.z);
+        frame.info = str(boost::format("modelhook=yes placement=yes anims=%zu lyt=[%.1f,%.1f,%.1f] hook=[%.1f,%.1f,%.1f] start=[%.1f,%.1f,%.1f]") % animCount % lytTrackPos->x % lytTrackPos->y % lytTrackPos->z % hookLocal.x % hookLocal.y % hookLocal.z % start.x % start.y % start.z);
         return frame;
     }
 
     float dist = glm::distance(glm::vec2(hookLocal), glm::vec2(leaderPos));
-    frame.info = str(boost::format("modelhook=yes placement=no anims=%zu hook=[%.1f,%.1f,%.1f] dist=%.1f")
-                     % animCount % hookLocal.x % hookLocal.y % hookLocal.z % dist);
+    frame.info = str(boost::format("modelhook=yes placement=no anims=%zu hook=[%.1f,%.1f,%.1f] dist=%.1f") % animCount % hookLocal.x % hookLocal.y % hookLocal.z % dist);
 
     if (dist > kTrackFrameMaxDistance) {
         // No LYT placement and the hook is not in the party's world frame.
@@ -1873,44 +1852,22 @@ void Game::openSwoopRace() {
     // track. Restored on exit (or naturally re-spawned on the return module).
     setPartyVisible(false);
 
-    debug(str(boost::format("swoop: started type=%s track=%s models=%zu loaded=%zu camera=chase movePerSec=%.0f lataccel=%.0f camfov=%.0f")
-              % minigameTypeName(mg.type)
-              % mg.player.trackResRef
-              % mg.player.modelResRefs.size()
-              % loadedCount
-              % mg.movementPerSec
-              % mg.lateralAccel
-              % mg.cameraViewAngle));
+    debug(str(boost::format("swoop: started type=%s track=%s models=%zu loaded=%zu camera=chase movePerSec=%.0f lataccel=%.0f camfov=%.0f") % minigameTypeName(mg.type) % mg.player.trackResRef % mg.player.modelResRefs.size() % loadedCount % mg.movementPerSec % mg.lateralAccel % mg.cameraViewAngle));
 
     // Track frame: lyt-track/track-model/fallback mode and how the start frame
     // was chosen (see deriveSwoopTrackFrame).
     std::string trackLabel(mg.player.trackResRef.empty() ? std::string("<none>") : mg.player.trackResRef);
     if (trackFrame.mode == "fallback") {
-        debug(str(boost::format("swoop: track=%s mode=fallback reason=%s%s")
-                  % trackLabel
-                  % trackFrame.reason
-                  % (trackFrame.info.empty() ? std::string() : (" " + trackFrame.info))));
+        debug(str(boost::format("swoop: track=%s mode=fallback reason=%s%s") % trackLabel % trackFrame.reason % (trackFrame.info.empty() ? std::string() : (" " + trackFrame.info))));
     } else {
-        debug(str(boost::format("swoop: track=%s mode=%s %s startFacing=%.2f")
-                  % trackLabel
-                  % trackFrame.mode
-                  % trackFrame.info
-                  % trackFrame.facing));
+        debug(str(boost::format("swoop: track=%s mode=%s %s startFacing=%.2f") % trackLabel % trackFrame.mode % trackFrame.info % trackFrame.facing));
     }
 
     // Movement model: track-relative progress + lateral strafe (no turning).
-    debug(str(boost::format("swoop: movement=track-progress strafeOnly=yes progressAxis=trackForward lateralAxis=trackRight anim=deferred start=[%.1f,%.1f,%.1f] facing=%.2f finish=%.1f")
-              % trackFrame.position.x % trackFrame.position.y % trackFrame.position.z
-              % trackFrame.facing
-              % finishProgress));
+    debug(str(boost::format("swoop: movement=track-progress strafeOnly=yes progressAxis=trackForward lateralAxis=trackRight anim=deferred start=[%.1f,%.1f,%.1f] facing=%.2f finish=%.1f") % trackFrame.position.x % trackFrame.position.y % trackFrame.position.z % trackFrame.facing % finishProgress));
 
     // Lateral bounds chosen for the strafe (see SwoopRace::computeLateralBounds).
-    debug(str(boost::format("swoop: bounds lateral=[-%.1f,+%.1f] source=%s tunnelX=[%.1f,%.1f]")
-              % _swoopRace.lateralLeftBound()
-              % _swoopRace.lateralRightBound()
-              % _swoopRace.lateralBoundSource()
-              % mg.player.tunnelXNeg
-              % mg.player.tunnelXPos));
+    debug(str(boost::format("swoop: bounds lateral=[-%.1f,+%.1f] source=%s tunnelX=[%.1f,%.1f]") % _swoopRace.lateralLeftBound() % _swoopRace.lateralRightBound() % _swoopRace.lateralBoundSource() % mg.player.tunnelXNeg % mg.player.tunnelXPos));
 
     // Map authored LYT obstacle placements into the current track frame
     // (progress = down-course distance, lateral = strafe offset). Diagnostic
@@ -1925,18 +1882,14 @@ void Game::openSwoopRace() {
                 ++areMatched;
             }
         }
-        debug(str(boost::format("swoop: lyt obstacles=%zu areObstacles=%zu matched=%zu")
-                  % layout->obstacles.size() % mg.obstacles.size() % areMatched));
+        debug(str(boost::format("swoop: lyt obstacles=%zu areObstacles=%zu matched=%zu") % layout->obstacles.size() % mg.obstacles.size() % areMatched));
         constexpr size_t kMaxObstacleDiag = 6;
         for (size_t i = 0; i < layout->obstacles.size() && i < kMaxObstacleDiag; ++i) {
             const auto &obs = layout->obstacles[i];
             glm::vec3 d = obs.position - trackFrame.position;
             float progress = glm::dot(d, fwd);
             float lateral = glm::dot(d, right);
-            debug(str(boost::format("  swoopobj[%zu] name=%s pos=[%.1f,%.1f,%.1f] progress=%.1f lateral=%.1f type=obstacle")
-                      % i % obs.name
-                      % obs.position.x % obs.position.y % obs.position.z
-                      % progress % lateral));
+            debug(str(boost::format("  swoopobj[%zu] name=%s pos=[%.1f,%.1f,%.1f] progress=%.1f lateral=%.1f type=obstacle") % i % obs.name % obs.position.x % obs.position.y % obs.position.z % progress % lateral));
         }
     }
 
@@ -2027,9 +1980,7 @@ void Game::finishSwoopLifecycle(bool success) {
         applySwoopForcedSuccessResult(raceModule);
     }
 
-    debug(str(boost::format("swoop: finished forcedSuccess=%s returning=%s")
-              % (success ? "yes" : "no")
-              % session.originModule));
+    debug(str(boost::format("swoop: finished forcedSuccess=%s returning=%s") % (success ? "yes" : "no") % session.originModule));
 }
 
 std::string Game::swoopReturnWaypoint(const std::string &raceModule) const {
@@ -2054,8 +2005,8 @@ void Game::applyTarisForcedWinningTime() {
     // new_beat = playerTime - 25cs) stays strictly positive. Setting
     // player=0:00.00 underflows to MIN_BEAT=-1 (total=-4025), making every
     // subsequent heat unwinnable.
-    int beatMin  = getGlobalNumber("TAR_SWOOP_MIN_BEAT");
-    int beatSec  = getGlobalNumber("TAR_SWOOP_SEC_BEAT");
+    int beatMin = getGlobalNumber("TAR_SWOOP_MIN_BEAT");
+    int beatSec = getGlobalNumber("TAR_SWOOP_SEC_BEAT");
     int beatMsec = getGlobalNumber("TAR_SWOOP_MSEC_BEAT");
     int beatTotal = beatMin * 10000 + beatSec * 100 + beatMsec;
 
@@ -2068,10 +2019,10 @@ void Game::applyTarisForcedWinningTime() {
     //   - Degenerate beat (<= 25): use the asset-confirmed heat-1 reference
     //     (3793 = 3843 - 50); this path should not occur in normal Taris flow.
     static constexpr int kMargin = 50;
-    static constexpr int kMinSafe = 26;                     // next beat = playerTotal - 25 > 0
-    static constexpr int kMinSafePlayerTime = 100;          // floor for the comfortable-margin branch
+    static constexpr int kMinSafe = 26;                                   // next beat = playerTotal - 25 > 0
+    static constexpr int kMinSafePlayerTime = 100;                        // floor for the comfortable-margin branch
     static constexpr int kNormalThreshold = kMinSafePlayerTime + kMargin; // 150
-    static constexpr int kFallback = 3793;                  // k_ptar_racefirst heat-1 beat (3843) - 50
+    static constexpr int kFallback = 3793;                                // k_ptar_racefirst heat-1 beat (3843) - 50
 
     int playerTotal;
     if (beatTotal > kNormalThreshold) {
@@ -2082,19 +2033,19 @@ void Game::applyTarisForcedWinningTime() {
         playerTotal = kFallback;
     }
 
-    int playerMin  = playerTotal / 10000;
-    int playerSec  = (playerTotal % 10000) / 100;
+    int playerMin = playerTotal / 10000;
+    int playerSec = (playerTotal % 10000) / 100;
     int playerMsec = playerTotal % 100;
-    setGlobalNumber("TAR_SWOOP_MIN",  playerMin);
-    setGlobalNumber("TAR_SWOOP_SEC",  playerSec);
+    setGlobalNumber("TAR_SWOOP_MIN", playerMin);
+    setGlobalNumber("TAR_SWOOP_SEC", playerSec);
     setGlobalNumber("TAR_SWOOP_MSEC", playerMsec);
 
     _console.printLine(str(boost::format(
-        "swoop: result forcedSuccess=yes planet=taris TAR_SWOOP_RUN=1"
-        " beat=%d:%d.%d time=%d:%d.%d margin=%d") %
-        beatMin % beatSec % beatMsec %
-        playerMin % playerSec % playerMsec %
-        (beatTotal - playerTotal)));
+                               "swoop: result forcedSuccess=yes planet=taris TAR_SWOOP_RUN=1"
+                               " beat=%d:%d.%d time=%d:%d.%d margin=%d") %
+                           beatMin % beatSec % beatMsec %
+                           playerMin % playerSec % playerMsec %
+                           (beatTotal - playerTotal)));
 }
 
 void Game::applySwoopForcedSuccessResult(const std::string &raceModule) {
@@ -2526,7 +2477,7 @@ void Game::consoleKill(const ConsoleArgs &args) {
         100000,
         DamageType::Universal,
         DamagePower::Normal,
-        /*damager=*/ 0);
+        /*damager=*/0);
     object->applyEffect(std::move(effect), DurationType::Instant);
 }
 
@@ -2910,7 +2861,7 @@ void Game::consoleGrass(const ConsoleArgs &args) {
     properties.texture = texture.get();
     auto grass = sceneGraph.newGrass(properties, *surface);
     grass->setLocalTransform(glm::translate(glm::vec3 {
-        args.get<float>(3).value(), args.get<float>(4).value(), args.get<float>(5).value()}) *
+                                 args.get<float>(3).value(), args.get<float>(4).value(), args.get<float>(5).value()}) *
                              surface->absoluteTransform());
     sceneGraph.addRoot(grass);
     // Keep the source model alive for GrassSceneNode, but do not add it as a
@@ -2986,24 +2937,6 @@ void Game::consoleRunScript(const ConsoleArgs &args) {
 
     int result = scriptRunner().run(resRef, vars);
     _console.printLine(str(boost::format("%s -> %d") % resRef % result));
-}
-
-void Game::consoleShowAABB(const ConsoleArgs &args) {
-    consoleCheckUsage(args, 1, 1, "1|0");
-    bool show = args.get<int>(1).value();
-    setShowAABB(show);
-}
-
-void Game::consoleShowWalkmesh(const ConsoleArgs &args) {
-    consoleCheckUsage(args, 1, 1, "1|0");
-    bool show = args.get<int>(1).value();
-    setShowWalkmesh(show);
-}
-
-void Game::consoleShowTriggers(const ConsoleArgs &args) {
-    consoleCheckUsage(args, 1, 1, "1|0");
-    bool show = args.get<int>(1).value();
-    setShowTriggers(show);
 }
 
 void Game::consoleSpawnCreature(const ConsoleArgs &args) {
@@ -3451,37 +3384,16 @@ void Game::consoleMiniGameInfo(const ConsoleArgs &args) {
         return;
     }
     const auto &mg = area->miniGame();
-    _console.printLine(str(boost::format("minigame: type=%s camfov=%.1f lataccel=%.3f movePerSec=%.3f inertia=%d bumpPlane=%u doBumping=%d")
-                           % minigameTypeName(mg.type)
-                           % mg.cameraViewAngle
-                           % mg.lateralAccel
-                           % mg.movementPerSec
-                           % static_cast<int>(mg.useInertia)
-                           % mg.bumpPlane
-                           % static_cast<int>(mg.doBumping)));
-    _console.printLine(str(boost::format("  player: cam=%s track=%s spd=[%.1f,%.1f] accel=%.3f hp=%u models=%zu")
-                           % mg.player.cameraResRef
-                           % mg.player.trackResRef
-                           % mg.player.minimumSpeed
-                           % mg.player.maximumSpeed
-                           % mg.player.accelSecs
-                           % mg.player.hitPoints
-                           % mg.player.modelResRefs.size()));
-    _console.printLine(str(boost::format("  tunnel (deg): X=[%.1f,%.1f] Y=[%.1f,%.1f] Z=[%.1f,%.1f]")
-                           % mg.player.tunnelXNeg % mg.player.tunnelXPos
-                           % mg.player.tunnelYNeg % mg.player.tunnelYPos
-                           % mg.player.tunnelZNeg % mg.player.tunnelZPos));
-    _console.printLine(str(boost::format("  tracks=%zu enemies=%zu obstacles=%zu")
-                           % mg.trackResRefs.size()
-                           % mg.enemies.size()
-                           % mg.obstacles.size()));
+    _console.printLine(str(boost::format("minigame: type=%s camfov=%.1f lataccel=%.3f movePerSec=%.3f inertia=%d bumpPlane=%u doBumping=%d") % minigameTypeName(mg.type) % mg.cameraViewAngle % mg.lateralAccel % mg.movementPerSec % static_cast<int>(mg.useInertia) % mg.bumpPlane % static_cast<int>(mg.doBumping)));
+    _console.printLine(str(boost::format("  player: cam=%s track=%s spd=[%.1f,%.1f] accel=%.3f hp=%u models=%zu") % mg.player.cameraResRef % mg.player.trackResRef % mg.player.minimumSpeed % mg.player.maximumSpeed % mg.player.accelSecs % mg.player.hitPoints % mg.player.modelResRefs.size()));
+    _console.printLine(str(boost::format("  tunnel (deg): X=[%.1f,%.1f] Y=[%.1f,%.1f] Z=[%.1f,%.1f]") % mg.player.tunnelXNeg % mg.player.tunnelXPos % mg.player.tunnelYNeg % mg.player.tunnelYPos % mg.player.tunnelZNeg % mg.player.tunnelZPos));
+    _console.printLine(str(boost::format("  tracks=%zu enemies=%zu obstacles=%zu") % mg.trackResRefs.size() % mg.enemies.size() % mg.obstacles.size()));
     for (size_t i = 0; i < mg.trackResRefs.size(); ++i) {
         _console.printLine(str(boost::format("    track[%zu] %s") % i % mg.trackResRefs[i]));
     }
     for (size_t i = 0; i < mg.enemies.size(); ++i) {
         const auto &e = mg.enemies[i];
-        _console.printLine(str(boost::format("    enemy[%zu] track=%s hp=%u models=%zu")
-                               % i % e.trackResRef % e.hitPoints % e.modelResRefs.size()));
+        _console.printLine(str(boost::format("    enemy[%zu] track=%s hp=%u models=%zu") % i % e.trackResRef % e.hitPoints % e.modelResRefs.size()));
     }
     for (size_t i = 0; i < mg.obstacles.size(); ++i) {
         _console.printLine(str(boost::format("    obstacle[%zu] name=%s") % i % mg.obstacles[i].name));
@@ -3490,11 +3402,9 @@ void Game::consoleMiniGameInfo(const ConsoleArgs &args) {
         auto placement = layout->findTrackByName(mg.player.trackResRef);
         if (placement) {
             const auto &p = placement->get().position;
-            _console.printLine(str(boost::format("  lyt tracks=%zu playerTrack=%s pos=[%.1f,%.1f,%.1f]")
-                                   % layout->tracks.size() % mg.player.trackResRef % p.x % p.y % p.z));
+            _console.printLine(str(boost::format("  lyt tracks=%zu playerTrack=%s pos=[%.1f,%.1f,%.1f]") % layout->tracks.size() % mg.player.trackResRef % p.x % p.y % p.z));
         } else {
-            _console.printLine(str(boost::format("  lyt tracks=%zu playerTrack=%s pos=<not found>")
-                                   % layout->tracks.size() % mg.player.trackResRef));
+            _console.printLine(str(boost::format("  lyt tracks=%zu playerTrack=%s pos=<not found>") % layout->tracks.size() % mg.player.trackResRef));
         }
         size_t obstaclesMatched = 0;
         for (const auto &obs : mg.obstacles) {
@@ -3502,13 +3412,11 @@ void Game::consoleMiniGameInfo(const ConsoleArgs &args) {
                 ++obstaclesMatched;
             }
         }
-        _console.printLine(str(boost::format("  lyt obstacles=%zu (matched %zu of %zu .are obstacles)")
-                               % layout->obstacles.size() % obstaclesMatched % mg.obstacles.size()));
+        _console.printLine(str(boost::format("  lyt obstacles=%zu (matched %zu of %zu .are obstacles)") % layout->obstacles.size() % obstaclesMatched % mg.obstacles.size()));
     }
     const auto &sc = mg.player.scripts;
     if (!sc.onCreate.empty() || !sc.onDeath.empty() || !sc.onTrackLoop.empty()) {
-        _console.printLine(str(boost::format("  scripts: create=%s death=%s loop=%s damage=%s")
-                               % sc.onCreate % sc.onDeath % sc.onTrackLoop % sc.onDamage));
+        _console.printLine(str(boost::format("  scripts: create=%s death=%s loop=%s damage=%s") % sc.onCreate % sc.onDeath % sc.onTrackLoop % sc.onDamage));
     }
 }
 
@@ -3574,8 +3482,7 @@ void Game::consoleStartSwoopRace(const ConsoleArgs &args) {
 
     _swoopLifecycle = session;
     _swoopLifecycle.active = true;
-    _console.printLine(str(boost::format("swoop: lifecycle start origin=%s target=%s forcedSuccess=yes")
-                           % session.originModule % target));
+    _console.printLine(str(boost::format("swoop: lifecycle start origin=%s target=%s forcedSuccess=yes") % session.originModule % target));
 }
 
 void Game::consoleFinishSwoop(const ConsoleArgs &args) {
@@ -3592,15 +3499,7 @@ void Game::consoleSwoopState(const ConsoleArgs &args) {
         return;
     }
     glm::vec3 pos = _swoopRace.position();
-    _console.printLine(str(boost::format("swoop: progress=%.1f finish=%.1f lateral=%.2f speed=%.1f elapsed=%.1f pos=[%.1f,%.1f,%.1f] bounds=[-%.1f,+%.1f] mode=track-progress")
-                           % _swoopRace.progress()
-                           % _swoopRace.finishProgress()
-                           % _swoopRace.lateralOffset()
-                           % _swoopRace.speed()
-                           % _swoopRace.elapsed()
-                           % pos.x % pos.y % pos.z
-                           % _swoopRace.lateralLeftBound()
-                           % _swoopRace.lateralRightBound()));
+    _console.printLine(str(boost::format("swoop: progress=%.1f finish=%.1f lateral=%.2f speed=%.1f elapsed=%.1f pos=[%.1f,%.1f,%.1f] bounds=[-%.1f,+%.1f] mode=track-progress") % _swoopRace.progress() % _swoopRace.finishProgress() % _swoopRace.lateralOffset() % _swoopRace.speed() % _swoopRace.elapsed() % pos.x % pos.y % pos.z % _swoopRace.lateralLeftBound() % _swoopRace.lateralRightBound()));
 }
 
 } // namespace game

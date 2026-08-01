@@ -56,7 +56,8 @@ float grassRandom01(int faceIndex, int clusterIndex, uint32_t stream) {
     // Keep 24 random mantissa bits, matching the useful precision of the old
     // randomFloat path while making placement independent of the shared RNG.
     return static_cast<float>(grassHash(static_cast<uint32_t>(faceIndex),
-                                        static_cast<uint32_t>(clusterIndex), stream) >> 8) /
+                                        static_cast<uint32_t>(clusterIndex), stream) >>
+                              8) /
            16777216.0f;
 }
 
@@ -177,7 +178,7 @@ void GrassSceneNode::update(float dt) {
     }
 }
 
-void GrassSceneNode::registerLeafs(RenderRegistry &registry, const std::vector<SceneNode *> &leafs) {
+void GrassSceneNode::collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) {
     if (leafs.empty()) {
         return;
     }
@@ -200,13 +201,13 @@ void GrassSceneNode::registerLeafs(RenderRegistry &registry, const std::vector<S
         material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)] = &lightmap->get();
     }
     material.faceCulling = FaceCullMode::None;
-    registry.registerGrass(renderCategory(RenderCategory::Opaque),
-                      id(),
-                      nameIds(),
-                      material,
-                      kMaxClusterDistance,
-                      _properties.quadSize,
-                      instances);
+    scene.addGrass(renderCategory(RenderCategory::Opaque),
+                     id(),
+                     nameIds(),
+                     material,
+                     kMaxClusterDistance,
+                     _properties.quadSize,
+                     instances);
 }
 
 int GrassSceneNode::getNumClustersInFace(float area) const {

@@ -47,7 +47,7 @@ struct ResourceServices;
 
 namespace scene {
 
-class RenderRegistry;
+class GpuScene;
 class ISceneGraph;
 class IUser;
 class SceneGraph;
@@ -87,7 +87,7 @@ public:
 
     virtual void update(float dt);
 
-    virtual void registerLeafs(RenderRegistry &registry, const std::vector<SceneNode *> &leafs) {
+    virtual void collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) {
     }
 
     bool isEnabled() const { return _enabled; }
@@ -192,7 +192,7 @@ protected:
 
     bool _enabled {true};
     bool _culled {false};
-    bool _point {true};   /**< is this node represented by a single point?  */
+    bool _point {true}; /**< is this node represented by a single point?  */
 
     /**
      * Can this node be culled?

@@ -26,6 +26,7 @@
 #include "reone/graphics/uniforms.h"
 #include "reone/resource/di/services.h"
 #include "reone/resource/provider/textures.h"
+#include "reone/scene/gpuscene.h"
 #include "reone/scene/graph.h"
 #include "reone/scene/node/camera.h"
 #include "reone/scene/node/light.h"
@@ -243,7 +244,7 @@ static bool isReceivingShadows(const ModelSceneNode &model, const MeshSceneNode 
     return model.usage() == ModelUsage::Room;
 }
 
-void MeshSceneNode::registerRender(RenderRegistry &registry) {
+void MeshSceneNode::collectInto(GpuScene &scene) {
     auto mesh = _modelNode.mesh();
     // shouldRender only asks whether the model node names a diffuse map, not
     // whether that texture resolved. A missing resource leaves the pointer
@@ -304,7 +305,7 @@ void MeshSceneNode::registerRender(RenderRegistry &registry) {
                                   (_model.isBackgroundScenery() && !_nodeTextures.lightmap);
     // The manually curated per-name record - the mechanical level-by-level
     // pass that heuristics cannot replace. Class and material ops both.
-    material.curatedIndex = _sceneGraph.registry().curatedIndex(
+    material.curatedIndex = _sceneGraph.gpuScene().traceMaterials().curatedIndex(
         _model.model().name(), _modelNode.name());
     if (render && _sceneGraph.hasShadowLight() && isReceivingShadows(_model, *this)) {
         material.affectedByShadows = true;
@@ -345,11 +346,11 @@ void MeshSceneNode::registerRender(RenderRegistry &registry) {
         if (_prevBones.size() != _bones.size()) {
             _prevBones = _bones;
         }
-        registry.registerMesh(categories,
-                         id(),
-                         nameIds(),
-                         *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
-                         RegisteredSkin {_bones, _prevBones}, &_model);
+        scene.addMesh(categories,
+                        id(),
+                        nameIds(),
+                        *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
+                        RegisteredSkin {_bones, _prevBones}, &_model);
     } else if (_modelNode.isDanglymesh()) {
         std::vector<glm::vec4> positions;
         positions.reserve(_dangly.vertices.size());
@@ -360,22 +361,22 @@ void MeshSceneNode::registerRender(RenderRegistry &registry) {
         if (prevPositions.size() != positions.size()) {
             prevPositions = positions;
         }
-        registry.registerMesh(categories,
-                         id(),
-                         nameIds(),
-                         *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
-                         RegisteredDangly {std::move(positions), std::move(prevPositions)}, &_model);
+        scene.addMesh(categories,
+                        id(),
+                        nameIds(),
+                        *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
+                        RegisteredDangly {std::move(positions), std::move(prevPositions)}, &_model);
     } else if (_modelNode.isSaberMesh()) {
-        registry.registerMesh(categories,
-                         id(),
-                         nameIds(),
-                         *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
-                         RegisteredSaber {glm::vec4 {_saber.displacement, 0.0f}}, &_model);
+        scene.addMesh(categories,
+                        id(),
+                        nameIds(),
+                        *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
+                        RegisteredSaber {glm::vec4 {_saber.displacement, 0.0f}}, &_model);
     } else {
-        registry.registerMesh(categories,
-                         id(),
-                         nameIds(),
-                         *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, {}, &_model);
+        scene.addMesh(categories,
+                        id(),
+                        nameIds(),
+                        *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, {}, &_model);
     }
 }
 

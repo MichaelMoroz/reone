@@ -68,10 +68,6 @@ public:
     MOCK_METHOD(void, setActiveCamera, (CameraSceneNode *), (override));
     MOCK_METHOD(void, setUpdateRoots, (bool), (override));
 
-    MOCK_METHOD(void, setRenderAABB, (bool), (override));
-    MOCK_METHOD(void, setRenderWalkmeshes, (bool), (override));
-    MOCK_METHOD(void, setRenderTriggers, (bool), (override));
-
     MOCK_METHOD(std::shared_ptr<CameraSceneNode>, newCamera, (), (override));
     MOCK_METHOD(std::shared_ptr<ModelSceneNode>, newModel, (graphics::Model &, ModelUsage), (override));
     MOCK_METHOD(std::shared_ptr<WalkmeshSceneNode>, newWalkmesh, (graphics::Walkmesh & walkmesh), (override));
@@ -104,8 +100,8 @@ public:
 
     MOCK_METHOD(uint32_t, internName, (std::string_view), (override));
     MOCK_METHOD(std::string_view, nameText, (uint32_t), (const override));
-    MOCK_METHOD(const RenderRegistry &, registry, (), (const override));
-    MOCK_METHOD(RenderRegistry &, registry, (), (override));
+    MOCK_METHOD(const GpuScene &, gpuScene, (), (const override));
+    MOCK_METHOD(GpuScene &, gpuScene, (), (override));
     MOCK_METHOD(const std::vector<LightSceneNode *> &, lights, (), (const override));
 };
 
@@ -122,7 +118,7 @@ public:
     MOCK_METHOD(void, init, (), (override));
 
     MOCK_METHOD(graphics::Texture &, render,
-                (RenderRegistry &, const CameraSceneNode *, RenderPassName,
+                (const CameraSceneNode *, RenderPassName,
                  const graphics::Frustum *, size_t),
                 (override));
     MOCK_METHOD(std::vector<RenderTargetInfo>, targets, (), (const override));
@@ -130,7 +126,8 @@ public:
 
 class MockRenderPipelineFactory : public IRenderPipelineFactory, boost::noncopyable {
 public:
-    MOCK_METHOD(std::unique_ptr<IRenderPipeline>, create, (RenderMode, glm::ivec2), (override));
+    MOCK_METHOD(std::unique_ptr<IRenderPipeline>, create,
+                (RenderMode, glm::ivec2, GpuScene &), (override));
     MOCK_METHOD(void, setVulkanRenderer, (graphics::VulkanRenderer &), (override));
 };
 

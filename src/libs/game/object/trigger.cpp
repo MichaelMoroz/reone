@@ -307,7 +307,6 @@ void Trigger::syncDebugVisual() {
     if (!_sceneNode) {
         return;
     }
-    static_cast<TriggerSceneNode *>(_sceneNode.get())->setDebugColor(debugColor());
 }
 
 } // namespace game

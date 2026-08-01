@@ -48,8 +48,8 @@
 #include "object/area.h"
 #include "object/camera/animated.h"
 #include "object/camera/dialog.h"
-#include "object/camera/free.h"
 #include "object/camera/firstperson.h"
+#include "object/camera/free.h"
 #include "object/camera/static.h"
 #include "object/camera/thirdperson.h"
 #include "object/creature.h"
@@ -64,8 +64,8 @@
 #include "options.h"
 #include "party.h"
 #include "script/runner.h"
-#include "swooprace.h"
 #include "statussummary.h"
+#include "swooprace.h"
 #include "talent.h"
 
 #include <queue>
@@ -85,7 +85,7 @@ class Font;
 class Model;
 class Texture;
 
-}
+} // namespace graphics
 
 namespace game {
 
@@ -445,12 +445,12 @@ private:
     // -> auto-start race -> forced-success finish -> return to origin. Passive
     // bookkeeping only; it does not touch party membership, inventory, or story.
     struct SwoopLifecycle {
-        bool active {false};        // a lifecycle race is in progress (return pending)
-        bool haveOrigin {false};    // origin position/facing captured
-        std::string originModule;   // module resref to return to
+        bool active {false};      // a lifecycle race is in progress (return pending)
+        bool haveOrigin {false};  // origin position/facing captured
+        std::string originModule; // module resref to return to
         glm::vec3 originPosition {0.0f};
         float originFacing {0.0f};
-        bool forcedSuccess {true};  // PR1: finish is always non-blocking success
+        bool forcedSuccess {true}; // PR1: finish is always non-blocking success
     };
 
     SwoopLifecycle _swoopLifecycle;
@@ -673,9 +673,6 @@ private:
     void consoleCamLook(const ConsoleArgs &tokens);
     void consoleCamStatus(const ConsoleArgs &tokens);
     void consoleRunScript(const ConsoleArgs &tokens);
-    void consoleShowAABB(const ConsoleArgs &tokens);
-    void consoleShowWalkmesh(const ConsoleArgs &tokens);
-    void consoleShowTriggers(const ConsoleArgs &tokens);
     void consoleSpawnCreature(const ConsoleArgs &tokens);
     void consoleSpawnCompanion(const ConsoleArgs &tokens);
     void consoleSelectObjectById(const ConsoleArgs &tokens);

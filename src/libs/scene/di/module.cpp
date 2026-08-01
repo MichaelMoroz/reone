@@ -56,7 +56,9 @@ void SceneModule::init() {
     _graphs->reserve(kSceneCharacter);
 }
 
-std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode, glm::ivec2 targetSize) {
+std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode,
+                                                               glm::ivec2 targetSize,
+                                                               GpuScene &scene) {
     if (!_vulkanRenderer) {
         throw std::logic_error("Vulkan renderer was not supplied to the pipeline factory");
     }
@@ -68,7 +70,7 @@ std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode, 
     }
     return std::make_unique<VulkanRenderPipeline>(
         std::move(targetSize), _options, *_vulkanRenderer, _uniforms, _meshRegistry, _textureRegistry,
-        mode == RenderMode::PathTracing);
+        scene, mode == RenderMode::PathTracing);
 }
 
 void SceneModule::deinit() {

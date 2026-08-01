@@ -48,7 +48,7 @@ public:
 
     void update(float dt) override;
 
-    void registerRender(RenderRegistry &registry);
+    void collectInto(GpuScene &scene);
 
     bool shouldRender() const;
     bool shouldCastShadows() const;

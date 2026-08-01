@@ -34,7 +34,6 @@
 #include "reone/resource/provider/movies.h"
 #include "reone/resource/provider/paths.h"
 #include "reone/resource/provider/scripts.h"
-#include "reone/resource/provider/shaders.h"
 #include "reone/resource/provider/soundsets.h"
 #include "reone/resource/provider/textures.h"
 #include "reone/resource/provider/visibilities.h"
@@ -169,9 +168,6 @@ public:
     MOCK_METHOD(std::shared_ptr<Ltr>, get, (const ResRef &resRef), (override));
 };
 
-class MockShaders : public IShaders, boost::noncopyable {
-};
-
 class MockResourceDirector : public IResourceDirector, boost::noncopyable {
 public:
     MOCK_METHOD(void, init, (), (override));
@@ -203,7 +199,6 @@ public:
         _soundSets = std::make_unique<MockSoundSets>();
         _visibilities = std::make_unique<MockVisiblities>();
         _ltrs = std::make_unique<MockLtrs>();
-        _shaders = std::make_unique<MockShaders>();
         _director = std::make_unique<MockResourceDirector>();
 
         _services = std::make_unique<ResourceServices>(
@@ -226,7 +221,6 @@ public:
             *_soundSets,
             *_visibilities,
             *_ltrs,
-            *_shaders,
             *_director);
     }
 
@@ -298,7 +292,6 @@ private:
     std::unique_ptr<MockSoundSets> _soundSets;
     std::unique_ptr<MockVisiblities> _visibilities;
     std::unique_ptr<MockLtrs> _ltrs;
-    std::unique_ptr<MockShaders> _shaders;
     std::unique_ptr<MockResourceDirector> _director;
 
     std::unique_ptr<ResourceServices> _services;

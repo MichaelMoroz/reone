@@ -19,7 +19,7 @@
 
 #include "reone/graphics/texture.h"
 
-#include "../registry.h"
+#include "../gpuscene.h"
 #include "pass.h"
 
 template <>
@@ -86,8 +86,7 @@ public:
 
     virtual void init() = 0;
 
-    virtual graphics::Texture &render(RenderRegistry &registry,
-                                      const CameraSceneNode *camera,
+    virtual graphics::Texture &render(const CameraSceneNode *camera,
                                       RenderPassName shadowPass,
                                       const graphics::Frustum *shadowFrusta,
                                       size_t numShadowFrusta) = 0;
@@ -134,7 +133,8 @@ class IRenderPipelineFactory {
 public:
     virtual ~IRenderPipelineFactory() = default;
 
-    virtual std::unique_ptr<IRenderPipeline> create(RenderMode mode, glm::ivec2 targetSize) = 0;
+    virtual std::unique_ptr<IRenderPipeline> create(RenderMode mode, glm::ivec2 targetSize,
+                                                    GpuScene &scene) = 0;
 
     /**
      * Hand the factory the Vulkan renderer, so it can build a Vulkan pipeline.
@@ -155,7 +155,8 @@ public:
         _uniforms(uniforms) {
     }
 
-    std::unique_ptr<IRenderPipeline> create(RenderMode mode, glm::ivec2 targetSize) override;
+    std::unique_ptr<IRenderPipeline> create(RenderMode mode, glm::ivec2 targetSize,
+                                            GpuScene &scene) override;
 
     void setVulkanRenderer(graphics::VulkanRenderer &renderer) override {
         _vulkanRenderer = &renderer;

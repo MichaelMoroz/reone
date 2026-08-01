@@ -58,7 +58,7 @@ public:
 
     void update(float dt) override;
 
-    void registerLeafs(RenderRegistry &registry, const std::vector<SceneNode *> &leafs) override;
+    void collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) override;
 
     int getNumClustersInFace(float area) const;
     int getGrassVariant(int faceIndex, int clusterIndex) const;

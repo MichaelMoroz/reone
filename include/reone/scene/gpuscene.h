@@ -6,30 +6,178 @@
 
 #include <volk.h>
 
-#include <functional>
 #include <array>
 #include <cstddef>
+#include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
+#include <variant>
 #include <vector>
 
 #include <glm/glm.hpp>
 
-#include "reone/graphics/vulkan/buffer.h"
+#include "reone/graphics/frustum.h"
+#include "reone/graphics/material.h"
 #include "reone/scene/node.h"
+#include "reone/scene/render/pipeline/tracematerials.h"
 
 namespace reone::graphics {
 class Mesh;
+class Texture;
+class VulkanBuffer;
 class VulkanRenderer;
-}
+} // namespace reone::graphics
 namespace reone::scene {
-class RenderRegistry;
-struct RegisteredMesh;
-struct RegisteredGrass;
-struct RegisteredParticles;
-struct RegisteredBillboard;
-struct RegisteredSkin;
+class CameraSceneNode;
+class IRenderPassExecutor;
+class ModelSceneNode;
+
+enum class RenderPassName {
+    None,
+    DirLightShadowsPass,
+    PointLightShadows,
+    OpaqueGeometry,
+    TransparentGeometry,
+    PostProcessing,
+};
+
+using RenderPassFlags = uint32_t;
+constexpr RenderPassFlags renderPassFlag(RenderPassName pass) {
+    return pass == RenderPassName::None ? 0 : 1u << (static_cast<uint32_t>(pass) - 1);
+}
+
+enum class RenderCategory : uint32_t {
+    None = 0,
+    ShadowCaster = 1 << 0,
+    Opaque = 1 << 1,
+    Transparent = 1 << 2,
+    LensFlare = 1 << 3,
+};
+using RenderCategories = uint32_t;
+constexpr RenderCategories renderCategory(RenderCategory category) {
+    return static_cast<RenderCategories>(category);
+}
+
+struct RenderFilter {
+    RenderPassName pass {RenderPassName::None};
+    RenderCategory category {RenderCategory::None};
+};
+
+enum class VisibilityPolicyKind { ViewCamera,
+                                  Frusta,
+                                  None };
+struct VisibilityPolicy {
+    VisibilityPolicyKind kind {VisibilityPolicyKind::ViewCamera};
+    const CameraSceneNode *drawDistanceCamera {nullptr};
+    const graphics::Frustum *lightFrusta {nullptr};
+    size_t numLightFrusta {0};
+
+    static VisibilityPolicy viewCamera(const CameraSceneNode *camera) {
+        return {VisibilityPolicyKind::ViewCamera, camera, nullptr, 0};
+    }
+    static VisibilityPolicy shadowFrusta(const graphics::Frustum *frusta, size_t numFrusta,
+                                         const CameraSceneNode *drawDistanceCamera) {
+        return {VisibilityPolicyKind::Frusta, drawDistanceCamera, frusta, numFrusta};
+    }
+    static VisibilityPolicy noCulling() {
+        return {VisibilityPolicyKind::None, nullptr, nullptr, 0};
+    }
+};
+
+struct ParticleInstance {
+    int frame {0};
+    glm::vec3 position {0.0f};
+    glm::vec2 size {0.0f};
+    glm::vec4 color {1.0f};
+    glm::vec3 right {0.0f};
+    glm::vec3 up {0.0f};
+};
+struct GrassInstance {
+    int variant {0};
+    glm::vec3 position {0.0f};
+    glm::vec2 lightmapUV {0.0f};
+    float yaw {0.0f};
+};
+struct RegisteredSkin {
+    std::vector<glm::mat4> bones;
+    std::vector<glm::mat4> prevBones;
+};
+struct RegisteredDangly {
+    std::vector<glm::vec4> positions;
+    std::vector<glm::vec4> prevPositions;
+};
+struct RegisteredSaber {
+    glm::vec4 displacement {0.0f};
+};
+using RegisteredDeformation =
+    std::variant<std::monostate, RegisteredSkin, RegisteredDangly, RegisteredSaber>;
+
+struct RegisteredMesh {
+    RenderCategories categories {0};
+    SceneNodeId id;
+    SceneNodeNameIds nameIds;
+    RenderPassFlags drawnPasses {0};
+    std::reference_wrapper<graphics::Mesh> mesh;
+    graphics::Material material;
+    glm::mat4 transform {1.0f};
+    glm::mat4 transformInv {1.0f};
+    glm::mat4 prevTransform {1.0f};
+    RegisteredDeformation deformation;
+    ModelSceneNode *cullRoot {nullptr};
+};
+struct RegisteredBillboard {
+    RenderCategories categories {0};
+    SceneNodeId id;
+    SceneNodeNameIds nameIds;
+    RenderPassFlags drawnPasses {0};
+    std::reference_wrapper<graphics::Texture> texture;
+    glm::vec4 color {1.0f};
+    glm::mat4 transform {1.0f};
+    glm::mat4 transformInv {1.0f};
+    std::optional<float> size;
+    ModelSceneNode *cullRoot {nullptr};
+};
+struct RegisteredParticles {
+    RenderCategories categories {0};
+    SceneNodeId id;
+    SceneNodeNameIds nameIds;
+    RenderPassFlags drawnPasses {0};
+    graphics::Material material;
+    glm::ivec2 gridSize {1};
+    std::vector<ParticleInstance> instances;
+    ModelSceneNode *cullRoot {nullptr};
+};
+struct RegisteredGrass {
+    RenderCategories categories {0};
+    SceneNodeId id;
+    SceneNodeNameIds nameIds;
+    RenderPassFlags drawnPasses {0};
+    graphics::Material material;
+    float radius {0.0f};
+    float quadSize {0.0f};
+    std::vector<GrassInstance> instances;
+};
+using ObjectRecord =
+    std::variant<RegisteredMesh, RegisteredBillboard, RegisteredParticles, RegisteredGrass>;
+
+struct SceneCounts {
+    size_t entries {0};
+    size_t rigid {0};
+    size_t skinned {0};
+    size_t dangly {0};
+    size_t saber {0};
+    size_t particleEmitters {0};
+    size_t particles {0};
+    size_t grassNodes {0};
+    size_t grassClusters {0};
+    size_t billboards {0};
+    size_t objects() const { return entries; }
+};
+std::string formatSceneCounts(const SceneCounts &counts);
+std::string renderPassName(RenderPassName pass);
 
 /**
  * GPU-side world-space scene geometry. It owns what is present in this frame
@@ -82,14 +230,22 @@ public:
 
     /** std430-compatible canonical vertex used by skin.slang and consumers. */
     struct alignas(16) MergedVertex {
-        glm::vec3 position {0.0f}; float positionPad {0.0f};
-        glm::vec3 normal {0.0f}; float normalPad {0.0f};
-        glm::vec2 uv1 {0.0f}; glm::vec2 uv2 {0.0f};
-        glm::vec3 tangent {0.0f}; float tangentPad {0.0f};
-        glm::vec3 bitangent {0.0f}; float bitangentPad {0.0f};
-        glm::vec3 tanSpaceNormal {0.0f}; float tanSpaceNormalPad {0.0f};
-        glm::vec3 prevPosition {0.0f}; float prevPositionPad {0.0f};
-        glm::vec2 pad {0.0f}; float tailPad[2] {};
+        glm::vec3 position {0.0f};
+        float positionPad {0.0f};
+        glm::vec3 normal {0.0f};
+        float normalPad {0.0f};
+        glm::vec2 uv1 {0.0f};
+        glm::vec2 uv2 {0.0f};
+        glm::vec3 tangent {0.0f};
+        float tangentPad {0.0f};
+        glm::vec3 bitangent {0.0f};
+        float bitangentPad {0.0f};
+        glm::vec3 tanSpaceNormal {0.0f};
+        float tanSpaceNormalPad {0.0f};
+        glm::vec3 prevPosition {0.0f};
+        float prevPositionPad {0.0f};
+        glm::vec2 pad {0.0f};
+        float tailPad[2] {};
         // Per-quad particle/billboard tint. Meshes and grass write white.
         glm::vec4 color {1.0f};
     };
@@ -108,15 +264,26 @@ public:
     struct alignas(16) SceneObject {
         Matrix3x4 transform;
         Matrix3x4 prevTransform;
-        uint32_t srcVertexOffset {0}; uint32_t srcIndexOffset {0};
-        uint32_t srcVertexStride {0}; int32_t offPosition {-1};
-        int32_t offNormals {-1}; int32_t offUV1 {-1}; int32_t offUV2 {-1};
-        int32_t offTanSpace {-1}; int32_t offBoneIndices {-1}; int32_t offBoneWeights {-1};
-        uint32_t vertexCount {0}; uint32_t triangleCount {0};
-        uint32_t dstVertexBase {0}; uint32_t dstTriangleBase {0};
-        uint32_t geometryIndex {0}; uint32_t boneBase {UINT32_MAX};
-        uint32_t boneCount {0}; uint32_t materialIndex {0};
-        uint32_t danglyBase {UINT32_MAX}; uint32_t danglyCount {0};
+        uint32_t srcVertexOffset {0};
+        uint32_t srcIndexOffset {0};
+        uint32_t srcVertexStride {0};
+        int32_t offPosition {-1};
+        int32_t offNormals {-1};
+        int32_t offUV1 {-1};
+        int32_t offUV2 {-1};
+        int32_t offTanSpace {-1};
+        int32_t offBoneIndices {-1};
+        int32_t offBoneWeights {-1};
+        uint32_t vertexCount {0};
+        uint32_t triangleCount {0};
+        uint32_t dstVertexBase {0};
+        uint32_t dstTriangleBase {0};
+        uint32_t geometryIndex {0};
+        uint32_t boneBase {UINT32_MAX};
+        uint32_t boneCount {0};
+        uint32_t materialIndex {0};
+        uint32_t danglyBase {UINT32_MAX};
+        uint32_t danglyCount {0};
         alignas(16) glm::vec4 saberDisplacement {0.0f};
     };
     static_assert(sizeof(Matrix3x4) == 48);
@@ -131,26 +298,28 @@ public:
     static_assert(sizeof(SceneObject) == 192);
 
     /** A consumer-defined intersection property, not an acceleration-structure policy. */
-    enum class PrimitiveClass { Opaque, NonOpaque };
+    enum class PrimitiveClass { Opaque,
+                                NonOpaque };
 
     /**
      * The requested lifetime of admitted geometry. The implementation may put
      * several objects with the same residency into one region, but it may not
      * infer this classification from a material or a Mesh pointer.
      */
-    enum class ResidencyClass { Static, Dynamic };
+    enum class ResidencyClass { Static,
+                                Dynamic };
 
     /** Trace-specific material lowering is supplied by the current consumer. */
-    struct Admission {
+    struct Classification {
         InstanceMaterial material;
         PrimitiveClass primitiveClass {PrimitiveClass::Opaque};
         ResidencyClass residency {ResidencyClass::Dynamic};
         const RegisteredSkin *skin {nullptr};
     };
-    using Classifier = std::function<std::optional<Admission>(const RegisteredMesh &)>;
-    using GrassClassifier = std::function<std::optional<Admission>(const RegisteredGrass &)>;
-    using ParticleClassifier = std::function<std::optional<Admission>(const RegisteredParticles &)>;
-    using BillboardClassifier = std::function<std::optional<Admission>(const RegisteredBillboard &)>;
+    using Classifier = std::function<std::optional<Classification>(const RegisteredMesh &)>;
+    using GrassClassifier = std::function<std::optional<Classification>(const RegisteredGrass &)>;
+    using ParticleClassifier = std::function<std::optional<Classification>(const RegisteredParticles &)>;
+    using BillboardClassifier = std::function<std::optional<Classification>(const RegisteredBillboard &)>;
 
     struct BufferView {
         const graphics::VulkanBuffer *buffer {nullptr};
@@ -223,12 +392,53 @@ public:
         std::vector<Region> regions;
     };
 
-    explicit GpuScene(graphics::VulkanRenderer &renderer);
+    GpuScene();
     ~GpuScene();
-    void init();
+    void init(graphics::VulkanRenderer &renderer);
     void deinit();
+    void resetFrame();
+    void checkIdentityStability();
+
+    void addMesh(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
+                   graphics::Mesh &mesh, const graphics::Material &material,
+                   const glm::mat4 &transform, const glm::mat4 &transformInv,
+                   const glm::mat4 &prevTransform, RegisteredDeformation deformation,
+                   ModelSceneNode *cullRoot);
+    void addBillboard(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
+                        graphics::Texture &texture, const glm::vec4 &color,
+                        const glm::mat4 &transform, const glm::mat4 &transformInv,
+                        std::optional<float> size, ModelSceneNode *cullRoot);
+    void addParticles(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
+                        const graphics::Material &material, const glm::ivec2 &gridSize,
+                        const std::vector<ParticleInstance> &instances,
+                        ModelSceneNode *cullRoot);
+    void addGrass(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
+                    const graphics::Material &material, float radius, float quadSize,
+                    const std::vector<GrassInstance> &instances);
+    void drawScene(IRenderPassExecutor &executor, RenderFilter filter,
+                   VisibilityPolicy visibility);
+
+    bool isObjectEnabled(uint32_t idIndex) const {
+        return _disabledObjects.find(idIndex) == _disabledObjects.end();
+    }
+    void setObjectEnabled(uint32_t idIndex, bool enabled) {
+        if (enabled)
+            _disabledObjects.erase(idIndex);
+        else
+            _disabledObjects.insert(idIndex);
+    }
+    const ModelSceneNode *skyRoom() const { return _skyRoom; }
+    void setSkyRoom(const ModelSceneNode *room) { _skyRoom = room; }
+    TraceMaterialOverrides &traceMaterials() { return _traceMaterials; }
+    const TraceMaterialOverrides &traceMaterials() const { return _traceMaterials; }
+    const SceneCounts &counts() const { return _counts; }
+    const SceneCounts &drawnCounts() const { return _drawnCounts; }
+    const std::map<RenderPassName, SceneCounts> &drawnCountsByPass() const {
+        return _drawnCountsByPass;
+    }
+    const std::vector<ObjectRecord> &objects() const { return _objects; }
+
     View update(VkCommandBuffer cmd,
-                RenderRegistry &registry,
                 const Classifier &classifier,
                 const GrassClassifier &grassClassifier,
                 const ParticleClassifier &particleClassifier,
@@ -243,7 +453,16 @@ private:
         uint32_t vertexDataCount {0};
         uint32_t indexCount {0};
     };
-    graphics::VulkanRenderer &_renderer;
+    std::vector<ObjectRecord> _objects;
+    std::unordered_set<uint32_t> _disabledObjects;
+    const ModelSceneNode *_skyRoom {nullptr};
+    TraceMaterialOverrides _traceMaterials;
+    SceneCounts _counts;
+    SceneCounts _drawnCounts;
+    std::map<RenderPassName, SceneCounts> _drawnCountsByPass;
+    std::vector<SceneNodeId> _previousFrameIds;
+    size_t _identitySnapshot {0};
+    graphics::VulkanRenderer *_renderer {nullptr};
     VkDescriptorSetLayout _mergeLayout {VK_NULL_HANDLE};
     VkDescriptorPool _mergePool {VK_NULL_HANDLE};
     std::array<VkDescriptorSet, 2> _mergeSets {};

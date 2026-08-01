@@ -66,7 +66,6 @@ struct Collision;
 
 class IAnimationEventListener;
 class IRenderPipelineFactory;
-class RenderRegistry;
 
 class ISceneGraph {
 public:
@@ -97,8 +96,8 @@ public:
     virtual std::optional<std::reference_wrapper<CameraSceneNode>> camera() = 0;
 
     /** The completed frame snapshot. Editor update intentionally sees frame N-1. */
-    virtual const RenderRegistry &registry() const = 0;
-    virtual RenderRegistry &registry() = 0;
+    virtual const GpuScene &gpuScene() const = 0;
+    virtual GpuScene &gpuScene() = 0;
     virtual const std::vector<LightSceneNode *> &lights() const = 0;
     virtual uint32_t internName(std::string_view name) = 0;
     virtual std::string_view nameText(uint32_t id) const = 0;
@@ -116,10 +115,6 @@ public:
 
     virtual void setActiveCamera(CameraSceneNode *camera) = 0;
     virtual void setUpdateRoots(bool update) = 0;
-
-    virtual void setRenderAABB(bool render) = 0;
-    virtual void setRenderWalkmeshes(bool render) = 0;
-    virtual void setRenderTriggers(bool render) = 0;
 
     // Roots
 
@@ -176,10 +171,10 @@ public:
     graphics::Texture &render(const glm::ivec2 &dim) override;
     void invalidateRenderPipeline() override { _renderPipeline.reset(); }
 
-    void renderScene(RenderRegistry &registry);
+    void collectInto(GpuScene &scene);
 
-    const RenderRegistry &registry() const override { return _registry; }
-    RenderRegistry &registry() override { return _registry; }
+    const GpuScene &gpuScene() const override { return _gpuScene; }
+    GpuScene &gpuScene() override { return _gpuScene; }
     const std::vector<LightSceneNode *> &lights() const override { return _lights; }
     uint32_t internName(std::string_view name) override;
     std::string_view nameText(uint32_t id) const override;
@@ -201,10 +196,6 @@ public:
 
     void setActiveCamera(CameraSceneNode *camera) override { _activeCamera = camera; }
     void setUpdateRoots(bool update) override { _updateRoots = update; }
-
-    void setRenderAABB(bool render) override { _renderAABB = render; }
-    void setRenderWalkmeshes(bool render) override { _renderWalkmeshes = render; }
-    void setRenderTriggers(bool render) override { _renderTriggers = render; }
 
     // Roots
 
@@ -311,13 +302,9 @@ private:
     resource::ResourceServices &_resourceSvc;
 
     std::unique_ptr<IRenderPipeline> _renderPipeline;
-    RenderRegistry _registry;
+    GpuScene _gpuScene;
 
     bool _updateRoots {true};
-
-    bool _renderAABB {false};
-    bool _renderWalkmeshes {false};
-    bool _renderTriggers {false};
 
     std::set<std::shared_ptr<SceneNode>> _nodes;
 

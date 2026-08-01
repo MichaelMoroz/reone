@@ -18,23 +18,23 @@
 #include "editor.h"
 #include "engine.h"
 #include "reone/game/types.h"
+#include "reone/graphics/di/services.h"
+#include "reone/graphics/mesh.h"
+#include "reone/graphics/meshregistry.h"
+#include "reone/graphics/textureutil.h"
 #include "reone/resource/container/erf.h"
 #include "reone/resource/container/rim.h"
 #include "reone/resource/format/gffreader.h"
 #include "reone/resource/parser/gff/ifo.h"
 #include "reone/resource/parser/gff/nfo.h"
+#include "reone/resource/resources.h"
+#include "reone/scene/gpuscene.h"
+#include "reone/scene/graph.h"
+#include "reone/scene/graphs.h"
+#include "reone/scene/render/pipeline.h"
 #include "reone/system/fileutil.h"
 #include "reone/system/stream/fileinput.h"
 #include "reone/system/stream/memoryinput.h"
-#include "reone/graphics/di/services.h"
-#include "reone/graphics/mesh.h"
-#include "reone/graphics/meshregistry.h"
-#include "reone/graphics/textureutil.h"
-#include "reone/resource/resources.h"
-#include "reone/scene/graph.h"
-#include "reone/scene/graphs.h"
-#include "reone/scene/registry.h"
-#include "reone/scene/render/pipeline.h"
 #include "reone/system/stringutil.h"
 
 #include "imgui.h"
@@ -164,7 +164,7 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
     return true;
 }
 
-const char *registryMaterialName(graphics::MaterialType type) {
+const char *objectMaterialName(graphics::MaterialType type) {
     switch (type) {
     case graphics::MaterialType::OpaqueModel:
         return "OpaqueModel";
@@ -188,15 +188,14 @@ const char *registryMaterialName(graphics::MaterialType type) {
  * dot for absent turns the column into a bitfield the eye can scan, and the
  * header spells out the order.
  */
-std::string registryPassSlots(scene::RenderPassFlags flags) {
+std::string objectPassSlots(scene::RenderPassFlags flags) {
     static constexpr scene::RenderPassName kOrder[] {
         scene::RenderPassName::DirLightShadowsPass,
         scene::RenderPassName::PointLightShadows,
         scene::RenderPassName::OpaqueGeometry,
         scene::RenderPassName::TransparentGeometry,
-        scene::RenderPassName::PostProcessing,
-        scene::RenderPassName::Debug};
-    static constexpr char kLabels[] {'D', 'P', 'O', 'T', 'X', 'G'};
+        scene::RenderPassName::PostProcessing};
+    static constexpr char kLabels[] {'D', 'P', 'O', 'T', 'X'};
     std::string result(std::size(kOrder), '.');
     for (size_t i = 0; i < std::size(kOrder); ++i) {
         if ((flags & scene::renderPassFlag(kOrder[i])) != 0) {
@@ -206,7 +205,7 @@ std::string registryPassSlots(scene::RenderPassFlags flags) {
     return result;
 }
 
-void registryRightAligned(const std::string &text) {
+void objectRightAligned(const std::string &text) {
     float width = ImGui::CalcTextSize(text.c_str()).x;
     float avail = ImGui::GetContentRegionAvail().x;
     if (avail > width) {
@@ -225,8 +224,8 @@ bool containsInsensitive(std::string_view text, std::string_view needle) {
                        }) != text.end();
 }
 
-struct RegistryEntryView {
-    const scene::RegisteredObject *object {nullptr};
+struct ObjectEntryView {
+    const scene::ObjectRecord *object {nullptr};
     const scene::ModelSceneNode *root {nullptr};
     std::string_view modelName;
     std::string_view nodeName;
@@ -235,27 +234,24 @@ struct RegistryEntryView {
     scene::RenderPassFlags drawnPasses {0};
     size_t particles {0};
     size_t clusters {0};
-    bool debug {false};
     uint32_t id {UINT32_MAX};
     std::string classification;
 };
 
-RegistryEntryView makeRegistryEntryView(const scene::ISceneGraph &graph,
-                                        const scene::RenderRegistry &registry,
-                                        const scene::RegisteredObject &object) {
+ObjectEntryView makeObjectEntryView(const scene::ISceneGraph &graph,
+                                    const scene::GpuScene &scene,
+                                    const scene::ObjectRecord &object) {
     return std::visit(
-        [&graph, &registry, &object](const auto &entry) -> RegistryEntryView {
+        [&graph, &scene, &object](const auto &entry) -> ObjectEntryView {
             using T = std::decay_t<decltype(entry)>;
-            RegistryEntryView result;
+            ObjectEntryView result;
             result.object = &object;
-            if constexpr (!std::is_same_v<T, scene::RegisteredDebug>) {
-                result.id = entry.id.index;
-            }
+            result.id = entry.id.index;
             if constexpr (std::is_same_v<T, scene::RegisteredMesh>) {
                 result.root = entry.cullRoot;
                 result.modelName = graph.nameText(entry.nameIds.model);
                 result.nodeName = graph.nameText(entry.nameIds.node);
-                result.material = registryMaterialName(entry.material.type);
+                result.material = objectMaterialName(entry.material.type);
                 result.drawnPasses = entry.drawnPasses;
                 if (std::holds_alternative<scene::RegisteredSkin>(entry.deformation)) {
                     result.kind = "skinned";
@@ -271,7 +267,7 @@ RegistryEntryView makeRegistryEntryView(const scene::ISceneGraph &graph,
                 // tracer itself, everything else re-derives from the same
                 // authored data the admission reads.
                 std::vector<const char *> tags;
-                if (entry.cullRoot && entry.cullRoot == registry.skyRoom()) {
+                if (entry.cullRoot && entry.cullRoot == scene.skyRoom()) {
                     tags.push_back("sky");
                 } else if (entry.material.backgroundGeometry ||
                            (entry.cullRoot && entry.cullRoot->isBackgroundScenery())) {
@@ -302,15 +298,16 @@ RegistryEntryView makeRegistryEntryView(const scene::ISceneGraph &graph,
                 }
                 // A curated record supersedes the derived tags on screen,
                 // starred so hand-curated rows are visually distinct.
-                if (const auto *curated = registry.curatedByIndex(entry.material.curatedIndex)) {
+                if (const auto *curated =
+                        scene.traceMaterials().curatedByIndex(entry.material.curatedIndex)) {
                     switch (curated->klass) {
-                    case scene::RenderRegistry::TraceClass::Prelit:
+                    case scene::TraceClass::Prelit:
                         result.classification = "prelit*";
                         break;
-                    case scene::RenderRegistry::TraceClass::Emissive:
+                    case scene::TraceClass::Emissive:
                         result.classification = "emissive*";
                         break;
-                    case scene::RenderRegistry::TraceClass::None:
+                    case scene::TraceClass::None:
                         result.classification = "none*";
                         break;
                     default:
@@ -329,36 +326,26 @@ RegistryEntryView makeRegistryEntryView(const scene::ISceneGraph &graph,
                 result.modelName = graph.nameText(entry.nameIds.model);
                 result.nodeName = graph.nameText(entry.nameIds.node);
                 result.kind = "particles";
-                result.material = registryMaterialName(entry.material.type);
+                result.material = objectMaterialName(entry.material.type);
                 result.drawnPasses = entry.drawnPasses;
                 result.particles = entry.instances.size();
             } else if constexpr (std::is_same_v<T, scene::RegisteredGrass>) {
                 result.modelName = graph.nameText(entry.nameIds.model);
                 result.nodeName = graph.nameText(entry.nameIds.node);
                 result.kind = "grass";
-                result.material = registryMaterialName(entry.material.type);
+                result.material = objectMaterialName(entry.material.type);
                 result.drawnPasses = entry.drawnPasses;
                 result.clusters = entry.instances.size();
-            } else if constexpr (std::is_same_v<T, scene::RegisteredAABB>) {
-                result.root = entry.cullRoot;
-                result.modelName = graph.nameText(entry.nameIds.model);
-                result.nodeName = graph.nameText(entry.nameIds.node);
-                result.kind = "aabb";
-                result.drawnPasses = entry.drawnPasses;
-            } else if constexpr (std::is_same_v<T, scene::RegisteredDebug>) {
-                result.kind = "debug";
-                result.nodeName = "debug";
-                result.debug = true;
             }
             return result;
         },
         object);
 }
 
-struct RegistryGroupView {
+struct ObjectGroupView {
     const scene::ModelSceneNode *root {nullptr};
     std::string label;
-    std::vector<RegistryEntryView> entries;
+    std::vector<ObjectEntryView> entries;
     size_t particles {0};
     size_t clusters {0};
 };
@@ -1063,10 +1050,10 @@ void Editor::frameTimes() {
     ImGui::End();
 }
 
-void Editor::drawRegistry() {
+void Editor::drawObjects() {
     dockNext();
     ImGui::SetNextWindowSize(ImVec2(700, 620), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Registry", &_showRegistry, ImGuiWindowFlags_HorizontalScrollbar)) {
+    if (!ImGui::Begin("Objects", &_showObjects, ImGuiWindowFlags_HorizontalScrollbar)) {
         ImGui::End();
         return;
     }
@@ -1078,15 +1065,15 @@ void Editor::drawRegistry() {
         ImGui::End();
         return;
     }
-    if (_registryScene.empty() || sceneNames.count(_registryScene) == 0) {
+    if (_objectsScene.empty() || sceneNames.count(_objectsScene) == 0) {
         auto main = sceneNames.find(game::kSceneMain);
-        _registryScene = main != sceneNames.end() ? *main : *sceneNames.begin();
+        _objectsScene = main != sceneNames.end() ? *main : *sceneNames.begin();
     }
     ImGui::SetNextItemWidth(180.0f);
-    if (ImGui::BeginCombo("##registry-scene", _registryScene.c_str())) {
+    if (ImGui::BeginCombo("##objects-scene", _objectsScene.c_str())) {
         for (const auto &name : sceneNames) {
-            if (ImGui::Selectable(name.c_str(), name == _registryScene)) {
-                _registryScene = name;
+            if (ImGui::Selectable(name.c_str(), name == _objectsScene)) {
+                _objectsScene = name;
             }
         }
         ImGui::EndCombo();
@@ -1094,18 +1081,19 @@ void Editor::drawRegistry() {
     ImGui::SameLine();
     ImGui::TextDisabled("scene");
 
-    auto &graph = graphs.get(_registryScene);
+    auto &graph = graphs.get(_objectsScene);
     // Editor::update runs before SceneGraph::render resets and fills the
-    // registry, so this is deliberately the previous frame's complete
+    // GpuScene, so this is deliberately the previous frame's complete
     // snapshot. Reading it during render would expose a partial frame.
-    auto &registry = graph.registry();
-    const auto &registered = registry.registeredCounts();
-    const auto &drawnByPass = registry.drawnCountsByPass();
+    auto &scene = graph.gpuScene();
+    auto &materials = scene.traceMaterials();
+    const auto &counts = scene.counts();
+    const auto &drawnByPass = scene.drawnCountsByPass();
     auto drawnEntries = [&drawnByPass](scene::RenderPassName pass) {
         auto it = drawnByPass.find(pass);
         return it == drawnByPass.end() ? size_t {0} : it->second.entries;
     };
-    ImGui::Text("registered %zu", registered.entries);
+    ImGui::Text("objects %zu", counts.entries);
     ImGui::SameLine();
     ImGui::TextDisabled("|");
     ImGui::SameLine();
@@ -1117,23 +1105,22 @@ void Editor::drawRegistry() {
     float controlsRight = ImGui::CalcTextSize("Hide fully culled").x + ImGui::GetFrameHeight() +
                           ImGui::GetStyle().ItemSpacing.x * 3.0f;
     ImGui::SetNextItemWidth(-controlsRight);
-    ImGui::InputTextWithHint("##registry-filter", "Filter model or node", _registryFilter, sizeof(_registryFilter));
+    ImGui::InputTextWithHint("##objects-filter", "Filter model or node", _objectsFilter,
+                             sizeof(_objectsFilter));
     ImGui::SameLine();
-    ImGui::Checkbox("Hide fully culled", &_registryHideFullyCulled);
-    ImGui::TextDisabled("DPOTXG: dir shadows, point shadows, opaque, transparent, post, debug");
+    ImGui::Checkbox("Hide fully culled", &_objectsHideFullyCulled);
+    ImGui::TextDisabled("DPOTX: dir shadows, point shadows, opaque, transparent, post");
     ImGui::Spacing();
 
-    std::vector<RegistryGroupView> groups;
-    for (const auto &object : registry.objects()) {
-        auto entry = makeRegistryEntryView(graph, registry, object);
+    std::vector<ObjectGroupView> groups;
+    for (const auto &object : scene.objects()) {
+        auto entry = makeObjectEntryView(graph, scene, object);
         std::string label;
         if (entry.root) {
             label = std::string(graph.nameText(entry.root->nameIds().model));
             if (label.empty()) {
                 label = "[unnamed model]";
             }
-        } else if (entry.debug) {
-            label = "[debug]";
         } else if (entry.kind == std::string_view("grass")) {
             label = "[grass]";
         } else if (entry.kind == std::string_view("particles")) {
@@ -1186,14 +1173,14 @@ void Editor::drawRegistry() {
     static constexpr ImGuiTableFlags kTableFlags =
         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
         ImGuiTableFlags_ScrollX | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingFixedFit;
-    if (!ImGui::BeginTable("##registry-table", 8, kTableFlags)) {
+    if (!ImGui::BeginTable("##objects-table", 8, kTableFlags)) {
         ImGui::End();
         return;
     }
     ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 26.0f);
     ImGui::TableSetupColumn("Model / node", ImGuiTableColumnFlags_WidthFixed, 250.0f);
     ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 64.0f);
-    ImGui::TableSetupColumn("DPOTXG", ImGuiTableColumnFlags_WidthFixed, 66.0f);
+    ImGui::TableSetupColumn("DPOTX", ImGuiTableColumnFlags_WidthFixed, 66.0f);
     ImGui::TableSetupColumn("Material", ImGuiTableColumnFlags_WidthFixed, 158.0f);
     ImGui::TableSetupColumn("Class", ImGuiTableColumnFlags_WidthFixed, 130.0f);
     ImGui::TableSetupColumn("Entries", ImGuiTableColumnFlags_WidthFixed, 68.0f);
@@ -1201,10 +1188,10 @@ void Editor::drawRegistry() {
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableHeadersRow();
 
-    std::string_view filter(_registryFilter);
+    std::string_view filter(_objectsFilter);
     for (size_t groupIndex = 0; groupIndex < groups.size(); ++groupIndex) {
         auto &group = groups[groupIndex];
-        std::vector<const RegistryEntryView *> visible;
+        std::vector<const ObjectEntryView *> visible;
         visible.reserve(group.entries.size());
         for (const auto &entry : group.entries) {
             if (containsInsensitive(entry.modelName, filter) ||
@@ -1218,7 +1205,7 @@ void Editor::drawRegistry() {
         const auto drawn = std::count_if(visible.begin(), visible.end(), [](const auto *entry) {
             return entry->drawnPasses != 0;
         });
-        if (_registryHideFullyCulled && drawn == 0) {
+        if (_objectsHideFullyCulled && drawn == 0) {
             continue;
         }
 
@@ -1229,13 +1216,11 @@ void Editor::drawRegistry() {
         // mode - raster walks and the TLAS alike. The group box drives all
         // of its entries at once.
         bool groupEnabled = std::all_of(visible.begin(), visible.end(), [&](const auto *entry) {
-            return entry->debug || registry.isObjectEnabled(entry->id);
+            return scene.isObjectEnabled(entry->id);
         });
         if (ImGui::Checkbox("##group-on", &groupEnabled)) {
             for (const auto *entry : visible) {
-                if (!entry->debug) {
-                    registry.setObjectEnabled(entry->id, groupEnabled);
-                }
+                scene.setObjectEnabled(entry->id, groupEnabled);
             }
         }
         ImGui::TableSetColumnIndex(1);
@@ -1251,14 +1236,14 @@ void Editor::drawRegistry() {
                                 group.clusters != 0 ? "clusters" : "particles");
         }
         ImGui::TableSetColumnIndex(6);
-        registryRightAligned(std::to_string(visible.size()));
+        objectRightAligned(std::to_string(visible.size()));
         ImGui::TableSetColumnIndex(7);
         if (drawn == 0) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            registryRightAligned("0");
+            objectRightAligned("0");
             ImGui::PopStyleColor();
         } else {
-            registryRightAligned(std::to_string(drawn));
+            objectRightAligned(std::to_string(drawn));
         }
 
         if (open) {
@@ -1280,33 +1265,31 @@ void Editor::drawRegistry() {
                     }
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
-                    if (!entry.debug) {
-                        bool enabled = registry.isObjectEnabled(entry.id);
-                        if (ImGui::Checkbox("##on", &enabled)) {
-                            registry.setObjectEnabled(entry.id, enabled);
-                        }
+                    bool enabled = scene.isObjectEnabled(entry.id);
+                    if (ImGui::Checkbox("##on", &enabled)) {
+                        scene.setObjectEnabled(entry.id, enabled);
                     }
                     ImGui::TableSetColumnIndex(1);
                     ImGui::TextUnformatted(node.data(), node.data() + node.size());
                     // Right-click classifies: the mechanical per-level pass,
                     // written straight to trace-classes.txt.
-                    if (!entry.debug && ImGui::BeginPopupContextItem("##classify")) {
+                    if (ImGui::BeginPopupContextItem("##classify")) {
                         auto model = std::string(entry.modelName);
                         auto nodeName2 = std::string(entry.nodeName);
-                        auto curated = registry.curatedFor(model, nodeName2);
-                        auto item = [&](const char *label, scene::RenderRegistry::TraceClass klass) {
+                        auto curated = materials.curatedFor(model, nodeName2);
+                        auto item = [&](const char *label, scene::TraceClass klass) {
                             if (ImGui::MenuItem(label, nullptr, curated.klass == klass)) {
                                 curated.klass = curated.klass == klass
-                                                    ? scene::RenderRegistry::TraceClass::Default
+                                                    ? scene::TraceClass::Default
                                                     : klass;
-                                registry.setCurated(model, nodeName2, curated);
+                                materials.setCurated(model, nodeName2, curated);
                             }
                         };
                         ImGui::TextDisabled("Classify");
                         ImGui::Separator();
-                        item("Prelit (fullbright, casts nothing)", scene::RenderRegistry::TraceClass::Prelit);
-                        item("Emissive (glows and casts)", scene::RenderRegistry::TraceClass::Emissive);
-                        item("None (strip selfIllum)", scene::RenderRegistry::TraceClass::None);
+                        item("Prelit (fullbright, casts nothing)", scene::TraceClass::Prelit);
+                        item("Emissive (glows and casts)", scene::TraceClass::Emissive);
+                        item("None (strip selfIllum)", scene::TraceClass::None);
                         ImGui::Separator();
                         if (ImGui::MenuItem("Edit material...")) {
                             _showMaterialEditor = true;
@@ -1319,7 +1302,7 @@ void Editor::drawRegistry() {
                     ImGui::TableSetColumnIndex(2);
                     ImGui::TextUnformatted(entry.kind);
                     ImGui::TableSetColumnIndex(3);
-                    ImGui::TextUnformatted(registryPassSlots(entry.drawnPasses).c_str());
+                    ImGui::TextUnformatted(objectPassSlots(entry.drawnPasses).c_str());
                     ImGui::TableSetColumnIndex(4);
                     ImGui::TextUnformatted(entry.material);
                     ImGui::TableSetColumnIndex(5);
@@ -1338,10 +1321,10 @@ void Editor::drawRegistry() {
     ImGui::EndTable();
     ImGui::End();
 
-    drawMaterialEditor(registry);
+    drawMaterialEditor(materials);
 }
 
-void Editor::drawMaterialEditor(scene::RenderRegistry &registry) {
+void Editor::drawMaterialEditor(scene::TraceMaterialOverrides &materials) {
     if (!_showMaterialEditor) {
         return;
     }
@@ -1358,7 +1341,7 @@ void Editor::drawMaterialEditor(scene::RenderRegistry &registry) {
     static constexpr const char *kClassNames[] = {"Default", "Prelit", "Emissive", "None"};
     int klass = static_cast<int>(_materialEdit.klass);
     if (ImGui::Combo("Class", &klass, kClassNames, 4)) {
-        _materialEdit.klass = static_cast<scene::RenderRegistry::TraceClass>(klass);
+        _materialEdit.klass = static_cast<scene::TraceClass>(klass);
         changed = true;
     }
 
@@ -1399,11 +1382,11 @@ void Editor::drawMaterialEditor(scene::RenderRegistry &registry) {
 
     ImGui::Separator();
     if (ImGui::Button("Reset to default")) {
-        _materialEdit = scene::RenderRegistry::CuratedMaterial();
+        _materialEdit = scene::CuratedMaterial();
         changed = true;
     }
     if (changed) {
-        registry.setCurated(_materialEditModel, _materialEditNode, _materialEdit);
+        materials.setCurated(_materialEditModel, _materialEditNode, _materialEdit);
     }
     ImGui::End();
 }
@@ -1555,7 +1538,7 @@ void Editor::update(float dt) {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("Tools")) {
             ImGui::MenuItem("2DA", nullptr, &_showTwoDa);
-            ImGui::MenuItem("Registry", nullptr, &_showRegistry);
+            ImGui::MenuItem("Objects", nullptr, &_showObjects);
             ImGui::MenuItem("Render targets", nullptr, &_showRenderTargets);
             ImGui::MenuItem("Graphics settings", nullptr, &_showGraphicsSettings);
             ImGui::MenuItem("Path tracing", nullptr, &_showPathTracing);
@@ -1597,8 +1580,8 @@ void Editor::update(float dt) {
     } else {
     }
 
-    if (_showRegistry) {
-        drawRegistry();
+    if (_showObjects) {
+        drawObjects();
     }
 
     if (_showWarp) {

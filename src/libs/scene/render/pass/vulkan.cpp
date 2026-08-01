@@ -263,21 +263,21 @@ void VulkanRenderPass::bindAndDraw(
 }
 
 void VulkanRenderPass::executeDraw(Mesh &mesh,
-                            Material &material,
-                            const glm::mat4 &transform,
-                            const glm::mat4 &transformInv,
-                            const glm::mat4 &prevTransform) {
+                                   Material &material,
+                                   const glm::mat4 &transform,
+                                   const glm::mat4 &transformInv,
+                                   const glm::mat4 &prevTransform) {
     drawGeometry(mesh, material, "staticVertex",
                  transform, transformInv, prevTransform, 0, {});
 }
 
 void VulkanRenderPass::executeDrawSkinned(Mesh &mesh,
-                                   Material &material,
-                                   const glm::mat4 &transform,
-                                   const glm::mat4 &transformInv,
-                                   const glm::mat4 &prevTransform,
-                                   const std::vector<glm::mat4> &bones,
-                                   const std::vector<glm::mat4> &prevBones) {
+                                          Material &material,
+                                          const glm::mat4 &transform,
+                                          const glm::mat4 &transformInv,
+                                          const glm::mat4 &prevTransform,
+                                          const std::vector<glm::mat4> &bones,
+                                          const std::vector<glm::mat4> &prevBones) {
     if (isShadowPass()) {
         executeDraw(mesh, material, transform, transformInv, prevTransform);
         return;
@@ -297,11 +297,11 @@ void VulkanRenderPass::executeDrawSkinned(Mesh &mesh,
 }
 
 void VulkanRenderPass::executeDrawDangly(Mesh &mesh,
-                                  Material &material,
-                                  const glm::mat4 &transform,
-                                  const glm::mat4 &transformInv,
-                                  const glm::mat4 &prevTransform,
-                                  const std::vector<glm::vec4> &positions) {
+                                         Material &material,
+                                         const glm::mat4 &transform,
+                                         const glm::mat4 &transformInv,
+                                         const glm::mat4 &prevTransform,
+                                         const std::vector<glm::vec4> &positions) {
     if (isShadowPass()) {
         executeDraw(mesh, material, transform, transformInv, prevTransform);
         return;
@@ -318,11 +318,11 @@ void VulkanRenderPass::executeDrawDangly(Mesh &mesh,
 }
 
 void VulkanRenderPass::executeDrawSaber(Mesh &mesh,
-                                 Material &material,
-                                 const glm::mat4 &transform,
-                                 const glm::mat4 &transformInv,
-                                 const glm::mat4 &prevTransform,
-                                 const glm::vec4 &displacement) {
+                                        Material &material,
+                                        const glm::mat4 &transform,
+                                        const glm::mat4 &transformInv,
+                                        const glm::mat4 &prevTransform,
+                                        const glm::vec4 &displacement) {
     if (isShadowPass()) {
         executeDraw(mesh, material, transform, transformInv, prevTransform);
         return;
@@ -334,10 +334,10 @@ void VulkanRenderPass::executeDrawSaber(Mesh &mesh,
 }
 
 void VulkanRenderPass::executeDrawBillboard(Texture &texture,
-                                     const glm::vec4 &color,
-                                     const glm::mat4 &transform,
-                                     const glm::mat4 &transformInv,
-                                     std::optional<float> size) {
+                                            const glm::vec4 &color,
+                                            const glm::mat4 &transform,
+                                            const glm::mat4 &transformInv,
+                                            std::optional<float> size) {
     const auto &quad = _resources.get(_meshRegistry.get(MeshName::billboard));
 
     VulkanPipelineCache::Key key;
@@ -378,8 +378,8 @@ void VulkanRenderPass::executeDrawBillboard(Texture &texture,
 }
 
 void VulkanRenderPass::executeDrawParticles(Material &material,
-                                     const glm::ivec2 &gridSize,
-                                     const std::vector<ParticleInstance> &particles) {
+                                            const glm::ivec2 &gridSize,
+                                            const std::vector<ParticleInstance> &particles) {
     if (particles.empty()) {
         return;
     }
@@ -443,9 +443,9 @@ void VulkanRenderPass::executeDrawParticles(Material &material,
 }
 
 void VulkanRenderPass::executeDrawGrass(float radius,
-                                 float quadSize,
-                                 Material &material,
-                                 const std::vector<GrassInstance> &instances) {
+                                        float quadSize,
+                                        Material &material,
+                                        const std::vector<GrassInstance> &instances) {
     if (instances.empty()) {
         return;
     }
@@ -502,14 +502,6 @@ void VulkanRenderPass::executeDrawGrass(float radius,
     }
 
     bindAndDraw(pipeline, offsets, bindings, quad, static_cast<int>(count));
-}
-
-void VulkanRenderPass::executeDrawAABB(const std::vector<glm::vec4> &corners) {
-    warnOnce("AABBs");
-}
-
-void VulkanRenderPass::executeDrawDebug(const std::function<void()> &execute) {
-    warnOnce("draw debug");
 }
 
 } // namespace scene

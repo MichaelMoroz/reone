@@ -24,7 +24,6 @@
 #include "reone/graphics/vulkan/pipelinecache.h"
 
 #include "../pass.h"
-#include "../../registry.h"
 
 namespace reone {
 
@@ -75,8 +74,7 @@ public:
          * Straight onto an already-resolved image, in draw order. Read-only
          * depth as well; what lens flares and the like use.
          */
-        Forward
-        ,
+        Forward,
         /** Forward-lit opaque geometry for the original renderer. */
         Retro
     };
@@ -112,50 +110,47 @@ public:
     void beginPass(RenderPassName pass) override { _pass = pass; }
 
     void executeDraw(graphics::Mesh &mesh,
-              graphics::Material &material,
-              const glm::mat4 &transform,
-              const glm::mat4 &transformInv,
-              const glm::mat4 &prevTransform) override;
-
-    void executeDrawSkinned(graphics::Mesh &mesh,
                      graphics::Material &material,
                      const glm::mat4 &transform,
                      const glm::mat4 &transformInv,
-                     const glm::mat4 &prevTransform,
-                     const std::vector<glm::mat4> &bones,
-                     const std::vector<glm::mat4> &prevBones) override;
+                     const glm::mat4 &prevTransform) override;
+
+    void executeDrawSkinned(graphics::Mesh &mesh,
+                            graphics::Material &material,
+                            const glm::mat4 &transform,
+                            const glm::mat4 &transformInv,
+                            const glm::mat4 &prevTransform,
+                            const std::vector<glm::mat4> &bones,
+                            const std::vector<glm::mat4> &prevBones) override;
 
     void executeDrawDangly(graphics::Mesh &mesh,
-                    graphics::Material &material,
-                    const glm::mat4 &transform,
-                    const glm::mat4 &transformInv,
-                    const glm::mat4 &prevTransform,
-                    const std::vector<glm::vec4> &positions) override;
+                           graphics::Material &material,
+                           const glm::mat4 &transform,
+                           const glm::mat4 &transformInv,
+                           const glm::mat4 &prevTransform,
+                           const std::vector<glm::vec4> &positions) override;
 
     void executeDrawSaber(graphics::Mesh &mesh,
-                   graphics::Material &material,
-                   const glm::mat4 &transform,
-                   const glm::mat4 &transformInv,
-                   const glm::mat4 &prevTransform,
-                   const glm::vec4 &displacement) override;
+                          graphics::Material &material,
+                          const glm::mat4 &transform,
+                          const glm::mat4 &transformInv,
+                          const glm::mat4 &prevTransform,
+                          const glm::vec4 &displacement) override;
 
     void executeDrawBillboard(graphics::Texture &texture,
-                       const glm::vec4 &color,
-                       const glm::mat4 &transform,
-                       const glm::mat4 &transformInv,
-                       std::optional<float> size) override;
+                              const glm::vec4 &color,
+                              const glm::mat4 &transform,
+                              const glm::mat4 &transformInv,
+                              std::optional<float> size) override;
 
     void executeDrawParticles(graphics::Material &material,
-                       const glm::ivec2 &gridSize,
-                       const std::vector<ParticleInstance> &particles) override;
+                              const glm::ivec2 &gridSize,
+                              const std::vector<ParticleInstance> &particles) override;
 
     void executeDrawGrass(float radius,
-                   float quadSize,
-                   graphics::Material &material,
-                   const std::vector<GrassInstance> &instances) override;
-
-    void executeDrawAABB(const std::vector<glm::vec4> &corners) override;
-    void executeDrawDebug(const std::function<void()> &execute) override;
+                          float quadSize,
+                          graphics::Material &material,
+                          const std::vector<GrassInstance> &instances) override;
 
     /**
      * Offset of this frame's GlobalUniforms slice. The pipeline pushes it once
@@ -244,7 +239,6 @@ private:
                     const glm::mat4 &prevTransform,
                     int extraFeatureBits,
                     std::optional<glm::vec4> saberDisplacement) const;
-
 };
 
 } // namespace scene

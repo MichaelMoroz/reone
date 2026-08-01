@@ -41,12 +41,12 @@ set(SCENE_HEADERS
     ${SCENE_INCLUDE_DIR}/node/sound.h
     ${SCENE_INCLUDE_DIR}/node/trigger.h
     ${SCENE_INCLUDE_DIR}/node/walkmesh.h
-    ${SCENE_INCLUDE_DIR}/registry.h
     ${SCENE_INCLUDE_DIR}/render/pass.h
     ${SCENE_INCLUDE_DIR}/render/pipeline.h
     ${SCENE_INCLUDE_DIR}/render/pass/vulkan.h
     ${SCENE_INCLUDE_DIR}/render/pipeline/vulkan.h
     ${SCENE_INCLUDE_DIR}/render/pipeline/rayquery.h
+    ${SCENE_INCLUDE_DIR}/render/pipeline/tracematerials.h
     ${SCENE_INCLUDE_DIR}/types.h
     ${SCENE_INCLUDE_DIR}/user.h)
 
@@ -67,7 +67,7 @@ set(SCENE_SOURCES
     ${SCENE_SOURCE_DIR}/node/sound.cpp
     ${SCENE_SOURCE_DIR}/node/trigger.cpp
     ${SCENE_SOURCE_DIR}/node/walkmesh.cpp
-    ${SCENE_SOURCE_DIR}/registry.cpp
+    ${SCENE_SOURCE_DIR}/render/pipeline/tracematerials.cpp
 )
 
 add_library(scene STATIC ${SCENE_HEADERS} ${SCENE_SOURCES} ${CLANG_FORMAT_PATH})

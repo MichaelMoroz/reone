@@ -19,11 +19,10 @@
 
 #include <volk.h>
 
+#include "rayquery.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/vulkan/gbuffer.h"
-#include "rayquery.h"
 
-#include "../../registry.h"
 #include "../pipeline.h"
 
 namespace reone {
@@ -58,6 +57,7 @@ public:
                          graphics::IUniforms &uniforms,
                          graphics::IMeshRegistry &meshRegistry,
                          graphics::TextureRegistry &textureRegistry,
+                         GpuScene &gpuScene,
                          bool primaryRayMode = false) :
         _targetSize(std::move(targetSize)),
         _options(options),
@@ -65,6 +65,7 @@ public:
         _uniforms(uniforms),
         _meshRegistry(meshRegistry),
         _textureRegistry(textureRegistry),
+        _gpuScene(gpuScene),
         _primaryRayMode(primaryRayMode) {
     }
 
@@ -73,8 +74,7 @@ public:
     void init() override;
     void deinit();
 
-    graphics::Texture &render(RenderRegistry &registry,
-                              const CameraSceneNode *camera,
+    graphics::Texture &render(const CameraSceneNode *camera,
                               RenderPassName activeShadowPass,
                               const graphics::Frustum *shadowFrusta,
                               size_t numShadowFrusta) override;
@@ -84,8 +84,6 @@ public:
     void dumpTargets(const std::filesystem::path &dir) override;
     void restartTemporalHistory() override;
 
-    const RenderRegistry &registry() const { return *_registry; }
-
 private:
     glm::ivec2 _targetSize;
     graphics::GraphicsOptions &_options;
@@ -93,7 +91,7 @@ private:
     graphics::IUniforms &_uniforms;
     graphics::IMeshRegistry &_meshRegistry;
     graphics::TextureRegistry &_textureRegistry;
-    RenderRegistry *_registry {nullptr};
+    GpuScene &_gpuScene;
     const CameraSceneNode *_cullCamera {nullptr};
     RenderPassName _shadowPass {RenderPassName::None};
 

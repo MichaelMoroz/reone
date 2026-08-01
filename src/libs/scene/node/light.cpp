@@ -64,7 +64,7 @@ void LightSceneNode::update(float dt) {
     }
 }
 
-void LightSceneNode::registerLensFlare(RenderRegistry &registry, const ModelNode::LensFlare &flare) {
+void LightSceneNode::collectLensFlare(GpuScene &scene, const ModelNode::LensFlare &flare) {
     std::shared_ptr<Camera> camera(_sceneGraph.camera()->get().camera());
     if (!camera) {
         return;
@@ -75,8 +75,8 @@ void LightSceneNode::registerLensFlare(RenderRegistry &registry, const ModelNode
     }
     auto color = glm::vec4(_color, 0.5f);
     auto transform = glm::translate(origin());
-    registry.registerBillboard(renderCategory(RenderCategory::LensFlare),
-                          id(), nameIds(), *texture, color, transform, glm::inverse(transform), 0.2f * flare.size, &_model);
+    scene.addBillboard(renderCategory(RenderCategory::LensFlare),
+                         id(), nameIds(), *texture, color, transform, glm::inverse(transform), 0.2f * flare.size, &_model);
 }
 
 bool LightSceneNode::isDirectional() const {

@@ -49,7 +49,7 @@ public:
 
     void update(float dt) override;
 
-    void registerLeafs(RenderRegistry &registry, const std::vector<SceneNode *> &leafs) override;
+    void collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) override;
 
     void detonate();
 

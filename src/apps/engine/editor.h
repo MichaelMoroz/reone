@@ -18,8 +18,8 @@
 #pragma once
 
 #include "reone/graphics/texture.h"
-#include "reone/scene/registry.h"
 #include "reone/resource/id.h"
+#include "reone/scene/gpuscene.h"
 
 #include "imgui.h" // ImGuiID
 
@@ -85,19 +85,19 @@ private:
     float _rtScale {1.0f};
     bool _rtAutoMode {true};
 
-    // Registry viewer. It intentionally reads the last completed render
+    // Objects viewer. It intentionally reads the last completed render
     // snapshot from update, before SceneGraph starts filling the next one.
-    void drawRegistry();
-    void drawMaterialEditor(scene::RenderRegistry &registry);
-    bool _showRegistry {false};
-    std::string _registryScene;
-    char _registryFilter[128] {};
+    void drawObjects();
+    void drawMaterialEditor(scene::TraceMaterialOverrides &materials);
+    bool _showObjects {false};
+    std::string _objectsScene;
+    char _objectsFilter[128] {};
     // Curated-material editor state: which key is open, live working copy.
     bool _showMaterialEditor {false};
     std::string _materialEditModel;
     std::string _materialEditNode;
-    scene::RenderRegistry::CuratedMaterial _materialEdit;
-    bool _registryHideFullyCulled {false};
+    scene::CuratedMaterial _materialEdit;
+    bool _objectsHideFullyCulled {false};
 
     void graphicsSettings();
     bool _showGraphicsSettings {false};

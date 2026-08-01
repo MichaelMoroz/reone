@@ -103,8 +103,7 @@ public:
 
     void update(float dt) override;
 
-    void registerLeafs(RenderRegistry &registry, const std::vector<SceneNode *> &leafs) override;
-    void registerAABB(RenderRegistry &registry);
+    void collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) override;
 
     void computeAABB();
     void signalEvent(const std::string &name);

@@ -20,10 +20,10 @@
 #include "SDL3/SDL.h"
 
 #include "imgui.h"
+#include "imgui_impl_sdl3.h"
 #include "imgui_impl_vulkan.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/graphics/vulkan/swapchain.h"
-#include "imgui_impl_sdl3.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -32,12 +32,12 @@
 #include "renderdoc_app.h"
 
 #include "reone/graphics/format/tgawriter.h"
-#include "reone/graphics/window.h"
 #include "reone/graphics/vulkan/debugscope.h"
-#include "reone/system/randomutil.h"
-#include "reone/system/stream/fileoutput.h"
+#include "reone/graphics/window.h"
 #include "reone/resource/exception/notfound.h"
 #include "reone/resource/gameprobe.h"
+#include "reone/system/randomutil.h"
+#include "reone/system/stream/fileoutput.h"
 
 #include "editor.h"
 
@@ -637,17 +637,18 @@ void Engine::dumpObjectsIfRequested() {
         return;
     }
     auto &graph = _services->scene.graphs.get(kSceneMain);
-    auto &registry = graph.registry();
+    auto &scene = graph.gpuScene();
+    const auto &materials = scene.traceMaterials();
     auto module = _game->module();
     std::string moduleName = module ? module->name() : "?";
     std::set<std::string> lines;
-    for (const auto &object : registry.objects()) {
+    for (const auto &object : scene.objects()) {
         const auto *mesh = std::get_if<scene::RegisteredMesh>(&object);
         if (!mesh ||
             !glm::any(glm::greaterThan(mesh->material.selfIllumColor, glm::vec3(0.0f))) ||
             std::holds_alternative<scene::RegisteredDangly>(mesh->deformation) ||
-            (mesh->cullRoot && mesh->cullRoot == registry.skyRoom()) ||
-            registry.curatedByIndex(mesh->material.curatedIndex)) {
+            (mesh->cullRoot && mesh->cullRoot == scene.skyRoom()) ||
+            materials.curatedByIndex(mesh->material.curatedIndex)) {
             continue;
         }
         std::string model {graph.nameText(mesh->nameIds.model)};
@@ -667,10 +668,10 @@ void Engine::dumpObjectsIfRequested() {
     }
     // The completion header, written last: its presence proves this module's
     // block is whole (a killed run leaves lines but no header), and the
-    // registry object count is the evidence the module actually loaded -
+    // admitted object count is the evidence the module actually loaded -
     // "0 candidates" from a real scene holds hundreds of objects, from a
     // failed warp near none.
-    out << "# " << moduleName << " objects=" << registry.objects().size()
+    out << "# " << moduleName << " objects=" << scene.objects().size()
         << " candidates=" << lines.size() << "\n";
     info("Dumped " + std::to_string(lines.size()) + " emissive candidates of " + moduleName +
          " to " + _options.dumpObjectsPath);

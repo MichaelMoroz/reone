@@ -8,11 +8,16 @@
 #include <cstring>
 #include <limits>
 
+#include "reone/graphics/camera.h"
 #include "reone/graphics/mesh.h"
+#include "reone/graphics/uniforms.h"
+#include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/graphics/vulkan/resources.h"
-#include "reone/scene/registry.h"
+#include "reone/scene/node/camera.h"
+#include "reone/scene/node/model.h"
+#include "reone/scene/render/pass.h"
 #include "reone/system/logutil.h"
 
 using namespace reone::graphics;
@@ -34,14 +39,303 @@ GpuScene::Matrix3x4 matrix3x4(const glm::mat4 &m) {
 }
 
 uint32_t grownCapacity(uint32_t current, uint32_t required, uint32_t minimum) {
-    if (current != 0 && required <= current) return current;
+    if (current != 0 && required <= current)
+        return current;
     uint64_t capacity = std::max(current, minimum);
-    while (capacity < required) capacity *= 2;
+    while (capacity < required)
+        capacity *= 2;
     if (capacity > std::numeric_limits<uint32_t>::max())
         throw std::runtime_error("Vulkan: merged scene capacity exceeds uint32 range");
     return static_cast<uint32_t>(capacity);
 }
+
+bool isCountedMesh(const Material &material) {
+    return material.type == MaterialType::OpaqueModel ||
+           material.type == MaterialType::TransparentModel;
+}
+
+void countMesh(SceneCounts &counts, const RegisteredDeformation &deformation) {
+    if (std::holds_alternative<RegisteredSkin>(deformation))
+        ++counts.skinned;
+    else if (std::holds_alternative<RegisteredDangly>(deformation))
+        ++counts.dangly;
+    else if (std::holds_alternative<RegisteredSaber>(deformation))
+        ++counts.saber;
+    else
+        ++counts.rigid;
+}
+
+bool isInAnyFrustum(const SceneNode &node, const Frustum *frusta, size_t numFrusta) {
+    for (size_t i = 0; i < numFrusta; ++i) {
+        const auto &frustum = frusta[i];
+        if (node.isPoint() ? frustum.isInFrustum(node.origin())
+                           : frustum.isInFrustum(node.aabb() * node.absoluteTransform()))
+            return true;
+    }
+    return false;
+}
+
+bool isInAnyFrustum(const glm::vec3 &point, const Frustum *frusta, size_t numFrusta) {
+    for (size_t i = 0; i < numFrusta; ++i)
+        if (frusta[i].isInFrustum(point))
+            return true;
+    return false;
+}
+
+bool isCulled(ModelSceneNode &root, VisibilityPolicy visibility) {
+    if (!root.isEnabled())
+        return true;
+    if (!root.isCullingEnabled() || visibility.kind == VisibilityPolicyKind::None)
+        return false;
+    if (visibility.drawDistanceCamera) {
+        float distanceToCamera = root.getSquareDistanceTo(*visibility.drawDistanceCamera);
+        float drawDistance = root.drawDistance() * root.drawDistance();
+        if (distanceToCamera > drawDistance)
+            return true;
+    }
+    switch (visibility.kind) {
+    case VisibilityPolicyKind::ViewCamera:
+        return visibility.drawDistanceCamera && !visibility.drawDistanceCamera->isInFrustum(root);
+    case VisibilityPolicyKind::Frusta:
+        return !isInAnyFrustum(root, visibility.lightFrusta, visibility.numLightFrusta);
+    case VisibilityPolicyKind::None:
+        return false;
+    }
+    return false;
+}
+
+bool isCulled(const glm::vec3 &point, VisibilityPolicy visibility) {
+    switch (visibility.kind) {
+    case VisibilityPolicyKind::ViewCamera:
+        return visibility.drawDistanceCamera &&
+               !visibility.drawDistanceCamera->camera()->frustum().isInFrustum(point);
+    case VisibilityPolicyKind::Frusta:
+        return !isInAnyFrustum(point, visibility.lightFrusta, visibility.numLightFrusta);
+    case VisibilityPolicyKind::None:
+        return false;
+    }
+    return false;
+}
 } // namespace
+
+std::string formatSceneCounts(const SceneCounts &counts) {
+    return "objects=" + std::to_string(counts.objects()) +
+           ", rigid=" + std::to_string(counts.rigid) +
+           ", skinned=" + std::to_string(counts.skinned) +
+           ", dangly=" + std::to_string(counts.dangly) +
+           ", saber=" + std::to_string(counts.saber) +
+           ", particle_emitters=" + std::to_string(counts.particleEmitters) +
+           ", particles=" + std::to_string(counts.particles) +
+           ", grass_nodes=" + std::to_string(counts.grassNodes) +
+           ", grass_clusters=" + std::to_string(counts.grassClusters) +
+           ", billboards=" + std::to_string(counts.billboards);
+}
+
+std::string renderPassName(RenderPassName pass) {
+    switch (pass) {
+    case RenderPassName::DirLightShadowsPass:
+        return "directional shadows";
+    case RenderPassName::PointLightShadows:
+        return "point shadows";
+    case RenderPassName::OpaqueGeometry:
+        return "opaque";
+    case RenderPassName::TransparentGeometry:
+        return "transparent";
+    case RenderPassName::PostProcessing:
+        return "post-processing";
+    default:
+        return "none";
+    }
+}
+
+void GpuScene::resetFrame() {
+    for (auto &object : _objects)
+        std::visit([](auto &entry) { entry.drawnPasses = 0; }, object);
+    _objects.clear();
+    _counts = {};
+    _drawnCounts = {};
+    _drawnCountsByPass.clear();
+}
+
+void GpuScene::checkIdentityStability() {
+    if (!Logger::instance.isChannelEnabled(LogChannel::Graphics))
+        return;
+    std::vector<SceneNodeId> ids;
+    ids.reserve(_objects.size());
+    for (const auto &object : _objects)
+        std::visit([&ids](const auto &entry) { ids.push_back(entry.id); }, object);
+    std::sort(ids.begin(), ids.end(), [](SceneNodeId a, SceneNodeId b) {
+        return a.index != b.index ? a.index < b.index : a.generation < b.generation;
+    });
+    const bool unique = std::adjacent_find(ids.begin(), ids.end()) == ids.end();
+    const bool sameAsPrevious = !_previousFrameIds.empty() && ids == _previousFrameIds;
+    info("GpuScene admission ids snapshot=" + std::to_string(++_identitySnapshot) +
+             ", entries=" + std::to_string(ids.size()) +
+             ", unique=" + (unique ? "true" : "false") +
+             ", same_as_previous=" + (sameAsPrevious ? "true" : "false"),
+         LogChannel::Graphics);
+    _previousFrameIds = std::move(ids);
+}
+
+void GpuScene::addMesh(RenderCategories categories, SceneNodeId id,
+                         SceneNodeNameIds nameIds, Mesh &mesh, const Material &material,
+                         const glm::mat4 &transform, const glm::mat4 &transformInv,
+                         const glm::mat4 &prevTransform, RegisteredDeformation deformation,
+                         ModelSceneNode *cullRoot) {
+    ++_counts.entries;
+    if (isCountedMesh(material))
+        countMesh(_counts, deformation);
+    _objects.push_back(RegisteredMesh {categories, id, nameIds, 0, mesh, material, transform,
+                                       transformInv, prevTransform, std::move(deformation), cullRoot});
+}
+
+void GpuScene::addBillboard(RenderCategories categories, SceneNodeId id,
+                              SceneNodeNameIds nameIds, Texture &texture, const glm::vec4 &color,
+                              const glm::mat4 &transform, const glm::mat4 &transformInv,
+                              std::optional<float> size, ModelSceneNode *cullRoot) {
+    ++_counts.entries;
+    ++_counts.billboards;
+    _objects.push_back(RegisteredBillboard {
+        categories, id, nameIds, 0, texture, color, transform, transformInv, size, cullRoot});
+}
+
+void GpuScene::addParticles(RenderCategories categories, SceneNodeId id,
+                              SceneNodeNameIds nameIds, const Material &material,
+                              const glm::ivec2 &gridSize,
+                              const std::vector<ParticleInstance> &instances,
+                              ModelSceneNode *cullRoot) {
+    ++_counts.entries;
+    ++_counts.particleEmitters;
+    _counts.particles += instances.size();
+    _objects.push_back(
+        RegisteredParticles {categories, id, nameIds, 0, material, gridSize, instances, cullRoot});
+}
+
+void GpuScene::addGrass(RenderCategories categories, SceneNodeId id,
+                          SceneNodeNameIds nameIds, const Material &material, float radius,
+                          float quadSize, const std::vector<GrassInstance> &instances) {
+    ++_counts.entries;
+    ++_counts.grassNodes;
+    _counts.grassClusters += instances.size();
+    _objects.push_back(
+        RegisteredGrass {categories, id, nameIds, 0, material, radius, quadSize, instances});
+}
+
+void GpuScene::drawScene(IRenderPassExecutor &executor, RenderFilter filter,
+                         VisibilityPolicy visibility) {
+    executor.beginPass(filter.pass);
+    auto &passCounts = _drawnCountsByPass[filter.pass];
+    auto category = renderCategory(filter.category);
+    for (auto &object : _objects) {
+        std::visit(
+            [&](auto &entry) {
+                if ((entry.categories & category) == 0) {
+                    return;
+                }
+                if (!isObjectEnabled(entry.id.index)) {
+                    return;
+                }
+                using T = std::decay_t<decltype(entry)>;
+                if constexpr (std::is_same_v<T, RegisteredMesh>) {
+                    if (entry.cullRoot && isCulled(*entry.cullRoot, visibility)) {
+                        return;
+                    }
+                    ++_drawnCounts.entries;
+                    ++passCounts.entries;
+                    entry.drawnPasses |= renderPassFlag(filter.pass);
+                    if (isCountedMesh(entry.material)) {
+                        countMesh(_drawnCounts, entry.deformation);
+                        countMesh(passCounts, entry.deformation);
+                    }
+                    bool shadowPass = filter.pass == RenderPassName::DirLightShadowsPass ||
+                                      filter.pass == RenderPassName::PointLightShadows;
+                    if (shadowPass) {
+                        executor.executeDraw(
+                            entry.mesh, entry.material, entry.transform, entry.transformInv,
+                            entry.prevTransform);
+                    } else if (auto skin = std::get_if<RegisteredSkin>(&entry.deformation)) {
+                        executor.executeDrawSkinned(
+                            entry.mesh, entry.material, entry.transform, entry.transformInv,
+                            entry.prevTransform, skin->bones, skin->prevBones);
+                    } else if (auto dangly = std::get_if<RegisteredDangly>(&entry.deformation)) {
+                        executor.executeDrawDangly(
+                            entry.mesh, entry.material, entry.transform, entry.transformInv,
+                            entry.prevTransform, dangly->positions);
+                    } else if (auto saber = std::get_if<RegisteredSaber>(&entry.deformation)) {
+                        executor.executeDrawSaber(
+                            entry.mesh, entry.material, entry.transform, entry.transformInv,
+                            entry.prevTransform, saber->displacement);
+                    } else {
+                        executor.executeDraw(
+                            entry.mesh, entry.material, entry.transform, entry.transformInv,
+                            entry.prevTransform);
+                    }
+                } else if constexpr (std::is_same_v<T, RegisteredBillboard>) {
+                    if (!entry.cullRoot || !isCulled(*entry.cullRoot, visibility)) {
+                        ++_drawnCounts.entries;
+                        ++passCounts.entries;
+                        ++_drawnCounts.billboards;
+                        ++passCounts.billboards;
+                        entry.drawnPasses |= renderPassFlag(filter.pass);
+                        executor.executeDrawBillboard(
+                            entry.texture, entry.color, entry.transform, entry.transformInv,
+                            entry.size);
+                    }
+                } else if constexpr (std::is_same_v<T, RegisteredParticles>) {
+                    if (entry.cullRoot && isCulled(*entry.cullRoot, visibility)) {
+                        return;
+                    }
+                    std::vector<ParticleInstance> visible;
+                    visible.reserve(entry.instances.size());
+                    for (const auto &instance : entry.instances) {
+                        if (!isCulled(instance.position, visibility)) {
+                            visible.push_back(instance);
+                        }
+                    }
+                    if (!visible.empty()) {
+                        ++_drawnCounts.entries;
+                        ++passCounts.entries;
+                        ++_drawnCounts.particleEmitters;
+                        _drawnCounts.particles += visible.size();
+                        ++passCounts.particleEmitters;
+                        passCounts.particles += visible.size();
+                        entry.drawnPasses |= renderPassFlag(filter.pass);
+                        for (size_t first = 0; first < visible.size(); first += kMaxParticles) {
+                            auto last = std::min(first + kMaxParticles, visible.size());
+                            std::vector<ParticleInstance> batch(
+                                visible.begin() + first, visible.begin() + last);
+                            executor.executeDrawParticles(entry.material, entry.gridSize, batch);
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, RegisteredGrass>) {
+                    std::vector<GrassInstance> visible;
+                    visible.reserve(entry.instances.size());
+                    for (const auto &instance : entry.instances) {
+                        if (!isCulled(instance.position, visibility)) {
+                            visible.push_back(instance);
+                        }
+                    }
+                    if (!visible.empty()) {
+                        ++_drawnCounts.entries;
+                        ++passCounts.entries;
+                        ++_drawnCounts.grassNodes;
+                        _drawnCounts.grassClusters += visible.size();
+                        ++passCounts.grassNodes;
+                        passCounts.grassClusters += visible.size();
+                        entry.drawnPasses |= renderPassFlag(filter.pass);
+                        for (size_t first = 0; first < visible.size(); first += kMaxGrassClusters) {
+                            auto last = std::min(first + kMaxGrassClusters, visible.size());
+                            std::vector<GrassInstance> batch(
+                                visible.begin() + first, visible.begin() + last);
+                            executor.executeDrawGrass(
+                                entry.radius, entry.quadSize, entry.material, batch);
+                        }
+                    }
+                }
+            },
+            object);
+    }
+}
 
 struct GpuScene::Frame {
     std::unique_ptr<VulkanBuffer> scene;
@@ -57,13 +351,16 @@ struct GpuScene::Frame {
     std::vector<PrimitiveIdRange> primitiveIds;
 };
 
-GpuScene::GpuScene(VulkanRenderer &renderer) : _renderer(renderer) {}
-GpuScene::~GpuScene() { deinit(); }
+GpuScene::GpuScene() = default;
+GpuScene::~GpuScene() {
+    deinit();
+}
 
 GpuScene::PrimitiveId GpuScene::PrimitiveIdView::operator[](uint32_t index) const {
     for (uint32_t rangeIndex = 0; rangeIndex < rangeCount; ++rangeIndex) {
         const auto &range = ranges[rangeIndex];
-        if (index < range.firstTriangle || index - range.firstTriangle >= range.triangleCount) continue;
+        if (index < range.firstTriangle || index - range.firstTriangle >= range.triangleCount)
+            continue;
         auto id = range.first;
         id.localPrimitive += index - range.firstTriangle;
         return id;
@@ -71,9 +368,11 @@ GpuScene::PrimitiveId GpuScene::PrimitiveIdView::operator[](uint32_t index) cons
     throw std::out_of_range("Vulkan: frame-local primitive address is not published");
 }
 
-void GpuScene::init() {
-    if (_inited) return;
-    auto &device = _renderer.device();
+void GpuScene::init(VulkanRenderer &renderer) {
+    if (_inited)
+        return;
+    _renderer = &renderer;
+    auto &device = _renderer->device();
     VkDescriptorSetLayoutBinding bindings[9] {};
     for (uint32_t i = 0; i < 9; ++i) {
         bindings[i].binding = i;
@@ -100,7 +399,7 @@ void GpuScene::init() {
     alloc.pSetLayouts = setLayouts.data();
     if (vkAllocateDescriptorSets(device.handle(), &alloc, _mergeSets.data()) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: merge descriptor allocation failed");
-    auto spirv = readSpirV(_renderer.shaderDir() / "skin.spv");
+    auto spirv = readSpirV(_renderer->shaderDir() / "skin.spv");
     VkShaderModuleCreateInfo moduleInfo {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     moduleInfo.codeSize = spirv.size() * sizeof(uint32_t);
     moduleInfo.pCode = spirv.data();
@@ -128,26 +427,34 @@ void GpuScene::init() {
     const auto result = vkCreateComputePipelines(device.handle(), VK_NULL_HANDLE, 1, &pipelineInfo,
                                                  nullptr, &_mergePipeline);
     vkDestroyShaderModule(device.handle(), module, nullptr);
-    if (result != VK_SUCCESS) throw std::runtime_error("Vulkan: merge compute pipeline creation failed");
+    if (result != VK_SUCCESS)
+        throw std::runtime_error("Vulkan: merge compute pipeline creation failed");
     device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_mergePipeline), "gpu-scene:merge");
-    for (auto &frame : _frames) frame = std::make_unique<Frame>();
+    for (auto &frame : _frames)
+        frame = std::make_unique<Frame>();
     _inited = true;
 }
 
 void GpuScene::deinit() {
-    if (!_inited) return;
-    auto &device = _renderer.device();
+    if (!_inited)
+        return;
+    auto &device = _renderer->device();
     _frames = {};
     clearSourceGeometry();
-    if (_mergePipeline) vkDestroyPipeline(device.handle(), _mergePipeline, nullptr);
-    if (_mergePipelineLayout) vkDestroyPipelineLayout(device.handle(), _mergePipelineLayout, nullptr);
-    if (_mergePool) vkDestroyDescriptorPool(device.handle(), _mergePool, nullptr);
-    if (_mergeLayout) vkDestroyDescriptorSetLayout(device.handle(), _mergeLayout, nullptr);
+    if (_mergePipeline)
+        vkDestroyPipeline(device.handle(), _mergePipeline, nullptr);
+    if (_mergePipelineLayout)
+        vkDestroyPipelineLayout(device.handle(), _mergePipelineLayout, nullptr);
+    if (_mergePool)
+        vkDestroyDescriptorPool(device.handle(), _mergePool, nullptr);
+    if (_mergeLayout)
+        vkDestroyDescriptorSetLayout(device.handle(), _mergeLayout, nullptr);
     _mergePipeline = VK_NULL_HANDLE;
     _mergePipelineLayout = VK_NULL_HANDLE;
     _mergePool = VK_NULL_HANDLE;
     _mergeLayout = VK_NULL_HANDLE;
     _mergeSets = {};
+    _renderer = nullptr;
     _inited = false;
 }
 
@@ -175,10 +482,10 @@ void GpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount, uint32_t b
         frame.sceneObjectCapacity = objectCapacity;
         frame.boneCapacity = boneCapacity;
         frame.danglyPositionCapacity = danglyPositionCapacity;
-        frame.scene = std::make_unique<VulkanBuffer>(_renderer.device());
+        frame.scene = std::make_unique<VulkanBuffer>(_renderer->device());
         frame.scene->initHostVisible(static_cast<VkDeviceSize>(objectCapacity) * sizeof(SceneObject) +
-                                     static_cast<VkDeviceSize>(boneCapacity) * sizeof(Matrix3x4) +
-                                     static_cast<VkDeviceSize>(danglyPositionCapacity) * sizeof(glm::vec4),
+                                         static_cast<VkDeviceSize>(boneCapacity) * sizeof(Matrix3x4) +
+                                         static_cast<VkDeviceSize>(danglyPositionCapacity) * sizeof(glm::vec4),
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     }
     const auto vertexCapacity = grownCapacity(frame.vertexCapacity, vertexCount, kInitialVertexCapacity);
@@ -189,15 +496,16 @@ void GpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount, uint32_t b
         const VkDeviceSize vertexBytes = static_cast<VkDeviceSize>(vertexCapacity) * sizeof(MergedVertex);
         const VkDeviceSize indexBytes = static_cast<VkDeviceSize>(triangleCapacity) * 3 * sizeof(uint32_t);
         const VkDeviceSize materialIdBytes = static_cast<VkDeviceSize>(triangleCapacity) * sizeof(uint32_t);
-        frame.geometry = std::make_unique<VulkanBuffer>(_renderer.device());
+        frame.geometry = std::make_unique<VulkanBuffer>(_renderer->device());
         frame.geometry->initDeviceLocal(vertexBytes + indexBytes + materialIdBytes,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, nullptr);
+                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                                        nullptr);
     }
     const auto grassClusterCapacity = grownCapacity(frame.grassClusterCapacity, grassClusterCount, 64);
     if (!frame.grassClusters || grassClusterCapacity != frame.grassClusterCapacity) {
         frame.grassClusterCapacity = grassClusterCapacity;
-        frame.grassClusters = std::make_unique<VulkanBuffer>(_renderer.device());
+        frame.grassClusters = std::make_unique<VulkanBuffer>(_renderer->device());
         frame.grassClusters->initHostVisible(
             // ProceduralQuad is six vec4s (the last two carry lightmap UV and
             // per-quad colour); keep this in lockstep with skin.slang.
@@ -238,14 +546,16 @@ const GpuScene::SourceGeometry &GpuScene::appendSourceGeometry(const Mesh &mesh)
     const auto vertexCapacity = grow(_sourceVertexCapacity, static_cast<uint32_t>(_sourceVertexData.size()), 256 * 1024);
     const auto indexCapacity = grow(_sourceIndexCapacity, static_cast<uint32_t>(_sourceIndexData.size()), 256 * 1024);
     if (!_sourceVertices || !_sourceIndices || vertexCapacity != _sourceVertexCapacity || indexCapacity != _sourceIndexCapacity) {
-        auto vertexBuffer = std::make_unique<VulkanBuffer>(_renderer.device());
-        auto indexBuffer = std::make_unique<VulkanBuffer>(_renderer.device());
+        auto vertexBuffer = std::make_unique<VulkanBuffer>(_renderer->device());
+        auto indexBuffer = std::make_unique<VulkanBuffer>(_renderer->device());
         vertexBuffer->initDeviceLocal(static_cast<VkDeviceSize>(vertexCapacity) * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, nullptr);
         indexBuffer->initDeviceLocal(static_cast<VkDeviceSize>(indexCapacity) * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, nullptr);
         vertexBuffer->uploadDeviceLocal(0, static_cast<VkDeviceSize>(_sourceVertexData.size()) * sizeof(float), _sourceVertexData.data());
         indexBuffer->uploadDeviceLocal(0, static_cast<VkDeviceSize>(_sourceIndexData.size()) * sizeof(uint32_t), _sourceIndexData.data());
-        if (_sourceVertices) _retiredSourceBuffers.push_back(std::move(_sourceVertices));
-        if (_sourceIndices) _retiredSourceBuffers.push_back(std::move(_sourceIndices));
+        if (_sourceVertices)
+            _retiredSourceBuffers.push_back(std::move(_sourceVertices));
+        if (_sourceIndices)
+            _retiredSourceBuffers.push_back(std::move(_sourceIndices));
         _sourceVertices = std::move(vertexBuffer);
         _sourceIndices = std::move(indexBuffer);
         _sourceVertexCapacity = vertexCapacity;
@@ -261,13 +571,12 @@ const GpuScene::SourceGeometry &GpuScene::appendSourceGeometry(const Mesh &mesh)
 }
 
 GpuScene::View GpuScene::update(VkCommandBuffer cmd,
-                                RenderRegistry &registry,
                                 const Classifier &classifier,
                                 const GrassClassifier &grassClassifier,
                                 const ParticleClassifier &particleClassifier,
                                 const BillboardClassifier &billboardClassifier,
                                 const glm::mat4 &cameraView) {
-    const auto resourceGeneration = _renderer.resources().generation();
+    const auto resourceGeneration = _renderer->resources().generation();
     if (resourceGeneration != _sourceResourceGeneration) {
         // invalidateResources() has waited for the GPU and discarded the
         // module-owned Mesh cache. Mesh addresses are therefore no longer
@@ -275,10 +584,12 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
         // reuse an address with unrelated geometry.
         clearSourceGeometry();
         _sourceResourceGeneration = resourceGeneration;
-        if (++_sceneScope == 0) ++_sceneScope;
+        if (++_sceneScope == 0)
+            ++_sceneScope;
     }
-    if (++_revision == 0) ++_revision;
-    auto &frame = *_frames[_renderer.frameIndex()];
+    if (++_revision == 0)
+        ++_revision;
+    auto &frame = *_frames[_renderer->frameIndex()];
     std::vector<InstanceMaterial> materials;
     std::vector<SceneObject> opaqueObjects, nonOpaqueObjects;
     std::vector<SceneNodeId> opaqueObjectIds, nonOpaqueObjectIds;
@@ -295,25 +606,28 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
     };
     static_assert(sizeof(ProceduralQuad) == sizeof(glm::vec4) * 6);
     std::vector<ProceduralQuad> proceduralQuads;
-    materials.reserve(registry.objects().size());
-    opaqueObjects.reserve(registry.objects().size());
-    nonOpaqueObjects.reserve(registry.objects().size());
-    opaqueObjectIds.reserve(registry.objects().size());
-    nonOpaqueObjectIds.reserve(registry.objects().size());
+    materials.reserve(_objects.size());
+    opaqueObjects.reserve(_objects.size());
+    nonOpaqueObjects.reserve(_objects.size());
+    opaqueObjectIds.reserve(_objects.size());
+    nonOpaqueObjectIds.reserve(_objects.size());
     // ROWS, not columns. glm is column-major, so cameraView[i] is column i.
     // Billboards still use the primary-camera approximation; grass does not.
     const glm::mat3 viewRows = glm::transpose(glm::mat3(cameraView));
     const glm::vec3 viewRow0 = viewRows[0];
     const glm::vec3 viewRow1 = viewRows[1];
     const glm::vec3 viewRow2 = viewRows[2];
-    for (const auto &object : registry.objects()) {
+    for (const auto &object : _objects) {
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
         if (mesh) {
-            if (!registry.isObjectEnabled(mesh->id.index)) continue;
-            if ((mesh->categories & (renderCategory(RenderCategory::Opaque) | renderCategory(RenderCategory::Transparent))) == 0) continue;
+            if (!isObjectEnabled(mesh->id.index))
+                continue;
+            if ((mesh->categories & (renderCategory(RenderCategory::Opaque) | renderCategory(RenderCategory::Transparent))) == 0)
+                continue;
             auto admission = classifier(*mesh);
-            if (!admission) continue;
-            _renderer.resources().get(mesh->mesh.get());
+            if (!admission)
+                continue;
+            _renderer->resources().get(mesh->mesh.get());
             const auto &source = appendSourceGeometry(mesh->mesh.get());
             const auto &layout = mesh->mesh.get().vertexLayout();
             if (layout.stride % sizeof(float) != 0 || layout.offPosition % static_cast<int>(sizeof(float)) != 0 ||
@@ -330,9 +644,12 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
             sceneObject.srcVertexOffset = source.vertexOffset;
             sceneObject.srcIndexOffset = source.indexOffset;
             sceneObject.srcVertexStride = static_cast<uint32_t>(layout.stride);
-            sceneObject.offPosition = layout.offPosition; sceneObject.offNormals = layout.offNormals;
-            sceneObject.offUV1 = layout.offUV1; sceneObject.offUV2 = layout.offUV2;
-            sceneObject.offTanSpace = layout.offTanSpace; sceneObject.offBoneIndices = layout.offBoneIndices;
+            sceneObject.offPosition = layout.offPosition;
+            sceneObject.offNormals = layout.offNormals;
+            sceneObject.offUV1 = layout.offUV1;
+            sceneObject.offUV2 = layout.offUV2;
+            sceneObject.offTanSpace = layout.offTanSpace;
+            sceneObject.offBoneIndices = layout.offBoneIndices;
             sceneObject.offBoneWeights = layout.offBoneWeights;
             sceneObject.vertexCount = static_cast<uint32_t>(mesh->mesh.get().vertexCount());
             sceneObject.triangleCount = static_cast<uint32_t>(mesh->mesh.get().faces().size());
@@ -345,8 +662,10 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
                     throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
                 sceneObject.boneBase = static_cast<uint32_t>(bones.size());
                 sceneObject.boneCount = static_cast<uint32_t>(skin.bones.size());
-                for (const auto &bone : skin.bones) bones.push_back(matrix3x4(bone));
-                for (const auto &bone : skin.prevBones) bones.push_back(matrix3x4(bone));
+                for (const auto &bone : skin.bones)
+                    bones.push_back(matrix3x4(bone));
+                for (const auto &bone : skin.prevBones)
+                    bones.push_back(matrix3x4(bone));
             }
             if (const auto *dangly = std::get_if<RegisteredDangly>(&mesh->deformation)) {
                 if (dangly->positions.size() != sceneObject.vertexCount ||
@@ -375,10 +694,13 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
             continue;
         }
         const auto *grass = std::get_if<RegisteredGrass>(&object);
-        if (!grass || !registry.isObjectEnabled(grass->id.index) || grass->instances.empty()) continue;
-        if ((grass->categories & (renderCategory(RenderCategory::Opaque) | renderCategory(RenderCategory::Transparent))) == 0) continue;
+        if (!grass || !isObjectEnabled(grass->id.index) || grass->instances.empty())
+            continue;
+        if ((grass->categories & (renderCategory(RenderCategory::Opaque) | renderCategory(RenderCategory::Transparent))) == 0)
+            continue;
         auto admission = grassClassifier(*grass);
-        if (!admission) continue;
+        if (!admission)
+            continue;
         if (grass->instances.size() > std::numeric_limits<uint32_t>::max() / 4 ||
             proceduralQuads.size() > std::numeric_limits<uint32_t>::max() - grass->instances.size())
             throw std::runtime_error("Vulkan: merged grass scene exceeds shader index range");
@@ -401,9 +723,12 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
             const glm::vec2 uvOffset {0.5f * (instance.variant % 2),
                                       0.5f * (instance.variant / 2)};
             proceduralQuads.push_back({glm::vec4(instance.position, static_cast<float>(instance.variant)),
-                                       glm::vec4(right, 0.0f), glm::vec4(up, 0.0f),
-                                       glm::vec4(uvOffset, glm::vec2(0.5f)), instance.lightmapUV,
-                                       {0.0f, 0.0f}, glm::vec4(1.0f)});
+                                       glm::vec4(right, 0.0f),
+                                       glm::vec4(up, 0.0f),
+                                       glm::vec4(uvOffset, glm::vec2(0.5f)),
+                                       instance.lightmapUV,
+                                       {0.0f, 0.0f},
+                                       glm::vec4(1.0f)});
         }
         materials.push_back(admission->material);
         if (sceneObject.geometryIndex == 0) {
@@ -414,13 +739,16 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
             nonOpaqueObjectIds.push_back(grass->id);
         }
     }
-    for (const auto &object : registry.objects()) {
+    for (const auto &object : _objects) {
         const auto *particles = std::get_if<RegisteredParticles>(&object);
-        if (!particles || !registry.isObjectEnabled(particles->id.index) || particles->instances.empty()) continue;
+        if (!particles || !isObjectEnabled(particles->id.index) || particles->instances.empty())
+            continue;
         if ((particles->categories & (renderCategory(RenderCategory::Opaque) |
-                                      renderCategory(RenderCategory::Transparent))) == 0) continue;
+                                      renderCategory(RenderCategory::Transparent))) == 0)
+            continue;
         auto admission = particleClassifier(*particles);
-        if (!admission) continue;
+        if (!admission)
+            continue;
         if (particles->instances.size() > std::numeric_limits<uint32_t>::max() / 4 ||
             proceduralQuads.size() > std::numeric_limits<uint32_t>::max() - particles->instances.size())
             throw std::runtime_error("Vulkan: merged particle scene exceeds shader index range");
@@ -442,7 +770,9 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
             proceduralQuads.push_back({glm::vec4(instance.position, static_cast<float>(frame)),
                                        glm::vec4(instance.right * instance.size.x, 0.0f),
                                        glm::vec4(instance.up * instance.size.y, 0.0f),
-                                       glm::vec4(uvOffset, uvScale), glm::vec2(0.0f), {0.0f, 0.0f},
+                                       glm::vec4(uvOffset, uvScale),
+                                       glm::vec2(0.0f),
+                                       {0.0f, 0.0f},
                                        instance.color});
         }
         materials.push_back(admission->material);
@@ -454,13 +784,16 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
             nonOpaqueObjectIds.push_back(particles->id);
         }
     }
-    for (const auto &object : registry.objects()) {
+    for (const auto &object : _objects) {
         const auto *billboard = std::get_if<RegisteredBillboard>(&object);
-        if (!billboard || !registry.isObjectEnabled(billboard->id.index)) continue;
+        if (!billboard || !isObjectEnabled(billboard->id.index))
+            continue;
         if ((billboard->categories & (renderCategory(RenderCategory::Opaque) |
-                                      renderCategory(RenderCategory::Transparent))) == 0) continue;
+                                      renderCategory(RenderCategory::Transparent))) == 0)
+            continue;
         auto admission = billboardClassifier(*billboard);
-        if (!admission) continue;
+        if (!admission)
+            continue;
         SceneObject sceneObject;
         sceneObject.srcVertexOffset = static_cast<uint32_t>(proceduralQuads.size());
         sceneObject.srcVertexStride = 1;
@@ -474,8 +807,11 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
         const float width = glm::length(glm::vec3(billboard->transform[0]));
         const float height = glm::length(glm::vec3(billboard->transform[1]));
         proceduralQuads.push_back({glm::vec4(glm::vec3(billboard->transform[3]), 0.0f),
-                                   glm::vec4(viewRow0 * width, 0.0f), glm::vec4(viewRow1 * height, 0.0f),
-                                   glm::vec4(0.0f, 0.0f, 1.0f, 1.0f), glm::vec2(0.0f), {0.0f, 0.0f},
+                                   glm::vec4(viewRow0 * width, 0.0f),
+                                   glm::vec4(viewRow1 * height, 0.0f),
+                                   glm::vec4(0.0f, 0.0f, 1.0f, 1.0f),
+                                   glm::vec2(0.0f),
+                                   {0.0f, 0.0f},
                                    billboard->color});
         materials.push_back(admission->material);
         if (sceneObject.geometryIndex == 0) {
@@ -526,54 +862,75 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
     const VkDeviceSize vertexBytes = static_cast<VkDeviceSize>(frame.vertexCapacity) * sizeof(MergedVertex);
     const VkDeviceSize indexBytes = static_cast<VkDeviceSize>(frame.triangleCapacity) * 3 * sizeof(uint32_t);
     std::memcpy(frame.scene->mapped(), objects.data(), objects.size() * sizeof(SceneObject));
-    if (!bones.empty()) std::memcpy(static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes,
-                                    bones.data(), bones.size() * sizeof(Matrix3x4));
-    if (!danglyPositions.empty()) std::memcpy(static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes + sceneBoneBytes,
-                                              danglyPositions.data(), danglyPositions.size() * sizeof(glm::vec4));
-    if (!proceduralQuads.empty()) std::memcpy(frame.grassClusters->mapped(), proceduralQuads.data(),
-                                              proceduralQuads.size() * sizeof(ProceduralQuad));
+    if (!bones.empty())
+        std::memcpy(static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes,
+                    bones.data(), bones.size() * sizeof(Matrix3x4));
+    if (!danglyPositions.empty())
+        std::memcpy(static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes + sceneBoneBytes,
+                    danglyPositions.data(), danglyPositions.size() * sizeof(glm::vec4));
+    if (!proceduralQuads.empty())
+        std::memcpy(frame.grassClusters->mapped(), proceduralQuads.data(),
+                    proceduralQuads.size() * sizeof(ProceduralQuad));
     // A grass-only scene never appends mesh source data. Bind the procedural
     // cluster buffer to the otherwise-unused source slots in that case so the
     // complete descriptor set remains valid without inventing mesh records.
     const auto *sourceVertices = _sourceVertices ? _sourceVertices.get() : frame.grassClusters.get();
     const auto *sourceIndices = _sourceIndices ? _sourceIndices.get() : frame.grassClusters.get();
     std::array<VkDescriptorBufferInfo, 9> buffers {{{frame.scene->handle(), 0, sceneObjectBytes},
-        {frame.scene->handle(), sceneObjectBytes, sceneBoneBytes}, {frame.geometry->handle(), 0, vertexBytes},
-        {frame.geometry->handle(), vertexBytes, indexBytes}, {frame.geometry->handle(), vertexBytes + indexBytes,
-        static_cast<VkDeviceSize>(frame.triangleCapacity) * sizeof(uint32_t)}, {sourceVertices->handle(), 0, sourceVertices->size()},
-        {sourceIndices->handle(), 0, sourceIndices->size()}, {frame.grassClusters->handle(), 0, frame.grassClusters->size()},
-        {frame.scene->handle(), sceneObjectBytes + sceneBoneBytes, danglyPositionBytes}}};
+                                                    {frame.scene->handle(), sceneObjectBytes, sceneBoneBytes},
+                                                    {frame.geometry->handle(), 0, vertexBytes},
+                                                    {frame.geometry->handle(), vertexBytes, indexBytes},
+                                                    {frame.geometry->handle(), vertexBytes + indexBytes,
+                                                     static_cast<VkDeviceSize>(frame.triangleCapacity) * sizeof(uint32_t)},
+                                                    {sourceVertices->handle(), 0, sourceVertices->size()},
+                                                    {sourceIndices->handle(), 0, sourceIndices->size()},
+                                                    {frame.grassClusters->handle(), 0, frame.grassClusters->size()},
+                                                    {frame.scene->handle(), sceneObjectBytes + sceneBoneBytes, danglyPositionBytes}}};
     std::array<VkWriteDescriptorSet, 9> writes {};
-    const auto set = _mergeSets[_renderer.frameIndex()];
+    const auto set = _mergeSets[_renderer->frameIndex()];
     for (uint32_t i = 0; i < writes.size(); ++i) {
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[i].dstSet = set; writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1; writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[i].pBufferInfo = &buffers[i];
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[i].pBufferInfo = &buffers[i];
     }
-    vkUpdateDescriptorSets(_renderer.device().handle(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(_renderer->device().handle(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     const MergePushConstants constants {static_cast<uint32_t>(objects.size()), static_cast<uint32_t>(opaqueObjects.size()),
                                         static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount), static_cast<uint32_t>(opaqueTriangleCount)};
     std::array<VkBufferMemoryBarrier2, 2> sourceBarriers {};
     for (size_t i = 0; i < sourceBarriers.size(); ++i) {
-        auto &barrier = sourceBarriers[i]; barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT; barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT; barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-        barrier.buffer = buffers[5 + i].buffer; barrier.offset = 0; barrier.size = VK_WHOLE_SIZE;
+        auto &barrier = sourceBarriers[i];
+        barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        barrier.buffer = buffers[5 + i].buffer;
+        barrier.offset = 0;
+        barrier.size = VK_WHOLE_SIZE;
     }
     VkDependencyInfo sourceDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    sourceDependency.bufferMemoryBarrierCount = static_cast<uint32_t>(sourceBarriers.size()); sourceDependency.pBufferMemoryBarriers = sourceBarriers.data();
+    sourceDependency.bufferMemoryBarrierCount = static_cast<uint32_t>(sourceBarriers.size());
+    sourceDependency.pBufferMemoryBarriers = sourceBarriers.data();
     vkCmdPipelineBarrier2(cmd, &sourceDependency);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _mergePipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _mergePipelineLayout, 0, 1, &set, 0, nullptr);
     vkCmdPushConstants(cmd, _mergePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), &constants);
     const auto threads = std::max(constants.vertexCount, constants.triangleCount);
-    if (threads) vkCmdDispatch(cmd, (threads + 63) / 64, 1, 1);
+    if (threads)
+        vkCmdDispatch(cmd, (threads + 63) / 64, 1, 1);
     VkMemoryBarrier2 mergeBarrier {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-    mergeBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT; mergeBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+    mergeBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    mergeBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
     mergeBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
     mergeBarrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_SHADER_READ_BIT;
-    VkDependencyInfo mergeDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; mergeDependency.memoryBarrierCount = 1; mergeDependency.pMemoryBarriers = &mergeBarrier;
+    VkDependencyInfo mergeDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    mergeDependency.memoryBarrierCount = 1;
+    mergeDependency.pMemoryBarriers = &mergeBarrier;
     vkCmdPipelineBarrier2(cmd, &mergeDependency);
-    frame.materials = std::make_unique<VulkanBuffer>(_renderer.device());
+    frame.materials = std::make_unique<VulkanBuffer>(_renderer->device());
     frame.materials->initHostVisible(static_cast<VkDeviceSize>(materials.size()) * sizeof(InstanceMaterial), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     std::memcpy(frame.materials->mapped(), materials.data(), materials.size() * sizeof(InstanceMaterial));
     const VkDeviceSize writtenVertexBytes = static_cast<VkDeviceSize>(vertexCount) * sizeof(MergedVertex);
@@ -600,7 +957,7 @@ GpuScene::View GpuScene::update(VkCommandBuffer cmd,
     view.triangleCount = static_cast<uint32_t>(triangleCount);
     view.primitiveIds = {frame.primitiveIds.data(), static_cast<uint32_t>(frame.primitiveIds.size())};
     // Rebuild-every-frame remains deliberately all-dynamic. Future retained
-    // regions can use Admission::residency without changing this publication.
+    // regions can use Classification::residency without changing this publication.
     view.regions = {{ResidencyClass::Dynamic, _revision, 0, static_cast<uint32_t>(vertexCount),
                      0, static_cast<uint32_t>(triangleCount)}};
     return view;

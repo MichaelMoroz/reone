@@ -48,7 +48,7 @@ public:
 
     void update(float dt) override;
 
-    void registerLensFlare(RenderRegistry &registry, const graphics::ModelNode::LensFlare &flare);
+    void collectLensFlare(GpuScene &scene, const graphics::ModelNode::LensFlare &flare);
 
     bool isDirectional() const;
 

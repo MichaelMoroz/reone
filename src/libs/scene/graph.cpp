@@ -17,7 +17,6 @@
 
 #include "reone/scene/graph.h"
 
-
 #include "reone/audio/di/services.h"
 #include "reone/graphics/camera/perspective.h"
 #include "reone/graphics/di/services.h"
@@ -428,7 +427,7 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
         } else {
             throw std::invalid_argument("Unsupported render mode: " + _graphicsOpt.mode);
         }
-        _renderPipeline = _renderPipelineFactory.create(mode, dim);
+        _renderPipeline = _renderPipelineFactory.create(mode, dim, _gpuScene);
         _renderPipeline->init();
         info("Scene '" + _name + "': render pipeline created, mode=" +
                  std::to_string(static_cast<int>(mode)) + " dim=" +
@@ -436,7 +435,7 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
              LogChannel::Graphics);
     }
     auto &pipeline = *_renderPipeline;
-    _registry.resetFrame();
+    _gpuScene.resetFrame();
     std::array<graphics::Frustum, graphics::kNumShadowLightSpace> shadowFrusta;
     const graphics::Frustum *activeShadowFrusta {nullptr};
     size_t numActiveShadowFrusta {0};
@@ -514,7 +513,7 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
             screenEffect.clipNear = camera->zNear();
             screenEffect.clipFar = camera->zFar();
         });
-        renderScene(_registry);
+        collectInto(_gpuScene);
     }
 
     auto shadowPass = !hasShadowLight()
@@ -523,7 +522,7 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
                                  ? RenderPassName::DirLightShadowsPass
                                  : RenderPassName::PointLightShadows);
     auto &output = pipeline.render(
-        _registry, _activeCamera, shadowPass, activeShadowFrusta, numActiveShadowFrusta);
+        _activeCamera, shadowPass, activeShadowFrusta, numActiveShadowFrusta);
     snapshotPreviousFrame();
     return output;
 }
@@ -578,70 +577,34 @@ void SceneGraph::snapshotPreviousFrame() {
     }
 }
 
-void SceneGraph::renderScene(RenderRegistry &registry) {
+void SceneGraph::collectInto(GpuScene &scene) {
     if (!_activeCamera) {
         return;
-    }
-    registry.beginSceneTraversal();
-
-    if (_renderWalkmeshes || _renderTriggers) {
-        _graphicsSvc.uniforms.setWalkmesh([this](auto &walkmesh) {
-            for (int i = 0; i < kMaxWalkmeshMaterials - 1; ++i) {
-                walkmesh.materials[i] = _walkableSurfaces.count(i) > 0 ? glm::vec4(0.0f, 1.0f, 0.0f, 1.0f) : glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
-            }
-            walkmesh.materials[kMaxWalkmeshMaterials - 1] = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f); // triggers
-        });
     }
 
     for (auto &mesh : _meshes) {
         // Transparent meshes are registered by their distance-sorted leaf
         // buckets below. Registering them here as well would duplicate them.
         if (!mesh->shouldRender() || !mesh->isTransparent()) {
-            mesh->registerRender(registry);
+            mesh->collectInto(scene);
         }
     }
     // Draw opaque leafs
     for (auto &[node, leafs] : _opaqueLeafs) {
-        node->registerLeafs(registry, leafs);
+        node->collectLeafs(scene, leafs);
     }
 
-    if (_renderAABB) {
-        for (auto &model : _modelRoots) {
-            if (model->isEnabled()) {
-                model->registerAABB(registry);
-            }
-        }
+    for (auto &[node, leafs] : _transparentLeafs) {
+        node->collectLeafs(scene, leafs);
     }
-    if (_renderWalkmeshes) {
-        for (auto &walkmesh : _walkmeshRoots) {
-            if (walkmesh->isEnabled()) {
-                walkmesh->registerRender(registry);
-            }
+    for (auto &light : _flareLights) {
+        Collision collision;
+        if (testLineOfSight(_activeCamera->origin(), light->origin(), collision)) {
+            continue;
         }
+        light->collectLensFlare(scene, light->modelNode().light()->flares.front());
     }
-    if (_renderTriggers) {
-        for (auto &trigger : _triggerRoots) {
-            if (trigger->isEnabled()) {
-                trigger->registerRender(registry);
-            }
-        }
-    }
-    if (!_renderWalkmeshes) {
-        // Draw transparent leafs (incl. meshes)
-        for (auto &[node, leafs] : _transparentLeafs) {
-            node->registerLeafs(registry, leafs);
-        }
-
-        // Draw lens flares
-        for (auto &light : _flareLights) {
-            Collision collision;
-            if (testLineOfSight(_activeCamera->origin(), light->origin(), collision)) {
-                continue;
-            }
-            light->registerLensFlare(registry, light->modelNode().light()->flares.front());
-        }
-    }
-    registry.checkIdentityStability();
+    scene.checkIdentityStability();
 }
 
 static std::vector<glm::vec4> computeFrustumCornersWorldSpace(const glm::mat4 &projection, const glm::mat4 &view) {
@@ -984,7 +947,6 @@ std::shared_ptr<ModelSceneNode> SceneGraph::newModel(Model &model, ModelUsage us
 std::shared_ptr<WalkmeshSceneNode> SceneGraph::newWalkmesh(Walkmesh &walkmesh) {
     auto node = newSceneNode<WalkmeshSceneNode, Walkmesh &>(walkmesh);
     node->setNameIds({0, internName("walkmesh")});
-    node->init();
     return std::move(node);
 }
 
@@ -1008,7 +970,6 @@ std::shared_ptr<LightSceneNode> SceneGraph::newLight(ModelSceneNode &model, Mode
 std::shared_ptr<TriggerSceneNode> SceneGraph::newTrigger(std::vector<glm::vec3> geometry) {
     auto node = newSceneNode<TriggerSceneNode, std::vector<glm::vec3>>(std::move(geometry));
     node->setNameIds({0, internName("trigger")});
-    node->init();
     return std::move(node);
 }
 

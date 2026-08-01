@@ -17,16 +17,16 @@
 
 #include "reone/scene/render/pipeline/vulkan.h"
 
+#include "reone/graphics/dxtutil.h"
 #include "reone/graphics/npyutil.h"
 #include "reone/graphics/options.h"
-#include "reone/graphics/dxtutil.h"
-#include "reone/graphics/textureutil.h"
 #include "reone/graphics/textureregistry.h"
+#include "reone/graphics/textureutil.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/debugscope.h"
 #include "reone/graphics/vulkan/descriptors.h"
-#include "reone/graphics/vulkan/pbrtextures.h"
 #include "reone/graphics/vulkan/device.h"
+#include "reone/graphics/vulkan/pbrtextures.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/graphics/vulkan/uniformring.h"
@@ -37,7 +37,6 @@
 #include "imgui_impl_vulkan.h"
 
 #include <string_view>
-
 
 using namespace reone::graphics;
 
@@ -174,14 +173,14 @@ void VulkanRenderPipeline::init() {
         return;
     }
     auto &device = _renderer.device();
-
     if (_primaryRayMode) {
         _output = std::make_unique<VulkanImage>(device);
         _output->initColorAttachment(_targetSize, _renderer.swapchain().imageFormat());
         _outputHandle = std::make_shared<Texture>(
             "vk_primary_ray_output", TextureType::TwoDim, Texture::Properties());
         _renderer.resources().registerExternal(*_outputHandle, *_output);
-        _rayQuery = std::make_unique<RayQueryPipeline>(_renderer, _targetSize, _options);
+        _rayQuery = std::make_unique<RayQueryPipeline>(
+            _renderer, _targetSize, _options, _gpuScene);
         _rayQuery->init();
         _inited = true;
         return;
@@ -558,8 +557,7 @@ void VulkanRenderPipeline::shadowPass(VkCommandBuffer cmd,
     // both use Vulkan's own convention.
     VkViewport viewport {0.0f, 0.0f, static_cast<float>(extent.x),
                          static_cast<float>(extent.y), 0.0f, 1.0f};
-    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(extent.x),
-                               static_cast<uint32_t>(extent.y)}};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(extent.x), static_cast<uint32_t>(extent.y)}};
 
     vkCmdBeginRendering(cmd, &rendering);
     vkCmdSetViewport(cmd, 0, 1, &viewport);
@@ -579,7 +577,7 @@ void VulkanRenderPipeline::shadowPass(VkCommandBuffer cmd,
                           VulkanGBuffer::depthFormat());
     pass.setGlobalsOffset(globalsOffset);
     pass.setShadowViewMask(viewMask);
-    _registry->drawScene(
+    _gpuScene.drawScene(
         pass,
         {_shadowPass, RenderCategory::ShadowCaster},
         visibility);
@@ -632,8 +630,7 @@ void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOff
     VkViewport viewport {0.0f, static_cast<float>(_targetSize.y),
                          static_cast<float>(_targetSize.x),
                          -static_cast<float>(_targetSize.y), 0.0f, 1.0f};
-    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
-                               static_cast<uint32_t>(_targetSize.y)}};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x), static_cast<uint32_t>(_targetSize.y)}};
 
     _gbuffer->transitionColor(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     _gbuffer->transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
@@ -655,7 +652,7 @@ void VulkanRenderPipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOff
                           VulkanGBuffer::colorFormats(),
                           VulkanGBuffer::depthFormat());
     pass.setGlobalsOffset(globalsOffset);
-    _registry->drawScene(
+    _gpuScene.drawScene(
         pass,
         {RenderPassName::OpaqueGeometry, RenderCategory::Opaque},
         VisibilityPolicy::viewCamera(_cullCamera));
@@ -704,9 +701,9 @@ void VulkanRenderPipeline::retroGeometryPass(VkCommandBuffer cmd, uint32_t globa
                           _meshRegistry, cmd, {_renderer.swapchain().imageFormat(), _renderer.swapchain().imageFormat()},
                           VulkanGBuffer::depthFormat(), VulkanRenderPass::Kind::Retro);
     pass.setGlobalsOffset(globalsOffset);
-    _registry->drawScene(pass,
-                         {RenderPassName::OpaqueGeometry, RenderCategory::Opaque},
-                         VisibilityPolicy::viewCamera(_cullCamera));
+    _gpuScene.drawScene(pass,
+                        {RenderPassName::OpaqueGeometry, RenderCategory::Opaque},
+                        VisibilityPolicy::viewCamera(_cullCamera));
     vkCmdEndRendering(cmd);
 
     hilightsBlurPass(cmd);
@@ -741,8 +738,7 @@ void VulkanRenderPipeline::hilightsBlurPass(VkCommandBuffer cmd) {
     // Not flipped, for the reason given in filterPass.
     VkViewport viewport {0.0f, 0.0f, static_cast<float>(_targetSize.x),
                          static_cast<float>(_targetSize.y), 0.0f, 1.0f};
-    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
-                               static_cast<uint32_t>(_targetSize.y)}};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x), static_cast<uint32_t>(_targetSize.y)}};
 
     auto axis = [&](const VulkanImage &source, VkDescriptorSet sourceSet,
                     const VulkanImage &destination, glm::vec2 direction) {
@@ -944,8 +940,7 @@ void VulkanRenderPipeline::resolvePass(VkCommandBuffer cmd, uint32_t globalsOffs
 
     VkViewport viewport {0.0f, 0.0f, static_cast<float>(_targetSize.x),
                          static_cast<float>(_targetSize.y), 0.0f, 1.0f};
-    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
-                               static_cast<uint32_t>(_targetSize.y)}};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x), static_cast<uint32_t>(_targetSize.y)}};
 
     std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
@@ -1010,8 +1005,7 @@ void VulkanRenderPipeline::drawOntoOutput(VkCommandBuffer cmd,
     VkViewport viewport {0.0f, static_cast<float>(_targetSize.y),
                          static_cast<float>(_targetSize.x),
                          -static_cast<float>(_targetSize.y), 0.0f, 1.0f};
-    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
-                               static_cast<uint32_t>(_targetSize.y)}};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x), static_cast<uint32_t>(_targetSize.y)}};
 
     vkCmdBeginRendering(cmd, &rendering);
     vkCmdSetViewport(cmd, 0, 1, &viewport);
@@ -1031,10 +1025,8 @@ void VulkanRenderPipeline::drawOntoOutput(VkCommandBuffer cmd,
                           VulkanGBuffer::depthFormat(),
                           VulkanRenderPass::Kind::Forward);
     pass.setGlobalsOffset(globalsOffset);
-    auto category = passName == RenderPassName::PostProcessing
-                        ? RenderCategory::LensFlare
-                        : RenderCategory::Debug;
-    _registry->drawScene(pass, {passName, category}, VisibilityPolicy::viewCamera(_cullCamera));
+    _gpuScene.drawScene(pass, {passName, RenderCategory::LensFlare},
+                        VisibilityPolicy::viewCamera(_cullCamera));
 
     vkCmdEndRendering(cmd);
 }
@@ -1096,28 +1088,27 @@ void VulkanRenderPipeline::transparencyPass(VkCommandBuffer cmd, uint32_t global
     VkViewport viewport {0.0f, static_cast<float>(_targetSize.y),
                          static_cast<float>(_targetSize.x),
                          -static_cast<float>(_targetSize.y), 0.0f, 1.0f};
-    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
-                               static_cast<uint32_t>(_targetSize.y)}};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x), static_cast<uint32_t>(_targetSize.y)}};
 
     vkCmdBeginRendering(cmd, &rendering);
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     VulkanRenderPass pass(_options,
-                              _renderer.device(),
-                              _renderer.pipelines(),
-                              _renderer.uniformRing(),
-                              _renderer.descriptors(),
-                              _renderer.resources(),
-                              _uniforms,
-                              _renderer.pbrTextures(),
-                              _meshRegistry,
-                              cmd,
-                              {kOITAccumFormat, kOITRevealageFormat},
-                              VulkanGBuffer::depthFormat(),
-                              VulkanRenderPass::Kind::OIT);
+                          _renderer.device(),
+                          _renderer.pipelines(),
+                          _renderer.uniformRing(),
+                          _renderer.descriptors(),
+                          _renderer.resources(),
+                          _uniforms,
+                          _renderer.pbrTextures(),
+                          _meshRegistry,
+                          cmd,
+                          {kOITAccumFormat, kOITRevealageFormat},
+                          VulkanGBuffer::depthFormat(),
+                          VulkanRenderPass::Kind::OIT);
     pass.setGlobalsOffset(globalsOffset);
-    _registry->drawScene(
+    _gpuScene.drawScene(
         pass,
         {RenderPassName::TransparentGeometry, RenderCategory::Transparent},
         VisibilityPolicy::viewCamera(_cullCamera));
@@ -1173,8 +1164,7 @@ void VulkanRenderPipeline::oitBlendPass(VkCommandBuffer cmd) {
     // the images it reads were written the same way up.
     VkViewport viewport {0.0f, 0.0f, static_cast<float>(_targetSize.x),
                          static_cast<float>(_targetSize.y), 0.0f, 1.0f};
-    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
-                               static_cast<uint32_t>(_targetSize.y)}};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x), static_cast<uint32_t>(_targetSize.y)}};
 
     // The shader reads no uniform block, but the layout still declares them all,
     // so the set is bound with every offset at zero.
@@ -1218,9 +1208,9 @@ void VulkanRenderPipeline::filterPass(VkCommandBuffer cmd,
     VulkanDebugScope scope(_renderer.device(), cmd, label, {0.4f, 0.6f, 0.9f});
 
     transitionColorImage(cmd, *_frameImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     transitionColorImage(cmd, *_spareImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
     VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     attachment.imageView = _spareImage->view();
@@ -1247,8 +1237,7 @@ void VulkanRenderPipeline::filterPass(VkCommandBuffer cmd,
     // viewport here would turn the image over on every pass.
     VkViewport viewport {0.0f, 0.0f, static_cast<float>(_targetSize.x),
                          static_cast<float>(_targetSize.y), 0.0f, 1.0f};
-    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
-                               static_cast<uint32_t>(_targetSize.y)}};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x), static_cast<uint32_t>(_targetSize.y)}};
 
     std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
     offsets[UniformBlockBindingPoints::screenEffect] = screenEffectOffset;
@@ -1306,13 +1295,11 @@ void VulkanRenderPipeline::filterChainPass(VkCommandBuffer cmd) {
     }
 }
 
-Texture &VulkanRenderPipeline::render(RenderRegistry &registry,
-                                      const CameraSceneNode *camera,
+Texture &VulkanRenderPipeline::render(const CameraSceneNode *camera,
                                       RenderPassName activeShadowPass,
                                       const graphics::Frustum *shadowFrusta,
                                       size_t numShadowFrusta) {
     auto cmd = _renderer.commandBuffer();
-    _registry = &registry;
     _cullCamera = camera;
     _shadowPass = activeShadowPass;
 
@@ -1349,7 +1336,7 @@ Texture &VulkanRenderPipeline::render(RenderRegistry &registry,
         beginDep.imageMemoryBarrierCount = 1;
         beginDep.pImageMemoryBarriers = &toGeneral;
         vkCmdPipelineBarrier2(cmd, &beginDep);
-        _rayQuery->render(cmd, registry, globalsOffset, *_output, globals.view, globals.projection,
+        _rayQuery->render(cmd, globalsOffset, *_output, globals.view, globals.projection,
                           globals.jitter);
         VkImageMemoryBarrier2 toRead {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
         toRead.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -1535,9 +1522,8 @@ std::vector<VulkanRenderPipeline::Target> VulkanRenderPipeline::targetEntries() 
         "g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_lightmap",
         "g_buffer_self_illum", "g_buffer_motion"};
     for (int i = 0; i < VulkanGBuffer::Count; ++i) {
-        auto kind = i == VulkanGBuffer::EyeNormal ? RenderTargetKind::EyeNormal :
-                    i == VulkanGBuffer::Motion ? RenderTargetKind::Motion :
-                                                  RenderTargetKind::Color;
+        auto kind = i == VulkanGBuffer::EyeNormal ? RenderTargetKind::EyeNormal : i == VulkanGBuffer::Motion ? RenderTargetKind::Motion
+                                                                                                             : RenderTargetKind::Color;
         entries.push_back({kDisplayNames[i], kDumpNames[i], kind, &_gbuffer->color(i),
                            _gbuffer->colorLayout(), false});
     }
@@ -1663,13 +1649,11 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
     }
     std::filesystem::create_directories(dir);
 
-    info("Vulkan scene traversals: " + std::to_string(_registry->traversalCount()),
+    info("Vulkan scene contents: " + formatSceneCounts(_gpuScene.counts()),
          LogChannel::Graphics);
-    info("Vulkan registry registered: " + formatRegistryCounts(_registry->registeredCounts()),
-         LogChannel::Graphics);
-    for (const auto &[pass, drawn] : _registry->drawnCountsByPass()) {
-        info("Vulkan registry drawn " + renderPassName(pass) +
-                 ": " + formatRegistryCounts(drawn),
+    for (const auto &[pass, drawn] : _gpuScene.drawnCountsByPass()) {
+        info("Vulkan scene drawn " + renderPassName(pass) +
+                 ": " + formatSceneCounts(drawn),
              LogChannel::Graphics);
     }
 
@@ -1711,7 +1695,7 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
                 // depth range before rasterization (glToVulkanClip), so this
                 // is the Vulkan form, not OpenGL's 2*n*f denominator.
                 linearDepth[i] = near * far /
-                    std::max(far - deviceDepth * (far - near), 1e-6f);
+                                 std::max(far - deviceDepth * (far - near), 1e-6f);
             }
             writeNpy(dir / "g_buffer_depth.npy", linearDepth.data(), extent.x, extent.y, 1,
                      NpyType::Float32);

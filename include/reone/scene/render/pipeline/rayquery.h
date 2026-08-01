@@ -21,9 +21,8 @@ class VulkanRenderer;
 class VulkanImage;
 class Mesh;
 struct GraphicsOptions;
-}
+} // namespace reone::graphics
 namespace reone::scene {
-class RenderRegistry;
 class ModelSceneNode;
 struct RegisteredMesh;
 struct RegisteredGrass;
@@ -35,7 +34,8 @@ class RayQueryPipeline : boost::noncopyable {
 public:
     RayQueryPipeline(graphics::VulkanRenderer &renderer,
                      glm::ivec2 extent,
-                     graphics::GraphicsOptions &options);
+                     graphics::GraphicsOptions &options,
+                     GpuScene &gpuScene);
     ~RayQueryPipeline() { deinit(); }
     void init();
     void deinit();
@@ -43,7 +43,7 @@ public:
      * View and projection ride along for the denoiser: NRD reprojects from
      * the matrix pair, and only the caller has the camera.
      */
-    void render(VkCommandBuffer cmd, RenderRegistry &registry, uint32_t globalsOffset,
+    void render(VkCommandBuffer cmd, uint32_t globalsOffset,
                 graphics::VulkanImage &output,
                 const glm::mat4 &view, const glm::mat4 &projection,
                 const glm::vec4 &jitter);
@@ -89,7 +89,7 @@ private:
     VkPipeline _pipeline {VK_NULL_HANDLE};
     std::unique_ptr<graphics::VulkanBuffer> _raygenSbt;
     VkStridedDeviceAddressRegionKHR _raygenSbtRegion {};
-    std::unique_ptr<GpuScene> _gpuScene;
+    GpuScene &_gpuScene;
     std::array<Frame, 2> _frames;
     uint32_t _lastInstances {0};
     uint32_t _lastTriangles {0};
@@ -190,7 +190,7 @@ private:
     /**
      * The NRD-facing output split, set 2 in the trace pipeline: diffuse and
      * specular radiance with hit distance, normal/roughness, viewZ, motion,
-      * the noise-free target, and the two material factors. Written
+     * the noise-free target, and the two material factors. Written
      * every traced frame whether or not NRD is built in - the channels
      * double as debug views - and double-buffered like every other per-frame
      * resource, since two frames are in flight.
@@ -209,15 +209,13 @@ private:
     int _lastAuxFrame {-1};
 
     void clearFrame(Frame &frame);
-    std::optional<GpuScene::Admission> classifyMesh(RenderRegistry &registry,
-                                                     const RegisteredMesh &mesh,
-                                                     const ModelSceneNode *skyRoom,
-                                                     bool skyBaked);
-    std::optional<GpuScene::Admission> classifyGrass(const RegisteredGrass &grass);
-    std::optional<GpuScene::Admission> classifyParticles(const RegisteredParticles &particles);
-    std::optional<GpuScene::Admission> classifyBillboard(const RegisteredBillboard &billboard);
+    std::optional<GpuScene::Classification> classifyMesh(const RegisteredMesh &mesh,
+                                                    const ModelSceneNode *skyRoom,
+                                                    bool skyBaked);
+    std::optional<GpuScene::Classification> classifyGrass(const RegisteredGrass &grass);
+    std::optional<GpuScene::Classification> classifyParticles(const RegisteredParticles &particles);
+    std::optional<GpuScene::Classification> classifyBillboard(const RegisteredBillboard &billboard);
     bool bakeSkyRoom(VkCommandBuffer cmd,
-                     RenderRegistry &registry,
                      const ModelSceneNode &room,
                      const glm::vec3 &origin);
 };

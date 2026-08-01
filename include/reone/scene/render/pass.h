@@ -19,7 +19,7 @@
 
 #include "reone/graphics/types.h"
 
-#include "../registry.h"
+#include "../gpuscene.h"
 
 namespace reone {
 
@@ -91,8 +91,6 @@ public:
                                   float quadSize,
                                   graphics::Material &material,
                                   const std::vector<GrassInstance> &instances) = 0;
-    virtual void executeDrawAABB(const std::vector<glm::vec4> &corners) = 0;
-    virtual void executeDrawDebug(const std::function<void()> &execute) = 0;
 };
 
 } // namespace scene
