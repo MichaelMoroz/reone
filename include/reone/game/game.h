@@ -82,6 +82,8 @@ class GUI;
 namespace graphics {
 
 class Font;
+class Model;
+class Texture;
 
 }
 
@@ -660,6 +662,7 @@ private:
     void consoleGiveXP(const ConsoleArgs &tokens);
     void consoleGiveGold(const ConsoleArgs &tokens);
     void consoleWarp(const ConsoleArgs &tokens);
+    void loadTestbed(const std::string &variant);
     void consoleScene(const ConsoleArgs &tokens);
     void consoleSpawn(const ConsoleArgs &tokens);
     void consoleGrass(const ConsoleArgs &tokens);
@@ -707,6 +710,9 @@ private:
     // object selection model.
     std::shared_ptr<scene::ModelSceneNode> _consoleSpawnedModel;
     bool _consoleEmittersEnabled {false};
+    std::shared_ptr<graphics::Model> _consoleTestbedFloor;
+    std::shared_ptr<graphics::Model> _consoleTestbedSmoke;
+    std::shared_ptr<graphics::Texture> _consoleTestbedWhite;
 
     // END Console commands
 };

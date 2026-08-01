@@ -42,6 +42,7 @@
 #include "reone/game/surfaces.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/font.h"
+#include "reone/graphics/mesh.h"
 #include "reone/graphics/format/tgawriter.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/model.h"
@@ -2555,8 +2556,227 @@ void Game::consoleGiveGold(const ConsoleArgs &args) {
 }
 
 void Game::consoleWarp(const ConsoleArgs &args) {
-    consoleCheckUsage(args, 1, 1, "module");
+    consoleCheckUsage(args, 1, 2, "module [grass|smoke|none]");
+    if (args[1].value() == "testbed") {
+        loadTestbed(args.size() == 3 ? std::string(args[2].value()) : "grass");
+        return;
+    }
     loadModule(std::string(args[1].value()));
+}
+
+void Game::loadTestbed(const std::string &variant) {
+    if (variant != "grass" && variant != "smoke" && variant != "smoke-control" && variant != "none") {
+        throw std::runtime_error("Unknown testbed object: " + variant);
+    }
+
+    // This is deliberately code-built instead of an IFO/ARE/GIT module: the
+    // fixture has no authored game content, and keeping it here makes its
+    // floor, light and camera independent of resource load timing.
+    if (_module && _module->area()) {
+        _module->area()->unloadParty();
+    }
+    _party.reset();
+    _module.reset();
+    _loadedModules.clear();
+    _services.graphics.renderer.invalidateResources();
+    auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
+    sceneGraph.clear();
+    sceneGraph.setAmbientLightColor(glm::vec3 {0.0f});
+    sceneGraph.setFog({});
+    _consoleSpawnedModel.reset();
+    _consoleEmittersEnabled = false;
+
+    _module = newModule();
+    _module->initEmpty();
+
+    constexpr float floorHalfExtent = 10.0f;
+    constexpr float floorStep = 0.5f;
+    constexpr int floorSegments = static_cast<int>(2.0f * floorHalfExtent / floorStep);
+    std::vector<Mesh::Vertex> vertices;
+    std::vector<Mesh::Face> faces;
+    vertices.reserve((floorSegments + 1) * (floorSegments + 1));
+    faces.reserve(2 * floorSegments * floorSegments);
+    for (int y = 0; y <= floorSegments; ++y) {
+        for (int x = 0; x <= floorSegments; ++x) {
+            float px = -floorHalfExtent + x * floorStep;
+            float py = -floorHalfExtent + y * floorStep;
+            vertices.push_back(Mesh::VertexBuilder()
+                                   .position({px, py, 0.0f})
+                                   .normal({0.0f, 0.0f, 1.0f})
+                                   .uv1({static_cast<float>(x) / floorSegments,
+                                         static_cast<float>(y) / floorSegments})
+                                   .build());
+        }
+    }
+    auto vertexIndex = [floorSegments](int x, int y) {
+        return static_cast<uint16_t>(y * (floorSegments + 1) + x);
+    };
+    for (int y = 0; y < floorSegments; ++y) {
+        for (int x = 0; x < floorSegments; ++x) {
+            uint32_t material = (x >= 18 && x < 22 && y >= 18 && y < 22) ? 1 : 0;
+            auto first = Mesh::Face(std::array<uint16_t, 3> {vertexIndex(x, y), vertexIndex(x + 1, y), vertexIndex(x + 1, y + 1)});
+            first.material = material;
+            faces.push_back(std::move(first));
+            auto second = Mesh::Face(std::array<uint16_t, 3> {vertexIndex(x, y), vertexIndex(x + 1, y + 1), vertexIndex(x, y + 1)});
+            second.material = material;
+            faces.push_back(std::move(second));
+        }
+    }
+    auto floorMesh = std::make_shared<Mesh>(
+        std::move(vertices),
+        Mesh::VertexLayoutBuilder()
+            .stride(8 * sizeof(float))
+            .offPosition(0)
+            .offNormals(3 * sizeof(float))
+            .offUV1(6 * sizeof(float))
+            .build(),
+        std::move(faces));
+    auto floorTriangleMesh = std::make_shared<ModelNode::TriangleMesh>();
+    floorTriangleMesh->mesh = std::move(floorMesh);
+    floorTriangleMesh->render = true;
+    floorTriangleMesh->shadow = true;
+    // MeshSceneNode uses the authored map name as its renderability flag;
+    // the actual texture is the one-pixel procedural white texture below.
+    floorTriangleMesh->diffuseMap = "testbed_white";
+    floorTriangleMesh->diffuse = glm::vec3 {1.0f};
+    floorTriangleMesh->ambient = glm::vec3 {0.0f};
+
+    auto root = std::make_shared<ModelNode>(0, "testbed_root", glm::vec3 {0.0f}, glm::quat {1.0f, 0.0f, 0.0f, 0.0f}, false);
+    auto floorNode = std::make_shared<ModelNode>(1, "testbed_floor", glm::vec3 {0.0f}, glm::quat {1.0f, 0.0f, 0.0f, 0.0f}, false, root.get());
+    floorNode->setMesh(std::move(floorTriangleMesh));
+    root->addChild(floorNode);
+
+    // A distant point makes this engine's radius-promoted directional light.
+    // It shines from (-X, -Y, +Z), 45 degrees above the floor, leaving its
+    // shadow toward (+X, +Y) across otherwise empty white ground.
+    auto lightNode = std::make_shared<ModelNode>(2, "testbed_sun", glm::vec3 {-100.0f, -100.0f, 141.42136f}, glm::quat {1.0f, 0.0f, 0.0f, 0.0f}, false, root.get());
+    auto light = std::make_shared<ModelNode::Light>();
+    light->dynamicType = 1;
+    light->shadow = true;
+    lightNode->setLight(std::move(light));
+    lightNode->vectorTracks()[ControllerTypes::color].add(0.0f, glm::vec3 {1.0f});
+    lightNode->floatTracks()[ControllerTypes::radius].add(0.0f, 1000.0f);
+    lightNode->floatTracks()[ControllerTypes::multiplier].add(0.0f, 1.0f);
+    root->addChild(lightNode);
+
+    _consoleTestbedFloor = std::make_shared<Model>(
+        "testbed_floor", MdlClassification::other, root,
+        std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+    _consoleTestbedFloor->init();
+
+    auto whitePixels = std::make_shared<ByteBuffer>();
+    whitePixels->resize(3, 0xff);
+    _consoleTestbedWhite = std::make_shared<Texture>("testbed_white", TextureType::TwoDim, Texture::Properties {});
+    _consoleTestbedWhite->setPixels(1, 1, PixelFormat::RGB8, Texture::Layer {std::move(whitePixels)});
+    _consoleTestbedWhite->init();
+
+    // The floor's white texel is generated because nothing in the game is a
+    // plain white 1x1. Particles are not: an emitter resolves its texture by
+    // name through the registry (`node/emitter.cpp:255`), so a runtime-built
+    // texture returns null and the emitter registers nothing at all - which
+    // reads as "the tracer cannot see particles" rather than as a missing
+    // asset. The testbed therefore uses `fx_smoke01`, which is also the exact
+    // texture the menu and the Dantooine vents render, so the fixture
+    // exercises the asset under investigation rather than an idealised ramp.
+
+    auto floorModel = sceneGraph.newModel(*_consoleTestbedFloor, ModelUsage::Room);
+    floorModel->setMainTexture(_consoleTestbedWhite.get());
+    floorModel->setPickable(true);
+    sceneGraph.addRoot(floorModel);
+
+    if (variant == "grass") {
+        auto grassTexture = _services.resource.textures.get("lda_grass2", TextureUsage::MainTex);
+        if (!grassTexture) {
+            throw ResourceNotFoundException("Grass texture not found: lda_grass2");
+        }
+        GrassProperties grass;
+        grass.density = 64.0f;
+        grass.quadSize = 0.5f;
+        grass.probabilities = {1.0f, 0.0f, 0.0f, 0.0f};
+        grass.materials.insert(1);
+        grass.texture = grassTexture.get();
+        sceneGraph.addRoot(sceneGraph.newGrass(std::move(grass), *floorNode));
+    } else if (variant == "smoke") {
+        // A marker at the emitter origin, deliberately tiny. It exists only so
+        // the emitter's position is legible when a backend renders the
+        // particle coverage as fully transparent - the particles are the
+        // subject, and a core large enough to read at a distance would hide
+        // them. It is part of the same model as the emitter, not a second
+        // scene object.
+        std::vector<Mesh::Vertex> smokeVertices;
+        for (const auto &position : std::array<glm::vec3, 6> {
+                 glm::vec3 {0.0f, 0.0f, 0.75f}, glm::vec3 {0.05f, 0.0f, 0.7f},
+                 glm::vec3 {0.0f, 0.05f, 0.7f}, glm::vec3 {-0.05f, 0.0f, 0.7f},
+                 glm::vec3 {0.0f, -0.05f, 0.7f}, glm::vec3 {0.0f, 0.0f, 0.65f}}) {
+            smokeVertices.push_back(Mesh::VertexBuilder()
+                                        .position(position)
+                                        .normal(glm::normalize(position + glm::vec3 {0.0f, 0.0f, 0.1f}))
+                                        .uv1({0.5f, 0.5f})
+                                        .build());
+        }
+        std::vector<Mesh::Face> smokeFaces;
+        for (const auto &indices : std::array<std::array<uint16_t, 3>, 8> {
+                 std::array<uint16_t, 3> {0, 1, 2}, std::array<uint16_t, 3> {0, 2, 3},
+                 std::array<uint16_t, 3> {0, 3, 4}, std::array<uint16_t, 3> {0, 4, 1},
+                 std::array<uint16_t, 3> {5, 2, 1}, std::array<uint16_t, 3> {5, 3, 2},
+                 std::array<uint16_t, 3> {5, 4, 3}, std::array<uint16_t, 3> {5, 1, 4}}) {
+            smokeFaces.emplace_back(indices);
+        }
+        auto smokeMesh = std::make_shared<ModelNode::TriangleMesh>();
+        smokeMesh->mesh = std::make_shared<Mesh>(
+            std::move(smokeVertices),
+            Mesh::VertexLayoutBuilder().stride(8 * sizeof(float)).offPosition(0).offNormals(3 * sizeof(float)).offUV1(6 * sizeof(float)).build(),
+            std::move(smokeFaces));
+        smokeMesh->render = true;
+        smokeMesh->shadow = true;
+        smokeMesh->diffuseMap = "testbed_white";
+        smokeMesh->diffuse = glm::vec3 {0.35f};
+        auto smokeRoot = std::make_shared<ModelNode>(0, "testbed_smoke_root", glm::vec3 {0.0f}, glm::quat {1.0f, 0.0f, 0.0f, 0.0f}, false);
+        auto smokeCore = std::make_shared<ModelNode>(1, "testbed_smoke_core", glm::vec3 {0.0f}, glm::quat {1.0f, 0.0f, 0.0f, 0.0f}, false, smokeRoot.get());
+        smokeCore->setMesh(std::move(smokeMesh));
+        smokeRoot->addChild(smokeCore);
+        auto emitterNode = std::make_shared<ModelNode>(2, "testbed_smoke_emitter", glm::vec3 {0.0f, 0.0f, 0.7f}, glm::quat {1.0f, 0.0f, 0.0f, 0.0f}, false, smokeRoot.get());
+        auto emitter = std::make_shared<ModelNode::Emitter>();
+        emitter->updateMode = ModelNode::Emitter::UpdateMode::Fountain;
+        emitter->renderMode = ModelNode::Emitter::RenderMode::Normal;
+        emitter->blendMode = ModelNode::Emitter::BlendMode::Normal;
+        emitter->textureName = "fx_smoke01";
+        emitter->gridSize = {1, 1};
+        emitter->twosided = true;
+        emitterNode->setEmitter(std::move(emitter));
+        emitterNode->floatTracks()[ControllerTypes::birthrate].add(0.0f, 6.0f);
+        emitterNode->floatTracks()[ControllerTypes::lifeExp].add(0.0f, 1.5f);
+        emitterNode->floatTracks()[ControllerTypes::xSize].add(0.0f, 50.0f);
+        emitterNode->floatTracks()[ControllerTypes::ySize].add(0.0f, 50.0f);
+        emitterNode->floatTracks()[ControllerTypes::sizeStart].add(0.0f, 0.5f);
+        emitterNode->floatTracks()[ControllerTypes::sizeMid].add(0.0f, 1.0f);
+        emitterNode->floatTracks()[ControllerTypes::sizeEnd].add(0.0f, 1.5f);
+        emitterNode->floatTracks()[ControllerTypes::alphaStart].add(0.0f, 0.45f);
+        emitterNode->floatTracks()[ControllerTypes::alphaMid].add(0.0f, 0.25f);
+        emitterNode->floatTracks()[ControllerTypes::alphaEnd].add(0.0f, 0.0f);
+        emitterNode->floatTracks()[ControllerTypes::velocity].add(0.0f, 0.8f);
+        emitterNode->vectorTracks()[ControllerTypes::colorStart].add(0.0f, glm::vec3 {0.45f});
+        emitterNode->vectorTracks()[ControllerTypes::colorMid].add(0.0f, glm::vec3 {0.55f});
+        emitterNode->vectorTracks()[ControllerTypes::colorEnd].add(0.0f, glm::vec3 {0.65f});
+        smokeRoot->addChild(emitterNode);
+        _consoleTestbedSmoke = std::make_shared<Model>(
+            "testbed_smoke", MdlClassification::effect, smokeRoot,
+            std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+        _consoleTestbedSmoke->init();
+        _consoleSpawnedModel = sceneGraph.newModel(*_consoleTestbedSmoke, ModelUsage::Placeable);
+        _consoleSpawnedModel->setMainTexture(_consoleTestbedWhite.get());
+        _consoleSpawnedModel->setPickable(true);
+        sceneGraph.addRoot(_consoleSpawnedModel);
+        _consoleEmittersEnabled = true;
+    }
+
+    _cameraType = CameraType::Free;
+    auto camera = getConsoleArea()->getCamera<FreeCamera>(CameraType::Free);
+    camera->setPosition({0.0f, -8.0f, 5.0f});
+    camera->setLookAt({1.5f, 2.0f, 0.0f});
+    setRelativeMouseMode(true);
+    openInGame();
+    info("Testbed loaded: floor=matte white, ambient=off, sky=off, light=(-100,-100,141.421), object=" + variant);
 }
 
 void Game::consoleScene(const ConsoleArgs &args) {
