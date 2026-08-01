@@ -844,10 +844,14 @@ is a decision the removal cannot avoid:
   single vertex stage taking `POSITION` and `localUniforms.model`, so deforming
   shadows need new entry points and pipeline keys. **Phase E4 shadows from real
   geometry inherits this.**
-- **Only one culling policy exists.** Every pipeline hands the *view* camera to
-  every pass, shadows included (`pipeline/vulkan.cpp:1017`), so a shadow caster
-  outside the view frustum is dropped from the shadow map. It predates the
-  registry and must not be silently reproduced when selection becomes ranges.
+- **Culling is now per light for the frustum, and still per view for distance.**
+  `49496d2f` fixed the half that mattered: `graph.cpp:448-455` builds a frustum
+  per cascade and per cube face from `_shadowLightSpace[i]` and passes them as
+  `VisibilityPolicy::shadowFrusta`, so a caster outside the *view* frustum is no
+  longer dropped from the shadow map. Draw-distance culling was not converted —
+  `gpuscene.cpp:66-71` still measures against `visibility.drawDistanceCamera`,
+  which is the view camera even in a shadow pass. The remaining half must not be
+  silently reproduced when selection becomes ranges.
 - **`SceneGraph::_nodes` never shrinks.** It holds a `shared_ptr` to every node
   ever created, is never erased from and never read; `clear()` leaves it
   untouched. Nothing in a scene is destroyed until the `SceneGraph` dies. Under
