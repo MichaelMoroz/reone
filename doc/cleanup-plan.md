@@ -38,13 +38,13 @@ The consequences run the other way from a deletion:
   already RT-free — but that now has to stay true deliberately rather than by
   accident. The tracer layers acceleration structures over the scene; it does
   not define it.
-- **Phase E is real work, justified by hardware rather than elegance.** Raster
+- **Phase F is real work, justified by hardware rather than elegance.** Raster
   consuming `GpuScene` matters most exactly where the machine is weakest: a
   mega-draw over merged geometry against 1048 per-mesh draws. That is also the
   configuration with the least headroom to waste.
 - **But it is an empirical question, not an assumption.** A per-frame compute
   merge on a GPU with weak compute may cost more than the draws it saves.
-  Phase E must be measured on the low end, and "raster keeps per-mesh draws on
+  Phase F must be measured on the low end, and "raster keeps per-mesh draws on
   hardware where the merge does not pay" is an acceptable answer.
 - **Admission has to serve both consumers after all.** The particle budget and
   the grass classes are shared, so the raster/tracer reconciliation stands.
@@ -100,8 +100,9 @@ This was an unstated assumption until 2026-08-01 and the tree is a long way from
 it — 575 `Vk`/`vk` references live in `libs/scene`, four public headers under
 `include/reone/scene/` include `volk.h`, and `scene/render/` is in practice a
 second Vulkan renderer hosted in the scene library. The measurement and the rule
-for new code are under Phase E, which is the phase that would otherwise deepen
-it. The existing references move in Phase F.
+and the split are under Phase E, which now runs before the raster work rather
+than after it, so that F never writes new Vulkan into a library it is about to
+leave.
 
 **"One path" means one canonical output, not one upload.** An earlier revision
 of this section said the merge was an alternative to per-mesh `VulkanMesh`
@@ -114,10 +115,10 @@ to reach the GPU before anything can merge it. The honest shape is two levels:
 CPU Mesh asset
   -> source mesh cache        device-addressable per-mesh data, uploaded once
   -> GpuScene merge           per frame -> canonical world-space triangle stream
-  -> consumers                tracer today, raster after Phase E
+  -> consumers                tracer today, raster after Phase F
 ```
 
-So what Phase E actually deletes is **raster drawing directly from per-mesh
+So what Phase F actually deletes is **raster drawing directly from per-mesh
 buffers**, not the uploads themselves. The per-mesh path stops being a draw
 path and becomes a source cache, which is a smaller and more accurate claim.
 
@@ -227,9 +228,8 @@ every reference for the sake of tidiness.
 | **C** | residency in the contract, not the implementation | pixel-identical | **done** `badd9c5f` |
 | **D** | admit everything, and see it correctly | traced image changes deliberately, inspected per class; raster untouched except where stated | grass, dangly, saber, particles **done**; blended transparency open |
 | *(registry)* | delete `RenderRegistry` whole — it is branch-only; `SceneGraph` admits directly | **full raster image hash-identical, shadows included**; traced within noise | not started |
-| **E** | raster consumes `GpuScene` | **G-buffer byte-identical**; shadows change deliberately and are judged by eye | not started |
-| **F** | Vulkan containment: no Vulkan API outside `graphics/vulkan` | pixel-identical — it is a relocation, so raster hash-identical and traced within noise | not started |
-| **G** | the mega-draw: bindless raster, one draw per cull mode | pixel-identical **and measurably faster** — the only phase that fails by changing nothing | not started; gated on a measurement that may cancel it |
+| **E** | Vulkan containment: no Vulkan API outside `graphics/vulkan` | pixel-identical — it is a relocation, so raster hash-identical and traced within noise | not started |
+| **F** | raster consumes `GpuScene`, ending in the mega-draw (F5) | **G-buffer byte-identical**; shadows change deliberately and are judged by eye. F5 additionally must be **measurably faster** or it is reverted | not started |
 
 ### What happens next, in order
 
@@ -262,37 +262,35 @@ admission three times:
   - **the removal itself** — `SceneGraph` admits into `GpuScene` directly,
     `drawScene`'s selection becomes ranges, the kill switch and curated
     materials move to stable-id tables, the panel is renamed Objects
-  - **the `GpuScene` split and relocation.** It cannot simply move to
+  - **the `GpuScene` split, which unblocks Phase E.** It cannot simply move to
     `graphics/vulkan`: `update()` takes a `RenderRegistry &`, and graphics
     knowing about scene types inverts the library dependency. Removing the
     registry is exactly what unblocks it — Vulkan-typed storage goes down into
-    `graphics/vulkan`, registry-reading admission stays above. Doing this
-    before step 3 means writing admission twice.
+    `graphics/vulkan`, registry-reading admission stays above. Splitting it here
+    rather than in E means admission is written once, and E inherits one fewer
+    file to untangle.
   - **backlog 7.7, the isolation fixtures that render nothing.** Not
     housekeeping: per-class isolation is what would have caught the grass
     transpose, and it cannot run today. `--commands-frame` looks like the fix,
     since the cause is `warp` completing its module load after the commands
     file has run.
 
-**4. Phase E**, rewritten below against a byte-identical G-buffer bar. Three of
-its five original breakages turned out to be current tracer bugs and were fixed
-in D. What remains is raster's own lowering over a scene that is already
-correct — but the hard bar promotes two things the earlier draft deferred into
-prerequisites, and the phase opens with a probe rather than a change, because
-raster and the merge compute world position and normals by different
-expressions and one of those is a different vector rather than a different
-rounding.
-
-**5. Phase F, the Vulkan containment sweep**, which this plan had never named:
+**4. Phase E, the Vulkan containment sweep**, which this plan had never named:
 575 `Vk`/`vk` references in `libs/scene` and four public headers including
-`volk.h`. Phase E is held to writing its *new* code into `graphics/vulkan`; the
-existing surface moves in F, on its own, because relocating `rayquery.cpp`
-mid-E would break the very bar E is verified by.
+`volk.h`. It runs **before** the raster work, reversing an earlier revision —
+otherwise F writes its new buffer binding, descriptors and barriers into a
+library it is about to leave, and every line of it moves twice.
 
-**6. Phase G, the mega-draw**, which the plan had argued for in three places
-and planned in none. It needs bindless textures in raster, which today exist
-only inside the tracer, so it follows F rather than E. It is also the one phase
-gated on a measurement that may cancel it outright.
+**5. Phase F, raster consumes `GpuScene`**, against a byte-identical G-buffer
+bar. Three of its five original breakages turned out to be current tracer bugs
+and were fixed in D. What remains is raster's own lowering over a scene that is
+already correct — but the hard bar promotes two things the earlier draft
+deferred into prerequisites, and the phase opens with a probe rather than a
+change, because raster and the merge compute world position and normals by
+different expressions and one of those is a different vector rather than a
+different rounding. **The mega-draw is its last substep, F5**, not a phase of
+its own: it only means something once F0-F4 have proven a merged draw
+byte-identical, and it is gated on a measurement that may cancel it.
 
 ## Phase A — remove OpenGL *(done: `3445fdc1`, `6a681168`, `f14d7dae`, `df1aa375`)*
 
@@ -595,7 +593,7 @@ and is the largest visible gain in the traced image, then particles and
 billboards. One class per commit, tracer still the only consumer, each
 inspected against the traced image while the raster baseline stays untouched.
 
-Phase E then accepts that raster keeps a non-merged path for
+Phase F then accepts that raster keeps a non-merged path for
 whatever stays out.
 
 ### Coverage is transmission
@@ -797,7 +795,7 @@ this document repeats:
   hash table on the stack and the entry copy-initialises a second
   (`node/mesh.cpp:254-268`, `registry.cpp:118`). Two per entry, ~1500 entries.
   **The fix is flattening `textures` into fixed slot indices, which is the
-  bindless change Phase G wants anyway — not a change to when the registry is
+  bindless change the mega-draw (F5) wants anyway — not a change to when the registry is
   filled.**
 - **Dangly positions are moved, not copied.** `RegisteredDeformation` is taken
   by value and `std::move`d, and the call site passes a prvalue. There is
@@ -961,44 +959,23 @@ saved layout, size and dock position reset to the code defaults. That reads as
 the panel breaking. Delete `build/bin/imgui.ini` and check what a first run
 actually shows before believing a layout regression.
 
-## Phase E — raster consumes `GpuScene`
+## Phase E — Vulkan containment
 
-Rewritten 2026-08-01, for two reasons. The bar hardened to a byte-identical
-G-buffer, which turns several things the earlier draft deferred into
-prerequisites. And the Vulkan containment condition, which this document had
-never stated, turns out to govern *where* the phase's new code may be written.
+**No Vulkan API outside `graphics/vulkan`**, as stated in the end state.
 
-Of the five breakages the first draft listed, four are gone. Three were tracer
-correctness bugs fixed in Phase D — dangly and saber frozen at base pose
-(`c1469287`) chief among them, a bug that had stood since the tracer existed and
-took one commit once someone noticed the displaced positions were already being
-handed to it. The fourth, "merged shadow draws lose frustum rejection", stopped
-mattering when caching culling removed ~9000 frustum tests per frame and moved
-frame time by *nothing*. What remains is raster's own lowering over a scene that
-is already correct.
+**It goes before F, and an earlier revision had that backwards.** The argument
+for putting it last was that a pure relocation's pixel-identical bar is only
+meaningful over code that has stopped changing, and that relocating
+`rayquery.cpp` while the raster work was still editing it would destroy both
+phases' verification. That is a real hazard and it is the smaller one. The
+larger one is that F writes *new* Vulkan — buffer binding, descriptors, a
+widened barrier — and if containment has not happened yet, every line of it
+lands in `libs/scene` and has to be moved again. **Do not write new code into a
+building you are about to evacuate.** Relocating first also means F edits code
+that is already where it belongs, so the two never touch the same file in the
+same phase.
 
-### The bar, and why it has two halves
-
-**The rasterised G-buffer must be byte-identical before and after.**
-`np.array_equal` on the `--dumptargets` `.npy` files: `g_buffer_diffuse`,
-`g_buffer_eye_normal`, `g_buffer_lightmap`, `g_buffer_self_illum`,
-`g_buffer_depth`, and motion. Raster is bit-exact by construction once `--dev 0`
-suppresses the frame-time readout, so there is no tolerance to negotiate here —
-a differing pixel is a real difference and the change is wrong.
-
-**Shadows are the deliberate exception.** Proxies go away and shadowing moves to
-real geometry, so shadow maps and everything lit through them change on purpose.
-Shadows are judged by eye, the G-buffer by hash. Keeping the two bars apart is
-what makes the phase checkable; one combined "looks right" bar would hide a
-G-buffer regression behind an intended shadow change.
-
-### Vulkan containment, which this plan had missed
-
-**No Vulkan API outside `graphics/vulkan`.** Stated here as an architectural
-condition because it was never written down, and because Phase E is the phase
-that would otherwise make it worse.
-
-The current position, measured 2026-08-01:
+### The measurement
 
 | file | `Vk`/`vk` references |
 |---|---:|
@@ -1011,138 +988,9 @@ The current position, measured 2026-08-01:
 
 575 references inside `libs/scene`, against 4,652 lines of actual
 `graphics/vulkan`. Four public headers under `include/reone/scene/` include
-`volk.h` directly, so the leak is in the *interface*, not only the
-implementation. `scene/render/` is in practice a second Vulkan renderer living
-in the scene library, and `GpuScene`'s 73 references are 13% of the problem —
-the earlier note about relocating `GpuScene` was addressing the smallest part.
-
-**The operational rule for this phase**: new Vulkan code goes into
-`graphics/vulkan` from the start. Raster consuming merged geometry means buffer
-binding, descriptor plumbing and a widened barrier, all of it Vulkan; writing
-that into `libs/scene` in order to move it out a month later is the expensive
-mistake. **The existing 575 references are explicitly not this phase's job** —
-relocating `rayquery.cpp` mid-Phase-E would change far too much at once and
-destroy the byte-identical bar. They move in Phase F.
-
-### E0 — is byte-identical reachable at all? Answer before building anything
-
-Three places where raster and the merge compute the same quantity differently.
-Two are possible rounding differences; **one is a different vector**. Probe all
-three in the existing vertex stage — compute both forms, `asuint` XOR them,
-write a flag to a target — and count nonzero pixels on danm14ab before writing
-any of the switchover.
-
-| quantity | raster | the merge | kind of difference |
-|---|---|---|---|
-| world position | `mul(localUniforms.model, objectPos)` (`pbr_model.slang:59`) | three `dot(row, float4(p,1))` (`skin.slang:86-90`) | summation order and FMA contraction — possibly bits |
-| **normal** | **inverse transpose**, `mul(n, (float3x3)modelInv)` (`lib/geometry.slang:64-66`) | **plain `M * n`**, `transformDir` (`skin.slang:287-289`) | **a different vector under any non-uniform scale or shear** |
-| normalisation | `normalize()` | `safeNormalize`, `v * rsqrt(dot(v,v))` (`skin.slang:99-103`) | `rsqrt` may lower to an approximate instruction |
-
-Plus one shape difference: raster's tangent frame is computed **only** when the
-normal-map or bump-map feature bit is set and is `float3(0)` otherwise
-(`pbr_model.slang:64-70`), while the merge fills it unconditionally. Wherever
-those disagree, `g_buffer_eye_normal` differs on every normal-mapped surface.
-
-**When a probe is nonzero, the merge moves — not the bar.** The tracer has no
-bit-exactness requirement and the merge is the newer code. For the normal that
-means `SceneObject` gains the inverse (or its 3x3 transpose) and the merge
-adopts the inverse transpose. If a probe cannot be driven to zero, that is a
-finding worth stopping on, not something to work around by loosening the
-comparison.
-
-**A tracer correctness question falls out of the normal row, and it is not a
-Phase E question.** If `M * n` is wrong for non-uniformly-scaled objects, then
-the path tracer has been shading those objects with wrong normals for as long as
-the merge has existed. Measure whether any admitted object actually has
-non-uniform scale before claiming it either way: if every transform is a rigid
-motion plus uniform scale the two conventions agree and this is only about bits.
-Either way it belongs to Phase D correctness, recorded here because Phase E is
-what exposed it.
-
-### E1 — `MergedVertex` must carry object-space position
-
-`opaqueFragment` — the G-buffer writer itself — hashes object-space position for
-the hashed alpha test (`pbr_model.slang:280`). `MergedVertex` has no such field.
-The earlier draft called this "a raster lowering problem for Phase E proper" and
-left it late; under a byte-identical bar it blocks the first step, because any
-dithered surface differs immediately.
-
-144 → 160 bytes. `skin.slang` declares the struct independently of the C++ header
-and the `static_assert`s are the only ABI guard, so both sides and every assert
-move together.
-
-### E2 — getting merged geometry into a raster draw
-
-The merged buffers carry `VK_BUFFER_USAGE_STORAGE_BUFFER_BIT` only
-(`gpuscene.cpp:243-244`), and the post-merge barrier names AS-build and
-ray-tracing reads. Both need widening for a raster consumer.
-
-**Prefer programmable vertex pulling** — bind the merged buffer as a
-`StructuredBuffer<MergedVertex>` and index by `SV_VertexID` — over adding
-`VERTEX`/`INDEX` usage and going through vertex input. No binding descriptions,
-no attribute descriptions, no format plumbing in the pipeline key, one
-declaration of the vertex layout instead of two, and the mega-draw becomes
-trivial later.
-
-### E3 — the static opaque set, and nothing else yet
-
-World-space vertices, `model` = identity, every other part of `LocalUniforms`,
-the material path and texture binding unchanged. This step changes **where
-vertices come from and nothing else**, which is exactly what makes a
-byte-identical result meaningful.
-
-**Do not let merged raster draws cover grass and particles.** Phase D admitted
-them for the tracer, while raster draws them through `executeDrawGrass` and
-`executeDrawParticles` with their own shaders — cover them here and they render
-twice.
-
-**Skinned geometry is a separate later step.** Raster skins in the vertex shader
-from a bone palette; the merge skins in compute. Those must also be shown
-bit-identical, and the same rule applies when they are not. Attempting static
-and skinned together makes a failure impossible to localise.
-
-Motion vectors carry the same question: the VS builds `prevClipPos` as
-`prevViewProjection * (prevModel * prevObjectPos)` (`pbr_model.slang:75-76`)
-while the merge already holds `prevPosition` in world space.
-
-### E4 — shadows from real geometry
-
-Only once the G-buffer is byte-identical. Admission takes Opaque and Transparent
-only (`rayquery.cpp:517`, `:1112`), so shadow-only proxies sit outside the merge
-while raster's shadow pass draws exactly them. Shadow from real geometry and
-delete the proxies rather than plumbing them through. Proxies exist because four
-cascades and six cube faces of real geometry were expensive on 2003 hardware,
-which is no longer a constraint.
-
-This is where the image changes on purpose.
-
-### Not in this phase
-
-- **The mega-draw** — that is Phase G, and it depends on F for bindless. Phase E
-  does per-object draws over merged ranges and produces the numbers that decide
-  whether G happens at all.
-- **`offMaterial`**, which still has no `SceneObject` field. Walkmesh debug
-  geometry is its only consumer and deleting that remains the better answer than
-  widening the vertex.
-- **The 575-reference containment sweep** — that is Phase F.
-
-`pipeline/vulkan.cpp` remains the awkward one: it owns frame ordering and returns
-before every raster pass in path-tracing mode (`:1337-1373`), so a core consumed
-by both needs a precise update point and per-consumer barriers. Its
-`glToVulkanClip` rewrite (`:1319-1334`) and the negative-height viewport
-(`:627-634`) are real Vulkan cleanups that belong with Phase F.
-
-## Phase F — Vulkan containment
-
-**No Vulkan API outside `graphics/vulkan`**, as stated in the end state. The
-measurement and the reason it is a separate phase are under Phase E; this is
-what actually has to move.
-
-It comes last for one reason: it is a **pure relocation**, so its bar is
-pixel-identical — raster hash-identical, traced within noise — and that bar is
-only meaningful over code that has stopped changing. Running it before E would
-mean relocating `rayquery.cpp` and `pipeline/vulkan.cpp` while E is still
-editing them, which destroys both phases' verification at once.
+`volk.h`, so the leak is in the *interface*, not only the implementation.
+`scene/render/` is in practice a second Vulkan renderer living in the scene
+library, and `GpuScene`'s 73 references are 13% of the problem.
 
 ### It is not a file move, and that is the whole difficulty
 
@@ -1192,20 +1040,145 @@ Fold in here rather than earlier: `glToVulkanClip` (`pipeline/vulkan.cpp:1319-13
 and the negative-height viewport (`:627-634`), both Vulkan-native cleanups that
 change matrices, so each is its own commit with its own capture check.
 
-## Phase G — the mega-draw
+## Phase F — raster consumes `GpuScene`
+
+Rewritten 2026-08-01, for two reasons. The bar hardened to a byte-identical
+G-buffer, which turns several things the earlier draft deferred into
+prerequisites. And the Vulkan containment condition, which this document had
+never stated, turns out to govern *where* the phase's new code may be written.
+
+Of the five breakages the first draft listed, four are gone. Three were tracer
+correctness bugs fixed in Phase D — dangly and saber frozen at base pose
+(`c1469287`) chief among them, a bug that had stood since the tracer existed and
+took one commit once someone noticed the displaced positions were already being
+handed to it. The fourth, "merged shadow draws lose frustum rejection", stopped
+mattering when caching culling removed ~9000 frustum tests per frame and moved
+frame time by *nothing*. What remains is raster's own lowering over a scene that
+is already correct.
+
+### The bar, and why it has two halves
+
+**The rasterised G-buffer must be byte-identical before and after.**
+`np.array_equal` on the `--dumptargets` `.npy` files: `g_buffer_diffuse`,
+`g_buffer_eye_normal`, `g_buffer_lightmap`, `g_buffer_self_illum`,
+`g_buffer_depth`, and motion. Raster is bit-exact by construction once `--dev 0`
+suppresses the frame-time readout, so there is no tolerance to negotiate here —
+a differing pixel is a real difference and the change is wrong.
+
+**Shadows are the deliberate exception.** Proxies go away and shadowing moves to
+real geometry, so shadow maps and everything lit through them change on purpose.
+Shadows are judged by eye, the G-buffer by hash. Keeping the two bars apart is
+what makes the phase checkable; one combined "looks right" bar would hide a
+G-buffer regression behind an intended shadow change.
+
+### F0 — is byte-identical reachable at all? Answer before building anything
+
+Three places where raster and the merge compute the same quantity differently.
+Two are possible rounding differences; **one is a different vector**. Probe all
+three in the existing vertex stage — compute both forms, `asuint` XOR them,
+write a flag to a target — and count nonzero pixels on danm14ab before writing
+any of the switchover.
+
+| quantity | raster | the merge | kind of difference |
+|---|---|---|---|
+| world position | `mul(localUniforms.model, objectPos)` (`pbr_model.slang:59`) | three `dot(row, float4(p,1))` (`skin.slang:86-90`) | summation order and FMA contraction — possibly bits |
+| **normal** | **inverse transpose**, `mul(n, (float3x3)modelInv)` (`lib/geometry.slang:64-66`) | **plain `M * n`**, `transformDir` (`skin.slang:287-289`) | **a different vector under any non-uniform scale or shear** |
+| normalisation | `normalize()` | `safeNormalize`, `v * rsqrt(dot(v,v))` (`skin.slang:99-103`) | `rsqrt` may lower to an approximate instruction |
+
+Plus one shape difference: raster's tangent frame is computed **only** when the
+normal-map or bump-map feature bit is set and is `float3(0)` otherwise
+(`pbr_model.slang:64-70`), while the merge fills it unconditionally. Wherever
+those disagree, `g_buffer_eye_normal` differs on every normal-mapped surface.
+
+**When a probe is nonzero, the merge moves — not the bar.** The tracer has no
+bit-exactness requirement and the merge is the newer code. For the normal that
+means `SceneObject` gains the inverse (or its 3x3 transpose) and the merge
+adopts the inverse transpose. If a probe cannot be driven to zero, that is a
+finding worth stopping on, not something to work around by loosening the
+comparison.
+
+**A tracer correctness question falls out of the normal row, and it is not a
+Phase F question.** If `M * n` is wrong for non-uniformly-scaled objects, then
+the path tracer has been shading those objects with wrong normals for as long as
+the merge has existed. Measure whether any admitted object actually has
+non-uniform scale before claiming it either way: if every transform is a rigid
+motion plus uniform scale the two conventions agree and this is only about bits.
+Either way it belongs to Phase D correctness, recorded here because Phase F is
+what exposed it.
+
+### F1 — `MergedVertex` must carry object-space position
+
+`opaqueFragment` — the G-buffer writer itself — hashes object-space position for
+the hashed alpha test (`pbr_model.slang:280`). `MergedVertex` has no such field.
+The earlier draft called this "a raster lowering problem for Phase E proper" (as
+the raster phase was then lettered) and
+left it late; under a byte-identical bar it blocks the first step, because any
+dithered surface differs immediately.
+
+144 → 160 bytes. `skin.slang` declares the struct independently of the C++ header
+and the `static_assert`s are the only ABI guard, so both sides and every assert
+move together.
+
+### F2 — getting merged geometry into a raster draw
+
+The merged buffers carry `VK_BUFFER_USAGE_STORAGE_BUFFER_BIT` only
+(`gpuscene.cpp:243-244`), and the post-merge barrier names AS-build and
+ray-tracing reads. Both need widening for a raster consumer.
+
+**Prefer programmable vertex pulling** — bind the merged buffer as a
+`StructuredBuffer<MergedVertex>` and index by `SV_VertexID` — over adding
+`VERTEX`/`INDEX` usage and going through vertex input. No binding descriptions,
+no attribute descriptions, no format plumbing in the pipeline key, one
+declaration of the vertex layout instead of two, and the mega-draw becomes
+trivial later.
+
+### F3 — the static opaque set, and nothing else yet
+
+World-space vertices, `model` = identity, every other part of `LocalUniforms`,
+the material path and texture binding unchanged. This step changes **where
+vertices come from and nothing else**, which is exactly what makes a
+byte-identical result meaningful.
+
+**Do not let merged raster draws cover grass and particles.** Phase D admitted
+them for the tracer, while raster draws them through `executeDrawGrass` and
+`executeDrawParticles` with their own shaders — cover them here and they render
+twice.
+
+**Skinned geometry is a separate later step.** Raster skins in the vertex shader
+from a bone palette; the merge skins in compute. Those must also be shown
+bit-identical, and the same rule applies when they are not. Attempting static
+and skinned together makes a failure impossible to localise.
+
+Motion vectors carry the same question: the VS builds `prevClipPos` as
+`prevViewProjection * (prevModel * prevObjectPos)` (`pbr_model.slang:75-76`)
+while the merge already holds `prevPosition` in world space.
+
+### F4 — shadows from real geometry
+
+Only once the G-buffer is byte-identical. Admission takes Opaque and Transparent
+only (`rayquery.cpp:517`, `:1112`), so shadow-only proxies sit outside the merge
+while raster's shadow pass draws exactly them. Shadow from real geometry and
+delete the proxies rather than plumbing them through. Proxies exist because four
+cascades and six cube faces of real geometry were expensive on 2003 hardware,
+which is no longer a constraint.
+
+This is where the image changes on purpose.
+
+### F5 — the mega-draw, if it pays
 
 The payoff the rest of this document is justified by, and until now the only
 part of it never planned. The opening section argues raster consuming `GpuScene`
 "matters most exactly where the machine is weakest: a mega-draw over merged
 geometry against 1048 per-mesh draws", the registry section argues a mega-draw
-dissolves `drawScene`, and Phase E excludes it — so it has been the motivation
+dissolves `drawScene`, and every earlier draft excluded it — so it was the motivation
 for three sections and the subject of none.
 
-**It goes last because it depends on both phases before it.** E puts merged
-geometry into a raster draw at all; F is what makes bindless reachable. Doing it
-earlier means doing it twice.
+**It is the last substep of this phase, not a phase of its own.** F0-F4 put
+merged geometry into a raster draw and prove it byte-identical; only then is
+there anything to collapse. Bindless arrives from Phase E having put the
+tracer's descriptor-indexing machinery somewhere shareable.
 
-### The gate: measure before building
+#### The gate: measure before building
 
 **This project has already been wrong about exactly this.** Culling moved from
 ~200 frustum tests per frame to ~9000; caching it removed the calls and changed
@@ -1223,7 +1196,7 @@ outcome rather than a failure. The low-end note in the opening section says the
 same thing from the other direction: a per-frame compute merge on weak compute
 may cost more than the draws it saves.
 
-### What one draw actually requires
+#### What one draw actually requires
 
 **1. Per-primitive materials, which means bindless — and raster has none.**
 Today each draw binds its own texture set (`acquireTextureSet`, per draw) and
@@ -1266,7 +1239,7 @@ should be read as "a handful" from here.
 there, so they partition by (blend, cull) and keep the ordering sort over ranges.
 The mega-draw is an opaque-pass claim; transparents get whatever falls out.
 
-### Bar
+#### Bar
 
 Pixel-identical for the opaque G-buffer: same geometry, same materials, only the
 binding model changed. Shadows are already settled by then.
@@ -1277,13 +1250,26 @@ one exists solely to make something faster, so a version that is
 pixel-identical and no quicker has failed and should be reverted rather than
 kept for tidiness.
 
-### What it deletes
+#### What it deletes
 
 Per-draw texture sets, per-draw `LocalUniforms` pushes, and — once skinned
 geometry consumes the merged stream — the per-draw bone palette upload
 (`pass/vulkan.cpp:274-297`) together with the CPU palette build
 (`node/mesh.cpp:327-354`). That last deletion is the one the target section
 promised and is the clearest signal the phase worked.
+
+### Not in this phase
+
+- **`offMaterial`**, which still has no `SceneObject` field. Walkmesh debug
+  geometry is its only consumer and deleting that remains the better answer than
+  widening the vertex.
+- **The 575-reference containment sweep** — that is Phase E, and it has already happened by the time this phase starts.
+
+`pipeline/vulkan.cpp` remains the awkward one: it owns frame ordering and returns
+before every raster pass in path-tracing mode (`:1337-1373`), so a core consumed
+by both needs a precise update point and per-consumer barriers. Its
+`glToVulkanClip` rewrite (`:1319-1334`) and the negative-height viewport
+(`:627-634`) are real Vulkan cleanups that belong with Phase E.
 
 ## Hazards
 
@@ -1353,7 +1339,7 @@ Step 4 cannot be compared at all, and should be measured rather than compared.
 
 ## Not in scope
 
-**For the pixel-identical phases — A, B0, B, C, and Phase E's raster half —
+**For the pixel-identical phases — A, B0, B, C, E, and Phase F's raster half —
 no behaviour changes, no features, no performance work.** If something looks
 wrong mid-refactor, write it down rather than fixing it: a refactor that also
 changes behaviour cannot be verified by comparing images, and the whole
