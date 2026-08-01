@@ -239,26 +239,30 @@ every reference for the sake of tidiness.
 | **B0** | one source buffer, offsets not addresses | pixel-identical | **done** `a24b1bd3` |
 | **B** | extract `GpuScene`, tracer as only consumer | pixel-identical | **done** `6fed967b` |
 | **C** | residency in the contract, not the implementation | pixel-identical | **done** `badd9c5f` |
-| **D** | admit everything, and see it correctly | traced image changes deliberately, inspected per class; raster untouched except where stated | grass, dangly, saber, particles **done**; blended transparency open |
-| *(registry)* | delete `RenderRegistry` whole — it is branch-only; `SceneGraph` admits directly | **full raster image hash-identical, shadows included**; traced within noise | not started |
-| **E** | Vulkan containment: no Vulkan API outside `graphics/vulkan` | pixel-identical — it is a relocation, so raster hash-identical and traced within noise | not started |
-| **F** | raster consumes `GpuScene`, ending in the mega-draw (F5) | **G-buffer byte-identical**; shadows change deliberately and are judged by eye. F5 additionally must be **measurably faster** or it is reverted | not started |
+| **D** | admit everything, and see it correctly | traced image changes deliberately, inspected per class; raster untouched except where stated | **done** — grass, dangly, saber, particles admitted; blended transparency **superseded by hybrid**, see below |
+| *(registry)* | delete `RenderRegistry` whole — it is branch-only; `SceneGraph` admits directly | **full raster image hash-identical, shadows included**; traced within noise | **done** `8d37449d` |
+| **E** | Vulkan containment: no Vulkan API outside `graphics/vulkan` | pixel-identical — it is a relocation, so raster hash-identical and traced within noise | **done** `6dd2965b`, `6a8d280d` |
+| **F** | raster consumes `GpuScene` and becomes primary visibility for both renderers, ending in the mega-draw (F5) | **G-buffer byte-identical** — under hybrid this is the contract with the tracer, not a safety check. Shadows change deliberately and are judged by eye; F5 must additionally be **measurably faster** or it is reverted | next |
 
 ### What happens next, in order
 
 Written down 2026-08-01 because the correctness work in D pulled a long way
 from the phase list and the way back should not have to be rediscovered.
 
-**1. Close Phase D.** One open question remains, and it is narrower than the two
-defects this step originally named. **Grass shadows work** — the blades were
-sub-pixel at distance, not absent, which took a purpose-built test module to
-establish and cost an afternoon of arguing with a screenshot first. **Smoke is
-admitted, traced, and wrong**: a solid black band on the main menu where retro
-renders soft grey fog. The suspect is the transparency model rather than
-admission — see "Coverage is transmission" under Phase D, which also records
-the model itself. Everything built alongside this (the free camera, the TLAS
-content counts, the traced G-buffer dump, the testbed module) exists to make it
-checkable and is not separate work.
+**1. ~~Close Phase D.~~ Closed.** Grass, dangly, saber and particles are
+admitted and seen correctly. Grass shadows work — the blades were sub-pixel at
+distance, not absent, which took a purpose-built test module to establish and
+cost an afternoon of arguing with a screenshot first.
+
+The one defect left open — smoke rendering as a black band — is **superseded
+rather than fixed**, by the hybrid decision (`vulkan-rt-backend.md` §11.2).
+Its truncating half cannot happen once raster owns primary visibility, because
+the background behind a puff *is* the G-buffer and was never at risk. Its other
+half, smoke self-shadowing to black under single scattering, is a real lighting
+problem that belongs with participating media, not with admission. Everything
+built alongside it — the free camera, the TLAS content counts, the traced
+G-buffer dump, the testbed module — outlives the defect and is used by every
+phase after this one.
 
 **2. ~~Measure the registry copy.~~ It was already measured, on 2026-07-28, and
 this plan asked for it again for a year's worth of paragraphs.** The numbers are
@@ -1055,10 +1059,11 @@ change matrices, so each is its own commit with its own capture check.
 
 ## Phase F — raster consumes `GpuScene`
 
-Rewritten 2026-08-01, for two reasons. The bar hardened to a byte-identical
-G-buffer, which turns several things the earlier draft deferred into
-prerequisites. And the Vulkan containment condition, which this document had
-never stated, turns out to govern *where* the phase's new code may be written.
+Rewritten 2026-08-01, then reconciled with the hybrid decision the same day.
+The bar hardened to a byte-identical G-buffer, which turns several things the
+earlier draft deferred into prerequisites; Phase E has since put the Vulkan
+surface where this phase's new code belongs, so that constraint is satisfied
+rather than pending.
 
 Of the five breakages the first draft listed, four are gone. Three were tracer
 correctness bugs fixed in Phase D — dangly and saber frozen at base pose
@@ -1068,6 +1073,38 @@ handed to it. The fourth, "merged shadow draws lose frustum rejection", stopped
 mattering when caching culling removed ~9000 frustum tests per frame and moved
 frame time by *nothing*. What remains is raster's own lowering over a scene that
 is already correct.
+
+### What hybrid changed about this phase
+
+Reconciled 2026-08-01. This phase was written before the hybrid decision
+(`vulkan-rt-backend.md` §11.2) and read as an optimisation justified by CPU
+overhead on weak hardware. It is not that any more.
+
+**Raster owns primary visibility for both renderers.** Camera rays are not
+traced; the tracer does transport starting from raster's G-buffer. So this phase
+is not optional and does not depend on the mega-draw paying off — one geometry
+path is a requirement, and if the merge turns out not to pay on weak hardware
+the fallback is N draws over the same `GpuScene` records, not a second path.
+
+**And the byte-identical bar stops being a safety check.** It was "prove the
+relocation changed nothing". Under hybrid the G-buffer raster produces *is the
+tracer's input*, so the bar is the contract between the two renderers: every
+traced frame is only as correct as the G-buffer under it.
+
+Three pieces of work follow from hybrid that the steps below do not mention, and
+they belong at the end of this phase rather than in it:
+
+- **the traced primary path is retired**, except the debug shader that emits a
+  ray-traced G-buffer for validation — the `RTDebug` mode, backlog 7.9. Delete
+  the visibility walk without pinning that down first and the ability to check
+  the merged scene against raster goes with it.
+- **coverage-as-transmission goes with it**, in its primary-ray half only.
+  Shading a blended surface and continuing with `1 - alpha` describes a camera
+  ray walking a stack of quads, and there is no camera ray. Shadow rays and
+  secondary bounces still cross smoke and keep the model.
+- **transmissive surfaces have to be re-homed**, and how they are lit once
+  raster composites them is the open question hybrid creates. It is not answered
+  here.
 
 ### The bar, and why it has two halves
 
@@ -1186,7 +1223,9 @@ geometry against 1048 per-mesh draws", the registry section argues a mega-draw
 dissolves `drawScene`, and every earlier draft excluded it — so it was the motivation
 for three sections and the subject of none.
 
-**It is the last substep of this phase, not a phase of its own.** F0-F4 put
+**The phase does not hinge on this substep.** Under hybrid, raster is primary
+visibility whether or not one draw beats many; F5 only decides how those draws
+are issued. **It is the last substep, not a phase of its own.** F0-F4 put
 merged geometry into a raster draw and prove it byte-identical; only then is
 there anything to collapse. Bindless arrives from Phase E having put the
 tracer's descriptor-indexing machinery somewhere shareable.
