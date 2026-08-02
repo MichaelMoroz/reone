@@ -251,6 +251,28 @@ other. The classifier is shared in the letter and forked in the substance, and
 Admission belongs in its own unit that neither renderer owns. `RayQueryPipeline`
 then shrinks to what its name claims — bake, TLAS, dispatch, denoise.
 
+**Four simplifications ride along in the same step**, because they all live in
+the admission code being extracted and each makes the invariant cheaper to hold:
+
+1. **One procedural record kind.** The device side already lowered particles,
+   grass and billboards into a single `GpuSceneProceduralQuad`; the scene side
+   still carries three record types, three classifiers and three lowering
+   paths. One `RegisteredQuads` record collapses them, and a billboard is a
+   one-instance system.
+2. **Deduplicate materials.** Today `materials` holds one 256-byte record per
+   admitted *object* — two hundred meshes sharing ten textures upload two
+   hundred materials. Hash-cons by content; `materialIds` already provides the
+   per-triangle indirection, so nothing downstream changes.
+3. **Drop `objectPosition` from `MergedVertex`.** Hashed alpha was its only
+   consumer and the coverage correction deleted it. 16 of 160 bytes per merged
+   vertex, in the C++ struct, both slang declarations and the asserts, moved
+   together.
+4. **One classification vocabulary.** An object's nature is currently spread
+   over `RenderCategory`, `PrimitiveClass`, `surfaceType` and feature bits
+   24/25/26, each consumer re-inferring from texture blending flags. Admission
+   assigns one authoritative kind — opaque, cutout, lit-blended,
+   additive-emissive — and everything else derives from it mechanically.
+
 *Proves itself,* and this is the check worth having: **hash the
 `GpuSceneUpload` in both modes at the same camera and frame and require
 equality.** Object records, material table, bone and dangly pools, ordering.
