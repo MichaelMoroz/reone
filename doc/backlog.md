@@ -136,6 +136,132 @@ for shadow sampling". It did not; it was a constant, and that was the whole poin
 | 3.4 | ~~Shadow passes cull against the view camera, not the light~~ *(fixed 2026-07-28, `49496d2f`)* | Fixed two days before this backlog was compiled, so it was never true of the tree it describes: `libs/scene/graph.cpp:448-455` builds a frustum per cascade and per cube face from `_shadowLightSpace[i]` and hands them over as `VisibilityPolicy::shadowFrusta`. "Affects all three pipelines" was wrong regardless — there is one pipeline implementation, and `RenderMode` has three values. Residual re-filed as 3.6 | — | — |
 | 3.5 | Evaluate the dangly spring inside the merge kernel | Re-filed from `c1469287` and from 3.1. The spring is still solved on the CPU and its output uploaded every frame for 653 dangly nodes; moving it into the merge dispatch, which already writes the dynamic slice of the merged buffer, deletes the pass and the per-frame upload together | P2 | M |
 | 3.6 | Draw-distance culling still uses the view camera in shadow passes | The frustum test is now per light (3.4), but distance culling is not: `gpuscene.cpp:66-71` measures against `visibility.drawDistanceCamera`, which stays the view camera in a shadow pass. A caster far from the eye and close to the light is dropped after the frustum correctly kept it | P2 | S |
+| 3.7 | **Traced transparency: stochastic commits for coverage, a flat loop for emission, analytic sabers** — design settled, see below | Deletes the `passThrough` continuation restarts and all transmittance tracking from the nearest ray; additive emission stays deterministic and stays in `noiseFree` | P2 | L |
+
+### 3.7 — traced transparency, the design in full
+
+Settled 2026-08-03, unbuilt. Sequenced after the phase-F geometry track — G3 supplies
+the classification and the primitive list, and V1c narrows all of this to bounce
+rays, since raster will own primary visibility.
+
+**The split that drives everything: occlusion and emission are different
+channels.** Stochastic transparency — commit a candidate with probability equal
+to its coverage — is an unbiased estimator of the *multiplicative* channel,
+because a blended surface's contribution is proportional to its coverage: one
+coin flip stands in for both the attenuation and the added color. Additive
+surfaces (`kPtSurfaceUnlitTransparent` — saber blades, glow decals, bolts) are
+the degenerate limit: finite energy at zero coverage, straight color C/α
+divergent. No commit probability represents them — P = 0 loses the emission,
+any forced P occludes what additive never occludes, and a Russian-roulette
+weight is unbiased but turns a smooth glow into per-path fireflies. The
+structural constraint that decides it: emission routes through `noiseFree`
+(`outputs.slang:56`), which **bypasses the denoiser**, so additive emission
+must be computed deterministically no matter how stochastic traversal gets.
+
+**Traversal goes stochastic for coverage.** Today `ptTraceNearest` enumerates
+deterministically: blended coverage commits at every nonzero alpha and the path
+composites it as a transmitting surface, additive always commits and the path
+pays it with a `passThrough` continuation — a full traversal restart per layer
+(`trace.slang:79`, `:88-91`; `material.slang:411-418`). Instead: cutouts stay
+binary at the threshold, blended candidates commit with P = α, additive never
+commits. Nearest-committed-among-successes gives the correct chain — for
+surfaces at t₁ < t₂, P(scatter at 2) = (1−α₁)·α₂ — independent of enumeration
+order, provided the flips are decorrelated per ray × primitive. Paths become
+unit-weight: no throughput tracking, no restarts, one scattering event per
+segment. The new variance lands only in the lit-blended channel, which the
+denoiser owns and which is judged by distribution anyway. The one number to
+watch when built: blade-behind-smoke acquires binary per-path flicker in the
+accumulated radiance (counted fully or not at all, correct in expectation) —
+compare such frames by distribution against the enumerating tracer.
+
+**Emission is gathered over the confirmed segment, and expectation does the
+compositing.** Additive contribution = enumerate everything in
+`[0, CommittedRayT()]` and sum. Interleaving with stochastic occluders needs no
+sorting and no explicit T(z): if the smoke's flip commits, the segment ends
+there and the glow behind it is excluded; if it passes, the glow counts at full
+strength — expectation Le·(1−α), exactly right. The commit decision *is* the
+transmittance sample; additive surfaces are pure readers of it.
+
+**The gather ladder, walked to its end.** Recorded because each rung answers
+"why not the simpler-looking one":
+
+1. *In-loop fixed (t, Le) array, filtered by final committed t after the loop.*
+   The filter is mandatory: candidate enumeration is unordered, so a glow can be
+   enumerated before a nearer commit arrives — including hardware opaque commits
+   the loop never sees. Naive in-loop summing is biased **by traversal order,
+   differently per GPU**. Cost: the array is live state across `Proceed()` —
+   inline queries have no payloads, so the price is VGPRs and occupancy on a
+   latency-bound loop.
+2. *One `sawAdditive` bit, plus a conditional masked gather query over the
+   segment.* Conservative-correct by the query contract (every non-opaque
+   candidate nearer than the final hit must be offered). Near-zero live state;
+   second traversal only for rays that crossed additive geometry.
+3. *Accumulate regardless, track `maxAdditiveT`.* The sum is exact iff
+   `maxAdditiveT <= CommittedRayT()` — soundness from the max, completeness from
+   the query contract; misses validate trivially. Fallback to the gather only
+   when enumeration was out of order, which makes the fallback *rate* a
+   hardware-enumeration-order property: correctness invariant, cost
+   vendor-dependent.
+4. *A dedicated additive TLAS.* Both trace loops simplify (the always-commit
+   branch and the shadow ray's additive skip at `trace.slang:136` disappear;
+   shadow rays stop enumerating candidates they ignore), cost becomes
+   vendor-deterministic, but every segment pays a second query setup.
+5. **The decision: a flat O(N) loop** over a compact per-frame list of
+   world-space additive primitives. At this game's N — bolts, sabers, a few
+   decals — brute force beats any acceleration structure: wave-uniform trip
+   count (zero divergence), records through the scalar cache, texture fetches
+   only on hits inside the segment, one traversal per path segment *total*, and
+   no second AS to build. The loop is O(rays × N), bounces included; crossover
+   is a few hundred primitives (screen-filling additive particle effects).
+   Debug-counter N per frame; the escape hatch is rung 4, and the function's
+   contract — enumerate the segment, sum emission — doesn't change if swapped.
+
+**Shadow rays don't change.** `ptShadowTransmittance` already skips additive,
+and its deterministic (1−α) product is strictly lower-variance than a coin
+flip. Leave it.
+
+**Sabers and bolts become analytic capsules, not meshes.** The mesh saber is
+crossed additive planes assuming the viewer is the camera — an assumption
+bounce rays violate: a blade reflected in a floor is seen edge-on and
+degenerates into a line. The record becomes a capsule and the evaluation
+becomes the **line integral of an emission density** around the blade axis
+(hot core, radial falloff) — view-independent by construction, a few dozen
+ALU, and the segment bound clips it correctly for free: the occluded half of a
+blade behind a pillar simply isn't in the integral. The swing trail is a
+deterministic chain of 4–8 decaying capsules from a CPU-side transform history
+— **not** stochastic time sampling, which would inject noise into `noiseFree`.
+Bolts are capsules outright and will look better than the authored billboards.
+Consequence: the additive class may leave merged geometry entirely — particles
+and decals stay procedural quads, capsules are records — and nothing additive
+remains in either the merged buffer's traced ranges or any TLAS.
+
+Two requirements ride with the capsules:
+
+- **One shared slang function, two callers.** The capsule record is scene
+  description; the tracer evaluates the integral per segment in the additive
+  loop, raster draws a bounding quad in the blended pass and evaluates the
+  identical function per fragment over `[near, opaque depth]`. Same record,
+  same code — the modes agree by construction instead of by two
+  implementations of one glow.
+- **Parameters come from authored content.** Blade color, length and radius
+  must be derived from the existing models and textures — fitted at admission
+  or curated per crystal like `curatedEmission`. This deliberately departs from
+  the authored 2003 look, same doctrine as "PBR is not held to its old output";
+  it is a look decision to make explicitly, not discover.
+
+**Raster's side is already settled by G8** — the CPU sort plus premultiplied
+`ONE, ONE_MINUS_SRC_ALPHA` keeps the two channels separate deterministically.
+Stochastic transparency in raster (Enderton-style stochastic depth samples,
+with additive fragments as visibility *readers*, never writers) is only the
+escape hatch if the blended set ever outgrows the sort. At a few hundred quads
+it won't.
+
+**Hooks into phase F:** admission's one classification vocabulary (G3) supplies
+the additive-emissive kind, and building the primitive list is its consumer.
+The list, AS membership and the sort remap are all **derived artifacts, not
+scene description** — outside the G3 upload-hash equality check by
+construction. If any additive geometry stays in the merge meanwhile, G3 must
+keep its triangles contiguous in merge order so a range can name them.
 
 ## 4. Build and tooling
 
