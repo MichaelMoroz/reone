@@ -23,43 +23,8 @@ namespace reone {
 
 namespace graphics {
 
-void Uniforms::init() {
-}
-
 void Uniforms::setGlobals(const std::function<void(GlobalUniforms &)> &block) {
     block(_globals);
-}
-
-void Uniforms::setLocals(const std::function<void(LocalUniforms &)> &block) {
-    block(_locals);
-}
-
-void Uniforms::setBones(const std::function<void(BoneUniforms &)> &block) {
-    block(_bones);
-}
-
-void Uniforms::setDangly(const std::function<void(DanglyUniforms &)> &block) {
-    block(_dangly);
-}
-
-void Uniforms::setParticles(const std::function<void(ParticleUniforms &)> &block) {
-    block(_particles);
-}
-
-void Uniforms::setGrass(const std::function<void(GrassUniforms &)> &block) {
-    block(_grass);
-}
-
-void Uniforms::setWalkmesh(const std::function<void(WalkmeshUniforms &)> &block) {
-    block(_walkmesh);
-}
-
-void Uniforms::setAABB(const std::function<void(AABBUniforms &)> &block) {
-    block(_aabb);
-}
-
-void Uniforms::setText(const std::function<void(TextUniforms &)> &block) {
-    block(_text);
 }
 
 void Uniforms::setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block) {

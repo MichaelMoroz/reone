@@ -133,9 +133,8 @@ void FsrUpscaler::dispatch(VkCommandBuffer cmd, const Inputs &inputs, const glm:
     dispatch.frameTimeDelta = frameTimeSeconds * 1000.0f; // FSR wants milliseconds
     dispatch.preExposure = 1.0f;                          // must be > 0; we do not pre-expose
     dispatch.reset = reset;
-    // Plain forward depth, 0 at the near plane: glToVulkanClip rescales GL's
-    // -1..1 into 0..1 without inverting, so neither DEPTH_INVERTED nor
-    // DEPTH_INFINITE applies and near/far are passed the obvious way round.
+    // Plain forward Vulkan depth, 0 at the near plane. Neither DEPTH_INVERTED
+    // nor DEPTH_INFINITE applies and near/far are passed the obvious way round.
     dispatch.cameraNear = cameraNear;
     dispatch.cameraFar = cameraFar;
     dispatch.cameraFovAngleVertical = verticalFov;

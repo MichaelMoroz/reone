@@ -38,7 +38,7 @@ public:
         _zNear = zNear;
         _zFar = zFar;
 
-        Camera::setProjection(glm::perspective(fovy, aspect, zNear, zFar));
+        Camera::setProjection(glm::perspectiveRH_ZO(fovy, aspect, zNear, zFar));
     }
 
 private:

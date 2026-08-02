@@ -73,22 +73,6 @@ public:
     MOCK_METHOD(Texture &, get, (const std::string &), (override));
 };
 
-class MockUniforms : public IUniforms, boost::noncopyable {
-public:
-    MOCK_METHOD(void, setGlobals, (const std::function<void(GlobalUniforms &)> &), (override));
-    MOCK_METHOD(void, setLocals, (const std::function<void(LocalUniforms &)> &), (override));
-    MOCK_METHOD(void, setBones, (const std::function<void(BoneUniforms &)> &), (override));
-    MOCK_METHOD(void, setDangly, (const std::function<void(DanglyUniforms &)> &), (override));
-    MOCK_METHOD(void, setParticles, (const std::function<void(ParticleUniforms &)> &), (override));
-    MOCK_METHOD(void, setGrass, (const std::function<void(GrassUniforms &)> &), (override));
-    MOCK_METHOD(void, setWalkmesh, (const std::function<void(WalkmeshUniforms &)> &), (override));
-    MOCK_METHOD(void, setAABB, (const std::function<void(AABBUniforms &)> &), (override));
-    MOCK_METHOD(void, setText, (const std::function<void(TextUniforms &)> &), (override));
-    MOCK_METHOD(void, setScreenEffect, (const std::function<void(ScreenEffectUniforms &)> &), (override));
-    MOCK_METHOD(const GlobalUniforms &, globals, (), (const override));
-    MOCK_METHOD(const WalkmeshUniforms &, walkmesh, (), (const override));
-};
-
 class TestGraphicsModule : boost::noncopyable {
 public:
     void init() {
@@ -97,7 +81,7 @@ public:
         _renderer2d = std::make_unique<Mock2DRenderer>();
         _statistic = std::make_unique<MockStatistic>();
         _textureRegistry = std::make_unique<MockTextureRegistry>();
-        _uniforms = std::make_unique<MockUniforms>();
+        _uniforms = std::make_unique<Uniforms>();
 
         _services = std::make_unique<GraphicsServices>(
             *_meshRegistry,
@@ -118,7 +102,7 @@ private:
     std::unique_ptr<Mock2DRenderer> _renderer2d;
     std::unique_ptr<MockStatistic> _statistic;
     std::unique_ptr<MockTextureRegistry> _textureRegistry;
-    std::unique_ptr<MockUniforms> _uniforms;
+    std::unique_ptr<Uniforms> _uniforms;
 
     std::unique_ptr<GraphicsServices> _services;
 };

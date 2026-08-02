@@ -1417,10 +1417,9 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
                 // Halton(2,3) with y negated for the UV-down axis.
                 const float verticalFov =
                     2.0f * std::atan(1.0f / std::max(1e-4f, projection[1][1]));
-                // Read the planes back out of the matrix rather than plumbing
-                // them down: unprojecting both ends of the depth range is
-                // convention-agnostic, which matters because this projection
-                // has already been through glToVulkanClip.
+                // Read the planes back out of the native Vulkan projection
+                // rather than plumbing them down: unprojecting both ends of
+                // the depth range avoids depending on its coefficient layout.
                 const glm::mat4 projectionInv = glm::inverse(projection);
                 const glm::vec4 nearH = projectionInv * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
                 const glm::vec4 farH = projectionInv * glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);

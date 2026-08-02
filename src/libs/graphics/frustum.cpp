@@ -27,14 +27,14 @@ Frustum::Frustum(const glm::mat4 &viewProjection) {
         _planes[1].normal[i] = viewProjection[i][3] - viewProjection[i][0];
         _planes[2].normal[i] = viewProjection[i][3] + viewProjection[i][1];
         _planes[3].normal[i] = viewProjection[i][3] - viewProjection[i][1];
-        _planes[4].normal[i] = viewProjection[i][3] + viewProjection[i][2];
+        _planes[4].normal[i] = viewProjection[i][2];
         _planes[5].normal[i] = viewProjection[i][3] - viewProjection[i][2];
     }
     _planes[0].distance = viewProjection[3][3] + viewProjection[3][0];
     _planes[1].distance = viewProjection[3][3] - viewProjection[3][0];
     _planes[2].distance = viewProjection[3][3] + viewProjection[3][1];
     _planes[3].distance = viewProjection[3][3] - viewProjection[3][1];
-    _planes[4].distance = viewProjection[3][3] + viewProjection[3][2];
+    _planes[4].distance = viewProjection[3][2];
     _planes[5].distance = viewProjection[3][3] - viewProjection[3][2];
     for (auto &plane : _planes) {
         float length = glm::length(plane.normal);

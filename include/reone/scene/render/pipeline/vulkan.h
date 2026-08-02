@@ -13,7 +13,7 @@
 
 namespace reone::graphics {
 class IMeshRegistry;
-class IUniforms;
+class Uniforms;
 class VulkanRenderer;
 class VulkanScenePipeline;
 class VulkanGpuScene;
@@ -29,7 +29,7 @@ public:
     VulkanRenderPipeline(glm::ivec2 targetSize,
                          graphics::GraphicsOptions &options,
                          graphics::VulkanRenderer &renderer,
-                         graphics::IUniforms &uniforms,
+                         graphics::Uniforms &uniforms,
                          graphics::IMeshRegistry &meshRegistry,
                          graphics::TextureRegistry &textureRegistry,
                          GpuScene &gpuScene,
@@ -50,7 +50,7 @@ private:
     glm::ivec2 _targetSize;
     graphics::GraphicsOptions &_options;
     graphics::VulkanRenderer &_renderer;
-    graphics::IUniforms &_uniforms;
+    graphics::Uniforms &_uniforms;
     graphics::IMeshRegistry &_meshRegistry;
     graphics::TextureRegistry &_textureRegistry;
     GpuScene &_gpuScene;

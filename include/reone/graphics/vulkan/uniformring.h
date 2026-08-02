@@ -31,11 +31,9 @@ class VulkanDevice;
  * Per-draw uniform data, bump-allocated out of one host-visible buffer per
  * frame in flight and addressed by dynamic offset.
  *
- * This is what replaces the OpenGL model described in §3.1 of the plan, where
- * every setLocals overwrote a whole uniform buffer that queued draws still
- * referenced. That is legal in GL only because the driver renames the storage
- * behind the caller; with recorded command buffers there is no such rescue, and
- * the second draw would read the third draw's data.
+ * This replaces the old mutable uniform-buffer model, where each update
+ * overwrote storage that queued draws still referenced. With recorded command
+ * buffers the second draw would otherwise read the third draw's data.
  *
  * So each draw gets its own slice, and nothing is ever overwritten within a
  * frame. Reuse happens only when the frame's fence says the GPU has finished

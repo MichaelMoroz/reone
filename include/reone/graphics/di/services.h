@@ -26,7 +26,7 @@ class IRenderer;
 class I2DRenderer;
 class IStatistic;
 class ITextureRegistry;
-class IUniforms;
+class Uniforms;
 
 struct GraphicsServices {
     IMeshRegistry &meshRegistry;
@@ -34,7 +34,7 @@ struct GraphicsServices {
     I2DRenderer &renderer2d;
     IStatistic &statistic;
     ITextureRegistry &textureRegistry;
-    IUniforms &uniforms;
+    Uniforms &uniforms;
 
     GraphicsServices(
         IMeshRegistry &meshRegistry,
@@ -42,7 +42,7 @@ struct GraphicsServices {
         I2DRenderer &renderer2d,
         IStatistic &statistic,
         ITextureRegistry &textureRegistry,
-        IUniforms &uniforms) :
+        Uniforms &uniforms) :
         meshRegistry(meshRegistry),
         renderer(renderer),
         renderer2d(renderer2d),

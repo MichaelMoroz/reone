@@ -611,7 +611,7 @@ static std::vector<glm::vec4> computeFrustumCornersWorldSpace(const glm::mat4 &p
                 auto pt = inv * glm::vec4(
                                     2.0f * x - 1.0f,
                                     2.0f * y - 1.0f,
-                                    2.0f * z - 1.0f,
+                                    static_cast<float>(z),
                                     1.0f);
                 corners.push_back(pt / pt.w);
             }
@@ -628,7 +628,7 @@ static glm::mat4 computeDirectionalLightSpaceMatrix(
     const glm::vec3 &lightDir,
     const glm::mat4 &cameraView) {
 
-    auto projection = glm::perspective(fov, aspect, near, far);
+    auto projection = glm::perspectiveRH_ZO(fov, aspect, near, far);
 
     glm::vec3 center(0.0f);
     auto corners = computeFrustumCornersWorldSpace(projection, cameraView);
@@ -666,7 +666,7 @@ static glm::mat4 computeDirectionalLightSpaceMatrix(
         maxZ *= zMult;
     }
 
-    auto lightProjection = glm::ortho(minX, maxX, minY, maxY, minZ, maxZ);
+    auto lightProjection = glm::orthoRH_ZO(minX, maxX, minY, maxY, minZ, maxZ);
     return lightProjection * lightView;
 }
 
@@ -707,7 +707,7 @@ void SceneGraph::computeLightSpaceMatrices() {
             _shadowCascadeFarPlanes[i] = far;
         }
     } else {
-        glm::mat4 projection(glm::perspective(kPointLightShadowsFOV, 1.0f, kPointLightShadowsNearPlane, kPointLightShadowsFarPlane));
+        glm::mat4 projection(glm::perspectiveRH_ZO(kPointLightShadowsFOV, 1.0f, kPointLightShadowsNearPlane, kPointLightShadowsFarPlane));
         for (int i = 0; i < kNumCubeFaces; ++i) {
             glm::mat4 lightView(getPointLightView(shadowLightPosition(), static_cast<CubeMapFace>(i)));
             _shadowLightSpace[i] = projection * lightView;

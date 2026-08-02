@@ -49,7 +49,7 @@ static constexpr char kPostProcessModule[] = "postprocess";
 VulkanScenePipeline::VulkanScenePipeline(glm::ivec2 targetSize,
                                          GraphicsOptions &options,
                                          VulkanRenderer &renderer,
-                                         IUniforms &uniforms,
+                                         Uniforms &uniforms,
                                          IMeshRegistry &meshRegistry,
                                          TextureRegistry &textureRegistry,
                                          bool primaryRayMode) :
@@ -64,21 +64,6 @@ VulkanScenePipeline::VulkanScenePipeline(glm::ivec2 targetSize,
 
 VulkanScenePipeline::~VulkanScenePipeline() {
     deinit();
-}
-
-/**
- * Map an OpenGL clip volume onto Vulkan's.
- *
- * The scene graph builds its matrices for OpenGL, where clip z runs -1..1.
- * Vulkan clips at 0..1, so half the depth range would be discarded. This
- * rescales z without touching x or y - the y difference is handled by the
- * viewport instead, which leaves triangle winding alone.
- */
-static glm::mat4 glToVulkanClip(const glm::mat4 &m) {
-    glm::mat4 correction {1.0f};
-    correction[2][2] = 0.5f;
-    correction[3][2] = 0.5f;
-    return correction * m;
 }
 
 /**
@@ -310,22 +295,10 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
 Texture &VulkanScenePipeline::render(const VulkanSceneFramePlan &plan,
                                      IVulkanSceneCallbacks &callbacks) {
     auto cmd = _renderer.commandBuffer();
-    // The scene graph filled GlobalUniforms through the GL Uniforms object,
-    // which is inert under Vulkan, so the values are read back from its CPU
-    // mirror and pushed into this frame's arena instead.
-    // The matrices arrive in OpenGL convention; only the depth range needs
-    // rewriting here. See glToVulkanClip and the flipped viewport below.
+    // The scene graph stores the frame's Vulkan-native uniform values here;
+    // copy them into this frame's arena. Clip-space y is still handled by the
+    // flipped viewport so triangle winding remains unchanged.
     auto globals = _uniforms.globals();
-    globals.projection = glToVulkanClip(globals.projection);
-    globals.projectionInv = glm::inverse(globals.projection);
-    globals.viewProjection = glToVulkanClip(globals.viewProjection);
-    globals.prevViewProjection = glToVulkanClip(globals.prevViewProjection);
-    // The shadow matrices are built for OpenGL too, and are used twice: once to
-    // render the map and once to look into it. Correcting them here keeps the
-    // two agreeing, and puts shadow depth in 0..1 like everything else.
-    for (int i = 0; i < kNumShadowLightSpace; ++i) {
-        globals.shadowLightSpace[i] = glToVulkanClip(globals.shadowLightSpace[i]);
-    }
     auto globalsOffset = _renderer.uniformRing().push(globals);
 
     if (_primaryRayMode) {
@@ -663,9 +636,8 @@ void VulkanScenePipeline::dumpTargets(const std::filesystem::path &dir,
             for (size_t i = 0; i < count; ++i) {
                 float deviceDepth;
                 std::memcpy(&deviceDepth, raw.data() + i * sizeof(float), sizeof(deviceDepth));
-                // The scene projection is corrected into Vulkan's [0,1]
-                // depth range before rasterization (glToVulkanClip), so this
-                // is the Vulkan form, not OpenGL's 2*n*f denominator.
+                // Scene projections are built in Vulkan's [0,1] depth range,
+                // so this is the Vulkan form, not OpenGL's 2*n*f denominator.
                 linearDepth[i] = near * far /
                                  std::max(far - deviceDepth * (far - near), 1e-6f);
             }

@@ -238,66 +238,16 @@ struct alignas(16) ScreenEffectUniforms {
     float sharpenAmount {0.25f};
 };
 
-class IUniforms {
+class Uniforms {
 public:
-    virtual ~IUniforms() = default;
+    void setGlobals(const std::function<void(GlobalUniforms &)> &block);
+    void setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block);
 
-    virtual void setGlobals(const std::function<void(GlobalUniforms &)> &block) = 0;
-    virtual void setLocals(const std::function<void(LocalUniforms &)> &block) = 0;
-    virtual void setBones(const std::function<void(BoneUniforms &)> &block) = 0;
-    virtual void setDangly(const std::function<void(DanglyUniforms &)> &block) = 0;
-    virtual void setParticles(const std::function<void(ParticleUniforms &)> &block) = 0;
-    virtual void setGrass(const std::function<void(GrassUniforms &)> &block) = 0;
-    virtual void setWalkmesh(const std::function<void(WalkmeshUniforms &)> &block) = 0;
-    virtual void setAABB(const std::function<void(AABBUniforms &)> &block) = 0;
-    virtual void setText(const std::function<void(TextUniforms &)> &block) = 0;
-    virtual void setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block) = 0;
-
-    /**
-     * The CPU-side mirror, as last set.
-     *
-     * The Vulkan pipeline needs it because the scene graph fills these blocks
-     * through this interface and the OpenGL upload behind it is inert; the
-     * values have to be read back and written into the frame's uniform arena.
-     */
-    virtual const GlobalUniforms &globals() const = 0;
-    virtual const WalkmeshUniforms &walkmesh() const = 0;
-};
-
-class Uniforms : public IUniforms, boost::noncopyable {
-public:
-    void init();
-
-    void setGlobals(const std::function<void(GlobalUniforms &)> &block) override;
-    void setLocals(const std::function<void(LocalUniforms &)> &block) override;
-    void setBones(const std::function<void(BoneUniforms &)> &block) override;
-    void setDangly(const std::function<void(DanglyUniforms &)> &block) override;
-    void setParticles(const std::function<void(ParticleUniforms &)> &block) override;
-    void setGrass(const std::function<void(GrassUniforms &)> &block) override;
-    void setWalkmesh(const std::function<void(WalkmeshUniforms &)> &block) override;
-    void setAABB(const std::function<void(AABBUniforms &)> &block) override;
-    void setText(const std::function<void(TextUniforms &)> &block) override;
-    void setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block) override;
-
-    const GlobalUniforms &globals() const override { return _globals; }
-    const WalkmeshUniforms &walkmesh() const override { return _walkmesh; }
+    const GlobalUniforms &globals() const { return _globals; }
 
 private:
-    // Uniforms
-
     GlobalUniforms _globals;
-    LocalUniforms _locals;
-    BoneUniforms _bones;
-    DanglyUniforms _dangly;
-    ParticleUniforms _particles;
-    GrassUniforms _grass;
-    WalkmeshUniforms _walkmesh;
-    AABBUniforms _aabb;
-    TextUniforms _text;
     ScreenEffectUniforms _screenEffect;
-
-    // END Uniforms
-
 };
 
 } // namespace graphics

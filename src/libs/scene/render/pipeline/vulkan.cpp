@@ -50,7 +50,7 @@ private:
 VulkanRenderPipeline::VulkanRenderPipeline(glm::ivec2 targetSize,
                                            graphics::GraphicsOptions &options,
                                            graphics::VulkanRenderer &renderer,
-                                           graphics::IUniforms &uniforms,
+                                           graphics::Uniforms &uniforms,
                                            graphics::IMeshRegistry &meshRegistry,
                                            graphics::TextureRegistry &textureRegistry,
                                            GpuScene &gpuScene,
