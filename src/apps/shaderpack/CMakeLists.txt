@@ -38,6 +38,7 @@ set(SPIRV_MODULES
     "pbr_ibl:iblVertex+brdfFragment+irradianceFragment+prefilterFragment"
     "particles:particleVertex+particleFragment+oitParticleFragment"
     "pbr_resolve:resolveVertex+resolveFragment"
+    "retro_resolve:retroResolveVertex+retroResolveFragment"
     "pbr_ssao:ssaoVertex+ssaoFragment"
     "pbr_ssr:ssrVertex+ssrFragment"
     "rayquery:main"

@@ -150,6 +150,13 @@ void VulkanScenePipeline::init() {
     _output->setSampler(colorSampler);
     _gbuffer->setSamplers(colorSampler, depthSampler);
 
+    _retroResolveSet = _renderer.descriptors().createPersistentTextureSet(
+        {{1, &_gbuffer->color(VulkanGBuffer::Diffuse)},
+         {2, &_gbuffer->color(VulkanGBuffer::EyeNormal)},
+         {3, &_gbuffer->color(VulkanGBuffer::Lightmap)},
+         {4, &_gbuffer->color(VulkanGBuffer::SelfIllum)},
+         {5, &_gbuffer->depth()}});
+
     _outputHandle = std::make_shared<Texture>(
         "vk_scene_output", TextureType::TwoDim, Texture::Properties());
     _renderer.resources().registerExternal(*_outputHandle, *_output);
@@ -196,6 +203,7 @@ void VulkanScenePipeline::deinit() {
     _output.reset();
     _gbuffer.reset();
     _outputHandle.reset();
+    _retroResolveSet = VK_NULL_HANDLE;
     _inited = false;
 }
 
@@ -292,6 +300,59 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
     vkCmdEndRendering(cmd);
 }
 
+void VulkanScenePipeline::retroResolvePass(VkCommandBuffer cmd, uint32_t globalsOffset) {
+    VulkanDebugScope scope(_renderer.device(), cmd, "Retro deferred resolve",
+                           {0.9f, 0.7f, 0.3f});
+
+    _gbuffer->transitionColor(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    _gbuffer->transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+    transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    attachment.imageView = _output->view();
+    attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = {static_cast<uint32_t>(_targetSize.x),
+                                   static_cast<uint32_t>(_targetSize.y)};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &attachment;
+
+    VulkanPipelineCache::Key key;
+    key.module = "retro_resolve";
+    key.vertexEntry = "retroResolveVertex";
+    key.fragmentEntry = "retroResolveFragment";
+    key.colorFormats = {_output->format()};
+    auto &pipeline = _renderer.pipelines().get(key);
+
+    VkViewport viewport {0.0f, 0.0f, static_cast<float>(_targetSize.x),
+                         static_cast<float>(_targetSize.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
+                               static_cast<uint32_t>(_targetSize.y)}};
+    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+
+    vkCmdBeginRendering(cmd, &rendering);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    auto uniformSet = _renderer.descriptors().uniformSet(_renderer.uniformRing().frame());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                            VulkanDescriptors::kUniformSet, 1, &uniformSet,
+                            static_cast<uint32_t>(offsets.size()), offsets.data());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                            VulkanDescriptors::kTextureSet, 1, &_retroResolveSet, 0, nullptr);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+
+    transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
 Texture &VulkanScenePipeline::render(const VulkanSceneFramePlan &plan,
                                      IVulkanSceneCallbacks &callbacks) {
     auto cmd = _renderer.commandBuffer();
@@ -339,6 +400,7 @@ Texture &VulkanScenePipeline::render(const VulkanSceneFramePlan &plan,
         return *_outputHandle;
     }
 
+    bool outputResolved = false;
     for (const auto step : plan.steps) {
         switch (step) {
         case VulkanSceneStep::ProcessPBRTextures:
@@ -347,32 +409,38 @@ Texture &VulkanScenePipeline::render(const VulkanSceneFramePlan &plan,
         case VulkanSceneStep::Geometry:
             geometryPass(cmd, globalsOffset, callbacks);
             break;
+        case VulkanSceneStep::RetroResolve:
+            retroResolvePass(cmd, globalsOffset);
+            outputResolved = true;
+            break;
         }
     }
 
     // An empty raster plan is a supported degenerate frame. Keep the output
     // alive as a regular attachment, clear it to black, then publish it in the
     // layout the 2D compositor samples.
-    transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    attachment.imageView = _output->view();
-    attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
-    rendering.renderArea.extent = {static_cast<uint32_t>(_targetSize.x),
-                                   static_cast<uint32_t>(_targetSize.y)};
-    rendering.layerCount = 1;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachments = &attachment;
-    vkCmdBeginRendering(cmd, &rendering);
-    vkCmdEndRendering(cmd);
-    transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    _gbuffer->transitionColor(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    _gbuffer->transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+    if (!outputResolved) {
+        transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        attachment.imageView = _output->view();
+        attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+        VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+        rendering.renderArea.extent = {static_cast<uint32_t>(_targetSize.x),
+                                       static_cast<uint32_t>(_targetSize.y)};
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &attachment;
+        vkCmdBeginRendering(cmd, &rendering);
+        vkCmdEndRendering(cmd);
+        transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        _gbuffer->transitionColor(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        _gbuffer->transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+    }
 
     previewPass(cmd, globalsOffset, callbacks);
 
