@@ -4,6 +4,50 @@ Written 2026-07-30. Revised after an adversarial review that corrected most of
 the first draft's central claim; the review is preserved in the commit history
 of this file and its findings are folded in below.
 
+---
+
+## Start here
+
+**Everything below this box is reasoning.** It is worth reading once and never
+again. This box is the part that changes.
+
+**State:** A, B0, B, C, D, the registry removal and E are done. F is in
+progress and is **two independent tracks** — they do not block each other and
+neither is a prerequisite for the other.
+
+| track | what it does | next step | bar |
+|---|---|---|---|
+| **F-geo** | raster consumes `GpuScene`, ending in the mega-draw | **F3** — route the static opaque set through merged geometry | raster **byte-identical**, every increment |
+| **F-vis** | raster becomes primary visibility for every mode, then the sky composites once | **F6** — stop PathTracing early-returning past the G-buffer | `g_buffer_depth` exists and matches across PBR and PathTracing |
+
+**Done in F:** F0, F1 (`0cc67e42`), F2 (`394bf675`).
+
+**Which first?** F-geo. It holds the byte-identical bar the whole way, and that
+bar is the most reliable instrument this project has. F-vis gives it up at F6 by
+definition, so it is the work to do once the mechanically-checkable work is
+spent. The counter-argument is real and recorded: the sky is ~80% built and
+renders nothing until F7, so it is committed but unproven.
+
+**Where things are in this file**
+
+| you want | go to |
+|---|---|
+| the step to do next | *F-geo* — F0 through F5, near the end |
+| the sky work | *F-vis* — F6 through F10 |
+| why a phase exists at all | the reasoning sections between here and *Order of work* |
+| what an earlier draft got wrong | the correction blocks inside each phase |
+
+**Rules that apply to every step, so they are not repeated:**
+
+- Each increment must hold its bar **on its own**. A change spanning three steps
+  cannot be bisected when the hash moves, and the hash will move.
+- Capture with `--dev 0` and `--grassdensity 1`. `reone.cfg` is graded away from
+  defaults and wins every flag not passed.
+- Traced output is nondeterministic; compare distributions, never a stored
+  figure.
+
+---
+
 ## What this is for — the question that governs the rest
 
 Every earlier revision optimised the refactor without asking where the engine is
@@ -242,8 +286,8 @@ every reference for the sake of tidiness.
 | **D** | admit everything, and see it correctly | traced image changes deliberately, inspected per class; raster untouched except where stated | **done** — grass, dangly, saber, particles admitted; blended transparency **superseded by hybrid**, see below |
 | *(registry)* | delete `RenderRegistry` whole — it is branch-only; `SceneGraph` admits directly | **full raster image hash-identical, shadows included**; traced within noise | **done** `8d37449d` |
 | **E** | Vulkan containment: no Vulkan API outside `graphics/vulkan` | pixel-identical — it is a relocation, so raster hash-identical and traced within noise | **done** `6dd2965b`, `6a8d280d` |
-| **F-vis** | raster becomes primary visibility for *every* mode, then the sky composites once (F6 → F7–F10) | `g_buffer_depth` must exist and match across PBR and PathTracing; then the *props* bar — modules with `sky = none` stay raster byte-identical and scenery that is not sky is still drawn | **next** |
-| **F-geo** | raster consumes `GpuScene`, ending in the mega-draw (F2 → F3 → F4 → F5) | **G-buffer byte-identical** at every increment — under hybrid this is the contract with the tracer, not a safety check. Shadows change deliberately and are judged by eye; F5 must additionally be **measurably faster** or it is reverted | F2 **done** `394bf675`; F3 next |
+| **F-geo** | raster consumes `GpuScene`, ending in the mega-draw (F2 → F3 → F4 → F5) | **G-buffer byte-identical** at every increment — under hybrid this is the contract with the tracer, not a safety check. Shadows change deliberately and are judged by eye; F5 must additionally be **measurably faster** or it is reverted | **next** — F2 done `394bf675`, F3 next |
+| **F-vis** | raster becomes primary visibility for *every* mode, then the sky composites once (F6 → F7–F10) | `g_buffer_depth` must exist and match across PBR and PathTracing; then the *props* bar — modules with `sky = none` stay raster byte-identical and scenery that is not sky is still drawn | after F-geo |
 
 ### F is two tracks, not a chain
 
@@ -257,15 +301,21 @@ both renderers" — and they are independent:
 - **F-geo** needs merged geometry reachable from the render pass. It does not
   need hybrid.
 
-**They converge only at F5**, where the mega-draw wants both.
+**They never converge.** A first version of this split claimed they met at F5,
+where the mega-draw supposedly wanted both. That was invented and this document
+already said otherwise: *"the phase does not hinge on this substep. Under hybrid,
+raster is primary visibility whether or not one draw beats many; F5 only decides
+how those draws are issued."* F-geo runs to completion alone.
 
-**Do F-vis first.** The sky is the closest thing to finished anywhere in this
-plan — baker, manifest, per-game configs and 79 baked assets are all committed
-and none of it renders, because the renderer half is blocked on one thing. F-geo
-buys performance, and that performance only lands at F5 anyway, so deferring it
-defers nothing currently missed. The cost of this order is honest: F-vis changes
-traced output by definition and gives up the comfortable byte-identical bar
-earlier than F-geo would, which is why F6 carries a mechanical check of its own.
+**Do F-geo first**, on verification grounds rather than size — F6 is phase-sized
+too, so neither order puts a smaller thing first. F2 through F5 hold the
+byte-identical bar the whole way; F6 gives it up by definition. Spending the
+mechanically-checkable work first, while the strongest instrument still applies,
+beats trading it away to start sooner on work that needs judgement anyway.
+
+The counter-argument, recorded because it is not weightless: the sky is ~80%
+built — baker, manifest, per-game configs, 79 baked assets, all committed — and
+renders nothing until F7. Committed-but-unproven work is its own kind of debt.
 
 ## F-vis — raster becomes primary visibility, and the sky composites once
 
