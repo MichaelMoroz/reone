@@ -242,7 +242,53 @@ every reference for the sake of tidiness.
 | **D** | admit everything, and see it correctly | traced image changes deliberately, inspected per class; raster untouched except where stated | **done** — grass, dangly, saber, particles admitted; blended transparency **superseded by hybrid**, see below |
 | *(registry)* | delete `RenderRegistry` whole — it is branch-only; `SceneGraph` admits directly | **full raster image hash-identical, shadows included**; traced within noise | **done** `8d37449d` |
 | **E** | Vulkan containment: no Vulkan API outside `graphics/vulkan` | pixel-identical — it is a relocation, so raster hash-identical and traced within noise | **done** `6dd2965b`, `6a8d280d` |
-| **F** | raster consumes `GpuScene` and becomes primary visibility for both renderers, ending in the mega-draw (F5) | **G-buffer byte-identical** — under hybrid this is the contract with the tracer, not a safety check. Shadows change deliberately and are judged by eye; F5 must additionally be **measurably faster** or it is reverted | next |
+| **F** | raster consumes `GpuScene` and becomes primary visibility for both renderers — the mega-draw (F5), then the sky composited once for every mode (F6–F9) | **G-buffer byte-identical** — under hybrid this is the contract with the tracer, not a safety check. Shadows change deliberately and are judged by eye; F5 must additionally be **measurably faster** or it is reverted. For F6–F9 the bar is the *props*: modules with `sky = none` stay raster byte-identical, and the scenery that is not sky must still be drawn | next |
+
+### F6–F9 — one sky, one composite
+
+Folded into F in 2026-08-02 rather than made its own phase, because it is not a
+feature and not a successor: the sky can only composite once *because* F makes
+raster own primary visibility in every mode. Treating it as separable is what
+produced the mess recorded here.
+
+The classification half is done and committed — `skybake` renders sky shells
+offline into cubemaps (`8fa4e55b`, `6010a309`) and the per-module configs are
+curated data (`d219bd6b`). Backlog 1.14 carries the evidence for why runtime
+classification was abandoned. What remains is the renderer half, and it lands
+after F5 because it depends on the same unification:
+
+- **F6 — merge the render graph.** Today each mode owns its own chain of passes
+  and they only meet at AA. They should be one graph in which a mode *selects*
+  passes rather than owning a pipeline, which is what makes a shared composite
+  expressible at all. Without this, F7 has nowhere to live that is not "in two
+  places", and that is exactly how the last attempt went wrong.
+- **F7 — composite the sky once**, in a single pass immediately before
+  `filterChainPass` (`graphics/vulkan/scenepipeline.cpp:1282`), where Retro,
+  PBR, PathTrace and RTDebug converge. An integration attempt put it in
+  `pbr_resolve.slang` *and* `postprocess.slang` — two implementations of one
+  idea, precisely the fault that got the runtime bake deleted. It is
+  well-defined only because the renderer is hybrid: raster owns primary
+  visibility in every mode, so the G-buffer exists in all four and "nothing was
+  drawn here" is one test instead of a per-pipeline question. **Test coverage,
+  never depth** — `sGBufDepth` holds linear view-space distance, not a 0..1 clip
+  value, so comparing it against 1.0 is true for every pixel in the frame.
+- **F8 — the tracer keeps only transport.** `ptSkyRadiance` on bounce miss
+  stays; its primary-miss call is compositing and moves to F7.
+- **F9 — suppress exactly the shell.** The config names the meshes, so the baker
+  and the renderer read one list instead of each evaluating a rule and hoping
+  they agree. Neither the K1 no-walkmesh convention nor the TSL per-mesh flag
+  identifies the shell on its own: `001ebo16` flags all thirteen of its meshes,
+  and the set contains the star shell *and* the asteroids *and* the planet.
+  Suppressing by flag deletes a planet and looks like success.
+- **F10 — delete the runtime bake**, `slang/sky.slang`, and the shadow-ray
+  candidate rejection at `slang/tracing/trace.slang:134`, which exists only to
+  cope with sky geometry that may still be present.
+
+The trap worth naming, because it is what makes G4 safe to be strict about: a
+sky that renders correctly while quietly removing scenery still passes every
+sky-shaped test. So the bar is the props, not the sky — capture `001ebo` and
+`manm26ad` and confirm the asteroids, the planet and the Ahto City rings are
+still drawn.
 
 ### What happens next, in order
 
