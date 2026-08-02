@@ -242,9 +242,34 @@ every reference for the sake of tidiness.
 | **D** | admit everything, and see it correctly | traced image changes deliberately, inspected per class; raster untouched except where stated | **done** — grass, dangly, saber, particles admitted; blended transparency **superseded by hybrid**, see below |
 | *(registry)* | delete `RenderRegistry` whole — it is branch-only; `SceneGraph` admits directly | **full raster image hash-identical, shadows included**; traced within noise | **done** `8d37449d` |
 | **E** | Vulkan containment: no Vulkan API outside `graphics/vulkan` | pixel-identical — it is a relocation, so raster hash-identical and traced within noise | **done** `6dd2965b`, `6a8d280d` |
-| **F** | raster consumes `GpuScene` and becomes primary visibility for both renderers — the mega-draw (F5), then the sky composited once for every mode (F6–F9) | **G-buffer byte-identical** — under hybrid this is the contract with the tracer, not a safety check. Shadows change deliberately and are judged by eye; F5 must additionally be **measurably faster** or it is reverted. For F6–F9 the bar is the *props*: modules with `sky = none` stay raster byte-identical, and the scenery that is not sky must still be drawn | next |
+| **F-vis** | raster becomes primary visibility for *every* mode, then the sky composites once (F6 → F7–F10) | `g_buffer_depth` must exist and match across PBR and PathTracing; then the *props* bar — modules with `sky = none` stay raster byte-identical and scenery that is not sky is still drawn | **next** |
+| **F-geo** | raster consumes `GpuScene`, ending in the mega-draw (F2 → F3 → F4 → F5) | **G-buffer byte-identical** at every increment — under hybrid this is the contract with the tracer, not a safety check. Shadows change deliberately and are judged by eye; F5 must additionally be **measurably faster** or it is reverted | F2 **done** `394bf675`; F3 next |
 
-### F6–F9 — one sky, one composite
+### F is two tracks, not a chain
+
+Split 2026-08-02, because treating it as sequential put the largest and riskiest
+piece in front of work that was nearly finished. Phase F's own description names
+two things — "raster consumes `GpuScene`" *and* "becomes primary visibility for
+both renderers" — and they are independent:
+
+- **F-vis** needs traced mode to stop early-returning past the G-buffer
+  (`scenepipeline.cpp:191-207`). It does not need merged geometry.
+- **F-geo** needs merged geometry reachable from the render pass. It does not
+  need hybrid.
+
+**They converge only at F5**, where the mega-draw wants both.
+
+**Do F-vis first.** The sky is the closest thing to finished anywhere in this
+plan — baker, manifest, per-game configs and 79 baked assets are all committed
+and none of it renders, because the renderer half is blocked on one thing. F-geo
+buys performance, and that performance only lands at F5 anyway, so deferring it
+defers nothing currently missed. The cost of this order is honest: F-vis changes
+traced output by definition and gives up the comfortable byte-identical bar
+earlier than F-geo would, which is why F6 carries a mechanical check of its own.
+
+## F-vis — raster becomes primary visibility, and the sky composites once
+
+### F6–F10 — one sky, one composite
 
 Folded into F in 2026-08-02 rather than made its own phase, because it is not a
 feature and not a successor: the sky can only composite once *because* F makes
@@ -1228,6 +1253,12 @@ real geometry, so shadow maps and everything lit through them change on purpose.
 Shadows are judged by eye, the G-buffer by hash. Keeping the two bars apart is
 what makes the phase checkable; one combined "looks right" bar would hide a
 G-buffer regression behind an intended shadow change.
+
+## F-geo — raster consumes `GpuScene`
+
+F0 through F5. Independent of F-vis until F5, where the mega-draw wants both.
+F0, F1 and F2 are done; F3 is next and is larger than it reads — see the blocker
+recorded under it.
 
 ### F0 — is byte-identical reachable at all? Answer before building anything
 
