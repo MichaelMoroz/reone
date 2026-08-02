@@ -10,6 +10,7 @@
 namespace reone::graphics {
 class VulkanRayQuery;
 class VulkanRenderer;
+class VulkanGpuScene;
 struct GraphicsOptions;
 struct VulkanPrimaryRayContext;
 } // namespace reone::graphics
@@ -28,12 +29,15 @@ public:
     RayQueryPipeline(graphics::VulkanRenderer &renderer,
                      glm::ivec2 extent,
                      graphics::GraphicsOptions &options,
-                     GpuScene &gpuScene);
+                     GpuScene &gpuScene,
+                     graphics::VulkanGpuScene &deviceGpuScene,
+                     bool primaryRayMode);
     ~RayQueryPipeline();
 
     void init();
     void deinit();
     void render(const graphics::VulkanPrimaryRayContext &context);
+    graphics::GpuSceneUpload prepareRaster(const glm::mat4 &view);
     void restartTemporalHistory();
     graphics::VulkanRayQuery &native();
     const graphics::VulkanRayQuery &native() const;
@@ -43,9 +47,15 @@ private:
     glm::ivec2 _extent;
     graphics::GraphicsOptions &_options;
     GpuScene &_gpuScene;
+    graphics::VulkanGpuScene &_deviceGpuScene;
+    bool _primaryRayMode {false};
     std::unique_ptr<graphics::VulkanRayQuery> _native;
     graphics::RayQuerySubmission _submission;
     uint32_t _frameNumber {0};
+
+    graphics::GpuSceneUpload prepare(const glm::mat4 &view,
+                                     const ModelSceneNode *skyRoom,
+                                     bool skyBaked);
 
     std::optional<GpuScene::Classification> classifyMesh(
         const RegisteredMesh &mesh, const ModelSceneNode *skyRoom, bool skyBaked);

@@ -10,6 +10,7 @@
 
 #include "reone/graphics/options.h"
 #include "reone/graphics/vulkan/rayquery.h"
+#include "reone/graphics/vulkan/gpuscene.h"
 #include "reone/graphics/vulkan/scenepipeline.h"
 #include "reone/scene/render/pipeline/rayquery.h"
 #include "reone/system/logutil.h"
@@ -22,6 +23,11 @@ public:
 
     void renderPrimary(const graphics::VulkanPrimaryRayContext &context) override {
         _owner._rayQuery->render(context);
+    }
+
+    graphics::VulkanGpuScene::View mergeGeometry(VkCommandBuffer commandBuffer) override {
+        return _owner._deviceGpuScene->update(commandBuffer,
+                                               std::move(_owner._rasterUpload));
     }
 
     std::vector<graphics::VulkanExternalTarget> primaryTargets() const override {
@@ -66,11 +72,12 @@ void VulkanRenderPipeline::init() {
         _targetSize, _options, _renderer, _uniforms, _meshRegistry,
         _textureRegistry, _primaryRayMode);
     _executor->init();
-    if (_primaryRayMode) {
-        _rayQuery = std::make_unique<RayQueryPipeline>(
-            _renderer, _targetSize, _options, _gpuScene);
-        _rayQuery->init();
-    }
+    _deviceGpuScene = std::make_unique<graphics::VulkanGpuScene>();
+    _deviceGpuScene->init(_renderer);
+    _rayQuery = std::make_unique<RayQueryPipeline>(
+        _renderer, _targetSize, _options, _gpuScene, *_deviceGpuScene,
+        _primaryRayMode);
+    _rayQuery->init();
     _callbacks = std::make_unique<Callbacks>(*this);
     _inited = true;
 }
@@ -79,13 +86,22 @@ void VulkanRenderPipeline::deinit() {
     if (!_inited)
         return;
     _callbacks.reset();
+    if (_rayQuery)
+        _rayQuery->deinit();
     _rayQuery.reset();
+    if (_deviceGpuScene)
+        _deviceGpuScene->deinit();
+    _deviceGpuScene.reset();
     _executor.reset();
     _inited = false;
 }
 
 graphics::Texture &VulkanRenderPipeline::render(const CameraSceneNode *camera) {
     graphics::VulkanSceneFramePlan plan;
+    if (!_primaryRayMode) {
+        _rasterUpload = _rayQuery->prepareRaster(_uniforms.globals().view);
+        plan.steps.push_back(graphics::VulkanSceneStep::Geometry);
+    }
     return _executor->render(plan, *_callbacks);
 }
 

@@ -24,11 +24,13 @@
 #include "reone/graphics/textureutil.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/debugscope.h"
+#include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/descriptors.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/pbrtextures.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/graphics/vulkan/resources.h"
+#include "reone/graphics/vulkan/pipeline.h"
 #include "reone/graphics/vulkan/uniformring.h"
 #include "reone/system/logutil.h"
 
@@ -211,6 +213,100 @@ void VulkanScenePipeline::deinit() {
     _outputHandle.reset();
     _inited = false;
 }
+
+void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset,
+                                       IVulkanSceneCallbacks &callbacks) {
+    VulkanDebugScope scope(_renderer.device(), cmd, "Merged geometry (G-buffer)",
+                           {0.3f, 0.6f, 0.3f});
+
+    // Upload and compute-merge are deliberately recorded immediately before
+    // the draw. VulkanGpuScene publishes the compute-to-vertex/index barrier.
+    const auto scene = callbacks.mergeGeometry(cmd);
+
+    std::array<VkRenderingAttachmentInfo, VulkanGBuffer::Count> attachments {};
+    for (int i = 0; i < VulkanGBuffer::Count; ++i) {
+        auto &attachment = attachments[i];
+        attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        attachment.imageView = _gbuffer->color(i).view();
+        attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    }
+    VkRenderingAttachmentInfo depth {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depth.imageView = _gbuffer->depth().view();
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depth.clearValue.depthStencil = {1.0f, 0};
+
+    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = {static_cast<uint32_t>(_targetSize.x),
+                                   static_cast<uint32_t>(_targetSize.y)};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = VulkanGBuffer::Count;
+    rendering.pColorAttachments = attachments.data();
+    rendering.pDepthAttachment = &depth;
+    VkViewport viewport {0.0f, static_cast<float>(_targetSize.y),
+                         static_cast<float>(_targetSize.x),
+                         -static_cast<float>(_targetSize.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
+                               static_cast<uint32_t>(_targetSize.y)}};
+
+    _gbuffer->transitionColor(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    _gbuffer->transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+    vkCmdBeginRendering(cmd, &rendering);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    if (scene.vertices.buffer && scene.triangleCount != 0) {
+        VulkanPipelineCache::Key key;
+        key.module = "megadraw";
+        key.vertexEntry = "megadrawVertex";
+        key.fragmentEntry = "megadrawFragment";
+        key.colorFormats = VulkanGBuffer::colorFormats();
+        key.depthFormat = VulkanGBuffer::depthFormat();
+        key.depthTest = true;
+        key.depthWrite = true;
+        key.cull = FaceCullMode::None;
+        auto &pipeline = _renderer.pipelines().get(key);
+        auto uniformSet = _renderer.uniformSet();
+        std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+        offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+        auto megaSet = _renderer.descriptors().updateMegaDrawSet(
+            _renderer.frameIndex(), scene, _renderer.resources());
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                                VulkanDescriptors::kUniformSet, 1, &uniformSet,
+                                static_cast<uint32_t>(offsets.size()), offsets.data());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                                VulkanDescriptors::kMegaDrawSet, 1, &megaSet, 0, nullptr);
+        vkCmdBindIndexBuffer(cmd, scene.indices.buffer->handle(), scene.indices.offset,
+                             VK_INDEX_TYPE_UINT32);
+
+        struct MegaDrawPushConstants {
+            uint32_t triangleBase;
+            uint32_t materialGated;
+        };
+        if (scene.opaqueTriangleCount != 0) {
+            const MegaDrawPushConstants push {0, 0};
+            vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(push), &push);
+            vkCmdDrawIndexed(cmd, scene.opaqueTriangleCount * 3, 1, 0, 0, 0);
+        }
+        const uint32_t nonOpaqueTriangles =
+            scene.triangleCount - scene.opaqueTriangleCount;
+        if (nonOpaqueTriangles != 0) {
+            const MegaDrawPushConstants push {scene.opaqueTriangleCount, 1};
+            vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(push), &push);
+            vkCmdDrawIndexed(cmd, nonOpaqueTriangles * 3, 1,
+                             scene.opaqueTriangleCount * 3, 0, 0);
+        }
+    }
+    vkCmdEndRendering(cmd);
+}
+
 Texture &VulkanScenePipeline::render(const VulkanSceneFramePlan &plan,
                                      IVulkanSceneCallbacks &callbacks) {
     auto cmd = _renderer.commandBuffer();
@@ -274,6 +370,9 @@ Texture &VulkanScenePipeline::render(const VulkanSceneFramePlan &plan,
         switch (step) {
         case VulkanSceneStep::ProcessPBRTextures:
             _renderer.pbrTextures().process(cmd, globalsOffset);
+            break;
+        case VulkanSceneStep::Geometry:
+            geometryPass(cmd, globalsOffset, callbacks);
             break;
         }
     }

@@ -65,6 +65,9 @@ public:
         bool depthTest {false};
         bool depthWrite {false};
         std::vector<VkDescriptorSetLayout> setLayouts;
+        /** Fragment push constants shared by graphics layouts (mega-draw uses
+            two uints for triangle base and material-gated range selection). */
+        uint32_t fragmentPushConstantSize {0};
 
         /**
          * Empty means the vertex shader synthesises its own geometry from

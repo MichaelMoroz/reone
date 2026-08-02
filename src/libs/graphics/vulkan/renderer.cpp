@@ -70,7 +70,8 @@ void VulkanRenderer::init() {
         [this](const std::string &name) {
             return readSpirV(_shaderDir / (name + ".spv"));
         },
-        {_descriptors.uniformLayout(), _descriptors.textureLayout()});
+        {_descriptors.uniformLayout(), _descriptors.textureLayout(),
+         _descriptors.megaDrawLayout()});
     _renderer2d.init();
     _inited = true;
 }

@@ -21,6 +21,7 @@
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/gbuffer.h"
+#include "reone/graphics/vulkan/gpuscene.h"
 
 namespace reone::graphics {
 
@@ -33,6 +34,7 @@ struct GraphicsOptions;
 
 enum class VulkanSceneStep {
     ProcessPBRTextures,
+    Geometry,
 };
 
 struct VulkanSceneFramePlan {
@@ -58,6 +60,7 @@ class IVulkanSceneCallbacks {
 public:
     virtual ~IVulkanSceneCallbacks() = default;
     virtual void renderPrimary(const VulkanPrimaryRayContext &context) = 0;
+    virtual VulkanGpuScene::View mergeGeometry(VkCommandBuffer commandBuffer) = 0;
     virtual std::vector<VulkanExternalTarget> primaryTargets() const = 0;
 };
 
@@ -125,6 +128,8 @@ private:
 
     void previewPass(VkCommandBuffer cmd, uint32_t globalsOffset,
                      const IVulkanSceneCallbacks &callbacks);
+    void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset,
+                      IVulkanSceneCallbacks &callbacks);
     std::vector<Target> targetEntries(const IVulkanSceneCallbacks &callbacks) const;
 };
 

@@ -65,6 +65,13 @@ void VulkanPipeline::init(const Config &config) {
     VkPipelineLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layoutInfo.setLayoutCount = static_cast<uint32_t>(config.setLayouts.size());
     layoutInfo.pSetLayouts = config.setLayouts.data();
+    VkPushConstantRange pushRange {};
+    if (config.fragmentPushConstantSize != 0) {
+        pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        pushRange.size = config.fragmentPushConstantSize;
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges = &pushRange;
+    }
     if (vkCreatePipelineLayout(_device.handle(), &layoutInfo, nullptr, &_layout) != VK_SUCCESS) {
         vkDestroyShaderModule(_device.handle(), module, nullptr);
         throw std::runtime_error("Vulkan: pipeline layout creation failed");

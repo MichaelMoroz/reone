@@ -20,6 +20,7 @@
 #include <volk.h>
 
 #include "image.h"
+#include "gpuscene.h"
 
 namespace reone {
 
@@ -27,6 +28,7 @@ namespace graphics {
 
 class VulkanDevice;
 class VulkanUniformRing;
+class VulkanResources;
 
 /**
  * The uniform descriptor set: one dynamic uniform buffer per block, at the
@@ -56,6 +58,7 @@ public:
      */
     static constexpr int kUniformSet = 0;
     static constexpr int kTextureSet = 1;
+    static constexpr int kMegaDrawSet = 2;
 
     /** Distinct textures one frame may draw with before the pool is exhausted. */
     static constexpr uint32_t kMaxTextureSetsPerFrame = 1024;
@@ -76,6 +79,13 @@ public:
     VkDescriptorSet uniformSet(int frame) const { return _uniformSets[frame]; }
 
     VkDescriptorSetLayout textureLayout() const { return _textureLayout; }
+    VkDescriptorSetLayout megaDrawLayout() const { return _megaDrawLayout; }
+
+    /** Publish one frame's merged geometry/material buffers and bindless
+        texture tables to graphics set 2. */
+    VkDescriptorSet updateMegaDrawSet(
+        int frame, const VulkanGpuScene::View &scene,
+        const VulkanResources &resources);
 
     /**
      * Point a texture unit at @p image for every set acquired from now on.
@@ -137,6 +147,10 @@ private:
     std::vector<VkDescriptorSet> _uniformSets;
 
     VkDescriptorSetLayout _textureLayout {VK_NULL_HANDLE};
+    VkDescriptorSetLayout _megaDrawLayout {VK_NULL_HANDLE};
+    VkDescriptorPool _megaDrawPool {VK_NULL_HANDLE};
+    std::vector<VkDescriptorSet> _megaDrawSets;
+    uint32_t _bindlessTextureCapacity {0};
     VkSampler _sampler {VK_NULL_HANDLE};
     /**
      * One default per view shape. A unit declared Sampler2DArray in the shader

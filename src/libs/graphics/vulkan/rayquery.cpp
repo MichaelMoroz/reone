@@ -331,8 +331,6 @@ void VulkanRayQuery::init() {
     vkDestroyShaderModule(device.handle(), module, nullptr);
     device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_pipeline), "rayquery:primaryRay");
 
-    _deviceGpuScene = std::make_unique<VulkanGpuScene>();
-    _deviceGpuScene->init(_renderer);
 #ifdef R_ENABLE_NRD
     {
         // Stage 1 of the NRD integration: prove the library is linked, its
@@ -732,7 +730,6 @@ void VulkanRayQuery::deinit() {
     }
 #endif
     auto &device = _renderer.device();
-    _deviceGpuScene.reset();
     if (_pipeline)
         vkDestroyPipeline(device.handle(), _pipeline, nullptr);
     _raygenSbt.reset();
@@ -850,7 +847,8 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
                             VulkanImage &output,
                             const glm::mat4 &view, const glm::mat4 &projection,
                             const glm::vec4 &jitter,
-                            RayQuerySubmission submission, bool skyBaked) {
+                            RayQuerySubmission submission, VulkanGpuScene &deviceGpuScene,
+                            bool skyBaked) {
     const int frameIndex = _renderer.frameIndex();
     // A valid traced frame can contain no merged geometry. That path clears
     // the output and returns below, but its auxiliary images are still useful
@@ -885,7 +883,7 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
     _lastGrass = submission.grass;
     _lastParticles = submission.particles;
     _lastBillboards = submission.billboards;
-    const auto scene = _deviceGpuScene->update(cmd, std::move(submission.upload));
+    const auto scene = deviceGpuScene.update(cmd, std::move(submission.upload));
     if (!scene.vertices.buffer) {
         VkClearColorValue clear {{0.02f, 0.03f, 0.06f, 1.0f}};
         VkImageSubresourceRange range {};

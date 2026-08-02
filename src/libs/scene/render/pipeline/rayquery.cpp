@@ -12,6 +12,8 @@
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/rayquery.h"
+#include "reone/graphics/vulkan/renderer.h"
+#include "reone/graphics/vulkan/resources.h"
 #include "reone/graphics/vulkan/scenepipeline.h"
 #include "reone/scene/node/model.h"
 #include "reone/system/logutil.h"
@@ -26,15 +28,18 @@ using InstanceMaterial = GpuScene::InstanceMaterial;
 RayQueryPipeline::RayQueryPipeline(VulkanRenderer &renderer,
                                    glm::ivec2 extent,
                                    GraphicsOptions &options,
-                                   GpuScene &gpuScene) :
-    _renderer(renderer), _extent(extent), _options(options), _gpuScene(gpuScene) {}
+                                   GpuScene &gpuScene,
+                                   VulkanGpuScene &deviceGpuScene,
+                                   bool primaryRayMode) :
+    _renderer(renderer), _extent(extent), _options(options), _gpuScene(gpuScene),
+    _deviceGpuScene(deviceGpuScene), _primaryRayMode(primaryRayMode) {}
 
 RayQueryPipeline::~RayQueryPipeline() {
     deinit();
 }
 
 void RayQueryPipeline::init() {
-    if (_native)
+    if (!_primaryRayMode || _native)
         return;
     _native = std::make_unique<VulkanRayQuery>(_renderer, _extent, _options);
     _native->init();
@@ -199,16 +204,16 @@ std::optional<GpuScene::Classification> RayQueryPipeline::classifyMesh(const Reg
         }
     }
     if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
-        material.mainTex = _native->textureId(*texture).value_or(UINT32_MAX);
+        material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
     }
     if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::NormalMap)]) {
-        material.normalMap = _native->textureId(*texture).value_or(UINT32_MAX);
+        material.normalMap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
     }
     if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)]) {
-        material.lightmap = _native->textureId(*texture).value_or(UINT32_MAX);
+        material.lightmap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
     }
     if (const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::BumpMapArray)]) {
-        material.bumpMapArray = _native->textureId(*texture).value_or(UINT32_MAX);
+        material.bumpMapArray = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
         material.bumpMapFrame = mesh->material.bumpMapFrame;
         material.bumpMapScale = texture->features().bumpMapScaling;
     }
@@ -241,10 +246,10 @@ std::optional<GpuScene::Classification> RayQueryPipeline::classifyGrass(const Re
     material.featureMask = static_cast<uint32_t>(materialFeatureMask(grass.material)) |
                            UniformsFeatureFlags::hashedalphatest | (1u << 26) | (8u << 27);
     if (const auto *texture = grass.material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
-        material.mainTex = _native->textureId(*texture).value_or(UINT32_MAX);
+        material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
     }
     if (const auto *texture = grass.material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)]) {
-        material.lightmap = _native->textureId(*texture).value_or(UINT32_MAX);
+        material.lightmap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
     }
     const auto &src = _options.ptCategoryOverrides[8];
     material.overrideColor = glm::vec4(src.color[0], src.color[1], src.color[2],
@@ -267,7 +272,7 @@ std::optional<GpuScene::Classification> RayQueryPipeline::classifyParticles(cons
     material.uv2 = particles.material.uv[2];
     material.featureMask = static_cast<uint32_t>(materialFeatureMask(particles.material));
     if (const auto *texture = particles.material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
-        material.mainTex = _native->textureId(*texture).value_or(UINT32_MAX);
+        material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
     }
     // Particle OIT is a coverage layer. The tracer has no OIT compositing
     // path, so ordinary particles use its non-opaque alpha candidate path;
@@ -298,13 +303,44 @@ std::optional<GpuScene::Classification> RayQueryPipeline::classifyBillboard(cons
     ++_submission.billboards;
     InstanceMaterial material;
     material.diffuseColor = billboard.color;
-    material.mainTex = _native->textureId(billboard.texture.get()).value_or(UINT32_MAX);
+    material.mainTex = _renderer.resources().textureId(billboard.texture.get()).value_or(UINT32_MAX);
     // Registered billboards are lens flares: raster draws them additively with
     // no depth test. They are nevertheless represented in the BLAS so rays
     // can see their emitted contribution, while remaining non-occluding.
     material.surfaceType = 1;
     return {{material, GpuScene::PrimitiveClass::NonOpaque,
              GpuScene::ResidencyClass::Dynamic, nullptr}};
+}
+
+GpuSceneUpload RayQueryPipeline::prepare(const glm::mat4 &view,
+                                         const ModelSceneNode *skyRoom,
+                                         bool skyBaked) {
+    return _gpuScene.prepare(
+        [this, skyRoom, skyBaked](const RegisteredMesh &mesh) {
+            return classifyMesh(mesh, skyRoom, skyBaked);
+        },
+        [this](const RegisteredGrass &grass) { return classifyGrass(grass); },
+        [this](const RegisteredParticles &particles) { return classifyParticles(particles); },
+        [this](const RegisteredBillboard &billboard) { return classifyBillboard(billboard); },
+        view);
+}
+
+GpuSceneUpload RayQueryPipeline::prepareRaster(const glm::mat4 &view) {
+    _submission = {};
+    // Raster keeps the background room as ordinary opaque geometry. Only the
+    // traced path selects and bakes a sky room before entering this shared
+    // classifier/texture-registration implementation.
+    auto upload = prepare(view, nullptr, false);
+    // GpuScene reserves source strides 0 and 1 for expanded procedural quads;
+    // ordinary meshes carry their byte stride. Annotate only this raster copy
+    // of the material table so the shared traced upload remains byte-identical.
+    for (const auto &object : upload.objects) {
+        if (object.data.srcVertexStride <= 1) {
+            upload.materials[object.data.materialIndex].featureMask |=
+                kGpuSceneFeatureProcedural;
+        }
+    }
+    return upload;
 }
 
 void RayQueryPipeline::render(const VulkanPrimaryRayContext &context) {
@@ -403,17 +439,10 @@ void RayQueryPipeline::render(const VulkanPrimaryRayContext &context) {
         _native->clearSkyRoom();
     }
 
-    _submission.upload = _gpuScene.prepare(
-        [this, skyRoom, skyBaked](const RegisteredMesh &mesh) {
-            return classifyMesh(mesh, skyRoom, skyBaked);
-        },
-        [this](const RegisteredGrass &grass) { return classifyGrass(grass); },
-        [this](const RegisteredParticles &particles) { return classifyParticles(particles); },
-        [this](const RegisteredBillboard &billboard) { return classifyBillboard(billboard); },
-        context.view);
+    _submission.upload = prepare(context.view, skyRoom, skyBaked);
     _native->render(context.commandBuffer, context.globalsOffset, *context.output,
                     context.view, context.projection, context.jitter,
-                    std::move(_submission), skyBaked);
+                    std::move(_submission), _deviceGpuScene, skyBaked);
     ++_frameNumber;
 }
 

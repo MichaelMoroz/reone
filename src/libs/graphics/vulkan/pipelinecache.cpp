@@ -112,6 +112,10 @@ VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
     config.vertexBindings = key.vertexBindings;
     config.vertexAttributes = key.vertexAttributes;
     config.setLayouts = _setLayouts;
+    // Every cached graphics layout exposes the same tiny fragment range. This
+    // keeps layouts shared by sky/resolve valid while allowing the mega-draw
+    // shader to select the global triangle range without a per-draw buffer.
+    config.fragmentPushConstantSize = 2 * sizeof(uint32_t);
     config.blend = key.blend;
     config.cull = key.cull;
     config.depthTest = key.depthTest;

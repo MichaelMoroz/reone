@@ -93,6 +93,12 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     features13.dynamicRendering = VK_TRUE;
     features13.synchronization2 = VK_TRUE;
+#ifdef R_ENABLE_FSR
+    // Required subgroup sizes are core in Vulkan 1.3. Enabling the promoted
+    // field here avoids chaining the legacy extension feature struct beside
+    // Vulkan13Features, which validation forbids.
+    features13.subgroupSizeControl = VK_TRUE;
+#endif
 
     // Ray query needs device addresses for geometry and descriptor indexing for
     // the bindless material textures it will eventually read. Keep this list
@@ -106,6 +112,18 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     features12.descriptorBindingPartiallyBound = VK_TRUE;
     features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
     features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+
+    // The merged raster draw uses descriptor indexing even when ray tracing is
+    // unavailable. Keep device addresses in the optional tracing feature set,
+    // but require the bindless image features for the baseline raster device.
+    VkPhysicalDeviceVulkan12Features rasterFeatures12 {};
+    rasterFeatures12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    rasterFeatures12.descriptorIndexing = VK_TRUE;
+    rasterFeatures12.runtimeDescriptorArray = VK_TRUE;
+    rasterFeatures12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    rasterFeatures12.descriptorBindingPartiallyBound = VK_TRUE;
+    rasterFeatures12.descriptorBindingVariableDescriptorCount = VK_TRUE;
+    rasterFeatures12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
 
     VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures {};
     accelerationStructureFeatures.sType =
@@ -125,6 +143,7 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     // not a baseline capability.
     VkPhysicalDeviceFeatures features {};
     features.imageCubeArray = VK_TRUE;
+    features.geometryShader = VK_TRUE; // fragment SV_PrimitiveID capability
     // The OpenGL backend filters material textures anisotropically, so
     // matching it needs this. Required rather than optional: every device
     // this targets has had it for well over a decade.
@@ -139,6 +158,7 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
             .set_minimum_version(1, 3)
             .set_required_features(requiredFeatures)
             .set_required_features_11(features11)
+            .set_required_features_12(rasterFeatures12)
             .set_required_features_13(features13);
     };
 
@@ -188,13 +208,8 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     // FSR2 requests an explicit subgroup size whenever this extension is
     // advertised. Its pipeline pNext is only legal when the matching feature
     // was enabled at device creation.
-    VkPhysicalDeviceSubgroupSizeControlFeaturesEXT subgroupSizeControlFeatures {};
     if (subgroupSizeControlAvailable) {
-        subgroupSizeControlFeatures.sType =
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
-        subgroupSizeControlFeatures.subgroupSizeControl = VK_TRUE;
-        rayQuerySelector.add_required_extension(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME)
-            .add_required_extension_features(subgroupSizeControlFeatures);
+        rayQuerySelector.add_required_extension(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
     }
 #endif
     auto rayQueryPhysicalResult = rayQuerySelector.select();
@@ -268,22 +283,26 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     _uniformAlignment = props.limits.minUniformBufferOffsetAlignment;
     _maxAnisotropy = props.limits.maxSamplerAnisotropy;
     info("Vulkan device: " + _deviceName);
-    if (_rayQueryAvailable) {
-        VkPhysicalDeviceProperties2 properties2 {
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-        _accelerationStructureProperties = {
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
+    {
+        VkPhysicalDeviceProperties2 properties2 {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         VkPhysicalDeviceDescriptorIndexingProperties descriptorIndexingProperties {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES};
-        _accelerationStructureProperties.pNext = &descriptorIndexingProperties;
-        properties2.pNext = &_accelerationStructureProperties;
+        properties2.pNext = &descriptorIndexingProperties;
+        if (_rayQueryAvailable) {
+            _accelerationStructureProperties = {
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
+            _accelerationStructureProperties.pNext = &descriptorIndexingProperties;
+            properties2.pNext = &_accelerationStructureProperties;
+        }
         vkGetPhysicalDeviceProperties2(_device.physical_device, &properties2);
         _maxBindlessSampledImages = std::min({4096u,
             descriptorIndexingProperties.maxDescriptorSetUpdateAfterBindSampledImages,
             descriptorIndexingProperties.maxPerStageDescriptorUpdateAfterBindSampledImages});
         if (_maxBindlessSampledImages == 0) {
-            throw std::runtime_error("Vulkan: ray-query device has no update-after-bind sampled-image capacity");
+            throw std::runtime_error("Vulkan: device has no update-after-bind sampled-image capacity");
         }
+    }
+    if (_rayQueryAvailable) {
         info("Vulkan ray-query acceleration-structure properties: maxGeometryCount=" +
                  std::to_string(_accelerationStructureProperties.maxGeometryCount) +
                  ", maxInstanceCount=" +

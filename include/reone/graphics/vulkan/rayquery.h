@@ -38,7 +38,8 @@ public:
     void render(VkCommandBuffer cmd, uint32_t globalsOffset,
                 VulkanImage &output, const glm::mat4 &view,
                 const glm::mat4 &projection, const glm::vec4 &jitter,
-                RayQuerySubmission submission, bool skyBaked);
+                RayQuerySubmission submission, VulkanGpuScene &deviceGpuScene,
+                bool skyBaked);
 
     struct Channel {
         const char *name;
@@ -74,7 +75,6 @@ private:
     VkPipeline _pipeline {VK_NULL_HANDLE};
     std::unique_ptr<VulkanBuffer> _raygenSbt;
     VkStridedDeviceAddressRegionKHR _raygenSbtRegion {};
-    std::unique_ptr<VulkanGpuScene> _deviceGpuScene;
     std::array<Frame, 2> _frames;
     uint32_t _lastInstances {0};
     uint32_t _lastTriangles {0};

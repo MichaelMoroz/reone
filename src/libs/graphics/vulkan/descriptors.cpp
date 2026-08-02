@@ -21,6 +21,8 @@
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/image.h"
+#include "reone/graphics/vulkan/buffer.h"
+#include "reone/graphics/vulkan/resources.h"
 #include "reone/graphics/vulkan/uniformring.h"
 
 namespace reone {
@@ -114,6 +116,80 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
     textureLayoutInfo.pBindings = textureBindings.data();
     if (vkCreateDescriptorSetLayout(_device.handle(), &textureLayoutInfo, nullptr, &_textureLayout) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: texture descriptor set layout creation failed");
+    }
+
+    _bindlessTextureCapacity = _device.maxBindlessSampledImages();
+    if (_bindlessTextureCapacity == 0) {
+        throw std::runtime_error("Vulkan: mega-draw bindless texture capacity is zero");
+    }
+    std::array<VkDescriptorSetLayoutBinding, 5> megaBindings {};
+    for (uint32_t i = 0; i < 3; ++i) {
+        megaBindings[i].binding = i;
+        megaBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        megaBindings[i].descriptorCount = 1;
+        megaBindings[i].stageFlags = i == 0
+                                         ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
+                                         : VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    for (uint32_t i = 3; i < 5; ++i) {
+        megaBindings[i].binding = i;
+        megaBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        megaBindings[i].descriptorCount = _bindlessTextureCapacity;
+        megaBindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    std::array<VkDescriptorBindingFlags, 5> megaBindingFlags {};
+    for (uint32_t i = 3; i < 5; ++i) {
+        megaBindingFlags[i] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+                              VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    }
+    // Vulkan permits a variable descriptor count only on the numerically
+    // highest binding. The ordinary 2D table at binding 3 retains its fixed
+    // device-capacity shape; the array-texture table at binding 4 consumes the
+    // allocated runtime count.
+    megaBindingFlags[4] |= VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+    VkDescriptorSetLayoutBindingFlagsCreateInfo megaFlagsInfo {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+    megaFlagsInfo.bindingCount = static_cast<uint32_t>(megaBindingFlags.size());
+    megaFlagsInfo.pBindingFlags = megaBindingFlags.data();
+    VkDescriptorSetLayoutCreateInfo megaLayoutInfo {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    megaLayoutInfo.pNext = &megaFlagsInfo;
+    megaLayoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+    megaLayoutInfo.bindingCount = static_cast<uint32_t>(megaBindings.size());
+    megaLayoutInfo.pBindings = megaBindings.data();
+    if (vkCreateDescriptorSetLayout(_device.handle(), &megaLayoutInfo, nullptr,
+                                    &_megaDrawLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: mega-draw descriptor set layout creation failed");
+    }
+    std::array<VkDescriptorPoolSize, 2> megaPoolSizes {{
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3u * static_cast<uint32_t>(framesInFlight)},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+         2u * _bindlessTextureCapacity * static_cast<uint32_t>(framesInFlight)},
+    }};
+    VkDescriptorPoolCreateInfo megaPoolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    megaPoolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+    megaPoolInfo.maxSets = static_cast<uint32_t>(framesInFlight);
+    megaPoolInfo.poolSizeCount = static_cast<uint32_t>(megaPoolSizes.size());
+    megaPoolInfo.pPoolSizes = megaPoolSizes.data();
+    if (vkCreateDescriptorPool(_device.handle(), &megaPoolInfo, nullptr,
+                               &_megaDrawPool) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: mega-draw descriptor pool creation failed");
+    }
+    std::vector<VkDescriptorSetLayout> megaLayouts(framesInFlight, _megaDrawLayout);
+    VkDescriptorSetAllocateInfo megaAlloc {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    std::vector<uint32_t> megaVariableCounts(framesInFlight, _bindlessTextureCapacity);
+    VkDescriptorSetVariableDescriptorCountAllocateInfo megaVariableInfo {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO};
+    megaVariableInfo.descriptorSetCount = static_cast<uint32_t>(megaVariableCounts.size());
+    megaVariableInfo.pDescriptorCounts = megaVariableCounts.data();
+    megaAlloc.pNext = &megaVariableInfo;
+    megaAlloc.descriptorPool = _megaDrawPool;
+    megaAlloc.descriptorSetCount = static_cast<uint32_t>(megaLayouts.size());
+    megaAlloc.pSetLayouts = megaLayouts.data();
+    _megaDrawSets.resize(framesInFlight);
+    if (vkAllocateDescriptorSets(_device.handle(), &megaAlloc,
+                                 _megaDrawSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: mega-draw descriptor allocation failed");
     }
 
     VkDescriptorPoolSize poolSize {};
@@ -218,6 +294,58 @@ void VulkanDescriptors::beginFrame(int frame) {
     vkResetDescriptorPool(_device.handle(), f.pool, 0);
     f.byTexture.clear();
     f.byBindings.clear();
+}
+
+VkDescriptorSet VulkanDescriptors::updateMegaDrawSet(
+    int frame, const VulkanGpuScene::View &scene,
+    const VulkanResources &resources) {
+    auto set = _megaDrawSets.at(frame);
+    std::array<VkDescriptorBufferInfo, 3> buffers {{
+        {scene.vertices.buffer->handle(), scene.vertices.offset, scene.vertices.size},
+        {scene.materialIds.buffer->handle(), scene.materialIds.offset, scene.materialIds.size},
+        {scene.materials.buffer->handle(), scene.materials.offset, scene.materials.size},
+    }};
+    std::array<VkWriteDescriptorSet, 3> bufferWrites {};
+    for (uint32_t i = 0; i < bufferWrites.size(); ++i) {
+        bufferWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        bufferWrites[i].dstSet = set;
+        bufferWrites[i].dstBinding = i;
+        bufferWrites[i].descriptorCount = 1;
+        bufferWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bufferWrites[i].pBufferInfo = &buffers[i];
+    }
+    vkUpdateDescriptorSets(_device.handle(), static_cast<uint32_t>(bufferWrites.size()),
+                           bufferWrites.data(), 0, nullptr);
+
+    auto writeImages = [&](uint32_t binding,
+                           const std::vector<std::pair<uint32_t, const VulkanImage *>> &images) {
+        std::vector<VkDescriptorImageInfo> infos;
+        std::vector<VkWriteDescriptorSet> writes;
+        infos.reserve(images.size());
+        writes.reserve(images.size());
+        for (const auto &[id, image] : images) {
+            if (id >= _bindlessTextureCapacity) {
+                throw std::runtime_error("Vulkan: mega-draw bindless texture array exhausted");
+            }
+            infos.push_back({image->sampler(), image->view(),
+                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+            VkWriteDescriptorSet write {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            write.dstSet = set;
+            write.dstBinding = binding;
+            write.dstArrayElement = id;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &infos.back();
+            writes.push_back(write);
+        }
+        if (!writes.empty()) {
+            vkUpdateDescriptorSets(_device.handle(), static_cast<uint32_t>(writes.size()),
+                                   writes.data(), 0, nullptr);
+        }
+    };
+    writeImages(3, resources.uploadedTextures());
+    writeImages(4, resources.uploadedTextureArrays());
+    return set;
 }
 
 void VulkanDescriptors::writeTextureSet(VkDescriptorSet set, const VulkanImage *mainTex) {
@@ -397,6 +525,16 @@ const VulkanImage *VulkanDescriptors::defaultFor(int unit,
 }
 
 void VulkanDescriptors::deinit() {
+    if (_megaDrawPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(_device.handle(), _megaDrawPool, nullptr);
+        _megaDrawPool = VK_NULL_HANDLE;
+    }
+    _megaDrawSets.clear();
+    if (_megaDrawLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(_device.handle(), _megaDrawLayout, nullptr);
+        _megaDrawLayout = VK_NULL_HANDLE;
+    }
+    _bindlessTextureCapacity = 0;
     if (_persistentPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(_device.handle(), _persistentPool, nullptr);
         _persistentPool = VK_NULL_HANDLE;
