@@ -233,6 +233,39 @@ coverage rule today sends punch-through material through the non-opaque range
 at the tracer's 0.5 threshold. Changing that is a change to the *shared* rule
 and to the classifier, not to the raster draw alone.
 
+### Sorting, which blending needs and one draw does not provide
+
+Blended output is order-dependent and the scene graph does not sort — the
+comment claiming distance-sorted transparent buckets sits above code that
+builds them in node-iteration order, and the old path papered over it with
+OIT, which is boxed. The tracer needs no order; raster does. So the ordering
+is a **raster-side derived artifact, not part of the scene description** — the
+shared upload stays byte-identical between modes and the equality check is
+untouched.
+
+The shape: **CPU-sort only the blended set — lit and additive-emissive
+together, since they interleave — and feed the draw a per-triangle remap
+buffer.** The set is small (a few hundred particle quads, faded meshes,
+water), well inside CPU budget. Order is decided entirely CPU-side today —
+`dstTriangleBase` is assigned by walking the object vector — so nothing on the
+GPU has an opinion to fight.
+
+The remap feeds **two reads, not one**, and missing the second is the bug to
+warn about: the vertex stage pulls corner `k` of sorted slot `t` via
+`indices[remap[t]*3+k]`, and the fragment stage must look up material by the
+**original** triangle id, `materialIds[remap[base+prim]]`, because the
+per-triangle material table is in merge order, not sorted order.
+
+Sort keys come from the CPU side that already knows them: procedural quads
+carry world positions in their records, mesh triangles get transform-applied
+centroids. Skinned blended meshes would sort by their untransformed-bind
+approximation, which is acceptable for a sort key and not worth CPU skinning.
+
+Per-object sorting falls out for free in admission order; the remap only has
+to exist where triangles of different objects interleave. Depth-test against
+the opaque G-buffer, **depth-write off**, or blended fragments reject each
+other.
+
 ## One scene description
 
 Raster and path tracing must consume **the same scene description**. The only
