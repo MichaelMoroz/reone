@@ -46,7 +46,8 @@ compare distributions, never a stored number.
 | **G2** | done `ef6c5850`, coverage corrected in `298d0542` — one draw over merged geometry writes a G-buffer that agrees with the traced one |
 | **G3** | done `cc9a36ac` — admission extracted and shared, sky suppressed identically, all three modes hash the upload to the same value |
 | **G4** | done `d6148ee6` — matrices born in Vulkan clip, `glToVulkanClip` and the inert `IUniforms` deleted; dumps bit-identical across the change |
-| **G5–G8** | shading, shadows, then the blended pass. Next. |
+| **G5** | done `802ec6c8` — retro shades the G-buffer; by eye, three of four modules read as the same game |
+| **G6–G8** | PBR shading, shadows, the blended pass. Next. |
 | **V1–V5** | the visibility track and the sky. After G. |
 
 ## Two tracks, and why geometry goes first
@@ -258,7 +259,20 @@ last bit of depth — so the bar is the 206-pixel figure: the traced-agreement
 numbers must not move, and retro/PBR must stay byte-identical to each other.
 Traced output judged by distribution, as always.
 
-## G5 — retro shading on the G-buffer
+## G5 — retro shading on the G-buffer — done `802ec6c8`
+
+Landed; three modules read as the same game by eye, and the gaps are named in
+the commit: lightmap presence inferred (no bit exists), lightmapped-as-static
+gate, per-object ambient/diffuse collapsed to neutral, environment reflection
+omitted — all candidates for the G6 material-record growth.
+
+**The 202tel finding, for G8:** a lit-blended panel sits in the G-buffer as
+the primary surface — exactly as the tracer records it — and resolves opaque,
+occluding what the old renderer showed through it. The shared coverage rule is
+doing its job; the open design question is how lit-blended surfaces leave the
+opaque G-buffer for the sorted blended draw *in both consumers at once*.
+Backlog 3.7's stochastic traced transparency is the tracer-side half of that
+same question.
 
 Retro's material, reading the G-buffer instead of shading forward. Retro stops
 being a forward renderer.
