@@ -35,7 +35,7 @@ void SceneGraphs::reserve(std::string name) {
         _audioSvc,
         _resourceSvc);
     scene->gpuScene().traceMaterials().loadTraceClasses(
-        std::filesystem::current_path() / "trace-classes.txt");
+        _overrideRoot / "materials.ini");
 
     _scenes.insert(std::make_pair(name, std::move(scene)));
 }

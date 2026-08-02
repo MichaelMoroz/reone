@@ -63,12 +63,14 @@ public:
         graphics::GraphicsOptions &graphicsOpt,
         graphics::GraphicsServices &graphicsSvc,
         audio::AudioServices &audioSvc,
-        resource::ResourceServices &resourceSvc) :
+        resource::ResourceServices &resourceSvc,
+        std::filesystem::path overrideRoot) :
         _renderPipelineFactory(renderPipelineFactory),
         _graphicsOpt(graphicsOpt),
         _graphicsSvc(graphicsSvc),
         _audioSvc(audioSvc),
-        _resourceSvc(resourceSvc) {
+        _resourceSvc(resourceSvc),
+        _overrideRoot(std::move(overrideRoot)) {
     }
 
     void reserve(std::string name) override;
@@ -90,6 +92,7 @@ private:
     graphics::GraphicsServices &_graphicsSvc;
     audio::AudioServices &_audioSvc;
     resource::ResourceServices &_resourceSvc;
+    std::filesystem::path _overrideRoot;
 
     std::unordered_map<std::string, std::shared_ptr<ISceneGraph>> _scenes;
 };

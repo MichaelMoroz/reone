@@ -114,6 +114,8 @@ public:
 
     ResourceServices &services() { return *_services; }
 
+    GameID gameId() const { return _gameId; }
+
     void setGameID(GameID id) {
         _gameId = id;
     }
