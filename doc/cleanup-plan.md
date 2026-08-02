@@ -17,16 +17,15 @@ neither is a prerequisite for the other.
 
 | track | what it does | next step | bar |
 |---|---|---|---|
-| **F-geo** | raster consumes `GpuScene`, ending in the mega-draw | **F3** — route the static opaque set through merged geometry | raster **byte-identical**, every increment |
+| **F-geo** | raster consumes `GpuScene`, ending in the mega-draw | **F3** — delete the old raster path and rebuild it from `GpuScene` | agreement with the **traced** G-buffer; retro by eye. There is no old image to match |
 | **F-vis** | raster becomes primary visibility for every mode, then the sky composites once | **F6** — stop PathTracing early-returning past the G-buffer | `g_buffer_depth` exists and matches across PBR and PathTracing |
 
 **Done in F:** F0, F1 (`0cc67e42`), F2 (`394bf675`).
 
-**Which first?** F-geo. It holds the byte-identical bar the whole way, and that
-bar is the most reliable instrument this project has. F-vis gives it up at F6 by
-definition, so it is the work to do once the mechanically-checkable work is
-spent. The counter-argument is real and recorded: the sky is ~80% built and
-renders nothing until F7, so it is committed but unproven.
+**Which first?** F-geo, and there is now a hard reason rather than a preference:
+its reference is the **traced** G-buffer, which is produced by traced primary
+visibility — exactly what F6c deletes. F-geo must finish using the instrument
+before F-vis removes it.
 
 **Phase F lives in [`phase-f.md`](phase-f.md), not here.** This file is the
 record of how the engine got here — completed phases, the reasoning that

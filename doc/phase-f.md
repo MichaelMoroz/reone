@@ -334,102 +334,62 @@ no attribute descriptions, no format plumbing in the pipeline key, one
 declaration of the vertex layout instead of two, and the mega-draw becomes
 trivial later.
 
-### F3 — the static opaque set, and nothing else yet
+### F3 — delete the old raster path and rebuild it from `GpuScene`
 
-World-space vertices, `model` = identity, every other part of `LocalUniforms`,
-the material path and texture binding unchanged. This step changes **where
-vertices come from and nothing else**, which is exactly what makes a
-byte-identical result meaningful.
+**Decided 2026-08-02, replacing every earlier shape of this step.** Migrating
+category by category, keeping both paths alive and holding raster
+byte-identical, was tried three ways on paper and each was harder than the thing
+it was protecting. The old raster path differs from `GpuScene` too much for
+incremental agreement to be a useful target.
 
-**Do not let merged raster draws cover grass and particles.** Phase D admitted
-them for the tracer, while raster draws them through `executeDrawGrass` and
-`executeDrawParticles` with their own shaders — cover them here and they render
-twice.
+So it goes. **Remove the old raster paths completely, then rebuild against
+`GpuScene`, doing everything the way the tracer already does it.**
 
-**Nor background geometry.** Found 2026-08-02: covering it breaks the hash, and
-excluding it restores `A654109C…` exactly on `danm14ab`. Same class as grass and
-particles — the sky room is drawn by a path of its own — and it disappears as a
-question at F10, when the sky stops being geometry at all. Until then it is a
-third exclusion, not a subtlety.
+**Kept:**
 
-**The blocker to plan around: `VulkanRenderPass` cannot see `GpuScene`.** It
-takes a `Mesh &` and draws it, so nothing raster-side can ask where a mesh lives
-in the merged buffer. F3 is therefore not a shader change with some plumbing
-attached — the plumbing *is* the step, crossing descriptors, the pipeline key,
-the pass and the pipeline plan. An attempt on 2026-08-02 touched 22 files and is
-in a stash for reference.
+- **Shadow handling.** It works and it is orthogonal to where vertices come
+  from.
+- **Base materials.** Retro keeps a retro material; PBR keeps its own PBR-like
+  one. Both now read the same G-buffer instead of each owning a path.
 
-#### F3 migrates one object category at a time
+**Dropped, deliberately, into a box to reopen later:** OIT, SSAO, SSR. They are
+not deleted because they are wrong — they are deleted because keeping them alive
+across a rewrite of the thing they sit on costs more than rebuilding them
+afterwards on a path that has settled.
 
-**Restructured 2026-08-02.** The earlier shape — "static opaque, then everything
-else" — split the work by *how hard it looked* rather than by anything the scene
-recognises, and left a long stretch with two half-built paths and no working
-state in between.
+**Replaced:**
 
-Instead: **stand the `GpuScene` draw path up first, then move categories across
-it one at a time.** For each category, remove it from the old raster path, have
-the `GpuScene` path render it, and check. Both paths run side by side for the
-whole migration, and every step ends with a scene that renders completely —
-partly from the old path, partly from the new one. There is never a broken
-intermediate state, and the frame is always a comparison of one category's worth
-of change.
+- **Transparency becomes plain alpha blending.** Opaque raster for everything
+  else. Weighted-blended OIT goes in the box above.
+- **FXAA and sharpen move to the end of the chain, where FSR sits.** They are
+  currently mid-chain; at the end they are one filter stage over a finished
+  image, and the three become interchangeable rather than special.
+- **Retro stops being forward-rendered.** Both modes fill the G-buffer and both
+  shade from it. This is the change that makes a single sky composite possible
+  at all — F7 had to special-case retro precisely because retro had no
+  G-buffer, and that special case now disappears rather than being written.
 
-The categories are the ones `GpuScene` already distinguishes: static meshes,
-skinned, dangly, sabers, grass, particles, billboards. Order them by how easily
-a difference is seen — static meshes first because they are most of the frame
-and hold still; grass and particles last because they are stochastic and their
-old raster paths are separate shaders that must be deleted in the same step or
-they render twice.
+#### What "correct" means now
 
-Per-category check, in order of strength:
+There is no old image to match, because the old path is gone. Two bars replace
+it:
 
-1. **Against the traced G-buffer** for that category — the reference, since it
-   comes from the same `GpuScene` records the new path reads.
-2. **Against the old raster image** for every category *not yet* migrated —
-   these must stay byte-identical, which is what proves the step touched only
-   what it claimed to.
-3. **By eye** for the migrated category, once, against a capture from before.
+- **Against the traced G-buffer**, for geometry and coverage. Same `GpuScene`
+  records, so disagreement is a real defect rather than a difference of
+  convention.
+- **Retro by eye, against captures taken before the deletion.** Retro is the one
+  mode expected to look more or less the same, so it is the honest visual
+  check. **PBR is not a reference** — it is visibly broken today, and holding
+  the rebuild to it would be preserving a bug.
 
-There is no "valid end" in the sense earlier drafts assumed, and it is worth
-saying plainly: the two renderers are not converging on the same image. Raster
-is converging on `GpuScene`, and `GpuScene` already contains things raster has
-never drawn.
+Capture the "before" set **first**, across several modules, and keep it. Once
+the old path is deleted it cannot be regenerated, and a comparison nobody took
+in advance is a comparison nobody can take.
 
-#### The plumbing, before any category moves
-
-Splitting it so the early steps are inert — nothing consumes them — makes them
-safe, and safe is not the same as verified. A step whose only evidence is "the
-hash did not move" has proved that it broke nothing and **nothing whatsoever
-about whether what it added works**. Three green steps like that and the switch
-fails with no way to tell which one lied. So every step carries a *positive*
-check that exercises the new capability directly:
-
-| step | change | what proves it works |
-|---|---|---|
-| **F3a** | `GpuScene` exposes each mesh's merged vertex and index offsets | a test that reads the merged buffer at the reported offset for N registered meshes and asserts the positions equal the source mesh transformed to world space, and the index count matches `faces().size() * 3`. Wrong offsets fail loudly instead of silently pointing at a neighbour |
-| **F3b** | descriptor set binds the merged buffer to the vertex stage | `--vkvalidation 1` clean, **plus** a readback through that binding asserting the same vertices F3a checked. A misbound descriptor reads zeros or another buffer, and both pass a validation-only check |
-| **F3c** | `mergedVertex` entry pulling by `SV_VertexID` | `spirv-dis` shows the entry point and a storage-buffer load from the merged binding. Cheap, and it catches the trap that has cost three investigations here: a shader edit that never made it into the compiled module |
-| **F3d** | route **one** mesh through it, old path still drawing everything else | that mesh matches the traced G-buffer; every other pixel byte-identical to the old raster image. First step whose success means the whole chain works, and whose failure is one object rather than a scene |
-
-Then one category per step, each removing it from the old raster path in the
-same commit that adds it to the new one — never both, or it draws twice.
-
-F3d is the important one. Turning the switch on for a single mesh costs the same
-plumbing as turning it on for everything, and makes a wrong vertex a
-one-object-shaped difference instead of a scene-wide one.
-
-**Skinned geometry is a separate later step.** Raster skins in the vertex shader
-from a bone palette; the merge skins in compute. Those must also be shown
-bit-identical, and the same rule applies when they are not. Attempting static
-and skinned together makes a failure impossible to localise.
-
-Motion vectors carry the same question: the VS builds `prevClipPos` as
-`prevViewProjection * (prevModel * prevObjectPos)` (`pbr_model.slang:75-76`)
-while the merge already holds `prevPosition` in world space.
 
 ### F4 — shadows from real geometry
 
-Only once the G-buffer is byte-identical. Admission takes Opaque and Transparent
+Only once the rebuilt G-buffer agrees with the traced one. Admission takes Opaque and Transparent
 only (`rayquery.cpp:517`, `:1112`), so shadow-only proxies sit outside the merge
 while raster's shadow pass draws exactly them. Shadow from real geometry and
 delete the proxies rather than plumbing them through. Proxies exist because four
