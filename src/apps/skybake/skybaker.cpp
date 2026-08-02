@@ -52,6 +52,7 @@ struct MeshInfo {
     std::string texture;
     std::shared_ptr<Mesh> mesh;
     glm::mat4 transform {1.0f};
+    bool background {false};
 };
 
 struct RoomInfo {
@@ -60,6 +61,8 @@ struct RoomInfo {
     size_t faceCount {0};
     double coverage {0.0};
     bool hasSkyNamedTexture {false};
+    size_t backgroundMeshes {0};
+    bool hasWalkmesh {false};
 };
 
 struct ModuleSurvey {
@@ -110,12 +113,36 @@ struct BakedSky {
     size_t alphaPassThroughs {0};
 };
 
+/**
+ * The meshes that form the sky shell. The two games say it differently: K1
+ * omits the walkmesh from a room that is entirely sky, so every mesh counts;
+ * TSL flags the sky meshes individually and leaves them inside an ordinary
+ * walkable room, so only the flagged ones do. Taking the whole room in the TSL
+ * case would bake the level's walls into the cubemap - 104pera is 76 meshes of
+ * which 1 is sky.
+ */
+std::vector<MeshInfo> shellMeshes(const RoomInfo &room) {
+    if (room.backgroundMeshes == 0)
+        return room.meshes;
+    std::vector<MeshInfo> shell;
+    shell.reserve(room.backgroundMeshes);
+    for (const auto &mesh : room.meshes) {
+        if (mesh.background)
+            shell.push_back(mesh);
+    }
+    return shell;
+}
+
 class RayScene {
 public:
-    explicit RayScene(const RoomInfo &room) {
+    explicit RayScene(const RoomInfo &room) :
+        RayScene(shellMeshes(room)) {
+    }
+
+    explicit RayScene(const std::vector<MeshInfo> &meshes) {
         glm::vec3 boundsMin(std::numeric_limits<float>::max());
         glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
-        for (const auto &mesh : room.meshes) {
+        for (const auto &mesh : meshes) {
             for (const auto &face : mesh.mesh->faces()) {
                 const auto local = mesh.mesh->faceVertexCoords(face);
                 RayTriangle triangle;
@@ -434,7 +461,7 @@ std::vector<MeshInfo> collectMeshes(const Model &model) {
         if (!triangleMesh || !triangleMesh->mesh || !triangleMesh->render)
             continue;
         result.push_back({node->name(), lower(triangleMesh->diffuseMap), triangleMesh->mesh,
-                          node->absoluteTransform()});
+                          node->absoluteTransform(), triangleMesh->backgroundGeometry});
     }
     std::sort(result.begin(), result.end(), [](const auto &a, const auto &b) {
         return std::tie(a.nodeName, a.texture) < std::tie(b.nodeName, b.texture);
@@ -450,6 +477,8 @@ RoomInfo loadRoom(Resources &resources, const std::string &name) {
     for (const auto &mesh : room.meshes) {
         room.faceCount += mesh.mesh->faces().size();
         room.hasSkyNamedTexture = room.hasSkyNamedTexture || isSkyTexture(mesh.texture);
+        if (mesh.background)
+            ++room.backgroundMeshes;
     }
     return room;
 }
@@ -472,10 +501,16 @@ ModuleSurvey surveyModule(GameResources &game, const std::string &moduleName) {
                     continue;
                 if (!seenRooms.insert(layoutRoom.name).second)
                     continue;
-                if (hasWalkmesh(resources, layoutRoom.name))
-                    continue;
+                const bool walkable = hasWalkmesh(resources, layoutRoom.name);
                 try {
                     auto room = loadRoom(resources, layoutRoom.name);
+                    room.hasWalkmesh = walkable;
+                    // A walkable room can still carry sky: K1 marks sky rooms
+                    // by omitting the walkmesh, but TSL authors the per-mesh
+                    // background-geometry flag instead, and those meshes can
+                    // sit inside a room the player walks around in.
+                    if (walkable && room.backgroundMeshes == 0)
+                        continue;
                     RayScene scene(room);
                     room.coverage = coverageFraction(scene);
                     // Neither signal is sufficient alone, and each one's false
@@ -514,7 +549,9 @@ void printSurvey(const ModuleSurvey &survey) {
         std::cout << "candidate module=" << survey.name << " room=" << room.name
                   << " meshes=" << room.meshes.size() << " faces=" << room.faceCount
                   << " coverage=" << std::fixed << std::setprecision(4) << room.coverage
-                  << " sky_named_textures=" << (room.hasSkyNamedTexture ? "yes" : "no") << '\n';
+                  << " sky_named_textures=" << (room.hasSkyNamedTexture ? "yes" : "no")
+                  << " bg_meshes=" << room.backgroundMeshes
+                  << " walkmesh=" << (room.hasWalkmesh ? "yes" : "no") << '\n';
         for (const auto &mesh : room.meshes)
             std::cout << "  mesh=" << mesh.nodeName << " faces=" << mesh.mesh->faces().size()
                       << " texture=" << (mesh.texture.empty() ? "none" : mesh.texture) << '\n';
