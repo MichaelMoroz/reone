@@ -42,7 +42,9 @@ compare distributions, never a stored number.
 |---|---|
 | **F0, F1** | done `0cc67e42` — the merge adopted raster's transform maths, and `MergedVertex` carries object-space position for the hashed alpha test |
 | **F2** | done `394bf675` — the merged buffer gained `INDEX_BUFFER` usage, and the post-merge barrier names the vertex shader and index input so a raster draw cannot race the merge compute |
-| **G1–G5** | the geometry track. Next. |
+| **G1** | done `db668c2f` — the per-mesh path is gone; raster modes run an empty plan and present a cleared scene |
+| **G2** | done `ef6c5850` — one draw over merged geometry writes the G-buffer, in both raster modes |
+| **G3–G5** | shading, then shadows. Next. |
 | **V1–V5** | the visibility track and the sky. After G. |
 
 ## Two tracks, and why geometry goes first
@@ -63,43 +65,68 @@ to be a useful target; three drafts tried and each was harder than the thing it
 protected. So it goes, and what replaces it is written the way it should have
 been written: one draw over merged geometry, then shading on top.
 
-## G1 — delete the raster path, keep the shaders
+## G1 — delete the raster path, keep the shaders — done `db668c2f`
 
-Remove the per-mesh draw walk, the pipeline plumbing behind it, and the passes
-that only exist to feed it. **Keep every shader.** They encode a decade of
+Removed the per-mesh draw walk, the pipeline plumbing behind it, and the passes
+that only existed to feed it. **Every shader kept.** They encode a decade of
 material behaviour that nothing else records, and G3 and G4 put them back to
 work against a different input.
 
 Also boxed for later, deliberately: **OIT, SSAO, SSR**. Not wrong — just not
 worth carrying across a rewrite of the thing they sit on.
 
-**Take the "before" captures first**, across several modules, in retro and PBR.
-Once the old path is gone it cannot be regenerated, and retro-by-eye is the only
-visual reference the rest of the track has.
+The "before" captures were taken first: `danm14ab`, `danm13`, `ebo_m12aa` and
+`202tel`, retro and PBR, with `--dumptargets` alongside the PBR ones. **The
+target dumps turned out to matter more than the screenshots** — they are what
+made G2 measurable against the path it replaced, rather than against the tracer
+alone. Anything that deletes a producer should dump its output first.
 
-## G2 — one draw, one basic G-buffer
+Two corrections the work produced:
+
+- **Vulkan ran four walks per frame, not six.** Shadow is one walk whose
+  cascades and cube faces are multiview *inside* it. The 1.873 ms and the "six
+  `drawScene` walks" were an OpenGL measurement from 2026-07-28, and OpenGL is
+  gone. The shape of G2 is still right; the number was never about this backend.
+- **The sky bake still rides raster's per-mesh infrastructure** — `VulkanMesh`
+  and its vertex input descriptions, the pipeline key's vertex input fields, the
+  per-mesh resources and zero buffer, `LocalUniforms` and the uniform ring.
+  Commit `00c542e2` gave it its own *shader*, which is not the same as
+  independence. All of that had to survive the deletion, and V5 inherits the
+  job of untangling it.
+
+## G2 — one draw, one basic G-buffer — done `ef6c5850`
 
 A single indexed draw over the merged buffer, pulling vertices by `SV_VertexID`,
 writing position, normal, albedo and the rest of the G-buffer. No shading. No
-per-mesh anything.
+per-mesh anything. `slang/megadraw.slang`, and a third descriptor set carrying
+the merged buffers and the bindless texture tables.
 
-**Opaque only, by construction.** The draw takes the opaque category and
-transparency is simply not in it — an alpha-blended pass comes later, over the
-same merged buffer. This is a filter on what the draw covers, not a special case
-inside it.
+**The merge had no owner outside the tracer.** `VulkanGpuScene` lived inside
+`VulkanRayQuery`, which is only constructed in traced mode, so raster had never
+built merged geometry at all — the buffer F2 made readable had no producer on
+that path. `VulkanRenderPipeline` owns it now. Classification, texture
+registration and prepare became **one shared implementation** feeding either
+consumer; a second classifier would have drifted from the first, which is the
+bug class this rewrite exists to remove.
 
-The mega-draw was previously scheduled last, as an optimisation to be justified
-by measurement. That framing died with the old path: there is no walk left to
-collapse, and one draw is *less* code than reproducing per-mesh dispatch. The
-**1.873 ms** those six `drawScene` walks cost (measured 2026-07-28, against
-0.445 ms for registration) stops being a gate and becomes the reason this shape
-is right.
+**Two draws, not one.** The opaque range, then the non-opaque range gated to
+punch-through materials with the hashed alpha test. Procedural quads carry a
+consumer-local tag, because grass and particles are merged with
+`objectPosition` zero and would hash against a constant.
 
-*Proves itself:* the G-buffer it writes agrees with the traced G-buffer for
-geometry and coverage. `--ptdebugview` already exposes thirteen views — normals,
-albedo, roughness, metallic, lightmap, viewZ, motion, categories — each
-replacing shading at the primary hit, from the same `GpuScene` records. Start
-with one object, then the scene.
+*Proved itself* against the pre-G1 dumps, `danm14ab`, same camera: coverage
+differs by **13 pixels of 2,073,600**; depth median 0.0074 world units; eye
+normals **80.3% bit-identical**, lightmap 86.6%, self-illum 97.9%. Against the
+traced G-buffer, 1,607,850 pixels agree, 465,730 are raster-only — the sky room
+the tracer classifies away — and **none are traced-only**.
+
+Retro's G-buffer is **bit-identical to PBR's**, which is the point: the draw is
+mode-independent, and only shading will differ.
+
+The depth residue sits at far distance in the sky room, where the merge's
+transform order differs from the old vertex shader's, and in the grass band.
+Both are expected: agreement was never going to be exact, which is why this
+track measures distributions rather than hashes.
 
 ## G3 — retro shading on the G-buffer
 
@@ -113,6 +140,21 @@ retro special case *only* because retro had no G-buffer.
 
 *Proves itself:* by eye, against the G1 captures.
 
+**Three things are legitimately missing from the frame, and none of them is a
+G3 regression.** Check them off before reading anything else into a
+comparison:
+
+- **Alpha-blended foliage.** The leaf canopy is absent from the G-buffer, and
+  was absent from the old one too — it always drew in the transparent pass,
+  which G1 boxed. Measured on `danm14ab`: old and new raster G-buffers both
+  show bare trunk and branches where the traced G-buffer has a full canopy.
+  Trees look dead until transparency returns.
+- **Grass and particles**, gated out of the punch-through draw by construction.
+- **Shadows**, until G5.
+
+The traced G-buffer has all three, so raster-versus-traced will disagree across
+exactly those pixels for the rest of the track.
+
 ## G4 — PBR shading on the G-buffer
 
 The PBR material, same input.
@@ -120,6 +162,13 @@ The PBR material, same input.
 **PBR is not held to its old output.** It is visibly broken today, and matching
 it would preserve the bug. It is held to looking right, and to agreeing with the
 traced G-buffer on geometry.
+
+**G4 owns three fields the merged material record does not have.**
+`GpuSceneMaterial` carries no `envMapDerivedLayer`, no `waterAlpha` and no
+environment cube ids, so G2 writes zero for each. The old resolve read
+`envMapDerivedLayer` out of the self-illumination alpha; something has to put it
+back before environment mapping and water can work at all. Growing the record is
+the obvious move, and it is G4's, not a G2 omission to be discovered later.
 
 ## G5 — shadows from real geometry
 
