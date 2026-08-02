@@ -12,10 +12,6 @@
 
 namespace reone::graphics {
 
-/** Consumer-local material tag for geometry expanded from procedural quad
-    records. It occupies the first bit above the legacy raster feature mask. */
-static constexpr uint32_t kGpuSceneFeatureProcedural = 1u << 23;
-
 class Mesh;
 
 struct alignas(16) GpuSceneMaterial {

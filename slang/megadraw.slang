@@ -3,7 +3,7 @@
 
 import uniforms;
 import lib.gbuf;
-import lib.hashedalpha;
+import lib.math;
 import lib.motion;
 
 static const uint kNoTexture = 0xffffffffu;
@@ -13,9 +13,12 @@ static const uint kMegaFeatureNormalMap = 1u << 2;
 static const uint kMegaFeatureBumpMap = 1u << 3;
 static const uint kMegaFeatureShadows = 1u << 7;
 static const uint kMegaFeatureFog = 1u << 9;
-static const uint kMegaFeatureHashedAlpha = 1u << 11;
-static const uint kMegaFeatureProcedural = 1u << 23;
+static const uint kMegaFeaturePremulAlpha = 1u << 12;
+static const uint kMegaFeatureBlendedCoverage = 1u << 25;
 static const uint kMegaFeaturePunchThrough = 1u << 26;
+static const uint kMegaSurfaceUnlitTransparent = 1;
+static const float kMegaAlphaTestEpsilon = 0.01;
+static const float kMegaAlphaTestThreshold = 0.5;
 
 struct MergedVertex {
     float3 position;
@@ -77,9 +80,8 @@ struct Varyings {
     float2 uv1 : TEXCOORD4;
     float2 uv2 : TEXCOORD5;
     float4 color : TEXCOORD6;
-    float3 objectPosition : TEXCOORD7;
-    float4 curClipPos : TEXCOORD8;
-    float4 prevClipPos : TEXCOORD9;
+    float4 curClipPos : TEXCOORD7;
+    float4 prevClipPos : TEXCOORD8;
 };
 
 [shader("vertex")]
@@ -97,7 +99,6 @@ Varyings megadrawVertex(uint vertexId : SV_VertexID) {
     output.uv1 = vertex.uv1;
     output.uv2 = vertex.uv2;
     output.color = vertex.color;
-    output.objectPosition = vertex.objectPosition;
     return output;
 }
 
@@ -115,6 +116,35 @@ float2 transformedUV(InstanceMaterial material, float2 uv) {
                   material.uv0.y * h.x + material.uv1.y * h.y + material.uv2.y * h.z);
 }
 
+// Keep the coverage cases in lockstep with candidateAlpha/commitsCoverage in
+// tracing/trace.slang, and surface ownership with the primary layer loop in
+// rayquery.slang. Opaque geometry publishes unconditionally, but additive
+// emission layers publish no G-buffer surface even though traversal commits them.
+bool commitsTracedCoverage(InstanceMaterial material, float2 uv, float vertexAlpha) {
+    if (pushConstants.materialGated == 0) return true;
+
+    if (material.surfaceType == kMegaSurfaceUnlitTransparent) return false;
+
+    bool isCutout = (material.featureMask & kMegaFeaturePunchThrough) != 0;
+    bool isBlendedCoverage =
+        (material.featureMask & kMegaFeatureBlendedCoverage) != 0;
+    if (!isCutout && !isBlendedCoverage) {
+        return true;
+    }
+
+    float alpha = 1.0;
+    if (material.mainTex != kNoTexture) {
+        float4 texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)]
+                           .SampleLevel(uv, 0.0);
+        alpha = (material.featureMask & kMegaFeaturePremulAlpha) != 0
+                    ? rgbToLuma(texel.rgb)
+                    : texel.a;
+        alpha *= vertexAlpha;
+    }
+    if (alpha < kMegaAlphaTestEpsilon) return false;
+    return !isCutout || alpha >= kMegaAlphaTestThreshold;
+}
+
 float3 safeNormal(float3 value, float3 fallback) {
     float lengthSquared = dot(value, value);
     return lengthSquared > 1.0e-10 ? value * rsqrt(lengthSquared) : fallback;
@@ -127,14 +157,9 @@ GBufferOutput megadrawFragment(Varyings input, uint primitiveId : SV_PrimitiveID
     uint materialIndex = mergedMaterialIds[triangleId];
     InstanceMaterial material = instanceMaterials[materialIndex];
 
-    if (pushConstants.materialGated != 0) {
-        if ((material.featureMask & kMegaFeaturePunchThrough) == 0 ||
-            (material.featureMask & kMegaFeatureProcedural) != 0) {
-            discard;
-        }
-    }
-
     float2 uv = transformedUV(material, input.uv1);
+    if (!commitsTracedCoverage(material, uv, input.color.a)) discard;
+
     float4 diffuse = float4(1.0);
     if (material.mainTex != kNoTexture) {
         diffuse = bindlessTextures[NonUniformResourceIndex(material.mainTex)].Sample(uv);
@@ -142,13 +167,6 @@ GBufferOutput megadrawFragment(Varyings input, uint primitiveId : SV_PrimitiveID
     diffuse *= input.color;
 
     bool envmapped = (material.featureMask & kMegaFeatureEnvMap) != 0;
-    if (!envmapped) {
-        if ((material.featureMask & kMegaFeatureHashedAlpha) != 0) {
-            if (hashedAlphaTestFails(diffuse.a, input.objectPosition)) discard;
-        } else if (diffuse.a == 0.0) {
-            discard;
-        }
-    }
 
     float3 normal = safeNormal(input.normal, float3(0.0, 0.0, 1.0));
     float3 tangent = safeNormal(input.tangent, float3(1.0, 0.0, 0.0));

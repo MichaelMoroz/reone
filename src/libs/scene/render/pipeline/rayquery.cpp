@@ -330,17 +330,7 @@ GpuSceneUpload RayQueryPipeline::prepareRaster(const glm::mat4 &view) {
     // Raster keeps the background room as ordinary opaque geometry. Only the
     // traced path selects and bakes a sky room before entering this shared
     // classifier/texture-registration implementation.
-    auto upload = prepare(view, nullptr, false);
-    // GpuScene reserves source strides 0 and 1 for expanded procedural quads;
-    // ordinary meshes carry their byte stride. Annotate only this raster copy
-    // of the material table so the shared traced upload remains byte-identical.
-    for (const auto &object : upload.objects) {
-        if (object.data.srcVertexStride <= 1) {
-            upload.materials[object.data.materialIndex].featureMask |=
-                kGpuSceneFeatureProcedural;
-        }
-    }
-    return upload;
+    return prepare(view, nullptr, false);
 }
 
 void RayQueryPipeline::render(const VulkanPrimaryRayContext &context) {
