@@ -251,44 +251,102 @@ feature and not a successor: the sky can only composite once *because* F makes
 raster own primary visibility in every mode. Treating it as separable is what
 produced the mess recorded here.
 
+**Reviewed 2026-08-02 and corrected. Four things this section originally
+asserted were false, and they are recorded because each was written with
+confidence:**
+
+- **Hybrid does not exist yet.** `PathTracing` bypasses raster entirely -
+  `VulkanScenePipeline::init` returns before allocating `_gbuffer`
+  (`graphics/vulkan/scenepipeline.cpp:191-207`), and the source comment says so.
+  There are **three** modes, not four: `Retro`, `PBR`, `PathTracing`
+  (`scene/render/pipeline.h:58-63`); `RTDebug` is still planned. So "the
+  G-buffer exists in all four" was wrong twice, and "modes only meet at AA" is
+  wrong too - traced never reaches AA today. **F6 is what makes the rest true**,
+  which is the real reason it comes first; the original argument about where a
+  composite can live was a weaker version of this.
+- **The composite cannot go before `filterChainPass`.** That point is *after*
+  Transparency, OITBlend and PostProcessing (`scene/render/pipeline/vulkan.cpp:152-167`),
+  so a sky pass there paints over transparent particles and lens flares. It goes
+  straight after the opaque resolve:
+  `Resolve/RetroGeometry -> SkyComposite -> Transparency -> OITBlend -> PostProcessing -> filters`.
+- **`sGBufDepth` is device depth in `[0,1]`, not linear view-space distance.**
+  `pbr_resolve.slang:62-78` states it and reconstructs position from it. An
+  earlier note here said the opposite and told the reader never to test depth;
+  that came from misreading a `--dumptargets` dump, which linearises. `depth == 1.0`
+  is a sound "no opaque geometry" test on the raster attachment. Retro is the
+  real exception - it renders forward into `_output` and has no deferred colour
+  G-buffer (`scenepipeline.cpp:676-724`), so it needs its own coverage signal.
+- **The config does not name meshes yet.** `override/*/modules.ini` carries only
+  `room =` and `sky =`. F9 therefore begins by adding the manifest, not by
+  reading one.
+
 The classification half is done and committed — `skybake` renders sky shells
 offline into cubemaps (`8fa4e55b`, `6010a309`) and the per-module configs are
 curated data (`d219bd6b`). Backlog 1.14 carries the evidence for why runtime
 classification was abandoned. What remains is the renderer half, and it lands
 after F5 because it depends on the same unification:
 
-- **F6 — merge the render graph.** Today each mode owns its own chain of passes
-  and they only meet at AA. They should be one graph in which a mode *selects*
-  passes rather than owning a pipeline, which is what makes a shared composite
-  expressible at all. Without this, F7 has nowhere to live that is not "in two
-  places", and that is exactly how the last attempt went wrong.
-- **F7 — composite the sky once**, in a single pass immediately before
-  `filterChainPass` (`graphics/vulkan/scenepipeline.cpp:1282`), where Retro,
-  PBR, PathTrace and RTDebug converge. An integration attempt put it in
-  `pbr_resolve.slang` *and* `postprocess.slang` — two implementations of one
-  idea, precisely the fault that got the runtime bake deleted. It is
-  well-defined only because the renderer is hybrid: raster owns primary
-  visibility in every mode, so the G-buffer exists in all four and "nothing was
-  drawn here" is one test instead of a per-pipeline question. **Test coverage,
-  never depth** — `sGBufDepth` holds linear view-space distance, not a 0..1 clip
-  value, so comparing it against 1.0 is true for every pixel in the frame.
-- **F8 — the tracer keeps only transport.** `ptSkyRadiance` on bounce miss
-  stays; its primary-miss call is compositing and moves to F7.
-- **F9 — suppress exactly the shell.** The config names the meshes, so the baker
-  and the renderer read one list instead of each evaluating a rule and hoping
-  they agree. Neither the K1 no-walkmesh convention nor the TSL per-mesh flag
-  identifies the shell on its own: `001ebo16` flags all thirteen of its meshes,
-  and the set contains the star shell *and* the asteroids *and* the planet.
+- **F6 — hybridise, then merge the graph.** This is the phase-sized one, and the
+  review is blunt that a full graph rewrite is not what is needed:
+  `VulkanScenePipeline` is already a 1,883-line frame executor with a
+  `VulkanSceneFramePlan`, and PBR and Retro already *select* steps from it
+  (`scene/render/pipeline/vulkan.cpp:138-170`). What is missing is that
+  PathTracing early-returns out of the whole shape. The honest change is to
+  remove that exclusive return, have raster produce visibility and depth in
+  traced mode too, and make the tracer emit a transport image the plan
+  composites — which touches `scenepipeline.{h,cpp}` initialisation, target
+  ownership, barriers and dumping; `vulkan.cpp` plan construction; the tracer's
+  output contract; and sky asset loading and descriptors, which do not exist
+  yet. **Do not schedule this as a small prerequisite to the sky.**
+  *Acceptance:* with filters off, dump targets from a fixed camera in PBR and in
+  PathTracing and require `g_buffer_depth.npy` to exist and match in both.
+- **F7 — composite the sky once**, in a single pass placed **after the opaque
+  resolve and before Transparency** — not before `filterChainPass`, which is
+  past OITBlend and would paint over particles and flares. An integration
+  attempt put it in `pbr_resolve.slang` *and* `postprocess.slang` — two
+  implementations of one idea, precisely the fault that got the runtime bake
+  deleted. Raster tests `depth == 1.0` on the device-depth attachment; retro,
+  having no deferred colour G-buffer, tests its own coverage.
+  *Acceptance:* a fixture with one opaque prop, one OIT particle and a lens
+  flare; sky-off vs sky-on with filters disabled; the changed-pixel set must be
+  exactly the far-depth set, and the particle and flare pixels must not move.
+- **F8 — the tracer keeps only transport.** `ptSkyRadiance` on bounce miss stays
+  (`slang/rayquery.slang:341-349`); its primary-miss call is compositing and
+  moves to F7. Note the output-contract change this implies: primary-miss sky
+  currently feeds `outputs.noiseFree` (`rayquery.slang:147-157`) and supplies the
+  cyan sky-miss colour for the surface debug view, so F8 must say what replaces
+  both. *Acceptance:* a fixed-seed fixture whose camera sees an opaque surface
+  and whose first secondary ray misses; hash the traced result across the change.
+- **F9 — suppress exactly the shell.** Begins by *adding* a per-mesh manifest to
+  `override/*/modules.ini`, which today carries only `room =` and `sky =`, plus
+  the resolver that reads it; the runtime currently uses a heuristic room
+  classifier instead (`scene/render/pipeline/rayquery.cpp:318-368`). Then the
+  baker and the renderer read one list rather than each evaluating a rule and
+  hoping they agree. Neither the K1 no-walkmesh convention nor the TSL per-mesh
+  flag identifies the shell alone: `001ebo16` flags all thirteen of its meshes,
+  and that set contains the star shell *and* the asteroids *and* the planet.
   Suppressing by flag deletes a planet and looks like success.
+  *Acceptance:* unit-test the resolver against `001ebo16` — the resolved shell
+  set must equal the manifest, and the asteroid and planet meshes must be absent
+  from it.
 - **F10 — delete the runtime bake**, `slang/sky.slang`, and the shadow-ray
   candidate rejection at `slang/tracing/trace.slang:134`, which exists only to
-  cope with sky geometry that may still be present.
+  cope with sky geometry that may still be present. Larger than one line: the
+  same removal touches the sky feature bit and the classifier that feeds it.
+  *Acceptance:* `rg -n 'bakeSkyRoom|clearSkyRoom|RayQuerySkyRoom|skyAvailable' src include slang`
+  returns no runtime-bake remnants, and `slang/sky.slang` does not exist.
 
-The trap worth naming, because it is what makes G4 safe to be strict about: a
+The trap worth naming, because it is what makes F10 safe to be strict about: a
 sky that renders correctly while quietly removing scenery still passes every
 sky-shaped test. So the bar is the props, not the sky — capture `001ebo` and
 `manm26ad` and confirm the asteroids, the planet and the Ahto City rings are
 still drawn.
+
+That bar is **necessary but not sufficient**, and the review is right about why:
+hashing `sky = none` modules only proves the untouched branch stayed untouched.
+It cannot catch a sky composited in the wrong order, a shell resolved to the
+wrong mesh set, or traced output moved by F8 — which is why each step above
+carries its own mechanical check instead of deferring to the phase bar.
 
 ### What happens next, in order
 
