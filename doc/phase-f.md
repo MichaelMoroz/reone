@@ -45,8 +45,8 @@ compare distributions, never a stored number.
 | **G1** | done `db668c2f` — the per-mesh path is gone; raster modes run an empty plan and present a cleared scene |
 | **G2** | done `ef6c5850`, coverage corrected in `298d0542` — one draw over merged geometry writes a G-buffer that agrees with the traced one |
 | **G3** | done `cc9a36ac` — admission extracted and shared, sky suppressed identically, all three modes hash the upload to the same value |
-| **G4** | the GL legacy out. **Before any shading** — see below for why the order is forced. |
-| **G5–G8** | shading, shadows, then the blended pass. |
+| **G4** | done `d6148ee6` — matrices born in Vulkan clip, `glToVulkanClip` and the inert `IUniforms` deleted; dumps bit-identical across the change |
+| **G5–G8** | shading, shadows, then the blended pass. Next. |
 | **V1–V5** | the visibility track and the sky. After G. |
 
 ## Two tracks, and why geometry goes first
@@ -226,7 +226,15 @@ makes the whole class of divergence impossible to reintroduce quietly. The
 sky's 464,982 raster-only pixels fall out of it as a consequence rather than
 needing a fix of their own.
 
-## G4 — the OpenGL legacy goes
+## G4 — the OpenGL legacy goes — done `d6148ee6`
+
+Landed better than the bar asked: dumps, captures and screenshots came out
+**bit-identical**, not ulp-close — the native ZO construction reproduces the
+old correction exactly. Two consumers were quietly re-deriving the GL
+convention and moved with it: frustum near-plane extraction and shadow-corner
+unprojection. The sky-cube bake keeps its private `glm::perspective`
+deliberately — it was never routed through the correction, so converting it
+would have been a behaviour change smuggled into a refactor.
 
 The backend is Vulkan-only since `df1aa375`, but the frame still speaks GL in
 two places, live code both:
