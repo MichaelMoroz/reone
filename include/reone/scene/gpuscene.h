@@ -82,37 +82,33 @@ struct RegisteredMesh {
     RegisteredDeformation deformation;
     ModelSceneNode *cullRoot {nullptr};
 };
-struct RegisteredBillboard {
-    RenderCategories categories {0};
-    SceneNodeId id;
-    SceneNodeNameIds nameIds;
-    std::reference_wrapper<graphics::Texture> texture;
+enum class ProceduralKind {
+    Grass,
+    Particles,
+    Billboard,
+};
+struct ProceduralInstance {
+    int variant {0};
+    glm::vec3 position {0.0f};
+    glm::vec2 size {0.0f};
     glm::vec4 color {1.0f};
-    glm::mat4 transform {1.0f};
-    glm::mat4 transformInv {1.0f};
-    std::optional<float> size;
-    ModelSceneNode *cullRoot {nullptr};
+    glm::vec3 right {0.0f};
+    glm::vec3 up {0.0f};
+    glm::vec2 lightmapUV {0.0f};
+    float yaw {0.0f};
 };
-struct RegisteredParticles {
+struct RegisteredProcedural {
     RenderCategories categories {0};
     SceneNodeId id;
     SceneNodeNameIds nameIds;
     graphics::Material material;
+    ProceduralKind kind {ProceduralKind::Grass};
     glm::ivec2 gridSize {1};
-    std::vector<ParticleInstance> instances;
+    float quadSize {0.0f};
+    std::vector<ProceduralInstance> instances;
     ModelSceneNode *cullRoot {nullptr};
 };
-struct RegisteredGrass {
-    RenderCategories categories {0};
-    SceneNodeId id;
-    SceneNodeNameIds nameIds;
-    graphics::Material material;
-    float radius {0.0f};
-    float quadSize {0.0f};
-    std::vector<GrassInstance> instances;
-};
-using ObjectRecord =
-    std::variant<RegisteredMesh, RegisteredBillboard, RegisteredParticles, RegisteredGrass>;
+using ObjectRecord = std::variant<RegisteredMesh, RegisteredProcedural>;
 
 struct SceneCounts {
     size_t entries {0};
@@ -131,8 +127,8 @@ std::string formatSceneCounts(const SceneCounts &counts);
 
 /**
  * GPU-side world-space scene geometry. It owns what is present in this frame
- * and where it is stored; consumers supply their classification and interpret
- * the published buffers according to their own policy.
+ * and where it is stored; shared admission supplies classification and lowers
+ * the published buffers for both raster and tracing consumers.
  */
 class GpuScene : boost::noncopyable {
 public:
@@ -143,37 +139,43 @@ public:
     using PrimitiveClass = graphics::GpuScenePrimitiveClass;
     using ResidencyClass = graphics::GpuSceneResidencyClass;
 
-    /** Trace-specific material lowering is supplied by the current consumer. */
+    enum class AdmissionKind {
+        Opaque,
+        Cutout,
+        LitBlended,
+        AdditiveEmissive,
+    };
+
+    /** Material lowering and the authoritative coverage kind for one object. */
     struct Classification {
         InstanceMaterial material;
-        PrimitiveClass primitiveClass {PrimitiveClass::Opaque};
+        AdmissionKind kind {AdmissionKind::Opaque};
         ResidencyClass residency {ResidencyClass::Dynamic};
         const RegisteredSkin *skin {nullptr};
     };
     using Classifier = std::function<std::optional<Classification>(const RegisteredMesh &)>;
-    using GrassClassifier = std::function<std::optional<Classification>(const RegisteredGrass &)>;
-    using ParticleClassifier = std::function<std::optional<Classification>(const RegisteredParticles &)>;
-    using BillboardClassifier = std::function<std::optional<Classification>(const RegisteredBillboard &)>;
+    using ProceduralClassifier =
+        std::function<std::optional<Classification>(const RegisteredProcedural &)>;
 
     void resetFrame();
     void checkIdentityStability();
 
     void addMesh(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
-                   graphics::Mesh &mesh, const graphics::Material &material,
-                   const glm::mat4 &transform, const glm::mat4 &transformInv,
-                   const glm::mat4 &prevTransform, RegisteredDeformation deformation,
-                   ModelSceneNode *cullRoot);
+                 graphics::Mesh &mesh, const graphics::Material &material,
+                 const glm::mat4 &transform, const glm::mat4 &transformInv,
+                 const glm::mat4 &prevTransform, RegisteredDeformation deformation,
+                 ModelSceneNode *cullRoot);
     void addBillboard(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
-                        graphics::Texture &texture, const glm::vec4 &color,
-                        const glm::mat4 &transform, const glm::mat4 &transformInv,
-                        std::optional<float> size, ModelSceneNode *cullRoot);
+                      graphics::Texture &texture, const glm::vec4 &color,
+                      const glm::mat4 &transform, const glm::mat4 &transformInv,
+                      std::optional<float> size, ModelSceneNode *cullRoot);
     void addParticles(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
-                        const graphics::Material &material, const glm::ivec2 &gridSize,
-                        const std::vector<ParticleInstance> &instances,
-                        ModelSceneNode *cullRoot);
+                      const graphics::Material &material, const glm::ivec2 &gridSize,
+                      const std::vector<ParticleInstance> &instances,
+                      ModelSceneNode *cullRoot);
     void addGrass(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
-                    const graphics::Material &material, float radius, float quadSize,
-                    const std::vector<GrassInstance> &instances);
+                  const graphics::Material &material, float radius, float quadSize,
+                  const std::vector<GrassInstance> &instances);
     bool isObjectEnabled(uint32_t idIndex) const {
         return _disabledObjects.find(idIndex) == _disabledObjects.end();
     }
@@ -191,9 +193,7 @@ public:
     const std::vector<ObjectRecord> &objects() const { return _objects; }
 
     graphics::GpuSceneUpload prepare(const Classifier &classifier,
-                                     const GrassClassifier &grassClassifier,
-                                     const ParticleClassifier &particleClassifier,
-                                     const BillboardClassifier &billboardClassifier,
+                                     const ProceduralClassifier &proceduralClassifier,
                                      const glm::mat4 &cameraView) const;
 
 private:

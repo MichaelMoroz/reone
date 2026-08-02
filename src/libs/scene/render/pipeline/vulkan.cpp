@@ -8,6 +8,9 @@
  */
 #include "reone/scene/render/pipeline/vulkan.h"
 
+#include <iomanip>
+#include <sstream>
+
 #include "reone/graphics/options.h"
 #include "reone/graphics/vulkan/rayquery.h"
 #include "reone/graphics/vulkan/gpuscene.h"
@@ -22,12 +25,13 @@ public:
     explicit Callbacks(VulkanRenderPipeline &owner) : _owner(owner) {}
 
     void renderPrimary(const graphics::VulkanPrimaryRayContext &context) override {
-        _owner._rayQuery->render(context);
+        if (_owner._rayQuery)
+            _owner._rayQuery->render(context, std::move(_owner._admissionResult));
     }
 
     graphics::VulkanGpuScene::View mergeGeometry(VkCommandBuffer commandBuffer) override {
         return _owner._deviceGpuScene->update(commandBuffer,
-                                               std::move(_owner._rasterUpload));
+                                              std::move(_owner._admissionResult.submission.upload));
     }
 
     std::vector<graphics::VulkanExternalTarget> primaryTargets() const override {
@@ -74,10 +78,12 @@ void VulkanRenderPipeline::init() {
     _executor->init();
     _deviceGpuScene = std::make_unique<graphics::VulkanGpuScene>();
     _deviceGpuScene->init(_renderer);
-    _rayQuery = std::make_unique<RayQueryPipeline>(
-        _renderer, _targetSize, _options, _gpuScene, *_deviceGpuScene,
-        _primaryRayMode);
-    _rayQuery->init();
+    _admission = std::make_unique<GpuSceneAdmission>(_renderer, _options, _gpuScene);
+    if (_primaryRayMode) {
+        _rayQuery = std::make_unique<RayQueryPipeline>(
+            _renderer, _targetSize, _options, _gpuScene, *_deviceGpuScene);
+        _rayQuery->init();
+    }
     _callbacks = std::make_unique<Callbacks>(*this);
     _inited = true;
 }
@@ -89,6 +95,7 @@ void VulkanRenderPipeline::deinit() {
     if (_rayQuery)
         _rayQuery->deinit();
     _rayQuery.reset();
+    _admission.reset();
     if (_deviceGpuScene)
         _deviceGpuScene->deinit();
     _deviceGpuScene.reset();
@@ -98,10 +105,14 @@ void VulkanRenderPipeline::deinit() {
 
 graphics::Texture &VulkanRenderPipeline::render(const CameraSceneNode *camera) {
     graphics::VulkanSceneFramePlan plan;
-    if (!_primaryRayMode) {
-        _rasterUpload = _rayQuery->prepareRaster(_uniforms.globals().view);
+    _admissionResult = _admission->prepare(_uniforms.globals().view);
+    _lastUploadHash = _admissionResult.uploadHash;
+    _lastMaterialReferences =
+        _admissionResult.submission.upload.materialReferenceCount;
+    _lastMaterialCount =
+        static_cast<uint32_t>(_admissionResult.submission.upload.materials.size());
+    if (!_primaryRayMode)
         plan.steps.push_back(graphics::VulkanSceneStep::Geometry);
-    }
     return _executor->render(plan, *_callbacks);
 }
 
@@ -128,6 +139,12 @@ void *VulkanRenderPipeline::renderTargetPreview(const std::string &name,
 
 void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
     info("Vulkan scene contents: " + formatSceneCounts(_gpuScene.counts()),
+         LogChannel::Graphics);
+    std::ostringstream hash;
+    hash << std::hex << std::setw(16) << std::setfill('0') << _lastUploadHash;
+    info("GpuScene upload hash=" + hash.str() +
+             ", materials=" + std::to_string(_lastMaterialReferences) + "->" +
+             std::to_string(_lastMaterialCount),
          LogChannel::Graphics);
     _executor->dumpTargets(dir, *_callbacks);
 }

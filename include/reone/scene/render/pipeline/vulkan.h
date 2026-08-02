@@ -8,6 +8,7 @@
  */
 #pragma once
 
+#include "../admission.h"
 #include "../pipeline.h"
 
 namespace reone::graphics {
@@ -57,8 +58,12 @@ private:
     bool _inited {false};
     std::unique_ptr<graphics::VulkanScenePipeline> _executor;
     std::unique_ptr<graphics::VulkanGpuScene> _deviceGpuScene;
+    std::unique_ptr<GpuSceneAdmission> _admission;
+    GpuSceneAdmissionResult _admissionResult;
     std::unique_ptr<RayQueryPipeline> _rayQuery;
-    graphics::GpuSceneUpload _rasterUpload;
+    uint64_t _lastUploadHash {0};
+    uint32_t _lastMaterialReferences {0};
+    uint32_t _lastMaterialCount {0};
     std::unique_ptr<Callbacks> _callbacks;
 };
 

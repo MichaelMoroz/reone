@@ -42,6 +42,7 @@ set(SCENE_HEADERS
     ${SCENE_INCLUDE_DIR}/node/trigger.h
     ${SCENE_INCLUDE_DIR}/node/walkmesh.h
     ${SCENE_INCLUDE_DIR}/render/pipeline.h
+    ${SCENE_INCLUDE_DIR}/render/admission.h
     ${SCENE_INCLUDE_DIR}/render/pipeline/vulkan.h
     ${SCENE_INCLUDE_DIR}/render/pipeline/rayquery.h
     ${SCENE_INCLUDE_DIR}/render/pipeline/tracematerials.h
@@ -74,6 +75,7 @@ set_target_properties(scene PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(scene PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 
 target_sources(scene PRIVATE
+    ${SCENE_SOURCE_DIR}/render/admission.cpp
     ${SCENE_SOURCE_DIR}/render/pipeline/vulkan.cpp
     ${SCENE_SOURCE_DIR}/render/pipeline/rayquery.cpp)
 target_link_libraries(scene PUBLIC graphicsvulkan)

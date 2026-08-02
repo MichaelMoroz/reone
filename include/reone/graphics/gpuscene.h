@@ -76,8 +76,6 @@ struct alignas(16) GpuSceneMergedVertex {
     glm::vec2 pad {0.0f};
     float tailPad[2] {};
     glm::vec4 color {1.0f};
-    glm::vec3 objectPosition {0.0f};
-    float objectPositionPad {0.0f};
 };
 static_assert(offsetof(GpuSceneMergedVertex, position) == 0);
 static_assert(offsetof(GpuSceneMergedVertex, normal) == 16);
@@ -89,8 +87,7 @@ static_assert(offsetof(GpuSceneMergedVertex, tanSpaceNormal) == 80);
 static_assert(offsetof(GpuSceneMergedVertex, prevPosition) == 96);
 static_assert(offsetof(GpuSceneMergedVertex, pad) == 112);
 static_assert(offsetof(GpuSceneMergedVertex, color) == 128);
-static_assert(offsetof(GpuSceneMergedVertex, objectPosition) == 144);
-static_assert(sizeof(GpuSceneMergedVertex) == 160);
+static_assert(sizeof(GpuSceneMergedVertex) == 144);
 
 struct alignas(16) GpuSceneObjectData {
     glm::mat4 transform {1.0f};
@@ -151,7 +148,7 @@ struct GpuSceneObjectInput {
     uint32_t objectGeneration {0};
 };
 
-/** Vulkan-free output of scene admission and consumer classification. */
+/** Vulkan-free output of shared scene admission. */
 struct GpuSceneUpload {
     std::vector<GpuSceneMaterial> materials;
     std::vector<GpuSceneObjectInput> objects;
@@ -159,6 +156,7 @@ struct GpuSceneUpload {
     std::vector<glm::vec4> danglyPositions;
     std::vector<GpuSceneProceduralQuad> proceduralQuads;
     uint32_t opaqueObjectCount {0};
+    uint32_t materialReferenceCount {0};
 };
 
 } // namespace reone::graphics

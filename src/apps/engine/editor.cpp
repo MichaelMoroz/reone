@@ -289,24 +289,24 @@ ObjectEntryView makeObjectEntryView(const scene::ISceneGraph &graph,
                         break;
                     }
                 }
-            } else if constexpr (std::is_same_v<T, scene::RegisteredBillboard>) {
+            } else if constexpr (std::is_same_v<T, scene::RegisteredProcedural>) {
                 result.root = entry.cullRoot;
                 result.modelName = graph.nameText(entry.nameIds.model);
                 result.nodeName = graph.nameText(entry.nameIds.node);
-                result.kind = "billboard";
-            } else if constexpr (std::is_same_v<T, scene::RegisteredParticles>) {
-                result.root = entry.cullRoot;
-                result.modelName = graph.nameText(entry.nameIds.model);
-                result.nodeName = graph.nameText(entry.nameIds.node);
-                result.kind = "particles";
                 result.material = objectMaterialName(entry.material.type);
-                result.particles = entry.instances.size();
-            } else if constexpr (std::is_same_v<T, scene::RegisteredGrass>) {
-                result.modelName = graph.nameText(entry.nameIds.model);
-                result.nodeName = graph.nameText(entry.nameIds.node);
-                result.kind = "grass";
-                result.material = objectMaterialName(entry.material.type);
-                result.clusters = entry.instances.size();
+                switch (entry.kind) {
+                case scene::ProceduralKind::Grass:
+                    result.kind = "grass";
+                    result.clusters = entry.instances.size();
+                    break;
+                case scene::ProceduralKind::Particles:
+                    result.kind = "particles";
+                    result.particles = entry.instances.size();
+                    break;
+                case scene::ProceduralKind::Billboard:
+                    result.kind = "billboard";
+                    break;
+                }
             }
             return result;
         },

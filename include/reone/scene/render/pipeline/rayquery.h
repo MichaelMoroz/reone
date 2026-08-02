@@ -4,7 +4,6 @@
  */
 #pragma once
 
-#include "reone/graphics/rayquery.h"
 #include "reone/scene/gpuscene.h"
 
 namespace reone::graphics {
@@ -17,27 +16,22 @@ struct VulkanPrimaryRayContext;
 
 namespace reone::scene {
 
-class ModelSceneNode;
-struct RegisteredMesh;
-struct RegisteredGrass;
-struct RegisteredParticles;
-struct RegisteredBillboard;
+struct GpuSceneAdmissionResult;
 
-/** Scene admission and curated lowering for the native primary-ray path. */
+/** Sky bake and native primary-ray execution for one admitted upload. */
 class RayQueryPipeline : boost::noncopyable {
 public:
     RayQueryPipeline(graphics::VulkanRenderer &renderer,
                      glm::ivec2 extent,
                      graphics::GraphicsOptions &options,
                      GpuScene &gpuScene,
-                     graphics::VulkanGpuScene &deviceGpuScene,
-                     bool primaryRayMode);
+                     graphics::VulkanGpuScene &deviceGpuScene);
     ~RayQueryPipeline();
 
     void init();
     void deinit();
-    void render(const graphics::VulkanPrimaryRayContext &context);
-    graphics::GpuSceneUpload prepareRaster(const glm::mat4 &view);
+    void render(const graphics::VulkanPrimaryRayContext &context,
+                GpuSceneAdmissionResult admission);
     void restartTemporalHistory();
     graphics::VulkanRayQuery &native();
     const graphics::VulkanRayQuery &native() const;
@@ -48,20 +42,7 @@ private:
     graphics::GraphicsOptions &_options;
     GpuScene &_gpuScene;
     graphics::VulkanGpuScene &_deviceGpuScene;
-    bool _primaryRayMode {false};
     std::unique_ptr<graphics::VulkanRayQuery> _native;
-    graphics::RayQuerySubmission _submission;
-    uint32_t _frameNumber {0};
-
-    graphics::GpuSceneUpload prepare(const glm::mat4 &view,
-                                     const ModelSceneNode *skyRoom,
-                                     bool skyBaked);
-
-    std::optional<GpuScene::Classification> classifyMesh(
-        const RegisteredMesh &mesh, const ModelSceneNode *skyRoom, bool skyBaked);
-    std::optional<GpuScene::Classification> classifyGrass(const RegisteredGrass &grass);
-    std::optional<GpuScene::Classification> classifyParticles(const RegisteredParticles &particles);
-    std::optional<GpuScene::Classification> classifyBillboard(const RegisteredBillboard &billboard);
 };
 
 } // namespace reone::scene

@@ -508,9 +508,9 @@ void VulkanRayQuery::clearFrame(Frame &frame) {
 
 bool VulkanRayQuery::bakeSkyRoom(VkCommandBuffer cmd,
                                   const RayQuerySkyRoom &room) {
-    // A failed bake is deliberately sticky for this detected room: geometry is
-    // the safe fallback, and retrying a known-invalid asset every frame would
-    // turn that safety path into a standing cost.
+    // A failed bake is deliberately sticky for this detected room: the fallback
+    // cube is stable, and retrying a known-invalid asset every frame would turn
+    // that path into a standing cost. Admission suppresses the shell either way.
     if (_skyCubeRoom == room.identity) {
         return _skyCubeReady;
     }

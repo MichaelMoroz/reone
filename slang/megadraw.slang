@@ -31,7 +31,6 @@ struct MergedVertex {
     float3 prevPosition;
     float2 pad;
     float4 color;
-    float3 objectPosition;
 };
 
 struct InstanceMaterial {

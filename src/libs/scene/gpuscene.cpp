@@ -5,7 +5,9 @@
 #include "reone/scene/gpuscene.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
+#include <unordered_map>
 
 #include "reone/graphics/mesh.h"
 #include "reone/scene/node/model.h"
@@ -35,6 +37,64 @@ void countMesh(SceneCounts &counts, const RegisteredDeformation &deformation) {
         ++counts.saber;
     else
         ++counts.rigid;
+}
+
+uint64_t hashBytes(const void *data, size_t size) {
+    constexpr uint64_t kOffset = 14695981039346656037ull;
+    constexpr uint64_t kPrime = 1099511628211ull;
+    uint64_t hash = kOffset;
+    const auto *bytes = static_cast<const unsigned char *>(data);
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= bytes[i];
+        hash *= kPrime;
+    }
+    return hash;
+}
+
+class MaterialPool {
+public:
+    explicit MaterialPool(graphics::GpuSceneUpload &upload) :
+        _upload(upload) {}
+
+    uint32_t add(const GpuScene::InstanceMaterial &material) {
+        ++_upload.materialReferenceCount;
+        const auto hash = hashBytes(&material, sizeof(material));
+        auto &candidates = _indices[hash];
+        for (const auto index : candidates) {
+            if (std::memcmp(&_upload.materials[index], &material, sizeof(material)) == 0)
+                return index;
+        }
+        const auto index = static_cast<uint32_t>(_upload.materials.size());
+        _upload.materials.push_back(material);
+        candidates.push_back(index);
+        return index;
+    }
+
+private:
+    graphics::GpuSceneUpload &_upload;
+    std::unordered_map<uint64_t, std::vector<uint32_t>> _indices;
+};
+
+GpuScene::PrimitiveClass applyAdmissionKind(GpuScene::Classification &classification) {
+    constexpr uint32_t kBlendedCoverage = 1u << 25;
+    constexpr uint32_t kPunchThrough = 1u << 26;
+    classification.material.featureMask &= ~(kBlendedCoverage | kPunchThrough);
+    switch (classification.kind) {
+    case GpuScene::AdmissionKind::Opaque:
+        return GpuScene::PrimitiveClass::Opaque;
+    case GpuScene::AdmissionKind::Cutout:
+        classification.material.featureMask |= kPunchThrough;
+        return GpuScene::PrimitiveClass::NonOpaque;
+    case GpuScene::AdmissionKind::LitBlended:
+        classification.material.featureMask |= kBlendedCoverage;
+        return GpuScene::PrimitiveClass::NonOpaque;
+    case GpuScene::AdmissionKind::AdditiveEmissive:
+        // Curated prelit remains the existing terminating surface model.
+        if (classification.material.surfaceType != 2)
+            classification.material.surfaceType = 1;
+        return GpuScene::PrimitiveClass::NonOpaque;
+    }
+    return GpuScene::PrimitiveClass::Opaque;
 }
 
 } // namespace
@@ -78,10 +138,10 @@ void GpuScene::checkIdentityStability() {
 }
 
 void GpuScene::addMesh(RenderCategories categories, SceneNodeId id,
-                         SceneNodeNameIds nameIds, Mesh &mesh, const Material &material,
-                         const glm::mat4 &transform, const glm::mat4 &transformInv,
-                         const glm::mat4 &prevTransform, RegisteredDeformation deformation,
-                         ModelSceneNode *cullRoot) {
+                       SceneNodeNameIds nameIds, Mesh &mesh, const Material &material,
+                       const glm::mat4 &transform, const glm::mat4 &transformInv,
+                       const glm::mat4 &prevTransform, RegisteredDeformation deformation,
+                       ModelSceneNode *cullRoot) {
     ++_counts.entries;
     if (isCountedMesh(material))
         countMesh(_counts, deformation);
@@ -90,55 +150,124 @@ void GpuScene::addMesh(RenderCategories categories, SceneNodeId id,
 }
 
 void GpuScene::addBillboard(RenderCategories categories, SceneNodeId id,
-                              SceneNodeNameIds nameIds, Texture &texture, const glm::vec4 &color,
-                              const glm::mat4 &transform, const glm::mat4 &transformInv,
-                              std::optional<float> size, ModelSceneNode *cullRoot) {
+                            SceneNodeNameIds nameIds, Texture &texture, const glm::vec4 &color,
+                            const glm::mat4 &transform, const glm::mat4 &transformInv,
+                            std::optional<float> size, ModelSceneNode *cullRoot) {
     ++_counts.entries;
     ++_counts.billboards;
-    _objects.push_back(RegisteredBillboard {
-        categories, id, nameIds, texture, color, transform, transformInv, size, cullRoot});
+    Material material {};
+    material.type = MaterialType::Particle;
+    material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)] = &texture;
+    ProceduralInstance instance;
+    instance.position = glm::vec3(transform[3]);
+    instance.size = {glm::length(glm::vec3(transform[0])),
+                     glm::length(glm::vec3(transform[1]))};
+    instance.color = color;
+    RegisteredProcedural procedural;
+    procedural.categories = categories;
+    procedural.id = id;
+    procedural.nameIds = nameIds;
+    procedural.material = material;
+    procedural.kind = ProceduralKind::Billboard;
+    procedural.instances.push_back(instance);
+    procedural.cullRoot = cullRoot;
+    _objects.push_back(std::move(procedural));
+    (void)transformInv;
+    (void)size;
 }
 
 void GpuScene::addParticles(RenderCategories categories, SceneNodeId id,
-                              SceneNodeNameIds nameIds, const Material &material,
-                              const glm::ivec2 &gridSize,
-                              const std::vector<ParticleInstance> &instances,
-                              ModelSceneNode *cullRoot) {
+                            SceneNodeNameIds nameIds, const Material &material,
+                            const glm::ivec2 &gridSize,
+                            const std::vector<ParticleInstance> &instances,
+                            ModelSceneNode *cullRoot) {
     ++_counts.entries;
     ++_counts.particleEmitters;
     _counts.particles += instances.size();
-    _objects.push_back(
-        RegisteredParticles {categories, id, nameIds, material, gridSize, instances, cullRoot});
+    RegisteredProcedural procedural;
+    procedural.categories = categories;
+    procedural.id = id;
+    procedural.nameIds = nameIds;
+    procedural.material = material;
+    procedural.kind = ProceduralKind::Particles;
+    procedural.gridSize = gridSize;
+    procedural.cullRoot = cullRoot;
+    procedural.instances.reserve(instances.size());
+    for (const auto &source : instances) {
+        ProceduralInstance instance;
+        instance.variant = source.frame;
+        instance.position = source.position;
+        instance.size = source.size;
+        instance.color = source.color;
+        instance.right = source.right;
+        instance.up = source.up;
+        procedural.instances.push_back(instance);
+    }
+    _objects.push_back(std::move(procedural));
 }
 
 void GpuScene::addGrass(RenderCategories categories, SceneNodeId id,
-                          SceneNodeNameIds nameIds, const Material &material, float radius,
-                          float quadSize, const std::vector<GrassInstance> &instances) {
+                        SceneNodeNameIds nameIds, const Material &material, float radius,
+                        float quadSize, const std::vector<GrassInstance> &instances) {
     ++_counts.entries;
     ++_counts.grassNodes;
     _counts.grassClusters += instances.size();
-    _objects.push_back(
-        RegisteredGrass {categories, id, nameIds, material, radius, quadSize, instances});
+    RegisteredProcedural procedural;
+    procedural.categories = categories;
+    procedural.id = id;
+    procedural.nameIds = nameIds;
+    procedural.material = material;
+    procedural.kind = ProceduralKind::Grass;
+    procedural.quadSize = quadSize;
+    procedural.instances.reserve(instances.size());
+    for (const auto &source : instances) {
+        ProceduralInstance instance;
+        instance.variant = source.variant;
+        instance.position = source.position;
+        instance.lightmapUV = source.lightmapUV;
+        instance.yaw = source.yaw;
+        procedural.instances.push_back(instance);
+    }
+    _objects.push_back(std::move(procedural));
+    (void)radius;
 }
 
 graphics::GpuSceneUpload GpuScene::prepare(
-                                const Classifier &classifier,
-                                const GrassClassifier &grassClassifier,
-                                const ParticleClassifier &particleClassifier,
-                                const BillboardClassifier &billboardClassifier,
-                                const glm::mat4 &cameraView) const {
+    const Classifier &classifier,
+    const ProceduralClassifier &proceduralClassifier,
+    const glm::mat4 &cameraView) const {
     graphics::GpuSceneUpload upload;
     std::vector<graphics::GpuSceneObjectInput> opaqueObjects, nonOpaqueObjects;
     upload.materials.reserve(_objects.size());
     opaqueObjects.reserve(_objects.size());
     nonOpaqueObjects.reserve(_objects.size());
+    MaterialPool materials(upload);
     // ROWS, not columns. glm is column-major, so cameraView[i] is column i.
     // Billboards still use the primary-camera approximation; grass does not.
     const glm::mat3 viewRows = glm::transpose(glm::mat3(cameraView));
     const glm::vec3 viewRow0 = viewRows[0];
     const glm::vec3 viewRow1 = viewRows[1];
-    const glm::vec3 viewRow2 = viewRows[2];
+
+    // Retain the established merge order while using one procedural record and
+    // lowering path: meshes and grass first, then particles, then billboards.
+    // Absolute primitive order affects exact-tie traversal and accumulation.
+    std::vector<const ObjectRecord *> orderedObjects;
+    orderedObjects.reserve(_objects.size());
     for (const auto &object : _objects) {
+        const auto *procedural = std::get_if<RegisteredProcedural>(&object);
+        if (!procedural || procedural->kind == ProceduralKind::Grass)
+            orderedObjects.push_back(&object);
+    }
+    for (const auto kind : {ProceduralKind::Particles, ProceduralKind::Billboard}) {
+        for (const auto &object : _objects) {
+            const auto *procedural = std::get_if<RegisteredProcedural>(&object);
+            if (procedural && procedural->kind == kind)
+                orderedObjects.push_back(&object);
+        }
+    }
+
+    for (const auto *objectRecord : orderedObjects) {
+        const auto &object = *objectRecord;
         const auto *mesh = std::get_if<RegisteredMesh>(&object);
         if (mesh) {
             if (!isObjectEnabled(mesh->id.index))
@@ -156,7 +285,8 @@ graphics::GpuSceneUpload GpuScene::prepare(
             sceneObject.transform = mesh->transform;
             sceneObject.prevTransform = mesh->prevTransform;
             sceneObject.transformInv = mesh->transformInv;
-            sceneObject.materialIndex = static_cast<uint32_t>(upload.materials.size());
+            const auto primitiveClass = applyAdmissionKind(*classification);
+            sceneObject.materialIndex = materials.add(classification->material);
             if (classification->skin) {
                 const auto &skin = *classification->skin;
                 if (skin.bones.size() != skin.prevBones.size())
@@ -190,8 +320,7 @@ graphics::GpuSceneUpload GpuScene::prepare(
             if (const auto *saber = std::get_if<RegisteredSaber>(&mesh->deformation)) {
                 sceneObject.saberDisplacement = saber->displacement;
             }
-            sceneObject.geometryIndex = classification->primitiveClass == PrimitiveClass::Opaque ? 0 : 1;
-            upload.materials.push_back(classification->material);
+            sceneObject.geometryIndex = primitiveClass == PrimitiveClass::Opaque ? 0 : 1;
             if (sceneObject.geometryIndex == 0) {
                 opaqueObjects.push_back(input);
             } else {
@@ -199,128 +328,70 @@ graphics::GpuSceneUpload GpuScene::prepare(
             }
             continue;
         }
-        const auto *grass = std::get_if<RegisteredGrass>(&object);
-        if (!grass || !isObjectEnabled(grass->id.index) || grass->instances.empty())
+        const auto *procedural = std::get_if<RegisteredProcedural>(&object);
+        if (!procedural || !isObjectEnabled(procedural->id.index) || procedural->instances.empty())
             continue;
-        if ((grass->categories & (renderCategory(RenderCategory::Opaque) | renderCategory(RenderCategory::Transparent))) == 0)
+        if ((procedural->categories & (renderCategory(RenderCategory::Opaque) |
+                                       renderCategory(RenderCategory::Transparent))) == 0)
             continue;
-        auto classification = grassClassifier(*grass);
+        auto classification = proceduralClassifier(*procedural);
         if (!classification)
             continue;
-        if (grass->instances.size() > std::numeric_limits<uint32_t>::max() / 4 ||
+        if (procedural->instances.size() > std::numeric_limits<uint32_t>::max() / 4 ||
             upload.proceduralQuads.size() >
-                std::numeric_limits<uint32_t>::max() - grass->instances.size())
-            throw std::runtime_error("Vulkan: merged grass scene exceeds shader index range");
+                std::numeric_limits<uint32_t>::max() - procedural->instances.size())
+            throw std::runtime_error("Vulkan: merged procedural scene exceeds shader index range");
         graphics::GpuSceneObjectInput input;
         auto &sceneObject = input.data;
-        input.objectIndex = grass->id.index;
-        input.objectGeneration = grass->id.generation;
+        input.objectIndex = procedural->id.index;
+        input.objectGeneration = procedural->id.generation;
         sceneObject.srcVertexOffset = static_cast<uint32_t>(upload.proceduralQuads.size());
-        // A zero source stride tags a procedural grass-cluster list. The merge
-        // shader expands it directly, avoiding one CPU SceneObject per blade.
-        sceneObject.srcVertexStride = 0;
-        sceneObject.vertexCount = static_cast<uint32_t>(grass->instances.size()) * 4;
-        sceneObject.triangleCount = static_cast<uint32_t>(grass->instances.size()) * 2;
-        sceneObject.materialIndex = static_cast<uint32_t>(upload.materials.size());
-        sceneObject.geometryIndex = classification->primitiveClass == PrimitiveClass::Opaque ? 0 : 1;
-        for (const auto &instance : grass->instances) {
-            // The same yaw raster receives in GrassUniforms. A blade stands on
-            // world +Z and is invariant under primary, reflection and shadow
-            // ray direction.
-            const glm::vec3 right {glm::cos(instance.yaw) * grass->quadSize,
-                                   glm::sin(instance.yaw) * grass->quadSize, 0.0f};
-            const glm::vec3 up {0.0f, 0.0f, grass->quadSize};
-            const glm::vec2 uvOffset {0.5f * (instance.variant % 2),
-                                      0.5f * (instance.variant / 2)};
-            upload.proceduralQuads.push_back(
-                {glm::vec4(instance.position, static_cast<float>(instance.variant)),
-                 glm::vec4(right, 0.0f), glm::vec4(up, 0.0f),
-                 glm::vec4(uvOffset, glm::vec2(0.5f)), instance.lightmapUV,
-                 {0.0f, 0.0f}, glm::vec4(1.0f)});
+        sceneObject.srcVertexStride = procedural->kind == ProceduralKind::Grass ? 0 : 1;
+        sceneObject.vertexCount = static_cast<uint32_t>(procedural->instances.size()) * 4;
+        sceneObject.triangleCount = static_cast<uint32_t>(procedural->instances.size()) * 2;
+        const auto primitiveClass = applyAdmissionKind(*classification);
+        sceneObject.materialIndex = materials.add(classification->material);
+        sceneObject.geometryIndex = primitiveClass == PrimitiveClass::Opaque ? 0 : 1;
+        const glm::ivec2 grid = glm::max(procedural->gridSize, glm::ivec2(1));
+        for (const auto &instance : procedural->instances) {
+            graphics::GpuSceneProceduralQuad quad;
+            quad.positionVariant = glm::vec4(instance.position,
+                                             static_cast<float>(instance.variant));
+            quad.color = instance.color;
+            switch (procedural->kind) {
+            case ProceduralKind::Grass: {
+                // The same yaw raster receives in GrassUniforms. A blade stands
+                // on world +Z and is independent of ray direction.
+                const glm::vec3 right {glm::cos(instance.yaw) * procedural->quadSize,
+                                       glm::sin(instance.yaw) * procedural->quadSize, 0.0f};
+                quad.right = glm::vec4(right, 0.0f);
+                quad.up = glm::vec4(0.0f, 0.0f, procedural->quadSize, 0.0f);
+                quad.uvOffsetScale =
+                    glm::vec4(0.5f * (instance.variant % 2),
+                              0.5f * (instance.variant / 2), 0.5f, 0.5f);
+                quad.lightmapUV = instance.lightmapUV;
+                break;
+            }
+            case ProceduralKind::Particles: {
+                const int frame = std::max(0, instance.variant);
+                const glm::vec2 uvScale {1.0f / grid.x, 1.0f / grid.y};
+                const glm::vec2 uvOffset {(frame % grid.x) * uvScale.x,
+                                          (frame / grid.x) * uvScale.y};
+                quad.positionVariant.w = static_cast<float>(frame);
+                quad.right = glm::vec4(instance.right * instance.size.x, 0.0f);
+                quad.up = glm::vec4(instance.up * instance.size.y, 0.0f);
+                quad.uvOffsetScale = glm::vec4(uvOffset, uvScale);
+                break;
+            }
+            case ProceduralKind::Billboard:
+                // Billboard rasterization uses the primary-camera axes; the
+                // merged quad fixes that same approximation for all ray types.
+                quad.right = glm::vec4(viewRow0 * instance.size.x, 0.0f);
+                quad.up = glm::vec4(viewRow1 * instance.size.y, 0.0f);
+                break;
+            }
+            upload.proceduralQuads.push_back(quad);
         }
-        upload.materials.push_back(classification->material);
-        if (sceneObject.geometryIndex == 0) {
-            opaqueObjects.push_back(input);
-        } else {
-            nonOpaqueObjects.push_back(input);
-        }
-    }
-    for (const auto &object : _objects) {
-        const auto *particles = std::get_if<RegisteredParticles>(&object);
-        if (!particles || !isObjectEnabled(particles->id.index) || particles->instances.empty())
-            continue;
-        if ((particles->categories & (renderCategory(RenderCategory::Opaque) |
-                                      renderCategory(RenderCategory::Transparent))) == 0)
-            continue;
-        auto classification = particleClassifier(*particles);
-        if (!classification)
-            continue;
-        if (particles->instances.size() > std::numeric_limits<uint32_t>::max() / 4 ||
-            upload.proceduralQuads.size() >
-                std::numeric_limits<uint32_t>::max() - particles->instances.size())
-            throw std::runtime_error("Vulkan: merged particle scene exceeds shader index range");
-        graphics::GpuSceneObjectInput input;
-        auto &sceneObject = input.data;
-        input.objectIndex = particles->id.index;
-        input.objectGeneration = particles->id.generation;
-        sceneObject.srcVertexOffset = static_cast<uint32_t>(upload.proceduralQuads.size());
-        // One is the centered billboard tag. As with grass (zero), the merge
-        // expands this compact emitter list into quads rather than receiving
-        // one CPU SceneObject per particle.
-        sceneObject.srcVertexStride = 1;
-        sceneObject.vertexCount = static_cast<uint32_t>(particles->instances.size()) * 4;
-        sceneObject.triangleCount = static_cast<uint32_t>(particles->instances.size()) * 2;
-        sceneObject.materialIndex = static_cast<uint32_t>(upload.materials.size());
-        sceneObject.geometryIndex = classification->primitiveClass == PrimitiveClass::Opaque ? 0 : 1;
-        const glm::ivec2 grid = glm::max(particles->gridSize, glm::ivec2(1));
-        for (const auto &instance : particles->instances) {
-            const int frame = std::max(0, instance.frame);
-            const glm::vec2 uvScale {1.0f / grid.x, 1.0f / grid.y};
-            const glm::vec2 uvOffset {(frame % grid.x) * uvScale.x, (frame / grid.x) * uvScale.y};
-            upload.proceduralQuads.push_back(
-                {glm::vec4(instance.position, static_cast<float>(frame)),
-                 glm::vec4(instance.right * instance.size.x, 0.0f),
-                 glm::vec4(instance.up * instance.size.y, 0.0f), glm::vec4(uvOffset, uvScale),
-                 glm::vec2(0.0f), {0.0f, 0.0f}, instance.color});
-        }
-        upload.materials.push_back(classification->material);
-        if (sceneObject.geometryIndex == 0) {
-            opaqueObjects.push_back(input);
-        } else {
-            nonOpaqueObjects.push_back(input);
-        }
-    }
-    for (const auto &object : _objects) {
-        const auto *billboard = std::get_if<RegisteredBillboard>(&object);
-        if (!billboard || !isObjectEnabled(billboard->id.index))
-            continue;
-        if ((billboard->categories & (renderCategory(RenderCategory::Opaque) |
-                                      renderCategory(RenderCategory::Transparent))) == 0)
-            continue;
-        auto classification = billboardClassifier(*billboard);
-        if (!classification)
-            continue;
-        graphics::GpuSceneObjectInput input;
-        auto &sceneObject = input.data;
-        input.objectIndex = billboard->id.index;
-        input.objectGeneration = billboard->id.generation;
-        sceneObject.srcVertexOffset = static_cast<uint32_t>(upload.proceduralQuads.size());
-        sceneObject.srcVertexStride = 1;
-        sceneObject.vertexCount = 4;
-        sceneObject.triangleCount = 2;
-        sceneObject.materialIndex = static_cast<uint32_t>(upload.materials.size());
-        sceneObject.geometryIndex = classification->primitiveClass == PrimitiveClass::Opaque ? 0 : 1;
-        // Billboard rasterization gets its axes from the primary camera. The
-        // tracer bakes that same primary-camera approximation into the merged
-        // quad; reflections and shadows therefore see a fixed pose.
-        const float width = glm::length(glm::vec3(billboard->transform[0]));
-        const float height = glm::length(glm::vec3(billboard->transform[1]));
-        upload.proceduralQuads.push_back(
-            {glm::vec4(glm::vec3(billboard->transform[3]), 0.0f),
-             glm::vec4(viewRow0 * width, 0.0f), glm::vec4(viewRow1 * height, 0.0f),
-             glm::vec4(0.0f, 0.0f, 1.0f, 1.0f), glm::vec2(0.0f),
-             {0.0f, 0.0f}, billboard->color});
-        upload.materials.push_back(classification->material);
         if (sceneObject.geometryIndex == 0) {
             opaqueObjects.push_back(input);
         } else {

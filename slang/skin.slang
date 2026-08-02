@@ -51,7 +51,6 @@ struct MergedVertex {
     float3 prevPosition;
     float2 pad;
     float4 color;
-    float3 objectPosition;
 };
 
 [[vk::binding(0, 0)]] StructuredBuffer<SceneObject> objects;
@@ -201,7 +200,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
             mergedVertex.tanSpaceNormal = float3(0);
             mergedVertex.pad = float2(0);
             mergedVertex.color = cluster.color;
-            mergedVertex.objectPosition = float3(0);
             vertices[id] = mergedVertex;
         } else {
         uint sourceVertex = object.srcVertexOffset + vertexId * (object.srcVertexStride / 4);
@@ -263,7 +261,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
         mergedVertex.position = transformPoint(object.transform, position);
         mergedVertex.prevPosition = transformPoint(object.prevTransform, prevPosition);
         mergedVertex.color = float4(1.0);
-        mergedVertex.objectPosition = position.xyz;
 
         // Some legacy meshes omit normals.  A stable axis is less faithful
         // than a face normal, but it is a documented, finite fallback and
