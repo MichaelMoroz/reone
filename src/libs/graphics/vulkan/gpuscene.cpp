@@ -213,10 +213,17 @@ void VulkanGpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
         const VkDeviceSize materialIdBytes =
             static_cast<VkDeviceSize>(triangleCapacity) * sizeof(uint32_t);
         frame.geometry = std::make_unique<VulkanBuffer>(_renderer->device());
+        // INDEX_BUFFER is for the raster consumer added in F2. Vertices need no
+        // new usage because raster pulls them programmably - a
+        // StructuredBuffer<MergedVertex> indexed by SV_VertexID - rather than
+        // going through vertex input, so there is one declaration of the vertex
+        // layout instead of two and no format plumbing in the pipeline key.
+        // Indices still bind as indices, which keeps the post-transform cache.
         frame.geometry->initDeviceLocal(
             vertexBytes + indexBytes + materialIdBytes,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
             nullptr);
     }
     const auto proceduralQuadCapacity =
@@ -448,10 +455,18 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
     VkMemoryBarrier2 mergeBarrier {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
     mergeBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     mergeBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+    // The tracer is no longer the only consumer: F2 makes raster read the same
+    // merged buffer, pulling vertices in the vertex shader and binding the
+    // index range as indices. Both stages have to be named here or the raster
+    // draw races the merge compute - and it would race silently, because the
+    // previous frame's contents are usually close enough to look right.
     mergeBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                                VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT;
     mergeBarrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                 VK_ACCESS_2_SHADER_READ_BIT;
+                                 VK_ACCESS_2_SHADER_READ_BIT |
+                                 VK_ACCESS_2_INDEX_READ_BIT;
     VkDependencyInfo mergeDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     mergeDependency.memoryBarrierCount = 1;
     mergeDependency.pMemoryBarriers = &mergeBarrier;
