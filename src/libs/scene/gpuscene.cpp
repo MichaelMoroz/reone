@@ -7,12 +7,8 @@
 #include <algorithm>
 #include <limits>
 
-#include "reone/graphics/camera.h"
 #include "reone/graphics/mesh.h"
-#include "reone/graphics/uniforms.h"
-#include "reone/scene/node/camera.h"
 #include "reone/scene/node/model.h"
-#include "reone/scene/render/pass.h"
 #include "reone/system/logutil.h"
 
 using namespace reone::graphics;
@@ -41,57 +37,6 @@ void countMesh(SceneCounts &counts, const RegisteredDeformation &deformation) {
         ++counts.rigid;
 }
 
-bool isInAnyFrustum(const SceneNode &node, const Frustum *frusta, size_t numFrusta) {
-    for (size_t i = 0; i < numFrusta; ++i) {
-        const auto &frustum = frusta[i];
-        if (node.isPoint() ? frustum.isInFrustum(node.origin())
-                           : frustum.isInFrustum(node.aabb() * node.absoluteTransform()))
-            return true;
-    }
-    return false;
-}
-
-bool isInAnyFrustum(const glm::vec3 &point, const Frustum *frusta, size_t numFrusta) {
-    for (size_t i = 0; i < numFrusta; ++i)
-        if (frusta[i].isInFrustum(point))
-            return true;
-    return false;
-}
-
-bool isCulled(ModelSceneNode &root, VisibilityPolicy visibility) {
-    if (!root.isEnabled())
-        return true;
-    if (!root.isCullingEnabled() || visibility.kind == VisibilityPolicyKind::None)
-        return false;
-    if (visibility.drawDistanceCamera) {
-        float distanceToCamera = root.getSquareDistanceTo(*visibility.drawDistanceCamera);
-        float drawDistance = root.drawDistance() * root.drawDistance();
-        if (distanceToCamera > drawDistance)
-            return true;
-    }
-    switch (visibility.kind) {
-    case VisibilityPolicyKind::ViewCamera:
-        return visibility.drawDistanceCamera && !visibility.drawDistanceCamera->isInFrustum(root);
-    case VisibilityPolicyKind::Frusta:
-        return !isInAnyFrustum(root, visibility.lightFrusta, visibility.numLightFrusta);
-    case VisibilityPolicyKind::None:
-        return false;
-    }
-    return false;
-}
-
-bool isCulled(const glm::vec3 &point, VisibilityPolicy visibility) {
-    switch (visibility.kind) {
-    case VisibilityPolicyKind::ViewCamera:
-        return visibility.drawDistanceCamera &&
-               !visibility.drawDistanceCamera->camera()->frustum().isInFrustum(point);
-    case VisibilityPolicyKind::Frusta:
-        return !isInAnyFrustum(point, visibility.lightFrusta, visibility.numLightFrusta);
-    case VisibilityPolicyKind::None:
-        return false;
-    }
-    return false;
-}
 } // namespace
 
 std::string formatSceneCounts(const SceneCounts &counts) {
@@ -107,30 +52,9 @@ std::string formatSceneCounts(const SceneCounts &counts) {
            ", billboards=" + std::to_string(counts.billboards);
 }
 
-std::string renderPassName(RenderPassName pass) {
-    switch (pass) {
-    case RenderPassName::DirLightShadowsPass:
-        return "directional shadows";
-    case RenderPassName::PointLightShadows:
-        return "point shadows";
-    case RenderPassName::OpaqueGeometry:
-        return "opaque";
-    case RenderPassName::TransparentGeometry:
-        return "transparent";
-    case RenderPassName::PostProcessing:
-        return "post-processing";
-    default:
-        return "none";
-    }
-}
-
 void GpuScene::resetFrame() {
-    for (auto &object : _objects)
-        std::visit([](auto &entry) { entry.drawnPasses = 0; }, object);
     _objects.clear();
     _counts = {};
-    _drawnCounts = {};
-    _drawnCountsByPass.clear();
 }
 
 void GpuScene::checkIdentityStability() {
@@ -161,7 +85,7 @@ void GpuScene::addMesh(RenderCategories categories, SceneNodeId id,
     ++_counts.entries;
     if (isCountedMesh(material))
         countMesh(_counts, deformation);
-    _objects.push_back(RegisteredMesh {categories, id, nameIds, 0, mesh, material, transform,
+    _objects.push_back(RegisteredMesh {categories, id, nameIds, mesh, material, transform,
                                        transformInv, prevTransform, std::move(deformation), cullRoot});
 }
 
@@ -172,7 +96,7 @@ void GpuScene::addBillboard(RenderCategories categories, SceneNodeId id,
     ++_counts.entries;
     ++_counts.billboards;
     _objects.push_back(RegisteredBillboard {
-        categories, id, nameIds, 0, texture, color, transform, transformInv, size, cullRoot});
+        categories, id, nameIds, texture, color, transform, transformInv, size, cullRoot});
 }
 
 void GpuScene::addParticles(RenderCategories categories, SceneNodeId id,
@@ -184,7 +108,7 @@ void GpuScene::addParticles(RenderCategories categories, SceneNodeId id,
     ++_counts.particleEmitters;
     _counts.particles += instances.size();
     _objects.push_back(
-        RegisteredParticles {categories, id, nameIds, 0, material, gridSize, instances, cullRoot});
+        RegisteredParticles {categories, id, nameIds, material, gridSize, instances, cullRoot});
 }
 
 void GpuScene::addGrass(RenderCategories categories, SceneNodeId id,
@@ -194,123 +118,7 @@ void GpuScene::addGrass(RenderCategories categories, SceneNodeId id,
     ++_counts.grassNodes;
     _counts.grassClusters += instances.size();
     _objects.push_back(
-        RegisteredGrass {categories, id, nameIds, 0, material, radius, quadSize, instances});
-}
-
-void GpuScene::drawScene(IRenderPassExecutor &executor, RenderFilter filter,
-                         VisibilityPolicy visibility) {
-    executor.beginPass(filter.pass);
-    auto &passCounts = _drawnCountsByPass[filter.pass];
-    auto category = renderCategory(filter.category);
-    for (auto &object : _objects) {
-        std::visit(
-            [&](auto &entry) {
-                if ((entry.categories & category) == 0) {
-                    return;
-                }
-                if (!isObjectEnabled(entry.id.index)) {
-                    return;
-                }
-                using T = std::decay_t<decltype(entry)>;
-                if constexpr (std::is_same_v<T, RegisteredMesh>) {
-                    if (entry.cullRoot && isCulled(*entry.cullRoot, visibility)) {
-                        return;
-                    }
-                    ++_drawnCounts.entries;
-                    ++passCounts.entries;
-                    entry.drawnPasses |= renderPassFlag(filter.pass);
-                    if (isCountedMesh(entry.material)) {
-                        countMesh(_drawnCounts, entry.deformation);
-                        countMesh(passCounts, entry.deformation);
-                    }
-                    bool shadowPass = filter.pass == RenderPassName::DirLightShadowsPass ||
-                                      filter.pass == RenderPassName::PointLightShadows;
-                    if (shadowPass) {
-                        executor.executeDraw(
-                            entry.mesh, entry.material, entry.transform, entry.transformInv,
-                            entry.prevTransform);
-                    } else if (auto skin = std::get_if<RegisteredSkin>(&entry.deformation)) {
-                        executor.executeDrawSkinned(
-                            entry.mesh, entry.material, entry.transform, entry.transformInv,
-                            entry.prevTransform, skin->bones, skin->prevBones);
-                    } else if (auto dangly = std::get_if<RegisteredDangly>(&entry.deformation)) {
-                        executor.executeDrawDangly(
-                            entry.mesh, entry.material, entry.transform, entry.transformInv,
-                            entry.prevTransform, dangly->positions);
-                    } else if (auto saber = std::get_if<RegisteredSaber>(&entry.deformation)) {
-                        executor.executeDrawSaber(
-                            entry.mesh, entry.material, entry.transform, entry.transformInv,
-                            entry.prevTransform, saber->displacement);
-                    } else {
-                        executor.executeDraw(
-                            entry.mesh, entry.material, entry.transform, entry.transformInv,
-                            entry.prevTransform);
-                    }
-                } else if constexpr (std::is_same_v<T, RegisteredBillboard>) {
-                    if (!entry.cullRoot || !isCulled(*entry.cullRoot, visibility)) {
-                        ++_drawnCounts.entries;
-                        ++passCounts.entries;
-                        ++_drawnCounts.billboards;
-                        ++passCounts.billboards;
-                        entry.drawnPasses |= renderPassFlag(filter.pass);
-                        executor.executeDrawBillboard(
-                            entry.texture, entry.color, entry.transform, entry.transformInv,
-                            entry.size);
-                    }
-                } else if constexpr (std::is_same_v<T, RegisteredParticles>) {
-                    if (entry.cullRoot && isCulled(*entry.cullRoot, visibility)) {
-                        return;
-                    }
-                    std::vector<ParticleInstance> visible;
-                    visible.reserve(entry.instances.size());
-                    for (const auto &instance : entry.instances) {
-                        if (!isCulled(instance.position, visibility)) {
-                            visible.push_back(instance);
-                        }
-                    }
-                    if (!visible.empty()) {
-                        ++_drawnCounts.entries;
-                        ++passCounts.entries;
-                        ++_drawnCounts.particleEmitters;
-                        _drawnCounts.particles += visible.size();
-                        ++passCounts.particleEmitters;
-                        passCounts.particles += visible.size();
-                        entry.drawnPasses |= renderPassFlag(filter.pass);
-                        for (size_t first = 0; first < visible.size(); first += kMaxParticles) {
-                            auto last = std::min(first + kMaxParticles, visible.size());
-                            std::vector<ParticleInstance> batch(
-                                visible.begin() + first, visible.begin() + last);
-                            executor.executeDrawParticles(entry.material, entry.gridSize, batch);
-                        }
-                    }
-                } else if constexpr (std::is_same_v<T, RegisteredGrass>) {
-                    std::vector<GrassInstance> visible;
-                    visible.reserve(entry.instances.size());
-                    for (const auto &instance : entry.instances) {
-                        if (!isCulled(instance.position, visibility)) {
-                            visible.push_back(instance);
-                        }
-                    }
-                    if (!visible.empty()) {
-                        ++_drawnCounts.entries;
-                        ++passCounts.entries;
-                        ++_drawnCounts.grassNodes;
-                        _drawnCounts.grassClusters += visible.size();
-                        ++passCounts.grassNodes;
-                        passCounts.grassClusters += visible.size();
-                        entry.drawnPasses |= renderPassFlag(filter.pass);
-                        for (size_t first = 0; first < visible.size(); first += kMaxGrassClusters) {
-                            auto last = std::min(first + kMaxGrassClusters, visible.size());
-                            std::vector<GrassInstance> batch(
-                                visible.begin() + first, visible.begin() + last);
-                            executor.executeDrawGrass(
-                                entry.radius, entry.quadSize, entry.material, batch);
-                        }
-                    }
-                }
-            },
-            object);
-    }
+        RegisteredGrass {categories, id, nameIds, material, radius, quadSize, instances});
 }
 
 graphics::GpuSceneUpload GpuScene::prepare(

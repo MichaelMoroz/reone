@@ -29,7 +29,6 @@
 #include "reone/gui/gui.h"
 #include "reone/resource/gff.h"
 #include "reone/resource/resources.h"
-#include "reone/scene/render/pass.h"
 #include "reone/system/logutil.h"
 
 #include <sstream>

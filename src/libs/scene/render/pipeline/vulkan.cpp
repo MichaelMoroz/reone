@@ -11,7 +11,6 @@
 #include "reone/graphics/options.h"
 #include "reone/graphics/vulkan/rayquery.h"
 #include "reone/graphics/vulkan/scenepipeline.h"
-#include "reone/scene/render/pass/vulkan.h"
 #include "reone/scene/render/pipeline/rayquery.h"
 #include "reone/system/logutil.h"
 
@@ -20,46 +19,6 @@ namespace reone::scene {
 class VulkanRenderPipeline::Callbacks : public graphics::IVulkanSceneCallbacks {
 public:
     explicit Callbacks(VulkanRenderPipeline &owner) : _owner(owner) {}
-
-    void draw(graphics::VulkanSceneDraw draw,
-              graphics::VulkanRenderPass &recorder) override {
-        VulkanRenderPass pass(recorder);
-        switch (draw) {
-        case graphics::VulkanSceneDraw::DirectionalShadow:
-            _owner._gpuScene.drawScene(
-                pass,
-                {RenderPassName::DirLightShadowsPass, RenderCategory::ShadowCaster},
-                VisibilityPolicy::shadowFrusta(_owner._shadowFrusta,
-                                               _owner._numShadowFrusta,
-                                               _owner._cullCamera));
-            break;
-        case graphics::VulkanSceneDraw::PointShadow:
-            _owner._gpuScene.drawScene(
-                pass,
-                {RenderPassName::PointLightShadows, RenderCategory::ShadowCaster},
-                VisibilityPolicy::shadowFrusta(_owner._shadowFrusta,
-                                               _owner._numShadowFrusta,
-                                               _owner._cullCamera));
-            break;
-        case graphics::VulkanSceneDraw::Opaque:
-        case graphics::VulkanSceneDraw::RetroOpaque:
-            _owner._gpuScene.drawScene(
-                pass, {RenderPassName::OpaqueGeometry, RenderCategory::Opaque},
-                VisibilityPolicy::viewCamera(_owner._cullCamera));
-            break;
-        case graphics::VulkanSceneDraw::PostProcessing:
-        case graphics::VulkanSceneDraw::LensFlare:
-            _owner._gpuScene.drawScene(
-                pass, {RenderPassName::PostProcessing, RenderCategory::LensFlare},
-                VisibilityPolicy::viewCamera(_owner._cullCamera));
-            break;
-        case graphics::VulkanSceneDraw::Transparent:
-            _owner._gpuScene.drawScene(
-                pass, {RenderPassName::TransparentGeometry, RenderCategory::Transparent},
-                VisibilityPolicy::viewCamera(_owner._cullCamera));
-            break;
-        }
-    }
 
     void renderPrimary(const graphics::VulkanPrimaryRayContext &context) override {
         _owner._rayQuery->render(context);
@@ -125,48 +84,8 @@ void VulkanRenderPipeline::deinit() {
     _inited = false;
 }
 
-graphics::Texture &VulkanRenderPipeline::render(
-    const CameraSceneNode *camera,
-    RenderPassName activeShadowPass,
-    const graphics::Frustum *shadowFrusta,
-    size_t numShadowFrusta) {
-    _cullCamera = camera;
-    _shadowPass = activeShadowPass;
-    _shadowFrusta = shadowFrusta;
-    _numShadowFrusta = numShadowFrusta;
-
+graphics::Texture &VulkanRenderPipeline::render(const CameraSceneNode *camera) {
     graphics::VulkanSceneFramePlan plan;
-    switch (activeShadowPass) {
-    case RenderPassName::DirLightShadowsPass:
-        plan.shadow = graphics::VulkanSceneShadow::Directional;
-        break;
-    case RenderPassName::PointLightShadows:
-        plan.shadow = graphics::VulkanSceneShadow::Point;
-        break;
-    default:
-        plan.shadow = graphics::VulkanSceneShadow::None;
-        break;
-    }
-    if (!_primaryRayMode) {
-        if (_options.pbr) {
-            plan.steps = {graphics::VulkanSceneStep::ProcessPBRTextures,
-                          graphics::VulkanSceneStep::Shadow,
-                          graphics::VulkanSceneStep::Geometry,
-                          graphics::VulkanSceneStep::ScreenSpaceEffects,
-                          graphics::VulkanSceneStep::Resolve,
-                          graphics::VulkanSceneStep::Transparency,
-                          graphics::VulkanSceneStep::OITBlend,
-                          graphics::VulkanSceneStep::PostProcessing,
-                          graphics::VulkanSceneStep::FilterChain};
-        } else {
-            plan.steps = {graphics::VulkanSceneStep::Shadow,
-                          graphics::VulkanSceneStep::RetroGeometry,
-                          graphics::VulkanSceneStep::Transparency,
-                          graphics::VulkanSceneStep::OITBlend,
-                          graphics::VulkanSceneStep::PostProcessing,
-                          graphics::VulkanSceneStep::FilterChain};
-        }
-    }
     return _executor->render(plan, *_callbacks);
 }
 
@@ -194,11 +113,6 @@ void *VulkanRenderPipeline::renderTargetPreview(const std::string &name,
 void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
     info("Vulkan scene contents: " + formatSceneCounts(_gpuScene.counts()),
          LogChannel::Graphics);
-    for (const auto &[pass, drawn] : _gpuScene.drawnCountsByPass()) {
-        info("Vulkan scene drawn " + renderPassName(pass) + ": " +
-                 formatSceneCounts(drawn),
-             LogChannel::Graphics);
-    }
     _executor->dumpTargets(dir, *_callbacks);
 }
 

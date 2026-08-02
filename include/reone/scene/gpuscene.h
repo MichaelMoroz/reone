@@ -7,7 +7,6 @@
 #include <array>
 #include <cstddef>
 #include <functional>
-#include <map>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -29,22 +28,7 @@ class Texture;
 } // namespace reone::graphics
 namespace reone::scene {
 class CameraSceneNode;
-class IRenderPassExecutor;
 class ModelSceneNode;
-
-enum class RenderPassName {
-    None,
-    DirLightShadowsPass,
-    PointLightShadows,
-    OpaqueGeometry,
-    TransparentGeometry,
-    PostProcessing,
-};
-
-using RenderPassFlags = uint32_t;
-constexpr RenderPassFlags renderPassFlag(RenderPassName pass) {
-    return pass == RenderPassName::None ? 0 : 1u << (static_cast<uint32_t>(pass) - 1);
-}
 
 enum class RenderCategory : uint32_t {
     None = 0,
@@ -57,32 +41,6 @@ using RenderCategories = uint32_t;
 constexpr RenderCategories renderCategory(RenderCategory category) {
     return static_cast<RenderCategories>(category);
 }
-
-struct RenderFilter {
-    RenderPassName pass {RenderPassName::None};
-    RenderCategory category {RenderCategory::None};
-};
-
-enum class VisibilityPolicyKind { ViewCamera,
-                                  Frusta,
-                                  None };
-struct VisibilityPolicy {
-    VisibilityPolicyKind kind {VisibilityPolicyKind::ViewCamera};
-    const CameraSceneNode *drawDistanceCamera {nullptr};
-    const graphics::Frustum *lightFrusta {nullptr};
-    size_t numLightFrusta {0};
-
-    static VisibilityPolicy viewCamera(const CameraSceneNode *camera) {
-        return {VisibilityPolicyKind::ViewCamera, camera, nullptr, 0};
-    }
-    static VisibilityPolicy shadowFrusta(const graphics::Frustum *frusta, size_t numFrusta,
-                                         const CameraSceneNode *drawDistanceCamera) {
-        return {VisibilityPolicyKind::Frusta, drawDistanceCamera, frusta, numFrusta};
-    }
-    static VisibilityPolicy noCulling() {
-        return {VisibilityPolicyKind::None, nullptr, nullptr, 0};
-    }
-};
 
 struct ParticleInstance {
     int frame {0};
@@ -116,7 +74,6 @@ struct RegisteredMesh {
     RenderCategories categories {0};
     SceneNodeId id;
     SceneNodeNameIds nameIds;
-    RenderPassFlags drawnPasses {0};
     std::reference_wrapper<graphics::Mesh> mesh;
     graphics::Material material;
     glm::mat4 transform {1.0f};
@@ -129,7 +86,6 @@ struct RegisteredBillboard {
     RenderCategories categories {0};
     SceneNodeId id;
     SceneNodeNameIds nameIds;
-    RenderPassFlags drawnPasses {0};
     std::reference_wrapper<graphics::Texture> texture;
     glm::vec4 color {1.0f};
     glm::mat4 transform {1.0f};
@@ -141,7 +97,6 @@ struct RegisteredParticles {
     RenderCategories categories {0};
     SceneNodeId id;
     SceneNodeNameIds nameIds;
-    RenderPassFlags drawnPasses {0};
     graphics::Material material;
     glm::ivec2 gridSize {1};
     std::vector<ParticleInstance> instances;
@@ -151,7 +106,6 @@ struct RegisteredGrass {
     RenderCategories categories {0};
     SceneNodeId id;
     SceneNodeNameIds nameIds;
-    RenderPassFlags drawnPasses {0};
     graphics::Material material;
     float radius {0.0f};
     float quadSize {0.0f};
@@ -174,7 +128,6 @@ struct SceneCounts {
     size_t objects() const { return entries; }
 };
 std::string formatSceneCounts(const SceneCounts &counts);
-std::string renderPassName(RenderPassName pass);
 
 /**
  * GPU-side world-space scene geometry. It owns what is present in this frame
@@ -221,9 +174,6 @@ public:
     void addGrass(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
                     const graphics::Material &material, float radius, float quadSize,
                     const std::vector<GrassInstance> &instances);
-    void drawScene(IRenderPassExecutor &executor, RenderFilter filter,
-                   VisibilityPolicy visibility);
-
     bool isObjectEnabled(uint32_t idIndex) const {
         return _disabledObjects.find(idIndex) == _disabledObjects.end();
     }
@@ -238,10 +188,6 @@ public:
     TraceMaterialOverrides &traceMaterials() { return _traceMaterials; }
     const TraceMaterialOverrides &traceMaterials() const { return _traceMaterials; }
     const SceneCounts &counts() const { return _counts; }
-    const SceneCounts &drawnCounts() const { return _drawnCounts; }
-    const std::map<RenderPassName, SceneCounts> &drawnCountsByPass() const {
-        return _drawnCountsByPass;
-    }
     const std::vector<ObjectRecord> &objects() const { return _objects; }
 
     graphics::GpuSceneUpload prepare(const Classifier &classifier,
@@ -256,8 +202,6 @@ private:
     const ModelSceneNode *_skyRoom {nullptr};
     TraceMaterialOverrides _traceMaterials;
     SceneCounts _counts;
-    SceneCounts _drawnCounts;
-    std::map<RenderPassName, SceneCounts> _drawnCountsByPass;
     std::vector<SceneNodeId> _previousFrameIds;
     size_t _identitySnapshot {0};
 };

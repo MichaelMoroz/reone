@@ -310,11 +310,6 @@ std::optional<GpuScene::Classification> RayQueryPipeline::classifyBillboard(cons
 void RayQueryPipeline::render(const VulkanPrimaryRayContext &context) {
     _submission = {};
 
-    // The tracer admits the complete scene. Raster frusta and distance culls
-    // must not decide what a ray can hit.
-    const auto visibility = VisibilityPolicy::noCulling();
-    (void)visibility;
-
     // There is exactly one sky: the background-scenery room whose union
     // bounds overlap the scene on all axes. This remains scene policy; the
     // native half only knows how to bake the selected meshes.

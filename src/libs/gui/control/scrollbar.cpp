@@ -26,7 +26,6 @@
 #include "reone/resource/gff.h"
 #include "reone/resource/provider/textures.h"
 #include "reone/resource/resources.h"
-#include "reone/scene/render/pass.h"
 
 #include "reone/gui/gui.h"
 

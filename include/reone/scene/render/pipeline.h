@@ -20,7 +20,6 @@
 #include "reone/graphics/texture.h"
 
 #include "../gpuscene.h"
-#include "pass.h"
 
 template <>
 struct std::hash<glm::ivec2> {
@@ -86,10 +85,7 @@ public:
 
     virtual void init() = 0;
 
-    virtual graphics::Texture &render(const CameraSceneNode *camera,
-                                      RenderPassName shadowPass,
-                                      const graphics::Frustum *shadowFrusta,
-                                      size_t numShadowFrusta) = 0;
+    virtual graphics::Texture &render(const CameraSceneNode *camera) = 0;
 
     /**
      * Intermediate targets, for inspection by development tooling. Empty unless

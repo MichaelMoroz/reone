@@ -181,31 +181,6 @@ const char *objectMaterialName(graphics::MaterialType type) {
     return "-";
 }
 
-/**
- * One character slot per pass, always in the same position.
- *
- * A variable-length list of the passes that drew an entry cannot be read down
- * a column: "D O" and "O" put the O in different places. A fixed layout with a
- * dot for absent turns the column into a bitfield the eye can scan, and the
- * header spells out the order.
- */
-std::string objectPassSlots(scene::RenderPassFlags flags) {
-    static constexpr scene::RenderPassName kOrder[] {
-        scene::RenderPassName::DirLightShadowsPass,
-        scene::RenderPassName::PointLightShadows,
-        scene::RenderPassName::OpaqueGeometry,
-        scene::RenderPassName::TransparentGeometry,
-        scene::RenderPassName::PostProcessing};
-    static constexpr char kLabels[] {'D', 'P', 'O', 'T', 'X'};
-    std::string result(std::size(kOrder), '.');
-    for (size_t i = 0; i < std::size(kOrder); ++i) {
-        if ((flags & scene::renderPassFlag(kOrder[i])) != 0) {
-            result[i] = kLabels[i];
-        }
-    }
-    return result;
-}
-
 void objectRightAligned(const std::string &text) {
     float width = ImGui::CalcTextSize(text.c_str()).x;
     float avail = ImGui::GetContentRegionAvail().x;
@@ -232,7 +207,6 @@ struct ObjectEntryView {
     std::string_view nodeName;
     const char *kind {""};
     const char *material {"-"};
-    scene::RenderPassFlags drawnPasses {0};
     size_t particles {0};
     size_t clusters {0};
     uint32_t id {UINT32_MAX};
@@ -253,7 +227,6 @@ ObjectEntryView makeObjectEntryView(const scene::ISceneGraph &graph,
                 result.modelName = graph.nameText(entry.nameIds.model);
                 result.nodeName = graph.nameText(entry.nameIds.node);
                 result.material = objectMaterialName(entry.material.type);
-                result.drawnPasses = entry.drawnPasses;
                 if (std::holds_alternative<scene::RegisteredSkin>(entry.deformation)) {
                     result.kind = "skinned";
                 } else if (std::holds_alternative<scene::RegisteredDangly>(entry.deformation)) {
@@ -321,21 +294,18 @@ ObjectEntryView makeObjectEntryView(const scene::ISceneGraph &graph,
                 result.modelName = graph.nameText(entry.nameIds.model);
                 result.nodeName = graph.nameText(entry.nameIds.node);
                 result.kind = "billboard";
-                result.drawnPasses = entry.drawnPasses;
             } else if constexpr (std::is_same_v<T, scene::RegisteredParticles>) {
                 result.root = entry.cullRoot;
                 result.modelName = graph.nameText(entry.nameIds.model);
                 result.nodeName = graph.nameText(entry.nameIds.node);
                 result.kind = "particles";
                 result.material = objectMaterialName(entry.material.type);
-                result.drawnPasses = entry.drawnPasses;
                 result.particles = entry.instances.size();
             } else if constexpr (std::is_same_v<T, scene::RegisteredGrass>) {
                 result.modelName = graph.nameText(entry.nameIds.model);
                 result.nodeName = graph.nameText(entry.nameIds.node);
                 result.kind = "grass";
                 result.material = objectMaterialName(entry.material.type);
-                result.drawnPasses = entry.drawnPasses;
                 result.clusters = entry.instances.size();
             }
             return result;
@@ -1112,28 +1082,10 @@ void Editor::drawObjects() {
     auto &scene = graph.gpuScene();
     auto &materials = scene.traceMaterials();
     const auto &counts = scene.counts();
-    const auto &drawnByPass = scene.drawnCountsByPass();
-    auto drawnEntries = [&drawnByPass](scene::RenderPassName pass) {
-        auto it = drawnByPass.find(pass);
-        return it == drawnByPass.end() ? size_t {0} : it->second.entries;
-    };
     ImGui::Text("objects %zu", counts.entries);
-    ImGui::SameLine();
-    ImGui::TextDisabled("|");
-    ImGui::SameLine();
-    ImGui::Text("drawn  opaque %zu   transparent %zu   dir shadows %zu",
-                drawnEntries(scene::RenderPassName::OpaqueGeometry),
-                drawnEntries(scene::RenderPassName::TransparentGeometry),
-                drawnEntries(scene::RenderPassName::DirLightShadowsPass));
-
-    float controlsRight = ImGui::CalcTextSize("Hide fully culled").x + ImGui::GetFrameHeight() +
-                          ImGui::GetStyle().ItemSpacing.x * 3.0f;
-    ImGui::SetNextItemWidth(-controlsRight);
+    ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##objects-filter", "Filter model or node", _objectsFilter,
                              sizeof(_objectsFilter));
-    ImGui::SameLine();
-    ImGui::Checkbox("Hide fully culled", &_objectsHideFullyCulled);
-    ImGui::TextDisabled("DPOTX: dir shadows, point shadows, opaque, transparent, post");
     ImGui::Spacing();
 
     std::vector<ObjectGroupView> groups;
@@ -1197,18 +1149,16 @@ void Editor::drawObjects() {
     static constexpr ImGuiTableFlags kTableFlags =
         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
         ImGuiTableFlags_ScrollX | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingFixedFit;
-    if (!ImGui::BeginTable("##objects-table", 8, kTableFlags)) {
+    if (!ImGui::BeginTable("##objects-table", 6, kTableFlags)) {
         ImGui::End();
         return;
     }
     ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 26.0f);
     ImGui::TableSetupColumn("Model / node", ImGuiTableColumnFlags_WidthFixed, 250.0f);
     ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 64.0f);
-    ImGui::TableSetupColumn("DPOTX", ImGuiTableColumnFlags_WidthFixed, 66.0f);
     ImGui::TableSetupColumn("Material", ImGuiTableColumnFlags_WidthFixed, 158.0f);
     ImGui::TableSetupColumn("Class", ImGuiTableColumnFlags_WidthFixed, 130.0f);
     ImGui::TableSetupColumn("Entries", ImGuiTableColumnFlags_WidthFixed, 68.0f);
-    ImGui::TableSetupColumn("Drawn", ImGuiTableColumnFlags_WidthFixed, 58.0f);
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableHeadersRow();
 
@@ -1226,18 +1176,11 @@ void Editor::drawObjects() {
         if (visible.empty()) {
             continue;
         }
-        const auto drawn = std::count_if(visible.begin(), visible.end(), [](const auto *entry) {
-            return entry->drawnPasses != 0;
-        });
-        if (_objectsHideFullyCulled && drawn == 0) {
-            continue;
-        }
-
         ImGui::PushID(static_cast<int>(groupIndex));
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         // The kill switch: unticking removes the object from every render
-        // mode - raster walks and the TLAS alike. The group box drives all
+        // mode. The group box drives all
         // of its entries at once.
         bool groupEnabled = std::all_of(visible.begin(), visible.end(), [&](const auto *entry) {
             return scene.isObjectEnabled(entry->id);
@@ -1254,21 +1197,13 @@ void Editor::drawObjects() {
         // entry holding 1482 clusters, so a per-entry column would read "1" and
         // hide the only number that matters for it.
         if (group.clusters != 0 || group.particles != 0) {
-            ImGui::TableSetColumnIndex(4);
+            ImGui::TableSetColumnIndex(3);
             ImGui::TextDisabled("%zu %s",
                                 group.clusters != 0 ? group.clusters : group.particles,
                                 group.clusters != 0 ? "clusters" : "particles");
         }
-        ImGui::TableSetColumnIndex(6);
+        ImGui::TableSetColumnIndex(5);
         objectRightAligned(std::to_string(visible.size()));
-        ImGui::TableSetColumnIndex(7);
-        if (drawn == 0) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            objectRightAligned("0");
-            ImGui::PopStyleColor();
-        } else {
-            objectRightAligned(std::to_string(drawn));
-        }
 
         if (open) {
             ImGuiListClipper clipper;
@@ -1280,13 +1215,6 @@ void Editor::drawObjects() {
                     const std::string_view node = entry.nodeName.empty()
                                                       ? std::string_view("[unnamed]")
                                                       : entry.nodeName;
-                    // A culled entry is dimmed rather than annotated, so the
-                    // eye finds the drawn ones without reading every row.
-                    const bool culled = entry.drawnPasses == 0;
-                    if (culled) {
-                        ImGui::PushStyleColor(ImGuiCol_Text,
-                                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                    }
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
                     bool enabled = scene.isObjectEnabled(entry.id);
@@ -1326,14 +1254,9 @@ void Editor::drawObjects() {
                     ImGui::TableSetColumnIndex(2);
                     ImGui::TextUnformatted(entry.kind);
                     ImGui::TableSetColumnIndex(3);
-                    ImGui::TextUnformatted(objectPassSlots(entry.drawnPasses).c_str());
-                    ImGui::TableSetColumnIndex(4);
                     ImGui::TextUnformatted(entry.material);
-                    ImGui::TableSetColumnIndex(5);
+                    ImGui::TableSetColumnIndex(4);
                     ImGui::TextUnformatted(entry.classification.c_str());
-                    if (culled) {
-                        ImGui::PopStyleColor();
-                    }
                     ImGui::PopID();
                 }
             }

@@ -516,13 +516,7 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
         collectInto(_gpuScene);
     }
 
-    auto shadowPass = !hasShadowLight()
-                          ? RenderPassName::None
-                          : (isShadowLightDirectional()
-                                 ? RenderPassName::DirLightShadowsPass
-                                 : RenderPassName::PointLightShadows);
-    auto &output = pipeline.render(
-        _activeCamera, shadowPass, activeShadowFrusta, numActiveShadowFrusta);
+    auto &output = pipeline.render(_activeCamera);
     snapshotPreviousFrame();
     return output;
 }

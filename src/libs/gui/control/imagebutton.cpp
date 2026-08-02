@@ -26,7 +26,6 @@
 #include "reone/gui/gui.h"
 #include "reone/resource/provider/fonts.h"
 #include "reone/resource/provider/textures.h"
-#include "reone/scene/render/pass.h"
 
 using namespace reone::graphics;
 using namespace reone::resource;

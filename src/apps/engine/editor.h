@@ -97,7 +97,6 @@ private:
     std::string _materialEditModel;
     std::string _materialEditNode;
     scene::CuratedMaterial _materialEdit;
-    bool _objectsHideFullyCulled {false};
 
     void graphicsSettings();
     bool _showGraphicsSettings {false};

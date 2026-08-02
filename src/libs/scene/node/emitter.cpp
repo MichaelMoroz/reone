@@ -28,7 +28,7 @@
 #include "reone/scene/graph.h"
 #include "reone/scene/node/camera.h"
 #include "reone/scene/node/particle.h"
-#include "reone/scene/render/pass.h"
+#include "reone/scene/gpuscene.h"
 #include "reone/system/randomutil.h"
 
 using namespace reone::graphics;

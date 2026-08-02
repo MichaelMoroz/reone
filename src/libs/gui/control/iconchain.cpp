@@ -20,9 +20,6 @@
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/renderer2d.h"
 
-#include "reone/scene/render/pass.h"
-
-using namespace reone::scene;
 
 namespace reone {
 

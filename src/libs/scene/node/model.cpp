@@ -29,7 +29,6 @@
 #include "reone/scene/node/emitter.h"
 #include "reone/scene/node/light.h"
 #include "reone/scene/node/mesh.h"
-#include "reone/scene/render/pass.h"
 #include "reone/scene/types.h"
 #include "reone/system/logutil.h"
 

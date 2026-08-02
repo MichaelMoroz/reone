@@ -36,10 +36,7 @@ public:
 
     void init() override;
     void deinit();
-    graphics::Texture &render(const CameraSceneNode *camera,
-                              RenderPassName activeShadowPass,
-                              const graphics::Frustum *shadowFrusta,
-                              size_t numShadowFrusta) override;
+    graphics::Texture &render(const CameraSceneNode *camera) override;
     std::vector<RenderTargetInfo> targets() const override;
     void *renderTargetPreview(const std::string &name, int mode, float scale) override;
     void dumpTargets(const std::filesystem::path &dir) override;
@@ -57,11 +54,6 @@ private:
     GpuScene &_gpuScene;
     bool _primaryRayMode {false};
     bool _inited {false};
-    const CameraSceneNode *_cullCamera {nullptr};
-    RenderPassName _shadowPass {RenderPassName::None};
-    const graphics::Frustum *_shadowFrusta {nullptr};
-    size_t _numShadowFrusta {0};
-
     std::unique_ptr<graphics::VulkanScenePipeline> _executor;
     std::unique_ptr<RayQueryPipeline> _rayQuery;
     std::unique_ptr<Callbacks> _callbacks;

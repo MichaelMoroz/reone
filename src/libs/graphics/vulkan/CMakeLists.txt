@@ -30,7 +30,6 @@ set(VULKAN_HEADERS
     ${VULKAN_INCLUDE_DIR}/pipelinecache.h
     ${VULKAN_INCLUDE_DIR}/renderer.h
     ${VULKAN_INCLUDE_DIR}/renderer2d.h
-    ${VULKAN_INCLUDE_DIR}/renderpass.h
     ${VULKAN_INCLUDE_DIR}/rayquery.h
     ${VULKAN_INCLUDE_DIR}/resources.h
     ${VULKAN_INCLUDE_DIR}/samplers.h
@@ -51,7 +50,6 @@ set(VULKAN_SOURCES
     ${VULKAN_SOURCE_DIR}/pipelinecache.cpp
     ${VULKAN_SOURCE_DIR}/renderer.cpp
     ${VULKAN_SOURCE_DIR}/renderer2d.cpp
-    ${VULKAN_SOURCE_DIR}/renderpass.cpp
     ${VULKAN_SOURCE_DIR}/rayquery.cpp
     ${VULKAN_SOURCE_DIR}/resources.cpp
     ${VULKAN_SOURCE_DIR}/samplers.cpp

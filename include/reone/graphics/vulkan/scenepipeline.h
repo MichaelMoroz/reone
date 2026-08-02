@@ -28,39 +28,14 @@ class IMeshRegistry;
 class IUniforms;
 class VulkanImage;
 class VulkanRenderer;
-class VulkanRenderPass;
 class TextureRegistry;
 struct GraphicsOptions;
 
-enum class VulkanSceneDraw {
-    DirectionalShadow,
-    PointShadow,
-    Opaque,
-    RetroOpaque,
-    PostProcessing,
-    LensFlare,
-    Transparent,
-};
-
 enum class VulkanSceneStep {
     ProcessPBRTextures,
-    Shadow,
-    Geometry,
-    RetroGeometry,
-    ScreenSpaceEffects,
-    Resolve,
-    Transparency,
-    OITBlend,
-    PostProcessing,
-    FilterChain,
 };
 
-enum class VulkanSceneShadow { None,
-                               Directional,
-                               Point };
-
 struct VulkanSceneFramePlan {
-    VulkanSceneShadow shadow {VulkanSceneShadow::None};
     std::vector<VulkanSceneStep> steps;
 };
 
@@ -82,7 +57,6 @@ struct VulkanExternalTarget {
 class IVulkanSceneCallbacks {
 public:
     virtual ~IVulkanSceneCallbacks() = default;
-    virtual void draw(VulkanSceneDraw draw, VulkanRenderPass &pass) = 0;
     virtual void renderPrimary(const VulkanPrimaryRayContext &context) = 0;
     virtual std::vector<VulkanExternalTarget> primaryTargets() const = 0;
 };
@@ -126,39 +100,10 @@ private:
     TextureRegistry &_textureRegistry;
     bool _inited {false};
     bool _primaryRayMode {false};
-    VulkanSceneShadow _shadow {VulkanSceneShadow::None};
 
     std::unique_ptr<VulkanGBuffer> _gbuffer;
     std::unique_ptr<VulkanImage> _output;
-    std::unique_ptr<VulkanImage> _dirShadows;
-    std::unique_ptr<VulkanImage> _pointShadows;
-    VkImageLayout _dirShadowLayout {VK_IMAGE_LAYOUT_UNDEFINED};
-    VkImageLayout _pointShadowLayout {VK_IMAGE_LAYOUT_UNDEFINED};
     std::shared_ptr<Texture> _outputHandle;
-    std::unique_ptr<VulkanImage> _ping;
-    std::unique_ptr<VulkanImage> _hilights;
-    std::unique_ptr<VulkanImage> _ssao;
-    std::unique_ptr<VulkanImage> _ssr;
-    std::unique_ptr<VulkanImage> _ssaoPing;
-    std::unique_ptr<VulkanImage> _halfPing;
-    std::array<glm::vec4, kNumSSAOSamples> _ssaoSamples;
-    VulkanImage *_frameImage {nullptr};
-    VulkanImage *_spareImage {nullptr};
-    std::unique_ptr<VulkanImage> _oitAccum;
-    std::unique_ptr<VulkanImage> _oitRevealage;
-
-    VkDescriptorSet _resolveSet {VK_NULL_HANDLE};
-    VkDescriptorSet _outputAsSourceSet {VK_NULL_HANDLE};
-    VkDescriptorSet _pingAsSourceSet {VK_NULL_HANDLE};
-    VkDescriptorSet _hilightsAsSourceSet {VK_NULL_HANDLE};
-    VkDescriptorSet _ssaoSet {VK_NULL_HANDLE};
-    VkDescriptorSet _ssrSet {VK_NULL_HANDLE};
-    VkDescriptorSet _ssaoAsSourceSet {VK_NULL_HANDLE};
-    VkDescriptorSet _ssrAsSourceSet {VK_NULL_HANDLE};
-    VkDescriptorSet _ssaoPingAsSourceSet {VK_NULL_HANDLE};
-    VkDescriptorSet _halfPingAsSourceSet {VK_NULL_HANDLE};
-    VkDescriptorSet _oitBlendOutputSet {VK_NULL_HANDLE};
-    VkDescriptorSet _oitBlendPingSet {VK_NULL_HANDLE};
 
     struct Preview {
         std::unique_ptr<VulkanImage> image;
@@ -178,26 +123,6 @@ private:
         bool depth;
     };
 
-    void shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset,
-                    IVulkanSceneCallbacks &callbacks);
-    void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset,
-                      IVulkanSceneCallbacks &callbacks);
-    void retroGeometryPass(VkCommandBuffer cmd, uint32_t globalsOffset,
-                           IVulkanSceneCallbacks &callbacks);
-    void hilightsBlurPass(VkCommandBuffer cmd);
-    void screenSpaceEffectsPass(VkCommandBuffer cmd, uint32_t globalsOffset);
-    void transparencyPass(VkCommandBuffer cmd, uint32_t globalsOffset,
-                          IVulkanSceneCallbacks &callbacks);
-    void oitBlendPass(VkCommandBuffer cmd);
-    void postProcessingPass(VkCommandBuffer cmd, uint32_t globalsOffset,
-                            IVulkanSceneCallbacks &callbacks);
-    void filterChainPass(VkCommandBuffer cmd);
-    void filterPass(VkCommandBuffer cmd, uint32_t screenEffectOffset,
-                    const char *fragmentEntry, const char *label);
-    void drawOntoOutput(VkCommandBuffer cmd, uint32_t globalsOffset,
-                        VulkanSceneDraw draw, const char *label,
-                        IVulkanSceneCallbacks &callbacks);
-    void resolvePass(VkCommandBuffer cmd, uint32_t globalsOffset);
     void previewPass(VkCommandBuffer cmd, uint32_t globalsOffset,
                      const IVulkanSceneCallbacks &callbacks);
     std::vector<Target> targetEntries(const IVulkanSceneCallbacks &callbacks) const;

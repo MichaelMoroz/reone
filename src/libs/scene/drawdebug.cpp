@@ -28,7 +28,7 @@
 #include "reone/resource/di/services.h"
 #include "reone/resource/provider/fonts.h"
 #include "reone/resource/provider/textures.h"
-#include "reone/scene/render/pass.h"
+#include "reone/graphics/uniforms.h"
 
 #include <limits>
 #include <map>
