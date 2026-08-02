@@ -118,7 +118,7 @@ after F5 because it depends on the same unification:
 
   | step | change | what proves it works |
   |---|---|---|
-  | **F6a** | allocate the G-buffer in traced mode; nothing writes it | `--dumptargets` in PathTracing now lists `g_buffer_*` at the right dimensions and format, where before there were none. Traced image unchanged |
+  | **F6a** | allocate the G-buffer in traced mode; nothing writes it | **First establish whether this is work at all.** Measured 2026-08-02: `--dumptargets` in PathTracing already emits `g_buffer_depth.npy` at 1080x1920, entirely zero (min 0, max 0) against raster's 1.77-645. Either the target is allocated and never written - in which case F6a is already done - or `dumpTargets` synthesises zeros for an absent target, in which case it is not. The review says `init` returns before allocating `_gbuffer` (`scenepipeline.cpp:191-207`); the dump says otherwise. Resolve that before writing code |
   | **F6b** | run the raster geometry pass in traced mode, write the G-buffer, discard it | `g_buffer_depth.npy` from PathTracing is **byte-identical to PBR's** at the same camera. That is the whole proof that raster visibility is correct in traced mode, and it is available before anything depends on it. Traced image still unchanged; only frame cost moves |
   | **F6c** | the tracer takes its primary hit from the G-buffer instead of tracing camera rays | traced output changes by design. Compare distributions across three runs a side, and judge the images. This is the step that spends the byte-identical bar |
 
@@ -221,20 +221,51 @@ they belong at the end of this phase rather than in it:
   raster composites them is the open question hybrid creates. It is not answered
   here.
 
-### The bar, and why it has two halves
+### The bar: the traced G-buffer is ground truth, not the old raster image
 
-**The rasterised G-buffer must be byte-identical before and after.**
-`np.array_equal` on the `--dumptargets` `.npy` files: `g_buffer_diffuse`,
-`g_buffer_eye_normal`, `g_buffer_lightmap`, `g_buffer_self_illum`,
-`g_buffer_depth`, and motion. Raster is bit-exact by construction once `--dev 0`
-suppresses the frame-time readout, so there is no tolerance to negotiate here —
-a differing pixel is a real difference and the change is wrong.
+**Corrected 2026-08-02.** Every earlier draft made "the rasterised G-buffer is
+byte-identical before and after" the terminal bar. That is the wrong reference,
+and holding to it would encode raster's gaps as correct.
 
-**Shadows are the deliberate exception.** Proxies go away and shadowing moves to
-real geometry, so shadow maps and everything lit through them change on purpose.
-Shadows are judged by eye, the G-buffer by hash. Keeping the two bars apart is
-what makes the phase checkable; one combined "looks right" bar would hide a
-G-buffer regression behind an intended shadow change.
+`GpuScene` is the complete scene description. Raster is an **incomplete
+consumer** of it: Phase D admitted grass, dangly, sabers and particles for the
+tracer, raster draws some of them through separate paths of their own and some
+not at all, and raster still draws the sky as a room of geometry when the
+decided end state is a cubemap sampled where nothing was drawn. Demanding the
+two agree bit for bit is demanding the new path reproduce the old path's
+omissions.
+
+So the reference is the **traced G-buffer**, and the instrument already exists:
+`--ptdebugview` has thirteen views — normals, albedo, roughness, metallic,
+lightmap, viewZ, motion, categories — each replacing shading at the primary hit.
+That is a G-buffer, view by view, produced from `GpuScene` itself.
+
+Measured on `danm14ab`, 2026-08-02, to check the reference is worth trusting:
+
+- traced and raster agree on **1,650,826 pixels**; **35** are traced-only, and
+  those look like alpha-tested foliage, where raster's diffuse alpha is zero and
+  the tracer still hits geometry. So the tracer is not missing whole categories.
+- the remaining 422,739-pixel difference is **the sky**, which is the planned
+  change rather than a discrepancy — raster draws a room, the tracer classifies
+  it, and F7–F10 makes raster agree.
+- traced `g_buffer_depth` is **allocated and entirely zero** (min 0, max 0)
+  against raster's 1.77–645, confirming nothing writes it in traced mode.
+
+**Byte-identity against the old raster image survives only as a regression
+check**, for categories not yet migrated, and it expires per category as each
+one moves. It is evidence that untouched work stayed untouched — never evidence
+that migrated work is right.
+
+**Use the instrument before F6c deletes it.** The traced G-buffer comes from
+traced primary visibility, and hybrid removes exactly that. Backlog 7.9 called
+keeping it a nice-to-have; it is now the measuring instrument for this whole
+track, so F6c must not land until F-geo has stopped needing it — the first real
+ordering constraint between the two tracks.
+
+**Shadows remain judged by eye.** Proxies go away and shadowing moves to real
+geometry, so shadow maps and everything lit through them change on purpose.
+Keeping that separate from the G-buffer comparison is what stops a regression
+hiding behind an intended change.
 
 ## F-geo — raster consumes `GpuScene`
 
@@ -328,7 +359,43 @@ attached — the plumbing *is* the step, crossing descriptors, the pipeline key,
 the pass and the pipeline plan. An attempt on 2026-08-02 touched 22 files and is
 in a stash for reference.
 
-#### F3 is five steps, and each one proves its own work
+#### F3 migrates one object category at a time
+
+**Restructured 2026-08-02.** The earlier shape — "static opaque, then everything
+else" — split the work by *how hard it looked* rather than by anything the scene
+recognises, and left a long stretch with two half-built paths and no working
+state in between.
+
+Instead: **stand the `GpuScene` draw path up first, then move categories across
+it one at a time.** For each category, remove it from the old raster path, have
+the `GpuScene` path render it, and check. Both paths run side by side for the
+whole migration, and every step ends with a scene that renders completely —
+partly from the old path, partly from the new one. There is never a broken
+intermediate state, and the frame is always a comparison of one category's worth
+of change.
+
+The categories are the ones `GpuScene` already distinguishes: static meshes,
+skinned, dangly, sabers, grass, particles, billboards. Order them by how easily
+a difference is seen — static meshes first because they are most of the frame
+and hold still; grass and particles last because they are stochastic and their
+old raster paths are separate shaders that must be deleted in the same step or
+they render twice.
+
+Per-category check, in order of strength:
+
+1. **Against the traced G-buffer** for that category — the reference, since it
+   comes from the same `GpuScene` records the new path reads.
+2. **Against the old raster image** for every category *not yet* migrated —
+   these must stay byte-identical, which is what proves the step touched only
+   what it claimed to.
+3. **By eye** for the migrated category, once, against a capture from before.
+
+There is no "valid end" in the sense earlier drafts assumed, and it is worth
+saying plainly: the two renderers are not converging on the same image. Raster
+is converging on `GpuScene`, and `GpuScene` already contains things raster has
+never drawn.
+
+#### The plumbing, before any category moves
 
 Splitting it so the early steps are inert — nothing consumes them — makes them
 safe, and safe is not the same as verified. A step whose only evidence is "the
@@ -342,12 +409,14 @@ check that exercises the new capability directly:
 | **F3a** | `GpuScene` exposes each mesh's merged vertex and index offsets | a test that reads the merged buffer at the reported offset for N registered meshes and asserts the positions equal the source mesh transformed to world space, and the index count matches `faces().size() * 3`. Wrong offsets fail loudly instead of silently pointing at a neighbour |
 | **F3b** | descriptor set binds the merged buffer to the vertex stage | `--vkvalidation 1` clean, **plus** a readback through that binding asserting the same vertices F3a checked. A misbound descriptor reads zeros or another buffer, and both pass a validation-only check |
 | **F3c** | `mergedVertex` entry pulling by `SV_VertexID` | `spirv-dis` shows the entry point and a storage-buffer load from the merged binding. Cheap, and it catches the trap that has cost three investigations here: a shader edit that never made it into the compiled module |
-| **F3d** | route **one** mesh through it | raster byte-identical. This is the first step whose success means the whole chain works, and its failure localises to one mesh rather than a scene |
-| **F3e** | route the whole static opaque set | raster byte-identical on all six references |
+| **F3d** | route **one** mesh through it, old path still drawing everything else | that mesh matches the traced G-buffer; every other pixel byte-identical to the old raster image. First step whose success means the whole chain works, and whose failure is one object rather than a scene |
+
+Then one category per step, each removing it from the old raster path in the
+same commit that adds it to the new one — never both, or it draws twice.
 
 F3d is the important one. Turning the switch on for a single mesh costs the same
-plumbing as turning it on for everything and makes a wrong vertex a
-one-object-shaped difference in the image instead of a scene-wide one.
+plumbing as turning it on for everything, and makes a wrong vertex a
+one-object-shaped difference instead of a scene-wide one.
 
 **Skinned geometry is a separate later step.** Raster skins in the vertex shader
 from a bone palette; the merge skins in compute. Those must also be shown
