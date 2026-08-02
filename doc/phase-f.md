@@ -44,7 +44,8 @@ compare distributions, never a stored number.
 | **F2** | done `394bf675` — the merged buffer gained `INDEX_BUFFER` usage, and the post-merge barrier names the vertex shader and index input so a raster draw cannot race the merge compute |
 | **G1** | done `db668c2f` — the per-mesh path is gone; raster modes run an empty plan and present a cleared scene |
 | **G2** | done `ef6c5850`, coverage corrected in `298d0542` — one draw over merged geometry writes a G-buffer that agrees with the traced one |
-| **G3–G4** | the refactors: one scene description, then the GL legacy out. **Before any shading** — see below for why the order is forced. |
+| **G3** | done `cc9a36ac` — admission extracted and shared, sky suppressed identically, all three modes hash the upload to the same value |
+| **G4** | the GL legacy out. **Before any shading** — see below for why the order is forced. |
 | **G5–G8** | shading, shadows, then the blended pass. |
 | **V1–V5** | the visibility track and the sky. After G. |
 
@@ -159,7 +160,16 @@ The mistake class in the third one is worth naming: the rule was taken from
 what *traversal commits* rather than from what *fills the traced G-buffer*.
 Those are different questions and only the second one matters here.
 
-## G3 — one scene description
+## G3 — one scene description — done `cc9a36ac`
+
+Landed as specified: admission in `scene/render/admission`, owned by
+`VulkanRenderPipeline`; `RayQueryPipeline` traced-only; all four
+simplifications. The measured outcome: all three modes log upload hash
+`5b6089c88c790882` on `danm14ab`; raster-only coverage fell 464,982 → 5 with
+traced-only at 9; materials dedup 1,085 → 122; `MergedVertex` 160 → 144 bytes.
+One decided behaviour change beyond the sky suppression itself: a failed sky
+bake now falls back to the fallback cube with the shell still suppressed,
+where it used to restore the shell as geometry.
 
 **The refactors come before the shading, and the order is forced twice over.**
 First: the admission rewrite changes the classification vocabulary, the
