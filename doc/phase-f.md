@@ -43,8 +43,8 @@ compare distributions, never a stored number.
 | **F0, F1** | done `0cc67e42` — the merge adopted raster's transform maths, and `MergedVertex` carries object-space position for the hashed alpha test |
 | **F2** | done `394bf675` — the merged buffer gained `INDEX_BUFFER` usage, and the post-merge barrier names the vertex shader and index input so a raster draw cannot race the merge compute |
 | **G1** | done `db668c2f` — the per-mesh path is gone; raster modes run an empty plan and present a cleared scene |
-| **G2** | done `ef6c5850` — one draw over merged geometry writes the G-buffer, in both raster modes |
-| **G3–G5** | shading, then shadows. Next. |
+| **G2** | done `ef6c5850`, coverage corrected in `298d0542` — one draw over merged geometry writes a G-buffer that agrees with the traced one |
+| **G3–G6** | shading, shadows, then the blended pass. Next. |
 | **V1–V5** | the visibility track and the sky. After G. |
 
 ## Two tracks, and why geometry goes first
@@ -114,19 +114,49 @@ punch-through materials with the hashed alpha test. Procedural quads carry a
 consumer-local tag, because grass and particles are merged with
 `objectPosition` zero and would hash against a constant.
 
-*Proved itself* against the pre-G1 dumps, `danm14ab`, same camera: coverage
-differs by **13 pixels of 2,073,600**; depth median 0.0074 world units; eye
-normals **80.3% bit-identical**, lightmap 86.6%, self-illum 97.9%. Against the
-traced G-buffer, 1,607,850 pixels agree, 465,730 are raster-only — the sky room
-the tracer classifies away — and **none are traced-only**.
+*Proves itself* against the traced G-buffer, `danm14ab` frame 310, **both sides
+with `--taajitter 0`**:
 
-Retro's G-buffer is **bit-identical to PBR's**, which is the point: the draw is
-mode-independent, and only shading will differ.
+| | |
+|---|---:|
+| traced-only | **0** |
+| raster-only | 464,982 — the sky shell, see below |
+| both covered | 1,608,598 |
+| depth error > 1 unit | **206 px, 0.0128%** |
+| depth median / meanabs | 0.000106 / **0.0038** world units |
+| eye normal meanabs | **0.00237** |
 
-The depth residue sits at far distance in the sky room, where the merge's
-transform order differs from the old vertex shader's, and in the grass band.
-Both are expected: agreement was never going to be exact, which is why this
-track measures distributions rather than hashes.
+Retro's G-buffer is **byte-identical to PBR's** across all six targets, which is
+the point: the draw is mode-independent, and only shading differs.
+
+**Measure this with jitter off, on both sides.** Raster jitters through the
+projection matrix and the tracer jitters the ray, so with jitter on every
+alpha-cutout edge decides independently and the comparison is dominated by
+sampling noise — it read 2.94% where the truth was 0.67%, and the mistake
+survived long enough to send a step chasing a residual that was not there. The
+diagnostics skill says this already; it is repeated here because it was read and
+then not applied.
+
+### The coverage rule, and why it is the tracer's
+
+Three faults were found by holding the G-buffer to the traced one, and each was
+raster applying a rule the tracer does not:
+
+- **the opaque draw alpha-tested.** Alpha-blended leaf meshes classify as
+  Opaque, so the tracer commits every texel of a leaf card in hardware. That one
+  `discard` was the missing canopy.
+- **the non-opaque draw demanded punch-through and rejected procedural quads**,
+  which removed grass. Coverage now mirrors `commitsCoverage` and the range
+  itself is the filter, exactly as the BLAS geometry range is for the tracer.
+  Hashed alpha went with it — a stochastic test cannot match a deterministic one.
+- **additive surfaces are not surfaces.** Traversal commits them, but the
+  primary layer loop pays their emission and passes through, so the traced
+  G-buffer holds what is behind. Raster was writing a solid saber blade where
+  the tracer records the hand and the ground.
+
+The mistake class in the third one is worth naming: the rule was taken from
+what *traversal commits* rather than from what *fills the traced G-buffer*.
+Those are different questions and only the second one matters here.
 
 ## G3 — retro shading on the G-buffer
 
@@ -140,20 +170,18 @@ retro special case *only* because retro had no G-buffer.
 
 *Proves itself:* by eye, against the G1 captures.
 
-**Three things are legitimately missing from the frame, and none of them is a
-G3 regression.** Check them off before reading anything else into a
-comparison:
+**Two things are legitimately missing from the frame, and neither is a G3
+regression.** Foliage and grass are *not* on this list any more — they were,
+until the coverage rule was corrected, and the correction is `298d0542`.
 
-- **Alpha-blended foliage.** The leaf canopy is absent from the G-buffer, and
-  was absent from the old one too — it always drew in the transparent pass,
-  which G1 boxed. Measured on `danm14ab`: old and new raster G-buffers both
-  show bare trunk and branches where the traced G-buffer has a full canopy.
-  Trees look dead until transparency returns.
-- **Grass and particles**, gated out of the punch-through draw by construction.
+- **Additive emissive surfaces** — saber blades, glow decals. They contribute
+  no G-buffer surface by design; see the blended pass below.
 - **Shadows**, until G5.
 
-The traced G-buffer has all three, so raster-versus-traced will disagree across
-exactly those pixels for the rest of the track.
+The sky is a third difference of a different kind: raster still admits the sky
+shell as geometry and the tracer does not, which is the 464,982 raster-only
+pixels. That is a defect rather than an accepted difference — see the note on
+one scene description below.
 
 ## G4 — PBR shading on the G-buffer
 
@@ -180,6 +208,56 @@ is not a constraint now.
 
 Shadows are judged by eye, separately from the G-buffer comparison, so a
 regression cannot hide behind an intended change.
+
+## G6 — the blended pass, and the three alpha kinds
+
+The G-buffer holds opaque surfaces. Everything else is a second draw over the
+same merged buffer, after shading. There are exactly three kinds of alpha and
+they are not variations of one thing:
+
+| kind | example | where it belongs |
+|---|---|---|
+| **alpha punchcards** | leaf cards, fences, grilles | **opaque** — writes depth, discards on zero alpha |
+| **alpha emissive** | saber blades, glow decals | **transparent, additive** |
+| **alpha lit + emissive** | particles, smoke | **transparent, alpha blended** |
+
+**The last two are one draw, not two.** Output premultiplied colour and fix the
+blend state at `ONE, ONE_MINUS_SRC_ALPHA`: additive is then simply alpha zero,
+and alpha-blended is alpha equal to coverage. The material decides which it is
+by the alpha it writes, so no second pipeline and no second pass are needed —
+the distinction stops being a branch in the frame graph and becomes a value.
+
+One thing to settle when this is built, because both consumers must agree on
+it: punchcards are opaque here, discarding at zero alpha, whereas the shared
+coverage rule today sends punch-through material through the non-opaque range
+at the tracer's 0.5 threshold. Changing that is a change to the *shared* rule
+and to the classifier, not to the raster draw alone.
+
+## One scene description
+
+Raster and path tracing must consume **the same scene description**. The only
+difference between the two is how it is rendered. Everything upstream of that —
+which objects are admitted, how they are classified, what the material records
+say, whether the sky shell is suppressed — is scene policy, and there is one
+answer to it.
+
+That is not the case today, and the failure has a name in the source:
+`RayQueryPipeline::prepareRaster`, which calls the shared `prepare` with
+`skyRoom = nullptr, skyBaked = false` and a comment presenting the divergence as
+intent. So the sky shell is admitted for one consumer and rejected for the
+other. The classifier is shared in the letter and forked in the substance, and
+`RayQueryPipeline` is constructed in Retro and PBR purely to host it.
+
+Admission belongs in its own unit that neither renderer owns. `RayQueryPipeline`
+then shrinks to what its name claims — bake, TLAS, dispatch, denoise.
+
+*Proves itself,* and this is the check worth having: **hash the
+`GpuSceneUpload` in both modes at the same camera and frame and require
+equality.** Object records, material table, bone and dangly pools, ordering.
+Pixel counts are downstream evidence; this tests the invariant directly, and it
+makes the whole class of divergence impossible to reintroduce quietly. The
+sky's 464,982 raster-only pixels fall out of it as a consequence rather than
+needing a fix of their own.
 
 ## Why the traced G-buffer is trustworthy
 
