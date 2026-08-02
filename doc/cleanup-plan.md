@@ -1302,6 +1302,22 @@ them for the tracer, while raster draws them through `executeDrawGrass` and
 `executeDrawParticles` with their own shaders — cover them here and they render
 twice.
 
+**Nor background geometry.** Found 2026-08-02: covering it breaks the hash, and
+excluding it restores `A654109C…` exactly on `danm14ab`. Same class as grass and
+particles — the sky room is drawn by a path of its own — and it disappears as a
+question at F10, when the sky stops being geometry at all. Until then it is a
+third exclusion, not a subtlety.
+
+**The blocker to plan around: `VulkanRenderPass` cannot see `GpuScene`.** It
+takes a `Mesh &` and draws it, so nothing raster-side can ask where a mesh lives
+in the merged buffer. F3 is therefore not a shader change with some plumbing
+attached — the plumbing *is* the step, crossing descriptors, the pipeline key,
+the pass and the pipeline plan. An attempt on 2026-08-02 touched 22 files and is
+in a stash for reference. Do it in increments that each hold the byte-identical
+bar on their own: expose merged geometry to the pass without using it; add the
+pulling vertex entry; then route the static opaque set. A single change spanning
+all three cannot be bisected when the hash moves, and the hash *will* move.
+
 **Skinned geometry is a separate later step.** Raster skins in the vertex shader
 from a bone palette; the merge skins in compute. Those must also be shown
 bit-identical, and the same rule applies when they are not. Attempting static
