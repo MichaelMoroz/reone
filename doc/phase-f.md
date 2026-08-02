@@ -1,508 +1,256 @@
-# Phase F — the work in progress
+# Phase F — what to do next
 
-Split out of `cleanup-plan.md` on 2026-08-02. That file is the record of how the
-engine got here; this one is what to do next, and nothing else.
+`cleanup-plan.md` is the record of how the engine got here. This file is the
+work that remains, and nothing else.
 
-**Steps are sized to an agent's context, not to a human's sense of a coherent
-change.** A step that does not finish before the agent compacts is a step that
-gets abandoned - twice on 2026-08-02, at ninety minutes each. So the rule is:
+## How steps are written here
 
-- **Split by inertness, then prove each step anyway.** Every step but the last
-  adds capability nothing consumes, which makes it safe - but "the hash did not
-  move" proves only that nothing broke, never that the new thing works. So each
-  step also carries a *positive* check that exercises what it added: a readback,
-  a disassembly, a unit test. Three inert steps verified only by absence, and
-  the switch fails with no way to tell which one lied.
-- **Turn the switch on for one object before all of them.** Same plumbing, and a
-  wrong result is one object-shaped difference instead of a scene.
-- **One page, no cross-references.** The step text is the brief. If a brief has
-  to say "read the plan", the agent burns context re-deriving what is written
-  here and gets it wrong after compacting.
-- **A bar the agent can check itself** - a hash, a grep, a target that must
-  exist - so it knows when to stop without a human in the loop.
-- **Independently committable**, so a failed step is discarded rather than left
-  in a twenty-two-file stash nobody reopens.
+A step that does not finish before an agent compacts gets abandoned — that
+happened three times on 2026-08-02, at ninety minutes each. So steps are sized
+to a context, not to a coherent-looking change, and each one:
 
-Standing rules for every capture: `--dev 0` and `--grassdensity 1`, because
-`reone.cfg` is graded away from defaults and wins any flag not passed. Traced
-output is nondeterministic - compare distributions, never a stored figure.
+- **is briefable in a page, with no cross-references.** The step text is the
+  brief. A brief that says "read the plan" spends the agent's context
+  re-deriving what is already written down, and it derives it wrongly after
+  compacting.
+- **proves its own work, positively.** "The hash did not move" shows nothing
+  broke; it shows nothing about whether the new thing works. Three steps
+  verified only by absence and the switch fails with no way to tell which one
+  lied.
+- **turns on for one object before all of them.** Same plumbing either way, and
+  a wrong result is one object-shaped difference instead of a whole scene.
+- **is committable alone**, so a failure is discarded rather than left in a
+  twenty-two-file stash nobody reopens.
+
+And before building a metric: **render the thing and look at it.** Every metric
+built on 2026-08-02 either missed the real defect or misled — the sky
+continuity check said nothing about buildings baked into the horizon, and the
+"holes" triage ranked a correct starfield worst. Metrics are for checking the
+rest of the set once you know what you are looking at.
+
+**Capture rules, everywhere:** `--dev 0` or the frame-time readout forges a
+difference, and `--grassdensity 1` because `reone.cfg` is graded away from
+defaults and wins any flag not passed. Traced output is nondeterministic —
+compare distributions, never a stored number.
+
+## State
+
+| | |
+|---|---|
+| **F0, F1** | done `0cc67e42` — the merge adopted raster's transform maths, and `MergedVertex` carries object-space position for the hashed alpha test |
+| **F2** | done `394bf675` — the merged buffer gained `INDEX_BUFFER` usage, and the post-merge barrier names the vertex shader and index input so a raster draw cannot race the merge compute |
+| **F3–F5** | *F-geo*, below. Next. |
+| **F6–F10** | *F-vis*, below. After F-geo. |
+
+## Two tracks, and why F-geo goes first
+
+Phase F names two independent things: raster **consuming** `GpuScene`, and
+raster **becoming primary visibility** for every mode. Neither needs the other.
+F5 does not need hybrid — the plan's own words are that it "only decides how
+those draws are issued".
+
+The ordering is forced, though, and not by preference. **F-geo measures against
+the traced G-buffer, and F6c deletes the traced primary visibility that produces
+it.** So F-geo must be finished with the instrument before F-vis removes it.
 
 ---
 
-### F is two tracks, not a chain
+# F-geo — rebuild raster on `GpuScene`
 
-Split 2026-08-02, because treating it as sequential put the largest and riskiest
-piece in front of work that was nearly finished. Phase F's own description names
-two things — "raster consumes `GpuScene`" *and* "becomes primary visibility for
-both renderers" — and they are independent:
+## F3 — delete the old raster path, then recreate it
 
-- **F-vis** needs traced mode to stop early-returning past the G-buffer
-  (`scenepipeline.cpp:191-207`). It does not need merged geometry.
-- **F-geo** needs merged geometry reachable from the render pass. It does not
-  need hybrid.
+Incremental migration was drafted three ways — static-opaque-first, then
+category-by-category with both paths live — and each was harder than the thing
+it protected. The old raster path differs from `GpuScene` too much for
+incremental agreement to be a useful target. So it goes first, and what replaces
+it does things the way the tracer already does them.
 
-**They never converge.** A first version of this split claimed they met at F5,
-where the mega-draw supposedly wanted both. That was invented and this document
-already said otherwise: *"the phase does not hinge on this substep. Under hybrid,
-raster is primary visibility whether or not one draw beats many; F5 only decides
-how those draws are issued."* F-geo runs to completion alone.
+**Keep**
 
-**Do F-geo first**, on verification grounds rather than size — F6 is phase-sized
-too, so neither order puts a smaller thing first. F2 through F5 hold the
-byte-identical bar the whole way; F6 gives it up by definition. Spending the
-mechanically-checkable work first, while the strongest instrument still applies,
-beats trading it away to start sooner on work that needs judgement anyway.
-
-The counter-argument, recorded because it is not weightless: the sky is ~80%
-built — baker, manifest, per-game configs, 79 baked assets, all committed — and
-renders nothing until F7. Committed-but-unproven work is its own kind of debt.
-
-## F-vis — raster becomes primary visibility, and the sky composites once
-
-### F6–F10 — one sky, one composite
-
-Folded into F in 2026-08-02 rather than made its own phase, because it is not a
-feature and not a successor: the sky can only composite once *because* F makes
-raster own primary visibility in every mode. Treating it as separable is what
-produced the mess recorded here.
-
-**Reviewed 2026-08-02 and corrected. Four things this section originally
-asserted were false, and they are recorded because each was written with
-confidence:**
-
-- **Hybrid does not exist yet.** `PathTracing` bypasses raster entirely -
-  `VulkanScenePipeline::init` returns before allocating `_gbuffer`
-  (`graphics/vulkan/scenepipeline.cpp:191-207`), and the source comment says so.
-  There are **three** modes, not four: `Retro`, `PBR`, `PathTracing`
-  (`scene/render/pipeline.h:58-63`); `RTDebug` is still planned. So "the
-  G-buffer exists in all four" was wrong twice, and "modes only meet at AA" is
-  wrong too - traced never reaches AA today. **F6 is what makes the rest true**,
-  which is the real reason it comes first; the original argument about where a
-  composite can live was a weaker version of this.
-- **The composite cannot go before `filterChainPass`.** That point is *after*
-  Transparency, OITBlend and PostProcessing (`scene/render/pipeline/vulkan.cpp:152-167`),
-  so a sky pass there paints over transparent particles and lens flares. It goes
-  straight after the opaque resolve:
-  `Resolve/RetroGeometry -> SkyComposite -> Transparency -> OITBlend -> PostProcessing -> filters`.
-- **`sGBufDepth` is device depth in `[0,1]`, not linear view-space distance.**
-  `pbr_resolve.slang:62-78` states it and reconstructs position from it. An
-  earlier note here said the opposite and told the reader never to test depth;
-  that came from misreading a `--dumptargets` dump, which linearises. `depth == 1.0`
-  is a sound "no opaque geometry" test on the raster attachment. Retro is the
-  real exception - it renders forward into `_output` and has no deferred colour
-  G-buffer (`scenepipeline.cpp:676-724`), so it needs its own coverage signal.
-- **The config does not name meshes yet.** `override/*/modules.ini` carries only
-  `room =` and `sky =`. F9 therefore begins by adding the manifest, not by
-  reading one.
-
-The classification half is done and committed — `skybake` renders sky shells
-offline into cubemaps (`8fa4e55b`, `6010a309`) and the per-module configs are
-curated data (`d219bd6b`). Backlog 1.14 carries the evidence for why runtime
-classification was abandoned. What remains is the renderer half, and it lands
-after F5 because it depends on the same unification:
-
-- **F6 — hybridise, then merge the graph.** This is the phase-sized one, and the
-  review is blunt that a full graph rewrite is not what is needed:
-  `VulkanScenePipeline` is already a 1,883-line frame executor with a
-  `VulkanSceneFramePlan`, and PBR and Retro already *select* steps from it
-  (`scene/render/pipeline/vulkan.cpp:138-170`). What is missing is that
-  PathTracing early-returns out of the whole shape. The honest change is to
-  remove that exclusive return, have raster produce visibility and depth in
-  traced mode too, and make the tracer emit a transport image the plan
-  composites — which touches `scenepipeline.{h,cpp}` initialisation, target
-  ownership, barriers and dumping; `vulkan.cpp` plan construction; the tracer's
-  output contract; and sky asset loading and descriptors, which do not exist
-  yet. **Do not schedule this as a small prerequisite to the sky.**
-
-  Three steps, each proving its own work rather than only its harmlessness:
-
-  | step | change | what proves it works |
-  |---|---|---|
-  | **F6a** | allocate the G-buffer in traced mode; nothing writes it | **First establish whether this is work at all.** Measured 2026-08-02: `--dumptargets` in PathTracing already emits `g_buffer_depth.npy` at 1080x1920, entirely zero (min 0, max 0) against raster's 1.77-645. Either the target is allocated and never written - in which case F6a is already done - or `dumpTargets` synthesises zeros for an absent target, in which case it is not. The review says `init` returns before allocating `_gbuffer` (`scenepipeline.cpp:191-207`); the dump says otherwise. Resolve that before writing code |
-  | **F6b** | run the raster geometry pass in traced mode, write the G-buffer, discard it | `g_buffer_depth.npy` from PathTracing is **byte-identical to PBR's** at the same camera. That is the whole proof that raster visibility is correct in traced mode, and it is available before anything depends on it. Traced image still unchanged; only frame cost moves |
-  | **F6c** | the tracer takes its primary hit from the G-buffer instead of tracing camera rays | traced output changes by design. Compare distributions across three runs a side, and judge the images. This is the step that spends the byte-identical bar |
-
-  F6b is where the value is. It makes the correctness of hybrid visible while
-  the old path is still running, so F6c is a switch rather than a leap.
-- **F7 — composite the sky once**, in a single pass placed **after the opaque
-  resolve and before Transparency** — not before `filterChainPass`, which is
-  past OITBlend and would paint over particles and flares. An integration
-  attempt put it in `pbr_resolve.slang` *and* `postprocess.slang` — two
-  implementations of one idea, precisely the fault that got the runtime bake
-  deleted. Raster tests `depth == 1.0` on the device-depth attachment; retro,
-  having no deferred colour G-buffer, tests its own coverage.
-  *Acceptance:* a fixture with one opaque prop, one OIT particle and a lens
-  flare; sky-off vs sky-on with filters disabled; the changed-pixel set must be
-  exactly the far-depth set, and the particle and flare pixels must not move.
-- **F8 — the tracer keeps only transport.** `ptSkyRadiance` on bounce miss stays
-  (`slang/rayquery.slang:341-349`); its primary-miss call is compositing and
-  moves to F7. Note the output-contract change this implies: primary-miss sky
-  currently feeds `outputs.noiseFree` (`rayquery.slang:147-157`) and supplies the
-  cyan sky-miss colour for the surface debug view, so F8 must say what replaces
-  both. *Acceptance:* a fixed-seed fixture whose camera sees an opaque surface
-  and whose first secondary ray misses; hash the traced result across the change.
-- **F9 — suppress exactly the shell.** Begins by *adding* a per-mesh manifest to
-  `override/*/modules.ini`, which today carries only `room =` and `sky =`, plus
-  the resolver that reads it; the runtime currently uses a heuristic room
-  classifier instead (`scene/render/pipeline/rayquery.cpp:318-368`). Then the
-  baker and the renderer read one list rather than each evaluating a rule and
-  hoping they agree. Neither the K1 no-walkmesh convention nor the TSL per-mesh
-  flag identifies the shell alone: `001ebo16` flags all thirteen of its meshes,
-  and that set contains the star shell *and* the asteroids *and* the planet.
-  Suppressing by flag deletes a planet and looks like success.
-  *Acceptance:* unit-test the resolver against `001ebo16` — the resolved shell
-  set must equal the manifest, and the asteroid and planet meshes must be absent
-  from it.
-- **F10 — delete the runtime bake**, `slang/sky.slang`, and the shadow-ray
-  candidate rejection at `slang/tracing/trace.slang:134`, which exists only to
-  cope with sky geometry that may still be present. Larger than one line: the
-  same removal touches the sky feature bit and the classifier that feeds it.
-  *Acceptance:* `rg -n 'bakeSkyRoom|clearSkyRoom|RayQuerySkyRoom|skyAvailable' src include slang`
-  returns no runtime-bake remnants, and `slang/sky.slang` does not exist.
-
-The trap worth naming, because it is what makes F10 safe to be strict about: a
-sky that renders correctly while quietly removing scenery still passes every
-sky-shaped test. So the bar is the props, not the sky — capture `001ebo` and
-`manm26ad` and confirm the asteroids, the planet and the Ahto City rings are
-still drawn.
-
-That bar is **necessary but not sufficient**, and the review is right about why:
-hashing `sky = none` modules only proves the untouched branch stayed untouched.
-It cannot catch a sky composited in the wrong order, a shell resolved to the
-wrong mesh set, or traced output moved by F8 — which is why each step above
-carries its own mechanical check instead of deferring to the phase bar.
-
-## Phase F — raster consumes `GpuScene`
-
-Rewritten 2026-08-01, then reconciled with the hybrid decision the same day.
-The bar hardened to a byte-identical G-buffer, which turns several things the
-earlier draft deferred into prerequisites; Phase E has since put the Vulkan
-surface where this phase's new code belongs, so that constraint is satisfied
-rather than pending.
-
-Of the five breakages the first draft listed, four are gone. Three were tracer
-correctness bugs fixed in Phase D — dangly and saber frozen at base pose
-(`c1469287`) chief among them, a bug that had stood since the tracer existed and
-took one commit once someone noticed the displaced positions were already being
-handed to it. The fourth, "merged shadow draws lose frustum rejection", stopped
-mattering when caching culling removed ~9000 frustum tests per frame and moved
-frame time by *nothing*. What remains is raster's own lowering over a scene that
-is already correct.
-
-### What hybrid changed about this phase
-
-Reconciled 2026-08-01. This phase was written before the hybrid decision
-(`vulkan-rt-backend.md` §11.2) and read as an optimisation justified by CPU
-overhead on weak hardware. It is not that any more.
-
-**Raster owns primary visibility for both renderers.** Camera rays are not
-traced; the tracer does transport starting from raster's G-buffer. So this phase
-is not optional and does not depend on the mega-draw paying off — one geometry
-path is a requirement, and if the merge turns out not to pay on weak hardware
-the fallback is N draws over the same `GpuScene` records, not a second path.
-
-**And the byte-identical bar stops being a safety check.** It was "prove the
-relocation changed nothing". Under hybrid the G-buffer raster produces *is the
-tracer's input*, so the bar is the contract between the two renderers: every
-traced frame is only as correct as the G-buffer under it.
-
-Three pieces of work follow from hybrid that the steps below do not mention, and
-they belong at the end of this phase rather than in it:
-
-- **the traced primary path is retired**, except the debug shader that emits a
-  ray-traced G-buffer for validation — the `RTDebug` mode, backlog 7.9. Delete
-  the visibility walk without pinning that down first and the ability to check
-  the merged scene against raster goes with it.
-- **coverage-as-transmission goes with it**, in its primary-ray half only.
-  Shading a blended surface and continuing with `1 - alpha` describes a camera
-  ray walking a stack of quads, and there is no camera ray. Shadow rays and
-  secondary bounces still cross smoke and keep the model.
-- **transmissive surfaces have to be re-homed**, and how they are lit once
-  raster composites them is the open question hybrid creates. It is not answered
-  here.
-
-### The bar: the traced G-buffer is ground truth, not the old raster image
-
-**Corrected 2026-08-02.** Every earlier draft made "the rasterised G-buffer is
-byte-identical before and after" the terminal bar. That is the wrong reference,
-and holding to it would encode raster's gaps as correct.
-
-`GpuScene` is the complete scene description. Raster is an **incomplete
-consumer** of it: Phase D admitted grass, dangly, sabers and particles for the
-tracer, raster draws some of them through separate paths of their own and some
-not at all, and raster still draws the sky as a room of geometry when the
-decided end state is a cubemap sampled where nothing was drawn. Demanding the
-two agree bit for bit is demanding the new path reproduce the old path's
-omissions.
-
-So the reference is the **traced G-buffer**, and the instrument already exists:
-`--ptdebugview` has thirteen views — normals, albedo, roughness, metallic,
-lightmap, viewZ, motion, categories — each replacing shading at the primary hit.
-That is a G-buffer, view by view, produced from `GpuScene` itself.
-
-Measured on `danm14ab`, 2026-08-02, to check the reference is worth trusting:
-
-- traced and raster agree on **1,650,826 pixels**; **35** are traced-only, and
-  those look like alpha-tested foliage, where raster's diffuse alpha is zero and
-  the tracer still hits geometry. So the tracer is not missing whole categories.
-- the remaining 422,739-pixel difference is **the sky**, which is the planned
-  change rather than a discrepancy — raster draws a room, the tracer classifies
-  it, and F7–F10 makes raster agree.
-- traced `g_buffer_depth` is **allocated and entirely zero** (min 0, max 0)
-  against raster's 1.77–645, confirming nothing writes it in traced mode.
-
-**Byte-identity against the old raster image survives only as a regression
-check**, for categories not yet migrated, and it expires per category as each
-one moves. It is evidence that untouched work stayed untouched — never evidence
-that migrated work is right.
-
-**Use the instrument before F6c deletes it.** The traced G-buffer comes from
-traced primary visibility, and hybrid removes exactly that. Backlog 7.9 called
-keeping it a nice-to-have; it is now the measuring instrument for this whole
-track, so F6c must not land until F-geo has stopped needing it — the first real
-ordering constraint between the two tracks.
-
-**Shadows remain judged by eye.** Proxies go away and shadowing moves to real
-geometry, so shadow maps and everything lit through them change on purpose.
-Keeping that separate from the G-buffer comparison is what stops a regression
-hiding behind an intended change.
-
-## F-geo — raster consumes `GpuScene`
-
-F0 through F5. Independent of F-vis until F5, where the mega-draw wants both.
-F0, F1 and F2 are done; F3 is next and is larger than it reads — see the blocker
-recorded under it.
-
-### F0 — is byte-identical reachable at all? Answer before building anything
-
-Three places where raster and the merge compute the same quantity differently.
-Two are possible rounding differences; **one is a different vector**. Probe all
-three in the existing vertex stage — compute both forms, `asuint` XOR them,
-write a flag to a target — and count nonzero pixels on danm14ab before writing
-any of the switchover.
-
-| quantity | raster | the merge | kind of difference |
-|---|---|---|---|
-| world position | `mul(localUniforms.model, objectPos)` (`pbr_model.slang:59`) | three `dot(row, float4(p,1))` (`skin.slang:86-90`) | summation order and FMA contraction — possibly bits |
-| **normal** | **inverse transpose**, `mul(n, (float3x3)modelInv)` (`lib/geometry.slang:64-66`) | **plain `M * n`**, `transformDir` (`skin.slang:287-289`) | **a different vector under any non-uniform scale or shear** |
-| normalisation | `normalize()` | `safeNormalize`, `v * rsqrt(dot(v,v))` (`skin.slang:99-103`) | `rsqrt` may lower to an approximate instruction |
-
-Plus one shape difference: raster's tangent frame is computed **only** when the
-normal-map or bump-map feature bit is set and is `float3(0)` otherwise
-(`pbr_model.slang:64-70`), while the merge fills it unconditionally. Wherever
-those disagree, `g_buffer_eye_normal` differs on every normal-mapped surface.
-
-**When a probe is nonzero, the merge moves — not the bar.** The tracer has no
-bit-exactness requirement and the merge is the newer code. For the normal that
-means `SceneObject` gains the inverse (or its 3x3 transpose) and the merge
-adopts the inverse transpose. If a probe cannot be driven to zero, that is a
-finding worth stopping on, not something to work around by loosening the
-comparison.
-
-**A tracer correctness question falls out of the normal row, and it is not a
-Phase F question.** If `M * n` is wrong for non-uniformly-scaled objects, then
-the path tracer has been shading those objects with wrong normals for as long as
-the merge has existed. Measure whether any admitted object actually has
-non-uniform scale before claiming it either way: if every transform is a rigid
-motion plus uniform scale the two conventions agree and this is only about bits.
-Either way it belongs to Phase D correctness, recorded here because Phase F is
-what exposed it.
-
-### F1 — `MergedVertex` must carry object-space position
-
-`opaqueFragment` — the G-buffer writer itself — hashes object-space position for
-the hashed alpha test (`pbr_model.slang:280`). `MergedVertex` has no such field.
-The earlier draft called this "a raster lowering problem for Phase E proper" (as
-the raster phase was then lettered) and
-left it late; under a byte-identical bar it blocks the first step, because any
-dithered surface differs immediately.
-
-144 → 160 bytes. `skin.slang` declares the struct independently of the C++ header
-and the `static_assert`s are the only ABI guard, so both sides and every assert
-move together.
-
-### F2 — getting merged geometry into a raster draw
-
-The merged buffers carry `VK_BUFFER_USAGE_STORAGE_BUFFER_BIT` only
-(`gpuscene.cpp:243-244`), and the post-merge barrier names AS-build and
-ray-tracing reads. Both need widening for a raster consumer.
-
-**Prefer programmable vertex pulling** — bind the merged buffer as a
-`StructuredBuffer<MergedVertex>` and index by `SV_VertexID` — over adding
-`VERTEX`/`INDEX` usage and going through vertex input. No binding descriptions,
-no attribute descriptions, no format plumbing in the pipeline key, one
-declaration of the vertex layout instead of two, and the mega-draw becomes
-trivial later.
-
-### F3 — delete the old raster path and rebuild it from `GpuScene`
-
-**Decided 2026-08-02, replacing every earlier shape of this step.** Migrating
-category by category, keeping both paths alive and holding raster
-byte-identical, was tried three ways on paper and each was harder than the thing
-it was protecting. The old raster path differs from `GpuScene` too much for
-incremental agreement to be a useful target.
-
-So it goes. **Remove the old raster paths completely, then rebuild against
-`GpuScene`, doing everything the way the tracer already does it.**
-
-**Kept:**
-
-- **Shadow handling.** It works and it is orthogonal to where vertices come
+- **Shadow handling.** It works, and it is orthogonal to where vertices come
   from.
 - **Base materials.** Retro keeps a retro material; PBR keeps its own PBR-like
-  one. Both now read the same G-buffer instead of each owning a path.
+  one.
 
-**Dropped, deliberately, into a box to reopen later:** OIT, SSAO, SSR. They are
-not deleted because they are wrong — they are deleted because keeping them alive
-across a rewrite of the thing they sit on costs more than rebuilding them
-afterwards on a path that has settled.
+**Change**
 
-**Replaced:**
+- **Both modes fill and shade from one G-buffer.** Retro stops being forward
+  rendered. This is the change that pays for itself twice: the sky composite in
+  F7 needed a retro special case *only* because retro had no G-buffer, and that
+  special case now never gets written.
+- **Transparency is plain alpha blending.** Opaque raster for everything else.
+- **FXAA and sharpen move to the end of the chain, where FSR sits.** Three
+  interchangeable filters over a finished image, instead of two of them wired
+  into the middle.
 
-- **Transparency becomes plain alpha blending.** Opaque raster for everything
-  else. Weighted-blended OIT goes in the box above.
-- **FXAA and sharpen move to the end of the chain, where FSR sits.** They are
-  currently mid-chain; at the end they are one filter stage over a finished
-  image, and the three become interchangeable rather than special.
-- **Retro stops being forward-rendered.** Both modes fill the G-buffer and both
-  shade from it. This is the change that makes a single sky composite possible
-  at all — F7 had to special-case retro precisely because retro had no
-  G-buffer, and that special case now disappears rather than being written.
+**Drop, into a box to reopen later:** OIT, SSAO, SSR. Not because they are
+wrong — because carrying them across a rewrite of the thing they sit on costs
+more than rebuilding them afterwards on a path that has settled.
 
-#### What "correct" means now
+### What correct means, with the old path gone
 
-There is no old image to match, because the old path is gone. Two bars replace
-it:
+There is no old image to match. Two references replace it:
 
-- **Against the traced G-buffer**, for geometry and coverage. Same `GpuScene`
-  records, so disagreement is a real defect rather than a difference of
-  convention.
-- **Retro by eye, against captures taken before the deletion.** Retro is the one
-  mode expected to look more or less the same, so it is the honest visual
-  check. **PBR is not a reference** — it is visibly broken today, and holding
-  the rebuild to it would be preserving a bug.
+- **The traced G-buffer**, for geometry and coverage. `--ptdebugview` already
+  exposes thirteen views — normals, albedo, roughness, metallic, lightmap,
+  viewZ, motion, categories — each replacing shading at the primary hit. It
+  reads the same `GpuScene` records the rebuilt raster path will, so a
+  disagreement is a defect rather than a difference of convention.
+- **Retro, by eye**, against captures taken before the deletion. Retro is the
+  one mode expected to look more or less the same.
 
-Capture the "before" set **first**, across several modules, and keep it. Once
-the old path is deleted it cannot be regenerated, and a comparison nobody took
-in advance is a comparison nobody can take.
+**PBR is not a reference.** It is visibly broken today, and holding a rebuild to
+it would preserve the bug.
 
+**Take the "before" captures first**, across several modules, and keep them.
+Once the old path is deleted it cannot be regenerated, and a comparison nobody
+took in advance is a comparison nobody can take.
 
-### F4 — shadows from real geometry
+### Why the traced G-buffer is trustworthy
 
-Only once the rebuilt G-buffer agrees with the traced one. Admission takes Opaque and Transparent
-only (`rayquery.cpp:517`, `:1112`), so shadow-only proxies sit outside the merge
-while raster's shadow pass draws exactly them. Shadow from real geometry and
-delete the proxies rather than plumbing them through. Proxies exist because four
-cascades and six cube faces of real geometry were expensive on 2003 hardware,
-which is no longer a constraint.
+Measured on `danm14ab`, 2026-08-02:
 
-This is where the image changes on purpose.
+- traced and raster agree on **1,650,826 pixels**
+- **35** pixels are traced-only — they look like alpha-tested foliage, where
+  raster's diffuse alpha is zero and the tracer still hits geometry
+- the other **422,739** are the sky, which is the decided change rather than a
+  discrepancy: raster draws a room, the tracer classifies it
 
-### F5 — the mega-draw, if it pays
+So the tracer is not missing whole categories. Worth repeating the check on a
+creature-heavy and a particle-heavy module before leaning on it everywhere.
 
-The payoff the rest of this document is justified by, and until now the only
-part of it never planned. The opening section argues raster consuming `GpuScene`
-"matters most exactly where the machine is weakest: a mega-draw over merged
-geometry against 1048 per-mesh draws", the registry section argues a mega-draw
-dissolves `drawScene`, and every earlier draft excluded it — so it was the motivation
-for three sections and the subject of none.
+## F4 — shadows from real geometry
 
-**The phase does not hinge on this substep.** Under hybrid, raster is primary
-visibility whether or not one draw beats many; F5 only decides how those draws
-are issued. **It is the last substep, not a phase of its own.** F0-F4 put
-merged geometry into a raster draw and prove it byte-identical; only then is
-there anything to collapse. Bindless arrives from Phase E having put the
-tracer's descriptor-indexing machinery somewhere shareable.
+Admission takes Opaque and Transparent only, so shadow-only proxies sit outside
+the merge while raster's shadow pass draws exactly them. Shadow from real
+geometry and delete the proxies rather than plumbing them through. They exist
+because four cascades and six cube faces of real geometry were expensive in
+2003, which is not a constraint now.
 
-#### The gate: measure before building
+Shadows are judged by eye. Keeping that separate from the G-buffer comparison is
+what stops a regression hiding behind an intended change.
 
-**This project has already been wrong about exactly this.** Culling moved from
-~200 frustum tests per frame to ~9000; caching it removed the calls and changed
-frame time by *nothing*. A ratio of call counts is not evidence. So the gate is
-two measurements, not an argument:
+## F5 — the mega-draw, if it pays
 
-- step 2 of the ordered list — is the per-object `Material` and bone copy a
-  visible slice of the 2.3 ms update slot?
-- what does 1048 draws actually cost in CPU time? Per-draw descriptor writes,
-  uniform ring pushes and pipeline binds are the claim; time them.
+The payoff the whole track is justified by: one draw over merged geometry
+instead of ~1048 per-mesh draws.
 
-If the answer is that per-draw CPU cost is small, **this phase should not
-happen**, and "raster keeps per-object draws over merged ranges" is a correct
-outcome rather than a failure. The low-end note in the opening section says the
-same thing from the other direction: a per-frame compute merge on weak compute
-may cost more than the draws it saves.
+**Gated on measurement, not on the argument.** This project has already been
+wrong about exactly this — culling went from ~200 frustum tests per frame to
+~9000, caching it removed the calls, and frame time changed by nothing. The
+numbers that matter were taken 2026-07-28 and should not be re-derived:
+registration costs **0.445 ms/frame**, the six `drawScene` walks cost
+**1.873 ms**. The walks are what F5 collects; the registry removal moved them
+rather than removing them.
 
-#### What one draw actually requires
+If it does not measure faster, it is reverted.
 
-**1. Per-primitive materials, which means bindless — and raster has none.**
-Today each draw binds its own texture set (`acquireTextureSet`, per draw) and
-pushes its own `LocalUniforms`. One draw covering many materials means the
-fragment stage looks the material up per primitive and indexes textures by id.
-The tracer already does this, and **it is the only thing in the tree that does**:
-`VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT` with a variable descriptor count
-appears at `rayquery.cpp:138-143` and nowhere else. Raster adopting it is the
-bulk of this phase, and it is another argument for F first — the machinery has
-to live somewhere shareable rather than inside the tracer's pipeline.
+---
 
-**2. `InstanceMaterial` is not the table raster needs.** The corrected-shape
-section already settled this: it carries trace-only surface types and curated
-trace operations, and lacks `color`, `ambientColor`, the env-map slots, fog and
-blend/cull state that raster reads from the original `Material`. So either
-raster gets its own per-primitive table or the shared one widens. **Decide
-explicitly** — sharing it by default is how the first draft of this plan went
-wrong.
+# F-vis — raster becomes primary visibility, and the sky composites once
 
-**3. Feature bits stop being uniform across a draw.** `pbr_model.slang` says so
-in its own header comment: *"Material features remain runtime branches — they
-are uniform across a draw."* That stops being true. They become per-primitive
-loads, and whether the resulting divergence costs more than the draws saved is
-an empirical question belonging to the gate above.
+## F6 — hybridise
 
-**4. Pipeline state cannot vary within a draw, and this is the part that
-actually determines the draw count.** Blend and cull are pipeline state, not
-shader state. But with merged geometry and vertex pulling, most of the current
-key collapses: the vertex bindings and attributes vanish (one layout), and the
-vertex entry vanishes with them (everything is already transformed, so `static`,
-`skinned`, `dangly` and `saber` stop being separate stages). For the opaque
-G-buffer pass the fragment entry is fixed and blend is fixed, so **only cull
-varies** — `material.faceCulling.value_or(FaceCullMode::Back)`.
+`PathTracing` bypasses raster entirely today: `VulkanScenePipeline::init`
+returns before allocating the G-buffer (`scenepipeline.cpp:191-207`). There are
+**three** modes — `Retro`, `PBR`, `PathTracing` — not four; `RTDebug` is still
+planned.
 
-That is the concrete claim to test: **1048 draws becomes one per cull mode, a
-handful.** Not literally one, and the section that says "one draw" everywhere
-should be read as "a handful" from here.
+This is phase-sized. It is *not* a graph rewrite: `VulkanScenePipeline` is
+already a frame executor with a `VulkanSceneFramePlan`, and PBR and Retro
+already select steps from it. What is missing is that PathTracing early-returns
+out of the whole shape. Removing that touches initialisation, target ownership,
+barriers and dumping, plan construction, and the tracer's output contract.
 
-**5. Transparents do not collapse the same way.** Blend mode varies per material
-there, so they partition by (blend, cull) and keep the ordering sort over ranges.
-The mega-draw is an opaque-pass claim; transparents get whatever falls out.
+| | change | what proves it |
+|---|---|---|
+| **F6a** | allocate the G-buffer in traced mode | **First establish whether this is work at all.** `--dumptargets` in PathTracing already emits `g_buffer_depth.npy` at full size, entirely zero, against raster's 1.77–645. Either it is allocated and unwritten, or `dumpTargets` synthesises zeros for an absent target. The source and the dump disagree; settle it before writing code |
+| **F6b** | run the raster geometry pass in traced mode, write the G-buffer, discard it | `g_buffer_depth` from PathTracing must be **byte-identical to PBR's** at the same camera. That is the whole proof that raster visibility is right in traced mode, available before anything depends on it. Traced image unchanged; only frame cost moves |
+| **F6c** | the tracer takes its primary hit from the G-buffer instead of tracing camera rays | traced output changes by design — compare distributions across three runs a side and judge the images. **This is what deletes the traced G-buffer instrument, so it must not land while F-geo still needs it** |
 
-#### Bar
+## F7 — composite the sky once
 
-Pixel-identical for the opaque G-buffer: same geometry, same materials, only the
-binding model changed. Shadows are already settled by then.
+One pass, **after the opaque resolve and before Transparency**. Not before
+`filterChainPass`, which sits past OITBlend and PostProcessing and would paint
+over transparent particles and lens flares:
 
-**And a second bar this phase alone has: frame time must actually improve.**
-Every other phase in this document is verified by things *not* changing. This
-one exists solely to make something faster, so a version that is
-pixel-identical and no quicker has failed and should be reverted rather than
-kept for tidiness.
+```
+Resolve → SkyComposite → Transparency → OITBlend → PostProcessing → filters
+```
 
-#### What it deletes
+An integration attempt put the sky in `pbr_resolve.slang` *and*
+`postprocess.slang` — two implementations of one idea, the same fault that got
+the runtime bake deleted. With F3 giving both modes a G-buffer there is one
+place for it.
 
-Per-draw texture sets, per-draw `LocalUniforms` pushes, and — once skinned
-geometry consumes the merged stream — the per-draw bone palette upload
-(`pass/vulkan.cpp:274-297`) together with the CPU palette build
-(`node/mesh.cpp:327-354`). That last deletion is the one the target section
-promised and is the clearest signal the phase worked.
+Test coverage or `depth == 1.0` on the device-depth attachment. Note
+`sGBufDepth` **is** device depth in `[0,1]` — `pbr_resolve.slang:62-78` states
+it and reconstructs position from it. An earlier draft here claimed it was
+linear view-space distance, from misreading a `--dumptargets` dump, which
+linearises.
 
-### Not in this phase
+*Acceptance:* a fixture with an opaque prop, an alpha-blended particle and a
+lens flare. Sky off versus sky on, filters disabled. The changed-pixel set must
+be exactly the far-depth set, and the particle and flare pixels must not move.
 
-- **`offMaterial`**, which still has no `SceneObject` field. Walkmesh debug
-  geometry is its only consumer and deleting that remains the better answer than
-  widening the vertex.
-- **The 575-reference containment sweep** — that is Phase E, and it has already happened by the time this phase starts.
+## F8 — the tracer keeps only transport
 
-`pipeline/vulkan.cpp` remains the awkward one: it owns frame ordering and returns
-before every raster pass in path-tracing mode (`:1337-1373`), so a core consumed
-by both needs a precise update point and per-consumer barriers. Its
-`glToVulkanClip` rewrite (`:1319-1334`) and the negative-height viewport
-(`:627-634`) are real Vulkan cleanups that belong with Phase E.
+`ptSkyRadiance` on **bounce miss** stays: that is transport, and it is what
+makes the sky an environment light. Its **primary-miss** call is compositing and
+moves to F7.
+
+Two things move with it, so F8 must say what replaces them: the primary-miss sky
+currently feeds `outputs.noiseFree`, and it supplies the cyan sky colour the
+surface debug view uses.
+
+*Acceptance:* a fixed-seed fixture whose camera sees an opaque surface and whose
+first secondary ray misses. Hash the traced result across the change.
+
+## F9 — suppress exactly the shell
+
+The manifest exists: `override/*/modules.ini` carries `meshes =` naming the
+shell mesh by mesh, and `skybake` bakes exactly that list (`403c0802`). F9 makes
+the renderer read the same list, so the baker and the renderer share one source
+of truth instead of each evaluating a rule and hoping they agree.
+
+This matters because neither game marks the shell distinctly enough to infer it.
+K1 omits the walkmesh from a sky room but says nothing about props inside it;
+TSL flags meshes individually and flags the props too. `001ebo16` flags all
+thirteen of its meshes, and that set is the star shell **plus three asteroids, a
+planet and a nebula**. Suppressing by flag deletes a planet and looks like the
+sky works.
+
+*Acceptance:* capture `001ebo` and `manm26ad` and confirm the asteroids, the
+planet and the Ahto City rings are **still drawn**. The bar is the props, not
+the sky — a sky that renders correctly while quietly removing scenery passes
+every sky-shaped test.
+
+## F10 — delete the runtime bake
+
+`bakeSkyRoom` and its call sites, `slang/sky.slang` and its shaderpack wiring,
+and the shadow-ray candidate rejection at `slang/tracing/trace.slang:134`, which
+exists only to cope with sky geometry possibly still being present. Larger than
+one line: the same removal reaches the sky feature bit and the classifier that
+feeds it.
+
+*Acceptance:* `rg -n 'bakeSkyRoom|clearSkyRoom|RayQuerySkyRoom|skyAvailable' src include slang`
+returns no runtime-bake remnants, and `slang/sky.slang` does not exist.
+
+---
+
+## Done already, so it is not re-litigated
+
+The sky's offline half is finished and committed. `skybake` renders sky shells
+into cubemaps by casting rays from inside the shell — mesh count and shape stop
+mattering, tiling falls out of the hit UV, orientation falls out of the ray
+direction, and a missing floor is a ray that hits nothing, which is black by
+construction. Per-game curated configs live in `override/k1` and `override/k2`
+and are committed; the 79 baked assets are gitignored and regenerated by the
+tool from the player's own install.
+
+Coverage: **56 of 117** K1 modules and **46 of 82** K2 modules name a sky. Every
+entry is still marked `# review` — they are drafts, and a wrong `room =`
+silently suppresses level geometry.
+
+Backlog 1.14 carries the evidence for why runtime sky classification was
+abandoned, including the 117-module sweep that killed it.
