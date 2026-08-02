@@ -44,7 +44,8 @@ compare distributions, never a stored number.
 | **F2** | done `394bf675` — the merged buffer gained `INDEX_BUFFER` usage, and the post-merge barrier names the vertex shader and index input so a raster draw cannot race the merge compute |
 | **G1** | done `db668c2f` — the per-mesh path is gone; raster modes run an empty plan and present a cleared scene |
 | **G2** | done `ef6c5850`, coverage corrected in `298d0542` — one draw over merged geometry writes a G-buffer that agrees with the traced one |
-| **G3–G6** | shading, shadows, then the blended pass. Next. |
+| **G3–G4** | the refactors: one scene description, then the GL legacy out. **Before any shading** — see below for why the order is forced. |
+| **G5–G8** | shading, shadows, then the blended pass. |
 | **V1–V5** | the visibility track and the sky. After G. |
 
 ## Two tracks, and why geometry goes first
@@ -69,7 +70,7 @@ been written: one draw over merged geometry, then shading on top.
 
 Removed the per-mesh draw walk, the pipeline plumbing behind it, and the passes
 that only existed to feed it. **Every shader kept.** They encode a decade of
-material behaviour that nothing else records, and G3 and G4 put them back to
+material behaviour that nothing else records, and G5 and G6 put them back to
 work against a different input.
 
 Also boxed for later, deliberately: **OIT, SSAO, SSR**. Not wrong — just not
@@ -158,7 +159,88 @@ The mistake class in the third one is worth naming: the rule was taken from
 what *traversal commits* rather than from what *fills the traced G-buffer*.
 Those are different questions and only the second one matters here.
 
-## G3 — retro shading on the G-buffer
+## G3 — one scene description
+
+**The refactors come before the shading, and the order is forced twice over.**
+First: the admission rewrite changes the classification vocabulary, the
+material table and the `MergedVertex` layout, and G5/G6 shading consumes all
+three — shading first means re-verifying it after the ground moves. Second:
+right now is the cheapest a refactor will ever be, because the
+traced-agreement instrument is armed and the G-buffer is raster's *only*
+output. "Nothing moved" is checkable to a couple hundred pixels, with no
+shaded image to re-judge by eye.
+
+Raster and path tracing must consume **the same scene description**. The only
+difference between the two is how it is rendered. Everything upstream of that —
+which objects are admitted, how they are classified, what the material records
+say, whether the sky shell is suppressed — is scene policy, and there is one
+answer to it.
+
+That is not the case today, and the failure has a name in the source:
+`RayQueryPipeline::prepareRaster`, which calls the shared `prepare` with
+`skyRoom = nullptr, skyBaked = false` and a comment presenting the divergence as
+intent. So the sky shell is admitted for one consumer and rejected for the
+other. The classifier is shared in the letter and forked in the substance, and
+`RayQueryPipeline` is constructed in Retro and PBR purely to host it.
+
+Admission belongs in its own unit that neither renderer owns. `RayQueryPipeline`
+then shrinks to what its name claims — bake, TLAS, dispatch, denoise.
+
+**Four simplifications ride along in the same step**, because they all live in
+the admission code being extracted and each makes the invariant cheaper to hold:
+
+1. **One procedural record kind.** The device side already lowered particles,
+   grass and billboards into a single `GpuSceneProceduralQuad`; the scene side
+   still carries three record types, three classifiers and three lowering
+   paths. One `RegisteredQuads` record collapses them, and a billboard is a
+   one-instance system.
+2. **Deduplicate materials.** Today `materials` holds one 256-byte record per
+   admitted *object* — two hundred meshes sharing ten textures upload two
+   hundred materials. Hash-cons by content; `materialIds` already provides the
+   per-triangle indirection, so nothing downstream changes.
+3. **Drop `objectPosition` from `MergedVertex`.** Hashed alpha was its only
+   consumer and the coverage correction deleted it. 16 of 160 bytes per merged
+   vertex, in the C++ struct, both slang declarations and the asserts, moved
+   together.
+4. **One classification vocabulary.** An object's nature is currently spread
+   over `RenderCategory`, `PrimitiveClass`, `surfaceType` and feature bits
+   24/25/26, each consumer re-inferring from texture blending flags. Admission
+   assigns one authoritative kind — opaque, cutout, lit-blended,
+   additive-emissive — and everything else derives from it mechanically.
+
+*Proves itself,* and this is the check worth having: **hash the
+`GpuSceneUpload` in both modes at the same camera and frame and require
+equality.** Object records, material table, bone and dangly pools, ordering.
+Pixel counts are downstream evidence; this tests the invariant directly, and it
+makes the whole class of divergence impossible to reintroduce quietly. The
+sky's 464,982 raster-only pixels fall out of it as a consequence rather than
+needing a fix of their own.
+
+## G4 — the OpenGL legacy goes
+
+The backend is Vulkan-only since `df1aa375`, but the frame still speaks GL in
+two places, live code both:
+
+- **Matrices are built in GL convention and rewritten every frame.**
+  `glToVulkanClip` converts projection, viewProjection, prevViewProjection and
+  four shadow matrices per frame, with the flipped viewport compensating y.
+  The camera should produce Vulkan clip space directly and the function should
+  not exist.
+- **`IUniforms` is an inert shell.** `Uniforms::init()` is empty and the
+  setters write a CPU mirror that the Vulkan pipeline reads back a moment
+  later — the header says so itself. After G1, `setBones`, `setDangly`,
+  `setParticles` and `setWalkmesh` have zero callers, and the only callers of
+  `setLocals`/`setAABB` sit in `drawdebug.cpp`, which is not in the build and
+  still references GL types deleted with the backend.
+
+*Proves itself:* it is a pure refactor, and the instrument is already armed.
+Raster G-buffer dumps before and after may differ only at the ulp level —
+constructing the projection natively instead of correcting it can move the
+last bit of depth — so the bar is the 206-pixel figure: the traced-agreement
+numbers must not move, and retro/PBR must stay byte-identical to each other.
+Traced output judged by distribution, as always.
+
+## G5 — retro shading on the G-buffer
 
 Retro's material, reading the G-buffer instead of shading forward. Retro stops
 being a forward renderer.
@@ -170,20 +252,19 @@ retro special case *only* because retro had no G-buffer.
 
 *Proves itself:* by eye, against the G1 captures.
 
-**Two things are legitimately missing from the frame, and neither is a G3
+**Two things are legitimately missing from the frame, and neither is a G5
 regression.** Foliage and grass are *not* on this list any more — they were,
 until the coverage rule was corrected, and the correction is `298d0542`.
 
 - **Additive emissive surfaces** — saber blades, glow decals. They contribute
   no G-buffer surface by design; see the blended pass below.
-- **Shadows**, until G5.
+- **Shadows**, until G7.
 
 The sky is a third difference of a different kind: raster still admits the sky
 shell as geometry and the tracer does not, which is the 464,982 raster-only
-pixels. That is a defect rather than an accepted difference — see the note on
-one scene description below.
+pixels. That is a defect rather than an accepted difference — G3 removes it.
 
-## G4 — PBR shading on the G-buffer
+## G6 — PBR shading on the G-buffer
 
 The PBR material, same input.
 
@@ -191,14 +272,15 @@ The PBR material, same input.
 it would preserve the bug. It is held to looking right, and to agreeing with the
 traced G-buffer on geometry.
 
-**G4 owns three fields the merged material record does not have.**
+**G6 owns three fields the merged material record does not have.**
 `GpuSceneMaterial` carries no `envMapDerivedLayer`, no `waterAlpha` and no
 environment cube ids, so G2 writes zero for each. The old resolve read
 `envMapDerivedLayer` out of the self-illumination alpha; something has to put it
 back before environment mapping and water can work at all. Growing the record is
-the obvious move, and it is G4's, not a G2 omission to be discovered later.
+the obvious move — G3 is rebuilding that record anyway, so G6 states what it
+needs and G3 leaves room for it.
 
-## G5 — shadows from real geometry
+## G7 — shadows from real geometry
 
 Admission takes Opaque and Transparent only, so shadow-only proxies sit outside
 the merge while the old shadow pass drew exactly them. Shadow from real geometry
@@ -209,7 +291,7 @@ is not a constraint now.
 Shadows are judged by eye, separately from the G-buffer comparison, so a
 regression cannot hide behind an intended change.
 
-## G6 — the blended pass, and the three alpha kinds
+## G8 — the blended pass, and the three alpha kinds
 
 The G-buffer holds opaque surfaces. Everything else is a second draw over the
 same merged buffer, after shading. There are exactly three kinds of alpha and
@@ -266,54 +348,6 @@ to exist where triangles of different objects interleave. Depth-test against
 the opaque G-buffer, **depth-write off**, or blended fragments reject each
 other.
 
-## One scene description
-
-Raster and path tracing must consume **the same scene description**. The only
-difference between the two is how it is rendered. Everything upstream of that —
-which objects are admitted, how they are classified, what the material records
-say, whether the sky shell is suppressed — is scene policy, and there is one
-answer to it.
-
-That is not the case today, and the failure has a name in the source:
-`RayQueryPipeline::prepareRaster`, which calls the shared `prepare` with
-`skyRoom = nullptr, skyBaked = false` and a comment presenting the divergence as
-intent. So the sky shell is admitted for one consumer and rejected for the
-other. The classifier is shared in the letter and forked in the substance, and
-`RayQueryPipeline` is constructed in Retro and PBR purely to host it.
-
-Admission belongs in its own unit that neither renderer owns. `RayQueryPipeline`
-then shrinks to what its name claims — bake, TLAS, dispatch, denoise.
-
-**Four simplifications ride along in the same step**, because they all live in
-the admission code being extracted and each makes the invariant cheaper to hold:
-
-1. **One procedural record kind.** The device side already lowered particles,
-   grass and billboards into a single `GpuSceneProceduralQuad`; the scene side
-   still carries three record types, three classifiers and three lowering
-   paths. One `RegisteredQuads` record collapses them, and a billboard is a
-   one-instance system.
-2. **Deduplicate materials.** Today `materials` holds one 256-byte record per
-   admitted *object* — two hundred meshes sharing ten textures upload two
-   hundred materials. Hash-cons by content; `materialIds` already provides the
-   per-triangle indirection, so nothing downstream changes.
-3. **Drop `objectPosition` from `MergedVertex`.** Hashed alpha was its only
-   consumer and the coverage correction deleted it. 16 of 160 bytes per merged
-   vertex, in the C++ struct, both slang declarations and the asserts, moved
-   together.
-4. **One classification vocabulary.** An object's nature is currently spread
-   over `RenderCategory`, `PrimitiveClass`, `surfaceType` and feature bits
-   24/25/26, each consumer re-inferring from texture blending flags. Admission
-   assigns one authoritative kind — opaque, cutout, lit-blended,
-   additive-emissive — and everything else derives from it mechanically.
-
-*Proves itself,* and this is the check worth having: **hash the
-`GpuSceneUpload` in both modes at the same camera and frame and require
-equality.** Object records, material table, bone and dangly pools, ordering.
-Pixel counts are downstream evidence; this tests the invariant directly, and it
-makes the whole class of divergence impossible to reintroduce quietly. The
-sky's 464,982 raster-only pixels fall out of it as a consequence rather than
-needing a fix of their own.
-
 ## Why the traced G-buffer is trustworthy
 
 Measured on `danm14ab`, 2026-08-02:
@@ -362,7 +396,7 @@ G-buffer → shade → SkyComposite → transparency → post → filters
 
 An integration attempt put the sky in the PBR resolve *and* in postprocess — two
 implementations of one idea, the same fault that got the runtime bake deleted.
-With G3 and G4 both shading from one G-buffer there is one place for it.
+With G5 and G6 both shading from one G-buffer there is one place for it.
 
 `depth == 1.0` on the device-depth attachment is the test. Note `sGBufDepth`
 **is** device depth in `[0,1]` — `pbr_resolve.slang:62-78` states it and
