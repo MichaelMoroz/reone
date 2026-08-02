@@ -76,6 +76,16 @@ struct ConfigEntry {
     std::string module;
     std::string room;
     std::string sky;
+    /**
+     * The shell, named mesh by mesh. Empty means "fall back to shellMeshes()",
+     * which is only a draft heuristic - neither the K1 no-walkmesh convention
+     * nor the TSL per-mesh flag can tell a shell from the things standing in
+     * front of it. 001ebo16 flags all thirteen of its meshes and that set holds
+     * the star shell, the asteroids and the planet. Whatever is listed here is
+     * what gets baked and, later, what the renderer suppresses; everything else
+     * in the room stays ordinary geometry.
+     */
+    std::vector<std::string> meshes;
 };
 
 struct RayTriangle {
@@ -129,6 +139,27 @@ std::vector<MeshInfo> shellMeshes(const RoomInfo &room) {
     for (const auto &mesh : room.meshes) {
         if (mesh.background)
             shell.push_back(mesh);
+    }
+    return shell;
+}
+
+/**
+ * The shell to bake: the curated manifest when there is one, the heuristic
+ * otherwise. A named mesh that the room does not contain is an error rather
+ * than a silent omission - a typo there would quietly shrink the sky and the
+ * bake would still look plausible.
+ */
+std::vector<MeshInfo> selectShell(const RoomInfo &room,
+                                  const std::vector<std::string> &manifest) {
+    if (manifest.empty())
+        return shellMeshes(room);
+    std::vector<MeshInfo> shell;
+    for (const auto &name : manifest) {
+        auto found = std::find_if(room.meshes.begin(), room.meshes.end(),
+                                  [&name](const auto &mesh) { return lower(mesh.nodeName) == name; });
+        if (found == room.meshes.end())
+            throw std::runtime_error("Room '" + room.name + "' has no mesh '" + name + "'");
+        shell.push_back(*found);
     }
     return shell;
 }
@@ -580,6 +611,27 @@ void writeSurveyConfig(const RunOptions &options, const std::vector<ModuleSurvey
             if (survey.guesses.size() > 1)
                 out << ": candidates=" << boost::join(survey.guesses, ",");
             out << '\n';
+            // The shell, drafted mesh by mesh. This is the list that gets baked
+            // and later suppressed, so anything left off it stays in the scene.
+            // Draft it and print what was excluded, because the heuristic
+            // cannot separate a shell from the props inside it and a reviewer
+            // has to be able to see the difference without opening the model.
+            auto chosen = std::find_if(survey.candidates.begin(), survey.candidates.end(),
+                                       [&room](const auto &c) { return c.name == room; });
+            if (chosen != survey.candidates.end()) {
+                std::vector<std::string> shell;
+                for (const auto &mesh : shellMeshes(*chosen))
+                    shell.push_back(mesh.nodeName);
+                out << "meshes = " << boost::join(shell, " ") << " # review\n";
+                for (const auto &mesh : chosen->meshes) {
+                    if (std::find(shell.begin(), shell.end(), mesh.nodeName) != shell.end())
+                        continue;
+                    out << "# review excluded: mesh=" << mesh.nodeName
+                        << " faces=" << mesh.mesh->faces().size()
+                        << " texture=" << (mesh.texture.empty() ? "none" : mesh.texture)
+                        << " (stays scene geometry)\n";
+                }
+            }
         }
         for (const auto &room : survey.candidates) {
             out << "# review candidate: room=" << room.name
@@ -621,6 +673,14 @@ std::vector<ConfigEntry> readConfig(const std::filesystem::path &path) {
             current->room = value;
         else if (key == "sky")
             current->sky = value;
+        else if (key == "meshes")
+            boost::split(current->meshes, value, boost::is_any_of(" ,\t"),
+                         boost::token_compress_on);
+    }
+    for (auto &entry : entries) {
+        entry.meshes.erase(std::remove_if(entry.meshes.begin(), entry.meshes.end(),
+                                          [](const auto &name) { return name.empty(); }),
+                           entry.meshes.end());
     }
     for (const auto &entry : entries) {
         if (entry.sky.empty())
@@ -1024,7 +1084,9 @@ void runBake(const RunOptions &options) {
             std::cout << "bake module=" << entry.module << " room=" << entry.room << " sky=" << entry.sky << '\n';
             auto &resources = game.loadModule(entry.module);
             auto room = loadRoom(resources, entry.room);
-            RayScene scene(room);
+            // A manifest is authoritative: it is curated, the heuristic is not.
+            auto shell = selectShell(room, entry.meshes);
+            RayScene scene(shell);
             auto baked = bakeSky(resources, scene, options.faceSize);
             writeBaked(entry, scene, baked, skyDir);
             std::cout << "  raycast_triangles=" << scene.triangles().size()
