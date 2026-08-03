@@ -36,6 +36,15 @@ difference, and `--grassdensity 1`, because `reone.cfg` is graded away from
 defaults and wins any flag not passed. Traced output is nondeterministic —
 compare distributions, never a stored number.
 
+**Captures are deterministic per binary, not across binaries.** The capture
+frame counts from process start, so anything that shifts load timing — G5
+added one shader module — shifts animation phase at a fixed frame: 92k pixels
+moved on `danm14ab` because the plaza droid stood differently, and one
+material dedup split on `bumpMapFrame`, with admission untouched. Cross-commit
+dump comparisons must expect animation-phase drift or mask animated actors.
+The upload hash is stable within a binary and across modes — that equality is
+the invariant; its absolute value across commits is not.
+
 ## State
 
 | | |
