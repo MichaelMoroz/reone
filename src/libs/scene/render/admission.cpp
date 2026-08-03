@@ -309,7 +309,9 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(const glm::mat4 &view) {
             return classifyProcedural(procedural);
         },
         view);
-    result.uploadHash = hashUpload(_submission.upload);
+    // The hash walks every uploaded byte; its one consumer is the
+    // --dumptargets log line, so frames outside a dump run skip it.
+    result.uploadHash = _options.hashUploads ? hashUpload(_submission.upload) : 0;
     result.submission = std::move(_submission);
     ++_frameNumber;
     return result;

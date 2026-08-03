@@ -42,6 +42,12 @@ struct GraphicsOptions {
     bool pbr {true};
     /** "raster" normally follows pbr; "path-tracing" selects Vulkan ray queries. */
     std::string mode {"raster"};
+    /**
+     * Hash the GpuScene upload every frame so --dumptargets can log it. The
+     * hash walks every uploaded byte, which is measurable CPU per frame, so
+     * it is on only when a dump was requested - the one consumer it has.
+     */
+    bool hashUploads {false};
 
     // Path tracing
 

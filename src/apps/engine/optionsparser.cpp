@@ -161,6 +161,9 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->game.developer = vars["dev"].as<bool>();
     options->capturePath = vars["capture"].as<std::string>();
     options->dumpTargetsPath = vars["dumptargets"].as<std::string>();
+    // The per-frame upload hash exists for the dump log line; do not pay for
+    // it on frames nobody will ever compare.
+    options->graphics.hashUploads = !options->dumpTargetsPath.empty();
     options->dumpObjectsPath = vars["dumpobjects"].as<std::string>();
     options->captureFrame = vars["captureframe"].as<int>();
     options->captureFrames = std::max(1, vars["captureframes"].as<int>());

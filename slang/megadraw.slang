@@ -115,21 +115,17 @@ float2 transformedUV(InstanceMaterial material, float2 uv) {
                   material.uv0.y * h.x + material.uv1.y * h.y + material.uv2.y * h.z);
 }
 
-// Keep the coverage cases in lockstep with candidateAlpha/commitsCoverage in
-// tracing/trace.slang, and surface ownership with the primary layer loop in
-// rayquery.slang. Opaque geometry publishes unconditionally, but additive
-// emission layers publish no G-buffer surface even though traversal commits them.
+// Keep the cutout thresholds in lockstep with candidateAlpha/commitsCoverage
+// in tracing/trace.slang. The gated draw publishes CUTOUT COVERAGE ONLY:
+// blended and additive surfaces contribute nothing to the raster G-buffer -
+// they belong to the sorted blended pass (G8). The traced G-buffer still
+// records blended surfaces as its primary hit, so raster-vs-traced coverage
+// legitimately diverges on exactly those pixels until G8 settles surface
+// ownership for both consumers at once (doc/phase-f.md, the 202tel note).
 bool commitsTracedCoverage(InstanceMaterial material, float2 uv, float vertexAlpha) {
     if (pushConstants.materialGated == 0) return true;
 
-    if (material.surfaceType == kMegaSurfaceUnlitTransparent) return false;
-
-    bool isCutout = (material.featureMask & kMegaFeaturePunchThrough) != 0;
-    bool isBlendedCoverage =
-        (material.featureMask & kMegaFeatureBlendedCoverage) != 0;
-    if (!isCutout && !isBlendedCoverage) {
-        return true;
-    }
+    if ((material.featureMask & kMegaFeaturePunchThrough) == 0) return false;
 
     float alpha = 1.0;
     if (material.mainTex != kNoTexture) {
@@ -140,8 +136,7 @@ bool commitsTracedCoverage(InstanceMaterial material, float2 uv, float vertexAlp
                     : texel.a;
         alpha *= vertexAlpha;
     }
-    if (alpha < kMegaAlphaTestEpsilon) return false;
-    return !isCutout || alpha >= kMegaAlphaTestThreshold;
+    return alpha >= kMegaAlphaTestThreshold;
 }
 
 float3 safeNormal(float3 value, float3 fallback) {
