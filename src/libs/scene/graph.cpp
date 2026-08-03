@@ -17,6 +17,8 @@
 
 #include "reone/scene/graph.h"
 
+#include "reone/system/profiler.h"
+
 #include "reone/audio/di/services.h"
 #include "reone/graphics/camera/perspective.h"
 #include "reone/graphics/di/services.h"
@@ -161,6 +163,7 @@ void SceneGraph::removeRoot(SoundSceneNode &node) {
 }
 
 void SceneGraph::update(float dt) {
+    R_PROFILE_ZONE("SceneGraph::update");
     if (_updateRoots) {
         for (auto &root : _modelRoots) {
             root->update(dt);
@@ -185,6 +188,7 @@ void SceneGraph::update(float dt) {
 }
 
 void SceneGraph::updateLighting() {
+    R_PROFILE_ZONE("SceneGraph::updateLighting");
     // Find closest lights and create a lookup
     auto closestLights = computeClosestLights(kMaxLights, [](auto &light, float distance2) {
         float radius = light.radius() + kLightRadiusBias;
@@ -415,6 +419,7 @@ void SceneGraph::prepareTransparentLeafs() {
 }
 
 Texture &SceneGraph::render(const glm::ivec2 &dim) {
+    R_PROFILE_ZONE("SceneGraph::render");
     if (!_renderPipeline) {
         // The mode is what was asked for; the factory decides what the current
         // backend can actually give. Deciding here on the backend is what made
@@ -572,6 +577,7 @@ void SceneGraph::snapshotPreviousFrame() {
 }
 
 void SceneGraph::collectInto(GpuScene &scene) {
+    R_PROFILE_ZONE("SceneGraph::collectInto");
     if (!_activeCamera) {
         return;
     }

@@ -17,6 +17,8 @@
 
 #include "reone/graphics/vulkan/renderer.h"
 
+#include "reone/system/profiler.h"
+
 #include "reone/graphics/texture.h"
 #include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/vulkan/pipeline.h"
@@ -441,6 +443,7 @@ void VulkanRenderer::invalidateTexture(Texture &texture) {
 }
 
 void VulkanRenderer::endFrame() {
+    R_PROFILE_ZONE("VulkanRenderer::present");
     if (!_inFrame) {
         throw std::logic_error("Renderer: no frame begun");
     }

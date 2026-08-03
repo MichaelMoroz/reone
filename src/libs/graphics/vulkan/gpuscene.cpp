@@ -4,6 +4,8 @@
  */
 #include "reone/graphics/vulkan/gpuscene.h"
 
+#include "reone/system/profiler.h"
+
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -302,6 +304,7 @@ const VulkanGpuScene::SourceGeometry &VulkanGpuScene::appendSourceGeometry(const
 }
 
 VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload upload) {
+    R_PROFILE_ZONE("VulkanGpuScene::update");
     const auto resourceGeneration = _renderer->resources().generation();
     if (resourceGeneration != _sourceResourceGeneration) {
         clearSourceGeometry();
@@ -368,116 +371,128 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
         upload.danglyPositions.size() > std::numeric_limits<uint32_t>::max())
         throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
 
-    ensureMergeBuffers(frame, static_cast<uint32_t>(upload.objects.size()),
-                       static_cast<uint32_t>(upload.bones.size()),
-                       static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount),
-                       static_cast<uint32_t>(upload.proceduralQuads.size()),
-                       static_cast<uint32_t>(upload.danglyPositions.size()));
-    const VkDeviceSize sceneObjectBytes =
-        static_cast<VkDeviceSize>(frame.sceneObjectCapacity) * sizeof(GpuSceneObjectData);
-    const VkDeviceSize sceneBoneBytes =
-        static_cast<VkDeviceSize>(frame.boneCapacity) * sizeof(GpuSceneMatrix3x4);
-    const VkDeviceSize danglyPositionBytes =
-        static_cast<VkDeviceSize>(frame.danglyPositionCapacity) * sizeof(glm::vec4);
-    const VkDeviceSize vertexBytes =
-        static_cast<VkDeviceSize>(frame.vertexCapacity) * sizeof(GpuSceneMergedVertex);
-    const VkDeviceSize indexBytes =
-        static_cast<VkDeviceSize>(frame.triangleCapacity) * 3 * sizeof(uint32_t);
-    auto *sceneObjects = static_cast<GpuSceneObjectData *>(frame.scene->mapped());
-    for (size_t i = 0; i < upload.objects.size(); ++i)
-        sceneObjects[i] = upload.objects[i].data;
-    if (!upload.bones.empty())
-        std::memcpy(static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes,
-                    upload.bones.data(), upload.bones.size() * sizeof(GpuSceneMatrix3x4));
-    if (!upload.danglyPositions.empty())
-        std::memcpy(static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes + sceneBoneBytes,
-                    upload.danglyPositions.data(), upload.danglyPositions.size() * sizeof(glm::vec4));
-    if (!upload.proceduralQuads.empty())
-        std::memcpy(frame.proceduralQuads->mapped(), upload.proceduralQuads.data(),
-                    upload.proceduralQuads.size() * sizeof(GpuSceneProceduralQuad));
+    VkDeviceSize sceneObjectBytes = 0;
+    VkDeviceSize sceneBoneBytes = 0;
+    VkDeviceSize danglyPositionBytes = 0;
+    VkDeviceSize vertexBytes = 0;
+    VkDeviceSize indexBytes = 0;
+    {
+        R_PROFILE_ZONE("VulkanGpuScene::staging upload");
+        ensureMergeBuffers(frame, static_cast<uint32_t>(upload.objects.size()),
+                           static_cast<uint32_t>(upload.bones.size()),
+                           static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount),
+                           static_cast<uint32_t>(upload.proceduralQuads.size()),
+                           static_cast<uint32_t>(upload.danglyPositions.size()));
+        sceneObjectBytes =
+            static_cast<VkDeviceSize>(frame.sceneObjectCapacity) * sizeof(GpuSceneObjectData);
+        sceneBoneBytes =
+            static_cast<VkDeviceSize>(frame.boneCapacity) * sizeof(GpuSceneMatrix3x4);
+        danglyPositionBytes =
+            static_cast<VkDeviceSize>(frame.danglyPositionCapacity) * sizeof(glm::vec4);
+        vertexBytes =
+            static_cast<VkDeviceSize>(frame.vertexCapacity) * sizeof(GpuSceneMergedVertex);
+        indexBytes =
+            static_cast<VkDeviceSize>(frame.triangleCapacity) * 3 * sizeof(uint32_t);
+        auto *sceneObjects = static_cast<GpuSceneObjectData *>(frame.scene->mapped());
+        for (size_t i = 0; i < upload.objects.size(); ++i)
+            sceneObjects[i] = upload.objects[i].data;
+        if (!upload.bones.empty())
+            std::memcpy(static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes,
+                        upload.bones.data(), upload.bones.size() * sizeof(GpuSceneMatrix3x4));
+        if (!upload.danglyPositions.empty())
+            std::memcpy(static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes + sceneBoneBytes,
+                        upload.danglyPositions.data(), upload.danglyPositions.size() * sizeof(glm::vec4));
+        if (!upload.proceduralQuads.empty())
+            std::memcpy(frame.proceduralQuads->mapped(), upload.proceduralQuads.data(),
+                        upload.proceduralQuads.size() * sizeof(GpuSceneProceduralQuad));
 
-    const auto *sourceVertices =
-        _sourceVertices ? _sourceVertices.get() : frame.proceduralQuads.get();
-    const auto *sourceIndices =
-        _sourceIndices ? _sourceIndices.get() : frame.proceduralQuads.get();
-    std::array<VkDescriptorBufferInfo, 9> buffers {{{frame.scene->handle(), 0, sceneObjectBytes},
-                                                    {frame.scene->handle(), sceneObjectBytes, sceneBoneBytes},
-                                                    {frame.geometry->handle(), 0, vertexBytes},
-                                                    {frame.geometry->handle(), vertexBytes, indexBytes},
-                                                    {frame.geometry->handle(), vertexBytes + indexBytes,
-                                                     static_cast<VkDeviceSize>(frame.triangleCapacity) * sizeof(uint32_t)},
-                                                    {sourceVertices->handle(), 0, sourceVertices->size()},
-                                                    {sourceIndices->handle(), 0, sourceIndices->size()},
-                                                    {frame.proceduralQuads->handle(), 0, frame.proceduralQuads->size()},
-                                                    {frame.scene->handle(), sceneObjectBytes + sceneBoneBytes,
-                                                     danglyPositionBytes}}};
-    std::array<VkWriteDescriptorSet, 9> writes {};
-    const auto set = _mergeSets[_renderer->frameIndex()];
-    for (uint32_t i = 0; i < writes.size(); ++i) {
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = set;
-        writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[i].pBufferInfo = &buffers[i];
+        frame.materials = std::make_unique<VulkanBuffer>(_renderer->device());
+        frame.materials->initHostVisible(
+            static_cast<VkDeviceSize>(upload.materials.size()) * sizeof(GpuSceneMaterial),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        std::memcpy(frame.materials->mapped(), upload.materials.data(),
+                    upload.materials.size() * sizeof(GpuSceneMaterial));
     }
-    vkUpdateDescriptorSets(_renderer->device().handle(), static_cast<uint32_t>(writes.size()),
-                           writes.data(), 0, nullptr);
-    const MergePushConstants constants {static_cast<uint32_t>(upload.objects.size()),
-                                        upload.opaqueObjectCount,
-                                        static_cast<uint32_t>(vertexCount),
-                                        static_cast<uint32_t>(triangleCount),
-                                        static_cast<uint32_t>(opaqueTriangleCount)};
-    std::array<VkBufferMemoryBarrier2, 2> sourceBarriers {};
-    for (size_t i = 0; i < sourceBarriers.size(); ++i) {
-        auto &barrier = sourceBarriers[i];
-        barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
-        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-        barrier.buffer = buffers[5 + i].buffer;
-        barrier.offset = 0;
-        barrier.size = VK_WHOLE_SIZE;
-    }
-    VkDependencyInfo sourceDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    sourceDependency.bufferMemoryBarrierCount = static_cast<uint32_t>(sourceBarriers.size());
-    sourceDependency.pBufferMemoryBarriers = sourceBarriers.data();
-    vkCmdPipelineBarrier2(cmd, &sourceDependency);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _mergePipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _mergePipelineLayout, 0, 1,
-                            &set, 0, nullptr);
-    vkCmdPushConstants(cmd, _mergePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                       sizeof(constants), &constants);
-    const auto threads = std::max(constants.vertexCount, constants.triangleCount);
-    if (threads)
-        vkCmdDispatch(cmd, (threads + 63) / 64, 1, 1);
-    VkMemoryBarrier2 mergeBarrier {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-    mergeBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    mergeBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-    // The tracer is no longer the only consumer: F2 makes raster read the same
-    // merged buffer, pulling vertices in the vertex shader and binding the
-    // index range as indices. Both stages have to be named here or the raster
-    // draw races the merge compute - and it would race silently, because the
-    // previous frame's contents are usually close enough to look right.
-    mergeBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
-                                VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
-                                VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT;
-    mergeBarrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                 VK_ACCESS_2_SHADER_READ_BIT |
-                                 VK_ACCESS_2_INDEX_READ_BIT;
-    VkDependencyInfo mergeDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    mergeDependency.memoryBarrierCount = 1;
-    mergeDependency.pMemoryBarriers = &mergeBarrier;
-    vkCmdPipelineBarrier2(cmd, &mergeDependency);
 
-    frame.materials = std::make_unique<VulkanBuffer>(_renderer->device());
-    frame.materials->initHostVisible(
-        static_cast<VkDeviceSize>(upload.materials.size()) * sizeof(GpuSceneMaterial),
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    std::memcpy(frame.materials->mapped(), upload.materials.data(),
-                upload.materials.size() * sizeof(GpuSceneMaterial));
+    {
+        R_PROFILE_ZONE("VulkanGpuScene::command recording");
+        const auto *sourceVertices =
+            _sourceVertices ? _sourceVertices.get() : frame.proceduralQuads.get();
+        const auto *sourceIndices =
+            _sourceIndices ? _sourceIndices.get() : frame.proceduralQuads.get();
+        std::array<VkDescriptorBufferInfo, 9> buffers {{{frame.scene->handle(), 0, sceneObjectBytes},
+                                                        {frame.scene->handle(), sceneObjectBytes, sceneBoneBytes},
+                                                        {frame.geometry->handle(), 0, vertexBytes},
+                                                        {frame.geometry->handle(), vertexBytes, indexBytes},
+                                                        {frame.geometry->handle(), vertexBytes + indexBytes,
+                                                         static_cast<VkDeviceSize>(frame.triangleCapacity) * sizeof(uint32_t)},
+                                                        {sourceVertices->handle(), 0, sourceVertices->size()},
+                                                        {sourceIndices->handle(), 0, sourceIndices->size()},
+                                                        {frame.proceduralQuads->handle(), 0, frame.proceduralQuads->size()},
+                                                        {frame.scene->handle(), sceneObjectBytes + sceneBoneBytes,
+                                                         danglyPositionBytes}}};
+        std::array<VkWriteDescriptorSet, 9> writes {};
+        const auto set = _mergeSets[_renderer->frameIndex()];
+        for (uint32_t i = 0; i < writes.size(); ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = set;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[i].pBufferInfo = &buffers[i];
+        }
+        vkUpdateDescriptorSets(_renderer->device().handle(), static_cast<uint32_t>(writes.size()),
+                               writes.data(), 0, nullptr);
+        const MergePushConstants constants {static_cast<uint32_t>(upload.objects.size()),
+                                            upload.opaqueObjectCount,
+                                            static_cast<uint32_t>(vertexCount),
+                                            static_cast<uint32_t>(triangleCount),
+                                            static_cast<uint32_t>(opaqueTriangleCount)};
+        std::array<VkBufferMemoryBarrier2, 2> sourceBarriers {};
+        for (size_t i = 0; i < sourceBarriers.size(); ++i) {
+            auto &barrier = sourceBarriers[i];
+            barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            barrier.buffer = buffers[5 + i].buffer;
+            barrier.offset = 0;
+            barrier.size = VK_WHOLE_SIZE;
+        }
+        VkDependencyInfo sourceDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        sourceDependency.bufferMemoryBarrierCount = static_cast<uint32_t>(sourceBarriers.size());
+        sourceDependency.pBufferMemoryBarriers = sourceBarriers.data();
+        vkCmdPipelineBarrier2(cmd, &sourceDependency);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _mergePipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _mergePipelineLayout, 0, 1,
+                                &set, 0, nullptr);
+        vkCmdPushConstants(cmd, _mergePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(constants), &constants);
+        const auto threads = std::max(constants.vertexCount, constants.triangleCount);
+        if (threads)
+            vkCmdDispatch(cmd, (threads + 63) / 64, 1, 1);
+        VkMemoryBarrier2 mergeBarrier {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        mergeBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        mergeBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        // The tracer is no longer the only consumer: F2 makes raster read the same
+        // merged buffer, pulling vertices in the vertex shader and binding the
+        // index range as indices. Both stages have to be named here or the raster
+        // draw races the merge compute - and it would race silently, because the
+        // previous frame's contents are usually close enough to look right.
+        mergeBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                    VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                    VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                                    VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT;
+        mergeBarrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                     VK_ACCESS_2_SHADER_READ_BIT |
+                                     VK_ACCESS_2_INDEX_READ_BIT;
+        VkDependencyInfo mergeDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        mergeDependency.memoryBarrierCount = 1;
+        mergeDependency.pMemoryBarriers = &mergeBarrier;
+        vkCmdPipelineBarrier2(cmd, &mergeDependency);
+    }
+
     const VkDeviceSize writtenVertexBytes =
         static_cast<VkDeviceSize>(vertexCount) * sizeof(GpuSceneMergedVertex);
     const VkDeviceSize writtenIndexBytes =

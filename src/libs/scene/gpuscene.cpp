@@ -4,6 +4,8 @@
  */
 #include "reone/scene/gpuscene.h"
 
+#include "reone/system/profiler.h"
+
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -236,6 +238,7 @@ graphics::GpuSceneUpload GpuScene::prepare(
     const Classifier &classifier,
     const ProceduralClassifier &proceduralClassifier,
     const glm::mat4 &cameraView) const {
+    R_PROFILE_ZONE("SceneAdmission::classification + dedup");
     graphics::GpuSceneUpload upload;
     std::vector<graphics::GpuSceneObjectInput> opaqueObjects, nonOpaqueObjects;
     upload.materials.reserve(_objects.size());
@@ -334,6 +337,7 @@ graphics::GpuSceneUpload GpuScene::prepare(
         if ((procedural->categories & (renderCategory(RenderCategory::Opaque) |
                                        renderCategory(RenderCategory::Transparent))) == 0)
             continue;
+        R_PROFILE_ZONE("SceneAdmission::procedural lowering");
         auto classification = proceduralClassifier(*procedural);
         if (!classification)
             continue;

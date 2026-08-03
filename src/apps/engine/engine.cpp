@@ -36,6 +36,7 @@
 #include "reone/graphics/window.h"
 #include "reone/resource/exception/notfound.h"
 #include "reone/resource/gameprobe.h"
+#include "reone/system/profiler.h"
 #include "reone/system/randomutil.h"
 #include "reone/system/stream/fileoutput.h"
 
@@ -457,6 +458,7 @@ int Engine::run() {
             }
         }
         _profiler->measure(kMainThreadName, kProfilerInputTimeIndex, [this, &quit]() {
+            R_PROFILE_ZONE("input");
             while (!_events.empty()) {
                 auto event = _events.front();
                 _events.pop();
@@ -490,6 +492,7 @@ int Engine::run() {
             _profiler->resetAccumulation(kMainThreadName);
         }
         _profiler->measure(kMainThreadName, kProfilerUpdateTimeIndex, [this, &frameTime]() {
+            R_PROFILE_ZONE("update");
             imguiBeginFrame();
             _game->update(frameTime);
             bool showcur = _game->cursorType() == CursorType::None;
@@ -509,9 +512,11 @@ int Engine::run() {
             }
         });
         _profiler->measure(kMainThreadName, kProfilerRenderGraphicsTimeIndex, [this, &quit]() {
+            R_PROFILE_ZONE("graphics");
             renderFrame(quit);
         });
         _profiler->measure(kMainThreadName, kProfilerRenderAudioTimeIndex, [this]() {
+            R_PROFILE_ZONE("audio");
             _services->audio.mixer.render();
         });
         // A module/save load presents loading-screen frames. Defer it until
@@ -739,14 +744,18 @@ void Engine::renderVulkanFrame(bool &quit) {
     // The renderer owns the Vulkan dynamic-rendering scaffolding, including
     // the physical swapchain extent. Keep scene composite, GUI, and console
     // in one scope so their 2D batch may share it.
-    _vulkanRenderer->begin2DRendering(extent);
-    _game->render();
-    _console->render();
-    _vulkanRenderer->end2DRendering();
+    {
+        R_PROFILE_ZONE("VulkanRenderer::2D record");
+        _vulkanRenderer->begin2DRendering(extent);
+        _game->render();
+        _console->render();
+        _vulkanRenderer->end2DRendering();
+    }
 
     imguiRender();
     captureIfRequested(quit);
     _vulkanRenderer->endFrame();
+    R_PROFILE_FRAME_MARK();
 }
 
 void Engine::applyGraphicsRebuildVulkan() {

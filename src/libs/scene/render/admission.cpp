@@ -4,6 +4,8 @@
  */
 #include "reone/scene/render/admission.h"
 
+#include "reone/system/profiler.h"
+
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -248,6 +250,7 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
 }
 
 GpuSceneAdmissionResult GpuSceneAdmission::prepare(const glm::mat4 &view) {
+    R_PROFILE_ZONE("SceneAdmission::prepare");
     _submission = {};
 
     static constexpr float kSkyOverlapThreshold = 0.5f;

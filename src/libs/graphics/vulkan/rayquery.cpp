@@ -4,6 +4,8 @@
  */
 #include "reone/graphics/vulkan/rayquery.h"
 
+#include "reone/system/profiler.h"
+
 #include <algorithm>
 
 #include "reone/graphics/options.h"
@@ -84,8 +86,8 @@ VkDeviceSize grownCapacity(VkDeviceSize current, VkDeviceSize required, VkDevice
 } // namespace
 
 VulkanRayQuery::VulkanRayQuery(VulkanRenderer &renderer,
-                                 glm::ivec2 extent,
-                                 GraphicsOptions &options) :
+                               glm::ivec2 extent,
+                               GraphicsOptions &options) :
     _renderer(renderer), _options(options), _extent(extent) {}
 
 VulkanRayQuery::~VulkanRayQuery() {
@@ -507,7 +509,7 @@ void VulkanRayQuery::clearFrame(Frame &frame) {
 }
 
 bool VulkanRayQuery::bakeSkyRoom(VkCommandBuffer cmd,
-                                  const RayQuerySkyRoom &room) {
+                                 const RayQuerySkyRoom &room) {
     // A failed bake is deliberately sticky for this detected room: the fallback
     // cube is stable, and retrying a known-invalid asset every frame would turn
     // that path into a standing cost. Admission suppresses the shell either way.
@@ -849,6 +851,7 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
                             const glm::vec4 &jitter,
                             RayQuerySubmission submission, VulkanGpuScene &deviceGpuScene,
                             bool skyBaked) {
+    R_PROFILE_ZONE("VulkanRayQuery::render");
     const int frameIndex = _renderer.frameIndex();
     // A valid traced frame can contain no merged geometry. That path clears
     // the output and returns below, but its auxiliary images are still useful
@@ -1038,33 +1041,36 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
     const VkAccelerationStructureBuildRangeInfoKHR *blasRangePointers[] {
         &blasRanges[0], &blasRanges[1]};
     const auto begin = std::chrono::steady_clock::now();
-    vkCmdBuildAccelerationStructuresKHR(cmd, 1, &blasBuild, blasRangePointers);
-    // The TLAS build reads the merged BLAS, so keep this build-to-build
-    // dependency separate from the later build-to-trace hand-off.
-    VkMemoryBarrier2 blasToTlas {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-    blasToTlas.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-    blasToTlas.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-    blasToTlas.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-    blasToTlas.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-    VkDependencyInfo blasToTlasDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    blasToTlasDependency.memoryBarrierCount = 1;
-    blasToTlasDependency.pMemoryBarriers = &blasToTlas;
-    vkCmdPipelineBarrier2(cmd, &blasToTlasDependency);
-    tlasBuild.dstAccelerationStructure = frame.tlas;
-    tlasBuild.scratchData.deviceAddress = scratchAddress;
-    VkAccelerationStructureBuildRangeInfoKHR tlasRange {};
-    tlasRange.primitiveCount = kTlasInstanceCount;
-    const VkAccelerationStructureBuildRangeInfoKHR *tlasRanges[] {&tlasRange};
-    vkCmdBuildAccelerationStructuresKHR(cmd, 1, &tlasBuild, tlasRanges);
-    VkMemoryBarrier2 tlasToTrace {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-    tlasToTrace.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-    tlasToTrace.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-    tlasToTrace.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-    tlasToTrace.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-    VkDependencyInfo tlasToTraceDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    tlasToTraceDependency.memoryBarrierCount = 1;
-    tlasToTraceDependency.pMemoryBarriers = &tlasToTrace;
-    vkCmdPipelineBarrier2(cmd, &tlasToTraceDependency);
+    {
+        R_PROFILE_ZONE("VulkanRayQuery::BLAS/TLAS build record");
+        vkCmdBuildAccelerationStructuresKHR(cmd, 1, &blasBuild, blasRangePointers);
+        // The TLAS build reads the merged BLAS, so keep this build-to-build
+        // dependency separate from the later build-to-trace hand-off.
+        VkMemoryBarrier2 blasToTlas {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        blasToTlas.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        blasToTlas.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        blasToTlas.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        blasToTlas.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        VkDependencyInfo blasToTlasDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        blasToTlasDependency.memoryBarrierCount = 1;
+        blasToTlasDependency.pMemoryBarriers = &blasToTlas;
+        vkCmdPipelineBarrier2(cmd, &blasToTlasDependency);
+        tlasBuild.dstAccelerationStructure = frame.tlas;
+        tlasBuild.scratchData.deviceAddress = scratchAddress;
+        VkAccelerationStructureBuildRangeInfoKHR tlasRange {};
+        tlasRange.primitiveCount = kTlasInstanceCount;
+        const VkAccelerationStructureBuildRangeInfoKHR *tlasRanges[] {&tlasRange};
+        vkCmdBuildAccelerationStructuresKHR(cmd, 1, &tlasBuild, tlasRanges);
+        VkMemoryBarrier2 tlasToTrace {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        tlasToTrace.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        tlasToTrace.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        tlasToTrace.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+        tlasToTrace.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        VkDependencyInfo tlasToTraceDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        tlasToTraceDependency.memoryBarrierCount = 1;
+        tlasToTraceDependency.pMemoryBarriers = &tlasToTrace;
+        vkCmdPipelineBarrier2(cmd, &tlasToTraceDependency);
+    }
 
     VkDescriptorImageInfo image {};
     image.imageView = output.view();
@@ -1256,8 +1262,11 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
                                   skyBaked ? 1u : 0u};
     vkCmdPushConstants(cmd, _pipelineLayout, VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, sizeof(constants), &constants);
     const VkStridedDeviceAddressRegionKHR emptySbt {};
-    vkCmdTraceRaysKHR(cmd, &_raygenSbtRegion, &emptySbt, &emptySbt, &emptySbt,
-                      static_cast<uint32_t>(_extent.x), static_cast<uint32_t>(_extent.y), 1);
+    {
+        R_PROFILE_ZONE("VulkanRayQuery::dispatch record");
+        vkCmdTraceRaysKHR(cmd, &_raygenSbtRegion, &emptySbt, &emptySbt, &emptySbt,
+                          static_cast<uint32_t>(_extent.x), static_cast<uint32_t>(_extent.y), 1);
+    }
 #ifdef R_ENABLE_NRD
     if (_nrdDenoiser) {
         // The trace pass's storage writes feed NRD's sampled reads.

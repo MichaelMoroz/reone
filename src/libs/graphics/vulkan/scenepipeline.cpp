@@ -17,6 +17,8 @@
 
 #include "reone/graphics/vulkan/scenepipeline.h"
 
+#include "reone/system/profiler.h"
+
 #include "reone/graphics/dxtutil.h"
 #include "reone/graphics/npyutil.h"
 #include "reone/graphics/options.h"
@@ -209,6 +211,7 @@ void VulkanScenePipeline::deinit() {
 
 void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset,
                                        IVulkanSceneCallbacks &callbacks) {
+    R_PROFILE_ZONE("VulkanScenePipeline::geometryPass record");
     VulkanDebugScope scope(_renderer.device(), cmd, "Merged geometry (G-buffer)",
                            {0.3f, 0.6f, 0.3f});
 
@@ -301,6 +304,7 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
 }
 
 void VulkanScenePipeline::retroResolvePass(VkCommandBuffer cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("VulkanScenePipeline::retroResolvePass record");
     VulkanDebugScope scope(_renderer.device(), cmd, "Retro deferred resolve",
                            {0.9f, 0.7f, 0.3f});
 
@@ -598,6 +602,7 @@ void *VulkanScenePipeline::renderTargetPreview(const std::string &name, int mode
 
 void VulkanScenePipeline::previewPass(VkCommandBuffer cmd, uint32_t globalsOffset,
                                       const IVulkanSceneCallbacks &callbacks) {
+    R_PROFILE_ZONE("VulkanScenePipeline::previewPass record");
     if (!_preview) {
         return;
     }

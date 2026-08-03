@@ -30,6 +30,7 @@
 #include "reone/scene/graph.h"
 #include "reone/scene/node/grasscluster.h"
 #include "reone/scene/render/pipeline.h"
+#include "reone/system/profiler.h"
 
 using namespace reone::graphics;
 
@@ -93,6 +94,7 @@ void GrassSceneNode::growClusterPool(int target) {
 }
 
 void GrassSceneNode::update(float dt) {
+    R_PROFILE_ZONE("GrassSceneNode::materialisation");
     if (!_enabled || !_sceneGraph.grassEnabled()) {
         return;
     }

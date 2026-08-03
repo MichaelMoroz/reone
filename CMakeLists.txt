@@ -32,6 +32,10 @@ option(BUILD_SKYBAKE "build offline skybox baker" ON)
 option(ENABLE_MOVIE "enable movie playback" ON)
 option(ENABLE_ASAN "enable address sanitizer" OFF)
 
+# Tracy is a local developer profiler. Builds without it do not fetch the
+# dependency and the project wrapper compiles every instrumentation call away.
+option(ENABLE_TRACY "fetch and enable the Tracy profiler and command-line tools" ON)
+
 # NRD ships under the proprietary NVIDIA RTX SDKs license, which both forbids
 # and is forbidden by GPL-3 in a distributed binary. It is therefore strictly
 # a local developer toggle: OFF by default, fetched and linked only when
@@ -83,6 +87,35 @@ find_package(VulkanHeaders CONFIG REQUIRED)
 find_package(volk CONFIG REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(vk-bootstrap CONFIG REQUIRED)
+
+if(ENABLE_TRACY)
+    include(FetchContent)
+    FetchContent_Declare(Tracy
+        GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+        GIT_TAG v0.13.1
+        GIT_SHALLOW TRUE)
+    set(TRACY_STATIC ON CACHE BOOL "" FORCE)
+    set(TRACY_ENABLE ON CACHE BOOL "" FORCE)
+    set(TRACY_ON_DEMAND ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(Tracy)
+
+    # Upstream keeps these as standalone CMake projects because both own the
+    # same server targets. Build them in isolated trees and put their Release
+    # executables beside the engine for scriptable captures.
+    include(ExternalProject)
+    foreach(tool capture csvexport)
+        string(REPLACE "-" "_" tool_target "tracy_${tool}")
+        ExternalProject_Add(${tool_target}
+            SOURCE_DIR ${tracy_SOURCE_DIR}/${tool}
+            BINARY_DIR ${CMAKE_BINARY_DIR}/_deps/${tool_target}-build
+            CMAKE_ARGS
+                -DCMAKE_RUNTIME_OUTPUT_DIRECTORY=${CMAKE_BINARY_DIR}/bin
+                -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=${CMAKE_BINARY_DIR}/bin
+                -DNO_ISA_EXTENSIONS=ON
+            BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config $<CONFIG>
+            INSTALL_COMMAND "")
+    endforeach()
+endif()
 
 if(ENABLE_NRD)
     # NRD is GAPI-free: it embeds SPIRV compute shaders and hands back dispatch
