@@ -5,6 +5,7 @@ import uniforms;
 import lib.gbuf;
 import lib.math;
 import lib.motion;
+import lib.scene_material;
 
 static const uint kNoTexture = 0xffffffffu;
 static const uint kMegaFeatureLightmap = 1u << 0;
@@ -33,36 +34,6 @@ struct MergedVertex {
     float3 prevPosition;
     float2 pad;
     float4 color;
-};
-
-struct InstanceMaterial {
-    float4 selfIllumColor;
-    float4 diffuseColor;
-    float4 uv0;
-    float4 uv1;
-    float4 uv2;
-    uint mainTex;
-    uint normalMap;
-    uint lightmap;
-    uint bumpMapArray;
-    uint featureMask;
-    int bumpMapFrame;
-    float bumpMapScale;
-    uint envMap;
-    float4 curatedAlbedoMul;
-    float4 curatedRoughA;
-    float4 curatedRoughB;
-    float4 curatedMetalA;
-    float4 curatedMetalB;
-    float4 curatedEmission;
-    uint surfaceType;
-    float roughnessScale;
-    uint envMapCube;
-    float waterAlpha;
-    float4 overrideColor;
-    float4 overrideParams;
-    float4 ambientColor;
-    int envMapDerivedLayer;
 };
 
 [[vk::binding(0, 2)]] StructuredBuffer<MergedVertex> mergedVertices;
@@ -114,8 +85,7 @@ struct GBufferOutput {
     float4 lightmapColor : SV_Target2;
     float4 selfIllumColor : SV_Target3;
     float2 motion : SV_Target4;
-    float4 materialAmbient : SV_Target5;
-    float4 materialDiffuse : SV_Target6;
+    uint materialId : SV_Target5;
 };
 
 float2 transformedUV(InstanceMaterial material, float2 uv) {
@@ -218,7 +188,6 @@ GBufferOutput megadrawFragment(Varyings input, uint primitiveId : SV_PrimitiveID
     output.selfIllumColor = float4(material.selfIllumColor.rgb,
                                    material.envMapDerivedLayer / 255.0);
     output.motion = computeMotion(input.curClipPos, input.prevClipPos);
-    output.materialAmbient = material.ambientColor;
-    output.materialDiffuse = material.diffuseColor;
+    output.materialId = materialIndex;
     return output;
 }

@@ -510,6 +510,36 @@ the pre-G1 PBR captures for material behaviour rather than for the old
 output's bugs; the upload hash stays equal across all three modes, which is
 what proves the record change did not fork admission.
 
+### Where material data lives — the rule, settled in G6
+
+G6 first carried per-object ambient and diffuse in **two new RGBA8
+attachments**, 8 bytes per pixel to copy fields that already existed in the
+record. G6b replaced that with a **material id** in the G-buffer and a lookup
+in the `instanceMaterials` buffer the resolves can already reach. The rule
+that generalises it, and the reason it survives real PBR textures:
+
+| data | where it goes | why |
+|---|---|---|
+| **per-pixel**: roughness, metalness | a G-buffer channel, sampled in the mega-draw | it varies per texel; no id can carry it |
+| **per-object**: ambient and diffuse tints, water alpha, env cube ids, derived env layer, curated overrides | behind the material id | constant across the object, so copying it per pixel is pure waste |
+| **ambient occlusion** | **nowhere** | the lightmap *is* the baked occlusion for static geometry and the tracer traces the real thing — a third answer to a question two systems already answer |
+
+**Textured PBR therefore costs no new attachments.** Roughness and metalness
+need two bytes, and two are already free or about to be: `eyeNormal.a` is
+written as literal zero today, and `selfIllum.a` carries
+`envMapDerivedLayer`, which is per-object and moves behind the id. Packing
+roughness beside the normal is also what the tracer already does — its guide
+channel is literally `traced_normal_roughness`, NRD's own format — so the two
+consumers' layouts converge rather than drift.
+
+Two things to carry into that work when it happens: both consumers currently
+**derive** roughness from diffuse alpha (`material.slang`'s
+`clamp(alpha, 0.2, 1.0)` and its raster counterpart), so real textures must be
+adopted in **one step for both** or the shared-material rule breaks; and the
+curated per-category roughness and metalness overrides multiply into those
+derived values today, so they need re-expressing against textured inputs
+rather than against a derivation.
+
 ## G7 — shadows from real geometry
 
 Admission takes Opaque and Transparent only, so shadow-only proxies sit outside

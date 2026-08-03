@@ -111,6 +111,7 @@ private:
     std::shared_ptr<Texture> _outputHandle;
     VkDescriptorSet _retroResolveSet {VK_NULL_HANDLE};
     VkDescriptorSet _pbrResolveSet {VK_NULL_HANDLE};
+    VkDescriptorSet _resolveMaterialSet {VK_NULL_HANDLE};
 
     struct Preview {
         std::unique_ptr<VulkanImage> image;

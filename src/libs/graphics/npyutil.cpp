@@ -26,6 +26,8 @@ static const char *descrFor(NpyType type) {
     switch (type) {
     case NpyType::UInt8:
         return "|u1";
+    case NpyType::UInt16:
+        return "<u2";
     case NpyType::Float16:
         return "<f2";
     case NpyType::Float32:
@@ -39,6 +41,8 @@ static size_t sizeOf(NpyType type) {
     switch (type) {
     case NpyType::UInt8:
         return 1;
+    case NpyType::UInt16:
+        return 2;
     case NpyType::Float16:
         return 2;
     case NpyType::Float32:

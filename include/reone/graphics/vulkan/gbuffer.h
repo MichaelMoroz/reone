@@ -33,8 +33,7 @@ class VulkanDevice;
  * than once per fragment.
  *
  * The first five attachments match the retained geometry contract. The final
- * two carry lighting-only material colours that cannot be reconstructed from
- * albedo without changing the authored lighting model.
+ * attachment identifies the material record used by deferred lighting.
  */
 class VulkanGBuffer : boost::noncopyable {
 public:
@@ -45,10 +44,16 @@ public:
         Lightmap,
         SelfIllum,
         Motion,
-        MaterialAmbient,
-        MaterialDiffuse,
+        /**
+         * Extension point for deferred material data. A resolve that needs a
+         * new field adds it to GpuSceneMaterial, not to the G-buffer.
+         */
+        MaterialId,
         Count
     };
+
+    /** R16_UINT clear value; valid material indices stop at 0xfffe. */
+    static constexpr uint32_t kNoMaterial = 0xffffu;
 
     VulkanGBuffer(VulkanDevice &device) :
         _device(device) {
@@ -69,10 +74,11 @@ public:
      * the renderer creates itself have to be told, or they fall back to the
      * global sampler - which repeats, and filters depth.
      */
-    void setSamplers(VkSampler color, VkSampler depth) {
+    void setSamplers(VkSampler color, VkSampler depth, VkSampler materialId) {
         for (auto &image : _color) {
             image->setSampler(color);
         }
+        _color[MaterialId]->setSampler(materialId);
         _depth->setSampler(depth);
     }
 

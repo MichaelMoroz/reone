@@ -149,8 +149,12 @@ void VulkanScenePipeline::init() {
     auto &samplers = _renderer.resources().samplers();
     auto colorSampler = samplers.get(getTextureProperties(TextureUsage::ColorBuffer));
     auto depthSampler = samplers.get(getTextureProperties(TextureUsage::DepthBuffer));
+    auto materialIdProperties = getTextureProperties(TextureUsage::ColorBuffer);
+    materialIdProperties.minFilter = Texture::Filtering::Nearest;
+    materialIdProperties.magFilter = Texture::Filtering::Nearest;
+    auto materialIdSampler = samplers.get(materialIdProperties);
     _output->setSampler(colorSampler);
-    _gbuffer->setSamplers(colorSampler, depthSampler);
+    _gbuffer->setSamplers(colorSampler, depthSampler, materialIdSampler);
 
     _retroResolveSet = _renderer.descriptors().createPersistentTextureSet(
         {{1, &_gbuffer->color(VulkanGBuffer::Diffuse)},
@@ -159,8 +163,7 @@ void VulkanScenePipeline::init() {
          {4, &_gbuffer->color(VulkanGBuffer::SelfIllum)},
          {5, &_gbuffer->depth()},
          {17, &_renderer.pbrTextures().prefilteredArray()},
-         {21, &_gbuffer->color(VulkanGBuffer::MaterialAmbient)},
-         {22, &_gbuffer->color(VulkanGBuffer::MaterialDiffuse)}});
+         {21, &_gbuffer->color(VulkanGBuffer::MaterialId)}});
     _pbrResolveSet = _renderer.descriptors().createPersistentTextureSet(
         {{1, &_gbuffer->color(VulkanGBuffer::Diffuse)},
          {2, &_gbuffer->color(VulkanGBuffer::EyeNormal)},
@@ -170,8 +173,7 @@ void VulkanScenePipeline::init() {
          {13, &_renderer.pbrTextures().brdfImage()},
          {16, &_renderer.pbrTextures().irradianceArray()},
          {17, &_renderer.pbrTextures().prefilteredArray()},
-         {21, &_gbuffer->color(VulkanGBuffer::MaterialAmbient)},
-         {22, &_gbuffer->color(VulkanGBuffer::MaterialDiffuse)}});
+         {21, &_gbuffer->color(VulkanGBuffer::MaterialId)}});
 
     _outputHandle = std::make_shared<Texture>(
         "vk_scene_output", TextureType::TwoDim, Texture::Properties());
@@ -190,8 +192,7 @@ void VulkanScenePipeline::init() {
     };
     static const char *kColorNames[VulkanGBuffer::Count] = {
         "G-buffer diffuse", "G-buffer eye normal", "G-buffer lightmap",
-        "G-buffer self-illum", "G-buffer motion", "G-buffer material ambient",
-        "G-buffer material diffuse"};
+        "G-buffer self-illum", "G-buffer motion", "G-buffer material ID"};
     for (int i = 0; i < VulkanGBuffer::Count; ++i) {
         name(_gbuffer->color(i), kColorNames[i]);
     }
@@ -222,6 +223,7 @@ void VulkanScenePipeline::deinit() {
     _outputHandle.reset();
     _retroResolveSet = VK_NULL_HANDLE;
     _pbrResolveSet = VK_NULL_HANDLE;
+    _resolveMaterialSet = VK_NULL_HANDLE;
     _inited = false;
 }
 
@@ -234,6 +236,7 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
     // Upload and compute-merge are deliberately recorded immediately before
     // the draw. VulkanGpuScene publishes the compute-to-vertex/index barrier.
     const auto scene = callbacks.mergeGeometry(cmd);
+    _resolveMaterialSet = VK_NULL_HANDLE;
 
     std::array<VkRenderingAttachmentInfo, VulkanGBuffer::Count> attachments {};
     for (int i = 0; i < VulkanGBuffer::Count; ++i) {
@@ -244,6 +247,8 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
         attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     }
+    attachments[VulkanGBuffer::MaterialId].clearValue.color.uint32[0] =
+        VulkanGBuffer::kNoMaterial;
     VkRenderingAttachmentInfo depth {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     depth.imageView = _gbuffer->depth().view();
     depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
@@ -271,6 +276,14 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     if (scene.vertices.buffer && scene.triangleCount != 0) {
+        const auto materialCount = scene.materials.size / sizeof(GpuSceneMaterial);
+        if (materialCount > VulkanGBuffer::kNoMaterial) {
+            warn("Vulkan: G-buffer R16_UINT material ID exhausted by " +
+                     std::to_string(materialCount) +
+                     " material records; refusing to wrap into the 0xffff sentinel",
+                 LogChannel::Graphics);
+            throw std::runtime_error("Vulkan: too many materials for the G-buffer material ID");
+        }
         VulkanPipelineCache::Key key;
         key.module = "megadraw";
         key.vertexEntry = "megadrawVertex";
@@ -284,7 +297,7 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
         auto uniformSet = _renderer.uniformSet();
         std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
         offsets[UniformBlockBindingPoints::globals] = globalsOffset;
-        auto megaSet = _renderer.descriptors().updateMegaDrawSet(
+        _resolveMaterialSet = _renderer.descriptors().updateMegaDrawSet(
             _renderer.frameIndex(), scene, _renderer.resources());
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
@@ -292,7 +305,8 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
                                 VulkanDescriptors::kUniformSet, 1, &uniformSet,
                                 static_cast<uint32_t>(offsets.size()), offsets.data());
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
-                                VulkanDescriptors::kMegaDrawSet, 1, &megaSet, 0, nullptr);
+                                VulkanDescriptors::kMegaDrawSet, 1, &_resolveMaterialSet, 0,
+                                nullptr);
         vkCmdBindIndexBuffer(cmd, scene.indices.buffer->handle(), scene.indices.offset,
                              VK_INDEX_TYPE_UINT32);
 
@@ -366,7 +380,12 @@ void VulkanScenePipeline::retroResolvePass(VkCommandBuffer cmd, uint32_t globals
                             static_cast<uint32_t>(offsets.size()), offsets.data());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
                             VulkanDescriptors::kTextureSet, 1, &_retroResolveSet, 0, nullptr);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+    if (_resolveMaterialSet != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                                VulkanDescriptors::kMegaDrawSet, 1, &_resolveMaterialSet, 0,
+                                nullptr);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
     vkCmdEndRendering(cmd);
 
     transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -420,7 +439,12 @@ void VulkanScenePipeline::pbrResolvePass(VkCommandBuffer cmd, uint32_t globalsOf
                             static_cast<uint32_t>(offsets.size()), offsets.data());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
                             VulkanDescriptors::kTextureSet, 1, &_pbrResolveSet, 0, nullptr);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+    if (_resolveMaterialSet != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                                VulkanDescriptors::kMegaDrawSet, 1, &_resolveMaterialSet, 0,
+                                nullptr);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
     vkCmdEndRendering(cmd);
 
     transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -548,6 +572,8 @@ static std::optional<DumpFormat> dumpFormatFor(VkFormat format) {
         return DumpFormat {4, NpyType::UInt8, false};
     case VK_FORMAT_R8_UNORM:
         return DumpFormat {1, NpyType::UInt8, false};
+    case VK_FORMAT_R16_UINT:
+        return DumpFormat {1, NpyType::UInt16, false};
     case VK_FORMAT_R16_SFLOAT:
         return DumpFormat {1, NpyType::Float32, true};
     case VK_FORMAT_R16G16_SFLOAT:
@@ -629,12 +655,10 @@ std::vector<VulkanScenePipeline::Target> VulkanScenePipeline::targetEntries(
     }
     static const char *kDisplayNames[VulkanGBuffer::Count] = {
         "G-buffer diffuse", "G-buffer eye normal", "G-buffer lightmap",
-        "G-buffer self-illum", "G-buffer motion", "G-buffer material ambient",
-        "G-buffer material diffuse"};
+        "G-buffer self-illum", "G-buffer motion", "G-buffer material ID"};
     static const char *kDumpNames[VulkanGBuffer::Count] = {
         "g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_lightmap",
-        "g_buffer_self_illum", "g_buffer_motion", "g_buffer_material_ambient",
-        "g_buffer_material_diffuse"};
+        "g_buffer_self_illum", "g_buffer_motion", "g_buffer_material_id"};
     for (int i = 0; i < VulkanGBuffer::Count; ++i) {
         auto kind = i == VulkanGBuffer::EyeNormal ? VulkanTargetKind::EyeNormal : i == VulkanGBuffer::Motion ? VulkanTargetKind::Motion
                                                                                                              : VulkanTargetKind::Color;

@@ -24,6 +24,7 @@ namespace graphics {
 /** The element type of an array written to .npy. */
 enum class NpyType {
     UInt8,
+    UInt16,
     Float16,
     Float32
 };

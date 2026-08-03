@@ -33,9 +33,8 @@ std::vector<VkFormat> VulkanGBuffer::colorFormats() {
         VK_FORMAT_R8G8B8A8_UNORM, // EyeNormal
         VK_FORMAT_R8G8B8A8_UNORM, // Lightmap
         VK_FORMAT_R8G8B8A8_UNORM, // SelfIllum
-        VK_FORMAT_R16G16_SFLOAT,  // Motion
-        VK_FORMAT_R8G8B8A8_UNORM, // MaterialAmbient
-        VK_FORMAT_R8G8B8A8_UNORM  // MaterialDiffuse
+        VK_FORMAT_R16G16_SFLOAT, // Motion
+        VK_FORMAT_R16_UINT       // MaterialId
     };
 }
 

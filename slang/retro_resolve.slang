@@ -4,6 +4,7 @@
 
 import uniforms;
 import lib.gbuf;
+import lib.scene_material;
 
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
 [[vk::binding(2, 1)]] Sampler2D sGBufEyeNormal;
@@ -11,8 +12,10 @@ import lib.gbuf;
 [[vk::binding(4, 1)]] Sampler2D sGBufSelfIllum;
 [[vk::binding(5, 1)]] Sampler2D sGBufDepth;
 [[vk::binding(17, 1)]] SamplerCubeArray sPrefilteredEnvMapArray;
-[[vk::binding(21, 1)]] Sampler2D sGBufMaterialAmbient;
-[[vk::binding(22, 1)]] Sampler2D sGBufMaterialDiffuse;
+[[vk::binding(21, 1), vk::image_format("r16ui")]] Sampler2D<uint> sGBufMaterialId;
+[[vk::binding(2, 2)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
+
+static const uint kNoMaterial = 0xffffu;
 
 static const int kLightDynamicTypeAll = 1;
 
@@ -49,12 +52,14 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     float4 diffuseSample = sGBufDiffuse.Sample(input.uv);
     float4 lightmapSample = sGBufLightmap.Sample(input.uv);
     float4 selfIllumSample = sGBufSelfIllum.Sample(input.uv);
+    uint materialId = sGBufMaterialId.Load(int3(int2(input.position.xy), 0)).r;
 
-    // The attachment clear and an uncovered alpha-tested pixel both carry this
+    // The material-id clear and an uncovered alpha-tested pixel both carry this
     // sentinel. Sky will eventually composite over these black pixels.
-    if (diffuseSample.a == 0.0 && lightmapSample.a == 0.0) {
+    if (materialId == kNoMaterial) {
         return float4(0.0, 0.0, 0.0, 1.0);
     }
+    InstanceMaterial material = instanceMaterials[materialId];
 
     float3 eyePos = reconstructViewPos(input.uv);
     float3 eyeNormal = normalize(2.0 * sGBufEyeNormal.Sample(input.uv).xyz - 1.0);
@@ -68,8 +73,8 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     bool fogEnabled;
     unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
                            shadowsEnabled, fogEnabled);
-    float3 materialAmbient = sGBufMaterialAmbient.Sample(input.uv).rgb;
-    float3 materialDiffuse = sGBufMaterialDiffuse.Sample(input.uv).rgb;
+    float3 materialAmbient = material.ambientColor.rgb;
+    float3 materialDiffuse = material.diffuseColor.rgb;
 
     float3 ambient = float3(0.0);
     float3 lit = selfIllumSample.rgb;

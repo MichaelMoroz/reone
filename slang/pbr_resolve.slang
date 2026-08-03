@@ -14,6 +14,7 @@ import lib.math;
 import lib.gbuf;
 import lib.shadow;
 import lib.surface;
+import lib.scene_material;
 
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
 [[vk::binding(2, 1)]] Sampler2D sGBufEyeNormal;
@@ -23,8 +24,10 @@ import lib.surface;
 [[vk::binding(13, 1)]] Sampler2D sBRDFLUT;
 [[vk::binding(16, 1)]] SamplerCubeArray sIrradianceMapArray;
 [[vk::binding(17, 1)]] SamplerCubeArray sPrefilteredEnvMapArray;
-[[vk::binding(21, 1)]] Sampler2D sGBufMaterialAmbient;
-[[vk::binding(22, 1)]] Sampler2D sGBufMaterialDiffuse;
+[[vk::binding(21, 1), vk::image_format("r16ui")]] Sampler2D<uint> sGBufMaterialId;
+[[vk::binding(2, 2)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
+
+static const uint kNoMaterial = 0xffffu;
 
 /** Roughness spans this many prefiltered mips; see VulkanPBRTextures. */
 static const float kMaxReflectionLOD = 4.0;
@@ -115,12 +118,14 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     float4 mainTexSample = sGBufDiffuse.Sample(uv);
     float4 lightmapSample = sGBufLightmap.Sample(uv);
     float4 selfIllumSample = sGBufSelfIllum.Sample(uv);
+    uint materialId = sGBufMaterialId.Load(int3(int2(input.position.xy), 0)).r;
 
     // Nothing was drawn here: leave the clear colour alone rather than lighting
     // it, which would tint the whole background.
-    if (mainTexSample.a == 0.0 && lightmapSample.a == 0.0) {
+    if (materialId == kNoMaterial) {
         return float4(0.0, 0.0, 0.0, 1.0);
     }
+    InstanceMaterial material = instanceMaterials[materialId];
 
     float3 eyePos = reconstructViewPos(uv);
     float3 eyeNormal = normalize(2.0 * sGBufEyeNormal.Sample(uv).xyz - 1.0);
@@ -131,8 +136,8 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
 
     float3 albedo = gammaToLinear(mainTexSample.rgb);
     float3 emission = gammaToLinear(selfIllumSample.rgb);
-    float3 materialAmbient = gammaToLinear(sGBufMaterialAmbient.Sample(uv).rgb);
-    float3 materialDiffuse = gammaToLinear(sGBufMaterialDiffuse.Sample(uv).rgb);
+    float3 materialAmbient = gammaToLinear(material.ambientColor.rgb);
+    float3 materialDiffuse = gammaToLinear(material.diffuseColor.rgb);
     // Odyssey assets carry neither metalness nor roughness. What an
     // environment-mapped surface does carry is diffuse alpha, which the retro
     // renderer uses as a reflection strength: it adds the environment at
