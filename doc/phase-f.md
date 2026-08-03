@@ -57,10 +57,23 @@ the invariant; its absolute value across commits is not.
 | **G4** | done `d6148ee6` — matrices born in Vulkan clip, `glToVulkanClip` and the inert `IUniforms` deleted; dumps bit-identical across the change |
 | **G5** | done `802ec6c8` — retro shades the G-buffer; by eye, three of four modules read as the same game. `920c1259` then took blended surfaces out of the G-buffer and the per-frame hash out of the frame; `1c703dde` added Tracy, capturable headless |
 | **R1** | done `cfbb2989` — persistent registration; 1.33 → 0.16 ms measured, zero shadow mismatches including a module transition |
-| **R2** | delete the translation layer: nodes own GPU-shaped records, classification moves to material-set time, the Registered* intermediates die |
+| **R2** | recommended to ride inside G6 as a constraint — the grown material record is computed at material-set time — with the Registered* deletion as mechanical cleanup after; standalone only if the schema collapse should precede more features |
 | **R3** | done `1b6559aa` — grass placement in the merge compute; grass CPU 0.007 ms and flat through a teleport, graphics slot 4.1 → 1.3 ms at density 3.57 |
-| **G6–G8** | PBR shading, shadows, the blended pass. After R1/R2. |
-| **V1–V5** | the visibility track and the sky. After G. |
+| **G6–G8** | PBR shading, shadows, the blended pass — **reordered, see below** |
+| **V1–V5** | the visibility track and the sky |
+
+**The critical path, reordered 2026-08-03.** Transparency comes before
+unification, because the tracer's transparency currently lives ON the primary
+ray and unification deletes the primary ray (3.7's own sequencing note says
+the same). The order: **tracer guide fix** (in flight — guide surface = first
+opaque-or-cutout hit) → **grass density becomes a GPU uniform** (budgets baked
+at a density cap, the kernel gates by density/cap, so the dial is live again
+with no face-record rebuild) → **G8** (raster's blended pass, analytic
+shading) → **backlog 3.7** (traced transparency restructure: stochastic
+coverage, flat additive loop, unit-weight paths) → **V1 unification** (now a
+deletion, not an integration) → **G6/G7 once, on the shared G-buffer**. The
+traced quality lane (ReSTIR → SHARC → radiance volume → volumetrics, see "The
+traced frame, end state") follows after.
 
 ## Two tracks, and why geometry goes first
 
