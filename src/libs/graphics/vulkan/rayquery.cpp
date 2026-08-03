@@ -356,9 +356,11 @@ void VulkanRayQuery::init() {
             _nrdDenoiser = std::make_unique<NrdDenoiser>(device, *instance, _extent);
             _nrdDenoiser->init();
 
-            // Seven: output, noise-free, diffuse and specular factors, denoised diffuse and specular,
-            // viewZ. Must match the binding list in slang/nrd_composite.slang.
-            constexpr uint32_t kCompositeBindingCount = 7;
+            // Nine: output, noise-free, diffuse and specular factors,
+            // denoised diffuse and specular, viewZ, then the two raw channels
+            // used when a transmitting surface's guide ray misses.
+            // Must match the binding list in slang/nrd_composite.slang.
+            constexpr uint32_t kCompositeBindingCount = 9;
             VkDescriptorSetLayoutBinding compositeBindings[kCompositeBindingCount] {};
             for (uint32_t i = 0; i < kCompositeBindingCount; ++i) {
                 compositeBindings[i].binding = i;
@@ -1364,7 +1366,7 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
 #endif
             // Motion is not among them: it existed only for the removed TAA's
             // reprojection. NRD still consumes it directly.
-            constexpr uint32_t kCompositeBindings = 7;
+            constexpr uint32_t kCompositeBindings = 9;
             std::array<VkDescriptorImageInfo, kCompositeBindings> compositeImages {{
                 {VK_NULL_HANDLE, compositeTarget, VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, aux[5]->view(), VK_IMAGE_LAYOUT_GENERAL},
@@ -1373,6 +1375,8 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
                 {VK_NULL_HANDLE, _nrdDenoiser->denoisedDiffuse().view(), VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, _nrdDenoiser->denoisedSpecular().view(), VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, aux[3]->view(), VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, aux[0]->view(), VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, aux[1]->view(), VK_IMAGE_LAYOUT_GENERAL},
             }};
             std::array<VkWriteDescriptorSet, kCompositeBindings> compositeWrites {};
             for (uint32_t i = 0; i < kCompositeBindings; ++i) {

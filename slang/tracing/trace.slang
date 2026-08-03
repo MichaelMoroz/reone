@@ -9,6 +9,9 @@
 //                    has nonzero coverage. Compositing is the path's job,
 //                    not traversal's: punch-through coverage is binary,
 //                    blended coverage is a transmitting surface.
+//   ptTraceGuideNearest - the primary guide ray: commits only opaque or
+//                    binary cutout coverage; blended and additive surfaces
+//                    are invisible to it.
 //   ptShadowTransmittance - the shadow ray: accumulates transmittance to a
 //                    light, attenuated by punch-through coverage; additive
 //                    surfaces cast nothing and the sky never occludes.
@@ -97,6 +100,36 @@ public TraceHit ptTraceNearest(RayDesc ray) {
         float2 barycentrics = query.CandidateTriangleBarycentrics();
         float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
         if (commitsCoverage(materialIndex, candidateAlpha(materialIndex, indices, weights))) {
+            query.CommitNonOpaqueTriangleHit();
+        }
+    }
+    return committedHit(query);
+}
+
+/**
+ * The primary guide ray. Hardware-opaque geometry still commits directly.
+ * Of the non-opaque candidates, only binary cutout coverage is a guide
+ * surface; blended coverage and additive emission are transparent. Other
+ * terminating candidates retain their existing surface semantics.
+ */
+public TraceHit ptTraceGuideNearest(RayDesc ray) {
+    RayQuery<RAY_FLAG_NONE> query;
+    query.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, ray);
+    while (query.Proceed()) {
+        if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
+        uint geometryIndex = query.CandidateGeometryIndex();
+        uint materialIndex = materialIndexFor(geometryIndex, query.CandidatePrimitiveIndex());
+        if (instanceMaterials[materialIndex].surfaceType == kPtSurfaceUnlitTransparent ||
+            isBlendedCoverage(materialIndex)) continue;
+        if (!isCutout(materialIndex)) {
+            query.CommitNonOpaqueTriangleHit();
+            continue;
+        }
+        uint3 indices = ptTriangleIndices(geometryIndex, query.CandidatePrimitiveIndex());
+        float2 barycentrics = query.CandidateTriangleBarycentrics();
+        float3 weights = float3(1.0 - barycentrics.x - barycentrics.y,
+                                barycentrics.x, barycentrics.y);
+        if (candidateAlpha(materialIndex, indices, weights) >= kAlphaTestThreshold) {
             query.CommitNonOpaqueTriangleHit();
         }
     }

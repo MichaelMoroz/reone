@@ -162,36 +162,102 @@ void main() {
         return;
     }
 
-    // The sky sits at environment depth for the denoiser; every real surface
-    // reports its own depth and motion. An unlit primary keeps a white albedo
-    // guide: its radiance is emission, and nothing is behind it to remodulate.
+    // Transport remains tied to the shaded primary. In particular, its
+    // demodulation factors cannot follow a different guide surface without
+    // changing both the dumped radiance channels and the undenoised image.
     bool pbrPrimary = instanceMaterials[primaryHit.materialIndex].surfaceType == kPtSurfacePbr;
     bool primaryBlendedCoverage =
         (instanceMaterials[primaryHit.materialIndex].featureMask & kPtMaskBlendedCoverage) != 0;
-    outputs.normal = primaryShading.normal;
-    outputs.roughness = primaryShading.roughness;
-    outputs.viewZ = primaryShading.terminatesPath
-                        ? kPtInfDistance
-                        : mul(globalUniforms.view, float4(primaryHit.position, 1.0)).z;
-    outputs.motion = primaryShading.terminatesPath ? float3(0.0) : ptMotionVector(primaryHit);
-    // The comparison G-buffer follows raster exactly: diffuse is pre-lighting
-    // albedo, eye normal is signed view-space normal packed into [0,1], depth
-    // is positive linear view distance, and motion is current-minus-previous
-    // UV displacement from the unjittered matrices.
-    // VulkanGBuffer stores the authored gamma-encoded texture colour (the
-    // deferred resolve converts it later), whereas tracing shades in linear.
-    outputs.gBufferDiffuse = float4(ptLinearToGamma(primaryShading.albedo), primaryShading.alpha);
-    outputs.gBufferEyeNormal = 0.5 * mul(primaryShading.normal,
-                                         (float3x3)globalUniforms.viewInv) + 0.5;
-    float viewZ = mul(globalUniforms.view, float4(primaryHit.position, 1.0)).z;
-    outputs.gBufferDepth = max(0.0, -viewZ);
-    if (!primaryShading.terminatesPath) {
-        float4 currentClip = mul(globalUniforms.viewProjection, float4(primaryHit.position, 1.0));
-        float4 previousClip = mul(globalUniforms.prevViewProjection,
-                                  float4(primaryHit.position + outputs.motion, 1.0));
-        if (currentClip.w > 1e-6 && previousClip.w > 1e-6) {
-            outputs.gBufferMotion = 0.5 * (currentClip.xy / currentClip.w -
-                                           previousClip.xy / previousClip.w);
+    float transportViewZ = primaryShading.terminatesPath
+                               ? kPtInfDistance
+                               : mul(globalUniforms.view,
+                                     float4(primaryHit.position, 1.0)).z;
+    if (pbrPrimary && !primaryBlendedCoverage) {
+        float3 Rf0 = lerp(lerp(float3(0.04), primaryShading.albedo, primaryShading.metallic),
+                          float3(1.0), primaryShading.envStrength);
+        ptNrdMaterialFactors(primaryShading.normal, -probe.Direction, primaryShading.albedo,
+                             primaryShading.metallic, Rf0, primaryShading.roughness,
+                             outputs.transportDiffFactor, outputs.transportSpecFactor);
+    }
+
+    // The guide surface is usually the transport primary, at no additional
+    // traversal cost. A blended primary is the exceptional path: continue
+    // just beyond it with a query that ignores every blended/additive layer.
+    bool guideNeedsTrace = primaryBlendedCoverage ||
+                           instanceMaterials[primaryHit.materialIndex].surfaceType ==
+                               kPtSurfaceUnlitTransparent;
+    TraceHit guide = primary;
+    HitGeometry guideHit = primaryHit;
+    SurfaceShading guideShading = primaryShading;
+    bool guideHitFound = true;
+    if (guideNeedsTrace) {
+        RayDesc guideRay = probe;
+        guideRay.Origin = primaryHit.position + guideRay.Direction *
+                          max(pushConstants.rayOriginOffset, 1e-3);
+        guideRay.TMin = 0.001;
+        guide = ptTraceGuideNearest(guideRay);
+        guideHitFound = guide.hit;
+        if (guideHitFound) {
+            guideHit = ptMakeHitGeometry(guide, guideRay,
+                                         spreadAngle * (primaryDistance + guide.hitT));
+            guideShading = ptShade(guideHit);
+        }
+    }
+
+    if (guideHitFound) {
+        // The sky sits at environment depth for the denoiser; every real
+        // guide surface reports its own depth and motion. An unlit guide keeps
+        // the default white factors because its radiance is emission.
+        outputs.normal = guideShading.normal;
+        outputs.roughness = guideShading.roughness;
+        outputs.viewZ = guideShading.terminatesPath
+                            ? kPtInfDistance
+                            : mul(globalUniforms.view,
+                                  float4(guideHit.position, 1.0)).z;
+        outputs.motion = guideShading.terminatesPath
+                             ? float3(0.0)
+                             : ptMotionVector(guideHit);
+        if (instanceMaterials[guideHit.materialIndex].surfaceType == kPtSurfacePbr) {
+            if (!guideNeedsTrace) {
+                outputs.diffFactor = outputs.transportDiffFactor;
+                outputs.specFactor = outputs.transportSpecFactor;
+            } else {
+                float3 Rf0 = lerp(lerp(float3(0.04), guideShading.albedo,
+                                      guideShading.metallic),
+                                  float3(1.0), guideShading.envStrength);
+                ptNrdMaterialFactors(guideShading.normal, -ray.Direction,
+                                     guideShading.albedo, guideShading.metallic, Rf0,
+                                     guideShading.roughness, outputs.diffFactor,
+                                     outputs.specFactor);
+            }
+        }
+        // The comparison G-buffer follows raster exactly: diffuse is
+        // pre-lighting albedo, eye normal is signed view-space normal packed
+        // into [0,1], depth is positive linear view distance, and motion is
+        // current-minus-previous UV displacement from unjittered matrices.
+        // VulkanGBuffer stores the authored gamma-encoded texture colour (the
+        // deferred resolve converts it later), whereas tracing shades linear.
+        outputs.gBufferDiffuse = float4(ptLinearToGamma(guideShading.albedo),
+                                        guideShading.alpha);
+        outputs.gBufferEyeNormal = 0.5 * mul(guideShading.normal,
+                                             (float3x3)globalUniforms.viewInv) + 0.5;
+        float guideViewZ = mul(globalUniforms.view, float4(guideHit.position, 1.0)).z;
+        outputs.gBufferDepth = max(0.0, -guideViewZ);
+        if (!guideShading.terminatesPath) {
+            float4 currentClip = mul(globalUniforms.viewProjection,
+                                     float4(guideHit.position, 1.0));
+            float4 previousClip = mul(globalUniforms.prevViewProjection,
+                                      float4(guideHit.position + outputs.motion, 1.0));
+            if (currentClip.w > 1e-6 && previousClip.w > 1e-6) {
+                outputs.gBufferMotion = 0.5 * (currentClip.xy / currentClip.w -
+                                               previousClip.xy / previousClip.w);
+            }
+        }
+        // The sky keeps the far-plane defaults: it has no position to
+        // reproject and an upscaler must not try to chase one.
+        if (!guideShading.terminatesPath) {
+            outputs.setUpscalerGuides(pixel, uint2(width, height), guideHit.position,
+                                      outputs.motion);
         }
     }
     // A transmitting primary carries radiance from surfaces behind it. That
@@ -199,20 +265,8 @@ void main() {
     // multiplying it back at composite would tint and darken the transmitted
     // background. Keep the channel in radiance space and apply the smoke's
     // response only to its own local contribution below.
-    if (pbrPrimary && !primaryBlendedCoverage) {
-        float3 Rf0 = lerp(lerp(float3(0.04), primaryShading.albedo, primaryShading.metallic),
-                          float3(1.0), primaryShading.envStrength);
-        ptNrdMaterialFactors(primaryShading.normal, -probe.Direction, primaryShading.albedo,
-                             primaryShading.metallic, Rf0, primaryShading.roughness,
-                             outputs.diffFactor, outputs.specFactor);
-    }
     float primaryOpacity = primaryBlendedCoverage ? primaryShading.alpha : 1.0;
     outputs.noiseFree = layerEmission + primaryShading.emission * primaryOpacity;
-    // The sky keeps the far-plane defaults: it has no position to reproject and
-    // an upscaler must not try to chase one.
-    if (!primaryShading.terminatesPath) {
-        outputs.setUpscalerGuides(pixel, uint2(width, height), primaryHit.position, outputs.motion);
-    }
 
     if (primaryShading.terminatesPath) {
         finishPixel(pixel, outputs, debug);
@@ -266,9 +320,9 @@ void main() {
                     // Invariant: channel * diffFactor equals the primary
                     // diffuse radiance, so direct irradiance stays unscaled.
                     diffuseChannel += nee.diffuse;
-                    specularChannel += nee.specular / outputs.specFactor;
+                    specularChannel += nee.specular / outputs.transportSpecFactor;
                     if (sample.specularLobe) {
-                        pathWeight *= sample.weight / outputs.specFactor;
+                        pathWeight *= sample.weight / outputs.transportSpecFactor;
                     } else {
                         // Sampling remains importance-weighted by the lobe,
                         // while the path channel must retain only transport
@@ -398,10 +452,10 @@ void main() {
     outputs.diffuse = diffuseChannel / float(sampleCount);
     outputs.specular = specularChannel / float(sampleCount);
     outputs.diffuseHitDist = diffHitCount > 0.0
-                                 ? ptNormalizeHitDist(diffHitSum / diffHitCount, outputs.viewZ, 1.0)
+                                 ? ptNormalizeHitDist(diffHitSum / diffHitCount, transportViewZ, 1.0)
                                  : 0.0;
     outputs.specularHitDist = specHitCount > 0.0
-                                  ? ptNormalizeHitDist(specHitSum / specHitCount, outputs.viewZ,
+                                  ? ptNormalizeHitDist(specHitSum / specHitCount, transportViewZ,
                                                        primaryShading.roughness)
                                   : 0.0;
     finishPixel(pixel, outputs, debug);

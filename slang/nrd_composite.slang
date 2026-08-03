@@ -3,13 +3,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-// The post-denoise assembly uses the primary-hit factors that accompanied the
+// The post-denoise assembly uses the guide factors that accompanied the
 // demodulated radiance through NRD, overwriting the trace kernel's own write.
 //
 // One job, and one wrinkle. The denoised channels only exist inside NRD's
 // denoising range - REBLUR never writes its outputs at sky depth, so adding
-// them there splashed uninitialized pool memory across the sky - hence the
-// viewZ guard.
+// them there splashed uninitialized pool memory across the sky. A plain sky
+// miss has only noise-free radiance, but a transmitting surface in front of
+// the sky leaves real radiance in the noisy channels with no guide surface for
+// NRD. The viewZ guard therefore falls back to those raw channels.
 //
 // Anti-aliasing is not this pass's problem. It used to run a hand-rolled TAA
 // here, reprojecting through the same motion vectors NRD uses and clamping
@@ -41,6 +43,8 @@ struct PushConstants {
 [[vk::binding(4, 1)]] RWTexture2D<float4> inDenoisedDiffuse;
 [[vk::binding(5, 1)]] RWTexture2D<float4> inDenoisedSpecular;
 [[vk::binding(6, 1)]] RWTexture2D<float> inViewZ;
+[[vk::binding(7, 1)]] RWTexture2D<float4> inRawDiffuse;
+[[vk::binding(8, 1)]] RWTexture2D<float4> inRawSpecular;
 
 /** Denoised channels are undefined beyond NRD's denoising range. */
 static const float kDenoisedRange = 1.0e5;
@@ -66,10 +70,13 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     int2 pixel = int2(dispatchId.xy);
 
     float3 color = inNoiseFree[pixel].rgb;
-    if (abs(inViewZ[pixel]) < kDenoisedRange) {
-        color += yCoCgToLinear(inDenoisedDiffuse[pixel].rgb) * inDiffFactor[pixel].rgb +
-                 yCoCgToLinear(inDenoisedSpecular[pixel].rgb) * inSpecFactor[pixel].rgb;
-    }
+    bool hasDenoisedSurface = abs(inViewZ[pixel]) < kDenoisedRange;
+    float3 diffuse = hasDenoisedSurface ? inDenoisedDiffuse[pixel].rgb
+                                        : inRawDiffuse[pixel].rgb;
+    float3 specular = hasDenoisedSurface ? inDenoisedSpecular[pixel].rgb
+                                         : inRawSpecular[pixel].rgb;
+    color += yCoCgToLinear(diffuse) * inDiffFactor[pixel].rgb +
+             yCoCgToLinear(specular) * inSpecFactor[pixel].rgb;
     if (pushConstants.linearOutput != 0) {
         outputImage[pixel] = float4(color, 1.0);
         return;

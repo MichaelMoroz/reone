@@ -56,6 +56,11 @@ public struct TraceOutputs {
     public float3 noiseFree;    // layers, emission, sky - bypasses the denoiser
     public float3 diffFactor;
     public float3 specFactor;
+    // The output factor textures describe the guide surface. These internal
+    // assembly factors retain the transport primary's material response so a
+    // guide change cannot alter the undenoised radiance.
+    public float3 transportDiffFactor;
+    public float3 transportSpecFactor;
     /**
      * Post-projection depth in [0,1], jittered exactly like the colour, and
      * UV-space screen motion as previous minus current with y down - the two
@@ -85,6 +90,8 @@ public struct TraceOutputs {
         outputs.noiseFree = float3(0.0);
         outputs.diffFactor = float3(1.0);
         outputs.specFactor = float3(1.0);
+        outputs.transportDiffFactor = float3(1.0);
+        outputs.transportSpecFactor = float3(1.0);
         // A miss is the far plane, standing still.
         outputs.deviceDepth = 1.0;
         outputs.screenMotion = float2(0.0);
@@ -120,7 +127,8 @@ public struct TraceOutputs {
 
     /** The assembled image the kernel writes when the denoiser is off. */
     public float3 assemble() {
-        return noiseFree + diffuse * diffFactor + specular * specFactor;
+        return noiseFree + diffuse * transportDiffFactor +
+               specular * transportSpecFactor;
     }
 
     public void write(uint2 pixel) {
