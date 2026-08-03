@@ -165,17 +165,16 @@ SurfaceParams sampleSurface(Varyings input, float2 uv) {
 /**
  * Reflection from either shape of environment map, ported from i_envmap.glsl.
  *
- * A cube map is sampled by direction. A sphere map is the same reflection
- * flattened to equirectangular uv - note the negated direction, which is what
- * makes the two agree.
+ * A cube map is sampled by direction. A legacy 2D EnvMap uses the eye-space
+ * GL_SPHERE_MAP projection used by Odyssey's fixed-function texture generator.
  */
 float4 sampleEnvMap(float3 R) {
     if (isFeatureEnabled(kFeatureEnvMapCube)) {
         return sEnvMapCube.Sample(R);
     }
-    float3 d = normalize(-R);
-    float2 uv = float2(0.5 + atan2(d.x, d.z) / (2.0 * kPi),
-                       0.5 - asin(d.y) / kPi);
+    float m = 2.0 * sqrt(R.x * R.x + R.y * R.y +
+                         (R.z + 1.0) * (R.z + 1.0));
+    float2 uv = float2(R.x / m + 0.5, R.y / m + 0.5);
     return sEnvMap.Sample(uv);
 }
 
@@ -225,8 +224,9 @@ float4 shadeTransparent(Varyings input) {
     float3 color = lighting * localUniforms.color.rgb * diffuseColor;
     if (isFeatureEnabled(kFeatureEnvMap)) {
         float3 I = normalize(input.worldPos.xyz - globalUniforms.cameraPosition.xyz);
-        float3 R = reflect(I, surface.normal);
-        color += sampleEnvMap(R).rgb * (1.0 - diffuseAlpha);
+        float3 worldR = reflect(I, surface.normal);
+        float3 eyeR = normalize(mul(globalUniforms.view, float4(worldR, 0.0)).xyz);
+        color += sampleEnvMap(eyeR).rgb * (1.0 - diffuseAlpha);
     }
     if (isFeatureEnabled(kFeatureWater)) {
         color *= localUniforms.waterAlpha;
@@ -358,7 +358,9 @@ RetroOutput retroOpaqueFragment(Varyings input) {
                    surface.albedo;
     if (isFeatureEnabled(kFeatureEnvMap)) {
         float3 viewDir = normalize(globalUniforms.cameraPosition.xyz - input.worldPos.xyz);
-        color += sampleEnvMap(reflect(-viewDir, surface.normal)).rgb * (1.0 - surface.alpha);
+        float3 worldR = reflect(-viewDir, surface.normal);
+        float3 eyeR = normalize(mul(globalUniforms.view, float4(worldR, 0.0)).xyz);
+        color += sampleEnvMap(eyeR).rgb * (1.0 - surface.alpha);
     }
     if (isFeatureEnabled(kFeatureFog)) {
         float d = length(input.worldPos.xyz - globalUniforms.cameraPosition.xyz);

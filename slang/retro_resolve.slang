@@ -15,8 +15,11 @@ import lib.scene_material;
 [[vk::binding(17, 1)]] SamplerCubeArray sPrefilteredEnvMapArray;
 [[vk::binding(21, 1), vk::image_format("r16ui")]] Sampler2D<uint> sGBufMaterialId;
 [[vk::binding(2, 2)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
+[[vk::binding(3, 2)]] Sampler2D bindlessTextures[];
+[[vk::binding(5, 2)]] SamplerCube bindlessTextureCubes[];
 
 static const uint kNoMaterial = 0xffffu;
+static const uint kNoTexture = 0xffffffffu;
 
 static const int kLightDynamicTypeAll = 1;
 
@@ -46,6 +49,22 @@ float3 reconstructViewPos(float2 uv) {
 float lightAttenuationQuadratic(GlobalUniformsLight light, float distance) {
     float d = light.radius + distance;
     return (light.radius * light.radius) / (d * d);
+}
+
+float3 sampleAuthoredMirror(InstanceMaterial material, float3 eyeReflection) {
+    if (material.envMapCube != kNoTexture) {
+        // This fullscreen pass cannot derive a stable cube LOD from its
+        // quantized normal. Minified-surface sharpness is a separate policy;
+        // the authored mirror deliberately uses its base level here.
+        return bindlessTextureCubes[NonUniformResourceIndex(material.envMapCube)]
+            .SampleLevel(eyeReflection, 0.0).rgb;
+    }
+    float3 r = eyeReflection;
+    float m = 2.0 * sqrt(r.x * r.x + r.y * r.y +
+                         (r.z + 1.0) * (r.z + 1.0));
+    float2 uv = float2(r.x / m + 0.5, r.y / m + 0.5);
+    return bindlessTextures[NonUniformResourceIndex(material.envMap)]
+        .Sample(uv).rgb;
 }
 
 [shader("fragment")]
@@ -116,11 +135,11 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
                            (1.0 - shadow) * max(float3(0.0), lit)) *
                    diffuseSample.rgb;
     if (envmapped) {
-        float3 viewDir = normalize(globalUniforms.cameraPosition.xyz - worldPos);
-        float3 reflection = reflect(-viewDir, normal);
-        int envLayer = int(round(selfIllumSample.a * 255.0));
-        color += sPrefilteredEnvMapArray.SampleLevel(
-                     float4(reflection, float(envLayer)), 0.0).rgb *
+        float3 eyeReflection = reflect(normalize(eyePos), eyeNormal);
+        // Odyssey generated eye-space reflection coordinates per vertex from
+        // the geometric normal. A deferred resolve necessarily does this per
+        // pixel from the normal-mapped, quantized G-buffer normal instead.
+        color += sampleAuthoredMirror(material, eyeReflection) *
                  (1.0 - diffuseSample.a);
     }
 

@@ -81,9 +81,13 @@ float3 sampleEnvironment(float3 direction, float lod) {
     if (isFeatureEnabled(kFeatureEnvMapCube)) {
         return sEnvMapCube.SampleLevel(direction, lod).rgb;
     }
-    float3 d = normalize(-direction);
-    float2 uv = float2(0.5 + atan2(d.x, d.z) / (2.0 * kPi),
-                       0.5 - asin(d.y) / kPi);
+    // A 2D Odyssey EnvMap is a GL sphere map, not an equirectangular
+    // environment. During convolution, direction is the eye-space reflection
+    // direction whose authored sphere-map texel contributes to this cube.
+    float3 r = normalize(direction);
+    float m = 2.0 * sqrt(r.x * r.x + r.y * r.y +
+                         (r.z + 1.0) * (r.z + 1.0));
+    float2 uv = float2(r.x / m + 0.5, r.y / m + 0.5);
     return sEnvMap.SampleLevel(uv, lod).rgb;
 }
 
@@ -98,9 +102,10 @@ float3 sampleEnvironment(float3 direction) {
     if (isFeatureEnabled(kFeatureEnvMapCube)) {
         return sEnvMapCube.Sample(direction).rgb;
     }
-    float3 d = normalize(-direction);
-    float2 uv = float2(0.5 + atan2(d.x, d.z) / (2.0 * kPi),
-                       0.5 - asin(d.y) / kPi);
+    float3 r = normalize(direction);
+    float m = 2.0 * sqrt(r.x * r.x + r.y * r.y +
+                         (r.z + 1.0) * (r.z + 1.0));
+    float2 uv = float2(r.x / m + 0.5, r.y / m + 0.5);
     return sEnvMap.Sample(uv).rgb;
 }
 

@@ -490,6 +490,19 @@ std::vector<std::pair<uint32_t, const VulkanImage *>> VulkanResources::uploadedT
     return result;
 }
 
+std::vector<std::pair<uint32_t, const VulkanImage *>>
+VulkanResources::uploadedTextureCubes() const {
+    std::vector<std::pair<uint32_t, const VulkanImage *>> result;
+    result.reserve(_textures.size());
+    for (const auto &[texture, uploaded] : _textures) {
+        if (texture->type() != TextureType::CubeMap || uploaded.id == UINT32_MAX) {
+            continue;
+        }
+        result.emplace_back(uploaded.id, uploaded.image.get());
+    }
+    return result;
+}
+
 VkBuffer VulkanResources::zeroBuffer() {
     if (!_zeroBuffer) {
         // Large enough for the widest attribute any shader declares.

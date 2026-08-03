@@ -79,9 +79,10 @@ public:
     const VulkanImage &get(const Texture &texture);
 
     /**
-     * Dense bindless descriptor index assigned when a 2D asset is uploaded.
-     * A texture the upload path cannot represent has no id, so tracing can
-     * deliberately fall back rather than sampling an unrelated descriptor.
+     * Dense bindless descriptor index assigned when a material texture is
+     * uploaded. Each descriptor view shape publishes the same id in its own
+     * table. A texture the upload path cannot represent has no id, so a shader
+     * can deliberately fall back rather than sampling an unrelated descriptor.
      */
     std::optional<uint32_t> textureId(const Texture &texture);
 
@@ -90,6 +91,9 @@ public:
 
     /** Uploaded 2D-array textures and their stable bindless indices. */
     std::vector<std::pair<uint32_t, const VulkanImage *>> uploadedTextureArrays() const;
+
+    /** Uploaded cube textures and their stable bindless indices. */
+    std::vector<std::pair<uint32_t, const VulkanImage *>> uploadedTextureCubes() const;
 
     /**
      * Associate @p texture with an image this cache does not own.

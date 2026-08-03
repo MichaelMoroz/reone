@@ -26,8 +26,11 @@ import lib.scene_material;
 [[vk::binding(17, 1)]] SamplerCubeArray sPrefilteredEnvMapArray;
 [[vk::binding(21, 1), vk::image_format("r16ui")]] Sampler2D<uint> sGBufMaterialId;
 [[vk::binding(2, 2)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
+[[vk::binding(3, 2)]] Sampler2D bindlessTextures[];
+[[vk::binding(5, 2)]] SamplerCube bindlessTextureCubes[];
 
 static const uint kNoMaterial = 0xffffu;
+static const uint kNoTexture = 0xffffffffu;
 
 /** Roughness spans this many prefiltered mips; see VulkanPBRTextures. */
 static const float kMaxReflectionLOD = 4.0;
@@ -80,6 +83,22 @@ float3 reconstructViewPos(float2 uv) {
 float lightAttenuationQuadratic(GlobalUniformsLight light, float distance) {
     float d = light.radius + distance;
     return (light.radius * light.radius) / (d * d);
+}
+
+float3 sampleAuthoredMirror(InstanceMaterial material, float3 eyeReflection) {
+    if (material.envMapCube != kNoTexture) {
+        // This fullscreen pass cannot derive a stable cube LOD from its
+        // quantized normal. Minified-surface sharpness is a separate policy;
+        // the authored mirror deliberately uses its base level here.
+        return bindlessTextureCubes[NonUniformResourceIndex(material.envMapCube)]
+            .SampleLevel(eyeReflection, 0.0).rgb;
+    }
+    float3 r = eyeReflection;
+    float m = 2.0 * sqrt(r.x * r.x + r.y * r.y +
+                         (r.z + 1.0) * (r.z + 1.0));
+    float2 uv = float2(r.x / m + 0.5, r.y / m + 0.5);
+    return bindlessTextures[NonUniformResourceIndex(material.envMap)]
+        .Sample(uv).rgb;
 }
 
 float distributionGGX(float NdotH2, float a2) {
@@ -138,19 +157,9 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     float3 emission = gammaToLinear(selfIllumSample.rgb);
     float3 materialAmbient = gammaToLinear(material.ambientColor.rgb);
     float3 materialDiffuse = gammaToLinear(material.diffuseColor.rgb);
-    // Odyssey assets carry neither metalness nor roughness. What an
-    // environment-mapped surface does carry is diffuse alpha, which the retro
-    // renderer uses as a reflection strength: it adds the environment at
-    // (1 - alpha), see glsl/f_rtr_opaqmodel.glsl. Deferred PBR read that alpha
-    // as roughness and dropped the strength entirely, so every reflection came
-    // back weighted by a dielectric's 4% - a droid whose alpha averages 0.7
-    // reflected about a fifth of what the original renderer gave it.
-    //
-    // Feeding the strength into F0 restores the magnitude without a second
-    // environment term: alpha 0 reflects like a mirror, alpha 1 like any other
-    // dielectric. Reflectance rather than metalness, so the reflection stays
-    // untinted by albedo and the diffuse lobe is not switched off, which is
-    // what the retro path does and what metalness would not.
+    // Odyssey assets carry neither metalness nor roughness. Diffuse alpha is
+    // the authored mirror strength, handled separately below exactly as the
+    // original renderer did; it is not a second F0 for the IBL lobe.
     float metallic = 0.0;
     // Odyssey assets carry no roughness channel; the diffuse alpha stands in,
     // floored so that nothing turns into a perfect mirror.
@@ -176,13 +185,13 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     float fog = fogEnabled ? getFog(worldPos) : 0.0;
 
     float NdotV = max(0.0, dot(normal, V));
-    // Gated on envmapped: on everything else the diffuse alpha is an opacity
-    // or an alpha-test threshold and means nothing about reflectance.
-    float envMapStrength = envmapped ? (1.0 - mainTexSample.a) : 0.0;
-    float3 F0 = lerp(lerp(float3(0.04), albedo, metallic), float3(1.0), envMapStrength);
+    float3 F0 = lerp(float3(0.04), albedo, metallic);
 
-    // The reflection direction is what both derived maps are indexed by.
+    // Odyssey generated eye-space reflection coordinates per vertex from the
+    // geometric normal. A deferred resolve necessarily does this per pixel
+    // from the normal-mapped, quantized G-buffer normal instead.
     float3 R = reflect(-V, normal);
+    float3 eyeR = reflect(normalize(eyePos), eyeNormal);
     int envLayer = int(round(selfIllumSample.a * 255.0));
 
     float3 environment = float3(0.0);
@@ -195,9 +204,10 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
                             : materialAmbient *
                                   gammaToLinear(globalUniforms.worldAmbientColor.rgb);
     if (envmapped) {
-        irradiance += gammaToLinear(sIrradianceMapArray.Sample(float4(R, float(envLayer))).rgb);
+        irradiance += gammaToLinear(
+            sIrradianceMapArray.Sample(float4(eyeR, float(envLayer))).rgb);
         environment = gammaToLinear(
-            sPrefilteredEnvMapArray.SampleLevel(float4(R, float(envLayer)),
+            sPrefilteredEnvMapArray.SampleLevel(float4(eyeR, float(envLayer)),
                                                 roughness * kMaxReflectionLOD).rgb);
     }
     float3 directD = float3(0.0);
@@ -254,7 +264,11 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     float3 ambientS = float3(0.0);
     if (envmapped) {
         float2 brdf = sBRDFLUT.Sample(float2(NdotV, roughness)).xy;
-        ambientS = environment * (F * brdf.x + brdf.y);
+        // Diffuse alpha partitions the environment response: (1 - alpha)
+        // belongs to the authored mirror below, while IBL fills the remaining
+        // alpha share with roughness-varying specular. The two lobes therefore
+        // complement rather than double-light one another.
+        ambientS = mainTexSample.a * environment * (F * brdf.x + brdf.y);
     }
 
     float3 selfIllumStep = step(float3(1e-4), selfIllumSample.rgb);
@@ -272,6 +286,14 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     color += (1.0 - selfIllumed) * (1.0 - shadow) * max(float3(0.0), directS);
 
     color = linearToGamma(color);
+    // Authored mirror and roughness-varying IBL are distinct. The IBL above
+    // keeps the ordinary dielectric response; this gamma-space add reserves
+    // (1 - diffuse alpha) for the original game's sharp mirror term, so that
+    // authored strength is not counted in both lobes.
+    if (envmapped) {
+        color += sampleAuthoredMirror(material, eyeR) *
+                 (1.0 - mainTexSample.a);
+    }
     color = lerp(color, globalUniforms.fogColor.rgb, fog);
 
     return float4(color, 1.0);

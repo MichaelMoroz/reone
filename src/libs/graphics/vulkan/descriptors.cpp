@@ -122,7 +122,7 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
     if (_bindlessTextureCapacity == 0) {
         throw std::runtime_error("Vulkan: mega-draw bindless texture capacity is zero");
     }
-    std::array<VkDescriptorSetLayoutBinding, 5> megaBindings {};
+    std::array<VkDescriptorSetLayoutBinding, 6> megaBindings {};
     for (uint32_t i = 0; i < 3; ++i) {
         megaBindings[i].binding = i;
         megaBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -131,22 +131,21 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
                                          ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
                                          : VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    for (uint32_t i = 3; i < 5; ++i) {
+    for (uint32_t i = 3; i < 6; ++i) {
         megaBindings[i].binding = i;
         megaBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         megaBindings[i].descriptorCount = _bindlessTextureCapacity;
         megaBindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    std::array<VkDescriptorBindingFlags, 5> megaBindingFlags {};
-    for (uint32_t i = 3; i < 5; ++i) {
+    std::array<VkDescriptorBindingFlags, 6> megaBindingFlags {};
+    for (uint32_t i = 3; i < 6; ++i) {
         megaBindingFlags[i] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
                               VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     }
-    // Vulkan permits a variable descriptor count only on the numerically
-    // highest binding. The ordinary 2D table at binding 3 retains its fixed
-    // device-capacity shape; the array-texture table at binding 4 consumes the
-    // allocated runtime count.
-    megaBindingFlags[4] |= VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+    // All three view shapes share the material texture id namespace. Keep each
+    // table at the fixed device capacity: only the highest binding may have a
+    // variable descriptor count, while any shape may contain the highest live
+    // material id.
     VkDescriptorSetLayoutBindingFlagsCreateInfo megaFlagsInfo {
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
     megaFlagsInfo.bindingCount = static_cast<uint32_t>(megaBindingFlags.size());
@@ -164,7 +163,7 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
     std::array<VkDescriptorPoolSize, 2> megaPoolSizes {{
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3u * static_cast<uint32_t>(framesInFlight)},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-         2u * _bindlessTextureCapacity * static_cast<uint32_t>(framesInFlight)},
+         3u * _bindlessTextureCapacity * static_cast<uint32_t>(framesInFlight)},
     }};
     VkDescriptorPoolCreateInfo megaPoolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     megaPoolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
@@ -177,12 +176,6 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
     }
     std::vector<VkDescriptorSetLayout> megaLayouts(framesInFlight, _megaDrawLayout);
     VkDescriptorSetAllocateInfo megaAlloc {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    std::vector<uint32_t> megaVariableCounts(framesInFlight, _bindlessTextureCapacity);
-    VkDescriptorSetVariableDescriptorCountAllocateInfo megaVariableInfo {
-        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO};
-    megaVariableInfo.descriptorSetCount = static_cast<uint32_t>(megaVariableCounts.size());
-    megaVariableInfo.pDescriptorCounts = megaVariableCounts.data();
-    megaAlloc.pNext = &megaVariableInfo;
     megaAlloc.descriptorPool = _megaDrawPool;
     megaAlloc.descriptorSetCount = static_cast<uint32_t>(megaLayouts.size());
     megaAlloc.pSetLayouts = megaLayouts.data();
@@ -345,6 +338,7 @@ VkDescriptorSet VulkanDescriptors::updateMegaDrawSet(
     };
     writeImages(3, resources.uploadedTextures());
     writeImages(4, resources.uploadedTextureArrays());
+    writeImages(5, resources.uploadedTextureCubes());
     return set;
 }
 
