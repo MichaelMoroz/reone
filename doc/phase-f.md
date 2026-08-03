@@ -57,7 +57,8 @@ the invariant; its absolute value across commits is not.
 | **G4** | done `d6148ee6` — matrices born in Vulkan clip, `glToVulkanClip` and the inert `IUniforms` deleted; dumps bit-identical across the change |
 | **G5** | done `802ec6c8` — retro shades the G-buffer; by eye, three of four modules read as the same game. `920c1259` then took blended surfaces out of the G-buffer and the per-frame hash out of the frame; `1c703dde` added Tracy, capturable headless |
 | **R1** | in flight — persistent registration: the scene description stops rebuilding every frame. Tracy-measured target: collectInto 0.73 + admission 0.60 = 1.33 ms/frame → under 0.30 |
-| **G6–G8** | PBR shading, shadows, the blended pass. After R1. |
+| **R2** | delete the translation layer: nodes own GPU-shaped records, classification moves to material-set time, the Registered* intermediates die |
+| **G6–G8** | PBR shading, shadows, the blended pass. After R1/R2. |
 | **V1–V5** | the visibility track and the sky. After G. |
 
 ## Two tracks, and why geometry goes first
@@ -351,6 +352,42 @@ transition and a traced run; G-buffer dumps byte-identical between the
 incremental and forced-full paths *in the same binary* (no phase-drift
 excuse); and the two zones fall from 1.33 ms to under 0.30, measured by the
 instrument that found them.
+
+## R2 — delete the translation layer
+
+R1 makes the rebuild cheap. R2 asks the question R1 should have started from:
+**why does admission exist at all if the scene can be in the right form in the
+first place?** Classification is a pure function of the material — blending
+mode, texture features, dials. A pure function of rarely-changing inputs is
+not a frame phase; it runs when the input changes.
+
+The layer is historical: it was the tracer's private policy grafted beside
+raster's material system, and G3 unified the policy but kept the shape of a
+per-frame pass. What remains genuinely per-frame is dynamic *data* — bone
+palettes, dangly positions, particle instances, billboard basis — not
+classification of anything.
+
+End state: **nodes own slots in the persistent GPU-shaped tables.** Setting a
+material computes its record and kind once, through the same shared function —
+one policy, preserved — and interns it. Moving writes matrices into the slot.
+Animation writes palettes into its own arena. A frame is *flush dirty ranges,
+append dynamic streams*. The `Registered*` intermediates and the per-frame
+assembly loop die; one schema instead of three.
+
+The wrinkles that look like blockers and are not: calibration dials re-bake
+affected records on the generation bump (set-time, not frame-time), and the
+sky rule is a registration-time predicate once the room is known.
+
+R1's substrate carries over whole — stable-id table, dirty hooks, refcounted
+interner, node-owned streams, canonical order — and above all the **shadow
+tripwire**, which is just as necessary when nodes write tables directly:
+stale-slot bugs are the same failure class, and it caught a real
+animation-timing bug within hours of existing.
+
+*Proves itself* the same way R1 does: zero shadow mismatches across the
+acceptance set including a module transition, byte-identical dumps between
+paths in one binary, and the frame cost of the former collection+admission
+zones reduced to the dynamic streams alone.
 
 ## G6 — PBR shading on the G-buffer
 
