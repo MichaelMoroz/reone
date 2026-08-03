@@ -537,6 +537,82 @@ creature-heavy and a particle-heavy module before leaning on it everywhere.
 
 ---
 
+# The traced frame, end state — settled 2026-08-03, revisable on measurement
+
+Raster owns primary visibility for every mode; the tracer becomes a lighting
+strategy over shared surfaces. The frame:
+
+```
+raster geometry   →  opaque G-buffer            (shared, the megadraw)
+raster blended    →  transparency layer(s)      (shared geometry, sorted remap draw)
+PT pass 1         →  rays from opaque surfaces  (the G-buffer is the ray-origin set)
+denoise           →  NRD over the opaque signal
+PT resolve        →  opaque + blended + additive emission + sky, composited
+FSR (jitter on) / FXAA (jitter off)
+```
+
+**Considered and rejected: a "pass 2" tracing rays from transparency pixels.**
+Tracing from the transparency layer again is slow, and its signal cannot be
+denoised — transparency has no stable guides. Blended surfaces shade
+analytically in the interim (the same lit blended draw both modes share), and
+upgrade to sampling the radiance cache when it exists. Do not re-propose
+pass 2; the replacement is the cache below.
+
+**Guide-miss is the sky case.** With guides describing the first
+opaque-or-cutout hit, pixels whose guide ray misses (smoke over baked sky)
+must not route through NRD — a no-surface pixel denoises to zero. The
+composite falls back to the raw signal there; sky radiance is deterministic
+and never needed denoising. This is a preview of the PT resolve owning the
+sky layer explicitly.
+
+## The traced quality lane, in order
+
+Sequenced AFTER the critical path (below). Each entry exists because of the
+one before it.
+
+1. **ReSTIR DI first.** The current light loop is already one-sample RIS
+   with no reuse; reservoirs plus temporal/spatial reuse is the same
+   estimator matured. It attacks variance at the source for every pixel, has
+   no world structure to build or invalidate, and its temporal reuse
+   reprojects against exactly the stable guide surfaces the guide fix
+   provides. 3.7's unit-weight paths and unified primary visibility both
+   simplify it, hence the ordering.
+2. **SHARC on top, long term.** Spatial-hash radiance cache: sparse
+   on-demand entries where paths land, multi-resolution through the key,
+   world-anchored accumulation, and the normal in the hash key structurally
+   defuses most wall-leaking. Fed by the paths we already trace; enables
+   bounce shortening. Its output is point-sampled and jittered — sharp,
+   sparse, noisy — which forces the next stage.
+3. **Accumulation and consumption are different structures.** SHARC
+   accumulates; consumers need dense, smooth, band-limited data. So a
+   resample stage filters SHARC into a **dense world-space radiance volume**
+   — well-posed filtering, because world-anchored resampling has no
+   disocclusion. The volume's shape is one of two, decided at build:
+   multi-octave cascades (discrete levels, seam interpolation at
+   boundaries), or a single warped non-uniform grid centred on the player,
+   **snapped in ~1 m jumps and resampled at the snap** — which converts
+   camera motion into discrete amortised resample events with zero
+   per-frame reprojection between snaps. Rejected as the store: froxels
+   (screen-space reprojection re-imports the instability the world-space
+   move exists to avoid — froxels survive only as a possible view-side fog
+   integrator that holds no history of its own) and uniform world grids
+   (leak-safe resolution is unaffordable, coarse resolution leaks).
+4. **Volumetrics split density from radiance** — different fields, opposing
+   requirements. Radiance: low-frequency, the coarse volume above is
+   *correct*, not a compromise. Density: three sources — per-area uniform/
+   height fog is **analytic, no storage**; emitter smoke and ground fog are
+   meters-scale with sharp gradients and get **fine local density bricks**
+   (~0.25–0.5 m) allocated only around active emitters, transient with
+   them; nothing in between. The particle systems remain the authors of
+   density — injection rasterises particle kernels into bricks, preserving
+   authored spawn/drift/animation. The scattering integral marches
+   (analytic + brick density) × coarse radiance × phase.
+   **Prototype transmittance first**: self-shadowing through the column is
+   what makes smoke read as dense; inscatter without it is glowing soup and
+   fails the look test immediately. **Add a Dxun exterior (4xxDXN) to the
+   K2 fixture set before this work starts** — it is the all-fog stress
+   case and the render-and-look-at-it rule applies.
+
 # V — raster becomes primary visibility, and the sky composites once
 
 ## V1 — hybridise
