@@ -65,7 +65,7 @@ the invariant; its absolute value across commits is not.
 | **G7** | shadows from real geometry, envmap and bump verified against content |
 | **G8** | transparency in retro and PBR — sorted quads, premultiplied, the three alpha kinds |
 | **G9** | anti-aliasing as one output stage for all three modes: FSR and FXAA |
-| **sky in raster** | **open, and it blocks the meaning of "raster finished"** — G3 suppressed the shell unconditionally and the single composite lives in V2, inside the substage. Decide before G6 starts |
+| **sky** | the path is decided: **the offline `skybake` asset becomes the single source**, so V0 fixes the baker first, then V4 suppresses from the same manifest, V2 composites, V5 deletes the runtime bake. Still open: whether that chain runs before G6 or after G9 — raster shows a black sky until it does |
 | **PT substage** | everything traced, after G6–G9 — see the substage section for its ordered list |
 
 **The order of work, set 2026-08-03: finish raster first.** Done since the last
@@ -811,6 +811,46 @@ one before it.
 
 ## V — raster becomes primary visibility, and the sky composites once
 
+### V0 — fix the baker, and make the offline asset the only sky
+
+**There are two bakers and only one of them has a consumer.**
+`src/apps/skybake` is the offline tool backlog 1.14 decided on — 1,392 lines,
+casting rays from inside the shell into six faces — and its committed configs
+live in `override/k1` and `override/k2`. `VulkanRayQuery::bakeSkyRoom` is a
+runtime GPU bake of the same idea. Grepping `src/libs` and `src/apps/engine`
+for a consumer of the offline assets returns **nothing**: every sky rendered
+today comes from the runtime bake. The offline tool is the intended survivor,
+so V0 is what has to be true before V2, V4 and V5 can happen at all.
+
+Two defects, one of them structural:
+
+- **Seams on the box geometry.** Undiagnosed. 1.14 already prescribes the
+  instrument: *bake a six-colour debug sky first and confirm empirically which
+  world direction shows which face.* Six flat faces make both faults
+  self-evident — if seams survive on flat colour the fault is face frustums or
+  edge sampling; if they vanish it is content-side (shell UV seams, tiling,
+  filtering). Run that before touching anything, since it doubles as 1.14's
+  axis-convention proof (KOTOR is Z-up, cube faces are Y-up, and a mirrored or
+  yawed sky looks plausible enough to ship).
+- **Whole-room granularity swallows the props.** Every config entry is
+  `room = <room>` / `sky = <room>`; `grep -c meshes` over both `modules.ini`
+  files returns **0**. The tool carries a per-mesh list
+  (`skybaker.cpp:88`) that nothing uses. So `001ebo16` goes in as one lump —
+  the star shell *plus three asteroids, a planet and a nebula* — which is
+  exactly the city-skyline / planet / asteroid content that must stay
+  geometry. V0 wires `meshes =` through and curates it for the rooms that hold
+  props.
+
+*Acceptance:* the six-colour probe renders with correct face-to-direction
+mapping and no seams; a real bake of a props-holding room contains the shell
+**and nothing else**; and the assets remain loadable by nothing yet — V0 fixes
+the producer only, so it can be judged on its own output rather than through a
+renderer that does not read it.
+
+*Coverage is the long pole, and it is content work, not code:* 56 of 117 K1
+modules and 46 of 82 K2 name a sky, and every entry is still marked
+`# review`.
+
 ### V1 — hybridise
 
 `PathTracing` bypasses raster entirely today: `VulkanScenePipeline::init`
@@ -873,10 +913,13 @@ first secondary ray misses. Hash the traced result across the change.
 
 ### V4 — suppress exactly the shell
 
-The manifest exists: `override/*/modules.ini` carries `meshes =` naming the
-shell mesh by mesh, and `skybake` bakes exactly that list (`403c0802`). V4 makes
-the renderer read the same list, so baker and renderer share one source of truth
-instead of each evaluating a rule and hoping they agree.
+The manifest is `override/*/modules.ini`. **V0 is what puts the shell meshes
+in it** — today every entry names a whole room and no config carries a
+`meshes =` key, so there is not yet a per-mesh list for anything to read. Once
+V0 has curated one, V4 makes the renderer read that same list, so baker and
+renderer share one source of truth instead of each evaluating a rule and hoping
+they agree. Today the renderer does the latter: G3 suppresses by a geometric
+room heuristic, which is what 1.14 wanted deleted.
 
 Neither game marks the shell distinctly enough to infer it. K1 omits the
 walkmesh from a sky room but says nothing about props inside it; TSL flags
