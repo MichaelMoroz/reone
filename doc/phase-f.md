@@ -56,7 +56,7 @@ the invariant; its absolute value across commits is not.
 | **G3** | done `cc9a36ac` — admission extracted and shared, sky suppressed identically, all three modes hash the upload to the same value |
 | **G4** | done `d6148ee6` — matrices born in Vulkan clip, `glToVulkanClip` and the inert `IUniforms` deleted; dumps bit-identical across the change |
 | **G5** | done `802ec6c8` — retro shades the G-buffer; by eye, three of four modules read as the same game. `920c1259` then took blended surfaces out of the G-buffer and the per-frame hash out of the frame; `1c703dde` added Tracy, capturable headless |
-| **R1** | in flight — persistent registration: the scene description stops rebuilding every frame. Tracy-measured target: collectInto 0.73 + admission 0.60 = 1.33 ms/frame → under 0.30 |
+| **R1** | done `cfbb2989` — persistent registration; 1.33 → 0.16 ms measured, zero shadow mismatches including a module transition |
 | **R2** | delete the translation layer: nodes own GPU-shaped records, classification moves to material-set time, the Registered* intermediates die |
 | **G6–G8** | PBR shading, shadows, the blended pass. After R1/R2. |
 | **V1–V5** | the visibility track and the sky. After G. |
@@ -320,7 +320,14 @@ The sky is a third difference of a different kind: raster still admits the sky
 shell as geometry and the tracer does not, which is the 464,982 raster-only
 pixels. That is a defect rather than an accepted difference — G3 removes it.
 
-## R1 — the scene stops rebuilding itself
+## R1 — the scene stops rebuilding itself — done `cfbb2989`
+
+Landed under the gate: 1.33 → **0.16 ms**. The shadow tripwire caught two real
+bugs during the work — deformation refreshing before parent animation applied
+(a walk-order dependence, now pinned at the render boundary for both paths)
+and stale state after module transition. Acceptance ran shadow-armed with
+zero mismatches, and `--commands-frame-scheduled` now exists for scripted
+module transitions.
 
 Tracy attributed the render thread's cost: `collectInto` 0.73 ms plus
 admission 0.60 ms per frame, spent re-deriving a description that is ~95%
