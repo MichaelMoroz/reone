@@ -62,18 +62,42 @@ the invariant; its absolute value across commits is not.
 | **G6–G8** | PBR shading, shadows, the blended pass — **reordered, see below** |
 | **V1–V5** | the visibility track and the sky |
 
-**The critical path, reordered 2026-08-03.** Transparency comes before
-unification, because the tracer's transparency currently lives ON the primary
-ray and unification deletes the primary ray (3.7's own sequencing note says
-the same). The order: **tracer guide fix** (in flight — guide surface = first
-opaque-or-cutout hit) → **grass density becomes a GPU uniform** (budgets baked
-at a density cap, the kernel gates by density/cap, so the dial is live again
-with no face-record rebuild) → **G8** (raster's blended pass, analytic
-shading) → **backlog 3.7** (traced transparency restructure: stochastic
-coverage, flat additive loop, unit-weight paths) → **V1 unification** (now a
-deletion, not an integration) → **G6/G7 once, on the shared G-buffer**. The
-traced quality lane (ReSTIR → SHARC → radiance volume → volumetrics, see "The
-traced frame, end state") follows after.
+**The critical path, reordered 2026-08-03 (revised same day).** Transparency
+comes before unification, because the tracer's transparency currently lives ON
+the primary ray and unification deletes the primary ray (3.7's own sequencing
+note says the same). Done since the reorder: the **tracer guide fix**
+(`98ad7e4f` — guide surface = first opaque-or-cutout hit, guide-miss falls
+back to raw at the composite; at the vent camera, traced-only coverage
+831,500 → 0 and depth MAE 2.995 → 0.0012) and **grass density as a live GPU
+gate** (`c1747799`).
+
+Next, in order: the **emitter census** (in flight — the authored inventory of
+lit vs additive particle types, which decides how much of the particle load
+leaves geometry) → **G8 + the first fog grid together** (see below) →
+**backlog 3.7** → **V1 unification** → **G6/G7 once, on the shared G-buffer**.
+ReSTIR and SHARC stay in the quality lane after.
+
+**The first fog grid, specced 2026-08-03:** a distorted player-centred world
+grid — the simple incarnation of the end-state volume, built now rather than
+after SHARC. Density source: the per-area scene fog parameters (and, pending
+the census, lit smoke/fog particles baked in as density instead of traced as
+billboards — blended billboards are the slow path in traversal; emissive
+particles and sabers stay geometry). Lighting: **one sample per voxel per
+frame with large temporal reuse**; consumption: **trilinear at render**, a
+**software raymarch of density × emission** applied twice — after each
+hardware ray segment (bounces included) and at the PT resolve when combining
+final channels. When SHARC arrives later it feeds this same grid through the
+resample stage; the grid's shape and consumers do not change.
+
+**Fog × AA, the working answer:** under TAA the march would sit as a post on
+the AA result to dodge reprojection; FSR complicates that in principle — but
+this engine runs FSR at **NativeAA, no upscaling**, so "before FSR at render
+res" and "after FSR at display res" are the same resolution, and the choice
+reduces to whether fog participates in FSR's temporal accumulation. Composite
+the march **after** FSR as a post using guide depth (fog is low-frequency; it
+needs no AA and gains no ghosting), which also survives true upscaling later:
+march at display res with render-res depth taps. Revisit only if upscaling
+actually lands.
 
 ## Two tracks, and why geometry goes first
 
