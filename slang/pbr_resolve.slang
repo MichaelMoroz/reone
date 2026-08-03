@@ -175,13 +175,17 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
                            shadowsEnabled, fogEnabled);
 
-    // The lightmap is baked static irradiance, including baked visibility.
-    // Keep at least 75% of ambient irradiance under a live shadow: this lets
-    // dynamic contact shadows read on baked floors without deleting the
-    // illumination from already-dark interiors. Direct light is fully
-    // occluded below.
-    float shadow = shadowsEnabled ? getShadow(eyePos, worldPos) : 0.0;
-    float ambientVisibility = 1.0 - 0.25 * shadow;
+    ShadowResult shadow;
+    shadow.factor = 1.0;
+    shadow.iblFactor = 1.0;
+    if (shadowsEnabled) {
+        shadow = getShadow(eyePos, worldPos, normal);
+    }
+    // ShadowOpacity was authored for the original gamma-space renderer. PBR
+    // applies lighting in linear space, so convert the display visibility to
+    // an energy multiplier before using it on BRDF and IBL terms.
+    float directVisibility = pow(shadow.factor, kGamma);
+    float iblVisibility = pow(shadow.iblFactor, kGamma);
     float fog = fogEnabled ? getFog(worldPos) : 0.0;
 
     float NdotV = max(0.0, dot(normal, V));
@@ -278,12 +282,12 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     // a colour added on top of it. Adding it instead saturates anything fully
     // self-illuminated - a sky - to white.
     float3 color = min(float3(1.0),
-                       ambientVisibility * ao * ambientD +
-                           (1.0 - shadow) * (max(float3(0.0), directD) + emission)) *
+                       iblVisibility * ao * ambientD +
+                           directVisibility * max(float3(0.0), directD) + emission) *
                    albedo;
-    color += ao * ambientS;
+    color += iblVisibility * ao * ambientS;
     // A self-illuminated surface does not take a specular highlight.
-    color += (1.0 - selfIllumed) * (1.0 - shadow) * max(float3(0.0), directS);
+    color += (1.0 - selfIllumed) * directVisibility * max(float3(0.0), directS);
 
     color = linearToGamma(color);
     // Authored mirror and roughness-varying IBL are distinct. The IBL above
@@ -291,7 +295,7 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     // (1 - diffuse alpha) for the original game's sharp mirror term, so that
     // authored strength is not counted in both lobes.
     if (envmapped) {
-        color += sampleAuthoredMirror(material, eyeR) *
+        color += shadow.iblFactor * sampleAuthoredMirror(material, eyeR) *
                  (1.0 - mainTexSample.a);
     }
     color = lerp(color, globalUniforms.fogColor.rgb, fog);

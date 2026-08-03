@@ -45,6 +45,7 @@ set(SCENE_HEADERS
     ${SCENE_INCLUDE_DIR}/render/pipeline/vulkan.h
     ${SCENE_INCLUDE_DIR}/render/pipeline/rayquery.h
     ${SCENE_INCLUDE_DIR}/render/pipeline/tracematerials.h
+    ${SCENE_INCLUDE_DIR}/shadowproperties.h
     ${SCENE_INCLUDE_DIR}/types.h
     ${SCENE_INCLUDE_DIR}/user.h)
 

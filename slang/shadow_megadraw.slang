@@ -9,9 +9,10 @@ import lib.scene_material;
 static const float kPointShadowFar = 2500.0;
 // Point shadows replace raster depth with radial distance. Pipeline depth bias
 // is therefore replaced along with it, so reproduce the same constant+slope
-// model in radial-depth units: two centimetres over the 2500-unit range.
-static const float kPointShadowConstantBias = 0.02 / kPointShadowFar;
-static const float kPointShadowSlopeBias = 2.0;
+// model in radial-depth units. Receiver normal offset now handles most grazing
+// cases, leaving only a small write-side slope term here.
+static const float kPointShadowConstantBias = 0.0;
+static const float kPointShadowSlopeBias = 1.0;
 
 struct DirectionalShadowVaryings {
     float4 position : SV_Position;

@@ -51,6 +51,8 @@ public:
     void collectLensFlare(GpuScene &scene, const graphics::ModelNode::LensFlare &flare);
 
     bool isDirectional() const;
+    bool hasAuthoredDirection() const;
+    glm::vec3 direction() const;
 
     const ModelSceneNode &model() const { return _model; }
     const glm::vec3 &color() const { return _color; }

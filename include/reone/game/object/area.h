@@ -27,6 +27,7 @@
 #include "reone/resource/parser/gff/are.h"
 #include "reone/resource/parser/gff/git.h"
 #include "reone/resource/types.h"
+#include "reone/scene/shadowproperties.h"
 #include "reone/system/timer.h"
 
 #include "../object.h"
@@ -255,6 +256,7 @@ private:
     Grass _grass;
     std::optional<MinigameSpec> _miniGameSpec;
     glm::vec3 _ambientColor {0.0f};
+    scene::ShadowProperties _shadows;
     Timer _perceptionTimer;
     std::shared_ptr<Object> _hilightedObject;
     std::shared_ptr<Object> _selectedObject;
@@ -367,6 +369,7 @@ private:
 
     void loadCameraStyle(const resource::generated::ARE &are);
     void loadAmbientColor(const resource::generated::ARE &are);
+    void loadShadows(const resource::generated::ARE &are);
     void loadScripts(const resource::generated::ARE &are);
     void loadMap(const resource::generated::ARE &are);
     void loadStealthXP(const resource::generated::ARE &are);

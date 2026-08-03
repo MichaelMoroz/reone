@@ -422,8 +422,8 @@ void VulkanScenePipeline::shadowPass(VkCommandBuffer cmd,
             // D32_SFLOAT constant bias is expressed in representable depth
             // increments; the slope term supplies the useful offset on curved
             // surfaces that approach parallel to the light.
-            key.depthBiasConstantFactor = 2.0f;
-            key.depthBiasSlopeFactor = 2.0f;
+            key.depthBiasConstantFactor = 0.0f;
+            key.depthBiasSlopeFactor = 1.0f;
             key.cull = cull;
             auto &pipeline = _renderer.pipelines().get(key);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,

@@ -326,9 +326,9 @@ RetroOutput retroOpaqueFragment(Varyings input) {
     }
 
     float3 ambient = float3(0.0);
-    float3 diffuse = localUniforms.selfIllumColor.rgb;
+    float3 direct = float3(0.0);
     if (isFeatureEnabled(kFeatureLightmap)) {
-        diffuse += surface.lightmap;
+        ambient += surface.lightmap;
     } else if (!isFeatureEnabled(kFeatureStatic)) {
         ambient += localUniforms.ambientColor.rgb * globalUniforms.worldAmbientColor.rgb;
     }
@@ -342,7 +342,7 @@ RetroOutput retroOpaqueFragment(Varyings input) {
         if (light.ambientOnly != 0) {
             ambient += light.multiplier * attenuation * localUniforms.ambientColor.rgb * light.color.rgb;
         } else {
-            diffuse += light.multiplier * max(0.0, dot(surface.normal, lightVector / max(0.0001, distance))) * attenuation * localUniforms.diffuseColor.rgb * light.color.rgb;
+            direct += light.multiplier * max(0.0, dot(surface.normal, lightVector / max(0.0001, distance))) * attenuation * localUniforms.diffuseColor.rgb * light.color.rgb;
         }
     }
     // Bug for bug with f_rtr_opaqmodel.glsl: the original renderer selects the
@@ -350,17 +350,22 @@ RetroOutput retroOpaqueFragment(Varyings input) {
     // space position as the deferred resolve does. Passing the same thing keeps
     // the two backends comparable; correcting it is a change to both at once.
     float3 cascadeSelector = globalUniforms.cameraPosition.xyz - input.worldPos.xyz;
-    float shadow = isFeatureEnabled(kFeatureShadows)
-                       ? getShadow(cascadeSelector, input.worldPos.xyz)
-                       : 0.0;
+    ShadowResult shadow;
+    shadow.factor = 1.0;
+    shadow.iblFactor = 1.0;
+    if (isFeatureEnabled(kFeatureShadows)) {
+        shadow = getShadow(cascadeSelector, input.worldPos.xyz, surface.normal);
+    }
     float3 color = min(float3(1.0),
-                       ambient + (1.0 - shadow) * max(float3(0.0), diffuse)) *
+                       shadow.iblFactor * ambient +
+                           shadow.factor * max(float3(0.0), direct) +
+                           localUniforms.selfIllumColor.rgb) *
                    surface.albedo;
     if (isFeatureEnabled(kFeatureEnvMap)) {
         float3 viewDir = normalize(globalUniforms.cameraPosition.xyz - input.worldPos.xyz);
         float3 worldR = reflect(-viewDir, surface.normal);
         float3 eyeR = normalize(mul(globalUniforms.view, float4(worldR, 0.0)).xyz);
-        color += sampleEnvMap(eyeR).rgb * (1.0 - surface.alpha);
+        color += shadow.iblFactor * sampleEnvMap(eyeR).rgb * (1.0 - surface.alpha);
     }
     if (isFeatureEnabled(kFeatureFog)) {
         float d = length(input.worldPos.xyz - globalUniforms.cameraPosition.xyz);

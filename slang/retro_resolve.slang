@@ -97,7 +97,7 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     float3 materialDiffuse = material.diffuseColor.rgb;
 
     float3 ambient = float3(0.0);
-    float3 lit = selfIllumSample.rgb;
+    float3 direct = float3(0.0);
     if (hasLightmap) {
         // Lightmaps are baked static irradiance. Dynamic visibility is
         // applied to this ambient term only through the bounded factor below.
@@ -119,27 +119,29 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
         if (light.ambientOnly != 0) {
             ambient += light.multiplier * attenuation * materialAmbient * light.color.rgb;
         } else {
-            lit += light.multiplier *
-                   max(0.0, dot(normal, lightVector / max(0.0001, distance))) *
-                   attenuation * materialDiffuse * light.color.rgb;
+            direct += light.multiplier *
+                      max(0.0, dot(normal, lightVector / max(0.0001, distance))) *
+                      attenuation * materialDiffuse * light.color.rgb;
         }
     }
 
-    float shadow = shadowsEnabled ? getShadow(eyePos, worldPos) : 0.0;
-    float ambientVisibility = 1.0 - 0.25 * shadow;
-    // Preserve retroOpaqueFragment's ordering, saturation, and gamma-space
-    // arithmetic. Direct light can be fully occluded; ambient always retains
-    // at least 75% of its baked value.
+    ShadowResult shadow;
+    shadow.factor = 1.0;
+    shadow.iblFactor = 1.0;
+    if (shadowsEnabled) {
+        shadow = getShadow(eyePos, worldPos, normal);
+    }
     float3 color = min(float3(1.0),
-                       ambientVisibility * ambient +
-                           (1.0 - shadow) * max(float3(0.0), lit)) *
+                       shadow.iblFactor * ambient +
+                           shadow.factor * max(float3(0.0), direct) +
+                           selfIllumSample.rgb) *
                    diffuseSample.rgb;
     if (envmapped) {
         float3 eyeReflection = reflect(normalize(eyePos), eyeNormal);
         // Odyssey generated eye-space reflection coordinates per vertex from
         // the geometric normal. A deferred resolve necessarily does this per
         // pixel from the normal-mapped, quantized G-buffer normal instead.
-        color += sampleAuthoredMirror(material, eyeReflection) *
+        color += shadow.iblFactor * sampleAuthoredMirror(material, eyeReflection) *
                  (1.0 - diffuseSample.a);
     }
 

@@ -83,6 +83,26 @@ bool LightSceneNode::isDirectional() const {
     return _radius >= kMinDirectionalLightRadius;
 }
 
+bool LightSceneNode::hasAuthoredDirection() const {
+    // The binary model format always supplies a quaternion, including the
+    // identity default used when no direction was authored. Treat a transform
+    // that leaves the conventional light forward axis unchanged as absent so
+    // the scene-centre fallback can provide an azimuth.
+    constexpr auto defaultDirection = glm::vec3(0.0f, 0.0f, -1.0f);
+    return glm::dot(direction(), defaultDirection) < 0.9999f;
+}
+
+glm::vec3 LightSceneNode::direction() const {
+    // KotOR cameras and lights face along local -Z. The complete scene-node
+    // transform retains the light node's authored orientation and every parent
+    // transform, while w=0 deliberately excludes translation.
+    auto direction = glm::vec3(absoluteTransform() * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
+    if (glm::length2(direction) < glm::epsilon<float>()) {
+        return glm::vec3(0.0f, 0.0f, -1.0f);
+    }
+    return glm::normalize(direction);
+}
+
 } // namespace scene
 
 } // namespace reone

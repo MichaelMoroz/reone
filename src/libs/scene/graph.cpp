@@ -85,6 +85,32 @@ static const std::vector<float> g_shadowCascadeDivisors {
     0.045f,
     0.135f};
 
+glm::vec3 SceneGraph::shadowLightDirection() const {
+    auto authored = _shadowLight->direction();
+    if (_shadowLight->hasAuthoredDirection()) {
+        return authored;
+    }
+
+    // Identity is the model format's default orientation. Aim such lights at
+    // the centre of the module's room geometry: unlike the camera or world
+    // origin, these bounds are fixed for the lifetime of the loaded area.
+    AABB bounds;
+    for (auto &root : _modelRoots) {
+        if (root->usage() != ModelUsage::Room || root->isBackgroundScenery()) {
+            continue;
+        }
+        bounds.expand(root->aabb() * root->absoluteTransform());
+    }
+    if (!bounds.isDegenerate()) {
+        auto centre = 0.5f * (bounds.min() + bounds.max());
+        auto direction = centre - shadowLightPosition();
+        if (glm::length2(direction) >= glm::epsilon<float>()) {
+            return glm::normalize(direction);
+        }
+    }
+    return authored;
+}
+
 void SceneGraph::clear() {
     _modelRoots.clear();
     _walkmeshRoots.clear();
@@ -102,6 +128,7 @@ void SceneGraph::clear() {
     _gpuScene.clear();
     _shadowGpuScene.clear();
     _incrementalSceneReady = false;
+    _shadowProperties = {};
 }
 
 void SceneGraph::addRoot(std::shared_ptr<ModelSceneNode> node) {
@@ -297,6 +324,23 @@ void SceneGraph::updateShadowLight(float dt) {
     if (!_shadowLight && !closestLights.empty()) {
         _shadowLight = closestLights.front();
         _shadowActive = true;
+        // There is no previous shadow to cross-fade on the first light in a
+        // freshly loaded scene. Starting it dim only makes the module visibly
+        // brighten during its opening frames.
+        if (!hadShadowLight) {
+            _shadowStrength = 1.0f;
+        }
+        auto direction = shadowLightDirection();
+        auto position = shadowLightPosition();
+        auto orientation = _shadowLight->modelNode().restOrientation();
+        std::ostringstream ss;
+        ss << "Scene '" << _name << "': shadow light '" << _shadowLight->modelNode().name()
+           << "' aim=" << (_shadowLight->hasAuthoredDirection() ? "authored" : "room-bounds")
+           << " position=(" << position.x << ", " << position.y << ", " << position.z
+           << ") orientation=(" << orientation.w << ", " << orientation.x << ", "
+           << orientation.y << ", " << orientation.z << ") direction=(" << direction.x
+           << ", " << direction.y << ", " << direction.z << ")";
+        info(ss.str(), LogChannel::Graphics);
     }
     if (hadShadowLight != (_shadowLight != nullptr))
         _incrementalSceneReady = false;
@@ -509,9 +553,11 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
                 for (int i = 0; i < kNumShadowLightSpace; ++i) {
                     globals.shadowLightSpace[i] = _shadowLightSpace[i];
                 }
-                globals.shadowLightPosition = glm::vec4(shadowLightPosition(), isShadowLightDirectional() ? 0.0 : 1.0);
+                globals.shadowLightPosition = isShadowLightDirectional()
+                                                  ? glm::vec4(shadowLightDirection(), 0.0f)
+                                                  : glm::vec4(shadowLightPosition(), 1.0f);
                 globals.shadowCascadeFarPlanes = _shadowCascadeFarPlanes;
-                globals.shadowStrength = shadowStrength();
+                globals.shadowStrength = shadowStrength() * _shadowProperties.opacity;
                 globals.shadowRadius = shadowRadius();
             }
             if (isFogEnabled()) {
@@ -775,10 +821,10 @@ static glm::mat4 getPointLightView(const glm::vec3 &lightPos, CubeMapFace face) 
 void SceneGraph::computeLightSpaceMatrices() {
     if (isShadowLightDirectional()) {
         auto camera = std::static_pointer_cast<PerspectiveCamera>(this->camera()->get().camera());
-        // Radius-promoted directional lights are authored as distant points
-        // aimed at the module origin. Their direction must not follow the main
-        // camera, or every camera translation rotates the shadow projection.
-        auto lightDir = glm::normalize(-shadowLightPosition());
+        // Use the light's authored direction, or the fixed module-room bounds
+        // fallback for an identity/default orientation. Neither source follows
+        // the camera, so camera motion cannot rotate the shadow projection.
+        auto lightDir = shadowLightDirection();
         float fovy = camera->fovy();
         float aspect = camera->aspect();
         float cameraNear = camera->zNear();

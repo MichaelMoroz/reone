@@ -23,6 +23,7 @@
 #include "reone/scene/render/pipeline.h"
 
 #include "fogproperties.h"
+#include "shadowproperties.h"
 #include "node/camera.h"
 #include "node/dummy.h"
 #include "node/emitter.h"
@@ -103,6 +104,7 @@ public:
     virtual std::string_view nameText(uint32_t id) const = 0;
 
     virtual void setAmbientLightColor(glm::vec3 color) = 0;
+    virtual void setShadowProperties(ShadowProperties properties) = 0;
     virtual bool hasShadowLight() const = 0;
     virtual bool isShadowLightDirectional() const = 0;
 
@@ -284,8 +286,14 @@ public:
     bool isShadowLightDirectional() const override { return _shadowLight->isDirectional(); }
 
     glm::vec3 shadowLightPosition() const { return _shadowLight->origin(); }
+    glm::vec3 shadowLightDirection() const;
     float shadowStrength() const { return _shadowStrength; }
     float shadowRadius() const { return _shadowLight->radius(); }
+
+    void setShadowProperties(ShadowProperties properties) override {
+        _shadowProperties = std::move(properties);
+    }
+    const ShadowProperties &shadowProperties() const { return _shadowProperties; }
 
     // END Shadows
 
@@ -400,6 +408,7 @@ private:
 
     bool _shadowActive {false};
     float _shadowStrength {0.0f};
+    ShadowProperties _shadowProperties;
 
     LightSceneNode *_shadowLight {nullptr};
 

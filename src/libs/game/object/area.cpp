@@ -200,6 +200,7 @@ void Area::loadARE(const resource::generated::ARE &are) {
 
     loadCameraStyle(are);
     loadAmbientColor(are);
+    loadShadows(are);
     loadScripts(are);
     loadMap(are);
     loadStealthXP(are);
@@ -229,6 +230,15 @@ void Area::loadCameraStyle(const resource::generated::ARE &are) {
 
 void Area::loadAmbientColor(const resource::generated::ARE &are) {
     _ambientColor = are.DynAmbientColor > 0 ? Gff::colorFromUint32(are.DynAmbientColor) : g_defaultAmbientColor;
+
+    applySceneProperties();
+}
+
+void Area::loadShadows(const resource::generated::ARE &are) {
+    _shadows.opacity = glm::clamp(static_cast<float>(are.ShadowOpacity) / 100.0f,
+                                  0.0f, 1.0f);
+    _shadows.sunShadows = are.SunShadows != 0;
+    _shadows.moonShadows = are.MoonShadows != 0;
 
     applySceneProperties();
 }
@@ -348,6 +358,7 @@ void Area::loadMiniGame(const resource::generated::ARE &are) {
 void Area::applySceneProperties() {
     auto &sceneGraph = _services.scene.graphs.get(_sceneName);
     sceneGraph.setAmbientLightColor(_ambientColor);
+    sceneGraph.setShadowProperties(_shadows);
 
     auto fogProperties = FogProperties();
     fogProperties.enabled = _fogEnabled;

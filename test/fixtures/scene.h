@@ -59,6 +59,7 @@ public:
     MOCK_METHOD(std::optional<std::reference_wrapper<CameraSceneNode>>, camera, (), (override));
 
     MOCK_METHOD(void, setAmbientLightColor, (glm::vec3), (override));
+    MOCK_METHOD(void, setShadowProperties, (ShadowProperties properties), (override));
     MOCK_METHOD(void, setFog, (FogProperties fog), (override));
 
     MOCK_METHOD(void, setWalkableSurfaces, (std::set<uint32_t>), (override));
