@@ -65,7 +65,7 @@ the invariant; its absolute value across commits is not.
 | **G7** | shadows from real geometry, envmap and bump verified against content |
 | **G8** | transparency in retro and PBR — sorted quads, premultiplied, the three alpha kinds |
 | **G9** | anti-aliasing as one output stage for all three modes: FSR and FXAA |
-| **sky** | the path is decided: **the offline `skybake` asset becomes the single source**, so V0 fixes the baker first, then V4 suppresses from the same manifest, V2 composites, V5 deletes the runtime bake. Still open: whether that chain runs before G6 or after G9 — raster shows a black sky until it does |
+| **sky** | **after G9.** The offline `skybake` asset becomes the single source: V0 fixes the baker, V4 suppresses from its manifest, V2 composites, V5 deletes the runtime bake. Raster shows a black sky until then, by decision |
 | **PT substage** | everything traced, after G6–G9 — see the substage section for its ordered list |
 
 **The order of work, set 2026-08-03: finish raster first.** Done since the last
@@ -98,12 +98,13 @@ binds: **the geometry track measures against the traced G-buffer, and
 unification deletes the traced primary visibility that produces it** — finish
 with the instrument before removing it.
 
-**Open, and not silently assumed:** the raster track as listed leaves the sky
-black in retro and PBR — G3 suppressed the shell unconditionally and the
-single sky composite lives in V2, inside the substage. Either V2's composite
-comes forward into the raster finish, or "raster is finished" means finished
-apart from the sky. Worth deciding before G6 starts rather than discovering
-it at the end.
+**Decided, and stated so it is not mistaken for an oversight:** the raster
+track leaves **the sky black in retro and PBR**, and that is intentional
+through G9. G3 suppressed the shell unconditionally in every mode, and the
+sky chain — V0 fix the baker, V4 suppress from its manifest, V2 composite,
+V5 delete the runtime bake — **runs after G9**. So "the raster track is
+finished" means finished apart from the sky, and every by-eye acceptance
+from G6 to G9 is judged against a black-sky frame.
 
 ---
 
