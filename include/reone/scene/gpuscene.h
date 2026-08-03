@@ -42,6 +42,14 @@ constexpr RenderCategories renderCategory(RenderCategory category) {
     return static_cast<RenderCategories>(category);
 }
 
+/**
+ * Grass face budgets bake at this density; the live dial reaches the merge
+ * kernel as density/cap in a push constant and gates the active cluster
+ * prefix, so a density change costs nothing on the CPU. Must match the
+ * editor slider's maximum, or the top of the slider silently clips.
+ */
+constexpr float kGrassDensityCap = 8.0f;
+
 struct RegisteredSkin {
     const std::vector<glm::mat4> *bones {nullptr};
     const std::vector<glm::mat4> *prevBones {nullptr};

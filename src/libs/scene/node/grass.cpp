@@ -145,8 +145,12 @@ void GrassSceneNode::collectInto(GpuScene &scene) {
 }
 
 int GrassSceneNode::getNumClustersInFace(float area) const {
+    // Budgets bake at the density CAP, not the live dial: the merge kernel
+    // gates the active prefix by density/cap from a push constant, so the
+    // slider is live without rebuilding face records. The cap matches the
+    // editor slider's maximum.
     return static_cast<int>(glm::round(
-        kGrassDensityFactor * _sceneGraph.grassDensityScale() *
+        kGrassDensityFactor * kGrassDensityCap *
         _properties.density * area));
 }
 

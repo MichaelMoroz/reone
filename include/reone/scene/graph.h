@@ -210,10 +210,16 @@ public:
         if (enabled == _grassEnabled && densityScale == _grassDensityScale) {
             return;
         }
+        const bool enabledChanged = enabled != _grassEnabled;
         _grassEnabled = enabled;
         _grassDensityScale = densityScale;
-        ++_grassGeneration;
-        _incrementalSceneReady = false;
+        // Density is live on the GPU side - budgets bake at the cap and the
+        // kernel gates by density/cap - so only the enable toggle still needs
+        // a generation bump and reconciliation.
+        if (enabledChanged) {
+            ++_grassGeneration;
+            _incrementalSceneReady = false;
+        }
     }
     bool grassEnabled() const override { return _grassEnabled; }
     float grassDensityScale() const override { return _grassDensityScale; }

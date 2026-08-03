@@ -260,6 +260,14 @@ ProceduralQuad expandGrassCluster(SceneObject object, uint clusterId) {
     float yaw = 6.28318530717958647692
         * grassRandom01(sourceFace, localCluster, 3);
     float sizeScale = saturate((32.0 - distance(position, pushConstants.cameraPosition.xyz)) / 4.0);
+    // Live density: budgets are baked at the density cap and the dial rides in
+    // cameraPosition.w as density/cap. Clusters beyond the active prefix emit
+    // degenerate quads, the same mechanism the distance ring uses, so the
+    // slider costs a push-constant change instead of a face-record rebuild.
+    uint activeBudget = uint(round(
+        float(face.faceBudgetMaterialVariants.y) * pushConstants.cameraPosition.w));
+    if (localCluster >= activeBudget)
+        sizeScale = 0.0;
     float quadSize = face.uv1yUv2QuadSize.w * sizeScale;
 
     ProceduralQuad cluster;

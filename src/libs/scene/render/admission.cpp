@@ -458,6 +458,11 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
         },
         view, _admissionGeneration,
         _options.admissionForceFull, std::move(reuse));
+    // The live grass density rides to the merge kernel in cameraPosition.w as
+    // density/cap; budgets are baked at the cap. Set before hashing so the
+    // shadow path (below, same assignment) stays byte-comparable.
+    _submission.upload.cameraPosition.w =
+        std::clamp(_options.grassDensity / kGrassDensityCap, 0.0f, 1.0f);
     for (const auto &range : _submission.upload.grassRanges)
         _submission.grass += range.clusterCount;
     if (_options.admissionShadow && _gpuScene.shadowScene()) {
@@ -471,6 +476,8 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
             },
             view, _admissionGeneration, true);
         _submission = std::move(savedSubmission);
+        shadowUpload.cameraPosition.w =
+            std::clamp(_options.grassDensity / kGrassDensityCap, 0.0f, 1.0f);
         const auto incrementalHash = hashUpload(_submission.upload);
         const auto shadowHash = hashUpload(shadowUpload);
         if (_submission.upload.objects.empty() != shadowUpload.objects.empty()) {

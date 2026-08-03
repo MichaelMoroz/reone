@@ -905,22 +905,15 @@ void Editor::graphicsSettings() {
     ImGui::Checkbox("SSAO", &options.ssao);
     ImGui::Checkbox("SSR", &options.ssr);
     ImGui::Checkbox("Grass", &options.grass);
-    // Bound to a pending value, committed on release. Every change of the
-    // committed value re-materialises every cluster, so a slider wired
-    // straight to it rebuilds the whole grass set on each mouse-move - the
-    // init cost once per frame for as long as you drag, which reads as the
-    // density itself being ruinous when it is only the dragging.
-    if (_pendingGrassDensity < 0.0f) {
-        _pendingGrassDensity = options.grassDensity;
-    }
-    ImGui::SliderFloat("Grass density", &_pendingGrassDensity, 0.0f, 8.0f, "%.2fx",
+    // Wired straight: density is a GPU gate over budgets baked at the slider
+    // maximum (kGrassDensityCap), so dragging costs a push-constant change.
+    // The old committed-on-release dance existed to avoid re-materialising
+    // every cluster per mouse-move; that rebuild no longer exists.
+    ImGui::SliderFloat("Grass density", &options.grassDensity, 0.0f, 8.0f, "%.2fx",
                        ImGuiSliderFlags_Logarithmic);
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-        options.grassDensity = _pendingGrassDensity;
-    }
     ImGui::TextDisabled("Multiplies the area's authored density, so areas keep\n"
-                        "their relative variation. Applies on release: every\n"
-                        "change re-materialises every cluster.");
+                        "their relative variation. Live: the dial gates the\n"
+                        "active cluster prefix on the GPU.");
     ImGui::Checkbox("TAA jitter", &options.taaJitter);
     ImGui::SliderFloat("Draw distance", &options.drawDistance, 1.0f, 1000.0f, "%.0f");
 
