@@ -55,8 +55,9 @@ the invariant; its absolute value across commits is not.
 | **G2** | done `ef6c5850`, coverage corrected in `298d0542` — one draw over merged geometry writes a G-buffer that agrees with the traced one |
 | **G3** | done `cc9a36ac` — admission extracted and shared, sky suppressed identically, all three modes hash the upload to the same value |
 | **G4** | done `d6148ee6` — matrices born in Vulkan clip, `glToVulkanClip` and the inert `IUniforms` deleted; dumps bit-identical across the change |
-| **G5** | done `802ec6c8` — retro shades the G-buffer; by eye, three of four modules read as the same game |
-| **G6–G8** | PBR shading, shadows, the blended pass. Next. |
+| **G5** | done `802ec6c8` — retro shades the G-buffer; by eye, three of four modules read as the same game. `920c1259` then took blended surfaces out of the G-buffer and the per-frame hash out of the frame; `1c703dde` added Tracy, capturable headless |
+| **R1** | in flight — persistent registration: the scene description stops rebuilding every frame. Tracy-measured target: collectInto 0.73 + admission 0.60 = 1.33 ms/frame → under 0.30 |
+| **G6–G8** | PBR shading, shadows, the blended pass. After R1. |
 | **V1–V5** | the visibility track and the sky. After G. |
 
 ## Two tracks, and why geometry goes first
@@ -317,6 +318,39 @@ until the coverage rule was corrected, and the correction is `298d0542`.
 The sky is a third difference of a different kind: raster still admits the sky
 shell as geometry and the tracer does not, which is the 464,982 raster-only
 pixels. That is a defect rather than an accepted difference — G3 removes it.
+
+## R1 — the scene stops rebuilding itself
+
+Tracy attributed the render thread's cost: `collectInto` 0.73 ms plus
+admission 0.60 ms per frame, spent re-deriving a description that is ~95%
+identical to the previous frame's. Both zones are one defect: registration
+and admission are O(scene) when the scene barely changes.
+
+The design: a **persistent object table** with dirty tracking. Nodes register
+on creation, unregister on destroy; transform changes mark dirty; material
+changes bump a per-object generation; dial changes bump a global admission
+generation (the `grassGeneration` pattern, generalised). Classification and
+the 256-byte material record cache per object — `bumpMapFrame` is the one
+per-frame field and is patched, not rebuilt. The dedup table persists with
+refcounts. Bone and dangly streams stay per-frame but collapse their
+three-copy chain to one write into a persistent arena.
+
+Two load-bearing decisions:
+
+- **Canonical order.** Incremental add/remove cannot reproduce a per-frame
+  walk order, so both paths order opaque-first-then-stable-id. One-time
+  traced-distribution shift; byte-comparable forever after.
+- **The full rebuild stays alive as a shadow path.** Behind a flag, every
+  frame builds the upload both ways and compares hashes — the
+  stale-invalidation tripwire, run through every acceptance capture,
+  including a module transition so unregister/re-register is exercised.
+  The G3 hash instrument is what makes this refactor checkable at all.
+
+*Proves itself:* zero shadow mismatches across danm14ab, danm13, a module
+transition and a traced run; G-buffer dumps byte-identical between the
+incremental and forced-full paths *in the same binary* (no phase-drift
+excuse); and the two zones fall from 1.33 ms to under 0.30, measured by the
+instrument that found them.
 
 ## G6 — PBR shading on the G-buffer
 
