@@ -180,6 +180,17 @@ public:
 
     std::shared_ptr<Module> module() const { return _module; }
     CameraType cameraType() const { return _cameraType; }
+    /**
+     * Enter or leave the free camera, the same way the `camera free` console
+     * command does. Exposed so the developer UI can offer it as a toggle:
+     * flying the scene is how shadow direction, reflections and anything else
+     * view-dependent get checked, and reaching for the console every time is
+     * friction that discourages looking.
+     *
+     * Returns false when the free camera is unavailable - outside a module,
+     * there is nothing to fly.
+     */
+    bool setFreeCameraEnabled(bool enabled);
     const std::set<std::string> &moduleNames() const { return _moduleNames; }
     const std::set<std::string> &saveNames() const { return _saveNames; }
 

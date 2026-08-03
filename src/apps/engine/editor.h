@@ -100,6 +100,7 @@ private:
 
     void graphicsSettings();
     bool _showGraphicsSettings {false};
+    bool _freeCameraUnavailable {false};
 
     void pathTracingSettings();
     bool _showPathTracing {false};

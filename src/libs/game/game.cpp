@@ -2894,6 +2894,32 @@ void Game::consoleIgnite(const ConsoleArgs &args) {
     _consoleSpawnedModel->playAnimation("powerup");
 }
 
+bool Game::setFreeCameraEnabled(bool enabled) {
+    if (enabled == (_cameraType == CameraType::Free)) {
+        return true;
+    }
+    if (enabled) {
+        auto area = _module ? _module->area() : nullptr;
+        if (!area || !area->getCamera<FreeCamera>(CameraType::Free)) {
+            return false;
+        }
+        _savedCameraType = _cameraType;
+        _cameraType = CameraType::Free;
+        setRelativeMouseMode(true);
+        area->updateRoomVisibility();
+        return true;
+    }
+    // Back to whatever was active before, rather than assuming third person:
+    // the toggle can be flipped from first person or a dialog camera too.
+    _cameraType = _savedCameraType == CameraType::Free ? CameraType::ThirdPerson
+                                                       : _savedCameraType;
+    setRelativeMouseMode(_cameraType == CameraType::FirstPerson);
+    if (_module && _module->area()) {
+        _module->area()->updateRoomVisibility();
+    }
+    return true;
+}
+
 void Game::consoleCamera(const ConsoleArgs &args) {
     consoleCheckUsage(args, 1, 1, "free");
     if (args[1].value() != "free") {
