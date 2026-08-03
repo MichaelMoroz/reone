@@ -3,6 +3,35 @@
 `cleanup-plan.md` is the record of how the engine got here. This file is the
 work that remains, and nothing else.
 
+## The goal
+
+**Make the engine better while preserving the retro look.** Those pull in
+opposite directions often enough that the rule needs stating: the two aims are
+separated by *mode*, not traded off inside one.
+
+- **Retro is preservation.** It reproduces what the original did. A deviation
+  is a bug, not a taste question, and the reference engines settle it — see
+  the reference section at the end of this file. Retro is also the fidelity
+  anchor every other mode is judged against, which is why it goes first in
+  each step and why it must stay honest.
+- **PBR and path tracing are the improvement.** They are held to looking
+  right, not to matching the original, and 2003's constraints are not
+  binding on them.
+
+The useful consequence when reading a reference finding: ask whether it
+records **artistic intent** or **a technical limitation**. The env-map
+formula, the sphere-map projection, the alpha blend modes and submission
+order are intent — they *are* the look, and they bind retro absolutely.
+The eight-light budget, skeleton-derived shadows, absent anti-aliasing and
+unfiltered textures are limitations — retro may keep them, the other modes
+should exceed them.
+
+One case shows the distinction is not always obvious: KOTOR's 2D env maps are
+GL **sphere maps**, so the eye-space projection is not a stylistic choice at
+all — it is how the texels were authored, and sampling them any other way
+reads the wrong pixels *in every mode*. A cube map has no such constraint,
+so there world-space reflection is available to the improving modes.
+
 Steps are named in three groups: **`G…`** the raster track, **`R…`** runtime
 cost work that cut across it, and the **path-tracing substage**, which contains
 the old `V…` visibility steps. The earlier `F0…F10` numbering outlived three
