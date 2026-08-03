@@ -3,10 +3,11 @@
 `cleanup-plan.md` is the record of how the engine got here. This file is the
 work that remains, and nothing else.
 
-Steps are named `G1…` on the geometry track and `V1…` on the visibility track,
-because the old `F0…F10` numbering outlived three restructures and stopped
-meaning anything. Commits before 2026-08-02 refer to F0, F1 and F2; those are
-done and are listed under **State** below.
+Steps are named in three groups: **`G…`** the raster track, **`R…`** runtime
+cost work that cut across it, and the **path-tracing substage**, which contains
+the old `V…` visibility steps. The earlier `F0…F10` numbering outlived three
+restructures and stopped meaning anything; commits before 2026-08-02 refer to
+F0, F1 and F2, which are done and listed under **State** below.
 
 ## How steps are written here
 
@@ -32,8 +33,9 @@ triage ranked a correct starfield worst. Metrics check the rest of the set once
 you know what you are looking at.
 
 **Capture rules, everywhere:** `--dev 0`, or the frame-time readout forges a
-difference, and `--grassdensity 1`, because `reone.cfg` is graded away from
-defaults and wins any flag not passed. Traced output is nondeterministic —
+difference; `--grassdensity 1`, because `reone.cfg` is graded away from
+defaults and wins any flag not passed; and `--taajitter 0` on **both sides** of
+any cross-mode comparison, or the comparison measures sampling noise (see G2). Traced output is nondeterministic —
 compare distributions, never a stored number.
 
 **Captures are deterministic per binary, not across binaries.** The capture
@@ -57,13 +59,14 @@ the invariant; its absolute value across commits is not.
 | **G4** | done `d6148ee6` — matrices born in Vulkan clip, `glToVulkanClip` and the inert `IUniforms` deleted; dumps bit-identical across the change |
 | **G5** | done `802ec6c8` — retro shades the G-buffer; by eye, three of four modules read as the same game. `920c1259` then took blended surfaces out of the G-buffer and the per-frame hash out of the frame; `1c703dde` added Tracy, capturable headless |
 | **R1** | done `cfbb2989` — persistent registration; 1.33 → 0.16 ms measured, zero shadow mismatches including a module transition |
-| **R2** | recommended to ride inside G6 as a constraint — the grown material record is computed at material-set time — with the Registered* deletion as mechanical cleanup after; standalone only if the schema collapse should precede more features |
+| **R2** | its constraint rides inside G6 — the grown material record is computed at material-set time, not per frame — leaving R2 itself as the `Registered*` deletion, mechanical cleanup once nothing reads them |
 | **R3** | done `1b6559aa` — grass placement in the merge compute; grass CPU 0.007 ms and flat through a teleport, graphics slot 4.1 → 1.3 ms at density 3.57 |
 | **G6** | finish PBR: shading on the G-buffer, and the material record grows to carry envmap, bump and water |
 | **G7** | shadows from real geometry, envmap and bump verified against content |
 | **G8** | transparency in retro and PBR — sorted quads, premultiplied, the three alpha kinds |
 | **G9** | anti-aliasing as one output stage for all three modes: FSR and FXAA |
-| **PT substage** | everything traced, after the raster track: transparency (backlog 3.7), the sphere/capsule march and its grids, unification, ReSTIR, SHARC, volumetrics, and V1–V5 |
+| **sky in raster** | **open, and it blocks the meaning of "raster finished"** — G3 suppressed the shell unconditionally and the single composite lives in V2, inside the substage. Decide before G6 starts |
+| **PT substage** | everything traced, after G6–G9 — see the substage section for its ordered list |
 
 **The order of work, set 2026-08-03: finish raster first.** Done since the last
 reorder: the **tracer guide fix** (`98ad7e4f` — guide surface = first
@@ -90,134 +93,17 @@ were previously on the critical path:
   all three alpha kinds, textured, exactly as the original drew them. The
   question of additive leaving geometry belongs to the substage, not here.
 
+One ordering constraint survives from the older two-track framing and still
+binds: **the geometry track measures against the traced G-buffer, and
+unification deletes the traced primary visibility that produces it** — finish
+with the instrument before removing it.
+
 **Open, and not silently assumed:** the raster track as listed leaves the sky
 black in retro and PBR — G3 suppressed the shell unconditionally and the
 single sky composite lives in V2, inside the substage. Either V2's composite
 comes forward into the raster finish, or "raster is finished" means finished
 apart from the sky. Worth deciding before G6 starts rather than discovering
 it at the end.
-
-**The first fog grid, specced 2026-08-03:** a distorted player-centred world
-grid — the simple incarnation of the end-state volume, built now rather than
-after SHARC. Density source: the per-area scene fog parameters, plus — the census
-(`714bd700`) settled which particles bake — **the Normal-blend billboard
-smoke/dust/cloud families** (~2,250 emitter nodes across ~490 models, the
-ambient always-on traversal load: vents, sandstorms, mist authored as
-`fx_smoke`) **and fire/explosion (144 nodes), which bake with an emissive
-channel** — the voxel carries density plus self-emission, and the march
-integrates density × (cached radiance + self-emission), so fire both glows
-and occludes as media. Everything else stays geometry, each for its own
-reason: crowd sprites and birds (6,535 nodes — sprite *characters*, not
-media), rain and wave strips (shaped, directional), motion-blur streaks and
-linked lightning (not billboard quads at all), and all additive per the
-standing rule. The census also surfaced that 1,124 lit
-emitters carry an authored `tinted` flag the renderer has never consumed —
-the tint colors the media when baking, so honoring it starts there. Lighting: **one sample per voxel per
-frame with large temporal reuse**; consumption: **trilinear at render**, a
-**software raymarch of density × emission** applied twice — after each
-hardware ray segment (bounces included) and at the PT resolve when combining
-final channels. When SHARC arrives later it feeds this same grid through the
-resample stage; the grid's shape and consumers do not change.
-
-**Media and additive are one march, and it is path-tracing only.** Retro does
-exactly what the original did — sorted textured quads for everything
-alpha-blended, analytic area fog, no grid and no marcher. It stays the
-untouched fidelity reference, which is what makes the approximations below
-judgeable: if a traced ring blobs, the authored ring is on screen one mode
-over. PBR keeps retro's treatment for now; adopting the march there is a
-later, separate decision.
-
-**Ray-oriented additive sprites are spheres and capsules.** A billboard
-oriented to face every ray has the same silhouette from every direction —
-that *is* a sphere, and a stretched one is a capsule. So intersection is a
-quadratic rather than plane-and-basis maths, the AABB is `position ± radius`
-(exact, orientation-free), and the record — position, radius, colour — is
-smaller than the quad it replaces. The census splits them cleanly: ~1,300
-additive flare/glow/star/spark nodes are radial → spheres; ~493 motion-blur
-streaks and 114 linked lightning emitters are elongated → capsules. Colour is
-a load-time property (texture average × tint × alpha), which keeps bindless
-texture fetches out of the march loop entirely.
-
-**They are volumes, not surfaces**, so the march integrates emission along
-the chord instead of committing a hit. That removes the hit list, the
-in-register sort and all ordering care: an additive sprite is just another
-emissive term in the same integral the media already computes.
-
-**The id grid: a uniform spatial hash, rebuilt per frame, built on the CPU.**
-Membership query, not field sample — no interpolation, no resample stage, no
-temporal identity, so none of the objections that shaped the radiance-cache
-design apply. It is boundless (a firefight across the plaza keeps its glow)
-and pathologically sparse. Insertion is self-limiting: a sprite covering more
-than K cells goes to a small **overflow list tested unconditionally per
-segment**, so pathological content self-selects instead of blowing up the
-table — no need to know the size distribution in advance. A coarse occupancy
-bitmask over the same key space keeps the common empty-cell case to a bit
-test rather than a probe chain. CPU construction is not a compromise: additive
-sprites are particles, already lowered CPU-side per frame in admission, so the
-table builds where the data is and uploads through the existing
-procedural-quad path. Watch it in Tracy; if it ever shows, the same code moves
-to the merge compute, whose shape it already matches.
-
-**The loop, one implementation for primary and bounce:**
-
-```
-DDA over id cells:
-  cell occupied?  gather its spheres/capsules (plus the overflow list)
-  march density across the cell span at its own step rate
-    per step: sum emission of primitives overlapping this step
-              composite inscatter, advance transmittance
-```
-
-DDA supplies span boundaries; the density march subdivides them, so the two
-structures need no aligned resolutions. **Two ray marchers is the thing to
-avoid** — primary and bounce differ only in step count and jitter, not in
-code. One constraint follows from 3.7: **primary must stay deterministic**,
-because additive emission routes through `noiseFree` and bypasses the
-denoiser — fixed steps on primary, stochastic taps only on bounces.
-
-*Consequence:* in path-tracing mode additive sprites leave geometry entirely,
-so the blended draw covers **lit-blended surfaces only** there — a filter on
-what the draw covers, not a fork of it, the same shape as G2's opaque-only
-rule. Lit blended fragments still sample the march's integrated
-`(inscatter, transmittance)` output at their own depth, so glass behind smoke
-dims correctly.
-
-*The accepted approximation, to be judged against retro:* shaped additive
-loses its shape — a ring becomes a blob, lightning a glowing tube. For
-flares, glows, sparks and bolt cores, a radial profile is what the texture
-already was, so nothing is lost; for the shaped minority it is a real change
-in the primary view. If it reads badly, the outs are a small textured-quad
-path for just those families, or an optional radial-UV texture lookup on
-primary where step counts are fixed. Decide from frames, not in advance.
-
-*Left open on purpose:* additive emitters lighting the media back (a bolt
-illuminating the smoke around it). The per-voxel lighting sample can reach
-them through the same primitive list, but the original game never did it; it
-is a dial, not a requirement.
-
-**Fog × AA, the working answer:** under TAA the march would sit as a post on
-the AA result to dodge reprojection; FSR complicates that in principle — but
-this engine runs FSR at **NativeAA, no upscaling**, so "before FSR at render
-res" and "after FSR at display res" are the same resolution, and the choice
-reduces to whether fog participates in FSR's temporal accumulation. Composite
-the march **after** FSR as a post using guide depth (fog is low-frequency; it
-needs no AA and gains no ghosting). And the march need not run at display
-resolution at all: **march at reduced resolution** — half or quarter, as
-production volumetrics commonly do — and depth-aware upsample at the
-composite. That decouples march cost and resolution from the AA pipeline
-entirely, which dissolves the super-resolution question for good: under any
-FSR mode the march res is its own dial, and the composite upsamples to
-whatever the display res is. Revisit only if fog ever carries frequencies a
-quarter-res march visibly loses.
-
-## Two tracks, and why geometry goes first
-
-Phase F named two independent things: raster **consuming** `GpuScene`, and
-raster **becoming primary visibility** for every mode. Neither needs the other.
-
-The ordering is forced, and not by preference. **The geometry track measures
-against the traced G-buffer, and V1 deletes the traced primary visibility that
-produces it.** Finish with the instrument before removing it.
 
 ---
 
@@ -235,7 +121,8 @@ that only existed to feed it. **Every shader kept.** They encode a decade of
 material behaviour that nothing else records, and G5 and G6 put them back to
 work against a different input.
 
-Also boxed for later, deliberately: **OIT, SSAO, SSR**. Not wrong — just not
+Also boxed for later, deliberately: **OIT, SSAO, SSR**, and the old post
+chain including FXAA and sharpen. Not wrong — just not
 worth carrying across a rewrite of the thing they sit on.
 
 The "before" captures were taken first: `danm14ab`, `danm13`, `ebo_m12aa` and
@@ -283,14 +170,16 @@ with `--taajitter 0`**:
 | | |
 |---|---:|
 | traced-only | **0** |
-| raster-only | 464,982 — the sky shell, see below |
+| raster-only | 464,982 — the sky shell, which G3 then removed |
 | both covered | 1,608,598 |
 | depth error > 1 unit | **206 px, 0.0128%** |
 | depth median / meanabs | 0.000106 / **0.0038** world units |
 | eye normal meanabs | **0.00237** |
 
 Retro's G-buffer is **byte-identical to PBR's** across all six targets, which is
-the point: the draw is mode-independent, and only shading differs.
+the point: the draw is mode-independent, and only shading differs. Worth
+repeating on a creature-heavy and a particle-heavy module before leaning on the
+agreement everywhere.
 
 **Measure this with jitter off, on both sides.** Raster jitters through the
 projection matrix and the tracer jitters the ray, so with jitter on every
@@ -439,13 +328,11 @@ geometry and coverage, and for opaque and cutout it is; for blended coverage
 it recorded a defect, and G2b faithfully copied it before G5b removed it
 again.
 
-So the fix direction is now settled rather than open: **the tracer's guide
-surface should be the first opaque-or-cutout hit — the rule raster already
-implements** — while blended surfaces keep contributing radiance in the layer
-loop. That realigns the two consumers, restores the coverage agreement, and
-removes the reprojection artifacts in one move. It is the same change backlog
-3.7 wants for other reasons (stochastic coverage, flat emission loop), so it
-lands there, on the tracer side; raster is already correct.
+That fix landed as `98ad7e4f`: the tracer's guide surface is the first
+opaque-or-cutout hit — the rule raster already implements — while blended
+surfaces keep contributing radiance in the layer loop. At the vent camera it
+took traced-only coverage from 831,500 to 0 and depth MAE from 2.995 to
+0.0012.
 
 Retro's material, reading the G-buffer instead of shading forward. Retro stops
 being a forward renderer.
@@ -465,9 +352,8 @@ until the coverage rule was corrected, and the correction is `298d0542`.
   no G-buffer surface by design; see the blended pass below.
 - **Shadows**, until G7.
 
-The sky is a third difference of a different kind: raster still admits the sky
-shell as geometry and the tracer does not, which is the 464,982 raster-only
-pixels. That is a defect rather than an accepted difference — G3 removes it.
+The sky-shell divergence recorded here — 464,982 raster-only pixels — was
+removed by G3; raster-only coverage is now 5 px.
 
 ## R1 — the scene stops rebuilding itself — done `cfbb2989`
 
@@ -553,8 +439,8 @@ flat through a scheduled teleport; graphics slot 4.118 → 1.337 ms at density
 3.57; the merge dispatch pays 9.9 µs. Field acceptance — the 350/250 moving
 fps report — pending the reporter.
 
-Measured in play: 350 fps standing, 250 fps moving. The delta is the grass
-edge band — the ramp is quantised so a *still* camera rebuilds nothing, which
+Pre-R3 baseline, measured in play: 350 fps standing, 250 fps moving. The
+delta is the grass edge band — the ramp is quantised so a *still* camera rebuilds nothing, which
 means a *moving* camera crosses a quantisation step every few centimetres and
 keeps every edge-band patch's instance vector rebuilding. Mitigations
 (coarser steps, hysteresis, per-cluster patching) shrink the class; moving
@@ -582,7 +468,9 @@ slang bit-exact. The design:
   admission. Grass registers once per node with a face-table reference.
 
 *Proves itself:* the grass CPU zones go to ~zero and stay there under camera
-motion; standing fps unchanged, moving fps recovers (play-verified); the
+motion; standing fps unchanged, and moving fps recovers — the landed evidence
+being the CPU-zone and graphics-slot figures, the in-play figure not yet
+re-measured; the
 field edge reads the same or better — continuous now — in both modes; the
 density dial still works; merge GPU cost delta measured and reported.
 
@@ -598,9 +486,28 @@ traced G-buffer on geometry.
 `GpuSceneMaterial` carries no `envMapDerivedLayer`, no `waterAlpha` and no
 environment cube ids, so G2 writes zero for each. The old resolve read
 `envMapDerivedLayer` out of the self-illumination alpha; something has to put it
-back before environment mapping and water can work at all. Growing the record is
-the obvious move — G3 is rebuilding that record anyway, so G6 states what it
-needs and G3 leaves room for it.
+back before environment mapping and water can work at all. Growing the record
+is G6's own work: the fields are added to `GpuSceneMaterial` and admission
+(`scene/render/admission`) fills them.
+
+**It also owns G5's four named gaps**, which all resolve here: no
+lightmap-presence bit (inferred today from the neutral-white value), the
+lightmapped-as-static light gate, per-object ambient and diffuse colours
+collapsed to neutral, and environment reflection omitted with only the bit
+kept.
+
+**R2's constraint rides in this step** (see the R2 row in State): the grown
+record is computed **at material-set time**, through the shared classifier,
+not rebuilt per frame — G6 is reshaping that record anyway, so the schema and
+its timing change together rather than twice. The `Registered*` deletion stays
+R2's, as mechanical cleanup afterwards.
+
+*Proves itself:* the PBR G-buffer stays byte-identical to retro's (the draw is
+mode-independent; only shading may differ); an environment-mapped fixture and
+a water fixture render with those materials visibly working, judged against
+the pre-G1 PBR captures for material behaviour rather than for the old
+output's bugs; the upload hash stays equal across all three modes, which is
+what proves the record change did not fork admission.
 
 ## G7 — shadows from real geometry
 
@@ -610,10 +517,19 @@ and delete the proxies rather than plumbing them through. They exist because
 four cascades and six cube faces of real geometry were expensive in 2003, which
 is not a constraint now.
 
-Shadows are judged by eye, separately from the G-buffer comparison, so a
-regression cannot hide behind an intended change.
+*Proves itself:* named shadow fixtures — an interior with a point light and an
+exterior under the sun — captured against the pre-G1 retro and PBR captures
+and judged by eye, separately from the G-buffer comparison so a regression
+cannot hide behind an intended change; plus the frame-cost delta of real
+geometry against the deleted proxy pass, reported per cascade and cube face.
 
 ## G8 — the blended pass, and the three alpha kinds
+
+**Scope: retro and PBR.** In path-tracing mode additive sprites leave geometry
+and are handled by the march (see the substage), so the blended draw there
+covers lit-blended surfaces only — a filter on the range it draws, not a fork
+of the draw. Briefed without this, the draw double-counts additive in traced
+mode.
 
 The G-buffer holds opaque surfaces. Everything else is a second draw over the
 same merged buffer, after shading. There are exactly three kinds of alpha and
@@ -621,7 +537,7 @@ they are not variations of one thing:
 
 | kind | example | where it belongs |
 |---|---|---|
-| **alpha punchcards** | leaf cards, fences, grilles | **opaque** — writes depth, discards on zero alpha |
+| **alpha punchcards** | leaf cards, fences, grilles | **opaque** — writes depth, discards on zero alpha; **open, conflicts with the shared coverage rule — see below** |
 | **alpha emissive** | saber blades, glow decals | **transparent, additive** |
 | **alpha lit + emissive** | particles, smoke | **transparent, alpha blended** |
 
@@ -670,18 +586,13 @@ to exist where triangles of different objects interleave. Depth-test against
 the opaque G-buffer, **depth-write off**, or blended fragments reject each
 other.
 
-## Why the traced G-buffer is trustworthy
-
-Measured on `danm14ab`, 2026-08-02:
-
-- traced and raster agree on **1,650,826 pixels**
-- **35** are traced-only — alpha-tested foliage, where raster's diffuse alpha is
-  zero and the tracer still hits geometry
-- the other **422,739** are the sky, which is the decided change rather than a
-  discrepancy: raster draws a room, the tracer classifies it
-
-So the tracer is not missing whole categories. Worth repeating on a
-creature-heavy and a particle-heavy module before leaning on it everywhere.
+*Proves itself:* a fixture carrying all three alpha kinds at once — an
+alpha-blended pane, an additive glow and a punchcard — renders each correctly
+in retro and PBR against the pre-G1 captures; sort correctness is shown by a
+deliberately interleaved pair, two transparent objects whose triangles
+alternate in depth, which is wrong without the remap and right with it; and
+the upload hash stays equal across modes, proving the sort is a raster-side
+artifact rather than a change to the shared description.
 
 ## G9 — anti-aliasing, one output stage for three modes
 
@@ -724,7 +635,7 @@ raster geometry   →  opaque G-buffer            (shared, the megadraw)
 raster blended    →  transparency layer(s)      (shared geometry, sorted remap draw)
 PT pass 1         →  rays from opaque surfaces  (the G-buffer is the ray-origin set)
 denoise           →  NRD over the opaque signal
-PT resolve        →  opaque + blended + additive emission + sky, composited
+PT resolve        →  opaque + blended + additive emission + sky as a layer
 FSR (jitter on) / FXAA (jitter off)
 ```
 
@@ -742,9 +653,124 @@ composite falls back to the raw signal there; sky radiance is deterministic
 and never needed denoising. This is a preview of the PT resolve owning the
 sky layer explicitly.
 
+## The fog grid, the march, and additive as primitives
+
+**The first fog grid, specced 2026-08-03:** a distorted player-centred world
+grid — the simple incarnation of the end-state volume, built now rather than
+after SHARC. Density source: the per-area scene fog parameters, plus — the census
+(`714bd700`) settled which particles bake — **the Normal-blend billboard
+smoke/dust/cloud families** (~2,250 emitter nodes across ~490 models, the
+ambient always-on traversal load: vents, sandstorms, mist authored as
+`fx_smoke`) **and fire/explosion (144 nodes), which bake with an emissive
+channel** — the voxel carries density plus self-emission, and the march
+integrates density × (cached radiance + self-emission), so fire both glows
+and occludes as media. Everything else stays out of the density bake: crowd
+sprites and birds (6,535 nodes — sprite *characters*, not media), and rain and
+wave strips (shaped, directional). Additive families do not bake either — they
+become the sphere and capsule primitives specced below. The census also surfaced that 1,124 lit
+emitters carry an authored `tinted` flag the renderer has never consumed —
+the tint colors the media when baking, so honoring it starts there. Lighting: **one sample per voxel per
+frame with large temporal reuse**; consumption: **trilinear at render**, a
+**software raymarch of density × emission** applied twice — after each
+hardware ray segment (bounces included) and at the PT resolve when combining
+final channels. When SHARC arrives later it feeds this same grid through the
+resample stage; the grid's shape and consumers do not change.
+
+**Media and additive are one march, and it is path-tracing only.** Retro does
+exactly what the original did — sorted textured quads for everything
+alpha-blended, analytic area fog, no grid and no marcher. It stays the
+untouched fidelity reference, which is what makes the approximations below
+judgeable: if a traced ring blobs, the authored ring is on screen one mode
+over. PBR keeps retro's treatment for now; adopting the march there is a
+later, separate decision.
+
+**Ray-oriented additive sprites are spheres and capsules.** A billboard
+oriented to face every ray has the same silhouette from every direction —
+that *is* a sphere, and a stretched one is a capsule. So intersection is a
+quadratic rather than plane-and-basis maths, the AABB is `position ± radius`
+(exact, orientation-free), and the record — position, radius, colour — is
+smaller than the quad it replaces. The census splits them cleanly: ~1,300
+additive flare/glow/star/spark nodes are radial → spheres; ~493 motion-blur
+streaks and 114 linked lightning emitters are elongated → capsules. Colour is
+a load-time property (texture average × tint × alpha), which keeps bindless
+texture fetches out of the march loop entirely.
+
+**They are volumes, not surfaces**, so the march integrates emission along
+the chord instead of committing a hit. That removes the hit list, the
+in-register sort and all ordering care: an additive sprite is just another
+emissive term in the same integral the media already computes.
+
+**The id grid: a uniform spatial hash, rebuilt per frame, built on the CPU.**
+Membership query, not field sample — no interpolation, no resample stage, no
+temporal identity, so none of the objections that shaped the radiance-cache
+design apply. It is boundless (a firefight across the plaza keeps its glow)
+and pathologically sparse. Insertion is self-limiting: a sprite covering more
+than K cells goes to a small **overflow list tested unconditionally per
+segment**, so pathological content self-selects instead of blowing up the
+table — no need to know the size distribution in advance. A coarse occupancy
+bitmask over the same key space keeps the common empty-cell case to a bit
+test rather than a probe chain. CPU construction is not a compromise: additive
+sprites are particles, already lowered CPU-side per frame in admission, so the
+table builds where the data is and uploads through the existing
+procedural-quad path. Watch it in Tracy; if it ever shows, the same code moves
+to the merge compute, whose shape it already matches.
+
+**The loop, one implementation for primary and bounce:**
+
+```
+DDA over id cells:
+  cell occupied?  gather its spheres/capsules (plus the overflow list)
+  march density across the cell span at its own step rate
+    per step: sum emission of primitives overlapping this step
+              composite inscatter, advance transmittance
+```
+
+DDA supplies span boundaries; the density march subdivides them, so the two
+structures need no aligned resolutions. **Two ray marchers is the thing to
+avoid** — primary and bounce differ only in step count and jitter, not in
+code. One constraint follows from 3.7: **primary must stay deterministic**,
+because additive emission routes through `noiseFree` and bypasses the
+denoiser — fixed steps on primary, stochastic taps only on bounces.
+
+*Consequence:* in path-tracing mode additive sprites leave geometry entirely,
+so the blended draw covers **lit-blended surfaces only** there — a filter on
+what the draw covers, not a fork of it, the same shape as the G-buffer's
+opaque-and-cutout
+rule. Lit blended fragments still sample the march's integrated
+`(inscatter, transmittance)` output at their own depth, so glass behind smoke
+dims correctly.
+
+*The accepted approximation, to be judged against retro:* shaped additive
+loses its shape — a ring becomes a blob, lightning a glowing tube. For
+flares, glows, sparks and bolt cores, a radial profile is what the texture
+already was, so nothing is lost; for the shaped minority it is a real change
+in the primary view. If it reads badly, the outs are a small textured-quad
+path for just those families, or an optional radial-UV texture lookup on
+primary where step counts are fixed. Decide from frames, not in advance.
+
+*Left open on purpose:* additive emitters lighting the media back (a bolt
+illuminating the smoke around it). The per-voxel lighting sample can reach
+them through the same primitive list, but the original game never did it; it
+is a dial, not a requirement.
+
+**Fog × AA, the working answer:** under TAA the march would sit as a post on
+the AA result to dodge reprojection; FSR complicates that in principle — but
+this engine runs FSR at **NativeAA, no upscaling**, so "before FSR at render
+res" and "after FSR at display res" are the same resolution, and the choice
+reduces to whether fog participates in FSR's temporal accumulation. Composite
+the march **after** FSR as a post using guide depth (fog is low-frequency; it
+needs no AA and gains no ghosting). And the march need not run at display
+resolution at all: **march at reduced resolution** — half or quarter, as
+production volumetrics commonly do — and depth-aware upsample at the
+composite. That decouples march cost and resolution from the AA pipeline
+entirely, which dissolves the super-resolution question for good: under any
+FSR mode the march res is its own dial, and the composite upsamples to
+whatever the display res is. Revisit only if fog ever carries frequencies a
+quarter-res march visibly loses.
+
 ## The traced quality lane, in order
 
-Sequenced AFTER the critical path (below). Each entry exists because of the
+Sequenced after the fog grid and the march above. Each entry exists because of the
 one before it.
 
 1. **ReSTIR DI first.** The current light loop is already one-sample RIS
@@ -774,25 +800,18 @@ one before it.
    move exists to avoid — froxels survive only as a possible view-side fog
    integrator that holds no history of its own) and uniform world grids
    (leak-safe resolution is unaffordable, coarse resolution leaks).
-4. **Volumetrics split density from radiance** — different fields, opposing
-   requirements. Radiance: low-frequency, the coarse volume above is
-   *correct*, not a compromise. Density: three sources — per-area uniform/
-   height fog is **analytic, no storage**; emitter smoke and ground fog are
-   meters-scale with sharp gradients and get **fine local density bricks**
-   (~0.25–0.5 m) allocated only around active emitters, transient with
-   them; nothing in between. The particle systems remain the authors of
-   density — injection rasterises particle kernels into bricks, preserving
-   authored spawn/drift/animation. The scattering integral marches
-   (analytic + brick density) × coarse radiance × phase.
-   **Prototype transmittance first**: self-shadowing through the column is
-   what makes smoke read as dense; inscatter without it is glowing soup and
-   fails the look test immediately. **Add a Dxun exterior (4xxDXN) to the
-   K2 fixture set before this work starts** — it is the all-fog stress
-   case and the render-and-look-at-it rule applies.
+4. **Volumetrics** consume the grid above. Density lives there — analytic area
+   fog plus the baked smoke, dust, cloud and fire families — and radiance is
+   the coarse field this stage resamples into. **Prototype transmittance
+   first**: self-shadowing through the column is what makes smoke read as
+   dense; inscatter without it is glowing soup and fails the look test
+   immediately. **Add a Dxun exterior (4xxDXN) to the K2 fixture set before
+   this work starts** — it is the all-fog stress case and the
+   render-and-look-at-it rule applies.
 
-# V — raster becomes primary visibility, and the sky composites once
+## V — raster becomes primary visibility, and the sky composites once
 
-## V1 — hybridise
+### V1 — hybridise
 
 `PathTracing` bypasses raster entirely today: `VulkanScenePipeline::init`
 returns before allocating the G-buffer (`scenepipeline.cpp:191-207`). There are
@@ -811,7 +830,12 @@ and dumping, plan construction, and the tracer's output contract.
 | **V1b** | run the geometry pass in traced mode, write the G-buffer, discard it | `g_buffer_depth` from PathTracing **byte-identical to PBR's** at the same camera. That is the whole proof that raster visibility is right in traced mode, available before anything depends on it. Traced image unchanged; only frame cost moves |
 | **V1c** | the tracer takes its primary hit from the G-buffer instead of tracing camera rays | traced output changes by design — compare distributions across three runs a side and judge the images. **This deletes the traced G-buffer instrument, so it must not land while G still needs it** |
 
-## V2 — composite the sky once
+### V2 — composite the sky once
+
+**Scope: the raster modes.** In path tracing the sky is a layer of the PT
+resolve (see the frame diagram above), which composites it against everything
+else at once and cannot paint over anything. What follows is retro and PBR,
+where there is a discrete transparent pass to order against.
 
 One pass, **after the opaque resolve and before transparency**. Not at the end
 of the chain, which sits past the transparent pass and would paint over
@@ -834,7 +858,7 @@ distance, from misreading a `--dumptargets` dump, which linearises.
 lens flare. Sky off versus sky on, filters disabled. The changed-pixel set must
 be exactly the far-depth set, and the particle and flare pixels must not move.
 
-## V3 — the tracer keeps only transport
+### V3 — the tracer keeps only transport
 
 `ptSkyRadiance` on **bounce miss** stays: that is transport, and it is what
 makes the sky an environment light. Its **primary-miss** call is compositing and
@@ -847,7 +871,7 @@ surface debug view uses.
 *Acceptance:* a fixed-seed fixture whose camera sees an opaque surface and whose
 first secondary ray misses. Hash the traced result across the change.
 
-## V4 — suppress exactly the shell
+### V4 — suppress exactly the shell
 
 The manifest exists: `override/*/modules.ini` carries `meshes =` naming the
 shell mesh by mesh, and `skybake` bakes exactly that list (`403c0802`). V4 makes
@@ -865,7 +889,7 @@ planet and the Ahto City rings are **still drawn**. The bar is the props, not
 the sky — a sky that renders correctly while quietly removing scenery passes
 every sky-shaped test.
 
-## V5 — delete the runtime bake
+### V5 — delete the runtime bake
 
 `bakeSkyRoom` and its call sites, `slang/sky.slang` and its shaderpack wiring,
 and the shadow-ray candidate rejection at `slang/tracing/trace.slang:134`, which
