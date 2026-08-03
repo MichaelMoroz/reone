@@ -8,3 +8,4 @@ engine.log
 
 # Generated skybox assets - rebuild with build/bin/skybake, never committed
 override/*/sky/
+/override/mod_stuff
