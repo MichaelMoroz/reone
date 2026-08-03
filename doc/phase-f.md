@@ -510,6 +510,22 @@ the pre-G1 PBR captures for material behaviour rather than for the old
 output's bugs; the upload hash stays equal across all three modes, which is
 what proves the record change did not fork admission.
 
+### Open defect: metal reads duller than the original
+
+Reported from play — metal is less reflective in **both** retro and PBR than
+in the original game. The cause is visible in the code rather than a matter of
+taste: the original forward shader sampled the **authored environment cube
+directly** (`sampleEnvMap`, `pbr_model.slang:361`), while both current
+resolves sample the **prefiltered IBL array at mip 0** — a roughness-convolved
+cube at 128² (`kPrefilteredSize`). The strength term is unchanged in both,
+`* (1 - diffuse.a)`, so this is not a scaling error: the reflection is taken
+from a blurred, downsampled source where the original took a sharp one.
+
+The fix direction is to sample the material's own env cube for the mirror term
+and keep the prefiltered chain for what it is for — roughness-varying IBL.
+G6 added `envMap` and `envMapCube` ids to the record precisely so the sharp
+source is reachable; nothing reads them for this term yet.
+
 ### Where material data lives — the rule, settled in G6
 
 G6 first carried per-object ambient and diffuse in **two new RGBA8
@@ -625,11 +641,22 @@ alternate in depth, which is wrong without the remap and right with it; and
 the upload hash stays equal across modes, proving the sort is a raster-side
 artifact rather than a change to the shared description.
 
-## G9 — anti-aliasing, one output stage for three modes
+## G9 — the shared output stage: bloom, lens flares, anti-aliasing
 
 Raster has had no anti-aliasing since G1 boxed FXAA and sharpen with the rest
 of the old post chain; FSR exists but is wired only into the traced path.
-G9 makes AA a **shared output stage every mode ends in**, with two methods:
+G9 makes the frame's tail a **shared output stage every mode ends in**, and it
+carries three things, not one:
+
+- **Bloom, for every mode including path tracing.** The old renderer wrote
+  hilights to a second resolve target and blurred them (`hilightsBlurPass`);
+  the blur shaders survive in `postprocess.slang`. It is a display effect, so
+  it belongs to all three modes rather than to raster's resolve.
+- **Lens flares, for every raster mode.** They were in the retro pipeline as
+  well as PBR's, drawn as billboards in the old post walk. Their category
+  `LensFlare` is still filtered out at admission, so restoring them starts
+  there, not in the shader.
+- **Anti-aliasing**, with two methods:
 
 - **FSR** at NativeAA — the temporal resolve, which **requires jitter on**.
 - **FXAA** — spatial, single-frame, which **requires jitter off**, since a
@@ -648,8 +675,30 @@ relative to it.
 
 *Proves itself:* an edge-heavy fixture captured in all three modes under each
 method, jitter derived rather than set, judged by eye against the pre-G1
-retro captures for FXAA and against the current traced output for FSR.
-Frame-cost delta reported per mode.
+retro captures for FXAA and against the current traced output for FSR; bloom
+and flares judged against those same captures. Frame-cost delta per mode.
+
+### What the legacy renderer had, and where each piece went
+
+G1 kept every shader, so none of this is lost work — it is a wiring
+inventory. Checked against the pre-G1 passes:
+
+| feature | shader | fate |
+|---|---|---|
+| transparency / OIT | `oitBlendFragment` | **G8**, replaced by the sorted premultiplied draw |
+| FXAA, sharpen | `postprocess.slang` | **G9** |
+| bloom (hilights + blur) | `postprocess.slang` blurs | **G9**, now all three modes |
+| lens flares | billboard path | **G9**, both raster modes; unfilter `LensFlare` at admission |
+| sky | — | the sky chain, after G9 |
+| **SSAO** | `pbr_ssao.slang` | **unowned — decide** |
+| **SSR** | `pbr_ssr.slang` | **unowned — decide** |
+
+The resolve currently runs a neutral AO of 1.0 and says so
+(`pbr_resolve.slang`). SSAO and SSR are the two that deserve a real decision
+rather than a slot: both are **screen-space approximations of occlusion and
+reflection that path tracing computes properly**, so they are raster-only
+catch-up, not shared features — worth restoring only if raster is meant to
+stand on its own against the traced image rather than as its cheaper sibling.
 
 ---
 
