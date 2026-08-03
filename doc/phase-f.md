@@ -58,6 +58,7 @@ the invariant; its absolute value across commits is not.
 | **G5** | done `802ec6c8` — retro shades the G-buffer; by eye, three of four modules read as the same game. `920c1259` then took blended surfaces out of the G-buffer and the per-frame hash out of the frame; `1c703dde` added Tracy, capturable headless |
 | **R1** | done `cfbb2989` — persistent registration; 1.33 → 0.16 ms measured, zero shadow mismatches including a module transition |
 | **R2** | delete the translation layer: nodes own GPU-shaped records, classification moves to material-set time, the Registered* intermediates die |
+| **R3** | grass generates on the GPU — the moving-camera CPU cost (350→250 fps) is the edge band rebuilding; placement is a bit-exact integer hash and belongs in the merge |
 | **G6–G8** | PBR shading, shadows, the blended pass. After R1/R2. |
 | **V1–V5** | the visibility track and the sky. After G. |
 
@@ -395,6 +396,41 @@ animation-timing bug within hours of existing.
 acceptance set including a module transition, byte-identical dumps between
 paths in one binary, and the frame cost of the former collection+admission
 zones reduced to the dynamic streams alone.
+
+## R3 — grass generates on the GPU
+
+Measured in play: 350 fps standing, 250 fps moving. The delta is the grass
+edge band — the ramp is quantised so a *still* camera rebuilds nothing, which
+means a *moving* camera crosses a quantisation step every few centimetres and
+keeps every edge-band patch's instance vector rebuilding. Mitigations
+(coarser steps, hysteresis, per-cluster patching) shrink the class; moving
+placement into the merge compute deletes it.
+
+Grass is deterministic procedural data: an integer hash of (face, cluster,
+stream) — deliberately made integer for bit-reproducibility, so it ports to
+slang bit-exact. The design:
+
+- **Per-face records upload once** (face triangle in world space, lightmap
+  UVs, per-face cluster budget from area × density, material index),
+  refreshed only on the density generation.
+- **The merge compute expands clusters** from the ported hash for faces in
+  the camera band, computing the edge ramp *continuously* — no quantisation,
+  because there is no CPU rebuild to protect. Out-of-ring clusters emit
+  degenerate quads.
+- **Counts stay CPU-known and deterministic**: a cheap face-band scan sizes
+  the ranges (faces are hundreds, not thousands); every in-band face emits
+  its full budget, degenerate where scaled out. No indirect draws, no GPU
+  readback, BLAS capacity unchanged in kind.
+- **Both consumers inherit it for free** — same merged buffer, same BLAS
+  path; traced grass gets the same continuous edge.
+- **Deleted**: cluster materialisation, the cluster pool and scene-node
+  children, grass instance vectors in registration, grass lowering in
+  admission. Grass registers once per node with a face-table reference.
+
+*Proves itself:* the grass CPU zones go to ~zero and stay there under camera
+motion; standing fps unchanged, moving fps recovers (play-verified); the
+field edge reads the same or better — continuous now — in both modes; the
+density dial still works; merge GPU cost delta measured and reported.
 
 ## G6 — PBR shading on the G-buffer
 
