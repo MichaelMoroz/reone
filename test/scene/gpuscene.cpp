@@ -32,6 +32,19 @@ GpuScene::Classifier noMeshes() {
     };
 }
 
+GpuSceneGrassFace grassFace(uint32_t sourceFace, uint32_t budget, float x) {
+    GpuSceneGrassFace face;
+    face.vertex0Uv0x = {x - 1.0f, -1.0f, 0.0f, 0.0f};
+    face.vertex1Uv0y = {x + 1.0f, -1.0f, 0.0f, 0.0f};
+    face.vertex2Uv1x = {x, 1.0f, 0.0f, 0.0f};
+    face.uv1yUv2QuadSize.w = 0.5f;
+    face.probabilities = {1.0f, 0.0f, 0.0f, 0.0f};
+    face.boundsMin = {x - 1.0f, -1.0f, 0.0f, 0.0f};
+    face.boundsMax = {x + 1.0f, 1.0f, 0.0f, 0.0f};
+    face.faceBudgetMaterialVariants = {sourceFace, budget, 0u, 4u};
+    return face;
+}
+
 } // namespace
 
 TEST(GpuScene, persists_objects_and_caches_classification_in_canonical_order) {
@@ -86,4 +99,68 @@ TEST(GpuScene, full_collection_unregisters_unseen_objects_and_clear_resets_world
     scene.clear();
     EXPECT_TRUE(scene.objects().empty());
     EXPECT_EQ(0, scene.counts().objects());
+}
+
+TEST(GpuScene, grass_uses_face_band_prefix_ranges_without_cpu_quads) {
+    GpuScene scene;
+    std::vector<GpuSceneGrassFace> faces {
+        grassFace(7, 3, 0.0f), grassFace(11, 5, 20.0f),
+        grassFace(19, 2, 100.0f)};
+    Material material {};
+    material.type = MaterialType::Grass;
+    scene.addGrass(renderCategory(RenderCategory::Opaque), {4, 0}, {}, material,
+                   faces, 1);
+
+    int classifications = 0;
+    auto classify = [&classifications](const RegisteredProcedural &object) {
+        ++classifications;
+        EXPECT_EQ(ProceduralKind::Grass, object.kind);
+        GpuScene::Classification result;
+        result.kind = GpuScene::AdmissionKind::Cutout;
+        return std::optional {result};
+    };
+
+    auto near = scene.prepare(noMeshes(), classify, glm::mat4(1.0f), 1);
+    ASSERT_EQ(1, near.objects.size());
+    EXPECT_EQ(1, classifications);
+    EXPECT_TRUE(near.proceduralQuads.empty());
+    ASSERT_EQ(3, near.grassFaces.size());
+    ASSERT_EQ(2, near.grassRanges.size());
+    EXPECT_EQ(0, near.grassRanges[0].faceIndex);
+    EXPECT_EQ(0, near.grassRanges[0].clusterOffset);
+    EXPECT_EQ(3, near.grassRanges[0].clusterCount);
+    EXPECT_EQ(1, near.grassRanges[1].faceIndex);
+    EXPECT_EQ(3, near.grassRanges[1].clusterOffset);
+    EXPECT_EQ(5, near.grassRanges[1].clusterCount);
+    EXPECT_EQ(32, near.objects[0].data.vertexCount);
+    EXPECT_EQ(16, near.objects[0].data.triangleCount);
+    EXPECT_EQ(2, near.objects[0].data.srcIndexOffset);
+    EXPECT_EQ(near.objects[0].data.materialIndex,
+              near.grassFaces[0].faceBudgetMaterialVariants.z);
+
+    const auto generation = near.grassFaceGeneration;
+    auto farView = glm::translate(glm::mat4(1.0f), glm::vec3(-100.0f, 0.0f, 0.0f));
+    auto far = scene.prepare(noMeshes(), classify, farView, 1, false,
+                             std::move(near));
+    EXPECT_EQ(1, classifications);
+    EXPECT_EQ(generation, far.grassFaceGeneration);
+    ASSERT_EQ(1, far.grassRanges.size());
+    EXPECT_EQ(2, far.grassRanges[0].faceIndex);
+    EXPECT_EQ(0, far.grassRanges[0].clusterOffset);
+    EXPECT_EQ(2, far.grassRanges[0].clusterCount);
+    ASSERT_EQ(1, far.objects.size());
+    EXPECT_EQ(8, far.objects[0].data.vertexCount);
+    EXPECT_EQ(4, far.objects[0].data.triangleCount);
+
+    faces[0].faceBudgetMaterialVariants.y = 9;
+    scene.addGrass(renderCategory(RenderCategory::Opaque), {4, 0}, {}, material,
+                   faces, 2);
+    auto denser = scene.prepare(noMeshes(), classify, glm::mat4(1.0f), 1,
+                                false, std::move(far));
+    EXPECT_NE(generation, denser.grassFaceGeneration);
+    EXPECT_EQ(16, scene.counts().grassClusters);
+    ASSERT_EQ(2, denser.grassRanges.size());
+    EXPECT_EQ(0, denser.grassRanges[0].clusterOffset);
+    EXPECT_EQ(9, denser.grassRanges[0].clusterCount);
+    EXPECT_EQ(9, denser.grassRanges[1].clusterOffset);
 }

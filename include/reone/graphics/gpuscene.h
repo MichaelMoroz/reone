@@ -136,6 +136,33 @@ struct alignas(16) GpuSceneProceduralQuad {
 };
 static_assert(sizeof(GpuSceneProceduralQuad) == sizeof(glm::vec4) * 6);
 
+/**
+ * Persistent input for one authored grass face. The triangle is already in
+ * world space. UV components are packed into otherwise unused fourth lanes so
+ * the merge shader can read one cache-line-aligned record without a second
+ * source stream.
+ */
+struct alignas(16) GpuSceneGrassFace {
+    glm::vec4 vertex0Uv0x {0.0f};
+    glm::vec4 vertex1Uv0y {0.0f};
+    glm::vec4 vertex2Uv1x {0.0f};
+    glm::vec4 uv1yUv2QuadSize {0.0f};
+    glm::vec4 probabilities {0.0f};
+    glm::vec4 boundsMin {0.0f};
+    glm::vec4 boundsMax {0.0f};
+    glm::uvec4 faceBudgetMaterialVariants {0u};
+};
+static_assert(sizeof(GpuSceneGrassFace) == sizeof(glm::vec4) * 8);
+
+/** Per-frame prefix-sum entry selecting a persistent grass face. */
+struct alignas(16) GpuSceneGrassRange {
+    uint32_t faceIndex {0};
+    uint32_t clusterOffset {0};
+    uint32_t clusterCount {0};
+    uint32_t pad {0};
+};
+static_assert(sizeof(GpuSceneGrassRange) == sizeof(glm::uvec4));
+
 enum class GpuScenePrimitiveClass { Opaque,
                                     NonOpaque };
 enum class GpuSceneResidencyClass { Static,
@@ -155,6 +182,10 @@ struct GpuSceneUpload {
     std::vector<GpuSceneMatrix3x4> bones;
     std::vector<glm::vec4> danglyPositions;
     std::vector<GpuSceneProceduralQuad> proceduralQuads;
+    std::vector<GpuSceneGrassFace> grassFaces;
+    std::vector<GpuSceneGrassRange> grassRanges;
+    glm::vec4 cameraPosition {0.0f, 0.0f, 0.0f, 1.0f};
+    uint64_t grassFaceGeneration {0};
     uint32_t opaqueObjectCount {0};
     uint32_t materialReferenceCount {0};
 };

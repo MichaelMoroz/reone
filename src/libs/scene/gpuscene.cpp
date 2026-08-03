@@ -136,6 +136,7 @@ void GpuScene::clear() {
     _counts = {};
     _previousFrameIds.clear();
     ++_admissionGeneration;
+    dirtyGrassFaces();
 }
 
 void GpuScene::resetAdmissionCache() {
@@ -263,6 +264,11 @@ void GpuScene::invalidate(SceneNodeId id) {
     cache.dirty = true;
 }
 
+void GpuScene::dirtyGrassFaces() {
+    if (++_grassFaceGeneration == 0)
+        ++_grassFaceGeneration;
+}
+
 void GpuScene::upsert(ObjectRecord object) {
     const auto id = objectId(object);
     _fullCollectionUnseen.erase(id);
@@ -276,11 +282,24 @@ void GpuScene::upsert(ObjectRecord object) {
                 return idLess(objectId(candidate), value);
             });
         addCounts(object);
+        if (const auto *procedural = std::get_if<RegisteredProcedural>(&object);
+            procedural && procedural->kind == ProceduralKind::Grass)
+            dirtyGrassFaces();
         _objects.insert(insertion, std::move(object));
         _classification.try_emplace(id);
         return;
     }
 
+    const auto *oldProceduralForGrass = std::get_if<RegisteredProcedural>(&*it);
+    const auto *newProceduralForGrass = std::get_if<RegisteredProcedural>(&object);
+    const bool oldGrass = oldProceduralForGrass &&
+                          oldProceduralForGrass->kind == ProceduralKind::Grass;
+    const bool newGrass = newProceduralForGrass &&
+                          newProceduralForGrass->kind == ProceduralKind::Grass;
+    const bool grassFacesChanged = oldGrass != newGrass ||
+                                   (oldGrass && newGrass &&
+                                    oldProceduralForGrass->grassGeneration !=
+                                        newProceduralForGrass->grassGeneration);
     bool classificationChanged = it->index() != object.index();
     if (!classificationChanged) {
         if (const auto *oldMesh = std::get_if<RegisteredMesh>(&*it)) {
@@ -311,12 +330,17 @@ void GpuScene::upsert(ObjectRecord object) {
     removeCounts(*it);
     *it = std::move(object);
     addCounts(*it);
+    if (grassFacesChanged)
+        dirtyGrassFaces();
     if (classificationChanged)
         invalidate(id);
 }
 
 void GpuScene::eraseObject(std::vector<ObjectRecord>::iterator it) {
     const auto id = objectId(*it);
+    if (const auto *procedural = std::get_if<RegisteredProcedural>(&*it);
+        procedural && procedural->kind == ProceduralKind::Grass)
+        dirtyGrassFaces();
     removeCounts(*it);
     auto cache = _classification.find(id);
     if (cache != _classification.end()) {
@@ -501,40 +525,20 @@ void GpuScene::addParticles(RenderCategories categories, SceneNodeId id,
 }
 
 void GpuScene::addGrass(RenderCategories categories, SceneNodeId id,
-                        SceneNodeNameIds nameIds, const Material &material, float radius,
-                        float quadSize, const std::vector<GrassInstance> &instances) {
+                        SceneNodeNameIds nameIds, const Material &material,
+                        const std::vector<GpuSceneGrassFace> &faces,
+                        uint64_t grassGeneration) {
     RegisteredProcedural procedural;
     procedural.categories = categories;
     procedural.id = id;
     procedural.nameIds = nameIds;
     procedural.material = material;
     procedural.kind = ProceduralKind::Grass;
-    procedural.quadSize = quadSize;
-    procedural.instances.reserve(instances.size());
-    for (const auto &source : instances) {
-        ProceduralInstance instance;
-        instance.variant = source.variant;
-        instance.position = source.position;
-        instance.lightmapUV = source.lightmapUV;
-        instance.yaw = source.yaw;
-        instance.sizeScale = source.sizeScale;
-        procedural.instances.push_back(instance);
-        graphics::GpuSceneProceduralQuad quad;
-        quad.positionVariant = glm::vec4(source.position,
-                                         static_cast<float>(source.variant));
-        const float scaledQuadSize = quadSize * source.sizeScale;
-        const glm::vec3 right {glm::cos(source.yaw) * scaledQuadSize,
-                               glm::sin(source.yaw) * scaledQuadSize, 0.0f};
-        quad.right = glm::vec4(right, 0.0f);
-        quad.up = glm::vec4(0.0f, 0.0f, scaledQuadSize, 0.0f);
-        quad.uvOffsetScale =
-            glm::vec4(0.5f * (source.variant % 2),
-                      0.5f * (source.variant / 2), 0.5f, 0.5f);
-        quad.lightmapUV = source.lightmapUV;
-        procedural.loweredQuads.push_back(quad);
-    }
+    procedural.grassFaces = &faces;
+    for (const auto &face : faces)
+        procedural.grassClusterCount += face.faceBudgetMaterialVariants.y;
+    procedural.grassGeneration = grassGeneration;
     upsert(std::move(procedural));
-    (void)radius;
 }
 
 graphics::GpuSceneUpload GpuScene::prepare(
@@ -551,6 +555,8 @@ graphics::GpuSceneUpload GpuScene::prepare(
     upload.bones.clear();
     upload.danglyPositions.clear();
     upload.proceduralQuads.clear();
+    upload.grassRanges.clear();
+    upload.cameraPosition = glm::inverse(cameraView)[3];
     upload.opaqueObjectCount = 0;
     upload.materialReferenceCount = 0;
     std::vector<graphics::GpuSceneObjectInput> opaqueObjects, nonOpaqueObjects;
@@ -565,7 +571,17 @@ graphics::GpuSceneUpload GpuScene::prepare(
     // _objects is maintained in canonical SceneNodeId order. Partitioning into
     // these two vectors therefore yields opaque-first, stable-id order without
     // a per-frame sort.
+    uint32_t grassFaceBase = 0;
     for (const auto &object : _objects) {
+        uint32_t objectGrassFaceBase = grassFaceBase;
+        if (const auto *candidate = std::get_if<RegisteredProcedural>(&object);
+            candidate && candidate->kind == ProceduralKind::Grass &&
+            candidate->grassFaces) {
+            if (candidate->grassFaces->size() >
+                std::numeric_limits<uint32_t>::max() - grassFaceBase)
+                throw std::runtime_error("Vulkan: grass face table exceeds shader index range");
+            grassFaceBase += static_cast<uint32_t>(candidate->grassFaces->size());
+        }
         const auto id = objectId(object);
         if (!isActive(id))
             continue;
@@ -659,8 +675,9 @@ graphics::GpuSceneUpload GpuScene::prepare(
         if ((procedural->categories & (renderCategory(RenderCategory::Opaque) |
                                        renderCategory(RenderCategory::Transparent))) == 0)
             continue;
-        R_PROFILE_ZONE("SceneAdmission::procedural lowering");
         auto &cache = _classification[id];
+        const bool hadMaterial = cache.classified && cache.value.has_value();
+        const uint32_t oldMaterialIndex = cache.materialIndex;
         if (forceFull || cache.dirty || !cache.classified ||
             cache.admissionGeneration != admissionGeneration) {
             if (cache.classified && cache.value)
@@ -674,18 +691,65 @@ graphics::GpuSceneUpload GpuScene::prepare(
                 cache.materialIndex = internMaterial(cache.value->material);
             }
         }
+        if (procedural->kind == ProceduralKind::Grass &&
+            (hadMaterial != cache.value.has_value() ||
+             (cache.value && (!hadMaterial || oldMaterialIndex != cache.materialIndex))))
+            dirtyGrassFaces();
         if (!cache.value)
             continue;
-        const auto instanceCount = procedural->instanceCount();
+
+        uint64_t instanceCount = procedural->instanceCount();
+        uint32_t grassRangeBase = 0;
+        uint32_t grassRangeCount = 0;
+        if (procedural->kind == ProceduralKind::Grass) {
+            R_PROFILE_ZONE("SceneAdmission::grass face-band scan");
+            grassRangeBase = static_cast<uint32_t>(upload.grassRanges.size());
+            instanceCount = 0;
+            constexpr float kMaxClusterDistance = 32.0f;
+            const glm::vec3 cameraPosition(upload.cameraPosition);
+            for (size_t faceOffset = 0; faceOffset < procedural->grassFaces->size();
+                 ++faceOffset) {
+                const auto &face = (*procedural->grassFaces)[faceOffset];
+                const glm::vec3 closest = glm::clamp(
+                    cameraPosition, glm::vec3(face.boundsMin),
+                    glm::vec3(face.boundsMax));
+                if (glm::distance2(cameraPosition, closest) >
+                    kMaxClusterDistance * kMaxClusterDistance)
+                    continue;
+                const uint32_t budget = face.faceBudgetMaterialVariants.y;
+                if (budget == 0)
+                    continue;
+                if (instanceCount + budget > std::numeric_limits<uint32_t>::max())
+                    throw std::runtime_error(
+                        "Vulkan: grass cluster range exceeds shader index range");
+                if (upload.grassRanges.size() == std::numeric_limits<uint32_t>::max())
+                    throw std::runtime_error(
+                        "Vulkan: grass face ranges exceed shader index range");
+                upload.grassRanges.push_back(
+                    {objectGrassFaceBase + static_cast<uint32_t>(faceOffset),
+                     static_cast<uint32_t>(instanceCount), budget, 0u});
+                instanceCount += budget;
+            }
+            grassRangeCount = static_cast<uint32_t>(upload.grassRanges.size()) -
+                              grassRangeBase;
+            if (instanceCount == 0)
+                continue;
+        }
         if (instanceCount > std::numeric_limits<uint32_t>::max() / 4 ||
-            upload.proceduralQuads.size() >
-                std::numeric_limits<uint32_t>::max() - instanceCount)
+            (procedural->kind != ProceduralKind::Grass &&
+             upload.proceduralQuads.size() >
+                 std::numeric_limits<uint32_t>::max() - instanceCount))
             throw std::runtime_error("Vulkan: merged procedural scene exceeds shader index range");
         graphics::GpuSceneObjectInput input;
         auto &sceneObject = input.data;
         input.objectIndex = procedural->id.index;
         input.objectGeneration = procedural->id.generation;
-        sceneObject.srcVertexOffset = static_cast<uint32_t>(upload.proceduralQuads.size());
+        sceneObject.srcVertexOffset = procedural->kind == ProceduralKind::Grass
+                                          ? grassRangeBase
+                                          : static_cast<uint32_t>(upload.proceduralQuads.size());
+        sceneObject.srcIndexOffset = procedural->kind == ProceduralKind::Grass
+                                         ? grassRangeCount
+                                         : 0;
         sceneObject.srcVertexStride = procedural->kind == ProceduralKind::Grass ? 0 : 1;
         sceneObject.vertexCount = static_cast<uint32_t>(instanceCount) * 4;
         sceneObject.triangleCount = static_cast<uint32_t>(instanceCount) * 2;
@@ -697,7 +761,9 @@ graphics::GpuSceneUpload GpuScene::prepare(
         ++upload.materialReferenceCount;
         sceneObject.geometryIndex = primitiveClass == PrimitiveClass::Opaque ? 0 : 1;
         const glm::ivec2 grid = glm::max(procedural->gridSize, glm::ivec2(1));
-        if (!procedural->loweredQuads.empty() &&
+        if (procedural->kind == ProceduralKind::Grass) {
+            // The merge shader expands the persistent face records directly.
+        } else if (!procedural->loweredQuads.empty() &&
             procedural->loweredQuads.size() == instanceCount) {
             upload.proceduralQuads.insert(upload.proceduralQuads.end(),
                                           procedural->loweredQuads.begin(),
@@ -709,20 +775,8 @@ graphics::GpuSceneUpload GpuScene::prepare(
                                                  static_cast<float>(instance.variant));
                 quad.color = instance.color;
                 switch (procedural->kind) {
-                case ProceduralKind::Grass: {
-                    // The same yaw raster receives in GrassUniforms. A blade stands
-                    // on world +Z and is independent of ray direction.
-                    const float scaledQuadSize = procedural->quadSize * instance.sizeScale;
-                    const glm::vec3 right {glm::cos(instance.yaw) * scaledQuadSize,
-                                           glm::sin(instance.yaw) * scaledQuadSize, 0.0f};
-                    quad.right = glm::vec4(right, 0.0f);
-                    quad.up = glm::vec4(0.0f, 0.0f, scaledQuadSize, 0.0f);
-                    quad.uvOffsetScale =
-                        glm::vec4(0.5f * (instance.variant % 2),
-                                  0.5f * (instance.variant / 2), 0.5f, 0.5f);
-                    quad.lightmapUV = instance.lightmapUV;
+                case ProceduralKind::Grass:
                     break;
-                }
                 case ProceduralKind::Particles: {
                     const int frame = std::max(0, instance.variant);
                     const glm::vec2 uvScale {1.0f / grid.x, 1.0f / grid.y};
@@ -748,6 +802,25 @@ graphics::GpuSceneUpload GpuScene::prepare(
         } else {
             nonOpaqueObjects.push_back(input);
         }
+    }
+    if (upload.grassFaceGeneration != _grassFaceGeneration) {
+        upload.grassFaces.clear();
+        upload.grassFaces.reserve(grassFaceBase);
+        for (const auto &object : _objects) {
+            const auto *procedural = std::get_if<RegisteredProcedural>(&object);
+            if (!procedural || procedural->kind != ProceduralKind::Grass ||
+                !procedural->grassFaces)
+                continue;
+            uint32_t materialIndex = 0;
+            const auto cached = _classification.find(procedural->id);
+            if (cached != _classification.end() && cached->second.value)
+                materialIndex = cached->second.materialIndex;
+            for (auto face : *procedural->grassFaces) {
+                face.faceBudgetMaterialVariants.z = materialIndex;
+                upload.grassFaces.push_back(face);
+            }
+        }
+        upload.grassFaceGeneration = _grassFaceGeneration;
     }
     upload.opaqueObjectCount = static_cast<uint32_t>(opaqueObjects.size());
     upload.objects.reserve(opaqueObjects.size() + nonOpaqueObjects.size());

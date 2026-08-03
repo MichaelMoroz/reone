@@ -32,7 +32,6 @@ set(SCENE_HEADERS
     ${SCENE_INCLUDE_DIR}/node/dummy.h
     ${SCENE_INCLUDE_DIR}/node/emitter.h
     ${SCENE_INCLUDE_DIR}/node/grass.h
-    ${SCENE_INCLUDE_DIR}/node/grasscluster.h
     ${SCENE_INCLUDE_DIR}/node/light.h
     ${SCENE_INCLUDE_DIR}/node/mesh.h
     ${SCENE_INCLUDE_DIR}/node/model.h

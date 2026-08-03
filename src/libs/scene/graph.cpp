@@ -31,7 +31,6 @@
 #include "reone/scene/node/camera.h"
 #include "reone/scene/node/emitter.h"
 #include "reone/scene/node/grass.h"
-#include "reone/scene/node/grasscluster.h"
 #include "reone/scene/node/light.h"
 #include "reone/scene/node/mesh.h"
 #include "reone/scene/node/model.h"
@@ -397,28 +396,6 @@ void SceneGraph::refreshFromNode(SceneNode &node) {
 
 void SceneGraph::prepareOpaqueLeafs() {
     _opaqueLeafs.clear();
-
-    std::vector<SceneNode *> bucket;
-    // Group grass clusters into buckets without sorting
-    if (!_graphicsOpt.grass) {
-        return;
-    }
-    for (auto &grass : _grassRoots) {
-        if (!grass->isEnabled()) {
-            continue;
-        }
-        for (auto &child : grass->children()) {
-            if (child->type() != SceneNodeType::GrassCluster) {
-                continue;
-            }
-            auto cluster = static_cast<GrassClusterSceneNode *>(child);
-            bucket.push_back(cluster);
-        }
-        if (!bucket.empty()) {
-            _opaqueLeafs.push_back(std::make_pair(grass.get(), bucket));
-            bucket.clear();
-        }
-    }
 }
 
 void SceneGraph::prepareTransparentLeafs() {
@@ -453,8 +430,6 @@ void SceneGraph::prepareTransparentLeafs() {
             int maxCount = 1;
             if (parent->type() == SceneNodeType::Emitter) {
                 maxCount = kMaxParticles;
-            } else if (parent->type() == SceneNodeType::Grass) {
-                maxCount = kMaxGrassClusters;
             }
             if (bucketParent != parent || bucket.size() >= maxCount) {
                 _transparentLeafs.push_back(std::make_pair(bucketParent, bucket));
@@ -575,8 +550,11 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
         collectInto(_gpuScene, full);
         if (full)
             _gpuScene.endFullCollection();
-        const bool hasRenderableLists = !_meshes.empty() || !_opaqueLeafs.empty() ||
-                                        !_transparentLeafs.empty();
+        // A module transition can create grass roots after this frame's graph
+        // refresh. Grass alone must not mark incremental admission ready or the
+        // following frame would retain only that partial scene. Mesh/transparent
+        // lists are rebuilt by refresh and therefore remain the readiness fence.
+        const bool hasRenderableLists = !_meshes.empty() || !_transparentLeafs.empty();
         _incrementalSceneReady = hasRenderableLists;
         if (_graphicsOpt.admissionShadow) {
             _shadowGpuScene.resetFrame();
@@ -668,17 +646,17 @@ void SceneGraph::collectInto(GpuScene &scene, bool full) {
             }
         }
     }
-    // Grass materialisation is a dynamic cache keyed by nearby faces. Its
-    // records are upserted here; unchanged classification/material state stays
-    // cached even while the instance stream changes.
+    // Grass publishes only its persistent face table. Camera-dependent work is
+    // the admission face-band scan and GPU merge expansion.
     {
         R_PROFILE_ZONE("SceneGraph::grass collection");
-        for (auto &[node, leafs] : _opaqueLeafs) {
-            auto &grass = static_cast<GrassSceneNode &>(*node);
+        for (auto &grass : _grassRoots) {
+            if (!grass->isEnabled() || !_graphicsOpt.grass)
+                continue;
             if (full)
-                grass.collectLeafs(scene, leafs);
+                grass->collectInto(scene);
             else
-                grass.collectLeafsIfDirty(scene, leafs);
+                grass->collectIntoIfDirty(scene);
         }
     }
 
@@ -1082,11 +1060,6 @@ std::shared_ptr<ParticleSceneNode> SceneGraph::newParticle(EmitterSceneNode &emi
 std::shared_ptr<GrassSceneNode> SceneGraph::newGrass(GrassProperties properties, ModelNode &aabbNode) {
     auto node = newSceneNode<GrassSceneNode, GrassProperties, ModelNode &>(properties, aabbNode);
     node->init();
-    return std::move(node);
-}
-
-std::shared_ptr<GrassClusterSceneNode> SceneGraph::newGrassCluster(GrassSceneNode &grass) {
-    auto node = newSceneNode<GrassClusterSceneNode>();
     return std::move(node);
 }
 

@@ -53,7 +53,6 @@
 #include "reone/scene/di/services.h"
 #include "reone/scene/graphs.h"
 #include "reone/scene/node/grass.h"
-#include "reone/scene/node/grasscluster.h"
 #include "reone/scene/node/model.h"
 #include "reone/scene/node/sound.h"
 #include "reone/scene/node/trigger.h"

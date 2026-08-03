@@ -26,7 +26,10 @@ struct MergePushConstants {
     uint32_t vertexCount;
     uint32_t triangleCount;
     uint32_t opaqueTriangleCount;
+    uint32_t pad[3] {};
+    glm::vec4 cameraPosition {0.0f};
 };
+static_assert(sizeof(MergePushConstants) == 48);
 
 uint32_t grownCapacity(uint32_t current, uint32_t required, uint32_t minimum) {
     if (current != 0 && required <= current)
@@ -45,6 +48,7 @@ struct VulkanGpuScene::Frame {
     std::unique_ptr<VulkanBuffer> scene;
     std::unique_ptr<VulkanBuffer> geometry;
     std::unique_ptr<VulkanBuffer> proceduralQuads;
+    std::unique_ptr<VulkanBuffer> grassRanges;
     std::unique_ptr<VulkanBuffer> materials;
     uint32_t sceneObjectCapacity {0};
     uint32_t boneCapacity {0};
@@ -52,6 +56,7 @@ struct VulkanGpuScene::Frame {
     uint32_t vertexCapacity {0};
     uint32_t triangleCapacity {0};
     uint32_t proceduralQuadCapacity {0};
+    uint32_t grassRangeCapacity {0};
     std::vector<PrimitiveIdRange> primitiveIds;
 };
 
@@ -78,19 +83,19 @@ void VulkanGpuScene::init(VulkanRenderer &renderer) {
         return;
     _renderer = &renderer;
     auto &device = _renderer->device();
-    VkDescriptorSetLayoutBinding bindings[9] {};
-    for (uint32_t i = 0; i < 9; ++i) {
+    VkDescriptorSetLayoutBinding bindings[11] {};
+    for (uint32_t i = 0; i < 11; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
         bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     VkDescriptorSetLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layoutInfo.bindingCount = 9;
+    layoutInfo.bindingCount = 11;
     layoutInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device.handle(), &layoutInfo, nullptr, &_mergeLayout) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: merge descriptor layout creation failed");
-    VkDescriptorPoolSize poolSize {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 18};
+    VkDescriptorPoolSize poolSize {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 22};
     VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.maxSets = 2;
     poolInfo.poolSizeCount = 1;
@@ -148,6 +153,8 @@ void VulkanGpuScene::deinit() {
     auto &device = _renderer->device();
     _frames = {};
     clearSourceGeometry();
+    _grassFaces.reset();
+    _grassFaceGeneration = 0;
     if (_mergePipeline)
         vkDestroyPipeline(device.handle(), _mergePipeline, nullptr);
     if (_mergePipelineLayout)
@@ -179,7 +186,8 @@ void VulkanGpuScene::clearSourceGeometry() {
 void VulkanGpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
                                         uint32_t boneCount, uint32_t vertexCount,
                                         uint32_t triangleCount, uint32_t proceduralQuadCount,
-                                        uint32_t danglyPositionCount) {
+                                        uint32_t danglyPositionCount,
+                                        uint32_t grassRangeCount) {
     constexpr uint32_t kInitialObjectCapacity = 64, kInitialBoneCapacity = 256;
     constexpr uint32_t kInitialVertexCapacity = 4096, kInitialTriangleCapacity = 4096;
     const auto objectCapacity =
@@ -235,6 +243,15 @@ void VulkanGpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
         frame.proceduralQuads = std::make_unique<VulkanBuffer>(_renderer->device());
         frame.proceduralQuads->initHostVisible(
             static_cast<VkDeviceSize>(proceduralQuadCapacity) * sizeof(GpuSceneProceduralQuad),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    }
+    const auto grassRangeCapacity =
+        grownCapacity(frame.grassRangeCapacity, grassRangeCount, 64);
+    if (!frame.grassRanges || grassRangeCapacity != frame.grassRangeCapacity) {
+        frame.grassRangeCapacity = grassRangeCapacity;
+        frame.grassRanges = std::make_unique<VulkanBuffer>(_renderer->device());
+        frame.grassRanges->initHostVisible(
+            static_cast<VkDeviceSize>(grassRangeCapacity) * sizeof(GpuSceneGrassRange),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     }
 }
@@ -322,6 +339,19 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
         return empty;
 
     auto &frame = *_frames[_renderer->frameIndex()];
+    if (!_grassFaces || _grassFaceGeneration != upload.grassFaceGeneration) {
+        auto grassFaces = std::make_unique<VulkanBuffer>(_renderer->device());
+        const GpuSceneGrassFace emptyFace {};
+        const VkDeviceSize faceCount = std::max<size_t>(1, upload.grassFaces.size());
+        grassFaces->initDeviceLocal(
+            faceCount * sizeof(GpuSceneGrassFace), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            upload.grassFaces.empty() ? static_cast<const void *>(&emptyFace)
+                                      : static_cast<const void *>(upload.grassFaces.data()));
+        if (_grassFaces)
+            _retiredSourceBuffers.push_back(std::move(_grassFaces));
+        _grassFaces = std::move(grassFaces);
+        _grassFaceGeneration = upload.grassFaceGeneration;
+    }
     uint64_t vertexCount = 0;
     uint64_t opaqueTriangleCount = 0;
     uint64_t nonOpaqueTriangleCount = 0;
@@ -382,7 +412,8 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
                            static_cast<uint32_t>(upload.bones.size()),
                            static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount),
                            static_cast<uint32_t>(upload.proceduralQuads.size()),
-                           static_cast<uint32_t>(upload.danglyPositions.size()));
+                           static_cast<uint32_t>(upload.danglyPositions.size()),
+                           static_cast<uint32_t>(upload.grassRanges.size()));
         sceneObjectBytes =
             static_cast<VkDeviceSize>(frame.sceneObjectCapacity) * sizeof(GpuSceneObjectData);
         sceneBoneBytes =
@@ -405,6 +436,9 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
         if (!upload.proceduralQuads.empty())
             std::memcpy(frame.proceduralQuads->mapped(), upload.proceduralQuads.data(),
                         upload.proceduralQuads.size() * sizeof(GpuSceneProceduralQuad));
+        if (!upload.grassRanges.empty())
+            std::memcpy(frame.grassRanges->mapped(), upload.grassRanges.data(),
+                        upload.grassRanges.size() * sizeof(GpuSceneGrassRange));
 
         frame.materials = std::make_unique<VulkanBuffer>(_renderer->device());
         frame.materials->initHostVisible(
@@ -420,7 +454,7 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
             _sourceVertices ? _sourceVertices.get() : frame.proceduralQuads.get();
         const auto *sourceIndices =
             _sourceIndices ? _sourceIndices.get() : frame.proceduralQuads.get();
-        std::array<VkDescriptorBufferInfo, 9> buffers {{{frame.scene->handle(), 0, sceneObjectBytes},
+        std::array<VkDescriptorBufferInfo, 11> buffers {{{frame.scene->handle(), 0, sceneObjectBytes},
                                                         {frame.scene->handle(), sceneObjectBytes, sceneBoneBytes},
                                                         {frame.geometry->handle(), 0, vertexBytes},
                                                         {frame.geometry->handle(), vertexBytes, indexBytes},
@@ -430,8 +464,10 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
                                                         {sourceIndices->handle(), 0, sourceIndices->size()},
                                                         {frame.proceduralQuads->handle(), 0, frame.proceduralQuads->size()},
                                                         {frame.scene->handle(), sceneObjectBytes + sceneBoneBytes,
-                                                         danglyPositionBytes}}};
-        std::array<VkWriteDescriptorSet, 9> writes {};
+                                                         danglyPositionBytes},
+                                                        {_grassFaces->handle(), 0, _grassFaces->size()},
+                                                        {frame.grassRanges->handle(), 0, frame.grassRanges->size()}}};
+        std::array<VkWriteDescriptorSet, 11> writes {};
         const auto set = _mergeSets[_renderer->frameIndex()];
         for (uint32_t i = 0; i < writes.size(); ++i) {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -443,11 +479,13 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
         }
         vkUpdateDescriptorSets(_renderer->device().handle(), static_cast<uint32_t>(writes.size()),
                                writes.data(), 0, nullptr);
-        const MergePushConstants constants {static_cast<uint32_t>(upload.objects.size()),
-                                            upload.opaqueObjectCount,
-                                            static_cast<uint32_t>(vertexCount),
-                                            static_cast<uint32_t>(triangleCount),
-                                            static_cast<uint32_t>(opaqueTriangleCount)};
+        MergePushConstants constants;
+        constants.objectCount = static_cast<uint32_t>(upload.objects.size());
+        constants.opaqueObjectCount = upload.opaqueObjectCount;
+        constants.vertexCount = static_cast<uint32_t>(vertexCount);
+        constants.triangleCount = static_cast<uint32_t>(triangleCount);
+        constants.opaqueTriangleCount = static_cast<uint32_t>(opaqueTriangleCount);
+        constants.cameraPosition = upload.cameraPosition;
         std::array<VkBufferMemoryBarrier2, 2> sourceBarriers {};
         for (size_t i = 0; i < sourceBarriers.size(); ++i) {
             auto &barrier = sourceBarriers[i];

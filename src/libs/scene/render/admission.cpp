@@ -49,6 +49,9 @@ uint64_t hashUpload(const GpuSceneUpload &upload) {
     hashVector(hash, upload.bones);
     hashVector(hash, upload.danglyPositions);
     hashVector(hash, upload.proceduralQuads);
+    hashVector(hash, upload.grassFaces);
+    hashVector(hash, upload.grassRanges);
+    hashBytes(hash, &upload.cameraPosition, sizeof(upload.cameraPosition));
     hashBytes(hash, &upload.opaqueObjectCount, sizeof(upload.opaqueObjectCount));
     return hash;
 }
@@ -99,7 +102,17 @@ std::string describeUploadDifference(const GpuSceneUpload &left,
                          std::to_string(right.proceduralQuads.size()) +
                          " first_quad=" +
                          std::to_string(firstDifferent(left.proceduralQuads,
-                                                       right.proceduralQuads));
+                                                       right.proceduralQuads)) +
+                         " grass_faces=" + std::to_string(left.grassFaces.size()) + "/" +
+                         std::to_string(right.grassFaces.size()) +
+                         " first_grass_face=" +
+                         std::to_string(firstDifferent(left.grassFaces,
+                                                       right.grassFaces)) +
+                         " grass_ranges=" + std::to_string(left.grassRanges.size()) + "/" +
+                         std::to_string(right.grassRanges.size()) +
+                         " first_grass_range=" +
+                         std::to_string(firstDifferent(left.grassRanges,
+                                                       right.grassRanges));
     return detail;
 }
 
@@ -256,7 +269,6 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
     AdmissionKind kind = AdmissionKind::Opaque;
     switch (procedural.kind) {
     case ProceduralKind::Grass:
-        _submission.grass += static_cast<uint32_t>(procedural.instanceCount());
         material.diffuseColor = glm::vec4(procedural.material.diffuseColor, 1.0f);
         material.uv0 = procedural.material.uv[0];
         material.uv1 = procedural.material.uv[1];
@@ -347,7 +359,6 @@ void GpuSceneAdmission::rebuildSubmissionCounts(const ModelSceneNode *skyRoom) {
             continue;
         switch (procedural.kind) {
         case ProceduralKind::Grass:
-            _submission.grass += static_cast<uint32_t>(procedural.instanceCount());
             break;
         case ProceduralKind::Particles:
             _submission.particles += static_cast<uint32_t>(procedural.instanceCount());
@@ -357,6 +368,8 @@ void GpuSceneAdmission::rebuildSubmissionCounts(const ModelSceneNode *skyRoom) {
             break;
         }
     }
+    for (const auto &range : _submission.upload.grassRanges)
+        _submission.grass += range.clusterCount;
 }
 
 GpuSceneAdmissionResult GpuSceneAdmission::prepare(
@@ -445,6 +458,8 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
         },
         view, _admissionGeneration,
         _options.admissionForceFull, std::move(reuse));
+    for (const auto &range : _submission.upload.grassRanges)
+        _submission.grass += range.clusterCount;
     if (_options.admissionShadow && _gpuScene.shadowScene()) {
         auto savedSubmission = _submission;
         auto shadowUpload = _gpuScene.shadowScene()->prepare(

@@ -155,7 +155,6 @@ public:
     virtual std::shared_ptr<EmitterSceneNode> newEmitter(graphics::ModelNode &modelNode) = 0;
     virtual std::shared_ptr<ParticleSceneNode> newParticle(EmitterSceneNode &emitter) = 0;
     virtual std::shared_ptr<GrassSceneNode> newGrass(GrassProperties properties, graphics::ModelNode &aabbNode) = 0;
-    virtual std::shared_ptr<GrassClusterSceneNode> newGrassCluster(GrassSceneNode &grass) = 0;
 
     // END Factory methods
 };
@@ -315,7 +314,6 @@ public:
     std::shared_ptr<ParticleSceneNode> newParticle(EmitterSceneNode &emitter) override;
 
     std::shared_ptr<GrassSceneNode> newGrass(GrassProperties properties, graphics::ModelNode &aabbNode) override;
-    std::shared_ptr<GrassClusterSceneNode> newGrassCluster(GrassSceneNode &grass) override;
 
     // END Factory methods
 

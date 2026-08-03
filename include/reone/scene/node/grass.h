@@ -1,37 +1,21 @@
 /*
- * Copyright (c) 2020-2023 The reone project contributors
+ * Copyright (c) 2020-2026 The reone project contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
 
+#include "reone/graphics/gpuscene.h"
 #include "reone/graphics/modelnode.h"
-#include "reone/graphics/types.h"
 
 #include "../grassproperties.h"
 #include "../node.h"
 
-#include "grasscluster.h"
-
 namespace reone {
-
-namespace graphics {
-
-struct GraphicsServices;
-
-}
 
 namespace scene {
 
@@ -55,57 +39,34 @@ public:
     }
 
     void init();
-
     void update(float dt) override;
-
-    void collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) override;
-    void collectLeafsIfDirty(GpuScene &scene, const std::vector<SceneNode *> &leafs);
+    void collectInto(GpuScene &scene);
+    void collectIntoIfDirty(GpuScene &scene) {
+        if (_gpuSceneDirty)
+            collectInto(scene);
+    }
 
     int getNumClustersInFace(float area) const;
-    void growClusterPool(int target);
-    int getGrassVariant(int faceIndex, int clusterIndex) const;
+    const std::vector<graphics::GpuSceneGrassFace> &faceRecords() const {
+        return _faceRecords;
+    }
+
+protected:
+    void onAbsoluteTransformChanged() override;
 
 private:
-    struct ClusterPlacement {
-        int faceIndex {0};
-        int clusterIndex {0};
-        glm::vec3 position {0.0f};
-        glm::vec2 lightmapUV {0.0f};
-        int variant {0};
-        float yaw {0.0f};
-        uint8_t sizeLevel {0};
-        GrassClusterSceneNode *node {nullptr};
-        bool queued {false};
-    };
-
-    struct FaceClusters {
-        int faceIndex {0};
-        std::vector<ClusterPlacement> clusters;
-        glm::vec3 lastCameraPosition {0.0f};
-        float nextUpdateDistance2 {0.0f};
-        bool initialized {false};
-    };
-
     GrassProperties _properties;
     graphics::ModelNode &_aabbNode;
-
     std::vector<int> _grassFaces;
+    std::vector<graphics::GpuSceneGrassFace> _faceRecords;
     uint64_t _grassGeneration {0};
-    int _poolCapacity {0};
-    std::stack<GrassClusterSceneNode *> _clusterPool; /**< pre-allocated pool of clusters */
-    std::vector<FaceClusters> _clusterFaces;
-    std::vector<ClusterPlacement *> _pendingClusters;
-    bool _clusterPlacementsBuilt {false};
+    uint64_t _faceGeneration {0};
     bool _hasLightmapUV {true};
+    bool _faceRecordsBuilt {false};
     bool _gpuSceneDirty {true};
+    bool _wasGrassEnabled {false};
 
-    void rebuildClusterPlacements();
-    void returnAllClusters();
-    void updateFaceClusters(FaceClusters &face, const glm::vec3 &cameraPosition,
-                            std::unordered_set<SceneNode *> &returning);
-    void admitPendingClusters(const glm::vec3 &cameraPosition);
-    void collectLeafsImpl(GpuScene &scene, const std::vector<SceneNode *> &leafs,
-                          bool force);
+    void rebuildFaceRecords();
 };
 
 } // namespace scene

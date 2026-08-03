@@ -83,7 +83,6 @@ public:
     MOCK_METHOD(std::shared_ptr<EmitterSceneNode>, newEmitter, (graphics::ModelNode & modelNode), (override));
     MOCK_METHOD(std::shared_ptr<ParticleSceneNode>, newParticle, (EmitterSceneNode & emitter), (override));
     MOCK_METHOD(std::shared_ptr<GrassSceneNode>, newGrass, (GrassProperties properties, graphics::ModelNode &aabbNode), (override));
-    MOCK_METHOD(std::shared_ptr<GrassClusterSceneNode>, newGrassCluster, (GrassSceneNode & grass), (override));
 
     MOCK_METHOD(std::shared_ptr<graphics::Camera>, camera, (), (const override));
     MOCK_METHOD(const glm::vec3 &, ambientLightColor, (), (const override));

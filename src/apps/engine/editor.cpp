@@ -297,7 +297,7 @@ ObjectEntryView makeObjectEntryView(const scene::ISceneGraph &graph,
                 switch (entry.kind) {
                 case scene::ProceduralKind::Grass:
                     result.kind = "grass";
-                    result.clusters = entry.instances.size();
+                    result.clusters = entry.instanceCount();
                     break;
                 case scene::ProceduralKind::Particles:
                     result.kind = "particles";

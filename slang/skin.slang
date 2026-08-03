@@ -61,7 +61,7 @@ struct MergedVertex {
 [[vk::binding(5, 0)]] StructuredBuffer<float> sourceVertices;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> sourceIndices;
 
-struct GrassCluster {
+struct ProceduralQuad {
     float4 positionVariant;
     float4 right;
     float4 up;
@@ -71,8 +71,29 @@ struct GrassCluster {
     float4 color;
 };
 
-[[vk::binding(7, 0)]] StructuredBuffer<GrassCluster> grassClusters;
+[[vk::binding(7, 0)]] StructuredBuffer<ProceduralQuad> proceduralQuads;
 [[vk::binding(8, 0)]] StructuredBuffer<float4> danglyPositions;
+
+struct GrassFace {
+    float4 vertex0Uv0x;
+    float4 vertex1Uv0y;
+    float4 vertex2Uv1x;
+    float4 uv1yUv2QuadSize;
+    float4 probabilities;
+    float4 boundsMin;
+    float4 boundsMax;
+    uint4 faceBudgetMaterialVariants;
+};
+
+struct GrassRange {
+    uint faceIndex;
+    uint clusterOffset;
+    uint clusterCount;
+    uint pad;
+};
+
+[[vk::binding(9, 0)]] StructuredBuffer<GrassFace> grassFaces;
+[[vk::binding(10, 0)]] StructuredBuffer<GrassRange> grassRanges;
 
 struct PushConstants {
     uint objectCount;
@@ -80,6 +101,7 @@ struct PushConstants {
     uint vertexCount;
     uint triangleCount;
     uint opaqueTriangleCount;
+    float4 cameraPosition;
 };
 
 [[vk::push_constant]] PushConstants pushConstants;
@@ -171,6 +193,87 @@ uint findTriangleObject(uint id) {
     return low;
 }
 
+GrassRange findGrassRange(SceneObject object, uint clusterId) {
+    uint low = 0;
+    uint high = object.srcIndexOffset;
+    while (low + 1 < high) {
+        uint middle = (low + high) / 2;
+        if (grassRanges[object.srcVertexOffset + middle].clusterOffset <= clusterId) {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    return grassRanges[object.srcVertexOffset + low];
+}
+
+uint grassHash(uint faceIndex, uint clusterIndex, uint stream) {
+    uint value = faceIndex * 0x9e3779b9u
+        ^ clusterIndex * 0x85ebca6bu
+        ^ stream * 0xc2b2ae35u;
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16);
+}
+
+float grassRandom01(uint faceIndex, uint clusterIndex, uint stream) {
+    return float(grassHash(faceIndex, clusterIndex, stream) >> 8) / 16777216.0;
+}
+
+uint grassVariant(GrassFace face, uint faceIndex, uint clusterIndex) {
+    float sum = face.probabilities.x + face.probabilities.y
+        + face.probabilities.z + face.probabilities.w;
+    float value = grassRandom01(faceIndex, clusterIndex, 2) * sum;
+    float upper = 0.0;
+    uint variant = 3;
+    [unroll]
+    for (uint i = 0; i < 3; ++i) {
+        upper += face.probabilities[i];
+        if (value < upper) {
+            variant = i;
+            break;
+        }
+    }
+    return min(variant, max(1u, face.faceBudgetMaterialVariants.w) - 1u);
+}
+
+ProceduralQuad expandGrassCluster(SceneObject object, uint clusterId) {
+    GrassRange range = findGrassRange(object, clusterId);
+    GrassFace face = grassFaces[range.faceIndex];
+    uint localCluster = clusterId - range.clusterOffset;
+    uint sourceFace = face.faceBudgetMaterialVariants.x;
+    float r1sqrt = sqrt(grassRandom01(sourceFace, localCluster, 0));
+    float r2 = grassRandom01(sourceFace, localCluster, 1);
+    float3 baryPosition = float3(
+        1.0 - r1sqrt, r1sqrt * (1.0 - r2), r2 * r1sqrt);
+    float3 position = face.vertex0Uv0x.xyz * baryPosition.x
+        + face.vertex1Uv0y.xyz * baryPosition.y
+        + face.vertex2Uv1x.xyz * baryPosition.z;
+    float2 uv0 = float2(face.vertex0Uv0x.w, face.vertex1Uv0y.w);
+    float2 uv1 = float2(face.vertex2Uv1x.w, face.uv1yUv2QuadSize.x);
+    float2 uv2 = face.uv1yUv2QuadSize.yz;
+    float2 lightmapUV = uv0 * baryPosition.x
+        + uv1 * baryPosition.y + uv2 * baryPosition.z;
+    uint variant = grassVariant(face, sourceFace, localCluster);
+    float yaw = 6.28318530717958647692
+        * grassRandom01(sourceFace, localCluster, 3);
+    float sizeScale = saturate((32.0 - distance(position, pushConstants.cameraPosition.xyz)) / 4.0);
+    float quadSize = face.uv1yUv2QuadSize.w * sizeScale;
+
+    ProceduralQuad cluster;
+    cluster.positionVariant = float4(position, float(variant));
+    cluster.right = float4(cos(yaw) * quadSize, sin(yaw) * quadSize, 0.0, 0.0);
+    cluster.up = float4(0.0, 0.0, quadSize, 0.0);
+    cluster.uvOffsetScale = float4(
+        0.5 * float(variant % 2), 0.5 * float(variant / 2), 0.5, 0.5);
+    cluster.lightmapUV = lightmapUV;
+    cluster.pad = float2(0.0);
+    cluster.color = float4(1.0);
+    return cluster;
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
@@ -180,7 +283,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
         SceneObject object = objects[findVertexObject(id)];
         uint vertexId = id - object.dstVertexBase;
         if (object.srcVertexStride <= 1) {
-            GrassCluster cluster = grassClusters[object.srcVertexOffset + vertexId / 4];
+            ProceduralQuad cluster = object.srcVertexStride == 0
+                ? expandGrassCluster(object, vertexId / 4)
+                : proceduralQuads[object.srcVertexOffset + vertexId / 4];
             uint quadVertex = vertexId % 4;
             float x = (quadVertex == 0 || quadVertex == 3) ? -0.5 : 0.5;
             // Stride zero is the bottom-anchored grass mesh. Stride one is a
@@ -375,6 +480,11 @@ void main(uint3 tid : SV_DispatchThreadID) {
             indices[destinationIndex + 2] = sourceIndices[object.srcIndexOffset + firstIndex + 2]
                 + object.dstVertexBase;
         }
-        materialIds[id] = object.materialIndex;
+        if (object.srcVertexStride == 0) {
+            GrassRange range = findGrassRange(object, localId / 2);
+            materialIds[id] = grassFaces[range.faceIndex].faceBudgetMaterialVariants.z;
+        } else {
+            materialIds[id] = object.materialIndex;
+        }
     }
 }

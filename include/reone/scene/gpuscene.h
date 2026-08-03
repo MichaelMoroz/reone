@@ -42,12 +42,6 @@ constexpr RenderCategories renderCategory(RenderCategory category) {
     return static_cast<RenderCategories>(category);
 }
 
-struct GrassInstance {
-    int variant {0};
-    glm::vec3 position {0.0f};
-    glm::vec2 lightmapUV {0.0f};
-    float yaw {0.0f};
-};
 struct RegisteredSkin {
     const std::vector<glm::mat4> *bones {nullptr};
     const std::vector<glm::mat4> *prevBones {nullptr};
@@ -96,11 +90,16 @@ struct RegisteredProcedural {
     graphics::Material material;
     ProceduralKind kind {ProceduralKind::Grass};
     glm::ivec2 gridSize {1};
-    float quadSize {0.0f};
     std::vector<ProceduralInstance> instances;
     std::vector<graphics::GpuSceneProceduralQuad> loweredQuads;
+    const std::vector<graphics::GpuSceneGrassFace> *grassFaces {nullptr};
+    size_t grassClusterCount {0};
+    uint64_t grassGeneration {0};
     ModelSceneNode *cullRoot {nullptr};
     size_t instanceCount() const {
+        if (kind == ProceduralKind::Grass) {
+            return grassClusterCount;
+        }
         return loweredQuads.empty() ? instances.size() : loweredQuads.size();
     }
 };
@@ -190,8 +189,9 @@ public:
                       std::vector<graphics::GpuSceneProceduralQuad> quads,
                       ModelSceneNode *cullRoot);
     void addGrass(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
-                  const graphics::Material &material, float radius, float quadSize,
-                  const std::vector<GrassInstance> &instances);
+                  const graphics::Material &material,
+                  const std::vector<graphics::GpuSceneGrassFace> &faces,
+                  uint64_t grassGeneration);
     bool isObjectEnabled(uint32_t idIndex) const {
         return _disabledObjects.find(idIndex) == _disabledObjects.end();
     }
@@ -245,6 +245,7 @@ private:
     std::vector<SceneNodeId> _previousFrameIds;
     size_t _identitySnapshot {0};
     uint64_t _admissionGeneration {1};
+    uint64_t _grassFaceGeneration {1};
     GpuScene *_shadowScene {nullptr};
 
     static SceneNodeId objectId(const ObjectRecord &object);
@@ -258,6 +259,7 @@ private:
     uint32_t internMaterial(const InstanceMaterial &material);
     void releaseMaterial(uint32_t index);
     void invalidate(SceneNodeId id);
+    void dirtyGrassFaces();
     bool isActive(SceneNodeId id) const;
 };
 } // namespace reone::scene

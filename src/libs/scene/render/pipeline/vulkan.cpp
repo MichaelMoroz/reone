@@ -151,6 +151,15 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
              ", materials=" + std::to_string(_lastMaterialReferences) + "->" +
              std::to_string(_lastMaterialCount),
          LogChannel::Graphics);
+    uint64_t grassClusters = 0;
+    for (const auto &range : _admissionResult.submission.upload.grassRanges)
+        grassClusters += range.clusterCount;
+    info("GpuScene grass faces=" +
+             std::to_string(_admissionResult.submission.upload.grassFaces.size()) +
+             ", in_band_faces=" +
+             std::to_string(_admissionResult.submission.upload.grassRanges.size()) +
+             ", clusters=" + std::to_string(grassClusters),
+         LogChannel::Graphics);
     _executor->dumpTargets(dir, *_callbacks);
 }
 

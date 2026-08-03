@@ -31,7 +31,6 @@ enum class SceneNodeType {
     Emitter,
     Particle,
     Grass,
-    GrassCluster,
     Walkmesh,
     Trigger
 };

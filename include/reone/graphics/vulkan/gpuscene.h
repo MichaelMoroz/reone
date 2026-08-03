@@ -94,15 +94,18 @@ private:
     std::vector<uint32_t> _sourceIndexData;
     std::unique_ptr<VulkanBuffer> _sourceVertices;
     std::unique_ptr<VulkanBuffer> _sourceIndices;
+    std::unique_ptr<VulkanBuffer> _grassFaces;
     std::vector<std::unique_ptr<VulkanBuffer>> _retiredSourceBuffers;
     uint32_t _sourceVertexCapacity {0};
     uint32_t _sourceIndexCapacity {0};
+    uint64_t _grassFaceGeneration {0};
     uint64_t _sourceResourceGeneration {0};
     uint64_t _sceneScope {1};
     uint64_t _revision {0};
     bool _inited {false};
 
-    void ensureMergeBuffers(Frame &, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+    void ensureMergeBuffers(Frame &, uint32_t, uint32_t, uint32_t, uint32_t,
+                            uint32_t, uint32_t, uint32_t);
     void clearSourceGeometry();
     const SourceGeometry &appendSourceGeometry(const Mesh &mesh);
 };
