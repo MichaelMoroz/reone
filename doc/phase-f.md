@@ -58,7 +58,7 @@ the invariant; its absolute value across commits is not.
 | **G5** | done `802ec6c8` — retro shades the G-buffer; by eye, three of four modules read as the same game. `920c1259` then took blended surfaces out of the G-buffer and the per-frame hash out of the frame; `1c703dde` added Tracy, capturable headless |
 | **R1** | done `cfbb2989` — persistent registration; 1.33 → 0.16 ms measured, zero shadow mismatches including a module transition |
 | **R2** | delete the translation layer: nodes own GPU-shaped records, classification moves to material-set time, the Registered* intermediates die |
-| **R3** | grass generates on the GPU — the moving-camera CPU cost (350→250 fps) is the edge band rebuilding; placement is a bit-exact integer hash and belongs in the merge |
+| **R3** | done `1b6559aa` — grass placement in the merge compute; grass CPU 0.007 ms and flat through a teleport, graphics slot 4.1 → 1.3 ms at density 3.57 |
 | **G6–G8** | PBR shading, shadows, the blended pass. After R1/R2. |
 | **V1–V5** | the visibility track and the sky. After G. |
 
@@ -397,7 +397,13 @@ acceptance set including a module transition, byte-identical dumps between
 paths in one binary, and the frame cost of the former collection+admission
 zones reduced to the dynamic streams alone.
 
-## R3 — grass generates on the GPU
+## R3 — grass generates on the GPU — done `1b6559aa`
+
+Landed as specced. Placement parity to the pre-R3 baseline: 2,853 px of 2M,
+all silhouettes and the now-continuous ramp. Grass CPU 0.007 ms/frame and
+flat through a scheduled teleport; graphics slot 4.118 → 1.337 ms at density
+3.57; the merge dispatch pays 9.9 µs. Field acceptance — the 350/250 moving
+fps report — pending the reporter.
 
 Measured in play: 350 fps standing, 250 fps moving. The delta is the grass
 edge band — the ramp is quantised so a *still* camera rebuilds nothing, which
