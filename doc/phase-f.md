@@ -79,15 +79,39 @@ ReSTIR and SHARC stay in the quality lane after.
 
 **The first fog grid, specced 2026-08-03:** a distorted player-centred world
 grid — the simple incarnation of the end-state volume, built now rather than
-after SHARC. Density source: the per-area scene fog parameters (and, pending
-the census, lit smoke/fog particles baked in as density instead of traced as
-billboards — blended billboards are the slow path in traversal; emissive
-particles and sabers stay geometry). Lighting: **one sample per voxel per
+after SHARC. Density source: the per-area scene fog parameters, plus — the census
+(`714bd700`) settled which particles bake — **the Normal-blend billboard
+smoke/dust/cloud families** (~2,250 emitter nodes across ~490 models, the
+ambient always-on traversal load: vents, sandstorms, mist authored as
+`fx_smoke`) **and fire/explosion (144 nodes), which bake with an emissive
+channel** — the voxel carries density plus self-emission, and the march
+integrates density × (cached radiance + self-emission), so fire both glows
+and occludes as media. Everything else stays geometry, each for its own
+reason: crowd sprites and birds (6,535 nodes — sprite *characters*, not
+media), rain and wave strips (shaped, directional), motion-blur streaks and
+linked lightning (not billboard quads at all), and all additive per the
+standing rule. The census also surfaced that 1,124 lit
+emitters carry an authored `tinted` flag the renderer has never consumed —
+the tint colors the media when baking, so honoring it starts there. Lighting: **one sample per voxel per
 frame with large temporal reuse**; consumption: **trilinear at render**, a
 **software raymarch of density × emission** applied twice — after each
 hardware ray segment (bounces included) and at the PT resolve when combining
 final channels. When SHARC arrives later it feeds this same grid through the
 resample stage; the grid's shape and consumers do not change.
+
+**Emissive billboards × the march, settled:** the march outputs an
+integrated `(inscatter, transmittance)` froxel texture at reduced
+resolution — the view-side integrator role froxels were explicitly kept
+for, holding no history of its own; all history stays in the world grid.
+Every composite then samples it at its own depth: the opaque resolve at
+G-buffer depth, blended fragments at theirs during the sorted draw, and
+additive billboards multiply by T at their depth — a saber inside a smoke
+column dims by exactly the density in front of it while occluding nothing.
+Bounce segments keep the direct grid march. Left open on purpose: additive
+emitters lighting the media back (a bolt illuminating the smoke around
+it) — 3.7's flat additive loop makes it samplable from the per-voxel
+lighting ray later, but the original game never did it and it is a dial,
+not a requirement.
 
 **Fog × AA, the working answer:** under TAA the march would sit as a post on
 the AA result to dodge reprojection; FSR complicates that in principle — but
