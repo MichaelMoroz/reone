@@ -399,6 +399,34 @@ the primary ray lands on a different sub-pixel every frame, so `traced_albedo`
 differed on 57% of pixels for entirely legitimate reasons and the real signal
 was invisible.
 
+## CPU attribution: Tracy, headless
+
+Since `1c703dde` the engine carries Tracy (v0.13.1, `ENABLE_TRACY`, on-demand
+mode — zero cost until a capture attaches, macros compile out when the option
+is off). The whole loop is scriptable, no GUI needed:
+
+```
+# terminal 1 (or Start-Process): a long-lived engine
+engine.exe --game ... --dev 0 --mode raster --pbr 0 --grassdensity 1 \
+    --headless 1 --commands-file warp.txt --captureframe 3000 --capture out.tga
+# terminal 2, once it is past loading:
+tracy-capture.exe -o run.tracy -s 5      # both tools live in build/bin
+tracy-csvexport.exe run.tracy > zones.csv
+```
+
+`zones.csv` has `name,total_ns,counts,mean_ns,...` per zone; totals are
+**inclusive**, so do not sum parents with their children. The four top-level
+zones carry the frame-slot names (`input`/`update`/`graphics`/`audio`) so the
+log line and Tracy agree. Calibration point, danm14ab retro steady state,
+280 fps: `graphics` ≈ 1.9–2.3 ms with `collectInto` ≈ 0.73 and
+`SceneAdmission::prepare` ≈ 0.60 inside it.
+
+Two traps this section exists to prevent: the frame-slot log line measured
+over a loading-adjacent window reads several times higher than steady state —
+a 4.8/5.9 ms reading taken that way was chased as a regression that did not
+exist; and there are no GPU zones (skipped deliberately), so GPU time still
+comes from the in-engine readouts.
+
 ## Frame time, and how to compare two commits
 
 A capture run renders as fast as it can with a fixed 1/60 simulation step, so
