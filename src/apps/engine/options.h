@@ -40,6 +40,8 @@ struct Options {
      * Execute console commands from a file at startup.
      */
     std::string commandsFile;
+    /** Optional second command file run on commandsFrame after the startup file. */
+    std::string commandsFrameScheduledFile;
     /**
      * Run the commands file on this frame instead of during init.
      *

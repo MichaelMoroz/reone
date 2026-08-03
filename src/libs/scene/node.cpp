@@ -17,6 +17,11 @@
 
 #include "reone/scene/node.h"
 
+#include <cstring>
+
+#include "reone/scene/gpuscene.h"
+#include "reone/scene/graph.h"
+
 namespace reone {
 
 namespace scene {
@@ -25,9 +30,11 @@ void SceneNode::addChild(SceneNode &node) {
     node._parent = this;
     node.computeAbsoluteTransforms();
     _children.push_back(&node);
+    node.refreshGpuActivation(_enabled);
 }
 
 void SceneNode::computeAbsoluteTransforms() {
+    const auto oldTransform = _absTransform;
     if (_parent) {
         _absTransform = _parent->_absTransform * _localTransform;
     } else {
@@ -39,7 +46,8 @@ void SceneNode::computeAbsoluteTransforms() {
         child->computeAbsoluteTransforms();
     }
 
-    onAbsoluteTransformChanged();
+    if (std::memcmp(&oldTransform, &_absTransform, sizeof(glm::mat4)) != 0)
+        onAbsoluteTransformChanged();
 }
 
 void SceneNode::removeChild(SceneNode &node) {
@@ -50,6 +58,7 @@ void SceneNode::removeChild(SceneNode &node) {
     auto child = *maybeChild;
     child->_parent = nullptr;
     child->computeAbsoluteTransforms();
+    child->refreshGpuActivation(true);
     _children.erase(maybeChild);
 }
 
@@ -57,6 +66,7 @@ void SceneNode::removeAllChildren() {
     for (auto &child : _children) {
         child->_parent = nullptr;
         child->computeAbsoluteTransforms();
+        child->refreshGpuActivation(true);
     }
     _children.clear();
 }
@@ -102,6 +112,31 @@ glm::vec3 SceneNode::getWorldCenterOfAABB() const {
 void SceneNode::setLocalTransform(glm::mat4 transform) {
     _localTransform = std::move(transform);
     computeAbsoluteTransforms();
+}
+
+void SceneNode::setEnabled(bool enabled) {
+    if (_enabled == enabled)
+        return;
+    _enabled = enabled;
+    bool ancestorsActive = true;
+    for (auto *ancestor = _parent; ancestor; ancestor = ancestor->_parent)
+        ancestorsActive = ancestorsActive && ancestor->_enabled;
+    refreshGpuActivation(ancestorsActive);
+}
+
+void SceneNode::setGpuSubtreeActive(bool active) {
+    refreshGpuActivation(active);
+}
+
+void SceneNode::refreshGpuActivation(bool ancestorsActive) {
+    const bool active = ancestorsActive && _enabled;
+    _sceneGraph.gpuScene().setObjectActive(_id, active);
+    if (active)
+        onGpuActivationChanged(true);
+    else
+        _sceneGraph.gpuScene().unregisterObject(_id);
+    for (auto *child : _children)
+        child->refreshGpuActivation(active);
 }
 
 } // namespace scene

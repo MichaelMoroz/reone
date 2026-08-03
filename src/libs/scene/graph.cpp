@@ -92,10 +92,21 @@ void SceneGraph::clear() {
     _triggerRoots.clear();
     _soundRoots.clear();
     _grassRoots.clear();
+    _meshes.clear();
+    _lights.clear();
+    _emitters.clear();
+    _opaqueLeafs.clear();
+    _transparentLeafs.clear();
+    _flareLights.clear();
     _activeLights.clear();
+    _registeredFlareLights.clear();
+    _gpuScene.clear();
+    _shadowGpuScene.clear();
+    _incrementalSceneReady = false;
 }
 
 void SceneGraph::addRoot(std::shared_ptr<ModelSceneNode> node) {
+    node->setGpuSubtreeActive(true);
     _modelRoots.push_back(std::move(node));
 }
 
@@ -108,6 +119,7 @@ void SceneGraph::addRoot(std::shared_ptr<TriggerSceneNode> node) {
 }
 
 void SceneGraph::addRoot(std::shared_ptr<GrassSceneNode> node) {
+    node->setGpuSubtreeActive(true);
     _grassRoots.push_back(std::move(node));
 }
 
@@ -116,6 +128,7 @@ void SceneGraph::addRoot(std::shared_ptr<SoundSceneNode> node) {
 }
 
 void SceneGraph::removeRoot(ModelSceneNode &node) {
+    node.setGpuSubtreeActive(false);
     for (auto it = _activeLights.begin(); it != _activeLights.end();) {
         if (&(*it)->model() == &node) {
             it = _activeLights.erase(it);
@@ -147,6 +160,7 @@ void SceneGraph::removeRoot(TriggerSceneNode &node) {
 }
 
 void SceneGraph::removeRoot(GrassSceneNode &node) {
+    node.setGpuSubtreeActive(false);
     auto it = std::remove_if(
         _grassRoots.begin(),
         _grassRoots.end(),
@@ -182,9 +196,43 @@ void SceneGraph::update(float dt) {
     updateLighting();
     updateShadowLight(dt);
     updateFlareLights();
+    {
+        R_PROFILE_ZONE("SceneGraph::flare visibility update");
+        std::unordered_set<LightSceneNode *> visible;
+        for (auto *light : _flareLights) {
+            Collision collision;
+            if (testLineOfSight(_activeCamera->origin(), light->origin(), collision)) {
+                _gpuScene.unregisterObject(light->id());
+                continue;
+            }
+            light->collectLensFlare(
+                _gpuScene, light->modelNode().light()->flares.front());
+            visible.insert(light);
+        }
+        for (auto *light : _registeredFlareLights) {
+            if (visible.find(light) == visible.end())
+                _gpuScene.unregisterObject(light->id());
+        }
+        _registeredFlareLights = std::move(visible);
+    }
     updateSounds();
     prepareOpaqueLeafs();
     prepareTransparentLeafs();
+    {
+        R_PROFILE_ZONE("SceneGraph::particle stream update");
+        std::unordered_set<EmitterSceneNode *> collected;
+        for (auto &[node, leafs] : _transparentLeafs) {
+            if (node->type() != SceneNodeType::Emitter)
+                continue;
+            auto *emitter = static_cast<EmitterSceneNode *>(node);
+            emitter->collectLeafs(_gpuScene, leafs);
+            collected.insert(emitter);
+        }
+        for (auto *emitter : _emitters) {
+            if (collected.find(emitter) == collected.end())
+                _gpuScene.unregisterObject(emitter->id());
+        }
+    }
 }
 
 void SceneGraph::updateLighting() {
@@ -226,6 +274,7 @@ void SceneGraph::updateLighting() {
 }
 
 void SceneGraph::updateShadowLight(float dt) {
+    const bool hadShadowLight = _shadowLight != nullptr;
     auto closestLights = computeClosestLights(1, [this](auto &light, float distance2) {
         if (!light.modelNode().light()->shadow) {
             return false;
@@ -250,6 +299,8 @@ void SceneGraph::updateShadowLight(float dt) {
         _shadowLight = closestLights.front();
         _shadowActive = true;
     }
+    if (hadShadowLight != (_shadowLight != nullptr))
+        _incrementalSceneReady = false;
 }
 
 void SceneGraph::updateFlareLights() {
@@ -518,7 +569,29 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
             screenEffect.clipNear = camera->zNear();
             screenEffect.clipFar = camera->zFar();
         });
-        collectInto(_gpuScene);
+        const bool full = !_incrementalSceneReady || _graphicsOpt.admissionForceFull;
+        if (full)
+            _gpuScene.beginFullCollection();
+        collectInto(_gpuScene, full);
+        if (full)
+            _gpuScene.endFullCollection();
+        const bool hasRenderableLists = !_meshes.empty() || !_opaqueLeafs.empty() ||
+                                        !_transparentLeafs.empty();
+        _incrementalSceneReady = hasRenderableLists;
+        if (_graphicsOpt.admissionShadow) {
+            _shadowGpuScene.resetFrame();
+            _shadowGpuScene.beginFullCollection();
+            collectInto(_shadowGpuScene, true);
+            _shadowGpuScene.endFullCollection();
+        }
+        // During a module load dynamic nodes can update one frame before the
+        // graph has refreshed its render lists. The legacy full walk admitted
+        // nothing on that frame; discard those early upserts so both the real
+        // and shadow intern histories start at the first complete scene.
+        if (!hasRenderableLists) {
+            _gpuScene.clear();
+            _shadowGpuScene.clear();
+        }
     }
 
     auto &output = pipeline.render(_activeCamera);
@@ -576,35 +649,57 @@ void SceneGraph::snapshotPreviousFrame() {
     }
 }
 
-void SceneGraph::collectInto(GpuScene &scene) {
+void SceneGraph::collectInto(GpuScene &scene, bool full) {
     R_PROFILE_ZONE("SceneGraph::collectInto");
     if (!_activeCamera) {
         return;
     }
 
-    for (auto &mesh : _meshes) {
-        // Transparent meshes are registered by their distance-sorted leaf
-        // buckets below. Registering them here as well would duplicate them.
-        if (!mesh->shouldRender() || !mesh->isTransparent()) {
-            mesh->collectInto(scene);
+    {
+        R_PROFILE_ZONE("SceneGraph::dynamic mesh collection");
+        for (auto &mesh : _meshes) {
+            // Transparent meshes are registered by their leaf buckets in a full
+            // collection. Incremental collection visits only always-dirty streams.
+            if (full && (!mesh->shouldRender() || !mesh->isTransparent())) {
+                mesh->collectInto(scene);
+            } else if (!full && mesh->requiresPerFrameGpuSync() &&
+                       !mesh->hasDynamicDeformation()) {
+                mesh->collectInto(scene);
+            }
         }
     }
-    // Draw opaque leafs
-    for (auto &[node, leafs] : _opaqueLeafs) {
-        node->collectLeafs(scene, leafs);
+    // Grass materialisation is a dynamic cache keyed by nearby faces. Its
+    // records are upserted here; unchanged classification/material state stays
+    // cached even while the instance stream changes.
+    {
+        R_PROFILE_ZONE("SceneGraph::grass collection");
+        for (auto &[node, leafs] : _opaqueLeafs) {
+            auto &grass = static_cast<GrassSceneNode &>(*node);
+            if (full)
+                grass.collectLeafs(scene, leafs);
+            else
+                grass.collectLeafsIfDirty(scene, leafs);
+        }
     }
 
-    for (auto &[node, leafs] : _transparentLeafs) {
-        node->collectLeafs(scene, leafs);
-    }
-    for (auto &light : _flareLights) {
-        Collision collision;
-        if (testLineOfSight(_activeCamera->origin(), light->origin(), collision)) {
-            continue;
+    {
+        R_PROFILE_ZONE("SceneGraph::transient collection");
+        for (auto &[node, leafs] : _transparentLeafs) {
+            if (full)
+                node->collectLeafs(scene, leafs);
         }
-        light->collectLensFlare(scene, light->modelNode().light()->flares.front());
     }
-    scene.checkIdentityStability();
+    if (full) {
+        for (auto &light : _flareLights) {
+            Collision collision;
+            if (testLineOfSight(_activeCamera->origin(), light->origin(), collision)) {
+                continue;
+            }
+            light->collectLensFlare(scene, light->modelNode().light()->flares.front());
+        }
+    }
+    if (full)
+        scene.checkIdentityStability();
 }
 
 static std::vector<glm::vec4> computeFrustumCornersWorldSpace(const glm::mat4 &projection, const glm::mat4 &view) {

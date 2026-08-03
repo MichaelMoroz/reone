@@ -303,7 +303,7 @@ const VulkanGpuScene::SourceGeometry &VulkanGpuScene::appendSourceGeometry(const
     return location;
 }
 
-VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload upload) {
+VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload &upload) {
     R_PROFILE_ZONE("VulkanGpuScene::update");
     const auto resourceGeneration = _renderer->resources().generation();
     if (resourceGeneration != _sourceResourceGeneration) {

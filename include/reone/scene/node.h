@@ -124,7 +124,8 @@ public:
 
     // Flags
 
-    void setEnabled(bool enabled) { _enabled = enabled; }
+    void setEnabled(bool enabled);
+    void setGpuSubtreeActive(bool active);
     void setCulled(bool culled) { _culled = culled; }
     void setCullingEnabled(bool enabled) { _cullingEnabled = enabled; }
 
@@ -231,11 +232,13 @@ protected:
     void computeAbsoluteTransforms();
 
     virtual void onAbsoluteTransformChanged() {}
+    virtual void onGpuActivationChanged(bool active) {}
 
 private:
     friend class SceneGraph;
 
     void setId(SceneNodeId id) { _id = id; }
+    void refreshGpuActivation(bool ancestorsActive);
 };
 
 } // namespace scene

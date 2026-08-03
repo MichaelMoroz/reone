@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include "reone/scene/gpuscene.h"
+
 #include "modelnode.h"
 
 namespace reone {
@@ -54,18 +56,24 @@ public:
     bool shouldCastShadows() const;
 
     bool isTransparent() const;
+    bool requiresPerFrameGpuSync() const;
+    bool hasDynamicDeformation() const;
+    void refreshGpuSceneStreams(GpuScene &scene);
+    void updateGpuStreams();
 
     ModelSceneNode &model() { return _model; }
     const ModelSceneNode &model() const { return _model; }
 
     void setMainTexture(graphics::Texture *texture) override;
     void setEnvironmentMap(graphics::Texture *texture) override;
-    void setAlpha(float alpha) { _alpha = alpha; }
-    void setSelfIllumColor(glm::vec3 color) { _selfIllumColor = std::move(color); }
+    void setAlpha(float alpha);
+    void setSelfIllumColor(glm::vec3 color);
 
     void snapshotPreviousFrame(uint64_t frame) override;
 
 private:
+    void onGpuActivationChanged(bool active) override;
+
     struct NodeTextures {
         graphics::Texture *diffuse {nullptr};
         graphics::Texture *lightmap {nullptr};
@@ -83,6 +91,7 @@ private:
         std::vector<DanglyVertex> vertices;
         glm::vec3 prevWorldPos {0.0f};
     } _dangly;
+    std::vector<glm::vec4> _danglyPositions;
     std::vector<glm::vec4> _prevDanglyPositions;
 
     struct SaberVertex {
@@ -126,6 +135,9 @@ private:
     void updateBumpmapAnimation(float dt, const graphics::ModelNode::TriangleMesh &mesh);
     void updateDanglyAnimation(float dt, const graphics::ModelNode::Danglymesh &mesh);
     void updateSaberAnimation(float dt);
+    RegisteredDeformation buildDeformation();
+
+    void onAbsoluteTransformChanged() override;
 
     // END Animation
 };

@@ -42,14 +42,6 @@ constexpr RenderCategories renderCategory(RenderCategory category) {
     return static_cast<RenderCategories>(category);
 }
 
-struct ParticleInstance {
-    int frame {0};
-    glm::vec3 position {0.0f};
-    glm::vec2 size {0.0f};
-    glm::vec4 color {1.0f};
-    glm::vec3 right {0.0f};
-    glm::vec3 up {0.0f};
-};
 struct GrassInstance {
     int variant {0};
     glm::vec3 position {0.0f};
@@ -57,15 +49,15 @@ struct GrassInstance {
     float yaw {0.0f};
 };
 struct RegisteredSkin {
-    std::vector<glm::mat4> bones;
-    std::vector<glm::mat4> prevBones;
+    const std::vector<glm::mat4> *bones {nullptr};
+    const std::vector<glm::mat4> *prevBones {nullptr};
 };
 struct RegisteredDangly {
-    std::vector<glm::vec4> positions;
-    std::vector<glm::vec4> prevPositions;
+    const std::vector<glm::vec4> *positions {nullptr};
+    const std::vector<glm::vec4> *prevPositions {nullptr};
 };
 struct RegisteredSaber {
-    glm::vec4 displacement {0.0f};
+    const glm::vec3 *displacement {nullptr};
 };
 using RegisteredDeformation =
     std::variant<std::monostate, RegisteredSkin, RegisteredDangly, RegisteredSaber>;
@@ -106,7 +98,11 @@ struct RegisteredProcedural {
     glm::ivec2 gridSize {1};
     float quadSize {0.0f};
     std::vector<ProceduralInstance> instances;
+    std::vector<graphics::GpuSceneProceduralQuad> loweredQuads;
     ModelSceneNode *cullRoot {nullptr};
+    size_t instanceCount() const {
+        return loweredQuads.empty() ? instances.size() : loweredQuads.size();
+    }
 };
 using ObjectRecord = std::variant<RegisteredMesh, RegisteredProcedural>;
 
@@ -157,8 +153,28 @@ public:
     using ProceduralClassifier =
         std::function<std::optional<Classification>(const RegisteredProcedural &)>;
 
+    /** Drop only streams whose contents are defined afresh every frame. */
     void resetFrame();
+    void beginFullCollection();
+    void endFullCollection();
+    /** Drop the persistent world and all admission/intern state. */
+    void clear();
+    void resetAdmissionCache();
     void checkIdentityStability();
+
+    void unregisterObject(SceneNodeId id);
+    void setObjectActive(SceneNodeId id, bool active);
+    void updateMeshTransform(SceneNodeId id, const glm::mat4 &transform,
+                             const glm::mat4 &transformInv,
+                             const glm::mat4 &prevTransform);
+    void settleMeshTransform(SceneNodeId id, const glm::mat4 &transform);
+    bool updateMeshDeformation(SceneNodeId id, RegisteredDeformation deformation);
+    void patchBumpMapFrame(SceneNodeId id, int frame);
+    void patchMaterialUv(SceneNodeId id, const glm::mat3x4 &uv);
+    void dirtyAdmission() { ++_admissionGeneration; }
+    uint64_t admissionGeneration() const { return _admissionGeneration; }
+    void setShadowScene(GpuScene *scene) { _shadowScene = scene; }
+    GpuScene *shadowScene() const { return _shadowScene; }
 
     void addMesh(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
                  graphics::Mesh &mesh, const graphics::Material &material,
@@ -171,7 +187,7 @@ public:
                       std::optional<float> size, ModelSceneNode *cullRoot);
     void addParticles(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
                       const graphics::Material &material, const glm::ivec2 &gridSize,
-                      const std::vector<ParticleInstance> &instances,
+                      std::vector<graphics::GpuSceneProceduralQuad> quads,
                       ModelSceneNode *cullRoot);
     void addGrass(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
                   const graphics::Material &material, float radius, float quadSize,
@@ -179,6 +195,7 @@ public:
     bool isObjectEnabled(uint32_t idIndex) const {
         return _disabledObjects.find(idIndex) == _disabledObjects.end();
     }
+    bool isObjectActive(SceneNodeId id) const { return isActive(id); }
     void setObjectEnabled(uint32_t idIndex, bool enabled) {
         if (enabled)
             _disabledObjects.erase(idIndex);
@@ -194,15 +211,53 @@ public:
 
     graphics::GpuSceneUpload prepare(const Classifier &classifier,
                                      const ProceduralClassifier &proceduralClassifier,
-                                     const glm::mat4 &cameraView) const;
+                                     const glm::mat4 &cameraView,
+                                     uint64_t admissionGeneration,
+                                     bool forceFull = false,
+                                     graphics::GpuSceneUpload reuse = {});
 
 private:
+    struct CachedClassification {
+        bool dirty {true};
+        bool classified {false};
+        std::optional<Classification> value;
+        uint32_t materialIndex {0};
+        uint64_t admissionGeneration {0};
+    };
+    struct InternedMaterial {
+        InstanceMaterial material;
+        uint32_t references {0};
+        uint64_t hash {0};
+        bool occupied {false};
+    };
+
     std::vector<ObjectRecord> _objects;
+    std::unordered_map<SceneNodeId, CachedClassification> _classification;
+    std::vector<InternedMaterial> _materials;
+    std::unordered_map<uint64_t, std::vector<uint32_t>> _materialIndices;
+    std::vector<uint32_t> _freeMaterialIndices;
+    std::unordered_set<SceneNodeId> _inactiveObjects;
+    std::unordered_set<SceneNodeId> _fullCollectionUnseen;
     std::unordered_set<uint32_t> _disabledObjects;
     const ModelSceneNode *_skyRoom {nullptr};
     TraceMaterialOverrides _traceMaterials;
     SceneCounts _counts;
     std::vector<SceneNodeId> _previousFrameIds;
     size_t _identitySnapshot {0};
+    uint64_t _admissionGeneration {1};
+    GpuScene *_shadowScene {nullptr};
+
+    static SceneNodeId objectId(const ObjectRecord &object);
+    static bool idLess(SceneNodeId left, SceneNodeId right);
+    std::vector<ObjectRecord>::iterator findObject(SceneNodeId id);
+    std::vector<ObjectRecord>::const_iterator findObject(SceneNodeId id) const;
+    void upsert(ObjectRecord object);
+    void eraseObject(std::vector<ObjectRecord>::iterator it);
+    void addCounts(const ObjectRecord &object);
+    void removeCounts(const ObjectRecord &object);
+    uint32_t internMaterial(const InstanceMaterial &material);
+    void releaseMaterial(uint32_t index);
+    void invalidate(SceneNodeId id);
+    bool isActive(SceneNodeId id) const;
 };
 } // namespace reone::scene

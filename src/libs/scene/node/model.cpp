@@ -103,6 +103,12 @@ void ModelSceneNode::update(float dt) {
     }
     SceneNode::update(dt);
     updateAnimations(dt);
+    // Parent/model animation is complete now. Refresh node-owned deformation
+    // arenas here so render-time registration only observes stable pointers.
+    for (const auto &[number, node] : _nodeByNumber) {
+        if (node->type() == SceneNodeType::Mesh)
+            static_cast<MeshSceneNode *>(node)->updateGpuStreams();
+    }
 }
 
 void ModelSceneNode::collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) {

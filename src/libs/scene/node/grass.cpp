@@ -102,6 +102,7 @@ void GrassSceneNode::update(float dt) {
     // then cached. Without dropping the cache a change would only affect faces
     // the camera has not reached yet, which reads as the slider half-working.
     if (_grassGeneration != _sceneGraph.grassGeneration()) {
+        _gpuSceneDirty = true;
         _grassGeneration = _sceneGraph.grassGeneration();
         // Returning a cluster to the pool is not enough: it has to leave
         // _children too, exactly as the out-of-distance sweep below does.
@@ -147,6 +148,7 @@ void GrassSceneNode::update(float dt) {
         outOfDistance.insert(faceIdx);
     }
     if (!outOfDistance.empty()) {
+        _gpuSceneDirty = true;
         // Collected first, then removed in one sweep. Children are held in
         // insertion order now, so erasing them one at a time would be
         // quadratic in the number of clusters on screen.
@@ -190,6 +192,7 @@ void GrassSceneNode::update(float dt) {
         if (_materializedClusters.count(faceIdx) > 0) {
             continue;
         }
+        _gpuSceneDirty = true;
         auto &face = faces[faceIdx];
         auto verts = mesh->faceVertexCoords(face);
         for (int i = 0; i < getNumClustersInFace(face.area); ++i) {
@@ -219,7 +222,22 @@ void GrassSceneNode::update(float dt) {
 }
 
 void GrassSceneNode::collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) {
+    collectLeafsImpl(scene, leafs, true);
+}
+
+void GrassSceneNode::collectLeafsIfDirty(GpuScene &scene,
+                                         const std::vector<SceneNode *> &leafs) {
+    collectLeafsImpl(scene, leafs, false);
+}
+
+void GrassSceneNode::collectLeafsImpl(GpuScene &scene,
+                                      const std::vector<SceneNode *> &leafs,
+                                      bool force) {
+    if (!force && !_gpuSceneDirty)
+        return;
+    _gpuSceneDirty = false;
     if (leafs.empty()) {
+        scene.unregisterObject(id());
         return;
     }
     std::optional<std::reference_wrapper<Texture>> lightmap;

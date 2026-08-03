@@ -175,13 +175,14 @@ public:
         _graphicsSvc(graphicsSvc),
         _audioSvc(audioSvc),
         _resourceSvc(resourceSvc) {
+        _gpuScene.setShadowScene(&_shadowGpuScene);
     }
 
     void update(float dt) override;
     graphics::Texture &render(const glm::ivec2 &dim) override;
     void invalidateRenderPipeline() override { _renderPipeline.reset(); }
 
-    void collectInto(GpuScene &scene);
+    void collectInto(GpuScene &scene, bool full = true);
 
     const GpuScene &gpuScene() const override { return _gpuScene; }
     GpuScene &gpuScene() override { return _gpuScene; }
@@ -213,6 +214,7 @@ public:
         _grassEnabled = enabled;
         _grassDensityScale = densityScale;
         ++_grassGeneration;
+        _incrementalSceneReady = false;
     }
     bool grassEnabled() const override { return _grassEnabled; }
     float grassDensityScale() const override { return _grassDensityScale; }
@@ -263,7 +265,10 @@ public:
     }
 
     void setFog(FogProperties fog) override {
+        const bool admissionChanged = _fog.enabled != fog.enabled;
         _fog = std::move(fog);
+        if (admissionChanged)
+            _incrementalSceneReady = false;
     }
 
     // END Fog
@@ -324,6 +329,8 @@ private:
 
     std::unique_ptr<IRenderPipeline> _renderPipeline;
     GpuScene _gpuScene;
+    GpuScene _shadowGpuScene;
+    bool _incrementalSceneReady {false};
 
     bool _updateRoots {true};
 
@@ -340,6 +347,7 @@ private:
 
     CameraSceneNode *_activeCamera {nullptr};
     std::vector<LightSceneNode *> _flareLights;
+    std::unordered_set<LightSceneNode *> _registeredFlareLights;
 
     // Roots
 

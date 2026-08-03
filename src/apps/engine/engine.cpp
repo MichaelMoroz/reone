@@ -357,8 +357,8 @@ void Engine::init() {
         loadInputScript();
     }
 
-    if (_options.commandsFrame == 0) {
-        runCommandsFile();
+    if (_options.commandsFrame == 0 || !_options.commandsFrameScheduledFile.empty()) {
+        runCommandsFile(_options.commandsFile);
     }
 }
 
@@ -484,7 +484,9 @@ int Engine::run() {
         if (_options.commandsFrame > 0 && _frameIndex >= _options.commandsFrame &&
             !_commandsRun) {
             _commandsRun = true;
-            runCommandsFile();
+            runCommandsFile(_options.commandsFrameScheduledFile.empty()
+                                ? _options.commandsFile
+                                : _options.commandsFrameScheduledFile);
         }
         if (_frameIndex == 300 && _options.captureFrame > 0) {
             // The dump below then averages the same 300..captureframe window
@@ -768,13 +770,13 @@ void Engine::applyGraphicsRebuildVulkan() {
     _graphicsRebuildRequested = false;
 }
 
-void Engine::runCommandsFile() {
-    if (_options.commandsFile.empty()) {
+void Engine::runCommandsFile(const std::string &path) {
+    if (path.empty()) {
         return;
     }
-    std::ifstream file(_options.commandsFile);
+    std::ifstream file(path);
     if (!file.good()) {
-        throw std::runtime_error("Failed to open commands file: " + _options.commandsFile);
+        throw std::runtime_error("Failed to open commands file: " + path);
     }
     for (std::string line; std::getline(file, line);) {
         // getline keeps the carriage return of a CRLF file, which would end up

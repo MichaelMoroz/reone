@@ -48,6 +48,10 @@ struct GraphicsOptions {
      * it is on only when a dump was requested - the one consumer it has.
      */
     bool hashUploads {false};
+    /** Rebuild a second CPU scene every frame and compare its upload. */
+    bool admissionShadow {false};
+    /** Render through the full CPU collection/classification path. */
+    bool admissionForceFull {false};
 
     // Path tracing
 

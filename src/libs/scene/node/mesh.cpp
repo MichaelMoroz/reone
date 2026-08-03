@@ -33,6 +33,7 @@
 #include "reone/scene/node/model.h"
 #include "reone/scene/render/pipeline.h"
 #include "reone/system/logutil.h"
+#include "reone/system/profiler.h"
 #include "reone/system/randomutil.h"
 
 using namespace reone::graphics;
@@ -93,6 +94,8 @@ void MeshSceneNode::update(float dt) {
 
     std::shared_ptr<ModelNode::TriangleMesh> mesh(_modelNode.mesh());
     if (mesh) {
+        const auto oldUvOffset = _uvOffset;
+        const auto oldBumpFrame = _bumpmapCycleFrame;
         updateUVAnimation(dt, *mesh);
         updateBumpmapAnimation(dt, *mesh);
         if (mesh->danglymesh) {
@@ -100,6 +103,15 @@ void MeshSceneNode::update(float dt) {
         }
         if (mesh->saber) {
             updateSaberAnimation(dt);
+        }
+        if (oldBumpFrame != _bumpmapCycleFrame)
+            _sceneGraph.gpuScene().patchBumpMapFrame(id(), _bumpmapCycleFrame);
+        if (std::memcmp(&oldUvOffset, &_uvOffset, sizeof(_uvOffset)) != 0) {
+            const glm::mat3x4 uv(
+                glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
+                glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
+                glm::vec4(_uvOffset.x, _uvOffset.y, 0.0f, 0.0f));
+            _sceneGraph.gpuScene().patchMaterialUv(id(), uv);
         }
     }
 }
@@ -253,12 +265,14 @@ void MeshSceneNode::collectInto(GpuScene &scene) {
     bool render = shouldRender() && _nodeTextures.diffuse;
     bool castShadows = shouldCastShadows();
     if (!mesh || (!render && !castShadows)) {
+        scene.unregisterObject(id());
         return;
     }
     // Authored data contains mesh nodes with no vertices at all (tat_m18aa
     // and four other modules). There is nothing to draw or trace; letting one
     // through kills the Vulkan upload, which cannot buffer zero bytes.
     if (mesh->mesh->vertexData().empty()) {
+        scene.unregisterObject(id());
         return;
     }
     Material material;
@@ -323,7 +337,24 @@ void MeshSceneNode::collectInto(GpuScene &scene) {
     if (castShadows) {
         categories |= renderCategory(RenderCategory::ShadowCaster);
     }
+    scene.addMesh(categories,
+                  id(),
+                  nameIds(),
+                  *mesh->mesh, material, _absTransform, _absTransformInv,
+                  _prevAbsTransform, buildDeformation(), &_model);
+}
+
+void MeshSceneNode::onGpuActivationChanged(bool active) {
+    if (active)
+        collectInto(_sceneGraph.gpuScene());
+}
+
+RegisteredDeformation MeshSceneNode::buildDeformation() {
+    const auto mesh = _modelNode.mesh();
+    if (!mesh)
+        return {};
     if (_modelNode.isSkinMesh()) {
+        R_PROFILE_ZONE("GpuScene::skin stream update");
         const auto &skin = *mesh->skin;
         _bones.assign(kMaxBones, glm::mat4(1.0f));
         for (size_t i = 0; i < kMaxBones; ++i) {
@@ -346,38 +377,37 @@ void MeshSceneNode::collectInto(GpuScene &scene) {
         if (_prevBones.size() != _bones.size()) {
             _prevBones = _bones;
         }
-        scene.addMesh(categories,
-                        id(),
-                        nameIds(),
-                        *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
-                        RegisteredSkin {_bones, _prevBones}, &_model);
+        return RegisteredSkin {&_bones, &_prevBones};
     } else if (_modelNode.isDanglymesh()) {
-        std::vector<glm::vec4> positions;
-        positions.reserve(_dangly.vertices.size());
+        R_PROFILE_ZONE("GpuScene::dangly stream update");
+        _danglyPositions.clear();
+        _danglyPositions.reserve(_dangly.vertices.size());
         for (const auto &vertex : _dangly.vertices) {
-            positions.emplace_back(vertex.position + vertex.displacement, 1.0f);
+            _danglyPositions.emplace_back(vertex.position + vertex.displacement, 1.0f);
         }
-        auto prevPositions = _prevDanglyPositions;
-        if (prevPositions.size() != positions.size()) {
-            prevPositions = positions;
-        }
-        scene.addMesh(categories,
-                        id(),
-                        nameIds(),
-                        *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
-                        RegisteredDangly {std::move(positions), std::move(prevPositions)}, &_model);
+        if (_prevDanglyPositions.size() != _danglyPositions.size())
+            _prevDanglyPositions = _danglyPositions;
+        return RegisteredDangly {&_danglyPositions, &_prevDanglyPositions};
     } else if (_modelNode.isSaberMesh()) {
-        scene.addMesh(categories,
-                        id(),
-                        nameIds(),
-                        *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform,
-                        RegisteredSaber {glm::vec4 {_saber.displacement, 0.0f}}, &_model);
-    } else {
-        scene.addMesh(categories,
-                        id(),
-                        nameIds(),
-                        *mesh->mesh, material, _absTransform, _absTransformInv, _prevAbsTransform, {}, &_model);
+        R_PROFILE_ZONE("GpuScene::saber stream update");
+        return RegisteredSaber {&_saber.displacement};
     }
+    return {};
+}
+
+bool MeshSceneNode::hasDynamicDeformation() const {
+    return _modelNode.isSkinMesh() || _modelNode.isDanglymesh() ||
+           _modelNode.isSaberMesh();
+}
+
+void MeshSceneNode::refreshGpuSceneStreams(GpuScene &scene) {
+    if (!scene.updateMeshDeformation(id(), buildDeformation()))
+        collectInto(scene);
+}
+
+void MeshSceneNode::updateGpuStreams() {
+    if (hasDynamicDeformation())
+        (void)buildDeformation();
 }
 
 void MeshSceneNode::snapshotPreviousFrame(uint64_t frame) {
@@ -391,6 +421,20 @@ void MeshSceneNode::snapshotPreviousFrame(uint64_t frame) {
         _prevDanglyPositions.emplace_back(vertex.position + vertex.displacement, 1.0f);
     }
     SceneNode::snapshotPreviousFrame(frame);
+    _sceneGraph.gpuScene().settleMeshTransform(id(), _absTransform);
+}
+
+bool MeshSceneNode::requiresPerFrameGpuSync() const {
+    const auto mesh = _modelNode.mesh();
+    if (!mesh)
+        return false;
+    return _modelNode.isSkinMesh() || _modelNode.isDanglymesh() ||
+           _modelNode.isSaberMesh();
+}
+
+void MeshSceneNode::onAbsoluteTransformChanged() {
+    _sceneGraph.gpuScene().updateMeshTransform(
+        id(), _absTransform, _absTransformInv, _prevAbsTransform);
 }
 
 bool MeshSceneNode::isLightingEnabled() const {
@@ -408,11 +452,27 @@ void MeshSceneNode::setMainTexture(Texture *texture) {
     ModelNodeSceneNode::setMainTexture(texture);
     _nodeTextures.diffuse = texture;
     refreshAdditionalTextures();
+    collectInto(_sceneGraph.gpuScene());
 }
 
 void MeshSceneNode::setEnvironmentMap(Texture *texture) {
     ModelNodeSceneNode::setEnvironmentMap(texture);
     _nodeTextures.envmap = std::move(texture);
+    collectInto(_sceneGraph.gpuScene());
+}
+
+void MeshSceneNode::setAlpha(float alpha) {
+    if (_alpha == alpha)
+        return;
+    _alpha = alpha;
+    collectInto(_sceneGraph.gpuScene());
+}
+
+void MeshSceneNode::setSelfIllumColor(glm::vec3 color) {
+    if (_selfIllumColor == color)
+        return;
+    _selfIllumColor = std::move(color);
+    collectInto(_sceneGraph.gpuScene());
 }
 
 void MeshSceneNode::initDanglyMesh() {

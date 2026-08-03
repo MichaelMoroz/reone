@@ -71,7 +71,7 @@ public:
 
     void init(VulkanRenderer &renderer);
     void deinit();
-    View update(VkCommandBuffer cmd, GpuSceneUpload upload);
+    View update(VkCommandBuffer cmd, GpuSceneUpload &upload);
 
 private:
     struct Frame;

@@ -113,7 +113,7 @@ private:
 
     void processEvents(bool &quit);
     void loadInputScript();
-    void runCommandsFile();
+    void runCommandsFile(const std::string &path);
     /** Records the GUI through the 2D renderer, in its own rendering scope. */
     void renderFrame(bool &quit);
     void renderVulkanFrame(bool &quit);

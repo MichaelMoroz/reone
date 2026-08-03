@@ -249,6 +249,7 @@ void EmitterSceneNode::detonate() {
 
 void EmitterSceneNode::collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) {
     if (leafs.empty()) {
+        scene.unregisterObject(id());
         return;
     }
     auto emitter = _modelNode.emitter();
@@ -265,44 +266,56 @@ void EmitterSceneNode::collectLeafs(GpuScene &scene, const std::vector<SceneNode
     auto cameraUp = glm::vec3(view[0][1], view[1][1], view[2][1]);
     auto cameraForward = glm::vec3(view[0][2], view[1][2], view[2][2]);
 
-    auto particles = std::vector<ParticleInstance>(leafs.size());
+    auto quads = std::vector<GpuSceneProceduralQuad>(leafs.size());
+    const glm::ivec2 grid = glm::max(emitter->gridSize, glm::ivec2(1));
     for (size_t i = 0; i < leafs.size(); ++i) {
         const auto particle = static_cast<ParticleSceneNode *>(leafs[i]);
-        particles[i].frame = particle->frame();
-        particles[i].position = particle->origin();
-        particles[i].size = glm::vec2(particle->size());
-        particles[i].color = glm::vec4(particle->color(), particle->alpha());
+        ProceduralInstance instance;
+        instance.variant = std::max(0, particle->frame());
+        instance.position = particle->origin();
+        instance.size = glm::vec2(particle->size());
+        instance.color = glm::vec4(particle->color(), particle->alpha());
         switch (emitter->renderMode) {
         case ModelNode::Emitter::RenderMode::BillboardToLocalZ:
         case ModelNode::Emitter::RenderMode::MotionBlur:
             if (emitter->renderMode == ModelNode::Emitter::RenderMode::MotionBlur) {
-                particles[i].size = glm::vec2(particle->size().x, (1.0f + kMotionBlurStrength * kProjectileSpeed) * particle->size().y);
+                instance.size = glm::vec2(particle->size().x, (1.0f + kMotionBlurStrength * kProjectileSpeed) * particle->size().y);
             }
-            particles[i].right = glm::vec4(emitterUp, 0.0f);
-            particles[i].up = glm::vec4(emitterRight, 0.0f);
+            instance.right = glm::vec4(emitterUp, 0.0f);
+            instance.up = glm::vec4(emitterRight, 0.0f);
             break;
         case ModelNode::Emitter::RenderMode::BillboardToWorldZ:
-            particles[i].right = glm::vec4(0.0f, 1.0f, 0.0, 0.0f);
-            particles[i].up = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+            instance.right = glm::vec4(0.0f, 1.0f, 0.0, 0.0f);
+            instance.up = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
             break;
         case ModelNode::Emitter::RenderMode::AlignedToParticleDir:
-            particles[i].right = glm::vec4(emitterRight, 0.0f);
-            particles[i].up = glm::vec4(emitterForward, 0.0f);
+            instance.right = glm::vec4(emitterRight, 0.0f);
+            instance.up = glm::vec4(emitterForward, 0.0f);
             break;
         case ModelNode::Emitter::RenderMode::Linked: {
             auto particleUp = particle->dir();
             auto particleForward = glm::cross(particleUp, cameraRight);
             auto particleRight = glm::cross(particleForward, particleUp);
-            particles[i].right = glm::vec4(particleRight, 0.0f);
-            particles[i].up = glm::vec4(particleUp, 0.0f);
+            instance.right = glm::vec4(particleRight, 0.0f);
+            instance.up = glm::vec4(particleUp, 0.0f);
             break;
         }
         case ModelNode::Emitter::RenderMode::Normal:
         default:
-            particles[i].right = glm::vec4(cameraRight, 0.0f);
-            particles[i].up = glm::vec4(cameraUp, 0.0f);
+            instance.right = glm::vec4(cameraRight, 0.0f);
+            instance.up = glm::vec4(cameraUp, 0.0f);
             break;
         }
+        auto &quad = quads[i];
+        quad.positionVariant = glm::vec4(instance.position,
+                                         static_cast<float>(instance.variant));
+        quad.color = instance.color;
+        quad.right = glm::vec4(instance.right * instance.size.x, 0.0f);
+        quad.up = glm::vec4(instance.up * instance.size.y, 0.0f);
+        const glm::vec2 uvScale {1.0f / grid.x, 1.0f / grid.y};
+        const glm::vec2 uvOffset {(instance.variant % grid.x) * uvScale.x,
+                                  (instance.variant / grid.x) * uvScale.y};
+        quad.uvOffsetScale = glm::vec4(uvOffset, uvScale);
     }
     bool twosided = _modelNode.emitter()->twosided || _modelNode.emitter()->renderMode == ModelNode::Emitter::RenderMode::MotionBlur;
     Material material;
@@ -320,7 +333,8 @@ void EmitterSceneNode::collectLeafs(GpuScene &scene, const std::vector<SceneNode
                         ? static_cast<ModelSceneNode *>(root)
                         : nullptr;
     scene.addParticles(
-        renderCategory(RenderCategory::Transparent), id(), nameIds(), material, emitter->gridSize, particles, cullRoot);
+        renderCategory(RenderCategory::Transparent), id(), nameIds(), material, emitter->gridSize,
+        std::move(quads), cullRoot);
 }
 
 } // namespace scene

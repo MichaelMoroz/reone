@@ -45,6 +45,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("game", value<std::string>(), "path to game directory")                                                                //
         ("commands-file", value<std::string>()->default_value(""), "execute console commands from a file at startup")           //
         ("commands-frame", value<int>()->default_value(0), "run the commands file on this frame instead of at startup")       //
+        ("commands-frame-scheduled", value<std::string>()->default_value(""), "execute a second command file on commands-frame") //
         ("input-script", value<std::string>()->default_value(""), "run frame-indexed SDL mouse input script")                  //
         ("capture", value<std::string>()->default_value(""), "write a screenshot to this path and exit")                        //
         ("dumptargets", value<std::string>()->default_value(""), "write the scene render targets to this directory as .npy")   //
@@ -66,6 +67,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("grassdensity", value<float>()->default_value(options->graphics.grassDensity), "grass density multiplier")           //
         ("pbr", value<bool>()->default_value(options->graphics.pbr), "enable physically-based rendering")                       //
         ("mode", value<std::string>()->default_value(options->graphics.mode), "render mode: raster or path-tracing")            //
+        ("admissionshadow", value<bool>()->default_value(false), "compare incremental and full scene admission every frame") //
+        ("admissionforcefull", value<bool>()->default_value(false), "force full scene collection and classification")        //
         ("ptspp", value<int>()->default_value(options->graphics.pathTracingSamples), "path tracing samples per pixel")          //
         ("ptskyintensity", value<float>()->default_value(options->graphics.ptSkyIntensity), "path tracing sky intensity")       //
         ("ptemissiveintensity", value<float>()->default_value(options->graphics.ptEmissiveIntensity), "path tracing emissive intensity") //
@@ -182,6 +185,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.grassDensity = vars["grassdensity"].as<float>();
     options->graphics.pbr = vars["pbr"].as<bool>();
     options->graphics.mode = vars["mode"].as<std::string>();
+    options->graphics.admissionShadow = vars["admissionshadow"].as<bool>();
+    options->graphics.admissionForceFull = vars["admissionforcefull"].as<bool>();
     options->graphics.pathTracingSamples = std::max(1, vars["ptspp"].as<int>());
     options->graphics.ptSkyIntensity = vars["ptskyintensity"].as<float>();
     options->graphics.ptEmissiveIntensity = vars["ptemissiveintensity"].as<float>();
@@ -291,6 +296,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
 
     options->commandsFile = vars["commands-file"].as<std::string>();
     options->commandsFrame = vars["commands-frame"].as<int>();
+    options->commandsFrameScheduledFile = vars["commands-frame-scheduled"].as<std::string>();
     options->inputScript = vars["input-script"].as<std::string>();
 
     return options;

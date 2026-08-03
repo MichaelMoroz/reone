@@ -31,7 +31,7 @@ public:
 
     graphics::VulkanGpuScene::View mergeGeometry(VkCommandBuffer commandBuffer) override {
         return _owner._deviceGpuScene->update(commandBuffer,
-                                              std::move(_owner._admissionResult.submission.upload));
+                                              _owner._admissionResult.submission.upload);
     }
 
     std::vector<graphics::VulkanExternalTarget> primaryTargets() const override {
@@ -105,7 +105,9 @@ void VulkanRenderPipeline::deinit() {
 
 graphics::Texture &VulkanRenderPipeline::render(const CameraSceneNode *camera) {
     graphics::VulkanSceneFramePlan plan;
-    _admissionResult = _admission->prepare(_uniforms.globals().view);
+    auto uploadArena = std::move(_admissionResult.submission.upload);
+    _admissionResult = _admission->prepare(
+        _uniforms.globals().view, std::move(uploadArena));
     _lastUploadHash = _admissionResult.uploadHash;
     _lastMaterialReferences =
         _admissionResult.submission.upload.materialReferenceCount;

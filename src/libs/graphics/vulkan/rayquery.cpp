@@ -886,7 +886,7 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
     _lastGrass = submission.grass;
     _lastParticles = submission.particles;
     _lastBillboards = submission.billboards;
-    const auto scene = deviceGpuScene.update(cmd, std::move(submission.upload));
+    const auto scene = deviceGpuScene.update(cmd, submission.upload);
     if (!scene.vertices.buffer) {
         VkClearColorValue clear {{0.02f, 0.03f, 0.06f, 1.0f}};
         VkImageSubresourceRange range {};

@@ -53,6 +53,56 @@ uint64_t hashUpload(const GpuSceneUpload &upload) {
     return hash;
 }
 
+std::string describeUploadDifference(const GpuSceneUpload &left,
+                                     const GpuSceneUpload &right) {
+    auto firstDifferent = [](const auto &a, const auto &b) -> size_t {
+        const auto count = std::min(a.size(), b.size());
+        for (size_t i = 0; i < count; ++i) {
+            if (std::memcmp(&a[i], &b[i], sizeof(a[i])) != 0)
+                return i;
+        }
+        return count;
+    };
+    const auto firstObject = firstDifferent(left.objects, right.objects);
+    size_t objectByte = 0;
+    uint32_t leftId = UINT32_MAX, rightId = UINT32_MAX;
+    if (firstObject < left.objects.size() && firstObject < right.objects.size()) {
+        leftId = left.objects[firstObject].objectIndex;
+        rightId = right.objects[firstObject].objectIndex;
+        const auto *a = reinterpret_cast<const unsigned char *>(
+            &left.objects[firstObject].data);
+        const auto *b = reinterpret_cast<const unsigned char *>(
+            &right.objects[firstObject].data);
+        while (objectByte < sizeof(GpuSceneObjectData) && a[objectByte] == b[objectByte])
+            ++objectByte;
+    }
+    std::string detail = " objects=" + std::to_string(left.objects.size()) + "/" +
+                         std::to_string(right.objects.size()) +
+                         " first_object=" + std::to_string(firstObject) +
+                         " object_ids=" + std::to_string(leftId) + "/" +
+                         std::to_string(rightId) +
+                         " object_byte=" + std::to_string(objectByte) +
+                         " materials=" + std::to_string(left.materials.size()) + "/" +
+                         std::to_string(right.materials.size()) +
+                         " first_material=" +
+                         std::to_string(firstDifferent(left.materials, right.materials)) +
+                         " bones=" + std::to_string(left.bones.size()) + "/" +
+                         std::to_string(right.bones.size()) +
+                         " first_bone=" +
+                         std::to_string(firstDifferent(left.bones, right.bones)) +
+                         " dangly=" + std::to_string(left.danglyPositions.size()) + "/" +
+                         std::to_string(right.danglyPositions.size()) +
+                         " first_dangly=" +
+                         std::to_string(firstDifferent(left.danglyPositions,
+                                                       right.danglyPositions)) +
+                         " quads=" + std::to_string(left.proceduralQuads.size()) + "/" +
+                         std::to_string(right.proceduralQuads.size()) +
+                         " first_quad=" +
+                         std::to_string(firstDifferent(left.proceduralQuads,
+                                                       right.proceduralQuads));
+    return detail;
+}
+
 void applyCategoryOverride(InstanceMaterial &material,
                            const GraphicsOptions &options,
                            uint32_t categoryIndex) {
@@ -206,7 +256,7 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
     AdmissionKind kind = AdmissionKind::Opaque;
     switch (procedural.kind) {
     case ProceduralKind::Grass:
-        _submission.grass += static_cast<uint32_t>(procedural.instances.size());
+        _submission.grass += static_cast<uint32_t>(procedural.instanceCount());
         material.diffuseColor = glm::vec4(procedural.material.diffuseColor, 1.0f);
         material.uv0 = procedural.material.uv[0];
         material.uv1 = procedural.material.uv[1];
@@ -223,7 +273,7 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
         kind = AdmissionKind::Cutout;
         break;
     case ProceduralKind::Particles:
-        _submission.particles += static_cast<uint32_t>(procedural.instances.size());
+        _submission.particles += static_cast<uint32_t>(procedural.instanceCount());
         material.diffuseColor = glm::vec4(procedural.material.diffuseColor, 1.0f);
         material.uv0 = procedural.material.uv[0];
         material.uv1 = procedural.material.uv[1];
@@ -249,60 +299,142 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
     return {{material, kind, GpuScene::ResidencyClass::Dynamic, nullptr}};
 }
 
-GpuSceneAdmissionResult GpuSceneAdmission::prepare(const glm::mat4 &view) {
+void GpuSceneAdmission::rebuildSubmissionCounts(const ModelSceneNode *skyRoom) {
+    auto upload = std::move(_submission.upload);
+    _submission = {};
+    _submission.upload = std::move(upload);
+    const auto visibleCategories = renderCategory(RenderCategory::Opaque) |
+                                   renderCategory(RenderCategory::Transparent);
+    for (const auto &object : _gpuScene.objects()) {
+        const auto id = std::visit([](const auto &entry) { return entry.id; }, object);
+        if (!_gpuScene.isObjectActive(id) || !_gpuScene.isObjectEnabled(id.index))
+            continue;
+        if (const auto *mesh = std::get_if<RegisteredMesh>(&object)) {
+            if ((mesh->categories & visibleCategories) == 0)
+                continue;
+            if (skyRoom && mesh->cullRoot == skyRoom) {
+                ++_submission.sky;
+                continue;
+            }
+            if (mesh->id.index > 0x00ffffffu) {
+                ++_submission.outOfRange;
+                continue;
+            }
+            const bool skinned = std::holds_alternative<RegisteredSkin>(mesh->deformation);
+            const bool dangly = std::holds_alternative<RegisteredDangly>(mesh->deformation);
+            const bool saber = std::holds_alternative<RegisteredSaber>(mesh->deformation);
+            _submission.skinned += skinned ? 1u : 0u;
+            _submission.dangly += dangly ? 1u : 0u;
+            _submission.sabers += saber ? 1u : 0u;
+            if (skinned || dangly || saber)
+                _submission.dynamicTriangles +=
+                    static_cast<uint32_t>(mesh->mesh.get().faces().size());
+            if (const auto *diffuse = mesh->material.textures[
+                    static_cast<size_t>(MaterialTextureSlot::MainTex)];
+                diffuse && diffuse->features().blending == Texture::Blending::Additive)
+                ++_submission.additive;
+            const auto *curated =
+                _gpuScene.traceMaterials().curatedByIndex(mesh->material.curatedIndex);
+            if (!dangly && (!curated || curated->klass == TraceClass::Default) &&
+                glm::any(glm::greaterThan(mesh->material.selfIllumColor,
+                                          glm::vec3(0.0f))))
+                ++_submission.emissive;
+            continue;
+        }
+        const auto &procedural = std::get<RegisteredProcedural>(object);
+        if ((procedural.categories & visibleCategories) == 0 ||
+            procedural.instanceCount() == 0)
+            continue;
+        switch (procedural.kind) {
+        case ProceduralKind::Grass:
+            _submission.grass += static_cast<uint32_t>(procedural.instanceCount());
+            break;
+        case ProceduralKind::Particles:
+            _submission.particles += static_cast<uint32_t>(procedural.instanceCount());
+            break;
+        case ProceduralKind::Billboard:
+            ++_submission.billboards;
+            break;
+        }
+    }
+}
+
+GpuSceneAdmissionResult GpuSceneAdmission::prepare(
+    const glm::mat4 &view,
+    graphics::GpuSceneUpload reuse) {
     R_PROFILE_ZONE("SceneAdmission::prepare");
     _submission = {};
 
-    static constexpr float kSkyOverlapThreshold = 0.5f;
-    glm::vec3 sceneMin(std::numeric_limits<float>::max());
-    glm::vec3 sceneMax(std::numeric_limits<float>::lowest());
-    struct SkyRoomCandidate {
-        glm::vec3 boundsMin {std::numeric_limits<float>::max()};
-        glm::vec3 boundsMax {std::numeric_limits<float>::lowest()};
-    };
-    std::map<const ModelSceneNode *, SkyRoomCandidate> sceneryRooms;
-    for (const auto &object : _gpuScene.objects()) {
-        const auto *mesh = std::get_if<RegisteredMesh>(&object);
-        if (!mesh || !mesh->cullRoot || mesh->cullRoot->usage() != ModelUsage::Room)
-            continue;
-        if (!_gpuScene.isObjectEnabled(mesh->id.index))
-            continue;
-        if ((mesh->categories & (renderCategory(RenderCategory::Opaque) |
-                                 renderCategory(RenderCategory::Transparent))) == 0) {
-            continue;
-        }
-        const auto worldAabb = mesh->mesh.get().aabb() * mesh->transform;
-        sceneMin = glm::min(sceneMin, worldAabb.min());
-        sceneMax = glm::max(sceneMax, worldAabb.max());
-        if (mesh->cullRoot->isBackgroundScenery()) {
-            auto &candidate = sceneryRooms[mesh->cullRoot];
-            candidate.boundsMin = glm::min(candidate.boundsMin, worldAabb.min());
-            candidate.boundsMax = glm::max(candidate.boundsMax, worldAabb.max());
-        }
-    }
+    uint64_t optionsFingerprint = 14695981039346656037ull;
+    hashBytes(optionsFingerprint, _options.ptCategoryOverrides,
+              sizeof(_options.ptCategoryOverrides));
+    if (_optionsFingerprint != 0 && _optionsFingerprint != optionsFingerprint)
+        ++_admissionGeneration;
+    _optionsFingerprint = optionsFingerprint;
 
     GpuSceneAdmissionResult result;
-    if (!sceneryRooms.empty()) {
-        const glm::vec3 sceneExtent = glm::max(sceneMax - sceneMin, glm::vec3(1e-3f));
-        float bestVolume = 0.0f;
-        for (const auto &[room, candidate] : sceneryRooms) {
-            const glm::vec3 extent = candidate.boundsMax - candidate.boundsMin;
-            const glm::vec3 ratios = extent / sceneExtent;
-            if (glm::min(ratios.x, glm::min(ratios.y, ratios.z)) < kSkyOverlapThreshold)
+    const auto sceneGeneration = _gpuScene.admissionGeneration();
+    if (_skyCacheGeneration != sceneGeneration) {
+        static constexpr float kSkyOverlapThreshold = 0.5f;
+        glm::vec3 sceneMin(std::numeric_limits<float>::max());
+        glm::vec3 sceneMax(std::numeric_limits<float>::lowest());
+        struct SkyRoomCandidate {
+            glm::vec3 boundsMin {std::numeric_limits<float>::max()};
+            glm::vec3 boundsMax {std::numeric_limits<float>::lowest()};
+        };
+        std::map<const ModelSceneNode *, SkyRoomCandidate> sceneryRooms;
+        for (const auto &object : _gpuScene.objects()) {
+            const auto *mesh = std::get_if<RegisteredMesh>(&object);
+            if (!mesh || !mesh->cullRoot || mesh->cullRoot->usage() != ModelUsage::Room)
                 continue;
-            const float volume = extent.x * extent.y * extent.z;
-            if (volume > bestVolume) {
-                bestVolume = volume;
-                result.skyRoom = room;
-                result.skyOrigin = 0.5f * (candidate.boundsMin + candidate.boundsMax);
+            if (!_gpuScene.isObjectEnabled(mesh->id.index))
+                continue;
+            if ((mesh->categories & (renderCategory(RenderCategory::Opaque) |
+                                     renderCategory(RenderCategory::Transparent))) == 0)
+                continue;
+            const auto worldAabb = mesh->mesh.get().aabb() * mesh->transform;
+            sceneMin = glm::min(sceneMin, worldAabb.min());
+            sceneMax = glm::max(sceneMax, worldAabb.max());
+            if (mesh->cullRoot->isBackgroundScenery()) {
+                auto &candidate = sceneryRooms[mesh->cullRoot];
+                candidate.boundsMin = glm::min(candidate.boundsMin, worldAabb.min());
+                candidate.boundsMax = glm::max(candidate.boundsMax, worldAabb.max());
             }
         }
+        if (!sceneryRooms.empty()) {
+            const glm::vec3 sceneExtent =
+                glm::max(sceneMax - sceneMin, glm::vec3(1e-3f));
+            float bestVolume = 0.0f;
+            for (const auto &[room, candidate] : sceneryRooms) {
+                const glm::vec3 extent = candidate.boundsMax - candidate.boundsMin;
+                const glm::vec3 ratios = extent / sceneExtent;
+                if (glm::min(ratios.x, glm::min(ratios.y, ratios.z)) <
+                    kSkyOverlapThreshold)
+                    continue;
+                const float volume = extent.x * extent.y * extent.z;
+                if (volume > bestVolume) {
+                    bestVolume = volume;
+                    result.skyRoom = room;
+                    result.skyOrigin = 0.5f * (candidate.boundsMin + candidate.boundsMax);
+                }
+            }
+        }
+        _cachedSkyRoom = result.skyRoom;
+        _cachedSkyOrigin = result.skyOrigin;
+        _skyCacheGeneration = sceneGeneration;
         if (result.skyRoom && _frameNumber == 0) {
             info("Vulkan: sky room is '" + result.skyRoom->model().name() + "'",
                  LogChannel::Graphics);
         }
+    } else {
+        result.skyRoom = _cachedSkyRoom;
+        result.skyOrigin = _cachedSkyOrigin;
     }
 
+    if (_classifiedSkyRoom != result.skyRoom) {
+        ++_admissionGeneration;
+        _classifiedSkyRoom = result.skyRoom;
+    }
     _gpuScene.setSkyRoom(result.skyRoom);
     _submission.upload = _gpuScene.prepare(
         [this, skyRoom = result.skyRoom](const RegisteredMesh &mesh) {
@@ -311,7 +443,47 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(const glm::mat4 &view) {
         [this](const RegisteredProcedural &procedural) {
             return classifyProcedural(procedural);
         },
-        view);
+        view, _admissionGeneration,
+        _options.admissionForceFull, std::move(reuse));
+    if (_options.admissionShadow && _gpuScene.shadowScene()) {
+        auto savedSubmission = _submission;
+        auto shadowUpload = _gpuScene.shadowScene()->prepare(
+            [this, skyRoom = result.skyRoom](const RegisteredMesh &mesh) {
+                return classifyMesh(mesh, skyRoom);
+            },
+            [this](const RegisteredProcedural &procedural) {
+                return classifyProcedural(procedural);
+            },
+            view, _admissionGeneration, true);
+        _submission = std::move(savedSubmission);
+        const auto incrementalHash = hashUpload(_submission.upload);
+        const auto shadowHash = hashUpload(shadowUpload);
+        if (_submission.upload.objects.empty() != shadowUpload.objects.empty()) {
+            // Module loading can update deformers one engine tick before the
+            // graph publishes its first complete render lists. Do not let that
+            // partial tick seed different persistent intern histories.
+            _gpuScene.resetAdmissionCache();
+            _gpuScene.shadowScene()->resetAdmissionCache();
+            info("GpuScene admission shadow warmup frame=" +
+                     std::to_string(_frameNumber),
+                 LogChannel::Graphics);
+        } else if (incrementalHash != shadowHash) {
+            error("GpuScene admission shadow MISMATCH frame=" +
+                      std::to_string(_frameNumber) + ", incremental=" +
+                      std::to_string(incrementalHash) + ", full=" +
+                      std::to_string(shadowHash) +
+                      describeUploadDifference(_submission.upload, shadowUpload),
+                  LogChannel::Graphics);
+        } else {
+            info("GpuScene admission shadow match frame=" +
+                     std::to_string(_frameNumber) + ", hash=" +
+                     std::to_string(incrementalHash),
+                 LogChannel::Graphics);
+        }
+    }
+    if (_options.admissionShadow || _options.hashUploads ||
+        Logger::instance.isChannelEnabled(LogChannel::Graphics))
+        rebuildSubmissionCounts(result.skyRoom);
     // The hash walks every uploaded byte; its one consumer is the
     // --dumptargets log line, so frames outside a dump run skip it.
     result.uploadHash = _options.hashUploads ? hashUpload(_submission.upload) : 0;
