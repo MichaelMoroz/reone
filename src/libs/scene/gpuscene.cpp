@@ -517,14 +517,16 @@ void GpuScene::addGrass(RenderCategories categories, SceneNodeId id,
         instance.position = source.position;
         instance.lightmapUV = source.lightmapUV;
         instance.yaw = source.yaw;
+        instance.sizeScale = source.sizeScale;
         procedural.instances.push_back(instance);
         graphics::GpuSceneProceduralQuad quad;
         quad.positionVariant = glm::vec4(source.position,
                                          static_cast<float>(source.variant));
-        const glm::vec3 right {glm::cos(source.yaw) * quadSize,
-                               glm::sin(source.yaw) * quadSize, 0.0f};
+        const float scaledQuadSize = quadSize * source.sizeScale;
+        const glm::vec3 right {glm::cos(source.yaw) * scaledQuadSize,
+                               glm::sin(source.yaw) * scaledQuadSize, 0.0f};
         quad.right = glm::vec4(right, 0.0f);
-        quad.up = glm::vec4(0.0f, 0.0f, quadSize, 0.0f);
+        quad.up = glm::vec4(0.0f, 0.0f, scaledQuadSize, 0.0f);
         quad.uvOffsetScale =
             glm::vec4(0.5f * (source.variant % 2),
                       0.5f * (source.variant / 2), 0.5f, 0.5f);
@@ -700,45 +702,47 @@ graphics::GpuSceneUpload GpuScene::prepare(
             upload.proceduralQuads.insert(upload.proceduralQuads.end(),
                                           procedural->loweredQuads.begin(),
                                           procedural->loweredQuads.end());
-        } else for (const auto &instance : procedural->instances) {
-            graphics::GpuSceneProceduralQuad quad;
-            quad.positionVariant = glm::vec4(instance.position,
-                                             static_cast<float>(instance.variant));
-            quad.color = instance.color;
-            switch (procedural->kind) {
-            case ProceduralKind::Grass: {
-                // The same yaw raster receives in GrassUniforms. A blade stands
-                // on world +Z and is independent of ray direction.
-                const glm::vec3 right {glm::cos(instance.yaw) * procedural->quadSize,
-                                       glm::sin(instance.yaw) * procedural->quadSize, 0.0f};
-                quad.right = glm::vec4(right, 0.0f);
-                quad.up = glm::vec4(0.0f, 0.0f, procedural->quadSize, 0.0f);
-                quad.uvOffsetScale =
-                    glm::vec4(0.5f * (instance.variant % 2),
-                              0.5f * (instance.variant / 2), 0.5f, 0.5f);
-                quad.lightmapUV = instance.lightmapUV;
-                break;
+        } else
+            for (const auto &instance : procedural->instances) {
+                graphics::GpuSceneProceduralQuad quad;
+                quad.positionVariant = glm::vec4(instance.position,
+                                                 static_cast<float>(instance.variant));
+                quad.color = instance.color;
+                switch (procedural->kind) {
+                case ProceduralKind::Grass: {
+                    // The same yaw raster receives in GrassUniforms. A blade stands
+                    // on world +Z and is independent of ray direction.
+                    const float scaledQuadSize = procedural->quadSize * instance.sizeScale;
+                    const glm::vec3 right {glm::cos(instance.yaw) * scaledQuadSize,
+                                           glm::sin(instance.yaw) * scaledQuadSize, 0.0f};
+                    quad.right = glm::vec4(right, 0.0f);
+                    quad.up = glm::vec4(0.0f, 0.0f, scaledQuadSize, 0.0f);
+                    quad.uvOffsetScale =
+                        glm::vec4(0.5f * (instance.variant % 2),
+                                  0.5f * (instance.variant / 2), 0.5f, 0.5f);
+                    quad.lightmapUV = instance.lightmapUV;
+                    break;
+                }
+                case ProceduralKind::Particles: {
+                    const int frame = std::max(0, instance.variant);
+                    const glm::vec2 uvScale {1.0f / grid.x, 1.0f / grid.y};
+                    const glm::vec2 uvOffset {(frame % grid.x) * uvScale.x,
+                                              (frame / grid.x) * uvScale.y};
+                    quad.positionVariant.w = static_cast<float>(frame);
+                    quad.right = glm::vec4(instance.right * instance.size.x, 0.0f);
+                    quad.up = glm::vec4(instance.up * instance.size.y, 0.0f);
+                    quad.uvOffsetScale = glm::vec4(uvOffset, uvScale);
+                    break;
+                }
+                case ProceduralKind::Billboard:
+                    // Billboard rasterization uses the primary-camera axes; the
+                    // merged quad fixes that same approximation for all ray types.
+                    quad.right = glm::vec4(viewRow0 * instance.size.x, 0.0f);
+                    quad.up = glm::vec4(viewRow1 * instance.size.y, 0.0f);
+                    break;
+                }
+                upload.proceduralQuads.push_back(quad);
             }
-            case ProceduralKind::Particles: {
-                const int frame = std::max(0, instance.variant);
-                const glm::vec2 uvScale {1.0f / grid.x, 1.0f / grid.y};
-                const glm::vec2 uvOffset {(frame % grid.x) * uvScale.x,
-                                          (frame / grid.x) * uvScale.y};
-                quad.positionVariant.w = static_cast<float>(frame);
-                quad.right = glm::vec4(instance.right * instance.size.x, 0.0f);
-                quad.up = glm::vec4(instance.up * instance.size.y, 0.0f);
-                quad.uvOffsetScale = glm::vec4(uvOffset, uvScale);
-                break;
-            }
-            case ProceduralKind::Billboard:
-                // Billboard rasterization uses the primary-camera axes; the
-                // merged quad fixes that same approximation for all ray types.
-                quad.right = glm::vec4(viewRow0 * instance.size.x, 0.0f);
-                quad.up = glm::vec4(viewRow1 * instance.size.y, 0.0f);
-                break;
-            }
-            upload.proceduralQuads.push_back(quad);
-        }
         if (sceneObject.geometryIndex == 0) {
             opaqueObjects.push_back(input);
         } else {
