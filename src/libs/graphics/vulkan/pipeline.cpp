@@ -111,6 +111,9 @@ void VulkanPipeline::init(const Config &config) {
     }
     raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     raster.lineWidth = 1.0f;
+    raster.depthBiasEnable = config.depthBias ? VK_TRUE : VK_FALSE;
+    raster.depthBiasConstantFactor = config.depthBiasConstantFactor;
+    raster.depthBiasSlopeFactor = config.depthBiasSlopeFactor;
 
     VkPipelineMultisampleStateCreateInfo multisample {
         VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};

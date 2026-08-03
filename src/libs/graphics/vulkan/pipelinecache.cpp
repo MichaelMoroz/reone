@@ -34,6 +34,9 @@ bool VulkanPipelineCache::Key::operator==(const Key &other) const {
         cull != other.cull ||
         depthTest != other.depthTest ||
         depthWrite != other.depthWrite ||
+        depthBias != other.depthBias ||
+        depthBiasConstantFactor != other.depthBiasConstantFactor ||
+        depthBiasSlopeFactor != other.depthBiasSlopeFactor ||
         colorFormats != other.colorFormats ||
         vertexBindings.size() != other.vertexBindings.size() ||
         vertexAttributes.size() != other.vertexAttributes.size()) {
@@ -76,6 +79,9 @@ size_t VulkanPipelineCache::KeyHash::operator()(const Key &key) const {
     mix(static_cast<size_t>(key.blend));
     mix(static_cast<size_t>(key.cull));
     mix(static_cast<size_t>(key.depthTest) | (static_cast<size_t>(key.depthWrite) << 1));
+    mix(static_cast<size_t>(key.depthBias));
+    mix(std::hash<float> {}(key.depthBiasConstantFactor));
+    mix(std::hash<float> {}(key.depthBiasSlopeFactor));
     return hash;
 }
 
@@ -120,6 +126,9 @@ VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
     config.cull = key.cull;
     config.depthTest = key.depthTest;
     config.depthWrite = key.depthWrite;
+    config.depthBias = key.depthBias;
+    config.depthBiasConstantFactor = key.depthBiasConstantFactor;
+    config.depthBiasSlopeFactor = key.depthBiasSlopeFactor;
 
     auto pipeline = std::make_unique<VulkanPipeline>(_device);
     pipeline->init(config);

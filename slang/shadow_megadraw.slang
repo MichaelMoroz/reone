@@ -6,6 +6,13 @@ import uniforms;
 import lib.megadraw_geometry;
 import lib.scene_material;
 
+static const float kPointShadowFar = 2500.0;
+// Point shadows replace raster depth with radial distance. Pipeline depth bias
+// is therefore replaced along with it, so reproduce the same constant+slope
+// model in radial-depth units: two centimetres over the 2500-unit range.
+static const float kPointShadowConstantBias = 0.02 / kPointShadowFar;
+static const float kPointShadowSlopeBias = 2.0;
+
 struct DirectionalShadowVaryings {
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;
@@ -77,5 +84,8 @@ float pointShadowMegadrawFragment(PointShadowVaryings input,
     applyPointShadowCoverage(input, primitiveId);
     float lightDistance = length(input.worldPos -
                                  globalUniforms.shadowLightPosition.xyz);
-    return lightDistance / 2500.0;
+    float radialDepth = lightDistance / kPointShadowFar;
+    float radialSlope = max(abs(ddx(radialDepth)), abs(ddy(radialDepth)));
+    return min(1.0, radialDepth + kPointShadowConstantBias +
+                        kPointShadowSlopeBias * radialSlope);
 }

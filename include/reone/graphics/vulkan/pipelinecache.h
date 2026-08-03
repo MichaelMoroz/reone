@@ -63,6 +63,9 @@ public:
         FaceCullMode cull {FaceCullMode::None};
         bool depthTest {false};
         bool depthWrite {false};
+        bool depthBias {false};
+        float depthBiasConstantFactor {0.0f};
+        float depthBiasSlopeFactor {0.0f};
 
         bool operator==(const Key &other) const;
     };

@@ -166,22 +166,13 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
                            shadowsEnabled, fogEnabled);
 
-    // Sample the live map on the same feature-bit gate as the retro resolve.
-    float dynamicShadow = shadowsEnabled ? getShadow(eyePos, worldPos) : 0.0;
-    // The lightmap already contains baked visibility. Combine its occlusion
-    // with the live map by taking the darker result, but apply to ambientD
-    // only the additional attenuation needed to reach that result. Applying
-    // the baked term again would square an already-shadowed lightmap.
-    float bakedShadow = shadowsEnabled && hasLightmap
-                            ? 1.0 - saturate(rgbToLuma(lightmapSample.rgb))
-                            : 0.0;
-    float shadow = max(dynamicShadow, bakedShadow);
-    float lightmapShadow = 0.0;
-    if (shadowsEnabled && hasLightmap && shadow > bakedShadow) {
-        float bakedVisibility = 1.0 - bakedShadow;
-        lightmapShadow = saturate((shadow - bakedShadow) /
-                                  max(1e-4, bakedVisibility));
-    }
+    // The lightmap is baked static irradiance, including baked visibility.
+    // Keep at least 75% of ambient irradiance under a live shadow: this lets
+    // dynamic contact shadows read on baked floors without deleting the
+    // illumination from already-dark interiors. Direct light is fully
+    // occluded below.
+    float shadow = shadowsEnabled ? getShadow(eyePos, worldPos) : 0.0;
+    float ambientVisibility = 1.0 - 0.25 * shadow;
     float fog = fogEnabled ? getFog(worldPos) : 0.0;
 
     float NdotV = max(0.0, dot(normal, V));
@@ -273,7 +264,7 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     // a colour added on top of it. Adding it instead saturates anything fully
     // self-illuminated - a sky - to white.
     float3 color = min(float3(1.0),
-                       ao * (1.0 - lightmapShadow) * ambientD +
+                       ambientVisibility * ao * ambientD +
                            (1.0 - shadow) * (max(float3(0.0), directD) + emission)) *
                    albedo;
     color += ao * ambientS;

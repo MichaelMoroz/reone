@@ -80,7 +80,9 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     float3 ambient = float3(0.0);
     float3 lit = selfIllumSample.rgb;
     if (hasLightmap) {
-        lit += lightmapSample.rgb;
+        // Lightmaps are baked static irradiance. Dynamic visibility is
+        // applied to this ambient term only through the bounded factor below.
+        ambient += lightmapSample.rgb;
     } else if (!staticObject) {
         ambient += materialAmbient * globalUniforms.worldAmbientColor.rgb;
     }
@@ -105,10 +107,13 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     }
 
     float shadow = shadowsEnabled ? getShadow(eyePos, worldPos) : 0.0;
+    float ambientVisibility = 1.0 - 0.25 * shadow;
     // Preserve retroOpaqueFragment's ordering, saturation, and gamma-space
-    // arithmetic: shadow attenuates the lit term, never ambient.
+    // arithmetic. Direct light can be fully occluded; ambient always retains
+    // at least 75% of its baked value.
     float3 color = min(float3(1.0),
-                       ambient + (1.0 - shadow) * max(float3(0.0), lit)) *
+                       ambientVisibility * ambient +
+                           (1.0 - shadow) * max(float3(0.0), lit)) *
                    diffuseSample.rgb;
     if (envmapped) {
         float3 viewDir = normalize(globalUniforms.cameraPosition.xyz - worldPos);

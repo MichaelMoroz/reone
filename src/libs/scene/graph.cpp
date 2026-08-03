@@ -699,47 +699,57 @@ static glm::mat4 computeDirectionalLightSpaceMatrix(
     float aspect,
     float near, float far,
     const glm::vec3 &lightDir,
-    const glm::mat4 &cameraView) {
+    const glm::mat4 &cameraView,
+    int shadowResolution) {
 
     auto projection = glm::perspectiveRH_ZO(fov, aspect, near, far);
 
-    glm::vec3 center(0.0f);
     auto corners = computeFrustumCornersWorldSpace(projection, cameraView);
+    glm::vec3 center(0.0f);
     for (auto &v : corners) {
         center += glm::vec3(v);
     }
     center /= corners.size();
 
-    auto lightView = glm::lookAt(center - lightDir, center, glm::vec3(0.0f, 1.0f, 0.0f));
+    // A frustum AABB changes size when the camera rotates. Its enclosing
+    // sphere does not: the far-corner radius below is a function only of the
+    // slice distances and lens. Quantising it also absorbs floating-point
+    // noise in the lens calculation.
+    float halfDepth = 0.5f * (far - near);
+    float halfHeight = far * glm::tan(0.5f * fov);
+    float halfWidth = aspect * halfHeight;
+    float radius = glm::sqrt(halfDepth * halfDepth +
+                             halfHeight * halfHeight +
+                             halfWidth * halfWidth);
+    radius = std::ceil(radius * 16.0f) / 16.0f;
 
-    float minX = std::numeric_limits<float>::max();
-    float maxX = std::numeric_limits<float>::lowest();
-    float minY = std::numeric_limits<float>::max();
-    float maxY = std::numeric_limits<float>::lowest();
-    float minZ = std::numeric_limits<float>::max();
-    float maxZ = std::numeric_limits<float>::lowest();
-    for (auto &v : corners) {
-        auto trf = lightView * v;
-        minX = std::min(minX, trf.x);
-        maxX = std::max(maxX, trf.x);
-        minY = std::min(minY, trf.y);
-        maxY = std::max(maxY, trf.y);
-        minZ = std::min(minZ, trf.z);
-        maxZ = std::max(maxZ, trf.z);
-    }
-    float zMult = 10.0f;
-    if (minZ < 0.0f) {
-        minZ *= zMult;
-    } else {
-        minZ /= zMult;
-    }
-    if (maxZ < 0.0f) {
-        maxZ /= zMult;
-    } else {
-        maxZ *= zMult;
-    }
+    // Keep the light basis fixed in world space. Building lookAt around the
+    // camera-frustum centre would translate the shadow grid continuously.
+    const auto up = glm::abs(glm::dot(lightDir, glm::vec3(0.0f, 1.0f, 0.0f))) > 0.99f
+                        ? glm::vec3(0.0f, 0.0f, 1.0f)
+                        : glm::vec3(0.0f, 1.0f, 0.0f);
+    auto lightView = glm::lookAt(glm::vec3(0.0f), lightDir, up);
+    auto lightCenter = lightView * glm::vec4(center, 1.0f);
 
-    auto lightProjection = glm::orthoRH_ZO(minX, maxX, minY, maxY, minZ, maxZ);
+    const float texelSize = (2.0f * radius) /
+                            static_cast<float>(shadowResolution);
+    lightCenter.x = std::round(lightCenter.x / texelSize) * texelSize;
+    lightCenter.y = std::round(lightCenter.y / texelSize) * texelSize;
+
+    const float minX = lightCenter.x - radius;
+    const float maxX = lightCenter.x + radius;
+    const float minY = lightCenter.y - radius;
+    const float maxY = lightCenter.y + radius;
+    // Preserve the old ten-radius caster reach, but make it sphere-based too
+    // so camera rotation cannot make the depth extent breathe. orthoRH_ZO
+    // takes positive near/far distances, hence centre the slice at -10r in
+    // view space and cover the resulting [-20r, 0] interval.
+    lightView = glm::translate(glm::vec3(
+                    0.0f, 0.0f, -10.0f * radius - lightCenter.z)) *
+                lightView;
+
+    auto lightProjection = glm::orthoRH_ZO(
+        minX, maxX, minY, maxY, 0.0f, 20.0f * radius);
     return lightProjection * lightView;
 }
 
@@ -765,7 +775,10 @@ static glm::mat4 getPointLightView(const glm::vec3 &lightPos, CubeMapFace face) 
 void SceneGraph::computeLightSpaceMatrices() {
     if (isShadowLightDirectional()) {
         auto camera = std::static_pointer_cast<PerspectiveCamera>(this->camera()->get().camera());
-        auto lightDir = glm::normalize(camera->position() - shadowLightPosition());
+        // Radius-promoted directional lights are authored as distant points
+        // aimed at the module origin. Their direction must not follow the main
+        // camera, or every camera translation rotates the shadow projection.
+        auto lightDir = glm::normalize(-shadowLightPosition());
         float fovy = camera->fovy();
         float aspect = camera->aspect();
         float cameraNear = camera->zNear();
@@ -776,7 +789,9 @@ void SceneGraph::computeLightSpaceMatrices() {
             if (i > 0) {
                 near = cameraFar * g_shadowCascadeDivisors[i - 1];
             }
-            _shadowLightSpace[i] = computeDirectionalLightSpaceMatrix(fovy, aspect, near, far, lightDir, camera->view());
+            _shadowLightSpace[i] = computeDirectionalLightSpaceMatrix(
+                fovy, aspect, near, far, lightDir, camera->view(),
+                _graphicsOpt.shadowResolution);
             _shadowCascadeFarPlanes[i] = far;
         }
     } else {

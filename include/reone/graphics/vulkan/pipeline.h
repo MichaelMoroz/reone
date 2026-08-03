@@ -64,6 +64,9 @@ public:
         FaceCullMode cull {FaceCullMode::None};
         bool depthTest {false};
         bool depthWrite {false};
+        bool depthBias {false};
+        float depthBiasConstantFactor {0.0f};
+        float depthBiasSlopeFactor {0.0f};
         std::vector<VkDescriptorSetLayout> setLayouts;
         /** Fragment push constants shared by graphics layouts (mega-draw uses
             two uints for triangle base and material-gated range selection). */
