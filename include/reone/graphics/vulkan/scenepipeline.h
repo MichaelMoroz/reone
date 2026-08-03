@@ -34,12 +34,20 @@ struct GraphicsOptions;
 
 enum class VulkanSceneStep {
     ProcessPBRTextures,
+    Shadow,
     Geometry,
     PBRResolve,
     RetroResolve,
 };
 
+enum class VulkanSceneShadow {
+    None,
+    Directional,
+    Point,
+};
+
 struct VulkanSceneFramePlan {
+    VulkanSceneShadow shadow {VulkanSceneShadow::None};
     std::vector<VulkanSceneStep> steps;
 };
 
@@ -105,13 +113,20 @@ private:
     TextureRegistry &_textureRegistry;
     bool _inited {false};
     bool _primaryRayMode {false};
+    VulkanSceneShadow _shadow {VulkanSceneShadow::None};
 
     std::unique_ptr<VulkanGBuffer> _gbuffer;
     std::unique_ptr<VulkanImage> _output;
+    std::unique_ptr<VulkanImage> _dirShadows;
+    std::unique_ptr<VulkanImage> _pointShadows;
+    VkImageLayout _dirShadowLayout {VK_IMAGE_LAYOUT_UNDEFINED};
+    VkImageLayout _pointShadowLayout {VK_IMAGE_LAYOUT_UNDEFINED};
     std::shared_ptr<Texture> _outputHandle;
     VkDescriptorSet _retroResolveSet {VK_NULL_HANDLE};
     VkDescriptorSet _pbrResolveSet {VK_NULL_HANDLE};
     VkDescriptorSet _resolveMaterialSet {VK_NULL_HANDLE};
+    VulkanGpuScene::View _mergedScene;
+    bool _mergedScenePrepared {false};
 
     struct Preview {
         std::unique_ptr<VulkanImage> image;
@@ -131,6 +146,10 @@ private:
         bool depth;
     };
 
+    const VulkanGpuScene::View &prepareMergedScene(
+        VkCommandBuffer cmd, IVulkanSceneCallbacks &callbacks);
+    void shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset,
+                    IVulkanSceneCallbacks &callbacks);
     void previewPass(VkCommandBuffer cmd, uint32_t globalsOffset,
                      const IVulkanSceneCallbacks &callbacks);
     void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset,

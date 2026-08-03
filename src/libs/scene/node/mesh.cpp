@@ -209,20 +209,6 @@ bool MeshSceneNode::shouldRender() const {
     return !_modelNode.isAABBMesh() && !mesh->diffuseMap.empty();
 }
 
-bool MeshSceneNode::shouldCastShadows() const {
-    std::shared_ptr<ModelNode::TriangleMesh> mesh(_modelNode.mesh());
-    if (!mesh) {
-        return false;
-    }
-    if (_model.usage() == ModelUsage::Creature) {
-        return mesh->shadow && !_modelNode.isSkinMesh();
-    } else if (_model.usage() == ModelUsage::Placeable) {
-        return mesh->render;
-    } else {
-        return false;
-    }
-}
-
 bool MeshSceneNode::isTransparent() const {
     if (!_nodeTextures.diffuse) {
         return false;
@@ -263,8 +249,7 @@ void MeshSceneNode::collectInto(GpuScene &scene) {
     // null while the predicate stays true, and the material below dereferences
     // it, so the texture itself is part of being renderable.
     bool render = shouldRender() && _nodeTextures.diffuse;
-    bool castShadows = shouldCastShadows();
-    if (!mesh || (!render && !castShadows)) {
+    if (!mesh || !render) {
         scene.unregisterObject(id());
         return;
     }
@@ -331,12 +316,6 @@ void MeshSceneNode::collectInto(GpuScene &scene) {
         material.faceCulling = _nodeTextures.diffuse->features().decal ? FaceCullMode::None : FaceCullMode::Back;
     }
     auto categories = renderCategory(transparent ? RenderCategory::Transparent : RenderCategory::Opaque);
-    if (!render) {
-        categories = 0;
-    }
-    if (castShadows) {
-        categories |= renderCategory(RenderCategory::ShadowCaster);
-    }
     scene.addMesh(categories,
                   id(),
                   nameIds(),

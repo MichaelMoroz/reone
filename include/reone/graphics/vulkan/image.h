@@ -143,8 +143,9 @@ public:
      * A view of six consecutive layers at one mip, as a 2D array.
      *
      * This is what a cube's faces are rendered through - a six-view mask writes
-     * one face per view. Created on demand and owned by the image, because the
-     * number wanted is small and fixed and they outlive any one frame.
+     * one face per view. Works for colour and depth cube images. Created on
+     * demand and owned by the image, because the number wanted is small and
+     * fixed and they outlive any one frame.
      */
     VkImageView renderView(int cube, int mip);
 

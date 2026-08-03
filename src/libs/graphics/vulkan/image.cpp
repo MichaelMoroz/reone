@@ -726,10 +726,15 @@ VkImageView VulkanImage::renderView(int cube, int mip) {
     VkImageViewCreateInfo viewInfo {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     viewInfo.image = _image;
     // A 2D array of exactly the six faces, which is what a six-view render pass
-    // writes into. A cube view cannot be a colour attachment.
+    // writes into. A cube view cannot be an attachment.
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     viewInfo.format = _format;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.aspectMask =
+        (_format == VK_FORMAT_D16_UNORM ||
+         _format == VK_FORMAT_D32_SFLOAT ||
+         _format == VK_FORMAT_X8_D24_UNORM_PACK32)
+            ? VK_IMAGE_ASPECT_DEPTH_BIT
+            : VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.baseMipLevel = static_cast<uint32_t>(mip);
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = static_cast<uint32_t>(cube * kNumCubeFaces);

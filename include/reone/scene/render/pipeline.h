@@ -61,6 +61,13 @@ enum class RenderMode {
     PathTracing
 };
 
+/** Shadow light selected by the scene graph for this frame. */
+enum class RenderShadowKind {
+    None,
+    Directional,
+    Point,
+};
+
 /**
  * How a render target should be interpreted when displayed. Several targets hold
  * values that are not directly viewable - depth is non-linear, normals are
@@ -85,7 +92,8 @@ public:
 
     virtual void init() = 0;
 
-    virtual graphics::Texture &render(const CameraSceneNode *camera) = 0;
+    virtual graphics::Texture &render(const CameraSceneNode *camera,
+                                      RenderShadowKind shadow) = 0;
 
     /**
      * Intermediate targets, for inspection by development tooling. Empty unless

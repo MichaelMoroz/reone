@@ -103,8 +103,20 @@ void VulkanRenderPipeline::deinit() {
     _inited = false;
 }
 
-graphics::Texture &VulkanRenderPipeline::render(const CameraSceneNode *camera) {
+graphics::Texture &VulkanRenderPipeline::render(const CameraSceneNode *camera,
+                                                RenderShadowKind shadow) {
     graphics::VulkanSceneFramePlan plan;
+    switch (shadow) {
+    case RenderShadowKind::Directional:
+        plan.shadow = graphics::VulkanSceneShadow::Directional;
+        break;
+    case RenderShadowKind::Point:
+        plan.shadow = graphics::VulkanSceneShadow::Point;
+        break;
+    default:
+        plan.shadow = graphics::VulkanSceneShadow::None;
+        break;
+    }
     auto uploadArena = std::move(_admissionResult.submission.upload);
     _admissionResult = _admission->prepare(
         _uniforms.globals().view, std::move(uploadArena));
@@ -115,6 +127,7 @@ graphics::Texture &VulkanRenderPipeline::render(const CameraSceneNode *camera) {
         static_cast<uint32_t>(_admissionResult.submission.upload.materials.size());
     if (!_primaryRayMode) {
         plan.steps.push_back(graphics::VulkanSceneStep::ProcessPBRTextures);
+        plan.steps.push_back(graphics::VulkanSceneStep::Shadow);
         plan.steps.push_back(graphics::VulkanSceneStep::Geometry);
         if (_options.pbr)
             plan.steps.push_back(graphics::VulkanSceneStep::PBRResolve);

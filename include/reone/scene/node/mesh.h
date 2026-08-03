@@ -53,7 +53,6 @@ public:
     void collectInto(GpuScene &scene);
 
     bool shouldRender() const;
-    bool shouldCastShadows() const;
 
     bool isTransparent() const;
     bool requiresPerFrameGpuSync() const;

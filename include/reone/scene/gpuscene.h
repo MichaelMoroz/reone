@@ -32,7 +32,6 @@ class ModelSceneNode;
 
 enum class RenderCategory : uint32_t {
     None = 0,
-    ShadowCaster = 1 << 0,
     Opaque = 1 << 1,
     Transparent = 1 << 2,
     LensFlare = 1 << 3,

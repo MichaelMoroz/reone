@@ -372,9 +372,10 @@ void SceneGraph::refreshFromNode(SceneNode &node) {
 
     switch (node.type()) {
     case SceneNodeType::Mesh: {
-        // For model nodes, determine whether they should be rendered and cast shadows
+        // Shadow maps use the admitted real geometry, so shadow-only proxy
+        // nodes no longer belong in the scene collection.
         auto &modelNode = static_cast<MeshSceneNode &>(node);
-        if (modelNode.shouldRender() || modelNode.shouldCastShadows()) {
+        if (modelNode.shouldRender()) {
             _meshes.push_back(&modelNode);
         }
         break;
@@ -467,10 +468,6 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
     }
     auto &pipeline = *_renderPipeline;
     _gpuScene.resetFrame();
-    std::array<graphics::Frustum, graphics::kNumShadowLightSpace> shadowFrusta;
-    const graphics::Frustum *activeShadowFrusta {nullptr};
-    size_t numActiveShadowFrusta {0};
-
     auto cameraNode = this->camera();
     if (cameraNode) {
         auto camera = cameraNode->get().camera();
@@ -478,14 +475,6 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
         auto viewProjection = camera->projection() * camera->view();
         if (hasShadowLight()) {
             computeLightSpaceMatrices();
-            int numShadowFrusta = isShadowLightDirectional()
-                                      ? graphics::kNumShadowCascades
-                                      : graphics::kNumCubeFaces;
-            for (int i = 0; i < numShadowFrusta; ++i) {
-                shadowFrusta[i] = graphics::Frustum {_shadowLightSpace[i]};
-            }
-            activeShadowFrusta = shadowFrusta.data();
-            numActiveShadowFrusta = numShadowFrusta;
         }
         _graphicsSvc.uniforms.setGlobals([this, &camera, &jitter, &viewProjection](auto &globals) {
             if (_graphicsOpt.taaJitter) {
@@ -572,7 +561,12 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
         }
     }
 
-    auto &output = pipeline.render(_activeCamera);
+    auto shadow = !hasShadowLight()
+                      ? RenderShadowKind::None
+                      : (isShadowLightDirectional()
+                             ? RenderShadowKind::Directional
+                             : RenderShadowKind::Point);
+    auto &output = pipeline.render(_activeCamera, shadow);
     snapshotPreviousFrame();
     return output;
 }

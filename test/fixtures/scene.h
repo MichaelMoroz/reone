@@ -121,7 +121,7 @@ public:
     MOCK_METHOD(void, init, (), (override));
 
     MOCK_METHOD(graphics::Texture &, render,
-                (const CameraSceneNode *),
+                (const CameraSceneNode *, RenderShadowKind),
                 (override));
     MOCK_METHOD(std::vector<RenderTargetInfo>, targets, (), (const override));
 };

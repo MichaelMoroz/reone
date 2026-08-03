@@ -48,6 +48,11 @@ namespace graphics {
 
 static constexpr char kPostProcessModule[] = "postprocess";
 
+struct MegaDrawPushConstants {
+    uint32_t triangleBase;
+    uint32_t materialGated;
+};
+
 VulkanScenePipeline::VulkanScenePipeline(glm::ivec2 targetSize,
                                          GraphicsOptions &options,
                                          VulkanRenderer &renderer,
@@ -125,6 +130,44 @@ static void transitionColorImage(VkCommandBuffer cmd,
     vkCmdPipelineBarrier2(cmd, &dep);
 }
 
+/** Move a layered shadow map between attachment and sampled layouts. */
+static void transitionShadowMap(VkCommandBuffer cmd,
+                                const VulkanImage &image,
+                                VkImageLayout &from,
+                                VkImageLayout to) {
+    if (from == to) {
+        return;
+    }
+    VkImageMemoryBarrier2 barrier {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    barrier.srcStageMask = from == VK_IMAGE_LAYOUT_UNDEFINED
+                               ? VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT
+                               : VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                     VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+                                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    barrier.srcAccessMask = from == VK_IMAGE_LAYOUT_UNDEFINED
+                                ? 0
+                                : VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                      VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                           VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+                           VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    barrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    barrier.oldLayout = from;
+    barrier.newLayout = to;
+    barrier.image = image.handle();
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
+
+    VkDependencyInfo dependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependency.imageMemoryBarrierCount = 1;
+    dependency.pImageMemoryBarriers = &barrier;
+    vkCmdPipelineBarrier2(cmd, &dependency);
+    from = to;
+}
+
 void VulkanScenePipeline::init() {
     if (_inited) {
         return;
@@ -146,6 +189,14 @@ void VulkanScenePipeline::init() {
     _output = std::make_unique<VulkanImage>(device);
     _output->initColorAttachment(_targetSize, _renderer.swapchain().imageFormat());
 
+    glm::ivec2 shadowSize {_options.shadowResolution, _options.shadowResolution};
+    _dirShadows = std::make_unique<VulkanImage>(device);
+    _dirShadows->initDepthLayered(shadowSize, VulkanGBuffer::depthFormat(),
+                                  kNumShadowCascades, false);
+    _pointShadows = std::make_unique<VulkanImage>(device);
+    _pointShadows->initDepthLayered(shadowSize, VulkanGBuffer::depthFormat(),
+                                    kNumCubeFaces, true);
+
     auto &samplers = _renderer.resources().samplers();
     auto colorSampler = samplers.get(getTextureProperties(TextureUsage::ColorBuffer));
     auto depthSampler = samplers.get(getTextureProperties(TextureUsage::DepthBuffer));
@@ -155,6 +206,38 @@ void VulkanScenePipeline::init() {
     auto materialIdSampler = samplers.get(materialIdProperties);
     _output->setSampler(colorSampler);
     _gbuffer->setSamplers(colorSampler, depthSampler, materialIdSampler);
+    _dirShadows->setSampler(depthSampler);
+    _pointShadows->setSampler(depthSampler);
+
+    // Both resolve sets always bind both sampler shapes. Clear each target to
+    // the far plane once so the inactive light kind is a valid no-shadow map.
+    device.immediateSubmit([this, shadowSize](VkCommandBuffer cmd) {
+        auto clear = [&](VulkanImage &image, VkImageLayout &layout,
+                         int layers, bool cube) {
+            transitionShadowMap(cmd, image, layout,
+                                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+            VkRenderingAttachmentInfo depth {
+                VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+            depth.imageView = cube ? image.renderView(0, 0) : image.view();
+            depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            depth.clearValue.depthStencil = {1.0f, 0};
+            VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+            rendering.renderArea.extent = {
+                static_cast<uint32_t>(shadowSize.x),
+                static_cast<uint32_t>(shadowSize.y)};
+            rendering.layerCount = 1;
+            rendering.viewMask = (1u << layers) - 1u;
+            rendering.pDepthAttachment = &depth;
+            vkCmdBeginRendering(cmd, &rendering);
+            vkCmdEndRendering(cmd);
+            transitionShadowMap(cmd, image, layout,
+                                VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+        };
+        clear(*_dirShadows, _dirShadowLayout, kNumShadowCascades, false);
+        clear(*_pointShadows, _pointShadowLayout, kNumCubeFaces, true);
+    });
 
     _retroResolveSet = _renderer.descriptors().createPersistentTextureSet(
         {{1, &_gbuffer->color(VulkanGBuffer::Diffuse)},
@@ -162,7 +245,9 @@ void VulkanScenePipeline::init() {
          {3, &_gbuffer->color(VulkanGBuffer::Lightmap)},
          {4, &_gbuffer->color(VulkanGBuffer::SelfIllum)},
          {5, &_gbuffer->depth()},
+         {15, _dirShadows.get()},
          {17, &_renderer.pbrTextures().prefilteredArray()},
+         {19, _pointShadows.get()},
          {21, &_gbuffer->color(VulkanGBuffer::MaterialId)}});
     _pbrResolveSet = _renderer.descriptors().createPersistentTextureSet(
         {{1, &_gbuffer->color(VulkanGBuffer::Diffuse)},
@@ -171,8 +256,10 @@ void VulkanScenePipeline::init() {
          {4, &_gbuffer->color(VulkanGBuffer::SelfIllum)},
          {5, &_gbuffer->depth()},
          {13, &_renderer.pbrTextures().brdfImage()},
+         {15, _dirShadows.get()},
          {16, &_renderer.pbrTextures().irradianceArray()},
          {17, &_renderer.pbrTextures().prefilteredArray()},
+         {19, _pointShadows.get()},
          {21, &_gbuffer->color(VulkanGBuffer::MaterialId)}});
 
     _outputHandle = std::make_shared<Texture>(
@@ -197,6 +284,8 @@ void VulkanScenePipeline::init() {
         name(_gbuffer->color(i), kColorNames[i]);
     }
     name(_gbuffer->depth(), "G-buffer depth");
+    name(*_dirShadows, "Shadow map (directional cascades)");
+    name(*_pointShadows, "Shadow map (point cube)");
     name(*_output, "Scene output");
 
     _inited = true;
@@ -219,12 +308,149 @@ void VulkanScenePipeline::deinit() {
         _renderer.resources().unregisterExternal(*_outputHandle);
     }
     _output.reset();
+    _dirShadows.reset();
+    _pointShadows.reset();
+    _dirShadowLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    _pointShadowLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     _gbuffer.reset();
     _outputHandle.reset();
     _retroResolveSet = VK_NULL_HANDLE;
     _pbrResolveSet = VK_NULL_HANDLE;
     _resolveMaterialSet = VK_NULL_HANDLE;
+    _mergedScene = {};
+    _mergedScenePrepared = false;
     _inited = false;
+}
+
+const VulkanGpuScene::View &VulkanScenePipeline::prepareMergedScene(
+    VkCommandBuffer cmd, IVulkanSceneCallbacks &callbacks) {
+    if (_mergedScenePrepared) {
+        return _mergedScene;
+    }
+    // Upload and compute-merge are recorded once before the first consumer.
+    // VulkanGpuScene publishes the compute-to-vertex/index barrier; the same
+    // buffers and descriptor set then feed shadows and the G-buffer.
+    _mergedScene = callbacks.mergeGeometry(cmd);
+    _mergedScenePrepared = true;
+    _resolveMaterialSet = VK_NULL_HANDLE;
+    if (!_mergedScene.vertices.buffer || _mergedScene.triangleCount == 0) {
+        return _mergedScene;
+    }
+    const auto materialCount =
+        _mergedScene.materials.size / sizeof(GpuSceneMaterial);
+    if (materialCount > VulkanGBuffer::kNoMaterial) {
+        warn("Vulkan: G-buffer R16_UINT material ID exhausted by " +
+                 std::to_string(materialCount) +
+                 " material records; refusing to wrap into the 0xffff sentinel",
+             LogChannel::Graphics);
+        throw std::runtime_error(
+            "Vulkan: too many materials for the G-buffer material ID");
+    }
+    _resolveMaterialSet = _renderer.descriptors().updateMegaDrawSet(
+        _renderer.frameIndex(), _mergedScene, _renderer.resources());
+    return _mergedScene;
+}
+
+void VulkanScenePipeline::shadowPass(VkCommandBuffer cmd,
+                                     uint32_t globalsOffset,
+                                     IVulkanSceneCallbacks &callbacks) {
+    R_PROFILE_ZONE("VulkanScenePipeline::shadowPass record");
+    if (_shadow == VulkanSceneShadow::None) {
+        return;
+    }
+    const bool directional = _shadow == VulkanSceneShadow::Directional;
+    auto &image = directional ? *_dirShadows : *_pointShadows;
+    auto &layout = directional ? _dirShadowLayout : _pointShadowLayout;
+    const int layers = directional ? kNumShadowCascades : kNumCubeFaces;
+    const uint32_t viewMask = (1u << layers) - 1u;
+    const auto &scene = prepareMergedScene(cmd, callbacks);
+
+    VulkanDebugScope scope(
+        _renderer.device(), cmd,
+        directional ? "Shadows (merged directional cascades)"
+                    : "Shadows (merged point cube)",
+        {0.2f, 0.2f, 0.5f});
+    transitionShadowMap(cmd, image, layout,
+                        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+
+    VkRenderingAttachmentInfo depth {
+        VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depth.imageView = directional ? image.view() : image.renderView(0, 0);
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depth.clearValue.depthStencil = {1.0f, 0};
+    const auto extent = image.extent();
+    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = {static_cast<uint32_t>(extent.x),
+                                   static_cast<uint32_t>(extent.y)};
+    rendering.layerCount = 1;
+    rendering.viewMask = viewMask;
+    rendering.pDepthAttachment = &depth;
+    VkViewport viewport {0.0f, 0.0f, static_cast<float>(extent.x),
+                         static_cast<float>(extent.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(extent.x),
+                               static_cast<uint32_t>(extent.y)}};
+
+    vkCmdBeginRendering(cmd, &rendering);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    if (scene.vertices.buffer && scene.triangleCount != 0) {
+        auto uniformSet = _renderer.uniformSet();
+        std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+        offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+        vkCmdBindIndexBuffer(cmd, scene.indices.buffer->handle(),
+                             scene.indices.offset, VK_INDEX_TYPE_UINT32);
+
+        auto drawRange = [&](uint32_t triangleBase, uint32_t triangleCount,
+                             bool gated, FaceCullMode cull) {
+            if (triangleCount == 0) {
+                return;
+            }
+            VulkanPipelineCache::Key key;
+            key.module = "shadow_megadraw";
+            key.vertexEntry = directional ? "directionalShadowMegadrawVertex"
+                                          : "pointShadowMegadrawVertex";
+            key.fragmentEntry = directional
+                                    ? "directionalShadowMegadrawFragment"
+                                    : "pointShadowMegadrawFragment";
+            key.depthFormat = VulkanGBuffer::depthFormat();
+            key.viewMask = viewMask;
+            key.depthTest = true;
+            key.depthWrite = true;
+            key.cull = cull;
+            auto &pipeline = _renderer.pipelines().get(key);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              pipeline.handle());
+            vkCmdBindDescriptorSets(
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                VulkanDescriptors::kUniformSet, 1, &uniformSet,
+                static_cast<uint32_t>(offsets.size()), offsets.data());
+            vkCmdBindDescriptorSets(
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                VulkanDescriptors::kMegaDrawSet, 1, &_resolveMaterialSet,
+                0, nullptr);
+            const MegaDrawPushConstants push {triangleBase, gated ? 1u : 0u};
+            vkCmdPushConstants(cmd, pipeline.layout(),
+                               VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                               sizeof(push), &push);
+            vkCmdDrawIndexed(cmd, triangleCount * 3, 1,
+                             triangleBase * 3, 0, 0);
+        };
+
+        // Back faces put the stored depth behind an opaque receiver and avoid
+        // self-shadowing without changing the retained sampling code. Cutout
+        // cards remain two-sided: a one-sided fence or leaf must cast from
+        // either light direction, with its alpha gate still applied.
+        drawRange(0, scene.opaqueTriangleCount, false, FaceCullMode::Front);
+        const uint32_t gatedTriangles =
+            scene.triangleCount - scene.opaqueTriangleCount;
+        drawRange(scene.opaqueTriangleCount, gatedTriangles, true,
+                  FaceCullMode::None);
+    }
+    vkCmdEndRendering(cmd);
+    transitionShadowMap(cmd, image, layout,
+                        VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
 }
 
 void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset,
@@ -233,10 +459,7 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
     VulkanDebugScope scope(_renderer.device(), cmd, "Merged geometry (G-buffer)",
                            {0.3f, 0.6f, 0.3f});
 
-    // Upload and compute-merge are deliberately recorded immediately before
-    // the draw. VulkanGpuScene publishes the compute-to-vertex/index barrier.
-    const auto scene = callbacks.mergeGeometry(cmd);
-    _resolveMaterialSet = VK_NULL_HANDLE;
+    const auto &scene = prepareMergedScene(cmd, callbacks);
 
     std::array<VkRenderingAttachmentInfo, VulkanGBuffer::Count> attachments {};
     for (int i = 0; i < VulkanGBuffer::Count; ++i) {
@@ -276,14 +499,6 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     if (scene.vertices.buffer && scene.triangleCount != 0) {
-        const auto materialCount = scene.materials.size / sizeof(GpuSceneMaterial);
-        if (materialCount > VulkanGBuffer::kNoMaterial) {
-            warn("Vulkan: G-buffer R16_UINT material ID exhausted by " +
-                     std::to_string(materialCount) +
-                     " material records; refusing to wrap into the 0xffff sentinel",
-                 LogChannel::Graphics);
-            throw std::runtime_error("Vulkan: too many materials for the G-buffer material ID");
-        }
         VulkanPipelineCache::Key key;
         key.module = "megadraw";
         key.vertexEntry = "megadrawVertex";
@@ -297,9 +512,6 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
         auto uniformSet = _renderer.uniformSet();
         std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
         offsets[UniformBlockBindingPoints::globals] = globalsOffset;
-        _resolveMaterialSet = _renderer.descriptors().updateMegaDrawSet(
-            _renderer.frameIndex(), scene, _renderer.resources());
-
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
                                 VulkanDescriptors::kUniformSet, 1, &uniformSet,
@@ -310,10 +522,6 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
         vkCmdBindIndexBuffer(cmd, scene.indices.buffer->handle(), scene.indices.offset,
                              VK_INDEX_TYPE_UINT32);
 
-        struct MegaDrawPushConstants {
-            uint32_t triangleBase;
-            uint32_t materialGated;
-        };
         if (scene.opaqueTriangleCount != 0) {
             const MegaDrawPushConstants push {0, 0};
             vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -454,6 +662,9 @@ void VulkanScenePipeline::pbrResolvePass(VkCommandBuffer cmd, uint32_t globalsOf
 Texture &VulkanScenePipeline::render(const VulkanSceneFramePlan &plan,
                                      IVulkanSceneCallbacks &callbacks) {
     auto cmd = _renderer.commandBuffer();
+    _shadow = plan.shadow;
+    _mergedScene = {};
+    _mergedScenePrepared = false;
     // The scene graph stores the frame's Vulkan-native uniform values here;
     // copy them into this frame's arena. Clip-space y is still handled by the
     // flipped viewport so triangle winding remains unchanged.
@@ -503,6 +714,9 @@ Texture &VulkanScenePipeline::render(const VulkanSceneFramePlan &plan,
         switch (step) {
         case VulkanSceneStep::ProcessPBRTextures:
             _renderer.pbrTextures().process(cmd, globalsOffset);
+            break;
+        case VulkanSceneStep::Shadow:
+            shadowPass(cmd, globalsOffset, callbacks);
             break;
         case VulkanSceneStep::Geometry:
             geometryPass(cmd, globalsOffset, callbacks);

@@ -4,6 +4,7 @@
 
 import uniforms;
 import lib.gbuf;
+import lib.shadow;
 import lib.scene_material;
 
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
@@ -103,9 +104,11 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
         }
     }
 
-    // G7 restores shadows. All remaining terms preserve retroOpaqueFragment's
-    // ordering, saturation, and gamma-space arithmetic.
-    float3 color = min(float3(1.0), ambient + max(float3(0.0), lit)) *
+    float shadow = shadowsEnabled ? getShadow(eyePos, worldPos) : 0.0;
+    // Preserve retroOpaqueFragment's ordering, saturation, and gamma-space
+    // arithmetic: shadow attenuates the lit term, never ambient.
+    float3 color = min(float3(1.0),
+                       ambient + (1.0 - shadow) * max(float3(0.0), lit)) *
                    diffuseSample.rgb;
     if (envmapped) {
         float3 viewDir = normalize(globalUniforms.cameraPosition.xyz - worldPos);
