@@ -87,12 +87,24 @@ void RayQueryPipeline::render(const VulkanPrimaryRayContext &context,
         }
         if (!valid)
             bake.meshes.clear();
-        try {
-            skyBaked = _native->bakeSkyRoom(context.commandBuffer, bake);
-        } catch (const std::exception &e) {
-            warn("Vulkan: sky bake failed for '" + admission.skyRoom->model().name() +
-                     "': " + e.what() + "; using fallback cube",
-                 LogChannel::Graphics);
+        // A valid room with an empty gather is not a failed room - it is a room
+        // whose meshes have not activated yet. Loading from a save staggers room
+        // visibility, so the first frames here can see zero enabled shell
+        // meshes; attempting the bake then would latch bakeSkyRoom's sticky
+        // per-room failure and leave the fallback cube - no sky, no sun - for
+        // the whole session. Skip the attempt and retry next frame; only a
+        // genuinely invalid room (unsupported texture, deforming shell) is
+        // handed over empty so the stickiness still applies to it.
+        if (valid && bake.meshes.empty()) {
+            skyBaked = false;
+        } else {
+            try {
+                skyBaked = _native->bakeSkyRoom(context.commandBuffer, bake);
+            } catch (const std::exception &e) {
+                warn("Vulkan: sky bake failed for '" + admission.skyRoom->model().name() +
+                         "': " + e.what() + "; using fallback cube",
+                     LogChannel::Graphics);
+            }
         }
     } else {
         _native->clearSkyRoom();
