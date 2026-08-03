@@ -95,9 +95,14 @@ this engine runs FSR at **NativeAA, no upscaling**, so "before FSR at render
 res" and "after FSR at display res" are the same resolution, and the choice
 reduces to whether fog participates in FSR's temporal accumulation. Composite
 the march **after** FSR as a post using guide depth (fog is low-frequency; it
-needs no AA and gains no ghosting), which also survives true upscaling later:
-march at display res with render-res depth taps. Revisit only if upscaling
-actually lands.
+needs no AA and gains no ghosting). And the march need not run at display
+resolution at all: **march at reduced resolution** — half or quarter, as
+production volumetrics commonly do — and depth-aware upsample at the
+composite. That decouples march cost and resolution from the AA pipeline
+entirely, which dissolves the super-resolution question for good: under any
+FSR mode the march res is its own dial, and the composite upsamples to
+whatever the display res is. Revisit only if fog ever carries frequencies a
+quarter-res march visibly loses.
 
 ## Two tracks, and why geometry goes first
 
