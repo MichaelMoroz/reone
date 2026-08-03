@@ -510,7 +510,7 @@ the pre-G1 PBR captures for material behaviour rather than for the old
 output's bugs; the upload hash stays equal across all three modes, which is
 what proves the record change did not fork admission.
 
-### Open defect: metal reads duller than the original
+### Metal reads duller than the original — resolved
 
 Reported from play — metal is less reflective in **both** retro and PBR than
 in the original game. The cause is visible in the code rather than a matter of
@@ -524,7 +524,21 @@ from a blurred, downsampled source where the original took a sharp one.
 The fix direction is to sample the material's own env cube for the mirror term
 and keep the prefiltered chain for what it is for — roughness-varying IBL.
 G6 added `envMap` and `envMapCube` ids to the record precisely so the sharp
-source is reachable; nothing reads them for this term yet.
+source is reachable; this defect was the first consumer of the cube id.
+
+The resolves now select by authored material kind. An `EnvMapCube` is sampled
+directly through the cube-shaped bindless table using `envMapCube`; a legacy
+2D `EnvMap` has no cube descriptor, so it continues through the existing
+`envMapDerivedLayer` conversion and samples that layer at mip zero. Retro adds
+that sample after lighting as `env * (1 - diffuse.a)`, in gamma space and with
+no Fresnel or roughness, matching the retained forward shader exactly.
+
+PBR keeps the roughness-prefiltered array for IBL specular and adds the sharp
+authored mirror separately. Diffuse alpha partitions rather than duplicates
+the response: `(1 - alpha)` is the authored mirror share, while `alpha` gates
+the roughness-varying dielectric IBL share. The original mirror therefore
+keeps its authored strength and IBL fills the response the original renderer
+did not model without double-lighting the material.
 
 ### Where material data lives — the rule, settled in G6
 
@@ -1024,6 +1038,92 @@ feeds it.
 returns no runtime-bake remnants, and `slang/sky.slang` does not exist.
 
 ---
+
+# The reference engines, and what they say we get wrong
+
+Surveyed 2026-08-04 from `C:\Development\odessey` — **read-only reference
+checkouts, not dependencies**:
+
+- **xoreos** — C++ Aurora/Odyssey reimplementation. Reproduces the original's
+  *fixed-function GL state machine* (actual `glTexGeni`/`glBlendFunc` calls),
+  so it is the authority on **how the original sampled and blended**.
+- **KotOR.js** — TypeScript/Three.js, the most feature-complete. Authority on
+  **light budgets, gating policy and MDL controller semantics**.
+- **kvp-main** — a Vulkan wrapper over the *retail binary*, so it observes the
+  real draw stream. Authority on **blend states the game actually sets**, and
+  the only source for **modern PBR over these assets**.
+
+Where they disagree, xoreos wins on GL semantics (it emulates the state
+machine); KotOR.js wins on gameplay-side policy; kvp-main wins on anything
+observed from the shipping game.
+
+## Confirmed correct — do not "fix" these
+
+- **The env-map formula.** `color += env * (1 - diffuse.a)` — additive, no
+  Fresnel, no lerp, applied *after* the lightmap multiply and *not* attenuated
+  by it. All three agree (xoreos `shaderbuilder.cpp:609`, KotOR.js
+  `ShaderOdysseyModel.ts:423`, kvp-main sees `ONE_MINUS_DST_ALPHA/ONE` in the
+  retail stream).
+- **`if (alpha == 0) discard`** is exactly the retail `glAlphaFunc(GL_GREATER, 0)`.
+- **Lightmap multiplies** the diffuse result — the retail stream's
+  `DST_COLOR/ZERO` pass.
+- **The separate emissive/hilights buffer** shape kvp-main independently
+  converged on.
+
+## Corrections, ranked
+
+1. **The 2D `EnvMap` is a GL sphere map, not equirectangular.** We compute
+   `atan2/asin`; the original is
+   `m = 2·√(rx²+ry²+(rz+1)²); uv = (rx/m+0.5, ry/m+0.5)` on the **eye-space**
+   reflection (xoreos `shaderbuilder.cpp:376`). We also route 2D env maps
+   through the 128² prefiltered IBL array instead of sampling the authored
+   texture. This is the path most KOTOR metal uses.
+2. **The reflection vector is eye-space**, not world-space, for both cube and
+   sphere paths — hence the original's camera-locked reflection. Computed
+   per-vertex from the *geometric* normal; a deferred resolve can only manage
+   per-pixel from the G-buffer normal, which is an accepted divergence.
+3. **Implicit-LOD cube sampling in a fullscreen resolve** slides the mip,
+   because the reflection's derivatives come from 8-bit G-buffer normals.
+4. **`ShadowOpacity` is authored per area and we throw it away** — parsed at
+   `resource/parser/gff/are.cpp:369`, unused. The hard-coded 0.25 ambient cap
+   should be that value. `SunShadows`/`MoonShadows` are likewise parsed and
+   ignored.
+5. **Split the shadow term in two** — a BRDF factor and an ambient/IBL factor.
+   kvp-main's `ShadowResult { factor; iblFactor; }` exists for exactly the
+   double-darkening problem G7c hit, and its shipped floors let skylight fall
+   to 27–36%, far below our 25% *cap*.
+6. **Self-illum is additive** — "vanilla adds `GL_EMISSION` on top of the
+   texture" (kvp-main `MaterialSystem.cpp:196`). We modulate.
+7. **Additive with no alpha channel uses `SRC_COLOR/ONE`**, not
+   `SRC_ALPHA/ONE` (xoreos `modelnode.cpp:684`).
+8. **Keep submission order for non-opaque draws** — kvp-main's replay of the
+   real game reorders *only* true-opaque depth-writing geometry. **This lands
+   on G8**: if the remap sort reorders transparents, expect regressions the
+   original did not have.
+9. **The light budget was 8 global and 3 per model** (`videoquality.2da`,
+   KotOR.js `LightManager.ts:24`). We allow 32. More lights than the artists
+   authored for will not look better, it will look wrong in ways that are hard
+   to attribute.
+
+## What none of them can tell us
+
+**Original shadows.** xoreos renders none, KotOR.js built them and disabled
+them, kvp-main invented modern cascades. The only surviving statement is that
+the original cast creature shadows **from the skeleton, not the render mesh**
+(KotOR.js `OdysseyModel3D.ts:1230`), and that it shipped both a shadows and a
+*soft* shadows toggle. Our G7 cascades are a modern reconstruction with no
+reference to check against.
+
+## For the PBR texture question, when it comes
+
+kvp-main is the only prior art for PBR over assets that author no roughness or
+metalness, and its conclusion is chastening: after building an HSV material
+classifier, it **clamps metalness to 0.1** — "KotOR's gray textures are
+painted, not metal" — and ships `metallicSensitivity = 0.038` against a
+default of 1.0, with roughness pinned to 0.07–0.24. It also omits the `1/π`
+diffuse normalisation deliberately, because art authored for fixed-function
+goes too dark with it. The lesson is not the numbers; it is that deriving PBR
+parameters from diffuse textures mostly needs to be turned *off*.
 
 ## Done already, so it is not re-litigated
 
