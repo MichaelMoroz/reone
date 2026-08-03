@@ -99,7 +99,8 @@ GBufferOutput pbrFragment(Varyings input) {
         discard;
     }
 
-    float features = packGeometryFeatures(false, false, false);
+    float features = packGeometryFeatures(false, surface.hasLightmap, false,
+                                          false, false);
     float3 eyeNormal = mul(surface.normal, (float3x3)globalUniforms.viewInv);
     eyeNormal = 0.5 * eyeNormal + 0.5;
 

@@ -32,9 +32,9 @@ class VulkanDevice;
  * covered, kept so lighting can be resolved once per pixel afterwards rather
  * than once per fragment.
  *
- * The attachments, their formats and their order match the OpenGL PBR pipeline
- * exactly, so the same fragment shader output struct serves both and the two
- * can be compared frame by frame.
+ * The first five attachments match the retained geometry contract. The final
+ * two carry lighting-only material colours that cannot be reconstructed from
+ * albedo without changing the authored lighting model.
  */
 class VulkanGBuffer : boost::noncopyable {
 public:
@@ -45,6 +45,8 @@ public:
         Lightmap,
         SelfIllum,
         Motion,
+        MaterialAmbient,
+        MaterialDiffuse,
         Count
     };
 

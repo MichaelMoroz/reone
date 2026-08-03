@@ -24,7 +24,7 @@ namespace reone {
 namespace graphics {
 
 std::vector<VkFormat> VulkanGBuffer::colorFormats() {
-    // Matching the GL targets: RGBA8 for the three colour-ish channels, RGBA8
+    // Matching the retained targets: RGBA8 for the colour-ish channels, RGBA8
     // for eye normals (GL uses RGB8, but three-component render targets are not
     // universally supported and the fourth channel costs nothing here), and
     // RG16F for motion, which needs the range and the sign.
@@ -33,7 +33,9 @@ std::vector<VkFormat> VulkanGBuffer::colorFormats() {
         VK_FORMAT_R8G8B8A8_UNORM, // EyeNormal
         VK_FORMAT_R8G8B8A8_UNORM, // Lightmap
         VK_FORMAT_R8G8B8A8_UNORM, // SelfIllum
-        VK_FORMAT_R16G16_SFLOAT   // Motion
+        VK_FORMAT_R16G16_SFLOAT,  // Motion
+        VK_FORMAT_R8G8B8A8_UNORM, // MaterialAmbient
+        VK_FORMAT_R8G8B8A8_UNORM  // MaterialDiffuse
     };
 }
 

@@ -43,10 +43,10 @@ class VulkanUniformRing;
  * BRDF integration lookup that depends on nothing at all. This is the Vulkan
  * counterpart of PBRTextures, which does the same with the OpenGL pipeline.
  *
- * Cube maps are derived at most one per frame, into a fixed ring of layer
- * slots, so a module with more environment maps than slots recycles the oldest
- * rather than growing without bound. That matches the OpenGL behaviour,
- * including its consequences.
+ * Cube maps are derived at most one per frame into fixed layer slots. A layer
+ * is reserved when its material is classified, so that cached GPU material
+ * records do not need a per-frame repair pass. Reservations reset with the
+ * module-owned resource cache.
  */
 class VulkanPBRTextures : public IPBRTextures, boost::noncopyable {
 public:
@@ -75,12 +75,15 @@ public:
      */
     void process(VkCommandBuffer cmd, uint32_t globalsOffset);
 
-    /** No-op here: generation needs a command buffer, so process does the work. */
-    void refresh() override {}
+    /** Forget module-owned source reservations; process performs generation. */
+    void refresh() override;
 
     void requestEnvMapDerived(EnvMapDerivedRequest request) override {
-        _requests.insert(std::move(request));
+        requestEnvMapDerivedLayer(request.texture);
     }
+
+    /** Reserve the layer immediately so cached material records stay stable. */
+    int requestEnvMapDerivedLayer(Texture &envMap);
 
     std::optional<int> findEnvMapDerivedLayer(const std::string &name) override {
         auto it = _envMapToLayer.find(name);

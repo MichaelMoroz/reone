@@ -27,7 +27,7 @@ struct alignas(16) GpuSceneMaterial {
     uint32_t featureMask {0};
     int32_t bumpMapFrame {0};
     float bumpMapScale {1.0f};
-    float curatedPad[1] {};
+    uint32_t envMap {UINT32_MAX};
     glm::vec4 curatedAlbedoMul {1.0f, 1.0f, 1.0f, 0.0f};
     glm::vec4 curatedRoughA {0.0f};
     glm::vec4 curatedRoughB {0.0f};
@@ -36,18 +36,27 @@ struct alignas(16) GpuSceneMaterial {
     glm::vec4 curatedEmission {0.0f};
     uint32_t surfaceType {0};
     float roughnessScale {1.0f};
-    float overridePad[2] {};
+    uint32_t envMapCube {UINT32_MAX};
+    float waterAlpha {1.0f};
     glm::vec4 overrideColor {1.0f, 1.0f, 1.0f, 0.0f};
     glm::vec4 overrideParams {-1.0f, 1.0f, 1.0f, 1.0f};
+    glm::vec4 ambientColor {1.0f};
+    int32_t envMapDerivedLayer {0};
+    float tailPad[3] {};
 };
 static_assert(offsetof(GpuSceneMaterial, mainTex) == 80);
+static_assert(offsetof(GpuSceneMaterial, envMap) == 108);
 static_assert(offsetof(GpuSceneMaterial, curatedAlbedoMul) == 112);
 static_assert(offsetof(GpuSceneMaterial, curatedEmission) == 192);
 static_assert(offsetof(GpuSceneMaterial, surfaceType) == 208);
 static_assert(offsetof(GpuSceneMaterial, roughnessScale) == 212);
+static_assert(offsetof(GpuSceneMaterial, envMapCube) == 216);
+static_assert(offsetof(GpuSceneMaterial, waterAlpha) == 220);
 static_assert(offsetof(GpuSceneMaterial, overrideColor) == 224);
 static_assert(offsetof(GpuSceneMaterial, overrideParams) == 240);
-static_assert(sizeof(GpuSceneMaterial) == 256);
+static_assert(offsetof(GpuSceneMaterial, ambientColor) == 256);
+static_assert(offsetof(GpuSceneMaterial, envMapDerivedLayer) == 272);
+static_assert(sizeof(GpuSceneMaterial) == 288);
 
 /** Three row vectors encode a float3x4 exactly as skin.slang reads it. */
 struct alignas(16) GpuSceneMatrix3x4 {

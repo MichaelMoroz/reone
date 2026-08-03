@@ -13,7 +13,9 @@ static const uint kMegaFeatureNormalMap = 1u << 2;
 static const uint kMegaFeatureBumpMap = 1u << 3;
 static const uint kMegaFeatureShadows = 1u << 7;
 static const uint kMegaFeatureFog = 1u << 9;
+static const uint kMegaFeatureWater = 1u << 8;
 static const uint kMegaFeaturePremulAlpha = 1u << 12;
+static const uint kMegaFeatureStatic = 1u << 14;
 static const uint kMegaFeatureBlendedCoverage = 1u << 25;
 static const uint kMegaFeaturePunchThrough = 1u << 26;
 static const uint kMegaSurfaceUnlitTransparent = 1;
@@ -46,6 +48,7 @@ struct InstanceMaterial {
     uint featureMask;
     int bumpMapFrame;
     float bumpMapScale;
+    uint envMap;
     float4 curatedAlbedoMul;
     float4 curatedRoughA;
     float4 curatedRoughB;
@@ -54,8 +57,12 @@ struct InstanceMaterial {
     float4 curatedEmission;
     uint surfaceType;
     float roughnessScale;
+    uint envMapCube;
+    float waterAlpha;
     float4 overrideColor;
     float4 overrideParams;
+    float4 ambientColor;
+    int envMapDerivedLayer;
 };
 
 [[vk::binding(0, 2)]] StructuredBuffer<MergedVertex> mergedVertices;
@@ -107,6 +114,8 @@ struct GBufferOutput {
     float4 lightmapColor : SV_Target2;
     float4 selfIllumColor : SV_Target3;
     float2 motion : SV_Target4;
+    float4 materialAmbient : SV_Target5;
+    float4 materialDiffuse : SV_Target6;
 };
 
 float2 transformedUV(InstanceMaterial material, float2 uv) {
@@ -159,6 +168,9 @@ GBufferOutput megadrawFragment(Varyings input, uint primitiveId : SV_PrimitiveID
         diffuse = bindlessTextures[NonUniformResourceIndex(material.mainTex)].Sample(uv);
     }
     diffuse *= input.color;
+    if ((material.featureMask & kMegaFeatureWater) != 0) {
+        diffuse *= material.waterAlpha;
+    }
 
     bool envmapped = (material.featureMask & kMegaFeatureEnvMap) != 0;
 
@@ -185,12 +197,16 @@ GBufferOutput megadrawFragment(Varyings input, uint primitiveId : SV_PrimitiveID
     // for back-facing fragments or the two encodings differ by a sign.
     if (!isFrontFace) normal = -normal;
 
+    bool hasLightmap = (material.featureMask & kMegaFeatureLightmap) != 0 &&
+                       material.lightmap != kNoTexture;
     float3 lightmap = float3(1.0);
-    if ((material.featureMask & kMegaFeatureLightmap) != 0 && material.lightmap != kNoTexture) {
+    if (hasLightmap) {
         lightmap = bindlessTextures[NonUniformResourceIndex(material.lightmap)].Sample(input.uv2).rgb;
     }
     float features = packGeometryFeatures(
         envmapped,
+        hasLightmap,
+        (material.featureMask & kMegaFeatureStatic) != 0,
         (material.featureMask & kMegaFeatureShadows) != 0,
         (material.featureMask & kMegaFeatureFog) != 0);
     float3 eyeNormal = 0.5 * mul(normal, (float3x3)globalUniforms.viewInv) + 0.5;
@@ -199,9 +215,10 @@ GBufferOutput megadrawFragment(Varyings input, uint primitiveId : SV_PrimitiveID
     output.diffuseColor = diffuse;
     output.eyeNormal = float4(eyeNormal, 0.0);
     output.lightmapColor = float4(lightmap, features);
-    // GpuSceneMaterial has no envMapDerivedLayer; zero is the only faithful
-    // placeholder until the deferred PBR material record grows that field.
-    output.selfIllumColor = float4(material.selfIllumColor.rgb, 0.0);
+    output.selfIllumColor = float4(material.selfIllumColor.rgb,
+                                   material.envMapDerivedLayer / 255.0);
     output.motion = computeMotion(input.curClipPos, input.prevClipPos);
+    output.materialAmbient = material.ambientColor;
+    output.materialDiffuse = material.diffuseColor;
     return output;
 }

@@ -157,7 +157,21 @@ void VulkanScenePipeline::init() {
          {2, &_gbuffer->color(VulkanGBuffer::EyeNormal)},
          {3, &_gbuffer->color(VulkanGBuffer::Lightmap)},
          {4, &_gbuffer->color(VulkanGBuffer::SelfIllum)},
-         {5, &_gbuffer->depth()}});
+         {5, &_gbuffer->depth()},
+         {17, &_renderer.pbrTextures().prefilteredArray()},
+         {21, &_gbuffer->color(VulkanGBuffer::MaterialAmbient)},
+         {22, &_gbuffer->color(VulkanGBuffer::MaterialDiffuse)}});
+    _pbrResolveSet = _renderer.descriptors().createPersistentTextureSet(
+        {{1, &_gbuffer->color(VulkanGBuffer::Diffuse)},
+         {2, &_gbuffer->color(VulkanGBuffer::EyeNormal)},
+         {3, &_gbuffer->color(VulkanGBuffer::Lightmap)},
+         {4, &_gbuffer->color(VulkanGBuffer::SelfIllum)},
+         {5, &_gbuffer->depth()},
+         {13, &_renderer.pbrTextures().brdfImage()},
+         {16, &_renderer.pbrTextures().irradianceArray()},
+         {17, &_renderer.pbrTextures().prefilteredArray()},
+         {21, &_gbuffer->color(VulkanGBuffer::MaterialAmbient)},
+         {22, &_gbuffer->color(VulkanGBuffer::MaterialDiffuse)}});
 
     _outputHandle = std::make_shared<Texture>(
         "vk_scene_output", TextureType::TwoDim, Texture::Properties());
@@ -176,7 +190,8 @@ void VulkanScenePipeline::init() {
     };
     static const char *kColorNames[VulkanGBuffer::Count] = {
         "G-buffer diffuse", "G-buffer eye normal", "G-buffer lightmap",
-        "G-buffer self-illum", "G-buffer motion"};
+        "G-buffer self-illum", "G-buffer motion", "G-buffer material ambient",
+        "G-buffer material diffuse"};
     for (int i = 0; i < VulkanGBuffer::Count; ++i) {
         name(_gbuffer->color(i), kColorNames[i]);
     }
@@ -206,6 +221,7 @@ void VulkanScenePipeline::deinit() {
     _gbuffer.reset();
     _outputHandle.reset();
     _retroResolveSet = VK_NULL_HANDLE;
+    _pbrResolveSet = VK_NULL_HANDLE;
     _inited = false;
 }
 
@@ -357,6 +373,60 @@ void VulkanScenePipeline::retroResolvePass(VkCommandBuffer cmd, uint32_t globals
                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
+void VulkanScenePipeline::pbrResolvePass(VkCommandBuffer cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("VulkanScenePipeline::pbrResolvePass record");
+    VulkanDebugScope scope(_renderer.device(), cmd, "PBR deferred resolve",
+                           {0.9f, 0.7f, 0.3f});
+
+    _gbuffer->transitionColor(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    _gbuffer->transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+    transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    attachment.imageView = _output->view();
+    attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = {static_cast<uint32_t>(_targetSize.x),
+                                   static_cast<uint32_t>(_targetSize.y)};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &attachment;
+
+    VulkanPipelineCache::Key key;
+    key.module = "pbr_resolve";
+    key.vertexEntry = "resolveVertex";
+    key.fragmentEntry = "resolveFragment";
+    key.colorFormats = {_output->format()};
+    auto &pipeline = _renderer.pipelines().get(key);
+
+    VkViewport viewport {0.0f, 0.0f, static_cast<float>(_targetSize.x),
+                         static_cast<float>(_targetSize.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
+                               static_cast<uint32_t>(_targetSize.y)}};
+    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+
+    vkCmdBeginRendering(cmd, &rendering);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    auto uniformSet = _renderer.descriptors().uniformSet(_renderer.uniformRing().frame());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                            VulkanDescriptors::kUniformSet, 1, &uniformSet,
+                            static_cast<uint32_t>(offsets.size()), offsets.data());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                            VulkanDescriptors::kTextureSet, 1, &_pbrResolveSet, 0, nullptr);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+
+    transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
 Texture &VulkanScenePipeline::render(const VulkanSceneFramePlan &plan,
                                      IVulkanSceneCallbacks &callbacks) {
     auto cmd = _renderer.commandBuffer();
@@ -412,6 +482,10 @@ Texture &VulkanScenePipeline::render(const VulkanSceneFramePlan &plan,
             break;
         case VulkanSceneStep::Geometry:
             geometryPass(cmd, globalsOffset, callbacks);
+            break;
+        case VulkanSceneStep::PBRResolve:
+            pbrResolvePass(cmd, globalsOffset);
+            outputResolved = true;
             break;
         case VulkanSceneStep::RetroResolve:
             retroResolvePass(cmd, globalsOffset);
@@ -555,10 +629,12 @@ std::vector<VulkanScenePipeline::Target> VulkanScenePipeline::targetEntries(
     }
     static const char *kDisplayNames[VulkanGBuffer::Count] = {
         "G-buffer diffuse", "G-buffer eye normal", "G-buffer lightmap",
-        "G-buffer self-illum", "G-buffer motion"};
+        "G-buffer self-illum", "G-buffer motion", "G-buffer material ambient",
+        "G-buffer material diffuse"};
     static const char *kDumpNames[VulkanGBuffer::Count] = {
         "g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_lightmap",
-        "g_buffer_self_illum", "g_buffer_motion"};
+        "g_buffer_self_illum", "g_buffer_motion", "g_buffer_material_ambient",
+        "g_buffer_material_diffuse"};
     for (int i = 0; i < VulkanGBuffer::Count; ++i) {
         auto kind = i == VulkanGBuffer::EyeNormal ? VulkanTargetKind::EyeNormal : i == VulkanGBuffer::Motion ? VulkanTargetKind::Motion
                                                                                                              : VulkanTargetKind::Color;

@@ -11,6 +11,7 @@
 
 import uniforms;
 import lib.math;
+import lib.gbuf;
 import lib.shadow;
 import lib.surface;
 
@@ -19,22 +20,17 @@ import lib.surface;
 [[vk::binding(3, 1)]] Sampler2D sGBufLightmap;
 [[vk::binding(4, 1)]] Sampler2D sGBufSelfIllum;
 [[vk::binding(5, 1)]] Sampler2D sGBufDepth;
-[[vk::binding(7, 1)]] Sampler2D sSSAO;
-[[vk::binding(8, 1)]] Sampler2D sSSR;
 [[vk::binding(13, 1)]] Sampler2D sBRDFLUT;
 [[vk::binding(16, 1)]] SamplerCubeArray sIrradianceMapArray;
 [[vk::binding(17, 1)]] SamplerCubeArray sPrefilteredEnvMapArray;
+[[vk::binding(21, 1)]] Sampler2D sGBufMaterialAmbient;
+[[vk::binding(22, 1)]] Sampler2D sGBufMaterialDiffuse;
 
 /** Roughness spans this many prefiltered mips; see VulkanPBRTextures. */
 static const float kMaxReflectionLOD = 4.0;
 
 static const float kGamma = 2.2;
 
-
-// Packed into the lightmap alpha by the geometry pass; see lib/gbuf.slang.
-static const int kGeometryFeatureEnvMap = 1 << 0;
-static const int kGeometryFeatureShadows = 1 << 1;
-static const int kGeometryFeatureFog = 1 << 2;
 
 struct Varyings {
     float4 position : SV_Position;
@@ -78,14 +74,6 @@ float3 reconstructViewPos(float2 uv) {
     return viewPos.xyz / viewPos.w;
 }
 
-void unpackGeometryFeatures(float packed, out bool envmapped,
-                            out bool shadowsEnabled, out bool fogEnabled) {
-    int mask = int(round(packed * 255.0));
-    envmapped = (mask & kGeometryFeatureEnvMap) != 0;
-    shadowsEnabled = (mask & kGeometryFeatureShadows) != 0;
-    fogEnabled = (mask & kGeometryFeatureFog) != 0;
-}
-
 float lightAttenuationQuadratic(GlobalUniformsLight light, float distance) {
     float d = light.radius + distance;
     return (light.radius * light.radius) / (d * d);
@@ -120,13 +108,8 @@ float getFog(float3 worldPos) {
     return 1.0 - saturate(f);
 }
 
-struct ResolveOutput {
-    float4 color : SV_Target0;
-    float4 hilights : SV_Target1;
-};
-
 [shader("fragment")]
-ResolveOutput resolveFragment(Varyings input) {
+float4 resolveFragment(Varyings input) : SV_Target0 {
     float2 uv = input.uv;
 
     float4 mainTexSample = sGBufDiffuse.Sample(uv);
@@ -136,10 +119,7 @@ ResolveOutput resolveFragment(Varyings input) {
     // Nothing was drawn here: leave the clear colour alone rather than lighting
     // it, which would tint the whole background.
     if (mainTexSample.a == 0.0 && lightmapSample.a == 0.0) {
-        ResolveOutput output;
-        output.color = float4(0.0, 0.0, 0.0, 1.0);
-        output.hilights = float4(0.0, 0.0, 0.0, 0.0);
-        return output;
+        return float4(0.0, 0.0, 0.0, 1.0);
     }
 
     float3 eyePos = reconstructViewPos(uv);
@@ -151,6 +131,8 @@ ResolveOutput resolveFragment(Varyings input) {
 
     float3 albedo = gammaToLinear(mainTexSample.rgb);
     float3 emission = gammaToLinear(selfIllumSample.rgb);
+    float3 materialAmbient = gammaToLinear(sGBufMaterialAmbient.Sample(uv).rgb);
+    float3 materialDiffuse = gammaToLinear(sGBufMaterialDiffuse.Sample(uv).rgb);
     // Odyssey assets carry neither metalness nor roughness. What an
     // environment-mapped surface does carry is diffuse alpha, which the retro
     // renderer uses as a reflection strength: it adds the environment at
@@ -168,19 +150,24 @@ ResolveOutput resolveFragment(Varyings input) {
     // Odyssey assets carry no roughness channel; the diffuse alpha stands in,
     // floored so that nothing turns into a perfect mirror.
     float roughness = clamp(mainTexSample.a, 0.2, 1.0);
-    // Disabled effects leave their persistent targets at their neutral terms.
-    float ao = sSSAO.Sample(uv).r;
+    // SSAO is not part of the shared executor yet; its neutral term is one.
+    float ao = 1.0;
 
     bool envmapped;
+    bool hasLightmap;
+    bool staticObject;
     bool shadowsEnabled;
     bool fogEnabled;
-    unpackGeometryFeatures(lightmapSample.a, envmapped, shadowsEnabled, fogEnabled);
+    unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
+                           shadowsEnabled, fogEnabled);
 
     // A surface with no lightmap carries (1,1,1), which reads as no shadow.
     float shadow = 0.0;
     if (shadowsEnabled) {
         shadow = getShadow(eyePos, worldPos);
-        shadow = max(shadow, 1.0 - rgbToLuma(lightmapSample.rgb));
+        if (hasLightmap) {
+            shadow = max(shadow, 1.0 - rgbToLuma(lightmapSample.rgb));
+        }
     }
     float fog = fogEnabled ? getFog(worldPos) : 0.0;
 
@@ -199,15 +186,15 @@ ResolveOutput resolveFragment(Varyings input) {
     // sky hemisphere integral already is ambient, so adding both doubles it.
     // Interiors consequently lose this small raster-only baseline; direct
     // scene lights are the intentionally shared illumination there.
-    float3 irradiance = gammaToLinear(globalUniforms.worldAmbientColor.rgb);
+    float3 irradiance = hasLightmap
+                            ? gammaToLinear(lightmapSample.rgb)
+                            : materialAmbient *
+                                  gammaToLinear(globalUniforms.worldAmbientColor.rgb);
     if (envmapped) {
         irradiance += gammaToLinear(sIrradianceMapArray.Sample(float4(R, float(envLayer))).rgb);
         environment = gammaToLinear(
             sPrefilteredEnvMapArray.SampleLevel(float4(R, float(envLayer)),
                                                 roughness * kMaxReflectionLOD).rgb);
-        float4 ssrSample = sSSR.Sample(uv);
-        environment = lerp(environment, gammaToLinear(ssrSample.rgb),
-                           (1.0 - roughness) * ssrSample.a);
     }
     float3 directD = float3(0.0);
     float3 directS = float3(0.0);
@@ -219,6 +206,9 @@ ResolveOutput resolveFragment(Varyings input) {
 
     for (int i = 0; i < globalUniforms.numLights; ++i) {
         GlobalUniformsLight light = globalUniforms.lights[i];
+        if (staticObject && light.dynamicType != 1) {
+            continue;
+        }
 
         float3 fragToLight = light.position.xyz - worldPos;
         float lightDistance = length(fragToLight);
@@ -231,7 +221,7 @@ ResolveOutput resolveFragment(Varyings input) {
         float attenuation = lightAttenuationQuadratic(light, lightDistance);
         float3 radiance = light.multiplier * attenuation * gammaToLinear(light.color.rgb);
         if (light.ambientOnly != 0) {
-            irradiance += radiance;
+            irradiance += materialAmbient * radiance;
             continue;
         }
 
@@ -247,7 +237,7 @@ ResolveOutput resolveFragment(Varyings input) {
         float3 spec = (D * G * F) / max(1e-4, 4.0 * NdotL * NdotV);
 
         float3 kD = (1.0 - F) * (1.0 - metallic);
-        directD += kD / kPi * radiance * NdotL;
+        directD += materialDiffuse * kD / kPi * radiance * NdotL;
         directS += spec * radiance * NdotL;
     }
 
@@ -280,8 +270,5 @@ ResolveOutput resolveFragment(Varyings input) {
     color = linearToGamma(color);
     color = lerp(color, globalUniforms.fogColor.rgb, fog);
 
-    ResolveOutput output;
-    output.color = float4(color, 1.0);
-    output.hilights = float4(selfIllumed * step(float3(0.95), color) * color, 0.0);
-    return output;
+    return float4(color, 1.0);
 }

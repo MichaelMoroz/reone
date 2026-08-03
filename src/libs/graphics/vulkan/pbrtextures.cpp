@@ -134,6 +134,31 @@ Texture &VulkanPBRTextures::brdf() {
     throw std::logic_error("Vulkan PBR textures are not exposed as a Texture");
 }
 
+void VulkanPBRTextures::refresh() {
+    _requests.clear();
+    _envMapToLayer.clear();
+    _envMapSources.clear();
+    _nextLayer = 0;
+}
+
+int VulkanPBRTextures::requestEnvMapDerivedLayer(Texture &envMap) {
+    if (auto existing = findEnvMapDerivedLayer(envMap.name())) {
+        return *existing;
+    }
+    if (_nextLayer >= kMaxDerivedLayers) {
+        warn("Vulkan: more than " + std::to_string(kMaxDerivedLayers) +
+                 " environment maps requested; using derived layer 0 for " +
+                 envMap.name(),
+             LogChannel::Graphics);
+        return 0;
+    }
+
+    const int layer = _nextLayer++;
+    _envMapToLayer.emplace(envMap.name(), layer);
+    _requests.insert({envMap});
+    return layer;
+}
+
 /**
  * Move a whole image between being rendered into and being sampled.
  *
@@ -183,8 +208,7 @@ void VulkanPBRTextures::process(VkCommandBuffer cmd, uint32_t globalsOffset) {
     _requests.erase(_requests.begin());
 
     auto &envMap = request.texture;
-    int layer = _nextLayer;
-    _nextLayer = (_nextLayer + 1) % kMaxDerivedLayers;
+    const int layer = _envMapToLayer.at(envMap.name());
 
     VulkanDebugScope scope(_device, cmd, "IBL: derive environment map", {0.5f, 0.3f, 0.6f});
     transition(cmd, *_irradiance, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -197,7 +221,6 @@ void VulkanPBRTextures::process(VkCommandBuffer cmd, uint32_t globalsOffset) {
     transition(cmd, *_prefiltered, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-    _envMapToLayer[envMap.name()] = layer;
     _envMapSources[layer] = &envMap;
     debug("Vulkan: derived environment map " + envMap.name() + " into layer " +
               std::to_string(layer),

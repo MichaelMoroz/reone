@@ -114,8 +114,11 @@ graphics::Texture &VulkanRenderPipeline::render(const CameraSceneNode *camera) {
     _lastMaterialCount =
         static_cast<uint32_t>(_admissionResult.submission.upload.materials.size());
     if (!_primaryRayMode) {
+        plan.steps.push_back(graphics::VulkanSceneStep::ProcessPBRTextures);
         plan.steps.push_back(graphics::VulkanSceneStep::Geometry);
-        if (!_options.pbr)
+        if (_options.pbr)
+            plan.steps.push_back(graphics::VulkanSceneStep::PBRResolve);
+        else
             plan.steps.push_back(graphics::VulkanSceneStep::RetroResolve);
     }
     return _executor->render(plan, *_callbacks);

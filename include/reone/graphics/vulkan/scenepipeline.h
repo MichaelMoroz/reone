@@ -35,6 +35,7 @@ struct GraphicsOptions;
 enum class VulkanSceneStep {
     ProcessPBRTextures,
     Geometry,
+    PBRResolve,
     RetroResolve,
 };
 
@@ -109,6 +110,7 @@ private:
     std::unique_ptr<VulkanImage> _output;
     std::shared_ptr<Texture> _outputHandle;
     VkDescriptorSet _retroResolveSet {VK_NULL_HANDLE};
+    VkDescriptorSet _pbrResolveSet {VK_NULL_HANDLE};
 
     struct Preview {
         std::unique_ptr<VulkanImage> image;
@@ -133,6 +135,7 @@ private:
     void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset,
                       IVulkanSceneCallbacks &callbacks);
     void retroResolvePass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    void pbrResolvePass(VkCommandBuffer cmd, uint32_t globalsOffset);
     std::vector<Target> targetEntries(const IVulkanSceneCallbacks &callbacks) const;
 };
 

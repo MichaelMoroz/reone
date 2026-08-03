@@ -436,6 +436,7 @@ void VulkanRenderer::invalidateResources() {
     // operation, so the blunt wait is the right one.
     _device.waitIdle();
     _resources.clearUploaded();
+    _pbrTextures.refresh();
 }
 
 void VulkanRenderer::invalidateTexture(Texture &texture) {

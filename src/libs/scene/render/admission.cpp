@@ -15,6 +15,7 @@
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/renderer.h"
+#include "reone/graphics/vulkan/pbrtextures.h"
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/scene/node/model.h"
 #include "reone/system/logutil.h"
@@ -129,6 +130,41 @@ void applyCategoryOverride(InstanceMaterial &material,
     material.roughnessScale = std::max(0.0f, src.roughnessScale);
 }
 
+void populateMaterialResources(InstanceMaterial &dst,
+                               const Material &src,
+                               VulkanRenderer &renderer) {
+    const auto textureAt = [&src](MaterialTextureSlot slot) {
+        return src.textures[static_cast<size_t>(slot)];
+    };
+    const auto textureId = [&renderer](const Texture *texture) {
+        return texture ? renderer.resources().textureId(*texture).value_or(UINT32_MAX)
+                       : UINT32_MAX;
+    };
+
+    const auto *mainTex = textureAt(MaterialTextureSlot::MainTex);
+    dst.mainTex = textureId(mainTex);
+    dst.normalMap = textureId(textureAt(MaterialTextureSlot::NormalMap));
+    dst.lightmap = textureId(textureAt(MaterialTextureSlot::Lightmap));
+
+    if (const auto *bumpMap = textureAt(MaterialTextureSlot::BumpMapArray)) {
+        dst.bumpMapArray = textureId(bumpMap);
+        dst.bumpMapFrame = src.bumpMapFrame;
+        dst.bumpMapScale = bumpMap->features().bumpMapScaling;
+    }
+    if (mainTex && mainTex->features().waterAlpha != -1.0f) {
+        dst.waterAlpha = mainTex->features().waterAlpha;
+    }
+
+    auto *envMap = textureAt(MaterialTextureSlot::EnvMap);
+    auto *envMapCube = textureAt(MaterialTextureSlot::EnvMapCube);
+    dst.envMap = textureId(envMap);
+    dst.envMapCube = textureId(envMapCube);
+    if (auto *derivedSource = envMapCube ? envMapCube : envMap) {
+        dst.envMapDerivedLayer =
+            renderer.pbrTextures().requestEnvMapDerivedLayer(*derivedSource);
+    }
+}
+
 } // namespace
 
 GpuSceneAdmission::GpuSceneAdmission(VulkanRenderer &renderer,
@@ -166,10 +202,12 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
     InstanceMaterial material;
     material.selfIllumColor = glm::vec4(mesh.material.selfIllumColor, 0.0f);
     material.diffuseColor = glm::vec4(mesh.material.diffuseColor, 1.0f);
+    material.ambientColor = glm::vec4(mesh.material.ambientColor, 1.0f);
     material.uv0 = mesh.material.uv[0];
     material.uv1 = mesh.material.uv[1];
     material.uv2 = mesh.material.uv[2];
     material.featureMask = static_cast<uint32_t>(materialFeatureMask(mesh.material));
+    populateMaterialResources(material, mesh.material, _renderer);
     const uint32_t categoryIndex = mesh.cullRoot
                                        ? static_cast<uint32_t>(mesh.cullRoot->usage())
                                        : 8u;
@@ -235,25 +273,6 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
                       material.curatedEmission.w);
     }
 
-    if (const auto *texture =
-            mesh.material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
-        material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
-    }
-    if (const auto *texture =
-            mesh.material.textures[static_cast<size_t>(MaterialTextureSlot::NormalMap)]) {
-        material.normalMap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
-    }
-    if (const auto *texture =
-            mesh.material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)]) {
-        material.lightmap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
-    }
-    if (const auto *texture =
-            mesh.material.textures[static_cast<size_t>(MaterialTextureSlot::BumpMapArray)]) {
-        material.bumpMapArray = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
-        material.bumpMapFrame = mesh.material.bumpMapFrame;
-        material.bumpMapScale = texture->features().bumpMapScaling;
-    }
-
     _submission.dynamicTriangles +=
         (skinned || dangly || saber) ? static_cast<uint32_t>(mesh.mesh.get().faces().size()) : 0;
     if (!dangly && (!curated || curated->klass == TraceClass::Default) &&
@@ -270,30 +289,23 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
     switch (procedural.kind) {
     case ProceduralKind::Grass:
         material.diffuseColor = glm::vec4(procedural.material.diffuseColor, 1.0f);
+        material.ambientColor = glm::vec4(procedural.material.ambientColor, 1.0f);
         material.uv0 = procedural.material.uv[0];
         material.uv1 = procedural.material.uv[1];
         material.uv2 = procedural.material.uv[2];
         material.featureMask = static_cast<uint32_t>(materialFeatureMask(procedural.material)) |
                                UniformsFeatureFlags::hashedalphatest | (8u << 27);
-        if (const auto *texture = procedural.material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
-            material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
-        }
-        if (const auto *texture = procedural.material.textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)]) {
-            material.lightmap = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
-        }
         applyCategoryOverride(material, _options, 8);
         kind = AdmissionKind::Cutout;
         break;
     case ProceduralKind::Particles:
         _submission.particles += static_cast<uint32_t>(procedural.instanceCount());
         material.diffuseColor = glm::vec4(procedural.material.diffuseColor, 1.0f);
+        material.ambientColor = glm::vec4(procedural.material.ambientColor, 1.0f);
         material.uv0 = procedural.material.uv[0];
         material.uv1 = procedural.material.uv[1];
         material.uv2 = procedural.material.uv[2];
         material.featureMask = static_cast<uint32_t>(materialFeatureMask(procedural.material));
-        if (const auto *texture = procedural.material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
-            material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
-        }
         applyCategoryOverride(material, _options, 8);
         kind = procedural.material.blending == BlendMode::Lighten
                    ? AdmissionKind::AdditiveEmissive
@@ -302,12 +314,11 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
     case ProceduralKind::Billboard:
         ++_submission.billboards;
         material.diffuseColor = procedural.instances.front().color;
-        if (const auto *texture = procedural.material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
-            material.mainTex = _renderer.resources().textureId(*texture).value_or(UINT32_MAX);
-        }
+        material.ambientColor = glm::vec4(procedural.material.ambientColor, 1.0f);
         kind = AdmissionKind::AdditiveEmissive;
         break;
     }
+    populateMaterialResources(material, procedural.material, _renderer);
     return {{material, kind, GpuScene::ResidencyClass::Dynamic, nullptr}};
 }
 

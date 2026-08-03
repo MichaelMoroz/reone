@@ -176,6 +176,8 @@ struct TextureUnits {
     // 2D, continued
 
     static constexpr int gBufMotion = 20;
+    static constexpr int gBufMaterialAmbient = 21;
+    static constexpr int gBufMaterialDiffuse = 22;
 };
 
 // MDL

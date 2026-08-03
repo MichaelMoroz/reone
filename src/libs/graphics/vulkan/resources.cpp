@@ -368,7 +368,7 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
         image->setSampler(_samplers.get(texture.properties()));
         debug("Vulkan: uploaded texture " + texture.name(), LogChannel::Graphics);
         auto [it, inserted] = _textures.emplace(
-            &texture, UploadedTexture {std::move(image), _nextTextureId++});
+            &texture, UploadedTexture {std::move(image)});
         return *it->second.image;
     }
     const auto &layer = texture.layers().front();
@@ -438,7 +438,7 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
     image->setSampler(_samplers.get(texture.properties()));
     debug("Vulkan: uploaded texture " + texture.name(), LogChannel::Graphics);
     auto [it, inserted] = _textures.emplace(
-        &texture, UploadedTexture {std::move(image), _nextTextureId++});
+        &texture, UploadedTexture {std::move(image)});
     return *it->second.image;
 }
 
@@ -451,6 +451,12 @@ std::optional<uint32_t> VulkanResources::textureId(const Texture &texture) {
     if (it == _textures.end()) {
         return std::nullopt;
     }
+    // Generic get() callers use dedicated descriptors and must not perturb the
+    // dense material-texture namespace. In particular, tracing uploads sky
+    // shell textures that raster never sees; assigning those bindless ids made
+    // later cached material records mode-dependent.
+    if (it->second.id == UINT32_MAX)
+        it->second.id = _nextTextureId++;
     return it->second.id;
 }
 
@@ -461,7 +467,7 @@ std::vector<std::pair<uint32_t, const VulkanImage *>> VulkanResources::uploadedT
         // The ray-query shader's bindless array is Sampler2D. Cube and array
         // uploads have distinct view types and must not occupy that array;
         // they are not sampled by the diffuse/normal-map tracing path.
-        if (texture->type() != TextureType::TwoDim) {
+        if (texture->type() != TextureType::TwoDim || uploaded.id == UINT32_MAX) {
             continue;
         }
         result.emplace_back(uploaded.id, uploaded.image.get());
@@ -476,7 +482,7 @@ std::vector<std::pair<uint32_t, const VulkanImage *>> VulkanResources::uploadedT
         // Bump-map frames are a separate descriptor shape from the ordinary
         // material images. Keeping them out of Sampler2D prevents a valid 2D
         // image descriptor from being interpreted as a 2D-array image.
-        if (texture->type() != TextureType::TwoDimArray) {
+        if (texture->type() != TextureType::TwoDimArray || uploaded.id == UINT32_MAX) {
             continue;
         }
         result.emplace_back(uploaded.id, uploaded.image.get());

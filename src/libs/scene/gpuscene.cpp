@@ -803,7 +803,11 @@ graphics::GpuSceneUpload GpuScene::prepare(
             nonOpaqueObjects.push_back(input);
         }
     }
-    if (upload.grassFaceGeneration != _grassFaceGeneration) {
+    // Primary-ray submission consumes its upload arena. Recreate this
+    // generation-stable table when the returned arena has therefore lost the
+    // vector, even though the scene generation itself did not change.
+    if (upload.grassFaceGeneration != _grassFaceGeneration ||
+        (grassFaceBase != 0 && upload.grassFaces.empty())) {
         upload.grassFaces.clear();
         upload.grassFaces.reserve(grassFaceBase);
         for (const auto &object : _objects) {

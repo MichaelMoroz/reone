@@ -52,6 +52,7 @@ public struct InstanceMaterial {
     public uint featureMask;
     public int bumpMapFrame;
     public float bumpMapScale;
+    public uint envMap;
     // Curated material operations; see rayquery.cpp for the encoding.
     public float4 curatedAlbedoMul;
     public float4 curatedRoughA;
@@ -64,12 +65,16 @@ public struct InstanceMaterial {
     // This occupies the scalar slot before the override vectors so category
     // tuning does not change the storage-buffer array stride.
     public float roughnessScale;
+    public uint envMapCube;
+    public float waterAlpha;
     // The per-category calibration overrides, baked at admission so the
     // shader never touches a category table: rgb + lerp weight flat-paints
     // the albedo; params are roughness override (negative disables),
     // emission scale, env-map strength scale.
     public float4 overrideColor;
     public float4 overrideParams;
+    public float4 ambientColor;
+    public int envMapDerivedLayer;
 };
 
 [[vk::binding(0, 1)]] public RWTexture2D<float4> outputImage;

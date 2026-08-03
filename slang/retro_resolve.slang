@@ -3,14 +3,17 @@
 // reconstructs the fragment position and applies the original light/fog model.
 
 import uniforms;
+import lib.gbuf;
 
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
 [[vk::binding(2, 1)]] Sampler2D sGBufEyeNormal;
 [[vk::binding(3, 1)]] Sampler2D sGBufLightmap;
 [[vk::binding(4, 1)]] Sampler2D sGBufSelfIllum;
 [[vk::binding(5, 1)]] Sampler2D sGBufDepth;
+[[vk::binding(17, 1)]] SamplerCubeArray sPrefilteredEnvMapArray;
+[[vk::binding(21, 1)]] Sampler2D sGBufMaterialAmbient;
+[[vk::binding(22, 1)]] Sampler2D sGBufMaterialDiffuse;
 
-static const int kGeometryFeatureFog = 1 << 2;
 static const int kLightDynamicTypeAll = 1;
 
 struct Varyings {
@@ -45,6 +48,7 @@ float lightAttenuationQuadratic(GlobalUniformsLight light, float distance) {
 float4 retroResolveFragment(Varyings input) : SV_Target0 {
     float4 diffuseSample = sGBufDiffuse.Sample(input.uv);
     float4 lightmapSample = sGBufLightmap.Sample(input.uv);
+    float4 selfIllumSample = sGBufSelfIllum.Sample(input.uv);
 
     // The attachment clear and an uncovered alpha-tested pixel both carry this
     // sentinel. Sky will eventually composite over these black pixels.
@@ -57,27 +61,28 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     float3 worldPos = mul(globalUniforms.viewInv, float4(eyePos, 1.0)).xyz;
     float3 normal = normalize(mul(globalUniforms.viewInv, float4(eyeNormal, 0.0)).xyz);
 
-    // No-lightmap surfaces publish the old contract's neutral white value.
-    // The contract has no explicit presence bit, so an exactly-white lightmap
-    // texel is indistinguishable and takes this neutral-material fallback.
-    bool hasLightmap = any(lightmapSample.rgb < float3(254.5 / 255.0));
+    bool envmapped;
+    bool hasLightmap;
+    bool staticObject;
+    bool shadowsEnabled;
+    bool fogEnabled;
+    unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
+                           shadowsEnabled, fogEnabled);
+    float3 materialAmbient = sGBufMaterialAmbient.Sample(input.uv).rgb;
+    float3 materialDiffuse = sGBufMaterialDiffuse.Sample(input.uv).rgb;
 
     float3 ambient = float3(0.0);
-    float3 lit = sGBufSelfIllum.Sample(input.uv).rgb;
+    float3 lit = selfIllumSample.rgb;
     if (hasLightmap) {
         lit += lightmapSample.rgb;
-    } else {
-        // ambientColor is per-object and absent from the G-buffer. Its authored
-        // default is white, which is the least destructive deferred substitute.
-        ambient += globalUniforms.worldAmbientColor.rgb;
+    } else if (!staticObject) {
+        ambient += materialAmbient * globalUniforms.worldAmbientColor.rgb;
     }
 
     for (int i = 0; i < globalUniforms.numLights; ++i) {
         GlobalUniformsLight light = globalUniforms.lights[i];
 
-        // Static identity is not deferred either. Lightmapped geometry is the
-        // closest available proxy for the old static-object gate.
-        if (hasLightmap && light.dynamicType != kLightDynamicTypeAll) continue;
+        if (staticObject && light.dynamicType != kLightDynamicTypeAll) continue;
 
         float3 lightVector = light.position.xyz - worldPos;
         float distance = length(lightVector);
@@ -85,13 +90,11 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
 
         float attenuation = lightAttenuationQuadratic(light, distance);
         if (light.ambientOnly != 0) {
-            // ambientColor's neutral substitute is white.
-            ambient += light.multiplier * attenuation * light.color.rgb;
+            ambient += light.multiplier * attenuation * materialAmbient * light.color.rgb;
         } else {
-            // diffuseColor's neutral substitute is white.
             lit += light.multiplier *
                    max(0.0, dot(normal, lightVector / max(0.0001, distance))) *
-                   attenuation * light.color.rgb;
+                   attenuation * materialDiffuse * light.color.rgb;
         }
     }
 
@@ -99,9 +102,16 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     // ordering, saturation, and gamma-space arithmetic.
     float3 color = min(float3(1.0), ambient + max(float3(0.0), lit)) *
                    diffuseSample.rgb;
+    if (envmapped) {
+        float3 viewDir = normalize(globalUniforms.cameraPosition.xyz - worldPos);
+        float3 reflection = reflect(-viewDir, normal);
+        int envLayer = int(round(selfIllumSample.a * 255.0));
+        color += sPrefilteredEnvMapArray.SampleLevel(
+                     float4(reflection, float(envLayer)), 0.0).rgb *
+                 (1.0 - diffuseSample.a);
+    }
 
-    int featureMask = int(round(lightmapSample.a * 255.0));
-    if ((featureMask & kGeometryFeatureFog) != 0) {
+    if (fogEnabled) {
         float distance = length(worldPos - globalUniforms.cameraPosition.xyz);
         float fog = 1.0 - saturate((globalUniforms.fogFar - distance) /
                                    max(0.0001, globalUniforms.fogFar - globalUniforms.fogNear));

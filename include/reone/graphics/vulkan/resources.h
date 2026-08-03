@@ -153,7 +153,7 @@ private:
 
     struct UploadedTexture {
         std::unique_ptr<VulkanImage> image;
-        uint32_t id {0};
+        uint32_t id {UINT32_MAX};
     };
     std::unordered_map<const Texture *, UploadedTexture> _textures;
     uint32_t _nextTextureId {0};
