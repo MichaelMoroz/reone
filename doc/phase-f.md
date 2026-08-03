@@ -275,13 +275,26 @@ the commit: lightmap presence inferred (no bit exists), lightmapped-as-static
 gate, per-object ambient/diffuse collapsed to neutral, environment reflection
 omitted — all candidates for the G6 material-record growth.
 
-**The 202tel finding, for G8:** a lit-blended panel sits in the G-buffer as
-the primary surface — exactly as the tracer records it — and resolves opaque,
-occluding what the old renderer showed through it. The shared coverage rule is
-doing its job; the open design question is how lit-blended surfaces leave the
-opaque G-buffer for the sorted blended draw *in both consumers at once*.
-Backlog 3.7's stochastic traced transparency is the tracer-side half of that
-same question.
+**The 202tel finding, and what it turned out to be:** a lit-blended panel sat
+in the G-buffer as the primary surface — exactly as the tracer records it —
+and resolved opaque. This was first read as the shared coverage rule doing its
+job, with raster's cutout-only correction (`920c1259`) framed as a temporary
+divergence from ground truth. **The framing was backwards: the tracer's
+behaviour is the bug.** Blended surfaces in the traced G-buffer feed NRD
+guides whose depth, normal and motion describe the glass or the smoke while
+the denoised signal is dominated by what lies behind — observed as
+reprojection artifacts. The traced G-buffer was trusted as the instrument for
+geometry and coverage, and for opaque and cutout it is; for blended coverage
+it recorded a defect, and G2b faithfully copied it before G5b removed it
+again.
+
+So the fix direction is now settled rather than open: **the tracer's guide
+surface should be the first opaque-or-cutout hit — the rule raster already
+implements** — while blended surfaces keep contributing radiance in the layer
+loop. That realigns the two consumers, restores the coverage agreement, and
+removes the reprojection artifacts in one move. It is the same change backlog
+3.7 wants for other reasons (stochastic coverage, flat emission loop), so it
+lands there, on the tracer side; raster is already correct.
 
 Retro's material, reading the G-buffer instead of shading forward. Retro stops
 being a forward renderer.
