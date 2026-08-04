@@ -266,7 +266,7 @@ void EmitterSceneNode::collectLeafs(GpuScene &scene, const std::vector<SceneNode
     auto cameraUp = glm::vec3(view[0][1], view[1][1], view[2][1]);
     auto cameraForward = glm::vec3(view[0][2], view[1][2], view[2][2]);
 
-    auto quads = std::vector<GpuSceneProceduralQuad>(leafs.size());
+    auto quads = std::vector<ProceduralQuad>(leafs.size());
     const glm::ivec2 grid = glm::max(emitter->gridSize, glm::ivec2(1));
     for (size_t i = 0; i < leafs.size(); ++i) {
         const auto particle = static_cast<ParticleSceneNode *>(leafs[i]);

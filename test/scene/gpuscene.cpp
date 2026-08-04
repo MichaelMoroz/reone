@@ -11,8 +11,8 @@ using namespace reone::scene;
 
 namespace {
 
-std::vector<GpuSceneProceduralQuad> oneQuad(float x) {
-    GpuSceneProceduralQuad quad;
+std::vector<ProceduralQuad> oneQuad(float x) {
+    ProceduralQuad quad;
     quad.positionVariant.x = x;
     return {quad};
 }
@@ -32,8 +32,8 @@ GpuScene::Classifier noMeshes() {
     };
 }
 
-GpuSceneGrassFace grassFace(uint32_t sourceFace, uint32_t budget, float x) {
-    GpuSceneGrassFace face;
+GrassFace grassFace(uint32_t sourceFace, uint32_t budget, float x) {
+    GrassFace face;
     face.vertex0Uv0x = {x - 1.0f, -1.0f, 0.0f, 0.0f};
     face.vertex1Uv0y = {x + 1.0f, -1.0f, 0.0f, 0.0f};
     face.vertex2Uv1x = {x, 1.0f, 0.0f, 0.0f};
@@ -103,7 +103,7 @@ TEST(GpuScene, full_collection_unregisters_unseen_objects_and_clear_resets_world
 
 TEST(GpuScene, grass_uses_face_band_prefix_ranges_without_cpu_quads) {
     GpuScene scene;
-    std::vector<GpuSceneGrassFace> faces {
+    std::vector<GrassFace> faces {
         grassFace(7, 3, 0.0f), grassFace(11, 5, 20.0f),
         grassFace(19, 2, 100.0f)};
     Material material {};

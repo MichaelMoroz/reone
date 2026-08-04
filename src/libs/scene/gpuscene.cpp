@@ -510,7 +510,7 @@ void GpuScene::addBillboard(RenderCategories categories, SceneNodeId id,
 void GpuScene::addParticles(RenderCategories categories, SceneNodeId id,
                             SceneNodeNameIds nameIds, const Material &material,
                             const glm::ivec2 &gridSize,
-                            std::vector<graphics::GpuSceneProceduralQuad> quads,
+                            std::vector<graphics::ProceduralQuad> quads,
                             ModelSceneNode *cullRoot) {
     RegisteredProcedural procedural;
     procedural.categories = categories;
@@ -526,7 +526,7 @@ void GpuScene::addParticles(RenderCategories categories, SceneNodeId id,
 
 void GpuScene::addGrass(RenderCategories categories, SceneNodeId id,
                         SceneNodeNameIds nameIds, const Material &material,
-                        const std::vector<GpuSceneGrassFace> &faces,
+                        const std::vector<GrassFace> &faces,
                         uint64_t grassGeneration) {
     RegisteredProcedural procedural;
     procedural.categories = categories;
@@ -770,7 +770,7 @@ graphics::GpuSceneUpload GpuScene::prepare(
                                           procedural->loweredQuads.end());
         } else
             for (const auto &instance : procedural->instances) {
-                graphics::GpuSceneProceduralQuad quad;
+                graphics::ProceduralQuad quad;
                 quad.positionVariant = glm::vec4(instance.position,
                                                  static_cast<float>(instance.variant));
                 quad.color = instance.color;

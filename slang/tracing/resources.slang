@@ -41,7 +41,6 @@ public static const uint kPtCategoryMask = 0xFu;
 /** Coverage below this never commits: the texel simply is not there. */
 public static const float kPtAlphaTestEpsilon = 0.01;
 
-
 [[vk::binding(0, 1)]] public RWTexture2D<float4> outputImage;
 [[vk::binding(1, 1)]] public RaytracingAccelerationStructure sceneTLAS;
 [[vk::binding(2, 1)]] public StructuredBuffer<InstanceMaterial> instanceMaterials;

@@ -98,8 +98,8 @@ struct RegisteredProcedural {
     ProceduralKind kind {ProceduralKind::Grass};
     glm::ivec2 gridSize {1};
     std::vector<ProceduralInstance> instances;
-    std::vector<graphics::GpuSceneProceduralQuad> loweredQuads;
-    const std::vector<graphics::GpuSceneGrassFace> *grassFaces {nullptr};
+    std::vector<graphics::ProceduralQuad> loweredQuads;
+    const std::vector<graphics::GrassFace> *grassFaces {nullptr};
     size_t grassClusterCount {0};
     uint64_t grassGeneration {0};
     ModelSceneNode *cullRoot {nullptr};
@@ -135,7 +135,7 @@ std::string formatSceneCounts(const SceneCounts &counts);
 class GpuScene : boost::noncopyable {
 public:
     using InstanceMaterial = graphics::InstanceMaterial;
-    using Matrix3x4 = graphics::GpuSceneMatrix3x4;
+    using Matrix3x4 = graphics::Matrix3x4;
     using MergedVertex = graphics::MergedVertex;
     using SceneObject = graphics::SceneObject;
     using PrimitiveClass = graphics::GpuScenePrimitiveClass;
@@ -193,11 +193,11 @@ public:
                       std::optional<float> size, ModelSceneNode *cullRoot);
     void addParticles(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
                       const graphics::Material &material, const glm::ivec2 &gridSize,
-                      std::vector<graphics::GpuSceneProceduralQuad> quads,
+                      std::vector<graphics::ProceduralQuad> quads,
                       ModelSceneNode *cullRoot);
     void addGrass(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
                   const graphics::Material &material,
-                  const std::vector<graphics::GpuSceneGrassFace> &faces,
+                  const std::vector<graphics::GrassFace> &faces,
                   uint64_t grassGeneration);
     bool isObjectEnabled(uint32_t idIndex) const {
         return _disabledObjects.find(idIndex) == _disabledObjects.end();

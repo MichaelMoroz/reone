@@ -47,7 +47,7 @@ public:
     }
 
     int getNumClustersInFace(float area) const;
-    const std::vector<graphics::GpuSceneGrassFace> &faceRecords() const {
+    const std::vector<graphics::GrassFace> &faceRecords() const {
         return _faceRecords;
     }
 
@@ -58,7 +58,7 @@ private:
     GrassProperties _properties;
     graphics::ModelNode &_aabbNode;
     std::vector<int> _grassFaces;
-    std::vector<graphics::GpuSceneGrassFace> _faceRecords;
+    std::vector<graphics::GrassFace> _faceRecords;
     uint64_t _grassGeneration {0};
     uint64_t _faceGeneration {0};
     bool _hasLightmapUV {true};

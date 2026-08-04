@@ -204,7 +204,7 @@ void VulkanGpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
         frame.scene = std::make_unique<VulkanBuffer>(_renderer->device());
         frame.scene->initHostVisible(
             static_cast<VkDeviceSize>(objectCapacity) * sizeof(SceneObject) +
-                static_cast<VkDeviceSize>(boneCapacity) * sizeof(GpuSceneMatrix3x4) +
+                static_cast<VkDeviceSize>(boneCapacity) * sizeof(Matrix3x4) +
                 static_cast<VkDeviceSize>(danglyPositionCapacity) * sizeof(glm::vec4),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     }
@@ -242,7 +242,7 @@ void VulkanGpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
         frame.proceduralQuadCapacity = proceduralQuadCapacity;
         frame.proceduralQuads = std::make_unique<VulkanBuffer>(_renderer->device());
         frame.proceduralQuads->initHostVisible(
-            static_cast<VkDeviceSize>(proceduralQuadCapacity) * sizeof(GpuSceneProceduralQuad),
+            static_cast<VkDeviceSize>(proceduralQuadCapacity) * sizeof(ProceduralQuad),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     }
     const auto grassRangeCapacity =
@@ -251,7 +251,7 @@ void VulkanGpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
         frame.grassRangeCapacity = grassRangeCapacity;
         frame.grassRanges = std::make_unique<VulkanBuffer>(_renderer->device());
         frame.grassRanges->initHostVisible(
-            static_cast<VkDeviceSize>(grassRangeCapacity) * sizeof(GpuSceneGrassRange),
+            static_cast<VkDeviceSize>(grassRangeCapacity) * sizeof(GrassRange),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     }
 }
@@ -341,10 +341,10 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
     auto &frame = *_frames[_renderer->frameIndex()];
     if (!_grassFaces || _grassFaceGeneration != upload.grassFaceGeneration) {
         auto grassFaces = std::make_unique<VulkanBuffer>(_renderer->device());
-        const GpuSceneGrassFace emptyFace {};
+        const GrassFace emptyFace {};
         const VkDeviceSize faceCount = std::max<size_t>(1, upload.grassFaces.size());
         grassFaces->initDeviceLocal(
-            faceCount * sizeof(GpuSceneGrassFace), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            faceCount * sizeof(GrassFace), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             upload.grassFaces.empty() ? static_cast<const void *>(&emptyFace)
                                       : static_cast<const void *>(upload.grassFaces.data()));
         if (_grassFaces)
@@ -417,7 +417,7 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
         sceneObjectBytes =
             static_cast<VkDeviceSize>(frame.sceneObjectCapacity) * sizeof(SceneObject);
         sceneBoneBytes =
-            static_cast<VkDeviceSize>(frame.boneCapacity) * sizeof(GpuSceneMatrix3x4);
+            static_cast<VkDeviceSize>(frame.boneCapacity) * sizeof(Matrix3x4);
         danglyPositionBytes =
             static_cast<VkDeviceSize>(frame.danglyPositionCapacity) * sizeof(glm::vec4);
         vertexBytes =
@@ -429,16 +429,16 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
             sceneObjects[i] = upload.objects[i].data;
         if (!upload.bones.empty())
             std::memcpy(static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes,
-                        upload.bones.data(), upload.bones.size() * sizeof(GpuSceneMatrix3x4));
+                        upload.bones.data(), upload.bones.size() * sizeof(Matrix3x4));
         if (!upload.danglyPositions.empty())
             std::memcpy(static_cast<std::byte *>(frame.scene->mapped()) + sceneObjectBytes + sceneBoneBytes,
                         upload.danglyPositions.data(), upload.danglyPositions.size() * sizeof(glm::vec4));
         if (!upload.proceduralQuads.empty())
             std::memcpy(frame.proceduralQuads->mapped(), upload.proceduralQuads.data(),
-                        upload.proceduralQuads.size() * sizeof(GpuSceneProceduralQuad));
+                        upload.proceduralQuads.size() * sizeof(ProceduralQuad));
         if (!upload.grassRanges.empty())
             std::memcpy(frame.grassRanges->mapped(), upload.grassRanges.data(),
-                        upload.grassRanges.size() * sizeof(GpuSceneGrassRange));
+                        upload.grassRanges.size() * sizeof(GrassRange));
 
         frame.materials = std::make_unique<VulkanBuffer>(_renderer->device());
         frame.materials->initHostVisible(

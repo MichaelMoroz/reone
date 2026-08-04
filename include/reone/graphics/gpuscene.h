@@ -14,6 +14,11 @@ namespace reone::graphics {
 
 class Mesh;
 
+// Mirrors of the GPU scene tables. Each one carries the *same name* as its
+// declaration in slang/lib/scene_schema.slang, because the startup reflection
+// check pairs them by name; types below with a GpuScene prefix have no Slang
+// counterpart and exist only on the CPU side of admission.
+
 struct alignas(16) InstanceMaterial {
     glm::vec4 selfIllumColor {0.0f};
     glm::vec4 diffuseColor {1.0f};
@@ -59,12 +64,12 @@ static_assert(offsetof(InstanceMaterial, envMapDerivedLayer) == 272);
 static_assert(sizeof(InstanceMaterial) == 288);
 
 /** Three row vectors encode a float3x4 exactly as skin.slang reads it. */
-struct alignas(16) GpuSceneMatrix3x4 {
+struct alignas(16) Matrix3x4 {
     glm::vec4 row0 {1.0f, 0.0f, 0.0f, 0.0f};
     glm::vec4 row1 {0.0f, 1.0f, 0.0f, 0.0f};
     glm::vec4 row2 {0.0f, 0.0f, 1.0f, 0.0f};
 };
-static_assert(sizeof(GpuSceneMatrix3x4) == 48);
+static_assert(sizeof(Matrix3x4) == 48);
 
 /** std430-compatible canonical vertex used by skin.slang and consumers. */
 struct alignas(16) MergedVertex {
@@ -134,7 +139,7 @@ static_assert(offsetof(SceneObject, danglyBase) == 264);
 static_assert(offsetof(SceneObject, saberDisplacement) == 272);
 static_assert(sizeof(SceneObject) == 288);
 
-struct alignas(16) GpuSceneProceduralQuad {
+struct alignas(16) ProceduralQuad {
     glm::vec4 positionVariant {0.0f};
     glm::vec4 right {0.0f};
     glm::vec4 up {0.0f};
@@ -143,7 +148,7 @@ struct alignas(16) GpuSceneProceduralQuad {
     glm::vec2 pad {0.0f};
     glm::vec4 color {1.0f};
 };
-static_assert(sizeof(GpuSceneProceduralQuad) == sizeof(glm::vec4) * 6);
+static_assert(sizeof(ProceduralQuad) == sizeof(glm::vec4) * 6);
 
 /**
  * Persistent input for one authored grass face. The triangle is already in
@@ -151,7 +156,7 @@ static_assert(sizeof(GpuSceneProceduralQuad) == sizeof(glm::vec4) * 6);
  * the merge shader can read one cache-line-aligned record without a second
  * source stream.
  */
-struct alignas(16) GpuSceneGrassFace {
+struct alignas(16) GrassFace {
     glm::vec4 vertex0Uv0x {0.0f};
     glm::vec4 vertex1Uv0y {0.0f};
     glm::vec4 vertex2Uv1x {0.0f};
@@ -161,16 +166,16 @@ struct alignas(16) GpuSceneGrassFace {
     glm::vec4 boundsMax {0.0f};
     glm::uvec4 faceBudgetMaterialVariants {0u};
 };
-static_assert(sizeof(GpuSceneGrassFace) == sizeof(glm::vec4) * 8);
+static_assert(sizeof(GrassFace) == sizeof(glm::vec4) * 8);
 
 /** Per-frame prefix-sum entry selecting a persistent grass face. */
-struct alignas(16) GpuSceneGrassRange {
+struct alignas(16) GrassRange {
     uint32_t faceIndex {0};
     uint32_t clusterOffset {0};
     uint32_t clusterCount {0};
     uint32_t pad {0};
 };
-static_assert(sizeof(GpuSceneGrassRange) == sizeof(glm::uvec4));
+static_assert(sizeof(GrassRange) == sizeof(glm::uvec4));
 
 enum class GpuScenePrimitiveClass { Opaque,
                                     NonOpaque };
@@ -188,11 +193,11 @@ struct GpuSceneObjectInput {
 struct GpuSceneUpload {
     std::vector<InstanceMaterial> materials;
     std::vector<GpuSceneObjectInput> objects;
-    std::vector<GpuSceneMatrix3x4> bones;
+    std::vector<Matrix3x4> bones;
     std::vector<glm::vec4> danglyPositions;
-    std::vector<GpuSceneProceduralQuad> proceduralQuads;
-    std::vector<GpuSceneGrassFace> grassFaces;
-    std::vector<GpuSceneGrassRange> grassRanges;
+    std::vector<ProceduralQuad> proceduralQuads;
+    std::vector<GrassFace> grassFaces;
+    std::vector<GrassRange> grassRanges;
     glm::vec4 cameraPosition {0.0f, 0.0f, 0.0f, 1.0f};
     uint64_t grassFaceGeneration {0};
     uint32_t opaqueObjectCount {0};

@@ -76,7 +76,7 @@ void GrassSceneNode::rebuildFaceRecords() {
             uv2 = *mesh->tryFaceUV2(face, glm::vec3(0.0f, 0.0f, 1.0f));
         }
 
-        GpuSceneGrassFace record;
+        GrassFace record;
         record.vertex0Uv0x = glm::vec4(v0, uv0.x);
         record.vertex1Uv0y = glm::vec4(v1, uv0.y);
         record.vertex2Uv1x = glm::vec4(v2, uv1.x);
