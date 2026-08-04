@@ -38,6 +38,7 @@ enum class VulkanSceneStep {
     Geometry,
     PBRResolve,
     RetroResolve,
+    Blended,
 };
 
 enum class VulkanSceneShadow {
@@ -155,6 +156,10 @@ private:
     void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset,
                       IVulkanSceneCallbacks &callbacks);
     void retroResolvePass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    /** G8: the transparent surfaces the G-buffer deliberately leaves out,
+        drawn forward onto the resolved image in submission order. */
+    void blendedPass(VkCommandBuffer cmd, uint32_t globalsOffset,
+                     IVulkanSceneCallbacks &callbacks);
     void pbrResolvePass(VkCommandBuffer cmd, uint32_t globalsOffset);
     std::vector<Target> targetEntries(const IVulkanSceneCallbacks &callbacks) const;
 };

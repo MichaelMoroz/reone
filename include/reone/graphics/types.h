@@ -113,7 +113,11 @@ enum class BlendMode {
     Normal,
     Additive,
     Lighten,
-    OIT_Transparent
+    OIT_Transparent,
+    /** Source colour already multiplied by coverage: ONE, ONE_MINUS_SRC_ALPHA.
+        Lets additive and alpha-blended share one pipeline, additive being the
+        alpha-zero case. */
+    Premultiplied
 };
 
 enum class PolygonMode {

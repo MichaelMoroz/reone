@@ -29,6 +29,14 @@ struct MergedVertex {
 [[vk::binding(3, 2)]] Sampler2D bindlessTextures[];
 [[vk::binding(4, 2)]] Sampler2DArray bindlessTextureArrays[];
 
+// materialGated selects which coverage a pass publishes over the same range.
+// Ungated is the opaque range. Cutout is the punch-through gate the G-buffer
+// and both shadow passes share. Blended is G8's forward pass, which draws the
+// surfaces the G-buffer deliberately leaves out.
+static const uint kMegaCoverageUngated = 0u;
+static const uint kMegaCoverageCutout = 1u;
+static const uint kMegaCoverageBlended = 2u;
+
 struct PushConstants {
     uint triangleBase;
     uint materialGated;
@@ -45,7 +53,7 @@ float2 transformedUV(InstanceMaterial material, float2 uv) {
 // in tracing/trace.slang. The gated draw publishes CUTOUT COVERAGE ONLY:
 // blended and additive surfaces contribute nothing until G8.
 bool commitsTracedCoverage(InstanceMaterial material, float2 uv, float vertexAlpha) {
-    if (pushConstants.materialGated == 0) return true;
+    if (pushConstants.materialGated == kMegaCoverageUngated) return true;
 
     if ((material.featureMask & kMegaFeaturePunchThrough) == 0) return false;
 

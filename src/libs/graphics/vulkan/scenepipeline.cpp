@@ -547,6 +547,87 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
     vkCmdEndRendering(cmd);
 }
 
+void VulkanScenePipeline::blendedPass(VkCommandBuffer cmd, uint32_t globalsOffset,
+                                      IVulkanSceneCallbacks &callbacks) {
+    R_PROFILE_ZONE("VulkanScenePipeline::blendedPass record");
+    const auto &scene = prepareMergedScene(cmd, callbacks);
+    const uint32_t nonOpaqueTriangles =
+        scene.triangleCount > scene.opaqueTriangleCount
+            ? scene.triangleCount - scene.opaqueTriangleCount
+            : 0;
+    if (!scene.vertices.buffer || nonOpaqueTriangles == 0) {
+        return;
+    }
+    VulkanDebugScope scope(_renderer.device(), cmd, "Blended (forward, merged)",
+                           {0.3f, 0.6f, 0.9f});
+
+    // Depth-test against the opaque G-buffer but never write: blended
+    // fragments must not reject each other, or the result depends on which
+    // one happened to be drawn first rather than on coverage.
+    _gbuffer->transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+    transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    attachment.imageView = _output->view();
+    attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    // The resolve already wrote this image; loading preserves it.
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingAttachmentInfo depth {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depth.imageView = _gbuffer->depth().view();
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_NONE;
+    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = {static_cast<uint32_t>(_targetSize.x),
+                                   static_cast<uint32_t>(_targetSize.y)};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &attachment;
+    rendering.pDepthAttachment = &depth;
+
+    VulkanPipelineCache::Key key;
+    key.module = "megadraw";
+    key.vertexEntry = "megadrawVertex";
+    key.fragmentEntry = "megadrawBlendedFragment";
+    key.colorFormats = {_output->format()};
+    key.depthFormat = VulkanGBuffer::depthFormat();
+    key.depthTest = true;
+    key.depthWrite = false;
+    key.blend = BlendMode::Premultiplied;
+    key.cull = FaceCullMode::None;
+    auto &pipeline = _renderer.pipelines().get(key);
+
+    VkViewport viewport {0.0f, 0.0f, static_cast<float>(_targetSize.x),
+                         static_cast<float>(_targetSize.y), 0.0f, 1.0f};
+    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
+                               static_cast<uint32_t>(_targetSize.y)}};
+    auto uniformSet = _renderer.uniformSet();
+    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+
+    vkCmdBeginRendering(cmd, &rendering);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                            VulkanDescriptors::kUniformSet, 1, &uniformSet,
+                            static_cast<uint32_t>(offsets.size()), offsets.data());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                            VulkanDescriptors::kMegaDrawSet, 1, &_resolveMaterialSet,
+                            0, nullptr);
+    vkCmdBindIndexBuffer(cmd, scene.indices.buffer->handle(), scene.indices.offset,
+                         VK_INDEX_TYPE_UINT32);
+    // Submission order, deliberately. See megadraw.slang.
+    const MegaDrawPushConstants push {scene.opaqueTriangleCount, 2};
+    vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, sizeof(push), &push);
+    vkCmdDrawIndexed(cmd, nonOpaqueTriangles * 3, 1,
+                     scene.opaqueTriangleCount * 3, 0, 0);
+    vkCmdEndRendering(cmd);
+}
+
 void VulkanScenePipeline::retroResolvePass(VkCommandBuffer cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("VulkanScenePipeline::retroResolvePass record");
     VulkanDebugScope scope(_renderer.device(), cmd, "Retro deferred resolve",
@@ -730,6 +811,9 @@ Texture &VulkanScenePipeline::render(const VulkanSceneFramePlan &plan,
         case VulkanSceneStep::PBRResolve:
             pbrResolvePass(cmd, globalsOffset);
             outputResolved = true;
+            break;
+        case VulkanSceneStep::Blended:
+            blendedPass(cmd, globalsOffset, callbacks);
             break;
         case VulkanSceneStep::RetroResolve:
             retroResolvePass(cmd, globalsOffset);

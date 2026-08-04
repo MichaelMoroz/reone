@@ -133,6 +133,10 @@ graphics::Texture &VulkanRenderPipeline::render(const CameraSceneNode *camera,
             plan.steps.push_back(graphics::VulkanSceneStep::PBRResolve);
         else
             plan.steps.push_back(graphics::VulkanSceneStep::RetroResolve);
+        // Transparency composites onto the resolved image, so it follows
+        // whichever resolve ran. Raster only: in the traced mode additive
+        // sprites belong to the march and drawing them here would double them.
+        plan.steps.push_back(graphics::VulkanSceneStep::Blended);
     }
     return _executor->render(plan, *_callbacks);
 }

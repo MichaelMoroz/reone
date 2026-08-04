@@ -142,3 +142,49 @@ GBufferOutput megadrawFragment(Varyings input, uint primitiveId : SV_PrimitiveID
     output.materialId = materialIndex;
     return output;
 }
+
+// G8's forward blended pass, over the same merged geometry and the same
+// non-opaque range the G-buffer already draws for cutout coverage.
+//
+// The two transparent kinds are one draw, not two. Output is premultiplied and
+// the blend state is fixed at ONE, ONE_MINUS_SRC_ALPHA, so an additive surface
+// is simply alpha zero and a lit-blended one carries alpha equal to coverage.
+// The material decides which by the alpha it writes, so there is no second
+// pipeline and no branch in the frame graph.
+//
+// Order is submission order. kvp-main's replay of the retail draw stream
+// reorders only true-opaque depth-writing batches and never touches blended
+// ones, so a distance sort would be a deviation before it was an improvement.
+[shader("fragment")]
+float4 megadrawBlendedFragment(Varyings input, uint primitiveId : SV_PrimitiveID) {
+    uint triangleId = pushConstants.triangleBase + primitiveId;
+    uint materialIndex = mergedMaterialIds[triangleId];
+    InstanceMaterial material = instanceMaterials[materialIndex];
+
+    // Cutouts share this range but are opaque and already in the G-buffer.
+    if ((material.featureMask & kMegaFeaturePunchThrough) != 0) discard;
+
+    float2 uv = transformedUV(material, input.uv1);
+    float4 texel = float4(1.0);
+    if (material.mainTex != kNoTexture) {
+        texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)].Sample(uv);
+    }
+
+    // A premultiplied texture carries no usable alpha channel; luma recovers
+    // the coverage, exactly as particles.slang does.
+    float coverage = (material.featureMask & kMegaFeaturePremulAlpha) != 0
+                         ? rgbToLuma(texel.rgb)
+                         : texel.a;
+    float3 color = texel.rgb * material.diffuseColor.rgb * input.color.rgb;
+    color += material.selfIllumColor.rgb;
+    float alpha = coverage * input.color.a * material.diffuseColor.a;
+    if ((material.featureMask & kMegaFeatureWater) != 0) {
+        alpha *= material.waterAlpha;
+    }
+    if (alpha <= 0.0) discard;
+
+    // Blended surfaces occlude in proportion to coverage; additive ones add
+    // and never occlude, which premultiplied output expresses as alpha zero.
+    bool blended = (material.featureMask & kMegaFeatureBlendedCoverage) != 0;
+    return blended ? float4(color * alpha, alpha) : float4(color * alpha, 0.0);
+}

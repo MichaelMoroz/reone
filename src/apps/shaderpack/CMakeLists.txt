@@ -29,7 +29,7 @@ set(SPIRV_OUT_DIR ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin/spirv)
 # <source>:<entry>[+<entry>...]
 set(SPIRV_MODULES
     "pbr_model:staticVertex+skinnedVertex+danglyVertex+saberVertex+opaqueFragment+retroOpaqueFragment+transparentFragment+oitModelFragment"
-    "megadraw:megadrawVertex+megadrawFragment"
+    "megadraw:megadrawVertex+megadrawFragment+megadrawBlendedFragment"
     "shadow_megadraw:directionalShadowMegadrawVertex+pointShadowMegadrawVertex+directionalShadowMegadrawFragment+pointShadowMegadrawFragment"
     "sky:skyVertex+skyFragment"
     "grass:grassVertex+pbrFragment+retroFragment"
