@@ -793,7 +793,7 @@ they are not variations of one thing:
 
 | kind | example | where it belongs |
 |---|---|---|
-| **alpha punchcards** | leaf cards, fences, grilles | **opaque** — writes depth, discards on zero alpha; **open, conflicts with the shared coverage rule — see below** |
+| **alpha punchcards** | leaf cards, fences, grilles | **opaque, and already drawn — not part of this step** |
 | **alpha emissive** | saber blades, glow decals | **transparent, additive** |
 | **alpha lit + emissive** | particles, smoke | **transparent, alpha blended** |
 
@@ -803,15 +803,24 @@ and alpha-blended is alpha equal to coverage. The material decides which it is
 by the alpha it writes, so no second pipeline and no second pass are needed —
 the distinction stops being a branch in the frame graph and becomes a value.
 
-One thing to settle when this is built, because every consumer must agree on
-it: punchcards are opaque here, discarding at zero alpha, whereas the shared
-coverage rule today sends punch-through material through the non-opaque range
-at the tracer's 0.5 threshold. Changing that is a change to the *shared* rule
-and to the classifier, not to the raster draw alone — and since G7 the rule has
-three consumers, not two. The G-buffer mega-draw and the shadow mega-draw both
-read it out of `lib/megadraw_geometry.slang`, and the tracer's BLAS geometry
-ranges are the third. Moving the threshold moves what casts a shadow, so the
-punchcard fixture has to be judged with the sun on it.
+Punchcards are in that table to say what this step does *not* touch. They are
+opaque geometry and they already work: the gated mega-draw publishes their
+coverage into the G-buffer, both shadow passes test them the same way through
+`commitsTracedCoverage` in `lib/megadraw_geometry.slang:47`, and the tracer's
+`commitsCoverage` holds the same 0.5 threshold. Nothing about a blended pass
+changes any of that.
+
+Earlier drafts of this section recorded an open conflict here. There is none,
+and it came from conflating two things. The first was this document's own
+phrase "discards on zero alpha" against the 0.5 the code has always used - a
+wording slip, not a disagreement, and 0.5 is right because it is what discards
+the soft authored fringe instead of rendering it solid. The second was reading
+the tracer's non-opaque BLAS range as a classification that disagrees with
+"punchcards are opaque". It is not a classification at all. Hardware traversal
+cannot run an alpha test, so any surface with holes has to sit in a non-opaque
+range for the candidate loop to test it - `rayquery.cpp:926-929` says exactly
+that. Being non-opaque *to the BLAS* is how a ray tracer expresses
+opaque-with-holes, which is the same thing raster expresses with `discard`.
 
 ### Sorting, which blending needs and one draw does not provide
 
