@@ -120,7 +120,7 @@ named leaf zones; the fixture produces its two numbers unattended; the S3
 ordering question (is leaf-prep or animation the bigger half of the 1.25 ms?)
 has an answer.
 
-## S1 — Slang in the engine, one schema — landed
+## S1 — Slang in the engine, one schema — landed, with one open defect
 
 Two halves, one step, because the second is what makes the first pay.
 
@@ -130,30 +130,57 @@ Modules cache to `%TEMP%/reone/slang-cache` under a hash of every `.slang`
 source, so a shader edit needs no rebuild — restart or run the new
 `recompileshaders` console command, which waits for device idle, recompiles,
 and rebuilds the pipeline cache. A source error logs and retains the last good
-module. **Measured: cold 3908 ms, warm 282 ms** (`tests.exe
+module. **Measured: cold 3.8-4.2 s, warm 144 ms** (`tests.exe
 --gtest_filter=SlangShaderCompiler.*`) — the warm figure is the new
 per-launch cost that used to be build time, and is the number to watch if
-module count grows.
+module count grows. It started at 282 ms; `module()` was re-reading all 41
+sources on every call to answer "is this current", which also ran on every
+lazily created pipeline mid-game, and now only the explicit reload paths hash.
 
 The schema half: `slang/lib/scene_schema.slang` is the single Slang
 declaration of all seven scene tables, imported by `skin`, `megadraw_geometry`
 and `tracing/resources`, which each dropped their copies; `lib/scene_material.slang`
 is deleted. `VulkanRenderer::init` reflects the schema through
 `scene_schema_reflect.slang` and aborts startup naming the offending field if a
-C++ mirror disagrees. The three C++ mirrors renamed to match their Slang names
-(`GpuSceneMaterial`→`InstanceMaterial`, `GpuSceneMergedVertex`→`MergedVertex`,
-`GpuSceneObjectData`→`SceneObject`). The dead AABB debug shaders went with it
-(backlog 5.3).
+C++ mirror disagrees — every Slang field is offset-checked, not a sample, so
+swapping two adjacent `float4`s is caught where a stride comparison alone would
+pass. The rule the mirrors follow: **a schema mirror carries the same name as
+its Slang struct**, and only CPU-only types keep a `GpuScene` prefix. The dead
+AABB debug shaders went with it (backlog 5.3).
+
+**Open defect, and it gates calling S1 finished: both `tests.exe` and the
+engine die with `STATUS_HEAP_CORRUPTION` (0xC0000374).** The engine crashes on
+**every** headless capture run — `3/3` at `a6dc6ed1` and `3/3` after the fixes
+below — and `tests.exe` on roughly half of full-suite runs (4/6 at
+`a6dc6ed1`). It arrived with this step rather than with the review of it. The
+engine crash is **teardown only**: the module loads, the frame renders, the
+screenshot is written and the frame-slot line is logged, and the process then
+faults on the way out — the signature the diagnostics skill names for an
+object owning a resource that outlives the device. The suspects are the
+`SlangShaderCompiler` member's lifetime against `VulkanRenderer::deinit`
+ordering, and Slang's own DLLs. Run the Debug build's checked VMA first, as
+that skill prescribes. The test crash never reproduces with
+`--gtest_filter=SlangShaderCompiler.*` alone (0/5) or with those tests excluded
+(0/3); it needs both, and the process always dies entering the *first* Slang
+test after other suites have run. Adding only the neighbouring image-decoder
+suites reproduces it 2/2, which points at heap damage done earlier and merely
+*detected* by Slang's first large allocation, rather than at the compiler
+itself. Linking `graphicsvulkan` into `tests` is what newly put the two in one
+process. A separate real fault was found and fixed while chasing it - `mad.lib`
+and `slang.lib` both resolved to vcpkg's *debug* import library in Release
+builds (`LNK4098 MSVCRTD conflicts`), now bound per configuration - but that was
+not the cause: the crash rate is unchanged after it, in both binaries.
+
+What *is* established about the fixes: six headless raster captures of
+`danm14ab` at frame 310, three either side of them, hash identical — so the
+renames, the stricter guard and the build changes are output-neutral, which is
+the bar a pure refactor has to clear.
 
 **Deliberately still open**, so it is not mistaken for finished: the uniform
 blocks are *not* on this path — `uniformlayout.generated.h` is still produced
 offline by `uniformgen`/`slangc` and committed, so there are two schema
-mechanisms until that is folded in. Reflection checks a spot sample of fields
-per struct plus the stride, so a swap of two adjacent same-sized fields would
-pass; widen it to every field when a struct next changes. And `find_library`
-resolves `SLANG_LIBRARY` to vcpkg's *debug* import library, which makes Release
-link with `LNK4098 MSVCRTD conflicts` — it works, and it should be a
-per-configuration `debug`/`optimized` pair.
+mechanisms until that is folded in. and the naming rule is only half-applied
+in the C++ mirrors.
 
 **Runtime compilation** (backlog 4.9's wants, unchanged): link Slang, compile
 at startup and on demand, cache compiled SPIR-V keyed on source hash so warm
