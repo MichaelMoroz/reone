@@ -405,6 +405,14 @@ void Engine::deinit() {
     _systemModule.reset();
     _clock.reset();
 
+    // The renderer holds the surface created from the window, so it has to go
+    // before the window and before SDL_Quit. Left to its own destructor it
+    // outlived both, since ~Engine runs after this function returns.
+    if (_vulkanRenderer) {
+        _vulkanRenderer->deinit();
+        _vulkanRenderer.reset();
+    }
+
     _optionsView.reset();
     _window.reset();
 
