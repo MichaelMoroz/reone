@@ -79,6 +79,8 @@ static constexpr float kLineOfSightHeight = 1.7f;        // TODO: make it appear
 static constexpr float kMaxCollisionDistance = 8.0f;
 static constexpr float kMaxCollisionDistance2 = kMaxCollisionDistance * kMaxCollisionDistance;
 static constexpr float kCreatureCollisionEpsilon = 0.01f;
+/** Shadow darkness, chosen by eye across both authored ShadowOpacity groups. */
+static constexpr float kDefaultShadowOpacity = 0.5f;
 
 static constexpr std::array<glm::vec3, 2> kPartyFormationOffsets {{
     glm::vec3(1.5f, -0.7f, 0.0f),
@@ -235,8 +237,16 @@ void Area::loadAmbientColor(const resource::generated::ARE &are) {
 }
 
 void Area::loadShadows(const resource::generated::ARE &are) {
-    _shadows.opacity = glm::clamp(static_cast<float>(are.ShadowOpacity) / 100.0f,
-                                  0.0f, 1.0f);
+    // ShadowOpacity is a BYTE, and the retail game authors exactly two values
+    // across all 96 modules: 50 in 22 of them and 205 in the other 74. Reading
+    // it as a percentage clamped 74 modules to fully black, which is why their
+    // shadows read far too contrasty. Neither of the arithmetic readings is
+    // right either: as a byte fraction the pair becomes 0.196 and 0.804, and
+    // judged side by side both modules want the same middle strength rather
+    // than either end. Two values that both want the same answer are not a
+    // parameter, so the authored byte is logged and not used. --shadowopacity
+    // overrides this when a module needs a different look.
+    _shadows.opacity = kDefaultShadowOpacity;
     _shadows.sunShadows = are.SunShadows != 0;
     _shadows.moonShadows = are.MoonShadows != 0;
     // Authored per module and applied verbatim, so when a module's shadows
