@@ -122,6 +122,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
          "FSR RCAS sharpening, 0 disables the pass")                                                                          //
         ("texquality", value<int>()->default_value(static_cast<int>(options->graphics.textureQuality)), "texture quality")      //
         ("shadowres", value<int>()->default_value(glm::log2(options->graphics.shadowResolution) - 10), "shadow map resolution") //
+        ("shadowopacity", value<float>()->default_value(options->graphics.shadowOpacity), "override the module's authored shadow opacity (0-1; <0 keeps authored)") //
         ("anisofilter", value<int>()->default_value(options->graphics.anisotropicFiltering), "anisotropic filtering")           //
         ("drawdist", value<float>()->default_value(options->graphics.drawDistance), "draw distance")                           //
         ("musicvol", value<int>()->default_value(options->audio.musicVolume), "music volume in percents")                       //
@@ -233,6 +234,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
 #endif
     options->graphics.textureQuality = static_cast<TextureQuality>(vars["texquality"].as<int>());
     options->graphics.shadowResolution = 1 << (10 + vars["shadowres"].as<int>());
+    options->graphics.shadowOpacity = vars["shadowopacity"].as<float>();
     options->graphics.anisotropicFiltering = vars["anisofilter"].as<int>();
     options->graphics.drawDistance = vars["drawdist"].as<float>();
     for (int i = 0; i < 9; ++i) {

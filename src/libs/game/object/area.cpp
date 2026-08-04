@@ -239,6 +239,13 @@ void Area::loadShadows(const resource::generated::ARE &are) {
                                   0.0f, 1.0f);
     _shadows.sunShadows = are.SunShadows != 0;
     _shadows.moonShadows = are.MoonShadows != 0;
+    // Authored per module and applied verbatim, so when a module's shadows
+    // read too dark the first question is what it actually asked for.
+    info("Area '" + _name + "': ShadowOpacity=" + std::to_string(are.ShadowOpacity) +
+             " -> strength " + std::to_string(_shadows.opacity) +
+             ", sun=" + std::to_string(_shadows.sunShadows) +
+             " moon=" + std::to_string(_shadows.moonShadows),
+         LogChannel::Graphics);
 
     applySceneProperties();
 }

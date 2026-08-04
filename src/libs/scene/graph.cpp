@@ -557,7 +557,10 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
                                                   ? glm::vec4(shadowLightDirection(), 0.0f)
                                                   : glm::vec4(shadowLightPosition(), 1.0f);
                 globals.shadowCascadeFarPlanes = _shadowCascadeFarPlanes;
-                globals.shadowStrength = shadowStrength() * _shadowProperties.opacity;
+                const float opacity = _graphicsOpt.shadowOpacity >= 0.0f
+                                          ? _graphicsOpt.shadowOpacity
+                                          : _shadowProperties.opacity;
+                globals.shadowStrength = shadowStrength() * opacity;
                 globals.shadowRadius = shadowRadius();
             }
             if (isFogEnabled()) {

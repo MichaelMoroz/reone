@@ -238,8 +238,24 @@ static bool isLightingEnabledByUsage(ModelUsage usage) {
     return usage != ModelUsage::Projectile;
 }
 
+// Reception used to be limited to rooms, so every creature, door, placeable
+// and piece of equipment was lit as though the sun reached through whatever
+// was standing in front of it - including the shadow the object cast itself.
+// Anything occupying the world receives. GUI and camera models are not in the
+// world at all, and background scenery is excluded by the caller, which knows
+// whether this particular mesh resolved as sky.
 static bool isReceivingShadows(const ModelSceneNode &model, const MeshSceneNode &modelNode) {
-    return model.usage() == ModelUsage::Room;
+    switch (model.usage()) {
+    case ModelUsage::Room:
+    case ModelUsage::Creature:
+    case ModelUsage::Placeable:
+    case ModelUsage::Door:
+    case ModelUsage::Equipment:
+    case ModelUsage::Projectile:
+        return true;
+    default:
+        return false;
+    }
 }
 
 void MeshSceneNode::collectInto(GpuScene &scene) {
@@ -306,7 +322,8 @@ void MeshSceneNode::collectInto(GpuScene &scene) {
     // pass that heuristics cannot replace. Class and material ops both.
     material.curatedIndex = _sceneGraph.gpuScene().traceMaterials().curatedIndex(
         _model.model().name(), _modelNode.name());
-    if (render && _sceneGraph.hasShadowLight() && isReceivingShadows(_model, *this)) {
+    if (render && _sceneGraph.hasShadowLight() && !material.backgroundGeometry &&
+        isReceivingShadows(_model, *this)) {
         material.affectedByShadows = true;
     }
     if (render && _sceneGraph.isFogEnabled() && _model.model().isAffectedByFog()) {
