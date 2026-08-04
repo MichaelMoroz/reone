@@ -47,10 +47,31 @@ struct Field {
     size_t offset;
 };
 
+/**
+ * One global session for the process, created on first use and deliberately
+ * never released.
+ *
+ * The session owns Slang's compiler back-end DLLs. Releasing it - which every
+ * SlangShaderCompiler::deinit used to do - is the one act both crashing
+ * binaries had in common, and Slang's own guidance is that a program creates
+ * exactly one and keeps it, because creation is expensive. Leaking it at exit
+ * costs nothing the operating system does not reclaim.
+ */
+slang::IGlobalSession *globalSession() {
+    static slang::IGlobalSession *session = [] {
+        Slang::ComPtr<slang::IGlobalSession> created;
+        if (SLANG_FAILED(slang::createGlobalSession(created.writeRef())))
+            throw std::runtime_error("Slang: cannot create global session");
+        return created.detach();
+    }();
+    return session;
+}
+
 } // namespace
 
 struct SlangShaderCompiler::Impl {
-    Slang::ComPtr<slang::IGlobalSession> global;
+    /** Borrowed from globalSession(); this type never owns it. */
+    slang::IGlobalSession *global {nullptr};
 
     struct Program {
         Slang::ComPtr<slang::ISession> session;
@@ -106,8 +127,7 @@ SlangShaderCompiler::~SlangShaderCompiler() = default;
 void SlangShaderCompiler::init() {
     if (_impl->global)
         return;
-    if (SLANG_FAILED(slang::createGlobalSession(_impl->global.writeRef())))
-        throw std::runtime_error("Slang: cannot create global session");
+    _impl->global = globalSession();
     std::filesystem::create_directories(_cacheDir);
     _sourceHash = sourceHash();
     _cacheHits = 0;
@@ -126,7 +146,7 @@ void SlangShaderCompiler::init() {
 void SlangShaderCompiler::deinit() {
     _modules.clear();
     _moduleHashes.clear();
-    _impl->global.setNull();
+    _impl->global = nullptr;
     _sourceHash = 0;
 }
 
