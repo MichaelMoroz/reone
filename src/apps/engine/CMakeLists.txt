@@ -44,14 +44,7 @@ target_link_libraries(engine PRIVATE game ${Boost_PROGRAM_OPTIONS_LIBRARY} imgui
 
 target_link_libraries(engine PRIVATE graphicsvulkan)
 
-# Slang loads helper DLLs (the compiler and back ends) beside slang.dll.
-file(GLOB SLANG_RUNTIME_DLLS
-    ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/slang*.dll
-    ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/gfx.dll)
-foreach(dll ${SLANG_RUNTIME_DLLS})
-    add_custom_command(TARGET engine POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${dll} $<TARGET_FILE_DIR:engine>)
-endforeach()
+reone_copy_slang_runtime(engine)
 add_custom_command(TARGET engine POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/slang $<TARGET_FILE_DIR:engine>/slang)
 

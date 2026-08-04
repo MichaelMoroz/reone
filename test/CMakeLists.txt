@@ -124,13 +124,7 @@ target_include_directories(tests PRIVATE ${GTEST_INCLUDE_DIRS})
 target_precompile_headers(tests PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(tests PRIVATE tools json graphicsvulkan GTest::gmock_main)
 
-file(GLOB TEST_SLANG_RUNTIME_DLLS
-    ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/slang*.dll
-    ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/gfx.dll)
-foreach(dll ${TEST_SLANG_RUNTIME_DLLS})
-    add_custom_command(TARGET tests POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${dll} $<TARGET_FILE_DIR:tests>)
-endforeach()
+reone_copy_slang_runtime(tests)
 
 if(MSVC)
     target_compile_options(tests PRIVATE /bigobj)

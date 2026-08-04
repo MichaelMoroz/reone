@@ -91,7 +91,6 @@ target_compile_definitions(graphicsvulkan PUBLIC
     VMA_DYNAMIC_VULKAN_FUNCTIONS=1)
 target_compile_definitions(graphicsvulkan PUBLIC
     REONE_SHADER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/slang")
-target_include_directories(graphicsvulkan PRIVATE ${SLANG_INCLUDE_DIR})
 
 if(ENABLE_FSR)
     target_link_libraries(graphicsvulkan PUBLIC fsr2)
@@ -108,7 +107,7 @@ target_link_libraries(graphicsvulkan PUBLIC
     volk::volk_headers
     GPUOpen::VulkanMemoryAllocator
     vk-bootstrap::vk-bootstrap
-    ${SLANG_LIBRARY})
+    slang::slang)
 
 if(MSVC)
     target_link_libraries(graphicsvulkan PUBLIC SDL3::SDL3)

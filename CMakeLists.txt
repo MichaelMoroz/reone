@@ -242,13 +242,40 @@ if(SLANGC_EXECUTABLE)
 else()
     message(STATUS "slangc not found - uniform-layout regeneration is unavailable")
 endif()
-find_path(SLANG_INCLUDE_DIR slang.h
-    HINTS ${CMAKE_PREFIX_PATH} ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include)
-find_library(SLANG_LIBRARY NAMES slang
-    HINTS ${CMAKE_PREFIX_PATH} ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib)
-if(NOT SLANG_INCLUDE_DIR OR NOT SLANG_LIBRARY)
+# Release and Debug are found separately and bound per configuration. Letting
+# one find_library answer for both picks whichever vcpkg path comes first, and
+# a Release build that links the debug import library drags in MSVCRTD
+# (LNK4098) while loading the release DLL beside it.
+set(SLANG_ROOT ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET})
+find_path(SLANG_INCLUDE_DIR slang.h PATHS ${SLANG_ROOT}/include NO_DEFAULT_PATH)
+find_library(SLANG_LIBRARY_RELEASE NAMES slang PATHS ${SLANG_ROOT}/lib NO_DEFAULT_PATH)
+find_library(SLANG_LIBRARY_DEBUG NAMES slang PATHS ${SLANG_ROOT}/debug/lib NO_DEFAULT_PATH)
+if(NOT SLANG_INCLUDE_DIR OR NOT SLANG_LIBRARY_RELEASE)
     message(FATAL_ERROR "Slang headers and runtime library are required for the Vulkan renderer")
 endif()
+if(NOT SLANG_LIBRARY_DEBUG)
+    set(SLANG_LIBRARY_DEBUG ${SLANG_LIBRARY_RELEASE})
+endif()
+add_library(slang::slang UNKNOWN IMPORTED)
+set_target_properties(slang::slang PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
+    IMPORTED_CONFIGURATIONS "RELEASE;DEBUG"
+    IMPORTED_LOCATION "${SLANG_LIBRARY_RELEASE}"
+    IMPORTED_LOCATION_RELEASE "${SLANG_LIBRARY_RELEASE}"
+    IMPORTED_LOCATION_DEBUG "${SLANG_LIBRARY_DEBUG}"
+    MAP_IMPORTED_CONFIG_RELWITHDEBINFO Release
+    MAP_IMPORTED_CONFIG_MINSIZEREL Release)
+# The compiler and its back ends are loaded beside slang.dll at runtime, so the
+# whole set has to travel with any executable that compiles shaders.
+set(SLANG_RUNTIME_DIR $<IF:$<CONFIG:Debug>,${SLANG_ROOT}/debug/bin,${SLANG_ROOT}/bin>)
+file(GLOB SLANG_RUNTIME_NAMES RELATIVE ${SLANG_ROOT}/bin ${SLANG_ROOT}/bin/slang*.dll ${SLANG_ROOT}/bin/gfx.dll)
+function(reone_copy_slang_runtime target)
+    foreach(dll ${SLANG_RUNTIME_NAMES})
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${SLANG_RUNTIME_DIR}/${dll} $<TARGET_FILE_DIR:${target}>)
+    endforeach()
+endfunction()
 
 set(REONE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
 include_directories(${Boost_INCLUDE_DIRS} ${SDL3_INCLUDE_DIRS} ${MAD_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/extern/glm ${REONE_INCLUDE_DIR})
