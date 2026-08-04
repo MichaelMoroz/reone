@@ -6,8 +6,13 @@ import uniforms;
 static const int kNumShadowCascades = 4;
 static const int kNumPCFSamples = 20;
 static const int kNumDirectionalPCFSamples = 16;
-/** Penumbra width, in shadow-map texels, for the cascaded sun. */
+/** Upper bound on the kernel, in texels of whichever cascade is sampled. */
 static const float kDirectionalPCFRadiusTexels = 2.5;
+/** Penumbra half-width in world units, held equal across all cascades.
+    Matches what 2.5 texels of the nearest cascade already produced. */
+static const float kDirectionalPenumbraWorld = 0.01;
+/** Fraction of a cascade's depth range spent fading into the next one. */
+static const float kCascadeBlendBand = 0.2;
 
 static const float2 kPoissonDisk[kNumDirectionalPCFSamples] = {
     float2(-0.94201624, -0.39906216), float2(0.94558609, -0.76890725),
@@ -44,9 +49,8 @@ int cascadeFor(float3 viewPos) {
     return kNumShadowCascades - 1;
 }
 
-float getDirectionalLightShadow(float3 viewPos, float3 worldPos, float3 normal) {
-    int cascade = cascadeFor(viewPos);
-    float3 lightVector = -normalize(globalUniforms.shadowLightPosition.xyz);
+/** Shadow from one cascade, with a penumbra of constant width in world units. */
+float shadowInCascade(int cascade, float3 worldPos, float3 normal, float3 lightVector) {
     float NdotL = dot(normal, lightVector);
     float sinAngle = sqrt(max(0.0, 1.0 - NdotL * NdotL));
     float3 offsetWorldPos = worldPos + normal * sinAngle * kDirectionalNormalOffset;
@@ -64,6 +68,25 @@ float getDirectionalLightShadow(float3 viewPos, float3 worldPos, float3 normal) 
     uint layers;
     sShadowMap.GetDimensions(width, height, layers);
     float2 texelSize = 1.0 / float2(width, height);
+
+    // Hold the penumbra to a fixed width in WORLD units rather than in texels.
+    // The cascade divisors step 0.005 / 0.015 / 0.045, so each cascade covers
+    // three times the ground of the one before and its texels are three times
+    // wider. A radius fixed in texels therefore triples in world width at every
+    // split, and that discontinuity is what makes the transition obvious.
+    // Probing the matrix - rather than reconstructing the extent from the
+    // divisors - keeps this correct whatever the split scheme becomes.
+    float3 probeAxis = abs(lightVector.z) < 0.99 ? float3(0.0, 0.0, 1.0)
+                                                 : float3(1.0, 0.0, 0.0);
+    float3 tangent = normalize(cross(lightVector, probeAxis));
+    float4 probe = mul(globalUniforms.shadowLightSpace[cascade],
+                       float4(offsetWorldPos + tangent, 1.0));
+    float2 probeUv = 0.5 * (probe.xy / probe.w) + 0.5;
+    float uvPerWorld = max(length(probeUv - projCoords.xy), 1e-7);
+    // Below one texel the kernel degenerates to a point sample, so the coarse
+    // far cascades stay at that floor instead of aliasing.
+    float radiusTexels = clamp(kDirectionalPenumbraWorld * uvPerWorld / texelSize.x,
+                               1.0, kDirectionalPCFRadiusTexels);
 
     // A rotated Poisson disk instead of a 3x3 box. The box could only ever
     // produce ten discrete penumbra levels one texel wide, which reads as a
@@ -83,7 +106,7 @@ float getDirectionalLightShadow(float3 viewPos, float3 worldPos, float3 normal) 
         float2 disk = kPoissonDisk[i];
         float2 rotated = float2(disk.x * rot.x - disk.y * rot.y,
                                 disk.x * rot.y + disk.y * rot.x);
-        float2 offset = rotated * texelSize * kDirectionalPCFRadiusTexels;
+        float2 offset = rotated * texelSize * radiusTexels;
         // Explicit LOD: the kernel diverges across a quad, and there are no
         // mips on a depth target to select anyway.
         float pcfDepth = sShadowMap.SampleLevel(
@@ -91,6 +114,30 @@ float getDirectionalLightShadow(float3 viewPos, float3 worldPos, float3 normal) 
         shadow += currentDepth > pcfDepth ? 1.0 : 0.0;
     }
     return shadow / float(kNumDirectionalPCFSamples);
+}
+
+float getDirectionalLightShadow(float3 viewPos, float3 worldPos, float3 normal) {
+    float3 lightVector = -normalize(globalUniforms.shadowLightPosition.xyz);
+    int cascade = cascadeFor(viewPos);
+    float shadow = shadowInCascade(cascade, worldPos, normal, lightVector);
+
+    // Cross-fade into the next cascade over the tail of this one. Even with the
+    // penumbra held constant the two disagree at the split - they carry
+    // different depth precision, and their texel grids are snapped
+    // independently - so a hard switch draws a line across the ground at a
+    // fixed distance from the camera. The band makes that line a gradient.
+    if (cascade + 1 < kNumShadowCascades) {
+        float depth = abs(viewPos.z);
+        float far = globalUniforms.shadowCascadeFarPlanes[cascade];
+        float near = cascade > 0 ? globalUniforms.shadowCascadeFarPlanes[cascade - 1] : 0.0;
+        float t = saturate((depth - near) / max(far - near, 1e-4));
+        float blend = smoothstep(1.0 - kCascadeBlendBand, 1.0, t);
+        if (blend > 0.0) {
+            float next = shadowInCascade(cascade + 1, worldPos, normal, lightVector);
+            shadow = lerp(shadow, next, blend);
+        }
+    }
+    return shadow;
 }
 
 static const float3 kPCFOffsets[kNumPCFSamples] = {
