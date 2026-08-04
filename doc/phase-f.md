@@ -104,6 +104,7 @@ the invariant; its absolute value across commits is not.
 | **R3** | done `1b6559aa` — grass placement in the merge compute; grass CPU 0.007 ms and flat through a teleport, graphics slot 4.1 → 1.3 ms at density 3.57 |
 | **G6** | done `fe22cb22`, material id in `be0e8dce` — PBR shades the G-buffer, the record grew 256 → 288 bytes to carry envmap, water and per-object ambient, and G5's four approximations became real data. `cd3fbec2` then made metal reflect the authored source, sharp and in eye space. Bump rides in the record and is sampled, but has never been held to a fixture |
 | **G7** | done `e7a4f5b6` — shadows are a mega-draw over merged geometry and the proxies are deleted. Five corrections followed, all found in play: `67cbc312`, `0fb05120`, `05e6a8f8`, `2f00b5f5`, `306cfbc6` |
+| **G6c** | **next.** PBR evaluates the tracer's material derivation instead of only its stand-ins - decided 2026-08-04, the two modes are one shading model with different transport |
 | **G8** | transparency in retro and PBR — sorted quads, premultiplied, the three alpha kinds |
 | **G9** | anti-aliasing as one output stage for all three modes: FSR and FXAA |
 | **sky** | **after G9.** The offline `skybake` asset becomes the single source: V0 fixes the baker, V4 suppresses from its manifest, V2 composites, V5 deletes the runtime bake. Raster shows a black sky until then, by decision |
@@ -675,6 +676,42 @@ adopted in **one step for both** or the shared-material rule breaks; and the
 curated per-category roughness and metalness overrides multiply into those
 derived values today, so they need re-expressing against textured inputs
 rather than against a derivation.
+
+### G6c — PBR is the traced shading model, evaluated deferred
+
+**Decided 2026-08-04.** PBR mode is not a second shading model that happens to
+resemble the tracer's. It is the *same* model with the transport removed —
+deferred raster instead of path tracing, and nothing else different. Anything
+the tracer derives about a surface, the deferred resolve derives identically.
+
+It does not today, and the gap is entirely in evaluation rather than in
+transport. `pbr_resolve.slang:147` already reads the same `InstanceMaterial`
+out of the same `instanceMaterials` buffer, by the material id G6b put in the
+G-buffer, so every field the tracer uses is already in the resolve's hand. Both
+start from the same stand-ins — `metallic = 0`, `roughness = clamp(alpha, 0.2,
+1.0)`, and `material.slang:218` says in as many words that they are kept
+aligned. Then `material.slang:225-248` applies a chain the resolve applies none
+of: `curatedAlbedoMul`, the curated roughness and metalness channels, the
+per-category metallic scale in `overrideParams.w`, the albedo tint in
+`overrideColor`, the roughness override in `overrideParams.x`, `roughnessScale`,
+and the env strength in `overrideParams.z`.
+
+So every curated material decision is invisible in PBR. The droid calibration
+that `cd3fbec2` settled applies in the traced mode only, and the raster mode it
+was judged against cannot express it. It also explains why the two raster modes
+read so alike: with metalness pinned at zero and roughness reduced to one
+authored channel that means mirror strength rather than roughness, PBR has
+almost no material variation left to differ by. Measured at one camera per
+module, retro against PBR differs on 6.1% of pixels in tar_m03aa, 8.7% in
+korr_m33ab, 15.1% in danm14ab and 57.2% in unk_m41aa — largest where lighting
+dominates and smallest where lightmaps do, which is the signature of a
+difference that comes from the lighting integral and not from materials.
+
+The shape: lift `material.slang`'s derivation into `slang/lib` and have both
+consumers call it, the same way `commitsTracedCoverage` became shared in G7.
+The derivation is pure arithmetic over the record — no ray, no hit — so nothing
+about it is traced. Guard it with the traced mode staying byte-identical, since
+the tracer must come out of the refactor unchanged.
 
 ## G7 — shadows from real geometry — done `e7a4f5b6`
 
