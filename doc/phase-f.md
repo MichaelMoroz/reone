@@ -713,6 +713,24 @@ The derivation is pure arithmetic over the record — no ray, no hit — so noth
 about it is traced. Guard it with the traced mode staying byte-identical, since
 the tracer must come out of the refactor unchanged.
 
+**The lighting function goes with it, and the split is by mode — decided
+2026-08-05.** Retro keeps Odyssey's lighting maths *including its bugs*: the
+dimensionally-wrong range cull that compares a distance against `radius²`, and
+the `radius²/(radius+d)²` falloff that is not inverse-square. Those are the
+look, and backlog 1.9 records them as faithful ports rather than accidents.
+PBR does not keep them — it takes the corrected model the tracer already has,
+the sphere-light solid angle `Ω = 2π(1 − cos θ)` with `θ = asin(saturate(R/d))`
+and the `3/2 − 2ln2` scale, for the same reason it takes the tracer's material
+derivation: PBR is the traced shading model with the transport removed.
+
+That is a behaviour change and it is meant to be one. It also means the
+audit's finding is not "PBR has a bug": `pbr_resolve.slang:83-85` and `:235`
+carry the Odyssey cull and falloff deliberately, with a comment saying they are
+kept as the GL shader had them. G6c is what retires them, in PBR only.
+`retro_resolve.slang:116` keeps its copy, and any future refactor that shares
+lighting code between the two modes must keep both functions rather than
+converging them.
+
 ## G7 — shadows from real geometry — done `e7a4f5b6`
 
 Admission takes Opaque and Transparent only, so shadow-only proxies sat outside
