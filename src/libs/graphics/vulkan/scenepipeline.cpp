@@ -599,8 +599,12 @@ void VulkanScenePipeline::blendedPass(VkCommandBuffer cmd, uint32_t globalsOffse
     key.cull = FaceCullMode::None;
     auto &pipeline = _renderer.pipelines().get(key);
 
-    VkViewport viewport {0.0f, 0.0f, static_cast<float>(_targetSize.x),
-                         static_cast<float>(_targetSize.y), 0.0f, 1.0f};
+    // This is geometry in the same clip space as the G-buffer, not a
+    // fullscreen resolve. Use the same OpenGL-to-Vulkan Y conversion so its
+    // fragments depth-test against the pixel where the opaque pass wrote them.
+    VkViewport viewport {0.0f, static_cast<float>(_targetSize.y),
+                         static_cast<float>(_targetSize.x),
+                         -static_cast<float>(_targetSize.y), 0.0f, 1.0f};
     VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(_targetSize.x),
                                static_cast<uint32_t>(_targetSize.y)}};
     auto uniformSet = _renderer.uniformSet();
@@ -626,6 +630,11 @@ void VulkanScenePipeline::blendedPass(VkCommandBuffer cmd, uint32_t globalsOffse
     vkCmdDrawIndexed(cmd, nonOpaqueTriangles * 3, 1,
                      scene.opaqueTriangleCount * 3, 0, 0);
     vkCmdEndRendering(cmd);
+
+    // Publish the composited image in the layout expected by the preview and
+    // post-process descriptors, just as both resolve passes do after writing.
+    transitionColorImage(cmd, *_output, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
 void VulkanScenePipeline::retroResolvePass(VkCommandBuffer cmd, uint32_t globalsOffset) {

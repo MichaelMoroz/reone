@@ -28,6 +28,7 @@ struct MergedVertex {
 [[vk::binding(2, 2)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
 [[vk::binding(3, 2)]] Sampler2D bindlessTextures[];
 [[vk::binding(4, 2)]] Sampler2DArray bindlessTextureArrays[];
+[[vk::binding(5, 2)]] SamplerCube bindlessTextureCubes[];
 
 // materialGated selects which coverage a pass publishes over the same range.
 // Ungated is the opaque range. Cutout is the punch-through gate the G-buffer

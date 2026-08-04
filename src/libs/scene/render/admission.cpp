@@ -201,7 +201,10 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
 
     InstanceMaterial material;
     material.selfIllumColor = glm::vec4(mesh.material.selfIllumColor, 0.0f);
-    material.diffuseColor = glm::vec4(mesh.material.diffuseColor, 1.0f);
+    // The merged vertex stream has no per-object colour. Preserve the model's
+    // alpha controller in the material record for forward compositing.
+    material.diffuseColor =
+        glm::vec4(mesh.material.diffuseColor, mesh.material.color.a);
     material.ambientColor = glm::vec4(mesh.material.ambientColor, 1.0f);
     material.uv0 = mesh.material.uv[0];
     material.uv1 = mesh.material.uv[1];
@@ -253,6 +256,14 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
             ++_submission.additive;
         } else if (diffuse->features().blending == Texture::Blending::PunchThrough ||
                    mesh.material.type == MaterialType::TransparentModel) {
+            // TransparentModel stays a cutout. It is not a statement that the
+            // surface has continuous coverage: MeshSceneNode::isTransparent
+            // falls through to hasAlphaChannel, so any texture that merely
+            // carries an alpha channel lands here - which is most foliage.
+            // Routing those into the blended pass takes trees out of the
+            // G-buffer and visibly changes geometry that was correct before.
+            // Genuinely blended meshes need a narrower signal than this flag
+            // before they can be separated from alpha-tested ones.
             kind = AdmissionKind::Cutout;
         }
     }
@@ -313,7 +324,10 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
         break;
     case ProceduralKind::Billboard:
         ++_submission.billboards;
-        material.diffuseColor = procedural.instances.front().color;
+        // The lowered quad already carries the flare colour and alpha. Keep
+        // material alpha neutral so forward blending applies it only once.
+        material.diffuseColor =
+            glm::vec4(glm::vec3(procedural.instances.front().color), 1.0f);
         material.ambientColor = glm::vec4(procedural.material.ambientColor, 1.0f);
         kind = AdmissionKind::AdditiveEmissive;
         break;

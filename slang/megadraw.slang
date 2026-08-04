@@ -15,6 +15,7 @@ static const uint kMegaFeatureBumpMap = 1u << 3;
 static const uint kMegaFeatureShadows = 1u << 7;
 static const uint kMegaFeatureFog = 1u << 9;
 static const uint kMegaFeatureWater = 1u << 8;
+static const uint kMegaFeatureEnvMapCube = 1u << 13;
 static const uint kMegaFeatureStatic = 1u << 14;
 static const uint kMegaFeatureBlendedCoverage = 1u << 25;
 static const uint kMegaSurfaceUnlitTransparent = 1;
@@ -31,6 +32,7 @@ struct Varyings {
     float4 color : TEXCOORD6;
     float4 curClipPos : TEXCOORD7;
     float4 prevClipPos : TEXCOORD8;
+    float3 worldPos : TEXCOORD9;
 };
 
 [shader("vertex")]
@@ -57,6 +59,7 @@ Varyings megadrawVertex(uint vertexId : SV_VertexID) {
     output.uv1 = vertex.uv1;
     output.uv2 = vertex.uv2;
     output.color = vertex.color;
+    output.worldPos = vertex.position;
     return output;
 }
 
@@ -72,6 +75,50 @@ struct GBufferOutput {
 float3 safeNormal(float3 value, float3 fallback) {
     float lengthSquared = dot(value, value);
     return lengthSquared > 1.0e-10 ? value * rsqrt(lengthSquared) : fallback;
+}
+
+float3 megaMaterialNormal(InstanceMaterial material, Varyings input, float2 uv,
+                          bool faceForward, bool isFrontFace) {
+    float3 normal = safeNormal(input.normal, float3(0.0, 0.0, 1.0));
+    float3 tangent = safeNormal(input.tangent, float3(1.0, 0.0, 0.0));
+    float3 bitangent = safeNormal(input.bitangent, float3(0.0, 1.0, 0.0));
+    float3 frameNormal = safeNormal(input.tanSpaceNormal, normal);
+    if ((material.featureMask & kMegaFeatureNormalMap) != 0 &&
+        material.normalMap != kNoTexture) {
+        float3 n = bindlessTextures[NonUniformResourceIndex(material.normalMap)]
+                       .Sample(uv).rgb * 2.0 - 1.0;
+        normal = safeNormal(tangent * n.x + bitangent * n.y + frameNormal * n.z,
+                            normal);
+    } else if ((material.featureMask & kMegaFeatureBumpMap) != 0 &&
+               material.bumpMapArray != kNoTexture) {
+        float layer = float(material.bumpMapFrame);
+        float height = bindlessTextureArrays[
+                           NonUniformResourceIndex(material.bumpMapArray)]
+                           .Sample(float3(uv, layer)).r;
+        float dX = material.bumpMapScale * ddx(height);
+        float dY = material.bumpMapScale * ddy(height);
+        float3 n = safeNormal(float3(-dX, -dY, 1.0),
+                              float3(0.0, 0.0, 1.0));
+        normal = safeNormal(tangent * n.x + bitangent * n.y + frameNormal * n.z,
+                            normal);
+    }
+    if (faceForward && !isFrontFace) normal = -normal;
+    return normal;
+}
+
+float3 sampleMegaEnvMap(InstanceMaterial material, float3 eyeReflection) {
+    if ((material.featureMask & kMegaFeatureEnvMapCube) != 0 &&
+        material.envMapCube != kNoTexture) {
+        return bindlessTextureCubes[NonUniformResourceIndex(material.envMapCube)]
+            .Sample(eyeReflection).rgb;
+    }
+    if (material.envMap == kNoTexture) return float3(0.0);
+    float m = 2.0 * sqrt(eyeReflection.x * eyeReflection.x +
+                         eyeReflection.y * eyeReflection.y +
+                         (eyeReflection.z + 1.0) * (eyeReflection.z + 1.0));
+    float2 uv = float2(eyeReflection.x / m + 0.5,
+                       eyeReflection.y / m + 0.5);
+    return bindlessTextures[NonUniformResourceIndex(material.envMap)].Sample(uv).rgb;
 }
 
 [shader("fragment")]
@@ -95,28 +142,10 @@ GBufferOutput megadrawFragment(Varyings input, uint primitiveId : SV_PrimitiveID
 
     bool envmapped = (material.featureMask & kMegaFeatureEnvMap) != 0;
 
-    float3 normal = safeNormal(input.normal, float3(0.0, 0.0, 1.0));
-    float3 tangent = safeNormal(input.tangent, float3(1.0, 0.0, 0.0));
-    float3 bitangent = safeNormal(input.bitangent, float3(0.0, 1.0, 0.0));
-    float3 frameNormal = safeNormal(input.tanSpaceNormal, normal);
-    if ((material.featureMask & kMegaFeatureNormalMap) != 0 &&
-        material.normalMap != kNoTexture) {
-        float3 n = bindlessTextures[NonUniformResourceIndex(material.normalMap)].Sample(uv).rgb * 2.0 - 1.0;
-        normal = safeNormal(tangent * n.x + bitangent * n.y + frameNormal * n.z, normal);
-    } else if ((material.featureMask & kMegaFeatureBumpMap) != 0 &&
-               material.bumpMapArray != kNoTexture) {
-        float layer = float(material.bumpMapFrame);
-        float height = bindlessTextureArrays[NonUniformResourceIndex(material.bumpMapArray)].Sample(
-            float3(uv, layer)).r;
-        float dX = material.bumpMapScale * ddx(height);
-        float dY = material.bumpMapScale * ddy(height);
-        float3 n = safeNormal(float3(-dX, -dY, 1.0), float3(0.0, 0.0, 1.0));
-        normal = safeNormal(tangent * n.x + bitangent * n.y + frameNormal * n.z, normal);
-    }
-    // The traced G-buffer face-forwards its material normal against the
-    // committed geometric side. With culling disabled, raster must do the same
-    // for back-facing fragments or the two encodings differ by a sign.
-    if (!isFrontFace) normal = -normal;
+    // Match the traced G-buffer's committed-side convention on two-sided
+    // geometry. Transparent forward shading below deliberately retains the
+    // authored normal, as pbr_model.slang does.
+    float3 normal = megaMaterialNormal(material, input, uv, true, isFrontFace);
 
     bool hasLightmap = (material.featureMask & kMegaFeatureLightmap) != 0 &&
                        material.lightmap != kNoTexture;
@@ -156,7 +185,8 @@ GBufferOutput megadrawFragment(Varyings input, uint primitiveId : SV_PrimitiveID
 // reorders only true-opaque depth-writing batches and never touches blended
 // ones, so a distance sort would be a deviation before it was an improvement.
 [shader("fragment")]
-float4 megadrawBlendedFragment(Varyings input, uint primitiveId : SV_PrimitiveID) {
+float4 megadrawBlendedFragment(Varyings input, uint primitiveId : SV_PrimitiveID,
+                               bool isFrontFace : SV_IsFrontFace) {
     uint triangleId = pushConstants.triangleBase + primitiveId;
     uint materialIndex = mergedMaterialIds[triangleId];
     InstanceMaterial material = instanceMaterials[materialIndex];
@@ -170,21 +200,53 @@ float4 megadrawBlendedFragment(Varyings input, uint primitiveId : SV_PrimitiveID
         texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)].Sample(uv);
     }
 
-    // A premultiplied texture carries no usable alpha channel; luma recovers
-    // the coverage, exactly as particles.slang does.
-    float coverage = (material.featureMask & kMegaFeaturePremulAlpha) != 0
-                         ? rgbToLuma(texel.rgb)
-                         : texel.a;
-    float3 color = texel.rgb * material.diffuseColor.rgb * input.color.rgb;
-    color += material.selfIllumColor.rgb;
-    float alpha = coverage * input.color.a * material.diffuseColor.a;
-    if ((material.featureMask & kMegaFeatureWater) != 0) {
-        alpha *= material.waterAlpha;
+    bool blended = (material.featureMask & kMegaFeatureBlendedCoverage) != 0;
+    float coverage = texel.a;
+    float3 texelColor = texel.rgb;
+    if ((material.featureMask & kMegaFeaturePremulAlpha) != 0) {
+        // Match particles.slang and pbr_model.slang completely: recover the
+        // missing coverage and undo it before applying the blend once below.
+        coverage = rgbToLuma(texel.rgb);
+        texelColor *= 1.0 / max(0.0001, coverage);
     }
-    if (alpha <= 0.0) discard;
+
+    float objectAlpha = input.color.a * material.diffuseColor.a;
+    float3 color = texelColor * input.color.rgb;
+    if (blended) {
+        bool envmapped = (material.featureMask & kMegaFeatureEnvMap) != 0;
+        if (!envmapped) objectAlpha *= coverage;
+
+        float3 lighting = float3(1.0);
+        if ((material.featureMask & kMegaFeatureLightmap) != 0 &&
+            material.lightmap != kNoTexture) {
+            lighting = bindlessTextures[NonUniformResourceIndex(material.lightmap)]
+                           .Sample(input.uv2).rgb;
+            if ((material.featureMask & kMegaFeatureWater) != 0) {
+                lighting = lerp(float3(1.0), lighting, 0.2);
+            }
+        }
+        color *= lighting;
+
+        if (envmapped) {
+            float3 normal = megaMaterialNormal(material, input, uv, false,
+                                               isFrontFace);
+            float3 incident = normalize(input.worldPos -
+                                        globalUniforms.cameraPosition.xyz);
+            float3 worldReflection = reflect(incident, normal);
+            float3 eyeReflection = normalize(
+                mul(globalUniforms.view, float4(worldReflection, 0.0)).xyz);
+            color += sampleMegaEnvMap(material, eyeReflection) * (1.0 - coverage);
+        }
+        if ((material.featureMask & kMegaFeatureWater) != 0) {
+            color *= material.waterAlpha;
+        }
+    } else {
+        objectAlpha *= coverage;
+    }
+    if (objectAlpha <= 0.0) discard;
 
     // Blended surfaces occlude in proportion to coverage; additive ones add
     // and never occlude, which premultiplied output expresses as alpha zero.
-    bool blended = (material.featureMask & kMegaFeatureBlendedCoverage) != 0;
-    return blended ? float4(color * alpha, alpha) : float4(color * alpha, 0.0);
+    return blended ? float4(color * objectAlpha, objectAlpha)
+                   : float4(color * objectAlpha, 0.0);
 }

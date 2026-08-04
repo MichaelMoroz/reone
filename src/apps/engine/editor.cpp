@@ -256,10 +256,13 @@ ObjectEntryView makeObjectEntryView(const scene::ISceneGraph &graph,
                         graphics::MaterialTextureSlot::MainTex)]) {
                     if (diffuse->features().blending == graphics::Texture::Blending::Additive) {
                         tags.push_back("additive");
-                    } else if (diffuse->features().blending == graphics::Texture::Blending::PunchThrough ||
-                               entry.material.type == graphics::MaterialType::TransparentModel) {
+                    } else if (diffuse->features().blending == graphics::Texture::Blending::PunchThrough) {
                         tags.push_back("punch-through");
+                    } else if (entry.material.type == graphics::MaterialType::TransparentModel) {
+                        tags.push_back("alpha-blended");
                     }
+                } else if (entry.material.type == graphics::MaterialType::TransparentModel) {
+                    tags.push_back("alpha-blended");
                 }
                 for (const auto *tag : tags) {
                     if (!result.classification.empty()) {
