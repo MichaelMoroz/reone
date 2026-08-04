@@ -991,7 +991,7 @@ void Game::toggleInGameCameraType() {
         break;
     }
 
-    setRelativeMouseMode(_cameraType == CameraType::FirstPerson || _cameraType == CameraType::Free);
+    setRelativeMouseMode(_cameraType == CameraType::FirstPerson);
 
     _module->area()->updateRoomVisibility();
 }
@@ -1917,7 +1917,7 @@ void Game::closeSwoopRace() {
     _swoopRace.stop();
     setPartyVisible(true);
     _cameraType = _savedCameraType;
-    setRelativeMouseMode(_cameraType == CameraType::FirstPerson || _cameraType == CameraType::Free);
+    setRelativeMouseMode(_cameraType == CameraType::FirstPerson);
     openInGame();
     debug("swoop: stopped (race ended, party restored, camera reset)");
 }
@@ -2905,12 +2905,20 @@ bool Game::setFreeCameraEnabled(bool enabled) {
         }
         _savedCameraType = _cameraType;
         _cameraType = CameraType::Free;
-        setRelativeMouseMode(true);
+        // No cursor grab on activation - the free camera looks only while the
+        // right button is held. Grabbing here would swallow the very menu that
+        // toggles it.
+        setRelativeMouseMode(false);
         area->updateRoomVisibility();
         return true;
     }
     // Back to whatever was active before, rather than assuming third person:
     // the toggle can be flipped from first person or a dialog camera too.
+    if (_module && _module->area()) {
+        if (auto *free = _module->area()->getCamera<FreeCamera>(CameraType::Free)) {
+            free->endLook();
+        }
+    }
     _cameraType = _savedCameraType == CameraType::Free ? CameraType::ThirdPerson
                                                        : _savedCameraType;
     setRelativeMouseMode(_cameraType == CameraType::FirstPerson);
@@ -2930,7 +2938,7 @@ void Game::consoleCamera(const ConsoleArgs &args) {
         throw std::runtime_error("Free camera is not available");
     }
     _cameraType = CameraType::Free;
-    setRelativeMouseMode(true);
+    setRelativeMouseMode(false);
     getConsoleArea()->updateRoomVisibility();
 }
 

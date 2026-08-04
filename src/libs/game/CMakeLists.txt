@@ -511,6 +511,7 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/object/camera/animated.cpp
     ${GAME_SOURCE_DIR}/object/camera/dialog.cpp
     ${GAME_SOURCE_DIR}/object/camera/firstperson.cpp
+    ${GAME_SOURCE_DIR}/object/camera/free.cpp
     ${GAME_SOURCE_DIR}/object/camera/static.cpp
     ${GAME_SOURCE_DIR}/object/camera/thirdperson.cpp
     ${GAME_SOURCE_DIR}/object/creature.cpp
