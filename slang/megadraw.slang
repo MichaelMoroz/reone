@@ -40,7 +40,16 @@ Varyings megadrawVertex(uint vertexId : SV_VertexID) {
     output.curClipPos = mul(globalUniforms.viewProjection, float4(vertex.position, 1.0));
     output.prevClipPos = mul(globalUniforms.prevViewProjection,
                              float4(vertex.prevPosition, 1.0));
-    output.position = output.curClipPos;
+    // Rasterise on the jittered grid. globalUniforms.projection carries the
+    // sub-pixel offset and the deferred resolves invert it to reconstruct
+    // position from depth, so depth must be written through the same matrix -
+    // writing it unjittered and inverting it jittered wobbles every
+    // reconstructed world position by the Halton offset, which the shadow
+    // lookup turns into a per-frame binary flip along every shadow edge.
+    // curClipPos/prevClipPos stay unjittered, per uniforms.slang, so motion
+    // vectors never encode the offset.
+    output.position = mul(globalUniforms.projection,
+                          mul(globalUniforms.view, float4(vertex.position, 1.0)));
     output.normal = vertex.normal;
     output.tangent = vertex.tangent;
     output.bitangent = vertex.bitangent;

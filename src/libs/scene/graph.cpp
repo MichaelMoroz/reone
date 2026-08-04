@@ -621,6 +621,17 @@ glm::vec2 SceneGraph::computeJitter() const {
     if (!_graphicsOpt.taaJitter) {
         return glm::vec2(0.0f);
     }
+    // Jitter is only correct when something resolves it. Path tracing has FSR
+    // and NRD's accumulation; the raster modes have had no temporal resolve
+    // since G1 boxed the old post chain, so jittering there is pure shimmer -
+    // measured on a frozen scene with a static camera, 6-12% of pixels change
+    // per frame jittered against 0.19% unjittered. The option cannot be
+    // trusted to mean "a consumer exists": reone.cfg ships taajitter=1
+    // globally and it reaches every mode. G9 gives raster an AA stage and
+    // opens this gate for it.
+    if (_graphicsOpt.mode != "path-tracing") {
+        return glm::vec2(0.0f);
+    }
     // Halton(2, 3), the usual low-discrepancy sequence for temporal sampling,
     // recentred on zero and scaled to one pixel.
     static constexpr int kJitterPhases = 8;
