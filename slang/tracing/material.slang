@@ -17,6 +17,7 @@
 // dispatch on the type; everything downstream is type-blind.
 
 import lib.math;
+import lib.scene_schema;
 import uniforms;
 import tracing.rng;
 import tracing.brdf;

@@ -17,6 +17,8 @@
 
 #include "reone/graphics/vulkan/renderer.h"
 
+#include "SDL3/SDL.h"
+
 #include "reone/system/profiler.h"
 
 #include "reone/graphics/texture.h"
@@ -68,14 +70,41 @@ void VulkanRenderer::init() {
     _uniformRing.init(kFramesInFlight, 16u << 20);
     _descriptors.init(kFramesInFlight, _uniformRing);
     _pbrTextures.init();
+    // Installed builds carry the Slang source beside the executable. Keep the
+    // source-tree path as a development fallback so edits are picked up
+    // without rebuilding or copying files first.
+    if (auto *base = SDL_GetBasePath()) {
+        auto deployedSource = std::filesystem::path(base) / "slang";
+        SDL_free(const_cast<char *>(base));
+        if (std::filesystem::is_directory(deployedSource))
+            _shaderCompiler.setSourceDir(std::move(deployedSource));
+    }
+    _shaderCompiler.init();
+    _shaderCompiler.validateSceneSchema();
+    initPipelineCache();
+    _renderer2d.init();
+    _inited = true;
+}
+
+void VulkanRenderer::initPipelineCache() {
     _pipelines.init(
         [this](const std::string &name) {
-            return readSpirV(_shaderDir / (name + ".spv"));
+            return shaderModule(name);
         },
         {_descriptors.uniformLayout(), _descriptors.textureLayout(),
          _descriptors.megaDrawLayout()});
-    _renderer2d.init();
-    _inited = true;
+}
+
+bool VulkanRenderer::recompileShaders() {
+    if (_inFrame)
+        throw std::runtime_error("Vulkan: shader reload requested while a frame is recording");
+    vkDeviceWaitIdle(_device.handle());
+    const bool success = _shaderCompiler.recompileAll();
+    // Pipeline creation retains shader modules internally. Rebuild the cache so
+    // subsequent draws use the refreshed SPIR-V (or the retained last-good one).
+    _pipelines.deinit();
+    initPipelineCache();
+    return success;
 }
 
 void VulkanRenderer::deinit() {
@@ -90,6 +119,7 @@ void VulkanRenderer::deinit() {
     _renderer2d.deinit();
     _resources.deinit();
     _pipelines.deinit();
+    _shaderCompiler.deinit();
     _descriptors.deinit();
     _uniformRing.deinit();
     _depth.reset();

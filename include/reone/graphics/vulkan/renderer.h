@@ -29,6 +29,7 @@
 #include "renderer2d.h"
 #include "pbrtextures.h"
 #include "resources.h"
+#include "shadercompiler.h"
 #include "uniformring.h"
 
 struct SDL_Window;
@@ -60,6 +61,7 @@ public:
         _swapchain(_device),
         _uniformRing(_device),
         _descriptors(_device),
+        _shaderCompiler(REONE_SHADER_SOURCE_DIR),
         _pipelines(_device),
         _resources(_device),
         _pbrTextures(_device, _pipelines, _uniformRing, _descriptors, _resources),
@@ -98,16 +100,16 @@ public:
     VulkanPBRTextures &pbrTextures() { return _pbrTextures; }
     Vulkan2DRenderer &renderer2d() { return _renderer2d; }
 
-    /**
-     * Where SPIR-V modules are loaded from. Set before init; the pipeline cache
-     * reads modules by name from here on first use.
-     */
-    void setShaderDir(std::filesystem::path dir) { _shaderDir = std::move(dir); }
+    /** Runtime-compiled SPIR-V for one named Slang module. */
+    const std::vector<uint32_t> &shaderModule(const std::string &name) {
+        return _shaderCompiler.module(name);
+    }
+    /** Rebuild source modules now; bad sources retain their prior modules. */
+    bool recompileShaders();
 
     /** The uniform descriptor set for the frame being recorded. */
     VkDescriptorSet uniformSet() const { return _descriptors.uniformSet(_frameIndex); }
     VulkanSwapchain &swapchain() { return _swapchain; }
-    const std::filesystem::path &shaderDir() const { return _shaderDir; }
     int frameIndex() const { return _frameIndex; }
 
     /** Whether a frame is open, and so whether recording is legal. */
@@ -154,11 +156,11 @@ private:
     std::unique_ptr<VulkanImage> _depth;
     VulkanUniformRing _uniformRing;
     VulkanDescriptors _descriptors;
+    SlangShaderCompiler _shaderCompiler;
     VulkanPipelineCache _pipelines;
     VulkanResources _resources;
     VulkanPBRTextures _pbrTextures;
     Vulkan2DRenderer _renderer2d;
-    std::filesystem::path _shaderDir {"spirv"};
 
     bool _inited {false};
     bool _inFrame {false};
@@ -192,6 +194,7 @@ private:
     void deinitFrames();
     void initImageSemaphores();
     void deinitImageSemaphores();
+    void initPipelineCache();
 
     /**
      * Swapchain images arrive in an undefined layout and must be presentable

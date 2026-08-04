@@ -34,6 +34,7 @@ set(VULKAN_HEADERS
     ${VULKAN_INCLUDE_DIR}/resources.h
     ${VULKAN_INCLUDE_DIR}/samplers.h
     ${VULKAN_INCLUDE_DIR}/scenepipeline.h
+    ${VULKAN_INCLUDE_DIR}/shadercompiler.h
     ${VULKAN_INCLUDE_DIR}/swapchain.h
     ${VULKAN_INCLUDE_DIR}/uniformring.h)
 
@@ -54,6 +55,7 @@ set(VULKAN_SOURCES
     ${VULKAN_SOURCE_DIR}/resources.cpp
     ${VULKAN_SOURCE_DIR}/samplers.cpp
     ${VULKAN_SOURCE_DIR}/scenepipeline.cpp
+    ${VULKAN_SOURCE_DIR}/shadercompiler.cpp
     ${VULKAN_SOURCE_DIR}/swapchain.cpp
     ${VULKAN_SOURCE_DIR}/uniformring.cpp
     ${VULKAN_SOURCE_DIR}/volk.cpp
@@ -87,6 +89,9 @@ target_compile_definitions(graphicsvulkan PUBLIC
     # through null pointers and dies inside vmaCreateAllocator.
     VMA_STATIC_VULKAN_FUNCTIONS=0
     VMA_DYNAMIC_VULKAN_FUNCTIONS=1)
+target_compile_definitions(graphicsvulkan PUBLIC
+    REONE_SHADER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/slang")
+target_include_directories(graphicsvulkan PRIVATE ${SLANG_INCLUDE_DIR})
 
 if(ENABLE_FSR)
     target_link_libraries(graphicsvulkan PUBLIC fsr2)
@@ -102,7 +107,8 @@ target_link_libraries(graphicsvulkan PUBLIC
     Vulkan::Headers
     volk::volk_headers
     GPUOpen::VulkanMemoryAllocator
-    vk-bootstrap::vk-bootstrap)
+    vk-bootstrap::vk-bootstrap
+    ${SLANG_LIBRARY})
 
 if(MSVC)
     target_link_libraries(graphicsvulkan PUBLIC SDL3::SDL3)

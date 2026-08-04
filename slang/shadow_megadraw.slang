@@ -4,7 +4,7 @@
 
 import uniforms;
 import lib.megadraw_geometry;
-import lib.scene_material;
+import lib.scene_schema;
 
 static const float kPointShadowFar = 2500.0;
 // Point shadows replace raster depth with radial distance. Pipeline depth bias

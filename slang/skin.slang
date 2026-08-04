@@ -4,54 +4,7 @@
 // structure has one BLAS.  This keeps the object-to-source mapping here,
 // rather than duplicating per-mesh tracing shaders.
 import lib.geometry;
-
-struct Matrix3x4 {
-    float4 row0;
-    float4 row1;
-    float4 row2;
-};
-
-struct SceneObject {
-    float4x4 transform;
-    float4x4 prevTransform;
-    float4x4 transformInv;
-    // Element offsets: floats in sourceVertices and uints in sourceIndices.
-    // Attribute offsets below remain byte offsets inside each vertex record.
-    uint srcVertexOffset;
-    uint srcIndexOffset;
-    uint srcVertexStride;
-    int offPosition;
-    int offNormals;
-    int offUV1;
-    int offUV2;
-    int offTanSpace;
-    int offBoneIndices;
-    int offBoneWeights;
-    uint vertexCount;
-    uint triangleCount;
-    uint dstVertexBase;
-    uint dstTriangleBase;
-    uint geometryIndex;
-    uint boneBase;
-    uint boneCount;
-    uint materialIndex;
-    uint danglyBase;
-    uint danglyCount;
-    float4 saberDisplacement;
-};
-
-struct MergedVertex {
-    float3 position;
-    float3 normal;
-    float2 uv1;
-    float2 uv2;
-    float3 tangent;
-    float3 bitangent;
-    float3 tanSpaceNormal;
-    float3 prevPosition;
-    float2 pad;
-    float4 color;
-};
+import lib.scene_schema;
 
 [[vk::binding(0, 0)]] StructuredBuffer<SceneObject> objects;
 [[vk::binding(1, 0)]] StructuredBuffer<Matrix3x4> bones;
@@ -61,36 +14,8 @@ struct MergedVertex {
 [[vk::binding(5, 0)]] StructuredBuffer<float> sourceVertices;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> sourceIndices;
 
-struct ProceduralQuad {
-    float4 positionVariant;
-    float4 right;
-    float4 up;
-    float4 uvOffsetScale;
-    float2 lightmapUV;
-    float2 pad;
-    float4 color;
-};
-
 [[vk::binding(7, 0)]] StructuredBuffer<ProceduralQuad> proceduralQuads;
 [[vk::binding(8, 0)]] StructuredBuffer<float4> danglyPositions;
-
-struct GrassFace {
-    float4 vertex0Uv0x;
-    float4 vertex1Uv0y;
-    float4 vertex2Uv1x;
-    float4 uv1yUv2QuadSize;
-    float4 probabilities;
-    float4 boundsMin;
-    float4 boundsMax;
-    uint4 faceBudgetMaterialVariants;
-};
-
-struct GrassRange {
-    uint faceIndex;
-    uint clusterOffset;
-    uint clusterCount;
-    uint pad;
-};
 
 [[vk::binding(9, 0)]] StructuredBuffer<GrassFace> grassFaces;
 [[vk::binding(10, 0)]] StructuredBuffer<GrassRange> grassRanges;

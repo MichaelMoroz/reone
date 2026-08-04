@@ -11,6 +11,8 @@
 // records and per-category calibration overrides into this struct's fields.
 // The shader only evaluates; it never classifies.
 
+import lib.scene_schema;
+
 public static const uint kPtNoTexture = 0xffffffffu;
 
 /** Surface types, assigned CPU-side. Everything is PBR unless said otherwise. */
@@ -39,53 +41,11 @@ public static const uint kPtCategoryMask = 0xFu;
 /** Coverage below this never commits: the texel simply is not there. */
 public static const float kPtAlphaTestEpsilon = 0.01;
 
-public struct InstanceMaterial {
-    public float4 selfIllumColor;
-    public float4 diffuseColor;
-    public float4 uv0;
-    public float4 uv1;
-    public float4 uv2;
-    public uint mainTex;
-    public uint normalMap;
-    public uint lightmap;
-    public uint bumpMapArray;
-    public uint featureMask;
-    public int bumpMapFrame;
-    public float bumpMapScale;
-    public uint envMap;
-    // Curated material operations; see rayquery.cpp for the encoding.
-    public float4 curatedAlbedoMul;
-    public float4 curatedRoughA;
-    public float4 curatedRoughB;
-    public float4 curatedMetalA;
-    public float4 curatedMetalB;
-    public float4 curatedEmission;
-    /** kPtSurface*, decided at admission. */
-    public uint surfaceType;
-    // This occupies the scalar slot before the override vectors so category
-    // tuning does not change the storage-buffer array stride.
-    public float roughnessScale;
-    public uint envMapCube;
-    public float waterAlpha;
-    // The per-category calibration overrides, baked at admission so the
-    // shader never touches a category table: rgb + lerp weight flat-paints
-    // the albedo; params are roughness override (negative disables),
-    // emission scale, env-map strength scale.
-    public float4 overrideColor;
-    public float4 overrideParams;
-    public float4 ambientColor;
-    public int envMapDerivedLayer;
-};
 
 [[vk::binding(0, 1)]] public RWTexture2D<float4> outputImage;
 [[vk::binding(1, 1)]] public RaytracingAccelerationStructure sceneTLAS;
 [[vk::binding(2, 1)]] public StructuredBuffer<InstanceMaterial> instanceMaterials;
 [[vk::binding(3, 1)]] public RWStructuredBuffer<uint> traceStats;
-public struct MergedVertex {
-    public float3 position; public float3 normal; public float2 uv1; public float2 uv2;
-    public float3 tangent; public float3 bitangent; public float3 tanSpaceNormal;
-    public float3 prevPosition; public float2 pad; public float4 color;
-};
 [[vk::binding(4, 1)]] public StructuredBuffer<MergedVertex> mergedVertices;
 [[vk::binding(5, 1)]] public StructuredBuffer<uint> mergedIndices;
 [[vk::binding(6, 1)]] public StructuredBuffer<uint> mergedMaterialIds;

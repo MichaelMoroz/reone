@@ -334,6 +334,17 @@ void Engine::init() {
         _services->graphics,
         _services->resource);
     _console->init();
+    _console->registerCommand("recompileshaders", "compile Slang shaders and rebuild render pipelines",
+                              [this](const auto &) {
+                                  const bool success = _vulkanRenderer->recompileShaders();
+                                  // Compute and ray-query pipelines own their shader modules, so
+                                  // discard scene pipelines as well. They are rebuilt lazily before
+                                  // the next draw after the device has gone idle above.
+                                  _sceneModule->graphs().invalidateRenderPipelines();
+                                  _console->printLine(success
+                                                          ? "Slang shaders recompiled."
+                                                          : "Slang errors kept one or more last-good shaders; see log.");
+                              });
 
     _game = std::make_unique<Game>(
         gameId,

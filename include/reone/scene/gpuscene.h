@@ -134,10 +134,10 @@ std::string formatSceneCounts(const SceneCounts &counts);
  */
 class GpuScene : boost::noncopyable {
 public:
-    using InstanceMaterial = graphics::GpuSceneMaterial;
+    using InstanceMaterial = graphics::InstanceMaterial;
     using Matrix3x4 = graphics::GpuSceneMatrix3x4;
-    using MergedVertex = graphics::GpuSceneMergedVertex;
-    using SceneObject = graphics::GpuSceneObjectData;
+    using MergedVertex = graphics::MergedVertex;
+    using SceneObject = graphics::SceneObject;
     using PrimitiveClass = graphics::GpuScenePrimitiveClass;
     using ResidencyClass = graphics::GpuSceneResidencyClass;
 

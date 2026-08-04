@@ -61,6 +61,7 @@ set(TESTS_SOURCES
     ${TESTS_SOURCE_DIR}/graphics/format/tpcreader.cpp
     ${TESTS_SOURCE_DIR}/graphics/format/txireader.cpp
     ${TESTS_SOURCE_DIR}/graphics/keyframetrack.cpp
+    ${TESTS_SOURCE_DIR}/graphics/vulkan/shadercompiler.cpp
     ${TESTS_SOURCE_DIR}/graphics/walkmesh.cpp
     ${TESTS_SOURCE_DIR}/json/gff.cpp
     ${TESTS_SOURCE_DIR}/resource/extractresources.cpp
@@ -121,7 +122,15 @@ set_target_properties(tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_D
 target_include_directories(tests PRIVATE ${GTEST_INCLUDE_DIRS})
 
 target_precompile_headers(tests PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
-target_link_libraries(tests PRIVATE tools json GTest::gmock_main)
+target_link_libraries(tests PRIVATE tools json graphicsvulkan GTest::gmock_main)
+
+file(GLOB TEST_SLANG_RUNTIME_DLLS
+    ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/slang*.dll
+    ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/gfx.dll)
+foreach(dll ${TEST_SLANG_RUNTIME_DLLS})
+    add_custom_command(TARGET tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${dll} $<TARGET_FILE_DIR:tests>)
+endforeach()
 
 if(MSVC)
     target_compile_options(tests PRIVATE /bigobj)

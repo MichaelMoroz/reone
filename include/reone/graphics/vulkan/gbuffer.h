@@ -46,7 +46,7 @@ public:
         Motion,
         /**
          * Extension point for deferred material data. A resolve that needs a
-         * new field adds it to GpuSceneMaterial, not to the G-buffer.
+         * new field adds it to InstanceMaterial, not to the G-buffer.
          */
         MaterialId,
         Count

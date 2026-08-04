@@ -1,5 +1,5 @@
 // Shared vertex and fragment stages that several programs are built from.
-// Ported from glsl/v_passthrough, v_mvp, v_billboard, v_aabb, f_color, f_null,
+// Ported from glsl/v_passthrough, v_mvp, v_billboard, f_color, f_null,
 // f_texture and f_texnoper.
 //
 // See slang/pbr_opaque_model.slang for the matrix convention these rely on.
@@ -93,45 +93,11 @@ MVPVaryings billboardVertex(
     return output;
 }
 
-// ----------------------------------------------------------------------- aabb
-
-struct AABBVaryings {
-    float4 position : SV_Position;
-    float4 worldPos : TEXCOORD0;
-    float4 curClipPos : TEXCOORD1;
-    float4 prevClipPos : TEXCOORD2;
-};
-
-[shader("vertex")]
-AABBVaryings aabbVertex(uint vertexId: SV_VertexID) {
-    AABBVaryings output;
-    output.worldPos = aabbUniforms.corners[vertexId];
-    // Debug geometry, rebuilt every frame in world space, so only the camera moves.
-    output.curClipPos = mul(globalUniforms.viewProjection, output.worldPos);
-    output.prevClipPos = mul(globalUniforms.prevViewProjection, output.worldPos);
-    output.position = mul(globalUniforms.projection, mul(globalUniforms.view, output.worldPos));
-    return output;
-}
-
 // -------------------------------------------------------------------- colour
 
 [shader("fragment")]
 float4 colorFragment() : SV_Target {
     return localUniforms.color;
-}
-
-struct RetroAABBOutput {
-    float4 color : SV_Target0;
-    float4 hilights : SV_Target1;
-};
-
-/** A debug box still has two attachments in the retro forward pass. */
-[shader("fragment")]
-RetroAABBOutput retroAABBFragment(AABBVaryings input) {
-    RetroAABBOutput output;
-    output.color = float4(1.0);
-    output.hilights = float4(0.0);
-    return output;
 }
 
 // ----------------------------------------------------------------------- null

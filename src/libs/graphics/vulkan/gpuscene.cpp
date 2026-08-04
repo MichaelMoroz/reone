@@ -109,7 +109,7 @@ void VulkanGpuScene::init(VulkanRenderer &renderer) {
     alloc.pSetLayouts = setLayouts.data();
     if (vkAllocateDescriptorSets(device.handle(), &alloc, _mergeSets.data()) != VK_SUCCESS)
         throw std::runtime_error("Vulkan: merge descriptor allocation failed");
-    auto spirv = readSpirV(_renderer->shaderDir() / "skin.spv");
+    const auto &spirv = _renderer->shaderModule("skin");
     VkShaderModuleCreateInfo moduleInfo {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     moduleInfo.codeSize = spirv.size() * sizeof(uint32_t);
     moduleInfo.pCode = spirv.data();
@@ -203,7 +203,7 @@ void VulkanGpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
         frame.danglyPositionCapacity = danglyPositionCapacity;
         frame.scene = std::make_unique<VulkanBuffer>(_renderer->device());
         frame.scene->initHostVisible(
-            static_cast<VkDeviceSize>(objectCapacity) * sizeof(GpuSceneObjectData) +
+            static_cast<VkDeviceSize>(objectCapacity) * sizeof(SceneObject) +
                 static_cast<VkDeviceSize>(boneCapacity) * sizeof(GpuSceneMatrix3x4) +
                 static_cast<VkDeviceSize>(danglyPositionCapacity) * sizeof(glm::vec4),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -217,7 +217,7 @@ void VulkanGpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
         frame.vertexCapacity = vertexCapacity;
         frame.triangleCapacity = triangleCapacity;
         const VkDeviceSize vertexBytes =
-            static_cast<VkDeviceSize>(vertexCapacity) * sizeof(GpuSceneMergedVertex);
+            static_cast<VkDeviceSize>(vertexCapacity) * sizeof(MergedVertex);
         const VkDeviceSize indexBytes =
             static_cast<VkDeviceSize>(triangleCapacity) * 3 * sizeof(uint32_t);
         const VkDeviceSize materialIdBytes =
@@ -415,16 +415,16 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
                            static_cast<uint32_t>(upload.danglyPositions.size()),
                            static_cast<uint32_t>(upload.grassRanges.size()));
         sceneObjectBytes =
-            static_cast<VkDeviceSize>(frame.sceneObjectCapacity) * sizeof(GpuSceneObjectData);
+            static_cast<VkDeviceSize>(frame.sceneObjectCapacity) * sizeof(SceneObject);
         sceneBoneBytes =
             static_cast<VkDeviceSize>(frame.boneCapacity) * sizeof(GpuSceneMatrix3x4);
         danglyPositionBytes =
             static_cast<VkDeviceSize>(frame.danglyPositionCapacity) * sizeof(glm::vec4);
         vertexBytes =
-            static_cast<VkDeviceSize>(frame.vertexCapacity) * sizeof(GpuSceneMergedVertex);
+            static_cast<VkDeviceSize>(frame.vertexCapacity) * sizeof(MergedVertex);
         indexBytes =
             static_cast<VkDeviceSize>(frame.triangleCapacity) * 3 * sizeof(uint32_t);
-        auto *sceneObjects = static_cast<GpuSceneObjectData *>(frame.scene->mapped());
+        auto *sceneObjects = static_cast<SceneObject *>(frame.scene->mapped());
         for (size_t i = 0; i < upload.objects.size(); ++i)
             sceneObjects[i] = upload.objects[i].data;
         if (!upload.bones.empty())
@@ -442,10 +442,10 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
 
         frame.materials = std::make_unique<VulkanBuffer>(_renderer->device());
         frame.materials->initHostVisible(
-            static_cast<VkDeviceSize>(upload.materials.size()) * sizeof(GpuSceneMaterial),
+            static_cast<VkDeviceSize>(upload.materials.size()) * sizeof(InstanceMaterial),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         std::memcpy(frame.materials->mapped(), upload.materials.data(),
-                    upload.materials.size() * sizeof(GpuSceneMaterial));
+                    upload.materials.size() * sizeof(InstanceMaterial));
     }
 
     {
@@ -532,7 +532,7 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
     }
 
     const VkDeviceSize writtenVertexBytes =
-        static_cast<VkDeviceSize>(vertexCount) * sizeof(GpuSceneMergedVertex);
+        static_cast<VkDeviceSize>(vertexCount) * sizeof(MergedVertex);
     const VkDeviceSize writtenIndexBytes =
         static_cast<VkDeviceSize>(triangleCount) * 3 * sizeof(uint32_t);
     const VkDeviceSize writtenMaterialIdBytes =

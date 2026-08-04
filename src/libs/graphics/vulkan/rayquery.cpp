@@ -38,8 +38,6 @@ using namespace reone::graphics;
 namespace reone::graphics {
 namespace {
 
-using InstanceMaterial = GpuSceneMaterial;
-using MergedVertex = GpuSceneMergedVertex;
 
 // Sky cubemap face resolution. Measured on danm14ab against the geometry sky
 // it replaces, as a ratio of surviving horizontal detail: 512 keeps 0.59,
@@ -257,7 +255,7 @@ void VulkanRayQuery::init() {
                                auxWrites.data(), 0, nullptr);
     }
 
-    auto spirv = readSpirV(_renderer.shaderDir() / "rayquery.spv");
+    const auto &spirv = _renderer.shaderModule("rayquery");
     VkShaderModuleCreateInfo moduleInfo {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     moduleInfo.codeSize = spirv.size() * sizeof(uint32_t);
     moduleInfo.pCode = spirv.data();
@@ -400,7 +398,7 @@ void VulkanRayQuery::init() {
             compositePipelineLayout.pPushConstantRanges = &compositePush;
             if (vkCreatePipelineLayout(device.handle(), &compositePipelineLayout, nullptr, &_compositePipelineLayout) != VK_SUCCESS)
                 throw std::runtime_error("Vulkan: NRD composite pipeline layout creation failed");
-            auto compositeSpirv = readSpirV(_renderer.shaderDir() / "nrd_composite.spv");
+            const auto &compositeSpirv = _renderer.shaderModule("nrd_composite");
             VkShaderModuleCreateInfo compositeModuleInfo {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
             compositeModuleInfo.codeSize = compositeSpirv.size() * sizeof(uint32_t);
             compositeModuleInfo.pCode = compositeSpirv.data();
@@ -469,7 +467,7 @@ void VulkanRayQuery::init() {
         tonemapPipelineLayout.pPushConstantRanges = &tonemapPush;
         if (vkCreatePipelineLayout(device.handle(), &tonemapPipelineLayout, nullptr, &_tonemapPipelineLayout) != VK_SUCCESS)
             throw std::runtime_error("Vulkan: tonemap pipeline layout creation failed");
-        auto tonemapSpirv = readSpirV(_renderer.shaderDir() / "pt_tonemap.spv");
+        const auto &tonemapSpirv = _renderer.shaderModule("pt_tonemap");
         VkShaderModuleCreateInfo tonemapModuleInfo {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
         tonemapModuleInfo.codeSize = tonemapSpirv.size() * sizeof(uint32_t);
         tonemapModuleInfo.pCode = tonemapSpirv.data();
@@ -912,7 +910,7 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
         triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
         triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
         triangles.vertexData.deviceAddress = geometryAddress;
-        triangles.vertexStride = sizeof(GpuSceneMergedVertex);
+        triangles.vertexStride = sizeof(MergedVertex);
         triangles.maxVertex = scene.vertexCount - 1;
         triangles.indexType = VK_INDEX_TYPE_UINT32;
         triangles.indexData.deviceAddress = scene.indices.buffer->deviceAddress() + scene.indices.offset;

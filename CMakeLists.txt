@@ -232,16 +232,22 @@ if(ENABLE_FSR)
     add_compile_definitions(R_ENABLE_FSR)
 endif()
 
-# Compiles slang/ to SPIR-V for Vulkan and regenerates the uniform layout
-# assertions from GLSL-target reflection. Both uses degrade gracefully when it
-# is missing: Vulkan shader modules are absent, and the assertion header is committed.
+# Slang is linked by the Vulkan renderer and compiles shader modules at runtime.
+# slangc remains optional for the explicit uniform-layout regeneration utility.
 find_program(SLANGC_EXECUTABLE slangc
     HINTS ${CMAKE_PREFIX_PATH} ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/shader-slang
     DOC "Slang compiler")
 if(SLANGC_EXECUTABLE)
     message(STATUS "Found slangc: ${SLANGC_EXECUTABLE}")
 else()
-    message(STATUS "slangc not found - Vulkan shader modules will not be transpiled")
+    message(STATUS "slangc not found - uniform-layout regeneration is unavailable")
+endif()
+find_path(SLANG_INCLUDE_DIR slang.h
+    HINTS ${CMAKE_PREFIX_PATH} ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include)
+find_library(SLANG_LIBRARY NAMES slang
+    HINTS ${CMAKE_PREFIX_PATH} ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib)
+if(NOT SLANG_INCLUDE_DIR OR NOT SLANG_LIBRARY)
+    message(FATAL_ERROR "Slang headers and runtime library are required for the Vulkan renderer")
 endif()
 
 set(REONE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
@@ -299,7 +305,6 @@ add_subdirectory(src/libs/tools) # tools static library
 
 # Applications
 
-add_subdirectory(src/apps/shaderpack) # shaderpack application
 add_subdirectory(src/apps/uniformgen) # uniform layout assertion generator
 add_subdirectory(src/apps/engine) # engine application
 
@@ -342,6 +347,7 @@ if(UNIX AND NOT APPLE)
 endif()
 
 install(TARGETS ${InstallTargets} DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(DIRECTORY slang DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(TARGETS system resource graphics audio scene movie script gui game tools DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 # END Installation

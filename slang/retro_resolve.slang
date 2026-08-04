@@ -5,7 +5,7 @@
 import uniforms;
 import lib.gbuf;
 import lib.shadow;
-import lib.scene_material;
+import lib.scene_schema;
 
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
 [[vk::binding(2, 1)]] Sampler2D sGBufEyeNormal;

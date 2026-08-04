@@ -337,7 +337,7 @@ const VulkanGpuScene::View &VulkanScenePipeline::prepareMergedScene(
         return _mergedScene;
     }
     const auto materialCount =
-        _mergedScene.materials.size / sizeof(GpuSceneMaterial);
+        _mergedScene.materials.size / sizeof(InstanceMaterial);
     if (materialCount > VulkanGBuffer::kNoMaterial) {
         warn("Vulkan: G-buffer R16_UINT material ID exhausted by " +
                  std::to_string(materialCount) +

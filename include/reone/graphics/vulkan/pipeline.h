@@ -99,9 +99,6 @@ private:
     VkPipelineLayout _layout {VK_NULL_HANDLE};
 };
 
-/** Read a .spv file into the word vector VkShaderModuleCreateInfo wants. */
-std::vector<uint32_t> readSpirV(const std::filesystem::path &path);
-
 } // namespace graphics
 
 } // namespace reone

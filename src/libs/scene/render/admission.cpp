@@ -77,7 +77,7 @@ std::string describeUploadDifference(const GpuSceneUpload &left,
             &left.objects[firstObject].data);
         const auto *b = reinterpret_cast<const unsigned char *>(
             &right.objects[firstObject].data);
-        while (objectByte < sizeof(GpuSceneObjectData) && a[objectByte] == b[objectByte])
+        while (objectByte < sizeof(SceneObject) && a[objectByte] == b[objectByte])
             ++objectByte;
     }
     std::string detail = " objects=" + std::to_string(left.objects.size()) + "/" +

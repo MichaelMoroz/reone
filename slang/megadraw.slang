@@ -6,7 +6,7 @@ import lib.gbuf;
 import lib.math;
 import lib.megadraw_geometry;
 import lib.motion;
-import lib.scene_material;
+import lib.scene_schema;
 
 static const uint kMegaFeatureLightmap = 1u << 0;
 static const uint kMegaFeatureEnvMap = 1u << 1;

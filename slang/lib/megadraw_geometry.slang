@@ -3,25 +3,12 @@
 // punch-through surface cannot disagree about coverage between the two.
 
 import lib.math;
-import lib.scene_material;
+import lib.scene_schema;
 
 static const uint kNoTexture = 0xffffffffu;
 static const uint kMegaFeaturePremulAlpha = 1u << 12;
 static const uint kMegaFeaturePunchThrough = 1u << 26;
 static const float kMegaAlphaTestThreshold = 0.5;
-
-struct MergedVertex {
-    float3 position;
-    float3 normal;
-    float2 uv1;
-    float2 uv2;
-    float3 tangent;
-    float3 bitangent;
-    float3 tanSpaceNormal;
-    float3 prevPosition;
-    float2 pad;
-    float4 color;
-};
 
 [[vk::binding(0, 2)]] StructuredBuffer<MergedVertex> mergedVertices;
 [[vk::binding(1, 2)]] StructuredBuffer<uint> mergedMaterialIds;

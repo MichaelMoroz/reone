@@ -23,22 +23,6 @@ namespace reone {
 
 namespace graphics {
 
-std::vector<uint32_t> readSpirV(const std::filesystem::path &path) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.good()) {
-        throw std::runtime_error("Vulkan: cannot open SPIR-V module: " + path.string());
-    }
-    auto size = static_cast<size_t>(file.tellg());
-    if (size % sizeof(uint32_t) != 0) {
-        throw std::runtime_error("Vulkan: SPIR-V module is not a whole number of words: " +
-                                 path.string());
-    }
-    std::vector<uint32_t> words(size / sizeof(uint32_t));
-    file.seekg(0);
-    file.read(reinterpret_cast<char *>(words.data()), size);
-    return words;
-}
-
 void VulkanPipeline::init(const Config &config) {
     VkShaderModuleCreateInfo moduleInfo {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     moduleInfo.codeSize = config.spirv.size() * sizeof(uint32_t);

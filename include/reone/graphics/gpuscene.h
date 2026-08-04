@@ -14,7 +14,7 @@ namespace reone::graphics {
 
 class Mesh;
 
-struct alignas(16) GpuSceneMaterial {
+struct alignas(16) InstanceMaterial {
     glm::vec4 selfIllumColor {0.0f};
     glm::vec4 diffuseColor {1.0f};
     glm::vec4 uv0 {1.0f, 0.0f, 0.0f, 0.0f};
@@ -44,19 +44,19 @@ struct alignas(16) GpuSceneMaterial {
     int32_t envMapDerivedLayer {0};
     float tailPad[3] {};
 };
-static_assert(offsetof(GpuSceneMaterial, mainTex) == 80);
-static_assert(offsetof(GpuSceneMaterial, envMap) == 108);
-static_assert(offsetof(GpuSceneMaterial, curatedAlbedoMul) == 112);
-static_assert(offsetof(GpuSceneMaterial, curatedEmission) == 192);
-static_assert(offsetof(GpuSceneMaterial, surfaceType) == 208);
-static_assert(offsetof(GpuSceneMaterial, roughnessScale) == 212);
-static_assert(offsetof(GpuSceneMaterial, envMapCube) == 216);
-static_assert(offsetof(GpuSceneMaterial, waterAlpha) == 220);
-static_assert(offsetof(GpuSceneMaterial, overrideColor) == 224);
-static_assert(offsetof(GpuSceneMaterial, overrideParams) == 240);
-static_assert(offsetof(GpuSceneMaterial, ambientColor) == 256);
-static_assert(offsetof(GpuSceneMaterial, envMapDerivedLayer) == 272);
-static_assert(sizeof(GpuSceneMaterial) == 288);
+static_assert(offsetof(InstanceMaterial, mainTex) == 80);
+static_assert(offsetof(InstanceMaterial, envMap) == 108);
+static_assert(offsetof(InstanceMaterial, curatedAlbedoMul) == 112);
+static_assert(offsetof(InstanceMaterial, curatedEmission) == 192);
+static_assert(offsetof(InstanceMaterial, surfaceType) == 208);
+static_assert(offsetof(InstanceMaterial, roughnessScale) == 212);
+static_assert(offsetof(InstanceMaterial, envMapCube) == 216);
+static_assert(offsetof(InstanceMaterial, waterAlpha) == 220);
+static_assert(offsetof(InstanceMaterial, overrideColor) == 224);
+static_assert(offsetof(InstanceMaterial, overrideParams) == 240);
+static_assert(offsetof(InstanceMaterial, ambientColor) == 256);
+static_assert(offsetof(InstanceMaterial, envMapDerivedLayer) == 272);
+static_assert(sizeof(InstanceMaterial) == 288);
 
 /** Three row vectors encode a float3x4 exactly as skin.slang reads it. */
 struct alignas(16) GpuSceneMatrix3x4 {
@@ -67,7 +67,7 @@ struct alignas(16) GpuSceneMatrix3x4 {
 static_assert(sizeof(GpuSceneMatrix3x4) == 48);
 
 /** std430-compatible canonical vertex used by skin.slang and consumers. */
-struct alignas(16) GpuSceneMergedVertex {
+struct alignas(16) MergedVertex {
     glm::vec3 position {0.0f};
     float positionPad {0.0f};
     glm::vec3 normal {0.0f};
@@ -86,19 +86,19 @@ struct alignas(16) GpuSceneMergedVertex {
     float tailPad[2] {};
     glm::vec4 color {1.0f};
 };
-static_assert(offsetof(GpuSceneMergedVertex, position) == 0);
-static_assert(offsetof(GpuSceneMergedVertex, normal) == 16);
-static_assert(offsetof(GpuSceneMergedVertex, uv1) == 32);
-static_assert(offsetof(GpuSceneMergedVertex, uv2) == 40);
-static_assert(offsetof(GpuSceneMergedVertex, tangent) == 48);
-static_assert(offsetof(GpuSceneMergedVertex, bitangent) == 64);
-static_assert(offsetof(GpuSceneMergedVertex, tanSpaceNormal) == 80);
-static_assert(offsetof(GpuSceneMergedVertex, prevPosition) == 96);
-static_assert(offsetof(GpuSceneMergedVertex, pad) == 112);
-static_assert(offsetof(GpuSceneMergedVertex, color) == 128);
-static_assert(sizeof(GpuSceneMergedVertex) == 144);
+static_assert(offsetof(MergedVertex, position) == 0);
+static_assert(offsetof(MergedVertex, normal) == 16);
+static_assert(offsetof(MergedVertex, uv1) == 32);
+static_assert(offsetof(MergedVertex, uv2) == 40);
+static_assert(offsetof(MergedVertex, tangent) == 48);
+static_assert(offsetof(MergedVertex, bitangent) == 64);
+static_assert(offsetof(MergedVertex, tanSpaceNormal) == 80);
+static_assert(offsetof(MergedVertex, prevPosition) == 96);
+static_assert(offsetof(MergedVertex, pad) == 112);
+static_assert(offsetof(MergedVertex, color) == 128);
+static_assert(sizeof(MergedVertex) == 144);
 
-struct alignas(16) GpuSceneObjectData {
+struct alignas(16) SceneObject {
     glm::mat4 transform {1.0f};
     glm::mat4 prevTransform {1.0f};
     glm::mat4 transformInv {1.0f};
@@ -124,15 +124,15 @@ struct alignas(16) GpuSceneObjectData {
     uint32_t danglyCount {0};
     alignas(16) glm::vec4 saberDisplacement {0.0f};
 };
-static_assert(offsetof(GpuSceneObjectData, srcVertexOffset) == 192);
-static_assert(offsetof(GpuSceneObjectData, srcIndexOffset) == 196);
-static_assert(offsetof(GpuSceneObjectData, srcVertexStride) == 200);
-static_assert(offsetof(GpuSceneObjectData, offPosition) == 204);
-static_assert(offsetof(GpuSceneObjectData, vertexCount) == 232);
-static_assert(offsetof(GpuSceneObjectData, materialIndex) == 260);
-static_assert(offsetof(GpuSceneObjectData, danglyBase) == 264);
-static_assert(offsetof(GpuSceneObjectData, saberDisplacement) == 272);
-static_assert(sizeof(GpuSceneObjectData) == 288);
+static_assert(offsetof(SceneObject, srcVertexOffset) == 192);
+static_assert(offsetof(SceneObject, srcIndexOffset) == 196);
+static_assert(offsetof(SceneObject, srcVertexStride) == 200);
+static_assert(offsetof(SceneObject, offPosition) == 204);
+static_assert(offsetof(SceneObject, vertexCount) == 232);
+static_assert(offsetof(SceneObject, materialIndex) == 260);
+static_assert(offsetof(SceneObject, danglyBase) == 264);
+static_assert(offsetof(SceneObject, saberDisplacement) == 272);
+static_assert(sizeof(SceneObject) == 288);
 
 struct alignas(16) GpuSceneProceduralQuad {
     glm::vec4 positionVariant {0.0f};
@@ -178,7 +178,7 @@ enum class GpuSceneResidencyClass { Static,
                                     Dynamic };
 
 struct GpuSceneObjectInput {
-    GpuSceneObjectData data;
+    SceneObject data;
     const Mesh *sourceMesh {nullptr};
     uint32_t objectIndex {0};
     uint32_t objectGeneration {0};
@@ -186,7 +186,7 @@ struct GpuSceneObjectInput {
 
 /** Vulkan-free output of shared scene admission. */
 struct GpuSceneUpload {
-    std::vector<GpuSceneMaterial> materials;
+    std::vector<InstanceMaterial> materials;
     std::vector<GpuSceneObjectInput> objects;
     std::vector<GpuSceneMatrix3x4> bones;
     std::vector<glm::vec4> danglyPositions;
