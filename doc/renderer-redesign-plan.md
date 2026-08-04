@@ -120,7 +120,7 @@ named leaf zones; the fixture produces its two numbers unattended; the S3
 ordering question (is leaf-prep or animation the bigger half of the 1.25 ms?)
 has an answer.
 
-## S1 — Slang in the engine, one schema — landed, with one open defect
+## S1 — Slang in the engine, one schema — landed
 
 Two halves, one step, because the second is what makes the first pay.
 
@@ -148,39 +148,61 @@ pass. The rule the mirrors follow: **a schema mirror carries the same name as
 its Slang struct**, and only CPU-only types keep a `GpuScene` prefix. The dead
 AABB debug shaders went with it (backlog 5.3).
 
-**Open defect, and it gates calling S1 finished: both `tests.exe` and the
-engine die with `STATUS_HEAP_CORRUPTION` (0xC0000374).** The engine crashes on
-**every** headless capture run — `3/3` at `a6dc6ed1` and `3/3` after the fixes
-below — and `tests.exe` on roughly half of full-suite runs (4/6 at
-`a6dc6ed1`). It arrived with this step rather than with the review of it. The
-engine crash is **teardown only**: the module loads, the frame renders, the
-screenshot is written and the frame-slot line is logged, and the process then
-faults on the way out — the signature the diagnostics skill names for an
-object owning a resource that outlives the device. The suspects are the
-`SlangShaderCompiler` member's lifetime against `VulkanRenderer::deinit`
-ordering, and Slang's own DLLs. Run the Debug build's checked VMA first, as
-that skill prescribes. The test crash never reproduces with
-`--gtest_filter=SlangShaderCompiler.*` alone (0/5) or with those tests excluded
-(0/3); it needs both, and the process always dies entering the *first* Slang
-test after other suites have run. Adding only the neighbouring image-decoder
-suites reproduces it 2/2, which points at heap damage done earlier and merely
-*detected* by Slang's first large allocation, rather than at the compiler
-itself. Linking `graphicsvulkan` into `tests` is what newly put the two in one
-process. A separate real fault was found and fixed while chasing it - `mad.lib`
-and `slang.lib` both resolved to vcpkg's *debug* import library in Release
-builds (`LNK4098 MSVCRTD conflicts`), now bound per configuration - but that was
-not the cause: the crash rate is unchanged after it, in both binaries.
+**`STATUS_HEAP_CORRUPTION` (0xC0000374) — the engine is fixed, the test binary
+is not yet.** S1 shipped a
+process that died on the way out: the engine faulted on **every** headless
+capture (3/3 at `a6dc6ed1`) and `tests.exe` on about half its full-suite runs
+(4/6). The engine crash was teardown-only — module loaded, frame rendered,
+screenshot written, frame-slot line logged, then the fault — which is why it
+was invisible to anything that judged the image.
 
-What *is* established about the fixes: six headless raster captures of
-`danm14ab` at frame 310, three either side of them, hash identical — so the
-renames, the stricter guard and the build changes are output-neutral, which is
-the bar a pure refactor has to clear.
+**Releasing Slang's global session was the engine's cause.** It is the one act
+both binaries had in common: the engine does it once at teardown, and each test
+did it per `SlangShaderCompiler::deinit`. The session owns Slang's compiler
+back-end DLLs, and dropping the last reference takes the heap with it. It is
+now created once per process and deliberately never released, which is also
+what Slang's own guidance asks for, since creation is expensive. Engine
+captures went 3/3 crashing to **4/4 clean, cold cache included**.
+
+**`tests.exe` is not fully fixed by that**, and the residue is narrower and
+still open: with the session retained, a *cold-cache* Slang-only run still
+faulted 1/3, while warm runs were clean 2/2. The engine compiles all twenty
+modules cold without faulting, so the distinguishing factor is not compilation
+itself but how often the test does it — `recompileAll()` force-recompiles the
+whole set a second time, and several tests each build their own compiler over a
+copied source tree. **The next suspect is per-module `ISession` churn**:
+`Impl::load` creates and releases a fresh `ISession` for every module, so a
+full-suite run creates hundreds. Reusing one session per compiler is both the
+obvious test of that and a speed-up, since a session caches loaded modules.
+Until it is settled, treat a green full-suite run as weak evidence — this
+failure has looked absent twice and was not.
+
+Two wrong turns are recorded because both cost time. The first attribution —
+heap damage done by earlier image-decoder tests and merely *detected* by
+Slang — was **wrong, and wrong for a bad reason**: it assumed Google Test's
+filtered run preserved the full-suite order without checking, when the filtered
+run schedules the Slang suite first. The crash reproduces in the first Slang
+test alone against a fresh `TEMP`, so no other suite is involved. The second
+was the debug/release CRT mix; it is a real fault and is fixed, but the crash
+rate was unchanged either side of it.
+
+A distinct teardown-order defect was found in the same pass and fixed:
+`Engine::deinit()` never reset `_vulkanRenderer`, so the renderer — holding the
+surface created from the window — was destroyed by `~Engine`, after
+`_window.reset()` and `SDL_Quit()`. `_shaderCompiler.deinit()` preceding
+`_device.deinit()` was checked and was never the problem. A Debug capture used
+while chasing this blocked in the final `VulkanRenderer::endFrame()`, so the
+checked-VMA path has still not been exercised to completion — worth finishing
+separately, since it is the standing instrument for this bug class.
+
+Output neutrality of everything above is established: six headless raster
+captures of `danm14ab` at frame 310, three either side of the fixes, hash
+identical — the bar a pure refactor has to clear.
 
 **Deliberately still open**, so it is not mistaken for finished: the uniform
 blocks are *not* on this path — `uniformlayout.generated.h` is still produced
 offline by `uniformgen`/`slangc` and committed, so there are two schema
-mechanisms until that is folded in. and the naming rule is only half-applied
-in the C++ mirrors.
+mechanisms until that is folded in.
 
 **Runtime compilation** (backlog 4.9's wants, unchanged): link Slang, compile
 at startup and on demand, cache compiled SPIR-V keyed on source hash so warm
