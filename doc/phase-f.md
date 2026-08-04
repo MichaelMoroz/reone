@@ -61,10 +61,22 @@ check said nothing about buildings baked into the horizon, and the "holes"
 triage ranked a correct starfield worst. Metrics check the rest of the set once
 you know what you are looking at.
 
+The instrument for looking is the free camera, and it no longer costs a trip
+to the console: `5333ae11` put it on the editor menu, restoring the previous
+camera on the way out, and `620eea53` moved looking onto a held right button
+so the menu that turns the camera on stays clickable. That second commit also
+retracted a measurement from the same session which appeared to show the free
+camera never reaching the renderer at all. The captures had frozen the frame
+before the module finished loading, so they compared two loading screens. A
+capture taken too early proves nothing about the thing it names.
+
 **Capture rules, everywhere:** `--dev 0`, or the frame-time readout forges a
 difference; `--grassdensity 1`, because `reone.cfg` is graded away from
 defaults and wins any flag not passed; and `--taajitter 0` on **both sides** of
-any cross-mode comparison, or the comparison measures sampling noise (see G2). Traced output is nondeterministic —
+any cross-mode comparison, or the comparison measures sampling noise (see G2).
+Since `9ba51344` the raster modes are unjittered whatever that flag says, so
+in practice it now only silences the traced side; it stays a rule because G9
+opens the gate again. Traced output is nondeterministic —
 compare distributions, never a stored number.
 
 **Captures are deterministic per binary, not across binaries.** The capture
@@ -88,24 +100,26 @@ the invariant; its absolute value across commits is not.
 | **G4** | done `d6148ee6` — matrices born in Vulkan clip, `glToVulkanClip` and the inert `IUniforms` deleted; dumps bit-identical across the change |
 | **G5** | done `802ec6c8` — retro shades the G-buffer; by eye, three of four modules read as the same game. `920c1259` then took blended surfaces out of the G-buffer and the per-frame hash out of the frame; `1c703dde` added Tracy, capturable headless |
 | **R1** | done `cfbb2989` — persistent registration; 1.33 → 0.16 ms measured, zero shadow mismatches including a module transition |
-| **R2** | its constraint rides inside G6 — the grown material record is computed at material-set time, not per frame — leaving R2 itself as the `Registered*` deletion, mechanical cleanup once nothing reads them |
+| **R2** | its constraint landed inside G6 `fe22cb22` — the grown material record is computed at material-set time, not per frame — leaving R2 itself as the `Registered*` deletion, mechanical cleanup once nothing reads them |
 | **R3** | done `1b6559aa` — grass placement in the merge compute; grass CPU 0.007 ms and flat through a teleport, graphics slot 4.1 → 1.3 ms at density 3.57 |
-| **G6** | finish PBR: shading on the G-buffer, and the material record grows to carry envmap, bump and water |
-| **G7** | shadows from real geometry, envmap and bump verified against content |
+| **G6** | done `fe22cb22`, material id in `be0e8dce` — PBR shades the G-buffer, the record grew 256 → 288 bytes to carry envmap, water and per-object ambient, and G5's four approximations became real data. `cd3fbec2` then made metal reflect the authored source, sharp and in eye space. Bump rides in the record and is sampled, but has never been held to a fixture |
+| **G7** | done `e7a4f5b6` — shadows are a mega-draw over merged geometry and the proxies are deleted. Five corrections followed, all found in play: `67cbc312`, `0fb05120`, `05e6a8f8`, `2f00b5f5`, `306cfbc6` |
 | **G8** | transparency in retro and PBR — sorted quads, premultiplied, the three alpha kinds |
 | **G9** | anti-aliasing as one output stage for all three modes: FSR and FXAA |
 | **sky** | **after G9.** The offline `skybake` asset becomes the single source: V0 fixes the baker, V4 suppresses from its manifest, V2 composites, V5 deletes the runtime bake. Raster shows a black sky until then, by decision |
-| **PT substage** | everything traced, after G6–G9 — see the substage section for its ordered list |
+| **PT substage** | everything traced, after the raster track finishes — see the substage section for its ordered list |
 
 **The order of work, set 2026-08-03: finish raster first.** Done since the last
 reorder: the **tracer guide fix** (`98ad7e4f` — guide surface = first
 opaque-or-cutout hit, guide-miss falls back to raw at the composite; at the
 vent camera, traced-only coverage 831,500 → 0 and depth MAE 2.995 → 0.0012),
-**grass density as a live GPU gate** (`c1747799`), and the **emitter census**
-(`714bd700`).
+**grass density as a live GPU gate** (`c1747799`), the **emitter census**
+(`714bd700`), **G6** with its material-id follow-up and the metal fix
+(`fe22cb22`, `be0e8dce`, `cd3fbec2`), and **G7** with the five corrections that
+followed it (`e7a4f5b6`, then `67cbc312`, `0fb05120`, `05e6a8f8`, `2f00b5f5`,
+`306cfbc6`).
 
-The raster track runs to completion before any traced work: **G6** finish PBR,
-**G7** shadows with envmap and bump, **G8** transparency in retro and PBR,
+What is left of the raster track is **G8** transparency in retro and PBR and
 **G9** anti-aliasing for all three modes. Then everything traced becomes a
 **path-tracing substage** — backlog 3.7's transparency restructure, the
 sphere/capsule march with its density and id grids, V1 unification, ReSTIR,
@@ -251,6 +265,22 @@ One decided behaviour change beyond the sky suppression itself: a failed sky
 bake now falls back to the fallback cube with the shell still suppressed,
 where it used to restore the shell as geometry.
 
+`88d3efae` later removed the last input to what gets drawn that was not scene
+policy at all. `updateRoomVisibility` applied the VIS graph — the leader's
+room plus its adjacents — only when the camera happened to be third person;
+every other camera took the all-visible branch, so first person and the free
+camera already drew every room, including the walkmesh-less ones that are K1's
+skybox convention. That is why switching to the free camera on Korriban made
+sky appear: not a filter failing, a filter switched off by an input mode. The
+branch is deleted outright rather than given a camera-appropriate key,
+justified by this project's own measurement that culling buys nothing here —
+removing about 9,000 frustum tests per frame moved frame time by nothing,
+because the tests cost tens of nanoseconds and raster's real cost is CPU work
+per draw. Four modules are byte-identical in third person across the change,
+with the caveat the commit states: it was not confirmed that the culled branch
+was taken in those captures, so that reads as no regression observed rather
+than as proof of equivalence.
+
 **The refactors come before the shading, and the order is forced twice over.**
 First: the admission rewrite changes the classification vocabulary, the
 material table and the `MergedVertex` layout, and G5/G6 shading consumes all
@@ -380,7 +410,7 @@ until the coverage rule was corrected, and the correction is `298d0542`.
 
 - **Additive emissive surfaces** — saber blades, glow decals. They contribute
   no G-buffer surface by design; see the blended pass below.
-- **Shadows**, until G7.
+- **Shadows**, until G7 — restored by `e7a4f5b6` and the corrections after it.
 
 The sky-shell divergence recorded here — 464,982 raster-only pixels — was
 removed by G3; raster-only coverage is now 5 px.
@@ -504,7 +534,28 @@ re-measured; the
 field edge reads the same or better — continuous now — in both modes; the
 density dial still works; merge GPU cost delta measured and reported.
 
-## G6 — PBR shading on the G-buffer
+## G6 — PBR shading on the G-buffer — done `fe22cb22`, material id in `be0e8dce`
+
+Landed. PBR stops presenting black: the resolve G1 kept was rewired to the
+current executor, and `GpuSceneMaterial` grew 256 → 288 bytes to carry
+`envMap`, `envMapCube`, `waterAlpha`, `ambientColor` and `envMapDerivedLayer`,
+moved across the C++ struct, its asserts and both slang declarations together.
+Admission fills them through the shared classifier, with environment layers
+reserved at classification and reset when module resources go, so nothing new
+happens per frame. All four of G5's gaps closed: lightmap presence is a real
+bit rather than a comparison against neutral white, the static light gate is a
+real bit rather than has-a-lightmap, per-object ambient and diffuse are the
+authored colours, and environment reflection exists in both resolves. Judged
+against the pre-G1 captures as a material reference and not as a target,
+danm14ab, danm13 and ebo_m12aa read coherently; 202tel was inconclusive
+because near geometry occludes the bay. Eight G-buffer targets byte-identical
+between PBR and retro, upload hash `a12866a1ebaac77d` in all three modes,
+`SceneAdmission::prepare` unchanged at 0.132 ms.
+
+**One part of this row's old scope was never discharged: bump.** It sits in the
+material record and `megadraw.slang` samples it, but nothing has held it to
+authored content. Envmap was checked, by the metal work below. Bump is still an
+unchecked claim and should be given a fixture rather than assumed.
 
 The PBR material, same input.
 
@@ -544,7 +595,7 @@ what proves the record change did not fork admission.
 Reported from play — metal is less reflective in **both** retro and PBR than
 in the original game. The cause is visible in the code rather than a matter of
 taste: the original forward shader sampled the **authored environment cube
-directly** (`sampleEnvMap`, `pbr_model.slang:361`), while both current
+directly** (`sampleEnvMap`, `pbr_model.slang:368`), while both current
 resolves sample the **prefiltered IBL array at mip 0** — a roughness-convolved
 cube at 128² (`kPrefilteredSize`). The strength term is unchanged in both,
 `* (1 - diffuse.a)`, so this is not a scaling error: the reflection is taken
@@ -555,12 +606,21 @@ and keep the prefiltered chain for what it is for — roughness-varying IBL.
 G6 added `envMap` and `envMapCube` ids to the record precisely so the sharp
 source is reachable; this defect was the first consumer of the cube id.
 
-The resolves now select by authored material kind. An `EnvMapCube` is sampled
-directly through the cube-shaped bindless table using `envMapCube`; a legacy
-2D `EnvMap` has no cube descriptor, so it continues through the existing
-`envMapDerivedLayer` conversion and samples that layer at mip zero. Retro adds
-that sample after lighting as `env * (1 - diffuse.a)`, in gamma space and with
-no Fresnel or roughness, matching the retained forward shader exactly.
+That landed as `cd3fbec2`, and it turned out to be three faults rather than
+one. The resolves now select by authored material kind: an `EnvMapCube` is
+sampled directly through the cube-shaped bindless table using `envMapCube`, and
+a legacy 2D `EnvMap` is sampled from its own authored texture through the GL
+sphere-map projection (correction 1 in the reference section), not through an
+equirectangular formula and not through the prefiltered array at all. The same
+projection error was in `pbr_ibl`'s convolution, whose 2D input is that same
+authored sphere map. Both resolves and the kept forward shaders take the
+reflection vector in **eye space**, which is what makes the original's metal
+camera-locked. And the cube is sampled at **explicit LOD 0**: the first attempt
+at this fix moved the droid by only 0.0004, because implicit LOD inside a
+fullscreen resolve derives its derivatives from 8-bit G-buffer normals and slid
+the mip straight back to blurred. Retro adds the sample after lighting as
+`env * (1 - diffuse.a)`, in gamma space and with no Fresnel or roughness,
+matching the retained forward shader exactly.
 
 PBR keeps the roughness-prefiltered array for IBL specular and adds the sharp
 authored mirror separately. Diffuse alpha partitions rather than duplicates
@@ -569,13 +629,30 @@ the roughness-varying dielectric IBL share. The original mirror therefore
 keeps its authored strength and IBL fills the response the original renderer
 did not model without double-lighting the material.
 
+Measured on the droid, retro variance goes 0.0110 to 0.0207 against 0.0123 in
+the pre-G1 capture. That reads as an overshoot only if the pre-G1 capture is
+the target, and it is not: it is reone's own former renderer, the one reported
+as too dull, whose forward shader got plausible derivatives from real geometry
+and so applied legitimate minification filtering that LOD 0 removes entirely.
+By eye the droid gains reflected structure rather than gaining contrast, which
+is the difference between sharper and merely brighter. **Left open
+deliberately:** LOD 0 filters nothing at distance, so minified metal may alias.
+Choosing a LOD from surface footprint rather than pinning it is a separate
+policy, noted where the sampling happens.
+
 ### Where material data lives — the rule, settled in G6
 
 G6 first carried per-object ambient and diffuse in **two new RGBA8
 attachments**, 8 bytes per pixel to copy fields that already existed in the
-record. G6b replaced that with a **material id** in the G-buffer and a lookup
-in the `instanceMaterials` buffer the resolves can already reach. The rule
-that generalises it, and the reason it survives real PBR textures:
+record, and a shape where every future material field a resolve wanted cost
+another attachment. G6b (`be0e8dce`) replaced that with a 16-bit **material
+id** in the G-buffer and a lookup in the `instanceMaterials` buffer the
+resolves can already reach through the mega-draw's own set 2. Material
+transport falls from 8 bytes per pixel to 2 and the whole G-buffer from 32 to
+26; `0xFFFF` is the uncovered sentinel, and more than 65,535 records warns and
+drops the frame rather than wrapping, which matters because dedup keeps real
+counts in the low hundreds. The rule that generalises it, and the reason it
+survives real PBR textures:
 
 | data | where it goes | why |
 |---|---|---|
@@ -599,19 +676,108 @@ curated per-category roughness and metalness overrides multiply into those
 derived values today, so they need re-expressing against textured inputs
 rather than against a derivation.
 
-## G7 — shadows from real geometry
+## G7 — shadows from real geometry — done `e7a4f5b6`
 
-Admission takes Opaque and Transparent only, so shadow-only proxies sit outside
-the merge while the old shadow pass drew exactly them. Shadow from real geometry
-and delete the proxies rather than plumbing them through. They exist because
-four cascades and six cube faces of real geometry were expensive in 2003, which
-is not a constraint now.
+Admission takes Opaque and Transparent only, so shadow-only proxies sat outside
+the merge while the old shadow pass drew exactly them. The shadow pass is now a
+mega-draw like the G-buffer's: merged buffer, vertices pulled by `SV_VertexID`
+from set 2, the opaque range then the material-gated cutout range, so a fence
+casts a perforated shadow rather than a slab. The coverage rule is not
+reimplemented — it moved into `lib/megadraw_geometry.slang` and both draws share
+it, which makes it the second consumer of the classifier decision G8 still has
+open. Cascades and cube faces are one multiview pass each. The proxies are
+deleted rather than plumbed through: `RenderCategory::ShadowCaster`,
+`shouldCastShadows`, the refresh fallback that collected non-renderable casters
+and the per-cascade proxy frusta all went. Measured as real geometry, the pass
+costs +0.05 ms retro and +0.21 ms PBR for four directional cascades, and +0.11
+and +0.08 ms for six cube faces — which is the frame-cost delta this step asked
+for, and the answer to why the proxies existed in 2003 and do not need to now.
 
-*Proves itself:* named shadow fixtures — an interior with a point light and an
-exterior under the sun — captured against the pre-G1 retro and PBR captures
-and judged by eye, separately from the G-buffer comparison so a regression
-cannot hide behind an intended change; plus the frame-cost delta of real
-geometry against the deleted proxy pass, reported per cascade and cube face.
+PBR needed a second attempt to receive them at all. The first sampled the map
+correctly, with raw shadow output bit-identical to retro's, and still came out
+byte-identical to a build with no shadow maps, because PBR's illumination for
+static lightmapped surfaces lives in the ambient term and bypassed both
+`(1 - shadow)` multiplications. **Comparing against the previous commit rather
+than against the pre-G1 reference is what exposed it:** one variable changes, so
+a mode that does not move has no shadows whatever the screenshots suggest. The
+fix decides how baked and dynamic occlusion combine, which the old renderer left
+implicit — the lightmap carries visibility `1-B`, and with dynamic shadow `D`
+and combined `C = max(B, D)` the maximum wins and baked visibility is never
+squared.
+
+Against the pre-shadow build, retro changed 1,250,985 pixels and PBR 323,136,
+all darker in both, with character silhouettes and terrain occlusion visible in
+the amplified deltas. Seven G-buffer targets stayed byte-identical between modes
+and upload hash `a12866a1ebaac77d` held in all three, through this step and
+every correction below.
+
+**Five corrections followed, and every one came from play rather than from the
+acceptance set.** That is the finding worth keeping: a shadow term can pass
+byte-comparison and pixel-count gates while looking wrong from a camera the
+captures never stood at.
+
+- `67cbc312` **G7c.** There was no depth bias anywhere, not even in the pipeline
+  cache's key; neighbouring shadow-term differences above 10/255 on the arch
+  fall from 69.38% of its pixels to 20.29% once it exists. The cascades were
+  also a function of the main camera, taking their extent from its frustum, so
+  rotating re-rendered static geometry against a different light-space box and
+  every edge crawled. Each slice now takes a rotation-invariant sphere extent
+  quantised to 1/16 of a world unit, with the light-space origin rounded to
+  whole texels; in a static 600x400 ground region the per-frame changed-pixel
+  count goes from all 240,000 to about 6,890. And the incremental ambient factor
+  `(C-B)/(1-B)` has its singularity exactly on the common case — as the baked
+  term approaches one, which is what an unlit interior is, the room went black.
+  Dynamic shadow now attenuates baked ambient by at most a quarter while direct
+  light stays fully shadowable.
+- `0fb05120` **G7d.** The sun pointed at the world origin. G7c had removed a
+  camera dependency by aiming the light with `normalize(-position)`, which is
+  only correct for a module centred on (0,0,0), and danm14ab's play area sits
+  around x=320. The direction now comes from the light's authored orientation
+  where it has one and otherwise from the centre of the non-background room
+  bounds, constant per module and independent of the camera. The depth bias was
+  meanwhile eating the shadows it was meant to clean up: constant bias is gone,
+  slope drops to 1.0, and the receiver offsets along its normal by a swept
+  0.0115 world units rather than a guessed constant. The shadow term on the same
+  plaza material goes from 1.06x to 2.13x in both modes, agreeing to three
+  decimals. The 25% ambient cap was replaced by a split factor, one for the
+  direct BRDF term and one for ambient and IBL, which discharges correction 5 in
+  the reference section. The strength driving that factor was taken from the
+  ARE's authored `ShadowOpacity`, which is what the next entry undoes.
+- `05e6a8f8` Reception was gated on `ModelUsage::Room`, so only level geometry
+  was ever darkened. Every creature, door, placeable and piece of equipment was
+  lit as though the sun reached it — including through the shadow it was casting
+  itself, which is why characters read as pasted onto the scene rather than
+  standing in it. Casting was never the problem; the shadow pass draws the whole
+  merged scene. All world usages now receive, with GUI and camera models out by
+  construction and sky domes and backdrops excluded at the call site, the only
+  place that knows how a particular mesh resolved. The sun's filter, a 3x3 box
+  one texel wide that can only produce ten discrete penumbra levels, became a
+  16-tap Poisson disk over 2.5 texels rotated per receiver. The rotation is keyed
+  on **world** position, not screen position: a screen-space key re-rolls every
+  pixel as the camera moves, which would reintroduce the per-frame edge crawl
+  `9ba51344` had just removed.
+- `2f00b5f5` `ShadowOpacity` is a BYTE, and the retail game authors exactly two
+  values across all 96 modules: 50 in 22 of them and 205 in the other 74.
+  Dividing by 100 and clamping sent those 74 to fully black. Reading it as a byte
+  fraction maps the pair to 0.196 and 0.804 instead, and judged side by side
+  neither end is what either module wants — 0.196 puts danm14ab back near the
+  washed-out state G7d fixed, and 0.804 is still heavy. Both groups want the same
+  middle value, and two authored values that resolve to one answer are not a
+  parameter. So the byte is logged and drives nothing, shadow strength is a
+  constant 0.5 that says it was chosen, and `--shadowopacity` overrides it per
+  run.
+- `306cfbc6` The cascade divisors step 0.005 / 0.015 / 0.045, so each cascade's
+  texels are three times wider than the last and a kernel fixed at 2.5 texels
+  tripled the penumbra's world width at every split — the softening made the seam
+  far more obvious than the old one-texel box ever did. The kernel is now held to
+  a fixed width in **world** units, with the per-cascade texel radius derived
+  from it by probing the light-space matrix with a one-unit tangent offset;
+  probing rather than reconstructing from the divisors keeps it correct if the
+  split scheme changes. Equal penumbra is not enough on its own, because
+  neighbouring cascades carry different depth precision and snap their texel
+  grids independently, so the last fifth of each cascade's depth range
+  cross-fades into the next. The row-to-row step at the split falls 8.197 to
+  0.045, and the median step across the whole ground halves.
 
 ## G8 — the blended pass, and the three alpha kinds
 
@@ -637,11 +803,15 @@ and alpha-blended is alpha equal to coverage. The material decides which it is
 by the alpha it writes, so no second pipeline and no second pass are needed —
 the distinction stops being a branch in the frame graph and becomes a value.
 
-One thing to settle when this is built, because both consumers must agree on
+One thing to settle when this is built, because every consumer must agree on
 it: punchcards are opaque here, discarding at zero alpha, whereas the shared
 coverage rule today sends punch-through material through the non-opaque range
 at the tracer's 0.5 threshold. Changing that is a change to the *shared* rule
-and to the classifier, not to the raster draw alone.
+and to the classifier, not to the raster draw alone — and since G7 the rule has
+three consumers, not two. The G-buffer mega-draw and the shadow mega-draw both
+read it out of `lib/megadraw_geometry.slang`, and the tracer's BLAS geometry
+ranges are the third. Moving the threshold moves what casts a shadow, so the
+punchcard fixture has to be judged with the sun on it.
 
 ### Sorting, which blending needs and one draw does not provide
 
@@ -706,10 +876,32 @@ carries three things, not one:
   jittered frame with no temporal resolve just shimmers.
 
 So the AA choice *drives* the jitter setting rather than sitting beside it as
-an independent dial; today `taajitter` is a global option that a user can set
-into a contradiction with the active method. One selector, deriving jitter,
+an independent dial. `9ba51344` took the first half of that: `taajitter` is
+still a global option, but `computeJitter` returns zero outside path tracing,
+because jittering a grid nothing resolves is shimmer by construction. On a
+frozen scene with a static camera it was moving 6-12% of pixels per frame in
+both raster modes, and the reason it read as *shadows* crawling is a matrix
+mismatch worth recording here since G9 owns the reversal: the offset only ever
+reached `globals.projection`, while megadraw rasterises through
+`globals.viewProjection`, which `uniforms.slang` documents as deliberately
+unjittered so motion vectors stay clean. Depth was written through one matrix
+and inverted through another, so every reconstructed world position wobbled by
+the Halton offset each frame, and the shadow map lookup turned that into a
+binary flip along every shadow edge. G9 is what opens the gate again, and it
+should open it per method rather than per mode. One selector, deriving jitter,
 is the shape — and it is also what makes the modes comparable, because a
 retro and a traced capture at the same setting then differ in shading only.
+
+**Open, and it has to be settled before the gate opens: path tracing shows no
+image difference at all between jitter on and off.** `9ba51344` also corrected
+megadraw to rasterise through the jittered projection so depth and its inverse
+agree, but that correction is unexercised rather than verified, because no
+measurement in traced mode moved a pixel either way. It was kept because it
+matches the documented intent, not because a result forced it. Either FSR is
+not consuming the offset or the offset is not reaching the sampling, and both
+are defects in the one mode that has a temporal resolve today — so G9 cannot
+treat "FSR requires jitter on" as established until traced output is shown to
+respond to jitter at all.
 
 The shaders survive from G1 (`postprocess.slang` still carries
 `fxaaFragment`), and the FSR path exists in `fsrupscaler.cpp`; the work is
@@ -748,7 +940,7 @@ stand on its own against the traced image rather than as its cheaper sibling.
 # The path-tracing substage — after the raster track
 
 Settled 2026-08-03 as design, revisable on measurement. Nothing here starts
-until G6–G9 are done.
+until the raster track is done, which now means G8 and G9.
 
 Raster owns primary visibility for every mode; the tracer becomes a lighting
 strategy over shared surfaces. The frame:
@@ -955,14 +1147,18 @@ Two defects, one of them structural:
   filtering). Run that before touching anything, since it doubles as 1.14's
   axis-convention proof (KOTOR is Z-up, cube faces are Y-up, and a mirrored or
   yawed sky looks plausible enough to ship).
-- **Whole-room granularity swallows the props.** Every config entry is
+- **Whole-room granularity swallows the props.** Every committed config entry is
   `room = <room>` / `sky = <room>`; `grep -c meshes` over both `modules.ini`
-  files returns **0**. The tool carries a per-mesh list
-  (`skybaker.cpp:88`) that nothing uses. So `001ebo16` goes in as one lump —
+  files returns **0**. The wiring is not what is missing — `403c0802` gave the
+  tool a per-mesh list (`skybaker.cpp:88`), parses `meshes =` when a config
+  carries it (`skybaker.cpp:676`) and emits a draft one when it generates a
+  config (`skybaker.cpp:625`). The committed configs predate that and carry
+  none, so every one of them still falls back to the draft `shellMeshes()`
+  heuristic. So `001ebo16` goes in as one lump —
   the star shell *plus three asteroids, a planet and a nebula* — which is
   exactly the city-skyline / planet / asteroid content that must stay
-  geometry. V0 wires `meshes =` through and curates it for the rooms that hold
-  props.
+  geometry. V0 is therefore curation, not plumbing: fill `meshes =` in for the
+  rooms that hold props.
 
 *Acceptance:* the six-colour probe renders with correct face-to-direction
 mapping and no seams; a real bake of a props-holding room contains the shell
@@ -977,7 +1173,7 @@ modules and 46 of 82 K2 name a sky, and every entry is still marked
 ### V1 — hybridise
 
 `PathTracing` bypasses raster entirely today: `VulkanScenePipeline::init`
-returns before allocating the G-buffer (`scenepipeline.cpp:191-207`). There are
+returns before allocating the G-buffer (`scenepipeline.cpp:171-183`). There are
 **three** modes — `Retro`, `PBR`, `PathTracing` — not four; `RTDebug` is still
 planned.
 
@@ -1013,7 +1209,7 @@ implementations of one idea, the same fault that got the runtime bake deleted.
 With G5 and G6 both shading from one G-buffer there is one place for it.
 
 `depth == 1.0` on the device-depth attachment is the test. Note `sGBufDepth`
-**is** device depth in `[0,1]` — `pbr_resolve.slang:62-78` states it and
+**is** device depth in `[0,1]` — `pbr_resolve.slang:63-81` states it and
 reconstructs position from it. An earlier draft claimed linear view-space
 distance, from misreading a `--dumptargets` dump, which linearises.
 
@@ -1058,7 +1254,7 @@ every sky-shaped test.
 ### V5 — delete the runtime bake
 
 `bakeSkyRoom` and its call sites, `slang/sky.slang` and its shaderpack wiring,
-and the shadow-ray candidate rejection at `slang/tracing/trace.slang:134`, which
+and the shadow-ray candidate rejection at `slang/tracing/trace.slang:167`, which
 exists only to cope with sky geometry possibly still being present. Larger than
 one line: the same removal reaches the sky feature bit and the classifier that
 feeds it.
@@ -1101,26 +1297,36 @@ observed from the shipping game.
 
 ## Corrections, ranked
 
-1. **The 2D `EnvMap` is a GL sphere map, not equirectangular.** We compute
+1. **The 2D `EnvMap` is a GL sphere map, not equirectangular.** We computed
    `atan2/asin`; the original is
    `m = 2·√(rx²+ry²+(rz+1)²); uv = (rx/m+0.5, ry/m+0.5)` on the **eye-space**
-   reflection (xoreos `shaderbuilder.cpp:376`). We also route 2D env maps
+   reflection (xoreos `shaderbuilder.cpp:376`). We also routed 2D env maps
    through the 128² prefiltered IBL array instead of sampling the authored
-   texture. This is the path most KOTOR metal uses.
+   texture. This is the path most KOTOR metal uses. **Fixed in `cd3fbec2`**,
+   in both resolves and in `pbr_ibl`'s convolution.
 2. **The reflection vector is eye-space**, not world-space, for both cube and
    sphere paths — hence the original's camera-locked reflection. Computed
    per-vertex from the *geometric* normal; a deferred resolve can only manage
    per-pixel from the G-buffer normal, which is an accepted divergence.
+   **Fixed in `cd3fbec2`**, resolves and kept forward shaders together.
 3. **Implicit-LOD cube sampling in a fullscreen resolve** slides the mip,
    because the reflection's derivatives come from 8-bit G-buffer normals.
+   **Fixed in `cd3fbec2`** by pinning the authored mirror to explicit LOD 0,
+   which leaves minified metal unfiltered; see the metal section under G6.
 4. **`ShadowOpacity` is authored per area and we throw it away** — parsed at
-   `resource/parser/gff/are.cpp:369`, unused. The hard-coded 0.25 ambient cap
-   should be that value. `SunShadows`/`MoonShadows` are likewise parsed and
-   ignored.
+   `resource/parser/gff/are.cpp:369`, unused. **Tried and rejected in
+   `2f00b5f5`:** it is a BYTE holding exactly two values across the retail set,
+   50 in 22 modules and 205 in 74, and neither reading of that pair is what
+   either group wants, so it is logged and drives nothing while shadow strength
+   is a chosen 0.5. The survey was right about the field and wrong about the
+   conclusion, which is the useful shape of that finding: a parsed-and-ignored
+   value is worth looking at, not worth assuming is a parameter.
+   `SunShadows`/`MoonShadows` are still parsed and ignored.
 5. **Split the shadow term in two** — a BRDF factor and an ambient/IBL factor.
    kvp-main's `ShadowResult { factor; iblFactor; }` exists for exactly the
    double-darkening problem G7c hit, and its shipped floors let skylight fall
-   to 27–36%, far below our 25% *cap*.
+   to 27–36%, far below our 25% *cap*. **Done in `0fb05120`**: `getShadow`
+   returns both factors and the 25% cap is gone.
 6. **Self-illum is additive** — "vanilla adds `GL_EMISSION` on top of the
    texture" (kvp-main `MaterialSystem.cpp:196`). We modulate.
 7. **Additive with no alpha channel uses `SRC_COLOR/ONE`**, not
