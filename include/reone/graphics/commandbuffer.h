@@ -13,6 +13,7 @@
 
 #include "buffer.h"
 #include "rhi.h"
+#include "tracingstructure.h"
 
 namespace reone {
 
@@ -78,6 +79,9 @@ public:
                                               const IBuffer &indices) = 0;
     /** Publish merge-compute output to every scene geometry consumer. */
     virtual void publishMergedScene() = 0;
+    /** Build this frame's scene-wide tracing structure over merged geometry. */
+    virtual void buildSceneTracingStructure(ITracingStructure &structure,
+                                            const SceneTracingGeometry &geometry) = 0;
 };
 
 } // namespace graphics

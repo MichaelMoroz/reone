@@ -135,6 +135,10 @@ inline VkPipelineLayout toVulkanPipelineLayout(PipelineLayout layout) {
     return reinterpret_cast<VkPipelineLayout>(detail::HandleAccess::value(layout));
 }
 
+inline VkAccelerationStructureKHR toVulkanTracingStructure(TracingStructure structure) {
+    return reinterpret_cast<VkAccelerationStructureKHR>(detail::HandleAccess::value(structure));
+}
+
 } // namespace graphics
 
 } // namespace reone

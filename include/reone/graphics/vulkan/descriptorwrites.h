@@ -10,6 +10,8 @@
 #include <deque>
 #include <vector>
 
+#include "reone/graphics/rhi.h"
+
 namespace reone::graphics {
 
 struct DescriptorBinding {
@@ -39,6 +41,9 @@ public:
                      const VkDescriptorBufferInfo &info, uint32_t arrayElement = 0);
     void writeAccelerationStructure(VkDescriptorSet set, DescriptorBinding binding,
                                     VkAccelerationStructureKHR accelerationStructure,
+                                    uint32_t arrayElement = 0);
+    void writeAccelerationStructure(VkDescriptorSet set, DescriptorBinding binding,
+                                    TracingStructure structure,
                                     uint32_t arrayElement = 0);
 
     void apply() const;

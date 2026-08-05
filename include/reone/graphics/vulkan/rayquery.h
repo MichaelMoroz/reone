@@ -7,6 +7,7 @@
 #include <volk.h>
 
 #include "reone/graphics/rayquery.h"
+#include "reone/graphics/tracingstructure.h"
 #include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/gpuscene.h"
 
@@ -54,16 +55,8 @@ public:
 
 private:
     struct Frame {
-        std::unique_ptr<VulkanBuffer> instances;
         std::unique_ptr<VulkanBuffer> traceStats;
-        std::unique_ptr<VulkanBuffer> blasStorage;
-        std::unique_ptr<VulkanBuffer> tlasStorage;
-        std::unique_ptr<VulkanBuffer> scratch;
-        VkAccelerationStructureKHR blas {VK_NULL_HANDLE};
-        VkAccelerationStructureKHR tlas {VK_NULL_HANDLE};
-        VkDeviceSize blasStorageCapacity {0};
-        VkDeviceSize tlasStorageCapacity {0};
-        VkDeviceSize scratchCapacity {0};
+        std::unique_ptr<ITracingStructure> tracingStructure;
     };
 
     VulkanRenderer &_renderer;

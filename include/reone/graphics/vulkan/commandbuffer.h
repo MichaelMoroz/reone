@@ -45,6 +45,8 @@ public:
     void makeGpuSceneSourcesAvailable(const IBuffer &vertices,
                                       const IBuffer &indices) override;
     void publishMergedScene() override;
+    void buildSceneTracingStructure(ITracingStructure &structure,
+                                    const SceneTracingGeometry &geometry) override;
 
     VkCommandBuffer handle() const { return _commandBuffer; }
 

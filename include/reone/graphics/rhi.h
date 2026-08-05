@@ -59,12 +59,14 @@ struct SamplerTag;
 struct DescriptorSetTag;
 struct PipelineTag;
 struct PipelineLayoutTag;
+struct TracingStructureTag;
 
 using ImageView = Handle<ImageViewTag>;
 using Sampler = Handle<SamplerTag>;
 using DescriptorSet = Handle<DescriptorSetTag>;
 using Pipeline = Handle<PipelineTag>;
 using PipelineLayout = Handle<PipelineLayoutTag>;
+using TracingStructure = Handle<TracingStructureTag>;
 
 } // namespace graphics
 

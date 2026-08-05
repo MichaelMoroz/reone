@@ -11,6 +11,7 @@
 
 #include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/vulkan/buffer.h"
+#include "reone/graphics/vulkan/tracingstructure.h"
 
 #include <array>
 
@@ -182,6 +183,11 @@ void VulkanCommandBuffer::publishMergedScene() {
     dependency.memoryBarrierCount = 1;
     dependency.pMemoryBarriers = &barrier;
     vkCmdPipelineBarrier2(_commandBuffer, &dependency);
+}
+
+void VulkanCommandBuffer::buildSceneTracingStructure(
+    ITracingStructure &structure, const SceneTracingGeometry &geometry) {
+    toVulkanTracingStructure(structure).build(_commandBuffer, geometry);
 }
 
 } // namespace graphics

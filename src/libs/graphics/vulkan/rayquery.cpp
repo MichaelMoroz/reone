@@ -13,17 +13,18 @@
 #include "reone/graphics/textureutil.h"
 #include "reone/graphics/uniforms.h"
 
-#include "reone/graphics/vulkan/descriptorwrites.h"
-#include "reone/graphics/vulkan/descriptors.h"
 #include "reone/graphics/vulkan/buffer.h"
+#include "reone/graphics/vulkan/descriptors.h"
+#include "reone/graphics/vulkan/descriptorwrites.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/vulkan/mesh.h"
 #include "reone/graphics/vulkan/pipeline.h"
-#include "reone/graphics/vulkan/renderpass.h"
 #include "reone/graphics/vulkan/pipelinecache.h"
 #include "reone/graphics/vulkan/renderer.h"
+#include "reone/graphics/vulkan/renderpass.h"
 #include "reone/graphics/vulkan/resources.h"
+#include "reone/graphics/vulkan/tracingstructure.h"
 
 #ifdef R_ENABLE_NRD
 #include <NRD.h>
@@ -41,7 +42,6 @@ using namespace reone::graphics;
 namespace reone::graphics {
 namespace {
 
-
 // Sky cubemap face resolution. Measured on danm14ab against the geometry sky
 // it replaces, as a ratio of surviving horizontal detail: 512 keeps 0.59,
 // 1024 keeps 0.73, 2048 keeps 0.77 for four times the memory. The curve is
@@ -58,32 +58,6 @@ struct TraceStats {
     uint32_t shadowRays {0};
 };
 
-VkDeviceAddress alignedAddress(VkDeviceAddress address, VkDeviceSize alignment) {
-    return (address + alignment - 1) & ~(alignment - 1);
-}
-
-VkTransformMatrixKHR instanceTransform(const glm::mat4 &m) {
-    VkTransformMatrixKHR out {};
-    for (int row = 0; row < 3; ++row) {
-        for (int column = 0; column < 4; ++column) {
-            out.matrix[row][column] = m[column][row];
-        }
-    }
-    return out;
-}
-
-VkDeviceSize grownCapacity(VkDeviceSize current, VkDeviceSize required, VkDeviceSize minimum) {
-    if (current != 0 && required <= current)
-        return current;
-    VkDeviceSize capacity = std::max(current, minimum);
-    while (capacity < required) {
-        if (capacity > std::numeric_limits<VkDeviceSize>::max() / 2) {
-            throw std::runtime_error("Vulkan: acceleration-structure capacity exceeds device-size range");
-        }
-        capacity *= 2;
-    }
-    return capacity;
-}
 } // namespace
 
 VulkanRayQuery::VulkanRayQuery(VulkanRenderer &renderer,
@@ -113,15 +87,11 @@ void VulkanRayQuery::init() {
     for (uint32_t i = 4; i <= 6; ++i) {
         bindings.push_back({{i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR});
     }
-    bindings.push_back({{7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, _bindlessTextureCapacity,
-                        VK_SHADER_STAGE_RAYGEN_BIT_KHR,
-                        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT});
+    bindings.push_back({{7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, _bindlessTextureCapacity, VK_SHADER_STAGE_RAYGEN_BIT_KHR, VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT});
     // The sky cube occupies binding 9, so the two bindless ranges keep their
     // fixed device-limit allocation rather than using Vulkan's highest-binding
     // variable-descriptor-count rule.
-    bindings.push_back({{8, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, _bindlessTextureCapacity,
-                        VK_SHADER_STAGE_RAYGEN_BIT_KHR,
-                        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT});
+    bindings.push_back({{8, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, _bindlessTextureCapacity, VK_SHADER_STAGE_RAYGEN_BIT_KHR, VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT});
     bindings.push_back({{9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR});
 
     // A descriptor is required even when no room qualifies. Sampling is gated
@@ -248,8 +218,7 @@ void VulkanRayQuery::init() {
             std::vector<VulkanPipeline::LayoutBinding> compositeBindings;
             compositeBindings.reserve(kCompositeBindingCount);
             for (uint32_t i = 0; i < kCompositeBindingCount; ++i) {
-                compositeBindings.push_back({{i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, 1,
-                                             VK_SHADER_STAGE_COMPUTE_BIT});
+                compositeBindings.push_back({{i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, 1, VK_SHADER_STAGE_COMPUTE_BIT});
             }
             VulkanPipeline::Config compositeConfig;
             compositeConfig.type = VulkanPipeline::Config::Type::Compute;
@@ -276,8 +245,7 @@ void VulkanRayQuery::init() {
 
         std::vector<VulkanPipeline::LayoutBinding> tonemapBindings;
         for (uint32_t i = 0; i < 2; ++i) {
-            tonemapBindings.push_back({{i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, 1,
-                                       VK_SHADER_STAGE_COMPUTE_BIT});
+            tonemapBindings.push_back({{i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, 1, VK_SHADER_STAGE_COMPUTE_BIT});
         }
         VulkanPipeline::Config tonemapConfig;
         tonemapConfig.type = VulkanPipeline::Config::Type::Compute;
@@ -307,7 +275,6 @@ void VulkanRayQuery::clearFrame(Frame &frame) {
     // The merge and acceleration-structure buffers are capacity-managed. The
     // renderer has waited this in-flight frame's fence before reuse, so a full
     // BLAS/TLAS rebuild may overwrite them, but their allocations survive it.
-    frame.instances.reset();
     frame.traceStats.reset();
 }
 
@@ -452,18 +419,10 @@ bool VulkanRayQuery::bakeSkyRoom(VkCommandBuffer cmd,
 void VulkanRayQuery::deinit() {
     for (auto &frame : _frames) {
         clearFrame(frame);
-        if (frame.blas)
-            vkDestroyAccelerationStructureKHR(_renderer.device().handle(), frame.blas, nullptr);
-        if (frame.tlas)
-            vkDestroyAccelerationStructureKHR(_renderer.device().handle(), frame.tlas, nullptr);
-        frame.blas = VK_NULL_HANDLE;
-        frame.tlas = VK_NULL_HANDLE;
-        frame.blasStorage.reset();
-        frame.tlasStorage.reset();
-        frame.scratch.reset();
-        frame.blasStorageCapacity = 0;
-        frame.tlasStorageCapacity = 0;
-        frame.scratchCapacity = 0;
+        if (frame.tracingStructure) {
+            frame.tracingStructure->deinit();
+            frame.tracingStructure.reset();
+        }
     }
 #ifdef R_ENABLE_NRD
     _compositePipeline.reset();
@@ -614,173 +573,16 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
     frame.traceStats->initHostVisibleReadback(sizeof(TraceStats), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     std::memset(frame.traceStats->mapped(), 0, sizeof(TraceStats));
 
-    const VkDeviceAddress geometryAddress = toVulkanBuffer(*scene.vertices.buffer).deviceAddress() + scene.vertices.offset;
-    std::array<VkAccelerationStructureGeometryTrianglesDataKHR, 2> triangleData {};
-    std::array<VkAccelerationStructureGeometryKHR, 2> blasGeometries {};
-    for (auto &triangles : triangleData) {
-        triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-        triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-        triangles.vertexData.deviceAddress = geometryAddress;
-        triangles.vertexStride = sizeof(MergedVertex);
-        triangles.maxVertex = scene.vertexCount - 1;
-        triangles.indexType = VK_INDEX_TYPE_UINT32;
-        triangles.indexData.deviceAddress = toVulkanBuffer(*scene.indices.buffer).deviceAddress() + scene.indices.offset;
-    }
-    for (uint32_t i = 0; i < blasGeometries.size(); ++i) {
-        auto &geometry = blasGeometries[i];
-        geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-        geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-        geometry.geometry.triangles = triangleData[i];
-    }
-    // Geometry 1 deliberately remains non-opaque: the ray-query candidate
-    // loop evaluates its additive, alpha-tested, and sky surfaces itself.
-    blasGeometries[0].flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
-    blasGeometries[1].flags = 0;
-    VkAccelerationStructureBuildGeometryInfoKHR blasBuild {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
-    blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-    blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-    blasBuild.geometryCount = static_cast<uint32_t>(blasGeometries.size());
-    blasBuild.pGeometries = blasGeometries.data();
-    const std::array<uint32_t, 2> blasPrimitiveCounts {{
-        scene.opaqueTriangleCount,
-        scene.triangleCount - scene.opaqueTriangleCount,
-    }};
-    VkAccelerationStructureBuildSizesInfoKHR blasSizes {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
-    vkGetAccelerationStructureBuildSizesKHR(device.handle(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                                            &blasBuild, blasPrimitiveCounts.data(), &blasSizes);
-    if (!frame.blas || blasSizes.accelerationStructureSize > frame.blasStorageCapacity) {
-        if (frame.blas)
-            vkDestroyAccelerationStructureKHR(device.handle(), frame.blas, nullptr);
-        frame.blas = VK_NULL_HANDLE;
-        frame.blasStorage.reset();
-        frame.blasStorageCapacity = grownCapacity(frame.blasStorageCapacity,
-                                                  blasSizes.accelerationStructureSize, 64 * 1024);
-        frame.blasStorage = std::make_unique<VulkanBuffer>(device);
-        frame.blasStorage->initDeviceLocal(frame.blasStorageCapacity,
-                                           VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                           nullptr);
-        VkAccelerationStructureCreateInfoKHR create {
-            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
-        create.buffer = frame.blasStorage->handle();
-        create.size = frame.blasStorageCapacity;
-        create.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-        if (vkCreateAccelerationStructureKHR(device.handle(), &create, nullptr, &frame.blas) != VK_SUCCESS)
-            throw std::runtime_error("Vulkan: merged BLAS creation failed");
-    }
-
-    VkAccelerationStructureDeviceAddressInfoKHR blasAddressInfo {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
-    blasAddressInfo.accelerationStructure = frame.blas;
-    VkAccelerationStructureInstanceKHR instance {};
-    instance.transform = instanceTransform(glm::mat4(1.0f));
-    instance.instanceCustomIndex = 0;
-    instance.mask = 0xff;
-    instance.instanceShaderBindingTableRecordOffset = 0;
-    instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-    instance.accelerationStructureReference =
-        vkGetAccelerationStructureDeviceAddressKHR(device.handle(), &blasAddressInfo);
-    frame.instances = std::make_unique<VulkanBuffer>(device);
-    frame.instances->initHostVisible(sizeof(instance), VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                                                           VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
-    std::memcpy(frame.instances->mapped(), &instance, sizeof(instance));
-
-    VkAccelerationStructureGeometryInstancesDataKHR instanceData {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR};
-    instanceData.arrayOfPointers = VK_FALSE;
-    instanceData.data.deviceAddress = frame.instances->deviceAddress();
-    VkAccelerationStructureGeometryKHR tlasGeometry {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
-    tlasGeometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
-    tlasGeometry.geometry.instances = instanceData;
-    VkAccelerationStructureBuildGeometryInfoKHR tlasBuild {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
-    tlasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-    tlasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-    tlasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-    tlasBuild.geometryCount = 1;
-    tlasBuild.pGeometries = &tlasGeometry;
-    constexpr uint32_t kTlasInstanceCount = 1;
-    VkAccelerationStructureBuildSizesInfoKHR tlasSizes {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
-    vkGetAccelerationStructureBuildSizesKHR(device.handle(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                                            &tlasBuild, &kTlasInstanceCount, &tlasSizes);
-    if (!frame.tlas || tlasSizes.accelerationStructureSize > frame.tlasStorageCapacity) {
-        if (frame.tlas)
-            vkDestroyAccelerationStructureKHR(device.handle(), frame.tlas, nullptr);
-        frame.tlas = VK_NULL_HANDLE;
-        frame.tlasStorage.reset();
-        frame.tlasStorageCapacity = grownCapacity(frame.tlasStorageCapacity,
-                                                  tlasSizes.accelerationStructureSize, 64 * 1024);
-        frame.tlasStorage = std::make_unique<VulkanBuffer>(device);
-        frame.tlasStorage->initDeviceLocal(frame.tlasStorageCapacity,
-                                           VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                           nullptr);
-        VkAccelerationStructureCreateInfoKHR create {
-            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
-        create.buffer = frame.tlasStorage->handle();
-        create.size = frame.tlasStorageCapacity;
-        create.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-        if (vkCreateAccelerationStructureKHR(device.handle(), &create, nullptr, &frame.tlas) != VK_SUCCESS)
-            throw std::runtime_error("Vulkan: TLAS creation failed");
-    }
-
-    const auto alignment = device.accelerationStructureProperties().minAccelerationStructureScratchOffsetAlignment;
-    const VkDeviceSize scratchSize = std::max(blasSizes.buildScratchSize, tlasSizes.buildScratchSize);
-    if (scratchSize > std::numeric_limits<VkDeviceSize>::max() - alignment) {
-        throw std::runtime_error("Vulkan: acceleration-structure scratch size exceeds device-size range");
-    }
-    const VkDeviceSize scratchAllocationSize = scratchSize + alignment;
-    if (!frame.scratch || scratchAllocationSize > frame.scratchCapacity) {
-        frame.scratch.reset();
-        frame.scratchCapacity = grownCapacity(frame.scratchCapacity, scratchAllocationSize, 64 * 1024);
-        frame.scratch = std::make_unique<VulkanBuffer>(device);
-        frame.scratch->initDeviceLocal(frame.scratchCapacity,
-                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, nullptr);
-    }
-    const VkDeviceAddress scratchAddress = alignedAddress(frame.scratch->deviceAddress(), alignment);
-    blasBuild.dstAccelerationStructure = frame.blas;
-    blasBuild.scratchData.deviceAddress = scratchAddress;
-    std::array<VkAccelerationStructureBuildRangeInfoKHR, 2> blasRanges {};
-    blasRanges[0].primitiveCount = blasPrimitiveCounts[0];
-    blasRanges[1].primitiveCount = blasPrimitiveCounts[1];
-    blasRanges[1].primitiveOffset = static_cast<uint32_t>(scene.opaqueTriangleCount * 3 * sizeof(uint32_t));
-    const VkAccelerationStructureBuildRangeInfoKHR *blasRangePointers[] {
-        &blasRanges[0], &blasRanges[1]};
     const auto begin = std::chrono::steady_clock::now();
     {
         R_PROFILE_ZONE("VulkanRayQuery::BLAS/TLAS build record");
-        vkCmdBuildAccelerationStructuresKHR(cmd, 1, &blasBuild, blasRangePointers);
-        // The TLAS build reads the merged BLAS, so keep this build-to-build
-        // dependency separate from the later build-to-trace hand-off.
-        VkMemoryBarrier2 blasToTlas {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-        blasToTlas.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-        blasToTlas.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-        blasToTlas.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-        blasToTlas.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        VkDependencyInfo blasToTlasDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        blasToTlasDependency.memoryBarrierCount = 1;
-        blasToTlasDependency.pMemoryBarriers = &blasToTlas;
-        vkCmdPipelineBarrier2(cmd, &blasToTlasDependency);
-        tlasBuild.dstAccelerationStructure = frame.tlas;
-        tlasBuild.scratchData.deviceAddress = scratchAddress;
-        VkAccelerationStructureBuildRangeInfoKHR tlasRange {};
-        tlasRange.primitiveCount = kTlasInstanceCount;
-        const VkAccelerationStructureBuildRangeInfoKHR *tlasRanges[] {&tlasRange};
-        vkCmdBuildAccelerationStructuresKHR(cmd, 1, &tlasBuild, tlasRanges);
-        VkMemoryBarrier2 tlasToTrace {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-        tlasToTrace.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-        tlasToTrace.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-        tlasToTrace.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-        tlasToTrace.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        VkDependencyInfo tlasToTraceDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        tlasToTraceDependency.memoryBarrierCount = 1;
-        tlasToTraceDependency.pMemoryBarriers = &tlasToTrace;
-        vkCmdPipelineBarrier2(cmd, &tlasToTraceDependency);
+        if (!frame.tracingStructure) {
+            frame.tracingStructure = std::make_unique<VulkanTracingStructure>(device);
+        }
+        _renderer.recordingCommandBuffer().buildSceneTracingStructure(
+            *frame.tracingStructure,
+            {scene.vertices, scene.indices, scene.vertexCount,
+             scene.opaqueTriangleCount, scene.triangleCount});
     }
 
     const auto set = _pipeline->descriptorSet(1, _renderer.frameIndex());
@@ -788,7 +590,7 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
     writes.writeImage(set, {0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
                       {VK_NULL_HANDLE, output.view(), VK_IMAGE_LAYOUT_GENERAL});
     writes.writeAccelerationStructure(
-        set, {1, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}, frame.tlas);
+        set, {1, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}, frame.tracingStructure->handle());
     writes.writeBuffer(set, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                        {toVulkanBuffer(*scene.materials.buffer).handle(), 0, scene.materials.size});
     writes.writeBuffer(set, {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},

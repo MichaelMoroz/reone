@@ -5,6 +5,8 @@
 
 #include "reone/graphics/vulkan/descriptorwrites.h"
 
+#include "reone/graphics/vulkan/rhi.h"
+
 #include <stdexcept>
 
 namespace reone::graphics {
@@ -71,6 +73,12 @@ void DescriptorWriteBuilder::writeAccelerationStructure(
     auto write = makeWrite(set, binding, arrayElement);
     write.pNext = &stored.info;
     _writes.push_back(write);
+}
+
+void DescriptorWriteBuilder::writeAccelerationStructure(
+    VkDescriptorSet set, DescriptorBinding binding,
+    TracingStructure structure, uint32_t arrayElement) {
+    writeAccelerationStructure(set, binding, toVulkanTracingStructure(structure), arrayElement);
 }
 
 void DescriptorWriteBuilder::apply() const {

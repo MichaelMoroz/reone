@@ -64,6 +64,7 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/textureregistry.h
     ${GRAPHICS_INCLUDE_DIR}/textureutil.h
     ${GRAPHICS_INCLUDE_DIR}/textutil.h
+    ${GRAPHICS_INCLUDE_DIR}/tracingstructure.h
     ${GRAPHICS_INCLUDE_DIR}/triangleutil.h
     ${GRAPHICS_INCLUDE_DIR}/types.h
     ${GRAPHICS_INCLUDE_DIR}/uniforms.h
