@@ -70,7 +70,7 @@ private:
 
     std::unique_ptr<game::OptionsView> _optionsView;
     std::unique_ptr<graphics::Window> _window;
-    std::unique_ptr<graphics::VulkanRenderer> _vulkanRenderer;
+    std::unique_ptr<graphics::VulkanRenderer> _renderer;
 
     std::unique_ptr<Clock> _clock;
     std::unique_ptr<SystemModule> _systemModule;

@@ -85,17 +85,17 @@ void SceneModule::init() {
 std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode,
                                                                glm::ivec2 targetSize,
                                                                GpuScene &scene) {
-    if (!_vulkanRenderer) {
-        throw std::logic_error("Vulkan renderer was not supplied to the pipeline factory");
+    if (!_renderer) {
+        throw std::logic_error("Renderer was not supplied to the pipeline factory");
     }
-    if (mode == RenderMode::PathTracing && !_vulkanRenderer->device().rayQueryAvailable()) {
+    if (mode == RenderMode::PathTracing && !_renderer->device().rayQueryAvailable()) {
         warn("Path tracing needs ray-query acceleration structures and position fetch, "
              "which this device does not provide; rendering PBR instead.",
              LogChannel::Graphics);
         mode = RenderMode::PBR;
     }
     return std::make_unique<RenderPipeline>(
-        std::move(targetSize), _options, *_vulkanRenderer, _uniforms, _meshRegistry, _textureRegistry,
+        std::move(targetSize), _options, *_renderer, _uniforms, _meshRegistry, _textureRegistry,
         scene, mode == RenderMode::PathTracing);
 }
 

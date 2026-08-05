@@ -455,20 +455,20 @@ void ResourceExplorerViewModel::loadEngine() {
     }
 
     auto size = _renderPanel->GetClientSize();
-    _vulkanRenderer = std::make_unique<VulkanRenderer>(
+    _renderer = std::make_unique<VulkanRenderer>(
         _sdlWindow,
         glm::ivec2 {std::max(1, size.x), std::max(1, size.y)},
         _graphicsOpt.vsync,
         false);
-    _vulkanRenderer->init();
-    _graphicsModule->setRenderers(*_vulkanRenderer, _vulkanRenderer->renderer2d());
+    _renderer->init();
+    _graphicsModule->setRenderers(*_renderer, _renderer->renderer2d());
 
     _systemModule->init();
     _graphicsModule->init();
     _audioModule->init();
     _resourceModule->init();
     _sceneModule->init();
-    _sceneModule->renderPipelineFactory().setVulkanRenderer(*_vulkanRenderer);
+    _sceneModule->renderPipelineFactory().setRenderer(*_renderer);
 
     auto keyPath = findFileIgnoreCase(_resourcesPath, "chitin.key");
     if (!keyPath) {
@@ -481,7 +481,7 @@ void ResourceExplorerViewModel::loadEngine() {
 }
 
 void ResourceExplorerViewModel::deinitEngine() {
-    if (!_engineLoaded && !_vulkanRenderer) {
+    if (!_engineLoaded && !_renderer) {
         return;
     }
 
@@ -491,7 +491,7 @@ void ResourceExplorerViewModel::deinitEngine() {
     _resourceModule.reset();
     _scriptModule.reset();
     _audioModule.reset();
-    _vulkanRenderer.reset();
+    _renderer.reset();
     _graphicsModule.reset();
     _systemModule.reset();
     if (_sdlWindow) {

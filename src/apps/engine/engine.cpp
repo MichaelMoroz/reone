@@ -189,14 +189,14 @@ void Engine::init() {
 
     _systemModule = std::make_unique<SystemModule>(*_clock);
     _graphicsModule = std::make_unique<GraphicsModule>(_options.graphics);
-    _vulkanRenderer = std::make_unique<VulkanRenderer>(
+    _renderer = std::make_unique<VulkanRenderer>(
         _window->sdlWindow(),
         glm::ivec2 {_options.graphics.width, _options.graphics.height},
         _options.graphics.vsync,
         _options.vulkanValidation);
-    _vulkanRenderer->init();
-    _graphicsModule->setRenderers(*_vulkanRenderer, _vulkanRenderer->renderer2d());
-    imguiInit(*_vulkanRenderer);
+    _renderer->init();
+    _graphicsModule->setRenderers(*_renderer, _renderer->renderer2d());
+    imguiInit(*_renderer);
     _audioModule = std::make_unique<AudioModule>(_options.audio);
     _movieModule = std::make_unique<MovieModule>();
     _scriptModule = std::make_unique<ScriptModule>();
@@ -237,8 +237,8 @@ void Engine::init() {
     _gameModule->init();
 
     // The scene library cannot reach the renderer on its own; the engine owns
-    // it and hands it over so the Vulkan pipeline can be built.
-    _sceneModule->renderPipelineFactory().setVulkanRenderer(*_vulkanRenderer);
+    // it and hands it over so the scene pipeline can be built.
+    _sceneModule->renderPipelineFactory().setRenderer(*_renderer);
 
     _services = std::make_unique<ServicesView>(
         _gameModule->services(),
@@ -271,7 +271,7 @@ void Engine::init() {
     _console->init();
     _console->registerCommand("recompileshaders", "compile Slang shaders and rebuild render pipelines",
                               [this](const auto &) {
-                                  const bool success = _vulkanRenderer->recompileShaders();
+                                  const bool success = _renderer->recompileShaders();
                                   // Compute and ray-query pipelines own their shader modules, so
                                   // discard scene pipelines as well. They are rebuilt lazily before
                                   // the next draw after the device has gone idle above.
@@ -311,10 +311,10 @@ void Engine::init() {
 void Engine::deinit() {
     _editor.reset();
 
-    if (_vulkanRenderer) {
+    if (_renderer) {
         // Pipelines own images sampled by the last submitted command buffer;
         // release them only after that work has completed.
-        _vulkanRenderer->device().waitIdle();
+        _renderer->device().waitIdle();
     }
 
     // Before ImGui goes away. A render pipeline holds an ImGui descriptor set
@@ -343,9 +343,9 @@ void Engine::deinit() {
     // The renderer holds the surface created from the window, so it has to go
     // before the window and before SDL_Quit. Left to its own destructor it
     // outlived both, since ~Engine runs after this function returns.
-    if (_vulkanRenderer) {
-        _vulkanRenderer->deinit();
-        _vulkanRenderer.reset();
+    if (_renderer) {
+        _renderer->deinit();
+        _renderer.reset();
     }
 
     _optionsView.reset();
@@ -659,7 +659,7 @@ void Engine::dumpTargetsIfRequested() {
     }
     // The frame this describes has to be finished before its targets are read.
     // Vulkan needs its recorded commands submitted before the targets are read.
-    _vulkanRenderer->flushFrame();
+    _renderer->flushFrame();
     for (const auto &[name, pipeline] : rendered) {
         std::filesystem::path dir = _options.dumpTargetsPath;
         if (rendered.size() > 1) {
@@ -688,11 +688,11 @@ void Engine::renderVulkanFrame(bool &quit) {
     glm::ivec2 extent {_options.graphics.width, _options.graphics.height};
     if (_graphicsRebuildRequested) {
         _window->resize(_options.graphics.width, _options.graphics.height);
-        _vulkanRenderer->setVsync(_options.graphics.vsync);
+        _renderer->setVsync(_options.graphics.vsync);
     }
     // Before the frame's rendering scope: the scene pipeline begins render
     // passes of its own, and one cannot be nested inside another.
-    _vulkanRenderer->beginFrame(extent);
+    _renderer->beginFrame(extent);
     applyGraphicsRebuildVulkan();
     imguiBeginFrame();
     _game->renderSceneOffscreen();
@@ -700,8 +700,8 @@ void Engine::renderVulkanFrame(bool &quit) {
     // Keep scene composite and console in one 2D batch. The renderer owns the
     // dynamic-rendering scope and its physical swapchain extent.
     {
-        R_PROFILE_ZONE("VulkanRenderer::2D record");
-        _vulkanRenderer->with2DRendering(extent, [this]() {
+        R_PROFILE_ZONE("Renderer::2D record");
+        _renderer->with2DRendering(extent, [this]() {
             _game->render();
             _console->render();
         });
@@ -709,7 +709,7 @@ void Engine::renderVulkanFrame(bool &quit) {
 
     imguiRender();
     captureIfRequested(quit);
-    _vulkanRenderer->endFrame();
+    _renderer->endFrame();
     R_PROFILE_FRAME_MARK();
 }
 

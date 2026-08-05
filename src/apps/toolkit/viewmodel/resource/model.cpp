@@ -134,7 +134,7 @@ void ModelResourceViewModel::render3D(int w, int h, const std::filesystem::path 
     _cameraNode->setPerspectiveProjection(glm::radians(55.0f), aspect, kDefaultClipPlaneNear, kDefaultClipPlaneFar);
 
     auto &renderer = _graphicsModule.renderer();
-    // Vulkan presents the completed frame to the wxWidgets child window.
+    // The renderer presents the completed frame to the wxWidgets child window.
     renderer.beginFrame(glm::ivec2(w, h));
     // Scene pipelines open render passes of their own, so they must record
     // after the frame starts but before the renderer opens its 2D composite.

@@ -461,7 +461,7 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
         _cachedSkyOrigin = result.skyOrigin;
         _skyCacheGeneration = sceneGeneration;
         if (result.skyRoom && _frameNumber == 0) {
-            info("Vulkan: sky room is '" + result.skyRoom->model().name() + "'",
+            info("Scene admission: sky room is '" + result.skyRoom->model().name() + "'",
                  LogChannel::Graphics);
         }
     } else {

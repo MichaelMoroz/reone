@@ -164,7 +164,7 @@ void *RenderPipeline::renderTargetPreview(const std::string &name,
 }
 
 void RenderPipeline::dumpTargets(const std::filesystem::path &dir) {
-    info("Vulkan scene contents: " + formatSceneCounts(_gpuScene.counts()),
+    info("Scene contents: " + formatSceneCounts(_gpuScene.counts()),
          LogChannel::Graphics);
     std::ostringstream hash;
     hash << std::hex << std::setw(16) << std::setfill('0') << _lastUploadHash;

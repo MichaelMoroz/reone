@@ -104,7 +104,7 @@ void RayQueryPipeline::render(const PrimaryRayContext &context,
             try {
             skyBaked = _native->bakeSkyRoom(commandBuffer, bake);
             } catch (const std::exception &e) {
-                warn("Vulkan: sky bake failed for '" + admission.skyRoom->model().name() +
+                warn("Sky bake failed for '" + admission.skyRoom->model().name() +
                          "': " + e.what() + "; using fallback cube",
                      LogChannel::Graphics);
             }

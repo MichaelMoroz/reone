@@ -494,7 +494,7 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
     if (!_renderPipeline) {
         // The mode is what was asked for; the factory decides what the current
         // backend can actually give. Deciding here on the backend is what made
-        // --pbr silently inert on Vulkan.
+        // --pbr silently inert in the renderer.
         RenderMode mode;
         if (_graphicsOpt.mode == "raster") {
             mode = _graphicsOpt.pbr ? RenderMode::PBR : RenderMode::Retro;

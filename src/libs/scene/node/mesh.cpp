@@ -271,7 +271,7 @@ void MeshSceneNode::collectInto(GpuScene &scene) {
     }
     // Authored data contains mesh nodes with no vertices at all (tat_m18aa
     // and four other modules). There is nothing to draw or trace; letting one
-    // through kills the Vulkan upload, which cannot buffer zero bytes.
+    // through kills the scene upload, which cannot buffer zero bytes.
     if (mesh->mesh->vertexData().empty()) {
         scene.unregisterObject(id());
         return;

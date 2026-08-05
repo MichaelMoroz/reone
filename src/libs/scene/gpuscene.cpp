@@ -579,7 +579,7 @@ graphics::GpuSceneUpload GpuScene::prepare(
             candidate->grassFaces) {
             if (candidate->grassFaces->size() >
                 std::numeric_limits<uint32_t>::max() - grassFaceBase)
-                throw std::runtime_error("Vulkan: grass face table exceeds shader index range");
+                throw std::runtime_error("Grass face table exceeds shader index range");
             grassFaceBase += static_cast<uint32_t>(candidate->grassFaces->size());
         }
         const auto id = objectId(object);
@@ -625,10 +625,10 @@ graphics::GpuSceneUpload GpuScene::prepare(
                 const auto &skin = *skinPtr;
                 if (!skin.bones || !skin.prevBones ||
                     skin.bones->size() != skin.prevBones->size())
-                    throw std::runtime_error("Vulkan: skinned mesh has mismatched bone palettes");
+                    throw std::runtime_error("Skinned mesh has mismatched bone palettes");
                 if (upload.bones.size() + skin.bones->size() + skin.prevBones->size() >
                     std::numeric_limits<uint32_t>::max())
-                    throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
+                    throw std::runtime_error("Merged scene exceeds shader index range");
                 sceneObject.boneBase = static_cast<uint32_t>(upload.bones.size());
                 sceneObject.boneCount = static_cast<uint32_t>(skin.bones->size());
                 for (const auto &bone : *skin.bones)
@@ -641,11 +641,11 @@ graphics::GpuSceneUpload GpuScene::prepare(
                 if (!dangly->positions || !dangly->prevPositions ||
                     dangly->positions->size() != vertexCount ||
                     dangly->prevPositions->size() != vertexCount)
-                    throw std::runtime_error("Vulkan: dangly mesh has mismatched position streams");
+                    throw std::runtime_error("Dangly mesh has mismatched position streams");
                 if (upload.danglyPositions.size() + dangly->positions->size() +
                         dangly->prevPositions->size() >
                     std::numeric_limits<uint32_t>::max())
-                    throw std::runtime_error("Vulkan: merged dangly position pool exceeds shader index range");
+                    throw std::runtime_error("Merged dangly position pool exceeds shader index range");
                 sceneObject.danglyBase = static_cast<uint32_t>(upload.danglyPositions.size());
                 sceneObject.danglyCount = static_cast<uint32_t>(vertexCount);
                 upload.danglyPositions.insert(upload.danglyPositions.end(),
@@ -721,10 +721,10 @@ graphics::GpuSceneUpload GpuScene::prepare(
                     continue;
                 if (instanceCount + budget > std::numeric_limits<uint32_t>::max())
                     throw std::runtime_error(
-                        "Vulkan: grass cluster range exceeds shader index range");
+                        "Grass cluster range exceeds shader index range");
                 if (upload.grassRanges.size() == std::numeric_limits<uint32_t>::max())
                     throw std::runtime_error(
-                        "Vulkan: grass face ranges exceed shader index range");
+                        "Grass face ranges exceed shader index range");
                 upload.grassRanges.push_back(
                     {objectGrassFaceBase + static_cast<uint32_t>(faceOffset),
                      static_cast<uint32_t>(instanceCount), budget, 0u});
@@ -739,7 +739,7 @@ graphics::GpuSceneUpload GpuScene::prepare(
             (procedural->kind != ProceduralKind::Grass &&
              upload.proceduralQuads.size() >
                  std::numeric_limits<uint32_t>::max() - instanceCount))
-            throw std::runtime_error("Vulkan: merged procedural scene exceeds shader index range");
+            throw std::runtime_error("Merged procedural scene exceeds shader index range");
         graphics::GpuSceneObjectInput input;
         auto &sceneObject = input.data;
         input.objectIndex = procedural->id.index;
