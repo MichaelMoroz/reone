@@ -50,6 +50,99 @@ static VkDeviceSize texelSize(VkFormat format) {
     }
 }
 
+/** The stage and access scope implied by an image layout. */
+static void scopeForLayout(VkImageLayout layout,
+                           VkPipelineStageFlags2 &stage,
+                           VkAccessFlags2 &access) {
+    switch (layout) {
+    case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+        stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        access = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                 VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        break;
+    case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
+        stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        break;
+    case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL:
+        stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        break;
+    case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+        // Images are sampled by graphics, compute and ray tracing; tracking
+        // layout must not guess which consumer the previous frame chose.
+        stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        break;
+    case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+        stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        access = VK_ACCESS_2_TRANSFER_READ_BIT;
+        break;
+    case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+        stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        access = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        break;
+    case VK_IMAGE_LAYOUT_GENERAL:
+        // Storage images are consumed by compute and ray tracing as well as
+        // graphics. Their existing barriers are deliberately broad.
+        stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        access = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+        break;
+    default:
+        stage = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        access = 0;
+        break;
+    }
+}
+
+static VkImageAspectFlags aspectForFormat(VkFormat format) {
+    switch (format) {
+    case VK_FORMAT_D16_UNORM:
+    case VK_FORMAT_X8_D24_UNORM_PACK32:
+    case VK_FORMAT_D32_SFLOAT:
+        return VK_IMAGE_ASPECT_DEPTH_BIT;
+    default:
+        return VK_IMAGE_ASPECT_COLOR_BIT;
+    }
+}
+
+void VulkanImage::transitionTo(VkCommandBuffer cmd, VkImageLayout layout) {
+    transitionTo(cmd, std::vector<VulkanImage *> {this}, layout);
+}
+
+void VulkanImage::transitionTo(VkCommandBuffer cmd,
+                               const std::vector<VulkanImage *> &images,
+                               VkImageLayout layout) {
+    std::vector<VkImageMemoryBarrier2> barriers;
+    barriers.reserve(images.size());
+    for (auto *image : images) {
+        if (!image || image->_layout == layout) {
+            continue;
+        }
+        VkImageMemoryBarrier2 barrier {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        scopeForLayout(image->_layout, barrier.srcStageMask, barrier.srcAccessMask);
+        scopeForLayout(layout, barrier.dstStageMask, barrier.dstAccessMask);
+        barrier.oldLayout = image->_layout;
+        barrier.newLayout = layout;
+        barrier.image = image->_image;
+        barrier.subresourceRange.aspectMask = aspectForFormat(image->_format);
+        barrier.subresourceRange.levelCount = static_cast<uint32_t>(image->_mipLevels);
+        barrier.subresourceRange.layerCount = image->_layers;
+        barriers.push_back(barrier);
+        image->_layout = layout;
+    }
+    if (barriers.empty()) {
+        return;
+    }
+    VkDependencyInfo dependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependency.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
+    dependency.pImageMemoryBarriers = barriers.data();
+    vkCmdPipelineBarrier2(cmd, &dependency);
+}
+
 void VulkanImage::initSampled2D(glm::ivec2 extent, VkFormat format, const void *data) {
     VkDeviceSize size = data
                             ? static_cast<VkDeviceSize>(extent.x) * extent.y * texelSize(format)
@@ -63,6 +156,7 @@ void VulkanImage::initSampled2DSized(glm::ivec2 extent,
                                      VkDeviceSize size) {
     _extent = extent;
     _format = format;
+    _layers = 1;
 
     VkImageCreateInfo imageInfo {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -141,6 +235,7 @@ void VulkanImage::initSampled2DSized(glm::ivec2 extent,
                 VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     });
+    _layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
 void VulkanImage::initSampledLayered(glm::ivec2 extent,
@@ -150,6 +245,7 @@ void VulkanImage::initSampledLayered(glm::ivec2 extent,
                                      const void *data) {
     _extent = extent;
     _format = format;
+    _layers = static_cast<uint32_t>(layers);
 
     VkImageCreateInfo imageInfo {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -237,6 +333,7 @@ void VulkanImage::initSampledLayered(glm::ivec2 extent,
                 VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     });
+    _layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
 void VulkanImage::initSampledLayers(
@@ -249,6 +346,7 @@ void VulkanImage::initSampledLayers(
     }
     _extent = extent;
     _format = format;
+    _layers = static_cast<uint32_t>(layers.size());
 
     auto layerCount = static_cast<uint32_t>(layers.size());
 
@@ -360,6 +458,7 @@ void VulkanImage::initSampledLayers(
                 VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     });
+    _layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
 void VulkanImage::initSampledChain(glm::ivec2 extent,
@@ -375,6 +474,7 @@ void VulkanImage::initSampledChain(glm::ivec2 extent,
     _extent = extent;
     _format = format;
     _mipLevels = static_cast<int>(mipCount);
+    _layers = layerCount;
 
     VkImageCreateInfo imageInfo {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -526,6 +626,7 @@ void VulkanImage::initSampledChain(glm::ivec2 extent,
                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                 mipCount - 1, 1);
     });
+    _layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
 /** The bytes a tightly packed image copy occupies, including BC blocks. */
@@ -543,6 +644,7 @@ static VkDeviceSize imageSize(VkFormat format, glm::ivec2 extent, uint32_t layer
 void VulkanImage::initDepthLayered(glm::ivec2 extent, VkFormat format, int layers, bool cube) {
     _extent = extent;
     _format = format;
+    _layers = static_cast<uint32_t>(layers);
 
     VkImageCreateInfo imageInfo {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -585,6 +687,7 @@ void VulkanImage::initSampledCubeArray(glm::ivec2 faceExtent, VkFormat format,
     _mipLevels = 1;
 
     const uint32_t layers = static_cast<uint32_t>(cubes * kNumCubeFaces);
+    _layers = layers;
 
     VkImageCreateInfo imageInfo {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -671,6 +774,7 @@ void VulkanImage::initSampledCubeArray(glm::ivec2 faceExtent, VkFormat format,
                 VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     });
+    _layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
 void VulkanImage::initCubeArrayAttachment(glm::ivec2 faceExtent, VkFormat format,
@@ -680,6 +784,7 @@ void VulkanImage::initCubeArrayAttachment(glm::ivec2 faceExtent, VkFormat format
     _mipLevels = mips;
 
     const uint32_t layers = static_cast<uint32_t>(cubes * kNumCubeFaces);
+    _layers = layers;
 
     VkImageCreateInfo imageInfo {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -795,6 +900,7 @@ VkImageView VulkanImage::faceRenderView(int cube, int face, int mip) {
 void VulkanImage::initColorAttachment(glm::ivec2 extent, VkFormat format) {
     _extent = extent;
     _format = format;
+    _layers = 1;
 
     VkImageCreateInfo imageInfo {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -837,6 +943,7 @@ void VulkanImage::initColorAttachment(glm::ivec2 extent, VkFormat format) {
 void VulkanImage::initDepth(glm::ivec2 extent, VkFormat format) {
     _extent = extent;
     _format = format;
+    _layers = 1;
 
     VkImageCreateInfo imageInfo {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -874,7 +981,7 @@ void VulkanImage::initDepth(glm::ivec2 extent, VkFormat format) {
     }
 }
 
-std::vector<uint8_t> VulkanImage::readBack(VkImageLayout layout, bool depth) const {
+std::vector<uint8_t> VulkanImage::readBack(bool depth) const {
     auto aspect = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
     VkDeviceSize size = imageSize(_format, _extent, 1);
 
@@ -884,6 +991,7 @@ std::vector<uint8_t> VulkanImage::readBack(VkImageLayout layout, bool depth) con
     auto image = _image;
     auto dst = staging.handle();
     auto extent = _extent;
+    auto layout = _layout;
     _device.immediateSubmit([image, dst, extent, aspect, layout](VkCommandBuffer cmd) {
         auto barrier = [&](VkImageLayout from, VkImageLayout to) {
             VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -925,8 +1033,7 @@ std::vector<uint8_t> VulkanImage::readBack(VkImageLayout layout, bool depth) con
     return result;
 }
 
-std::vector<uint8_t> VulkanImage::readBack(VkImageLayout layout, uint32_t mip,
-                                           uint32_t layers) const {
+std::vector<uint8_t> VulkanImage::readBack(uint32_t mip, uint32_t layers) const {
     auto extent = glm::max(glm::ivec2(1), _extent >> static_cast<int>(mip));
     VkDeviceSize size = imageSize(_format, extent, layers);
 
@@ -935,6 +1042,7 @@ std::vector<uint8_t> VulkanImage::readBack(VkImageLayout layout, uint32_t mip,
 
     auto image = _image;
     auto dst = staging.handle();
+    auto layout = _layout;
     _device.immediateSubmit([image, dst, extent, mip, layers, layout](VkCommandBuffer cmd) {
         auto barrier = [&](VkImageLayout from, VkImageLayout to) {
             VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -993,6 +1101,9 @@ void VulkanImage::deinit() {
         _image = VK_NULL_HANDLE;
         _allocation = VK_NULL_HANDLE;
     }
+    _layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    _layers = 1;
+    _mipLevels = 1;
 }
 
 } // namespace graphics

@@ -19,6 +19,7 @@
 
 #ifdef R_ENABLE_NRD
 
+#include "reone/graphics/vulkan/descriptorwrites.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/system/logutil.h"
 
@@ -266,7 +267,6 @@ void NrdDenoiser::deinit() {
     _outDiffuse.reset();
     _outSpecular.reset();
     _constants.reset();
-    _poolTransitioned = false;
     _hasHistory = false;
 }
 
@@ -296,30 +296,15 @@ void NrdDenoiser::denoise(VkCommandBuffer cmd,
                           const glm::vec2 &jitter,
                           uint32_t frameNumber,
                           bool restartHistory) {
-    if (!_poolTransitioned) {
-        // Everything NRD touches lives in GENERAL for its whole life; the
-        // per-dispatch hazard is handled by execution barriers, not layouts.
-        std::vector<VkImageMemoryBarrier2> barriers;
-        auto add = [&barriers](VkImage image) {
-            VkImageMemoryBarrier2 barrier {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            barrier.image = image;
-            barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            barriers.push_back(barrier);
-        };
-        for (auto &image : _permanentPool) add(image->handle());
-        for (auto &image : _transientPool) add(image->handle());
-        add(_outDiffuse->handle());
-        add(_outSpecular->handle());
-        VkDependencyInfo dependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        dependency.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
-        dependency.pImageMemoryBarriers = barriers.data();
-        vkCmdPipelineBarrier2(cmd, &dependency);
-        _poolTransitioned = true;
-    }
+    // Everything NRD touches lives in GENERAL for its whole life; the
+    // per-dispatch hazard is handled by execution barriers, not layouts.
+    std::vector<VulkanImage *> poolImages;
+    poolImages.reserve(_permanentPool.size() + _transientPool.size() + 2);
+    for (auto &image : _permanentPool) poolImages.push_back(image.get());
+    for (auto &image : _transientPool) poolImages.push_back(image.get());
+    poolImages.push_back(_outDiffuse.get());
+    poolImages.push_back(_outSpecular.get());
+    VulkanImage::transitionTo(cmd, poolImages, VK_IMAGE_LAYOUT_GENERAL);
 
     // A warp is not camera motion: reprojecting across it drags the previous
     // module's history over the new scene. A teleport-sized jump resets the
@@ -437,50 +422,39 @@ void NrdDenoiser::denoise(VkCommandBuffer cmd,
         }
         auto setForSpace = [&](uint32_t space) {
             for (size_t i = 0; i < setSpaces.size(); ++i) {
-                if (setSpaces[i] == space) return sets[i];
+            if (setSpaces[i] == space) return sets[i];
             }
             throw std::runtime_error("NRD: dispatch resource in undeclared space");
         };
 
-        std::vector<VkDescriptorImageInfo> imageInfos;
-        imageInfos.reserve(dispatch.resourcesNum);
-        std::vector<VkWriteDescriptorSet> writes;
-        writes.reserve(dispatch.resourcesNum + 1);
+        DescriptorWriteBuilder writes(_device.handle());
         uint32_t resourceIndex = 0;
         for (uint32_t r = 0; r < pipelineDesc.resourceRangesNum; ++r) {
             const auto &range = pipelineDesc.resourceRanges[r];
             const bool storage = range.descriptorType == nrd::DescriptorType::STORAGE_TEXTURE;
             for (uint32_t i = 0; i < range.descriptorsNum; ++i, ++resourceIndex) {
                 const auto &resource = dispatch.resources[resourceIndex];
-                imageInfos.push_back({VK_NULL_HANDLE, viewFor(resource, inputs), VK_IMAGE_LAYOUT_GENERAL});
-                VkWriteDescriptorSet write {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-                write.dstSet = setForSpace(instanceDesc.resourcesSpaceIndex);
-                write.dstBinding = (storage ? offsets.storageTextureAndBufferOffset : offsets.textureOffset) +
-                                   instanceDesc.resourcesBaseRegisterIndex + i;
-                write.descriptorCount = 1;
-                write.descriptorType = storage ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-                                               : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                write.pImageInfo = &imageInfos.back();
-                writes.push_back(write);
+                writes.writeImage(
+                    setForSpace(instanceDesc.resourcesSpaceIndex),
+                    {(storage ? offsets.storageTextureAndBufferOffset : offsets.textureOffset) +
+                         instanceDesc.resourcesBaseRegisterIndex + i,
+                     storage ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE},
+                    {VK_NULL_HANDLE, viewFor(resource, inputs), VK_IMAGE_LAYOUT_GENERAL});
             }
         }
-        VkDescriptorBufferInfo constantInfo {};
         if (pipelineDesc.hasConstantData && dispatch.constantBufferDataSize > 0) {
             auto *slot = constantBase + static_cast<VkDeviceSize>(d) * _constantSlotSize;
             std::memcpy(slot, dispatch.constantBufferData, dispatch.constantBufferDataSize);
-            constantInfo.buffer = _constants->handle();
-            constantInfo.offset = static_cast<VkDeviceSize>(frameIndex) * _constantSlotSize * _constantSlotsPerFrame +
-                                  static_cast<VkDeviceSize>(d) * _constantSlotSize;
-            constantInfo.range = dispatch.constantBufferDataSize;
-            VkWriteDescriptorSet write {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            write.dstSet = setForSpace(instanceDesc.constantBufferAndSamplersSpaceIndex);
-            write.dstBinding = offsets.constantBufferOffset + instanceDesc.constantBufferRegisterIndex;
-            write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            write.pBufferInfo = &constantInfo;
-            writes.push_back(write);
+            writes.writeBuffer(
+                setForSpace(instanceDesc.constantBufferAndSamplersSpaceIndex),
+                {offsets.constantBufferOffset + instanceDesc.constantBufferRegisterIndex,
+                 VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+                {_constants->handle(),
+                 static_cast<VkDeviceSize>(frameIndex) * _constantSlotSize * _constantSlotsPerFrame +
+                     static_cast<VkDeviceSize>(d) * _constantSlotSize,
+                 dispatch.constantBufferDataSize});
         }
-        vkUpdateDescriptorSets(_device.handle(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        writes.apply();
 
         vkCmdPipelineBarrier2(cmd, &computeDependency);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.handle);

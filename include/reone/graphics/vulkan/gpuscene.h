@@ -16,6 +16,7 @@
 namespace reone::graphics {
 
 class VulkanBuffer;
+class VulkanPipeline;
 class VulkanRenderer;
 
 /** Native storage and compute publication for a Vulkan-free scene upload. */
@@ -83,11 +84,7 @@ private:
     };
 
     VulkanRenderer *_renderer {nullptr};
-    VkDescriptorSetLayout _mergeLayout {VK_NULL_HANDLE};
-    VkDescriptorPool _mergePool {VK_NULL_HANDLE};
-    std::array<VkDescriptorSet, 2> _mergeSets {};
-    VkPipelineLayout _mergePipelineLayout {VK_NULL_HANDLE};
-    VkPipeline _mergePipeline {VK_NULL_HANDLE};
+    std::unique_ptr<VulkanPipeline> _mergePipeline;
     std::array<std::unique_ptr<Frame>, 2> _frames;
     std::unordered_map<const Mesh *, SourceGeometry> _sourceGeometry;
     std::vector<float> _sourceVertexData;

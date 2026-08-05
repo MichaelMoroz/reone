@@ -127,7 +127,6 @@ private:
     glm::vec2 _prevJitter {0.0f};
     glm::vec3 _prevCameraPosition {0.0f};
     bool _hasHistory {false};
-    bool _poolTransitioned {false};
 
     VkImageView viewFor(const nrd::ResourceDesc &resource, const Inputs &inputs) const;
 };

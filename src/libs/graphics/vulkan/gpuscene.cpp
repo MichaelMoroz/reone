@@ -12,7 +12,9 @@
 
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/vulkan/buffer.h"
+#include "reone/graphics/vulkan/descriptorwrites.h"
 #include "reone/graphics/vulkan/device.h"
+#include "reone/graphics/vulkan/pipeline.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/system/logutil.h"
@@ -83,64 +85,23 @@ void VulkanGpuScene::init(VulkanRenderer &renderer) {
         return;
     _renderer = &renderer;
     auto &device = _renderer->device();
-    VkDescriptorSetLayoutBinding bindings[11] {};
+    std::vector<VulkanPipeline::LayoutBinding> bindings;
+    bindings.reserve(11);
     for (uint32_t i = 0; i < 11; ++i) {
-        bindings[i].binding = i;
-        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        bindings.push_back({{i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, 1, VK_SHADER_STAGE_COMPUTE_BIT});
     }
-    VkDescriptorSetLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layoutInfo.bindingCount = 11;
-    layoutInfo.pBindings = bindings;
-    if (vkCreateDescriptorSetLayout(device.handle(), &layoutInfo, nullptr, &_mergeLayout) != VK_SUCCESS)
-        throw std::runtime_error("Vulkan: merge descriptor layout creation failed");
-    VkDescriptorPoolSize poolSize {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 22};
-    VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    poolInfo.maxSets = 2;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
-    if (vkCreateDescriptorPool(device.handle(), &poolInfo, nullptr, &_mergePool) != VK_SUCCESS)
-        throw std::runtime_error("Vulkan: merge descriptor pool creation failed");
-    std::array<VkDescriptorSetLayout, 2> setLayouts {_mergeLayout, _mergeLayout};
-    VkDescriptorSetAllocateInfo alloc {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    alloc.descriptorPool = _mergePool;
-    alloc.descriptorSetCount = static_cast<uint32_t>(setLayouts.size());
-    alloc.pSetLayouts = setLayouts.data();
-    if (vkAllocateDescriptorSets(device.handle(), &alloc, _mergeSets.data()) != VK_SUCCESS)
-        throw std::runtime_error("Vulkan: merge descriptor allocation failed");
-    const auto &spirv = _renderer->shaderModule("skin");
-    VkShaderModuleCreateInfo moduleInfo {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-    moduleInfo.codeSize = spirv.size() * sizeof(uint32_t);
-    moduleInfo.pCode = spirv.data();
-    VkShaderModule module;
-    if (vkCreateShaderModule(device.handle(), &moduleInfo, nullptr, &module) != VK_SUCCESS)
-        throw std::runtime_error("Vulkan: merge shader module creation failed");
     VkPushConstantRange pushConstants {};
     pushConstants.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     pushConstants.size = sizeof(MergePushConstants);
-    VkPipelineLayoutCreateInfo pipelineLayoutInfo {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &_mergeLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pushConstants;
-    if (vkCreatePipelineLayout(device.handle(), &pipelineLayoutInfo, nullptr,
-                               &_mergePipelineLayout) != VK_SUCCESS) {
-        vkDestroyShaderModule(device.handle(), module, nullptr);
-        throw std::runtime_error("Vulkan: merge pipeline layout creation failed");
-    }
-    VkComputePipelineCreateInfo pipelineInfo {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-    pipelineInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    pipelineInfo.stage.module = module;
-    pipelineInfo.stage.pName = "main";
-    pipelineInfo.layout = _mergePipelineLayout;
-    const auto result = vkCreateComputePipelines(device.handle(), VK_NULL_HANDLE, 1,
-                                                 &pipelineInfo, nullptr, &_mergePipeline);
-    vkDestroyShaderModule(device.handle(), module, nullptr);
-    if (result != VK_SUCCESS)
-        throw std::runtime_error("Vulkan: merge compute pipeline creation failed");
-    device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_mergePipeline),
+    VulkanPipeline::Config pipelineConfig;
+    pipelineConfig.type = VulkanPipeline::Config::Type::Compute;
+    pipelineConfig.spirv = _renderer->shaderModule("skin");
+    pipelineConfig.computeEntry = "main";
+    pipelineConfig.descriptorSets = {{VK_NULL_HANDLE, std::move(bindings), 2}};
+    pipelineConfig.pushConstants = {pushConstants};
+    _mergePipeline = std::make_unique<VulkanPipeline>(device);
+    _mergePipeline->init(pipelineConfig);
+    device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_mergePipeline->handle()),
                          "gpu-scene:merge");
     for (auto &frame : _frames)
         frame = std::make_unique<Frame>();
@@ -155,19 +116,7 @@ void VulkanGpuScene::deinit() {
     clearSourceGeometry();
     _grassFaces.reset();
     _grassFaceGeneration = 0;
-    if (_mergePipeline)
-        vkDestroyPipeline(device.handle(), _mergePipeline, nullptr);
-    if (_mergePipelineLayout)
-        vkDestroyPipelineLayout(device.handle(), _mergePipelineLayout, nullptr);
-    if (_mergePool)
-        vkDestroyDescriptorPool(device.handle(), _mergePool, nullptr);
-    if (_mergeLayout)
-        vkDestroyDescriptorSetLayout(device.handle(), _mergeLayout, nullptr);
-    _mergePipeline = VK_NULL_HANDLE;
-    _mergePipelineLayout = VK_NULL_HANDLE;
-    _mergePool = VK_NULL_HANDLE;
-    _mergeLayout = VK_NULL_HANDLE;
-    _mergeSets = {};
+    _mergePipeline.reset();
     _renderer = nullptr;
     _inited = false;
 }
@@ -467,18 +416,12 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
                                                          danglyPositionBytes},
                                                         {_grassFaces->handle(), 0, _grassFaces->size()},
                                                         {frame.grassRanges->handle(), 0, frame.grassRanges->size()}}};
-        std::array<VkWriteDescriptorSet, 11> writes {};
-        const auto set = _mergeSets[_renderer->frameIndex()];
-        for (uint32_t i = 0; i < writes.size(); ++i) {
-            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[i].dstSet = set;
-            writes[i].dstBinding = i;
-            writes[i].descriptorCount = 1;
-            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[i].pBufferInfo = &buffers[i];
+        const auto set = _mergePipeline->descriptorSet(0, _renderer->frameIndex());
+        DescriptorWriteBuilder writes(_renderer->device().handle());
+        for (uint32_t i = 0; i < buffers.size(); ++i) {
+            writes.writeBuffer(set, {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, buffers[i]);
         }
-        vkUpdateDescriptorSets(_renderer->device().handle(), static_cast<uint32_t>(writes.size()),
-                               writes.data(), 0, nullptr);
+        writes.apply();
         MergePushConstants constants;
         constants.objectCount = static_cast<uint32_t>(upload.objects.size());
         constants.opaqueObjectCount = upload.opaqueObjectCount;
@@ -502,10 +445,10 @@ VulkanGpuScene::View VulkanGpuScene::update(VkCommandBuffer cmd, GpuSceneUpload 
         sourceDependency.bufferMemoryBarrierCount = static_cast<uint32_t>(sourceBarriers.size());
         sourceDependency.pBufferMemoryBarriers = sourceBarriers.data();
         vkCmdPipelineBarrier2(cmd, &sourceDependency);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _mergePipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _mergePipelineLayout, 0, 1,
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _mergePipeline->handle());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _mergePipeline->layout(), 0, 1,
                                 &set, 0, nullptr);
-        vkCmdPushConstants(cmd, _mergePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+        vkCmdPushConstants(cmd, _mergePipeline->layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(constants), &constants);
         const auto threads = std::max(constants.vertexCount, constants.triangleCount);
         if (threads)

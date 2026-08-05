@@ -24,11 +24,85 @@ namespace reone {
 namespace graphics {
 
 void VulkanPipeline::init(const Config &config) {
+    deinit();
+    try {
+    _setLayouts.reserve(config.descriptorSets.size());
+    _sets.resize(config.descriptorSets.size());
+    for (const auto &set : config.descriptorSets) {
+        if (set.layout != VK_NULL_HANDLE) {
+            if (!set.bindings.empty() || set.copies != 0)
+                throw std::invalid_argument("Vulkan: borrowed descriptor layout has builder state");
+            _setLayouts.push_back(set.layout);
+            continue;
+        }
+        if (set.bindings.empty() || set.copies == 0)
+            throw std::invalid_argument("Vulkan: owned descriptor layout needs bindings and copies");
+        std::vector<VkDescriptorSetLayoutBinding> bindings;
+        std::vector<VkDescriptorBindingFlags> bindingFlags;
+        bindings.reserve(set.bindings.size());
+        bindingFlags.reserve(set.bindings.size());
+        for (const auto &source : set.bindings) {
+            VkDescriptorSetLayoutBinding binding {};
+            binding.binding = source.binding.index;
+            binding.descriptorType = source.binding.type;
+            binding.descriptorCount = source.count;
+            binding.stageFlags = source.stages;
+            bindings.push_back(binding);
+            bindingFlags.push_back(source.flags);
+        }
+        VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo {
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+        bindingFlagsInfo.bindingCount = static_cast<uint32_t>(bindingFlags.size());
+        bindingFlagsInfo.pBindingFlags = bindingFlags.data();
+        VkDescriptorSetLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        layoutInfo.pNext = std::any_of(bindingFlags.begin(), bindingFlags.end(),
+                                      [](auto flags) { return flags != 0; }) ? &bindingFlagsInfo : nullptr;
+        layoutInfo.flags = set.flags;
+        layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+        layoutInfo.pBindings = bindings.data();
+        VkDescriptorSetLayout layout {VK_NULL_HANDLE};
+        if (vkCreateDescriptorSetLayout(_device.handle(), &layoutInfo, nullptr, &layout) != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: descriptor layout creation failed");
+        _setLayouts.push_back(layout);
+        _ownedSets.push_back({layout});
+
+        std::vector<VkDescriptorPoolSize> poolSizes;
+        for (const auto &binding : set.bindings) {
+            auto poolSize = std::find_if(poolSizes.begin(), poolSizes.end(), [&](const auto &candidate) {
+                return candidate.type == binding.binding.type;
+            });
+            if (poolSize == poolSizes.end()) {
+                poolSizes.push_back({binding.binding.type, binding.count * set.copies});
+            } else {
+                poolSize->descriptorCount += binding.count * set.copies;
+            }
+        }
+        VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        poolInfo.flags = set.flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT
+                             ? VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT
+                             : 0;
+        poolInfo.maxSets = set.copies;
+        poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+        poolInfo.pPoolSizes = poolSizes.data();
+        VkDescriptorPool pool {VK_NULL_HANDLE};
+        if (vkCreateDescriptorPool(_device.handle(), &poolInfo, nullptr, &pool) != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: descriptor pool creation failed");
+        _ownedSets.back().pool = pool;
+        auto &sets = _sets[_setLayouts.size() - 1];
+        sets.resize(set.copies);
+        std::vector<VkDescriptorSetLayout> layouts(set.copies, layout);
+        VkDescriptorSetAllocateInfo allocation {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        allocation.descriptorPool = pool;
+        allocation.descriptorSetCount = set.copies;
+        allocation.pSetLayouts = layouts.data();
+        if (vkAllocateDescriptorSets(_device.handle(), &allocation, sets.data()) != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: descriptor set allocation failed");
+    }
     VkShaderModuleCreateInfo moduleInfo {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     moduleInfo.codeSize = config.spirv.size() * sizeof(uint32_t);
     moduleInfo.pCode = config.spirv.data();
 
-    // Both stages come from the same module. Slang emits one SPIR-V blob with
+    // Both graphics stages come from the same module. Slang emits one SPIR-V blob with
     // every entry point compiled into it, which is also how the shared code in
     // slang/lib is only compiled once.
     VkShaderModule module {VK_NULL_HANDLE};
@@ -47,20 +121,54 @@ void VulkanPipeline::init(const Config &config) {
     stages[1].pName = config.fragmentEntry.c_str();
 
     VkPipelineLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    layoutInfo.setLayoutCount = static_cast<uint32_t>(config.setLayouts.size());
-    layoutInfo.pSetLayouts = config.setLayouts.data();
-    VkPushConstantRange pushRange {};
-    if (config.fragmentPushConstantSize != 0) {
-        pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        pushRange.size = config.fragmentPushConstantSize;
-        layoutInfo.pushConstantRangeCount = 1;
-        layoutInfo.pPushConstantRanges = &pushRange;
-    }
+    layoutInfo.setLayoutCount = static_cast<uint32_t>(_setLayouts.size());
+    layoutInfo.pSetLayouts = _setLayouts.data();
+    layoutInfo.pushConstantRangeCount = static_cast<uint32_t>(config.pushConstants.size());
+    layoutInfo.pPushConstantRanges = config.pushConstants.data();
     if (vkCreatePipelineLayout(_device.handle(), &layoutInfo, nullptr, &_layout) != VK_SUCCESS) {
         vkDestroyShaderModule(_device.handle(), module, nullptr);
         throw std::runtime_error("Vulkan: pipeline layout creation failed");
     }
 
+    if (config.type == Config::Type::Compute) {
+        VkComputePipelineCreateInfo pipelineInfo {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        pipelineInfo.stage = stages[0];
+        pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        pipelineInfo.stage.pName = config.computeEntry.c_str();
+        pipelineInfo.layout = _layout;
+        const auto result = vkCreateComputePipelines(_device.handle(), VK_NULL_HANDLE, 1,
+                                                     &pipelineInfo, nullptr, &_pipeline);
+        vkDestroyShaderModule(_device.handle(), module, nullptr);
+        if (result != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: compute pipeline creation failed");
+        return;
+    }
+    if (config.type == Config::Type::RayTracing) {
+        VkPipelineShaderStageCreateInfo stage = stages[0];
+        stage.stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        stage.pName = config.raygenEntry.c_str();
+        VkRayTracingShaderGroupCreateInfoKHR group {
+            VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR};
+        group.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        group.generalShader = 0;
+        group.closestHitShader = VK_SHADER_UNUSED_KHR;
+        group.anyHitShader = VK_SHADER_UNUSED_KHR;
+        group.intersectionShader = VK_SHADER_UNUSED_KHR;
+        VkRayTracingPipelineCreateInfoKHR pipelineInfo {
+            VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
+        pipelineInfo.stageCount = 1;
+        pipelineInfo.pStages = &stage;
+        pipelineInfo.groupCount = 1;
+        pipelineInfo.pGroups = &group;
+        pipelineInfo.maxPipelineRayRecursionDepth = 1;
+        pipelineInfo.layout = _layout;
+        const auto result = vkCreateRayTracingPipelinesKHR(
+            _device.handle(), VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_pipeline);
+        vkDestroyShaderModule(_device.handle(), module, nullptr);
+        if (result != VK_SUCCESS)
+            throw std::runtime_error("Vulkan: ray-tracing pipeline creation failed");
+        return;
+    }
     VkPipelineVertexInputStateCreateInfo vertexInput {
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vertexInput.vertexBindingDescriptionCount =
@@ -208,8 +316,11 @@ void VulkanPipeline::init(const Config &config) {
     // The module can go as soon as the pipeline is built; the pipeline holds
     // whatever it needs from it.
     vkDestroyShaderModule(_device.handle(), module, nullptr);
-    if (result != VK_SUCCESS) {
+    if (result != VK_SUCCESS)
         throw std::runtime_error("Vulkan: graphics pipeline creation failed");
+    } catch (...) {
+        deinit();
+        throw;
     }
 }
 
@@ -222,6 +333,20 @@ void VulkanPipeline::deinit() {
         vkDestroyPipelineLayout(_device.handle(), _layout, nullptr);
         _layout = VK_NULL_HANDLE;
     }
+    for (const auto &set : _ownedSets) {
+        if (set.pool != VK_NULL_HANDLE)
+            vkDestroyDescriptorPool(_device.handle(), set.pool, nullptr);
+        vkDestroyDescriptorSetLayout(_device.handle(), set.layout, nullptr);
+    }
+    _ownedSets.clear();
+    _setLayouts.clear();
+    _sets.clear();
+}
+
+VkDescriptorSet VulkanPipeline::descriptorSet(uint32_t set, uint32_t copy) const {
+    if (set >= _sets.size() || copy >= _sets[set].size())
+        throw std::out_of_range("Vulkan: descriptor set copy is not owned by this pipeline");
+    return _sets[set][copy];
 }
 
 } // namespace graphics

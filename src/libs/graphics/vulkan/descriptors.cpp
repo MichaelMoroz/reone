@@ -20,6 +20,7 @@
 #include "reone/graphics/types.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/device.h"
+#include "reone/graphics/vulkan/descriptorwrites.h"
 #include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/resources.h"
@@ -210,23 +211,13 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
     // Written once. Every binding covers that frame's whole arena; which slice a
     // draw reads is chosen by the dynamic offset passed at bind time.
     for (int frame = 0; frame < framesInFlight; ++frame) {
-        std::array<VkDescriptorBufferInfo, kNumUniformBlocks> bufferInfos {};
-        std::array<VkWriteDescriptorSet, kNumUniformBlocks> writes {};
+        DescriptorWriteBuilder writes(_device.handle());
         for (int i = 0; i < kNumUniformBlocks; ++i) {
-            bufferInfos[i].buffer = ring.buffer(frame);
-            bufferInfos[i].offset = 0;
-            bufferInfos[i].range = kBlockSizes[i];
-
-            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[i].dstSet = _uniformSets[frame];
-            writes[i].dstBinding = i;
-            writes[i].descriptorCount = 1;
-            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-            writes[i].pBufferInfo = &bufferInfos[i];
+            writes.writeBuffer(_uniformSets[frame],
+                               {static_cast<uint32_t>(i), VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC},
+                               {ring.buffer(frame), 0, kBlockSizes[i]});
         }
-        vkUpdateDescriptorSets(_device.handle(),
-                               static_cast<uint32_t>(writes.size()), writes.data(),
-                               0, nullptr);
+        writes.apply();
     }
 
     VkSamplerCreateInfo samplerInfo {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -298,43 +289,23 @@ VkDescriptorSet VulkanDescriptors::updateMegaDrawSet(
         {scene.materialIds.buffer->handle(), scene.materialIds.offset, scene.materialIds.size},
         {scene.materials.buffer->handle(), scene.materials.offset, scene.materials.size},
     }};
-    std::array<VkWriteDescriptorSet, 3> bufferWrites {};
-    for (uint32_t i = 0; i < bufferWrites.size(); ++i) {
-        bufferWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        bufferWrites[i].dstSet = set;
-        bufferWrites[i].dstBinding = i;
-        bufferWrites[i].descriptorCount = 1;
-        bufferWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        bufferWrites[i].pBufferInfo = &buffers[i];
+    DescriptorWriteBuilder bufferWrites(_device.handle());
+    for (uint32_t i = 0; i < buffers.size(); ++i) {
+        bufferWrites.writeBuffer(set, {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, buffers[i]);
     }
-    vkUpdateDescriptorSets(_device.handle(), static_cast<uint32_t>(bufferWrites.size()),
-                           bufferWrites.data(), 0, nullptr);
+    bufferWrites.apply();
 
     auto writeImages = [&](uint32_t binding,
                            const std::vector<std::pair<uint32_t, const VulkanImage *>> &images) {
-        std::vector<VkDescriptorImageInfo> infos;
-        std::vector<VkWriteDescriptorSet> writes;
-        infos.reserve(images.size());
-        writes.reserve(images.size());
+        DescriptorWriteBuilder writes(_device.handle());
         for (const auto &[id, image] : images) {
             if (id >= _bindlessTextureCapacity) {
                 throw std::runtime_error("Vulkan: mega-draw bindless texture array exhausted");
             }
-            infos.push_back({image->sampler(), image->view(),
-                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-            VkWriteDescriptorSet write {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            write.dstSet = set;
-            write.dstBinding = binding;
-            write.dstArrayElement = id;
-            write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.pImageInfo = &infos.back();
-            writes.push_back(write);
+            writes.writeImage(set, {binding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                              {image->sampler(), image->view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, id);
         }
-        if (!writes.empty()) {
-            vkUpdateDescriptorSets(_device.handle(), static_cast<uint32_t>(writes.size()),
-                                   writes.data(), 0, nullptr);
-        }
+        writes.apply();
     };
     writeImages(3, resources.uploadedTextures());
     writeImages(4, resources.uploadedTextureArrays());
@@ -343,24 +314,13 @@ VkDescriptorSet VulkanDescriptors::updateMegaDrawSet(
 }
 
 void VulkanDescriptors::writeTextureSet(VkDescriptorSet set, const VulkanImage *mainTex) {
-    std::array<VkDescriptorImageInfo, kNumTextures> infos {};
-    std::array<VkWriteDescriptorSet, kNumTextures> writes {};
+    DescriptorWriteBuilder writes(_device.handle());
     for (int i = 0; i < kNumTextures; ++i) {
         auto image = (i == TextureUnits::mainTex && mainTex) ? mainTex : _standing[i];
-        infos[i].sampler = image->sampler() ? image->sampler() : _sampler;
-        infos[i].imageView = image->view();
-        infos[i].imageLayout = sampledLayoutFor(*image);
-
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = set;
-        writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[i].pImageInfo = &infos[i];
+        writes.writeImage(set, {static_cast<uint32_t>(i), VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                          {image->sampler() ? image->sampler() : _sampler, image->view(), sampledLayoutFor(*image)});
     }
-    vkUpdateDescriptorSets(_device.handle(),
-                           static_cast<uint32_t>(writes.size()), writes.data(),
-                           0, nullptr);
+    writes.apply();
 }
 
 VkDescriptorSet VulkanDescriptors::createPersistentTextureSet(
@@ -388,8 +348,7 @@ VkDescriptorSet VulkanDescriptors::createPersistentTextureSet(
         throw std::runtime_error("Vulkan: persistent texture set allocation failed");
     }
 
-    std::array<VkDescriptorImageInfo, kNumTextures> infos {};
-    std::array<VkWriteDescriptorSet, kNumTextures> writes {};
+    DescriptorWriteBuilder writes(_device.handle());
     for (int i = 0; i < kNumTextures; ++i) {
         auto image = defaultFor(i, _default2D.get(), _defaultArray.get(), _defaultCube.get(),
                                   _defaultCubeArray.get());
@@ -398,27 +357,17 @@ VkDescriptorSet VulkanDescriptors::createPersistentTextureSet(
                 image = override;
             }
         }
-        infos[i].sampler = image->sampler() ? image->sampler() : _sampler;
-        infos[i].imageView = image->view();
-        infos[i].imageLayout = sampledLayoutFor(*image);
-
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = set;
-        writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[i].pImageInfo = &infos[i];
+        writes.writeImage(set, {static_cast<uint32_t>(i), VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                          {image->sampler() ? image->sampler() : _sampler, image->view(), sampledLayoutFor(*image)});
     }
-    vkUpdateDescriptorSets(_device.handle(),
-                           static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    writes.apply();
     return set;
 }
 
 void VulkanDescriptors::writeTextureSet(
     VkDescriptorSet set,
     const std::vector<std::pair<int, const VulkanImage *>> &bindings) {
-    std::array<VkDescriptorImageInfo, kNumTextures> infos {};
-    std::array<VkWriteDescriptorSet, kNumTextures> writes {};
+    DescriptorWriteBuilder writes(_device.handle());
     for (int i = 0; i < kNumTextures; ++i) {
         auto image = _standing[i];
         for (const auto &binding : bindings) {
@@ -426,20 +375,10 @@ void VulkanDescriptors::writeTextureSet(
                 image = binding.second;
             }
         }
-        infos[i].sampler = image->sampler() ? image->sampler() : _sampler;
-        infos[i].imageView = image->view();
-        infos[i].imageLayout = sampledLayoutFor(*image);
-
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = set;
-        writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[i].pImageInfo = &infos[i];
+        writes.writeImage(set, {static_cast<uint32_t>(i), VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                          {image->sampler() ? image->sampler() : _sampler, image->view(), sampledLayoutFor(*image)});
     }
-    vkUpdateDescriptorSets(_device.handle(),
-                           static_cast<uint32_t>(writes.size()), writes.data(),
-                           0, nullptr);
+    writes.apply();
 }
 
 VkDescriptorSet VulkanDescriptors::acquireTextureSet(

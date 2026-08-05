@@ -120,8 +120,6 @@ private:
     std::unique_ptr<VulkanImage> _output;
     std::unique_ptr<VulkanImage> _dirShadows;
     std::unique_ptr<VulkanImage> _pointShadows;
-    VkImageLayout _dirShadowLayout {VK_IMAGE_LAYOUT_UNDEFINED};
-    VkImageLayout _pointShadowLayout {VK_IMAGE_LAYOUT_UNDEFINED};
     std::shared_ptr<Texture> _outputHandle;
     VkDescriptorSet _retroResolveSet {VK_NULL_HANDLE};
     VkDescriptorSet _pbrResolveSet {VK_NULL_HANDLE};

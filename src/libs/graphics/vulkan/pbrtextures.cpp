@@ -24,6 +24,7 @@
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/debugscope.h"
 #include "reone/graphics/vulkan/descriptors.h"
+#include "reone/graphics/vulkan/renderpass.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/pipeline.h"
 #include "reone/graphics/vulkan/pipelinecache.h"
@@ -228,18 +229,6 @@ void VulkanPBRTextures::process(VkCommandBuffer cmd, uint32_t globalsOffset) {
 }
 
 void VulkanPBRTextures::generateBRDF(VkCommandBuffer cmd, uint32_t globalsOffset) {
-    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    attachment.imageView = _brdf->view();
-    attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-
-    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
-    rendering.renderArea.extent = {kBRDFSize, kBRDFSize};
-    rendering.layerCount = 1;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachments = &attachment;
-
     VulkanPipelineCache::Key key;
     key.module = kModule;
     key.vertexEntry = "iblVertex";
@@ -247,16 +236,16 @@ void VulkanPBRTextures::generateBRDF(VkCommandBuffer cmd, uint32_t globalsOffset
     key.colorFormats = {VK_FORMAT_R16G16_SFLOAT};
     auto &pipeline = _pipelines.get(key);
 
-    VkViewport viewport {0.0f, 0.0f, kBRDFSize, kBRDFSize, 0.0f, 1.0f};
-    VkRect2D scissor {{0, 0}, {kBRDFSize, kBRDFSize}};
-
     std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
 
-    vkCmdBeginRendering(cmd, &rendering);
+    RenderPassScope rendering(
+        cmd, {kBRDFSize, kBRDFSize},
+        {{_brdf->view(),
+          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+          VK_ATTACHMENT_LOAD_OP_CLEAR,
+          VK_ATTACHMENT_STORE_OP_STORE}});
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
     auto uniformSet = _descriptors.uniformSet(_ring.frame());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
                             VulkanDescriptors::kUniformSet, 1, &uniformSet,
@@ -265,7 +254,6 @@ void VulkanPBRTextures::generateBRDF(VkCommandBuffer cmd, uint32_t globalsOffset
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
                             VulkanDescriptors::kTextureSet, 1, &textureSet, 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRendering(cmd);
 }
 
 void VulkanPBRTextures::generateDerived(VkCommandBuffer cmd, uint32_t globalsOffset,
@@ -291,22 +279,8 @@ void VulkanPBRTextures::renderCubeFaces(VkCommandBuffer cmd,
                                         const char *fragmentEntry,
                                         const Texture *envMap,
                                         float roughness) {
-    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    attachment.imageView = target.renderView(cube, mip);
-    attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-
-    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
-    rendering.renderArea.extent = {static_cast<uint32_t>(extent.x),
-                                   static_cast<uint32_t>(extent.y)};
-    rendering.layerCount = 1;
     // Six views, one per face. The vertex stage reads SV_ViewID and the fragment
     // stage turns it into a direction, so one draw fills the whole cube.
-    rendering.viewMask = kCubeViewMask;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachments = &attachment;
-
     VulkanPipelineCache::Key key;
     key.module = kModule;
     key.vertexEntry = "iblVertex";
@@ -326,21 +300,20 @@ void VulkanPBRTextures::renderCubeFaces(VkCommandBuffer cmd,
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
     offsets[UniformBlockBindingPoints::locals] = _ring.push(locals);
 
-    VkViewport viewport {0.0f, 0.0f, static_cast<float>(extent.x),
-                         static_cast<float>(extent.y), 0.0f, 1.0f};
-    VkRect2D scissor {{0, 0}, {static_cast<uint32_t>(extent.x),
-                               static_cast<uint32_t>(extent.y)}};
-
     std::vector<std::pair<int, const VulkanImage *>> textures;
     if (envMap) {
         auto unit = envMap->isCubeMap() ? TextureUnits::envMapCube : TextureUnits::envMap;
         textures.push_back({unit, &_resources.get(*envMap)});
     }
 
-    vkCmdBeginRendering(cmd, &rendering);
+    RenderPassScope rendering(
+        cmd, extent,
+        {{target.renderView(cube, mip),
+          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+          VK_ATTACHMENT_LOAD_OP_CLEAR,
+          VK_ATTACHMENT_STORE_OP_STORE}},
+        std::nullopt, kCubeViewMask);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
     auto uniformSet = _descriptors.uniformSet(_ring.frame());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
                             VulkanDescriptors::kUniformSet, 1, &uniformSet,
@@ -349,7 +322,6 @@ void VulkanPBRTextures::renderCubeFaces(VkCommandBuffer cmd,
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
                             VulkanDescriptors::kTextureSet, 1, &textureSet, 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRendering(cmd);
 }
 
 } // namespace graphics

@@ -185,19 +185,32 @@ public:
                            const std::vector<std::pair<const void *, VkDeviceSize>> &layers);
 
     /**
+     * Move this image to @p layout.
+     *
+     * The image, rather than its caller, owns the current layout: only the
+     * image can know which pass or frame last used it. A transition to the
+     * current layout records nothing.
+     */
+    void transitionTo(VkCommandBuffer cmd, VkImageLayout layout);
+
+    /** Move several images to one layout in a single dependency. */
+    static void transitionTo(VkCommandBuffer cmd,
+                             const std::vector<VulkanImage *> &images,
+                             VkImageLayout layout);
+
+    /**
      * Copy the image back to host memory, exactly as stored.
      *
-     * @param layout the layout the image is currently in, restored afterwards.
      * @param depth  true to copy the depth aspect rather than colour.
      */
-    std::vector<uint8_t> readBack(VkImageLayout layout, bool depth = false) const;
+    std::vector<uint8_t> readBack(bool depth = false) const;
 
     /**
      * Copy one mip's consecutive colour layers back to host memory. This is
      * used for cube-array diagnostics, where each cube face becomes one
      * vertically unrolled image in the dump.
      */
-    std::vector<uint8_t> readBack(VkImageLayout layout, uint32_t mip, uint32_t layers) const;
+    std::vector<uint8_t> readBack(uint32_t mip, uint32_t layers) const;
 
     void deinit();
 
@@ -230,6 +243,8 @@ private:
     VmaAllocation _allocation {VK_NULL_HANDLE};
     glm::ivec2 _extent {0};
     VkFormat _format {VK_FORMAT_UNDEFINED};
+    uint32_t _layers {1};
+    VkImageLayout _layout {VK_IMAGE_LAYOUT_UNDEFINED};
 };
 
 } // namespace graphics

@@ -21,6 +21,7 @@ namespace reone::graphics {
 
 class VulkanRenderer;
 class VulkanImage;
+class VulkanPipeline;
 class Texture;
 struct GraphicsOptions;
 
@@ -68,11 +69,7 @@ private:
     VulkanRenderer &_renderer;
     GraphicsOptions &_options;
     glm::ivec2 _extent;
-    VkDescriptorSetLayout _layout {VK_NULL_HANDLE};
-    VkDescriptorPool _pool {VK_NULL_HANDLE};
-    std::array<VkDescriptorSet, 2> _sets {};
-    VkPipelineLayout _pipelineLayout {VK_NULL_HANDLE};
-    VkPipeline _pipeline {VK_NULL_HANDLE};
+    std::unique_ptr<VulkanPipeline> _pipeline;
     std::unique_ptr<VulkanBuffer> _raygenSbt;
     VkStridedDeviceAddressRegionKHR _raygenSbtRegion {};
     std::array<Frame, 2> _frames;
@@ -128,11 +125,7 @@ private:
     void *_nrdInstance {nullptr};
 #ifdef R_ENABLE_NRD
     std::unique_ptr<NrdDenoiser> _nrdDenoiser;
-    VkDescriptorSetLayout _compositeLayout {VK_NULL_HANDLE};
-    VkDescriptorPool _compositePool {VK_NULL_HANDLE};
-    std::array<VkDescriptorSet, 2> _compositeSets {};
-    VkPipelineLayout _compositePipelineLayout {VK_NULL_HANDLE};
-    VkPipeline _compositePipeline {VK_NULL_HANDLE};
+    std::unique_ptr<VulkanPipeline> _compositePipeline;
     glm::vec3 _prevCameraPosition {0.0f};
     bool _temporalHistoryValid {false};
 #endif
@@ -140,20 +133,11 @@ private:
     std::unique_ptr<FsrUpscaler> _fsr;
     std::unique_ptr<VulkanImage> _fsrColor;
     std::unique_ptr<VulkanImage> _fsrOutput;
-    bool _fsrImagesTransitioned {false};
-    VkDescriptorSetLayout _tonemapLayout {VK_NULL_HANDLE};
-    VkDescriptorPool _tonemapPool {VK_NULL_HANDLE};
-    std::array<VkDescriptorSet, 2> _tonemapSets {};
-    VkPipelineLayout _tonemapPipelineLayout {VK_NULL_HANDLE};
-    VkPipeline _tonemapPipeline {VK_NULL_HANDLE};
+    std::unique_ptr<VulkanPipeline> _tonemapPipeline;
 #endif
 
     static constexpr int kNumAuxImages = 14;
     std::array<std::array<std::unique_ptr<VulkanImage>, kNumAuxImages>, 2> _auxImages;
-    VkDescriptorSetLayout _auxLayout {VK_NULL_HANDLE};
-    VkDescriptorPool _auxPool {VK_NULL_HANDLE};
-    std::array<VkDescriptorSet, 2> _auxSets {};
-    bool _auxImagesTransitioned {false};
     int _lastAuxFrame {-1};
 
     void clearFrame(Frame &frame);

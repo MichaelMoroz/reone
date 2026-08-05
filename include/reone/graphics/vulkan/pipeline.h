@@ -20,6 +20,7 @@
 #include <volk.h>
 
 #include "reone/graphics/types.h"
+#include "reone/graphics/vulkan/descriptorwrites.h"
 
 namespace reone {
 
@@ -41,10 +42,35 @@ class VulkanDevice;
  */
 class VulkanPipeline : boost::noncopyable {
 public:
+    struct LayoutBinding {
+        DescriptorBinding binding;
+        uint32_t count {1};
+        VkShaderStageFlags stages {0};
+        VkDescriptorBindingFlags flags {0};
+    };
+
+    struct DescriptorSet {
+        /** A non-null layout is borrowed; otherwise this pipeline creates it. */
+        VkDescriptorSetLayout layout {VK_NULL_HANDLE};
+        std::vector<LayoutBinding> bindings;
+        /** Number of descriptor sets to allocate for an owned layout. */
+        uint32_t copies {0};
+        VkDescriptorSetLayoutCreateFlags flags {0};
+    };
+
     struct Config {
+        enum class Type {
+            Graphics,
+            Compute,
+            RayTracing,
+        };
+
+        Type type {Type::Graphics};
         std::vector<uint32_t> spirv;
         std::string vertexEntry;
         std::string fragmentEntry;
+        std::string computeEntry;
+        std::string raygenEntry;
         /**
          * Colour attachment formats, in attachment order, for dynamic
          * rendering. One entry for a normal pass, several for a G-buffer.
@@ -67,10 +93,10 @@ public:
         bool depthBias {false};
         float depthBiasConstantFactor {0.0f};
         float depthBiasSlopeFactor {0.0f};
-        std::vector<VkDescriptorSetLayout> setLayouts;
+        std::vector<DescriptorSet> descriptorSets;
         /** Fragment push constants shared by graphics layouts (mega-draw uses
             two uints for triangle base and material-gated range selection). */
-        uint32_t fragmentPushConstantSize {0};
+        std::vector<VkPushConstantRange> pushConstants;
 
         /**
          * Empty means the vertex shader synthesises its own geometry from
@@ -91,12 +117,21 @@ public:
 
     VkPipeline handle() const { return _pipeline; }
     VkPipelineLayout layout() const { return _layout; }
+    VkDescriptorSet descriptorSet(uint32_t set, uint32_t copy) const;
 
 private:
     VulkanDevice &_device;
 
+    struct OwnedSet {
+        VkDescriptorSetLayout layout {VK_NULL_HANDLE};
+        VkDescriptorPool pool {VK_NULL_HANDLE};
+    };
+
     VkPipeline _pipeline {VK_NULL_HANDLE};
     VkPipelineLayout _layout {VK_NULL_HANDLE};
+    std::vector<VkDescriptorSetLayout> _setLayouts;
+    std::vector<OwnedSet> _ownedSets;
+    std::vector<std::vector<VkDescriptorSet>> _sets;
 };
 
 } // namespace graphics

@@ -19,6 +19,8 @@
 
 #include <volk.h>
 
+#include <functional>
+
 #include "../renderer.h"
 
 #include "descriptors.h"
@@ -62,7 +64,7 @@ public:
         _uniformRing(_device),
         _descriptors(_device),
         _shaderCompiler(REONE_SHADER_SOURCE_DIR),
-        _pipelines(_device),
+        _pipelines(_device, _descriptors),
         _resources(_device),
         _pbrTextures(_device, _pipelines, _uniformRing, _descriptors, _resources),
         _renderer2d(_device, _pipelines, _uniformRing, _descriptors, _resources) {
@@ -74,8 +76,7 @@ public:
     void deinit() override;
 
     void beginFrame(glm::ivec2 extent) override;
-    void begin2DRendering(glm::ivec2 logicalExtent) override;
-    void end2DRendering() override;
+    void with2DRendering(glm::ivec2 logicalExtent, const std::function<void()> &block);
     void drawSceneOutput(Texture &output) override;
     void presentSceneOutput(Texture &output) override;
     std::shared_ptr<Texture> captureFrame() override;
@@ -165,7 +166,6 @@ private:
     bool _inited {false};
     bool _inFrame {false};
     bool _in2DRendering {false};
-    std::unique_ptr<VulkanDebugScope> _scope2d;
     /**
      * Set when acquire or present reports the swapchain no longer matches the
      * window. Acted on at the start of the next frame rather than immediately,

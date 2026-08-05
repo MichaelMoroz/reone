@@ -18,6 +18,7 @@
 #include "reone/graphics/vulkan/pipelinecache.h"
 
 #include "reone/graphics/vulkan/device.h"
+#include "reone/graphics/vulkan/descriptors.h"
 #include "reone/system/logutil.h"
 
 namespace reone {
@@ -86,10 +87,8 @@ size_t VulkanPipelineCache::KeyHash::operator()(const Key &key) const {
 }
 
 void VulkanPipelineCache::init(
-    std::function<std::vector<uint32_t>(const std::string &)> moduleLoader,
-    std::vector<VkDescriptorSetLayout> setLayouts) {
+    std::function<std::vector<uint32_t>(const std::string &)> moduleLoader) {
     _moduleLoader = std::move(moduleLoader);
-    _setLayouts = std::move(setLayouts);
 }
 
 void VulkanPipelineCache::deinit() {
@@ -117,11 +116,13 @@ VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
     config.viewMask = key.viewMask;
     config.vertexBindings = key.vertexBindings;
     config.vertexAttributes = key.vertexAttributes;
-    config.setLayouts = _setLayouts;
+    config.descriptorSets = {{_descriptors.uniformLayout()},
+                             {_descriptors.textureLayout()},
+                             {_descriptors.megaDrawLayout()}};
     // Every cached graphics layout exposes the same tiny fragment range. This
     // keeps layouts shared by sky/resolve valid while allowing the mega-draw
     // shader to select the global triangle range without a per-draw buffer.
-    config.fragmentPushConstantSize = 2 * sizeof(uint32_t);
+    config.pushConstants = {{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 2 * sizeof(uint32_t)}};
     config.blend = key.blend;
     config.cull = key.cull;
     config.depthTest = key.depthTest;

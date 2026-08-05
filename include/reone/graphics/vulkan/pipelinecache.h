@@ -26,6 +26,7 @@ namespace reone {
 namespace graphics {
 
 class VulkanDevice;
+class VulkanDescriptors;
 
 /**
  * Graphics pipelines, built on first use and kept.
@@ -74,16 +75,15 @@ public:
         size_t operator()(const Key &key) const;
     };
 
-    VulkanPipelineCache(VulkanDevice &device) :
-        _device(device) {
+    VulkanPipelineCache(VulkanDevice &device, VulkanDescriptors &descriptors) :
+        _device(device), _descriptors(descriptors) {
     }
 
     /**
      * @param moduleLoader turns a module name into SPIR-V. Called only on a
      *                     miss, so a hit costs one hash lookup.
      */
-    void init(std::function<std::vector<uint32_t>(const std::string &)> moduleLoader,
-              std::vector<VkDescriptorSetLayout> setLayouts);
+    void init(std::function<std::vector<uint32_t>(const std::string &)> moduleLoader);
     void deinit();
 
     /** The pipeline for @p key, built if this is the first request for it. */
@@ -93,9 +93,9 @@ public:
 
 private:
     VulkanDevice &_device;
+    VulkanDescriptors &_descriptors;
 
     std::function<std::vector<uint32_t>(const std::string &)> _moduleLoader;
-    std::vector<VkDescriptorSetLayout> _setLayouts;
 
     std::unordered_map<Key, std::unique_ptr<VulkanPipeline>, KeyHash> _pipelines;
     /** SPIR-V is kept so a second entry point in the same module is free. */

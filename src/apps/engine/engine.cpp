@@ -34,6 +34,7 @@
 #include "reone/graphics/format/tgawriter.h"
 #include "reone/graphics/vulkan/debugscope.h"
 #include "reone/graphics/window.h"
+#include "reone/graphics/vulkan/renderpass.h"
 #include "reone/resource/exception/notfound.h"
 #include "reone/resource/gameprobe.h"
 #include "reone/system/profiler.h"
@@ -124,23 +125,14 @@ static void imguiRenderVulkan(ImDrawData *drawData) {
     auto cmd = renderer.commandBuffer();
     auto &swapchain = renderer.swapchain();
 
-    VkRenderingAttachmentInfo attachment {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    attachment.imageView = renderer.currentImageView();
-    attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-
-    VkRenderingInfo rendering {VK_STRUCTURE_TYPE_RENDERING_INFO};
     auto extent = swapchain.extent();
-    rendering.renderArea.extent = {static_cast<uint32_t>(extent.x),
-                                   static_cast<uint32_t>(extent.y)};
-    rendering.layerCount = 1;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachments = &attachment;
-
-    vkCmdBeginRendering(cmd, &rendering);
+    RenderPassScope rendering(
+        cmd, extent,
+        {{renderer.currentImageView(),
+          VK_IMAGE_LAYOUT_GENERAL,
+          VK_ATTACHMENT_LOAD_OP_LOAD,
+          VK_ATTACHMENT_STORE_OP_STORE}});
     ImGui_ImplVulkan_RenderDrawData(drawData, cmd);
-    vkCmdEndRendering(cmd);
 }
 
 /**
@@ -762,15 +754,14 @@ void Engine::renderVulkanFrame(bool &quit) {
     imguiBeginFrame();
     _game->renderSceneOffscreen();
 
-    // The renderer owns the Vulkan dynamic-rendering scaffolding, including
-    // the physical swapchain extent. Keep scene composite, GUI, and console
-    // in one scope so their 2D batch may share it.
+    // Keep scene composite and console in one 2D batch. The renderer owns the
+    // dynamic-rendering scope and its physical swapchain extent.
     {
         R_PROFILE_ZONE("VulkanRenderer::2D record");
-        _vulkanRenderer->begin2DRendering(extent);
-        _game->render();
-        _console->render();
-        _vulkanRenderer->end2DRendering();
+        _vulkanRenderer->with2DRendering(extent, [this]() {
+            _game->render();
+            _console->render();
+        });
     }
 
     imguiRender();

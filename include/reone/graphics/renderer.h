@@ -50,25 +50,13 @@ public:
     virtual void beginFrame(glm::ivec2 extent) = 0;
 
     /**
-     * Begin and end the backend's 2D rendering scope. Vulkan needs an active
-     * dynamic-rendering scope for 2D draws; backends without that distinction
-     * may leave these as no-ops.
-     */
-    virtual void begin2DRendering(glm::ivec2) {}
-    virtual void end2DRendering() {}
-
-    /**
      * Composite an offscreen scene render over the frame, filling it. This is
      * the hand-off from a render pipeline, which produces a texture, to the
      * backend, which decides how that texture becomes visible.
      */
     virtual void drawSceneOutput(Texture &output) = 0;
 
-    /**
-     * Composite an offscreen scene render as the only 2D draw in this scope.
-     * Hosts with further 2D work use begin2DRendering/drawSceneOutput/
-     * end2DRendering to keep all of it in one scope.
-     */
+    /** Composite an offscreen scene render as the only 2D draw in the frame. */
     virtual void presentSceneOutput(Texture &output) {
         drawSceneOutput(output);
     }
