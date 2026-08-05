@@ -364,6 +364,16 @@ VkDescriptorSet VulkanDescriptors::createPersistentTextureSet(
     return set;
 }
 
+DescriptorSet VulkanDescriptors::createPersistentTextureSet(
+    const std::vector<std::pair<int, const IImage *>> &bindings) {
+    std::vector<std::pair<int, const VulkanImage *>> native;
+    native.reserve(bindings.size());
+    for (const auto &[unit, image] : bindings) {
+        native.emplace_back(unit, image ? &toVulkanImage(*image) : nullptr);
+    }
+    return toDescriptorSet(createPersistentTextureSet(native));
+}
+
 void VulkanDescriptors::writeTextureSet(
     VkDescriptorSet set,
     const std::vector<std::pair<int, const VulkanImage *>> &bindings) {

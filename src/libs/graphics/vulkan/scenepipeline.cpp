@@ -108,10 +108,10 @@ void VulkanScenePipeline::init() {
 
     glm::ivec2 shadowSize {_options.shadowResolution, _options.shadowResolution};
     _dirShadows = std::make_unique<VulkanImage>(device);
-    _dirShadows->initDepthLayered(shadowSize, VulkanGBuffer::depthFormat(),
+        _dirShadows->initLayeredDepthAttachment(shadowSize, Format::D32Sfloat,
                                   kNumShadowCascades, false);
     _pointShadows = std::make_unique<VulkanImage>(device);
-    _pointShadows->initDepthLayered(shadowSize, VulkanGBuffer::depthFormat(),
+        _pointShadows->initLayeredDepthAttachment(shadowSize, Format::D32Sfloat,
                                     kNumCubeFaces, true);
 
     auto &samplers = _renderer.resources().samplers();
@@ -148,27 +148,27 @@ void VulkanScenePipeline::init() {
     });
 
     _retroResolveSet = _renderer.descriptors().createPersistentTextureSet(
-        {{1, &_gbuffer->color(VulkanGBuffer::Diffuse)},
-         {2, &_gbuffer->color(VulkanGBuffer::EyeNormal)},
-         {3, &_gbuffer->color(VulkanGBuffer::Lightmap)},
-         {4, &_gbuffer->color(VulkanGBuffer::SelfIllum)},
-         {5, &_gbuffer->depth()},
+        std::vector<std::pair<int, const VulkanImage *>>{{1, &toVulkanImage(_gbuffer->color(GBufferAttachment::Diffuse))},
+         {2, &toVulkanImage(_gbuffer->color(GBufferAttachment::EyeNormal))},
+         {3, &toVulkanImage(_gbuffer->color(GBufferAttachment::Lightmap))},
+         {4, &toVulkanImage(_gbuffer->color(GBufferAttachment::SelfIllum))},
+         {5, &toVulkanImage(_gbuffer->depth())},
          {15, _dirShadows.get()},
          {17, &toVulkanImage(_renderer.pbrTextures().prefilteredArray())},
          {19, _pointShadows.get()},
-         {21, &_gbuffer->color(VulkanGBuffer::MaterialId)}});
+         {21, &toVulkanImage(_gbuffer->color(GBufferAttachment::MaterialId))}});
     _pbrResolveSet = _renderer.descriptors().createPersistentTextureSet(
-        {{1, &_gbuffer->color(VulkanGBuffer::Diffuse)},
-         {2, &_gbuffer->color(VulkanGBuffer::EyeNormal)},
-         {3, &_gbuffer->color(VulkanGBuffer::Lightmap)},
-         {4, &_gbuffer->color(VulkanGBuffer::SelfIllum)},
-         {5, &_gbuffer->depth()},
+        std::vector<std::pair<int, const VulkanImage *>>{{1, &toVulkanImage(_gbuffer->color(GBufferAttachment::Diffuse))},
+         {2, &toVulkanImage(_gbuffer->color(GBufferAttachment::EyeNormal))},
+         {3, &toVulkanImage(_gbuffer->color(GBufferAttachment::Lightmap))},
+         {4, &toVulkanImage(_gbuffer->color(GBufferAttachment::SelfIllum))},
+         {5, &toVulkanImage(_gbuffer->depth())},
          {13, &toVulkanImage(_renderer.pbrTextures().brdfImage())},
          {15, _dirShadows.get()},
          {16, &toVulkanImage(_renderer.pbrTextures().irradianceArray())},
          {17, &toVulkanImage(_renderer.pbrTextures().prefilteredArray())},
          {19, _pointShadows.get()},
-         {21, &_gbuffer->color(VulkanGBuffer::MaterialId)}});
+         {21, &toVulkanImage(_gbuffer->color(GBufferAttachment::MaterialId))}});
 
     _outputHandle = std::make_shared<Texture>(
         "vk_scene_output", TextureType::TwoDim, Texture::Properties());
@@ -307,7 +307,7 @@ void VulkanScenePipeline::shadowPass(VkCommandBuffer cmd,
             key.fragmentEntry = directional
                                     ? "directionalShadowMegadrawFragment"
                                     : "pointShadowMegadrawFragment";
-            key.depthFormat = VulkanGBuffer::depthFormat();
+            key.depthFormat = VulkanGBuffer::nativeDepthFormat();
             key.viewMask = viewMask;
             key.depthTest = true;
             key.depthWrite = true;
@@ -404,8 +404,8 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
         key.module = "megadraw";
         key.vertexEntry = "megadrawVertex";
         key.fragmentEntry = "megadrawFragment";
-        key.colorFormats = VulkanGBuffer::colorFormats();
-        key.depthFormat = VulkanGBuffer::depthFormat();
+        key.colorFormats = VulkanGBuffer::nativeColorFormats();
+        key.depthFormat = VulkanGBuffer::nativeDepthFormat();
         key.depthTest = true;
         key.depthWrite = true;
         key.cull = FaceCullMode::None;
@@ -467,7 +467,7 @@ void VulkanScenePipeline::blendedPass(VkCommandBuffer cmd, uint32_t globalsOffse
     key.vertexEntry = "megadrawVertex";
     key.fragmentEntry = "megadrawBlendedFragment";
     key.colorFormats = {_output->format()};
-    key.depthFormat = VulkanGBuffer::depthFormat();
+    key.depthFormat = VulkanGBuffer::nativeDepthFormat();
     key.depthTest = true;
     key.depthWrite = false;
     key.blend = BlendMode::Premultiplied;

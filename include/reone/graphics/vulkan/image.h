@@ -111,6 +111,9 @@ public:
      * on first use, and its contents never need to survive a frame.
      */
     void initDepth(glm::ivec2 extent, VkFormat format);
+    void initDepthAttachment(glm::ivec2 extent, Format format) override {
+        initDepth(extent, toVulkanFormat(format));
+    }
 
     /**
      * A layered depth image that is also sampled: a shadow map.
@@ -119,6 +122,10 @@ public:
      *             are sampled by direction, directional cascades by index.
      */
     void initDepthLayered(glm::ivec2 extent, VkFormat format, int layers, bool cube);
+    void initLayeredDepthAttachment(glm::ivec2 extent, Format format, int layers,
+                                   bool cube) override {
+        initDepthLayered(extent, toVulkanFormat(format), layers, cube);
+    }
 
     /**
      * A colour attachment that is also sampled afterwards, which is what every

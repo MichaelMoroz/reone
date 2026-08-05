@@ -23,6 +23,11 @@ public:
     virtual ~IImage() = default;
 
     virtual void initColorAttachment(glm::ivec2 extent, Format format) = 0;
+    /** A single depth target written by geometry and sampled by later passes. */
+    virtual void initDepthAttachment(glm::ivec2 extent, Format format) = 0;
+    /** A layered depth target used by one shadow kind. */
+    virtual void initLayeredDepthAttachment(glm::ivec2 extent, Format format,
+                                            int layers, bool cube) = 0;
     virtual void initCubeArrayAttachment(glm::ivec2 faceExtent, Format format,
                                          int cubes, int mips) = 0;
     virtual ImageView attachmentView(int cube, int mip) = 0;

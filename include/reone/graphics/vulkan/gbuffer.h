@@ -19,6 +19,7 @@
 
 #include <volk.h>
 
+#include "reone/graphics/gbuffer.h"
 #include "image.h"
 
 namespace reone {
@@ -35,7 +36,7 @@ class VulkanDevice;
  * The first five attachments match the retained geometry contract. The final
  * attachment identifies the material record used by deferred lighting.
  */
-class VulkanGBuffer : boost::noncopyable {
+class VulkanGBuffer : public IGBuffer, boost::noncopyable {
 public:
     /** Attachment order, matching fbOpaqueGeometry in the GL pipeline. */
     enum Attachment {
@@ -53,20 +54,22 @@ public:
     };
 
     /** R16_UINT clear value; valid material indices stop at 0xfffe. */
-    static constexpr uint32_t kNoMaterial = 0xffffu;
+    static constexpr uint32_t kNoMaterial = IGBuffer::kNoMaterial;
 
     VulkanGBuffer(VulkanDevice &device) :
         _device(device) {
     }
 
-    void init(glm::ivec2 extent);
-    void deinit();
+    void init(glm::ivec2 extent) override;
+    void deinit() override;
 
     /** Formats in attachment order, for building a pipeline against this set. */
-    static std::vector<VkFormat> colorFormats();
-    static VkFormat depthFormat() { return VK_FORMAT_D32_SFLOAT; }
+    static std::vector<VkFormat> nativeColorFormats();
+    static VkFormat nativeDepthFormat() { return VK_FORMAT_D32_SFLOAT; }
+    std::vector<Format> colorFormats() const override;
+    Format depthFormat() const override { return Format::D32Sfloat; }
 
-    glm::ivec2 extent() const { return _extent; }
+    glm::ivec2 extent() const override { return _extent; }
     /**
      * Assign the samplers these targets are read through.
      *
@@ -81,9 +84,15 @@ public:
         _color[MaterialId]->setSampler(materialId);
         _depth->setSampler(depth);
     }
+    void setSamplers(Sampler color, Sampler depth, Sampler materialId) override {
+        setSamplers(toVulkanSampler(color), toVulkanSampler(depth), toVulkanSampler(materialId));
+    }
 
     VulkanImage &color(int attachment) { return *_color[attachment]; }
-    VulkanImage &depth() { return *_depth; }
+    VulkanImage &color(GBufferAttachment attachment) override {
+        return color(static_cast<int>(attachment));
+    }
+    VulkanImage &depth() override { return *_depth; }
 
 private:
     VulkanDevice &_device;

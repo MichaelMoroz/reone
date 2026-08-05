@@ -33,6 +33,9 @@ public:
     virtual DescriptorSet acquireTextureDescriptorSet(int frame, const IImage *mainTex) = 0;
     virtual DescriptorSet acquireTextureDescriptorSet(
         int frame, const std::vector<std::pair<int, const IImage *>> &bindings) = 0;
+    /** A texture table that remains fixed for the lifetime of a scene target. */
+    virtual DescriptorSet createPersistentTextureSet(
+        const std::vector<std::pair<int, const IImage *>> &bindings) = 0;
 };
 
 } // namespace graphics

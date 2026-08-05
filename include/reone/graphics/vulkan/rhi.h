@@ -36,8 +36,12 @@ public:
 
 inline VkFormat toVulkanFormat(Format format) {
     switch (format) {
+    case Format::D32Sfloat:
+        return VK_FORMAT_D32_SFLOAT;
     case Format::R16G16Sfloat:
         return VK_FORMAT_R16G16_SFLOAT;
+    case Format::R16Uint:
+        return VK_FORMAT_R16_UINT;
     case Format::R8G8B8A8Unorm:
         return VK_FORMAT_R8G8B8A8_UNORM;
     case Format::B8G8R8A8Unorm:
@@ -48,8 +52,12 @@ inline VkFormat toVulkanFormat(Format format) {
 
 inline Format fromVulkanFormat(VkFormat format) {
     switch (format) {
+    case VK_FORMAT_D32_SFLOAT:
+        return Format::D32Sfloat;
     case VK_FORMAT_R16G16_SFLOAT:
         return Format::R16G16Sfloat;
+    case VK_FORMAT_R16_UINT:
+        return Format::R16Uint;
     case VK_FORMAT_R8G8B8A8_UNORM:
         return Format::R8G8B8A8Unorm;
     case VK_FORMAT_B8G8R8A8_UNORM:

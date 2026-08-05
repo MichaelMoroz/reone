@@ -23,7 +23,7 @@ namespace reone {
 
 namespace graphics {
 
-std::vector<VkFormat> VulkanGBuffer::colorFormats() {
+std::vector<VkFormat> VulkanGBuffer::nativeColorFormats() {
     // Matching the retained targets: RGBA8 for the colour-ish channels, RGBA8
     // for eye normals (GL uses RGB8, but three-component render targets are not
     // universally supported and the fourth channel costs nothing here), and
@@ -38,15 +38,21 @@ std::vector<VkFormat> VulkanGBuffer::colorFormats() {
     };
 }
 
+std::vector<Format> VulkanGBuffer::colorFormats() const {
+    return {Format::R8G8B8A8Unorm, Format::R8G8B8A8Unorm,
+            Format::R8G8B8A8Unorm, Format::R8G8B8A8Unorm,
+            Format::R16G16Sfloat, Format::R16Uint};
+}
+
 void VulkanGBuffer::init(glm::ivec2 extent) {
     _extent = extent;
-    auto formats = colorFormats();
+    auto formats = nativeColorFormats();
     for (int i = 0; i < Count; ++i) {
         _color[i] = std::make_unique<VulkanImage>(_device);
         _color[i]->initColorAttachment(extent, formats[i]);
     }
     _depth = std::make_unique<VulkanImage>(_device);
-    _depth->initDepth(extent, depthFormat());
+    _depth->initDepth(extent, nativeDepthFormat());
 
     // Images are created UNDEFINED and dynamic rendering does not transition
     // them, so the first frame would begin a pass declaring a layout the images

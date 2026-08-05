@@ -157,6 +157,11 @@ PipelineBinding VulkanPipelineCache::get(const PipelineKey &key) {
     nativeKey.blend = key.blend;
     nativeKey.depthTest = key.depthTest;
     nativeKey.depthWrite = key.depthWrite;
+    nativeKey.depthFormat = toVulkanFormat(key.depthFormat);
+    nativeKey.depthBias = key.depthBias;
+    nativeKey.depthBiasConstantFactor = key.depthBiasConstantFactor;
+    nativeKey.depthBiasSlopeFactor = key.depthBiasSlopeFactor;
+    nativeKey.cull = key.cull;
     nativeKey.colorFormats.reserve(key.colorFormats.size());
     for (auto format : key.colorFormats) {
         nativeKey.colorFormats.push_back(toVulkanFormat(format));

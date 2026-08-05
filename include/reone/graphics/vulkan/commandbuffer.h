@@ -32,6 +32,16 @@ public:
                            uint32_t dynamicOffsetCount) override;
     void draw(uint32_t vertexCount, uint32_t instanceCount) override;
     void setScissor(glm::ivec2 offset, glm::uvec2 extent) override;
+    void beginRendering(glm::ivec2 extent,
+                        const std::vector<RenderAttachment> &colors,
+                        const RenderAttachment *depth,
+                        uint32_t viewMask,
+                        bool invertedViewport) override;
+    void endRendering() override;
+    void bindIndexBuffer(const IBuffer &buffer, uint64_t offset) override;
+    void drawIndexed(uint32_t indexCount, uint32_t firstIndex) override;
+    void pushFragmentConstants(PipelineLayout layout, const void *data,
+                               uint32_t size) override;
     void makeGpuSceneSourcesAvailable(const IBuffer &vertices,
                                       const IBuffer &indices) override;
     void publishMergedScene() override;
