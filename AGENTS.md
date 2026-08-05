@@ -7,18 +7,31 @@ flags). All renderer/RT work happens on the `path-tracing` branch.
 
 Read before proposing work, in this order:
 
-- `doc/phase-f.md` — the feature track (raster rebuild G-steps, runtime
-  R-steps, sky V-steps, the path-tracing substage). Current state table at the
-  top.
-- `doc/renderer-redesign-plan.md` — the structural track (S-steps: scene
-  inversion, Slang runtime, residency, RHI) and the two invariants all
-  renderer work is judged by.
-- `doc/backlog.md` — everything outstanding, prioritized, including the
-  postmortems. If your idea appears there struck through, it was tried;
-  read why it died before re-proposing it.
+- `doc/tasks/README.md` — the index. Everything below hangs off it.
+- `doc/tasks/MASTER.md` — every open item with a stable ID, priority and owner.
+  **This is the answer to "what is outstanding".**
+- `doc/tasks/DESIGN.md` — the shape of each unbuilt step, its acceptance
+  criteria, and the decisions already taken with the reasoning that settled
+  them. Read the step you are about to work on before writing code.
+- `doc/tasks/RECORD.md` — postmortems, measurements, and approaches already
+  rejected. **If your idea appears here, it was tried; read why it died
+  before re-proposing it.**
+- `doc/tasks/CONVENTIONS.md` — conventions you would violate by accident, and
+  traps with their symptoms.
+- `doc/tasks/GLOSSARY.md` — the vocabulary, including terms that are now dead
+  and mean nothing despite appearing in commit messages.
+- `doc/tasks/FIDELITY.md` — the retro fidelity audit, 37 rows with evidence.
+- `doc/tasks/DECISIONS.md` — contradictions nobody has settled, and work with
+  no owner.
+
 - `.claude/skills/reone-diagnostics/SKILL.md` — the full measurement harness
   and its trap list. The short version is below, but the skill is the
   authority.
+
+Nine older planning documents were consolidated into that folder on 2026-08-05
+and deleted. Do not cite `phase-f.md`, `backlog.md`, `cleanup-plan.md` or the
+`vulkan-*` plans — they no longer exist, and item identifiers like
+`backlog 1.13` survive only as provenance.
 
 ## Design direction
 
@@ -33,7 +46,7 @@ the reference engines settle disputes — read-only checkouts of:
   prior art for PBR over these assets) — https://gitlab.com/nineteenss/kvp
 
 Checkout location varies per machine; the findings survey and where-each-wins
-rules live in `doc/phase-f.md`'s reference section. PBR/PT are held to looking right, not to matching 2003.
+rules live in `doc/tasks/DESIGN.md`'s reference-engine section. PBR/PT are held to looking right, not to matching 2003.
 Never trade these against each other inside one mode.
 
 **One scene description.** Raster and the tracer consume the same admission,
@@ -56,11 +69,11 @@ code, not just S-steps):
 
 **Settled decisions — do not re-litigate without new measurements:** one BLAS
 for the whole scene, full rebuild per frame (per-mesh structures and refit
-schedules were deleted; the AMD caveat is backlog 8.15); the sky is a curated
+schedules were deleted; the AMD caveat is TRC-035); the sky is a curated
 offline asset, never a runtime classification (the classifier was built,
-swept over 117 modules, and lost 46 skies — backlog 1.14); hybrid primary
+swept over 117 modules, and lost 46 skies — see RECORD.md); hybrid primary
 visibility is decided but **not landed** — raster will own the G-buffer in
-every mode (phase-F V1), but today the tracer still traces camera rays; grass
+every mode (TRC-020), but today the tracer still traces camera rays; grass
 generates on the GPU from integer hashes; culling buys nothing here
 (~9,000 frustum tests/frame measured at zero frame-time change).
 
@@ -75,7 +88,7 @@ generates on the GPU from integer hashes; culling buys nothing here
   `include/reone/graphics/gpuscene.h` with `alignas` and `static_assert`ed
   offsets. Both move in the same commit — the renderer reflects the schema at
   startup and aborts naming the field if they disagree. Beware storage-buffer
-  array stride when adding fields (backlog 0.3: a grown struct caused
+  array stride when adding fields (TRC-004: a grown struct caused
   `VK_ERROR_DEVICE_LOST`).
 - Comments state constraints and reasoning the code can't show — this repo's
   comments are load-bearing (they record why, measurements, rejected
@@ -86,8 +99,9 @@ generates on the GPU from integer hashes; culling buys nothing here
   the allocator is destroyed is the standing teardown-crash class. Silent
   startup crashes around Vulkan libraries are lifetime/symbol bugs until
   proven otherwise (volk's `vk*` data symbols collide silently).
-- Docs: decisions are recorded in `doc/*.md` with rationale and the numbers
-  that forced them. Steps are sized to one agent context, briefable in a
+- Docs: a new item goes in `doc/tasks/MASTER.md` with a state and a
+  provenance; its design goes in `DESIGN.md`; a measurement or a postmortem
+  goes in `RECORD.md`. Steps are sized to one agent context, briefable in a
   page, prove their own work positively, and are committable alone.
 - Commits: `[area] sentence` style — `[graphics] …`, `[scene] …`, `[game] …`,
   `[doc] …`. One commit per decision, not one per exchange. **No co-author or
@@ -98,8 +112,10 @@ generates on the GPU from integer hashes; culling buys nothing here
 
 **Build correctly before believing anything:**
 
-- `cmake --build build --config Release` → `build/bin`. The final `toolkit.exe`
-  link failure is known noise; `engine.exe` links before it.
+- `cmake --build build --config Release` → `build/bin`. The long-standing
+  `toolkit.exe` link failure is fixed; a red build is a real failure again, so
+  do not learn to ignore one. If `engine.exe` fails with `LNK1104`, a running
+  instance holds the binary — close it rather than killing by image name.
 - Named-target builds (`--target engine`) **skip the test suite**. Build the
   default target, then `--target tests` explicitly and run
   `build/bin/tests.exe` (~350 tests, under a second). A binary that links is
@@ -156,7 +172,7 @@ build/bin/engine.exe --game <GAME_DIR> --dev 0 --mode <mode> --pbr <0|1> \
   oracle: a full rebuild compared against the incremental scene every frame.
   Any registration/admission refactor runs acceptance with the oracle armed,
   including a module transition.
-- The traced-vs-raster G-buffer agreement numbers (phase-F G2: depth error
+- The traced-vs-raster G-buffer agreement numbers (G2: depth error
   ~0.0128% of pixels) — the geometry-correctness instrument until V1c, and
   the planned `RTDebug` mode after (backlog 7.9).
 - Isolation fixtures beat game modules: `warp testbed [grass|smoke|none]`,
@@ -175,7 +191,7 @@ build/bin/engine.exe --game <GAME_DIR> --dev 0 --mode <mode> --pbr <0|1> \
   and `collectInto`/admission-prepare are small post-R1/R3 zones — if either
   reads several tenths of a millisecond, the run hit the loading window or a
   stale binary.
-- GPU time does **not** exist in Tracy here — until backlog 2.5 lands it
+- GPU time does **not** exist in Tracy here — until TOOL-002 lands it
   comes from in-engine readouts or Nsight.
 - Never time with `--vkvalidation 1` (3× cost) or extra `--logch` channels
   (the identity-stability check measures itself). PT trace-stats stay off
