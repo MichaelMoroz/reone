@@ -19,7 +19,7 @@
 
 #include "reone/audio/di/services.h"
 #include "reone/audio/mixer.h"
-#include "reone/graphics/renderer.h"
+#include "reone/graphics/rhi/renderer.h"
 #include "reone/graphics/renderer2d.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/textureutil.h"

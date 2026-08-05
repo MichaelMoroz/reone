@@ -14,7 +14,7 @@
 
 #include <unordered_map>
 
-#include "reone/graphics/commandbuffer.h"
+#include "reone/graphics/rhi/commandbuffer.h"
 
 #include "reone/graphics/gpuscenecontext.h"
 

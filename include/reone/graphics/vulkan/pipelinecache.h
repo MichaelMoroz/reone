@@ -19,7 +19,7 @@
 
 #include <volk.h>
 
-#include "reone/graphics/pipelinecache.h"
+#include "reone/graphics/rhi/pipelinecache.h"
 
 #include "pipeline.h"
 

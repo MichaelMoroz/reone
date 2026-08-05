@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "image.h"
-#include "texture.h"
+#include "../texture.h"
 
 namespace reone::graphics {
 

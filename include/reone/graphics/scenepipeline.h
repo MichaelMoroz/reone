@@ -18,10 +18,10 @@
 
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
-#include "reone/graphics/commandbuffer.h"
-#include "reone/graphics/gbuffer.h"
+#include "reone/graphics/rhi/commandbuffer.h"
+#include "reone/graphics/rhi/gbuffer.h"
 #include "reone/graphics/gpuscene.h"
-#include "reone/graphics/renderer.h"
+#include "reone/graphics/rhi/renderer.h"
 
 namespace reone::graphics {
 

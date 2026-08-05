@@ -7,7 +7,7 @@
 #include "reone/graphics/options.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/rayquery.h"
-#include "reone/graphics/renderer.h"
+#include "reone/graphics/rhi/renderer.h"
 #include "reone/graphics/scenepipeline.h"
 #include "reone/scene/node/model.h"
 #include "reone/scene/render/admission.h"

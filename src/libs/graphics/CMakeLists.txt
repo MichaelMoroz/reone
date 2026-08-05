@@ -23,7 +23,7 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/camera.h
     ${GRAPHICS_INCLUDE_DIR}/camera/orthographic.h
     ${GRAPHICS_INCLUDE_DIR}/camera/perspective.h
-    ${GRAPHICS_INCLUDE_DIR}/commandbuffer.h
+    ${GRAPHICS_INCLUDE_DIR}/rhi/commandbuffer.h
     ${GRAPHICS_INCLUDE_DIR}/cursor.h
     ${GRAPHICS_INCLUDE_DIR}/di/module.h
     ${GRAPHICS_INCLUDE_DIR}/di/services.h
@@ -32,8 +32,8 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/frustum.h
     ${GRAPHICS_INCLUDE_DIR}/gpuscene.h
     ${GRAPHICS_INCLUDE_DIR}/gpuscenecontext.h
-    ${GRAPHICS_INCLUDE_DIR}/buffer.h
-    ${GRAPHICS_INCLUDE_DIR}/image.h
+    ${GRAPHICS_INCLUDE_DIR}/rhi/buffer.h
+    ${GRAPHICS_INCLUDE_DIR}/rhi/image.h
     ${GRAPHICS_INCLUDE_DIR}/rayquery.h
     ${GRAPHICS_INCLUDE_DIR}/scenepipeline.h
     ${GRAPHICS_INCLUDE_DIR}/format/bwmreader.h
@@ -55,22 +55,22 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/npyutil.h
     ${GRAPHICS_INCLUDE_DIR}/modelnode.h
     ${GRAPHICS_INCLUDE_DIR}/options.h
-    ${GRAPHICS_INCLUDE_DIR}/descriptors.h
-    ${GRAPHICS_INCLUDE_DIR}/pipelinecache.h
-    ${GRAPHICS_INCLUDE_DIR}/renderer.h
+    ${GRAPHICS_INCLUDE_DIR}/rhi/descriptors.h
+    ${GRAPHICS_INCLUDE_DIR}/rhi/pipelinecache.h
+    ${GRAPHICS_INCLUDE_DIR}/rhi/renderer.h
     ${GRAPHICS_INCLUDE_DIR}/renderer2d.h
-    ${GRAPHICS_INCLUDE_DIR}/resources.h
-    ${GRAPHICS_INCLUDE_DIR}/rhi.h
+    ${GRAPHICS_INCLUDE_DIR}/rhi/resources.h
+    ${GRAPHICS_INCLUDE_DIR}/rhi/rhi.h
     ${GRAPHICS_INCLUDE_DIR}/statistic.h
     ${GRAPHICS_INCLUDE_DIR}/texture.h
     ${GRAPHICS_INCLUDE_DIR}/textureregistry.h
     ${GRAPHICS_INCLUDE_DIR}/textureutil.h
     ${GRAPHICS_INCLUDE_DIR}/textutil.h
-    ${GRAPHICS_INCLUDE_DIR}/tracingstructure.h
+    ${GRAPHICS_INCLUDE_DIR}/rhi/tracingstructure.h
     ${GRAPHICS_INCLUDE_DIR}/triangleutil.h
     ${GRAPHICS_INCLUDE_DIR}/types.h
     ${GRAPHICS_INCLUDE_DIR}/uniforms.h
-    ${GRAPHICS_INCLUDE_DIR}/uniformring.h
+    ${GRAPHICS_INCLUDE_DIR}/rhi/uniformring.h
     ${GRAPHICS_INCLUDE_DIR}/walkmesh.h
     ${GRAPHICS_INCLUDE_DIR}/window.h)
 

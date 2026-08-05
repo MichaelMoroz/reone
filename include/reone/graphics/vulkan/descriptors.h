@@ -19,7 +19,7 @@
 
 #include <volk.h>
 
-#include "reone/graphics/descriptors.h"
+#include "reone/graphics/rhi/descriptors.h"
 
 #include "image.h"
 #include "reone/graphics/gpuscene.h"

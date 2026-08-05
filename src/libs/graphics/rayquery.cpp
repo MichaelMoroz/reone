@@ -10,8 +10,8 @@
 #include <chrono>
 
 #include "reone/graphics/options.h"
-#include "reone/graphics/renderer.h"
-#include "reone/graphics/resources.h"
+#include "reone/graphics/rhi/renderer.h"
+#include "reone/graphics/rhi/resources.h"
 #include "reone/system/logutil.h"
 
 namespace reone::graphics {

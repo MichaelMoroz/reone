@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "reone/graphics/commandbuffer.h"
+#include "reone/graphics/rhi/commandbuffer.h"
 
 #include "rhi.h"
 

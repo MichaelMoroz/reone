@@ -20,7 +20,7 @@
 #include <volk.h>
 
 #include "reone/graphics/types.h"
-#include "reone/graphics/resources.h"
+#include "reone/graphics/rhi/resources.h"
 
 #include "image.h"
 #include "samplers.h"

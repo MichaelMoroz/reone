@@ -19,7 +19,7 @@
 
 #include <volk.h>
 
-#include "reone/graphics/gbuffer.h"
+#include "reone/graphics/rhi/gbuffer.h"
 #include "image.h"
 
 namespace reone {

@@ -11,7 +11,7 @@
 
 #include <volk.h>
 
-#include "reone/graphics/rhi.h"
+#include "reone/graphics/rhi/rhi.h"
 
 namespace reone {
 

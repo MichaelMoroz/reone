@@ -6,7 +6,7 @@
 
 #include <volk.h>
 
-#include "reone/graphics/tracingstructure.h"
+#include "reone/graphics/rhi/tracingstructure.h"
 #include "reone/graphics/vulkan/buffer.h"
 
 namespace reone::graphics {

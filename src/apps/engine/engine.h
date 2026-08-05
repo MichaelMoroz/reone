@@ -22,7 +22,7 @@
 #include "reone/game/game.h"
 #include "reone/graphics/di/module.h"
 #include "reone/graphics/window.h"
-#include "reone/graphics/renderer.h"
+#include "reone/graphics/rhi/renderer.h"
 #include "reone/gui/di/module.h"
 #include "reone/input/event.h"
 #include "reone/movie/di/module.h"

@@ -20,17 +20,17 @@
 #include <gmock/gmock.h>
 
 #include "reone/graphics/di/services.h"
-#include "reone/graphics/descriptors.h"
-#include "reone/graphics/gbuffer.h"
+#include "reone/graphics/rhi/descriptors.h"
+#include "reone/graphics/rhi/gbuffer.h"
 #include "reone/graphics/meshregistry.h"
-#include "reone/graphics/pipelinecache.h"
-#include "reone/graphics/renderer.h"
+#include "reone/graphics/rhi/pipelinecache.h"
+#include "reone/graphics/rhi/renderer.h"
 #include "reone/graphics/renderer2d.h"
 #include "reone/graphics/pbrtextures.h"
-#include "reone/graphics/resources.h"
+#include "reone/graphics/rhi/resources.h"
 #include "reone/graphics/statistic.h"
 #include "reone/graphics/textureregistry.h"
-#include "reone/graphics/uniformring.h"
+#include "reone/graphics/rhi/uniformring.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/system/exception/notimplemented.h"
 

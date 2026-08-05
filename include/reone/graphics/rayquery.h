@@ -14,8 +14,8 @@
 #include <glm/glm.hpp>
 
 #include "reone/graphics/gpuscene.h"
-#include "reone/graphics/pipelinecache.h"
-#include "reone/graphics/tracingstructure.h"
+#include "reone/graphics/rhi/pipelinecache.h"
+#include "reone/graphics/rhi/tracingstructure.h"
 
 namespace reone::graphics {
 

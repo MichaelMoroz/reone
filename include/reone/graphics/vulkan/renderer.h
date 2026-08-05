@@ -21,7 +21,7 @@
 
 #include <functional>
 
-#include "../renderer.h"
+#include "../rhi/renderer.h"
 #include "../gpuscenecontext.h"
 
 #include "descriptors.h"

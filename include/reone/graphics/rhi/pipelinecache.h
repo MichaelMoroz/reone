@@ -14,8 +14,8 @@
 #include <vector>
 
 #include "rhi.h"
-#include "types.h"
-#include "gpuscene.h"
+#include "../types.h"
+#include "../gpuscene.h"
 
 namespace reone {
 

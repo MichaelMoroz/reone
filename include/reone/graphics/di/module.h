@@ -19,7 +19,7 @@
 
 #include "../meshregistry.h"
 #include "../options.h"
-#include "../renderer.h"
+#include "../rhi/renderer.h"
 #include "../renderer2d.h"
 #include "../statistic.h"
 #include "../textureregistry.h"

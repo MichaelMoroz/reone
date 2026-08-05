@@ -18,12 +18,12 @@
 #pragma once
 
 #include "types.h"
-#include "reone/graphics/commandbuffer.h"
-#include "reone/graphics/descriptors.h"
-#include "reone/graphics/image.h"
-#include "reone/graphics/pipelinecache.h"
-#include "reone/graphics/resources.h"
-#include "reone/graphics/uniformring.h"
+#include "reone/graphics/rhi/commandbuffer.h"
+#include "reone/graphics/rhi/descriptors.h"
+#include "reone/graphics/rhi/image.h"
+#include "reone/graphics/rhi/pipelinecache.h"
+#include "reone/graphics/rhi/resources.h"
+#include "reone/graphics/rhi/uniformring.h"
 
 namespace reone {
 

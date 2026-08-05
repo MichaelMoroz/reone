@@ -21,7 +21,7 @@
 
 #include <vk_mem_alloc.h>
 
-#include "reone/graphics/image.h"
+#include "reone/graphics/rhi/image.h"
 
 #include "rhi.h"
 

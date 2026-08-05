@@ -20,7 +20,7 @@
 #include <volk.h>
 
 #include "buffer.h"
-#include "reone/graphics/uniformring.h"
+#include "reone/graphics/rhi/uniformring.h"
 
 namespace reone {
 

@@ -27,7 +27,7 @@
 #include "reone/graphics/format/lipwriter.h"
 #include "reone/graphics/format/mdlmdxreader.h"
 #include "reone/graphics/lipanimation.h"
-#include "reone/graphics/renderer.h"
+#include "reone/graphics/rhi/renderer.h"
 #include "reone/resource/format/2dareader.h"
 #include "reone/resource/format/2dawriter.h"
 #include "reone/resource/format/gffreader.h"

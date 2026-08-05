@@ -21,7 +21,7 @@
 #include <memory>
 
 #include "rhi.h"
-#include "gpuscenecontext.h"
+#include "../gpuscenecontext.h"
 
 struct ImDrawData;
 struct SDL_Window;

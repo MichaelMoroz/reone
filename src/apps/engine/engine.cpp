@@ -21,7 +21,7 @@
 
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
-#include "reone/graphics/renderer.h"
+#include "reone/graphics/rhi/renderer.h"
 
 #ifdef _WIN32
 #include <windows.h>

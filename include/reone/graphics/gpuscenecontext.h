@@ -6,8 +6,8 @@
 
 #include <cstdint>
 #include <memory>
-#include "buffer.h"
-#include "commandbuffer.h"
+#include "rhi/buffer.h"
+#include "rhi/commandbuffer.h"
 
 namespace reone::graphics {
 
