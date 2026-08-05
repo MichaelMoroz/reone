@@ -14,7 +14,7 @@
 namespace reone::graphics {
 class IMeshRegistry;
 class Uniforms;
-class VulkanRenderer;
+class IRenderer;
 class ScenePipeline;
 class GpuScene;
 } // namespace reone::graphics
@@ -28,7 +28,7 @@ class RenderPipeline : public IRenderPipeline, boost::noncopyable {
 public:
     RenderPipeline(glm::ivec2 targetSize,
                          graphics::GraphicsOptions &options,
-                         graphics::VulkanRenderer &renderer,
+                         graphics::IRenderer &renderer,
                          graphics::Uniforms &uniforms,
                          graphics::IMeshRegistry &meshRegistry,
                          graphics::TextureRegistry &textureRegistry,
@@ -50,7 +50,7 @@ private:
 
     glm::ivec2 _targetSize;
     graphics::GraphicsOptions &_options;
-    graphics::VulkanRenderer &_renderer;
+    graphics::IRenderer &_renderer;
     graphics::Uniforms &_uniforms;
     graphics::IMeshRegistry &_meshRegistry;
     graphics::TextureRegistry &_textureRegistry;

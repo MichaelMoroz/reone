@@ -53,7 +53,7 @@ class Mesh;
  * CPU can record frame N+1 while the GPU is still working on frame N, and the
  * fence is what stops it from getting further ahead than that.
  */
-class VulkanRenderer : public IRenderer, public IGpuSceneContext, boost::noncopyable {
+class VulkanRenderer : public IRenderer, boost::noncopyable {
 public:
     static constexpr int kFramesInFlight = 2;
 
@@ -69,7 +69,7 @@ public:
         _uniformRing(_device),
         _descriptors(_device),
         _shaderCompiler(REONE_SHADER_SOURCE_DIR),
-        _pipelines(_device, _descriptors),
+        _pipelines(*this, _device, _descriptors),
         _resources(_device),
         _pbrTextures(*this, _pipelines, _uniformRing, _descriptors, _resources),
         _renderer2d(_pipelines, _uniformRing, _descriptors, _resources) {

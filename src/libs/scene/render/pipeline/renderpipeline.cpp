@@ -12,7 +12,7 @@
 #include <sstream>
 
 #include "reone/graphics/options.h"
-#include "reone/graphics/vulkan/renderer.h"
+#include "reone/graphics/renderer.h"
 #include "reone/graphics/rayquery.h"
 #include "reone/graphics/gpuscene.h"
 #include "reone/graphics/scenepipeline.h"
@@ -50,7 +50,7 @@ private:
 
 RenderPipeline::RenderPipeline(glm::ivec2 targetSize,
                                            graphics::GraphicsOptions &options,
-                                           graphics::VulkanRenderer &renderer,
+                                           graphics::IRenderer &renderer,
                                            graphics::Uniforms &uniforms,
                                            graphics::IMeshRegistry &meshRegistry,
                                            graphics::TextureRegistry &textureRegistry,

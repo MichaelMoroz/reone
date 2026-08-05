@@ -131,7 +131,7 @@ class MockRenderPipelineFactory : public IRenderPipelineFactory, boost::noncopya
 public:
     MOCK_METHOD(std::unique_ptr<IRenderPipeline>, create,
                 (RenderMode, glm::ivec2, GpuScene &), (override));
-    MOCK_METHOD(void, setRenderer, (graphics::VulkanRenderer &), (override));
+    MOCK_METHOD(void, setRenderer, (graphics::IRenderer &), (override));
 };
 
 class TestSceneModule : boost::noncopyable {

@@ -38,6 +38,11 @@ namespace reone {
 
 namespace graphics {
 
+std::unique_ptr<IRenderer> makeRenderer(SDL_Window *window, glm::ivec2 extent,
+                                        bool vsync, bool validation) {
+    return std::make_unique<VulkanRenderer>(window, extent, vsync, validation);
+}
+
 static void check(VkResult result, const char *what) {
     if (result == VK_SUCCESS) {
         return;

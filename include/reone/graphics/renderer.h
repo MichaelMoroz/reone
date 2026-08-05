@@ -21,8 +21,10 @@
 #include <memory>
 
 #include "rhi.h"
+#include "gpuscenecontext.h"
 
 struct ImDrawData;
+struct SDL_Window;
 
 namespace reone {
 
@@ -52,7 +54,7 @@ class IUniformRing;
  * A frame is strictly beginFrame, drawing, endFrame. Nothing may be drawn
  * outside that span.
  */
-class IRenderer {
+class IRenderer : public IGpuSceneContext {
 public:
     virtual ~IRenderer() = default;
 
@@ -181,6 +183,10 @@ public:
      */
     virtual void invalidateTexture(Texture &) {}
 };
+
+/** Create the renderer selected by this Vulkan-only build. */
+std::unique_ptr<IRenderer> makeRenderer(SDL_Window *window, glm::ivec2 extent,
+                                        bool vsync, bool validation);
 
 } // namespace graphics
 

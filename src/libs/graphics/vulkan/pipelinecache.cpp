@@ -19,6 +19,8 @@
 
 #include "reone/graphics/vulkan/rhi.h"
 
+#include "reone/graphics/vulkan/tracingpipeline.h"
+
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/descriptors.h"
 #include "reone/system/logutil.h"
@@ -168,6 +170,11 @@ PipelineBinding VulkanPipelineCache::get(const PipelineKey &key) {
     }
     auto &pipeline = get(nativeKey);
     return {toPipeline(pipeline.handle()), toPipelineLayout(pipeline.layout())};
+}
+
+std::unique_ptr<ITracingPipeline> VulkanPipelineCache::makeTracingPipeline(
+    glm::ivec2 extent, GraphicsOptions &options) {
+    return std::make_unique<VulkanTracingPipeline>(_renderer, extent, options);
 }
 
 } // namespace graphics

@@ -22,7 +22,7 @@
 #include "reone/game/game.h"
 #include "reone/graphics/di/module.h"
 #include "reone/graphics/window.h"
-#include "reone/graphics/vulkan/renderer.h"
+#include "reone/graphics/renderer.h"
 #include "reone/gui/di/module.h"
 #include "reone/input/event.h"
 #include "reone/movie/di/module.h"
@@ -70,7 +70,7 @@ private:
 
     std::unique_ptr<game::OptionsView> _optionsView;
     std::unique_ptr<graphics::Window> _window;
-    std::unique_ptr<graphics::VulkanRenderer> _renderer;
+    std::unique_ptr<graphics::IRenderer> _renderer;
 
     std::unique_ptr<Clock> _clock;
     std::unique_ptr<SystemModule> _systemModule;

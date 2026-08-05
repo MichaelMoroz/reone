@@ -7,10 +7,8 @@
 #include "reone/graphics/options.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/rayquery.h"
-#include "reone/graphics/vulkan/renderer.h"
+#include "reone/graphics/renderer.h"
 #include "reone/graphics/scenepipeline.h"
-#include "reone/graphics/vulkan/commandbuffer.h"
-#include "reone/graphics/vulkan/image.h"
 #include "reone/scene/node/model.h"
 #include "reone/scene/render/admission.h"
 #include "reone/system/logutil.h"
@@ -19,7 +17,7 @@ using namespace reone::graphics;
 
 namespace reone::scene {
 
-RayQueryPipeline::RayQueryPipeline(VulkanRenderer &renderer,
+RayQueryPipeline::RayQueryPipeline(IRenderer &renderer,
                                    glm::ivec2 extent,
                                    GraphicsOptions &options,
                                    GpuScene &gpuScene,

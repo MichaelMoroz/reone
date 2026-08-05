@@ -41,7 +41,7 @@ class Context;
 class MeshRegistry;
 class TextureRegistry;
 class Uniforms;
-class VulkanRenderer;
+class IRenderer;
 
 struct GraphicsOptions;
 
@@ -144,7 +144,7 @@ public:
      * Hand the factory the renderer, so it can build the scene pipeline.
      * The scene library cannot reach it otherwise: the engine owns it.
      */
-    virtual void setRenderer(graphics::VulkanRenderer &renderer) = 0;
+    virtual void setRenderer(graphics::IRenderer &renderer) = 0;
 };
 
 class RenderPipelineFactory : public IRenderPipelineFactory, boost::noncopyable {
@@ -162,7 +162,7 @@ public:
     std::unique_ptr<IRenderPipeline> create(RenderMode mode, glm::ivec2 targetSize,
                                             GpuScene &scene) override;
 
-    void setRenderer(graphics::VulkanRenderer &renderer) override {
+    void setRenderer(graphics::IRenderer &renderer) override {
         _renderer = &renderer;
     }
 
@@ -171,7 +171,7 @@ private:
     graphics::MeshRegistry &_meshRegistry;
     graphics::TextureRegistry &_textureRegistry;
     graphics::Uniforms &_uniforms;
-    graphics::VulkanRenderer *_renderer {nullptr};
+    graphics::IRenderer *_renderer {nullptr};
 };
 
 } // namespace scene

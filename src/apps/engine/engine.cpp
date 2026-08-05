@@ -22,7 +22,6 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "reone/graphics/renderer.h"
-#include "reone/graphics/vulkan/renderer.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -189,7 +188,7 @@ void Engine::init() {
 
     _systemModule = std::make_unique<SystemModule>(*_clock);
     _graphicsModule = std::make_unique<GraphicsModule>(_options.graphics);
-    _renderer = std::make_unique<VulkanRenderer>(
+    _renderer = makeRenderer(
         _window->sdlWindow(),
         glm::ivec2 {_options.graphics.width, _options.graphics.height},
         _options.graphics.vsync,

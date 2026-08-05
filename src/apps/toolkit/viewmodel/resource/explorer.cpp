@@ -27,7 +27,7 @@
 #include "reone/graphics/format/lipwriter.h"
 #include "reone/graphics/format/mdlmdxreader.h"
 #include "reone/graphics/lipanimation.h"
-#include "reone/graphics/vulkan/renderer.h"
+#include "reone/graphics/renderer.h"
 #include "reone/resource/format/2dareader.h"
 #include "reone/resource/format/2dawriter.h"
 #include "reone/resource/format/gffreader.h"
@@ -455,7 +455,7 @@ void ResourceExplorerViewModel::loadEngine() {
     }
 
     auto size = _renderPanel->GetClientSize();
-    _renderer = std::make_unique<VulkanRenderer>(
+    _renderer = makeRenderer(
         _sdlWindow,
         glm::ivec2 {std::max(1, size.x), std::max(1, size.y)},
         _graphicsOpt.vsync,

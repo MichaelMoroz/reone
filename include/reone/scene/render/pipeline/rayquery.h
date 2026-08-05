@@ -8,7 +8,7 @@
 
 namespace reone::graphics {
 class RayQuery;
-class VulkanRenderer;
+class IRenderer;
 class GpuScene;
 struct GraphicsOptions;
 struct PrimaryRayContext;
@@ -21,7 +21,7 @@ struct GpuSceneAdmissionResult;
 /** Sky bake and native primary-ray execution for one admitted upload. */
 class RayQueryPipeline : boost::noncopyable {
 public:
-    RayQueryPipeline(graphics::VulkanRenderer &renderer,
+    RayQueryPipeline(graphics::IRenderer &renderer,
                      glm::ivec2 extent,
                      graphics::GraphicsOptions &options,
                      GpuScene &gpuScene,
@@ -37,7 +37,7 @@ public:
     const graphics::RayQuery &native() const;
 
 private:
-    graphics::VulkanRenderer &_renderer;
+    graphics::IRenderer &_renderer;
     glm::ivec2 _extent;
     graphics::GraphicsOptions &_options;
     GpuScene &_gpuScene;

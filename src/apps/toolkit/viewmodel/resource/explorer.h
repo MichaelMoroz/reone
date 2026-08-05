@@ -273,7 +273,7 @@ private:
     std::unique_ptr<audio::AudioModule> _audioModule;
     std::unique_ptr<scene::SceneModule> _sceneModule;
     std::unique_ptr<script::ScriptModule> _scriptModule;
-    std::unique_ptr<graphics::VulkanRenderer> _renderer;
+    std::unique_ptr<graphics::IRenderer> _renderer;
     SDL_Window *_sdlWindow {nullptr};
     wxWindow *_renderPanel {nullptr};
 

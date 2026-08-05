@@ -5,33 +5,23 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
-
-#include <array>
-
-#include <memory>
-
-#include <optional>
-
-#include <volk.h>
-
-#include "reone/graphics/buffer.h"
-#include "reone/graphics/tracingstructure.h"
 
 #include <glm/glm.hpp>
 
 #include "reone/graphics/gpuscene.h"
+#include "reone/graphics/pipelinecache.h"
+#include "reone/graphics/tracingstructure.h"
 
 namespace reone::graphics {
 
+class IRenderer;
 class Mesh;
 class Texture;
-class VulkanImage;
-class VulkanPipeline;
-class VulkanRenderer;
-class FsrUpscaler;
-class NrdDenoiser;
 struct GraphicsOptions;
 
 struct RayQuerySkyMesh {
@@ -43,7 +33,7 @@ struct RayQuerySkyMesh {
     glm::mat3x4 uv {1.0f};
 };
 
-/** Vulkan-free description of the room selected for the fixed sky bake. */
+/** Backend-free description of the room selected for the fixed sky bake. */
 struct RayQuerySkyRoom {
     uint64_t identity {0};
     std::string name;
@@ -70,8 +60,7 @@ struct RayQuerySubmission {
 
 class RayQuery : boost::noncopyable {
 public:
-    RayQuery(VulkanRenderer &renderer, glm::ivec2 extent,
-                   GraphicsOptions &options);
+    RayQuery(IRenderer &renderer, glm::ivec2 extent, GraphicsOptions &options);
     ~RayQuery();
 
     void init();
@@ -84,26 +73,21 @@ public:
                 RayQuerySubmission submission, GpuScene &deviceGpuScene,
                 bool skyBaked);
 
-    struct Channel {
-        const char *name;
-        const char *dumpName;
-        VulkanImage *image;
-    };
-    std::vector<Channel> channels();
+    using Channel = TracingChannel;
+    std::vector<Channel> channels() const;
     void restartTemporalHistory();
     std::optional<uint32_t> textureId(const Texture &texture) const;
     bool supportsSkyTexture(const Texture &texture) const;
 
 private:
     struct Frame {
-        std::unique_ptr<IBuffer> traceStats;
         std::unique_ptr<ITracingStructure> tracingStructure;
     };
 
-    VulkanRenderer &_renderer;
+    IRenderer &_renderer;
     GraphicsOptions &_options;
     glm::ivec2 _extent;
-    std::unique_ptr<VulkanPipeline> _pipeline;
+    std::unique_ptr<ITracingPipeline> _pipeline;
     std::array<Frame, 2> _frames;
     uint32_t _lastInstances {0};
     uint32_t _lastTriangles {0};
@@ -124,53 +108,9 @@ private:
     uint32_t _lastSurvivingLights {0};
     uint32_t _lastPrimaryHits {0};
     uint32_t _lastShadowRays {0};
-    uint32_t _bindlessTextureCapacity {0};
     uint32_t _lastBindlessTextureCount {0};
-    uint64_t _skyCubeRoom {0};
-    bool _skyCubeReady {false};
-    std::unique_ptr<VulkanImage> _skyCube;
-    std::array<std::unique_ptr<VulkanImage>, 6> _skyDepth;
-    std::unique_ptr<VulkanImage> _skyFallbackCube;
-
-    struct TracePushConstants {
-        uint32_t frameIndex;
-        uint32_t samplesPerPixel;
-        float skyIntensity;
-        float emissiveIntensity;
-        float lightmapIntensity;
-        float directIntensity;
-        float rayOriginOffset;
-        float sunIntensity;
-        uint32_t traceFlags;
-        uint32_t bounceCount;
-        float emitterRadiusRatio;
-        float sunAngularRadius;
-        float exposure;
-        uint32_t geometryBase0;
-        uint32_t geometryBase1;
-        uint32_t skyAvailable;
-    };
-
     uint32_t _frameNumber {0};
-    bool _restartHistoryRequested {false};
     bool _inited {false};
-    void *_nrdInstance {nullptr};
-#ifdef R_ENABLE_NRD
-    std::unique_ptr<NrdDenoiser> _nrdDenoiser;
-    std::unique_ptr<VulkanPipeline> _compositePipeline;
-    glm::vec3 _prevCameraPosition {0.0f};
-    bool _temporalHistoryValid {false};
-#endif
-#ifdef R_ENABLE_FSR
-    std::unique_ptr<FsrUpscaler> _fsr;
-    std::unique_ptr<VulkanImage> _fsrColor;
-    std::unique_ptr<VulkanImage> _fsrOutput;
-    std::unique_ptr<VulkanPipeline> _tonemapPipeline;
-#endif
-
-    static constexpr int kNumAuxImages = 14;
-    std::array<std::array<std::unique_ptr<VulkanImage>, kNumAuxImages>, 2> _auxImages;
-    int _lastAuxFrame {-1};
 
     void clearFrame(Frame &frame);
 };

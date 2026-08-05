@@ -29,6 +29,7 @@ namespace graphics {
 
 class VulkanDevice;
 class VulkanDescriptors;
+class VulkanRenderer;
 
 /**
  * Graphics pipelines, built on first use and kept.
@@ -77,8 +78,9 @@ public:
         size_t operator()(const Key &key) const;
     };
 
-    VulkanPipelineCache(VulkanDevice &device, VulkanDescriptors &descriptors) :
-        _device(device), _descriptors(descriptors) {
+    VulkanPipelineCache(VulkanRenderer &renderer, VulkanDevice &device,
+                        VulkanDescriptors &descriptors) :
+        _renderer(renderer), _device(device), _descriptors(descriptors) {
     }
 
     /**
@@ -91,10 +93,13 @@ public:
     /** The pipeline for @p key, built if this is the first request for it. */
     VulkanPipeline &get(const Key &key);
     PipelineBinding get(const PipelineKey &key) override;
+    std::unique_ptr<ITracingPipeline> makeTracingPipeline(
+        glm::ivec2 extent, GraphicsOptions &options) override;
 
     size_t size() const { return _pipelines.size(); }
 
 private:
+    VulkanRenderer &_renderer;
     VulkanDevice &_device;
     VulkanDescriptors &_descriptors;
 
