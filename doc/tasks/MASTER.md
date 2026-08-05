@@ -105,8 +105,8 @@ substage design; [RECORD.md](RECORD.md) holds the traced-transparency ladder.
 | TRC-017 | **Material PBR-ification: authored name→material map, then heuristic** | open | P1 | L | none | — | backlog 3.2, RECORD.md; order is load-bearing |
 | TRC-018 | An editor mode to maintain the authored material map | open | P2 | M | none | TRC-017 | RECORD.md |
 | TRC-019 | **Traced transparency: stochastic commits, flat additive loop, analytic sabers** | decided | P2 | L | PT substage | RAS-003, TRC-020 | backlog 3.7; design settled 2026-08-03, unbuilt |
-| TRC-020 | **V1 — hybridise: raster owns primary visibility (V1a/b/c)** | open | P1 | L | phase-f V1 | RAS-010, TRC-021 | DESIGN.md; **not landed** despite rt-backend claiming otherwise |
-| TRC-021 | Pin the traced G-buffer as the `RTDebug` validation instrument | open | P1 | S | none | — | backlog 7.9; must land before V1c deletes it; no `traced_albedo` channel exists |
+| TRC-020 | **V1 — hybridise: raster owns primary visibility (V1a/b/c)** | open | P1 | L | phase-f V1 | RAS-010, TRC-021 | DESIGN.md; V1a settled and **V1b landed** `eebcf1d3` 2026-08-06 — geometry pass runs in PT, G-buffer byte-identical to PBR's; V1c (tracer consumes it, render deviates) remains |
+| TRC-021 | Pin the traced G-buffer as the `RTDebug` validation instrument | open | P1 | S | none | — | backlog 7.9; must land before V1c deletes it; advanced by `eebcf1d3` — canonicals now publish as `traced_diffuse`/`traced_eye_normal`/`traced_depth`/`traced_motion` beside the raster G-buffer in the same frame; the RTDebug *mode* remains |
 | TRC-022 | The fog grid, the march, and additive as spheres/capsules | open | P2 | L | PT substage | TRC-019 | DESIGN.md-1150; census 714bd700 |
 | TRC-023 | Honour the authored emitter `tinted` flag when baking media | open | P2 | S | PT substage | TRC-022 | DESIGN.md; 1,124 emitters carry it |
 | TRC-024 | **V0/V2/V4/V5 — the curated offline sky chain** | open | P2 | L | phase-f V | RAS-010 | backlog 1.14, DESIGN.md; merges four steps + FIDELITY #1 |
