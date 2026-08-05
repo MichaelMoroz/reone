@@ -377,6 +377,38 @@ bytes out of 31 generated headers. Deleting it and rebuilding regenerates it at
 the row is now P0: the cost is never the repair, it is the hour spent deciding
 whether the renderer change in front of you caused it.
 
+### 1.17 Single-pair path-tracing comparisons work by luck until they don't
+
+2026-08-05, during S5 stage 3. A capture read **0.24597** mean absolute
+difference against the stored baseline, above the highest figure previously
+observed between runs, and looked like the first real regression of the track.
+
+Rather than accept or dismiss it, the previous commit was stashed, rebuilt and
+captured **four times**. The result:
+
+| | mean\|d\| range |
+|---|---|
+| within the control build, 6 pairs | 0.00317 – 0.24505 |
+| within the new build, 6 pairs | 0.02616 – 0.09482 |
+| **across the two, 16 pairs** | **0.00308 – 0.24493** |
+
+The across-range lies entirely inside the control's own spread and the energies
+overlap completely. There was no shift. **The alarm was an artefact of comparing
+four new runs against one old run.**
+
+`AGENTS.md` already prescribes the right method — *"compare distributions, N runs
+a side, never a single pair against a stored baseline"*. Every path-tracing check
+in this track had instead been one fresh run against one stored capture, judged
+against a floor derived from a single earlier binary. That is a weaker test than
+the one written down, and it had been passing by luck: it produced one false
+alarm at 0.222 (dismissed correctly, by chance) and this one at 0.246.
+
+**A noise floor measured on one binary does not transfer to another.** The two
+builds here have visibly different spreads — 0.003–0.245 against 0.026–0.095 —
+so a threshold taken from either would misjudge the other. The control has to be
+rebuilt and re-sampled alongside, which costs a stash and a rebuild and is the
+only thing that actually answers the question.
+
 ---
 
 ## 2. Design analyses worth keeping, though the decision is made
