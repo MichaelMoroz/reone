@@ -7,9 +7,9 @@
 #include "reone/scene/gpuscene.h"
 
 namespace reone::graphics {
-class VulkanRayQuery;
+class RayQuery;
 class VulkanRenderer;
-class VulkanGpuScene;
+class GpuScene;
 struct GraphicsOptions;
 struct VulkanPrimaryRayContext;
 } // namespace reone::graphics
@@ -25,7 +25,7 @@ public:
                      glm::ivec2 extent,
                      graphics::GraphicsOptions &options,
                      GpuScene &gpuScene,
-                     graphics::VulkanGpuScene &deviceGpuScene);
+                     graphics::GpuScene &deviceGpuScene);
     ~RayQueryPipeline();
 
     void init();
@@ -33,16 +33,16 @@ public:
     void render(const graphics::VulkanPrimaryRayContext &context,
                 GpuSceneAdmissionResult admission);
     void restartTemporalHistory();
-    graphics::VulkanRayQuery &native();
-    const graphics::VulkanRayQuery &native() const;
+    graphics::RayQuery &native();
+    const graphics::RayQuery &native() const;
 
 private:
     graphics::VulkanRenderer &_renderer;
     glm::ivec2 _extent;
     graphics::GraphicsOptions &_options;
     GpuScene &_gpuScene;
-    graphics::VulkanGpuScene &_deviceGpuScene;
-    std::unique_ptr<graphics::VulkanRayQuery> _native;
+    graphics::GpuScene &_deviceGpuScene;
+    std::unique_ptr<graphics::RayQuery> _native;
 };
 
 } // namespace reone::scene

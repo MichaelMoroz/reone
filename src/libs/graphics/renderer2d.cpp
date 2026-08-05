@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "reone/graphics/vulkan/renderer2d.h"
+#include "reone/graphics/renderer2d.h"
 
 #include "reone/graphics/font.h"
 #include "reone/graphics/texture.h"
@@ -33,13 +33,13 @@ static constexpr char kModule[] = "vk2d";
 /** Two triangles, synthesised in the shader. */
 static constexpr int kQuadVertices = 6;
 
-void Vulkan2DRenderer::init() {
+void Renderer2D::init() {
 }
 
-void Vulkan2DRenderer::deinit() {
+void Renderer2D::deinit() {
 }
 
-void Vulkan2DRenderer::begin(ICommandBuffer &commandBuffer, glm::ivec2 extent,
+void Renderer2D::begin(ICommandBuffer &commandBuffer, glm::ivec2 extent,
                              glm::ivec2 physicalExtent, Format colorFormat) {
     _commandBuffer = &commandBuffer;
     _extent = extent;
@@ -65,11 +65,11 @@ void Vulkan2DRenderer::begin(ICommandBuffer &commandBuffer, glm::ivec2 extent,
     _globalsOffset = _ring.push(globals);
 }
 
-void Vulkan2DRenderer::end() {
+void Renderer2D::end() {
     _commandBuffer = nullptr;
 }
 
-void Vulkan2DRenderer::drawQuads(const char *vertexEntry,
+void Renderer2D::drawQuads(const char *vertexEntry,
                                  const char *fragmentEntry,
                                  const LocalUniforms &locals,
                                  uint32_t textOffset,
@@ -110,7 +110,7 @@ void Vulkan2DRenderer::drawQuads(const char *vertexEntry,
     ++_drawCount;
 }
 
-void Vulkan2DRenderer::drawImage(Texture &texture,
+void Renderer2D::drawImage(Texture &texture,
                                  const glm::vec2 &position,
                                  const glm::vec2 &size,
                                  const glm::vec4 &color,
@@ -140,7 +140,7 @@ static glm::mat3x4 cancelVFlip(const glm::mat3x4 &uv) {
     return result;
 }
 
-void Vulkan2DRenderer::drawImage(Texture &texture,
+void Renderer2D::drawImage(Texture &texture,
                                  const glm::mat4 &transform,
                                  const glm::vec4 &color,
                                  const glm::mat3x4 &uv) {
@@ -152,7 +152,7 @@ void Vulkan2DRenderer::drawImage(Texture &texture,
     drawQuads("quadVertex", "imageFragment", locals, 0, 1, &texture);
 }
 
-void Vulkan2DRenderer::drawRect(const glm::vec2 &position,
+void Renderer2D::drawRect(const glm::vec2 &position,
                                 const glm::vec2 &size,
                                 const glm::vec4 &color) {
     LocalUniforms locals;
@@ -163,14 +163,14 @@ void Vulkan2DRenderer::drawRect(const glm::vec2 &position,
     drawQuads("quadVertex", "colorFragment", locals, 0, 1, nullptr);
 }
 
-void Vulkan2DRenderer::drawFullTargetImage(Texture &texture, const glm::mat3x4 &uv) {
+void Renderer2D::drawFullTargetImage(Texture &texture, const glm::mat3x4 &uv) {
     LocalUniforms locals;
     locals.reset();
     locals.uv = _resources.isExternal(texture) ? cancelVFlip(uv) : uv;
     drawQuads("fullTargetVertex", "imageFragment", locals, 0, 1, &texture);
 }
 
-void Vulkan2DRenderer::drawText(Font &font,
+void Renderer2D::drawText(Font &font,
                                 std::string_view text,
                                 const glm::vec3 &position,
                                 const glm::vec3 &color,
@@ -214,7 +214,7 @@ void Vulkan2DRenderer::drawText(Font &font,
     }
 }
 
-void Vulkan2DRenderer::withBlendMode(BlendMode mode, const std::function<void()> &block) {
+void Renderer2D::withBlendMode(BlendMode mode, const std::function<void()> &block) {
     // Not a state change: it selects which pipeline the draws inside will use.
     auto previous = _blend;
     _blend = mode;
@@ -222,7 +222,7 @@ void Vulkan2DRenderer::withBlendMode(BlendMode mode, const std::function<void()>
     _blend = previous;
 }
 
-void Vulkan2DRenderer::withScissor(const glm::ivec4 &bounds, const std::function<void()> &block) {
+void Renderer2D::withScissor(const glm::ivec4 &bounds, const std::function<void()> &block) {
     if (!_commandBuffer) {
         throw std::logic_error("Vulkan 2D: no frame begun");
     }

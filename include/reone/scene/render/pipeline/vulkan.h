@@ -15,8 +15,8 @@ namespace reone::graphics {
 class IMeshRegistry;
 class Uniforms;
 class VulkanRenderer;
-class VulkanScenePipeline;
-class VulkanGpuScene;
+class ScenePipeline;
+class GpuScene;
 } // namespace reone::graphics
 
 namespace reone::scene {
@@ -57,8 +57,8 @@ private:
     GpuScene &_gpuScene;
     bool _primaryRayMode {false};
     bool _inited {false};
-    std::unique_ptr<graphics::VulkanScenePipeline> _executor;
-    std::unique_ptr<graphics::VulkanGpuScene> _deviceGpuScene;
+    std::unique_ptr<graphics::ScenePipeline> _executor;
+    std::unique_ptr<graphics::GpuScene> _deviceGpuScene;
     std::unique_ptr<GpuSceneAdmission> _admission;
     GpuSceneAdmissionResult _admissionResult;
     std::unique_ptr<RayQueryPipeline> _rayQuery;

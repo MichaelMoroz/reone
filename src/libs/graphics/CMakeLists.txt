@@ -35,6 +35,7 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/buffer.h
     ${GRAPHICS_INCLUDE_DIR}/image.h
     ${GRAPHICS_INCLUDE_DIR}/rayquery.h
+    ${GRAPHICS_INCLUDE_DIR}/scenepipeline.h
     ${GRAPHICS_INCLUDE_DIR}/format/bwmreader.h
     ${GRAPHICS_INCLUDE_DIR}/format/curreader.h
     ${GRAPHICS_INCLUDE_DIR}/format/lipreader.h
@@ -80,6 +81,7 @@ set(GRAPHICS_SOURCES
     ${GRAPHICS_SOURCE_DIR}/dxtutil.cpp
     ${GRAPHICS_SOURCE_DIR}/font.cpp
     ${GRAPHICS_SOURCE_DIR}/frustum.cpp
+    ${GRAPHICS_SOURCE_DIR}/gpuscene.cpp
     ${GRAPHICS_SOURCE_DIR}/format/bwmreader.cpp
     ${GRAPHICS_SOURCE_DIR}/format/curreader.cpp
     ${GRAPHICS_SOURCE_DIR}/format/lipreader.cpp
@@ -95,6 +97,10 @@ set(GRAPHICS_SOURCES
     ${GRAPHICS_SOURCE_DIR}/model.cpp
     ${GRAPHICS_SOURCE_DIR}/npyutil.cpp
     ${GRAPHICS_SOURCE_DIR}/modelnode.cpp
+    ${GRAPHICS_SOURCE_DIR}/pbrtextures.cpp
+    ${GRAPHICS_SOURCE_DIR}/rayquery.cpp
+    ${GRAPHICS_SOURCE_DIR}/renderer2d.cpp
+    ${GRAPHICS_SOURCE_DIR}/scenepipeline.cpp
     ${GRAPHICS_SOURCE_DIR}/texture.cpp
     ${GRAPHICS_SOURCE_DIR}/textureregistry.cpp
     ${GRAPHICS_SOURCE_DIR}/textureutil.cpp
@@ -107,6 +113,24 @@ add_library(graphics STATIC ${GRAPHICS_HEADERS} ${GRAPHICS_SOURCES} ${CLANG_FORM
 set_target_properties(graphics PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/lib)
 set_target_properties(graphics PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(graphics PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
+
+# The relocated RHI clients include the backend's opaque resource wrappers.
+# Their implementation remains in graphicsvulkan, while these header-only
+# dependencies are needed to compile the client declarations.
+target_link_libraries(graphics PUBLIC
+    Vulkan::Headers
+    volk::volk_headers
+    GPUOpen::VulkanMemoryAllocator)
+target_compile_definitions(graphics PRIVATE
+    REONE_SHADER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/slang")
+
+if(ENABLE_FSR)
+    target_link_libraries(graphics PRIVATE fsr2)
+endif()
+
+if(ENABLE_NRD)
+    target_link_libraries(graphics PRIVATE NRD)
+endif()
 
 if(MSVC)
     target_link_libraries(graphics PRIVATE SDL3::SDL3)

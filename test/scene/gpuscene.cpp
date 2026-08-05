@@ -17,7 +17,7 @@ std::vector<ProceduralQuad> oneQuad(float x) {
     return {quad};
 }
 
-void addParticles(GpuScene &scene, uint32_t index, float color = 1.0f) {
+void addParticles(reone::scene::GpuScene &scene, uint32_t index, float color = 1.0f) {
     Material material {};
     material.type = MaterialType::Particle;
     material.diffuseColor = glm::vec3(color);
@@ -25,8 +25,8 @@ void addParticles(GpuScene &scene, uint32_t index, float color = 1.0f) {
                        material, {1, 1}, oneQuad(static_cast<float>(index)), nullptr);
 }
 
-GpuScene::Classifier noMeshes() {
-    return [](const RegisteredMesh &) -> std::optional<GpuScene::Classification> {
+reone::scene::GpuScene::Classifier noMeshes() {
+    return [](const RegisteredMesh &) -> std::optional<reone::scene::GpuScene::Classification> {
         ADD_FAILURE() << "unexpected mesh";
         return std::nullopt;
     };
@@ -48,7 +48,7 @@ GrassFace grassFace(uint32_t sourceFace, uint32_t budget, float x) {
 } // namespace
 
 TEST(GpuScene, persists_objects_and_caches_classification_in_canonical_order) {
-    GpuScene scene;
+    reone::scene::GpuScene scene;
     addParticles(scene, 5);
     addParticles(scene, 2);
     addParticles(scene, 3);
@@ -56,10 +56,10 @@ TEST(GpuScene, persists_objects_and_caches_classification_in_canonical_order) {
     int classifications = 0;
     auto classify = [&classifications](const RegisteredProcedural &object) {
         ++classifications;
-        GpuScene::Classification result;
+        reone::scene::GpuScene::Classification result;
         result.kind = (object.id.index & 1u) != 0
-                          ? GpuScene::AdmissionKind::Opaque
-                          : GpuScene::AdmissionKind::LitBlended;
+                          ? reone::scene::GpuScene::AdmissionKind::Opaque
+                          : reone::scene::GpuScene::AdmissionKind::LitBlended;
         result.material.diffuseColor =
             glm::vec4(object.material.diffuseColor, 1.0f);
         return std::optional {result};
@@ -87,7 +87,7 @@ TEST(GpuScene, persists_objects_and_caches_classification_in_canonical_order) {
 }
 
 TEST(GpuScene, full_collection_unregisters_unseen_objects_and_clear_resets_world) {
-    GpuScene scene;
+    reone::scene::GpuScene scene;
     addParticles(scene, 1);
     addParticles(scene, 2);
     scene.beginFullCollection();
@@ -102,7 +102,7 @@ TEST(GpuScene, full_collection_unregisters_unseen_objects_and_clear_resets_world
 }
 
 TEST(GpuScene, grass_uses_face_band_prefix_ranges_without_cpu_quads) {
-    GpuScene scene;
+    reone::scene::GpuScene scene;
     std::vector<GrassFace> faces {
         grassFace(7, 3, 0.0f), grassFace(11, 5, 20.0f),
         grassFace(19, 2, 100.0f)};
@@ -115,8 +115,8 @@ TEST(GpuScene, grass_uses_face_band_prefix_ranges_without_cpu_quads) {
     auto classify = [&classifications](const RegisteredProcedural &object) {
         ++classifications;
         EXPECT_EQ(ProceduralKind::Grass, object.kind);
-        GpuScene::Classification result;
-        result.kind = GpuScene::AdmissionKind::Cutout;
+        reone::scene::GpuScene::Classification result;
+        result.kind = reone::scene::GpuScene::AdmissionKind::Cutout;
         return std::optional {result};
     };
 

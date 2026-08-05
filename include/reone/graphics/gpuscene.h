@@ -8,6 +8,16 @@
 #include <cstdint>
 #include <vector>
 
+#include <array>
+
+#include <memory>
+
+#include <unordered_map>
+
+#include "reone/graphics/commandbuffer.h"
+
+#include "reone/graphics/gpuscenecontext.h"
+
 #include <glm/glm.hpp>
 
 namespace reone::graphics {
@@ -202,6 +212,89 @@ struct GpuSceneUpload {
     uint64_t grassFaceGeneration {0};
     uint32_t opaqueObjectCount {0};
     uint32_t materialReferenceCount {0};
+};
+
+class GpuScene : boost::noncopyable {
+public:
+    using BufferView = graphics::BufferView;
+    struct PrimitiveId {
+        uint64_t sceneScope {0};
+        uint32_t objectIndex {0};
+        uint32_t objectGeneration {0};
+        uint32_t localPrimitive {0};
+    };
+    struct PrimitiveIdRange {
+        uint32_t firstTriangle {0};
+        uint32_t triangleCount {0};
+        PrimitiveId first;
+    };
+    struct PrimitiveIdView {
+        const PrimitiveIdRange *ranges {nullptr};
+        uint32_t rangeCount {0};
+        PrimitiveId operator[](uint32_t index) const;
+    };
+    struct Region {
+        GpuSceneResidencyClass residency {GpuSceneResidencyClass::Dynamic};
+        uint64_t revision {0};
+        uint32_t firstVertex {0};
+        uint32_t vertexCount {0};
+        uint32_t firstTriangle {0};
+        uint32_t triangleCount {0};
+    };
+    struct View {
+        uint64_t sceneScope {0};
+        uint64_t revision {0};
+        BufferView vertices;
+        BufferView indices;
+        BufferView materialIds;
+        BufferView materials;
+        uint32_t objectCount {0};
+        uint32_t opaqueObjectCount {0};
+        uint32_t vertexCount {0};
+        uint32_t opaqueTriangleCount {0};
+        uint32_t triangleCount {0};
+        PrimitiveIdView primitiveIds;
+        std::vector<Region> regions;
+    };
+
+    GpuScene();
+    ~GpuScene();
+
+    void init(IGpuSceneContext &context);
+    void deinit();
+    View update(ICommandBuffer &commandBuffer, GpuSceneUpload &upload);
+
+private:
+    struct Frame;
+    struct SourceGeometry {
+        uint32_t vertexOffset {0};
+        uint32_t indexOffset {0};
+        uint32_t vertexDataCount {0};
+        uint32_t indexCount {0};
+    };
+
+    IGpuSceneContext *_context {nullptr};
+    std::unique_ptr<IGpuSceneMergePipeline> _mergePipeline;
+    std::array<std::unique_ptr<Frame>, 2> _frames;
+    std::unordered_map<const Mesh *, SourceGeometry> _sourceGeometry;
+    std::vector<float> _sourceVertexData;
+    std::vector<uint32_t> _sourceIndexData;
+    std::unique_ptr<IBuffer> _sourceVertices;
+    std::unique_ptr<IBuffer> _sourceIndices;
+    std::unique_ptr<IBuffer> _grassFaces;
+    std::vector<std::unique_ptr<IBuffer>> _retiredSourceBuffers;
+    uint32_t _sourceVertexCapacity {0};
+    uint32_t _sourceIndexCapacity {0};
+    uint64_t _grassFaceGeneration {0};
+    uint64_t _sourceResourceGeneration {0};
+    uint64_t _sceneScope {1};
+    uint64_t _revision {0};
+    bool _inited {false};
+
+    void ensureMergeBuffers(Frame &, uint32_t, uint32_t, uint32_t, uint32_t,
+                            uint32_t, uint32_t, uint32_t);
+    void clearSourceGeometry();
+    const SourceGeometry &appendSourceGeometry(const Mesh &mesh);
 };
 
 } // namespace reone::graphics

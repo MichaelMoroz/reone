@@ -29,9 +29,9 @@
 #include "device.h"
 #include "swapchain.h"
 #include "pipelinecache.h"
-#include "renderer2d.h"
+#include "reone/graphics/renderer2d.h"
 #include "commandbuffer.h"
-#include "pbrtextures.h"
+#include "reone/graphics/pbrtextures.h"
 #include "resources.h"
 #include "shadercompiler.h"
 #include "uniformring.h"
@@ -70,7 +70,7 @@ public:
         _shaderCompiler(REONE_SHADER_SOURCE_DIR),
         _pipelines(_device, _descriptors),
         _resources(_device),
-        _pbrTextures(_device, _pipelines, _uniformRing, _descriptors, _resources),
+        _pbrTextures(*this, _device, _pipelines, _uniformRing, _descriptors, _resources),
         _renderer2d(_device, _pipelines, _uniformRing, _descriptors, _resources) {
     }
 
@@ -111,8 +111,8 @@ public:
     VulkanDescriptors &descriptors() { return _descriptors; }
     VulkanPipelineCache &pipelines() { return _pipelines; }
     VulkanResources &resources() { return _resources; }
-    VulkanPBRTextures &pbrTextures() { return _pbrTextures; }
-    Vulkan2DRenderer &renderer2d() { return _renderer2d; }
+    PBRTextures &pbrTextures() { return _pbrTextures; }
+    Renderer2D &renderer2d() { return _renderer2d; }
     /** Execute one short setup recording before frames begin. */
     void immediateSubmit(const std::function<void(ICommandBuffer &)> &block);
     /** ImGui owns descriptor lifetime for the preview texture it displays. */
@@ -182,8 +182,8 @@ private:
     SlangShaderCompiler _shaderCompiler;
     VulkanPipelineCache _pipelines;
     VulkanResources _resources;
-    VulkanPBRTextures _pbrTextures;
-    Vulkan2DRenderer _renderer2d;
+    PBRTextures _pbrTextures;
+    Renderer2D _renderer2d;
 
     bool _inited {false};
     bool _inFrame {false};

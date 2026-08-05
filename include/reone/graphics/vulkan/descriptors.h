@@ -22,7 +22,7 @@
 #include "reone/graphics/descriptors.h"
 
 #include "image.h"
-#include "gpuscene.h"
+#include "reone/graphics/gpuscene.h"
 
 namespace reone {
 
@@ -89,7 +89,7 @@ public:
     /** Publish one frame's merged geometry/material buffers and bindless
         texture tables to graphics set 2. */
     VkDescriptorSet updateMegaDrawSet(
-        int frame, const VulkanGpuScene::View &scene,
+        int frame, const GpuScene::View &scene,
         const VulkanResources &resources);
 
     /**

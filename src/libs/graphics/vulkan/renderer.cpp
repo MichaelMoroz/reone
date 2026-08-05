@@ -376,7 +376,7 @@ void VulkanRenderer::with2DRendering(glm::ivec2 logicalExtent,
     auto cmd = commandBuffer();
     const auto physicalExtent = _swapchain.extent();
     // The swapchain can be smaller than the requested client extent. Dynamic
-    // rendering targets physical pixels, while Vulkan2DRenderer keeps its
+    // rendering targets physical pixels, while Renderer2D keeps its
     // projection in the logical extent so the result scales rather than crops.
     VulkanDebugScope debugScope(
         _device, cmd, "2D (scene composite, GUI, console)",

@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "reone/graphics/vulkan/pbrtextures.h"
+#include "reone/graphics/pbrtextures.h"
 
 #include "reone/graphics/textureutil.h"
 
@@ -28,6 +28,7 @@
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/vulkan/resources.h"
+#include "reone/graphics/vulkan/renderer.h"
 #include "reone/graphics/vulkan/uniformring.h"
 #include "reone/system/logutil.h"
 
@@ -47,7 +48,7 @@ static constexpr char kModule[] = "pbr_ibl";
 /** All six faces at once; see the view mask in renderCubeFaces. */
 static constexpr uint32_t kCubeViewMask = (1u << kNumCubeFaces) - 1u;
 
-void VulkanPBRTextures::init() {
+void PBRTextures::init() {
     if (_inited) {
         return;
     }
@@ -74,13 +75,10 @@ void VulkanPBRTextures::init() {
 
     // Everything starts sampleable, because the resolve reads all three whether
     // or not anything has been generated into them yet.
-    _device.immediateSubmit([this](VkCommandBuffer commandBuffer) {
-        toVulkanImage(*_brdf).transitionTo(
-            commandBuffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        toVulkanImage(*_irradiance).transitionTo(
-            commandBuffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        toVulkanImage(*_prefiltered).transitionTo(
-            commandBuffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    _renderer.immediateSubmit([this](ICommandBuffer &commandBuffer) {
+        commandBuffer.transitionImage(*_brdf, ImageLayout::ShaderRead);
+        commandBuffer.transitionImage(*_irradiance, ImageLayout::ShaderRead);
+        commandBuffer.transitionImage(*_prefiltered, ImageLayout::ShaderRead);
     });
 
     // The BRDF table is indexed by NdotV and roughness, both of which reach the
@@ -102,7 +100,7 @@ void VulkanPBRTextures::init() {
     _inited = true;
 }
 
-void VulkanPBRTextures::deinit() {
+void PBRTextures::deinit() {
     if (_brdf) {
         _brdf->deinit();
     }
@@ -125,18 +123,18 @@ void VulkanPBRTextures::deinit() {
     _inited = false;
 }
 
-Texture &VulkanPBRTextures::brdf() {
+Texture &PBRTextures::brdf() {
     throw std::logic_error("Vulkan PBR textures are not exposed as a Texture");
 }
 
-void VulkanPBRTextures::refresh() {
+void PBRTextures::refresh() {
     _requests.clear();
     _envMapToLayer.clear();
     _envMapSources.clear();
     _nextLayer = 0;
 }
 
-int VulkanPBRTextures::requestEnvMapDerivedLayer(Texture &envMap) {
+int PBRTextures::requestEnvMapDerivedLayer(Texture &envMap) {
     if (auto existing = findEnvMapDerivedLayer(envMap.name())) {
         return *existing;
     }
@@ -154,7 +152,7 @@ int VulkanPBRTextures::requestEnvMapDerivedLayer(Texture &envMap) {
     return layer;
 }
 
-void VulkanPBRTextures::process(ICommandBuffer &commandBuffer, uint32_t globalsOffset) {
+void PBRTextures::process(ICommandBuffer &commandBuffer, uint32_t globalsOffset) {
     if (!_inited) {
         return;
     }
@@ -192,7 +190,7 @@ void VulkanPBRTextures::process(ICommandBuffer &commandBuffer, uint32_t globalsO
           LogChannel::Graphics);
 }
 
-void VulkanPBRTextures::generateBRDF(ICommandBuffer &commandBuffer, uint32_t globalsOffset) {
+void PBRTextures::generateBRDF(ICommandBuffer &commandBuffer, uint32_t globalsOffset) {
     PipelineKey key;
     key.module = kModule;
     key.vertexEntry = "iblVertex";
@@ -218,7 +216,7 @@ void VulkanPBRTextures::generateBRDF(ICommandBuffer &commandBuffer, uint32_t glo
     commandBuffer.draw(3, 1);
 }
 
-void VulkanPBRTextures::generateDerived(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
+void PBRTextures::generateDerived(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
                                         Texture &envMap, int layer) {
     renderCubeFaces(commandBuffer, globalsOffset, *_irradiance, layer, 0,
                     {kIrradianceSize, kIrradianceSize},
@@ -232,7 +230,7 @@ void VulkanPBRTextures::generateDerived(ICommandBuffer &commandBuffer, uint32_t 
     }
 }
 
-void VulkanPBRTextures::renderCubeFaces(ICommandBuffer &commandBuffer,
+void PBRTextures::renderCubeFaces(ICommandBuffer &commandBuffer,
                                         uint32_t globalsOffset,
                                         IImage &target,
                                         int cube,

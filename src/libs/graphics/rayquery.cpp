@@ -2,7 +2,7 @@
  * Copyright (c) 2026 The reone project contributors
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
-#include "reone/graphics/vulkan/rayquery.h"
+#include "reone/graphics/rayquery.h"
 
 #include "reone/system/profiler.h"
 
@@ -25,6 +25,13 @@
 #include "reone/graphics/vulkan/renderpass.h"
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/graphics/vulkan/tracingstructure.h"
+
+#ifdef R_ENABLE_FSR
+#include "reone/graphics/vulkan/fsrupscaler.h"
+#endif
+#ifdef R_ENABLE_NRD
+#include "reone/graphics/vulkan/nrddenoiser.h"
+#endif
 
 #ifdef R_ENABLE_NRD
 #include <NRD.h>
@@ -59,16 +66,16 @@ struct TraceStats {
 
 } // namespace
 
-VulkanRayQuery::VulkanRayQuery(VulkanRenderer &renderer,
+RayQuery::RayQuery(VulkanRenderer &renderer,
                                glm::ivec2 extent,
                                GraphicsOptions &options) :
     _renderer(renderer), _options(options), _extent(extent) {}
 
-VulkanRayQuery::~VulkanRayQuery() {
+RayQuery::~RayQuery() {
     deinit();
 }
 
-void VulkanRayQuery::init() {
+void RayQuery::init() {
     if (_inited)
         return;
     auto &device = _renderer.device();
@@ -241,14 +248,14 @@ void VulkanRayQuery::init() {
     _inited = true;
 }
 
-void VulkanRayQuery::clearFrame(Frame &frame) {
+void RayQuery::clearFrame(Frame &frame) {
     // The merge and acceleration-structure buffers are capacity-managed. The
     // renderer has waited this in-flight frame's fence before reuse, so a full
     // BLAS/TLAS rebuild may overwrite them, but their allocations survive it.
     frame.traceStats.reset();
 }
 
-bool VulkanRayQuery::bakeSkyRoom(ICommandBuffer &commandBuffer,
+bool RayQuery::bakeSkyRoom(ICommandBuffer &commandBuffer,
                                  const RayQuerySkyRoom &room) {
     // A failed bake is deliberately sticky for this detected room: the fallback
     // cube is stable, and retrying a known-invalid asset every frame would turn
@@ -386,7 +393,7 @@ bool VulkanRayQuery::bakeSkyRoom(ICommandBuffer &commandBuffer,
     return true;
 }
 
-void VulkanRayQuery::deinit() {
+void RayQuery::deinit() {
     for (auto &frame : _frames) {
         clearFrame(frame);
         if (frame.tracingStructure) {
@@ -429,27 +436,27 @@ void VulkanRayQuery::deinit() {
     _inited = false;
 }
 
-void VulkanRayQuery::clearSkyRoom() {
+void RayQuery::clearSkyRoom() {
     _skyCubeRoom = 0;
     _skyCubeReady = false;
 }
 
-std::optional<uint32_t> VulkanRayQuery::textureId(const Texture &texture) const {
+std::optional<uint32_t> RayQuery::textureId(const Texture &texture) const {
     return _renderer.resources().textureId(texture);
 }
 
-bool VulkanRayQuery::supportsSkyTexture(const Texture &texture) const {
+bool RayQuery::supportsSkyTexture(const Texture &texture) const {
     return VulkanResources::supported(texture.pixelFormat());
 }
 
-void VulkanRayQuery::restartTemporalHistory() {
+void RayQuery::restartTemporalHistory() {
     _restartHistoryRequested = true;
 #ifdef R_ENABLE_NRD
     _temporalHistoryValid = false;
 #endif
 }
 
-std::vector<VulkanRayQuery::Channel> VulkanRayQuery::channels() {
+std::vector<RayQuery::Channel> RayQuery::channels() {
     if (!_inited || _lastAuxFrame < 0) {
         return {};
     }
@@ -483,13 +490,13 @@ std::vector<VulkanRayQuery::Channel> VulkanRayQuery::channels() {
     return result;
 }
 
-void VulkanRayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
+void RayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
                             IImage &output,
                             const glm::mat4 &view, const glm::mat4 &projection,
                             const glm::vec4 &jitter,
-                            RayQuerySubmission submission, VulkanGpuScene &deviceGpuScene,
+                            RayQuerySubmission submission, GpuScene &deviceGpuScene,
                             bool skyBaked) {
-    R_PROFILE_ZONE("VulkanRayQuery::render");
+    R_PROFILE_ZONE("RayQuery::render");
     const auto nativeCommandBuffer = toVulkanCommandBuffer(commandBuffer).handle();
     const int frameIndex = _renderer.frameIndex();
     // A valid traced frame can contain no merged geometry. That path clears
@@ -539,7 +546,7 @@ void VulkanRayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffse
 
     const auto begin = std::chrono::steady_clock::now();
     {
-        R_PROFILE_ZONE("VulkanRayQuery::BLAS/TLAS build record");
+        R_PROFILE_ZONE("RayQuery::BLAS/TLAS build record");
         if (!frame.tracingStructure) {
             frame.tracingStructure = std::make_unique<VulkanTracingStructure>(device);
         }
@@ -640,7 +647,7 @@ void VulkanRayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffse
                                   skyBaked ? 1u : 0u};
     commandBuffer.pushRayTracingConstants(_pipeline->pipelineLayout(), &constants, sizeof(constants));
     {
-        R_PROFILE_ZONE("VulkanRayQuery::dispatch record");
+        R_PROFILE_ZONE("RayQuery::dispatch record");
         commandBuffer.traceRays(
             _pipeline->pipeline(), *frame.tracingStructure,
             {static_cast<uint32_t>(_extent.x), static_cast<uint32_t>(_extent.y)});

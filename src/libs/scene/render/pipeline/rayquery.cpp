@@ -6,9 +6,9 @@
 
 #include "reone/graphics/options.h"
 #include "reone/graphics/texture.h"
-#include "reone/graphics/vulkan/rayquery.h"
+#include "reone/graphics/rayquery.h"
 #include "reone/graphics/vulkan/renderer.h"
-#include "reone/graphics/vulkan/scenepipeline.h"
+#include "reone/graphics/scenepipeline.h"
 #include "reone/graphics/vulkan/commandbuffer.h"
 #include "reone/graphics/vulkan/image.h"
 #include "reone/scene/node/model.h"
@@ -23,7 +23,7 @@ RayQueryPipeline::RayQueryPipeline(VulkanRenderer &renderer,
                                    glm::ivec2 extent,
                                    GraphicsOptions &options,
                                    GpuScene &gpuScene,
-                                   VulkanGpuScene &deviceGpuScene) :
+                                   graphics::GpuScene &deviceGpuScene) :
     _renderer(renderer), _extent(extent), _options(options), _gpuScene(gpuScene),
     _deviceGpuScene(deviceGpuScene) {}
 
@@ -34,7 +34,7 @@ RayQueryPipeline::~RayQueryPipeline() {
 void RayQueryPipeline::init() {
     if (_native)
         return;
-    _native = std::make_unique<VulkanRayQuery>(_renderer, _extent, _options);
+    _native = std::make_unique<RayQuery>(_renderer, _extent, _options);
     _native->init();
 }
 
@@ -47,11 +47,11 @@ void RayQueryPipeline::restartTemporalHistory() {
         _native->restartTemporalHistory();
 }
 
-VulkanRayQuery &RayQueryPipeline::native() {
+RayQuery &RayQueryPipeline::native() {
     return *_native;
 }
 
-const VulkanRayQuery &RayQueryPipeline::native() const {
+const RayQuery &RayQueryPipeline::native() const {
     return *_native;
 }
 

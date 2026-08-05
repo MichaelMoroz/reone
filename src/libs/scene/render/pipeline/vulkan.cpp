@@ -13,9 +13,9 @@
 
 #include "reone/graphics/options.h"
 #include "reone/graphics/vulkan/renderer.h"
-#include "reone/graphics/vulkan/rayquery.h"
-#include "reone/graphics/vulkan/gpuscene.h"
-#include "reone/graphics/vulkan/scenepipeline.h"
+#include "reone/graphics/rayquery.h"
+#include "reone/graphics/gpuscene.h"
+#include "reone/graphics/scenepipeline.h"
 #include "reone/scene/render/pipeline/rayquery.h"
 #include "reone/system/logutil.h"
 
@@ -30,7 +30,7 @@ public:
             _owner._rayQuery->render(context, std::move(_owner._admissionResult));
     }
 
-    graphics::VulkanGpuScene::View mergeGeometry(graphics::ICommandBuffer &commandBuffer) override {
+    graphics::GpuScene::View mergeGeometry(graphics::ICommandBuffer &commandBuffer) override {
         return _owner._deviceGpuScene->update(commandBuffer,
                                               _owner._admissionResult.submission.upload);
     }
@@ -73,11 +73,11 @@ VulkanRenderPipeline::~VulkanRenderPipeline() {
 void VulkanRenderPipeline::init() {
     if (_inited)
         return;
-    _executor = std::make_unique<graphics::VulkanScenePipeline>(
+    _executor = std::make_unique<graphics::ScenePipeline>(
         _targetSize, _options, _renderer, _uniforms, _meshRegistry,
         _textureRegistry, _primaryRayMode);
     _executor->init();
-    _deviceGpuScene = std::make_unique<graphics::VulkanGpuScene>();
+    _deviceGpuScene = std::make_unique<graphics::GpuScene>();
     _deviceGpuScene->init(_renderer);
     _admission = std::make_unique<GpuSceneAdmission>(_renderer, _options, _gpuScene);
     if (_primaryRayMode) {

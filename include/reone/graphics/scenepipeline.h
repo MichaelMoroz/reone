@@ -20,7 +20,7 @@
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/commandbuffer.h"
 #include "reone/graphics/vulkan/gbuffer.h"
-#include "reone/graphics/vulkan/gpuscene.h"
+#include "reone/graphics/gpuscene.h"
 
 namespace reone::graphics {
 
@@ -70,7 +70,7 @@ class IVulkanSceneCallbacks {
 public:
     virtual ~IVulkanSceneCallbacks() = default;
     virtual void renderPrimary(const VulkanPrimaryRayContext &context) = 0;
-    virtual VulkanGpuScene::View mergeGeometry(ICommandBuffer &commandBuffer) = 0;
+    virtual GpuScene::View mergeGeometry(ICommandBuffer &commandBuffer) = 0;
     virtual std::vector<VulkanExternalTarget> primaryTargets() const = 0;
 };
 
@@ -84,16 +84,16 @@ struct VulkanTargetInfo {
 };
 
 /** Owns native render targets, descriptors, barriers, pipelines and commands. */
-class VulkanScenePipeline : boost::noncopyable {
+class ScenePipeline : boost::noncopyable {
 public:
-    VulkanScenePipeline(glm::ivec2 targetSize,
+    ScenePipeline(glm::ivec2 targetSize,
                         GraphicsOptions &options,
                         VulkanRenderer &renderer,
                         Uniforms &uniforms,
                         IMeshRegistry &meshRegistry,
                         TextureRegistry &textureRegistry,
                         bool primaryRayMode);
-    ~VulkanScenePipeline();
+    ~ScenePipeline();
 
     void init();
     void deinit();
@@ -123,7 +123,7 @@ private:
     DescriptorSet _retroResolveSet;
     DescriptorSet _pbrResolveSet;
     DescriptorSet _resolveMaterialSet;
-    VulkanGpuScene::View _mergedScene;
+    GpuScene::View _mergedScene;
     bool _mergedScenePrepared {false};
 
     struct Preview {
@@ -144,7 +144,7 @@ private:
         bool depth;
     };
 
-    const VulkanGpuScene::View &prepareMergedScene(
+    const GpuScene::View &prepareMergedScene(
         ICommandBuffer &cmd, IVulkanSceneCallbacks &callbacks);
     void shadowPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                     IVulkanSceneCallbacks &callbacks);

@@ -281,7 +281,7 @@ void VulkanDescriptors::beginFrame(int frame) {
 }
 
 VkDescriptorSet VulkanDescriptors::updateMegaDrawSet(
-    int frame, const VulkanGpuScene::View &scene,
+    int frame, const GpuScene::View &scene,
     const VulkanResources &resources) {
     auto set = _megaDrawSets.at(frame);
     std::array<VkDescriptorBufferInfo, 3> buffers {{

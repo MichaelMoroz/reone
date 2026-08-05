@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "reone/graphics/vulkan/scenepipeline.h"
+#include "reone/graphics/scenepipeline.h"
 
 #include "reone/system/profiler.h"
 
@@ -29,7 +29,7 @@
 #include "reone/graphics/vulkan/debugscope.h"
 #include "reone/graphics/vulkan/descriptors.h"
 #include "reone/graphics/vulkan/device.h"
-#include "reone/graphics/vulkan/pbrtextures.h"
+#include "reone/graphics/pbrtextures.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/graphics/vulkan/pipeline.h"
@@ -51,7 +51,7 @@ struct MegaDrawPushConstants {
     uint32_t materialGated;
 };
 
-VulkanScenePipeline::VulkanScenePipeline(glm::ivec2 targetSize,
+ScenePipeline::ScenePipeline(glm::ivec2 targetSize,
                                          GraphicsOptions &options,
                                          VulkanRenderer &renderer,
                                          Uniforms &uniforms,
@@ -67,7 +67,7 @@ VulkanScenePipeline::VulkanScenePipeline(glm::ivec2 targetSize,
     _primaryRayMode(primaryRayMode) {
 }
 
-VulkanScenePipeline::~VulkanScenePipeline() {
+ScenePipeline::~ScenePipeline() {
     deinit();
 }
 
@@ -78,7 +78,7 @@ static void transitionGBuffer(ICommandBuffer &cmd, IGBuffer &gbuffer,
     }
 }
 
-void VulkanScenePipeline::init() {
+void ScenePipeline::init() {
     if (_inited) {
         return;
     }
@@ -170,7 +170,7 @@ void VulkanScenePipeline::init() {
 
     _inited = true;
 }
-void VulkanScenePipeline::deinit() {
+void ScenePipeline::deinit() {
     if (!_inited) {
         return;
     }
@@ -199,13 +199,13 @@ void VulkanScenePipeline::deinit() {
     _inited = false;
 }
 
-const VulkanGpuScene::View &VulkanScenePipeline::prepareMergedScene(
+const GpuScene::View &ScenePipeline::prepareMergedScene(
     ICommandBuffer &cmd, IVulkanSceneCallbacks &callbacks) {
     if (_mergedScenePrepared) {
         return _mergedScene;
     }
     // Upload and compute-merge are recorded once before the first consumer.
-    // VulkanGpuScene publishes the compute-to-vertex/index barrier; the same
+    // GpuScene publishes the compute-to-vertex/index barrier; the same
     // buffers and descriptor set then feed shadows and the G-buffer.
     _mergedScene = callbacks.mergeGeometry(cmd);
     _mergedScenePrepared = true;
@@ -228,10 +228,10 @@ const VulkanGpuScene::View &VulkanScenePipeline::prepareMergedScene(
     return _mergedScene;
 }
 
-void VulkanScenePipeline::shadowPass(ICommandBuffer &cmd,
+void ScenePipeline::shadowPass(ICommandBuffer &cmd,
                                      uint32_t globalsOffset,
                                      IVulkanSceneCallbacks &callbacks) {
-    R_PROFILE_ZONE("VulkanScenePipeline::shadowPass record");
+    R_PROFILE_ZONE("ScenePipeline::shadowPass record");
     if (_shadow == VulkanSceneShadow::None) {
         return;
     }
@@ -303,9 +303,9 @@ void VulkanScenePipeline::shadowPass(ICommandBuffer &cmd,
     cmd.transitionImage(image, ImageLayout::DepthRead);
 }
 
-void VulkanScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
+void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                                        IVulkanSceneCallbacks &callbacks) {
-    R_PROFILE_ZONE("VulkanScenePipeline::geometryPass record");
+    R_PROFILE_ZONE("ScenePipeline::geometryPass record");
     const auto &scene = prepareMergedScene(cmd, callbacks);
 
     transitionGBuffer(cmd, *_gbuffer, ImageLayout::ColorAttachment);
@@ -363,9 +363,9 @@ void VulkanScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffs
     cmd.endRendering();
 }
 
-void VulkanScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
+void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                                       IVulkanSceneCallbacks &callbacks) {
-    R_PROFILE_ZONE("VulkanScenePipeline::blendedPass record");
+    R_PROFILE_ZONE("ScenePipeline::blendedPass record");
     const auto &scene = prepareMergedScene(cmd, callbacks);
     const uint32_t nonOpaqueTriangles =
         scene.triangleCount > scene.opaqueTriangleCount
@@ -419,8 +419,8 @@ void VulkanScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffse
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
 
-void VulkanScenePipeline::retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
-    R_PROFILE_ZONE("VulkanScenePipeline::retroResolvePass record");
+void ScenePipeline::retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("ScenePipeline::retroResolvePass record");
     transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
     cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
     cmd.transitionImage(*_output, ImageLayout::ColorAttachment);
@@ -454,8 +454,8 @@ void VulkanScenePipeline::retroResolvePass(ICommandBuffer &cmd, uint32_t globals
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
 
-void VulkanScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
-    R_PROFILE_ZONE("VulkanScenePipeline::pbrResolvePass record");
+void ScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("ScenePipeline::pbrResolvePass record");
     transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
     cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
     cmd.transitionImage(*_output, ImageLayout::ColorAttachment);
@@ -489,7 +489,7 @@ void VulkanScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOf
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
 
-Texture &VulkanScenePipeline::render(const VulkanSceneFramePlan &plan,
+Texture &ScenePipeline::render(const VulkanSceneFramePlan &plan,
                                      IVulkanSceneCallbacks &callbacks) {
     auto &cmd = _renderer.recordingCommandBuffer();
     _shadow = plan.shadow;
@@ -641,7 +641,7 @@ static bool isBGRA(Format format) {
     }
 }
 
-std::vector<VulkanScenePipeline::Target> VulkanScenePipeline::targetEntries(
+std::vector<ScenePipeline::Target> ScenePipeline::targetEntries(
     const IVulkanSceneCallbacks &callbacks) const {
     if (!_inited) {
         return {};
@@ -685,7 +685,7 @@ std::vector<VulkanScenePipeline::Target> VulkanScenePipeline::targetEntries(
     return entries;
 }
 
-void *VulkanScenePipeline::renderTargetPreview(const std::string &name, int mode, float scale,
+void *ScenePipeline::renderTargetPreview(const std::string &name, int mode, float scale,
                                                const IVulkanSceneCallbacks &callbacks) {
     auto entries = targetEntries(callbacks);
     if (std::none_of(entries.begin(), entries.end(), [&name](const auto &entry) {
@@ -710,9 +710,9 @@ void *VulkanScenePipeline::renderTargetPreview(const std::string &name, int mode
     return _preview->imguiTexture;
 }
 
-void VulkanScenePipeline::previewPass(ICommandBuffer &cmd, uint32_t globalsOffset,
+void ScenePipeline::previewPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                                       const IVulkanSceneCallbacks &callbacks) {
-    R_PROFILE_ZONE("VulkanScenePipeline::previewPass record");
+    R_PROFILE_ZONE("ScenePipeline::previewPass record");
     if (!_preview) {
         return;
     }
@@ -761,7 +761,7 @@ void VulkanScenePipeline::previewPass(ICommandBuffer &cmd, uint32_t globalsOffse
     cmd.transitionImage(*_preview->image, ImageLayout::ShaderRead);
 }
 
-void VulkanScenePipeline::dumpTargets(const std::filesystem::path &dir,
+void ScenePipeline::dumpTargets(const std::filesystem::path &dir,
                                       const IVulkanSceneCallbacks &callbacks) {
     if (!_inited) {
         return;
@@ -968,7 +968,7 @@ void VulkanScenePipeline::dumpTargets(const std::filesystem::path &dir,
          LogChannel::Graphics);
 }
 
-std::vector<VulkanTargetInfo> VulkanScenePipeline::targets(
+std::vector<VulkanTargetInfo> ScenePipeline::targets(
     const IVulkanSceneCallbacks &callbacks) const {
     std::vector<VulkanTargetInfo> result;
     for (const auto &entry : targetEntries(callbacks)) {

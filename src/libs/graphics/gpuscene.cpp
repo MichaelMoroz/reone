@@ -2,7 +2,7 @@
  * Copyright (c) 2026 The reone project contributors
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
-#include "reone/graphics/vulkan/gpuscene.h"
+#include "reone/graphics/gpuscene.h"
 
 #include "reone/system/profiler.h"
 
@@ -35,7 +35,7 @@ void releaseBuffer(std::unique_ptr<IBuffer> &buffer) {
 
 } // namespace
 
-struct VulkanGpuScene::Frame {
+struct GpuScene::Frame {
     std::unique_ptr<IBuffer> scene;
     std::unique_ptr<IBuffer> geometry;
     std::unique_ptr<IBuffer> proceduralQuads;
@@ -59,13 +59,13 @@ struct VulkanGpuScene::Frame {
     }
 };
 
-VulkanGpuScene::VulkanGpuScene() = default;
+GpuScene::GpuScene() = default;
 
-VulkanGpuScene::~VulkanGpuScene() {
+GpuScene::~GpuScene() {
     deinit();
 }
 
-VulkanGpuScene::PrimitiveId VulkanGpuScene::PrimitiveIdView::operator[](uint32_t index) const {
+GpuScene::PrimitiveId GpuScene::PrimitiveIdView::operator[](uint32_t index) const {
     for (uint32_t rangeIndex = 0; rangeIndex < rangeCount; ++rangeIndex) {
         const auto &range = ranges[rangeIndex];
         if (index < range.firstTriangle || index - range.firstTriangle >= range.triangleCount)
@@ -77,7 +77,7 @@ VulkanGpuScene::PrimitiveId VulkanGpuScene::PrimitiveIdView::operator[](uint32_t
     throw std::out_of_range("Vulkan: frame-local primitive address is not published");
 }
 
-void VulkanGpuScene::init(IGpuSceneContext &context) {
+void GpuScene::init(IGpuSceneContext &context) {
     if (_inited)
         return;
     _context = &context;
@@ -87,7 +87,7 @@ void VulkanGpuScene::init(IGpuSceneContext &context) {
     _inited = true;
 }
 
-void VulkanGpuScene::deinit() {
+void GpuScene::deinit() {
     if (!_inited)
         return;
     for (auto &frame : _frames) {
@@ -103,7 +103,7 @@ void VulkanGpuScene::deinit() {
     _inited = false;
 }
 
-void VulkanGpuScene::clearSourceGeometry() {
+void GpuScene::clearSourceGeometry() {
     _sourceGeometry.clear();
     _sourceVertexData.clear();
     _sourceIndexData.clear();
@@ -116,7 +116,7 @@ void VulkanGpuScene::clearSourceGeometry() {
     _sourceIndexCapacity = 0;
 }
 
-void VulkanGpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
+void GpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
                                         uint32_t boneCount, uint32_t vertexCount,
                                         uint32_t triangleCount, uint32_t proceduralQuadCount,
                                         uint32_t danglyPositionCount,
@@ -185,7 +185,7 @@ void VulkanGpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
     }
 }
 
-const VulkanGpuScene::SourceGeometry &VulkanGpuScene::appendSourceGeometry(const Mesh &mesh) {
+const GpuScene::SourceGeometry &GpuScene::appendSourceGeometry(const Mesh &mesh) {
     const auto [it, inserted] = _sourceGeometry.emplace(&mesh, SourceGeometry {});
     const auto &vertices = mesh.vertexData();
     const auto &faces = mesh.faces();
@@ -247,8 +247,8 @@ const VulkanGpuScene::SourceGeometry &VulkanGpuScene::appendSourceGeometry(const
     return location;
 }
 
-VulkanGpuScene::View VulkanGpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &upload) {
-    R_PROFILE_ZONE("VulkanGpuScene::update");
+GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &upload) {
+    R_PROFILE_ZONE("GpuScene::update");
     const auto resourceGeneration = _context->resourceGeneration();
     if (resourceGeneration != _sourceResourceGeneration) {
         clearSourceGeometry();
@@ -334,7 +334,7 @@ VulkanGpuScene::View VulkanGpuScene::update(ICommandBuffer &commandBuffer, GpuSc
     uint64_t vertexBytes = 0;
     uint64_t indexBytes = 0;
     {
-        R_PROFILE_ZONE("VulkanGpuScene::staging upload");
+        R_PROFILE_ZONE("GpuScene::staging upload");
         ensureMergeBuffers(frame, static_cast<uint32_t>(upload.objects.size()),
                            static_cast<uint32_t>(upload.bones.size()),
                            static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount),
@@ -376,7 +376,7 @@ VulkanGpuScene::View VulkanGpuScene::update(ICommandBuffer &commandBuffer, GpuSc
     }
 
     {
-        R_PROFILE_ZONE("VulkanGpuScene::command recording");
+        R_PROFILE_ZONE("GpuScene::command recording");
         const auto *sourceVertices =
             _sourceVertices ? _sourceVertices.get() : frame.proceduralQuads.get();
         const auto *sourceIndices =

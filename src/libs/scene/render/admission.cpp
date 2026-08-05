@@ -15,7 +15,7 @@
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/renderer.h"
-#include "reone/graphics/vulkan/pbrtextures.h"
+#include "reone/graphics/pbrtextures.h"
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/scene/node/model.h"
 #include "reone/system/logutil.h"
