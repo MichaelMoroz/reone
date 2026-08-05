@@ -266,41 +266,90 @@ void VulkanCommandBuffer::clearColor(IImage &image, glm::vec4 color) {
                           VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
 }
 
-void VulkanCommandBuffer::makeGpuSceneSourcesAvailable(const IBuffer &vertices,
-                                                        const IBuffer &indices) {
-    const std::array<const IBuffer *, 2> sources {{&vertices, &indices}};
-    std::array<VkBufferMemoryBarrier2, 2> barriers {};
-    for (size_t i = 0; i < barriers.size(); ++i) {
-        auto &barrier = barriers[i];
-        barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
-        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-        barrier.buffer = toVulkanBuffer(*sources[i]).handle();
-        barrier.offset = 0;
-        barrier.size = VK_WHOLE_SIZE;
+namespace {
+
+struct ResourceUse {
+    VkPipelineStageFlags2 stage;
+    VkAccessFlags2 access;
+};
+
+ResourceUse toVulkanBufferUse(BufferUse use) {
+    switch (use) {
+    case BufferUse::TransferWrite:
+        return {VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT};
+    case BufferUse::ComputeRead:
+        return {VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT};
+    case BufferUse::ComputeWrite:
+        return {VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT};
+    case BufferUse::AccelerationStructureBuildRead:
+        return {VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR};
+    case BufferUse::ShaderRead:
+        return {VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                    VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                VK_ACCESS_2_SHADER_READ_BIT};
+    case BufferUse::IndexRead:
+        return {VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT, VK_ACCESS_2_INDEX_READ_BIT};
     }
+    throw std::invalid_argument("Unknown buffer use");
+}
+
+ResourceUse toVulkanImageUse(ImageUse use) {
+    switch (use) {
+    case ImageUse::RayTracingStore:
+        return {VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+    case ImageUse::ComputeRead:
+        return {VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
+    case ImageUse::ComputeSample:
+        return {VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT};
+    case ImageUse::ComputeStore:
+        return {VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+    case ImageUse::ComputeStorageRead:
+        return {VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
+    }
+    throw std::invalid_argument("Unknown image use");
+}
+
+} // namespace
+
+void VulkanCommandBuffer::bufferBarrier(IBuffer &buffer, BufferUse from, BufferUse to) {
+    const auto source = toVulkanBufferUse(from);
+    const auto destination = toVulkanBufferUse(to);
+    VkBufferMemoryBarrier2 barrier {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+    barrier.srcStageMask = source.stage;
+    barrier.srcAccessMask = source.access;
+    barrier.dstStageMask = destination.stage;
+    barrier.dstAccessMask = destination.access;
+    barrier.buffer = toVulkanBuffer(buffer).handle();
+    barrier.offset = 0;
+    barrier.size = VK_WHOLE_SIZE;
     VkDependencyInfo dependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dependency.bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
-    dependency.pBufferMemoryBarriers = barriers.data();
+    dependency.bufferMemoryBarrierCount = 1;
+    dependency.pBufferMemoryBarriers = &barrier;
     vkCmdPipelineBarrier2(_commandBuffer, &dependency);
 }
 
-void VulkanCommandBuffer::publishMergedScene() {
-    VkMemoryBarrier2 barrier {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-    barrier.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                           VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
-                           VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
-                           VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT;
-    barrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                            VK_ACCESS_2_SHADER_READ_BIT |
-                            VK_ACCESS_2_INDEX_READ_BIT;
+void VulkanCommandBuffer::imageBarrier(IImage &image, ImageUse from, ImageUse to) {
+    const auto source = toVulkanImageUse(from);
+    const auto destination = toVulkanImageUse(to);
+    VkImageMemoryBarrier2 barrier {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    barrier.srcStageMask = source.stage;
+    barrier.srcAccessMask = source.access;
+    barrier.dstStageMask = destination.stage;
+    barrier.dstAccessMask = destination.access;
+    barrier.oldLayout = from == ImageUse::ComputeSample
+                            ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                            : VK_IMAGE_LAYOUT_GENERAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.image = toVulkanImage(image).handle();
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.layerCount = 1;
     VkDependencyInfo dependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dependency.memoryBarrierCount = 1;
-    dependency.pMemoryBarriers = &barrier;
+    dependency.imageMemoryBarrierCount = 1;
+    dependency.pImageMemoryBarriers = &barrier;
     vkCmdPipelineBarrier2(_commandBuffer, &dependency);
 }
 
@@ -313,62 +362,6 @@ void VulkanCommandBuffer::traceRays(Pipeline pipeline, ITracingStructure &struct
                                     glm::uvec2 extent) {
     toVulkanTracingStructure(structure).traceRays(_commandBuffer,
                                                    toVulkanPipeline(pipeline), extent);
-}
-
-static void memoryBarrier(VkCommandBuffer commandBuffer, VkPipelineStageFlags2 sourceStage,
-                          VkAccessFlags2 sourceAccess, VkPipelineStageFlags2 destinationStage,
-                          VkAccessFlags2 destinationAccess) {
-    VkMemoryBarrier2 barrier {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-    barrier.srcStageMask = sourceStage;
-    barrier.srcAccessMask = sourceAccess;
-    barrier.dstStageMask = destinationStage;
-    barrier.dstAccessMask = destinationAccess;
-    VkDependencyInfo dependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dependency.memoryBarrierCount = 1;
-    dependency.pMemoryBarriers = &barrier;
-    vkCmdPipelineBarrier2(commandBuffer, &dependency);
-}
-
-void VulkanCommandBuffer::publishTraceOutputForDenoising() {
-    memoryBarrier(_commandBuffer, VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                  VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                  VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
-}
-
-void VulkanCommandBuffer::publishCompositeForUpscaling() {
-    memoryBarrier(_commandBuffer, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                  VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                  VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-}
-
-void VulkanCommandBuffer::restoreUpscalerInputsForNextFrame(IImage &color, IImage &depth,
-                                                             IImage &motion) {
-    const std::array<IImage *, 3> images {{&color, &depth, &motion}};
-    std::array<VkImageMemoryBarrier2, 3> barriers {};
-    for (size_t i = 0; i < barriers.size(); ++i) {
-        auto &barrier = barriers[i];
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barrier.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        barrier.image = toVulkanImage(*images[i]).handle();
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.layerCount = 1;
-    }
-    VkDependencyInfo dependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dependency.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
-    dependency.pImageMemoryBarriers = barriers.data();
-    vkCmdPipelineBarrier2(_commandBuffer, &dependency);
-}
-
-void VulkanCommandBuffer::publishUpscaledFrameForTonemapping() {
-    memoryBarrier(_commandBuffer, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                  VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                  VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
 }
 
 } // namespace graphics

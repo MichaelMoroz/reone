@@ -632,8 +632,14 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
 #ifdef R_ENABLE_NRD
     if (_nrdDenoiser) {
         // The trace pass's storage writes feed NRD's sampled reads.
-        commandBuffer.publishTraceOutputForDenoising();
         const auto &aux = _auxImages[_renderer.frameIndex()];
+        std::array<IImage *, kNumAuxImages + 1> traceOutputs {};
+        traceOutputs[0] = &output;
+        for (int i = 0; i < kNumAuxImages; ++i)
+            traceOutputs[i + 1] = aux[i].get();
+        for (auto *image : traceOutputs) {
+            commandBuffer.imageBarrier(*image, ImageUse::RayTracingStore, ImageUse::ComputeRead);
+        }
         NrdDenoiser::Inputs inputs;
         inputs.diffRadianceHitDist = toVulkanImageView(aux[0]->sampleView());
         inputs.specRadianceHitDist = toVulkanImageView(aux[1]->sampleView());
@@ -740,7 +746,8 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
             if (fsrActive) {
                 // Composite writes, FSR reads. FSR's backend barriers its own
                 // internal resources but not ours, so the handoff is ours.
-                commandBuffer.publishCompositeForUpscaling();
+                commandBuffer.imageBarrier(*_fsrColor, ImageUse::ComputeStore,
+                                           ImageUse::ComputeRead);
 
                 graphics::FsrUpscaler::Inputs fsrInputs;
                 fsrInputs.color = _fsrColor.get();
@@ -767,8 +774,14 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
                 // The backend deliberately leaves its inputs ready for sampled
                 // reads. The trace and composite passes write these images as
                 // storage images again on the next frame, so restore GENERAL.
-                commandBuffer.restoreUpscalerInputsForNextFrame(*_fsrColor, *aux[7], *aux[8]);
-                commandBuffer.publishUpscaledFrameForTonemapping();
+                commandBuffer.imageBarrier(*_fsrColor, ImageUse::ComputeSample,
+                                           ImageUse::ComputeStore);
+                commandBuffer.imageBarrier(*aux[7], ImageUse::ComputeSample,
+                                           ImageUse::ComputeStore);
+                commandBuffer.imageBarrier(*aux[8], ImageUse::ComputeSample,
+                                           ImageUse::ComputeStore);
+                commandBuffer.imageBarrier(*_fsrOutput, ImageUse::ComputeStore,
+                                           ImageUse::ComputeStorageRead);
 
                 const auto tonemapSet = _tonemapPipeline->descriptorSet(1, frameIndex);
                 const std::array<ImageView, 2> tonemapImages {{

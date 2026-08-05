@@ -53,6 +53,25 @@ enum class ImageLayout {
     General,
 };
 
+/** The way a buffer participates in a dependency. */
+enum class BufferUse {
+    TransferWrite,
+    ComputeRead,
+    ComputeWrite,
+    AccelerationStructureBuildRead,
+    ShaderRead,
+    IndexRead,
+};
+
+/** The way an image participates in a dependency. */
+enum class ImageUse {
+    RayTracingStore,
+    ComputeRead,
+    ComputeSample,
+    ComputeStore,
+    ComputeStorageRead,
+};
+
 enum class AttachmentLoad { DontCare, Load, Clear };
 enum class AttachmentStore { DontCare, Store };
 
@@ -118,26 +137,14 @@ public:
     virtual void dispatch(glm::uvec3 groups) = 0;
     /** Clear a color target before a pass with no geometry to render. */
     virtual void clearColor(IImage &image, glm::vec4 color) = 0;
-    /** Make freshly uploaded scene sources readable by the merge compute pass. */
-    virtual void makeGpuSceneSourcesAvailable(const IBuffer &vertices,
-                                              const IBuffer &indices) = 0;
-    /** Publish merge-compute output to every scene geometry consumer. */
-    virtual void publishMergedScene() = 0;
+    virtual void bufferBarrier(IBuffer &buffer, BufferUse from, BufferUse to) = 0;
+    virtual void imageBarrier(IImage &image, ImageUse from, ImageUse to) = 0;
     /** Build this frame's scene-wide tracing structure over merged geometry. */
     virtual void buildSceneTracingStructure(ITracingStructure &structure,
                                             const SceneTracingGeometry &geometry) = 0;
     /** Trace a ray grid against this frame's scene-wide tracing structure. */
     virtual void traceRays(Pipeline pipeline, ITracingStructure &structure,
                            glm::uvec2 extent) = 0;
-    /** Make trace storage writes available to denoising reads. */
-    virtual void publishTraceOutputForDenoising() = 0;
-    /** Make the composite's storage writes available to the upscaler. */
-    virtual void publishCompositeForUpscaling() = 0;
-    /** Return the upscaler's sampled inputs to storage-write use next frame. */
-    virtual void restoreUpscalerInputsForNextFrame(IImage &color, IImage &depth,
-                                                   IImage &motion) = 0;
-    /** Make the upscaler's HDR output available to the tone-map pass. */
-    virtual void publishUpscaledFrameForTonemapping() = 0;
 };
 
 } // namespace graphics

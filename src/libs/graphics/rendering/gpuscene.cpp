@@ -175,7 +175,7 @@ void GpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
         // going through vertex input, so there is one declaration of the vertex
         // layout instead of two and no format plumbing in the pipeline key.
         // Indices still bind as indices, which keeps the post-transform cache.
-        frame.geometry->initMergedGeometry(vertexBytes + indexBytes + materialIdBytes);
+        frame.geometry->initDeviceLocalStorage(vertexBytes + indexBytes + materialIdBytes);
     }
     const auto proceduralQuadCapacity =
         grownCapacity(frame.proceduralQuadCapacity, proceduralQuadCount, 64);
@@ -389,9 +389,9 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
 
     {
         R_PROFILE_ZONE("GpuScene::command recording");
-        const auto *sourceVertices =
+        auto *sourceVertices =
             _sourceVertices ? _sourceVertices.get() : frame.proceduralQuads.get();
-        const auto *sourceIndices =
+        auto *sourceIndices =
             _sourceIndices ? _sourceIndices.get() : frame.proceduralQuads.get();
         std::array<BufferView, 11> buffers {{{frame.scene.get(), 0, sceneObjectBytes},
                                               {frame.scene.get(), sceneObjectBytes, sceneBoneBytes},
@@ -408,7 +408,10 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
                                               {_grassFaces.get(), 0, _grassFaces->size()},
                                               {frame.grassRanges.get(), 0,
                                                frame.grassRanges->size()}}};
-        commandBuffer.makeGpuSceneSourcesAvailable(*sourceVertices, *sourceIndices);
+        commandBuffer.bufferBarrier(*sourceVertices, BufferUse::TransferWrite,
+                                    BufferUse::ComputeRead);
+        commandBuffer.bufferBarrier(*sourceIndices, BufferUse::TransferWrite,
+                                    BufferUse::ComputeRead);
         _mergePipeline->merge(commandBuffer, {buffers.data(), static_cast<uint32_t>(buffers.size()),
                                                static_cast<uint32_t>(_context->frameIndex()),
                                                static_cast<uint32_t>(upload.objects.size()),
@@ -417,7 +420,12 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
                                                static_cast<uint32_t>(triangleCount),
                                                static_cast<uint32_t>(opaqueTriangleCount),
                                                upload.cameraPosition});
-        commandBuffer.publishMergedScene();
+        commandBuffer.bufferBarrier(*frame.geometry, BufferUse::ComputeWrite,
+                                    BufferUse::AccelerationStructureBuildRead);
+        commandBuffer.bufferBarrier(*frame.geometry, BufferUse::ComputeWrite,
+                                    BufferUse::ShaderRead);
+        commandBuffer.bufferBarrier(*frame.geometry, BufferUse::ComputeWrite,
+                                    BufferUse::IndexRead);
     }
 
     const uint64_t writtenVertexBytes =

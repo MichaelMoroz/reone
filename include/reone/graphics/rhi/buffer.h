@@ -32,8 +32,8 @@ public:
     virtual void initHostVisibleStorage(uint64_t size) = 0;
     /** Immutable storage consumed by the scene merge compute pass. */
     virtual void initDeviceStorage(uint64_t size, const void *data) = 0;
-    /** Storage written by the merge and consumed as scene geometry. */
-    virtual void initMergedGeometry(uint64_t size) = 0;
+    /** Device-local storage whose contents will be written by the GPU. */
+    virtual void initDeviceLocalStorage(uint64_t size) = 0;
     /** Host-visible storage written by the GPU and read by the CPU next frame. */
     virtual void initHostVisibleReadback(uint64_t size) = 0;
     /** Replace a range of immutable storage before the next merge. */

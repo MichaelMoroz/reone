@@ -43,7 +43,7 @@ void VulkanBuffer::initDeviceStorage(uint64_t size, const void *data) {
     initDeviceLocal(static_cast<VkDeviceSize>(size), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, data);
 }
 
-void VulkanBuffer::initMergedGeometry(uint64_t size) {
+void VulkanBuffer::initDeviceLocalStorage(uint64_t size) {
     initDeviceLocal(static_cast<VkDeviceSize>(size),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |

@@ -76,18 +76,12 @@ public:
                                  uint32_t size) override;
     void dispatch(glm::uvec3 groups) override;
     void clearColor(IImage &image, glm::vec4 color) override;
-    void makeGpuSceneSourcesAvailable(const IBuffer &vertices,
-                                      const IBuffer &indices) override;
-    void publishMergedScene() override;
+    void bufferBarrier(IBuffer &buffer, BufferUse from, BufferUse to) override;
+    void imageBarrier(IImage &image, ImageUse from, ImageUse to) override;
     void buildSceneTracingStructure(ITracingStructure &structure,
                                     const SceneTracingGeometry &geometry) override;
     void traceRays(Pipeline pipeline, ITracingStructure &structure,
                    glm::uvec2 extent) override;
-    void publishTraceOutputForDenoising() override;
-    void publishCompositeForUpscaling() override;
-    void restoreUpscalerInputsForNextFrame(IImage &color, IImage &depth,
-                                           IImage &motion) override;
-    void publishUpscaledFrameForTonemapping() override;
 
     VkCommandBuffer handle() const { return _commandBuffer; }
 

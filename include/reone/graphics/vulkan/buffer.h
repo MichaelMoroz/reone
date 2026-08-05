@@ -69,7 +69,7 @@ public:
     void uploadDeviceLocal(VkDeviceSize offset, VkDeviceSize size, const void *data);
     void initHostVisibleStorage(uint64_t size) override;
     void initDeviceStorage(uint64_t size, const void *data) override;
-    void initMergedGeometry(uint64_t size) override;
+    void initDeviceLocalStorage(uint64_t size) override;
     void initHostVisibleReadback(uint64_t size) override;
     void uploadDeviceStorage(uint64_t offset, uint64_t size, const void *data) override;
 
