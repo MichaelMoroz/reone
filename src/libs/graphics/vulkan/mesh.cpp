@@ -17,6 +17,8 @@
 
 #include "reone/graphics/vulkan/mesh.h"
 
+#include "reone/graphics/vulkan/commandbuffer.h"
+
 #include "reone/graphics/vulkan/device.h"
 
 #include "reone/system/logutil.h"
@@ -129,12 +131,13 @@ void VulkanMesh::deinit() {
     _indexCount = 0;
 }
 
-void VulkanMesh::draw(VkCommandBuffer cmd, VkBuffer zeros, int instances) const {
+void VulkanMesh::draw(ICommandBuffer &commandBuffer, VkBuffer zeros, int instances) const {
+    const auto &nativeCommandBuffer = toVulkanCommandBuffer(commandBuffer);
     VkBuffer buffers[] {_vertexBuffer.handle(), zeros};
     VkDeviceSize offsets[] {0, 0};
-    vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
-    vkCmdBindIndexBuffer(cmd, _indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT16);
-    vkCmdDrawIndexed(cmd, _indexCount, static_cast<uint32_t>(instances), 0, 0, 0);
+    vkCmdBindVertexBuffers(nativeCommandBuffer.handle(), 0, 2, buffers, offsets);
+    vkCmdBindIndexBuffer(nativeCommandBuffer.handle(), _indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexed(nativeCommandBuffer.handle(), _indexCount, static_cast<uint32_t>(instances), 0, 0, 0);
 }
 
 } // namespace graphics

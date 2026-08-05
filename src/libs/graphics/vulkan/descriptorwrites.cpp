@@ -48,6 +48,20 @@ void DescriptorWriteBuilder::writeImage(VkDescriptorSet set, DescriptorBinding b
     _writes.push_back(write);
 }
 
+void DescriptorWriteBuilder::writeStorageImage(DescriptorSet set, DescriptorBinding binding,
+                                                ImageView view, uint32_t arrayElement) {
+    writeImage(toVulkanDescriptorSet(set), binding,
+               {VK_NULL_HANDLE, toVulkanImageView(view), VK_IMAGE_LAYOUT_GENERAL}, arrayElement);
+}
+
+void DescriptorWriteBuilder::writeSampledImage(DescriptorSet set, DescriptorBinding binding,
+                                                Sampler sampler, ImageView view,
+                                                uint32_t arrayElement) {
+    writeImage(toVulkanDescriptorSet(set), binding,
+               {toVulkanSampler(sampler), toVulkanImageView(view),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, arrayElement);
+}
+
 void DescriptorWriteBuilder::writeBuffer(VkDescriptorSet set, DescriptorBinding binding,
                                          const VkDescriptorBufferInfo &info, uint32_t arrayElement) {
     if (!isBufferDescriptor(binding.type)) {

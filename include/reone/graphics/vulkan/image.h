@@ -180,6 +180,9 @@ public:
 
     /** One face of a cube, suitable for a per-face dynamic-rendering pass. */
     VkImageView faceRenderView(int cube, int face, int mip = 0);
+    ImageView faceAttachmentView(int cube, int face, int mip = 0) override {
+        return toImageView(faceRenderView(cube, face, mip));
+    }
 
     int mipLevels() const override { return _mipLevels; }
 
@@ -196,6 +199,13 @@ public:
                             int layers,
                             bool cube,
                             const void *data);
+    void initSampledLayered(glm::ivec2 extent,
+                            Format format,
+                            int layers,
+                            bool cube,
+                            const void *data) {
+        initSampledLayered(extent, toVulkanFormat(format), layers, cube, data);
+    }
 
     /**
      * A sampled array or cube image, each layer filled from its own pixels.
@@ -252,6 +262,7 @@ public:
      * and carried here. Not owned; VulkanSamplers caches and destroys them.
      */
     VkSampler sampler() const { return _sampler; }
+    Sampler sampleSampler() const override { return toSampler(_sampler); }
     void setSampler(VkSampler sampler) { _sampler = sampler; }
     void setSampler(Sampler sampler) override { _sampler = toVulkanSampler(sampler); }
     glm::ivec2 extent() const { return _extent; }

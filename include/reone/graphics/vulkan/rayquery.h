@@ -35,10 +35,10 @@ public:
 
     void init();
     void deinit();
-    bool bakeSkyRoom(VkCommandBuffer cmd, const RayQuerySkyRoom &room);
+    bool bakeSkyRoom(ICommandBuffer &commandBuffer, const RayQuerySkyRoom &room);
     void clearSkyRoom();
-    void render(VkCommandBuffer cmd, uint32_t globalsOffset,
-                VulkanImage &output, const glm::mat4 &view,
+    void render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
+                IImage &output, const glm::mat4 &view,
                 const glm::mat4 &projection, const glm::vec4 &jitter,
                 RayQuerySubmission submission, VulkanGpuScene &deviceGpuScene,
                 bool skyBaked);

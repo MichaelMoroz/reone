@@ -31,10 +31,13 @@ public:
     virtual void initCubeArrayAttachment(glm::ivec2 faceExtent, Format format,
                                          int cubes, int mips) = 0;
     virtual ImageView attachmentView(int cube, int mip) = 0;
+    /** One cube face used as a color attachment in a per-face pass. */
+    virtual ImageView faceAttachmentView(int cube, int face, int mip = 0) = 0;
     virtual void setSampler(Sampler sampler) = 0;
     virtual void deinit() = 0;
 
     virtual ImageView sampleView() const = 0;
+    virtual Sampler sampleSampler() const = 0;
     virtual Format pixelFormat() const = 0;
     virtual glm::ivec2 extent() const = 0;
     virtual int mipLevels() const = 0;

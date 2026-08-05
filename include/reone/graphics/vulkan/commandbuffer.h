@@ -26,10 +26,20 @@ public:
 
     void transitionImage(IImage &image, ImageLayout to) override;
     void bindPipeline(Pipeline pipeline) override;
+    void bindComputePipeline(Pipeline pipeline) override;
+    void bindRayTracingPipeline(Pipeline pipeline) override;
     void bindDescriptorSet(PipelineLayout layout, uint32_t index,
                            DescriptorSet set,
                            const uint32_t *dynamicOffsets,
                            uint32_t dynamicOffsetCount) override;
+    void bindComputeDescriptorSet(PipelineLayout layout, uint32_t index,
+                                  DescriptorSet set,
+                                  const uint32_t *dynamicOffsets,
+                                  uint32_t dynamicOffsetCount) override;
+    void bindRayTracingDescriptorSet(PipelineLayout layout, uint32_t index,
+                                     DescriptorSet set,
+                                     const uint32_t *dynamicOffsets,
+                                     uint32_t dynamicOffsetCount) override;
     void draw(uint32_t vertexCount, uint32_t instanceCount) override;
     void setScissor(glm::ivec2 offset, glm::uvec2 extent) override;
     void beginRendering(glm::ivec2 extent,
@@ -42,6 +52,12 @@ public:
     void drawIndexed(uint32_t indexCount, uint32_t firstIndex) override;
     void pushFragmentConstants(PipelineLayout layout, const void *data,
                                uint32_t size) override;
+    void pushComputeConstants(PipelineLayout layout, const void *data,
+                              uint32_t size) override;
+    void pushRayTracingConstants(PipelineLayout layout, const void *data,
+                                 uint32_t size) override;
+    void dispatch(glm::uvec3 groups) override;
+    void clearColor(IImage &image, glm::vec4 color) override;
     void makeGpuSceneSourcesAvailable(const IBuffer &vertices,
                                       const IBuffer &indices) override;
     void publishMergedScene() override;
@@ -49,6 +65,11 @@ public:
                                     const SceneTracingGeometry &geometry) override;
     void traceRays(Pipeline pipeline, ITracingStructure &structure,
                    glm::uvec2 extent) override;
+    void publishTraceOutputForDenoising() override;
+    void publishCompositeForUpscaling() override;
+    void restoreUpscalerInputsForNextFrame(IImage &color, IImage &depth,
+                                           IImage &motion) override;
+    void publishUpscaledFrameForTonemapping() override;
 
     VkCommandBuffer handle() const { return _commandBuffer; }
 

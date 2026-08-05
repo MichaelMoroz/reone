@@ -97,7 +97,7 @@ void VulkanRayQuery::init() {
     // in the shader, but this black cube keeps the descriptor type valid.
     const float black[4] {0.0f, 0.0f, 0.0f, 1.0f};
     _skyFallbackCube = std::make_unique<VulkanImage>(device);
-    _skyFallbackCube->initSampledLayered({1, 1}, VK_FORMAT_R16G16B16A16_SFLOAT,
+    _skyFallbackCube->initSampledLayered({1, 1}, Format::R16G16B16A16Sfloat,
                                          kNumCubeFaces, true, black);
     _skyFallbackCube->setSampler(
         _renderer.resources().samplers().get(getTextureProperties(TextureUsage::ColorBuffer)));
@@ -112,7 +112,6 @@ void VulkanRayQuery::init() {
         for (uint32_t i = 0; i < kNumAuxImages; ++i) {
             auxBindings.push_back({{i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR});
         }
-        VkPushConstantRange pushConstants {VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, sizeof(TracePushConstants)};
         VulkanPipeline::Config pipelineConfig;
         pipelineConfig.type = VulkanPipeline::Config::Type::RayTracing;
         pipelineConfig.spirv = _renderer.shaderModule("rayquery");
@@ -121,35 +120,35 @@ void VulkanRayQuery::init() {
                                          {VK_NULL_HANDLE, std::move(bindings), 2,
                                           VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT},
                                          {VK_NULL_HANDLE, std::move(auxBindings), 2}};
-        pipelineConfig.pushConstants = {pushConstants};
+        pipelineConfig.pushConstantSize = sizeof(TracePushConstants);
         _pipeline = std::make_unique<VulkanPipeline>(device);
         _pipeline->init(pipelineConfig);
         // Formats mirror the shader's declarations; normal/roughness rides
         // RGBA16F, the FP form NRD's RGBA16_SNORM encoding accepts.
-        static constexpr VkFormat kAuxFormats[kNumAuxImages] {
-            VK_FORMAT_R16G16B16A16_SFLOAT, // diffuse radiance + hit dist
-            VK_FORMAT_R16G16B16A16_SFLOAT, // specular radiance + hit dist
-            VK_FORMAT_R16G16B16A16_SFLOAT, // normal + roughness
-            VK_FORMAT_R32_SFLOAT,          // viewZ
-            VK_FORMAT_R16G16B16A16_SFLOAT, // motion
-            VK_FORMAT_R16G16B16A16_SFLOAT, // noise-free
-            VK_FORMAT_R16G16B16A16_SFLOAT, // diffuse material factor
-            VK_FORMAT_R32_SFLOAT,          // device depth, for the upscaler
-            VK_FORMAT_R16G16B16A16_SFLOAT, // screen-space motion, for the upscaler
-            VK_FORMAT_R16G16B16A16_SFLOAT, // specular material factor
-            VK_FORMAT_R8G8B8A8_UNORM,      // canonical raster/tracer diffuse
-            VK_FORMAT_R8G8B8A8_UNORM,      // canonical packed eye normal
-            VK_FORMAT_R32_SFLOAT,          // canonical positive linear view depth
-            VK_FORMAT_R16G16_SFLOAT,       // canonical current-minus-previous UV motion
+        static constexpr Format kAuxFormats[kNumAuxImages] {
+            Format::R16G16B16A16Sfloat, // diffuse radiance + hit dist
+            Format::R16G16B16A16Sfloat, // specular radiance + hit dist
+            Format::R16G16B16A16Sfloat, // normal + roughness
+            Format::R32Sfloat,          // viewZ
+            Format::R16G16B16A16Sfloat, // motion
+            Format::R16G16B16A16Sfloat, // noise-free
+            Format::R16G16B16A16Sfloat, // diffuse material factor
+            Format::R32Sfloat,          // device depth, for the upscaler
+            Format::R16G16B16A16Sfloat, // screen-space motion, for the upscaler
+            Format::R16G16B16A16Sfloat, // specular material factor
+            Format::R8G8B8A8Unorm,      // canonical raster/tracer diffuse
+            Format::R8G8B8A8Unorm,      // canonical packed eye normal
+            Format::R32Sfloat,          // canonical positive linear view depth
+            Format::R16G16Sfloat,       // canonical current-minus-previous UV motion
         };
         DescriptorWriteBuilder auxWrites(device.handle());
         for (int frame = 0; frame < 2; ++frame) {
             for (int i = 0; i < kNumAuxImages; ++i) {
                 auto image = std::make_unique<VulkanImage>(device);
                 image->initColorAttachment(_extent, kAuxFormats[i]);
-                auxWrites.writeImage(_pipeline->descriptorSet(2, frame),
-                                     {static_cast<uint32_t>(i), VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
-                                     {VK_NULL_HANDLE, image->view(), VK_IMAGE_LAYOUT_GENERAL});
+                auxWrites.writeStorageImage(_pipeline->descriptorSetHandle(2, frame),
+                                             {static_cast<uint32_t>(i), VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                                             image->sampleView());
                 _auxImages[frame][i] = std::move(image);
             }
         }
@@ -197,7 +196,7 @@ void VulkanRayQuery::init() {
             compositeConfig.computeEntry = "main";
             compositeConfig.descriptorSets = {{_renderer.descriptors().uniformLayout()},
                                               {VK_NULL_HANDLE, std::move(compositeBindings), 2}};
-            compositeConfig.pushConstants = {{VK_SHADER_STAGE_COMPUTE_BIT, 0, 3 * sizeof(uint32_t)}};
+            compositeConfig.pushConstantSize = 3 * sizeof(uint32_t);
             _compositePipeline = std::make_unique<VulkanPipeline>(device);
             _compositePipeline->init(compositeConfig);
         } else {
@@ -210,9 +209,9 @@ void VulkanRayQuery::init() {
         // Both at render resolution: NativeAA does not change the size, and the
         // composite/tonemap pair either side of FSR work on the same grid.
         _fsrColor = std::make_unique<VulkanImage>(device);
-        _fsrColor->initColorAttachment(_extent, VK_FORMAT_R16G16B16A16_SFLOAT);
+        _fsrColor->initColorAttachment(_extent, Format::R16G16B16A16Sfloat);
         _fsrOutput = std::make_unique<VulkanImage>(device);
-        _fsrOutput->initColorAttachment(_extent, VK_FORMAT_R16G16B16A16_SFLOAT);
+        _fsrOutput->initColorAttachment(_extent, Format::R16G16B16A16Sfloat);
 
         std::vector<VulkanPipeline::LayoutBinding> tonemapBindings;
         for (uint32_t i = 0; i < 2; ++i) {
@@ -224,7 +223,7 @@ void VulkanRayQuery::init() {
         tonemapConfig.computeEntry = "main";
         tonemapConfig.descriptorSets = {{_renderer.descriptors().uniformLayout()},
                                         {VK_NULL_HANDLE, std::move(tonemapBindings), 2}};
-        tonemapConfig.pushConstants = {{VK_SHADER_STAGE_COMPUTE_BIT, 0, 2 * sizeof(uint32_t)}};
+        tonemapConfig.pushConstantSize = 2 * sizeof(uint32_t);
         _tonemapPipeline = std::make_unique<VulkanPipeline>(device);
         _tonemapPipeline->init(tonemapConfig);
 
@@ -249,7 +248,7 @@ void VulkanRayQuery::clearFrame(Frame &frame) {
     frame.traceStats.reset();
 }
 
-bool VulkanRayQuery::bakeSkyRoom(VkCommandBuffer cmd,
+bool VulkanRayQuery::bakeSkyRoom(ICommandBuffer &commandBuffer,
                                  const RayQuerySkyRoom &room) {
     // A failed bake is deliberately sticky for this detected room: the fallback
     // cube is stable, and retrying a known-invalid asset every frame would turn
@@ -268,7 +267,7 @@ bool VulkanRayQuery::bakeSkyRoom(VkCommandBuffer cmd,
     auto &descriptors = _renderer.descriptors();
     if (!_skyCube) {
         _skyCube = std::make_unique<VulkanImage>(device);
-        _skyCube->initCubeArrayAttachment({kSkyCubeSize, kSkyCubeSize}, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1);
+        _skyCube->initCubeArrayAttachment({kSkyCubeSize, kSkyCubeSize}, Format::R16G16B16A16Sfloat, 1, 1);
         _skyCube->setSampler(
             resources.samplers().get(getTextureProperties(TextureUsage::ColorBuffer)));
         device.setObjectName(VK_OBJECT_TYPE_IMAGE,
@@ -278,18 +277,15 @@ bool VulkanRayQuery::bakeSkyRoom(VkCommandBuffer cmd,
     if (createDepth) {
         for (auto &depth : _skyDepth) {
             depth = std::make_unique<VulkanImage>(device);
-            depth->initDepth({kSkyCubeSize, kSkyCubeSize}, VK_FORMAT_D32_SFLOAT);
+            depth->initDepthAttachment({kSkyCubeSize, kSkyCubeSize}, Format::D32Sfloat);
         }
     }
 
-    _skyCube->transitionTo(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    commandBuffer.transitionImage(*_skyCube, ImageLayout::ColorAttachment);
     if (createDepth) {
-        std::vector<VulkanImage *> depthImages;
-        depthImages.reserve(kNumCubeFaces);
         for (int face = 0; face < kNumCubeFaces; ++face) {
-            depthImages.push_back(_skyDepth[face].get());
+            commandBuffer.transitionImage(*_skyDepth[face], ImageLayout::DepthAttachment);
         }
-        VulkanImage::transitionTo(cmd, depthImages, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
     }
 
     static const glm::vec3 kDirections[kNumCubeFaces] {
@@ -324,30 +320,30 @@ bool VulkanRayQuery::bakeSkyRoom(VkCommandBuffer cmd,
         std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
         offsets[UniformBlockBindingPoints::globals] = ring.push(globals);
 
-        VkClearValue colorClear {};
-        colorClear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-        VkClearValue depthClear {};
-        depthClear.depthStencil = {1.0f, 0};
-        RenderPassScope rendering(
-            cmd, {kSkyCubeSize, kSkyCubeSize},
-            {{_skyCube->faceRenderView(0, face),
-              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-              VK_ATTACHMENT_LOAD_OP_CLEAR,
-              VK_ATTACHMENT_STORE_OP_STORE,
-              colorClear}},
-            RenderPassAttachment {_skyDepth[face]->view(),
-                                  VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                                  VK_ATTACHMENT_LOAD_OP_CLEAR,
-                                  VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                                  depthClear});
+        ClearValue colorClear;
+        colorClear.color = {0.0f, 0.0f, 0.0f, 1.0f};
+        const RenderAttachment color {_skyCube->faceAttachmentView(0, face),
+                                      ImageLayout::ColorAttachment,
+                                      AttachmentLoad::Clear,
+                                      AttachmentStore::Store,
+                                      colorClear};
+        ClearValue depthClear;
+        depthClear.depth = 1.0f;
+        depthClear.depthOnly = true;
+        const RenderAttachment depth {_skyDepth[face]->sampleView(),
+                                      ImageLayout::DepthAttachment,
+                                      AttachmentLoad::Clear,
+                                      AttachmentStore::DontCare,
+                                      depthClear};
+        commandBuffer.beginRendering({kSkyCubeSize, kSkyCubeSize}, {color}, &depth, 0, false);
         for (const auto &mesh : room.meshes) {
-            const auto &vkMesh = resources.get(*mesh.mesh);
+            const auto &skyMesh = resources.get(*mesh.mesh);
             VulkanPipelineCache::Key key;
             key.module = "sky";
             key.vertexEntry = "skyVertex";
             key.fragmentEntry = "skyFragment";
-            key.colorFormats = {_skyCube->format()};
-            key.depthFormat = VK_FORMAT_D32_SFLOAT;
+            key.colorFormats = {toVulkanFormat(_skyCube->pixelFormat())};
+            key.depthFormat = toVulkanFormat(Format::D32Sfloat);
             key.depthTest = true;
             key.depthWrite = true;
             key.cull = FaceCullMode::None;
@@ -368,19 +364,22 @@ bool VulkanRayQuery::bakeSkyRoom(VkCommandBuffer cmd,
             locals.prevModel = mesh.prevTransform;
             locals.uv = mesh.uv;
             offsets[UniformBlockBindingPoints::locals] = ring.push(locals);
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
-                                    VulkanDescriptors::kUniformSet, 1, &uniformSet,
-                                    static_cast<uint32_t>(offsets.size()), offsets.data());
+            commandBuffer.bindPipeline(toPipeline(pipeline.handle()));
+            commandBuffer.bindDescriptorSet(toPipelineLayout(pipeline.layout()),
+                                            VulkanDescriptors::kUniformSet,
+                                            toDescriptorSet(uniformSet),
+                                            offsets.data(), static_cast<uint32_t>(offsets.size()));
             auto textureSet = descriptors.acquireTextureSet(
                 _renderer.frameIndex(), {{TextureUnits::mainTex, &resources.get(*mesh.texture)}});
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
-                                    VulkanDescriptors::kTextureSet, 1, &textureSet, 0, nullptr);
-            vkMesh.draw(cmd, resources.zeroBuffer());
+            commandBuffer.bindDescriptorSet(toPipelineLayout(pipeline.layout()),
+                                            VulkanDescriptors::kTextureSet,
+                                            toDescriptorSet(textureSet), nullptr, 0);
+            skyMesh.draw(commandBuffer, resources.zeroBuffer());
         }
+        commandBuffer.endRendering();
     }
 
-    _skyCube->transitionTo(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    commandBuffer.transitionImage(*_skyCube, ImageLayout::ShaderRead);
     _skyCubeReady = true;
     info("Vulkan: baked sky room '" + room.name + "' into a " + std::to_string(kSkyCubeSize) + "px cubemap",
          LogChannel::Graphics);
@@ -484,13 +483,14 @@ std::vector<VulkanRayQuery::Channel> VulkanRayQuery::channels() {
     return result;
 }
 
-void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
-                            VulkanImage &output,
+void VulkanRayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
+                            IImage &output,
                             const glm::mat4 &view, const glm::mat4 &projection,
                             const glm::vec4 &jitter,
                             RayQuerySubmission submission, VulkanGpuScene &deviceGpuScene,
                             bool skyBaked) {
     R_PROFILE_ZONE("VulkanRayQuery::render");
+    const auto nativeCommandBuffer = toVulkanCommandBuffer(commandBuffer).handle();
     const int frameIndex = _renderer.frameIndex();
     // A valid traced frame can contain no merged geometry. That path clears
     // the output and returns below, but its auxiliary images are still useful
@@ -525,14 +525,9 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
     _lastGrass = submission.grass;
     _lastParticles = submission.particles;
     _lastBillboards = submission.billboards;
-    const auto scene = deviceGpuScene.update(_renderer.recordingCommandBuffer(), submission.upload);
+    const auto scene = deviceGpuScene.update(commandBuffer, submission.upload);
     if (!scene.vertices.buffer) {
-        VkClearColorValue clear {{0.02f, 0.03f, 0.06f, 1.0f}};
-        VkImageSubresourceRange range {};
-        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        range.levelCount = 1;
-        range.layerCount = 1;
-        vkCmdClearColorImage(cmd, output.handle(), VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
+        commandBuffer.clearColor(output, {0.02f, 0.03f, 0.06f, 1.0f});
         return;
     }
     _lastInstances = 1;
@@ -548,7 +543,7 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
         if (!frame.tracingStructure) {
             frame.tracingStructure = std::make_unique<VulkanTracingStructure>(device);
         }
-        _renderer.recordingCommandBuffer().buildSceneTracingStructure(
+        commandBuffer.buildSceneTracingStructure(
             *frame.tracingStructure,
             {scene.vertices, scene.indices, scene.vertexCount,
              scene.opaqueTriangleCount, scene.triangleCount});
@@ -556,8 +551,8 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
 
     const auto set = _pipeline->descriptorSet(1, _renderer.frameIndex());
     DescriptorWriteBuilder writes(device.handle());
-    writes.writeImage(set, {0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
-                      {VK_NULL_HANDLE, output.view(), VK_IMAGE_LAYOUT_GENERAL});
+    writes.writeStorageImage(toDescriptorSet(set), {0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                             output.sampleView());
     writes.writeAccelerationStructure(
         set, {1, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}, frame.tracingStructure->handle());
     writes.writeBuffer(set, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
@@ -573,9 +568,9 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
     writes.apply();
     const VulkanImage &skyImage = skyBaked ? *_skyCube : *_skyFallbackCube;
     DescriptorWriteBuilder skyWrite(device.handle());
-    skyWrite.writeImage(set, {9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-                        {skyImage.sampler(), skyBaked ? _skyCube->cubeView(0) : _skyFallbackCube->view(),
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    skyWrite.writeSampledImage(toDescriptorSet(set), {9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                               skyImage.sampleSampler(),
+                               skyBaked ? toImageView(_skyCube->cubeView(0)) : _skyFallbackCube->sampleView());
     skyWrite.apply();
     // Texture ids are assigned by VulkanResources at upload time. The set is
     // update-after-bind and partially-bound so new assets can take a slot
@@ -586,8 +581,9 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
         if (id >= _bindlessTextureCapacity) {
             throw std::runtime_error("Vulkan: ray-query bindless texture array exhausted");
         }
-        textureWrites.writeImage(set, {7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-                                 {texture->sampler(), texture->view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, id);
+        textureWrites.writeSampledImage(toDescriptorSet(set),
+                                        {7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                                        texture->sampleSampler(), texture->sampleView(), id);
     }
     textureWrites.apply();
     const auto uploadedTextureArrays = _renderer.resources().uploadedTextureArrays();
@@ -596,34 +592,32 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
         if (id >= _bindlessTextureCapacity) {
             throw std::runtime_error("Vulkan: ray-query bindless texture array exhausted");
         }
-        textureArrayWrites.writeImage(set, {8, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-                                      {texture->sampler(), texture->view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, id);
+        textureArrayWrites.writeSampledImage(toDescriptorSet(set),
+                                             {8, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                                             texture->sampleSampler(), texture->sampleView(), id);
     }
     textureArrayWrites.apply();
     _lastBindlessTextureCount = static_cast<uint32_t>(uploadedTextures.size());
     {
         // Every aux image lives in GENERAL. The tracked transition is a no-op
         // after the first traced frame while retaining the one dependency.
-        std::vector<VulkanImage *> auxImages;
-        auxImages.reserve(2 * kNumAuxImages);
         for (int frameIndex = 0; frameIndex < 2; ++frameIndex) {
             for (int i = 0; i < kNumAuxImages; ++i) {
-                auxImages.push_back(_auxImages[frameIndex][i].get());
+                commandBuffer.transitionImage(*_auxImages[frameIndex][i], ImageLayout::General);
             }
         }
-        VulkanImage::transitionTo(cmd, auxImages, VK_IMAGE_LAYOUT_GENERAL);
     }
     std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
     offsets[0] = globalsOffset;
     auto uniformSet = _renderer.uniformSet();
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipeline->handle());
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipeline->layout(), 0, 1, &uniformSet,
-                            static_cast<uint32_t>(offsets.size()), offsets.data());
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipeline->layout(),
-                            1, 1, &set, 0, nullptr);
-    const auto auxSet = _pipeline->descriptorSet(2, _renderer.frameIndex());
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipeline->layout(), 2, 1,
-                            &auxSet, 0, nullptr);
+    commandBuffer.bindRayTracingPipeline(_pipeline->pipeline());
+    commandBuffer.bindRayTracingDescriptorSet(_pipeline->pipelineLayout(), 0,
+                                              toDescriptorSet(uniformSet), offsets.data(),
+                                              static_cast<uint32_t>(offsets.size()));
+    commandBuffer.bindRayTracingDescriptorSet(_pipeline->pipelineLayout(), 1,
+                                              toDescriptorSet(set), nullptr, 0);
+    const auto auxSet = _pipeline->descriptorSetHandle(2, _renderer.frameIndex());
+    commandBuffer.bindRayTracingDescriptorSet(_pipeline->pipelineLayout(), 2, auxSet, nullptr, 0);
     // Clamped rather than trusted: the option is user-editable in reone.cfg
     // and a zero would divide the accumulated radiance by zero.
     TracePushConstants constants {_frameNumber,
@@ -644,32 +638,24 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
                                   0,
                                   scene.opaqueTriangleCount,
                                   skyBaked ? 1u : 0u};
-    vkCmdPushConstants(cmd, _pipeline->layout(), VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, sizeof(constants), &constants);
+    commandBuffer.pushRayTracingConstants(_pipeline->pipelineLayout(), &constants, sizeof(constants));
     {
         R_PROFILE_ZONE("VulkanRayQuery::dispatch record");
-        _renderer.recordingCommandBuffer().traceRays(
-            toPipeline(_pipeline->handle()), *frame.tracingStructure,
+        commandBuffer.traceRays(
+            _pipeline->pipeline(), *frame.tracingStructure,
             {static_cast<uint32_t>(_extent.x), static_cast<uint32_t>(_extent.y)});
     }
 #ifdef R_ENABLE_NRD
     if (_nrdDenoiser) {
         // The trace pass's storage writes feed NRD's sampled reads.
-        VkMemoryBarrier2 traceToDenoise {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-        traceToDenoise.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-        traceToDenoise.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        traceToDenoise.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        traceToDenoise.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-        VkDependencyInfo traceDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        traceDependency.memoryBarrierCount = 1;
-        traceDependency.pMemoryBarriers = &traceToDenoise;
-        vkCmdPipelineBarrier2(cmd, &traceDependency);
+        commandBuffer.publishTraceOutputForDenoising();
         const auto &aux = _auxImages[_renderer.frameIndex()];
         NrdDenoiser::Inputs inputs;
-        inputs.diffRadianceHitDist = aux[0]->view();
-        inputs.specRadianceHitDist = aux[1]->view();
-        inputs.normalRoughness = aux[2]->view();
-        inputs.viewZ = aux[3]->view();
-        inputs.motion = aux[4]->view();
+        inputs.diffRadianceHitDist = toVulkanImageView(aux[0]->sampleView());
+        inputs.specRadianceHitDist = toVulkanImageView(aux[1]->sampleView());
+        inputs.normalRoughness = toVulkanImageView(aux[2]->sampleView());
+        inputs.viewZ = toVulkanImageView(aux[3]->sampleView());
+        inputs.motion = toVulkanImageView(aux[4]->sampleView());
         // The projection arrives carrying the TAA jitter (applied as a clip
         // translate); NRD is owed the unjittered matrix and the sub-pixel
         // offset separately, the latter in pixels with UV-down y.
@@ -693,7 +679,7 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
         tuning.antiFirefly = _options.ptNrdAntiFirefly;
         const bool restartHistory = _frameNumber == 0 || _restartHistoryRequested;
         _restartHistoryRequested = false;
-        _nrdDenoiser->denoise(cmd, _renderer.frameIndex(), inputs, tuning, view, unjitteredProjection,
+        _nrdDenoiser->denoise(nativeCommandBuffer, _renderer.frameIndex(), inputs, tuning, view, unjitteredProjection,
                               jitterPixels, _frameNumber, restartHistory);
         if (_options.ptDenoise && _options.ptDebugView == 0) {
             // The noise-free history resets whenever NRD's would: first
@@ -719,33 +705,33 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
 #ifdef R_ENABLE_FSR
             fsrActive = _fsr && _fsr->inited();
 #endif
-            VkImageView compositeTarget = output.view();
+            ImageView compositeTarget = output.sampleView();
 #ifdef R_ENABLE_FSR
             if (fsrActive) {
-                VulkanImage::transitionTo(cmd,
-                                          std::vector<VulkanImage *> {_fsrColor.get(), _fsrOutput.get()},
-                                          VK_IMAGE_LAYOUT_GENERAL);
-                compositeTarget = _fsrColor->view();
+                commandBuffer.transitionImage(*_fsrColor, ImageLayout::General);
+                commandBuffer.transitionImage(*_fsrOutput, ImageLayout::General);
+                compositeTarget = _fsrColor->sampleView();
             }
 #endif
             // Motion is not among them: it existed only for the removed TAA's
             // reprojection. NRD still consumes it directly.
             constexpr uint32_t kCompositeBindings = 9;
-            std::array<VkDescriptorImageInfo, kCompositeBindings> compositeImages {{
-                {VK_NULL_HANDLE, compositeTarget, VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, aux[5]->view(), VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, aux[6]->view(), VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, aux[9]->view(), VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, _nrdDenoiser->denoisedDiffuse().view(), VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, _nrdDenoiser->denoisedSpecular().view(), VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, aux[3]->view(), VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, aux[0]->view(), VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, aux[1]->view(), VK_IMAGE_LAYOUT_GENERAL},
+            const std::array<ImageView, kCompositeBindings> compositeImages {{
+                compositeTarget,
+                aux[5]->sampleView(),
+                aux[6]->sampleView(),
+                aux[9]->sampleView(),
+                _nrdDenoiser->denoisedDiffuse().sampleView(),
+                _nrdDenoiser->denoisedSpecular().sampleView(),
+                aux[3]->sampleView(),
+                aux[0]->sampleView(),
+                aux[1]->sampleView(),
             }};
             DescriptorWriteBuilder compositeWrites(device.handle());
             for (uint32_t i = 0; i < kCompositeBindings; ++i) {
-                compositeWrites.writeImage(compositeSet, {i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
-                                           compositeImages[i]);
+                compositeWrites.writeStorageImage(toDescriptorSet(compositeSet),
+                                                  {i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                                                  compositeImages[i]);
             }
             compositeWrites.apply();
             struct CompositePush {
@@ -755,30 +741,22 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
             } compositePush {static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)),
                              std::max(0.01f, _options.ptExposure),
                              fsrActive ? 1u : 0u};
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _compositePipeline->handle());
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _compositePipeline->layout(), 0, 1,
-                                    &uniformSet, static_cast<uint32_t>(offsets.size()), offsets.data());
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _compositePipeline->layout(),
-                                    1, 1, &compositeSet, 0, nullptr);
-            vkCmdPushConstants(cmd, _compositePipeline->layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                               sizeof(compositePush), &compositePush);
-            vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8),
-                          static_cast<uint32_t>((_extent.y + 7) / 8), 1);
+            commandBuffer.bindComputePipeline(_compositePipeline->pipeline());
+            commandBuffer.bindComputeDescriptorSet(_compositePipeline->pipelineLayout(), 0,
+                                                   toDescriptorSet(uniformSet), offsets.data(),
+                                                   static_cast<uint32_t>(offsets.size()));
+            commandBuffer.bindComputeDescriptorSet(_compositePipeline->pipelineLayout(), 1,
+                                                   toDescriptorSet(compositeSet), nullptr, 0);
+            commandBuffer.pushComputeConstants(_compositePipeline->pipelineLayout(),
+                                               &compositePush, sizeof(compositePush));
+            commandBuffer.dispatch({static_cast<uint32_t>((_extent.x + 7) / 8),
+                                    static_cast<uint32_t>((_extent.y + 7) / 8), 1});
             _temporalHistoryValid = true;
 #ifdef R_ENABLE_FSR
             if (fsrActive) {
                 // Composite writes, FSR reads. FSR's backend barriers its own
                 // internal resources but not ours, so the handoff is ours.
-                VkMemoryBarrier2 toUpscaler {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-                toUpscaler.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                toUpscaler.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                toUpscaler.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                toUpscaler.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                           VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                VkDependencyInfo upscalerDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                upscalerDependency.memoryBarrierCount = 1;
-                upscalerDependency.pMemoryBarriers = &toUpscaler;
-                vkCmdPipelineBarrier2(cmd, &upscalerDependency);
+                commandBuffer.publishCompositeForUpscaling();
 
                 graphics::FsrUpscaler::Inputs fsrInputs;
                 fsrInputs.color = _fsrColor.get();
@@ -798,54 +776,25 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
                 const glm::vec4 farH = projectionInv * glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
                 const float cameraNear = std::abs(nearH.z / nearH.w);
                 const float cameraFar = std::abs(farH.z / farH.w);
-                _fsr->dispatch(cmd, fsrInputs, jitterPixels, 1.0f / 60.0f,
+                _fsr->dispatch(nativeCommandBuffer, fsrInputs, jitterPixels, 1.0f / 60.0f,
                                cameraNear, cameraFar, verticalFov, _options.ptFsrSharpness,
                                _frameNumber == 0 || temporalReset);
 
                 // The backend deliberately leaves its inputs ready for sampled
                 // reads. The trace and composite passes write these images as
                 // storage images again on the next frame, so restore GENERAL.
-                std::array<VkImageMemoryBarrier2, 3> restoreFsrInputs {};
-                VulkanImage *fsrInputsToRestore[] {_fsrColor.get(), aux[7].get(), aux[8].get()};
-                for (uint32_t i = 0; i < restoreFsrInputs.size(); ++i) {
-                    auto &barrier = restoreFsrInputs[i];
-                    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    barrier.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    barrier.image = fsrInputsToRestore[i]->handle();
-                    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                    barrier.subresourceRange.levelCount = 1;
-                    barrier.subresourceRange.layerCount = 1;
-                }
-                VkDependencyInfo restoreFsrDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                restoreFsrDependency.imageMemoryBarrierCount =
-                    static_cast<uint32_t>(restoreFsrInputs.size());
-                restoreFsrDependency.pImageMemoryBarriers = restoreFsrInputs.data();
-                vkCmdPipelineBarrier2(cmd, &restoreFsrDependency);
-
-                VkMemoryBarrier2 toTonemap {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-                toTonemap.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                toTonemap.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                toTonemap.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                toTonemap.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-                VkDependencyInfo tonemapDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                tonemapDependency.memoryBarrierCount = 1;
-                tonemapDependency.pMemoryBarriers = &toTonemap;
-                vkCmdPipelineBarrier2(cmd, &tonemapDependency);
+                commandBuffer.restoreUpscalerInputsForNextFrame(*_fsrColor, *aux[7], *aux[8]);
+                commandBuffer.publishUpscaledFrameForTonemapping();
 
                 const auto tonemapSet = _tonemapPipeline->descriptorSet(1, frameIndex);
-                std::array<VkDescriptorImageInfo, 2> tonemapImages {{
-                    {VK_NULL_HANDLE, output.view(), VK_IMAGE_LAYOUT_GENERAL},
-                    {VK_NULL_HANDLE, _fsrOutput->view(), VK_IMAGE_LAYOUT_GENERAL},
+                const std::array<ImageView, 2> tonemapImages {{
+                    output.sampleView(), _fsrOutput->sampleView(),
                 }};
                 DescriptorWriteBuilder tonemapWrites(device.handle());
                 for (uint32_t i = 0; i < 2; ++i) {
-                    tonemapWrites.writeImage(tonemapSet, {i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
-                                             tonemapImages[i]);
+                    tonemapWrites.writeStorageImage(toDescriptorSet(tonemapSet),
+                                                    {i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                                                    tonemapImages[i]);
                 }
                 tonemapWrites.apply();
                 struct TonemapPush {
@@ -853,16 +802,16 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
                     float exposure;
                 } tonemapPush {static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)),
                                std::max(0.01f, _options.ptExposure)};
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _tonemapPipeline->handle());
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _tonemapPipeline->layout(),
-                                        0, 1, &uniformSet,
-                                        static_cast<uint32_t>(offsets.size()), offsets.data());
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _tonemapPipeline->layout(),
-                                        1, 1, &tonemapSet, 0, nullptr);
-                vkCmdPushConstants(cmd, _tonemapPipeline->layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                                   sizeof(tonemapPush), &tonemapPush);
-                vkCmdDispatch(cmd, static_cast<uint32_t>((_extent.x + 7) / 8),
-                              static_cast<uint32_t>((_extent.y + 7) / 8), 1);
+                commandBuffer.bindComputePipeline(_tonemapPipeline->pipeline());
+                commandBuffer.bindComputeDescriptorSet(_tonemapPipeline->pipelineLayout(), 0,
+                                                       toDescriptorSet(uniformSet), offsets.data(),
+                                                       static_cast<uint32_t>(offsets.size()));
+                commandBuffer.bindComputeDescriptorSet(_tonemapPipeline->pipelineLayout(), 1,
+                                                       toDescriptorSet(tonemapSet), nullptr, 0);
+                commandBuffer.pushComputeConstants(_tonemapPipeline->pipelineLayout(),
+                                                   &tonemapPush, sizeof(tonemapPush));
+                commandBuffer.dispatch({static_cast<uint32_t>((_extent.x + 7) / 8),
+                                        static_cast<uint32_t>((_extent.y + 7) / 8), 1});
             }
 #endif
         }

@@ -56,12 +56,42 @@ void VulkanCommandBuffer::bindPipeline(Pipeline pipeline) {
                       toVulkanPipeline(pipeline));
 }
 
+void VulkanCommandBuffer::bindComputePipeline(Pipeline pipeline) {
+    vkCmdBindPipeline(_commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      toVulkanPipeline(pipeline));
+}
+
+void VulkanCommandBuffer::bindRayTracingPipeline(Pipeline pipeline) {
+    vkCmdBindPipeline(_commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+                      toVulkanPipeline(pipeline));
+}
+
 void VulkanCommandBuffer::bindDescriptorSet(PipelineLayout layout, uint32_t index,
                                              DescriptorSet set,
                                              const uint32_t *dynamicOffsets,
                                              uint32_t dynamicOffsetCount) {
     auto nativeSet = toVulkanDescriptorSet(set);
     vkCmdBindDescriptorSets(_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            toVulkanPipelineLayout(layout), index, 1, &nativeSet,
+                            dynamicOffsetCount, dynamicOffsets);
+}
+
+void VulkanCommandBuffer::bindComputeDescriptorSet(PipelineLayout layout, uint32_t index,
+                                                    DescriptorSet set,
+                                                    const uint32_t *dynamicOffsets,
+                                                    uint32_t dynamicOffsetCount) {
+    auto nativeSet = toVulkanDescriptorSet(set);
+    vkCmdBindDescriptorSets(_commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            toVulkanPipelineLayout(layout), index, 1, &nativeSet,
+                            dynamicOffsetCount, dynamicOffsets);
+}
+
+void VulkanCommandBuffer::bindRayTracingDescriptorSet(PipelineLayout layout, uint32_t index,
+                                                       DescriptorSet set,
+                                                       const uint32_t *dynamicOffsets,
+                                                       uint32_t dynamicOffsetCount) {
+    auto nativeSet = toVulkanDescriptorSet(set);
+    vkCmdBindDescriptorSets(_commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
                             toVulkanPipelineLayout(layout), index, 1, &nativeSet,
                             dynamicOffsetCount, dynamicOffsets);
 }
@@ -147,6 +177,32 @@ void VulkanCommandBuffer::pushFragmentConstants(PipelineLayout layout, const voi
                        VK_SHADER_STAGE_FRAGMENT_BIT, 0, size, data);
 }
 
+void VulkanCommandBuffer::pushComputeConstants(PipelineLayout layout, const void *data,
+                                                uint32_t size) {
+    vkCmdPushConstants(_commandBuffer, toVulkanPipelineLayout(layout),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, size, data);
+}
+
+void VulkanCommandBuffer::pushRayTracingConstants(PipelineLayout layout, const void *data,
+                                                   uint32_t size) {
+    vkCmdPushConstants(_commandBuffer, toVulkanPipelineLayout(layout),
+                       VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, size, data);
+}
+
+void VulkanCommandBuffer::dispatch(glm::uvec3 groups) {
+    vkCmdDispatch(_commandBuffer, groups.x, groups.y, groups.z);
+}
+
+void VulkanCommandBuffer::clearColor(IImage &image, glm::vec4 color) {
+    VkClearColorValue clear {{color.r, color.g, color.b, color.a}};
+    VkImageSubresourceRange range {};
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+    vkCmdClearColorImage(_commandBuffer, toVulkanImage(image).handle(),
+                          VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
+}
+
 void VulkanCommandBuffer::makeGpuSceneSourcesAvailable(const IBuffer &vertices,
                                                         const IBuffer &indices) {
     const std::array<const IBuffer *, 2> sources {{&vertices, &indices}};
@@ -194,6 +250,62 @@ void VulkanCommandBuffer::traceRays(Pipeline pipeline, ITracingStructure &struct
                                     glm::uvec2 extent) {
     toVulkanTracingStructure(structure).traceRays(_commandBuffer,
                                                    toVulkanPipeline(pipeline), extent);
+}
+
+static void memoryBarrier(VkCommandBuffer commandBuffer, VkPipelineStageFlags2 sourceStage,
+                          VkAccessFlags2 sourceAccess, VkPipelineStageFlags2 destinationStage,
+                          VkAccessFlags2 destinationAccess) {
+    VkMemoryBarrier2 barrier {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    barrier.srcStageMask = sourceStage;
+    barrier.srcAccessMask = sourceAccess;
+    barrier.dstStageMask = destinationStage;
+    barrier.dstAccessMask = destinationAccess;
+    VkDependencyInfo dependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependency.memoryBarrierCount = 1;
+    dependency.pMemoryBarriers = &barrier;
+    vkCmdPipelineBarrier2(commandBuffer, &dependency);
+}
+
+void VulkanCommandBuffer::publishTraceOutputForDenoising() {
+    memoryBarrier(_commandBuffer, VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                  VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+}
+
+void VulkanCommandBuffer::publishCompositeForUpscaling() {
+    memoryBarrier(_commandBuffer, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+}
+
+void VulkanCommandBuffer::restoreUpscalerInputsForNextFrame(IImage &color, IImage &depth,
+                                                             IImage &motion) {
+    const std::array<IImage *, 3> images {{&color, &depth, &motion}};
+    std::array<VkImageMemoryBarrier2, 3> barriers {};
+    for (size_t i = 0; i < barriers.size(); ++i) {
+        auto &barrier = barriers[i];
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.image = toVulkanImage(*images[i]).handle();
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.layerCount = 1;
+    }
+    VkDependencyInfo dependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependency.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
+    dependency.pImageMemoryBarriers = barriers.data();
+    vkCmdPipelineBarrier2(_commandBuffer, &dependency);
+}
+
+void VulkanCommandBuffer::publishUpscaledFrameForTonemapping() {
+    memoryBarrier(_commandBuffer, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
 }
 
 } // namespace graphics

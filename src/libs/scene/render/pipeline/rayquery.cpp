@@ -57,8 +57,7 @@ const VulkanRayQuery &RayQueryPipeline::native() const {
 
 void RayQueryPipeline::render(const VulkanPrimaryRayContext &context,
                               GpuSceneAdmissionResult admission) {
-    const VkCommandBuffer commandBuffer =
-        toVulkanCommandBuffer(*context.commandBuffer).handle();
+    auto &commandBuffer = *context.commandBuffer;
     bool skyBaked = false;
     if (admission.skyRoom) {
         RayQuerySkyRoom bake;
@@ -114,7 +113,7 @@ void RayQueryPipeline::render(const VulkanPrimaryRayContext &context,
         _native->clearSkyRoom();
     }
 
-    _native->render(commandBuffer, context.globalsOffset, toVulkanImage(*context.output),
+    _native->render(commandBuffer, context.globalsOffset, *context.output,
                     context.view, context.projection, context.jitter,
                     std::move(admission.submission), _deviceGpuScene, skyBaked);
 }

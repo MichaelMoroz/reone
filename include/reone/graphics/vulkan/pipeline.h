@@ -74,6 +74,8 @@ public:
         float depthBiasSlopeFactor {0.0f};
         std::vector<DescriptorSet> descriptorSets;
         std::vector<VkPushConstantRange> pushConstants;
+        /** A single range whose stage is implied by this pipeline's work. */
+        uint32_t pushConstantSize {0};
         std::vector<VkVertexInputBindingDescription> vertexBindings;
         std::vector<VkVertexInputAttributeDescription> vertexAttributes;
     };
@@ -90,6 +92,11 @@ public:
     VkPipeline handle() const { return _pipeline; }
     VkPipelineLayout layout() const { return _layout; }
     VkDescriptorSet descriptorSet(uint32_t set, uint32_t copy) const;
+    Pipeline pipeline() const { return toPipeline(_pipeline); }
+    PipelineLayout pipelineLayout() const { return toPipelineLayout(_layout); }
+    ::reone::graphics::DescriptorSet descriptorSetHandle(uint32_t set, uint32_t copy) const {
+        return toDescriptorSet(descriptorSet(set, copy));
+    }
     void merge(ICommandBuffer &commandBuffer, const GpuSceneMerge &merge) override;
 
 private:

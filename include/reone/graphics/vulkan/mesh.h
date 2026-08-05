@@ -28,6 +28,7 @@ namespace reone {
 namespace graphics {
 
 class VulkanDevice;
+class ICommandBuffer;
 
 /**
  * A Mesh uploaded to device-local memory: its interleaved vertex data and an
@@ -55,7 +56,7 @@ public:
      *
      * @param zeros the shared stride-0 buffer bound at kZeroBinding
      */
-    void draw(VkCommandBuffer cmd, VkBuffer zeros, int instances = 1) const;
+    void draw(ICommandBuffer &commandBuffer, VkBuffer zeros, int instances = 1) const;
 
     /**
      * Vertex input state for a pipeline drawing this layout. The returned

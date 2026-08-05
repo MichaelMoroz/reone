@@ -123,11 +123,25 @@ void VulkanPipeline::init(const Config &config) {
     stages[1].module = module;
     stages[1].pName = config.fragmentEntry.c_str();
 
+    VkPushConstantRange singlePushConstant {};
+    std::vector<VkPushConstantRange> pushConstants = config.pushConstants;
+    if (config.pushConstantSize != 0) {
+        if (!pushConstants.empty())
+            throw std::invalid_argument("Vulkan: pipeline has two push-constant descriptions");
+        singlePushConstant.offset = 0;
+        singlePushConstant.size = config.pushConstantSize;
+        singlePushConstant.stageFlags = config.type == Config::Type::Compute
+            ? VK_SHADER_STAGE_COMPUTE_BIT
+            : config.type == Config::Type::RayTracing
+                  ? VK_SHADER_STAGE_RAYGEN_BIT_KHR
+                  : VK_SHADER_STAGE_FRAGMENT_BIT;
+        pushConstants.push_back(singlePushConstant);
+    }
     VkPipelineLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layoutInfo.setLayoutCount = static_cast<uint32_t>(_setLayouts.size());
     layoutInfo.pSetLayouts = _setLayouts.data();
-    layoutInfo.pushConstantRangeCount = static_cast<uint32_t>(config.pushConstants.size());
-    layoutInfo.pPushConstantRanges = config.pushConstants.data();
+    layoutInfo.pushConstantRangeCount = static_cast<uint32_t>(pushConstants.size());
+    layoutInfo.pPushConstantRanges = pushConstants.data();
     if (vkCreatePipelineLayout(_device.handle(), &layoutInfo, nullptr, &_layout) != VK_SUCCESS) {
         vkDestroyShaderModule(_device.handle(), module, nullptr);
         throw std::runtime_error("Vulkan: pipeline layout creation failed");

@@ -37,6 +37,10 @@ public:
 
     void writeImage(VkDescriptorSet set, DescriptorBinding binding,
                     const VkDescriptorImageInfo &info, uint32_t arrayElement = 0);
+    void writeStorageImage(DescriptorSet set, DescriptorBinding binding, ImageView view,
+                           uint32_t arrayElement = 0);
+    void writeSampledImage(DescriptorSet set, DescriptorBinding binding, Sampler sampler,
+                           ImageView view, uint32_t arrayElement = 0);
     void writeBuffer(VkDescriptorSet set, DescriptorBinding binding,
                      const VkDescriptorBufferInfo &info, uint32_t arrayElement = 0);
     void writeAccelerationStructure(VkDescriptorSet set, DescriptorBinding binding,
