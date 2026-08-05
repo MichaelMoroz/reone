@@ -128,6 +128,7 @@ public:
     const std::vector<uint32_t> &shaderModule(const std::string &name) {
         return _shaderCompiler.module(name);
     }
+    SlangShaderCompiler &shaderCompiler() { return _shaderCompiler; }
     /** Rebuild source modules now; bad sources retain their prior modules. */
     bool recompileShaders() override;
 

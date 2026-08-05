@@ -19,11 +19,13 @@
 #include <cstdint>
 #include <array>
 #include <memory>
+#include <unordered_map>
 
 #include <volk.h>
 
 #include "reone/graphics/rendering/rayquery.h"
 #include "reone/graphics/rhi/computepipeline.h"
+#include "reone/graphics/vulkan/descriptorwrites.h"
 
 namespace reone::graphics {
 
@@ -68,6 +70,7 @@ private:
     std::unique_ptr<VulkanImage> _skyCube;
     std::array<std::unique_ptr<VulkanImage>, 6> _skyDepth;
     std::unique_ptr<VulkanImage> _skyFallbackCube;
+    std::unordered_map<std::string, DescriptorBinding> _bindings;
 
     struct TracePushConstants {
         uint32_t frameIndex;
@@ -111,6 +114,7 @@ private:
     int _lastAuxFrame {-1};
 
     void clearFrame(Frame &frame);
+    const DescriptorBinding &binding(const char *name) const;
 };
 
 } // namespace reone::graphics

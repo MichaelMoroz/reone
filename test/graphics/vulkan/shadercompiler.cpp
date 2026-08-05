@@ -37,6 +37,24 @@ TEST(SlangShaderCompiler, compiles_engine_modules_and_validates_schemas) {
     compiler.deinit();
 }
 
+TEST(SlangShaderCompiler, preserves_unbounded_descriptor_arrays) {
+    SlangShaderCompiler compiler {REONE_SHADER_SOURCE_DIR};
+    compiler.init();
+    const auto reflection = compiler.reflection("rayquery");
+    EXPECT_EQ(reflection.stage, ShaderStage::RayGeneration);
+    const auto find = [&reflection](const char *name) {
+        return std::find_if(reflection.bindings.begin(), reflection.bindings.end(),
+                            [name](const auto &binding) { return binding.name == name; });
+    };
+    const auto textures = find("bindlessTextures");
+    const auto arrays = find("bindlessTextureArrays");
+    ASSERT_NE(textures, reflection.bindings.end());
+    ASSERT_NE(arrays, reflection.bindings.end());
+    EXPECT_EQ(textures->count, 0u);
+    EXPECT_EQ(arrays->count, 0u);
+    compiler.deinit();
+}
+
 class TemporaryShaderSources {
 public:
     TemporaryShaderSources() {

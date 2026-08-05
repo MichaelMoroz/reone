@@ -75,6 +75,17 @@ struct TraceStats {
     uint32_t shadowRays {0};
 };
 
+VkDescriptorType descriptorType(ShaderResourceKind kind) {
+    switch (kind) {
+    case ShaderResourceKind::StorageImage: return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    case ShaderResourceKind::StorageBuffer: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    case ShaderResourceKind::CombinedImageSampler: return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    case ShaderResourceKind::AccelerationStructure: return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    default: break;
+    }
+    throw std::runtime_error("Vulkan: ray-query reflection has an unsupported descriptor kind");
+}
+
 } // namespace
 
 VulkanTracingPipeline::VulkanTracingPipeline(VulkanRenderer &renderer,
@@ -86,6 +97,13 @@ VulkanTracingPipeline::~VulkanTracingPipeline() {
     deinit();
 }
 
+const DescriptorBinding &VulkanTracingPipeline::binding(const char *name) const {
+    const auto found = _bindings.find(name);
+    if (found == _bindings.end())
+        throw std::runtime_error("Vulkan: ray-query does not declare binding '" + std::string(name) + "'");
+    return found->second;
+}
+
 void VulkanTracingPipeline::init() {
     if (_inited)
         return;
@@ -94,22 +112,40 @@ void VulkanTracingPipeline::init() {
     if (_bindlessTextureCapacity == 0) {
         throw std::runtime_error("Vulkan: ray-query bindless texture capacity is zero");
     }
-    std::vector<VulkanPipeline::LayoutBinding> bindings {
-        {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR},
-        {{1, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR},
-        {{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR},
-        {{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR},
-    };
-    // Ranges into the one merged geometry buffer: vertices, indices, material ids.
-    for (uint32_t i = 4; i <= 6; ++i) {
-        bindings.push_back({{i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR});
+    const auto reflection = _renderer.shaderCompiler().reflection("rayquery");
+    // The stage is advisory - the load path may link without entry points, in
+    // which case it reflects Unknown. Reject only a positive mismatch.
+    if (reflection.stage != ShaderStage::Unknown && reflection.stage != ShaderStage::RayGeneration)
+        throw std::runtime_error("Vulkan: ray-query entry point is not a ray-generation shader");
+    std::vector<VulkanPipeline::LayoutBinding> bindings;
+    std::vector<VulkanPipeline::LayoutBinding> auxBindings;
+    for (const auto &reflected : reflection.bindings) {
+        if (reflected.set == 0) {
+            if (reflected.kind != ShaderResourceKind::UniformBuffer || reflected.count != 1)
+                throw std::runtime_error("Vulkan: ray-query has an unsupported frame binding '" +
+                                         reflected.name + "'");
+            continue;
+        }
+        if (reflected.set != 1 && reflected.set != 2)
+            throw std::runtime_error("Vulkan: ray-query declares binding '" + reflected.name +
+                                     "' in unsupported descriptor set " + std::to_string(reflected.set));
+        const bool bindless = reflected.count == 0;
+        if (bindless && reflected.kind != ShaderResourceKind::CombinedImageSampler)
+            throw std::runtime_error("Vulkan: ray-query unbounded binding '" + reflected.name +
+                                     "' is not a sampled-image array");
+        const DescriptorBinding target {reflected.binding, descriptorType(reflected.kind)};
+        if (!_bindings.emplace(reflected.name, target).second)
+            throw std::runtime_error("Vulkan: ray-query reflects binding '" + reflected.name + "' twice");
+        auto &setBindings = reflected.set == 1 ? bindings : auxBindings;
+        setBindings.push_back({target, bindless ? _bindlessTextureCapacity : reflected.count,
+                               VK_SHADER_STAGE_RAYGEN_BIT_KHR,
+                               bindless ? static_cast<VkDescriptorBindingFlags>(
+                                              VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+                                              VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT)
+                                        : 0});
     }
-    bindings.push_back({{7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, _bindlessTextureCapacity, VK_SHADER_STAGE_RAYGEN_BIT_KHR, VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT});
-    // The sky cube occupies binding 9, so the two bindless ranges keep their
-    // fixed device-limit allocation rather than using Vulkan's highest-binding
-    // variable-descriptor-count rule.
-    bindings.push_back({{8, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, _bindlessTextureCapacity, VK_SHADER_STAGE_RAYGEN_BIT_KHR, VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT});
-    bindings.push_back({{9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR});
+    if (bindings.empty() || auxBindings.empty())
+        throw std::runtime_error("Vulkan: ray-query reflection omitted a resource descriptor set");
 
     // A descriptor is required even when no room qualifies. Sampling is gated
     // in the shader, but this black cube keeps the descriptor type valid.
@@ -125,11 +161,6 @@ void VulkanTracingPipeline::init() {
     // and Vulkan allows nothing above it. Plain pool, static writes - the
     // images never change identity within a pipeline lifetime.
     {
-        std::vector<VulkanPipeline::LayoutBinding> auxBindings;
-        auxBindings.reserve(kNumAuxImages);
-        for (uint32_t i = 0; i < kNumAuxImages; ++i) {
-            auxBindings.push_back({{i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR});
-        }
         VulkanPipeline::Config pipelineConfig;
         pipelineConfig.type = VulkanPipeline::Config::Type::RayTracing;
         pipelineConfig.spirv = _renderer.shaderModule("rayquery");
@@ -160,12 +191,16 @@ void VulkanTracingPipeline::init() {
             Format::R16G16Sfloat,       // canonical current-minus-previous UV motion
         };
         DescriptorWriteBuilder auxWrites(device.handle());
+        static constexpr const char *kAuxBindingNames[kNumAuxImages] {
+            "outDiffuse", "outSpecular", "outNormalRoughness", "outViewZ", "outMotion",
+            "outNoiseFree", "outDiffFactor", "outDeviceDepth", "outScreenMotion", "outSpecFactor",
+            "outGBufferDiffuse", "outGBufferEyeNormal", "outGBufferDepth", "outGBufferMotion"};
         for (int frame = 0; frame < 2; ++frame) {
             for (int i = 0; i < kNumAuxImages; ++i) {
                 auto image = std::make_unique<VulkanImage>(device);
                 image->initColorAttachment(_extent, kAuxFormats[i]);
                 auxWrites.writeStorageImage(_pipeline->descriptorSetHandle(2, frame),
-                                             {static_cast<uint32_t>(i), VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                                             binding(kAuxBindingNames[i]),
                                              image->sampleView());
                 _auxImages[frame][i] = std::move(image);
             }
@@ -512,24 +547,24 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
 
     const auto set = _pipeline->descriptorSet(1, _renderer.frameIndex());
     DescriptorWriteBuilder writes(device.handle());
-    writes.writeStorageImage(toDescriptorSet(set), {0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+    writes.writeStorageImage(toDescriptorSet(set), binding("outputImage"),
                              output.sampleView());
     writes.writeAccelerationStructure(
-        set, {1, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}, input.structure.handle());
-    writes.writeBuffer(set, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+        set, binding("sceneTLAS"), input.structure.handle());
+    writes.writeBuffer(set, binding("instanceMaterials"),
                        {nativeBuffer(scene.materials.buffer->rhiHandle()), 0, scene.materials.size});
-    writes.writeBuffer(set, {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+    writes.writeBuffer(set, binding("traceStats"),
                        {nativeBuffer(frame.traceStats->rhiHandle()), 0, frame.traceStats->size()});
-    writes.writeBuffer(set, {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+    writes.writeBuffer(set, binding("mergedVertices"),
                        {nativeBuffer(scene.vertices.buffer->rhiHandle()), scene.vertices.offset, scene.vertices.size});
-    writes.writeBuffer(set, {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+    writes.writeBuffer(set, binding("mergedIndices"),
                        {nativeBuffer(scene.vertices.buffer->rhiHandle()), scene.indices.offset, scene.indices.size});
-    writes.writeBuffer(set, {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+    writes.writeBuffer(set, binding("mergedMaterialIds"),
                        {nativeBuffer(scene.materialIds.buffer->rhiHandle()), scene.materialIds.offset, scene.materialIds.size});
     writes.apply();
     const VulkanImage &skyImage = skyBaked ? *_skyCube : *_skyFallbackCube;
     DescriptorWriteBuilder skyWrite(device.handle());
-    skyWrite.writeSampledImage(toDescriptorSet(set), {9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+    skyWrite.writeSampledImage(toDescriptorSet(set), binding("skyCube"),
                                skyImage.sampleSampler(),
                                skyBaked ? toImageView(_skyCube->cubeView(0)) : _skyFallbackCube->sampleView());
     skyWrite.apply();
@@ -543,7 +578,7 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
             throw std::runtime_error("Vulkan: ray-query bindless texture array exhausted");
         }
         textureWrites.writeSampledImage(toDescriptorSet(set),
-                                        {7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                                        binding("bindlessTextures"),
                                         texture->sampleSampler(), texture->sampleView(), id);
     }
     textureWrites.apply();
@@ -554,7 +589,7 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
             throw std::runtime_error("Vulkan: ray-query bindless texture array exhausted");
         }
         textureArrayWrites.writeSampledImage(toDescriptorSet(set),
-                                             {8, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                                             binding("bindlessTextureArrays"),
                                              texture->sampleSampler(), texture->sampleView(), id);
     }
     textureArrayWrites.apply();

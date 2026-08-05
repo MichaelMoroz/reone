@@ -38,6 +38,14 @@ enum class ShaderResourceKind {
     AccelerationStructure,
 };
 
+/** The execution stage reflected from the selected Slang entry point. */
+enum class ShaderStage {
+    /** The load path may link a module without its entry points; stage is then advisory. */
+    Unknown,
+    Compute,
+    RayGeneration,
+};
+
 struct ShaderBindingDescription {
     std::string name;
     uint32_t set {0};
@@ -49,6 +57,7 @@ struct ShaderBindingDescription {
 struct ShaderReflection {
     std::vector<ShaderBindingDescription> bindings;
     uint32_t pushConstantSize {0};
+    ShaderStage stage {ShaderStage::Unknown};
 };
 
 /** An opaque descriptor location resolved from a Slang resource name. */

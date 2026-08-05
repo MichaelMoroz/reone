@@ -364,6 +364,24 @@ ShaderReflection SlangShaderCompiler::reflection(const std::string &name) const 
         throw std::runtime_error("Slang: reflection has no global parameters for '" + name + "'");
 
     ShaderReflection result;
+    // The load path links a module without explicitly adding its defined entry
+    // points, so the program layout may legitimately report zero of them even
+    // though the source declares one. The stage is therefore advisory: taken
+    // from reflection when an entry point is present, left Unknown otherwise,
+    // and each pipeline kind applies its own stage as it always did. More than
+    // one entry point is still a real error - which kernel to bind would be
+    // ambiguous.
+    if (layout->getEntryPointCount() > 1)
+        throw std::runtime_error("Slang: more than one entry point in '" + name + "'");
+    if (layout->getEntryPointCount() == 1) {
+        const auto stage = layout->getEntryPointByIndex(0)->getStage();
+        if (stage == SLANG_STAGE_COMPUTE)
+            result.stage = ShaderStage::Compute;
+        else if (stage == SLANG_STAGE_RAY_GENERATION)
+            result.stage = ShaderStage::RayGeneration;
+        else
+            throw std::runtime_error("Slang: unsupported reflected entry-point stage in '" + name + "'");
+    }
     // Walk the program's global parameters through their variable layouts
     // rather than the type layout's binding ranges. The binding-range API
     // would be tidier, but this Slang release ships its space accessors
@@ -409,14 +427,23 @@ ShaderReflection SlangShaderCompiler::reflection(const std::string &name) const 
         const auto set = param->getBindingSpace(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT);
         const auto binding = param->getOffset(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT);
 
-        // Arrays bind their element type at a count; everything else is one.
+        // Arrays bind their element type at a count; an unsized array remains
+        // explicitly unsized.  Treating it as one made descriptor-indexing
+        // shaders look like ordinary scalar bindings to callers, which then
+        // had no way to apply their API-specific bindless policy.
         auto *resource = typeLayout;
         size_t count = 1;
         while (resource && resource->getKind() == slang::TypeReflection::Kind::Array) {
-            count *= std::max<size_t>(1, resource->getElementCount());
+            const auto elementCount = resource->getElementCount();
+            if (elementCount == 0) {
+                count = 0;
+                resource = resource->getElementTypeLayout();
+                break;
+            }
+            count *= elementCount;
             resource = resource->getElementTypeLayout();
         }
-        if (!paramName || count == 0)
+        if (!paramName)
             throw std::runtime_error("Slang: incomplete binding reflection for '" + name + "'");
 
         const auto reflectionError = [&] {
