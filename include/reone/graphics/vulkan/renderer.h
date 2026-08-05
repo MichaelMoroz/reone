@@ -27,6 +27,7 @@
 #include "descriptors.h"
 #include "debugscope.h"
 #include "device.h"
+#include "gbuffer.h"
 #include "swapchain.h"
 #include "pipelinecache.h"
 #include "reone/graphics/renderer2d.h"
@@ -108,17 +109,23 @@ public:
     uint64_t resourceGeneration() const override;
 
     VulkanDevice &device() { return _device; }
-    VulkanUniformRing &uniformRing() { return _uniformRing; }
-    VulkanDescriptors &descriptors() { return _descriptors; }
-    VulkanPipelineCache &pipelines() { return _pipelines; }
+    VulkanUniformRing &uniformRing() override { return _uniformRing; }
+    VulkanDescriptors &descriptors() override { return _descriptors; }
+    VulkanPipelineCache &pipelines() override { return _pipelines; }
     VulkanResources &resources() override { return _resources; }
     PBRTextures &pbrTextures() override { return _pbrTextures; }
     Renderer2D &renderer2d() override { return _renderer2d; }
+    std::unique_ptr<IGBuffer> makeGBuffer() override {
+        return graphics::makeGBuffer(_device);
+    }
+    Format sceneOutputFormat() const override {
+        return fromVulkanFormat(_swapchain.imageFormat());
+    }
     /** Execute one short setup recording before frames begin. */
     void immediateSubmit(const std::function<void(ICommandBuffer &)> &block) override;
     /** ImGui owns descriptor lifetime for the preview texture it displays. */
-    void *addPreviewTexture(const IImage &image);
-    void removePreviewTexture(void *texture);
+    void *addPreviewTexture(const IImage &image) override;
+    void removePreviewTexture(void *texture) override;
 
     /** Runtime-compiled SPIR-V for one named Slang module. */
     const std::vector<uint32_t> &shaderModule(const std::string &name) {
@@ -133,14 +140,14 @@ public:
     /** The uniform descriptor set for the frame being recorded. */
     VkDescriptorSet uniformSet() const { return _descriptors.uniformSet(_frameIndex); }
     VulkanSwapchain &swapchain() { return _swapchain; }
-    int frameIndex() const { return _frameIndex; }
+    int frameIndex() const override { return _frameIndex; }
 
     /** Whether a frame is open, and so whether recording is legal. */
     bool inFrame() const { return _inFrame; }
 
     /** The command buffer being recorded, valid only between begin and end. */
     VkCommandBuffer commandBuffer() const { return _frames[_frameIndex].commandBuffer; }
-    ICommandBuffer &recordingCommandBuffer() {
+    ICommandBuffer &recordingCommandBuffer() override {
         return _frames[_frameIndex].recordingCommandBuffer;
     }
 

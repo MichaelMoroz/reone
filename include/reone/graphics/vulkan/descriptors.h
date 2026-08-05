@@ -88,9 +88,9 @@ public:
 
     /** Publish one frame's merged geometry/material buffers and bindless
         texture tables to graphics set 2. */
-    VkDescriptorSet updateMegaDrawSet(
+    DescriptorSet updateMegaDrawSet(
         int frame, const GpuScene::View &scene,
-        const VulkanResources &resources);
+        const IResources &resources) override;
 
     /**
      * Point a texture unit at @p image for every set acquired from now on.

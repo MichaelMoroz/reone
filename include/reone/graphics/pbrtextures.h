@@ -63,6 +63,11 @@ public:
     /** Reserve a stable derived-map layer for an admitted environment map. */
     virtual int requestEnvMapDerivedLayer(Texture &envMap) = 0;
     virtual std::optional<int> findEnvMapDerivedLayer(const std::string &name) = 0;
+    virtual void process(ICommandBuffer &commandBuffer, uint32_t globalsOffset) = 0;
+    virtual const IImage &brdfImage() const = 0;
+    virtual const IImage &irradianceArray() const = 0;
+    virtual const IImage &prefilteredArray() const = 0;
+    virtual const std::map<int, Texture *> &sourceEnvMaps() const = 0;
 };
 
 class PBRTextures : public IPBRTextures, boost::noncopyable {
@@ -90,7 +95,7 @@ public:
      * instead of needing its own of each. Must not be called inside a render
      * pass; it begins its own.
      */
-    void process(ICommandBuffer &commandBuffer, uint32_t globalsOffset);
+    void process(ICommandBuffer &commandBuffer, uint32_t globalsOffset) override;
 
     /** Forget module-owned source reservations; process performs generation. */
     void refresh() override;
@@ -110,11 +115,11 @@ public:
         return it->second;
     }
 
-    const IImage &brdfImage() const { return *_brdf; }
-    const IImage &irradianceArray() const { return *_irradiance; }
-    const IImage &prefilteredArray() const { return *_prefiltered; }
+    const IImage &brdfImage() const override { return *_brdf; }
+    const IImage &irradianceArray() const override { return *_irradiance; }
+    const IImage &prefilteredArray() const override { return *_prefiltered; }
     /** Source textures currently occupying the derived-map ring, for diagnostics. */
-    const std::map<int, Texture *> &sourceEnvMaps() const { return _envMapSources; }
+    const std::map<int, Texture *> &sourceEnvMaps() const override { return _envMapSources; }
 
 private:
     IRenderer &_renderer;

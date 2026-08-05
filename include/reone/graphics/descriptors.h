@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "gpuscene.h"
 #include "rhi.h"
 
 namespace reone {
@@ -19,6 +20,7 @@ namespace reone {
 namespace graphics {
 
 class IImage;
+class IResources;
 
 /** Descriptor operations used by the 2D and image-based-lighting clients. */
 class IDescriptors {
@@ -30,6 +32,8 @@ public:
     static constexpr int kTextureSet = 1;
 
     virtual DescriptorSet uniformDescriptorSet(int frame) const = 0;
+    virtual DescriptorSet updateMegaDrawSet(int frame, const GpuScene::View &scene,
+                                            const IResources &resources) = 0;
     virtual DescriptorSet acquireTextureDescriptorSet(int frame, const IImage *mainTex) = 0;
     virtual DescriptorSet acquireTextureDescriptorSet(
         int frame, const std::vector<std::pair<int, const IImage *>> &bindings) = 0;

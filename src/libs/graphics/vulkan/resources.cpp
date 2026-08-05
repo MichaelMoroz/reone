@@ -173,8 +173,8 @@ static std::optional<VkFormat> compressedFormat(PixelFormat format) {
     }
 }
 
-void VulkanResources::registerExternal(const Texture &texture, const VulkanImage &image) {
-    _external[&texture] = &image;
+void VulkanResources::registerExternal(const Texture &texture, const IImage &image) {
+    _external[&texture] = &toVulkanImage(image);
 }
 
 void VulkanResources::unregisterExternal(const Texture &texture) {
@@ -468,8 +468,8 @@ std::optional<uint32_t> VulkanResources::textureId(const Texture &texture) {
     return it->second.id;
 }
 
-std::vector<std::pair<uint32_t, const VulkanImage *>> VulkanResources::uploadedTextures() const {
-    std::vector<std::pair<uint32_t, const VulkanImage *>> result;
+std::vector<IResources::IndexedImage> VulkanResources::uploadedTextures() const {
+    std::vector<IResources::IndexedImage> result;
     result.reserve(_textures.size());
     for (const auto &[texture, uploaded] : _textures) {
         // The ray-query shader's bindless array is Sampler2D. Cube and array
@@ -483,8 +483,8 @@ std::vector<std::pair<uint32_t, const VulkanImage *>> VulkanResources::uploadedT
     return result;
 }
 
-std::vector<std::pair<uint32_t, const VulkanImage *>> VulkanResources::uploadedTextureArrays() const {
-    std::vector<std::pair<uint32_t, const VulkanImage *>> result;
+std::vector<IResources::IndexedImage> VulkanResources::uploadedTextureArrays() const {
+    std::vector<IResources::IndexedImage> result;
     result.reserve(_textures.size());
     for (const auto &[texture, uploaded] : _textures) {
         // Bump-map frames are a separate descriptor shape from the ordinary
@@ -498,9 +498,9 @@ std::vector<std::pair<uint32_t, const VulkanImage *>> VulkanResources::uploadedT
     return result;
 }
 
-std::vector<std::pair<uint32_t, const VulkanImage *>>
+std::vector<IResources::IndexedImage>
 VulkanResources::uploadedTextureCubes() const {
-    std::vector<std::pair<uint32_t, const VulkanImage *>> result;
+    std::vector<IResources::IndexedImage> result;
     result.reserve(_textures.size());
     for (const auto &[texture, uploaded] : _textures) {
         if (texture->type() != TextureType::CubeMap || uploaded.id == UINT32_MAX) {

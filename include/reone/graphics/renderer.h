@@ -18,6 +18,9 @@
 #pragma once
 
 #include <functional>
+#include <memory>
+
+#include "rhi.h"
 
 struct ImDrawData;
 
@@ -27,9 +30,14 @@ namespace graphics {
 
 class Texture;
 class ICommandBuffer;
+class IDescriptors;
+class IGBuffer;
+class IImage;
 class I2DRenderer;
 class IPBRTextures;
+class IPipelineCache;
 class IResources;
+class IUniformRing;
 
 /**
  * Owns the frame: the target everything is drawn into, and how a finished frame
@@ -99,11 +107,32 @@ public:
     /** Device-side resources used to assign material texture ids. */
     virtual IResources &resources() = 0;
 
+    /** Descriptor allocation and update for the frame being recorded. */
+    virtual IDescriptors &descriptors() = 0;
+
+    /** Per-frame uniform storage addressed by dynamic offsets. */
+    virtual IUniformRing &uniformRing() = 0;
+
+    /** Cached pipelines selected by backend-free pipeline keys. */
+    virtual IPipelineCache &pipelines() = 0;
+
     /** Derived environment-map management for PBR material admission. */
     virtual IPBRTextures &pbrTextures() = 0;
 
     /** The screen-space batcher used while the renderer owns the 2D scope. */
     virtual I2DRenderer &renderer2d() = 0;
+
+    /** The frame slot currently being recorded. */
+    virtual int frameIndex() const = 0;
+
+    /** The command buffer recording the current frame. */
+    virtual ICommandBuffer &recordingCommandBuffer() = 0;
+
+    /** Create the retained deferred attachments used by a scene pipeline. */
+    virtual std::unique_ptr<IGBuffer> makeGBuffer() = 0;
+
+    /** The pixel format a scene output must use before presentation. */
+    virtual Format sceneOutputFormat() const = 0;
 
     /** Rebuild shader modules, retaining prior modules if source compilation fails. */
     virtual bool recompileShaders() = 0;
@@ -126,6 +155,12 @@ public:
 
     /** Record and complete short setup work outside a frame. */
     virtual void immediateSubmit(const std::function<void(ICommandBuffer &)> &block) = 0;
+
+    /** Register an image for direct ImGui display and return its texture handle. */
+    virtual void *addPreviewTexture(const IImage &image) = 0;
+
+    /** Release an ImGui image handle returned by addPreviewTexture. */
+    virtual void removePreviewTexture(void *texture) = 0;
 
     /**
      * Drop every cached device-side copy of an engine resource.

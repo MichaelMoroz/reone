@@ -21,13 +21,12 @@
 #include "reone/graphics/commandbuffer.h"
 #include "reone/graphics/gbuffer.h"
 #include "reone/graphics/gpuscene.h"
+#include "reone/graphics/renderer.h"
 
 namespace reone::graphics {
 
 class IMeshRegistry;
 class Uniforms;
-class VulkanImage;
-class VulkanRenderer;
 class TextureRegistry;
 struct GraphicsOptions;
 
@@ -88,7 +87,7 @@ class ScenePipeline : boost::noncopyable {
 public:
     ScenePipeline(glm::ivec2 targetSize,
                         GraphicsOptions &options,
-                        VulkanRenderer &renderer,
+                        IRenderer &renderer,
                         Uniforms &uniforms,
                         IMeshRegistry &meshRegistry,
                         TextureRegistry &textureRegistry,
@@ -107,7 +106,7 @@ public:
 private:
     glm::ivec2 _targetSize;
     GraphicsOptions &_options;
-    VulkanRenderer &_renderer;
+    IRenderer &_renderer;
     Uniforms &_uniforms;
     IMeshRegistry &_meshRegistry;
     TextureRegistry &_textureRegistry;
@@ -116,9 +115,9 @@ private:
     SceneShadow _shadow {SceneShadow::None};
 
     std::unique_ptr<IGBuffer> _gbuffer;
-    std::unique_ptr<VulkanImage> _output;
-    std::unique_ptr<VulkanImage> _dirShadows;
-    std::unique_ptr<VulkanImage> _pointShadows;
+    std::unique_ptr<IImage> _output;
+    std::unique_ptr<IImage> _dirShadows;
+    std::unique_ptr<IImage> _pointShadows;
     std::shared_ptr<Texture> _outputHandle;
     DescriptorSet _retroResolveSet;
     DescriptorSet _pbrResolveSet;
@@ -127,7 +126,7 @@ private:
     bool _mergedScenePrepared {false};
 
     struct Preview {
-        std::unique_ptr<VulkanImage> image;
+        std::unique_ptr<IImage> image;
         void *imguiTexture {nullptr};
         std::string target;
         int mode {0};

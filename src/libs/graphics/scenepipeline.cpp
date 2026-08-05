@@ -23,19 +23,13 @@
 #include "reone/graphics/npyutil.h"
 #include "reone/graphics/options.h"
 #include "reone/graphics/textureregistry.h"
-#include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/textureutil.h"
 #include "reone/graphics/uniforms.h"
-#include "reone/graphics/vulkan/debugscope.h"
-#include "reone/graphics/vulkan/descriptors.h"
-#include "reone/graphics/vulkan/device.h"
-#include "reone/graphics/vulkan/gbuffer.h"
-#include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/pbrtextures.h"
-#include "reone/graphics/vulkan/renderer.h"
-#include "reone/graphics/vulkan/resources.h"
-#include "reone/graphics/vulkan/pipeline.h"
-#include "reone/graphics/vulkan/uniformring.h"
+#include "reone/graphics/descriptors.h"
+#include "reone/graphics/pipelinecache.h"
+#include "reone/graphics/resources.h"
+#include "reone/graphics/uniformring.h"
 #include "reone/system/logutil.h"
 
 #include <string_view>
@@ -55,7 +49,7 @@ struct MegaDrawPushConstants {
 
 ScenePipeline::ScenePipeline(glm::ivec2 targetSize,
                                          GraphicsOptions &options,
-                                         VulkanRenderer &renderer,
+                                         IRenderer &renderer,
                                          Uniforms &uniforms,
                                          IMeshRegistry &meshRegistry,
                                          TextureRegistry &textureRegistry,
@@ -84,10 +78,9 @@ void ScenePipeline::init() {
     if (_inited) {
         return;
     }
-    auto &device = _renderer.device();
     if (_primaryRayMode) {
-        _output = std::make_unique<VulkanImage>(device);
-        _output->initColorAttachment(_targetSize, _renderer.swapchain().imageFormat());
+        _output = _renderer.resources().makeImage();
+        _output->initColorAttachment(_targetSize, _renderer.sceneOutputFormat());
         _outputHandle = std::make_shared<Texture>(
             "vk_primary_ray_output", TextureType::TwoDim, Texture::Properties());
         _renderer.resources().registerExternal(*_outputHandle, *_output);
@@ -95,32 +88,32 @@ void ScenePipeline::init() {
         return;
     }
 
-    _gbuffer = makeGBuffer(device);
+    _gbuffer = _renderer.makeGBuffer();
     _gbuffer->init(_targetSize);
 
-    _output = std::make_unique<VulkanImage>(device);
-    _output->initColorAttachment(_targetSize, _renderer.swapchain().imageFormat());
+    _output = _renderer.resources().makeImage();
+    _output->initColorAttachment(_targetSize, _renderer.sceneOutputFormat());
 
     glm::ivec2 shadowSize {_options.shadowResolution, _options.shadowResolution};
-    _dirShadows = std::make_unique<VulkanImage>(device);
+    _dirShadows = _renderer.resources().makeImage();
         _dirShadows->initLayeredDepthAttachment(shadowSize, Format::D32Sfloat,
                                   kNumShadowCascades, false);
-    _pointShadows = std::make_unique<VulkanImage>(device);
+    _pointShadows = _renderer.resources().makeImage();
         _pointShadows->initLayeredDepthAttachment(shadowSize, Format::D32Sfloat,
                                     kNumCubeFaces, true);
 
-    auto &samplers = _renderer.resources().samplers();
-    auto colorSampler = samplers.get(getTextureProperties(TextureUsage::ColorBuffer));
-    auto depthSampler = samplers.get(getTextureProperties(TextureUsage::DepthBuffer));
+    auto colorSampler = _renderer.resources().sampler(
+        getTextureProperties(TextureUsage::ColorBuffer));
+    auto depthSampler = _renderer.resources().sampler(
+        getTextureProperties(TextureUsage::DepthBuffer));
     auto materialIdProperties = getTextureProperties(TextureUsage::ColorBuffer);
     materialIdProperties.minFilter = Texture::Filtering::Nearest;
     materialIdProperties.magFilter = Texture::Filtering::Nearest;
-    auto materialIdSampler = samplers.get(materialIdProperties);
-    _output->setSampler(toSampler(colorSampler));
-    _gbuffer->setSamplers(toSampler(colorSampler), toSampler(depthSampler),
-                          toSampler(materialIdSampler));
-    _dirShadows->setSampler(toSampler(depthSampler));
-    _pointShadows->setSampler(toSampler(depthSampler));
+    auto materialIdSampler = _renderer.resources().sampler(materialIdProperties);
+    _output->setSampler(colorSampler);
+    _gbuffer->setSamplers(colorSampler, depthSampler, materialIdSampler);
+    _dirShadows->setSampler(depthSampler);
+    _pointShadows->setSampler(depthSampler);
 
     // Both resolve sets always bind both sampler shapes. Clear each target to
     // the far plane once so the inactive light kind is a valid no-shadow map.
@@ -146,7 +139,7 @@ void ScenePipeline::init() {
          {4, &_gbuffer->color(GBufferAttachment::SelfIllum)},
          {5, &_gbuffer->depth()},
          {15, _dirShadows.get()},
-         {17, &toVulkanImage(_renderer.pbrTextures().prefilteredArray())},
+         {17, &_renderer.pbrTextures().prefilteredArray()},
          {19, _pointShadows.get()},
          {21, &_gbuffer->color(GBufferAttachment::MaterialId)}});
     _pbrResolveSet = descriptors.createPersistentTextureSet(
@@ -155,10 +148,10 @@ void ScenePipeline::init() {
          {3, &_gbuffer->color(GBufferAttachment::Lightmap)},
          {4, &_gbuffer->color(GBufferAttachment::SelfIllum)},
          {5, &_gbuffer->depth()},
-         {13, &toVulkanImage(_renderer.pbrTextures().brdfImage())},
+         {13, &_renderer.pbrTextures().brdfImage()},
          {15, _dirShadows.get()},
-         {16, &toVulkanImage(_renderer.pbrTextures().irradianceArray())},
-         {17, &toVulkanImage(_renderer.pbrTextures().prefilteredArray())},
+         {16, &_renderer.pbrTextures().irradianceArray()},
+         {17, &_renderer.pbrTextures().prefilteredArray()},
          {19, _pointShadows.get()},
          {21, &_gbuffer->color(GBufferAttachment::MaterialId)}});
 
@@ -225,8 +218,8 @@ const GpuScene::View &ScenePipeline::prepareMergedScene(
         throw std::runtime_error(
             "Vulkan: too many materials for the G-buffer material ID");
     }
-    _resolveMaterialSet = toDescriptorSet(_renderer.descriptors().updateMegaDrawSet(
-        _renderer.frameIndex(), _mergedScene, _renderer.resources()));
+    _resolveMaterialSet = _renderer.descriptors().updateMegaDrawSet(
+        _renderer.frameIndex(), _mergedScene, _renderer.resources());
     return _mergedScene;
 }
 
@@ -697,10 +690,10 @@ void *ScenePipeline::renderTargetPreview(const std::string &name, int mode, floa
     }
     if (!_preview) {
         _preview = std::make_unique<Preview>();
-        _preview->image = std::make_unique<VulkanImage>(_renderer.device());
+        _preview->image = _renderer.resources().makeImage();
         _preview->image->initColorAttachment({480, 360}, Format::R8G8B8A8Unorm);
-        _preview->image->setSampler(toSampler(
-            _renderer.resources().samplers().get(getTextureProperties(TextureUsage::ColorBuffer))));
+        _preview->image->setSampler(_renderer.resources().sampler(
+            getTextureProperties(TextureUsage::ColorBuffer)));
         _renderer.immediateSubmit([this](ICommandBuffer &cmd) {
             cmd.transitionImage(*_preview->image, ImageLayout::ShaderRead);
         });
@@ -922,7 +915,7 @@ void ScenePipeline::dumpTargets(const std::filesystem::path &dir,
                 auto raw = image.readBack(mip, layers);
                 auto extent = glm::max(glm::ivec2(1), image.extent() >> mip);
                 if (compressed) {
-                    size_t blockBytes = image.format() == VK_FORMAT_BC1_RGBA_UNORM_BLOCK ? 8 : 16;
+                    size_t blockBytes = image.pixelFormat() == Format::BC1RGBAUnormBlock ? 8 : 16;
                     size_t faceBytes = static_cast<size_t>((extent.x + 3) / 4) *
                                        ((extent.y + 3) / 4) * blockBytes;
                     std::vector<uint8_t> decoded(static_cast<size_t>(extent.x) * extent.y * layers * 4);

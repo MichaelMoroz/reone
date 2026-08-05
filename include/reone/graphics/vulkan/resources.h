@@ -90,13 +90,13 @@ public:
     std::optional<uint32_t> textureId(const Texture &texture) override;
 
     /** Uploaded 2D textures and their stable bindless indices. */
-    std::vector<std::pair<uint32_t, const VulkanImage *>> uploadedTextures() const;
+    std::vector<IndexedImage> uploadedTextures() const override;
 
     /** Uploaded 2D-array textures and their stable bindless indices. */
-    std::vector<std::pair<uint32_t, const VulkanImage *>> uploadedTextureArrays() const;
+    std::vector<IndexedImage> uploadedTextureArrays() const override;
 
     /** Uploaded cube textures and their stable bindless indices. */
-    std::vector<std::pair<uint32_t, const VulkanImage *>> uploadedTextureCubes() const;
+    std::vector<IndexedImage> uploadedTextureCubes() const override;
 
     /**
      * Associate @p texture with an image this cache does not own.
@@ -106,13 +106,13 @@ public:
      * Registering the pair lets the identity survive the seam without changing
      * the interface or giving Texture a backend-specific field.
      */
-    void registerExternal(const Texture &texture, const VulkanImage &image);
+    void registerExternal(const Texture &texture, const IImage &image) override;
 
     /**
      * Drop a registration, before the image behind it is destroyed. Without
      * this the map keeps pointing at freed memory.
      */
-    void unregisterExternal(const Texture &texture);
+    void unregisterExternal(const Texture &texture) override;
 
     /**
      * Whether this Texture is a render target this backend produced, rather

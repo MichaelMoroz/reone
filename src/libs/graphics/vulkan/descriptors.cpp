@@ -280,9 +280,9 @@ void VulkanDescriptors::beginFrame(int frame) {
     f.byBindings.clear();
 }
 
-VkDescriptorSet VulkanDescriptors::updateMegaDrawSet(
+DescriptorSet VulkanDescriptors::updateMegaDrawSet(
     int frame, const GpuScene::View &scene,
-    const VulkanResources &resources) {
+    const IResources &resources) {
     auto set = _megaDrawSets.at(frame);
     std::array<VkDescriptorBufferInfo, 3> buffers {{
         {toVulkanBuffer(*scene.vertices.buffer).handle(), scene.vertices.offset, scene.vertices.size},
@@ -295,22 +295,22 @@ VkDescriptorSet VulkanDescriptors::updateMegaDrawSet(
     }
     bufferWrites.apply();
 
-    auto writeImages = [&](uint32_t binding,
-                           const std::vector<std::pair<uint32_t, const VulkanImage *>> &images) {
+    auto writeImages = [&](uint32_t binding, const std::vector<IResources::IndexedImage> &images) {
         DescriptorWriteBuilder writes(_device.handle());
         for (const auto &[id, image] : images) {
             if (id >= _bindlessTextureCapacity) {
                 throw std::runtime_error("Vulkan: mega-draw bindless texture array exhausted");
             }
+            const auto &native = toVulkanImage(*image);
             writes.writeImage(set, {binding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-                              {image->sampler(), image->view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, id);
+                              {native.sampler(), native.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, id);
         }
         writes.apply();
     };
     writeImages(3, resources.uploadedTextures());
     writeImages(4, resources.uploadedTextureArrays());
     writeImages(5, resources.uploadedTextureCubes());
-    return set;
+    return toDescriptorSet(set);
 }
 
 void VulkanDescriptors::writeTextureSet(VkDescriptorSet set, const VulkanImage *mainTex) {
