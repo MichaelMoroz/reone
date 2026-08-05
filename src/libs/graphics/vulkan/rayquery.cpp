@@ -15,6 +15,7 @@
 
 #include "reone/graphics/vulkan/descriptorwrites.h"
 #include "reone/graphics/vulkan/descriptors.h"
+#include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/vulkan/mesh.h"
@@ -596,7 +597,7 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
     _lastGrass = submission.grass;
     _lastParticles = submission.particles;
     _lastBillboards = submission.billboards;
-    const auto scene = deviceGpuScene.update(cmd, submission.upload);
+    const auto scene = deviceGpuScene.update(_renderer.recordingCommandBuffer(), submission.upload);
     if (!scene.vertices.buffer) {
         VkClearColorValue clear {{0.02f, 0.03f, 0.06f, 1.0f}};
         VkImageSubresourceRange range {};
@@ -613,7 +614,7 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
     frame.traceStats->initHostVisibleReadback(sizeof(TraceStats), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     std::memset(frame.traceStats->mapped(), 0, sizeof(TraceStats));
 
-    const VkDeviceAddress geometryAddress = scene.vertices.buffer->deviceAddress() + scene.vertices.offset;
+    const VkDeviceAddress geometryAddress = toVulkanBuffer(*scene.vertices.buffer).deviceAddress() + scene.vertices.offset;
     std::array<VkAccelerationStructureGeometryTrianglesDataKHR, 2> triangleData {};
     std::array<VkAccelerationStructureGeometryKHR, 2> blasGeometries {};
     for (auto &triangles : triangleData) {
@@ -623,7 +624,7 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
         triangles.vertexStride = sizeof(MergedVertex);
         triangles.maxVertex = scene.vertexCount - 1;
         triangles.indexType = VK_INDEX_TYPE_UINT32;
-        triangles.indexData.deviceAddress = scene.indices.buffer->deviceAddress() + scene.indices.offset;
+        triangles.indexData.deviceAddress = toVulkanBuffer(*scene.indices.buffer).deviceAddress() + scene.indices.offset;
     }
     for (uint32_t i = 0; i < blasGeometries.size(); ++i) {
         auto &geometry = blasGeometries[i];
@@ -789,15 +790,15 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
     writes.writeAccelerationStructure(
         set, {1, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}, frame.tlas);
     writes.writeBuffer(set, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                       {scene.materials.buffer->handle(), 0, scene.materials.size});
+                       {toVulkanBuffer(*scene.materials.buffer).handle(), 0, scene.materials.size});
     writes.writeBuffer(set, {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                        {frame.traceStats->handle(), 0, frame.traceStats->size()});
     writes.writeBuffer(set, {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                       {scene.vertices.buffer->handle(), scene.vertices.offset, scene.vertices.size});
+                       {toVulkanBuffer(*scene.vertices.buffer).handle(), scene.vertices.offset, scene.vertices.size});
     writes.writeBuffer(set, {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                       {scene.vertices.buffer->handle(), scene.indices.offset, scene.indices.size});
+                       {toVulkanBuffer(*scene.vertices.buffer).handle(), scene.indices.offset, scene.indices.size});
     writes.writeBuffer(set, {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                       {scene.materialIds.buffer->handle(), scene.materialIds.offset, scene.materialIds.size});
+                       {toVulkanBuffer(*scene.materialIds.buffer).handle(), scene.materialIds.offset, scene.materialIds.size});
     writes.apply();
     const VulkanImage &skyImage = skyBaked ? *_skyCube : *_skyFallbackCube;
     DescriptorWriteBuilder skyWrite(device.handle());

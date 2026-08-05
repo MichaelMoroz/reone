@@ -32,12 +32,17 @@ public:
                            uint32_t dynamicOffsetCount) override;
     void draw(uint32_t vertexCount, uint32_t instanceCount) override;
     void setScissor(glm::ivec2 offset, glm::uvec2 extent) override;
+    void makeGpuSceneSourcesAvailable(const IBuffer &vertices,
+                                      const IBuffer &indices) override;
+    void publishMergedScene() override;
 
     VkCommandBuffer handle() const { return _commandBuffer; }
 
 private:
     VkCommandBuffer _commandBuffer {VK_NULL_HANDLE};
 };
+
+VulkanCommandBuffer &toVulkanCommandBuffer(ICommandBuffer &commandBuffer);
 
 } // namespace graphics
 

@@ -21,6 +21,8 @@
 
 #include <vk_mem_alloc.h>
 
+#include "reone/graphics/buffer.h"
+
 namespace reone {
 
 namespace graphics {
@@ -34,7 +36,7 @@ class VulkanDevice;
  * lives rather than what the buffer is for: host-visible memory the CPU writes
  * every frame, and device-local memory written once through a staging copy.
  */
-class VulkanBuffer : boost::noncopyable {
+class VulkanBuffer : public IBuffer, boost::noncopyable {
 public:
     VulkanBuffer(VulkanDevice &device) :
         _device(device) {
@@ -63,11 +65,15 @@ public:
 
     /** Copy a byte range into an existing device-local buffer and wait for it. */
     void uploadDeviceLocal(VkDeviceSize offset, VkDeviceSize size, const void *data);
+    void initHostVisibleStorage(uint64_t size) override;
+    void initDeviceStorage(uint64_t size, const void *data) override;
+    void initMergedGeometry(uint64_t size) override;
+    void uploadDeviceStorage(uint64_t offset, uint64_t size, const void *data) override;
 
-    void deinit();
+    void deinit() override;
 
     VkBuffer handle() const { return _buffer; }
-    VkDeviceSize size() const { return _size; }
+    uint64_t size() const override { return _size; }
 
     /**
      * GPU address for a buffer created with SHADER_DEVICE_ADDRESS usage, or
@@ -76,7 +82,7 @@ public:
     VkDeviceAddress deviceAddress() const;
 
     /** Null unless host-visible. */
-    void *mapped() const { return _info.pMappedData; }
+    void *mapped() const override { return _info.pMappedData; }
 
 private:
     VulkanDevice &_device;
@@ -87,6 +93,9 @@ private:
     VkDeviceSize _size {0};
     bool _deviceAddressable {false};
 };
+
+VulkanBuffer &toVulkanBuffer(IBuffer &buffer);
+const VulkanBuffer &toVulkanBuffer(const IBuffer &buffer);
 
 } // namespace graphics
 

@@ -285,9 +285,9 @@ VkDescriptorSet VulkanDescriptors::updateMegaDrawSet(
     const VulkanResources &resources) {
     auto set = _megaDrawSets.at(frame);
     std::array<VkDescriptorBufferInfo, 3> buffers {{
-        {scene.vertices.buffer->handle(), scene.vertices.offset, scene.vertices.size},
-        {scene.materialIds.buffer->handle(), scene.materialIds.offset, scene.materialIds.size},
-        {scene.materials.buffer->handle(), scene.materials.offset, scene.materials.size},
+        {toVulkanBuffer(*scene.vertices.buffer).handle(), scene.vertices.offset, scene.vertices.size},
+        {toVulkanBuffer(*scene.materialIds.buffer).handle(), scene.materialIds.offset, scene.materialIds.size},
+        {toVulkanBuffer(*scene.materials.buffer).handle(), scene.materials.offset, scene.materials.size},
     }};
     DescriptorWriteBuilder bufferWrites(_device.handle());
     for (uint32_t i = 0; i < buffers.size(); ++i) {

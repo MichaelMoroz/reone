@@ -19,8 +19,13 @@
 
 #include <volk.h>
 
+#include <string>
+#include <vector>
+
+#include "reone/graphics/gpuscenecontext.h"
 #include "reone/graphics/types.h"
 #include "reone/graphics/vulkan/descriptorwrites.h"
+#include "reone/graphics/vulkan/rhi.h"
 
 namespace reone {
 
@@ -28,19 +33,7 @@ namespace graphics {
 
 class VulkanDevice;
 
-/**
- * A graphics pipeline and the layout it is built against.
- *
- * Vulkan bakes what OpenGL kept as mutable state - blend mode, depth test, cull
- * mode, the shaders themselves - into an immutable object chosen at draw time.
- * That is the reason IContext must not be implemented in Vulkan (§1.3 of the
- * plan): emulating a state machine here means hashing a state vector per draw
- * to find a pipeline.
- *
- * Viewport and scissor are left dynamic, because those genuinely do change per
- * frame and are cheap to set.
- */
-class VulkanPipeline : boost::noncopyable {
+class VulkanPipeline : public IGpuSceneMergePipeline, boost::noncopyable {
 public:
     struct LayoutBinding {
         DescriptorBinding binding;
@@ -50,10 +43,8 @@ public:
     };
 
     struct DescriptorSet {
-        /** A non-null layout is borrowed; otherwise this pipeline creates it. */
         VkDescriptorSetLayout layout {VK_NULL_HANDLE};
         std::vector<LayoutBinding> bindings;
-        /** Number of descriptor sets to allocate for an owned layout. */
         uint32_t copies {0};
         VkDescriptorSetLayoutCreateFlags flags {0};
     };
@@ -71,21 +62,9 @@ public:
         std::string fragmentEntry;
         std::string computeEntry;
         std::string raygenEntry;
-        /**
-         * Colour attachment formats, in attachment order, for dynamic
-         * rendering. One entry for a normal pass, several for a G-buffer.
-         */
         std::vector<VkFormat> colorFormats;
-        /** UNDEFINED means no depth attachment. */
         VkFormat depthFormat {VK_FORMAT_UNDEFINED};
-        /**
-         * Which views a draw broadcasts to, zero for none. Must match the
-         * VkRenderingInfo it is used with; a mismatch is a validation error.
-         */
         uint32_t viewMask {0};
-
-        // State OpenGL would have set per draw. In Vulkan it is baked in, which
-        // is why these belong to the pipeline's identity rather than to a call.
         BlendMode blend {BlendMode::None};
         FaceCullMode cull {FaceCullMode::None};
         bool depthTest {false};
@@ -94,14 +73,7 @@ public:
         float depthBiasConstantFactor {0.0f};
         float depthBiasSlopeFactor {0.0f};
         std::vector<DescriptorSet> descriptorSets;
-        /** Fragment push constants shared by graphics layouts (mega-draw uses
-            two uints for triangle base and material-gated range selection). */
         std::vector<VkPushConstantRange> pushConstants;
-
-        /**
-         * Empty means the vertex shader synthesises its own geometry from
-         * SV_VertexID and no vertex buffer is bound.
-         */
         std::vector<VkVertexInputBindingDescription> vertexBindings;
         std::vector<VkVertexInputAttributeDescription> vertexAttributes;
     };
@@ -118,6 +90,7 @@ public:
     VkPipeline handle() const { return _pipeline; }
     VkPipelineLayout layout() const { return _layout; }
     VkDescriptorSet descriptorSet(uint32_t set, uint32_t copy) const;
+    void merge(ICommandBuffer &commandBuffer, const GpuSceneMerge &merge) override;
 
 private:
     VulkanDevice &_device;

@@ -23,6 +23,7 @@
 #include "reone/graphics/npyutil.h"
 #include "reone/graphics/options.h"
 #include "reone/graphics/textureregistry.h"
+#include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/textureutil.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/debugscope.h"
@@ -291,7 +292,7 @@ void VulkanScenePipeline::shadowPass(VkCommandBuffer cmd,
         auto uniformSet = _renderer.uniformSet();
         std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
         offsets[UniformBlockBindingPoints::globals] = globalsOffset;
-        vkCmdBindIndexBuffer(cmd, scene.indices.buffer->handle(),
+        vkCmdBindIndexBuffer(cmd, toVulkanBuffer(*scene.indices.buffer).handle(),
                              scene.indices.offset, VK_INDEX_TYPE_UINT32);
 
         auto drawRange = [&](uint32_t triangleBase, uint32_t triangleCount,
@@ -419,7 +420,7 @@ void VulkanScenePipeline::geometryPass(VkCommandBuffer cmd, uint32_t globalsOffs
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
                                 VulkanDescriptors::kMegaDrawSet, 1, &_resolveMaterialSet, 0,
                                 nullptr);
-        vkCmdBindIndexBuffer(cmd, scene.indices.buffer->handle(), scene.indices.offset,
+        vkCmdBindIndexBuffer(cmd, toVulkanBuffer(*scene.indices.buffer).handle(), scene.indices.offset,
                              VK_INDEX_TYPE_UINT32);
 
         if (scene.opaqueTriangleCount != 0) {
@@ -496,7 +497,7 @@ void VulkanScenePipeline::blendedPass(VkCommandBuffer cmd, uint32_t globalsOffse
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
                                 VulkanDescriptors::kMegaDrawSet, 1, &_resolveMaterialSet,
                                 0, nullptr);
-        vkCmdBindIndexBuffer(cmd, scene.indices.buffer->handle(), scene.indices.offset,
+        vkCmdBindIndexBuffer(cmd, toVulkanBuffer(*scene.indices.buffer).handle(), scene.indices.offset,
                              VK_INDEX_TYPE_UINT32);
         // Submission order, deliberately. See megadraw.slang.
         const MegaDrawPushConstants push {scene.opaqueTriangleCount, 2};

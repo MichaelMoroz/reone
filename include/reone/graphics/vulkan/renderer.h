@@ -22,6 +22,7 @@
 #include <functional>
 
 #include "../renderer.h"
+#include "../gpuscenecontext.h"
 
 #include "descriptors.h"
 #include "debugscope.h"
@@ -41,6 +42,8 @@ namespace reone {
 
 namespace graphics {
 
+class Mesh;
+
 /**
  * The frame as Vulkan sees it: acquire a swapchain image, record a command
  * buffer, submit, present.
@@ -49,7 +52,7 @@ namespace graphics {
  * CPU can record frame N+1 while the GPU is still working on frame N, and the
  * fence is what stops it from getting further ahead than that.
  */
-class VulkanRenderer : public IRenderer, boost::noncopyable {
+class VulkanRenderer : public IRenderer, public IGpuSceneContext, boost::noncopyable {
 public:
     static constexpr int kFramesInFlight = 2;
 
@@ -94,6 +97,11 @@ public:
     /** The colour beginFrame clears to. */
     void setClearColor(glm::vec4 color) { _clearColor = color; }
 
+    std::unique_ptr<IBuffer> makeBuffer() override;
+    std::unique_ptr<IGpuSceneMergePipeline> makeGpuSceneMergePipeline() override;
+    void prepareMesh(const Mesh &mesh) override;
+    uint64_t resourceGeneration() const override;
+
     VulkanDevice &device() { return _device; }
     VulkanUniformRing &uniformRing() { return _uniformRing; }
     VulkanDescriptors &descriptors() { return _descriptors; }
@@ -119,7 +127,9 @@ public:
 
     /** The command buffer being recorded, valid only between begin and end. */
     VkCommandBuffer commandBuffer() const { return _frames[_frameIndex].commandBuffer; }
-    ICommandBuffer &recordingCommandBuffer() { return _frames[_frameIndex].recordingCommandBuffer; }
+    ICommandBuffer &recordingCommandBuffer() {
+        return _frames[_frameIndex].recordingCommandBuffer;
+    }
 
     /** The image being rendered into this frame, and its view. */
     VkImageView currentImageView() const { return _swapchain.imageView(_imageIndex); }

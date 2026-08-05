@@ -17,6 +17,9 @@
 
 #include "reone/graphics/vulkan/pipeline.h"
 
+#include "reone/graphics/vulkan/buffer.h"
+#include "reone/graphics/vulkan/commandbuffer.h"
+
 #include "reone/graphics/vulkan/device.h"
 
 namespace reone {
@@ -347,6 +350,43 @@ VkDescriptorSet VulkanPipeline::descriptorSet(uint32_t set, uint32_t copy) const
     if (set >= _sets.size() || copy >= _sets[set].size())
         throw std::out_of_range("Vulkan: descriptor set copy is not owned by this pipeline");
     return _sets[set][copy];
+}
+
+void VulkanPipeline::merge(ICommandBuffer &commandBuffer, const GpuSceneMerge &merge) {
+    DescriptorWriteBuilder writes(_device.handle());
+    const auto set = descriptorSet(0, merge.frameIndex);
+    for (uint32_t i = 0; i < merge.bufferCount; ++i) {
+        const auto &buffer = merge.buffers[i];
+        VkDescriptorBufferInfo info {toVulkanBuffer(*buffer.buffer).handle(), buffer.offset,
+                                     buffer.size};
+        writes.writeBuffer(set, {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, info);
+    }
+    writes.apply();
+    struct PushConstants {
+        uint32_t objectCount;
+        uint32_t opaqueObjectCount;
+        uint32_t vertexCount;
+        uint32_t triangleCount;
+        uint32_t opaqueTriangleCount;
+        uint32_t pad[3] {};
+        glm::vec4 cameraPosition {0.0f};
+    } constants;
+    static_assert(sizeof(PushConstants) == 48);
+    constants.objectCount = merge.objectCount;
+    constants.opaqueObjectCount = merge.opaqueObjectCount;
+    constants.vertexCount = merge.vertexCount;
+    constants.triangleCount = merge.triangleCount;
+    constants.opaqueTriangleCount = merge.opaqueTriangleCount;
+    constants.cameraPosition = merge.cameraPosition;
+    const auto &nativeCommandBuffer = toVulkanCommandBuffer(commandBuffer);
+    vkCmdBindPipeline(nativeCommandBuffer.handle(), VK_PIPELINE_BIND_POINT_COMPUTE, _pipeline);
+    vkCmdBindDescriptorSets(nativeCommandBuffer.handle(), VK_PIPELINE_BIND_POINT_COMPUTE, _layout,
+                            0, 1, &set, 0, nullptr);
+    vkCmdPushConstants(nativeCommandBuffer.handle(), _layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                       sizeof(constants), &constants);
+    const auto threads = std::max(constants.vertexCount, constants.triangleCount);
+    if (threads)
+        vkCmdDispatch(nativeCommandBuffer.handle(), (threads + 63) / 64, 1, 1);
 }
 
 } // namespace graphics

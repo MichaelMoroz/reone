@@ -17,6 +17,9 @@
 
 #include "reone/graphics/vulkan/renderer.h"
 
+#include "reone/graphics/vulkan/buffer.h"
+#include "reone/graphics/vulkan/pipeline.h"
+
 #include "reone/graphics/vulkan/renderpass.h"
 
 #include "SDL3/SDL.h"
@@ -515,6 +518,44 @@ void VulkanRenderer::endFrame() {
 
     _frameIndex = (_frameIndex + 1) % kFramesInFlight;
     _inFrame = false;
+}
+
+std::unique_ptr<IBuffer> VulkanRenderer::makeBuffer() {
+    return std::make_unique<VulkanBuffer>(_device);
+}
+
+std::unique_ptr<IGpuSceneMergePipeline> VulkanRenderer::makeGpuSceneMergePipeline() {
+    constexpr uint32_t kStorageBufferCount = 11;
+    constexpr uint32_t kDescriptorSetCopies = 2;
+    std::vector<VulkanPipeline::LayoutBinding> bindings;
+    bindings.reserve(kStorageBufferCount);
+    for (uint32_t i = 0; i < kStorageBufferCount; ++i) {
+        bindings.push_back({{i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, 1,
+                            VK_SHADER_STAGE_COMPUTE_BIT});
+    }
+    VkPushConstantRange pushConstants {};
+    pushConstants.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pushConstants.size = 48;
+    VulkanPipeline::Config nativeConfig;
+    nativeConfig.type = VulkanPipeline::Config::Type::Compute;
+    nativeConfig.spirv = shaderModule("skin");
+    nativeConfig.computeEntry = "main";
+    nativeConfig.descriptorSets = {{VK_NULL_HANDLE, std::move(bindings),
+                                    kDescriptorSetCopies}};
+    nativeConfig.pushConstants = {pushConstants};
+    auto pipeline = std::make_unique<VulkanPipeline>(_device);
+    pipeline->init(nativeConfig);
+    _device.setObjectName(VK_OBJECT_TYPE_PIPELINE,
+                          reinterpret_cast<uint64_t>(pipeline->handle()), "gpu-scene:merge");
+    return pipeline;
+}
+
+void VulkanRenderer::prepareMesh(const Mesh &mesh) {
+    _resources.get(mesh);
+}
+
+uint64_t VulkanRenderer::resourceGeneration() const {
+    return _resources.generation();
 }
 
 } // namespace graphics

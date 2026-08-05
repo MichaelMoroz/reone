@@ -23,6 +23,39 @@ namespace reone {
 
 namespace graphics {
 
+VulkanBuffer &toVulkanBuffer(IBuffer &buffer) {
+    auto *result = dynamic_cast<VulkanBuffer *>(&buffer);
+    if (!result) {
+        throw std::invalid_argument("Buffer is not implemented by Vulkan");
+    }
+    return *result;
+}
+
+const VulkanBuffer &toVulkanBuffer(const IBuffer &buffer) {
+    return toVulkanBuffer(const_cast<IBuffer &>(buffer));
+}
+
+void VulkanBuffer::initHostVisibleStorage(uint64_t size) {
+    initHostVisible(static_cast<VkDeviceSize>(size), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+}
+
+void VulkanBuffer::initDeviceStorage(uint64_t size, const void *data) {
+    initDeviceLocal(static_cast<VkDeviceSize>(size), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, data);
+}
+
+void VulkanBuffer::initMergedGeometry(uint64_t size) {
+    initDeviceLocal(static_cast<VkDeviceSize>(size),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                    nullptr);
+}
+
+void VulkanBuffer::uploadDeviceStorage(uint64_t offset, uint64_t size, const void *data) {
+    uploadDeviceLocal(static_cast<VkDeviceSize>(offset), static_cast<VkDeviceSize>(size), data);
+}
+
 void VulkanBuffer::initHostVisible(VkDeviceSize size, VkBufferUsageFlags usage) {
     VkBufferCreateInfo bufInfo {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bufInfo.size = size;

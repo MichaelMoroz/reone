@@ -11,6 +11,7 @@
 
 #include <vector>
 
+#include "buffer.h"
 #include "rhi.h"
 
 namespace reone {
@@ -38,6 +39,11 @@ public:
                                    uint32_t dynamicOffsetCount) = 0;
     virtual void draw(uint32_t vertexCount, uint32_t instanceCount) = 0;
     virtual void setScissor(glm::ivec2 offset, glm::uvec2 extent) = 0;
+    /** Make freshly uploaded scene sources readable by the merge compute pass. */
+    virtual void makeGpuSceneSourcesAvailable(const IBuffer &vertices,
+                                              const IBuffer &indices) = 0;
+    /** Publish merge-compute output to every scene geometry consumer. */
+    virtual void publishMergedScene() = 0;
 };
 
 } // namespace graphics

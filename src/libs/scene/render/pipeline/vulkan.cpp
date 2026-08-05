@@ -12,6 +12,7 @@
 #include <sstream>
 
 #include "reone/graphics/options.h"
+#include "reone/graphics/vulkan/renderer.h"
 #include "reone/graphics/vulkan/rayquery.h"
 #include "reone/graphics/vulkan/gpuscene.h"
 #include "reone/graphics/vulkan/scenepipeline.h"
@@ -30,7 +31,7 @@ public:
     }
 
     graphics::VulkanGpuScene::View mergeGeometry(VkCommandBuffer commandBuffer) override {
-        return _owner._deviceGpuScene->update(commandBuffer,
+        return _owner._deviceGpuScene->update(_owner._renderer.recordingCommandBuffer(),
                                               _owner._admissionResult.submission.upload);
     }
 

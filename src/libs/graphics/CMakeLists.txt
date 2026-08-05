@@ -31,6 +31,8 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/font.h
     ${GRAPHICS_INCLUDE_DIR}/frustum.h
     ${GRAPHICS_INCLUDE_DIR}/gpuscene.h
+    ${GRAPHICS_INCLUDE_DIR}/gpuscenecontext.h
+    ${GRAPHICS_INCLUDE_DIR}/buffer.h
     ${GRAPHICS_INCLUDE_DIR}/image.h
     ${GRAPHICS_INCLUDE_DIR}/rayquery.h
     ${GRAPHICS_INCLUDE_DIR}/format/bwmreader.h

@@ -4,29 +4,21 @@
  */
 #pragma once
 
-#include <volk.h>
-
 #include <array>
 #include <memory>
 #include <unordered_map>
 #include <vector>
 
 #include "reone/graphics/gpuscene.h"
+#include "reone/graphics/commandbuffer.h"
+#include "reone/graphics/gpuscenecontext.h"
 
 namespace reone::graphics {
-
-class VulkanBuffer;
-class VulkanPipeline;
-class VulkanRenderer;
 
 /** Native storage and compute publication for a Vulkan-free scene upload. */
 class VulkanGpuScene : boost::noncopyable {
 public:
-    struct BufferView {
-        const VulkanBuffer *buffer {nullptr};
-        VkDeviceSize offset {0};
-        VkDeviceSize size {0};
-    };
+    using BufferView = graphics::BufferView;
     struct PrimitiveId {
         uint64_t sceneScope {0};
         uint32_t objectIndex {0};
@@ -70,9 +62,9 @@ public:
     VulkanGpuScene();
     ~VulkanGpuScene();
 
-    void init(VulkanRenderer &renderer);
+    void init(IGpuSceneContext &context);
     void deinit();
-    View update(VkCommandBuffer cmd, GpuSceneUpload &upload);
+    View update(ICommandBuffer &commandBuffer, GpuSceneUpload &upload);
 
 private:
     struct Frame;
@@ -83,16 +75,16 @@ private:
         uint32_t indexCount {0};
     };
 
-    VulkanRenderer *_renderer {nullptr};
-    std::unique_ptr<VulkanPipeline> _mergePipeline;
+    IGpuSceneContext *_context {nullptr};
+    std::unique_ptr<IGpuSceneMergePipeline> _mergePipeline;
     std::array<std::unique_ptr<Frame>, 2> _frames;
     std::unordered_map<const Mesh *, SourceGeometry> _sourceGeometry;
     std::vector<float> _sourceVertexData;
     std::vector<uint32_t> _sourceIndexData;
-    std::unique_ptr<VulkanBuffer> _sourceVertices;
-    std::unique_ptr<VulkanBuffer> _sourceIndices;
-    std::unique_ptr<VulkanBuffer> _grassFaces;
-    std::vector<std::unique_ptr<VulkanBuffer>> _retiredSourceBuffers;
+    std::unique_ptr<IBuffer> _sourceVertices;
+    std::unique_ptr<IBuffer> _sourceIndices;
+    std::unique_ptr<IBuffer> _grassFaces;
+    std::vector<std::unique_ptr<IBuffer>> _retiredSourceBuffers;
     uint32_t _sourceVertexCapacity {0};
     uint32_t _sourceIndexCapacity {0};
     uint64_t _grassFaceGeneration {0};
