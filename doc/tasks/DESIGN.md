@@ -1207,6 +1207,24 @@ a concrete backend-free class simply takes the plain name, `GpuScene`. What is
 forbidden is a name that says which API it is, wherever it appears outside
 `vulkan/`.
 
+**The parents carry API-neutral *types*, not just API-neutral names** (settled
+2026-08-05, after a first attempt got this wrong). A parent whose signature
+still says `VkFormat`, `VkImageView` or `VkDescriptorSet` is a Vulkan interface
+wearing an `I`, and it makes the gate *worse*: the first cut of step 6a
+introduced three such parents under `include/reone/graphics/` and took the
+Vulkan-token count outside `vulkan/` **from 2 sites to 16**. The seam therefore
+needs neutral types — a `Format` enum, type-safe opaque handles, and whatever
+command-buffer form the clients require — with the translation to Vulkan living
+inside `vulkan/`.
+
+This is knowingly the more expensive of the two options. It buys the thing the
+whole stage exists for: with neutral types the five clients become genuinely
+backend-free and can physically leave `vulkan/` (STR-028). Names-only would have
+been a smaller seam, but the clients could never move, and STR-028 would collapse
+into a rename. **"Minimise the RHI" still governs *within* this choice** — a
+neutral type earns its place by a client needing it, never by symmetry with one
+that does.
+
 This supersedes an earlier reading of stage 3 that proposed *collapsing*
 `IPBRTextures` and `I2DRenderer` on the grounds that one implementation needs no
 interface. **That was wrong for this codebase**: the parent is what keeps the
