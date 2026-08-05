@@ -202,7 +202,7 @@ void ScenePipeline::deinit() {
 }
 
 const GpuScene::View &ScenePipeline::prepareMergedScene(
-    ICommandBuffer &cmd, IVulkanSceneCallbacks &callbacks) {
+    ICommandBuffer &cmd, ISceneCallbacks &callbacks) {
     if (_mergedScenePrepared) {
         return _mergedScene;
     }
@@ -232,12 +232,12 @@ const GpuScene::View &ScenePipeline::prepareMergedScene(
 
 void ScenePipeline::shadowPass(ICommandBuffer &cmd,
                                      uint32_t globalsOffset,
-                                     IVulkanSceneCallbacks &callbacks) {
+                                     ISceneCallbacks &callbacks) {
     R_PROFILE_ZONE("ScenePipeline::shadowPass record");
-    if (_shadow == VulkanSceneShadow::None) {
+    if (_shadow == SceneShadow::None) {
         return;
     }
-    const bool directional = _shadow == VulkanSceneShadow::Directional;
+    const bool directional = _shadow == SceneShadow::Directional;
     auto &image = directional ? *_dirShadows : *_pointShadows;
     const int layers = directional ? kNumShadowCascades : kNumCubeFaces;
     const uint32_t viewMask = (1u << layers) - 1u;
@@ -306,7 +306,7 @@ void ScenePipeline::shadowPass(ICommandBuffer &cmd,
 }
 
 void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
-                                       IVulkanSceneCallbacks &callbacks) {
+                                       ISceneCallbacks &callbacks) {
     R_PROFILE_ZONE("ScenePipeline::geometryPass record");
     const auto &scene = prepareMergedScene(cmd, callbacks);
 
@@ -366,7 +366,7 @@ void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
 }
 
 void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
-                                      IVulkanSceneCallbacks &callbacks) {
+                                      ISceneCallbacks &callbacks) {
     R_PROFILE_ZONE("ScenePipeline::blendedPass record");
     const auto &scene = prepareMergedScene(cmd, callbacks);
     const uint32_t nonOpaqueTriangles =
@@ -491,8 +491,8 @@ void ScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) 
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
 
-Texture &ScenePipeline::render(const VulkanSceneFramePlan &plan,
-                                     IVulkanSceneCallbacks &callbacks) {
+Texture &ScenePipeline::render(const SceneFramePlan &plan,
+                                     ISceneCallbacks &callbacks) {
     auto &cmd = _renderer.recordingCommandBuffer();
     _shadow = plan.shadow;
     _mergedScene = {};
@@ -519,23 +519,23 @@ Texture &ScenePipeline::render(const VulkanSceneFramePlan &plan,
     bool outputResolved = false;
     for (const auto step : plan.steps) {
         switch (step) {
-        case VulkanSceneStep::ProcessPBRTextures:
+        case SceneStep::ProcessPBRTextures:
             _renderer.pbrTextures().process(_renderer.recordingCommandBuffer(), globalsOffset);
             break;
-        case VulkanSceneStep::Shadow:
+        case SceneStep::Shadow:
             shadowPass(cmd, globalsOffset, callbacks);
             break;
-        case VulkanSceneStep::Geometry:
+        case SceneStep::Geometry:
             geometryPass(cmd, globalsOffset, callbacks);
             break;
-        case VulkanSceneStep::PBRResolve:
+        case SceneStep::PBRResolve:
             pbrResolvePass(cmd, globalsOffset);
             outputResolved = true;
             break;
-        case VulkanSceneStep::Blended:
+        case SceneStep::Blended:
             blendedPass(cmd, globalsOffset, callbacks);
             break;
-        case VulkanSceneStep::RetroResolve:
+        case SceneStep::RetroResolve:
             retroResolvePass(cmd, globalsOffset);
             outputResolved = true;
             break;
@@ -644,7 +644,7 @@ static bool isBGRA(Format format) {
 }
 
 std::vector<ScenePipeline::Target> ScenePipeline::targetEntries(
-    const IVulkanSceneCallbacks &callbacks) const {
+    const ISceneCallbacks &callbacks) const {
     if (!_inited) {
         return {};
     }
@@ -655,7 +655,7 @@ std::vector<ScenePipeline::Target> ScenePipeline::targetEntries(
     // the G-buffer here dereferenced a null _gbuffer the moment the render
     // target window was opened.
     if (_primaryRayMode) {
-        entries.push_back({"Traced output", "traced_output", VulkanTargetKind::Color,
+        entries.push_back({"Traced output", "traced_output", TargetKind::Color,
                            _output.get(), ImageLayout::ShaderRead, false});
         // The split behind that image. Without these a traced frame can only
         // be judged as a whole, which cannot separate a noisy channel from a
@@ -663,7 +663,7 @@ std::vector<ScenePipeline::Target> ScenePipeline::targetEntries(
         // and composite passes read and write them as storage images and
         // nothing transitions them afterwards.
         for (const auto &channel : callbacks.primaryTargets()) {
-                entries.push_back({channel.name, channel.dumpName, VulkanTargetKind::Color,
+                entries.push_back({channel.name, channel.dumpName, TargetKind::Color,
                                    channel.image, ImageLayout::General, false});
         }
         return entries;
@@ -675,20 +675,20 @@ std::vector<ScenePipeline::Target> ScenePipeline::targetEntries(
         "g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_lightmap",
         "g_buffer_self_illum", "g_buffer_motion", "g_buffer_material_id"};
     for (int i = 0; i < static_cast<int>(GBufferAttachment::Count); ++i) {
-        auto kind = i == static_cast<int>(GBufferAttachment::EyeNormal) ? VulkanTargetKind::EyeNormal : i == static_cast<int>(GBufferAttachment::Motion) ? VulkanTargetKind::Motion
-                                                                                                             : VulkanTargetKind::Color;
+        auto kind = i == static_cast<int>(GBufferAttachment::EyeNormal) ? TargetKind::EyeNormal : i == static_cast<int>(GBufferAttachment::Motion) ? TargetKind::Motion
+                                                                                                             : TargetKind::Color;
         entries.push_back({kDisplayNames[i], kDumpNames[i], kind, &_gbuffer->color(static_cast<GBufferAttachment>(i)),
                            ImageLayout::ShaderRead, false});
     }
-    entries.push_back({"G-buffer depth", "g_buffer_depth", VulkanTargetKind::Depth,
+    entries.push_back({"G-buffer depth", "g_buffer_depth", TargetKind::Depth,
                        &_gbuffer->depth(), ImageLayout::DepthRead, true});
-    entries.push_back({"Output", "output", VulkanTargetKind::Color,
+    entries.push_back({"Output", "output", TargetKind::Color,
                        _output.get(), ImageLayout::ShaderRead, false});
     return entries;
 }
 
 void *ScenePipeline::renderTargetPreview(const std::string &name, int mode, float scale,
-                                               const IVulkanSceneCallbacks &callbacks) {
+                                               const ISceneCallbacks &callbacks) {
     auto entries = targetEntries(callbacks);
     if (std::none_of(entries.begin(), entries.end(), [&name](const auto &entry) {
             return entry.name == name;
@@ -713,7 +713,7 @@ void *ScenePipeline::renderTargetPreview(const std::string &name, int mode, floa
 }
 
 void ScenePipeline::previewPass(ICommandBuffer &cmd, uint32_t globalsOffset,
-                                      const IVulkanSceneCallbacks &callbacks) {
+                                      const ISceneCallbacks &callbacks) {
     R_PROFILE_ZONE("ScenePipeline::previewPass record");
     if (!_preview) {
         return;
@@ -764,7 +764,7 @@ void ScenePipeline::previewPass(ICommandBuffer &cmd, uint32_t globalsOffset,
 }
 
 void ScenePipeline::dumpTargets(const std::filesystem::path &dir,
-                                      const IVulkanSceneCallbacks &callbacks) {
+                                      const ISceneCallbacks &callbacks) {
     if (!_inited) {
         return;
     }
@@ -970,9 +970,9 @@ void ScenePipeline::dumpTargets(const std::filesystem::path &dir,
          LogChannel::Graphics);
 }
 
-std::vector<VulkanTargetInfo> ScenePipeline::targets(
-    const IVulkanSceneCallbacks &callbacks) const {
-    std::vector<VulkanTargetInfo> result;
+std::vector<TargetInfo> ScenePipeline::targets(
+    const ISceneCallbacks &callbacks) const {
+    std::vector<TargetInfo> result;
     for (const auto &entry : targetEntries(callbacks)) {
         result.push_back({entry.name, entry.kind});
     }

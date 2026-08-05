@@ -11,7 +11,7 @@ class RayQuery;
 class VulkanRenderer;
 class GpuScene;
 struct GraphicsOptions;
-struct VulkanPrimaryRayContext;
+struct PrimaryRayContext;
 } // namespace reone::graphics
 
 namespace reone::scene {
@@ -30,7 +30,7 @@ public:
 
     void init();
     void deinit();
-    void render(const graphics::VulkanPrimaryRayContext &context,
+    void render(const graphics::PrimaryRayContext &context,
                 GpuSceneAdmissionResult admission);
     void restartTemporalHistory();
     graphics::RayQuery &native();

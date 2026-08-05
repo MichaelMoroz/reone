@@ -17,7 +17,7 @@
 
 #include "reone/scene/di/module.h"
 
-#include "reone/scene/render/pipeline/vulkan.h"
+#include "reone/scene/render/pipeline/renderpipeline.h"
 
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/system/logutil.h"
@@ -94,7 +94,7 @@ std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode,
              LogChannel::Graphics);
         mode = RenderMode::PBR;
     }
-    return std::make_unique<VulkanRenderPipeline>(
+    return std::make_unique<RenderPipeline>(
         std::move(targetSize), _options, *_vulkanRenderer, _uniforms, _meshRegistry, _textureRegistry,
         scene, mode == RenderMode::PathTracing);
 }

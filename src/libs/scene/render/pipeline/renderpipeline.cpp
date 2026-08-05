@@ -6,7 +6,7 @@
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  */
-#include "reone/scene/render/pipeline/vulkan.h"
+#include "reone/scene/render/pipeline/renderpipeline.h"
 
 #include <iomanip>
 #include <sstream>
@@ -21,11 +21,11 @@
 
 namespace reone::scene {
 
-class VulkanRenderPipeline::Callbacks : public graphics::IVulkanSceneCallbacks {
+class RenderPipeline::Callbacks : public graphics::ISceneCallbacks {
 public:
-    explicit Callbacks(VulkanRenderPipeline &owner) : _owner(owner) {}
+    explicit Callbacks(RenderPipeline &owner) : _owner(owner) {}
 
-    void renderPrimary(const graphics::VulkanPrimaryRayContext &context) override {
+    void renderPrimary(const graphics::PrimaryRayContext &context) override {
         if (_owner._rayQuery)
             _owner._rayQuery->render(context, std::move(_owner._admissionResult));
     }
@@ -35,8 +35,8 @@ public:
                                               _owner._admissionResult.submission.upload);
     }
 
-    std::vector<graphics::VulkanExternalTarget> primaryTargets() const override {
-        std::vector<graphics::VulkanExternalTarget> result;
+    std::vector<graphics::ExternalTarget> primaryTargets() const override {
+        std::vector<graphics::ExternalTarget> result;
         if (!_owner._rayQuery)
             return result;
         for (const auto &channel : _owner._rayQuery->native().channels())
@@ -45,10 +45,10 @@ public:
     }
 
 private:
-    VulkanRenderPipeline &_owner;
+    RenderPipeline &_owner;
 };
 
-VulkanRenderPipeline::VulkanRenderPipeline(glm::ivec2 targetSize,
+RenderPipeline::RenderPipeline(glm::ivec2 targetSize,
                                            graphics::GraphicsOptions &options,
                                            graphics::VulkanRenderer &renderer,
                                            graphics::Uniforms &uniforms,
@@ -66,11 +66,11 @@ VulkanRenderPipeline::VulkanRenderPipeline(glm::ivec2 targetSize,
     _primaryRayMode(primaryRayMode) {
 }
 
-VulkanRenderPipeline::~VulkanRenderPipeline() {
+RenderPipeline::~RenderPipeline() {
     deinit();
 }
 
-void VulkanRenderPipeline::init() {
+void RenderPipeline::init() {
     if (_inited)
         return;
     _executor = std::make_unique<graphics::ScenePipeline>(
@@ -89,7 +89,7 @@ void VulkanRenderPipeline::init() {
     _inited = true;
 }
 
-void VulkanRenderPipeline::deinit() {
+void RenderPipeline::deinit() {
     if (!_inited)
         return;
     _callbacks.reset();
@@ -104,18 +104,18 @@ void VulkanRenderPipeline::deinit() {
     _inited = false;
 }
 
-graphics::Texture &VulkanRenderPipeline::render(const CameraSceneNode *camera,
+graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
                                                 RenderShadowKind shadow) {
-    graphics::VulkanSceneFramePlan plan;
+    graphics::SceneFramePlan plan;
     switch (shadow) {
     case RenderShadowKind::Directional:
-        plan.shadow = graphics::VulkanSceneShadow::Directional;
+        plan.shadow = graphics::SceneShadow::Directional;
         break;
     case RenderShadowKind::Point:
-        plan.shadow = graphics::VulkanSceneShadow::Point;
+        plan.shadow = graphics::SceneShadow::Point;
         break;
     default:
-        plan.shadow = graphics::VulkanSceneShadow::None;
+        plan.shadow = graphics::SceneShadow::None;
         break;
     }
     auto uploadArena = std::move(_admissionResult.submission.upload);
@@ -127,29 +127,29 @@ graphics::Texture &VulkanRenderPipeline::render(const CameraSceneNode *camera,
     _lastMaterialCount =
         static_cast<uint32_t>(_admissionResult.submission.upload.materials.size());
     if (!_primaryRayMode) {
-        plan.steps.push_back(graphics::VulkanSceneStep::ProcessPBRTextures);
-        plan.steps.push_back(graphics::VulkanSceneStep::Shadow);
-        plan.steps.push_back(graphics::VulkanSceneStep::Geometry);
+        plan.steps.push_back(graphics::SceneStep::ProcessPBRTextures);
+        plan.steps.push_back(graphics::SceneStep::Shadow);
+        plan.steps.push_back(graphics::SceneStep::Geometry);
         if (_options.pbr)
-            plan.steps.push_back(graphics::VulkanSceneStep::PBRResolve);
+            plan.steps.push_back(graphics::SceneStep::PBRResolve);
         else
-            plan.steps.push_back(graphics::VulkanSceneStep::RetroResolve);
+            plan.steps.push_back(graphics::SceneStep::RetroResolve);
         // Transparency composites onto the resolved image, so it follows
         // whichever resolve ran. Raster only: in the traced mode additive
         // sprites belong to the march and drawing them here would double them.
-        plan.steps.push_back(graphics::VulkanSceneStep::Blended);
+        plan.steps.push_back(graphics::SceneStep::Blended);
     }
     return _executor->render(plan, *_callbacks);
 }
 
-std::vector<RenderTargetInfo> VulkanRenderPipeline::targets() const {
+std::vector<RenderTargetInfo> RenderPipeline::targets() const {
     std::vector<RenderTargetInfo> result;
     for (const auto &target : _executor->targets(*_callbacks)) {
         RenderTargetKind kind = RenderTargetKind::Color;
         switch (target.kind) {
-        case graphics::VulkanTargetKind::Depth: kind = RenderTargetKind::Depth; break;
-        case graphics::VulkanTargetKind::EyeNormal: kind = RenderTargetKind::EyeNormal; break;
-        case graphics::VulkanTargetKind::Motion: kind = RenderTargetKind::Motion; break;
+        case graphics::TargetKind::Depth: kind = RenderTargetKind::Depth; break;
+        case graphics::TargetKind::EyeNormal: kind = RenderTargetKind::EyeNormal; break;
+        case graphics::TargetKind::Motion: kind = RenderTargetKind::Motion; break;
         default: break;
         }
         result.push_back({target.name, kind, nullptr});
@@ -157,13 +157,13 @@ std::vector<RenderTargetInfo> VulkanRenderPipeline::targets() const {
     return result;
 }
 
-void *VulkanRenderPipeline::renderTargetPreview(const std::string &name,
+void *RenderPipeline::renderTargetPreview(const std::string &name,
                                                 int mode,
                                                 float scale) {
     return _executor->renderTargetPreview(name, mode, scale, *_callbacks);
 }
 
-void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
+void RenderPipeline::dumpTargets(const std::filesystem::path &dir) {
     info("Vulkan scene contents: " + formatSceneCounts(_gpuScene.counts()),
          LogChannel::Graphics);
     std::ostringstream hash;
@@ -184,7 +184,7 @@ void VulkanRenderPipeline::dumpTargets(const std::filesystem::path &dir) {
     _executor->dumpTargets(dir, *_callbacks);
 }
 
-void VulkanRenderPipeline::restartTemporalHistory() {
+void RenderPipeline::restartTemporalHistory() {
     if (_rayQuery)
         _rayQuery->restartTemporalHistory();
 }

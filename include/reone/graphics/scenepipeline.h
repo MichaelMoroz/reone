@@ -31,7 +31,7 @@ class VulkanRenderer;
 class TextureRegistry;
 struct GraphicsOptions;
 
-enum class VulkanSceneStep {
+enum class SceneStep {
     ProcessPBRTextures,
     Shadow,
     Geometry,
@@ -40,18 +40,18 @@ enum class VulkanSceneStep {
     Blended,
 };
 
-enum class VulkanSceneShadow {
+enum class SceneShadow {
     None,
     Directional,
     Point,
 };
 
-struct VulkanSceneFramePlan {
-    VulkanSceneShadow shadow {VulkanSceneShadow::None};
-    std::vector<VulkanSceneStep> steps;
+struct SceneFramePlan {
+    SceneShadow shadow {SceneShadow::None};
+    std::vector<SceneStep> steps;
 };
 
-struct VulkanPrimaryRayContext {
+struct PrimaryRayContext {
     ICommandBuffer *commandBuffer {nullptr};
     uint32_t globalsOffset {0};
     IImage *output {nullptr};
@@ -60,27 +60,27 @@ struct VulkanPrimaryRayContext {
     glm::vec4 jitter {0.0f};
 };
 
-struct VulkanExternalTarget {
+struct ExternalTarget {
     const char *name {nullptr};
     const char *dumpName {nullptr};
     IImage *image {nullptr};
 };
 
-class IVulkanSceneCallbacks {
+class ISceneCallbacks {
 public:
-    virtual ~IVulkanSceneCallbacks() = default;
-    virtual void renderPrimary(const VulkanPrimaryRayContext &context) = 0;
+    virtual ~ISceneCallbacks() = default;
+    virtual void renderPrimary(const PrimaryRayContext &context) = 0;
     virtual GpuScene::View mergeGeometry(ICommandBuffer &commandBuffer) = 0;
-    virtual std::vector<VulkanExternalTarget> primaryTargets() const = 0;
+    virtual std::vector<ExternalTarget> primaryTargets() const = 0;
 };
 
-enum class VulkanTargetKind { Color,
+enum class TargetKind { Color,
                               Depth,
                               EyeNormal,
                               Motion };
-struct VulkanTargetInfo {
+struct TargetInfo {
     std::string name;
-    VulkanTargetKind kind {VulkanTargetKind::Color};
+    TargetKind kind {TargetKind::Color};
 };
 
 /** Owns native render targets, descriptors, barriers, pipelines and commands. */
@@ -97,12 +97,12 @@ public:
 
     void init();
     void deinit();
-    Texture &render(const VulkanSceneFramePlan &plan, IVulkanSceneCallbacks &callbacks);
-    std::vector<VulkanTargetInfo> targets(const IVulkanSceneCallbacks &callbacks) const;
+    Texture &render(const SceneFramePlan &plan, ISceneCallbacks &callbacks);
+    std::vector<TargetInfo> targets(const ISceneCallbacks &callbacks) const;
     void *renderTargetPreview(const std::string &name, int mode, float scale,
-                              const IVulkanSceneCallbacks &callbacks);
+                              const ISceneCallbacks &callbacks);
     void dumpTargets(const std::filesystem::path &dir,
-                     const IVulkanSceneCallbacks &callbacks);
+                     const ISceneCallbacks &callbacks);
 
 private:
     glm::ivec2 _targetSize;
@@ -113,7 +113,7 @@ private:
     TextureRegistry &_textureRegistry;
     bool _inited {false};
     bool _primaryRayMode {false};
-    VulkanSceneShadow _shadow {VulkanSceneShadow::None};
+    SceneShadow _shadow {SceneShadow::None};
 
     std::unique_ptr<IGBuffer> _gbuffer;
     std::unique_ptr<VulkanImage> _output;
@@ -138,27 +138,27 @@ private:
     struct Target {
         const char *name;
         const char *dumpName;
-        VulkanTargetKind kind;
+        TargetKind kind;
         const IImage *image;
         ImageLayout layout;
         bool depth;
     };
 
     const GpuScene::View &prepareMergedScene(
-        ICommandBuffer &cmd, IVulkanSceneCallbacks &callbacks);
+        ICommandBuffer &cmd, ISceneCallbacks &callbacks);
     void shadowPass(ICommandBuffer &cmd, uint32_t globalsOffset,
-                    IVulkanSceneCallbacks &callbacks);
+                    ISceneCallbacks &callbacks);
     void previewPass(ICommandBuffer &cmd, uint32_t globalsOffset,
-                     const IVulkanSceneCallbacks &callbacks);
+                     const ISceneCallbacks &callbacks);
     void geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
-                      IVulkanSceneCallbacks &callbacks);
+                      ISceneCallbacks &callbacks);
     void retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** G8: the transparent surfaces the G-buffer deliberately leaves out,
         drawn forward onto the resolved image in submission order. */
     void blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
-                     IVulkanSceneCallbacks &callbacks);
+                     ISceneCallbacks &callbacks);
     void pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
-    std::vector<Target> targetEntries(const IVulkanSceneCallbacks &callbacks) const;
+    std::vector<Target> targetEntries(const ISceneCallbacks &callbacks) const;
 };
 
 } // namespace reone::graphics

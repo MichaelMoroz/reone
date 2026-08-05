@@ -23,10 +23,10 @@ namespace reone::scene {
 
 class RayQueryPipeline;
 
-/** Scene-side frame ordering and draw selection for the Vulkan executor. */
-class VulkanRenderPipeline : public IRenderPipeline, boost::noncopyable {
+/** Scene-side frame ordering and draw selection for the scene executor. */
+class RenderPipeline : public IRenderPipeline, boost::noncopyable {
 public:
-    VulkanRenderPipeline(glm::ivec2 targetSize,
+    RenderPipeline(glm::ivec2 targetSize,
                          graphics::GraphicsOptions &options,
                          graphics::VulkanRenderer &renderer,
                          graphics::Uniforms &uniforms,
@@ -34,7 +34,7 @@ public:
                          graphics::TextureRegistry &textureRegistry,
                          GpuScene &gpuScene,
                          bool primaryRayMode = false);
-    ~VulkanRenderPipeline();
+    ~RenderPipeline();
 
     void init() override;
     void deinit();

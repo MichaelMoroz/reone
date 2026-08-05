@@ -55,7 +55,7 @@ const RayQuery &RayQueryPipeline::native() const {
     return *_native;
 }
 
-void RayQueryPipeline::render(const VulkanPrimaryRayContext &context,
+void RayQueryPipeline::render(const PrimaryRayContext &context,
                               GpuSceneAdmissionResult admission) {
     auto &commandBuffer = *context.commandBuffer;
     bool skyBaked = false;
