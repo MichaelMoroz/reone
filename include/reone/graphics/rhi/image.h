@@ -38,6 +38,8 @@ public:
                                             int layers, bool cube) = 0;
     virtual void initCubeArrayAttachment(glm::ivec2 faceExtent, Format format,
                                          int cubes, int mips) = 0;
+    virtual void initSampledLayered(glm::ivec2 extent, Format format, int layers,
+                                    bool cube, const void *data) = 0;
     virtual ImageView attachmentView(int cube, int mip) = 0;
     /** One cube face used as a color attachment in a per-face pass. */
     virtual ImageView faceAttachmentView(int cube, int face, int mip = 0) = 0;
@@ -45,6 +47,8 @@ public:
     virtual void deinit() = 0;
 
     virtual ImageView sampleView() const = 0;
+    /** A single cube from a cube-compatible image. */
+    virtual ImageView cubeSampleView(int cube) = 0;
     virtual Sampler sampleSampler() const = 0;
     virtual Format pixelFormat() const = 0;
     virtual glm::ivec2 extent() const = 0;

@@ -26,29 +26,13 @@
 #include "reone/graphics/texture.h"
 #include "reone/graphics/textureutil.h"
 #include "reone/graphics/uniforms.h"
+#include "reone/graphics/rhi/commandbuffer.h"
+#include "reone/graphics/rhi/descriptors.h"
+#include "reone/graphics/rhi/image.h"
+#include "reone/graphics/rhi/pipelinecache.h"
+#include "reone/graphics/rhi/resources.h"
+#include "reone/graphics/rhi/uniformring.h"
 
-#include "reone/graphics/vulkan/buffer.h"
-#include "reone/graphics/vulkan/descriptors.h"
-#include "reone/graphics/vulkan/descriptorwrites.h"
-#include "reone/graphics/vulkan/device.h"
-#include "reone/graphics/vulkan/image.h"
-#include "reone/graphics/vulkan/mesh.h"
-#include "reone/graphics/vulkan/pipeline.h"
-#include "reone/graphics/vulkan/pipelinecache.h"
-#include "reone/graphics/vulkan/renderer.h"
-#include "reone/graphics/vulkan/resources.h"
-#include "reone/graphics/vulkan/tracingstructure.h"
-
-#ifdef R_ENABLE_FSR
-#include "reone/graphics/vulkan/fsrupscaler.h"
-#endif
-#ifdef R_ENABLE_NRD
-#include "reone/graphics/vulkan/nrddenoiser.h"
-#endif
-
-#ifdef R_ENABLE_NRD
-#include <NRD.h>
-#endif
 #include "reone/system/logutil.h"
 
 #include <chrono>
@@ -79,7 +63,7 @@ struct TraceStats {
 
 } // namespace
 
-VulkanTracingPipeline::VulkanTracingPipeline(VulkanRenderer &renderer,
+VulkanTracingPipeline::VulkanTracingPipeline(IRenderer &renderer,
                                              glm::ivec2 extent,
                                              GraphicsOptions &options) :
     _renderer(renderer), _options(options), _extent(extent) {}
@@ -88,31 +72,22 @@ VulkanTracingPipeline::~VulkanTracingPipeline() {
     deinit();
 }
 
-const DescriptorBinding &VulkanTracingPipeline::binding(const char *name) const {
-    const auto found = _pipeline.bindings.find(name);
-    if (found == _pipeline.bindings.end())
-        throw std::runtime_error("Vulkan: ray-query does not declare binding '" + std::string(name) + "'");
-    return found->second;
-}
-
 void VulkanTracingPipeline::init() {
     if (_inited)
         return;
-    auto &device = _renderer.device();
-    const auto reflection = _renderer.shaderCompiler().reflection("rayquery");
-    _pipeline = _renderer.pipelines().makeRayTracingPipeline(
-        _renderer.shaderModule("rayquery"), reflection, device.maxBindlessSampledImages(),
-        sizeof(TracePushConstants), "rayquery:primaryRay");
-    _bindlessTextureCapacity = _pipeline.bindlessTextureCapacity;
+    _pipeline = _renderer.makeTracingPipeline(
+        {"rayquery", _renderer.reflection("rayquery"), sizeof(TracePushConstants),
+         "rayquery:primaryRay"});
+    _bindlessTextureCapacity = _pipeline->bindlessTextureCapacity();
 
     // A descriptor is required even when no room qualifies. Sampling is gated
     // in the shader, but this black cube keeps the descriptor type valid.
     const float black[4] {0.0f, 0.0f, 0.0f, 1.0f};
-    _skyFallbackCube = std::make_unique<VulkanImage>(device);
+    _skyFallbackCube = _renderer.resources().makeImage("Path-traced sky fallback cube");
     _skyFallbackCube->initSampledLayered({1, 1}, Format::R16G16B16A16Sfloat,
                                          kNumCubeFaces, true, black);
     _skyFallbackCube->setSampler(
-        _renderer.resources().samplers().get(getTextureProperties(TextureUsage::ColorBuffer)));
+        _renderer.resources().sampler(getTextureProperties(TextureUsage::ColorBuffer)));
 
     // The NRD output split: seven storage images in their own set, because
     // the main set's bindless arrays hold the variable-descriptor-count slot
@@ -137,54 +112,31 @@ void VulkanTracingPipeline::init() {
             Format::R32Sfloat,          // canonical positive linear view depth
             Format::R16G16Sfloat,       // canonical current-minus-previous UV motion
         };
-        DescriptorWriteBuilder auxWrites(device.handle());
         static constexpr const char *kAuxBindingNames[kNumAuxImages] {
             "outDiffuse", "outSpecular", "outNormalRoughness", "outViewZ", "outMotion",
             "outNoiseFree", "outDiffFactor", "outDeviceDepth", "outScreenMotion", "outSpecFactor",
             "outGBufferDiffuse", "outGBufferEyeNormal", "outGBufferDepth", "outGBufferMotion"};
         for (int frame = 0; frame < 2; ++frame) {
             for (int i = 0; i < kNumAuxImages; ++i) {
-                auto image = std::make_unique<VulkanImage>(device);
+                auto image = _renderer.resources().makeImage();
                 image->initColorAttachment(_extent, kAuxFormats[i]);
-                auxWrites.writeStorageImage(_pipeline->descriptorSetHandle(2, frame),
-                                             binding(kAuxBindingNames[i]),
-                                             image->sampleView());
+                const TracingBinding binding {kAuxBindingNames[i], *image};
+                _pipeline->updateBindings(2, frame, {&binding, 1});
                 _auxImages[frame][i] = std::move(image);
             }
         }
-        auxWrites.apply();
     }
 
 #ifdef R_ENABLE_NRD
     {
-        // Stage 1 of the NRD integration: prove the library is linked, its
-        // instance comes up, and its resource demands are known. The
-        // dispatches themselves arrive with the output split.
-        const nrd::LibraryDesc &libraryDesc = *nrd::GetLibraryDesc();
-        nrd::DenoiserDesc denoiserDesc {0, nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR};
-        nrd::InstanceCreationDesc creationDesc {};
-        creationDesc.denoisers = &denoiserDesc;
-        creationDesc.denoisersNum = 1;
-        nrd::Instance *instance = nullptr;
-        if (nrd::CreateInstance(creationDesc, instance) == nrd::Result::SUCCESS) {
-            _nrdInstance = instance;
-            const nrd::InstanceDesc &instanceDesc = *nrd::GetInstanceDesc(*instance);
-            info("NRD " + std::to_string(libraryDesc.versionMajor) + "." +
-                 std::to_string(libraryDesc.versionMinor) + "." +
-                 std::to_string(libraryDesc.versionBuild) + " up: " +
-                 std::to_string(instanceDesc.pipelinesNum) + " pipelines, " +
-                 std::to_string(instanceDesc.permanentPoolSize) + " permanent + " +
-                 std::to_string(instanceDesc.transientPoolSize) + " transient pool textures");
-            _nrdDenoiser = std::make_unique<NrdDenoiser>(device, *instance, _extent);
-            _nrdDenoiser->init();
+        _nrdDenoiser = _renderer.makeTracingDenoiser(_extent);
+        if (_nrdDenoiser) {
 
             _compositePipeline = _renderer.makeComputePipeline({"nrd_composite", "main", 2});
             _compositeBindings = _compositePipeline->resolveBindings(
                 {"outputImage", "inNoiseFree", "inDiffFactor", "inSpecFactor",
                  "inDenoisedDiffuse", "inDenoisedSpecular", "inViewZ", "inRawDiffuse",
                  "inRawSpecular"});
-        } else {
-            warn("NRD instance creation failed; denoising stays unavailable");
         }
     }
 #endif
@@ -192,17 +144,16 @@ void VulkanTracingPipeline::init() {
     if (_options.ptFsr) {
         // Both at render resolution: NativeAA does not change the size, and the
         // composite/tonemap pair either side of FSR work on the same grid.
-        _fsrColor = std::make_unique<VulkanImage>(device);
+        _fsrColor = _renderer.resources().makeImage();
         _fsrColor->initColorAttachment(_extent, Format::R16G16B16A16Sfloat);
-        _fsrOutput = std::make_unique<VulkanImage>(device);
+        _fsrOutput = _renderer.resources().makeImage();
         _fsrOutput->initColorAttachment(_extent, Format::R16G16B16A16Sfloat);
 
         _tonemapPipeline = _renderer.makeComputePipeline({"pt_tonemap", "main", 2});
         _tonemapBindings = _tonemapPipeline->resolveBindings({"outputImage", "inColor"});
 
         try {
-            _fsr = std::make_unique<graphics::FsrUpscaler>(device, _extent);
-            _fsr->init();
+            _fsr = _renderer.makeTracingUpscaler(_extent);
         } catch (const std::exception &e) {
             // Losing the upscaler must not lose the frame; it costs the
             // anti-aliasing, since FSR is the only temporal resolve left.
@@ -234,22 +185,19 @@ bool VulkanTracingPipeline::bakeSkyRoom(ICommandBuffer &commandBuffer,
     if (room.meshes.empty())
         return false;
 
-    auto &device = _renderer.device();
     auto &resources = _renderer.resources();
     auto &ring = _renderer.uniformRing();
     auto &descriptors = _renderer.descriptors();
     if (!_skyCube) {
-        _skyCube = std::make_unique<VulkanImage>(device);
+        _skyCube = resources.makeImage("Path-traced sky cube");
         _skyCube->initCubeArrayAttachment({kSkyCubeSize, kSkyCubeSize}, Format::R16G16B16A16Sfloat, 1, 1);
         _skyCube->setSampler(
-            resources.samplers().get(getTextureProperties(TextureUsage::ColorBuffer)));
-        device.setObjectName(VK_OBJECT_TYPE_IMAGE,
-                             reinterpret_cast<uint64_t>(_skyCube->handle()), "Path-traced sky cube");
+            resources.sampler(getTextureProperties(TextureUsage::ColorBuffer)));
     }
     bool createDepth = !_skyDepth[0];
     if (createDepth) {
         for (auto &depth : _skyDepth) {
-            depth = std::make_unique<VulkanImage>(device);
+            depth = resources.makeImage();
             depth->initDepthAttachment({kSkyCubeSize, kSkyCubeSize}, Format::D32Sfloat);
         }
     }
@@ -278,7 +226,7 @@ bool VulkanTracingPipeline::bakeSkyRoom(ICommandBuffer &commandBuffer,
         {0.0f, -1.0f, 0.0f},
     };
     const glm::mat4 projection = glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 10000.0f);
-    const auto uniformSet = _renderer.uniformSet();
+    const auto uniformSet = descriptors.uniformDescriptorSet(_renderer.frameIndex());
 
     for (int face = 0; face < kNumCubeFaces; ++face) {
         GlobalUniforms globals;
@@ -311,25 +259,17 @@ bool VulkanTracingPipeline::bakeSkyRoom(ICommandBuffer &commandBuffer,
                                       depthClear};
         commandBuffer.beginRendering({kSkyCubeSize, kSkyCubeSize}, {color}, &depth, 0, false);
         for (const auto &mesh : room.meshes) {
-            const auto &skyMesh = resources.get(*mesh.mesh);
-            VulkanPipelineCache::Key key;
+            PipelineKey key;
             key.module = "sky";
             key.vertexEntry = "skyVertex";
             key.fragmentEntry = "skyFragment";
-            key.colorFormats = {toVulkanFormat(_skyCube->pixelFormat())};
-            key.depthFormat = toVulkanFormat(Format::D32Sfloat);
+            key.colorFormats = {_skyCube->pixelFormat()};
+            key.depthFormat = Format::D32Sfloat;
             key.depthTest = true;
             key.depthWrite = true;
             key.cull = FaceCullMode::None;
-            key.vertexBindings = VulkanMesh::bindingDescriptions(mesh.mesh->vertexLayout());
-            key.vertexAttributes = VulkanMesh::attributeDescriptions(mesh.mesh->vertexLayout());
-            key.vertexAttributes.erase(
-                std::remove_if(key.vertexAttributes.begin(), key.vertexAttributes.end(),
-                               [](const auto &attribute) {
-                                   return attribute.location != 0 && attribute.location != 2;
-                               }),
-                key.vertexAttributes.end());
-            auto &pipeline = _renderer.pipelines().get(key);
+            key.vertexLayout = mesh.mesh->vertexLayout();
+            const auto pipeline = _renderer.pipelines().get(key);
 
             LocalUniforms locals;
             locals.reset();
@@ -338,17 +278,17 @@ bool VulkanTracingPipeline::bakeSkyRoom(ICommandBuffer &commandBuffer,
             locals.prevModel = mesh.prevTransform;
             locals.uv = mesh.uv;
             offsets[UniformBlockBindingPoints::locals] = ring.push(locals);
-            commandBuffer.bindPipeline(toPipeline(pipeline.handle()));
-            commandBuffer.bindDescriptorSet(toPipelineLayout(pipeline.layout()),
+            commandBuffer.bindPipeline(pipeline.pipeline);
+            commandBuffer.bindDescriptorSet(pipeline.layout,
                                             IDescriptors::kUniformSet,
-                                            toDescriptorSet(uniformSet),
+                                            uniformSet,
                                             offsets.data(), static_cast<uint32_t>(offsets.size()));
-            auto textureSet = descriptors.acquireTextureSet(
+            auto textureSet = descriptors.acquireTextureDescriptorSet(
                 _renderer.frameIndex(), {{TextureUnits::mainTex, &resources.get(*mesh.texture)}});
-            commandBuffer.bindDescriptorSet(toPipelineLayout(pipeline.layout()),
+            commandBuffer.bindDescriptorSet(pipeline.layout,
                                             IDescriptors::kTextureSet,
-                                            toDescriptorSet(textureSet), nullptr, 0);
-            skyMesh.draw(commandBuffer, resources.zeroBuffer());
+                                            textureSet, nullptr, 0);
+            resources.drawMesh(commandBuffer, *mesh.mesh);
         }
         commandBuffer.endRendering();
     }
@@ -369,10 +309,6 @@ void VulkanTracingPipeline::deinit() {
     _compositeBindings.clear();
     _temporalHistoryValid = false;
     _nrdDenoiser.reset();
-    if (_nrdInstance) {
-        nrd::DestroyInstance(*static_cast<nrd::Instance *>(_nrdInstance));
-        _nrdInstance = nullptr;
-    }
 #endif
     _pipeline.reset();
     for (auto &frame : _auxImages) {
@@ -406,7 +342,7 @@ void VulkanTracingPipeline::clearSkyRoom() {
 }
 
 bool VulkanTracingPipeline::supportsSkyTexture(const Texture &texture) const {
-    return VulkanResources::supported(texture.pixelFormat());
+    return _renderer.resources().supports(texture.pixelFormat());
 }
 
 void VulkanTracingPipeline::restartTemporalHistory() {
@@ -461,7 +397,6 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
     const auto frameNumber = input.frameNumber;
     const auto skyBaked = input.skyBaked;
     R_PROFILE_ZONE("VulkanTracingPipeline::render");
-    const auto nativeCommandBuffer = toVulkanCommandBuffer(commandBuffer).handle();
     const int frameIndex = input.frameIndex;
     // A valid traced frame can contain no merged geometry. That path clears
     // the output and returns below, but its auxiliary images are still useful
@@ -485,59 +420,49 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
         previousStats.bindlessTextures = _lastBindlessTextureCount;
         return previousStats;
     }
-    auto &device = _renderer.device();
     frame.traceStats = _renderer.makeBuffer();
     frame.traceStats->initHostVisibleReadback(sizeof(TraceStats));
     std::memset(frame.traceStats->mapped(), 0, sizeof(TraceStats));
 
-    const auto set = _pipeline->descriptorSet(1, _renderer.frameIndex());
-    DescriptorWriteBuilder writes(device.handle());
-    writes.writeStorageImage(toDescriptorSet(set), binding("outputImage"),
-                             output.sampleView());
-    writes.writeAccelerationStructure(
-        set, binding("sceneTLAS"), input.structure.handle());
-    writes.writeBuffer(set, binding("instanceMaterials"),
-                       {nativeBuffer(scene.materials.buffer->rhiHandle()), 0, scene.materials.size});
-    writes.writeBuffer(set, binding("traceStats"),
-                       {nativeBuffer(frame.traceStats->rhiHandle()), 0, frame.traceStats->size()});
-    writes.writeBuffer(set, binding("mergedVertices"),
-                       {nativeBuffer(scene.vertices.buffer->rhiHandle()), scene.vertices.offset, scene.vertices.size});
-    writes.writeBuffer(set, binding("mergedIndices"),
-                       {nativeBuffer(scene.vertices.buffer->rhiHandle()), scene.indices.offset, scene.indices.size});
-    writes.writeBuffer(set, binding("mergedMaterialIds"),
-                       {nativeBuffer(scene.materialIds.buffer->rhiHandle()), scene.materialIds.offset, scene.materialIds.size});
-    writes.apply();
-    const VulkanImage &skyImage = skyBaked ? *_skyCube : *_skyFallbackCube;
-    DescriptorWriteBuilder skyWrite(device.handle());
-    skyWrite.writeSampledImage(toDescriptorSet(set), binding("skyCube"),
-                               skyImage.sampleSampler(),
-                               skyBaked ? toImageView(_skyCube->cubeView(0)) : _skyFallbackCube->sampleView());
-    skyWrite.apply();
+    std::array<TracingBinding, 8> frameBindings {{
+        {"outputImage", output},
+        {"sceneTLAS", input.structure},
+        {"instanceMaterials", {scene.materials.buffer, 0, scene.materials.size}},
+        {"traceStats", {frame.traceStats.get(), 0, frame.traceStats->size()}},
+        {"mergedVertices", scene.vertices},
+        {"mergedIndices", scene.indices},
+        {"mergedMaterialIds", scene.materialIds},
+        {"skyCube", skyBaked ? *_skyCube : *_skyFallbackCube},
+    }};
+    if (skyBaked) {
+        frameBindings.back().imageView = _skyCube->cubeSampleView(0);
+        frameBindings.back().hasImageView = true;
+    }
+    _pipeline->updateBindings(1, _renderer.frameIndex(),
+                              {frameBindings.data(), static_cast<uint32_t>(frameBindings.size())});
     // Texture ids are assigned by the resource cache at upload time. The set is
     // update-after-bind and partially-bound so new assets can take a slot
     // without rebuilding it or populating unrelated descriptors.
     const auto uploadedTextures = _renderer.resources().uploadedTextures();
-    DescriptorWriteBuilder textureWrites(device.handle());
     for (const auto &[id, texture] : uploadedTextures) {
         if (id >= _bindlessTextureCapacity) {
             throw std::runtime_error("Vulkan: ray-query bindless texture array exhausted");
         }
-        textureWrites.writeSampledImage(toDescriptorSet(set),
-                                        binding("bindlessTextures"),
-                                        texture->sampleSampler(), texture->sampleView(), id);
+        TracingBinding textureBinding {"bindlessTextures", *texture};
+        textureBinding.arrayIndex = id;
+        textureBinding.arrayElement = true;
+        _pipeline->updateBindings(1, _renderer.frameIndex(), {&textureBinding, 1});
     }
-    textureWrites.apply();
     const auto uploadedTextureArrays = _renderer.resources().uploadedTextureArrays();
-    DescriptorWriteBuilder textureArrayWrites(device.handle());
     for (const auto &[id, texture] : uploadedTextureArrays) {
         if (id >= _bindlessTextureCapacity) {
             throw std::runtime_error("Vulkan: ray-query bindless texture array exhausted");
         }
-        textureArrayWrites.writeSampledImage(toDescriptorSet(set),
-                                             binding("bindlessTextureArrays"),
-                                             texture->sampleSampler(), texture->sampleView(), id);
+        TracingBinding textureArrayBinding {"bindlessTextureArrays", *texture};
+        textureArrayBinding.arrayIndex = id;
+        textureArrayBinding.arrayElement = true;
+        _pipeline->updateBindings(1, _renderer.frameIndex(), {&textureArrayBinding, 1});
     }
-    textureArrayWrites.apply();
     _lastBindlessTextureCount = static_cast<uint32_t>(uploadedTextures.size());
     {
         // Every aux image lives in GENERAL. The tracked transition is a no-op
@@ -550,14 +475,14 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
     }
     std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
     offsets[0] = globalsOffset;
-    auto uniformSet = _renderer.uniformSet();
+    auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.frameIndex());
     commandBuffer.bindRayTracingPipeline(_pipeline->pipeline());
     commandBuffer.bindRayTracingDescriptorSet(_pipeline->pipelineLayout(), 0,
-                                              toDescriptorSet(uniformSet), offsets.data(),
+                                              uniformSet, offsets.data(),
                                               static_cast<uint32_t>(offsets.size()));
     commandBuffer.bindRayTracingDescriptorSet(_pipeline->pipelineLayout(), 1,
-                                              toDescriptorSet(set), nullptr, 0);
-    const auto auxSet = _pipeline->descriptorSetHandle(2, _renderer.frameIndex());
+                                              _pipeline->descriptorSet(1, _renderer.frameIndex()), nullptr, 0);
+    const auto auxSet = _pipeline->descriptorSet(2, _renderer.frameIndex());
     commandBuffer.bindRayTracingDescriptorSet(_pipeline->pipelineLayout(), 2, auxSet, nullptr, 0);
     // Clamped rather than trusted: the option is user-editable in reone.cfg
     // and a zero would divide the accumulated radiance by zero.
@@ -597,12 +522,12 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
         for (auto *image : traceOutputs) {
             commandBuffer.imageBarrier(*image, ImageUse::RayTracingStore, ImageUse::ComputeRead);
         }
-        NrdDenoiser::Inputs inputs;
-        inputs.diffRadianceHitDist = toVulkanImageView(aux[0]->sampleView());
-        inputs.specRadianceHitDist = toVulkanImageView(aux[1]->sampleView());
-        inputs.normalRoughness = toVulkanImageView(aux[2]->sampleView());
-        inputs.viewZ = toVulkanImageView(aux[3]->sampleView());
-        inputs.motion = toVulkanImageView(aux[4]->sampleView());
+        TracingDenoiserInputs inputs;
+        inputs.diffRadianceHitDist = aux[0].get();
+        inputs.specRadianceHitDist = aux[1].get();
+        inputs.normalRoughness = aux[2].get();
+        inputs.viewZ = aux[3].get();
+        inputs.motion = aux[4].get();
         // The projection arrives carrying the TAA jitter (applied as a clip
         // translate); NRD is owed the unjittered matrix and the sub-pixel
         // offset separately, the latter in pixels with UV-down y.
@@ -610,7 +535,7 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
             glm::translate(glm::vec3(-jitter.x, -jitter.y, 0.0f)) * projection;
         glm::vec2 jitterPixels {jitter.x * 0.5f * static_cast<float>(_extent.x),
                                 -jitter.y * 0.5f * static_cast<float>(_extent.y)};
-        NrdDenoiser::Tuning tuning;
+        TracingDenoiserTuning tuning;
         tuning.maxAccumulatedFrames = _options.ptNrdMaxAccumulatedFrames;
         tuning.maxFastAccumulatedFrames = _options.ptNrdMaxFastAccumulatedFrames;
         tuning.maxStabilizedFrames = _options.ptNrdMaxStabilizedFrames;
@@ -626,7 +551,7 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
         tuning.antiFirefly = _options.ptNrdAntiFirefly;
         const bool restartHistory = frameNumber == 0 || _restartHistoryRequested;
         _restartHistoryRequested = false;
-        _nrdDenoiser->denoise(nativeCommandBuffer, _renderer.frameIndex(), inputs, tuning, view, unjitteredProjection,
+        _nrdDenoiser->denoise(commandBuffer, _renderer.frameIndex(), inputs, tuning, view, unjitteredProjection,
                                jitterPixels, frameNumber, restartHistory);
         if (_options.ptDenoise && _options.ptDebugView == 0) {
             // The noise-free history resets whenever NRD's would: first
@@ -648,7 +573,7 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
             // happens after, in pt_tonemap.
             bool fsrActive = false;
 #ifdef R_ENABLE_FSR
-            fsrActive = _fsr && _fsr->inited();
+            fsrActive = static_cast<bool>(_fsr);
 #endif
             ImageView compositeTarget = output.sampleView();
 #ifdef R_ENABLE_FSR
@@ -694,7 +619,7 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
                 commandBuffer.imageBarrier(*_fsrColor, ImageUse::ComputeStore,
                                            ImageUse::ComputeRead);
 
-                graphics::FsrUpscaler::Inputs fsrInputs;
+                TracingUpscalerInputs fsrInputs;
                 fsrInputs.color = _fsrColor.get();
                 fsrInputs.depth = aux[7].get();
                 fsrInputs.motion = aux[8].get();
@@ -712,7 +637,7 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
                 const glm::vec4 farH = projectionInv * glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
                 const float cameraNear = std::abs(nearH.z / nearH.w);
                 const float cameraFar = std::abs(farH.z / farH.w);
-                _fsr->dispatch(nativeCommandBuffer, fsrInputs, jitterPixels, 1.0f / 60.0f,
+                _fsr->dispatch(commandBuffer, fsrInputs, jitterPixels, 1.0f / 60.0f,
                                cameraNear, cameraFar, verticalFov, _options.ptFsrSharpness,
                                 frameNumber == 0 || temporalReset);
 
@@ -754,13 +679,13 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
 }
 
 std::unique_ptr<ITracingStructure> VulkanTracingPipeline::makeTracingStructure() {
-    return graphics::makeTracingStructure(_renderer.device());
+    return _renderer.makeTracingStructure();
 }
 
 class TracingPipeline::Impl : boost::noncopyable {
 public:
     Impl(IRenderer &renderer, glm::ivec2 extent, GraphicsOptions &options) :
-        _pipeline(dynamic_cast<VulkanRenderer &>(renderer), extent, options) {}
+        _pipeline(renderer, extent, options) {}
 
     VulkanTracingPipeline _pipeline;
 };

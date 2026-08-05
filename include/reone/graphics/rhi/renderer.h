@@ -21,6 +21,7 @@
 #include <memory>
 
 #include "rhi.h"
+#include "tracingpipeline.h"
 #include "../rendering/gpuscenecontext.h"
 
 struct ImDrawData;
@@ -127,6 +128,22 @@ public:
     /** Compile a compute pipeline whose descriptor layout comes from Slang. */
     virtual std::unique_ptr<IComputePipeline> makeComputePipeline(
         const ComputePipelineDesc &desc) = 0;
+
+    /** Reflect the named runtime Slang module through the renderer boundary. */
+    virtual ShaderReflection reflection(const std::string &name) const = 0;
+
+    /** Compile and reflect the tracer's ray-generation pipeline. */
+    virtual std::unique_ptr<ITracingPipeline> makeTracingPipeline(
+        const TracingPipelineDesc &desc) = 0;
+
+    /** Create the vendor denoiser behind its image-based tracing interface. */
+    virtual std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(glm::ivec2 extent) = 0;
+
+    /** Create the vendor temporal upscaler behind its image-based tracing interface. */
+    virtual std::unique_ptr<ITracingUpscaler> makeTracingUpscaler(glm::ivec2 extent) = 0;
+
+    /** Create the frame-local structure used by the trace pass. */
+    virtual std::unique_ptr<ITracingStructure> makeTracingStructure() = 0;
 
     /** The frame slot currently being recorded. */
     virtual int frameIndex() const = 0;

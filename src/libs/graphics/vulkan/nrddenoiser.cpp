@@ -21,6 +21,7 @@
 
 #include "reone/graphics/vulkan/descriptorwrites.h"
 #include "reone/graphics/vulkan/device.h"
+#include "reone/graphics/vulkan/commandbuffer.h"
 #include "reone/system/logutil.h"
 
 #include <cstring>
@@ -31,6 +32,30 @@ using namespace reone::graphics;
 namespace reone {
 
 namespace graphics {
+
+std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(VulkanDevice &device,
+                                                       glm::ivec2 extent) {
+    const nrd::LibraryDesc &libraryDesc = *nrd::GetLibraryDesc();
+    nrd::DenoiserDesc denoiserDesc {0, nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR};
+    nrd::InstanceCreationDesc creationDesc {};
+    creationDesc.denoisers = &denoiserDesc;
+    creationDesc.denoisersNum = 1;
+    nrd::Instance *instance = nullptr;
+    if (nrd::CreateInstance(creationDesc, instance) != nrd::Result::SUCCESS) {
+        warn("NRD instance creation failed; denoising stays unavailable");
+        return nullptr;
+    }
+    const nrd::InstanceDesc &instanceDesc = *nrd::GetInstanceDesc(*instance);
+    info("NRD " + std::to_string(libraryDesc.versionMajor) + "." +
+         std::to_string(libraryDesc.versionMinor) + "." +
+         std::to_string(libraryDesc.versionBuild) + " up: " +
+         std::to_string(instanceDesc.pipelinesNum) + " pipelines, " +
+         std::to_string(instanceDesc.permanentPoolSize) + " permanent + " +
+         std::to_string(instanceDesc.transientPoolSize) + " transient pool textures");
+    auto result = std::make_unique<NrdDenoiser>(device, *instance, extent, true);
+    result->init();
+    return result;
+}
 
 /**
  * Generous and unmeasured on purpose: a REBLUR_DIFFUSE_SPECULAR frame is
@@ -270,13 +295,14 @@ void NrdDenoiser::deinit() {
     _hasHistory = false;
 }
 
-VkImageView NrdDenoiser::viewFor(const nrd::ResourceDesc &resource, const Inputs &inputs) const {
+VkImageView NrdDenoiser::viewFor(const nrd::ResourceDesc &resource,
+                                  const TracingDenoiserInputs &inputs) const {
     switch (resource.type) {
-    case nrd::ResourceType::IN_MV: return inputs.motion;
-    case nrd::ResourceType::IN_NORMAL_ROUGHNESS: return inputs.normalRoughness;
-    case nrd::ResourceType::IN_VIEWZ: return inputs.viewZ;
-    case nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST: return inputs.diffRadianceHitDist;
-    case nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST: return inputs.specRadianceHitDist;
+    case nrd::ResourceType::IN_MV: return toVulkanImage(*inputs.motion).view();
+    case nrd::ResourceType::IN_NORMAL_ROUGHNESS: return toVulkanImage(*inputs.normalRoughness).view();
+    case nrd::ResourceType::IN_VIEWZ: return toVulkanImage(*inputs.viewZ).view();
+    case nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST: return toVulkanImage(*inputs.diffRadianceHitDist).view();
+    case nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST: return toVulkanImage(*inputs.specRadianceHitDist).view();
     case nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST: return _outDiffuse->view();
     case nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST: return _outSpecular->view();
     case nrd::ResourceType::PERMANENT_POOL: return _permanentPool[resource.indexInPool]->view();
@@ -287,15 +313,16 @@ VkImageView NrdDenoiser::viewFor(const nrd::ResourceDesc &resource, const Inputs
     }
 }
 
-void NrdDenoiser::denoise(VkCommandBuffer cmd,
+void NrdDenoiser::denoise(ICommandBuffer &commandBuffer,
                           int frameIndex,
-                          const Inputs &inputs,
-                          const Tuning &tuning,
+                          const TracingDenoiserInputs &inputs,
+                          const TracingDenoiserTuning &tuning,
                           const glm::mat4 &view,
                           const glm::mat4 &projection,
                           const glm::vec2 &jitter,
                           uint32_t frameNumber,
                           bool restartHistory) {
+    const auto cmd = toVulkanCommandBuffer(commandBuffer).handle();
     // Everything NRD touches lives in GENERAL for its whole life; the
     // per-dispatch hazard is handled by execution barriers, not layouts.
     std::vector<VulkanImage *> poolImages;

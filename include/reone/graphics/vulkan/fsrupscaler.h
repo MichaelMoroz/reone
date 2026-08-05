@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "reone/graphics/vulkan/image.h"
+#include "reone/graphics/rhi/tracingpipeline.h"
 
 #include <ffx_fsr2.h>
 #include <ffx_fsr2_vk.h>
@@ -45,7 +46,7 @@ class VulkanDevice;
  * reflection and descriptor-layout creation. Its few direct entry points are
  * compiled through volk so the process has exactly one Vulkan loader owner.
  */
-class FsrUpscaler : boost::noncopyable {
+class FsrUpscaler : public ITracingUpscaler, boost::noncopyable {
 public:
     FsrUpscaler(graphics::VulkanDevice &device, glm::ivec2 extent);
     ~FsrUpscaler() { deinit(); }
@@ -54,25 +55,16 @@ public:
     void deinit();
     bool inited() const { return _inited; }
 
-    struct Inputs {
-        /** Assembled linear HDR at render resolution, jittered, pre-tonemap. */
-        graphics::VulkanImage *color {nullptr};
-        /** Post-projection depth in [0,1], jittered like the colour. */
-        graphics::VulkanImage *depth {nullptr};
-        /** UV-space motion, previous minus current, y down, jitter-free. */
-        graphics::VulkanImage *motion {nullptr};
-        graphics::VulkanImage *output {nullptr};
-    };
-
     /**
      * @param jitter this frame's sub-pixel offset in pixels, the same value NRD
      *               is given - FSR's convention for it is identical
      * @param frameTimeSeconds converted to the milliseconds FSR expects
      * @param reset true on the first frame and after a camera cut
      */
-    void dispatch(VkCommandBuffer cmd, const Inputs &inputs, const glm::vec2 &jitter,
+    void dispatch(ICommandBuffer &commandBuffer, const TracingUpscalerInputs &inputs,
+                  const glm::vec2 &jitter,
                   float frameTimeSeconds, float cameraNear, float cameraFar, float verticalFov,
-                  float sharpness, bool reset);
+                  float sharpness, bool reset) override;
 
     /**
      * Sub-pixel offset for a frame index, from FSR's own Halton(2,3) generator.

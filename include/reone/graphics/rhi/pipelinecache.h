@@ -19,9 +19,11 @@
 
 #include <string>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "rhi.h"
+#include "../mesh.h"
 #include "../types.h"
 #include "../rendering/gpuscene.h"
 
@@ -87,6 +89,8 @@ struct PipelineKey {
     float depthBiasConstantFactor {0.0f};
     float depthBiasSlopeFactor {0.0f};
     FaceCullMode cull {FaceCullMode::None};
+    /** Empty when the vertex shader synthesises geometry from SV_VertexID. */
+    std::optional<Mesh::VertexLayout> vertexLayout;
 };
 
 struct PipelineBinding {

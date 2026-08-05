@@ -21,24 +21,14 @@
 #include <memory>
 #include <unordered_map>
 
-#include <volk.h>
-
 #include "reone/graphics/rendering/rayquery.h"
-#include "reone/graphics/rhi/computepipeline.h"
-#include "reone/graphics/vulkan/descriptorwrites.h"
-#include "reone/graphics/vulkan/pipelinecache.h"
+#include "reone/graphics/rhi/renderer.h"
 
 namespace reone::graphics {
 
-class VulkanImage;
-class VulkanPipeline;
-class VulkanRenderer;
-class FsrUpscaler;
-class NrdDenoiser;
-
 class VulkanTracingPipeline : boost::noncopyable {
 public:
-    VulkanTracingPipeline(VulkanRenderer &renderer, glm::ivec2 extent,
+    VulkanTracingPipeline(IRenderer &renderer, glm::ivec2 extent,
                           GraphicsOptions &options);
     ~VulkanTracingPipeline();
 
@@ -59,18 +49,18 @@ private:
         std::unique_ptr<IBuffer> traceStats;
     };
 
-    VulkanRenderer &_renderer;
+    IRenderer &_renderer;
     GraphicsOptions &_options;
     glm::ivec2 _extent;
-    VulkanPipelineCache::RayTracingPipeline _pipeline;
+    std::unique_ptr<ITracingPipeline> _pipeline;
     std::array<Frame, 2> _frames;
     uint32_t _bindlessTextureCapacity {0};
     uint32_t _lastBindlessTextureCount {0};
     uint64_t _skyCubeRoom {0};
     bool _skyCubeReady {false};
-    std::unique_ptr<VulkanImage> _skyCube;
-    std::array<std::unique_ptr<VulkanImage>, 6> _skyDepth;
-    std::unique_ptr<VulkanImage> _skyFallbackCube;
+    std::unique_ptr<IImage> _skyCube;
+    std::array<std::unique_ptr<IImage>, 6> _skyDepth;
+    std::unique_ptr<IImage> _skyFallbackCube;
 
     struct TracePushConstants {
         uint32_t frameIndex;
@@ -93,28 +83,26 @@ private:
 
     bool _restartHistoryRequested {false};
     bool _inited {false};
-    void *_nrdInstance {nullptr};
 #ifdef R_ENABLE_NRD
-    std::unique_ptr<NrdDenoiser> _nrdDenoiser;
+    std::unique_ptr<ITracingDenoiser> _nrdDenoiser;
     std::unique_ptr<IComputePipeline> _compositePipeline;
     std::vector<ComputeResourceSlot> _compositeBindings;
     glm::vec3 _prevCameraPosition {0.0f};
     bool _temporalHistoryValid {false};
 #endif
 #ifdef R_ENABLE_FSR
-    std::unique_ptr<FsrUpscaler> _fsr;
-    std::unique_ptr<VulkanImage> _fsrColor;
-    std::unique_ptr<VulkanImage> _fsrOutput;
+    std::unique_ptr<ITracingUpscaler> _fsr;
+    std::unique_ptr<IImage> _fsrColor;
+    std::unique_ptr<IImage> _fsrOutput;
     std::unique_ptr<IComputePipeline> _tonemapPipeline;
     std::vector<ComputeResourceSlot> _tonemapBindings;
 #endif
 
     static constexpr int kNumAuxImages = 14;
-    std::array<std::array<std::unique_ptr<VulkanImage>, kNumAuxImages>, 2> _auxImages;
+    std::array<std::array<std::unique_ptr<IImage>, kNumAuxImages>, 2> _auxImages;
     int _lastAuxFrame {-1};
 
     void clearFrame(Frame &frame);
-    const DescriptorBinding &binding(const char *name) const;
 };
 
 } // namespace reone::graphics

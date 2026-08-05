@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -26,6 +27,9 @@
 #include "../texture.h"
 
 namespace reone::graphics {
+
+class ICommandBuffer;
+class Mesh;
 
 /** Device-side resource lookup used while recording backend-free draws. */
 class IResources {
@@ -36,7 +40,7 @@ public:
 
     virtual void deinit() = 0;
     /** Create an image owned by the caller rather than by this resource cache. */
-    virtual std::unique_ptr<IImage> makeImage() = 0;
+    virtual std::unique_ptr<IImage> makeImage(const std::string &name = {}) = 0;
     virtual const IImage &get(const Texture &texture) = 0;
     /** Return the stable bindless id assigned during texture upload, if any. */
     virtual std::optional<uint32_t> textureId(const Texture &texture) = 0;
@@ -47,6 +51,9 @@ public:
     virtual void registerExternal(const Texture &texture, const IImage &image) = 0;
     virtual void unregisterExternal(const Texture &texture) = 0;
     virtual bool isExternal(const Texture &texture) const = 0;
+    virtual bool supports(PixelFormat format) const = 0;
+    /** Bind an uploaded mesh and record its indexed draw. */
+    virtual void drawMesh(ICommandBuffer &commandBuffer, const Mesh &mesh) = 0;
 };
 
 } // namespace reone::graphics

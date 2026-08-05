@@ -24,6 +24,7 @@
 #include <volk.h>
 
 #include "reone/graphics/vulkan/device.h"
+#include "reone/graphics/vulkan/commandbuffer.h"
 #include "reone/system/logutil.h"
 
 using namespace reone::graphics;
@@ -110,18 +111,20 @@ glm::vec2 FsrUpscaler::jitterOffset(int frameIndex, glm::ivec2 extent) {
     return {x, y};
 }
 
-void FsrUpscaler::dispatch(VkCommandBuffer cmd, const Inputs &inputs, const glm::vec2 &jitter,
+void FsrUpscaler::dispatch(ICommandBuffer &commandBuffer, const TracingUpscalerInputs &inputs,
+                           const glm::vec2 &jitter,
                            float frameTimeSeconds, float cameraNear, float cameraFar,
                            float verticalFov, float sharpness, bool reset) {
     if (!_inited || !inputs.color || !inputs.depth || !inputs.motion || !inputs.output) {
         return;
     }
+    const auto cmd = toVulkanCommandBuffer(commandBuffer).handle();
     FfxFsr2DispatchDescription dispatch {};
     dispatch.commandList = ffxGetCommandListVK(cmd);
-    dispatch.color = wrapImage(_context.get(), *inputs.color, L"pt_color");
-    dispatch.depth = wrapImage(_context.get(), *inputs.depth, L"pt_depth");
-    dispatch.motionVectors = wrapImage(_context.get(), *inputs.motion, L"pt_motion");
-    dispatch.output = wrapImage(_context.get(), *inputs.output, L"pt_upscaled");
+    dispatch.color = wrapImage(_context.get(), toVulkanImage(*inputs.color), L"pt_color");
+    dispatch.depth = wrapImage(_context.get(), toVulkanImage(*inputs.depth), L"pt_depth");
+    dispatch.motionVectors = wrapImage(_context.get(), toVulkanImage(*inputs.motion), L"pt_motion");
+    dispatch.output = wrapImage(_context.get(), toVulkanImage(*inputs.output), L"pt_upscaled");
     // Auto exposure is on, so no exposure resource and no reactive masks. The
     // masks are worth revisiting: without them FSR falls back on its own
     // shading-change detection, which AMD says handles transparency "as best it

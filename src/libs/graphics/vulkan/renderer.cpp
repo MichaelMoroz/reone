@@ -17,6 +17,14 @@
 
 #include "reone/graphics/vulkan/renderer.h"
 
+#ifdef R_ENABLE_FSR
+#include "reone/graphics/vulkan/fsrupscaler.h"
+#endif
+#ifdef R_ENABLE_NRD
+#include "reone/graphics/vulkan/nrddenoiser.h"
+#endif
+#include "reone/graphics/vulkan/tracingstructure.h"
+
 #include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/pipeline.h"
 
@@ -620,6 +628,36 @@ std::unique_ptr<IComputePipeline> VulkanRenderer::makeComputePipeline(
                           reinterpret_cast<uint64_t>(toVulkanComputePipeline(*pipeline).handle()),
                           "compute:" + desc.shader);
     return pipeline;
+}
+
+std::unique_ptr<ITracingPipeline> VulkanRenderer::makeTracingPipeline(
+    const TracingPipelineDesc &desc) {
+    return _pipelines.makeTracingPipeline(shaderModule(desc.shader),
+                                          desc.reflection,
+                                          _device.maxBindlessSampledImages(),
+                                          desc.pushConstantSize, desc.label);
+}
+
+std::unique_ptr<ITracingDenoiser> VulkanRenderer::makeTracingDenoiser(glm::ivec2 extent) {
+#ifdef R_ENABLE_NRD
+    return ::reone::graphics::makeTracingDenoiser(_device, extent);
+#else
+    return nullptr;
+#endif
+}
+
+std::unique_ptr<ITracingUpscaler> VulkanRenderer::makeTracingUpscaler(glm::ivec2 extent) {
+#ifdef R_ENABLE_FSR
+    auto upscaler = std::make_unique<FsrUpscaler>(_device, extent);
+    upscaler->init();
+    return upscaler;
+#else
+    return nullptr;
+#endif
+}
+
+std::unique_ptr<ITracingStructure> VulkanRenderer::makeTracingStructure() {
+    return graphics::makeTracingStructure(_device);
 }
 
 void VulkanRenderer::prepareMesh(const Mesh &mesh) {

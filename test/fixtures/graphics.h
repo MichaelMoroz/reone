@@ -47,6 +47,12 @@ public:
     MOCK_METHOD(std::unique_ptr<IBuffer>, makeBuffer, (), (override));
     MOCK_METHOD(std::unique_ptr<IComputePipeline>, makeComputePipeline,
                 (const ComputePipelineDesc &), (override));
+    MOCK_METHOD(ShaderReflection, reflection, (const std::string &), (const override));
+    MOCK_METHOD(std::unique_ptr<ITracingPipeline>, makeTracingPipeline,
+                (const TracingPipelineDesc &), (override));
+    MOCK_METHOD(std::unique_ptr<ITracingDenoiser>, makeTracingDenoiser, (glm::ivec2), (override));
+    MOCK_METHOD(std::unique_ptr<ITracingUpscaler>, makeTracingUpscaler, (glm::ivec2), (override));
+    MOCK_METHOD(std::unique_ptr<ITracingStructure>, makeTracingStructure, (), (override));
     MOCK_METHOD(void, prepareMesh, (const Mesh &), (override));
     MOCK_METHOD(uint64_t, resourceGeneration, (), (const override));
     MOCK_METHOD(void, init, (), (override));

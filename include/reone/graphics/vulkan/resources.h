@@ -54,7 +54,7 @@ public:
     }
 
     void deinit() override;
-    std::unique_ptr<IImage> makeImage() override;
+    std::unique_ptr<IImage> makeImage(const std::string &name = {}) override;
 
     /** The sampler cache, for images this class did not upload. */
     VulkanSamplers &samplers() { return _samplers; }
@@ -124,6 +124,7 @@ public:
     bool isExternal(const Texture &texture) const override {
         return _external.find(&texture) != _external.end();
     }
+    bool supports(PixelFormat format) const override { return supported(format); }
 
     /**
      * A small zero-filled buffer, bound at VulkanMesh::kZeroBinding so that
@@ -133,6 +134,7 @@ public:
 
     /** Upload @p mesh if it has not been seen, and return it. */
     const VulkanMesh &get(const Mesh &mesh);
+    void drawMesh(ICommandBuffer &commandBuffer, const Mesh &mesh) override;
 
     /**
      * Monotonically changes whenever module-owned uploads are discarded.

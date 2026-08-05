@@ -21,6 +21,8 @@
 
 #include <vk_mem_alloc.h>
 
+#include <string>
+
 #include "reone/graphics/rhi/image.h"
 
 #include "rhi.h"
@@ -32,7 +34,7 @@ namespace graphics {
 class VulkanDevice;
 class VulkanImage;
 
-std::unique_ptr<IImage> makeImage(VulkanDevice &device);
+std::unique_ptr<IImage> makeImage(VulkanDevice &device, const std::string &name = {});
 VulkanImage &toVulkanImage(IImage &image);
 const VulkanImage &toVulkanImage(const IImage &image);
 
@@ -47,8 +49,8 @@ const VulkanImage &toVulkanImage(const IImage &image);
  */
 class VulkanImage : public IImage, boost::noncopyable {
 public:
-    VulkanImage(VulkanDevice &device) :
-        _device(device) {
+    VulkanImage(VulkanDevice &device, std::string name = {}) :
+        _device(device), _name(std::move(name)) {
     }
 
     ~VulkanImage() override { deinit(); }
@@ -253,6 +255,7 @@ public:
     VkImage handle() const { return _image; }
     VkImageView view() const { return _view; }
     ImageView sampleView() const override { return toImageView(_view); }
+    ImageView cubeSampleView(int cube) override { return toImageView(cubeView(cube)); }
 
     /**
      * The sampler this image should be read through, or null for the default.
@@ -285,6 +288,9 @@ private:
     VkFormat _format {VK_FORMAT_UNDEFINED};
     uint32_t _layers {1};
     VkImageLayout _layout {VK_IMAGE_LAYOUT_UNDEFINED};
+    std::string _name;
+
+    void nameObject();
 };
 
 } // namespace graphics

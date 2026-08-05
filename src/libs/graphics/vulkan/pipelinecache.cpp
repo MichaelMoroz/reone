@@ -17,6 +17,11 @@
 
 #include "reone/graphics/vulkan/pipelinecache.h"
 
+#include "reone/graphics/vulkan/buffer.h"
+#include "reone/graphics/vulkan/image.h"
+#include "reone/graphics/vulkan/mesh.h"
+#include "reone/graphics/vulkan/tracingstructure.h"
+
 #include "reone/graphics/vulkan/rhi.h"
 
 #include "reone/graphics/vulkan/device.h"
@@ -166,11 +171,90 @@ PipelineBinding VulkanPipelineCache::get(const PipelineKey &key) {
     for (auto format : key.colorFormats) {
         nativeKey.colorFormats.push_back(toVulkanFormat(format));
     }
+    if (key.vertexLayout) {
+        nativeKey.vertexBindings = VulkanMesh::bindingDescriptions(*key.vertexLayout);
+        nativeKey.vertexAttributes = VulkanMesh::attributeDescriptions(*key.vertexLayout);
+    }
     auto &pipeline = get(nativeKey);
     return {toPipeline(pipeline.handle()), toPipelineLayout(pipeline.layout())};
 }
 
-VulkanPipelineCache::RayTracingPipeline VulkanPipelineCache::makeRayTracingPipeline(
+namespace {
+
+class VulkanRayTracingPipeline : public ITracingPipeline {
+public:
+    VulkanRayTracingPipeline(VulkanDevice &device, std::unique_ptr<VulkanPipeline> pipeline,
+                             std::unordered_map<std::string, DescriptorBinding> bindings,
+                             uint32_t bindlessTextureCapacity) :
+        _device(device), _pipeline(std::move(pipeline)), _bindings(std::move(bindings)),
+        _bindlessTextureCapacity(bindlessTextureCapacity) {}
+
+    Pipeline pipeline() const override { return _pipeline->pipeline(); }
+    PipelineLayout pipelineLayout() const override { return _pipeline->pipelineLayout(); }
+    DescriptorSet descriptorSet(uint32_t set, uint32_t frameIndex) const override {
+        return _pipeline->descriptorSetHandle(set, frameIndex);
+    }
+    uint32_t bindlessTextureCapacity() const override { return _bindlessTextureCapacity; }
+
+    void updateBindings(uint32_t set, uint32_t frameIndex,
+                        const TracingBindingSet &bindings) override {
+        DescriptorWriteBuilder writes(_device.handle());
+        const auto descriptorSet = _pipeline->descriptorSet(set, frameIndex);
+        for (uint32_t i = 0; i < bindings.count; ++i) {
+            const auto &source = bindings.bindings[i];
+            const auto &target = binding(source.name);
+            if (source.structure) {
+                writes.writeAccelerationStructure(descriptorSet, target,
+                                                  toVulkanTracingStructure(*source.structure).handle());
+            } else if (source.buffer.buffer) {
+                writes.writeBuffer(descriptorSet, target,
+                                  {toVulkanBuffer(*source.buffer.buffer).handle(), source.buffer.offset,
+                                   source.buffer.size});
+            } else if (source.images) {
+                for (uint32_t index = 0; index < source.imageCount; ++index) {
+                    if (!source.images[index]) {
+                        continue;
+                    }
+                    const auto &image = toVulkanImage(*source.images[index]);
+                    writes.writeSampledImage(toDescriptorSet(descriptorSet), target,
+                                             image.sampleSampler(), image.sampleView(), index);
+                }
+            } else if (source.image) {
+                const auto &image = toVulkanImage(*source.image);
+                const auto imageView = source.hasImageView ? source.imageView : image.sampleView();
+                if (target.type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) {
+                    writes.writeStorageImage(toDescriptorSet(descriptorSet), target, imageView);
+                } else {
+                    writes.writeSampledImage(toDescriptorSet(descriptorSet), target,
+                                             image.sampleSampler(), imageView,
+                                             source.arrayElement ? source.arrayIndex : 0);
+                }
+            } else {
+                throw std::invalid_argument("Vulkan: ray-query binding has no resource");
+            }
+        }
+        writes.apply();
+    }
+
+private:
+    const DescriptorBinding &binding(const char *name) const {
+        const auto found = _bindings.find(name);
+        if (found == _bindings.end()) {
+            throw std::runtime_error("Vulkan: ray-query does not declare binding '" +
+                                     std::string(name) + "'");
+        }
+        return found->second;
+    }
+
+    VulkanDevice &_device;
+    std::unique_ptr<VulkanPipeline> _pipeline;
+    std::unordered_map<std::string, DescriptorBinding> _bindings;
+    uint32_t _bindlessTextureCapacity {0};
+};
+
+} // namespace
+
+std::unique_ptr<ITracingPipeline> VulkanPipelineCache::makeTracingPipeline(
     const std::vector<uint32_t> &spirv, const ShaderReflection &reflection,
     uint32_t bindlessTextureCapacity, uint32_t pushConstantSize, const std::string &label) {
     if (bindlessTextureCapacity == 0)
@@ -178,8 +262,7 @@ VulkanPipelineCache::RayTracingPipeline VulkanPipelineCache::makeRayTracingPipel
     if (reflection.stage != ShaderStage::Unknown && reflection.stage != ShaderStage::RayGeneration)
         throw std::runtime_error("Vulkan: ray-query entry point is not a ray-generation shader");
 
-    RayTracingPipeline result;
-    result.bindlessTextureCapacity = bindlessTextureCapacity;
+    std::unordered_map<std::string, DescriptorBinding> reflectedBindings;
     std::vector<VulkanPipeline::LayoutBinding> bindings;
     std::vector<VulkanPipeline::LayoutBinding> auxBindings;
     for (const auto &reflected : reflection.bindings) {
@@ -205,7 +288,7 @@ VulkanPipelineCache::RayTracingPipeline VulkanPipelineCache::makeRayTracingPipel
         default: throw std::runtime_error("Vulkan: ray-query reflection has an unsupported descriptor kind");
         }
         const DescriptorBinding target {reflected.binding, type};
-        if (!result.bindings.emplace(reflected.name, target).second)
+        if (!reflectedBindings.emplace(reflected.name, target).second)
             throw std::runtime_error("Vulkan: ray-query reflects binding '" + reflected.name + "' twice");
         auto &setBindings = reflected.set == 1 ? bindings : auxBindings;
         setBindings.push_back({target, bindless ? bindlessTextureCapacity : reflected.count,
@@ -226,11 +309,12 @@ VulkanPipelineCache::RayTracingPipeline VulkanPipelineCache::makeRayTracingPipel
                               VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT},
                              {VK_NULL_HANDLE, std::move(auxBindings), 2}};
     config.pushConstantSize = pushConstantSize;
-    result.pipeline = std::make_unique<VulkanPipeline>(_device);
-    result.pipeline->init(config);
+    auto pipeline = std::make_unique<VulkanPipeline>(_device);
+    pipeline->init(config);
     _device.setObjectName(VK_OBJECT_TYPE_PIPELINE,
-                          reinterpret_cast<uint64_t>(result.pipeline->handle()), label);
-    return result;
+                          reinterpret_cast<uint64_t>(pipeline->handle()), label);
+    return std::make_unique<VulkanRayTracingPipeline>(
+        _device, std::move(pipeline), std::move(reflectedBindings), bindlessTextureCapacity);
 }
 
 } // namespace graphics

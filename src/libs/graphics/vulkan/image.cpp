@@ -25,8 +25,8 @@ namespace reone {
 
 namespace graphics {
 
-std::unique_ptr<IImage> makeImage(VulkanDevice &device) {
-    return std::make_unique<VulkanImage>(device);
+std::unique_ptr<IImage> makeImage(VulkanDevice &device, const std::string &name) {
+    return std::make_unique<VulkanImage>(device, name);
 }
 
 VulkanImage &toVulkanImage(IImage &image) {
@@ -35,6 +35,13 @@ VulkanImage &toVulkanImage(IImage &image) {
 
 const VulkanImage &toVulkanImage(const IImage &image) {
     return dynamic_cast<const VulkanImage &>(image);
+}
+
+void VulkanImage::nameObject() {
+    if (!_name.empty()) {
+        _device.setObjectName(VK_OBJECT_TYPE_IMAGE,
+                              reinterpret_cast<uint64_t>(_image), _name);
+    }
 }
 
 static VkDeviceSize texelSize(VkFormat format) {
@@ -280,6 +287,7 @@ void VulkanImage::initSampledLayered(glm::ivec2 extent,
                        &_image, &_allocation, nullptr) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: layered image allocation failed");
     }
+    nameObject();
 
     VkImageViewCreateInfo viewInfo {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     viewInfo.image = _image;
@@ -721,6 +729,7 @@ void VulkanImage::initSampledCubeArray(glm::ivec2 faceExtent, VkFormat format,
                        &_image, &_allocation, nullptr) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: cube array image allocation failed");
     }
+    nameObject();
 
     VkImageViewCreateInfo viewInfo {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     viewInfo.image = _image;
@@ -939,6 +948,7 @@ void VulkanImage::initColorAttachment(glm::ivec2 extent, VkFormat format) {
                        &_image, &_allocation, nullptr) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: colour attachment allocation failed");
     }
+    nameObject();
 
     VkImageViewCreateInfo viewInfo {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     viewInfo.image = _image;
@@ -980,6 +990,7 @@ void VulkanImage::initDepth(glm::ivec2 extent, VkFormat format) {
                        &_image, &_allocation, nullptr) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: depth image allocation failed");
     }
+    nameObject();
 
     VkImageViewCreateInfo viewInfo {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     viewInfo.image = _image;

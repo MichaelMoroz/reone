@@ -21,6 +21,7 @@
 
 #include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/image.h"
+#include "reone/graphics/rhi/tracingpipeline.h"
 
 #include <NRD.h>
 
@@ -42,41 +43,16 @@ class VulkanDevice;
  * NVIDIA RTX SDKs license and GPL-3 mutually exclude each other in a
  * distributed binary.
  */
-class NrdDenoiser : boost::noncopyable {
+class NrdDenoiser : public ITracingDenoiser, boost::noncopyable {
 public:
-    /** The trace pass's split, one view per NRD input. */
-    struct Inputs {
-        VkImageView motion {VK_NULL_HANDLE};
-        VkImageView normalRoughness {VK_NULL_HANDLE};
-        VkImageView viewZ {VK_NULL_HANDLE};
-        VkImageView diffRadianceHitDist {VK_NULL_HANDLE};
-        VkImageView specRadianceHitDist {VK_NULL_HANDLE};
-    };
+    NrdDenoiser(VulkanDevice &device, nrd::Instance &instance, glm::ivec2 extent,
+                bool ownsInstance = false) :
+        _device(device), _instance(instance), _extent(extent), _ownsInstance(ownsInstance) {}
 
-    /**
-     * Live REBLUR tuning, mirrored from the Path tracing panel's dials.
-     * Defaults match GraphicsOptions - the user-graded 2026-07-29 values.
-     */
-    struct Tuning {
-        int maxAccumulatedFrames {6};
-        int maxFastAccumulatedFrames {1};
-        int maxStabilizedFrames {30};
-        int historyFixFrames {4};
-        float diffusePrepassBlurRadius {1.0f};
-        float specularPrepassBlurRadius {1.0f};
-        float minBlurRadius {0.5f};
-        float maxBlurRadius {32.0f};
-        float lobeAngleFraction {0.77f};
-        float roughnessFraction {0.74f};
-        float planeDistanceSensitivity {0.099f};
-        float disocclusionThreshold {0.003f};
-        bool antiFirefly {true};
-    };
-
-    NrdDenoiser(VulkanDevice &device, nrd::Instance &instance, glm::ivec2 extent) :
-        _device(device), _instance(instance), _extent(extent) {}
-
-    ~NrdDenoiser() { deinit(); }
+    ~NrdDenoiser() override {
+        deinit();
+        if (_ownsInstance) nrd::DestroyInstance(_instance);
+    }
 
     void init();
     void deinit();
@@ -87,22 +63,23 @@ public:
      * denoised results land in denoisedDiffuse()/denoisedSpecular(), left in
      * GENERAL for the composite.
      */
-    void denoise(VkCommandBuffer cmd,
+    void denoise(ICommandBuffer &commandBuffer,
                  int frameIndex,
-                 const Inputs &inputs,
-                 const Tuning &tuning,
+                 const TracingDenoiserInputs &inputs,
+                 const TracingDenoiserTuning &tuning,
                  const glm::mat4 &view,
                  const glm::mat4 &projection,
                  const glm::vec2 &jitter,
                  uint32_t frameNumber,
-                 bool restartHistory);
+                 bool restartHistory) override;
 
-    VulkanImage &denoisedDiffuse() { return *_outDiffuse; }
-    VulkanImage &denoisedSpecular() { return *_outSpecular; }
+    IImage &denoisedDiffuse() override { return *_outDiffuse; }
+    IImage &denoisedSpecular() override { return *_outSpecular; }
 
 private:
     VulkanDevice &_device;
     nrd::Instance &_instance;
+    bool _ownsInstance {false};
     glm::ivec2 _extent;
 
     struct Pipeline {
@@ -128,8 +105,12 @@ private:
     glm::vec3 _prevCameraPosition {0.0f};
     bool _hasHistory {false};
 
-    VkImageView viewFor(const nrd::ResourceDesc &resource, const Inputs &inputs) const;
+    VkImageView viewFor(const nrd::ResourceDesc &resource,
+                        const TracingDenoiserInputs &inputs) const;
 };
+
+std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(VulkanDevice &device,
+                                                       glm::ivec2 extent);
 
 } // namespace graphics
 

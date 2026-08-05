@@ -26,8 +26,8 @@ namespace reone {
 
 namespace graphics {
 
-std::unique_ptr<IImage> VulkanResources::makeImage() {
-    return std::make_unique<VulkanImage>(_device);
+std::unique_ptr<IImage> VulkanResources::makeImage(const std::string &name) {
+    return std::make_unique<VulkanImage>(_device, name);
 }
 
 Sampler VulkanResources::sampler(const Texture::Properties &properties) {
@@ -531,6 +531,10 @@ const VulkanMesh &VulkanResources::get(const Mesh &mesh) {
     uploaded->init(mesh);
     auto &result = *_meshes.insert({&mesh, std::move(uploaded)}).first->second;
     return result;
+}
+
+void VulkanResources::drawMesh(ICommandBuffer &commandBuffer, const Mesh &mesh) {
+    get(mesh).draw(commandBuffer, zeroBuffer());
 }
 
 void VulkanResources::clearUploaded() {
