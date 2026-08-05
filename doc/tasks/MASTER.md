@@ -204,6 +204,7 @@ Largely untouched by renderer work and by volume the biggest block in the repo.
 | TOOL-021 | Main screen render is cropped rather than scaled | open | P2 | S | none | — | RECORD.md |
 | TOOL-022 | Add a Dxun exterior to the K2 fixture set before volumetrics | open | P3 | S | none | TRC-028 | DESIGN.md |
 | TOOL-023 | Retire the three obsolete planning documents into a history folder | open | P3 | S | none | — | this consolidation; see README provenance table |
+| TOOL-024 | A startup schema mismatch segfaults instead of naming the field | open | P2 | S | none | — | 2026-08-05, found verifying TOOL-007; `main.cpp:63` catches and logs, but a throw from `VulkanRenderer::init` dies silently — pre-existing, the call site is unchanged; RECORD.md 1.14 |
 
 ---
 

@@ -282,6 +282,48 @@ not evidence** — it is one sample from a distribution that includes a 4-of-4 a
 cites `tests.exe` as acceptance needs a run count, or it is citing luck. Ratios only: the absolute
 rate is one machine's, and the point is the comparison against the control, not the figure.
 
+### 1.14 The uniform ABI guard names the field — in the test, not in the engine
+
+Found 2026-08-05 verifying TOOL-007, which folded the uniform blocks onto the
+runtime Slang reflection path and deleted `uniformgen` and its committed
+`uniformlayout.generated.h`.
+
+The acceptance criterion S1 set was "a deliberately mis-sized C++ mirror aborts
+startup with the field named". Tested by swapping two adjacent `float4`s —
+`GlobalUniforms::cameraPosition` and `worldAmbientColor`, same size, offsets
+exchanged, which is precisely the case a size or stride comparison cannot catch.
+
+**The check is exact.** The test reports
+
+    Slang schema mismatch: GlobalUniforms::cameraPosition is at 272 in C++, 256 in Slang
+
+naming the field and both offsets. **The engine, given the same broken mirror,
+segfaults during startup with an empty log.** `main.cpp:63` catches
+`std::exception` around `engine.init()` and logs "Engine failure: …", so the
+diagnostic exists and never arrives; something faults on the throw path out of
+`VulkanRenderer::init` before it does.
+
+**Pre-existing, and TOOL-007 did not cause it** — the call site is unchanged,
+only renamed (`validateSceneSchema` → `validateSchemas`), so a scene-schema
+mismatch has always failed this way. Filed as TOOL-024.
+
+Worth stating because the value claimed for the runtime path was "fails at
+startup naming the field, not at 2 a.m. naming nothing", and in the engine it
+currently fails at startup naming nothing. The guard is real, but **the test
+suite is where it speaks**, and that is where a mirror edit should be caught
+anyway. A second-order lesson: two mis-size experiments disagreed — growing the
+struct and swapping two fields both crashed the engine, while only the test
+distinguished them — so an acceptance check that only ever runs one path can
+report a mechanism works when its user-facing half does not.
+
+### 1.15 The offline uniform generator had a coverage hole
+
+`uniformlayout.generated.h` asserted 78 fields; runtime reflection checks 79.
+The missing one was `LocalUniforms::iblRoughness`. The generated artifact had
+been the authority on uniform layout and was silently not covering a field —
+which is an argument for the mechanism that derives coverage from reflection at
+run time over one that bakes a list at generation time.
+
 ---
 
 ## 2. Design analyses worth keeping, though the decision is made
