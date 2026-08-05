@@ -85,16 +85,15 @@ void PBRTextures::init() {
     // edge of their domain - a grazing angle sits at NdotV zero and roughness
     // clamps to one. Sampled with the global repeating sampler those wrap round
     // to the opposite edge, which is exactly where a metallic surface reads.
-    auto &samplers = _resources.samplers();
     auto clamped = getTextureProperties(TextureUsage::ColorBuffer);
-    _brdf->setSampler(toSampler(samplers.get(clamped)));
-    _irradiance->setSampler(toSampler(samplers.get(clamped)));
+    _brdf->setSampler(_resources.sampler(clamped));
+    _irradiance->setSampler(_resources.sampler(clamped));
 
     // The prefiltered map is the exception: roughness selects a mip, so it
     // needs the chain that ColorBuffer's non-mipmapped filter would clamp away.
     auto prefilteredProps = clamped;
     prefilteredProps.minFilter = Texture::Filtering::LinearMipmapLinear;
-    _prefiltered->setSampler(toSampler(samplers.get(prefilteredProps)));
+    _prefiltered->setSampler(_resources.sampler(prefilteredProps));
 
 
     _inited = true;
@@ -157,8 +156,7 @@ void PBRTextures::process(ICommandBuffer &commandBuffer, uint32_t globalsOffset)
         return;
     }
     if (!_brdfGenerated) {
-        VulkanDebugScope scope(_device, static_cast<VulkanCommandBuffer &>(commandBuffer).handle(),
-                               "IBL: BRDF integration", {0.5f, 0.3f, 0.6f});
+        CommandBufferDebugScope scope(commandBuffer, "IBL: BRDF integration", {0.5f, 0.3f, 0.6f});
         commandBuffer.transitionImage(*_brdf, ImageLayout::ColorAttachment);
         generateBRDF(commandBuffer, globalsOffset);
         commandBuffer.transitionImage(*_brdf, ImageLayout::ShaderRead);
@@ -176,8 +174,7 @@ void PBRTextures::process(ICommandBuffer &commandBuffer, uint32_t globalsOffset)
     auto &envMap = request.texture;
     const int layer = _envMapToLayer.at(envMap.name());
 
-    VulkanDebugScope scope(_device, static_cast<VulkanCommandBuffer &>(commandBuffer).handle(),
-                           "IBL: derive environment map", {0.5f, 0.3f, 0.6f});
+    CommandBufferDebugScope scope(commandBuffer, "IBL: derive environment map", {0.5f, 0.3f, 0.6f});
     commandBuffer.transitionImage(*_irradiance, ImageLayout::ColorAttachment);
     commandBuffer.transitionImage(*_prefiltered, ImageLayout::ColorAttachment);
     generateDerived(commandBuffer, globalsOffset, envMap, layer);

@@ -22,6 +22,8 @@
 #include "reone/graphics/descriptors.h"
 #include "reone/graphics/image.h"
 #include "reone/graphics/pipelinecache.h"
+#include "reone/graphics/resources.h"
+#include "reone/graphics/uniformring.h"
 
 namespace reone {
 
@@ -122,10 +124,6 @@ public:
 
 struct LocalUniforms;
 
-class VulkanDevice;
-class VulkanResources;
-class VulkanUniformRing;
-
 /**
  * Screen-space drawing.
  *
@@ -144,12 +142,10 @@ class VulkanUniformRing;
  */
 class Renderer2D : public I2DRenderer, boost::noncopyable {
 public:
-    Renderer2D(VulkanDevice &device,
-                     IPipelineCache &pipelines,
-                     VulkanUniformRing &ring,
+    Renderer2D(IPipelineCache &pipelines,
+                     IUniformRing &ring,
                      IDescriptors &descriptors,
-                     VulkanResources &resources) :
-        _device(device),
+                     IResources &resources) :
         _pipelines(pipelines),
         _ring(ring),
         _descriptors(descriptors),
@@ -202,11 +198,10 @@ public:
     int drawCount() const { return _drawCount; }
 
 private:
-    VulkanDevice &_device;
     IPipelineCache &_pipelines;
-    VulkanUniformRing &_ring;
+    IUniformRing &_ring;
     IDescriptors &_descriptors;
-    VulkanResources &_resources;
+    IResources &_resources;
 
     ICommandBuffer *_commandBuffer {nullptr};
     glm::ivec2 _extent {0};

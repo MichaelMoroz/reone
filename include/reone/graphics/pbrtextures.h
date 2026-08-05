@@ -22,6 +22,8 @@
 #include "reone/graphics/descriptors.h"
 #include "reone/graphics/image.h"
 #include "reone/graphics/pipelinecache.h"
+#include "reone/graphics/resources.h"
+#include "reone/graphics/uniformring.h"
 
 namespace reone {
 
@@ -64,17 +66,15 @@ public:
 
 class VulkanDevice;
 class VulkanRenderer;
-class VulkanResources;
-class VulkanUniformRing;
 
 class PBRTextures : public IPBRTextures, boost::noncopyable {
 public:
     PBRTextures(VulkanRenderer &renderer,
-                VulkanDevice &device,
+                      VulkanDevice &device,
                       IPipelineCache &pipelines,
-                      VulkanUniformRing &ring,
+                      IUniformRing &ring,
                       IDescriptors &descriptors,
-                      VulkanResources &resources) :
+                      IResources &resources) :
         _renderer(renderer),
         _device(device),
         _pipelines(pipelines),
@@ -127,9 +127,9 @@ private:
     VulkanRenderer &_renderer;
     VulkanDevice &_device;
     IPipelineCache &_pipelines;
-    VulkanUniformRing &_ring;
+    IUniformRing &_ring;
     IDescriptors &_descriptors;
-    VulkanResources &_resources;
+    IResources &_resources;
 
     bool _inited {false};
     bool _brdfGenerated {false};

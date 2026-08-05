@@ -59,6 +59,7 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/pipelinecache.h
     ${GRAPHICS_INCLUDE_DIR}/renderer.h
     ${GRAPHICS_INCLUDE_DIR}/renderer2d.h
+    ${GRAPHICS_INCLUDE_DIR}/resources.h
     ${GRAPHICS_INCLUDE_DIR}/rhi.h
     ${GRAPHICS_INCLUDE_DIR}/statistic.h
     ${GRAPHICS_INCLUDE_DIR}/texture.h
@@ -69,6 +70,7 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/triangleutil.h
     ${GRAPHICS_INCLUDE_DIR}/types.h
     ${GRAPHICS_INCLUDE_DIR}/uniforms.h
+    ${GRAPHICS_INCLUDE_DIR}/uniformring.h
     ${GRAPHICS_INCLUDE_DIR}/walkmesh.h
     ${GRAPHICS_INCLUDE_DIR}/window.h)
 

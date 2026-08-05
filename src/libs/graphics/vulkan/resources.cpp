@@ -26,6 +26,10 @@ namespace reone {
 
 namespace graphics {
 
+Sampler VulkanResources::sampler(const Texture::Properties &properties) {
+    return toSampler(_samplers.get(properties));
+}
+
 bool VulkanResources::supported(PixelFormat format) {
     switch (format) {
     case PixelFormat::R8:

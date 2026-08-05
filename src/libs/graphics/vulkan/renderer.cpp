@@ -332,7 +332,7 @@ void VulkanRenderer::beginFrame(glm::ivec2 extent) {
     VkCommandBufferBeginInfo beginInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo), "vkBeginCommandBuffer");
-    frame.recordingCommandBuffer.begin(frame.commandBuffer);
+    frame.recordingCommandBuffer.begin(frame.commandBuffer, &_device);
 
     auto image = _swapchain.image(_imageIndex);
     transitionImage(frame.commandBuffer, image,
@@ -508,7 +508,7 @@ void VulkanRenderer::flushFrame() {
     VkCommandBufferBeginInfo beginInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo), "vkBeginCommandBuffer");
-    frame.recordingCommandBuffer.begin(frame.commandBuffer);
+    frame.recordingCommandBuffer.begin(frame.commandBuffer, &_device);
     _imageAvailableConsumed = true;
 }
 
@@ -587,9 +587,9 @@ std::unique_ptr<IBuffer> VulkanRenderer::makeBuffer() {
 }
 
 void VulkanRenderer::immediateSubmit(const std::function<void(ICommandBuffer &)> &block) {
-    _device.immediateSubmit([&block](VkCommandBuffer native) {
+    _device.immediateSubmit([this, &block](VkCommandBuffer native) {
         VulkanCommandBuffer commandBuffer;
-        commandBuffer.begin(native);
+        commandBuffer.begin(native, &_device);
         block(commandBuffer);
         commandBuffer.end();
     });

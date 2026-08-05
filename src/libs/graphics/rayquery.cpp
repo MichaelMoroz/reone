@@ -579,7 +579,7 @@ void RayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
                                skyImage.sampleSampler(),
                                skyBaked ? toImageView(_skyCube->cubeView(0)) : _skyFallbackCube->sampleView());
     skyWrite.apply();
-    // Texture ids are assigned by VulkanResources at upload time. The set is
+    // Texture ids are assigned by the resource cache at upload time. The set is
     // update-after-bind and partially-bound so new assets can take a slot
     // without rebuilding it or populating unrelated descriptors.
     const auto uploadedTextures = _renderer.resources().uploadedTextures();

@@ -18,13 +18,22 @@ namespace reone {
 namespace graphics {
 
 class VulkanImage;
+class VulkanDevice;
 
 class VulkanCommandBuffer : public ICommandBuffer {
 public:
-    void begin(VkCommandBuffer commandBuffer) { _commandBuffer = commandBuffer; }
-    void end() { _commandBuffer = VK_NULL_HANDLE; }
+    void begin(VkCommandBuffer commandBuffer, const VulkanDevice *device) {
+        _commandBuffer = commandBuffer;
+        _device = device;
+    }
+    void end() {
+        _commandBuffer = VK_NULL_HANDLE;
+        _device = nullptr;
+    }
 
     void transitionImage(IImage &image, ImageLayout to) override;
+    void beginDebugScope(const char *name, const glm::vec3 &color) override;
+    void endDebugScope() override;
     void bindPipeline(Pipeline pipeline) override;
     void bindComputePipeline(Pipeline pipeline) override;
     void bindRayTracingPipeline(Pipeline pipeline) override;
@@ -75,6 +84,7 @@ public:
 
 private:
     VkCommandBuffer _commandBuffer {VK_NULL_HANDLE};
+    const VulkanDevice *_device {nullptr};
 };
 
 VulkanCommandBuffer &toVulkanCommandBuffer(ICommandBuffer &commandBuffer);

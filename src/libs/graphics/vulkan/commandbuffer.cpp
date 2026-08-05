@@ -11,6 +11,7 @@
 
 #include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/vulkan/buffer.h"
+#include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/tracingstructure.h"
 
 #include <array>
@@ -25,6 +26,29 @@ VulkanCommandBuffer &toVulkanCommandBuffer(ICommandBuffer &commandBuffer) {
         throw std::invalid_argument("Command buffer is not implemented by Vulkan");
     }
     return *result;
+}
+
+CommandBufferDebugScope::CommandBufferDebugScope(ICommandBuffer &commandBuffer,
+                                                  const char *name,
+                                                  const glm::vec3 &color) :
+    _commandBuffer(commandBuffer) {
+    _commandBuffer.beginDebugScope(name, color);
+}
+
+CommandBufferDebugScope::~CommandBufferDebugScope() {
+    _commandBuffer.endDebugScope();
+}
+
+void VulkanCommandBuffer::beginDebugScope(const char *name, const glm::vec3 &color) {
+    if (_device) {
+        _device->beginLabel(_commandBuffer, name, color);
+    }
+}
+
+void VulkanCommandBuffer::endDebugScope() {
+    if (_device) {
+        _device->endLabel(_commandBuffer);
+    }
 }
 
 void VulkanCommandBuffer::transitionImage(IImage &image, ImageLayout to) {

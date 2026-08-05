@@ -71,7 +71,7 @@ public:
         _pipelines(_device, _descriptors),
         _resources(_device),
         _pbrTextures(*this, _device, _pipelines, _uniformRing, _descriptors, _resources),
-        _renderer2d(_device, _pipelines, _uniformRing, _descriptors, _resources) {
+        _renderer2d(_pipelines, _uniformRing, _descriptors, _resources) {
     }
 
     ~VulkanRenderer() { deinit(); }

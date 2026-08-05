@@ -20,6 +20,21 @@ namespace reone {
 namespace graphics {
 
 class IImage;
+class ICommandBuffer;
+
+/** A labelled command-buffer region, closed even when its caller returns early. */
+class CommandBufferDebugScope {
+public:
+    CommandBufferDebugScope(ICommandBuffer &commandBuffer, const char *name,
+                            const glm::vec3 &color = {0.4f, 0.6f, 0.9f});
+    ~CommandBufferDebugScope();
+
+    CommandBufferDebugScope(const CommandBufferDebugScope &) = delete;
+    CommandBufferDebugScope &operator=(const CommandBufferDebugScope &) = delete;
+
+private:
+    ICommandBuffer &_commandBuffer;
+};
 
 /** The layouts the image-based-lighting client transitions between. */
 enum class ImageLayout {
@@ -57,6 +72,8 @@ public:
     virtual ~ICommandBuffer() = default;
 
     virtual void transitionImage(IImage &image, ImageLayout to) = 0;
+    virtual void beginDebugScope(const char *name, const glm::vec3 &color) = 0;
+    virtual void endDebugScope() = 0;
     virtual void bindPipeline(Pipeline pipeline) = 0;
     virtual void bindComputePipeline(Pipeline pipeline) = 0;
     virtual void bindRayTracingPipeline(Pipeline pipeline) = 0;

@@ -20,6 +20,7 @@
 #include <volk.h>
 
 #include "reone/graphics/types.h"
+#include "reone/graphics/resources.h"
 
 #include "image.h"
 #include "samplers.h"
@@ -45,17 +46,18 @@ class VulkanDevice;
  * frame, and neither has a stable identifier that survives a reload - name
  * collisions across resource types are real in this engine.
  */
-class VulkanResources : boost::noncopyable {
+class VulkanResources : public IResources, boost::noncopyable {
 public:
     VulkanResources(VulkanDevice &device) :
         _device(device),
         _samplers(device) {
     }
 
-    void deinit();
+    void deinit() override;
 
     /** The sampler cache, for images this class did not upload. */
     VulkanSamplers &samplers() { return _samplers; }
+    Sampler sampler(const Texture::Properties &properties) override;
 
     /**
      * Drop uploaded Textures and Meshes, keeping externally registered images.
@@ -76,7 +78,7 @@ public:
     void invalidate(const Texture &texture);
 
     /** Upload @p texture if it has not been seen, and return the image. */
-    const VulkanImage &get(const Texture &texture);
+    const VulkanImage &get(const Texture &texture) override;
 
     /**
      * Dense bindless descriptor index assigned when a material texture is
@@ -118,7 +120,7 @@ public:
      * The distinction matters to anything that samples it: uploaded rows are in
      * OpenGL's bottom-up order, a render target's are not.
      */
-    bool isExternal(const Texture &texture) const {
+    bool isExternal(const Texture &texture) const override {
         return _external.find(&texture) != _external.end();
     }
 

@@ -20,6 +20,7 @@
 #include <volk.h>
 
 #include "buffer.h"
+#include "reone/graphics/uniformring.h"
 
 namespace reone {
 
@@ -39,8 +40,10 @@ class VulkanDevice;
  * frame. Reuse happens only when the frame's fence says the GPU has finished
  * with it, which is exactly the condition the caller already waits on.
  */
-class VulkanUniformRing : boost::noncopyable {
+class VulkanUniformRing : public IUniformRing, boost::noncopyable {
 public:
+    using IUniformRing::push;
+
     VulkanUniformRing(VulkanDevice &device) :
         _device(device) {
     }
@@ -52,32 +55,26 @@ public:
      *                       than wrapping, because wrapping would silently
      *                       corrupt draws already recorded this frame
      */
-    void init(int framesInFlight, VkDeviceSize bytesPerFrame);
-    void deinit();
+    void init(int framesInFlight, uint64_t bytesPerFrame) override;
+    void deinit() override;
 
     /** Hand the arena for @p frame back to the allocator. */
-    void beginFrame(int frame);
+    void beginFrame(int frame) override;
 
     /**
      * Copy @p size bytes into the current arena and return the offset to bind
      * at. The offset is aligned to the device's minimum uniform alignment.
      */
-    uint32_t push(const void *data, VkDeviceSize size);
-
-    /** Convenience for the uniform structs, which are all trivially copyable. */
-    template <class T>
-    uint32_t push(const T &value) {
-        return push(&value, sizeof(T));
-    }
+    uint32_t push(const void *data, uint64_t size) override;
 
     /** The frame beginFrame was last called with. */
-    int frame() const { return _frame; }
+    int frame() const override { return _frame; }
 
     VkBuffer buffer(int frame) const { return _arenas[frame]->handle(); }
     VkBuffer currentBuffer() const { return _arenas[_frame]->handle(); }
 
     /** High-water mark across the run, for sizing the arena honestly. */
-    VkDeviceSize peakUsage() const { return _peak; }
+    uint64_t peakUsage() const override { return _peak; }
 
 private:
     VulkanDevice &_device;

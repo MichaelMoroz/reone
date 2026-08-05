@@ -23,8 +23,8 @@ namespace reone {
 
 namespace graphics {
 
-void VulkanUniformRing::init(int framesInFlight, VkDeviceSize bytesPerFrame) {
-    _capacity = bytesPerFrame;
+void VulkanUniformRing::init(int framesInFlight, uint64_t bytesPerFrame) {
+    _capacity = static_cast<VkDeviceSize>(bytesPerFrame);
     _arenas.reserve(framesInFlight);
     for (int i = 0; i < framesInFlight; ++i) {
         auto arena = std::make_unique<VulkanBuffer>(_device);
@@ -44,7 +44,7 @@ void VulkanUniformRing::beginFrame(int frame) {
     _offset = 0;
 }
 
-uint32_t VulkanUniformRing::push(const void *data, VkDeviceSize size) {
+uint32_t VulkanUniformRing::push(const void *data, uint64_t size) {
     auto offset = _offset;
     if (offset + size > _capacity) {
         // Deliberately fatal. Wrapping would hand out storage that draws
