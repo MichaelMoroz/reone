@@ -865,11 +865,15 @@ coverage into the G-buffer, both shadow passes test them the same way through
 `commitsCoverage` holds the same 0.5 threshold. Nothing about a blended pass
 changes any of that.
 
-Earlier drafts of this section recorded an open conflict here. There is none,
-and it came from conflating two things. The first was this document's own
-phrase "discards on zero alpha" against the 0.5 the code has always used - a
-wording slip, not a disagreement, and 0.5 is right because it is what discards
-the soft authored fringe instead of rendering it solid. The second was reading
+Earlier drafts of this section recorded an open conflict here. One half of that
+dismissal was wrong and is withdrawn. **The threshold conflict is real.** This
+document's own phrase "discards on zero alpha" was read against the 0.5 the code
+has always used and called a wording slip; the reference value is neither 0 nor
+0.5 but **0.1** (xoreos `graphics/graphics.cpp:440`), so 0.5 is five times the
+reference and "0.5 is right because it discards the soft authored fringe" is a
+rendering-taste argument, not a preservation one. Retro is preservation, so this
+needs a capture rather than a preference — `retro-rendering-differences.md` row
+19 owns it. The second half of the dismissal stands: reading
 the tracer's non-opaque BLAS range as a classification that disagrees with
 "punchcards are opaque". It is not a classification at all. Hardware traversal
 cannot run an alpha test, so any surface with holes has to sit in a non-opaque
@@ -1353,7 +1357,13 @@ observed from the shipping game.
   by it. All three agree (xoreos `shaderbuilder.cpp:609`, KotOR.js
   `ShaderOdysseyModel.ts:423`, kvp-main sees `ONE_MINUS_DST_ALPHA/ONE` in the
   retail stream).
-- **`if (alpha == 0) discard`** is exactly the retail `glAlphaFunc(GL_GREATER, 0)`.
+- ~~**`if (alpha == 0) discard`** is exactly the retail `glAlphaFunc(GL_GREATER, 0)`.~~
+  **Corrected 2026-08-05, and it does not belong in this section.** xoreos sets
+  `glAlphaFunc(GL_GREATER, 0.1f)` once globally (`graphics/graphics.cpp:440-441`)
+  and only disables it around the env-map pass — the reference value is **0.1**,
+  not 0. Since our raster tests at 0.5, this is an open difference rather than a
+  confirmed match; it is `retro-rendering-differences.md` row 19, and the G8
+  passage below is corrected with it.
 - **Lightmap multiplies** the diffuse result — the retail stream's
   `DST_COLOR/ZERO` pass.
 - **The separate emissive/hilights buffer** shape kvp-main independently
