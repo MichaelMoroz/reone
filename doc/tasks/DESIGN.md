@@ -1225,6 +1225,24 @@ into a rename. **"Minimise the RHI" still governs *within* this choice** — a
 neutral type earns its place by a client needing it, never by symmetry with one
 that does.
 
+**The seam expresses intent, not Vulkan calls** (settled 2026-08-05). The
+default failure mode of an RHI is a call-per-call mirror — an `IBuffer` with the
+shape of `vkCmdCopyBuffer`, an `ICommandBuffer` with the shape of
+`vkCmdPipelineBarrier2`. That is the worst of both: it is as large as Vulkan and
+buys nothing, because a client written against it still has to think in Vulkan.
+Prefer the operation the client actually means. "Upload this data and make it
+visible to the next pass" is one seam call; the barrier struct, the stage masks
+and the access flags are the backend's business.
+
+**This matters most for ray tracing.** `rayquery` names 26 distinct Vulkan
+types, nearly all of them acceleration-structure and ray-query machinery.
+Wrapping them one for one would roughly double the seam for one client.
+**Acceleration-structure construction and ray traversal are both abstractable at
+the level of what they mean** — build a structure over this geometry; trace
+these rays against it — and that is the form to aim for. A smaller, higher-level
+seam is also the *cheaper* one to satisfy, since the alternative is a neutral
+mirror of every `VkAccelerationStructure*` type.
+
 This supersedes an earlier reading of stage 3 that proposed *collapsing*
 `IPBRTextures` and `I2DRenderer` on the grounds that one implementation needs no
 interface. **That was wrong for this codebase**: the parent is what keeps the

@@ -324,6 +324,46 @@ been the authority on uniform layout and was silently not covering a field —
 which is an argument for the mechanism that derives coverage from reflection at
 run time over one that bakes a list at generation time.
 
+### 1.16 An empty generated NRD shader blob, mistaken twice for an RHI regression
+
+2026-08-05, during S5 stage 2. Path tracing died at startup with
+`NRD: shader module creation failed` (`nrddenoiser.cpp:203`), raster unaffected.
+It appeared during step 6a when `VulkanImage` gained a virtual base, went away
+when unrelated wrapper types were deleted, then returned in step 6b-i when
+`VulkanBuffer` gained one.
+
+That looked like a pattern, and it was written up as one: *NRD breaks when a
+resource type it holds acquires a virtual base.* **It was a coincidence.**
+
+The real cause: `vkCreateShaderModule` returned `VK_ERROR_OUT_OF_HOST_MEMORY`,
+but not from allocator exhaustion — NRD pipeline 12 (`Clear.cs.hlsl|FLOAT=1`)
+was handed `codeSize == 0` and `pCode == nullptr`. Its generated embedded-SPIR-V
+header in the build tree was a **67-byte empty `NVSP` blob with no
+permutations**, which CMake accepted as up to date. Forcing a ShaderMake
+regeneration compiled all 159 NRD shaders and produced a 3,107-byte blob with
+both permutations; NRD then built 14 pipelines and path tracing completed. **No
+source change was required, in either occurrence.**
+
+Three lessons, in order of how much they cost:
+
+**The `VkResult` was being thrown away.** The call site tested
+`!= VK_SUCCESS` and threw a string. One integer separated "the SPIR-V is
+invalid" from "the allocator is exhausted", and discarding it cost two rounds of
+theorising. A Vulkan call that can fail for unrelated reasons should report
+which one.
+
+**A control test that requires a rebuild does not isolate a source change.**
+The stash-and-rebuild control (the technique that correctly settled TOOL-001 in
+1.13) *misled* here: stashing and rebuilding also regenerated the shader
+artifact, so "it works at HEAD" read as "the working tree caused it" when both
+statements were about the build tree, not the source. **When the artifact under
+suspicion is generated, hold the source fixed and vary only the artifact.**
+
+**Two occurrences are not a pattern when the correlate is "I rebuilt".** Both
+appearances followed a structural change, but every structural change was also a
+rebuild, and the rebuild is what touched the stale blob. A causal story was
+constructed from a correlation whose common term was never isolated.
+
 ---
 
 ## 2. Design analyses worth keeping, though the decision is made
