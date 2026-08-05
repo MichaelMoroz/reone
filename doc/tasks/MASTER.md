@@ -65,7 +65,7 @@ decisions already taken.
 | STR-015 | S5 stage 1 — a `RenderPassScope` RAII type | open | P2 | S | S5 | — | DESIGN.md; ~182 preamble lines |
 | STR-016 | S5 stage 1 — a pipeline builder covering compute and RT | open | P2 | S | S5 | — | DESIGN.md |
 | STR-017 | S5 stage 1 — a descriptor-write builder | open | P2 | S | S5 | — | DESIGN.md; ~1,100 lines out for ~350 in |
-| STR-018 | S5 stage 2 — formalise the RHI seam | open | P2 | L | S5 | TRC-020, STR-014..017 | DESIGN.md; grep gate on `Vk`/`vk`/`vma` outside the RHI |
+| STR-018 | S5 stage 2 — formalise the RHI seam | open | P2 | L | S5 | TRC-020, TOOL-007, STR-014..017 | DESIGN.md; grep gate on `Vk`/`vk`/`vma` outside the RHI |
 | STR-019 | S6 — delete the legacy per-mesh path | blocked | P3 | M | S6 | TRC-024 | DESIGN.md; last consumer is the runtime sky bake |
 | STR-020 | S6 — delete `Registered*` and the frame-phase surface | blocked | P3 | S | S6 | STR-004 | DESIGN.md |
 | STR-021 | S6 — delete the per-draw texture-set path | blocked | P3 | S | S6 | STR-018 | DESIGN.md |
@@ -75,6 +75,9 @@ decisions already taken.
 | STR-025 | Walkmesh geometry deletion is a game-model refactor | open | P3 | M | none | STR-023 | RECORD.md |
 | STR-026 | Frame floor outside the renderer (the ~2 ms update slot) | open | P2 | M | none | STR-001 | backlog 8.8 |
 | STR-027 | In-phase wind: every dangly tree moves identically forever | open | P3 | M | none | STR-007 | RECORD.md; `0.01*abs(sin(_windTime))` along world X |
+| STR-028 | S5 stage 3 — move the five RHI clients out of `vulkan/` | open | P2 | L | S5 | STR-018 | 2026-08-05 RHI sweep; 4,020 lines leave; `vulkan/` 9,398 → 5,378 `.cpp` lines |
+| STR-029 | S5 stage 3 — **no `Vulkan` identifier may appear outside `vulkan/`** | open | P1 | M | S5 | STR-028 | 2026-08-05 RHI sweep; 85 occurrences, 13 type names, incl. `IVulkanSceneCallbacks` and `scene/render/pipeline/vulkan.cpp` |
+| STR-030 | S5 stage 3 — parent class outside, `Vulkan*` child inside | open | P2 | M | S5 | STR-028, STR-029 | 2026-08-05 RHI sweep, revised same day; supersedes the interface-collapse reading |
 
 ## TRC — path tracing
 
@@ -178,7 +181,7 @@ Largely untouched by renderer work and by volume the biggest block in the repo.
 
 | ID | Title | St | Pri | Eff | Owner | Blocked by | Provenance |
 |---|---|---|---|---|---|---|---|
-| TOOL-001 | **`tests.exe` heap corruption on a cold cache** | open | P0 | M | S1 residue | — | DESIGN.md; engine fixed 4/4, tests still 1/3; `ISession` churn ruled out |
+| TOOL-001 | **`tests.exe` heap corruption on a cold cache** | open | P0 | M | S1 residue | — | DESIGN.md; engine fixed 4/4; committed tree measured 0/4 against a stashed control 2026-08-05, worse than the "1/3" this row used to claim — RECORD.md 1.13; `ISession` churn ruled out |
 | TOOL-002 | **GPU timing in `IStatistic`** | open | P1 | M | S0 | — | backlog 2.5; blocks every performance claim in TRC and STR |
 | TOOL-003 | Test the editor's Save buttons end to end | open | P0 | S | none | — | backlog 0.2; read-modify-write preserves foreign lines by position |
 | TOOL-004 | Rebuild and smoke-test the Debug configuration | open | P0 | S | none | — | backlog 0.4; the checked VMA is the instrument for lifetime bugs |

@@ -263,6 +263,25 @@ placement appears to depend on camera proximity to the surface in a way that fai
 Done 2026-07-30. It **trained everyone to ignore a red build, which is how `tests` stayed broken
 across four commits.** A broken target is not a local cost.
 
+### 1.13 TOOL-001's rate measured against a clean tree: 0 of 4, not 1 of 3
+
+Measured 2026-08-05 while accepting the S5 stage-1 builders. The suite aborts with exit **127** part
+way through `SlangShaderCompiler`, producing no gtest summary; when it does survive far enough to
+report, the failures are confined to that suite's five tests.
+
+The number that matters is the **control**. Suspecting the RHI work had caused it, the changes were
+stashed (`git stash push -u -- src include`), `tests` rebuilt from the committed tree, and the suite
+run four times: **4 of 4 aborted**. Restored, the same suite gave one clean `362/0`, one `361/1`, and
+two aborts across four runs. **The instability is entirely pre-existing and the working tree ran
+better than the control** — a reminder that "the tests are flaky" is a claim with a cheap experiment
+attached, and that attributing a flake to the change in front of you is the default error.
+
+Two consequences. TOOL-001's row still reads "tests still 1/3"; on this machine and this branch the
+committed tree is closer to 0/4, so the row understates it. And **a single green run of this suite is
+not evidence** — it is one sample from a distribution that includes a 4-of-4 abort. Any step that
+cites `tests.exe` as acceptance needs a run count, or it is citing luck. Ratios only: the absolute
+rate is one machine's, and the point is the comparison against the control, not the figure.
+
 ---
 
 ## 2. Design analyses worth keeping, though the decision is made

@@ -1134,8 +1134,24 @@ mode the frame shape stops moving, and the wrapper tier plus the builders
 formalize into an interface layer: device, swapchain, queues, buffers, images,
 pipelines, submission. **The gate is mechanical:**
 
-    rg 'vk[A-Z]|Vk[A-Z]|vma[A-Z]' src/libs/graphics --glob '!vulkan/**'
-    rg 'vk[A-Z]|Vk[A-Z]|vma[A-Z]' src/libs/graphics/vulkan/*.cpp   # only RHI files may match
+    rg 'vk[A-Z]|Vk[A-Z]|vma[A-Z]' src include --glob '!**/graphics/vulkan/**'
+
+The gate was originally written as two greps scoped to `src/libs/graphics`. That
+form was retired on 2026-08-05: the first passed *vacuously* — no file under
+`src/libs/graphics` outside `vulkan/` has ever contained a Vulkan token — and
+the second ("only RHI files may match") named a file set nobody had defined, so
+all 21 files matched it. Scoped repo-wide instead, the gate has real content.
+Measured the day it was rewritten, the entire external surface was six sites:
+
+- `src/apps/engine/engine.cpp` — a `VkFormat`, a `VkRenderingInfo` preamble and
+  `vkCmdBeginRendering`/`vkCmdEndRendering`, all of which S5 stage 1's
+  `RenderPassScope` absorbs;
+- `src/libs/scene/render/pipeline/vulkan.cpp` — a `VkCommandBuffer` in the
+  `mergeGeometry` override signature.
+
+**The API surface is therefore not what makes stage 2 large — the five client
+files' internals are.** A second count taken at the same time: 85 occurrences of
+13 `Vulkan`-prefixed *type names* outside the backend, which stage 3 removes.
 
 `IRenderer` sheds its Vulkan leak (`begin2DRendering` exists only to scope
 dynamic rendering — the RHI owns that scope). Slang runtime (S1) supplies the
@@ -1146,6 +1162,62 @@ blobs + hand-declared layouts.**
 the grep gate empty; the seven core files' line counts recorded before/after
 against the audit's ~5,000 → ~3,300 estimate — **a number to report, not a bar to
 force.**
+
+**Stage 3 — the clients leave the folder.** Added 2026-08-05 (STR-028..030).
+Once a class no longer names Vulkan it has no business living in `vulkan/`, and
+the layout it should move to already half-exists: `include/reone/graphics/`
+holds `gpuscene.h` and `rayquery.h` as backend-free data — `InstanceMaterial`,
+`MergedVertex`, `SceneObject`, `GpuSceneUpload`, `RayQuerySubmission` — and
+`renderer.h`, `renderer2d.h`, `pbrtextures.h` as interfaces. The data/interface
+line was drawn and then not followed through; stage 3 finishes it.
+
+Five files move to `src/libs/graphics/`, losing the prefix: `gpuscene` (572),
+`scenepipeline` (1300), `rayquery` (1539), `pbrtextures` (357), `renderer2d`
+(252). `vulkan/` drops from 9,398 to 5,378 `.cpp` lines and holds nothing but
+the RHI.
+
+**This is what makes the stage-2 gate self-enforcing.** The boundary stops being
+a file allowlist somebody has to maintain and becomes a directory: the RHI *is*
+`vulkan/`, defined by what remains after the clients leave.
+
+Two files do **not** move, and the reason is worth stating because it bounds the
+RHI's ambition: `nrddenoiser` (502) and `fsrupscaler` (152) are vendor SDK
+integrations that take native Vulkan handles by construction. An RHI cannot
+express them without handing the handle straight back through, so they stay as
+vendor bindings inside the backend. `renderer` stays too — it *is* the RHI's
+face.
+
+**The naming rule (set 2026-08-05, and it is the acceptance test for stage 3):
+no `Vulkan` identifier may appear outside `vulkan/`.** Not the prefix on a type,
+not a parameter name, not a file name. Two shapes satisfy it:
+
+- **A class that is genuinely backend-free has no Vulkan counterpart at all.**
+  `VulkanGpuScene` does not become `GpuScene` *alongside* something Vulkan — it
+  becomes `GpuScene`, full stop, and no `VulkanGpuScene` exists. This is the
+  case for all five relocated clients once they are on the RHI.
+- **A class that must stay backend-specific is split**: an API-independent parent
+  that the rest of the engine names and holds, and a `VulkanSomething` child
+  inside `vulkan/` that is the object actually constructed. Callers name only the
+  parent.
+
+The parent's *prefix* is free so long as the name is API-independent (settled
+2026-08-05). So the existing `I`-for-interface convention in `AGENTS.md` stands
+where the parent is purely abstract — `IPBRTextures` ← `VulkanPBRTextures` — and
+a concrete backend-free class simply takes the plain name, `GpuScene`. What is
+forbidden is a name that says which API it is, wherever it appears outside
+`vulkan/`.
+
+This supersedes an earlier reading of stage 3 that proposed *collapsing*
+`IPBRTextures` and `I2DRenderer` on the grounds that one implementation needs no
+interface. **That was wrong for this codebase**: the parent is what keeps the
+Vulkan name out of the caller's vocabulary, which is the whole point of the
+stage. Parents stay whether or not a second backend ever exists — the
+justification is naming discipline, not portability, consistent with "not the
+goal: a second graphics API" above.
+
+*Proves itself:* the stage-2 grep empty with `vulkan/` as the only exclusion;
+`rg 'Vulkan' src include --glob '!**/vulkan/**'` empty — **this is the stage-3
+gate**; captures byte-identical, since every step here is a move or a rename.
 
 ## S6 — deletions the track leaves behind
 
