@@ -7,9 +7,13 @@ Where those two disagreed, the code won and the disagreement is recorded.
 
 | File | What it is |
 |---|---|
-| [MASTER.md](MASTER.md) | Every open item, one row each, with a stable ID and its provenance. |
-| [GLOSSARY.md](GLOSSARY.md) | What the vocabulary means. Read this before MASTER if any term is unfamiliar. |
-| [DECISIONS.md](DECISIONS.md) | Contradictions between documents that a person has to settle, and items with no owner. |
+| [MASTER.md](MASTER.md) | Every open item, one row each, with a stable ID and its provenance. **What to do.** |
+| [DESIGN.md](DESIGN.md) | The shape of each unbuilt step, its acceptance criteria, and the decisions already taken. **How, and why this way.** |
+| [RECORD.md](RECORD.md) | Postmortems, measurements, and approaches already rejected with their reasoning. **What has already been paid for once.** |
+| [CONVENTIONS.md](CONVENTIONS.md) | Conventions an implementer violates by accident, and traps with their symptoms. |
+| [FIDELITY.md](FIDELITY.md) | The retro fidelity audit: 37 rows with evidence, status and required proof. |
+| [GLOSSARY.md](GLOSSARY.md) | What the vocabulary means. Read this first if any term is unfamiliar. |
+| [DECISIONS.md](DECISIONS.md) | Contradictions a person has to settle, and work with no owner. |
 | [_generated/doc-staleness-report.md](../_generated/doc-staleness-report.md) | The raw staleness audit. Regenerate rather than edit. |
 
 ## IDs
@@ -47,21 +51,28 @@ or two, `L` multi-session.
 
 ## Provenance
 
-Every row carries where it came from. The source documents stay in the tree as
-history — they hold reasoning, measurements and postmortems that no task list
-should try to absorb. What they no longer hold is authority over what to do next.
+Nine documents were consolidated into this folder and then **deleted**. They are
+recoverable from git history at `63ea1c41^`, but do not go looking — everything
+worth keeping was moved here first, and what was left behind was left behind on
+purpose: status blocks describing a tree that no longer exists, dependency tables
+that are now wrong, and per-item rows that MASTER supersedes.
 
-| Document | Standing after this consolidation |
+| Retired document | Where its content went |
 |---|---|
-| `backlog.md` | Superseded by MASTER. Keep for its postmortems and design prose (8.9's BLAS analysis, 1.9's light calibration, 3.7's transparency design). |
-| `phase-f.md` | **Still authoritative for the raster track's design.** MASTER points at it; it is not replaced. |
-| `retro-rendering-differences.md` | **Still authoritative for fidelity.** MASTER carries its rows by reference. |
-| `renderer-redesign-plan.md` | **Still authoritative for the structural track.** |
-| `renderer-registration-plan.md` | Historical. Its live residue is in MASTER; the rest is a design record. |
-| `cleanup-plan.md` | Historical. Same treatment. Its `F0…F10` numbering is dead — see the glossary. |
-| `vulkan-rt-backend.md` | **Largely obsolete.** Its status block, architecture section and per-mesh BLAS strategy describe a tree that no longer exists. Its `§11.2` hybrid decision and `§15`/`§16` conventions are the parts still worth reading. |
-| `vulkan-remaining-plan.md` | **Obsolete.** Four of its six items are done; item 5 still claims retro is OpenGL-only. |
-| `vulkan-opengl-remaining-difference.md` | **Obsolete.** Its comparison target was deleted with OpenGL; its remaining claims are not parity facts. |
+| `backlog.md` | Items → MASTER. Postmortems and design analyses → RECORD (the BLAS analysis, the light calibration, the transparency design, the sky-classifier rejection). |
+| `phase-f.md` | Step designs, acceptance criteria and the reference-engine survey → DESIGN. Items → MASTER. |
+| `renderer-redesign-plan.md` | S0–S6 designs and the seven decisions → DESIGN. Items → MASTER. |
+| `retro-rendering-differences.md` | Moved whole, as FIDELITY.md. |
+| `renderer-registration-plan.md` | Architecture boundaries, rejected approaches and the calibration programme → RECORD. |
+| `cleanup-plan.md` | Phase history, measurements and standing rules → RECORD. |
+| `vulkan-rt-backend.md` | Conventions, traps and the hybrid decision → CONVENTIONS and DESIGN. Its architecture sections were obsolete and are gone. |
+| `vulkan-remaining-plan.md` | The runtime-tier idea → CONVENTIONS. Four of its six items were already done; those are in MASTER's Closed list. |
+| `vulkan-opengl-remaining-difference.md` | Measurement rules and the ruled-out list → CONVENTIONS. Its parity numbers died with the OpenGL backend. |
+
+Two kinds of citation appear in MASTER's provenance column. A pointer like
+`DESIGN.md` resolves here. An identifier like `backlog 1.13`, `FIDELITY #17` or
+`vulkan-remaining §2` names the item's **origin** in a retired document — it is
+there so a claim can be traced, not so the document can be opened.
 
 ## Adding an item
 

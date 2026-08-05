@@ -10,13 +10,18 @@ Ordered by how much downstream work they block. Each names both sides; where the
 code settles the factual half, that is stated, but the *policy* half is still a
 choice.
 
+Citations below like `phase-f.md:277` name a **retired** document — they record
+where each side of the argument was made, not somewhere you can go and read it.
+The nine source documents were deleted on 2026-08-05; their surviving content is
+in DESIGN, RECORD, CONVENTIONS and FIDELITY, and git history has the rest.
+
 ### D1 — Room visibility: performance argument versus preservation argument
 
 **`phase-f.md:277`** justifies deleting the VIS branch on measurement: removing
 about 9,000 frustum tests per frame moved frame time by nothing, so the branch
 was deleted outright rather than given a camera-appropriate key.
 
-**`retro-rendering-differences.md` #17** records the consequence: every room is
+**`FIDELITY.md` #17** records the consequence: every room is
 now always drawn, the `.vis` graph is parsed and never read, and both reference
 engines apply room adjacency **camera-independently** — which is the property the
 deletion gave up rather than adopted. Retail had two policies, adjacency indoors
@@ -83,7 +88,7 @@ and STR-025.
 **`phase-f.md` reference correction 6** says vanilla adds emission on top of the
 texture, citing kvp.
 
-**`retro-rendering-differences.md` #35** shows the references disagree: KotOR.js
+**`FIDELITY.md` #35** shows the references disagree: KotOR.js
 multiplies with a 0.25 floor, fixed-function `GL_MODULATE` matches what reone
 already does, and kvp's line sits inside its own legacy-to-PBR conversion with
 compensating heuristics on the next lines.
