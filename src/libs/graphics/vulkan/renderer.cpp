@@ -20,6 +20,7 @@
 #include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/pipeline.h"
 
+#include "imgui_impl_sdl3.h"
 #include "imgui_impl_vulkan.h"
 
 #include "reone/graphics/vulkan/renderpass.h"
@@ -133,6 +134,65 @@ void VulkanRenderer::deinit() {
     _swapchain.deinit();
     _device.deinit();
     _inited = false;
+}
+
+void VulkanRenderer::initImGui() {
+    if (!ImGui_ImplSDL3_InitForVulkan(_window)) {
+        ImGui::DestroyContext();
+        throw std::runtime_error("ImGui: SDL Vulkan backend initialization failed");
+    }
+
+    VkFormat colorFormat = _swapchain.imageFormat();
+
+    ImGui_ImplVulkan_InitInfo info {};
+    info.ApiVersion = VK_API_VERSION_1_3;
+    info.Instance = _device.instance();
+    info.PhysicalDevice = _device.physicalDevice();
+    info.Device = _device.handle();
+    info.QueueFamily = _device.graphicsQueueFamily();
+    info.Queue = _device.graphicsQueue();
+    info.DescriptorPoolSize = 64;
+    info.MinImageCount = 2;
+    info.ImageCount = _swapchain.imageCount() < 2u ? 2u : _swapchain.imageCount();
+    info.UseDynamicRendering = true;
+    info.PipelineInfoMain.PipelineRenderingCreateInfo.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    info.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &colorFormat;
+
+    if (!ImGui_ImplVulkan_Init(&info)) {
+        ImGui_ImplSDL3_Shutdown();
+        ImGui::DestroyContext();
+        throw std::runtime_error("ImGui: Vulkan renderer backend initialization failed");
+    }
+}
+
+void VulkanRenderer::beginImGuiFrame() {
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
+}
+
+void VulkanRenderer::renderImGui(ImDrawData &drawData) {
+    if (!_inFrame) {
+        return;
+    }
+
+    RenderPassScope rendering(
+        commandBuffer(), _swapchain.extent(),
+        {{currentImageView(),
+          VK_IMAGE_LAYOUT_GENERAL,
+          VK_ATTACHMENT_LOAD_OP_LOAD,
+          VK_ATTACHMENT_STORE_OP_STORE}});
+    ImGui_ImplVulkan_RenderDrawData(&drawData, commandBuffer());
+}
+
+void VulkanRenderer::deinitImGui() {
+    // The last submitted frame may still reference the font texture,
+    // descriptor sets, and pipeline owned by the backend.
+    _device.waitIdle();
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
 }
 
 void VulkanRenderer::initFrames() {

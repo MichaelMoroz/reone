@@ -17,6 +17,8 @@
 
 #pragma once
 
+struct ImDrawData;
+
 namespace reone {
 
 namespace graphics {
@@ -42,6 +44,18 @@ public:
 
     virtual void init() = 0;
     virtual void deinit() = 0;
+
+    /** Bind ImGui's platform and renderer backends to this renderer. */
+    virtual void initImGui() = 0;
+
+    /** Begin ImGui's renderer backend frame after the application has a context. */
+    virtual void beginImGuiFrame() = 0;
+
+    /** Draw ImGui into the frame currently owned by this renderer. */
+    virtual void renderImGui(ImDrawData &drawData) = 0;
+
+    /** Release ImGui backend resources before this renderer is torn down. */
+    virtual void deinitImGui() = 0;
 
     /**
      * Acquire and clear a frame covering the whole of @p extent, in pixels.

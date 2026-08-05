@@ -41,6 +41,10 @@ class MockRenderer : public IRenderer, boost::noncopyable {
 public:
     MOCK_METHOD(void, init, (), (override));
     MOCK_METHOD(void, deinit, (), (override));
+    MOCK_METHOD(void, initImGui, (), (override));
+    MOCK_METHOD(void, beginImGuiFrame, (), (override));
+    MOCK_METHOD(void, renderImGui, (ImDrawData &), (override));
+    MOCK_METHOD(void, deinitImGui, (), (override));
     MOCK_METHOD(void, beginFrame, (glm::ivec2), (override));
     MOCK_METHOD(void, drawSceneOutput, (Texture &), (override));
     MOCK_METHOD(std::shared_ptr<Texture>, captureFrame, (), (override));

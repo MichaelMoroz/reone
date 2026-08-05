@@ -78,6 +78,10 @@ public:
 
     void init() override;
     void deinit() override;
+    void initImGui() override;
+    void beginImGuiFrame() override;
+    void renderImGui(ImDrawData &drawData) override;
+    void deinitImGui() override;
 
     void beginFrame(glm::ivec2 extent) override;
     void with2DRendering(glm::ivec2 logicalExtent, const std::function<void()> &block);

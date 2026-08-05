@@ -21,9 +21,8 @@
 
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
-#include "imgui_impl_vulkan.h"
+#include "reone/graphics/renderer.h"
 #include "reone/graphics/vulkan/renderer.h"
-#include "reone/graphics/vulkan/swapchain.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -32,9 +31,7 @@
 #include "renderdoc_app.h"
 
 #include "reone/graphics/format/tgawriter.h"
-#include "reone/graphics/vulkan/debugscope.h"
 #include "reone/graphics/window.h"
-#include "reone/graphics/vulkan/renderpass.h"
 #include "reone/resource/exception/notfound.h"
 #include "reone/resource/gameprobe.h"
 #include "reone/system/profiler.h"
@@ -70,7 +67,7 @@ static constexpr int kProfilerRenderAudioTimeIndex = 3;
 
 static bool g_imguiFrameOpen = false;
 
-static void imguiInit() {
+static void imguiCreateContext() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
@@ -80,59 +77,11 @@ static void imguiInit() {
     ImGui::GetStyle().FontScaleMain = 1.5f;
 }
 
-static VulkanRenderer *g_vulkanRenderer = nullptr;
+static IRenderer *g_imguiRenderer = nullptr;
 
-static void imguiInitVulkan(Window &window, VulkanRenderer &renderer) {
-    auto &device = renderer.device();
-    auto &swapchain = renderer.swapchain();
-
-    if (!ImGui_ImplSDL3_InitForVulkan(window.sdlWindow())) {
-        ImGui::DestroyContext();
-        throw std::runtime_error("ImGui: SDL Vulkan backend initialization failed");
-    }
-
-    VkFormat colorFormat = swapchain.imageFormat();
-
-    ImGui_ImplVulkan_InitInfo info {};
-    info.ApiVersion = VK_API_VERSION_1_3;
-    info.Instance = device.instance();
-    info.PhysicalDevice = device.physicalDevice();
-    info.Device = device.handle();
-    info.QueueFamily = device.graphicsQueueFamily();
-    info.Queue = device.graphicsQueue();
-    info.DescriptorPoolSize = 64;
-    info.MinImageCount = 2;
-    info.ImageCount = swapchain.imageCount() < 2u ? 2u : swapchain.imageCount();
-    info.UseDynamicRendering = true;
-    info.PipelineInfoMain.PipelineRenderingCreateInfo.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
-    info.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &colorFormat;
-
-    if (!ImGui_ImplVulkan_Init(&info)) {
-        ImGui_ImplSDL3_Shutdown();
-        ImGui::DestroyContext();
-        throw std::runtime_error("ImGui: Vulkan renderer backend initialization failed");
-    }
-    g_vulkanRenderer = &renderer;
-}
-
-static void imguiRenderVulkan(ImDrawData *drawData) {
-    auto &renderer = *g_vulkanRenderer;
-    if (!renderer.inFrame()) {
-        return;
-    }
-    auto cmd = renderer.commandBuffer();
-    auto &swapchain = renderer.swapchain();
-
-    auto extent = swapchain.extent();
-    RenderPassScope rendering(
-        cmd, extent,
-        {{renderer.currentImageView(),
-          VK_IMAGE_LAYOUT_GENERAL,
-          VK_ATTACHMENT_LOAD_OP_LOAD,
-          VK_ATTACHMENT_STORE_OP_STORE}});
-    ImGui_ImplVulkan_RenderDrawData(drawData, cmd);
+static void imguiInit(IRenderer &renderer) {
+    renderer.initImGui();
+    g_imguiRenderer = &renderer;
 }
 
 /**
@@ -169,8 +118,7 @@ static void imguiBeginFrame() {
     if (g_imguiFrameOpen) {
         return;
     }
-    ImGui_ImplVulkan_NewFrame();
-    ImGui_ImplSDL3_NewFrame();
+    g_imguiRenderer->beginImGuiFrame();
     ImGui::NewFrame();
     g_imguiFrameOpen = true;
     if (!ImGui::GetIO().WantCaptureMouse) {
@@ -182,7 +130,7 @@ static void imguiBeginFrame() {
 static void imguiRender() {
     ImGui::Render();
     g_imguiFrameOpen = false;
-    imguiRenderVulkan(ImGui::GetDrawData());
+    g_imguiRenderer->renderImGui(*ImGui::GetDrawData());
 }
 
 static void imguiShutdown() {
@@ -195,13 +143,8 @@ static void imguiShutdown() {
         ImGui::EndFrame();
         g_imguiFrameOpen = false;
     }
-    // The last submitted frame may still reference the font texture,
-    // descriptor sets, and pipeline owned by the backend.
-    g_vulkanRenderer->device().waitIdle();
-    ImGui_ImplVulkan_Shutdown();
-    g_vulkanRenderer = nullptr;
-    ImGui_ImplSDL3_Shutdown();
-    ImGui::DestroyContext();
+    g_imguiRenderer->deinitImGui();
+    g_imguiRenderer = nullptr;
 }
 
 Engine::Engine(Options &options) :
@@ -227,7 +170,7 @@ void Engine::init() {
     _window = std::make_unique<Window>(_options.graphics);
     _window->init();
 
-    imguiInit();
+    imguiCreateContext();
 
     if (_options.randomSeed >= 0) {
         seedRandom(static_cast<uint32_t>(_options.randomSeed));
@@ -253,7 +196,7 @@ void Engine::init() {
         _options.vulkanValidation);
     _vulkanRenderer->init();
     _graphicsModule->setRenderers(*_vulkanRenderer, _vulkanRenderer->renderer2d());
-    imguiInitVulkan(*_window, *_vulkanRenderer);
+    imguiInit(*_vulkanRenderer);
     _audioModule = std::make_unique<AudioModule>(_options.audio);
     _movieModule = std::make_unique<MovieModule>();
     _scriptModule = std::make_unique<ScriptModule>();
