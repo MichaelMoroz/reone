@@ -30,8 +30,8 @@ public:
             _owner._rayQuery->render(context, std::move(_owner._admissionResult));
     }
 
-    graphics::VulkanGpuScene::View mergeGeometry(VkCommandBuffer commandBuffer) override {
-        return _owner._deviceGpuScene->update(_owner._renderer.recordingCommandBuffer(),
+    graphics::VulkanGpuScene::View mergeGeometry(graphics::ICommandBuffer &commandBuffer) override {
+        return _owner._deviceGpuScene->update(commandBuffer,
                                               _owner._admissionResult.submission.upload);
     }
 

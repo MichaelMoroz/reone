@@ -38,6 +38,7 @@ public:
     virtual Format pixelFormat() const = 0;
     virtual glm::ivec2 extent() const = 0;
     virtual int mipLevels() const = 0;
+    virtual std::vector<uint8_t> readBack(bool depth) const = 0;
     virtual std::vector<uint8_t> readBack(uint32_t mip, uint32_t layers) const = 0;
 };
 

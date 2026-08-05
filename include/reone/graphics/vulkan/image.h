@@ -229,7 +229,7 @@ public:
      *
      * @param depth  true to copy the depth aspect rather than colour.
      */
-    std::vector<uint8_t> readBack(bool depth = false) const;
+    std::vector<uint8_t> readBack(bool depth = false) const override;
 
     /**
      * Copy one mip's consecutive colour layers back to host memory. This is

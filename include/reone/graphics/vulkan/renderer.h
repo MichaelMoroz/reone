@@ -109,6 +109,11 @@ public:
     VulkanResources &resources() { return _resources; }
     VulkanPBRTextures &pbrTextures() { return _pbrTextures; }
     Vulkan2DRenderer &renderer2d() { return _renderer2d; }
+    /** Execute one short setup recording before frames begin. */
+    void immediateSubmit(const std::function<void(ICommandBuffer &)> &block);
+    /** ImGui owns descriptor lifetime for the preview texture it displays. */
+    void *addPreviewTexture(const IImage &image);
+    void removePreviewTexture(void *texture);
 
     /** Runtime-compiled SPIR-V for one named Slang module. */
     const std::vector<uint32_t> &shaderModule(const std::string &name) {

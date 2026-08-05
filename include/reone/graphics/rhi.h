@@ -18,10 +18,17 @@ namespace graphics {
 /** Pixel formats named by the 2D and image-based-lighting clients. */
 enum class Format {
     D32Sfloat,
+    R8Unorm,
+    R16Sfloat,
     R16G16Sfloat,
     R16Uint,
+    R16G16B16A16Sfloat,
+    R32Sfloat,
     R8G8B8A8Unorm,
     B8G8R8A8Unorm,
+    B8G8R8A8Srgb,
+    BC1RGBAUnormBlock,
+    BC3UnormBlock,
 };
 
 namespace detail {

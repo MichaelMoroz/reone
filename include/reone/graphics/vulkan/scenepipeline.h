@@ -8,8 +8,6 @@
  */
 #pragma once
 
-#include <volk.h>
-
 #include <array>
 #include <filesystem>
 #include <memory>
@@ -20,6 +18,7 @@
 
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
+#include "reone/graphics/commandbuffer.h"
 #include "reone/graphics/vulkan/gbuffer.h"
 #include "reone/graphics/vulkan/gpuscene.h"
 
@@ -53,9 +52,9 @@ struct VulkanSceneFramePlan {
 };
 
 struct VulkanPrimaryRayContext {
-    VkCommandBuffer commandBuffer {VK_NULL_HANDLE};
+    ICommandBuffer *commandBuffer {nullptr};
     uint32_t globalsOffset {0};
-    VulkanImage *output {nullptr};
+    IImage *output {nullptr};
     glm::mat4 view {1.0f};
     glm::mat4 projection {1.0f};
     glm::vec4 jitter {0.0f};
@@ -64,14 +63,14 @@ struct VulkanPrimaryRayContext {
 struct VulkanExternalTarget {
     const char *name {nullptr};
     const char *dumpName {nullptr};
-    VulkanImage *image {nullptr};
+    IImage *image {nullptr};
 };
 
 class IVulkanSceneCallbacks {
 public:
     virtual ~IVulkanSceneCallbacks() = default;
     virtual void renderPrimary(const VulkanPrimaryRayContext &context) = 0;
-    virtual VulkanGpuScene::View mergeGeometry(VkCommandBuffer commandBuffer) = 0;
+    virtual VulkanGpuScene::View mergeGeometry(ICommandBuffer &commandBuffer) = 0;
     virtual std::vector<VulkanExternalTarget> primaryTargets() const = 0;
 };
 
@@ -121,9 +120,9 @@ private:
     std::unique_ptr<VulkanImage> _dirShadows;
     std::unique_ptr<VulkanImage> _pointShadows;
     std::shared_ptr<Texture> _outputHandle;
-    VkDescriptorSet _retroResolveSet {VK_NULL_HANDLE};
-    VkDescriptorSet _pbrResolveSet {VK_NULL_HANDLE};
-    VkDescriptorSet _resolveMaterialSet {VK_NULL_HANDLE};
+    DescriptorSet _retroResolveSet;
+    DescriptorSet _pbrResolveSet;
+    DescriptorSet _resolveMaterialSet;
     VulkanGpuScene::View _mergedScene;
     bool _mergedScenePrepared {false};
 
@@ -140,25 +139,25 @@ private:
         const char *name;
         const char *dumpName;
         VulkanTargetKind kind;
-        const VulkanImage *image;
-        VkImageLayout layout;
+        const IImage *image;
+        ImageLayout layout;
         bool depth;
     };
 
     const VulkanGpuScene::View &prepareMergedScene(
-        VkCommandBuffer cmd, IVulkanSceneCallbacks &callbacks);
-    void shadowPass(VkCommandBuffer cmd, uint32_t globalsOffset,
+        ICommandBuffer &cmd, IVulkanSceneCallbacks &callbacks);
+    void shadowPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                     IVulkanSceneCallbacks &callbacks);
-    void previewPass(VkCommandBuffer cmd, uint32_t globalsOffset,
+    void previewPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                      const IVulkanSceneCallbacks &callbacks);
-    void geometryPass(VkCommandBuffer cmd, uint32_t globalsOffset,
+    void geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                       IVulkanSceneCallbacks &callbacks);
-    void retroResolvePass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    void retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** G8: the transparent surfaces the G-buffer deliberately leaves out,
         drawn forward onto the resolved image in submission order. */
-    void blendedPass(VkCommandBuffer cmd, uint32_t globalsOffset,
+    void blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                      IVulkanSceneCallbacks &callbacks);
-    void pbrResolvePass(VkCommandBuffer cmd, uint32_t globalsOffset);
+    void pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
     std::vector<Target> targetEntries(const IVulkanSceneCallbacks &callbacks) const;
 };
 

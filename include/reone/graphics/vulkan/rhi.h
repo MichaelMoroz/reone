@@ -38,14 +38,28 @@ inline VkFormat toVulkanFormat(Format format) {
     switch (format) {
     case Format::D32Sfloat:
         return VK_FORMAT_D32_SFLOAT;
+    case Format::R8Unorm:
+        return VK_FORMAT_R8_UNORM;
+    case Format::R16Sfloat:
+        return VK_FORMAT_R16_SFLOAT;
     case Format::R16G16Sfloat:
         return VK_FORMAT_R16G16_SFLOAT;
     case Format::R16Uint:
         return VK_FORMAT_R16_UINT;
+    case Format::R16G16B16A16Sfloat:
+        return VK_FORMAT_R16G16B16A16_SFLOAT;
+    case Format::R32Sfloat:
+        return VK_FORMAT_R32_SFLOAT;
     case Format::R8G8B8A8Unorm:
         return VK_FORMAT_R8G8B8A8_UNORM;
     case Format::B8G8R8A8Unorm:
         return VK_FORMAT_B8G8R8A8_UNORM;
+    case Format::B8G8R8A8Srgb:
+        return VK_FORMAT_B8G8R8A8_SRGB;
+    case Format::BC1RGBAUnormBlock:
+        return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+    case Format::BC3UnormBlock:
+        return VK_FORMAT_BC3_UNORM_BLOCK;
     }
     throw std::invalid_argument("Unknown RHI format");
 }
@@ -54,14 +68,28 @@ inline Format fromVulkanFormat(VkFormat format) {
     switch (format) {
     case VK_FORMAT_D32_SFLOAT:
         return Format::D32Sfloat;
+    case VK_FORMAT_R8_UNORM:
+        return Format::R8Unorm;
+    case VK_FORMAT_R16_SFLOAT:
+        return Format::R16Sfloat;
     case VK_FORMAT_R16G16_SFLOAT:
         return Format::R16G16Sfloat;
     case VK_FORMAT_R16_UINT:
         return Format::R16Uint;
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+        return Format::R16G16B16A16Sfloat;
+    case VK_FORMAT_R32_SFLOAT:
+        return Format::R32Sfloat;
     case VK_FORMAT_R8G8B8A8_UNORM:
         return Format::R8G8B8A8Unorm;
     case VK_FORMAT_B8G8R8A8_UNORM:
         return Format::B8G8R8A8Unorm;
+    case VK_FORMAT_B8G8R8A8_SRGB:
+        return Format::B8G8R8A8Srgb;
+    case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
+        return Format::BC1RGBAUnormBlock;
+    case VK_FORMAT_BC3_UNORM_BLOCK:
+        return Format::BC3UnormBlock;
     default:
         throw std::invalid_argument("Vulkan format is outside the RHI seed");
     }

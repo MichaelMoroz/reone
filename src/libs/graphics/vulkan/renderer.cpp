@@ -20,6 +20,8 @@
 #include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/pipeline.h"
 
+#include "imgui_impl_vulkan.h"
+
 #include "reone/graphics/vulkan/renderpass.h"
 
 #include "SDL3/SDL.h"
@@ -522,6 +524,25 @@ void VulkanRenderer::endFrame() {
 
 std::unique_ptr<IBuffer> VulkanRenderer::makeBuffer() {
     return std::make_unique<VulkanBuffer>(_device);
+}
+
+void VulkanRenderer::immediateSubmit(const std::function<void(ICommandBuffer &)> &block) {
+    _device.immediateSubmit([&block](VkCommandBuffer native) {
+        VulkanCommandBuffer commandBuffer;
+        commandBuffer.begin(native);
+        block(commandBuffer);
+        commandBuffer.end();
+    });
+}
+
+void *VulkanRenderer::addPreviewTexture(const IImage &image) {
+    const auto &native = toVulkanImage(image);
+    return ImGui_ImplVulkan_AddTexture(native.sampler(), native.view(),
+                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
+void VulkanRenderer::removePreviewTexture(void *texture) {
+    ImGui_ImplVulkan_RemoveTexture(static_cast<VkDescriptorSet>(texture));
 }
 
 std::unique_ptr<IGpuSceneMergePipeline> VulkanRenderer::makeGpuSceneMergePipeline() {
