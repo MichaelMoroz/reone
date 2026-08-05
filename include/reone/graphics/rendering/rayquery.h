@@ -26,6 +26,7 @@
 #include <glm/glm.hpp>
 
 #include "reone/graphics/rendering/gpuscene.h"
+#include "reone/graphics/rendering/skystage.h"
 #include "reone/graphics/rhi/pipelinecache.h"
 #include "reone/graphics/rhi/tracingstructure.h"
 
@@ -37,23 +38,6 @@ class Texture;
 class TracingPipeline;
 struct GraphicsOptions;
 struct TracingChannel;
-
-struct RayQuerySkyMesh {
-    const Mesh *mesh {nullptr};
-    const Texture *texture {nullptr};
-    glm::mat4 transform {1.0f};
-    glm::mat4 transformInv {1.0f};
-    glm::mat4 prevTransform {1.0f};
-    glm::mat3x4 uv {1.0f};
-};
-
-/** Backend-free description of the room selected for the fixed sky bake. */
-struct RayQuerySkyRoom {
-    uint64_t identity {0};
-    std::string name;
-    glm::vec3 origin {0.0f};
-    std::vector<RayQuerySkyMesh> meshes;
-};
 
 /** What the scene side hands the tracer for this frame: the upload and its counts. */
 struct RayQuerySubmission {
@@ -79,19 +63,16 @@ public:
 
     void init();
     void deinit();
-    bool bakeSkyRoom(ICommandBuffer &commandBuffer, const RayQuerySkyRoom &room);
-    void clearSkyRoom();
     void render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
                  IImage &output, const glm::mat4 &view,
                  const glm::mat4 &projection, const glm::vec4 &jitter,
                  RayQuerySubmission submission, const GpuScene::View &scene,
-                 bool skyBaked);
+                 const SkyBinding &sky);
 
     using Channel = TracingChannel;
     std::vector<Channel> channels() const;
     void restartTemporalHistory();
     std::optional<uint32_t> textureId(const Texture &texture) const;
-    bool supportsSkyTexture(const Texture &texture) const;
 
 private:
     struct Frame {

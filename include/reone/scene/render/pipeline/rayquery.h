@@ -22,6 +22,7 @@ namespace reone::graphics {
 class RayQuery;
 class IRenderer;
 class GpuScene;
+class SkyStage;
 struct GraphicsOptions;
 struct PrimaryRayContext;
 } // namespace reone::graphics
@@ -36,7 +37,8 @@ public:
     RayQueryPipeline(graphics::IRenderer &renderer,
                      glm::ivec2 extent,
                      graphics::GraphicsOptions &options,
-                     GpuScene &gpuScene);
+                     GpuScene &gpuScene,
+                     graphics::SkyStage &sky);
     ~RayQueryPipeline();
 
     void init();
@@ -52,6 +54,7 @@ private:
     glm::ivec2 _extent;
     graphics::GraphicsOptions &_options;
     GpuScene &_gpuScene;
+    graphics::SkyStage &_sky;
     std::unique_ptr<graphics::RayQuery> _native;
 };
 

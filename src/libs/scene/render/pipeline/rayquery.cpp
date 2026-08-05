@@ -19,6 +19,7 @@
 #include "reone/graphics/options.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/rendering/rayquery.h"
+#include "reone/graphics/rendering/skystage.h"
 #include "reone/graphics/rhi/renderer.h"
 #include "reone/graphics/rendering/scenepipeline.h"
 #include "reone/scene/node/model.h"
@@ -32,8 +33,10 @@ namespace reone::scene {
 RayQueryPipeline::RayQueryPipeline(IRenderer &renderer,
                                     glm::ivec2 extent,
                                     GraphicsOptions &options,
-                                    GpuScene &gpuScene) :
-    _renderer(renderer), _extent(extent), _options(options), _gpuScene(gpuScene) {}
+                                    GpuScene &gpuScene,
+                                    SkyStage &sky) :
+    _renderer(renderer), _extent(extent), _options(options), _gpuScene(gpuScene),
+    _sky(sky) {}
 
 RayQueryPipeline::~RayQueryPipeline() {
     deinit();
@@ -88,7 +91,7 @@ void RayQueryPipeline::render(const PrimaryRayContext &context,
                 break;
             }
             const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)];
-            if (!texture || !_native->supportsSkyTexture(*texture)) {
+            if (!texture || !_sky.supportsSkyTexture(*texture)) {
                 valid = false;
                 break;
             }
@@ -110,7 +113,7 @@ void RayQueryPipeline::render(const PrimaryRayContext &context,
             skyBaked = false;
         } else {
             try {
-            skyBaked = _native->bakeSkyRoom(commandBuffer, bake);
+            skyBaked = _sky.bakeSkyRoom(commandBuffer, bake);
             } catch (const std::exception &e) {
                 warn("Sky bake failed for '" + admission.skyRoom->model().name() +
                          "': " + e.what() + "; using fallback cube",
@@ -118,12 +121,13 @@ void RayQueryPipeline::render(const PrimaryRayContext &context,
             }
         }
     } else {
-        _native->clearSkyRoom();
+        _sky.clearSkyRoom();
     }
 
     _native->render(commandBuffer, context.globalsOffset, *context.output,
                     context.view, context.projection, context.jitter,
-                    std::move(admission.submission), context.scene, skyBaked);
+                    std::move(admission.submission), context.scene,
+                    _sky.binding(skyBaked));
 }
 
 } // namespace reone::scene

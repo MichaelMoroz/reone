@@ -26,6 +26,7 @@
 #include "../mesh.h"
 #include "../types.h"
 #include "../rendering/gpuscene.h"
+#include "../rendering/skystage.h"
 
 namespace reone {
 
@@ -36,7 +37,6 @@ class IImage;
 class ITracingStructure;
 class Texture;
 struct GraphicsOptions;
-struct RayQuerySkyRoom;
 
 /** Results read from the previous frame's trace counters. */
 struct TracingStats {
@@ -60,7 +60,7 @@ struct TracingPipelineInput {
     ITracingStructure &structure;
     int frameIndex {0};
     uint32_t frameNumber {0};
-    bool skyBaked {false};
+    SkyBinding sky;
 };
 
 struct TracingChannel {

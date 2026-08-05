@@ -35,14 +35,10 @@ public:
     void init();
     void deinit();
     std::unique_ptr<ITracingStructure> makeTracingStructure();
-    bool bakeSkyRoom(ICommandBuffer &commandBuffer,
-                     const RayQuerySkyRoom &room);
-    void clearSkyRoom();
     TracingStats render(const TracingPipelineInput &input);
 
     std::vector<TracingChannel> channels() const;
     void restartTemporalHistory();
-    bool supportsSkyTexture(const Texture &texture) const;
 
 private:
     struct Frame {
@@ -56,11 +52,6 @@ private:
     std::array<Frame, 2> _frames;
     uint32_t _bindlessTextureCapacity {0};
     uint32_t _lastBindlessTextureCount {0};
-    uint64_t _skyCubeRoom {0};
-    bool _skyCubeReady {false};
-    std::unique_ptr<IImage> _skyCube;
-    std::array<std::unique_ptr<IImage>, 6> _skyDepth;
-    std::unique_ptr<IImage> _skyFallbackCube;
 
     struct TracePushConstants {
         uint32_t frameIndex;

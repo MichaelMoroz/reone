@@ -24,6 +24,7 @@
 #include "reone/graphics/rendering/rayquery.h"
 #include "reone/graphics/rendering/gpuscene.h"
 #include "reone/graphics/rendering/scenepipeline.h"
+#include "reone/graphics/rendering/skystage.h"
 #include "reone/scene/render/pipeline/rayquery.h"
 #include "reone/system/logutil.h"
 
@@ -89,8 +90,12 @@ void RenderPipeline::init() {
     _deviceGpuScene->init(_renderer);
     _admission = std::make_unique<GpuSceneAdmission>(_renderer, _options, _gpuScene);
     if (_primaryRayMode) {
+        // Gated with the tracer only because the tracer is still the sole
+        // consumer; nothing in SkyStage is mode-specific.
+        _sky = std::make_unique<graphics::SkyStage>(_renderer);
+        _sky->init();
         _rayQuery = std::make_unique<RayQueryPipeline>(
-            _renderer, _targetSize, _options, _gpuScene);
+            _renderer, _targetSize, _options, _gpuScene, *_sky);
         _rayQuery->init();
     }
     _callbacks = std::make_unique<Callbacks>(*this);
@@ -104,6 +109,12 @@ void RenderPipeline::deinit() {
     if (_rayQuery)
         _rayQuery->deinit();
     _rayQuery.reset();
+    // The cube and its six depth targets are VMA allocations, released here at
+    // the point the tracer used to release them - after its consumer is gone
+    // and well before the renderer takes the allocator down.
+    if (_sky)
+        _sky->deinit();
+    _sky.reset();
     _admission.reset();
     if (_deviceGpuScene)
         _deviceGpuScene->deinit();

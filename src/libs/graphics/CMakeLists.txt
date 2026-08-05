@@ -37,6 +37,7 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/rhi/image.h
     ${GRAPHICS_INCLUDE_DIR}/rendering/pbrtextures.h
     ${GRAPHICS_INCLUDE_DIR}/rendering/rayquery.h
+    ${GRAPHICS_INCLUDE_DIR}/rendering/skystage.h
     ${GRAPHICS_INCLUDE_DIR}/rendering/tracingpipeline.h
     ${GRAPHICS_INCLUDE_DIR}/rendering/gbuffer.h
     ${GRAPHICS_INCLUDE_DIR}/rendering/scenepipeline.h
@@ -105,6 +106,7 @@ set(GRAPHICS_SOURCES
     ${GRAPHICS_SOURCE_DIR}/modelnode.cpp
     ${GRAPHICS_SOURCE_DIR}/rendering/pbrtextures.cpp
     ${GRAPHICS_SOURCE_DIR}/rendering/rayquery.cpp
+    ${GRAPHICS_SOURCE_DIR}/rendering/skystage.cpp
     ${GRAPHICS_SOURCE_DIR}/rendering/tracingpipeline.cpp
     ${GRAPHICS_SOURCE_DIR}/rendering/gbuffer.cpp
     ${GRAPHICS_SOURCE_DIR}/rendering/renderer2d.cpp

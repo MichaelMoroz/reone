@@ -62,21 +62,8 @@ void RayQuery::deinit() {
     _inited = false;
 }
 
-bool RayQuery::bakeSkyRoom(ICommandBuffer &commandBuffer,
-                            const RayQuerySkyRoom &room) {
-    return _pipeline->bakeSkyRoom(commandBuffer, room);
-}
-
-void RayQuery::clearSkyRoom() {
-    _pipeline->clearSkyRoom();
-}
-
 std::optional<uint32_t> RayQuery::textureId(const Texture &texture) const {
     return _renderer.resources().textureId(texture);
-}
-
-bool RayQuery::supportsSkyTexture(const Texture &texture) const {
-    return _pipeline->supportsSkyTexture(texture);
 }
 
 void RayQuery::restartTemporalHistory() {
@@ -91,7 +78,7 @@ void RayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
                        IImage &output, const glm::mat4 &view,
                        const glm::mat4 &projection, const glm::vec4 &jitter,
                        RayQuerySubmission submission, const GpuScene::View &scene,
-                       bool skyBaked) {
+                       const SkyBinding &sky) {
     R_PROFILE_ZONE("RayQuery::render");
     const int frameIndex = _renderer.frameIndex();
     auto &frame = _frames[frameIndex];
@@ -127,7 +114,7 @@ void RayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
     const auto stats = _pipeline->render({commandBuffer, globalsOffset, output,
                                           view, projection, jitter, scene,
                                           *frame.tracingStructure, frameIndex,
-                                          _frameNumber, skyBaked});
+                                          _frameNumber, sky});
     _lastSecondaryRays = stats.secondaryRays;
     _lastSecondaryMisses = stats.secondaryMisses;
     _lastSurvivingLights = stats.survivingLights;
