@@ -85,7 +85,7 @@ generates on the GPU from integer hashes; culling buys nothing here
   in `src/libs/<lib>/`.
 - **GPU-shared structs are contracts, with one declaration each.** The Slang
   side lives in `slang/lib/scene_schema.slang`; the C++ mirror lives in
-  `include/reone/graphics/gpuscene.h` with `alignas` and `static_assert`ed
+  `include/reone/graphics/rendering/gpuscene.h` with `alignas` and `static_assert`ed
   offsets. Both move in the same commit — the renderer reflects the schema at
   startup and aborts naming the field if they disagree. Beware storage-buffer
   array stride when adding fields (TRC-004: a grown struct caused

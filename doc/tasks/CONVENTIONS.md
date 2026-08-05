@@ -20,6 +20,13 @@ confirmed from source alone, that is said inline rather than asserted.
 
 ---
 
+
+> **Paths and line numbers cited below from before 2026-08-05 predate the S5
+> relocation.** The render passes moved from `src/libs/graphics/vulkan/` to
+> `src/libs/graphics/rendering/`, and much of `rayquery.cpp` became
+> `vulkan/tracingpipeline.cpp` and `vulkan/tracingstructure.cpp`. The *findings*
+> stand; the coordinates need re-deriving. See `DESIGN.md`, "S5 as built".
+
 ## 1. Conventions that must hold
 
 Load-bearing. Breaking one produces a plausible-looking wrong image rather than

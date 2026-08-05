@@ -7,6 +7,13 @@ is a thing already paid for once.
 
 ---
 
+
+> **Paths and line numbers cited below from before 2026-08-05 predate the S5
+> relocation.** The render passes moved from `src/libs/graphics/vulkan/` to
+> `src/libs/graphics/rendering/`, and much of `rayquery.cpp` became
+> `vulkan/tracingpipeline.cpp` and `vulkan/tracingstructure.cpp`. The *findings*
+> stand; the coordinates need re-deriving. See `DESIGN.md`, "S5 as built".
+
 ## 1. Postmortems
 
 ### 1.1 The traceStats atomics were ~95% of the traced frame
