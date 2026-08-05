@@ -16,9 +16,8 @@
 
 #include <volk.h>
 
+#include "reone/graphics/buffer.h"
 #include "reone/graphics/tracingstructure.h"
-
-#include "reone/graphics/vulkan/buffer.h"
 
 #include <glm/glm.hpp>
 
@@ -97,7 +96,7 @@ public:
 
 private:
     struct Frame {
-        std::unique_ptr<VulkanBuffer> traceStats;
+        std::unique_ptr<IBuffer> traceStats;
         std::unique_ptr<ITracingStructure> tracingStructure;
     };
 

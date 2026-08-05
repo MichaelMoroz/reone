@@ -19,7 +19,7 @@
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/commandbuffer.h"
-#include "reone/graphics/vulkan/gbuffer.h"
+#include "reone/graphics/gbuffer.h"
 #include "reone/graphics/gpuscene.h"
 
 namespace reone::graphics {
@@ -115,7 +115,7 @@ private:
     bool _primaryRayMode {false};
     VulkanSceneShadow _shadow {VulkanSceneShadow::None};
 
-    std::unique_ptr<VulkanGBuffer> _gbuffer;
+    std::unique_ptr<IGBuffer> _gbuffer;
     std::unique_ptr<VulkanImage> _output;
     std::unique_ptr<VulkanImage> _dirShadows;
     std::unique_ptr<VulkanImage> _pointShadows;

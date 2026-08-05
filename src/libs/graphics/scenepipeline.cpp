@@ -29,6 +29,8 @@
 #include "reone/graphics/vulkan/debugscope.h"
 #include "reone/graphics/vulkan/descriptors.h"
 #include "reone/graphics/vulkan/device.h"
+#include "reone/graphics/vulkan/gbuffer.h"
+#include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/pbrtextures.h"
 #include "reone/graphics/vulkan/renderer.h"
 #include "reone/graphics/vulkan/resources.h"
@@ -93,7 +95,7 @@ void ScenePipeline::init() {
         return;
     }
 
-    _gbuffer = std::make_unique<VulkanGBuffer>(device);
+    _gbuffer = makeGBuffer(device);
     _gbuffer->init(_targetSize);
 
     _output = std::make_unique<VulkanImage>(device);
@@ -666,16 +668,16 @@ std::vector<ScenePipeline::Target> ScenePipeline::targetEntries(
         }
         return entries;
     }
-    static const char *kDisplayNames[VulkanGBuffer::Count] = {
+    static const char *kDisplayNames[static_cast<int>(GBufferAttachment::Count)] = {
         "G-buffer diffuse", "G-buffer eye normal", "G-buffer lightmap",
         "G-buffer self-illum", "G-buffer motion", "G-buffer material ID"};
-    static const char *kDumpNames[VulkanGBuffer::Count] = {
+    static const char *kDumpNames[static_cast<int>(GBufferAttachment::Count)] = {
         "g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_lightmap",
         "g_buffer_self_illum", "g_buffer_motion", "g_buffer_material_id"};
-    for (int i = 0; i < VulkanGBuffer::Count; ++i) {
-        auto kind = i == VulkanGBuffer::EyeNormal ? VulkanTargetKind::EyeNormal : i == VulkanGBuffer::Motion ? VulkanTargetKind::Motion
+    for (int i = 0; i < static_cast<int>(GBufferAttachment::Count); ++i) {
+        auto kind = i == static_cast<int>(GBufferAttachment::EyeNormal) ? VulkanTargetKind::EyeNormal : i == static_cast<int>(GBufferAttachment::Motion) ? VulkanTargetKind::Motion
                                                                                                              : VulkanTargetKind::Color;
-        entries.push_back({kDisplayNames[i], kDumpNames[i], kind, &_gbuffer->color(i),
+        entries.push_back({kDisplayNames[i], kDumpNames[i], kind, &_gbuffer->color(static_cast<GBufferAttachment>(i)),
                            ImageLayout::ShaderRead, false});
     }
     entries.push_back({"G-buffer depth", "g_buffer_depth", VulkanTargetKind::Depth,

@@ -13,6 +13,8 @@ namespace reone::graphics {
 
 class VulkanDevice;
 
+std::unique_ptr<ITracingStructure> makeTracingStructure(VulkanDevice &device);
+
 /** Vulkan implementation of a frame-local scene-wide tracing structure. */
 class VulkanTracingStructure : public ITracingStructure, boost::noncopyable {
 public:

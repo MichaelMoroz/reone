@@ -23,6 +23,10 @@ namespace reone {
 
 namespace graphics {
 
+std::unique_ptr<IGBuffer> makeGBuffer(VulkanDevice &device) {
+    return std::make_unique<VulkanGBuffer>(device);
+}
+
 std::vector<VkFormat> VulkanGBuffer::nativeColorFormats() {
     // Matching the retained targets: RGBA8 for the colour-ish channels, RGBA8
     // for eye normals (GL uses RGB8, but three-component render targets are not

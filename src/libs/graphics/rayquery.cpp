@@ -324,7 +324,7 @@ bool RayQuery::bakeSkyRoom(ICommandBuffer &commandBuffer,
         globals.viewProjection = globals.projection * globals.view;
         globals.prevViewProjection = globals.viewProjection;
         globals.cameraPosition = glm::vec4(room.origin, 1.0f);
-        std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+        std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
         offsets[UniformBlockBindingPoints::globals] = ring.push(globals);
 
         ClearValue colorClear;
@@ -373,13 +373,13 @@ bool RayQuery::bakeSkyRoom(ICommandBuffer &commandBuffer,
             offsets[UniformBlockBindingPoints::locals] = ring.push(locals);
             commandBuffer.bindPipeline(toPipeline(pipeline.handle()));
             commandBuffer.bindDescriptorSet(toPipelineLayout(pipeline.layout()),
-                                            VulkanDescriptors::kUniformSet,
+                                            IDescriptors::kUniformSet,
                                             toDescriptorSet(uniformSet),
                                             offsets.data(), static_cast<uint32_t>(offsets.size()));
             auto textureSet = descriptors.acquireTextureSet(
                 _renderer.frameIndex(), {{TextureUnits::mainTex, &resources.get(*mesh.texture)}});
             commandBuffer.bindDescriptorSet(toPipelineLayout(pipeline.layout()),
-                                            VulkanDescriptors::kTextureSet,
+                                            IDescriptors::kTextureSet,
                                             toDescriptorSet(textureSet), nullptr, 0);
             skyMesh.draw(commandBuffer, resources.zeroBuffer());
         }
@@ -540,15 +540,15 @@ void RayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
     _lastInstances = 1;
     _lastTriangles = scene.triangleCount;
     auto &device = _renderer.device();
-    frame.traceStats = std::make_unique<VulkanBuffer>(device);
-    frame.traceStats->initHostVisibleReadback(sizeof(TraceStats), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    frame.traceStats = _renderer.makeBuffer();
+    frame.traceStats->initHostVisibleReadback(sizeof(TraceStats));
     std::memset(frame.traceStats->mapped(), 0, sizeof(TraceStats));
 
     const auto begin = std::chrono::steady_clock::now();
     {
         R_PROFILE_ZONE("RayQuery::BLAS/TLAS build record");
         if (!frame.tracingStructure) {
-            frame.tracingStructure = std::make_unique<VulkanTracingStructure>(device);
+            frame.tracingStructure = makeTracingStructure(device);
         }
         commandBuffer.buildSceneTracingStructure(
             *frame.tracingStructure,
@@ -563,15 +563,15 @@ void RayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
     writes.writeAccelerationStructure(
         set, {1, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}, frame.tracingStructure->handle());
     writes.writeBuffer(set, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                       {toVulkanBuffer(*scene.materials.buffer).handle(), 0, scene.materials.size});
+                       {nativeBuffer(scene.materials.buffer->rhiHandle()), 0, scene.materials.size});
     writes.writeBuffer(set, {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                       {frame.traceStats->handle(), 0, frame.traceStats->size()});
+                       {nativeBuffer(frame.traceStats->rhiHandle()), 0, frame.traceStats->size()});
     writes.writeBuffer(set, {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                       {toVulkanBuffer(*scene.vertices.buffer).handle(), scene.vertices.offset, scene.vertices.size});
+                       {nativeBuffer(scene.vertices.buffer->rhiHandle()), scene.vertices.offset, scene.vertices.size});
     writes.writeBuffer(set, {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                       {toVulkanBuffer(*scene.vertices.buffer).handle(), scene.indices.offset, scene.indices.size});
+                       {nativeBuffer(scene.vertices.buffer->rhiHandle()), scene.indices.offset, scene.indices.size});
     writes.writeBuffer(set, {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                       {toVulkanBuffer(*scene.materialIds.buffer).handle(), scene.materialIds.offset, scene.materialIds.size});
+                       {nativeBuffer(scene.materialIds.buffer->rhiHandle()), scene.materialIds.offset, scene.materialIds.size});
     writes.apply();
     const VulkanImage &skyImage = skyBaked ? *_skyCube : *_skyFallbackCube;
     DescriptorWriteBuilder skyWrite(device.handle());
@@ -614,7 +614,7 @@ void RayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
             }
         }
     }
-    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
     offsets[0] = globalsOffset;
     auto uniformSet = _renderer.uniformSet();
     commandBuffer.bindRayTracingPipeline(_pipeline->pipeline());

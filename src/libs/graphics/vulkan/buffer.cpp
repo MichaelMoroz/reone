@@ -52,6 +52,10 @@ void VulkanBuffer::initMergedGeometry(uint64_t size) {
                     nullptr);
 }
 
+void VulkanBuffer::initHostVisibleReadback(uint64_t size) {
+    initHostVisibleReadback(static_cast<VkDeviceSize>(size), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+}
+
 void VulkanBuffer::uploadDeviceStorage(uint64_t offset, uint64_t size, const void *data) {
     uploadDeviceLocal(static_cast<VkDeviceSize>(offset), static_cast<VkDeviceSize>(size), data);
 }

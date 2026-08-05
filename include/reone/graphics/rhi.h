@@ -60,6 +60,7 @@ struct DescriptorSetTag;
 struct PipelineTag;
 struct PipelineLayoutTag;
 struct TracingStructureTag;
+struct BufferTag;
 
 using ImageView = Handle<ImageViewTag>;
 using Sampler = Handle<SamplerTag>;
@@ -67,6 +68,7 @@ using DescriptorSet = Handle<DescriptorSetTag>;
 using Pipeline = Handle<PipelineTag>;
 using PipelineLayout = Handle<PipelineLayoutTag>;
 using TracingStructure = Handle<TracingStructureTag>;
+using Buffer = Handle<BufferTag>;
 
 } // namespace graphics
 

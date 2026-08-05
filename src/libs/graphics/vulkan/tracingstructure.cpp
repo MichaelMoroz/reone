@@ -46,6 +46,10 @@ VkDeviceSize grownCapacity(VkDeviceSize current, VkDeviceSize required, VkDevice
 
 } // namespace
 
+std::unique_ptr<ITracingStructure> makeTracingStructure(VulkanDevice &device) {
+    return std::make_unique<VulkanTracingStructure>(device);
+}
+
 VulkanTracingStructure &toVulkanTracingStructure(ITracingStructure &structure) {
     auto *result = dynamic_cast<VulkanTracingStructure *>(&structure);
     if (!result) {

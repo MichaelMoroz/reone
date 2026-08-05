@@ -28,6 +28,8 @@ namespace graphics {
 
 class VulkanDevice;
 
+std::unique_ptr<IGBuffer> makeGBuffer(VulkanDevice &device);
+
 /**
  * The opaque geometry pass targets: what a fragment knows about the surface it
  * covered, kept so lighting can be resolved once per pixel afterwards rather

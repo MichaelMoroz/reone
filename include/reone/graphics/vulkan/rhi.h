@@ -115,8 +115,16 @@ inline PipelineLayout toPipelineLayout(VkPipelineLayout layout) {
     return detail::HandleAccess::make<PipelineLayoutTag>(reinterpret_cast<uintptr_t>(layout));
 }
 
+inline Buffer toBuffer(VkBuffer buffer) {
+    return detail::HandleAccess::make<BufferTag>(reinterpret_cast<uintptr_t>(buffer));
+}
+
 inline VkImageView toVulkanImageView(ImageView view) {
     return reinterpret_cast<VkImageView>(detail::HandleAccess::value(view));
+}
+
+inline VkBuffer nativeBuffer(Buffer buffer) {
+    return reinterpret_cast<VkBuffer>(detail::HandleAccess::value(buffer));
 }
 
 inline VkSampler toVulkanSampler(Sampler sampler) {

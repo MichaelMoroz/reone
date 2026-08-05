@@ -23,6 +23,8 @@
 
 #include "reone/graphics/buffer.h"
 
+#include "rhi.h"
+
 namespace reone {
 
 namespace graphics {
@@ -55,7 +57,7 @@ public:
     void initHostVisibleReadback(VkDeviceSize size, VkBufferUsageFlags usage);
 
     /** Make GPU writes to a mapped readback allocation visible to the CPU. */
-    void invalidateMapped() const;
+    void invalidateMapped() const override;
 
     /**
      * Memory on the device, filled once from @p data through a staging buffer.
@@ -68,11 +70,13 @@ public:
     void initHostVisibleStorage(uint64_t size) override;
     void initDeviceStorage(uint64_t size, const void *data) override;
     void initMergedGeometry(uint64_t size) override;
+    void initHostVisibleReadback(uint64_t size) override;
     void uploadDeviceStorage(uint64_t offset, uint64_t size, const void *data) override;
 
     void deinit() override;
 
     VkBuffer handle() const { return _buffer; }
+    Buffer rhiHandle() const override { return toBuffer(_buffer); }
     uint64_t size() const override { return _size; }
 
     /**
