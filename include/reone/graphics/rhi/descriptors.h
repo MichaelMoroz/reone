@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-#include "../gpuscene.h"
+#include "../rendering/gpuscene.h"
 #include "rhi.h"
 
 namespace reone {

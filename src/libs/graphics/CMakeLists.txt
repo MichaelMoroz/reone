@@ -30,13 +30,14 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/dxtutil.h
     ${GRAPHICS_INCLUDE_DIR}/font.h
     ${GRAPHICS_INCLUDE_DIR}/frustum.h
-    ${GRAPHICS_INCLUDE_DIR}/gpuscene.h
-    ${GRAPHICS_INCLUDE_DIR}/gpuscenecontext.h
+    ${GRAPHICS_INCLUDE_DIR}/rendering/gpuscene.h
+    ${GRAPHICS_INCLUDE_DIR}/rendering/gpuscenecontext.h
     ${GRAPHICS_INCLUDE_DIR}/rhi/buffer.h
     ${GRAPHICS_INCLUDE_DIR}/rhi/image.h
-    ${GRAPHICS_INCLUDE_DIR}/rayquery.h
+    ${GRAPHICS_INCLUDE_DIR}/rendering/pbrtextures.h
+    ${GRAPHICS_INCLUDE_DIR}/rendering/rayquery.h
     ${GRAPHICS_INCLUDE_DIR}/rendering/gbuffer.h
-    ${GRAPHICS_INCLUDE_DIR}/scenepipeline.h
+    ${GRAPHICS_INCLUDE_DIR}/rendering/scenepipeline.h
     ${GRAPHICS_INCLUDE_DIR}/format/bwmreader.h
     ${GRAPHICS_INCLUDE_DIR}/format/curreader.h
     ${GRAPHICS_INCLUDE_DIR}/format/lipreader.h
@@ -59,7 +60,7 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/rhi/descriptors.h
     ${GRAPHICS_INCLUDE_DIR}/rhi/pipelinecache.h
     ${GRAPHICS_INCLUDE_DIR}/rhi/renderer.h
-    ${GRAPHICS_INCLUDE_DIR}/renderer2d.h
+    ${GRAPHICS_INCLUDE_DIR}/rendering/renderer2d.h
     ${GRAPHICS_INCLUDE_DIR}/rhi/resources.h
     ${GRAPHICS_INCLUDE_DIR}/rhi/rhi.h
     ${GRAPHICS_INCLUDE_DIR}/statistic.h
@@ -84,7 +85,7 @@ set(GRAPHICS_SOURCES
     ${GRAPHICS_SOURCE_DIR}/dxtutil.cpp
     ${GRAPHICS_SOURCE_DIR}/font.cpp
     ${GRAPHICS_SOURCE_DIR}/frustum.cpp
-    ${GRAPHICS_SOURCE_DIR}/gpuscene.cpp
+    ${GRAPHICS_SOURCE_DIR}/rendering/gpuscene.cpp
     ${GRAPHICS_SOURCE_DIR}/format/bwmreader.cpp
     ${GRAPHICS_SOURCE_DIR}/format/curreader.cpp
     ${GRAPHICS_SOURCE_DIR}/format/lipreader.cpp
@@ -100,11 +101,11 @@ set(GRAPHICS_SOURCES
     ${GRAPHICS_SOURCE_DIR}/model.cpp
     ${GRAPHICS_SOURCE_DIR}/npyutil.cpp
     ${GRAPHICS_SOURCE_DIR}/modelnode.cpp
-    ${GRAPHICS_SOURCE_DIR}/pbrtextures.cpp
-    ${GRAPHICS_SOURCE_DIR}/rayquery.cpp
+    ${GRAPHICS_SOURCE_DIR}/rendering/pbrtextures.cpp
+    ${GRAPHICS_SOURCE_DIR}/rendering/rayquery.cpp
     ${GRAPHICS_SOURCE_DIR}/rendering/gbuffer.cpp
-    ${GRAPHICS_SOURCE_DIR}/renderer2d.cpp
-    ${GRAPHICS_SOURCE_DIR}/scenepipeline.cpp
+    ${GRAPHICS_SOURCE_DIR}/rendering/renderer2d.cpp
+    ${GRAPHICS_SOURCE_DIR}/rendering/scenepipeline.cpp
     ${GRAPHICS_SOURCE_DIR}/texture.cpp
     ${GRAPHICS_SOURCE_DIR}/textureregistry.cpp
     ${GRAPHICS_SOURCE_DIR}/textureutil.cpp

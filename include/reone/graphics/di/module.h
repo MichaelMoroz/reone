@@ -20,7 +20,7 @@
 #include "../meshregistry.h"
 #include "../options.h"
 #include "../rhi/renderer.h"
-#include "../renderer2d.h"
+#include "../rendering/renderer2d.h"
 #include "../statistic.h"
 #include "../textureregistry.h"
 #include "../uniforms.h"

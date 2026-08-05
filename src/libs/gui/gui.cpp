@@ -17,7 +17,7 @@
 
 #include "reone/gui/gui.h"
 
-#include "reone/graphics/renderer2d.h"
+#include "reone/graphics/rendering/renderer2d.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/texture.h"

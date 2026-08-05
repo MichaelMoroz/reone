@@ -23,7 +23,7 @@
 
 #include "rhi.h"
 #include "../types.h"
-#include "../gpuscene.h"
+#include "../rendering/gpuscene.h"
 
 namespace reone {
 

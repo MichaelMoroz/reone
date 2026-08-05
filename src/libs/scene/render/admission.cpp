@@ -27,7 +27,7 @@
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/rhi/renderer.h"
-#include "reone/graphics/pbrtextures.h"
+#include "reone/graphics/rendering/pbrtextures.h"
 #include "reone/scene/node/model.h"
 #include "reone/system/logutil.h"
 

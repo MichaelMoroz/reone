@@ -16,7 +16,7 @@
  */
 #include "reone/graphics/vulkan/tracingstructure.h"
 
-#include "reone/graphics/gpuscene.h"
+#include "reone/graphics/rendering/gpuscene.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/rhi.h"
 

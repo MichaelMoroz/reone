@@ -16,7 +16,7 @@
  */
 #pragma once
 
-#include "reone/graphics/rayquery.h"
+#include "reone/graphics/rendering/rayquery.h"
 #include "reone/scene/gpuscene.h"
 
 namespace reone::graphics {

@@ -14,7 +14,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-#include "reone/graphics/gpuscene.h"
+#include "reone/graphics/rendering/gpuscene.h"
 
 #include "reone/system/profiler.h"
 

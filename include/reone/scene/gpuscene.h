@@ -17,7 +17,7 @@
 #include <glm/glm.hpp>
 
 #include "reone/graphics/frustum.h"
-#include "reone/graphics/gpuscene.h"
+#include "reone/graphics/rendering/gpuscene.h"
 #include "reone/graphics/material.h"
 #include "reone/scene/node.h"
 #include "reone/scene/render/pipeline/tracematerials.h"

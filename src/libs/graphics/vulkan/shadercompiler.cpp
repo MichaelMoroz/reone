@@ -28,7 +28,7 @@
 #include <iterator>
 #include <sstream>
 
-#include "reone/graphics/gpuscene.h"
+#include "reone/graphics/rendering/gpuscene.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/system/logutil.h"
 

@@ -18,7 +18,7 @@
 #include "reone/gui/control/progressbar.h"
 
 #include "reone/graphics/di/services.h"
-#include "reone/graphics/renderer2d.h"
+#include "reone/graphics/rendering/renderer2d.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/texture.h"

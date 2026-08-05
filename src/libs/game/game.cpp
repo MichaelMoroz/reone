@@ -47,7 +47,7 @@
 #include "reone/graphics/model.h"
 #include "reone/graphics/modelnode.h"
 #include "reone/graphics/rhi/renderer.h"
-#include "reone/graphics/renderer2d.h"
+#include "reone/graphics/rendering/renderer2d.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/gui/gui.h"
 #include "reone/movie/format/bikreader.h"

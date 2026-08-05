@@ -14,7 +14,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-#include "reone/graphics/rayquery.h"
+#include "reone/graphics/rendering/rayquery.h"
 
 #include "reone/system/profiler.h"
 

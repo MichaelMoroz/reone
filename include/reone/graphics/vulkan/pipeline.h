@@ -22,7 +22,7 @@
 #include <string>
 #include <vector>
 
-#include "reone/graphics/gpuscenecontext.h"
+#include "reone/graphics/rendering/gpuscenecontext.h"
 #include "reone/graphics/types.h"
 #include "reone/graphics/vulkan/descriptorwrites.h"
 #include "reone/graphics/vulkan/rhi.h"

@@ -22,16 +22,16 @@
 #include <functional>
 
 #include "../rhi/renderer.h"
-#include "../gpuscenecontext.h"
+#include "../rendering/gpuscenecontext.h"
 
 #include "descriptors.h"
 #include "debugscope.h"
 #include "device.h"
 #include "swapchain.h"
 #include "pipelinecache.h"
-#include "reone/graphics/renderer2d.h"
+#include "reone/graphics/rendering/renderer2d.h"
 #include "commandbuffer.h"
-#include "reone/graphics/pbrtextures.h"
+#include "reone/graphics/rendering/pbrtextures.h"
 #include "resources.h"
 #include "shadercompiler.h"
 #include "uniformring.h"

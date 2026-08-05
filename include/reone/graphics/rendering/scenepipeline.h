@@ -28,7 +28,7 @@
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/rendering/gbuffer.h"
 #include "reone/graphics/rhi/commandbuffer.h"
-#include "reone/graphics/gpuscene.h"
+#include "reone/graphics/rendering/gpuscene.h"
 #include "reone/graphics/rhi/renderer.h"
 
 namespace reone::graphics {

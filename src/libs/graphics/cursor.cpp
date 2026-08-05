@@ -18,7 +18,7 @@
 #include "reone/graphics/cursor.h"
 
 #include "reone/graphics/texture.h"
-#include "reone/graphics/renderer2d.h"
+#include "reone/graphics/rendering/renderer2d.h"
 
 namespace reone {
 

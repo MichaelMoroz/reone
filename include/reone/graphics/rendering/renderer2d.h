@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "types.h"
+#include "../types.h"
 #include "reone/graphics/rhi/commandbuffer.h"
 #include "reone/graphics/rhi/descriptors.h"
 #include "reone/graphics/rhi/image.h"

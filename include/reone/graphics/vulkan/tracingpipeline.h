@@ -22,7 +22,7 @@
 
 #include <volk.h>
 
-#include "reone/graphics/rayquery.h"
+#include "reone/graphics/rendering/rayquery.h"
 
 namespace reone::graphics {
 

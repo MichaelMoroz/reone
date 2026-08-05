@@ -18,7 +18,7 @@
 #include "reone/gui/control/iconchain.h"
 
 #include "reone/graphics/di/services.h"
-#include "reone/graphics/renderer2d.h"
+#include "reone/graphics/rendering/renderer2d.h"
 
 
 namespace reone {

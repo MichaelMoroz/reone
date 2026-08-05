@@ -25,7 +25,7 @@
 #include "reone/game/di/services.h"
 #include "reone/game/object/item.h"
 #include "reone/game/types.h"
-#include "reone/graphics/renderer2d.h"
+#include "reone/graphics/rendering/renderer2d.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"

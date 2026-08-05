@@ -21,9 +21,9 @@
 
 #include "reone/graphics/options.h"
 #include "reone/graphics/rhi/renderer.h"
-#include "reone/graphics/rayquery.h"
-#include "reone/graphics/gpuscene.h"
-#include "reone/graphics/scenepipeline.h"
+#include "reone/graphics/rendering/rayquery.h"
+#include "reone/graphics/rendering/gpuscene.h"
+#include "reone/graphics/rendering/scenepipeline.h"
 #include "reone/scene/render/pipeline/rayquery.h"
 #include "reone/system/logutil.h"
 

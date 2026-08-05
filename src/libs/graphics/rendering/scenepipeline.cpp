@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "reone/graphics/scenepipeline.h"
+#include "reone/graphics/rendering/scenepipeline.h"
 
 #include "reone/system/profiler.h"
 
@@ -25,7 +25,7 @@
 #include "reone/graphics/textureregistry.h"
 #include "reone/graphics/textureutil.h"
 #include "reone/graphics/uniforms.h"
-#include "reone/graphics/pbrtextures.h"
+#include "reone/graphics/rendering/pbrtextures.h"
 #include "reone/graphics/rhi/descriptors.h"
 #include "reone/graphics/rhi/pipelinecache.h"
 #include "reone/graphics/rhi/resources.h"

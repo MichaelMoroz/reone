@@ -28,7 +28,7 @@
 
 #include "reone/graphics/rhi/commandbuffer.h"
 
-#include "reone/graphics/gpuscenecontext.h"
+#include "reone/graphics/rendering/gpuscenecontext.h"
 
 #include <glm/glm.hpp>
 

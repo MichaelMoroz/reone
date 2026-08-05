@@ -17,7 +17,7 @@
 
 #include "reone/graphics/font.h"
 
-#include "reone/graphics/renderer2d.h"
+#include "reone/graphics/rendering/renderer2d.h"
 #include "reone/graphics/texture.h"
 
 namespace reone {

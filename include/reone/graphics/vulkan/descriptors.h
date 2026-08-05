@@ -22,7 +22,7 @@
 #include "reone/graphics/rhi/descriptors.h"
 
 #include "image.h"
-#include "reone/graphics/gpuscene.h"
+#include "reone/graphics/rendering/gpuscene.h"
 
 namespace reone {
 

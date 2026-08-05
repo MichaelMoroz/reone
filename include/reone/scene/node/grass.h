@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "reone/graphics/gpuscene.h"
+#include "reone/graphics/rendering/gpuscene.h"
 #include "reone/graphics/modelnode.h"
 
 #include "../grassproperties.h"

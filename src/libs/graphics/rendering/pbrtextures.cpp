@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "reone/graphics/pbrtextures.h"
+#include "reone/graphics/rendering/pbrtextures.h"
 
 #include "reone/graphics/textureutil.h"
 

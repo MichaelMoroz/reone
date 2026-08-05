@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "texture.h"
+#include "../texture.h"
 #include "reone/graphics/rhi/commandbuffer.h"
 #include "reone/graphics/rhi/descriptors.h"
 #include "reone/graphics/rhi/image.h"

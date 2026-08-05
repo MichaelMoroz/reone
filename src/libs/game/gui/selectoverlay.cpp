@@ -17,7 +17,7 @@
 
 #include "reone/game/gui/selectoverlay.h"
 
-#include "reone/graphics/renderer2d.h"
+#include "reone/graphics/rendering/renderer2d.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/font.h"
 #include "reone/graphics/mesh.h"
