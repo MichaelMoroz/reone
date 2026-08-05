@@ -17,6 +17,7 @@
 #include <sstream>
 
 #include "reone/graphics/gpuscene.h"
+#include "reone/graphics/uniforms.h"
 #include "reone/system/logutil.h"
 
 namespace reone::graphics {
@@ -266,7 +267,7 @@ void SlangShaderCompiler::invalidate() {
     _sourceHash = sourceHash();
 }
 
-void SlangShaderCompiler::validateSceneSchema() {
+void SlangShaderCompiler::validateSchemas() {
     const auto program = _impl->load(_sourceDir, "scene_schema_reflect");
     Slang::ComPtr<slang::IBlob> diagnostic;
     auto *layout = program.linked->getLayout(0, diagnostic.writeRef());
@@ -277,16 +278,17 @@ void SlangShaderCompiler::validateSceneSchema() {
     // two adjacent fields of the same size - a stride comparison alone cannot.
     // The C++ mirrors carry explicit padding members that Slang derives from
     // its own alignment rules, so extra C++ members are expected and ignored.
-    const auto check = [layout](const char *name, size_t cppSize,
-                                std::initializer_list<Field> mirror) {
-        auto *type = layout->findTypeByName(name);
-        auto *typeLayout = type ? layout->getTypeLayout(type, slang::LayoutRules::Default) : nullptr;
+    const auto check = [](slang::ProgramLayout *reflection, const char *name, size_t cppSize,
+                          slang::LayoutRules rules, std::initializer_list<Field> mirror) {
+        auto *type = reflection->findTypeByName(name);
+        auto *typeLayout = type ? reflection->getTypeLayout(type, rules) : nullptr;
         if (!typeLayout)
             throw std::runtime_error("Slang schema reflection omitted " + std::string(name));
         const auto mismatch = [name](const std::string &detail) {
             return std::runtime_error("Slang schema mismatch: " + std::string(name) + detail);
         };
         std::string undeclared;
+        std::vector<const char *> reflected;
         unsigned int checked = 0;
         for (unsigned int i = 0; i < typeLayout->getFieldCount(); ++i) {
             // Reflection hands back a null entry for a field it did not lay
@@ -297,6 +299,7 @@ void SlangShaderCompiler::validateSceneSchema() {
             if (!fieldName)
                 continue;
             ++checked;
+            reflected.push_back(fieldName);
             const Field *expected = nullptr;
             for (const auto &candidate : mirror) {
                 if (std::strcmp(candidate.name, fieldName) == 0) {
@@ -322,6 +325,12 @@ void SlangShaderCompiler::validateSceneSchema() {
             throw mismatch(" declares " + undeclared + ", which the C++ mirror does not");
         // Guards the guard: a mirror entry with no reflected counterpart would
         // otherwise make this check quietly weaker rather than fail.
+        for (const auto &candidate : mirror) {
+            if (std::find_if(reflected.begin(), reflected.end(), [candidate](const char *fieldName) {
+                    return std::strcmp(candidate.name, fieldName) == 0;
+                }) == reflected.end())
+                throw mismatch(" C++ mirror declares " + std::string(candidate.name) + ", which Slang does not");
+        }
         if (checked != mirror.size())
             throw mismatch(" reflected " + std::to_string(checked) + " named fields against " +
                            std::to_string(mirror.size()) + " in the C++ mirror");
@@ -331,7 +340,9 @@ void SlangShaderCompiler::validateSceneSchema() {
     };
 #define REONE_SCHEMA_FIELD(type, field) \
     Field { #field, offsetof(type, field) }
-    check("InstanceMaterial", sizeof(InstanceMaterial),
+#define REONE_STORAGE_LAYOUT slang::LayoutRules::DefaultStructuredBuffer
+    check(layout, "InstanceMaterial", sizeof(InstanceMaterial),
+          REONE_STORAGE_LAYOUT,
           {REONE_SCHEMA_FIELD(InstanceMaterial, selfIllumColor),
            REONE_SCHEMA_FIELD(InstanceMaterial, diffuseColor),
            REONE_SCHEMA_FIELD(InstanceMaterial, uv0),
@@ -359,11 +370,13 @@ void SlangShaderCompiler::validateSceneSchema() {
            REONE_SCHEMA_FIELD(InstanceMaterial, overrideParams),
            REONE_SCHEMA_FIELD(InstanceMaterial, ambientColor),
            REONE_SCHEMA_FIELD(InstanceMaterial, envMapDerivedLayer)});
-    check("Matrix3x4", sizeof(Matrix3x4),
+    check(layout, "Matrix3x4", sizeof(Matrix3x4),
+          REONE_STORAGE_LAYOUT,
           {REONE_SCHEMA_FIELD(Matrix3x4, row0),
            REONE_SCHEMA_FIELD(Matrix3x4, row1),
            REONE_SCHEMA_FIELD(Matrix3x4, row2)});
-    check("MergedVertex", sizeof(MergedVertex),
+    check(layout, "MergedVertex", sizeof(MergedVertex),
+          REONE_STORAGE_LAYOUT,
           {REONE_SCHEMA_FIELD(MergedVertex, position),
            REONE_SCHEMA_FIELD(MergedVertex, normal),
            REONE_SCHEMA_FIELD(MergedVertex, uv1),
@@ -374,7 +387,8 @@ void SlangShaderCompiler::validateSceneSchema() {
            REONE_SCHEMA_FIELD(MergedVertex, prevPosition),
            REONE_SCHEMA_FIELD(MergedVertex, pad),
            REONE_SCHEMA_FIELD(MergedVertex, color)});
-    check("SceneObject", sizeof(SceneObject),
+    check(layout, "SceneObject", sizeof(SceneObject),
+          REONE_STORAGE_LAYOUT,
           {REONE_SCHEMA_FIELD(SceneObject, transform),
            REONE_SCHEMA_FIELD(SceneObject, prevTransform),
            REONE_SCHEMA_FIELD(SceneObject, transformInv),
@@ -399,7 +413,8 @@ void SlangShaderCompiler::validateSceneSchema() {
            REONE_SCHEMA_FIELD(SceneObject, danglyBase),
            REONE_SCHEMA_FIELD(SceneObject, danglyCount),
            REONE_SCHEMA_FIELD(SceneObject, saberDisplacement)});
-    check("ProceduralQuad", sizeof(ProceduralQuad),
+    check(layout, "ProceduralQuad", sizeof(ProceduralQuad),
+          REONE_STORAGE_LAYOUT,
           {REONE_SCHEMA_FIELD(ProceduralQuad, positionVariant),
            REONE_SCHEMA_FIELD(ProceduralQuad, right),
            REONE_SCHEMA_FIELD(ProceduralQuad, up),
@@ -407,7 +422,8 @@ void SlangShaderCompiler::validateSceneSchema() {
            REONE_SCHEMA_FIELD(ProceduralQuad, lightmapUV),
            REONE_SCHEMA_FIELD(ProceduralQuad, pad),
            REONE_SCHEMA_FIELD(ProceduralQuad, color)});
-    check("GrassFace", sizeof(GrassFace),
+    check(layout, "GrassFace", sizeof(GrassFace),
+          REONE_STORAGE_LAYOUT,
           {REONE_SCHEMA_FIELD(GrassFace, vertex0Uv0x),
            REONE_SCHEMA_FIELD(GrassFace, vertex1Uv0y),
            REONE_SCHEMA_FIELD(GrassFace, vertex2Uv1x),
@@ -416,11 +432,121 @@ void SlangShaderCompiler::validateSceneSchema() {
            REONE_SCHEMA_FIELD(GrassFace, boundsMin),
            REONE_SCHEMA_FIELD(GrassFace, boundsMax),
            REONE_SCHEMA_FIELD(GrassFace, faceBudgetMaterialVariants)});
-    check("GrassRange", sizeof(GrassRange),
+    check(layout, "GrassRange", sizeof(GrassRange),
+          REONE_STORAGE_LAYOUT,
           {REONE_SCHEMA_FIELD(GrassRange, faceIndex),
            REONE_SCHEMA_FIELD(GrassRange, clusterOffset),
            REONE_SCHEMA_FIELD(GrassRange, clusterCount),
            REONE_SCHEMA_FIELD(GrassRange, pad)});
+#undef REONE_STORAGE_LAYOUT
+
+    const auto uniformProgram = _impl->load(_sourceDir, "uniformreflect");
+    diagnostic.setNull();
+    auto *uniformLayout = uniformProgram.linked->getLayout(0, diagnostic.writeRef());
+    if (!uniformLayout)
+        throw std::runtime_error("Slang: cannot reflect uniforms\n" + Impl::diagnostics(diagnostic));
+    const auto checkUniform = [uniformLayout, &check](const char *name, size_t cppSize,
+                                                       std::initializer_list<Field> mirror) {
+        // ConstantBuffer is the std140 ABI used by the Vulkan uniform ring. Do
+        // not use the storage-buffer rule the scene tables require here.
+        check(uniformLayout, name, cppSize, slang::LayoutRules::DefaultConstantBuffer, mirror);
+    };
+#define REONE_UNIFORM_FIELD(type, field) \
+    Field { #field, offsetof(type, field) }
+    checkUniform("GlobalUniforms", sizeof(GlobalUniforms),
+                 {REONE_UNIFORM_FIELD(GlobalUniforms, projection),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, projectionInv),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, view),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, viewInv),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, cameraPosition),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, worldAmbientColor),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, lights),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, shadowLightPosition),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, shadowCascadeFarPlanes),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, shadowLightSpace),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, viewProjection),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, prevViewProjection),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, fogColor),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, jitter),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, clipNear),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, clipFar),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, numLights),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, shadowStrength),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, shadowRadius),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, fogNear),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, fogFar)});
+    checkUniform("LocalUniforms", sizeof(LocalUniforms),
+                 {REONE_UNIFORM_FIELD(LocalUniforms, model),
+                  REONE_UNIFORM_FIELD(LocalUniforms, modelInv),
+                  REONE_UNIFORM_FIELD(LocalUniforms, prevModel),
+                  REONE_UNIFORM_FIELD(LocalUniforms, uv),
+                  REONE_UNIFORM_FIELD(LocalUniforms, color),
+                  REONE_UNIFORM_FIELD(LocalUniforms, ambientColor),
+                  REONE_UNIFORM_FIELD(LocalUniforms, diffuseColor),
+                  REONE_UNIFORM_FIELD(LocalUniforms, selfIllumColor),
+                  REONE_UNIFORM_FIELD(LocalUniforms, saberDisplacement),
+                  REONE_UNIFORM_FIELD(LocalUniforms, featureMask),
+                  REONE_UNIFORM_FIELD(LocalUniforms, bumpMapFrame),
+                  REONE_UNIFORM_FIELD(LocalUniforms, bumpMapScale),
+                  REONE_UNIFORM_FIELD(LocalUniforms, waterAlpha),
+                  REONE_UNIFORM_FIELD(LocalUniforms, billboardSize),
+                  REONE_UNIFORM_FIELD(LocalUniforms, envMapDerivedLayer),
+                  REONE_UNIFORM_FIELD(LocalUniforms, iblRoughness)});
+    checkUniform("BoneUniforms", sizeof(BoneUniforms),
+                 {REONE_UNIFORM_FIELD(BoneUniforms, bones),
+                  REONE_UNIFORM_FIELD(BoneUniforms, prevBones)});
+    checkUniform("DanglyUniforms", sizeof(DanglyUniforms),
+                 {REONE_UNIFORM_FIELD(DanglyUniforms, positions)});
+    checkUniform("AABBUniforms", sizeof(AABBUniforms),
+                 {REONE_UNIFORM_FIELD(AABBUniforms, corners)});
+    checkUniform("ParticleUniforms", sizeof(ParticleUniforms),
+                 {REONE_UNIFORM_FIELD(ParticleUniforms, gridSize),
+                  REONE_UNIFORM_FIELD(ParticleUniforms, particles)});
+    checkUniform("GrassUniforms", sizeof(GrassUniforms),
+                 {REONE_UNIFORM_FIELD(GrassUniforms, quadSize),
+                  REONE_UNIFORM_FIELD(GrassUniforms, radius),
+                  REONE_UNIFORM_FIELD(GrassUniforms, clusters)});
+    checkUniform("WalkmeshUniforms", sizeof(WalkmeshUniforms),
+                 {REONE_UNIFORM_FIELD(WalkmeshUniforms, materials)});
+    checkUniform("TextUniforms", sizeof(TextUniforms),
+                 {REONE_UNIFORM_FIELD(TextUniforms, chars)});
+    checkUniform("ScreenEffectUniforms", sizeof(ScreenEffectUniforms),
+                 {REONE_UNIFORM_FIELD(ScreenEffectUniforms, projection),
+                  REONE_UNIFORM_FIELD(ScreenEffectUniforms, projectionInv),
+                  REONE_UNIFORM_FIELD(ScreenEffectUniforms, screenProjection),
+                  REONE_UNIFORM_FIELD(ScreenEffectUniforms, ssaoSamples),
+                  REONE_UNIFORM_FIELD(ScreenEffectUniforms, screenResolution),
+                  REONE_UNIFORM_FIELD(ScreenEffectUniforms, screenResolutionRcp),
+                  REONE_UNIFORM_FIELD(ScreenEffectUniforms, blurDirection),
+                  REONE_UNIFORM_FIELD(ScreenEffectUniforms, clipNear),
+                  REONE_UNIFORM_FIELD(ScreenEffectUniforms, clipFar),
+                  REONE_UNIFORM_FIELD(ScreenEffectUniforms, ssaoSampleRadius),
+                  REONE_UNIFORM_FIELD(ScreenEffectUniforms, ssaoBias),
+                  REONE_UNIFORM_FIELD(ScreenEffectUniforms, ssrBias),
+                  REONE_UNIFORM_FIELD(ScreenEffectUniforms, ssrPixelStride),
+                  REONE_UNIFORM_FIELD(ScreenEffectUniforms, ssrMaxSteps),
+                  REONE_UNIFORM_FIELD(ScreenEffectUniforms, sharpenAmount)});
+    checkUniform("GlobalUniformsLight", sizeof(GlobalUniformsLight),
+                 {REONE_UNIFORM_FIELD(GlobalUniformsLight, position),
+                  REONE_UNIFORM_FIELD(GlobalUniformsLight, color),
+                  REONE_UNIFORM_FIELD(GlobalUniformsLight, multiplier),
+                  REONE_UNIFORM_FIELD(GlobalUniformsLight, radius),
+                  REONE_UNIFORM_FIELD(GlobalUniformsLight, ambientOnly),
+                  REONE_UNIFORM_FIELD(GlobalUniformsLight, dynamicType)});
+    checkUniform("ParticleUniformsParticle", sizeof(ParticleUniformsParticle),
+                 {REONE_UNIFORM_FIELD(ParticleUniformsParticle, positionFrame),
+                  REONE_UNIFORM_FIELD(ParticleUniformsParticle, right),
+                  REONE_UNIFORM_FIELD(ParticleUniformsParticle, up),
+                  REONE_UNIFORM_FIELD(ParticleUniformsParticle, color),
+                  REONE_UNIFORM_FIELD(ParticleUniformsParticle, size)});
+    checkUniform("GrassUniformsCluster", sizeof(GrassUniformsCluster),
+                 {REONE_UNIFORM_FIELD(GrassUniformsCluster, positionVariant),
+                  REONE_UNIFORM_FIELD(GrassUniformsCluster, lightmapUV),
+                  REONE_UNIFORM_FIELD(GrassUniformsCluster, yaw)});
+    checkUniform("TextUniformsCharacter", sizeof(TextUniformsCharacter),
+                 {REONE_UNIFORM_FIELD(TextUniformsCharacter, posScale),
+                  REONE_UNIFORM_FIELD(TextUniformsCharacter, uv)});
+#undef REONE_UNIFORM_FIELD
 #undef REONE_SCHEMA_FIELD
 }
 

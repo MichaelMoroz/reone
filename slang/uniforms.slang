@@ -1,18 +1,13 @@
 // Uniform block layouts, mirroring the structs in
 // include/reone/graphics/uniforms.h.
 //
-// This file exists so that Slang's reflection can compute the std140 offsets and
-// a generator can assert them against the C++ structs, replacing a contract that
-// was previously maintained by hand and checked by nothing. See
-// doc/tasks/CONVENTIONS.md.
+// Slang reflection checks this std140 layout against the C++ mirrors at Vulkan
+// renderer startup. See reone/graphics/vulkan/shadercompiler.h.
 //
 // Struct and member names deliberately match the C++ ones rather than the
 // u-prefixed GLSL ones, so the generated assertions need no name mapping. The
 // Vulkan shaders written in phase 4 will use these blocks directly.
 //
-// Regenerate the assertions with:
-//     cmake --build build --target uniformlayout
-
 static const int kMaxLights = 32;
 static const int kNumShadowLightSpace = 6;
 static const int kMaxBones = 24;

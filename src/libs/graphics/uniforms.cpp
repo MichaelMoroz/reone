@@ -17,8 +17,6 @@
 
 #include "reone/graphics/uniforms.h"
 
-#include "reone/graphics/uniformlayout.generated.h"
-
 namespace reone {
 
 namespace graphics {

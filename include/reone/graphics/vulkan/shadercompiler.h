@@ -39,8 +39,8 @@ public:
     /** Drops memory state so the next module request rechecks the disk cache. */
     void invalidate();
 
-    /** Verifies the C++ GPU scene mirrors against Slang storage-buffer layout. */
-    void validateSceneSchema();
+    /** Verifies the C++ GPU scene and uniform mirrors against their Slang layouts. */
+    void validateSchemas();
 
 private:
     struct Impl;

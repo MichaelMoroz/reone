@@ -1,9 +1,6 @@
-// Entry point that exists only so that slangc emits reflection data for every
-// uniform block. Reflection reports the parameters an entry point actually
-// references, so this touches all of them. It is never executed, and is not
-// packed into the shader pack.
-//
-// See src/apps/uniformgen and doc/tasks/CONVENTIONS.md.
+// Reflection-only entry point for the C++ uniform ABI guard. It touches every
+// block because reflection reports only parameters an entry point references.
+// Do not add it to a render pipeline or shader pack.
 
 import uniforms;
 

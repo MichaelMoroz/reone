@@ -10,13 +10,13 @@
 
 namespace reone::graphics {
 
-TEST(SlangShaderCompiler, compiles_engine_modules_and_validates_scene_schema) {
+TEST(SlangShaderCompiler, compiles_engine_modules_and_validates_schemas) {
     SlangShaderCompiler compiler {REONE_SHADER_SOURCE_DIR};
     compiler.init();
     EXPECT_FALSE(compiler.module("megadraw").empty());
     EXPECT_FALSE(compiler.module("rayquery").empty());
     EXPECT_TRUE(compiler.recompileAll());
-    EXPECT_NO_THROW(compiler.validateSceneSchema());
+    EXPECT_NO_THROW(compiler.validateSchemas());
     compiler.deinit();
 }
 
@@ -88,7 +88,7 @@ TEST(SlangShaderCompiler, names_the_field_for_a_mismatched_cpp_mirror) {
     SlangShaderCompiler compiler {sources.path()};
     compiler.init();
     try {
-        compiler.validateSceneSchema();
+        compiler.validateSchemas();
         FAIL() << "expected a schema-layout failure";
     } catch (const std::runtime_error &error) {
         EXPECT_NE(std::string {error.what()}.find("InstanceMaterial::envMap"),

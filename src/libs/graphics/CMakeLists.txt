@@ -59,7 +59,6 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/textutil.h
     ${GRAPHICS_INCLUDE_DIR}/triangleutil.h
     ${GRAPHICS_INCLUDE_DIR}/types.h
-    ${GRAPHICS_INCLUDE_DIR}/uniformlayout.generated.h
     ${GRAPHICS_INCLUDE_DIR}/uniforms.h
     ${GRAPHICS_INCLUDE_DIR}/walkmesh.h
     ${GRAPHICS_INCLUDE_DIR}/window.h)

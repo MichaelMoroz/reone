@@ -332,7 +332,6 @@ add_subdirectory(src/libs/tools) # tools static library
 
 # Applications
 
-add_subdirectory(src/apps/uniformgen) # uniform layout assertion generator
 add_subdirectory(src/apps/engine) # engine application
 
 

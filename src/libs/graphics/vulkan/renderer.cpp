@@ -82,7 +82,7 @@ void VulkanRenderer::init() {
             _shaderCompiler.setSourceDir(std::move(deployedSource));
     }
     _shaderCompiler.init();
-    _shaderCompiler.validateSceneSchema();
+    _shaderCompiler.validateSchemas();
     initPipelineCache();
     _renderer2d.init();
     _inited = true;
