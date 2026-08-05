@@ -88,7 +88,7 @@ std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode,
     if (!_renderer) {
         throw std::logic_error("Renderer was not supplied to the pipeline factory");
     }
-    if (mode == RenderMode::PathTracing && !_renderer->device().rayQueryAvailable()) {
+    if (mode == RenderMode::PathTracing && !_renderer->rayQueryAvailable()) {
         warn("Path tracing needs ray-query acceleration structures and position fetch, "
              "which this device does not provide; rendering PBR instead.",
              LogChannel::Graphics);

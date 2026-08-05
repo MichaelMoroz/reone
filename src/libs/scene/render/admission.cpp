@@ -14,9 +14,8 @@
 #include "reone/graphics/options.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
-#include "reone/graphics/vulkan/renderer.h"
+#include "reone/graphics/renderer.h"
 #include "reone/graphics/pbrtextures.h"
-#include "reone/graphics/vulkan/resources.h"
 #include "reone/scene/node/model.h"
 #include "reone/system/logutil.h"
 
@@ -132,7 +131,7 @@ void applyCategoryOverride(InstanceMaterial &material,
 
 void populateMaterialResources(InstanceMaterial &dst,
                                const Material &src,
-                               VulkanRenderer &renderer) {
+                               IRenderer &renderer) {
     const auto textureAt = [&src](MaterialTextureSlot slot) {
         return src.textures[static_cast<size_t>(slot)];
     };
@@ -167,7 +166,7 @@ void populateMaterialResources(InstanceMaterial &dst,
 
 } // namespace
 
-GpuSceneAdmission::GpuSceneAdmission(VulkanRenderer &renderer,
+GpuSceneAdmission::GpuSceneAdmission(IRenderer &renderer,
                                      GraphicsOptions &options,
                                      GpuScene &gpuScene) :
     _renderer(renderer), _options(options), _gpuScene(gpuScene) {}

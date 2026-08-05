@@ -314,7 +314,7 @@ void Engine::deinit() {
     if (_renderer) {
         // Pipelines own images sampled by the last submitted command buffer;
         // release them only after that work has completed.
-        _renderer->device().waitIdle();
+        _renderer->waitIdle();
     }
 
     // Before ImGui goes away. A render pipeline holds an ImGui descriptor set

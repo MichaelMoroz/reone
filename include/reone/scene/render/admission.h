@@ -8,7 +8,7 @@
 #include "reone/scene/gpuscene.h"
 
 namespace reone::graphics {
-class VulkanRenderer;
+class IRenderer;
 struct GraphicsOptions;
 } // namespace reone::graphics
 
@@ -26,7 +26,7 @@ struct GpuSceneAdmissionResult {
 /** Owns scene selection, classification, resource ids, and upload lowering. */
 class GpuSceneAdmission : boost::noncopyable {
 public:
-    GpuSceneAdmission(graphics::VulkanRenderer &renderer,
+    GpuSceneAdmission(graphics::IRenderer &renderer,
                       graphics::GraphicsOptions &options,
                       GpuScene &gpuScene);
 
@@ -35,7 +35,7 @@ public:
         graphics::GpuSceneUpload reuse = {});
 
 private:
-    graphics::VulkanRenderer &_renderer;
+    graphics::IRenderer &_renderer;
     graphics::GraphicsOptions &_options;
     GpuScene &_gpuScene;
     graphics::RayQuerySubmission _submission;

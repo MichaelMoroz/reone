@@ -4,7 +4,9 @@
  */
 #pragma once
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 
 #include "image.h"
 #include "texture.h"
@@ -20,6 +22,8 @@ public:
     /** Create an image owned by the caller rather than by this resource cache. */
     virtual std::unique_ptr<IImage> makeImage() = 0;
     virtual const IImage &get(const Texture &texture) = 0;
+    /** Return the stable bindless id assigned during texture upload, if any. */
+    virtual std::optional<uint32_t> textureId(const Texture &texture) = 0;
     virtual Sampler sampler(const Texture::Properties &properties) = 0;
     virtual bool isExternal(const Texture &texture) const = 0;
 };

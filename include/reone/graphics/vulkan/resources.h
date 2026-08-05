@@ -87,7 +87,7 @@ public:
      * table. A texture the upload path cannot represent has no id, so a shader
      * can deliberately fall back rather than sampling an unrelated descriptor.
      */
-    std::optional<uint32_t> textureId(const Texture &texture);
+    std::optional<uint32_t> textureId(const Texture &texture) override;
 
     /** Uploaded 2D textures and their stable bindless indices. */
     std::vector<std::pair<uint32_t, const VulkanImage *>> uploadedTextures() const;

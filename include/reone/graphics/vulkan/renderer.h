@@ -84,16 +84,17 @@ public:
     void deinitImGui() override;
 
     void beginFrame(glm::ivec2 extent) override;
-    void with2DRendering(glm::ivec2 logicalExtent, const std::function<void()> &block);
+    void with2DRendering(glm::ivec2 logicalExtent,
+                         const std::function<void()> &block) override;
     void drawSceneOutput(Texture &output) override;
     void presentSceneOutput(Texture &output) override;
     std::shared_ptr<Texture> captureFrame() override;
     /** Submit completed recording so a synchronous readback can see this frame. */
-    void flushFrame();
+    void flushFrame() override;
     void endFrame() override;
     void invalidateResources() override;
     void invalidateTexture(Texture &texture) override;
-    void setVsync(bool enabled) {
+    void setVsync(bool enabled) override {
         _swapchain.setVsync(enabled);
         _needsRecreate = true;
     }
@@ -110,9 +111,9 @@ public:
     VulkanUniformRing &uniformRing() { return _uniformRing; }
     VulkanDescriptors &descriptors() { return _descriptors; }
     VulkanPipelineCache &pipelines() { return _pipelines; }
-    VulkanResources &resources() { return _resources; }
-    PBRTextures &pbrTextures() { return _pbrTextures; }
-    Renderer2D &renderer2d() { return _renderer2d; }
+    VulkanResources &resources() override { return _resources; }
+    PBRTextures &pbrTextures() override { return _pbrTextures; }
+    Renderer2D &renderer2d() override { return _renderer2d; }
     /** Execute one short setup recording before frames begin. */
     void immediateSubmit(const std::function<void(ICommandBuffer &)> &block) override;
     /** ImGui owns descriptor lifetime for the preview texture it displays. */
@@ -124,7 +125,10 @@ public:
         return _shaderCompiler.module(name);
     }
     /** Rebuild source modules now; bad sources retain their prior modules. */
-    bool recompileShaders();
+    bool recompileShaders() override;
+
+    void waitIdle() override { _device.waitIdle(); }
+    bool rayQueryAvailable() const override { return _device.rayQueryAvailable(); }
 
     /** The uniform descriptor set for the frame being recorded. */
     VkDescriptorSet uniformSet() const { return _descriptors.uniformSet(_frameIndex); }

@@ -27,6 +27,9 @@ namespace graphics {
 
 class Texture;
 class ICommandBuffer;
+class I2DRenderer;
+class IPBRTextures;
+class IResources;
 
 /**
  * Owns the frame: the target everything is drawn into, and how a finished frame
@@ -92,6 +95,34 @@ public:
      * canvas, say - ends the frame without presenting.
      */
     virtual void endFrame() = 0;
+
+    /** Device-side resources used to assign material texture ids. */
+    virtual IResources &resources() = 0;
+
+    /** Derived environment-map management for PBR material admission. */
+    virtual IPBRTextures &pbrTextures() = 0;
+
+    /** The screen-space batcher used while the renderer owns the 2D scope. */
+    virtual I2DRenderer &renderer2d() = 0;
+
+    /** Rebuild shader modules, retaining prior modules if source compilation fails. */
+    virtual bool recompileShaders() = 0;
+
+    /** Submit completed recording so synchronous readback can observe this frame. */
+    virtual void flushFrame() = 0;
+
+    /** Recreate presentation resources with the requested synchronization mode. */
+    virtual void setVsync(bool enabled) = 0;
+
+    /** Record a scoped run of screen-space drawing in the current frame. */
+    virtual void with2DRendering(glm::ivec2 logicalExtent,
+                                 const std::function<void()> &block) = 0;
+
+    /** Wait for all device work before releasing resources it may still use. */
+    virtual void waitIdle() = 0;
+
+    /** Whether this renderer can execute the path-tracing scene mode. */
+    virtual bool rayQueryAvailable() const = 0;
 
     /** Record and complete short setup work outside a frame. */
     virtual void immediateSubmit(const std::function<void(ICommandBuffer &)> &block) = 0;

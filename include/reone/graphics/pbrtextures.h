@@ -60,6 +60,8 @@ public:
 
     virtual void refresh() = 0;
     virtual void requestEnvMapDerived(EnvMapDerivedRequest request) = 0;
+    /** Reserve a stable derived-map layer for an admitted environment map. */
+    virtual int requestEnvMapDerivedLayer(Texture &envMap) = 0;
     virtual std::optional<int> findEnvMapDerivedLayer(const std::string &name) = 0;
 };
 
@@ -98,7 +100,7 @@ public:
     }
 
     /** Reserve the layer immediately so cached material records stay stable. */
-    int requestEnvMapDerivedLayer(Texture &envMap);
+    int requestEnvMapDerivedLayer(Texture &envMap) override;
 
     std::optional<int> findEnvMapDerivedLayer(const std::string &name) override {
         auto it = _envMapToLayer.find(name);

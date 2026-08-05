@@ -23,6 +23,8 @@
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/renderer.h"
 #include "reone/graphics/renderer2d.h"
+#include "reone/graphics/pbrtextures.h"
+#include "reone/graphics/resources.h"
 #include "reone/graphics/statistic.h"
 #include "reone/graphics/textureregistry.h"
 #include "reone/graphics/uniforms.h"
@@ -49,6 +51,15 @@ public:
     MOCK_METHOD(void, drawSceneOutput, (Texture &), (override));
     MOCK_METHOD(std::shared_ptr<Texture>, captureFrame, (), (override));
     MOCK_METHOD(void, endFrame, (), (override));
+    MOCK_METHOD(IResources &, resources, (), (override));
+    MOCK_METHOD(IPBRTextures &, pbrTextures, (), (override));
+    MOCK_METHOD(I2DRenderer &, renderer2d, (), (override));
+    MOCK_METHOD(bool, recompileShaders, (), (override));
+    MOCK_METHOD(void, flushFrame, (), (override));
+    MOCK_METHOD(void, setVsync, (bool), (override));
+    MOCK_METHOD(void, with2DRendering, (glm::ivec2, const std::function<void()> &), (override));
+    MOCK_METHOD(void, waitIdle, (), (override));
+    MOCK_METHOD(bool, rayQueryAvailable, (), (const override));
     MOCK_METHOD(void, immediateSubmit, (const std::function<void(ICommandBuffer &)> &), (override));
 };
 
