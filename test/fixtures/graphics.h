@@ -21,7 +21,6 @@
 
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/rhi/descriptors.h"
-#include "reone/graphics/rhi/gbuffer.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/rhi/pipelinecache.h"
 #include "reone/graphics/rhi/renderer.h"
@@ -67,7 +66,6 @@ public:
     MOCK_METHOD(I2DRenderer &, renderer2d, (), (override));
     MOCK_METHOD(int, frameIndex, (), (const override));
     MOCK_METHOD(ICommandBuffer &, recordingCommandBuffer, (), (override));
-    MOCK_METHOD(std::unique_ptr<IGBuffer>, makeGBuffer, (), (override));
     MOCK_METHOD(Format, sceneOutputFormat, (), (const override));
     MOCK_METHOD(bool, recompileShaders, (), (override));
     MOCK_METHOD(void, flushFrame, (), (override));

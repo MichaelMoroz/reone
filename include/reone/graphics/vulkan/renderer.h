@@ -27,7 +27,6 @@
 #include "descriptors.h"
 #include "debugscope.h"
 #include "device.h"
-#include "gbuffer.h"
 #include "swapchain.h"
 #include "pipelinecache.h"
 #include "reone/graphics/renderer2d.h"
@@ -115,9 +114,6 @@ public:
     VulkanResources &resources() override { return _resources; }
     PBRTextures &pbrTextures() override { return _pbrTextures; }
     Renderer2D &renderer2d() override { return _renderer2d; }
-    std::unique_ptr<IGBuffer> makeGBuffer() override {
-        return graphics::makeGBuffer(_device);
-    }
     Format sceneOutputFormat() const override {
         return fromVulkanFormat(_swapchain.imageFormat());
     }

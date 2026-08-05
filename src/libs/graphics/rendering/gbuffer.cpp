@@ -1,0 +1,80 @@
+/*
+ * Copyright (c) 2026 The reone project contributors
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+#include "reone/graphics/rendering/gbuffer.h"
+
+#include "reone/graphics/rhi/commandbuffer.h"
+#include "reone/graphics/rhi/resources.h"
+
+namespace reone::graphics {
+
+size_t GBuffer::attachmentIndex(GBufferAttachment attachment) {
+    switch (attachment) {
+    case GBufferAttachment::Diffuse: return 0;
+    case GBufferAttachment::EyeNormal: return 1;
+    case GBufferAttachment::Lightmap: return 2;
+    case GBufferAttachment::SelfIllum: return 3;
+    case GBufferAttachment::Motion: return 4;
+    case GBufferAttachment::MaterialId: return 5;
+    }
+    throw std::invalid_argument("Unknown G-buffer attachment");
+}
+
+void GBuffer::init(glm::ivec2 extent) {
+    _extent = extent;
+    auto formats = colorFormats();
+    auto &resources = _renderer.resources();
+    for (size_t i = 0; i < _color.size(); ++i) {
+        _color[i] = resources.makeImage();
+        _color[i]->initColorAttachment(extent, formats[i]);
+    }
+    _depth = resources.makeImage();
+    _depth->initDepthAttachment(extent, depthFormat());
+
+    // Images begin undefined and dynamic rendering does not transition them.
+    // Keep the colour attachments in one dependency; later passes preserve
+    // that batching through ICommandBuffer::transitionImages as well.
+    _renderer.immediateSubmit([this](ICommandBuffer &commandBuffer) {
+        commandBuffer.transitionImages(colorImages(), ImageLayout::ColorAttachment);
+        commandBuffer.transitionImage(*_depth, ImageLayout::DepthAttachment);
+    });
+}
+
+void GBuffer::deinit() {
+    for (auto &image : _color) {
+        image.reset();
+    }
+    _depth.reset();
+}
+
+void GBuffer::setSamplers(Sampler colorSampler, Sampler depthSampler,
+                          Sampler materialIdSampler) {
+    for (auto &image : _color) {
+        image->setSampler(colorSampler);
+    }
+    color(GBufferAttachment::MaterialId).setSampler(materialIdSampler);
+    _depth->setSampler(depthSampler);
+}
+
+IImage &GBuffer::color(GBufferAttachment attachment) {
+    return *_color[attachmentIndex(attachment)];
+}
+
+std::vector<IImage *> GBuffer::colorImages() {
+    std::vector<IImage *> images;
+    images.reserve(_color.size());
+    for (auto &image : _color) {
+        images.push_back(image.get());
+    }
+    return images;
+}
+
+std::vector<Format> GBuffer::colorFormats() const {
+    return {Format::R8G8B8A8Unorm, Format::R8G8B8A8Unorm,
+            Format::R8G8B8A8Unorm, Format::R8G8B8A8Unorm,
+            Format::R16G16Sfloat, Format::R16Uint};
+}
+
+} // namespace reone::graphics

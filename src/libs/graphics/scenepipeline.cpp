@@ -67,11 +67,9 @@ ScenePipeline::~ScenePipeline() {
     deinit();
 }
 
-static void transitionGBuffer(ICommandBuffer &cmd, IGBuffer &gbuffer,
+static void transitionGBuffer(ICommandBuffer &cmd, GBuffer &gbuffer,
                               ImageLayout layout) {
-    for (int i = 0; i < static_cast<int>(GBufferAttachment::Count); ++i) {
-        cmd.transitionImage(gbuffer.color(static_cast<GBufferAttachment>(i)), layout);
-    }
+    cmd.transitionImages(gbuffer.colorImages(), layout);
 }
 
 void ScenePipeline::init() {
@@ -88,7 +86,7 @@ void ScenePipeline::init() {
         return;
     }
 
-    _gbuffer = _renderer.makeGBuffer();
+    _gbuffer = std::make_unique<GBuffer>(_renderer);
     _gbuffer->init(_targetSize);
 
     _output = _renderer.resources().makeImage();
@@ -210,7 +208,7 @@ const GpuScene::View &ScenePipeline::prepareMergedScene(
     }
     const auto materialCount =
         _mergedScene.materials.size / sizeof(InstanceMaterial);
-    if (materialCount > IGBuffer::kNoMaterial) {
+    if (materialCount > GBuffer::kNoMaterial) {
         warn("Vulkan: G-buffer R16_UINT material ID exhausted by " +
                  std::to_string(materialCount) +
                  " material records; refusing to wrap into the 0xffff sentinel",
@@ -306,14 +304,14 @@ void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
     transitionGBuffer(cmd, *_gbuffer, ImageLayout::ColorAttachment);
     cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthAttachment);
     std::vector<RenderAttachment> colors;
-    colors.reserve(static_cast<int>(GBufferAttachment::Count));
-    for (int i = 0; i < static_cast<int>(GBufferAttachment::Count); ++i) {
+    colors.reserve(kGBufferAttachments.size());
+    for (auto gbufferAttachment : kGBufferAttachments) {
         RenderAttachment attachment {
-            _gbuffer->color(static_cast<GBufferAttachment>(i)).sampleView(),
+            _gbuffer->color(gbufferAttachment).sampleView(),
             ImageLayout::ColorAttachment, AttachmentLoad::Clear, AttachmentStore::Store};
-        if (i == static_cast<int>(GBufferAttachment::MaterialId)) {
+        if (gbufferAttachment == GBufferAttachment::MaterialId) {
             attachment.clear.integer = true;
-            attachment.clear.uintValue = IGBuffer::kNoMaterial;
+            attachment.clear.uintValue = GBuffer::kNoMaterial;
         }
         colors.push_back(attachment);
     }
@@ -661,16 +659,17 @@ std::vector<ScenePipeline::Target> ScenePipeline::targetEntries(
         }
         return entries;
     }
-    static const char *kDisplayNames[static_cast<int>(GBufferAttachment::Count)] = {
+    static const char *kDisplayNames[kGBufferAttachments.size()] = {
         "G-buffer diffuse", "G-buffer eye normal", "G-buffer lightmap",
         "G-buffer self-illum", "G-buffer motion", "G-buffer material ID"};
-    static const char *kDumpNames[static_cast<int>(GBufferAttachment::Count)] = {
+    static const char *kDumpNames[kGBufferAttachments.size()] = {
         "g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_lightmap",
         "g_buffer_self_illum", "g_buffer_motion", "g_buffer_material_id"};
-    for (int i = 0; i < static_cast<int>(GBufferAttachment::Count); ++i) {
-        auto kind = i == static_cast<int>(GBufferAttachment::EyeNormal) ? TargetKind::EyeNormal : i == static_cast<int>(GBufferAttachment::Motion) ? TargetKind::Motion
-                                                                                                             : TargetKind::Color;
-        entries.push_back({kDisplayNames[i], kDumpNames[i], kind, &_gbuffer->color(static_cast<GBufferAttachment>(i)),
+    for (size_t i = 0; i < kGBufferAttachments.size(); ++i) {
+        auto attachment = kGBufferAttachments[i];
+        auto kind = attachment == GBufferAttachment::EyeNormal ? TargetKind::EyeNormal : attachment == GBufferAttachment::Motion ? TargetKind::Motion
+                                                                                                                        : TargetKind::Color;
+        entries.push_back({kDisplayNames[i], kDumpNames[i], kind, &_gbuffer->color(attachment),
                            ImageLayout::ShaderRead, false});
     }
     entries.push_back({"G-buffer depth", "g_buffer_depth", TargetKind::Depth,

@@ -33,7 +33,6 @@ namespace graphics {
 class Texture;
 class ICommandBuffer;
 class IDescriptors;
-class IGBuffer;
 class IImage;
 class I2DRenderer;
 class IPBRTextures;
@@ -129,9 +128,6 @@ public:
 
     /** The command buffer recording the current frame. */
     virtual ICommandBuffer &recordingCommandBuffer() = 0;
-
-    /** Create the retained deferred attachments used by a scene pipeline. */
-    virtual std::unique_ptr<IGBuffer> makeGBuffer() = 0;
 
     /** The pixel format a scene output must use before presentation. */
     virtual Format sceneOutputFormat() const = 0;

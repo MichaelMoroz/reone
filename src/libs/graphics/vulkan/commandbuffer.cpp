@@ -5,6 +5,14 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "reone/graphics/vulkan/commandbuffer.h"
@@ -73,6 +81,37 @@ void VulkanCommandBuffer::transitionImage(IImage &image, ImageLayout to) {
         throw std::invalid_argument("Unknown RHI image layout");
     }
     toVulkanImage(image).transitionTo(_commandBuffer, target);
+}
+
+void VulkanCommandBuffer::transitionImages(const std::vector<IImage *> &images,
+                                           ImageLayout to) {
+    VkImageLayout target;
+    switch (to) {
+    case ImageLayout::ShaderRead:
+        target = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        break;
+    case ImageLayout::ColorAttachment:
+        target = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        break;
+    case ImageLayout::DepthAttachment:
+        target = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        break;
+    case ImageLayout::DepthRead:
+        target = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
+        break;
+    case ImageLayout::General:
+        target = VK_IMAGE_LAYOUT_GENERAL;
+        break;
+    default:
+        throw std::invalid_argument("Unknown RHI image layout");
+    }
+
+    std::vector<VulkanImage *> nativeImages;
+    nativeImages.reserve(images.size());
+    for (auto *image : images) {
+        nativeImages.push_back(&toVulkanImage(*image));
+    }
+    VulkanImage::transitionTo(_commandBuffer, nativeImages, target);
 }
 
 void VulkanCommandBuffer::bindPipeline(Pipeline pipeline) {

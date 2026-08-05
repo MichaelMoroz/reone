@@ -35,6 +35,7 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/rhi/buffer.h
     ${GRAPHICS_INCLUDE_DIR}/rhi/image.h
     ${GRAPHICS_INCLUDE_DIR}/rayquery.h
+    ${GRAPHICS_INCLUDE_DIR}/rendering/gbuffer.h
     ${GRAPHICS_INCLUDE_DIR}/scenepipeline.h
     ${GRAPHICS_INCLUDE_DIR}/format/bwmreader.h
     ${GRAPHICS_INCLUDE_DIR}/format/curreader.h
@@ -101,6 +102,7 @@ set(GRAPHICS_SOURCES
     ${GRAPHICS_SOURCE_DIR}/modelnode.cpp
     ${GRAPHICS_SOURCE_DIR}/pbrtextures.cpp
     ${GRAPHICS_SOURCE_DIR}/rayquery.cpp
+    ${GRAPHICS_SOURCE_DIR}/rendering/gbuffer.cpp
     ${GRAPHICS_SOURCE_DIR}/renderer2d.cpp
     ${GRAPHICS_SOURCE_DIR}/scenepipeline.cpp
     ${GRAPHICS_SOURCE_DIR}/texture.cpp
