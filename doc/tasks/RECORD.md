@@ -364,6 +364,19 @@ appearances followed a structural change, but every structural change was also a
 rebuild, and the rebuild is what touched the stale blob. A causal story was
 constructed from a correlation whose common term was never isolated.
 
+**Recurred a third time** on 2026-08-05 during the ray-tracing port, and the
+diagnosis was cheap because 1.13's lesson had been applied: the `VkResult` was
+captured (`-1`, `VK_ERROR_OUT_OF_HOST_MEMORY`) and matched to this entry instead
+of being theorised about. The precise state, for next time:
+
+    find build -path '*nrd*' -name '*.spirv.h' -size -200c
+
+returns exactly one file — `build/_deps/nrd-src/_Shaders/Clear.cs.spirv.h`, 67
+bytes out of 31 generated headers. Deleting it and rebuilding regenerates it at
+3,107 bytes and path tracing starts. **The whole fix is one `rm`**, which is why
+the row is now P0: the cost is never the repair, it is the hour spent deciding
+whether the renderer change in front of you caused it.
+
 ---
 
 ## 2. Design analyses worth keeping, though the decision is made
