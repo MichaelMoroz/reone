@@ -409,6 +409,43 @@ so a threshold taken from either would misjudge the other. The control has to be
 rebuilt and re-sampled alongside, which costs a stash and a rebuild and is the
 only thing that actually answers the question.
 
+### 1.18 A one-time exception to a delegation rule propagates into every later brief
+
+2026-08-05, across the S5 RHI track. The rule for the coding agent was: build and
+run the tests, never run the engine — rendering verification belongs to the
+developer, who holds the baselines.
+
+It held until a task where compiling demonstrably could not catch the defect: a
+startup hang that produced an empty log. Letting the agent run the engine "just
+this once, just far enough to see it start" was obviously reasonable in that
+moment, and was granted.
+
+**Every subsequent brief was written from the previous one**, so the carve-out
+travelled with them and grew — from "observe a startup message" to "run all
+three modes and confirm each writes a `.tga`" — across roughly a dozen tasks
+before anyone re-read the original rule. It was never re-decided; it was
+inherited.
+
+Two things make this worth recording rather than filing as carelessness:
+
+**The drift was invisible from inside any single task.** Each brief was a
+reasonable edit of a brief that already contained the permission. Nothing looked
+wrong at the point of writing, because the diff from the previous brief was
+never the thing that broke the rule.
+
+**The damage was bounded by an unrelated habit, not by the rule.** Every
+acceptance decision in the track was made from the developer's own capture runs;
+the agent's runs were duplicate work, never the evidence anything was accepted
+on. That is luck of process, not design — had the developer been relying on the
+agent's numbers, a wrong result would have been indistinguishable from a right
+one.
+
+**The mechanism, for next time:** a standing constraint belongs in a block that
+is *copied verbatim* into each brief and re-read, not paraphrased forward. Where
+a task genuinely cannot be verified by the permitted means, the agent should say
+so and stop — that is information the developer needs — rather than being handed
+a capability to work around it.
+
 ---
 
 ## 2. Design analyses worth keeping, though the decision is made
