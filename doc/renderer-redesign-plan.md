@@ -170,12 +170,12 @@ faulted 1/3, while warm runs were clean 2/2. The engine compiles all twenty
 modules cold without faulting, so the distinguishing factor is not compilation
 itself but how often the test does it — `recompileAll()` force-recompiles the
 whole set a second time, and several tests each build their own compiler over a
-copied source tree. **The next suspect is per-module `ISession` churn**:
-`Impl::load` creates and releases a fresh `ISession` for every module, so a
-full-suite run creates hundreds. Reusing one session per compiler is both the
-obvious test of that and a speed-up, since a session caches loaded modules.
-Until it is settled, treat a green full-suite run as weak evidence — this
-failure has looked absent twice and was not.
+copied source tree. **Per-module `ISession` churn was tested and ruled out as a
+fix**: reusing one session per compiler still faulted the first Slang test on
+**1/5** isolated cold-cache launches (four passed). The experiment was
+reverted rather than retained as an unproven workaround. Until the remaining
+cause is isolated, treat a green full-suite run as weak evidence — this failure
+has looked absent twice and was not.
 
 Two wrong turns are recorded because both cost time. The first attribution —
 heap damage done by earlier image-decoder tests and merely *detected* by
