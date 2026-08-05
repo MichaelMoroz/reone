@@ -1135,6 +1135,17 @@ formalize into an interface layer: device, swapchain, queues, buffers, images,
 pipelines, submission. **The gate is mechanical:**
 
     rg 'vk[A-Z]|Vk[A-Z]|vma[A-Z]' src include --glob '!**/graphics/vulkan/**'
+    rg 'Vulkan|VK_[A-Z0-9_]+|ImGui_ImplVulkan' src include --glob '!**/graphics/vulkan/**'
+
+**Both lines are the gate, and the second was added on 2026-08-05 because the
+first is not sufficient.** It matches Vulkan *API symbols*; it does not match
+Vulkan *type names*, because `VulkanImage` begins `Vu`, not `Vk`. Nor does it
+match `VK_API_VERSION_1_3` or `ImGui_ImplVulkan_*`. Two things passed the
+one-line gate while being full of Vulkan: `engine.cpp`, which held eleven
+Vulkan-ish tokens of which exactly one matched, and the five relocated clients,
+which owned `unique_ptr<VulkanGBuffer>` members and included backend headers
+from public ones. **A file can be entirely dependent on the backend and read as
+clean under the first line alone.**
 
 The gate was originally written as two greps scoped to `src/libs/graphics`. That
 form was retired on 2026-08-05: the first passed *vacuously* — no file under
