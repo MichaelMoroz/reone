@@ -16,6 +16,8 @@
  */
 #include "reone/graphics/rendering/rayquery.h"
 
+#include "reone/graphics/rendering/tracingpipeline.h"
+
 #include "reone/system/profiler.h"
 
 #include <algorithm>

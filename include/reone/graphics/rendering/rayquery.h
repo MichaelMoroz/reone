@@ -26,7 +26,6 @@
 #include <glm/glm.hpp>
 
 #include "reone/graphics/rendering/gpuscene.h"
-#include "reone/graphics/rendering/tracingpipeline.h"
 #include "reone/graphics/rhi/pipelinecache.h"
 #include "reone/graphics/rhi/tracingstructure.h"
 
@@ -35,7 +34,9 @@ namespace reone::graphics {
 class IRenderer;
 class Mesh;
 class Texture;
+class TracingPipeline;
 struct GraphicsOptions;
+struct TracingChannel;
 
 struct RayQuerySkyMesh {
     const Mesh *mesh {nullptr};
