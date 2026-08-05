@@ -24,7 +24,7 @@
 #include "reone/graphics/rendering/rayquery.h"
 #include "reone/graphics/rendering/gpuscene.h"
 #include "reone/graphics/rendering/scenepipeline.h"
-#include "reone/graphics/rendering/skystage.h"
+#include "reone/graphics/rendering/sky.h"
 #include "reone/scene/render/pipeline/rayquery.h"
 #include "reone/system/logutil.h"
 
@@ -91,8 +91,8 @@ void RenderPipeline::init() {
     _admission = std::make_unique<GpuSceneAdmission>(_renderer, _options, _gpuScene);
     if (_primaryRayMode) {
         // Gated with the tracer only because the tracer is still the sole
-        // consumer; nothing in SkyStage is mode-specific.
-        _sky = std::make_unique<graphics::SkyStage>(_renderer);
+        // consumer; nothing in Sky is mode-specific.
+        _sky = std::make_unique<graphics::Sky>(_renderer);
         _sky->init();
         _rayQuery = std::make_unique<RayQueryPipeline>(
             _renderer, _targetSize, _options, _gpuScene, *_sky);

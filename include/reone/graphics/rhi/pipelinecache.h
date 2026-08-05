@@ -26,7 +26,7 @@
 #include "../mesh.h"
 #include "../types.h"
 #include "../rendering/gpuscene.h"
-#include "../rendering/skystage.h"
+#include "../rendering/sky.h"
 
 namespace reone {
 

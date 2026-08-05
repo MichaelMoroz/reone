@@ -19,7 +19,7 @@
 #include "reone/graphics/options.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/rendering/rayquery.h"
-#include "reone/graphics/rendering/skystage.h"
+#include "reone/graphics/rendering/sky.h"
 #include "reone/graphics/rhi/renderer.h"
 #include "reone/graphics/rendering/scenepipeline.h"
 #include "reone/scene/node/model.h"
@@ -34,7 +34,7 @@ RayQueryPipeline::RayQueryPipeline(IRenderer &renderer,
                                     glm::ivec2 extent,
                                     GraphicsOptions &options,
                                     GpuScene &gpuScene,
-                                    SkyStage &sky) :
+                                    Sky &sky) :
     _renderer(renderer), _extent(extent), _options(options), _gpuScene(gpuScene),
     _sky(sky) {}
 

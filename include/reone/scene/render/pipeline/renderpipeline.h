@@ -25,7 +25,7 @@ class Uniforms;
 class IRenderer;
 class ScenePipeline;
 class GpuScene;
-class SkyStage;
+class Sky;
 } // namespace reone::graphics
 
 namespace reone::scene {
@@ -72,7 +72,7 @@ private:
     GpuSceneAdmissionResult _admissionResult;
     /** Frame-owned rather than tracer-owned: raster's sky composite is the next
         consumer of the same cube, and both middles run under this pipeline. */
-    std::unique_ptr<graphics::SkyStage> _sky;
+    std::unique_ptr<graphics::Sky> _sky;
     std::unique_ptr<RayQueryPipeline> _rayQuery;
     uint64_t _lastUploadHash {0};
     uint32_t _lastMaterialReferences {0};

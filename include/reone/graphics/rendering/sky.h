@@ -65,10 +65,10 @@ struct SkyBinding {
  * ask for a binding and bind it, and the sky is neutral rather than absent
  * whenever no bake is in use.
  */
-class SkyStage : boost::noncopyable {
+class Sky : boost::noncopyable {
 public:
-    explicit SkyStage(IRenderer &renderer);
-    ~SkyStage();
+    explicit Sky(IRenderer &renderer);
+    ~Sky();
 
     void init();
     void deinit();

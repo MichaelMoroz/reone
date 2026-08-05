@@ -26,7 +26,7 @@
 #include <glm/glm.hpp>
 
 #include "reone/graphics/rendering/gpuscene.h"
-#include "reone/graphics/rendering/skystage.h"
+#include "reone/graphics/rendering/sky.h"
 #include "reone/graphics/rhi/pipelinecache.h"
 #include "reone/graphics/rhi/tracingstructure.h"
 

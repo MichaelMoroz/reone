@@ -14,7 +14,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-#include "reone/graphics/rendering/skystage.h"
+#include "reone/graphics/rendering/sky.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -44,14 +44,14 @@ static constexpr uint32_t kSkyCubeSize = 1024;
 
 } // namespace
 
-SkyStage::SkyStage(IRenderer &renderer) :
+Sky::Sky(IRenderer &renderer) :
     _renderer(renderer) {}
 
-SkyStage::~SkyStage() {
+Sky::~Sky() {
     deinit();
 }
 
-void SkyStage::init() {
+void Sky::init() {
     if (_inited)
         return;
 
@@ -66,7 +66,7 @@ void SkyStage::init() {
     _inited = true;
 }
 
-void SkyStage::deinit() {
+void Sky::deinit() {
     _skyCube.reset();
     for (auto &depth : _skyDepth)
         depth.reset();
@@ -76,7 +76,7 @@ void SkyStage::deinit() {
     _inited = false;
 }
 
-bool SkyStage::bakeSkyRoom(ICommandBuffer &commandBuffer,
+bool Sky::bakeSkyRoom(ICommandBuffer &commandBuffer,
                            const RayQuerySkyRoom &room) {
     // A failed bake is deliberately sticky for this detected room: the fallback
     // cube is stable, and retrying a known-invalid asset every frame would turn
@@ -204,16 +204,16 @@ bool SkyStage::bakeSkyRoom(ICommandBuffer &commandBuffer,
     return true;
 }
 
-void SkyStage::clearSkyRoom() {
+void Sky::clearSkyRoom() {
     _skyCubeRoom = 0;
     _skyCubeReady = false;
 }
 
-bool SkyStage::supportsSkyTexture(const Texture &texture) const {
+bool Sky::supportsSkyTexture(const Texture &texture) const {
     return _renderer.resources().supports(texture.pixelFormat());
 }
 
-SkyBinding SkyStage::binding(bool useBaked) const {
+SkyBinding Sky::binding(bool useBaked) const {
     if (useBaked) {
         return {_skyCube.get(), _skyCube->cubeSampleView(0), true};
     }
