@@ -22,6 +22,7 @@
 #include "reone/graphics/descriptors.h"
 #include "reone/graphics/image.h"
 #include "reone/graphics/pipelinecache.h"
+#include "reone/graphics/renderer.h"
 #include "reone/graphics/resources.h"
 #include "reone/graphics/uniformring.h"
 
@@ -60,23 +61,16 @@ public:
     virtual void refresh() = 0;
     virtual void requestEnvMapDerived(EnvMapDerivedRequest request) = 0;
     virtual std::optional<int> findEnvMapDerivedLayer(const std::string &name) = 0;
-
-    virtual Texture &brdf() = 0;
 };
-
-class VulkanDevice;
-class VulkanRenderer;
 
 class PBRTextures : public IPBRTextures, boost::noncopyable {
 public:
-    PBRTextures(VulkanRenderer &renderer,
-                      VulkanDevice &device,
+    PBRTextures(IRenderer &renderer,
                       IPipelineCache &pipelines,
                       IUniformRing &ring,
                       IDescriptors &descriptors,
                       IResources &resources) :
         _renderer(renderer),
-        _device(device),
         _pipelines(pipelines),
         _ring(ring),
         _descriptors(descriptors),
@@ -114,9 +108,6 @@ public:
         return it->second;
     }
 
-    /** The resolve binds the image rather than the Texture. */
-    Texture &brdf() override;
-
     const IImage &brdfImage() const { return *_brdf; }
     const IImage &irradianceArray() const { return *_irradiance; }
     const IImage &prefilteredArray() const { return *_prefiltered; }
@@ -124,8 +115,7 @@ public:
     const std::map<int, Texture *> &sourceEnvMaps() const { return _envMapSources; }
 
 private:
-    VulkanRenderer &_renderer;
-    VulkanDevice &_device;
+    IRenderer &_renderer;
     IPipelineCache &_pipelines;
     IUniformRing &_ring;
     IDescriptors &_descriptors;

@@ -26,6 +26,10 @@ namespace reone {
 
 namespace graphics {
 
+std::unique_ptr<IImage> VulkanResources::makeImage() {
+    return std::make_unique<VulkanImage>(_device);
+}
+
 Sampler VulkanResources::sampler(const Texture::Properties &properties) {
     return toSampler(_samplers.get(properties));
 }

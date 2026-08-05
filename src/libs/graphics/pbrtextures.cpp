@@ -22,14 +22,6 @@
 #include "reone/graphics/texture.h"
 #include "reone/graphics/types.h"
 #include "reone/graphics/uniforms.h"
-#include "reone/graphics/vulkan/debugscope.h"
-#include "reone/graphics/vulkan/commandbuffer.h"
-#include "reone/graphics/vulkan/renderpass.h"
-#include "reone/graphics/vulkan/device.h"
-#include "reone/graphics/vulkan/image.h"
-#include "reone/graphics/vulkan/resources.h"
-#include "reone/graphics/vulkan/renderer.h"
-#include "reone/graphics/vulkan/uniformring.h"
 #include "reone/system/logutil.h"
 
 namespace reone {
@@ -52,26 +44,18 @@ void PBRTextures::init() {
     if (_inited) {
         return;
     }
-    _brdf = makeImage(_device);
+    _brdf = _resources.makeImage();
     _brdf->initColorAttachment({kBRDFSize, kBRDFSize}, Format::R16G16Sfloat);
 
-    _irradiance = makeImage(_device);
+    _irradiance = _resources.makeImage();
     _irradiance->initCubeArrayAttachment({kIrradianceSize, kIrradianceSize},
                                          Format::R8G8B8A8Unorm,
                                          kMaxDerivedLayers, 1);
 
-    _prefiltered = makeImage(_device);
+    _prefiltered = _resources.makeImage();
     _prefiltered->initCubeArrayAttachment({kPrefilteredSize, kPrefilteredSize},
                                           Format::R8G8B8A8Unorm,
                                           kMaxDerivedLayers, kNumPrefilteredMips);
-
-    _device.setObjectName(VK_OBJECT_TYPE_IMAGE,
-                          reinterpret_cast<uint64_t>(toVulkanImage(*_brdf).handle()), "BRDF LUT");
-    _device.setObjectName(VK_OBJECT_TYPE_IMAGE,
-                          reinterpret_cast<uint64_t>(toVulkanImage(*_irradiance).handle()), "Irradiance maps");
-    _device.setObjectName(VK_OBJECT_TYPE_IMAGE,
-                          reinterpret_cast<uint64_t>(toVulkanImage(*_prefiltered).handle()),
-                          "Prefiltered environment maps");
 
     // Everything starts sampleable, because the resolve reads all three whether
     // or not anything has been generated into them yet.
@@ -122,10 +106,6 @@ void PBRTextures::deinit() {
     _inited = false;
 }
 
-Texture &PBRTextures::brdf() {
-    throw std::logic_error("Vulkan PBR textures are not exposed as a Texture");
-}
-
 void PBRTextures::refresh() {
     _requests.clear();
     _envMapToLayer.clear();
@@ -138,7 +118,7 @@ int PBRTextures::requestEnvMapDerivedLayer(Texture &envMap) {
         return *existing;
     }
     if (_nextLayer >= kMaxDerivedLayers) {
-        warn("Vulkan: more than " + std::to_string(kMaxDerivedLayers) +
+        warn("More than " + std::to_string(kMaxDerivedLayers) +
                  " environment maps requested; using derived layer 0 for " +
                  envMap.name(),
              LogChannel::Graphics);
@@ -182,7 +162,7 @@ void PBRTextures::process(ICommandBuffer &commandBuffer, uint32_t globalsOffset)
     commandBuffer.transitionImage(*_prefiltered, ImageLayout::ShaderRead);
 
     _envMapSources[layer] = &envMap;
-    debug("Vulkan: derived environment map " + envMap.name() + " into layer " +
+    debug("Derived environment map " + envMap.name() + " into layer " +
               std::to_string(layer),
           LogChannel::Graphics);
 }
@@ -198,12 +178,9 @@ void PBRTextures::generateBRDF(ICommandBuffer &commandBuffer, uint32_t globalsOf
     std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
 
-    RenderPassScope rendering(
-        static_cast<VulkanCommandBuffer &>(commandBuffer).handle(), {kBRDFSize, kBRDFSize},
-        {{toVulkanImageView(_brdf->sampleView()),
-          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-          VK_ATTACHMENT_LOAD_OP_CLEAR,
-          VK_ATTACHMENT_STORE_OP_STORE}});
+    RenderAttachment color {_brdf->sampleView(), ImageLayout::ColorAttachment,
+                            AttachmentLoad::Clear, AttachmentStore::Store};
+    commandBuffer.beginRendering({kBRDFSize, kBRDFSize}, {color}, nullptr, 0, false);
     commandBuffer.bindPipeline(pipeline.pipeline);
     auto uniformSet = _descriptors.uniformDescriptorSet(_ring.frame());
     commandBuffer.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
@@ -211,6 +188,7 @@ void PBRTextures::generateBRDF(ICommandBuffer &commandBuffer, uint32_t globalsOf
     auto textureSet = _descriptors.acquireTextureDescriptorSet(_ring.frame(), nullptr);
     commandBuffer.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, textureSet, nullptr, 0);
     commandBuffer.draw(3, 1);
+    commandBuffer.endRendering();
 }
 
 void PBRTextures::generateDerived(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
@@ -263,13 +241,9 @@ void PBRTextures::renderCubeFaces(ICommandBuffer &commandBuffer,
         textures.push_back({unit, &_resources.get(*envMap)});
     }
 
-    RenderPassScope rendering(
-        static_cast<VulkanCommandBuffer &>(commandBuffer).handle(), extent,
-        {{toVulkanImageView(target.attachmentView(cube, mip)),
-          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-          VK_ATTACHMENT_LOAD_OP_CLEAR,
-          VK_ATTACHMENT_STORE_OP_STORE}},
-        std::nullopt, kCubeViewMask);
+    RenderAttachment color {target.attachmentView(cube, mip), ImageLayout::ColorAttachment,
+                            AttachmentLoad::Clear, AttachmentStore::Store};
+    commandBuffer.beginRendering(extent, {color}, nullptr, kCubeViewMask, false);
     commandBuffer.bindPipeline(pipeline.pipeline);
     auto uniformSet = _descriptors.uniformDescriptorSet(_ring.frame());
     commandBuffer.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
@@ -277,6 +251,7 @@ void PBRTextures::renderCubeFaces(ICommandBuffer &commandBuffer,
     auto textureSet = _descriptors.acquireTextureDescriptorSet(_ring.frame(), textures);
     commandBuffer.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, textureSet, nullptr, 0);
     commandBuffer.draw(3, 1);
+    commandBuffer.endRendering();
 }
 
 } // namespace graphics

@@ -54,6 +54,7 @@ public:
     }
 
     void deinit() override;
+    std::unique_ptr<IImage> makeImage() override;
 
     /** The sampler cache, for images this class did not upload. */
     VulkanSamplers &samplers() { return _samplers; }

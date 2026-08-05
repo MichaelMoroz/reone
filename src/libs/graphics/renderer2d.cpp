@@ -20,9 +20,6 @@
 #include "reone/graphics/font.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
-#include "reone/graphics/vulkan/device.h"
-#include "reone/graphics/vulkan/resources.h"
-#include "reone/graphics/vulkan/uniformring.h"
 #include "reone/system/logutil.h"
 
 namespace reone {
@@ -52,9 +49,9 @@ void Renderer2D::begin(ICommandBuffer &commandBuffer, glm::ivec2 extent,
     // caller's assumption about where things go.
     GlobalUniforms globals;
     globals.reset();
-    // Two departures from the OpenGL form, both because Vulkan's clip space
+    // Two departures from the legacy form, both because this backend's clip space
     // differs. Depth is 0..1, so orthoRH_ZO rather than ortho - the GL form puts
-    // every quad at z_ndc -1, which Vulkan clips, and nothing draws at all.
+    // every quad at z_ndc -1, which the depth range clips, and nothing draws at all.
     // And clip-space y points down, so bottom and top are *not* swapped here:
     // passing (h, 0) as the GL path does would put screen y=0 at the bottom and
     // turn the whole frame upside down.
@@ -76,7 +73,7 @@ void Renderer2D::drawQuads(const char *vertexEntry,
                                  int instances,
                                  const Texture *texture) {
     if (!_commandBuffer) {
-        throw std::logic_error("Vulkan 2D: no frame begun");
+        throw std::logic_error("2D: no frame begun");
     }
 
     PipelineKey key;
@@ -224,7 +221,7 @@ void Renderer2D::withBlendMode(BlendMode mode, const std::function<void()> &bloc
 
 void Renderer2D::withScissor(const glm::ivec4 &bounds, const std::function<void()> &block) {
     if (!_commandBuffer) {
-        throw std::logic_error("Vulkan 2D: no frame begun");
+        throw std::logic_error("2D: no frame begun");
     }
     // Caller bounds are logical coordinates; the scissor is physical pixels.
     // The two differ when the OS clamps the window below the configured

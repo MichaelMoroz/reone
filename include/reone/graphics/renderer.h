@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <functional>
+
 struct ImDrawData;
 
 namespace reone {
@@ -24,6 +26,7 @@ namespace reone {
 namespace graphics {
 
 class Texture;
+class ICommandBuffer;
 
 /**
  * Owns the frame: the target everything is drawn into, and how a finished frame
@@ -89,6 +92,9 @@ public:
      * canvas, say - ends the frame without presenting.
      */
     virtual void endFrame() = 0;
+
+    /** Record and complete short setup work outside a frame. */
+    virtual void immediateSubmit(const std::function<void(ICommandBuffer &)> &block) = 0;
 
     /**
      * Drop every cached device-side copy of an engine resource.

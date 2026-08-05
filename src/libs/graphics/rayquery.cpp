@@ -22,7 +22,6 @@
 #include "reone/graphics/vulkan/pipeline.h"
 #include "reone/graphics/vulkan/pipelinecache.h"
 #include "reone/graphics/vulkan/renderer.h"
-#include "reone/graphics/vulkan/renderpass.h"
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/graphics/vulkan/tracingstructure.h"
 

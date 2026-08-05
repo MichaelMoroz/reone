@@ -199,7 +199,7 @@ struct GpuSceneObjectInput {
     uint32_t objectGeneration {0};
 };
 
-/** Vulkan-free output of shared scene admission. */
+/** Backend-free output of shared scene admission. */
 struct GpuSceneUpload {
     std::vector<InstanceMaterial> materials;
     std::vector<GpuSceneObjectInput> objects;

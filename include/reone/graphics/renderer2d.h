@@ -117,7 +117,7 @@ public:
      * XY is the top-left corner, ZW the size, in the same screen coordinates
      * every other call here uses. OpenGL's scissor box is measured from the
      * bottom instead, so that backend flips it; callers should not, and one
-     * that did left the minimap clipped entirely off screen under Vulkan.
+     * that did left the minimap clipped entirely off screen.
      */
     virtual void withScissor(const glm::ivec4 &bounds, const std::function<void()> &block) = 0;
 };

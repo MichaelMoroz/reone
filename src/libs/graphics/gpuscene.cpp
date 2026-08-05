@@ -23,7 +23,7 @@ uint32_t grownCapacity(uint32_t current, uint32_t required, uint32_t minimum) {
     while (capacity < required)
         capacity *= 2;
     if (capacity > std::numeric_limits<uint32_t>::max())
-        throw std::runtime_error("Vulkan: merged scene capacity exceeds uint32 range");
+        throw std::runtime_error("Merged scene capacity exceeds uint32 range");
     return static_cast<uint32_t>(capacity);
 }
 
@@ -74,7 +74,7 @@ GpuScene::PrimitiveId GpuScene::PrimitiveIdView::operator[](uint32_t index) cons
         id.localPrimitive += index - range.firstTriangle;
         return id;
     }
-    throw std::out_of_range("Vulkan: frame-local primitive address is not published");
+    throw std::out_of_range("Frame-local primitive address is not published");
 }
 
 void GpuScene::init(IGpuSceneContext &context) {
@@ -192,14 +192,14 @@ const GpuScene::SourceGeometry &GpuScene::appendSourceGeometry(const Mesh &mesh)
     if (!inserted) {
         if (it->second.vertexDataCount != vertices.size() ||
             it->second.indexCount != faces.size() * 3) {
-            warn("Vulkan: GpuScene source cache reused a Mesh address with different geometry",
+            warn("GpuScene source cache reused a Mesh address with different geometry",
                  LogChannel::Graphics);
         }
         return it->second;
     }
     if (vertices.size() > std::numeric_limits<uint32_t>::max() - _sourceVertexData.size() ||
         faces.size() > (std::numeric_limits<uint32_t>::max() - _sourceIndexData.size()) / 3)
-        throw std::runtime_error("Vulkan: source geometry pool exceeds shader index range");
+        throw std::runtime_error("Source geometry pool exceeds shader index range");
     auto &location = it->second;
     location.vertexOffset = static_cast<uint32_t>(_sourceVertexData.size());
     location.indexOffset = static_cast<uint32_t>(_sourceIndexData.size());
@@ -296,7 +296,7 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
                 (layout.offTanSpace >= 0 && layout.offTanSpace % static_cast<int>(sizeof(float)) != 0) ||
                 (layout.offBoneIndices >= 0 && layout.offBoneIndices % static_cast<int>(sizeof(float)) != 0) ||
                 (layout.offBoneWeights >= 0 && layout.offBoneWeights % static_cast<int>(sizeof(float)) != 0))
-                throw std::runtime_error("Vulkan: source vertex attributes must be float-aligned");
+            throw std::runtime_error("Source vertex attributes must be float-aligned");
             object.srcVertexOffset = source.vertexOffset;
             object.srcIndexOffset = source.indexOffset;
             object.srcVertexStride = static_cast<uint32_t>(layout.stride);
@@ -311,10 +311,10 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
             object.triangleCount = static_cast<uint32_t>(input.sourceMesh->faces().size());
         }
         if (vertexCount + object.vertexCount > std::numeric_limits<uint32_t>::max())
-            throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
+            throw std::runtime_error("Merged scene exceeds shader index range");
         auto &triangleBase = object.geometryIndex == 0 ? opaqueTriangleCount : nonOpaqueTriangleCount;
         if (triangleBase + object.triangleCount > std::numeric_limits<uint32_t>::max())
-            throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
+            throw std::runtime_error("Merged scene exceeds shader index range");
         object.dstVertexBase = static_cast<uint32_t>(vertexCount);
         object.dstTriangleBase = static_cast<uint32_t>(triangleBase);
         vertexCount += object.vertexCount;
@@ -326,7 +326,7 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
     if (upload.objects.size() > std::numeric_limits<uint32_t>::max() ||
         upload.bones.size() > std::numeric_limits<uint32_t>::max() ||
         upload.danglyPositions.size() > std::numeric_limits<uint32_t>::max())
-        throw std::runtime_error("Vulkan: merged scene exceeds shader index range");
+        throw std::runtime_error("Merged scene exceeds shader index range");
 
     uint64_t sceneObjectBytes = 0;
     uint64_t sceneBoneBytes = 0;

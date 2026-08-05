@@ -49,6 +49,7 @@ public:
     MOCK_METHOD(void, drawSceneOutput, (Texture &), (override));
     MOCK_METHOD(std::shared_ptr<Texture>, captureFrame, (), (override));
     MOCK_METHOD(void, endFrame, (), (override));
+    MOCK_METHOD(void, immediateSubmit, (const std::function<void(ICommandBuffer &)> &), (override));
 };
 
 class Mock2DRenderer : public I2DRenderer, boost::noncopyable {

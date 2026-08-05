@@ -70,7 +70,7 @@ public:
         _shaderCompiler(REONE_SHADER_SOURCE_DIR),
         _pipelines(_device, _descriptors),
         _resources(_device),
-        _pbrTextures(*this, _device, _pipelines, _uniformRing, _descriptors, _resources),
+        _pbrTextures(*this, _pipelines, _uniformRing, _descriptors, _resources),
         _renderer2d(_pipelines, _uniformRing, _descriptors, _resources) {
     }
 
@@ -114,7 +114,7 @@ public:
     PBRTextures &pbrTextures() { return _pbrTextures; }
     Renderer2D &renderer2d() { return _renderer2d; }
     /** Execute one short setup recording before frames begin. */
-    void immediateSubmit(const std::function<void(ICommandBuffer &)> &block);
+    void immediateSubmit(const std::function<void(ICommandBuffer &)> &block) override;
     /** ImGui owns descriptor lifetime for the preview texture it displays. */
     void *addPreviewTexture(const IImage &image);
     void removePreviewTexture(void *texture);
