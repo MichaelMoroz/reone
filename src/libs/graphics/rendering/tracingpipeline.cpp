@@ -358,15 +358,15 @@ std::vector<TracingChannel> TracingPipeline::channels() const {
     }
     // Order and names follow the aux bindings in tracing/outputs.slang.
     static constexpr const char *kNames[kNumAuxImages] {
-        "Traced diffuse", "Traced specular", "Traced normal/roughness",
-        "Traced viewZ", "Traced motion", "Traced noise-free", "Traced diffuse factor",
+        "Traced diffuse radiance", "Traced specular radiance", "Traced normal/roughness",
+        "Traced viewZ", "Traced NRD motion", "Traced noise-free", "Traced diffuse factor",
         "Traced device depth", "Traced screen motion", "Traced specular factor",
-        "G-buffer diffuse", "G-buffer eye normal", "G-buffer depth", "G-buffer motion"};
+        "Traced diffuse", "Traced eye normal", "Traced depth", "Traced motion"};
     static constexpr const char *kDumpNames[kNumAuxImages] {
-        "traced_diffuse", "traced_specular", "traced_normal_roughness",
-        "traced_view_z", "traced_motion", "traced_noise_free", "traced_diff_factor",
+        "traced_radiance_diffuse", "traced_radiance_specular", "traced_normal_roughness",
+        "traced_view_z", "traced_nrd_motion", "traced_noise_free", "traced_diff_factor",
         "traced_device_depth", "traced_screen_motion", "traced_spec_factor",
-        "g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_depth", "g_buffer_motion"};
+        "traced_diffuse", "traced_eye_normal", "traced_depth", "traced_motion"};
     const auto &aux = _auxImages[_lastAuxFrame];
     std::vector<TracingChannel> result;
     for (int i = 0; i < kNumAuxImages; ++i) {

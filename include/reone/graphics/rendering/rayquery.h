@@ -82,10 +82,10 @@ public:
     bool bakeSkyRoom(ICommandBuffer &commandBuffer, const RayQuerySkyRoom &room);
     void clearSkyRoom();
     void render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
-                IImage &output, const glm::mat4 &view,
-                const glm::mat4 &projection, const glm::vec4 &jitter,
-                RayQuerySubmission submission, GpuScene &deviceGpuScene,
-                bool skyBaked);
+                 IImage &output, const glm::mat4 &view,
+                 const glm::mat4 &projection, const glm::vec4 &jitter,
+                 RayQuerySubmission submission, const GpuScene::View &scene,
+                 bool skyBaked);
 
     using Channel = TracingChannel;
     std::vector<Channel> channels() const;

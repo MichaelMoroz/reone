@@ -76,29 +76,11 @@ void ScenePipeline::init() {
     if (_inited) {
         return;
     }
-    if (_primaryRayMode) {
-        _output = _renderer.resources().makeImage();
-        _output->initColorAttachment(_targetSize, _renderer.sceneOutputFormat());
-        _outputHandle = std::make_shared<Texture>(
-            "vk_primary_ray_output", TextureType::TwoDim, Texture::Properties());
-        _renderer.resources().registerExternal(*_outputHandle, *_output);
-        _inited = true;
-        return;
-    }
-
     _gbuffer = std::make_unique<GBuffer>(_renderer);
     _gbuffer->init(_targetSize);
 
     _output = _renderer.resources().makeImage();
     _output->initColorAttachment(_targetSize, _renderer.sceneOutputFormat());
-
-    glm::ivec2 shadowSize {_options.shadowResolution, _options.shadowResolution};
-    _dirShadows = _renderer.resources().makeImage();
-        _dirShadows->initLayeredDepthAttachment(shadowSize, Format::D32Sfloat,
-                                  kNumShadowCascades, false);
-    _pointShadows = _renderer.resources().makeImage();
-        _pointShadows->initLayeredDepthAttachment(shadowSize, Format::D32Sfloat,
-                                    kNumCubeFaces, true);
 
     auto colorSampler = _renderer.resources().sampler(
         getTextureProperties(TextureUsage::ColorBuffer));
@@ -110,51 +92,62 @@ void ScenePipeline::init() {
     auto materialIdSampler = _renderer.resources().sampler(materialIdProperties);
     _output->setSampler(colorSampler);
     _gbuffer->setSamplers(colorSampler, depthSampler, materialIdSampler);
-    _dirShadows->setSampler(depthSampler);
-    _pointShadows->setSampler(depthSampler);
 
-    // Both resolve sets always bind both sampler shapes. Clear each target to
-    // the far plane once so the inactive light kind is a valid no-shadow map.
-    _renderer.immediateSubmit([this, shadowSize](ICommandBuffer &cmd) {
-        auto clear = [&](IImage &image, int layers, bool cube) {
-            cmd.transitionImage(image, ImageLayout::DepthAttachment);
-            RenderAttachment depth {image.attachmentView(0, 0), ImageLayout::DepthAttachment,
-                                    AttachmentLoad::Clear, AttachmentStore::Store};
-            depth.clear.depthOnly = true;
-            cmd.beginRendering(shadowSize, {}, &depth, cube ? (1u << layers) - 1u : 0, false);
-            cmd.endRendering();
-            cmd.transitionImage(image, ImageLayout::DepthRead);
-        };
-        clear(*_dirShadows, kNumShadowCascades, false);
-        clear(*_pointShadows, kNumCubeFaces, true);
-    });
+    if (!_primaryRayMode) {
+        glm::ivec2 shadowSize {_options.shadowResolution, _options.shadowResolution};
+        _dirShadows = _renderer.resources().makeImage();
+        _dirShadows->initLayeredDepthAttachment(shadowSize, Format::D32Sfloat,
+                                                kNumShadowCascades, false);
+        _pointShadows = _renderer.resources().makeImage();
+        _pointShadows->initLayeredDepthAttachment(shadowSize, Format::D32Sfloat,
+                                                  kNumCubeFaces, true);
+        _dirShadows->setSampler(depthSampler);
+        _pointShadows->setSampler(depthSampler);
 
-    IDescriptors &descriptors = _renderer.descriptors();
-    _retroResolveSet = descriptors.createPersistentTextureSet(
-        {{1, &_gbuffer->color(GBufferAttachment::Diffuse)},
-         {2, &_gbuffer->color(GBufferAttachment::EyeNormal)},
-         {3, &_gbuffer->color(GBufferAttachment::Lightmap)},
-         {4, &_gbuffer->color(GBufferAttachment::SelfIllum)},
-         {5, &_gbuffer->depth()},
-         {15, _dirShadows.get()},
-         {17, &_renderer.pbrTextures().prefilteredArray()},
-         {19, _pointShadows.get()},
-         {21, &_gbuffer->color(GBufferAttachment::MaterialId)}});
-    _pbrResolveSet = descriptors.createPersistentTextureSet(
-        {{1, &_gbuffer->color(GBufferAttachment::Diffuse)},
-         {2, &_gbuffer->color(GBufferAttachment::EyeNormal)},
-         {3, &_gbuffer->color(GBufferAttachment::Lightmap)},
-         {4, &_gbuffer->color(GBufferAttachment::SelfIllum)},
-         {5, &_gbuffer->depth()},
-         {13, &_renderer.pbrTextures().brdfImage()},
-         {15, _dirShadows.get()},
-         {16, &_renderer.pbrTextures().irradianceArray()},
-         {17, &_renderer.pbrTextures().prefilteredArray()},
-         {19, _pointShadows.get()},
-         {21, &_gbuffer->color(GBufferAttachment::MaterialId)}});
+        // Both resolve sets always bind both sampler shapes. Clear each target to
+        // the far plane once so the inactive light kind is a valid no-shadow map.
+        _renderer.immediateSubmit([this, shadowSize](ICommandBuffer &cmd) {
+            auto clear = [&](IImage &image, int layers, bool cube) {
+                cmd.transitionImage(image, ImageLayout::DepthAttachment);
+                RenderAttachment depth {image.attachmentView(0, 0), ImageLayout::DepthAttachment,
+                                        AttachmentLoad::Clear, AttachmentStore::Store};
+                depth.clear.depthOnly = true;
+                cmd.beginRendering(shadowSize, {}, &depth, cube ? (1u << layers) - 1u : 0, false);
+                cmd.endRendering();
+                cmd.transitionImage(image, ImageLayout::DepthRead);
+            };
+            clear(*_dirShadows, kNumShadowCascades, false);
+            clear(*_pointShadows, kNumCubeFaces, true);
+        });
+
+        IDescriptors &descriptors = _renderer.descriptors();
+        _retroResolveSet = descriptors.createPersistentTextureSet(
+            {{1, &_gbuffer->color(GBufferAttachment::Diffuse)},
+             {2, &_gbuffer->color(GBufferAttachment::EyeNormal)},
+             {3, &_gbuffer->color(GBufferAttachment::Lightmap)},
+             {4, &_gbuffer->color(GBufferAttachment::SelfIllum)},
+             {5, &_gbuffer->depth()},
+             {15, _dirShadows.get()},
+             {17, &_renderer.pbrTextures().prefilteredArray()},
+             {19, _pointShadows.get()},
+             {21, &_gbuffer->color(GBufferAttachment::MaterialId)}});
+        _pbrResolveSet = descriptors.createPersistentTextureSet(
+            {{1, &_gbuffer->color(GBufferAttachment::Diffuse)},
+             {2, &_gbuffer->color(GBufferAttachment::EyeNormal)},
+             {3, &_gbuffer->color(GBufferAttachment::Lightmap)},
+             {4, &_gbuffer->color(GBufferAttachment::SelfIllum)},
+             {5, &_gbuffer->depth()},
+             {13, &_renderer.pbrTextures().brdfImage()},
+             {15, _dirShadows.get()},
+             {16, &_renderer.pbrTextures().irradianceArray()},
+             {17, &_renderer.pbrTextures().prefilteredArray()},
+             {19, _pointShadows.get()},
+             {21, &_gbuffer->color(GBufferAttachment::MaterialId)}});
+    }
 
     _outputHandle = std::make_shared<Texture>(
-        "vk_scene_output", TextureType::TwoDim, Texture::Properties());
+        _primaryRayMode ? "vk_primary_ray_output" : "vk_scene_output",
+        TextureType::TwoDim, Texture::Properties());
     _renderer.resources().registerExternal(*_outputHandle, *_output);
 
     _renderer.immediateSubmit([this](ICommandBuffer &cmd) {
@@ -496,10 +489,24 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
     _renderer.uniformRing().setGlobalsOffset(globalsOffset);
 
     if (_primaryRayMode) {
+        // V1b deliberately records primary visibility before tracing. The
+        // tracer still owns the rendered image in this step; the G-buffer is
+        // a validation target only and its read layout is published below.
+        for (const auto step : plan.steps) {
+            if (step == SceneStep::Geometry) {
+                geometryPass(cmd, globalsOffset, callbacks);
+            }
+        }
         cmd.transitionImage(*_output, ImageLayout::General);
         callbacks.renderPrimary(
-            {&cmd, globalsOffset, _output.get(), globals.view, globals.projection, globals.jitter});
+            {&cmd, globalsOffset, _output.get(), _mergedScene,
+             globals.view, globals.projection, globals.jitter});
         cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+        // Keep the raster result available to target previews and dumps, but
+        // never bind it into the trace path. This explicit handoff makes the
+        // independent validation channels insensitive to command ordering.
+        transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
+        cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
         // The traced image is sampleable by now, so the preview can read it
         // like any other target. Without this the window would offer a target
         // it never draws, which is only marginally better than crashing.
@@ -641,11 +648,6 @@ std::vector<ScenePipeline::Target> ScenePipeline::targetEntries(
         return {};
     }
     std::vector<Target> entries;
-    // Report what this mode actually produced, not what the pipeline can
-    // produce in general. Tracing returns from render() before any raster pass
-    // and init() returns before the G-buffer is even allocated, so describing
-    // the G-buffer here dereferenced a null _gbuffer the moment the render
-    // target window was opened.
     if (_primaryRayMode) {
         entries.push_back({"Traced output", "traced_output", TargetKind::Color,
                            _output.get(), ImageLayout::ShaderRead, false});
@@ -655,10 +657,9 @@ std::vector<ScenePipeline::Target> ScenePipeline::targetEntries(
         // and composite passes read and write them as storage images and
         // nothing transitions them afterwards.
         for (const auto &channel : callbacks.primaryTargets()) {
-                entries.push_back({channel.name, channel.dumpName, TargetKind::Color,
-                                   channel.image, ImageLayout::General, false});
+            entries.push_back({channel.name, channel.dumpName, TargetKind::Color,
+                               channel.image, ImageLayout::General, false});
         }
-        return entries;
     }
     static const char *kDisplayNames[kGBufferAttachments.size()] = {
         "G-buffer diffuse", "G-buffer eye normal", "G-buffer lightmap",
@@ -675,8 +676,10 @@ std::vector<ScenePipeline::Target> ScenePipeline::targetEntries(
     }
     entries.push_back({"G-buffer depth", "g_buffer_depth", TargetKind::Depth,
                        &_gbuffer->depth(), ImageLayout::DepthRead, true});
-    entries.push_back({"Output", "output", TargetKind::Color,
-                       _output.get(), ImageLayout::ShaderRead, false});
+    if (!_primaryRayMode) {
+        entries.push_back({"Output", "output", TargetKind::Color,
+                           _output.get(), ImageLayout::ShaderRead, false});
+    }
     return entries;
 }
 
@@ -806,8 +809,8 @@ void ScenePipeline::dumpTargets(const std::filesystem::path &dir,
                      NpyType::Float32);
             continue;
         }
-        const bool yCoCgRadiance = dumpName == "traced_diffuse" ||
-                                   dumpName == "traced_specular" ||
+        const bool yCoCgRadiance = dumpName == "traced_radiance_diffuse" ||
+                                   dumpName == "traced_radiance_specular" ||
                                    dumpName == "denoised_diffuse" ||
                                    dumpName == "denoised_specular";
         auto path = dir / (std::string(entry.dumpName) + ".npy");

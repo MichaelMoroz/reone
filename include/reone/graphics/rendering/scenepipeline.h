@@ -62,6 +62,7 @@ struct PrimaryRayContext {
     ICommandBuffer *commandBuffer {nullptr};
     uint32_t globalsOffset {0};
     IImage *output {nullptr};
+    GpuScene::View scene;
     glm::mat4 view {1.0f};
     glm::mat4 projection {1.0f};
     glm::vec4 jitter {0.0f};

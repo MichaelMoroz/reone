@@ -30,12 +30,10 @@ using namespace reone::graphics;
 namespace reone::scene {
 
 RayQueryPipeline::RayQueryPipeline(IRenderer &renderer,
-                                   glm::ivec2 extent,
-                                   GraphicsOptions &options,
-                                   GpuScene &gpuScene,
-                                   graphics::GpuScene &deviceGpuScene) :
-    _renderer(renderer), _extent(extent), _options(options), _gpuScene(gpuScene),
-    _deviceGpuScene(deviceGpuScene) {}
+                                    glm::ivec2 extent,
+                                    GraphicsOptions &options,
+                                    GpuScene &gpuScene) :
+    _renderer(renderer), _extent(extent), _options(options), _gpuScene(gpuScene) {}
 
 RayQueryPipeline::~RayQueryPipeline() {
     deinit();
@@ -125,7 +123,7 @@ void RayQueryPipeline::render(const PrimaryRayContext &context,
 
     _native->render(commandBuffer, context.globalsOffset, *context.output,
                     context.view, context.projection, context.jitter,
-                    std::move(admission.submission), _deviceGpuScene, skyBaked);
+                    std::move(admission.submission), context.scene, skyBaked);
 }
 
 } // namespace reone::scene

@@ -90,7 +90,7 @@ void RenderPipeline::init() {
     _admission = std::make_unique<GpuSceneAdmission>(_renderer, _options, _gpuScene);
     if (_primaryRayMode) {
         _rayQuery = std::make_unique<RayQueryPipeline>(
-            _renderer, _targetSize, _options, _gpuScene, *_deviceGpuScene);
+            _renderer, _targetSize, _options, _gpuScene);
         _rayQuery->init();
     }
     _callbacks = std::make_unique<Callbacks>(*this);
@@ -134,7 +134,9 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         _admissionResult.submission.upload.materialReferenceCount;
     _lastMaterialCount =
         static_cast<uint32_t>(_admissionResult.submission.upload.materials.size());
-    if (!_primaryRayMode) {
+    if (_primaryRayMode) {
+        plan.steps.push_back(graphics::SceneStep::Geometry);
+    } else {
         plan.steps.push_back(graphics::SceneStep::ProcessPBRTextures);
         plan.steps.push_back(graphics::SceneStep::Shadow);
         plan.steps.push_back(graphics::SceneStep::Geometry);

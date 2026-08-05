@@ -36,8 +36,7 @@ public:
     RayQueryPipeline(graphics::IRenderer &renderer,
                      glm::ivec2 extent,
                      graphics::GraphicsOptions &options,
-                     GpuScene &gpuScene,
-                     graphics::GpuScene &deviceGpuScene);
+                     GpuScene &gpuScene);
     ~RayQueryPipeline();
 
     void init();
@@ -53,7 +52,6 @@ private:
     glm::ivec2 _extent;
     graphics::GraphicsOptions &_options;
     GpuScene &_gpuScene;
-    graphics::GpuScene &_deviceGpuScene;
     std::unique_ptr<graphics::RayQuery> _native;
 };
 
