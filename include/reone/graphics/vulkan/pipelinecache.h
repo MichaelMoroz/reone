@@ -47,6 +47,17 @@ class VulkanRenderer;
  */
 class VulkanPipelineCache : public IPipelineCache, boost::noncopyable {
 public:
+    /** Native result of the reflected ray-pipeline factory. The factory owns
+     * descriptor-kind translation and bindless layout policy. */
+    struct RayTracingPipeline {
+        std::unique_ptr<VulkanPipeline> pipeline;
+        std::unordered_map<std::string, DescriptorBinding> bindings;
+        uint32_t bindlessTextureCapacity {0};
+
+        explicit operator bool() const { return static_cast<bool>(pipeline); }
+        VulkanPipeline *operator->() const { return pipeline.get(); }
+        void reset() { pipeline.reset(); bindings.clear(); bindlessTextureCapacity = 0; }
+    };
     /**
      * Everything that distinguishes one pipeline from another. Anything absent
      * here is fixed for every pipeline in the backend.
@@ -93,9 +104,11 @@ public:
     /** The pipeline for @p key, built if this is the first request for it. */
     VulkanPipeline &get(const Key &key);
     PipelineBinding get(const PipelineKey &key) override;
-    std::unique_ptr<ITracingPipeline> makeTracingPipeline(
-        glm::ivec2 extent, GraphicsOptions &options) override;
-
+    RayTracingPipeline makeRayTracingPipeline(const std::vector<uint32_t> &spirv,
+                                              const ShaderReflection &reflection,
+                                              uint32_t bindlessTextureCapacity,
+                                              uint32_t pushConstantSize,
+                                              const std::string &label);
     size_t size() const { return _pipelines.size(); }
 
 private:

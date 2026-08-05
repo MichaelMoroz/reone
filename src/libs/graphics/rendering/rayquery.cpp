@@ -39,7 +39,7 @@ RayQuery::~RayQuery() {
 void RayQuery::init() {
     if (_inited)
         return;
-    _pipeline = _renderer.pipelines().makeTracingPipeline(_extent, _options);
+    _pipeline = std::make_unique<TracingPipeline>(_renderer, _extent, _options);
     _pipeline->init();
     _inited = true;
 }

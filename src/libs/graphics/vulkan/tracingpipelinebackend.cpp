@@ -14,7 +14,9 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-#include "reone/graphics/vulkan/tracingpipeline.h"
+#include "reone/graphics/vulkan/tracingpipelinebackend.h"
+
+#include "reone/graphics/rendering/tracingpipeline.h"
 
 #include "reone/system/profiler.h"
 
@@ -75,17 +77,6 @@ struct TraceStats {
     uint32_t shadowRays {0};
 };
 
-VkDescriptorType descriptorType(ShaderResourceKind kind) {
-    switch (kind) {
-    case ShaderResourceKind::StorageImage: return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    case ShaderResourceKind::StorageBuffer: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    case ShaderResourceKind::CombinedImageSampler: return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    case ShaderResourceKind::AccelerationStructure: return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    default: break;
-    }
-    throw std::runtime_error("Vulkan: ray-query reflection has an unsupported descriptor kind");
-}
-
 } // namespace
 
 VulkanTracingPipeline::VulkanTracingPipeline(VulkanRenderer &renderer,
@@ -98,8 +89,8 @@ VulkanTracingPipeline::~VulkanTracingPipeline() {
 }
 
 const DescriptorBinding &VulkanTracingPipeline::binding(const char *name) const {
-    const auto found = _bindings.find(name);
-    if (found == _bindings.end())
+    const auto found = _pipeline.bindings.find(name);
+    if (found == _pipeline.bindings.end())
         throw std::runtime_error("Vulkan: ray-query does not declare binding '" + std::string(name) + "'");
     return found->second;
 }
@@ -108,44 +99,11 @@ void VulkanTracingPipeline::init() {
     if (_inited)
         return;
     auto &device = _renderer.device();
-    _bindlessTextureCapacity = device.maxBindlessSampledImages();
-    if (_bindlessTextureCapacity == 0) {
-        throw std::runtime_error("Vulkan: ray-query bindless texture capacity is zero");
-    }
     const auto reflection = _renderer.shaderCompiler().reflection("rayquery");
-    // The stage is advisory - the load path may link without entry points, in
-    // which case it reflects Unknown. Reject only a positive mismatch.
-    if (reflection.stage != ShaderStage::Unknown && reflection.stage != ShaderStage::RayGeneration)
-        throw std::runtime_error("Vulkan: ray-query entry point is not a ray-generation shader");
-    std::vector<VulkanPipeline::LayoutBinding> bindings;
-    std::vector<VulkanPipeline::LayoutBinding> auxBindings;
-    for (const auto &reflected : reflection.bindings) {
-        if (reflected.set == 0) {
-            if (reflected.kind != ShaderResourceKind::UniformBuffer || reflected.count != 1)
-                throw std::runtime_error("Vulkan: ray-query has an unsupported frame binding '" +
-                                         reflected.name + "'");
-            continue;
-        }
-        if (reflected.set != 1 && reflected.set != 2)
-            throw std::runtime_error("Vulkan: ray-query declares binding '" + reflected.name +
-                                     "' in unsupported descriptor set " + std::to_string(reflected.set));
-        const bool bindless = reflected.count == 0;
-        if (bindless && reflected.kind != ShaderResourceKind::CombinedImageSampler)
-            throw std::runtime_error("Vulkan: ray-query unbounded binding '" + reflected.name +
-                                     "' is not a sampled-image array");
-        const DescriptorBinding target {reflected.binding, descriptorType(reflected.kind)};
-        if (!_bindings.emplace(reflected.name, target).second)
-            throw std::runtime_error("Vulkan: ray-query reflects binding '" + reflected.name + "' twice");
-        auto &setBindings = reflected.set == 1 ? bindings : auxBindings;
-        setBindings.push_back({target, bindless ? _bindlessTextureCapacity : reflected.count,
-                               VK_SHADER_STAGE_RAYGEN_BIT_KHR,
-                               bindless ? static_cast<VkDescriptorBindingFlags>(
-                                              VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
-                                              VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT)
-                                        : 0});
-    }
-    if (bindings.empty() || auxBindings.empty())
-        throw std::runtime_error("Vulkan: ray-query reflection omitted a resource descriptor set");
+    _pipeline = _renderer.pipelines().makeRayTracingPipeline(
+        _renderer.shaderModule("rayquery"), reflection, device.maxBindlessSampledImages(),
+        sizeof(TracePushConstants), "rayquery:primaryRay");
+    _bindlessTextureCapacity = _pipeline.bindlessTextureCapacity;
 
     // A descriptor is required even when no room qualifies. Sampling is gated
     // in the shader, but this black cube keeps the descriptor type valid.
@@ -161,17 +119,6 @@ void VulkanTracingPipeline::init() {
     // and Vulkan allows nothing above it. Plain pool, static writes - the
     // images never change identity within a pipeline lifetime.
     {
-        VulkanPipeline::Config pipelineConfig;
-        pipelineConfig.type = VulkanPipeline::Config::Type::RayTracing;
-        pipelineConfig.spirv = _renderer.shaderModule("rayquery");
-        pipelineConfig.raygenEntry = "main";
-        pipelineConfig.descriptorSets = {{_renderer.descriptors().uniformLayout()},
-                                         {VK_NULL_HANDLE, std::move(bindings), 2,
-                                          VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT},
-                                         {VK_NULL_HANDLE, std::move(auxBindings), 2}};
-        pipelineConfig.pushConstantSize = sizeof(TracePushConstants);
-        _pipeline = std::make_unique<VulkanPipeline>(device);
-        _pipeline->init(pipelineConfig);
         // Formats mirror the shader's declarations; normal/roughness rides
         // RGBA16F, the FP form NRD's RGBA16_SNORM encoding accepts.
         static constexpr Format kAuxFormats[kNumAuxImages] {
@@ -207,8 +154,6 @@ void VulkanTracingPipeline::init() {
         }
         auxWrites.apply();
     }
-
-    device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_pipeline->handle()), "rayquery:primaryRay");
 
 #ifdef R_ENABLE_NRD
     {
@@ -810,5 +755,39 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
 
 std::unique_ptr<ITracingStructure> VulkanTracingPipeline::makeTracingStructure() {
     return graphics::makeTracingStructure(_renderer.device());
+}
+
+class TracingPipeline::Impl : boost::noncopyable {
+public:
+    Impl(IRenderer &renderer, glm::ivec2 extent, GraphicsOptions &options) :
+        _pipeline(dynamic_cast<VulkanRenderer &>(renderer), extent, options) {}
+
+    VulkanTracingPipeline _pipeline;
+};
+
+TracingPipeline::TracingPipeline(IRenderer &renderer, glm::ivec2 extent,
+                                 GraphicsOptions &options) :
+    _impl(std::make_unique<Impl>(renderer, extent, options)) {}
+
+TracingPipeline::~TracingPipeline() = default;
+
+void TracingPipeline::init() { _impl->_pipeline.init(); }
+void TracingPipeline::deinit() { _impl->_pipeline.deinit(); }
+std::unique_ptr<ITracingStructure> TracingPipeline::makeTracingStructure() {
+    return _impl->_pipeline.makeTracingStructure();
+}
+bool TracingPipeline::bakeSkyRoom(ICommandBuffer &commandBuffer, const RayQuerySkyRoom &room) {
+    return _impl->_pipeline.bakeSkyRoom(commandBuffer, room);
+}
+void TracingPipeline::clearSkyRoom() { _impl->_pipeline.clearSkyRoom(); }
+bool TracingPipeline::supportsSkyTexture(const Texture &texture) const {
+    return _impl->_pipeline.supportsSkyTexture(texture);
+}
+TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
+    return _impl->_pipeline.render(input);
+}
+void TracingPipeline::restartTemporalHistory() { _impl->_pipeline.restartTemporalHistory(); }
+std::vector<TracingChannel> TracingPipeline::channels() const {
+    return _impl->_pipeline.channels();
 }
 } // namespace reone::graphics

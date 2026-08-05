@@ -26,6 +26,7 @@
 #include <glm/glm.hpp>
 
 #include "reone/graphics/rendering/gpuscene.h"
+#include "reone/graphics/rendering/tracingpipeline.h"
 #include "reone/graphics/rhi/pipelinecache.h"
 #include "reone/graphics/rhi/tracingstructure.h"
 
@@ -99,7 +100,7 @@ private:
     IRenderer &_renderer;
     GraphicsOptions &_options;
     glm::ivec2 _extent;
-    std::unique_ptr<ITracingPipeline> _pipeline;
+    std::unique_ptr<TracingPipeline> _pipeline;
     std::array<Frame, 2> _frames;
     uint32_t _lastInstances {0};
     uint32_t _lastTriangles {0};

@@ -26,6 +26,7 @@
 #include "reone/graphics/rendering/rayquery.h"
 #include "reone/graphics/rhi/computepipeline.h"
 #include "reone/graphics/vulkan/descriptorwrites.h"
+#include "reone/graphics/vulkan/pipelinecache.h"
 
 namespace reone::graphics {
 
@@ -35,23 +36,23 @@ class VulkanRenderer;
 class FsrUpscaler;
 class NrdDenoiser;
 
-class VulkanTracingPipeline : public ITracingPipeline, boost::noncopyable {
+class VulkanTracingPipeline : boost::noncopyable {
 public:
     VulkanTracingPipeline(VulkanRenderer &renderer, glm::ivec2 extent,
                           GraphicsOptions &options);
     ~VulkanTracingPipeline();
 
-    void init() override;
-    void deinit() override;
-    std::unique_ptr<ITracingStructure> makeTracingStructure() override;
+    void init();
+    void deinit();
+    std::unique_ptr<ITracingStructure> makeTracingStructure();
     bool bakeSkyRoom(ICommandBuffer &commandBuffer,
-                     const RayQuerySkyRoom &room) override;
-    void clearSkyRoom() override;
-    TracingStats render(const TracingPipelineInput &input) override;
+                     const RayQuerySkyRoom &room);
+    void clearSkyRoom();
+    TracingStats render(const TracingPipelineInput &input);
 
-    std::vector<TracingChannel> channels() const override;
-    void restartTemporalHistory() override;
-    bool supportsSkyTexture(const Texture &texture) const override;
+    std::vector<TracingChannel> channels() const;
+    void restartTemporalHistory();
+    bool supportsSkyTexture(const Texture &texture) const;
 
 private:
     struct Frame {
@@ -61,7 +62,7 @@ private:
     VulkanRenderer &_renderer;
     GraphicsOptions &_options;
     glm::ivec2 _extent;
-    std::unique_ptr<VulkanPipeline> _pipeline;
+    VulkanPipelineCache::RayTracingPipeline _pipeline;
     std::array<Frame, 2> _frames;
     uint32_t _bindlessTextureCapacity {0};
     uint32_t _lastBindlessTextureCount {0};
@@ -70,7 +71,6 @@ private:
     std::unique_ptr<VulkanImage> _skyCube;
     std::array<std::unique_ptr<VulkanImage>, 6> _skyDepth;
     std::unique_ptr<VulkanImage> _skyFallbackCube;
-    std::unordered_map<std::string, DescriptorBinding> _bindings;
 
     struct TracePushConstants {
         uint32_t frameIndex;

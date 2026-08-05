@@ -72,22 +72,6 @@ struct TracingChannel {
  * and upscaling work. The caller supplies scene meaning; the backend owns how
  * that work is expressed to its API.
  */
-class ITracingPipeline {
-public:
-    virtual ~ITracingPipeline() = default;
-
-    virtual void init() = 0;
-    virtual void deinit() = 0;
-    virtual std::unique_ptr<ITracingStructure> makeTracingStructure() = 0;
-    virtual bool bakeSkyRoom(ICommandBuffer &commandBuffer,
-                             const RayQuerySkyRoom &room) = 0;
-    virtual void clearSkyRoom() = 0;
-    virtual bool supportsSkyTexture(const Texture &texture) const = 0;
-    virtual TracingStats render(const TracingPipelineInput &input) = 0;
-    virtual void restartTemporalHistory() = 0;
-    virtual std::vector<TracingChannel> channels() const = 0;
-};
-
 /** Pipeline state selected by the 2D and image-based-lighting clients. */
 struct PipelineKey {
     std::string module;
@@ -117,9 +101,6 @@ public:
 
     virtual PipelineBinding get(const PipelineKey &key) = 0;
 
-    /** Build the native pipeline which traces an admitted scene into its output. */
-    virtual std::unique_ptr<ITracingPipeline> makeTracingPipeline(
-        glm::ivec2 extent, GraphicsOptions &options) = 0;
 };
 
 } // namespace graphics

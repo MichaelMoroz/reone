@@ -35,7 +35,7 @@ set(VULKAN_HEADERS
     ${VULKAN_INCLUDE_DIR}/shadercompiler.h
     ${VULKAN_INCLUDE_DIR}/swapchain.h
     ${VULKAN_INCLUDE_DIR}/tracingstructure.h
-    ${VULKAN_INCLUDE_DIR}/tracingpipeline.h
+    ${VULKAN_INCLUDE_DIR}/tracingpipelinebackend.h
     ${VULKAN_INCLUDE_DIR}/uniformring.h)
 
 set(VULKAN_SOURCES
@@ -55,7 +55,7 @@ set(VULKAN_SOURCES
     ${VULKAN_SOURCE_DIR}/shadercompiler.cpp
     ${VULKAN_SOURCE_DIR}/swapchain.cpp
     ${VULKAN_SOURCE_DIR}/tracingstructure.cpp
-    ${VULKAN_SOURCE_DIR}/tracingpipeline.cpp
+    ${VULKAN_SOURCE_DIR}/tracingpipelinebackend.cpp
     ${VULKAN_SOURCE_DIR}/uniformring.cpp
     ${VULKAN_SOURCE_DIR}/volk.cpp
     ${VULKAN_SOURCE_DIR}/vma.cpp)
