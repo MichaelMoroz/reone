@@ -18,6 +18,7 @@ set(VULKAN_SOURCE_DIR ${CMAKE_SOURCE_DIR}/src/libs/graphics/vulkan)
 
 set(VULKAN_HEADERS
     ${VULKAN_INCLUDE_DIR}/buffer.h
+    ${VULKAN_INCLUDE_DIR}/commandbuffer.h
     ${VULKAN_INCLUDE_DIR}/descriptorwrites.h
     ${VULKAN_INCLUDE_DIR}/descriptors.h
     ${VULKAN_INCLUDE_DIR}/debugscope.h
@@ -32,6 +33,7 @@ set(VULKAN_HEADERS
     ${VULKAN_INCLUDE_DIR}/renderpass.h
     ${VULKAN_INCLUDE_DIR}/renderer.h
     ${VULKAN_INCLUDE_DIR}/renderer2d.h
+    ${VULKAN_INCLUDE_DIR}/rhi.h
     ${VULKAN_INCLUDE_DIR}/rayquery.h
     ${VULKAN_INCLUDE_DIR}/resources.h
     ${VULKAN_INCLUDE_DIR}/samplers.h
@@ -42,6 +44,7 @@ set(VULKAN_HEADERS
 
 set(VULKAN_SOURCES
     ${VULKAN_SOURCE_DIR}/buffer.cpp
+    ${VULKAN_SOURCE_DIR}/commandbuffer.cpp
     ${VULKAN_SOURCE_DIR}/descriptorwrites.cpp
     ${VULKAN_SOURCE_DIR}/descriptors.cpp
     ${VULKAN_SOURCE_DIR}/device.cpp

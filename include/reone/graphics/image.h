@@ -1,0 +1,41 @@
+/*
+ * Copyright (c) 2020-2026 The reone project contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ */
+
+#pragma once
+
+#include <vector>
+
+#include "rhi.h"
+
+namespace reone {
+
+namespace graphics {
+
+/** Image operations used by the 2D and image-based-lighting clients. */
+class IImage {
+public:
+    virtual ~IImage() = default;
+
+    virtual void initColorAttachment(glm::ivec2 extent, Format format) = 0;
+    virtual void initCubeArrayAttachment(glm::ivec2 faceExtent, Format format,
+                                         int cubes, int mips) = 0;
+    virtual ImageView attachmentView(int cube, int mip) = 0;
+    virtual void setSampler(Sampler sampler) = 0;
+    virtual void deinit() = 0;
+
+    virtual ImageView sampleView() const = 0;
+    virtual Format pixelFormat() const = 0;
+    virtual glm::ivec2 extent() const = 0;
+    virtual int mipLevels() const = 0;
+    virtual std::vector<uint8_t> readBack(uint32_t mip, uint32_t layers) const = 0;
+};
+
+} // namespace graphics
+
+} // namespace reone

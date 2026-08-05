@@ -267,6 +267,7 @@ void VulkanRenderer::beginFrame(glm::ivec2 extent) {
     VkCommandBufferBeginInfo beginInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo), "vkBeginCommandBuffer");
+    frame.recordingCommandBuffer.begin(frame.commandBuffer);
 
     auto image = _swapchain.image(_imageIndex);
     transitionImage(frame.commandBuffer, image,
@@ -321,7 +322,8 @@ void VulkanRenderer::with2DRendering(glm::ivec2 logicalExtent,
           VK_IMAGE_LAYOUT_GENERAL,
           VK_ATTACHMENT_LOAD_OP_LOAD,
           VK_ATTACHMENT_STORE_OP_STORE}});
-    _renderer2d.begin(cmd, logicalExtent, physicalExtent, _swapchain.imageFormat());
+    _renderer2d.begin(recordingCommandBuffer(), logicalExtent, physicalExtent,
+                      fromVulkanFormat(_swapchain.imageFormat()));
     _in2DRendering = true;
     try {
         block();
@@ -416,6 +418,7 @@ void VulkanRenderer::flushFrame() {
 
     // Readback needs the current frame's commands to finish, but endFrame still
     // owns the transition and present, so it continues in a fresh buffer.
+    frame.recordingCommandBuffer.end();
     check(vkEndCommandBuffer(frame.commandBuffer), "vkEndCommandBuffer");
 
     VkCommandBufferSubmitInfo cmdInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
@@ -440,6 +443,7 @@ void VulkanRenderer::flushFrame() {
     VkCommandBufferBeginInfo beginInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo), "vkBeginCommandBuffer");
+    frame.recordingCommandBuffer.begin(frame.commandBuffer);
     _imageAvailableConsumed = true;
 }
 
@@ -467,6 +471,7 @@ void VulkanRenderer::endFrame() {
 
     transitionImage(frame.commandBuffer, _swapchain.image(_imageIndex),
                     VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    frame.recordingCommandBuffer.end();
     check(vkEndCommandBuffer(frame.commandBuffer), "vkEndCommandBuffer");
 
     VkCommandBufferSubmitInfo cmdInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};

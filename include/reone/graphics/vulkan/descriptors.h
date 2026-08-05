@@ -19,6 +19,8 @@
 
 #include <volk.h>
 
+#include "reone/graphics/descriptors.h"
+
 #include "image.h"
 #include "gpuscene.h"
 
@@ -43,7 +45,7 @@ class VulkanResources;
  * never change - they always point at that frame's whole arena, and only the
  * offsets move.
  */
-class VulkanDescriptors : boost::noncopyable {
+class VulkanDescriptors : public IDescriptors, boost::noncopyable {
 public:
     /** Must match the number of blocks in uniforms.h and uniforms.slang. */
     static constexpr int kNumUniformBlocks = 10;
@@ -77,6 +79,9 @@ public:
 
     VkDescriptorSetLayout uniformLayout() const { return _uniformLayout; }
     VkDescriptorSet uniformSet(int frame) const { return _uniformSets[frame]; }
+    DescriptorSet uniformDescriptorSet(int frame) const override {
+        return toDescriptorSet(uniformSet(frame));
+    }
 
     VkDescriptorSetLayout textureLayout() const { return _textureLayout; }
     VkDescriptorSetLayout megaDrawLayout() const { return _megaDrawLayout; }
@@ -114,6 +119,7 @@ public:
      * path tracer needs it.
      */
     VkDescriptorSet acquireTextureSet(int frame, const VulkanImage *mainTex);
+    DescriptorSet acquireTextureDescriptorSet(int frame, const IImage *mainTex) override;
 
     /**
      * A texture set with @p bindings applied over the standing ones, valid for
@@ -126,6 +132,9 @@ public:
     VkDescriptorSet acquireTextureSet(
         int frame,
         const std::vector<std::pair<int, const VulkanImage *>> &bindings);
+    DescriptorSet acquireTextureDescriptorSet(
+        int frame,
+        const std::vector<std::pair<int, const IImage *>> &bindings) override;
 
     /**
      * A texture set written once and never recycled, for passes whose textures

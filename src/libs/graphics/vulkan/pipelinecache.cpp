@@ -17,6 +17,8 @@
 
 #include "reone/graphics/vulkan/pipelinecache.h"
 
+#include "reone/graphics/vulkan/rhi.h"
+
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/descriptors.h"
 #include "reone/system/logutil.h"
@@ -144,6 +146,23 @@ VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
               key.module % key.vertexEntry % key.fragmentEntry % (_pipelines.size() + 1)),
           LogChannel::Graphics);
     return *_pipelines.insert({key, std::move(pipeline)}).first->second;
+}
+
+PipelineBinding VulkanPipelineCache::get(const PipelineKey &key) {
+    Key nativeKey;
+    nativeKey.module = key.module;
+    nativeKey.vertexEntry = key.vertexEntry;
+    nativeKey.fragmentEntry = key.fragmentEntry;
+    nativeKey.viewMask = key.viewMask;
+    nativeKey.blend = key.blend;
+    nativeKey.depthTest = key.depthTest;
+    nativeKey.depthWrite = key.depthWrite;
+    nativeKey.colorFormats.reserve(key.colorFormats.size());
+    for (auto format : key.colorFormats) {
+        nativeKey.colorFormats.push_back(toVulkanFormat(format));
+    }
+    auto &pipeline = get(nativeKey);
+    return {toPipeline(pipeline.handle()), toPipelineLayout(pipeline.layout())};
 }
 
 } // namespace graphics

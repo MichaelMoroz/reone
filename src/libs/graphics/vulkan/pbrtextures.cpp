@@ -23,11 +23,10 @@
 #include "reone/graphics/types.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/vulkan/debugscope.h"
-#include "reone/graphics/vulkan/descriptors.h"
+#include "reone/graphics/vulkan/commandbuffer.h"
 #include "reone/graphics/vulkan/renderpass.h"
 #include "reone/graphics/vulkan/device.h"
-#include "reone/graphics/vulkan/pipeline.h"
-#include "reone/graphics/vulkan/pipelinecache.h"
+#include "reone/graphics/vulkan/image.h"
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/graphics/vulkan/uniformring.h"
 #include "reone/system/logutil.h"
@@ -52,50 +51,36 @@ void VulkanPBRTextures::init() {
     if (_inited) {
         return;
     }
-    _brdf = std::make_unique<VulkanImage>(_device);
-    _brdf->initColorAttachment({kBRDFSize, kBRDFSize}, VK_FORMAT_R16G16_SFLOAT);
+    _brdf = makeImage(_device);
+    _brdf->initColorAttachment({kBRDFSize, kBRDFSize}, Format::R16G16Sfloat);
 
-    _irradiance = std::make_unique<VulkanImage>(_device);
+    _irradiance = makeImage(_device);
     _irradiance->initCubeArrayAttachment({kIrradianceSize, kIrradianceSize},
-                                         VK_FORMAT_R8G8B8A8_UNORM,
+                                         Format::R8G8B8A8Unorm,
                                          kMaxDerivedLayers, 1);
 
-    _prefiltered = std::make_unique<VulkanImage>(_device);
+    _prefiltered = makeImage(_device);
     _prefiltered->initCubeArrayAttachment({kPrefilteredSize, kPrefilteredSize},
-                                          VK_FORMAT_R8G8B8A8_UNORM,
+                                          Format::R8G8B8A8Unorm,
                                           kMaxDerivedLayers, kNumPrefilteredMips);
 
     _device.setObjectName(VK_OBJECT_TYPE_IMAGE,
-                          reinterpret_cast<uint64_t>(_brdf->handle()), "BRDF LUT");
+                          reinterpret_cast<uint64_t>(toVulkanImage(*_brdf).handle()), "BRDF LUT");
     _device.setObjectName(VK_OBJECT_TYPE_IMAGE,
-                          reinterpret_cast<uint64_t>(_irradiance->handle()), "Irradiance maps");
+                          reinterpret_cast<uint64_t>(toVulkanImage(*_irradiance).handle()), "Irradiance maps");
     _device.setObjectName(VK_OBJECT_TYPE_IMAGE,
-                          reinterpret_cast<uint64_t>(_prefiltered->handle()),
+                          reinterpret_cast<uint64_t>(toVulkanImage(*_prefiltered).handle()),
                           "Prefiltered environment maps");
 
     // Everything starts sampleable, because the resolve reads all three whether
     // or not anything has been generated into them yet.
-    _device.immediateSubmit([this](VkCommandBuffer cmd) {
-        auto toShaderRead = [&](VulkanImage &image) {
-            VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-            b.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-            b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            b.image = image.handle();
-            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            b.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
-            b.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
-
-            VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers = &b;
-            vkCmdPipelineBarrier2(cmd, &dep);
-        };
-        toShaderRead(*_brdf);
-        toShaderRead(*_irradiance);
-        toShaderRead(*_prefiltered);
+    _device.immediateSubmit([this](VkCommandBuffer commandBuffer) {
+        toVulkanImage(*_brdf).transitionTo(
+            commandBuffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        toVulkanImage(*_irradiance).transitionTo(
+            commandBuffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        toVulkanImage(*_prefiltered).transitionTo(
+            commandBuffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     });
 
     // The BRDF table is indexed by NdotV and roughness, both of which reach the
@@ -104,20 +89,29 @@ void VulkanPBRTextures::init() {
     // to the opposite edge, which is exactly where a metallic surface reads.
     auto &samplers = _resources.samplers();
     auto clamped = getTextureProperties(TextureUsage::ColorBuffer);
-    _brdf->setSampler(samplers.get(clamped));
-    _irradiance->setSampler(samplers.get(clamped));
+    _brdf->setSampler(toSampler(samplers.get(clamped)));
+    _irradiance->setSampler(toSampler(samplers.get(clamped)));
 
     // The prefiltered map is the exception: roughness selects a mip, so it
     // needs the chain that ColorBuffer's non-mipmapped filter would clamp away.
     auto prefilteredProps = clamped;
     prefilteredProps.minFilter = Texture::Filtering::LinearMipmapLinear;
-    _prefiltered->setSampler(samplers.get(prefilteredProps));
+    _prefiltered->setSampler(toSampler(samplers.get(prefilteredProps)));
 
 
     _inited = true;
 }
 
 void VulkanPBRTextures::deinit() {
+    if (_brdf) {
+        _brdf->deinit();
+    }
+    if (_irradiance) {
+        _irradiance->deinit();
+    }
+    if (_prefiltered) {
+        _prefiltered->deinit();
+    }
     _brdf.reset();
     _irradiance.reset();
     _prefiltered.reset();
@@ -160,43 +154,16 @@ int VulkanPBRTextures::requestEnvMapDerivedLayer(Texture &envMap) {
     return layer;
 }
 
-/**
- * Move a whole image between being rendered into and being sampled.
- *
- * Conservative masks on both sides: this runs at most once per frame, and the
- * cost of being exact here is not worth the risk of being subtly wrong.
- */
-static void transition(VkCommandBuffer cmd, VulkanImage &image,
-                       VkImageLayout from, VkImageLayout to) {
-    VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
-    b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-    b.oldLayout = from;
-    b.newLayout = to;
-    b.image = image.handle();
-    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    b.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
-    b.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
-
-    VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dep.imageMemoryBarrierCount = 1;
-    dep.pImageMemoryBarriers = &b;
-    vkCmdPipelineBarrier2(cmd, &dep);
-}
-
-void VulkanPBRTextures::process(VkCommandBuffer cmd, uint32_t globalsOffset) {
+void VulkanPBRTextures::process(ICommandBuffer &commandBuffer, uint32_t globalsOffset) {
     if (!_inited) {
         return;
     }
     if (!_brdfGenerated) {
-        VulkanDebugScope scope(_device, cmd, "IBL: BRDF integration", {0.5f, 0.3f, 0.6f});
-        transition(cmd, *_brdf, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        generateBRDF(cmd, globalsOffset);
-        transition(cmd, *_brdf, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        VulkanDebugScope scope(_device, static_cast<VulkanCommandBuffer &>(commandBuffer).handle(),
+                               "IBL: BRDF integration", {0.5f, 0.3f, 0.6f});
+        commandBuffer.transitionImage(*_brdf, ImageLayout::ColorAttachment);
+        generateBRDF(commandBuffer, globalsOffset);
+        commandBuffer.transitionImage(*_brdf, ImageLayout::ShaderRead);
         _brdfGenerated = true;
         return;
     }
@@ -211,16 +178,13 @@ void VulkanPBRTextures::process(VkCommandBuffer cmd, uint32_t globalsOffset) {
     auto &envMap = request.texture;
     const int layer = _envMapToLayer.at(envMap.name());
 
-    VulkanDebugScope scope(_device, cmd, "IBL: derive environment map", {0.5f, 0.3f, 0.6f});
-    transition(cmd, *_irradiance, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    transition(cmd, *_prefiltered, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    generateDerived(cmd, globalsOffset, envMap, layer);
-    transition(cmd, *_irradiance, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    transition(cmd, *_prefiltered, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    VulkanDebugScope scope(_device, static_cast<VulkanCommandBuffer &>(commandBuffer).handle(),
+                           "IBL: derive environment map", {0.5f, 0.3f, 0.6f});
+    commandBuffer.transitionImage(*_irradiance, ImageLayout::ColorAttachment);
+    commandBuffer.transitionImage(*_prefiltered, ImageLayout::ColorAttachment);
+    generateDerived(commandBuffer, globalsOffset, envMap, layer);
+    commandBuffer.transitionImage(*_irradiance, ImageLayout::ShaderRead);
+    commandBuffer.transitionImage(*_prefiltered, ImageLayout::ShaderRead);
 
     _envMapSources[layer] = &envMap;
     debug("Vulkan: derived environment map " + envMap.name() + " into layer " +
@@ -228,51 +192,49 @@ void VulkanPBRTextures::process(VkCommandBuffer cmd, uint32_t globalsOffset) {
           LogChannel::Graphics);
 }
 
-void VulkanPBRTextures::generateBRDF(VkCommandBuffer cmd, uint32_t globalsOffset) {
-    VulkanPipelineCache::Key key;
+void VulkanPBRTextures::generateBRDF(ICommandBuffer &commandBuffer, uint32_t globalsOffset) {
+    PipelineKey key;
     key.module = kModule;
     key.vertexEntry = "iblVertex";
     key.fragmentEntry = "brdfFragment";
-    key.colorFormats = {VK_FORMAT_R16G16_SFLOAT};
-    auto &pipeline = _pipelines.get(key);
+    key.colorFormats = {Format::R16G16Sfloat};
+    auto pipeline = _pipelines.get(key);
 
-    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
 
     RenderPassScope rendering(
-        cmd, {kBRDFSize, kBRDFSize},
-        {{_brdf->view(),
+        static_cast<VulkanCommandBuffer &>(commandBuffer).handle(), {kBRDFSize, kBRDFSize},
+        {{toVulkanImageView(_brdf->sampleView()),
           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
           VK_ATTACHMENT_LOAD_OP_CLEAR,
           VK_ATTACHMENT_STORE_OP_STORE}});
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
-    auto uniformSet = _descriptors.uniformSet(_ring.frame());
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
-                            VulkanDescriptors::kUniformSet, 1, &uniformSet,
-                            static_cast<uint32_t>(offsets.size()), offsets.data());
-    auto textureSet = _descriptors.acquireTextureSet(_ring.frame(), nullptr);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
-                            VulkanDescriptors::kTextureSet, 1, &textureSet, 0, nullptr);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+    commandBuffer.bindPipeline(pipeline.pipeline);
+    auto uniformSet = _descriptors.uniformDescriptorSet(_ring.frame());
+    commandBuffer.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                    offsets.data(), static_cast<uint32_t>(offsets.size()));
+    auto textureSet = _descriptors.acquireTextureDescriptorSet(_ring.frame(), nullptr);
+    commandBuffer.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, textureSet, nullptr, 0);
+    commandBuffer.draw(3, 1);
 }
 
-void VulkanPBRTextures::generateDerived(VkCommandBuffer cmd, uint32_t globalsOffset,
+void VulkanPBRTextures::generateDerived(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
                                         Texture &envMap, int layer) {
-    renderCubeFaces(cmd, globalsOffset, *_irradiance, layer, 0,
+    renderCubeFaces(commandBuffer, globalsOffset, *_irradiance, layer, 0,
                     {kIrradianceSize, kIrradianceSize},
                     "irradianceFragment", &envMap, 0.0f);
 
     for (int mip = 0; mip < kNumPrefilteredMips; ++mip) {
         int size = static_cast<int>(kPrefilteredSize * std::pow(0.5, mip));
         float roughness = mip / static_cast<float>(kNumPrefilteredMips - 1);
-        renderCubeFaces(cmd, globalsOffset, *_prefiltered, layer, mip,
+        renderCubeFaces(commandBuffer, globalsOffset, *_prefiltered, layer, mip,
                         {size, size}, "prefilterFragment", &envMap, roughness);
     }
 }
 
-void VulkanPBRTextures::renderCubeFaces(VkCommandBuffer cmd,
+void VulkanPBRTextures::renderCubeFaces(ICommandBuffer &commandBuffer,
                                         uint32_t globalsOffset,
-                                        VulkanImage &target,
+                                        IImage &target,
                                         int cube,
                                         int mip,
                                         glm::ivec2 extent,
@@ -281,13 +243,13 @@ void VulkanPBRTextures::renderCubeFaces(VkCommandBuffer cmd,
                                         float roughness) {
     // Six views, one per face. The vertex stage reads SV_ViewID and the fragment
     // stage turns it into a direction, so one draw fills the whole cube.
-    VulkanPipelineCache::Key key;
+    PipelineKey key;
     key.module = kModule;
     key.vertexEntry = "iblVertex";
     key.fragmentEntry = fragmentEntry;
-    key.colorFormats = {target.format()};
+    key.colorFormats = {target.pixelFormat()};
     key.viewMask = kCubeViewMask;
-    auto &pipeline = _pipelines.get(key);
+    auto pipeline = _pipelines.get(key);
 
     LocalUniforms locals;
     locals.reset();
@@ -296,32 +258,30 @@ void VulkanPBRTextures::renderCubeFaces(VkCommandBuffer cmd,
         locals.featureMask |= UniformsFeatureFlags::envmapcube;
     }
 
-    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
     offsets[UniformBlockBindingPoints::locals] = _ring.push(locals);
 
-    std::vector<std::pair<int, const VulkanImage *>> textures;
+    std::vector<std::pair<int, const IImage *>> textures;
     if (envMap) {
         auto unit = envMap->isCubeMap() ? TextureUnits::envMapCube : TextureUnits::envMap;
         textures.push_back({unit, &_resources.get(*envMap)});
     }
 
     RenderPassScope rendering(
-        cmd, extent,
-        {{target.renderView(cube, mip),
+        static_cast<VulkanCommandBuffer &>(commandBuffer).handle(), extent,
+        {{toVulkanImageView(target.attachmentView(cube, mip)),
           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
           VK_ATTACHMENT_LOAD_OP_CLEAR,
           VK_ATTACHMENT_STORE_OP_STORE}},
         std::nullopt, kCubeViewMask);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
-    auto uniformSet = _descriptors.uniformSet(_ring.frame());
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
-                            VulkanDescriptors::kUniformSet, 1, &uniformSet,
-                            static_cast<uint32_t>(offsets.size()), offsets.data());
-    auto textureSet = _descriptors.acquireTextureSet(_ring.frame(), textures);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
-                            VulkanDescriptors::kTextureSet, 1, &textureSet, 0, nullptr);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+    commandBuffer.bindPipeline(pipeline.pipeline);
+    auto uniformSet = _descriptors.uniformDescriptorSet(_ring.frame());
+    commandBuffer.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                    offsets.data(), static_cast<uint32_t>(offsets.size()));
+    auto textureSet = _descriptors.acquireTextureDescriptorSet(_ring.frame(), textures);
+    commandBuffer.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, textureSet, nullptr, 0);
+    commandBuffer.draw(3, 1);
 }
 
 } // namespace graphics

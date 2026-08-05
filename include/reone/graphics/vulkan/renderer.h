@@ -29,6 +29,7 @@
 #include "swapchain.h"
 #include "pipelinecache.h"
 #include "renderer2d.h"
+#include "commandbuffer.h"
 #include "pbrtextures.h"
 #include "resources.h"
 #include "shadercompiler.h"
@@ -118,6 +119,7 @@ public:
 
     /** The command buffer being recorded, valid only between begin and end. */
     VkCommandBuffer commandBuffer() const { return _frames[_frameIndex].commandBuffer; }
+    ICommandBuffer &recordingCommandBuffer() { return _frames[_frameIndex].recordingCommandBuffer; }
 
     /** The image being rendered into this frame, and its view. */
     VkImageView currentImageView() const { return _swapchain.imageView(_imageIndex); }
@@ -135,6 +137,7 @@ private:
     struct Frame {
         VkCommandPool commandPool {VK_NULL_HANDLE};
         VkCommandBuffer commandBuffer {VK_NULL_HANDLE};
+        VulkanCommandBuffer recordingCommandBuffer;
         /** Signalled when the acquired image is ready to be rendered into. */
         VkSemaphore imageAvailable {VK_NULL_HANDLE};
         /** Signalled when the GPU is done, so the CPU may reuse this set. */

@@ -25,6 +25,18 @@ namespace reone {
 
 namespace graphics {
 
+std::unique_ptr<IImage> makeImage(VulkanDevice &device) {
+    return std::make_unique<VulkanImage>(device);
+}
+
+VulkanImage &toVulkanImage(IImage &image) {
+    return dynamic_cast<VulkanImage &>(image);
+}
+
+const VulkanImage &toVulkanImage(const IImage &image) {
+    return dynamic_cast<const VulkanImage &>(image);
+}
+
 static VkDeviceSize texelSize(VkFormat format) {
     switch (format) {
     case VK_FORMAT_R8G8B8A8_UNORM:

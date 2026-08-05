@@ -23,6 +23,7 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/camera.h
     ${GRAPHICS_INCLUDE_DIR}/camera/orthographic.h
     ${GRAPHICS_INCLUDE_DIR}/camera/perspective.h
+    ${GRAPHICS_INCLUDE_DIR}/commandbuffer.h
     ${GRAPHICS_INCLUDE_DIR}/cursor.h
     ${GRAPHICS_INCLUDE_DIR}/di/module.h
     ${GRAPHICS_INCLUDE_DIR}/di/services.h
@@ -30,6 +31,7 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/font.h
     ${GRAPHICS_INCLUDE_DIR}/frustum.h
     ${GRAPHICS_INCLUDE_DIR}/gpuscene.h
+    ${GRAPHICS_INCLUDE_DIR}/image.h
     ${GRAPHICS_INCLUDE_DIR}/rayquery.h
     ${GRAPHICS_INCLUDE_DIR}/format/bwmreader.h
     ${GRAPHICS_INCLUDE_DIR}/format/curreader.h
@@ -50,8 +52,11 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/npyutil.h
     ${GRAPHICS_INCLUDE_DIR}/modelnode.h
     ${GRAPHICS_INCLUDE_DIR}/options.h
+    ${GRAPHICS_INCLUDE_DIR}/descriptors.h
+    ${GRAPHICS_INCLUDE_DIR}/pipelinecache.h
     ${GRAPHICS_INCLUDE_DIR}/renderer.h
     ${GRAPHICS_INCLUDE_DIR}/renderer2d.h
+    ${GRAPHICS_INCLUDE_DIR}/rhi.h
     ${GRAPHICS_INCLUDE_DIR}/statistic.h
     ${GRAPHICS_INCLUDE_DIR}/texture.h
     ${GRAPHICS_INCLUDE_DIR}/textureregistry.h

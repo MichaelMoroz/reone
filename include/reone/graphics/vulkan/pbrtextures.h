@@ -17,19 +17,17 @@
 
 #pragma once
 
-#include <volk.h>
-
+#include "reone/graphics/commandbuffer.h"
+#include "reone/graphics/descriptors.h"
+#include "reone/graphics/image.h"
+#include "reone/graphics/pipelinecache.h"
 #include "reone/graphics/pbrtextures.h"
-
-#include "image.h"
 
 namespace reone {
 
 namespace graphics {
 
-class VulkanDescriptors;
 class VulkanDevice;
-class VulkanPipelineCache;
 class VulkanResources;
 class VulkanUniformRing;
 
@@ -51,9 +49,9 @@ class VulkanUniformRing;
 class VulkanPBRTextures : public IPBRTextures, boost::noncopyable {
 public:
     VulkanPBRTextures(VulkanDevice &device,
-                      VulkanPipelineCache &pipelines,
+                      IPipelineCache &pipelines,
                       VulkanUniformRing &ring,
-                      VulkanDescriptors &descriptors,
+                      IDescriptors &descriptors,
                       VulkanResources &resources) :
         _device(device),
         _pipelines(pipelines),
@@ -73,7 +71,7 @@ public:
      * instead of needing its own of each. Must not be called inside a render
      * pass; it begins its own.
      */
-    void process(VkCommandBuffer cmd, uint32_t globalsOffset);
+    void process(ICommandBuffer &commandBuffer, uint32_t globalsOffset);
 
     /** Forget module-owned source reservations; process performs generation. */
     void refresh() override;
@@ -96,39 +94,39 @@ public:
     /** Unused under Vulkan - the resolve binds the image, not the Texture. */
     Texture &brdf() override;
 
-    const VulkanImage &brdfImage() const { return *_brdf; }
-    const VulkanImage &irradianceArray() const { return *_irradiance; }
-    const VulkanImage &prefilteredArray() const { return *_prefiltered; }
+    const IImage &brdfImage() const { return *_brdf; }
+    const IImage &irradianceArray() const { return *_irradiance; }
+    const IImage &prefilteredArray() const { return *_prefiltered; }
     /** Source textures currently occupying the derived-map ring, for diagnostics. */
     const std::map<int, Texture *> &sourceEnvMaps() const { return _envMapSources; }
 
 private:
     VulkanDevice &_device;
-    VulkanPipelineCache &_pipelines;
+    IPipelineCache &_pipelines;
     VulkanUniformRing &_ring;
-    VulkanDescriptors &_descriptors;
+    IDescriptors &_descriptors;
     VulkanResources &_resources;
 
     bool _inited {false};
     bool _brdfGenerated {false};
 
-    std::unique_ptr<VulkanImage> _brdf;
-    std::unique_ptr<VulkanImage> _irradiance;
-    std::unique_ptr<VulkanImage> _prefiltered;
+    std::unique_ptr<IImage> _brdf;
+    std::unique_ptr<IImage> _irradiance;
+    std::unique_ptr<IImage> _prefiltered;
 
     std::set<EnvMapDerivedRequest> _requests;
     std::unordered_map<std::string, int> _envMapToLayer;
     std::map<int, Texture *> _envMapSources;
     int _nextLayer {0};
 
-    void generateBRDF(VkCommandBuffer cmd, uint32_t globalsOffset);
-    void generateDerived(VkCommandBuffer cmd, uint32_t globalsOffset,
+    void generateBRDF(ICommandBuffer &commandBuffer, uint32_t globalsOffset);
+    void generateDerived(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
                          Texture &envMap, int layer);
 
     /** One six-view pass over a cube's faces at one mip. */
-    void renderCubeFaces(VkCommandBuffer cmd,
+    void renderCubeFaces(ICommandBuffer &commandBuffer,
                          uint32_t globalsOffset,
-                         VulkanImage &target,
+                         IImage &target,
                          int cube,
                          int mip,
                          glm::ivec2 extent,

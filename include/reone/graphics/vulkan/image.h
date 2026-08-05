@@ -21,11 +21,20 @@
 
 #include <vk_mem_alloc.h>
 
+#include "reone/graphics/image.h"
+
+#include "rhi.h"
+
 namespace reone {
 
 namespace graphics {
 
 class VulkanDevice;
+class VulkanImage;
+
+std::unique_ptr<IImage> makeImage(VulkanDevice &device);
+VulkanImage &toVulkanImage(IImage &image);
+const VulkanImage &toVulkanImage(const IImage &image);
 
 /**
  * A device-local image, its allocation and its view, freed together.
@@ -36,13 +45,13 @@ class VulkanDevice;
  * therefore three steps rather than one - transition to a transfer target, copy
  * from a staging buffer, transition to something a shader can read.
  */
-class VulkanImage : boost::noncopyable {
+class VulkanImage : public IImage, boost::noncopyable {
 public:
     VulkanImage(VulkanDevice &device) :
         _device(device) {
     }
 
-    ~VulkanImage() { deinit(); }
+    ~VulkanImage() override { deinit(); }
 
     /**
      * Create a sampled 2D image and fill it from @p data, which must be
@@ -116,6 +125,9 @@ public:
      * G-buffer target is.
      */
     void initColorAttachment(glm::ivec2 extent, VkFormat format);
+    void initColorAttachment(glm::ivec2 extent, Format format) override {
+        initColorAttachment(extent, toVulkanFormat(format));
+    }
 
     /**
      * A cube map array that is rendered into and then sampled: the derived
@@ -128,6 +140,10 @@ public:
      * a different view per cube and per mip, which renderView supplies.
      */
     void initCubeArrayAttachment(glm::ivec2 faceExtent, VkFormat format, int cubes, int mips);
+    void initCubeArrayAttachment(glm::ivec2 faceExtent, Format format, int cubes,
+                                 int mips) override {
+        initCubeArrayAttachment(faceExtent, toVulkanFormat(format), cubes, mips);
+    }
 
     /**
      * A sampled-only cube array, every face filled from @p data.
@@ -148,6 +164,9 @@ public:
      * fixed and they outlive any one frame.
      */
     VkImageView renderView(int cube, int mip);
+    ImageView attachmentView(int cube, int mip) override {
+        return toImageView(renderView(cube, mip));
+    }
 
     /** A cube view of one cube in a cube-compatible image, for SamplerCube. */
     VkImageView cubeView(int cube);
@@ -155,7 +174,7 @@ public:
     /** One face of a cube, suitable for a per-face dynamic-rendering pass. */
     VkImageView faceRenderView(int cube, int face, int mip = 0);
 
-    int mipLevels() const { return _mipLevels; }
+    int mipLevels() const override { return _mipLevels; }
 
     /**
      * A sampled array or cube image, filled with @p data repeated per layer.
@@ -210,12 +229,13 @@ public:
      * used for cube-array diagnostics, where each cube face becomes one
      * vertically unrolled image in the dump.
      */
-    std::vector<uint8_t> readBack(uint32_t mip, uint32_t layers) const;
+    std::vector<uint8_t> readBack(uint32_t mip, uint32_t layers) const override;
 
-    void deinit();
+    void deinit() override;
 
     VkImage handle() const { return _image; }
     VkImageView view() const { return _view; }
+    ImageView sampleView() const override { return toImageView(_view); }
 
     /**
      * The sampler this image should be read through, or null for the default.
@@ -226,7 +246,9 @@ public:
      */
     VkSampler sampler() const { return _sampler; }
     void setSampler(VkSampler sampler) { _sampler = sampler; }
+    void setSampler(Sampler sampler) override { _sampler = toVulkanSampler(sampler); }
     glm::ivec2 extent() const { return _extent; }
+    Format pixelFormat() const override { return fromVulkanFormat(_format); }
     VkFormat format() const { return _format; }
 
 private:

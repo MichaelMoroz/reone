@@ -437,6 +437,21 @@ VkDescriptorSet VulkanDescriptors::acquireTextureSet(int frame, const VulkanImag
     return set;
 }
 
+DescriptorSet VulkanDescriptors::acquireTextureDescriptorSet(int frame, const IImage *mainTex) {
+    return toDescriptorSet(acquireTextureSet(
+        frame, mainTex ? &toVulkanImage(*mainTex) : nullptr));
+}
+
+DescriptorSet VulkanDescriptors::acquireTextureDescriptorSet(
+    int frame, const std::vector<std::pair<int, const IImage *>> &bindings) {
+    std::vector<std::pair<int, const VulkanImage *>> nativeBindings;
+    nativeBindings.reserve(bindings.size());
+    for (const auto &[unit, image] : bindings) {
+        nativeBindings.push_back({unit, image ? &toVulkanImage(*image) : nullptr});
+    }
+    return toDescriptorSet(acquireTextureSet(frame, nativeBindings));
+}
+
 const VulkanImage *VulkanDescriptors::defaultFor(int unit,
                                                  const VulkanImage *twoD,
                                                  const VulkanImage *array,

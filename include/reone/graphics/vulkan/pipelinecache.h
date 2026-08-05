@@ -19,6 +19,8 @@
 
 #include <volk.h>
 
+#include "reone/graphics/pipelinecache.h"
+
 #include "pipeline.h"
 
 namespace reone {
@@ -42,7 +44,7 @@ class VulkanDescriptors;
  * emulating a state machine; this is the other thing, a small keyed set of
  * pipelines the renderer names deliberately.
  */
-class VulkanPipelineCache : boost::noncopyable {
+class VulkanPipelineCache : public IPipelineCache, boost::noncopyable {
 public:
     /**
      * Everything that distinguishes one pipeline from another. Anything absent
@@ -88,6 +90,7 @@ public:
 
     /** The pipeline for @p key, built if this is the first request for it. */
     VulkanPipeline &get(const Key &key);
+    PipelineBinding get(const PipelineKey &key) override;
 
     size_t size() const { return _pipelines.size(); }
 

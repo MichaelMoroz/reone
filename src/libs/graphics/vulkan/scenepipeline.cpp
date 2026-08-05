@@ -153,7 +153,7 @@ void VulkanScenePipeline::init() {
          {4, &_gbuffer->color(VulkanGBuffer::SelfIllum)},
          {5, &_gbuffer->depth()},
          {15, _dirShadows.get()},
-         {17, &_renderer.pbrTextures().prefilteredArray()},
+         {17, &toVulkanImage(_renderer.pbrTextures().prefilteredArray())},
          {19, _pointShadows.get()},
          {21, &_gbuffer->color(VulkanGBuffer::MaterialId)}});
     _pbrResolveSet = _renderer.descriptors().createPersistentTextureSet(
@@ -162,10 +162,10 @@ void VulkanScenePipeline::init() {
          {3, &_gbuffer->color(VulkanGBuffer::Lightmap)},
          {4, &_gbuffer->color(VulkanGBuffer::SelfIllum)},
          {5, &_gbuffer->depth()},
-         {13, &_renderer.pbrTextures().brdfImage()},
+         {13, &toVulkanImage(_renderer.pbrTextures().brdfImage())},
          {15, _dirShadows.get()},
-         {16, &_renderer.pbrTextures().irradianceArray()},
-         {17, &_renderer.pbrTextures().prefilteredArray()},
+         {16, &toVulkanImage(_renderer.pbrTextures().irradianceArray())},
+         {17, &toVulkanImage(_renderer.pbrTextures().prefilteredArray())},
          {19, _pointShadows.get()},
          {21, &_gbuffer->color(VulkanGBuffer::MaterialId)}});
 
@@ -656,7 +656,7 @@ Texture &VulkanScenePipeline::render(const VulkanSceneFramePlan &plan,
     for (const auto step : plan.steps) {
         switch (step) {
         case VulkanSceneStep::ProcessPBRTextures:
-            _renderer.pbrTextures().process(cmd, globalsOffset);
+            _renderer.pbrTextures().process(_renderer.recordingCommandBuffer(), globalsOffset);
             break;
         case VulkanSceneStep::Shadow:
             shadowPass(cmd, globalsOffset, callbacks);
@@ -995,10 +995,10 @@ void VulkanScenePipeline::dumpTargets(const std::filesystem::path &dir,
         // Cube arrays are unrolled face-after-face: layer 0 +X..-Z, then
         // layer 1 +X..-Z, and so on. Keeping every layer makes the dump useful
         // even when a scene derives more than one environment map.
-        auto dumpCubeArray = [&dir](const char *name, const VulkanImage &image, int mip,
-                                    uint32_t layers) {
+        auto dumpCubeArray = [&dir](const char *name, const IImage &image, int mip,
+                                     uint32_t layers) {
             constexpr uint32_t kFaces = 6;
-            auto format = dumpFormatFor(image.format());
+            auto format = dumpFormatFor(toVulkanFormat(image.pixelFormat()));
             if (!format) {
                 warn("Cannot dump cube array '" + std::string(name) + "': unsupported format",
                      LogChannel::Graphics);
@@ -1037,10 +1037,12 @@ void VulkanScenePipeline::dumpTargets(const std::filesystem::path &dir,
             }
         };
         auto &pbr = _renderer.pbrTextures();
-        dumpCubeArray("irradiance_map_array", pbr.irradianceArray(), 0, 16 * 6);
-        for (int mip = 0; mip < pbr.prefilteredArray().mipLevels(); ++mip) {
+        auto &irradiance = pbr.irradianceArray();
+        auto &prefiltered = pbr.prefilteredArray();
+        dumpCubeArray("irradiance_map_array", irradiance, 0, 16 * 6);
+        for (int mip = 0; mip < prefiltered.mipLevels(); ++mip) {
             dumpCubeArray(("prefiltered_env_map_array_mip" + std::to_string(mip)).c_str(),
-                          pbr.prefilteredArray(), mip, 16 * 6);
+                          prefiltered, mip, 16 * 6);
         }
 
         auto dumpSourceEnvMap = [&dir, this](int layer, const Texture &texture) {

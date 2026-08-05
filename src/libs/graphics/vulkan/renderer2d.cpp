@@ -20,7 +20,6 @@
 #include "reone/graphics/font.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
-#include "reone/graphics/vulkan/descriptors.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/graphics/vulkan/uniformring.h"
@@ -40,9 +39,9 @@ void Vulkan2DRenderer::init() {
 void Vulkan2DRenderer::deinit() {
 }
 
-void Vulkan2DRenderer::begin(VkCommandBuffer cmd, glm::ivec2 extent, glm::ivec2 physicalExtent,
-                             VkFormat colorFormat) {
-    _cmd = cmd;
+void Vulkan2DRenderer::begin(ICommandBuffer &commandBuffer, glm::ivec2 extent,
+                             glm::ivec2 physicalExtent, Format colorFormat) {
+    _commandBuffer = &commandBuffer;
     _extent = extent;
     _physicalExtent = physicalExtent;
     _colorFormat = colorFormat;
@@ -67,7 +66,7 @@ void Vulkan2DRenderer::begin(VkCommandBuffer cmd, glm::ivec2 extent, glm::ivec2 
 }
 
 void Vulkan2DRenderer::end() {
-    _cmd = VK_NULL_HANDLE;
+    _commandBuffer = nullptr;
 }
 
 void Vulkan2DRenderer::drawQuads(const char *vertexEntry,
@@ -76,11 +75,11 @@ void Vulkan2DRenderer::drawQuads(const char *vertexEntry,
                                  uint32_t textOffset,
                                  int instances,
                                  const Texture *texture) {
-    if (_cmd == VK_NULL_HANDLE) {
+    if (!_commandBuffer) {
         throw std::logic_error("Vulkan 2D: no frame begun");
     }
 
-    VulkanPipelineCache::Key key;
+    PipelineKey key;
     key.module = kModule;
     key.vertexEntry = vertexEntry;
     key.fragmentEntry = fragmentEntry;
@@ -90,25 +89,24 @@ void Vulkan2DRenderer::drawQuads(const char *vertexEntry,
     // the way, and there is no depth attachment bound during the 2D pass.
     key.depthTest = false;
     key.depthWrite = false;
-    auto &pipeline = _pipelines.get(key);
+    auto pipeline = _pipelines.get(key);
 
-    std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
     offsets[UniformBlockBindingPoints::globals] = _globalsOffset;
     offsets[UniformBlockBindingPoints::locals] = _ring.push(locals);
     offsets[UniformBlockBindingPoints::text] = textOffset;
-    const VulkanImage *mainTex = texture ? &_resources.get(*texture) : nullptr;
+    const IImage *mainTex = texture ? &_resources.get(*texture) : nullptr;
 
-    vkCmdBindPipeline(_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+    _commandBuffer->bindPipeline(pipeline.pipeline);
 
-    auto uniformSet = _descriptors.uniformSet(_ring.frame());
-    vkCmdBindDescriptorSets(_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
-                            VulkanDescriptors::kUniformSet, 1, &uniformSet,
-                            static_cast<uint32_t>(offsets.size()), offsets.data());
+    auto uniformSet = _descriptors.uniformDescriptorSet(_ring.frame());
+    _commandBuffer->bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                      offsets.data(), static_cast<uint32_t>(offsets.size()));
 
-    auto textureSet = _descriptors.acquireTextureSet(_ring.frame(), mainTex);
-    vkCmdBindDescriptorSets(_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
-                            VulkanDescriptors::kTextureSet, 1, &textureSet, 0, nullptr);
-    vkCmdDraw(_cmd, kQuadVertices, static_cast<uint32_t>(instances), 0, 0);
+    auto textureSet = _descriptors.acquireTextureDescriptorSet(_ring.frame(), mainTex);
+    _commandBuffer->bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, textureSet,
+                                      nullptr, 0);
+    _commandBuffer->draw(kQuadVertices, static_cast<uint32_t>(instances));
     ++_drawCount;
 }
 
@@ -225,7 +223,7 @@ void Vulkan2DRenderer::withBlendMode(BlendMode mode, const std::function<void()>
 }
 
 void Vulkan2DRenderer::withScissor(const glm::ivec4 &bounds, const std::function<void()> &block) {
-    if (_cmd == VK_NULL_HANDLE) {
+    if (!_commandBuffer) {
         throw std::logic_error("Vulkan 2D: no frame begun");
     }
     // Caller bounds are logical coordinates; the scissor is physical pixels.
@@ -233,18 +231,15 @@ void Vulkan2DRenderer::withScissor(const glm::ivec4 &bounds, const std::function
     // resolution and the viewport scales to fit.
     float scaleX = _extent.x > 0 ? static_cast<float>(_physicalExtent.x) / _extent.x : 1.0f;
     float scaleY = _extent.y > 0 ? static_cast<float>(_physicalExtent.y) / _extent.y : 1.0f;
-    VkRect2D scissor {};
-    scissor.offset = {static_cast<int32_t>(bounds[0] * scaleX),
-                      static_cast<int32_t>(bounds[1] * scaleY)};
-    scissor.extent = {static_cast<uint32_t>(bounds[2] * scaleX + 0.5f),
-                      static_cast<uint32_t>(bounds[3] * scaleY + 0.5f)};
-    vkCmdSetScissor(_cmd, 0, 1, &scissor);
+    _commandBuffer->setScissor(
+        {static_cast<int32_t>(bounds[0] * scaleX), static_cast<int32_t>(bounds[1] * scaleY)},
+        {static_cast<uint32_t>(bounds[2] * scaleX + 0.5f),
+         static_cast<uint32_t>(bounds[3] * scaleY + 0.5f)});
 
     block();
 
-    VkRect2D full {{0, 0}, {static_cast<uint32_t>(_physicalExtent.x),
-                            static_cast<uint32_t>(_physicalExtent.y)}};
-    vkCmdSetScissor(_cmd, 0, 1, &full);
+    _commandBuffer->setScissor(
+        {0, 0}, {static_cast<uint32_t>(_physicalExtent.x), static_cast<uint32_t>(_physicalExtent.y)});
 }
 
 } // namespace graphics

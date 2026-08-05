@@ -17,11 +17,11 @@
 
 #pragma once
 
-#include <volk.h>
-
+#include "reone/graphics/commandbuffer.h"
+#include "reone/graphics/descriptors.h"
+#include "reone/graphics/image.h"
+#include "reone/graphics/pipelinecache.h"
 #include "../renderer2d.h"
-
-#include "pipelinecache.h"
 
 namespace reone {
 
@@ -29,7 +29,6 @@ namespace graphics {
 
 struct LocalUniforms;
 
-class VulkanDescriptors;
 class VulkanDevice;
 class VulkanResources;
 class VulkanUniformRing;
@@ -53,9 +52,9 @@ class VulkanUniformRing;
 class Vulkan2DRenderer : public I2DRenderer, boost::noncopyable {
 public:
     Vulkan2DRenderer(VulkanDevice &device,
-                     VulkanPipelineCache &pipelines,
+                     IPipelineCache &pipelines,
                      VulkanUniformRing &ring,
-                     VulkanDescriptors &descriptors,
+                     IDescriptors &descriptors,
                      VulkanResources &resources) :
         _device(device),
         _pipelines(pipelines),
@@ -75,8 +74,8 @@ public:
         physicalExtent is the actual swapchain size the viewport covers. They
         differ when the OS clamps the window, and conflating them cropped the
         whole frame at 1:1 instead of scaling it. */
-    void begin(VkCommandBuffer cmd, glm::ivec2 extent, glm::ivec2 physicalExtent,
-               VkFormat colorFormat);
+    void begin(ICommandBuffer &commandBuffer, glm::ivec2 extent, glm::ivec2 physicalExtent,
+               Format colorFormat);
     void end();
 
     void drawImage(Texture &texture,
@@ -111,15 +110,15 @@ public:
 
 private:
     VulkanDevice &_device;
-    VulkanPipelineCache &_pipelines;
+    IPipelineCache &_pipelines;
     VulkanUniformRing &_ring;
-    VulkanDescriptors &_descriptors;
+    IDescriptors &_descriptors;
     VulkanResources &_resources;
 
-    VkCommandBuffer _cmd {VK_NULL_HANDLE};
+    ICommandBuffer *_commandBuffer {nullptr};
     glm::ivec2 _extent {0};
     glm::ivec2 _physicalExtent {0};
-    VkFormat _colorFormat {VK_FORMAT_UNDEFINED};
+    Format _colorFormat {Format::R8G8B8A8Unorm};
     BlendMode _blend {BlendMode::Normal};
     /** Offset of the projection pushed once per begin(), reused by every draw. */
     uint32_t _globalsOffset {0};
