@@ -29,6 +29,9 @@ public:
     virtual void deinit() = 0;
     virtual void beginFrame(int frame) = 0;
     virtual uint32_t push(const void *data, uint64_t size) = 0;
+    /** Offset of the frame's GlobalUniforms slice, shared by compute dispatches. */
+    virtual void setGlobalsOffset(uint32_t offset) = 0;
+    virtual uint32_t globalsOffset() const = 0;
     virtual int frame() const = 0;
     virtual uint64_t peakUsage() const = 0;
 

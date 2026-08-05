@@ -6,19 +6,19 @@
 import lib.geometry;
 import lib.scene_schema;
 
-[[vk::binding(0, 0)]] StructuredBuffer<SceneObject> objects;
-[[vk::binding(1, 0)]] StructuredBuffer<Matrix3x4> bones;
-[[vk::binding(2, 0)]] RWStructuredBuffer<MergedVertex> vertices;
-[[vk::binding(3, 0)]] RWStructuredBuffer<uint> indices;
-[[vk::binding(4, 0)]] RWStructuredBuffer<uint> materialIds;
-[[vk::binding(5, 0)]] StructuredBuffer<float> sourceVertices;
-[[vk::binding(6, 0)]] StructuredBuffer<uint> sourceIndices;
+[[vk::binding(0, 1)]] StructuredBuffer<SceneObject> objects;
+[[vk::binding(1, 1)]] StructuredBuffer<Matrix3x4> bones;
+[[vk::binding(2, 1)]] RWStructuredBuffer<MergedVertex> vertices;
+[[vk::binding(3, 1)]] RWStructuredBuffer<uint> indices;
+[[vk::binding(4, 1)]] RWStructuredBuffer<uint> materialIds;
+[[vk::binding(5, 1)]] StructuredBuffer<float> sourceVertices;
+[[vk::binding(6, 1)]] StructuredBuffer<uint> sourceIndices;
 
-[[vk::binding(7, 0)]] StructuredBuffer<ProceduralQuad> proceduralQuads;
-[[vk::binding(8, 0)]] StructuredBuffer<float4> danglyPositions;
+[[vk::binding(7, 1)]] StructuredBuffer<ProceduralQuad> proceduralQuads;
+[[vk::binding(8, 1)]] StructuredBuffer<float4> danglyPositions;
 
-[[vk::binding(9, 0)]] StructuredBuffer<GrassFace> grassFaces;
-[[vk::binding(10, 0)]] StructuredBuffer<GrassRange> grassRanges;
+[[vk::binding(9, 1)]] StructuredBuffer<GrassFace> grassFaces;
+[[vk::binding(10, 1)]] StructuredBuffer<GrassRange> grassRanges;
 
 struct PushConstants {
     uint objectCount;

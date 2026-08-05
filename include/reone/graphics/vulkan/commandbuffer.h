@@ -30,13 +30,15 @@ class VulkanDevice;
 
 class VulkanCommandBuffer : public ICommandBuffer {
 public:
-    void begin(VkCommandBuffer commandBuffer, const VulkanDevice *device) {
+    void begin(VkCommandBuffer commandBuffer, const VulkanDevice *device, uint32_t frameIndex) {
         _commandBuffer = commandBuffer;
         _device = device;
+        _frameIndex = frameIndex;
     }
     void end() {
         _commandBuffer = VK_NULL_HANDLE;
         _device = nullptr;
+        _frameIndex = 0;
     }
 
     void transitionImage(IImage &image, ImageLayout to) override;
@@ -44,16 +46,11 @@ public:
     void beginDebugScope(const char *name, const glm::vec3 &color) override;
     void endDebugScope() override;
     void bindPipeline(Pipeline pipeline) override;
-    void bindComputePipeline(Pipeline pipeline) override;
     void bindRayTracingPipeline(Pipeline pipeline) override;
     void bindDescriptorSet(PipelineLayout layout, uint32_t index,
                            DescriptorSet set,
                            const uint32_t *dynamicOffsets,
                            uint32_t dynamicOffsetCount) override;
-    void bindComputeDescriptorSet(PipelineLayout layout, uint32_t index,
-                                  DescriptorSet set,
-                                  const uint32_t *dynamicOffsets,
-                                  uint32_t dynamicOffsetCount) override;
     void bindRayTracingDescriptorSet(PipelineLayout layout, uint32_t index,
                                      DescriptorSet set,
                                      const uint32_t *dynamicOffsets,
@@ -70,11 +67,12 @@ public:
     void drawIndexed(uint32_t indexCount, uint32_t firstIndex) override;
     void pushFragmentConstants(PipelineLayout layout, const void *data,
                                uint32_t size) override;
-    void pushComputeConstants(PipelineLayout layout, const void *data,
-                              uint32_t size) override;
     void pushRayTracingConstants(PipelineLayout layout, const void *data,
                                  uint32_t size) override;
-    void dispatch(glm::uvec3 groups) override;
+    void dispatch(IComputePipeline &shader, glm::uvec3 groups,
+                  const ComputeBindingSet &bindings,
+                  const ComputeBindingSet *overrides,
+                  const void *pushConstants, uint32_t pushConstantSize) override;
     void clearColor(IImage &image, glm::vec4 color) override;
     void bufferBarrier(IBuffer &buffer, BufferUse from, BufferUse to) override;
     void imageBarrier(IImage &image, ImageUse from, ImageUse to) override;
@@ -84,10 +82,12 @@ public:
                    glm::uvec2 extent) override;
 
     VkCommandBuffer handle() const { return _commandBuffer; }
+    uint32_t frameIndex() const { return _frameIndex; }
 
 private:
     VkCommandBuffer _commandBuffer {VK_NULL_HANDLE};
     const VulkanDevice *_device {nullptr};
+    uint32_t _frameIndex {0};
 };
 
 VulkanCommandBuffer &toVulkanCommandBuffer(ICommandBuffer &commandBuffer);

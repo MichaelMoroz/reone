@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "buffer.h"
+#include "computepipeline.h"
 #include "rhi.h"
 #include "tracingstructure.h"
 
@@ -104,16 +105,11 @@ public:
     virtual void beginDebugScope(const char *name, const glm::vec3 &color) = 0;
     virtual void endDebugScope() = 0;
     virtual void bindPipeline(Pipeline pipeline) = 0;
-    virtual void bindComputePipeline(Pipeline pipeline) = 0;
     virtual void bindRayTracingPipeline(Pipeline pipeline) = 0;
     virtual void bindDescriptorSet(PipelineLayout layout, uint32_t index,
                                    DescriptorSet set,
                                    const uint32_t *dynamicOffsets,
                                    uint32_t dynamicOffsetCount) = 0;
-    virtual void bindComputeDescriptorSet(PipelineLayout layout, uint32_t index,
-                                          DescriptorSet set,
-                                          const uint32_t *dynamicOffsets,
-                                          uint32_t dynamicOffsetCount) = 0;
     virtual void bindRayTracingDescriptorSet(PipelineLayout layout, uint32_t index,
                                              DescriptorSet set,
                                              const uint32_t *dynamicOffsets,
@@ -130,11 +126,14 @@ public:
     virtual void drawIndexed(uint32_t indexCount, uint32_t firstIndex) = 0;
     virtual void pushFragmentConstants(PipelineLayout layout, const void *data,
                                        uint32_t size) = 0;
-    virtual void pushComputeConstants(PipelineLayout layout, const void *data,
-                                      uint32_t size) = 0;
     virtual void pushRayTracingConstants(PipelineLayout layout, const void *data,
                                          uint32_t size) = 0;
-    virtual void dispatch(glm::uvec3 groups) = 0;
+    /** Bind reflected compute resources and record one compute dispatch. */
+    virtual void dispatch(IComputePipeline &shader, glm::uvec3 groups,
+                          const ComputeBindingSet &bindings,
+                          const ComputeBindingSet *overrides = nullptr,
+                          const void *pushConstants = nullptr,
+                          uint32_t pushConstantSize = 0) = 0;
     /** Clear a color target before a pass with no geometry to render. */
     virtual void clearColor(IImage &image, glm::vec4 color) = 0;
     virtual void bufferBarrier(IBuffer &buffer, BufferUse from, BufferUse to) = 0;

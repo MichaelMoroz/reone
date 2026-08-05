@@ -286,7 +286,8 @@ private:
     };
 
     IGpuSceneContext *_context {nullptr};
-    std::unique_ptr<IGpuSceneMergePipeline> _mergePipeline;
+    std::unique_ptr<IComputePipeline> _mergePipeline;
+    std::vector<ComputeResourceSlot> _mergeBindings;
     std::array<std::unique_ptr<Frame>, 2> _frames;
     std::unordered_map<const Mesh *, SourceGeometry> _sourceGeometry;
     std::vector<float> _sourceVertexData;

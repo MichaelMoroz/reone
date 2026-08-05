@@ -16,6 +16,8 @@
  */
 #include "reone/graphics/vulkan/shadercompiler.h"
 
+#include <optional>
+
 #include <slang-com-ptr.h>
 #include <slang.h>
 
@@ -26,6 +28,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iterator>
+#include <limits>
 #include <sstream>
 
 #include "reone/graphics/rendering/gpuscene.h"
@@ -39,6 +42,104 @@ constexpr const char *kModules[] = {
     "pbr_model", "megadraw", "shadow_megadraw", "sky", "grass", "walkmesh", "common",
     "shadow", "pbr_ibl", "particles", "pbr_resolve", "retro_resolve", "pbr_ssao",
     "pbr_ssr", "rayquery", "skin", "nrd_composite", "pt_tonemap", "postprocess", "vk2d"};
+
+const char *parameterCategoryName(slang::ParameterCategory category) {
+    switch (category) {
+    case slang::None: return "none";
+    case slang::Mixed: return "mixed";
+    case slang::ConstantBuffer: return "constant buffer";
+    case slang::ShaderResource: return "shader resource";
+    case slang::UnorderedAccess: return "unordered access";
+    case slang::VaryingInput: return "varying input";
+    case slang::VaryingOutput: return "varying output";
+    case slang::SamplerState: return "sampler state";
+    case slang::Uniform: return "uniform";
+    case slang::DescriptorTableSlot: return "descriptor table slot";
+    case slang::SpecializationConstant: return "specialization constant";
+    case slang::PushConstantBuffer: return "push constant buffer";
+    case slang::RegisterSpace: return "register space";
+    case slang::GenericResource: return "generic resource";
+    case slang::RayPayload: return "ray payload";
+    case slang::HitAttributes: return "hit attributes";
+    case slang::CallablePayload: return "callable payload";
+    case slang::ShaderRecord: return "shader record";
+    case slang::ExistentialTypeParam: return "existential type parameter";
+    case slang::ExistentialObjectParam: return "existential object parameter";
+    case slang::SubElementRegisterSpace: return "sub-element register space";
+    case slang::InputAttachmentIndex: return "input attachment index";
+    case slang::MetalArgumentBufferElement: return "metal argument buffer element";
+    case slang::MetalAttribute: return "metal attribute";
+    case slang::MetalPayload: return "metal payload";
+    default: return "unknown";
+    }
+}
+
+const char *bindingTypeName(slang::BindingType type) {
+    switch (type) {
+    case slang::BindingType::Unknown: return "unknown";
+    case slang::BindingType::Sampler: return "sampler";
+    case slang::BindingType::Texture: return "texture";
+    case slang::BindingType::ConstantBuffer: return "constant buffer";
+    case slang::BindingType::ParameterBlock: return "parameter block";
+    case slang::BindingType::TypedBuffer: return "typed buffer";
+    case slang::BindingType::RawBuffer: return "raw buffer";
+    case slang::BindingType::CombinedTextureSampler: return "combined texture sampler";
+    case slang::BindingType::InputRenderTarget: return "input render target";
+    case slang::BindingType::InlineUniformData: return "inline uniform data";
+    case slang::BindingType::RayTracingAccelerationStructure: return "ray tracing acceleration structure";
+    case slang::BindingType::VaryingInput: return "varying input";
+    case slang::BindingType::VaryingOutput: return "varying output";
+    case slang::BindingType::ExistentialValue: return "existential value";
+    case slang::BindingType::PushConstant: return "push constant";
+    default: return "unknown";
+    }
+}
+
+const char *typeKindName(slang::TypeReflection::Kind kind) {
+    switch (kind) {
+    case slang::TypeReflection::Kind::None: return "none";
+    case slang::TypeReflection::Kind::Struct: return "struct";
+    case slang::TypeReflection::Kind::Array: return "array";
+    case slang::TypeReflection::Kind::ConstantBuffer: return "constant buffer";
+    case slang::TypeReflection::Kind::Resource: return "resource";
+    case slang::TypeReflection::Kind::SamplerState: return "sampler state";
+    case slang::TypeReflection::Kind::TextureBuffer: return "texture buffer";
+    case slang::TypeReflection::Kind::ShaderStorageBuffer: return "shader storage buffer";
+    case slang::TypeReflection::Kind::ParameterBlock: return "parameter block";
+    case slang::TypeReflection::Kind::DynamicResource: return "dynamic resource";
+    default: return "other";
+    }
+}
+
+const char *resourceShapeName(SlangResourceShape shape) {
+    switch (shape & SLANG_RESOURCE_BASE_SHAPE_MASK) {
+    case SLANG_RESOURCE_NONE: return "none";
+    case SLANG_TEXTURE_1D: return "texture 1D";
+    case SLANG_TEXTURE_2D: return "texture 2D";
+    case SLANG_TEXTURE_3D: return "texture 3D";
+    case SLANG_TEXTURE_CUBE: return "texture cube";
+    case SLANG_TEXTURE_BUFFER: return "texture buffer";
+    case SLANG_STRUCTURED_BUFFER: return "structured buffer";
+    case SLANG_BYTE_ADDRESS_BUFFER: return "byte address buffer";
+    case SLANG_ACCELERATION_STRUCTURE: return "acceleration structure";
+    case SLANG_TEXTURE_SUBPASS: return "subpass input";
+    default: return "unknown";
+    }
+}
+
+const char *resourceAccessName(SlangResourceAccess access) {
+    switch (access) {
+    case SLANG_RESOURCE_ACCESS_NONE: return "none";
+    case SLANG_RESOURCE_ACCESS_READ: return "read";
+    case SLANG_RESOURCE_ACCESS_READ_WRITE: return "read-write";
+    case SLANG_RESOURCE_ACCESS_RASTER_ORDERED: return "raster-ordered";
+    case SLANG_RESOURCE_ACCESS_APPEND: return "append";
+    case SLANG_RESOURCE_ACCESS_CONSUME: return "consume";
+    case SLANG_RESOURCE_ACCESS_WRITE: return "write";
+    case SLANG_RESOURCE_ACCESS_FEEDBACK: return "feedback";
+    default: return "unknown";
+    }
+}
 
 uint64_t hashBytes(uint64_t hash, const void *data, size_t size) {
     auto bytes = static_cast<const uint8_t *>(data);
@@ -249,6 +350,132 @@ const std::vector<uint32_t> &SlangShaderCompiler::module(const std::string &name
             return existing->second;
         throw;
     }
+}
+
+ShaderReflection SlangShaderCompiler::reflection(const std::string &name) const {
+    const auto program = _impl->load(_sourceDir, name);
+    Slang::ComPtr<slang::IBlob> diagnostic;
+    auto *layout = program.linked->getLayout(0, diagnostic.writeRef());
+    if (!layout)
+        throw std::runtime_error("Slang: cannot reflect bindings for '" + name + "'\n" +
+                                 Impl::diagnostics(diagnostic));
+    auto *globalParameters = layout->getGlobalParamsTypeLayout();
+    if (!globalParameters)
+        throw std::runtime_error("Slang: reflection has no global parameters for '" + name + "'");
+
+    ShaderReflection result;
+    // Walk the program's global parameters through their variable layouts
+    // rather than the type layout's binding ranges. The binding-range API
+    // would be tidier, but this Slang release ships its space accessors
+    // commented out of slang.h, and the descriptor-set *index* it does expose
+    // is not the *space* an explicit [[vk::binding(b, s)]] declares - the two
+    // agree only for single-set shaders, which is how the ranges walk survived
+    // until skin (frame uniforms in space 0, resources in space 1). Variable
+    // layouts report the annotated space directly.
+    const auto paramCount = layout->getParameterCount();
+    for (unsigned int index = 0; index < paramCount; ++index) {
+        auto *param = layout->getParameterByIndex(index);
+        if (!param)
+            continue;
+        const auto *paramName = param->getName();
+        auto *typeLayout = param->getTypeLayout();
+        if (!typeLayout)
+            throw std::runtime_error("Slang: parameter without a type layout in '" + name + "'");
+
+        bool isPushConstant = false, isDescriptor = false;
+        const auto categoryCount = typeLayout->getCategoryCount();
+        for (unsigned int c = 0; c < categoryCount; ++c) {
+            const auto category = typeLayout->getCategoryByIndex(c);
+            if (category == slang::PushConstantBuffer)
+                isPushConstant = true;
+            else if (category == slang::DescriptorTableSlot)
+                isDescriptor = true;
+        }
+        if (isPushConstant) {
+            // getSize(PushConstantBuffer) counts whole ranges, not bytes; the
+            // byte size is the wrapped element's uniform-category size.
+            auto *element = typeLayout->getElementTypeLayout();
+            const auto size = element ? element->getSize() : typeLayout->getSize();
+            if (size == 0 || size > std::numeric_limits<uint32_t>::max())
+                throw std::runtime_error("Slang: malformed push constants in '" + name + "'");
+            if (result.pushConstantSize != 0)
+                throw std::runtime_error("Slang: multiple push constant ranges in '" + name + "'");
+            result.pushConstantSize = static_cast<uint32_t>(size);
+            continue;
+        }
+        if (!isDescriptor)
+            continue; // varyings, specialization constants, plain uniform data
+
+        const auto set = param->getBindingSpace(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT);
+        const auto binding = param->getOffset(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT);
+
+        // Arrays bind their element type at a count; everything else is one.
+        auto *resource = typeLayout;
+        size_t count = 1;
+        while (resource && resource->getKind() == slang::TypeReflection::Kind::Array) {
+            count *= std::max<size_t>(1, resource->getElementCount());
+            resource = resource->getElementTypeLayout();
+        }
+        if (!paramName || count == 0)
+            throw std::runtime_error("Slang: incomplete binding reflection for '" + name + "'");
+
+        const auto reflectionError = [&] {
+            const auto leafKind = resource ? typeKindName(resource->getKind()) : "none";
+            const auto shape = resource ? resourceShapeName(resource->getResourceShape()) : "none";
+            const auto access = resource ? resourceAccessName(resource->getResourceAccess()) : "none";
+            return "Slang: unsupported reflected binding '" + std::string(paramName) + "' in '" +
+                   name + "': leaf kind " + std::string(leafKind) + ", resource shape " + shape +
+                   ", resource access " + access;
+        };
+
+        std::optional<ShaderResourceKind> resolved;
+        switch (resource ? resource->getKind() : slang::TypeReflection::Kind::None) {
+        case slang::TypeReflection::Kind::ConstantBuffer:
+            resolved = ShaderResourceKind::UniformBuffer;
+            break;
+        case slang::TypeReflection::Kind::SamplerState:
+            resolved = ShaderResourceKind::Sampler;
+            break;
+        case slang::TypeReflection::Kind::Resource:
+        case slang::TypeReflection::Kind::TextureBuffer:
+        case slang::TypeReflection::Kind::ShaderStorageBuffer: {
+            const auto fullShape = resource->getResourceShape();
+            const auto baseShape = fullShape & SLANG_RESOURCE_BASE_SHAPE_MASK;
+            const auto readOnly = resource->getResourceAccess() == SLANG_RESOURCE_ACCESS_READ;
+            const bool combined = (fullShape & SLANG_TEXTURE_COMBINED_FLAG) != 0;
+            switch (baseShape) {
+            case SLANG_STRUCTURED_BUFFER:
+            case SLANG_BYTE_ADDRESS_BUFFER:
+                resolved = ShaderResourceKind::StorageBuffer;
+                break;
+            case SLANG_TEXTURE_1D:
+            case SLANG_TEXTURE_2D:
+            case SLANG_TEXTURE_3D:
+            case SLANG_TEXTURE_CUBE:
+            case SLANG_TEXTURE_BUFFER:
+                resolved = combined ? ShaderResourceKind::CombinedImageSampler
+                           : readOnly ? ShaderResourceKind::SampledImage
+                                      : ShaderResourceKind::StorageImage;
+                break;
+            case SLANG_ACCELERATION_STRUCTURE:
+                resolved = ShaderResourceKind::AccelerationStructure;
+                break;
+            default:
+                break;
+            }
+            break;
+        }
+        default:
+            break;
+        }
+        if (!resolved)
+            throw std::runtime_error(reflectionError());
+
+        result.bindings.push_back({paramName, static_cast<uint32_t>(set),
+                                   static_cast<uint32_t>(binding),
+                                   static_cast<uint32_t>(count), *resolved});
+    }
+    return result;
 }
 
 bool SlangShaderCompiler::recompileAll() {

@@ -93,7 +93,10 @@ void GpuScene::init(IGpuSceneContext &context) {
     if (_inited)
         return;
     _context = &context;
-    _mergePipeline = _context->makeGpuSceneMergePipeline();
+    _mergePipeline = _context->makeComputePipeline({"skin", "main", 2});
+    _mergeBindings = _mergePipeline->resolveBindings(
+        {"objects", "bones", "vertices", "indices", "materialIds", "sourceVertices",
+         "sourceIndices", "proceduralQuads", "danglyPositions", "grassFaces", "grassRanges"});
     for (auto &frame : _frames)
         frame = std::make_unique<Frame>();
     _inited = true;
@@ -111,6 +114,7 @@ void GpuScene::deinit() {
     releaseBuffer(_grassFaces);
     _grassFaceGeneration = 0;
     _mergePipeline.reset();
+    _mergeBindings.clear();
     _context = nullptr;
     _inited = false;
 }
@@ -412,14 +416,33 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
                                     BufferUse::ComputeRead);
         commandBuffer.bufferBarrier(*sourceIndices, BufferUse::TransferWrite,
                                     BufferUse::ComputeRead);
-        _mergePipeline->merge(commandBuffer, {buffers.data(), static_cast<uint32_t>(buffers.size()),
-                                               static_cast<uint32_t>(_context->frameIndex()),
-                                               static_cast<uint32_t>(upload.objects.size()),
-                                               upload.opaqueObjectCount,
-                                               static_cast<uint32_t>(vertexCount),
-                                               static_cast<uint32_t>(triangleCount),
-                                               static_cast<uint32_t>(opaqueTriangleCount),
-                                               upload.cameraPosition});
+        struct PushConstants {
+            uint32_t objectCount;
+            uint32_t opaqueObjectCount;
+            uint32_t vertexCount;
+            uint32_t triangleCount;
+            uint32_t opaqueTriangleCount;
+            uint32_t pad[3] {};
+            glm::vec4 cameraPosition {0.0f};
+        } constants {static_cast<uint32_t>(upload.objects.size()), upload.opaqueObjectCount,
+                     static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount),
+                     static_cast<uint32_t>(opaqueTriangleCount), {}, upload.cameraPosition};
+        static_assert(sizeof(PushConstants) == 48);
+        std::array<ComputeBinding, 11> mergeBindings {{
+            {_mergeBindings[0], buffers[0]}, {_mergeBindings[1], buffers[1]},
+            {_mergeBindings[2], buffers[2]}, {_mergeBindings[3], buffers[3]},
+            {_mergeBindings[4], buffers[4]}, {_mergeBindings[5], buffers[5]},
+            {_mergeBindings[6], buffers[6]}, {_mergeBindings[7], buffers[7]},
+            {_mergeBindings[8], buffers[8]}, {_mergeBindings[9], buffers[9]},
+            {_mergeBindings[10], buffers[10]},
+        }};
+        const auto threads = std::max(constants.vertexCount, constants.triangleCount);
+        if (threads) {
+            commandBuffer.dispatch(*_mergePipeline, {(threads + 63) / 64, 1, 1},
+                                   {mergeBindings.data(), static_cast<uint32_t>(mergeBindings.size())},
+                                   nullptr,
+                                   &constants, sizeof(constants));
+        }
         commandBuffer.bufferBarrier(*frame.geometry, BufferUse::ComputeWrite,
                                     BufferUse::AccelerationStructureBuildRead);
         commandBuffer.bufferBarrier(*frame.geometry, BufferUse::ComputeWrite,

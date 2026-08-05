@@ -198,25 +198,11 @@ void VulkanTracingPipeline::init() {
             _nrdDenoiser = std::make_unique<NrdDenoiser>(device, *instance, _extent);
             _nrdDenoiser->init();
 
-            // Nine: output, noise-free, diffuse and specular factors,
-            // denoised diffuse and specular, viewZ, then the two raw channels
-            // used when a transmitting surface's guide ray misses.
-            // Must match the binding list in slang/nrd_composite.slang.
-            constexpr uint32_t kCompositeBindingCount = 9;
-            std::vector<VulkanPipeline::LayoutBinding> compositeBindings;
-            compositeBindings.reserve(kCompositeBindingCount);
-            for (uint32_t i = 0; i < kCompositeBindingCount; ++i) {
-                compositeBindings.push_back({{i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, 1, VK_SHADER_STAGE_COMPUTE_BIT});
-            }
-            VulkanPipeline::Config compositeConfig;
-            compositeConfig.type = VulkanPipeline::Config::Type::Compute;
-            compositeConfig.spirv = _renderer.shaderModule("nrd_composite");
-            compositeConfig.computeEntry = "main";
-            compositeConfig.descriptorSets = {{_renderer.descriptors().uniformLayout()},
-                                              {VK_NULL_HANDLE, std::move(compositeBindings), 2}};
-            compositeConfig.pushConstantSize = 3 * sizeof(uint32_t);
-            _compositePipeline = std::make_unique<VulkanPipeline>(device);
-            _compositePipeline->init(compositeConfig);
+            _compositePipeline = _renderer.makeComputePipeline({"nrd_composite", "main", 2});
+            _compositeBindings = _compositePipeline->resolveBindings(
+                {"outputImage", "inNoiseFree", "inDiffFactor", "inSpecFactor",
+                 "inDenoisedDiffuse", "inDenoisedSpecular", "inViewZ", "inRawDiffuse",
+                 "inRawSpecular"});
         } else {
             warn("NRD instance creation failed; denoising stays unavailable");
         }
@@ -231,19 +217,8 @@ void VulkanTracingPipeline::init() {
         _fsrOutput = std::make_unique<VulkanImage>(device);
         _fsrOutput->initColorAttachment(_extent, Format::R16G16B16A16Sfloat);
 
-        std::vector<VulkanPipeline::LayoutBinding> tonemapBindings;
-        for (uint32_t i = 0; i < 2; ++i) {
-            tonemapBindings.push_back({{i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, 1, VK_SHADER_STAGE_COMPUTE_BIT});
-        }
-        VulkanPipeline::Config tonemapConfig;
-        tonemapConfig.type = VulkanPipeline::Config::Type::Compute;
-        tonemapConfig.spirv = _renderer.shaderModule("pt_tonemap");
-        tonemapConfig.computeEntry = "main";
-        tonemapConfig.descriptorSets = {{_renderer.descriptors().uniformLayout()},
-                                        {VK_NULL_HANDLE, std::move(tonemapBindings), 2}};
-        tonemapConfig.pushConstantSize = 2 * sizeof(uint32_t);
-        _tonemapPipeline = std::make_unique<VulkanPipeline>(device);
-        _tonemapPipeline->init(tonemapConfig);
+        _tonemapPipeline = _renderer.makeComputePipeline({"pt_tonemap", "main", 2});
+        _tonemapBindings = _tonemapPipeline->resolveBindings({"outputImage", "inColor"});
 
         try {
             _fsr = std::make_unique<graphics::FsrUpscaler>(device, _extent);
@@ -337,6 +312,7 @@ bool VulkanTracingPipeline::bakeSkyRoom(ICommandBuffer &commandBuffer,
         globals.cameraPosition = glm::vec4(room.origin, 1.0f);
         std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
         offsets[UniformBlockBindingPoints::globals] = ring.push(globals);
+        ring.setGlobalsOffset(offsets[UniformBlockBindingPoints::globals]);
 
         ClearValue colorClear;
         colorClear.color = {0.0f, 0.0f, 0.0f, 1.0f};
@@ -410,6 +386,7 @@ void VulkanTracingPipeline::deinit() {
     }
 #ifdef R_ENABLE_NRD
     _compositePipeline.reset();
+    _compositeBindings.clear();
     _temporalHistoryValid = false;
     _nrdDenoiser.reset();
     if (_nrdInstance) {
@@ -417,7 +394,6 @@ void VulkanTracingPipeline::deinit() {
         _nrdInstance = nullptr;
     }
 #endif
-    auto &device = _renderer.device();
     _pipeline.reset();
     for (auto &frame : _auxImages) {
         for (auto &image : frame)
@@ -430,6 +406,7 @@ void VulkanTracingPipeline::deinit() {
     _fsrColor.reset();
     _fsrOutput.reset();
     _tonemapPipeline.reset();
+    _tonemapBindings.clear();
 #endif
     _bindlessTextureCapacity = 0;
     _lastBindlessTextureCount = 0;
@@ -686,8 +663,6 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
             // kernel's own write. Debug views keep the kernel's output.
             // History ping-pong: the frame at index i reads what the previous
             // frame (index 1-i) wrote into slot i, and writes slot 1-i.
-            const auto frameIndex = _renderer.frameIndex();
-            const auto compositeSet = _compositePipeline->descriptorSet(1, frameIndex);
             // With FSR the composite hands off linear HDR to the upscaler
             // instead of writing the finished frame; the display transform
             // happens after, in pt_tonemap.
@@ -706,24 +681,17 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
             // Motion is not among them: it existed only for the removed TAA's
             // reprojection. NRD still consumes it directly.
             constexpr uint32_t kCompositeBindings = 9;
-            const std::array<ImageView, kCompositeBindings> compositeImages {{
-                compositeTarget,
-                aux[5]->sampleView(),
-                aux[6]->sampleView(),
-                aux[9]->sampleView(),
-                _nrdDenoiser->denoisedDiffuse().sampleView(),
-                _nrdDenoiser->denoisedSpecular().sampleView(),
-                aux[3]->sampleView(),
-                aux[0]->sampleView(),
-                aux[1]->sampleView(),
+            const std::array<ComputeBinding, kCompositeBindings> compositeBindings {{
+                {_compositeBindings[0], compositeTarget},
+                {_compositeBindings[1], aux[5]->sampleView()},
+                {_compositeBindings[2], aux[6]->sampleView()},
+                {_compositeBindings[3], aux[9]->sampleView()},
+                {_compositeBindings[4], _nrdDenoiser->denoisedDiffuse().sampleView()},
+                {_compositeBindings[5], _nrdDenoiser->denoisedSpecular().sampleView()},
+                {_compositeBindings[6], aux[3]->sampleView()},
+                {_compositeBindings[7], aux[0]->sampleView()},
+                {_compositeBindings[8], aux[1]->sampleView()},
             }};
-            DescriptorWriteBuilder compositeWrites(device.handle());
-            for (uint32_t i = 0; i < kCompositeBindings; ++i) {
-                compositeWrites.writeStorageImage(toDescriptorSet(compositeSet),
-                                                  {i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
-                                                  compositeImages[i]);
-            }
-            compositeWrites.apply();
             struct CompositePush {
                 uint32_t tonemap;
                 float exposure;
@@ -731,16 +699,13 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
             } compositePush {static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)),
                              std::max(0.01f, _options.ptExposure),
                              fsrActive ? 1u : 0u};
-            commandBuffer.bindComputePipeline(_compositePipeline->pipeline());
-            commandBuffer.bindComputeDescriptorSet(_compositePipeline->pipelineLayout(), 0,
-                                                   toDescriptorSet(uniformSet), offsets.data(),
-                                                   static_cast<uint32_t>(offsets.size()));
-            commandBuffer.bindComputeDescriptorSet(_compositePipeline->pipelineLayout(), 1,
-                                                   toDescriptorSet(compositeSet), nullptr, 0);
-            commandBuffer.pushComputeConstants(_compositePipeline->pipelineLayout(),
-                                               &compositePush, sizeof(compositePush));
-            commandBuffer.dispatch({static_cast<uint32_t>((_extent.x + 7) / 8),
-                                    static_cast<uint32_t>((_extent.y + 7) / 8), 1});
+            commandBuffer.dispatch(*_compositePipeline,
+                                   {static_cast<uint32_t>((_extent.x + 7) / 8),
+                                    static_cast<uint32_t>((_extent.y + 7) / 8), 1},
+                                   {compositeBindings.data(),
+                                    static_cast<uint32_t>(compositeBindings.size())},
+                                   nullptr,
+                                   &compositePush, sizeof(compositePush));
             _temporalHistoryValid = true;
 #ifdef R_ENABLE_FSR
             if (fsrActive) {
@@ -783,32 +748,22 @@ TracingStats VulkanTracingPipeline::render(const TracingPipelineInput &input) {
                 commandBuffer.imageBarrier(*_fsrOutput, ImageUse::ComputeStore,
                                            ImageUse::ComputeStorageRead);
 
-                const auto tonemapSet = _tonemapPipeline->descriptorSet(1, frameIndex);
-                const std::array<ImageView, 2> tonemapImages {{
-                    output.sampleView(), _fsrOutput->sampleView(),
+                const std::array<ComputeBinding, 2> tonemapBindings {{
+                    {_tonemapBindings[0], output.sampleView()},
+                    {_tonemapBindings[1], _fsrOutput->sampleView()},
                 }};
-                DescriptorWriteBuilder tonemapWrites(device.handle());
-                for (uint32_t i = 0; i < 2; ++i) {
-                    tonemapWrites.writeStorageImage(toDescriptorSet(tonemapSet),
-                                                    {i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
-                                                    tonemapImages[i]);
-                }
-                tonemapWrites.apply();
                 struct TonemapPush {
                     uint32_t tonemap;
                     float exposure;
                 } tonemapPush {static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)),
                                std::max(0.01f, _options.ptExposure)};
-                commandBuffer.bindComputePipeline(_tonemapPipeline->pipeline());
-                commandBuffer.bindComputeDescriptorSet(_tonemapPipeline->pipelineLayout(), 0,
-                                                       toDescriptorSet(uniformSet), offsets.data(),
-                                                       static_cast<uint32_t>(offsets.size()));
-                commandBuffer.bindComputeDescriptorSet(_tonemapPipeline->pipelineLayout(), 1,
-                                                       toDescriptorSet(tonemapSet), nullptr, 0);
-                commandBuffer.pushComputeConstants(_tonemapPipeline->pipelineLayout(),
-                                                   &tonemapPush, sizeof(tonemapPush));
-                commandBuffer.dispatch({static_cast<uint32_t>((_extent.x + 7) / 8),
-                                        static_cast<uint32_t>((_extent.y + 7) / 8), 1});
+                commandBuffer.dispatch(*_tonemapPipeline,
+                                       {static_cast<uint32_t>((_extent.x + 7) / 8),
+                                        static_cast<uint32_t>((_extent.y + 7) / 8), 1},
+                                       {tonemapBindings.data(),
+                                        static_cast<uint32_t>(tonemapBindings.size())},
+                                       nullptr,
+                                       &tonemapPush, sizeof(tonemapPush));
             }
 #endif
         }

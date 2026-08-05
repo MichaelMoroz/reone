@@ -45,7 +45,8 @@ public:
 class MockRenderer : public IRenderer, boost::noncopyable {
 public:
     MOCK_METHOD(std::unique_ptr<IBuffer>, makeBuffer, (), (override));
-    MOCK_METHOD(std::unique_ptr<IGpuSceneMergePipeline>, makeGpuSceneMergePipeline, (), (override));
+    MOCK_METHOD(std::unique_ptr<IComputePipeline>, makeComputePipeline,
+                (const ComputePipelineDesc &), (override));
     MOCK_METHOD(void, prepareMesh, (const Mesh &), (override));
     MOCK_METHOD(uint64_t, resourceGeneration, (), (const override));
     MOCK_METHOD(void, init, (), (override));

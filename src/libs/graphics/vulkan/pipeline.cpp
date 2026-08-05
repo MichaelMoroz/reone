@@ -19,12 +19,35 @@
 
 #include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/commandbuffer.h"
+#include "reone/graphics/vulkan/descriptors.h"
+#include "reone/graphics/vulkan/uniformring.h"
 
 #include "reone/graphics/vulkan/device.h"
+
+#include "reone/graphics/uniforms.h"
+
+#include <array>
 
 namespace reone {
 
 namespace graphics {
+
+namespace {
+
+const char *resourceKindName(ShaderResourceKind kind) {
+    switch (kind) {
+    case ShaderResourceKind::SampledImage: return "sampled image";
+    case ShaderResourceKind::CombinedImageSampler: return "combined image sampler";
+    case ShaderResourceKind::StorageImage: return "storage image";
+    case ShaderResourceKind::StorageBuffer: return "storage buffer";
+    case ShaderResourceKind::UniformBuffer: return "uniform buffer";
+    case ShaderResourceKind::Sampler: return "sampler";
+    case ShaderResourceKind::AccelerationStructure: return "acceleration structure";
+    }
+    return "unknown";
+}
+
+} // namespace
 
 void VulkanPipeline::init(const Config &config) {
     deinit();
@@ -38,8 +61,20 @@ void VulkanPipeline::init(const Config &config) {
             _setLayouts.push_back(set.layout);
             continue;
         }
-        if (set.bindings.empty() || set.copies == 0)
-            throw std::invalid_argument("Vulkan: owned descriptor layout needs bindings and copies");
+        if (set.bindings.empty()) {
+            if (set.copies != 0)
+                throw std::invalid_argument("Vulkan: empty descriptor layout owns no sets");
+            VkDescriptorSetLayoutCreateInfo layoutInfo {
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            VkDescriptorSetLayout layout {VK_NULL_HANDLE};
+            if (vkCreateDescriptorSetLayout(_device.handle(), &layoutInfo, nullptr, &layout) != VK_SUCCESS)
+                throw std::runtime_error("Vulkan: empty descriptor layout creation failed");
+            _setLayouts.push_back(layout);
+            _ownedSets.push_back({layout});
+            continue;
+        }
+        if (set.copies == 0)
+            throw std::invalid_argument("Vulkan: owned descriptor layout needs copies");
         std::vector<VkDescriptorSetLayoutBinding> bindings;
         std::vector<VkDescriptorBindingFlags> bindingFlags;
         bindings.reserve(set.bindings.size());
@@ -366,41 +401,220 @@ VkDescriptorSet VulkanPipeline::descriptorSet(uint32_t set, uint32_t copy) const
     return _sets[set][copy];
 }
 
-void VulkanPipeline::merge(ICommandBuffer &commandBuffer, const GpuSceneMerge &merge) {
+VulkanComputePipeline::VulkanComputePipeline(
+    VulkanDevice &device, VulkanDescriptors &descriptors, VulkanUniformRing &uniformRing,
+    const ComputePipelineDesc &desc, std::vector<uint32_t> spirv,
+    ShaderReflection reflection) :
+    _device(device), _descriptors(descriptors), _uniformRing(uniformRing), _desc(desc), _spirv(std::move(spirv)),
+    _bindings(std::move(reflection.bindings)),
+    _pushConstantSize(reflection.pushConstantSize), _pipeline(device) {}
+
+VulkanComputePipeline &toVulkanComputePipeline(IComputePipeline &pipeline) {
+    auto *result = dynamic_cast<VulkanComputePipeline *>(&pipeline);
+    if (!result)
+        throw std::invalid_argument("Compute pipeline is not implemented by Vulkan");
+    return *result;
+}
+
+void VulkanComputePipeline::init() {
+    uint32_t maxSet = 0;
+    for (const auto &binding : _bindings)
+        maxSet = std::max(maxSet, binding.set);
+    std::vector<VulkanPipeline::DescriptorSet> sets(maxSet + 1);
+    std::vector<ShaderBindingDescription> dispatchBindings;
+    dispatchBindings.reserve(_bindings.size());
+    for (const auto &binding : _bindings) {
+        if (binding.kind == ShaderResourceKind::UniformBuffer) {
+            if (binding.set != VulkanDescriptors::kUniformSet ||
+                binding.binding >= VulkanDescriptors::kNumUniformBlocks || binding.count != 1)
+                throw std::runtime_error("Vulkan: compute shader '" + _desc.shader +
+                                         "' has a non-frame uniform binding '" + binding.name + "'");
+            if (!sets[binding.set].bindings.empty()) {
+                std::string occupants;
+                for (const auto &other : dispatchBindings)
+                    if (other.set == binding.set)
+                        occupants += " '" + other.name + "'@" + std::to_string(other.binding);
+                throw std::runtime_error("Vulkan: compute shader '" + _desc.shader +
+                                         "' mixes frame uniforms and resources in descriptor set " +
+                                         std::to_string(binding.set) + "; uniform '" + binding.name +
+                                         "' arrived after:" + occupants);
+            }
+            if (_frameUniformSet && *_frameUniformSet != binding.set)
+                throw std::runtime_error("Vulkan: compute shader '" + _desc.shader +
+                                         "' spreads frame uniforms across descriptor sets");
+            _frameUniformSet = binding.set;
+            continue;
+        }
+        if (_frameUniformSet && binding.set == *_frameUniformSet)
+            throw std::runtime_error("Vulkan: compute shader '" + _desc.shader +
+                                     "' mixes frame uniforms and resources in descriptor set " +
+                                     std::to_string(binding.set) + ": '" + binding.name +
+                                     "' (kind " + std::to_string(static_cast<int>(binding.kind)) +
+                                     ", binding " + std::to_string(binding.binding) + ")");
+        VkDescriptorType descriptorType;
+        switch (binding.kind) {
+        case ShaderResourceKind::StorageImage:
+            descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            break;
+        case ShaderResourceKind::StorageBuffer:
+            descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            break;
+        default:
+            throw std::runtime_error("Vulkan: unsupported compute binding '" + binding.name +
+                                     "' in shader '" + _desc.shader + "': " +
+                                     resourceKindName(binding.kind));
+        }
+        sets[binding.set].bindings.push_back({{binding.binding, descriptorType}, binding.count,
+                                               VK_SHADER_STAGE_COMPUTE_BIT});
+        sets[binding.set].copies = _desc.descriptorSetCopies;
+        dispatchBindings.push_back(binding);
+    }
+    if (_frameUniformSet)
+        sets[*_frameUniformSet].layout = _descriptors.uniformLayout();
+    _bindings = std::move(dispatchBindings);
+    VulkanPipeline::Config config;
+    config.type = VulkanPipeline::Config::Type::Compute;
+    config.spirv = std::move(_spirv);
+    config.computeEntry = _desc.entry;
+    config.descriptorSets = std::move(sets);
+    config.pushConstantSize = _pushConstantSize;
+    _pipeline.init(config);
+    _resolvedBindings.resize(_bindings.size());
+}
+
+std::vector<ComputeResourceSlot> VulkanComputePipeline::resolveBindings(
+    std::initializer_list<const char *> names) const {
+    std::vector<ComputeResourceSlot> result;
+    result.reserve(names.size());
+    for (const auto *name : names) {
+        auto found = std::find_if(_bindings.begin(), _bindings.end(), [name](const auto &binding) {
+            return binding.name == name;
+        });
+        if (found == _bindings.end())
+            throw std::invalid_argument("Compute shader '" + _desc.shader +
+                                        "' does not declare binding '" + name + "'");
+        const auto slot = static_cast<uint32_t>(std::distance(_bindings.begin(), found));
+        if (std::find_if(result.begin(), result.end(), [slot](const auto candidate) {
+                return candidate.value == slot;
+            }) != result.end())
+            throw std::invalid_argument("Compute shader '" + _desc.shader +
+                                        "' resolves binding '" + name + "' more than once");
+        result.push_back({slot});
+    }
+    return result;
+}
+
+void VulkanComputePipeline::dispatch(VkCommandBuffer commandBuffer, uint32_t frameIndex,
+                                     glm::uvec3 groups,
+                                     const ComputeBindingSet &bindings,
+                                     const ComputeBindingSet *overrides,
+                                     const void *pushConstants,
+                                     uint32_t pushConstantSize) {
     DescriptorWriteBuilder writes(_device.handle());
-    const auto set = descriptorSet(0, merge.frameIndex);
-    for (uint32_t i = 0; i < merge.bufferCount; ++i) {
-        const auto &buffer = merge.buffers[i];
-        VkDescriptorBufferInfo info {toVulkanBuffer(*buffer.buffer).handle(), buffer.offset,
-                                     buffer.size};
-        writes.writeBuffer(set, {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, info);
+    std::fill(_resolvedBindings.begin(), _resolvedBindings.end(), nullptr);
+    const auto accept = [this](const ComputeBindingSet &source,
+                                          bool replace) {
+        if (source.count != 0 && !source.bindings)
+            throw std::invalid_argument("Compute shader '" + _desc.shader +
+                                        "' received an empty binding scope");
+        for (uint32_t i = 0; i < source.count; ++i) {
+            const auto &binding = source.bindings[i];
+            if (binding.slot.value >= _bindings.size())
+                throw std::invalid_argument("Compute shader '" + _desc.shader +
+                                            "' received an unknown resolved binding");
+            const auto slot = binding.slot.value;
+            if (_resolvedBindings[slot] && !replace)
+                throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
+                                            _bindings[slot].name + "' was supplied twice in its scope");
+            _resolvedBindings[slot] = &binding;
+        }
+    };
+    accept(bindings, false);
+    if (overrides) {
+        accept(*overrides, true);
+        for (uint32_t i = 0; i < overrides->count; ++i) {
+            const auto slot = overrides->bindings[i].slot.value;
+            for (uint32_t earlier = 0; earlier < i; ++earlier) {
+                if (overrides->bindings[earlier].slot.value == slot)
+                    throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
+                                                _bindings[slot].name + "' was overridden twice");
+            }
+        }
+    }
+    for (size_t bindingIndex = 0; bindingIndex < _bindings.size(); ++bindingIndex) {
+        const auto &binding = _bindings[bindingIndex];
+        const auto *source = _resolvedBindings[bindingIndex];
+        if (!source)
+            throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
+                                        binding.name + "' (set " + std::to_string(binding.set) +
+                                        ", binding " + std::to_string(binding.binding) +
+                                        ") is not satisfied");
+        if (source->count != binding.count)
+            throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
+                                        binding.name + "' needs " + std::to_string(binding.count) +
+                                        " resources, got " + std::to_string(source->count));
+        const auto set = _pipeline.descriptorSet(binding.set, frameIndex);
+        const DescriptorBinding target {binding.binding,
+            binding.kind == ShaderResourceKind::StorageImage ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                                                              : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+        for (uint32_t i = 0; i < source->count; ++i) {
+            if (binding.kind == ShaderResourceKind::StorageImage) {
+                if (source->type != ComputeBinding::Type::Image)
+                    throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
+                                                binding.name + "' requires images");
+                writes.writeStorageImage(toDescriptorSet(set), target,
+                                         source->imageArray ? source->imageArray[i] : source->image, i);
+            } else if (binding.kind == ShaderResourceKind::StorageBuffer) {
+                if (source->type != ComputeBinding::Type::Buffer)
+                    throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
+                                                binding.name + "' requires buffers");
+                const auto &view = source->bufferArray ? source->bufferArray[i] : source->buffer;
+                if (!view.buffer)
+                    throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
+                                                binding.name + "' has no buffer");
+                writes.writeBuffer(set, target, {toVulkanBuffer(*view.buffer).handle(), view.offset,
+                                                  view.size}, i);
+            } else {
+                throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
+                                            binding.name + "' has an unsupported resource kind");
+            }
+        }
     }
     writes.apply();
-    struct PushConstants {
-        uint32_t objectCount;
-        uint32_t opaqueObjectCount;
-        uint32_t vertexCount;
-        uint32_t triangleCount;
-        uint32_t opaqueTriangleCount;
-        uint32_t pad[3] {};
-        glm::vec4 cameraPosition {0.0f};
-    } constants;
-    static_assert(sizeof(PushConstants) == 48);
-    constants.objectCount = merge.objectCount;
-    constants.opaqueObjectCount = merge.opaqueObjectCount;
-    constants.vertexCount = merge.vertexCount;
-    constants.triangleCount = merge.triangleCount;
-    constants.opaqueTriangleCount = merge.opaqueTriangleCount;
-    constants.cameraPosition = merge.cameraPosition;
-    const auto &nativeCommandBuffer = toVulkanCommandBuffer(commandBuffer);
-    vkCmdBindPipeline(nativeCommandBuffer.handle(), VK_PIPELINE_BIND_POINT_COMPUTE, _pipeline);
-    vkCmdBindDescriptorSets(nativeCommandBuffer.handle(), VK_PIPELINE_BIND_POINT_COMPUTE, _layout,
-                            0, 1, &set, 0, nullptr);
-    vkCmdPushConstants(nativeCommandBuffer.handle(), _layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                       sizeof(constants), &constants);
-    const auto threads = std::max(constants.vertexCount, constants.triangleCount);
-    if (threads)
-        vkCmdDispatch(nativeCommandBuffer.handle(), (threads + 63) / 64, 1, 1);
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipeline.handle());
+    if (_frameUniformSet) {
+        std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};
+        offsets[UniformBlockBindingPoints::globals] = _uniformRing.globalsOffset();
+        const auto uniformSet = _descriptors.uniformSet(frameIndex);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipeline.layout(),
+                                *_frameUniformSet, 1, &uniformSet,
+                                static_cast<uint32_t>(offsets.size()), offsets.data());
+    }
+    uint32_t maxSet = 0;
+    for (const auto &binding : _bindings)
+        maxSet = std::max(maxSet, binding.set);
+    for (uint32_t setIndex = 0; setIndex <= maxSet; ++setIndex) {
+        const auto &setBindings = std::find_if(_bindings.begin(), _bindings.end(), [setIndex](const auto &binding) {
+            return binding.set == setIndex;
+        });
+        if (setBindings == _bindings.end())
+            continue;
+        const auto set = _pipeline.descriptorSet(setIndex, frameIndex);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipeline.layout(),
+                                setIndex, 1, &set, 0, nullptr);
+    }
+    if (pushConstantSize != _pushConstantSize)
+        throw std::invalid_argument("Compute shader '" + _desc.shader +
+                                    "' push constants do not match reflected size " +
+                                    std::to_string(_pushConstantSize));
+    if (pushConstantSize != 0) {
+        if (!pushConstants)
+            throw std::invalid_argument("Compute shader '" + _desc.shader +
+                                        "' push constants are null");
+        vkCmdPushConstants(commandBuffer, _pipeline.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           pushConstantSize, pushConstants);
+    }
+    vkCmdDispatch(commandBuffer, groups.x, groups.y, groups.z);
 }
 
 } // namespace graphics

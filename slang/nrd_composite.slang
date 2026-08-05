@@ -21,8 +21,6 @@
 // pt_tonemap applies the display transform afterwards, which is where it
 // belongs when an upscaler sits in between.
 
-import uniforms;
-
 struct PushConstants {
     uint tonemap;  /**< 0 none, 1 ACES - mirrors the trace kernel's dial */
     float exposure;

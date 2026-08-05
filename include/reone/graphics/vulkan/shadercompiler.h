@@ -22,6 +22,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "reone/graphics/rhi/computepipeline.h"
+
 namespace reone::graphics {
 
 /**
@@ -46,6 +48,8 @@ public:
 
     /** Returns a valid last-known-good module or throws on its first failure. */
     const std::vector<uint32_t> &module(const std::string &name);
+    /** Descriptor bindings reflected from one linked Slang module. */
+    ShaderReflection reflection(const std::string &name) const;
     /** Compile every engine module now. False means at least one old module was retained. */
     bool recompileAll();
     /** Drops memory state so the next module request rechecks the disk cache. */

@@ -66,6 +66,8 @@ public:
      * at. The offset is aligned to the device's minimum uniform alignment.
      */
     uint32_t push(const void *data, uint64_t size) override;
+    void setGlobalsOffset(uint32_t offset) override { _globalsOffset = offset; }
+    uint32_t globalsOffset() const override { return _globalsOffset; }
 
     /** The frame beginFrame was last called with. */
     int frame() const override { return _frame; }
@@ -83,6 +85,7 @@ private:
     VkDeviceSize _capacity {0};
     VkDeviceSize _offset {0};
     VkDeviceSize _peak {0};
+    uint32_t _globalsOffset {0};
     int _frame {0};
 };
 

@@ -337,7 +337,7 @@ void VulkanRenderer::beginFrame(glm::ivec2 extent) {
     VkCommandBufferBeginInfo beginInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo), "vkBeginCommandBuffer");
-    frame.recordingCommandBuffer.begin(frame.commandBuffer, &_device);
+    frame.recordingCommandBuffer.begin(frame.commandBuffer, &_device, _frameIndex);
 
     auto image = _swapchain.image(_imageIndex);
     transitionImage(frame.commandBuffer, image,
@@ -513,7 +513,7 @@ void VulkanRenderer::flushFrame() {
     VkCommandBufferBeginInfo beginInfo {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo), "vkBeginCommandBuffer");
-    frame.recordingCommandBuffer.begin(frame.commandBuffer, &_device);
+    frame.recordingCommandBuffer.begin(frame.commandBuffer, &_device, _frameIndex);
     _imageAvailableConsumed = true;
 }
 
@@ -594,7 +594,7 @@ std::unique_ptr<IBuffer> VulkanRenderer::makeBuffer() {
 void VulkanRenderer::immediateSubmit(const std::function<void(ICommandBuffer &)> &block) {
     _device.immediateSubmit([this, &block](VkCommandBuffer native) {
         VulkanCommandBuffer commandBuffer;
-        commandBuffer.begin(native, &_device);
+        commandBuffer.begin(native, &_device, 0);
         block(commandBuffer);
         commandBuffer.end();
     });
@@ -610,29 +610,15 @@ void VulkanRenderer::removePreviewTexture(void *texture) {
     ImGui_ImplVulkan_RemoveTexture(static_cast<VkDescriptorSet>(texture));
 }
 
-std::unique_ptr<IGpuSceneMergePipeline> VulkanRenderer::makeGpuSceneMergePipeline() {
-    constexpr uint32_t kStorageBufferCount = 11;
-    constexpr uint32_t kDescriptorSetCopies = 2;
-    std::vector<VulkanPipeline::LayoutBinding> bindings;
-    bindings.reserve(kStorageBufferCount);
-    for (uint32_t i = 0; i < kStorageBufferCount; ++i) {
-        bindings.push_back({{i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, 1,
-                            VK_SHADER_STAGE_COMPUTE_BIT});
-    }
-    VkPushConstantRange pushConstants {};
-    pushConstants.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pushConstants.size = 48;
-    VulkanPipeline::Config nativeConfig;
-    nativeConfig.type = VulkanPipeline::Config::Type::Compute;
-    nativeConfig.spirv = shaderModule("skin");
-    nativeConfig.computeEntry = "main";
-    nativeConfig.descriptorSets = {{VK_NULL_HANDLE, std::move(bindings),
-                                    kDescriptorSetCopies}};
-    nativeConfig.pushConstants = {pushConstants};
-    auto pipeline = std::make_unique<VulkanPipeline>(_device);
-    pipeline->init(nativeConfig);
+std::unique_ptr<IComputePipeline> VulkanRenderer::makeComputePipeline(
+    const ComputePipelineDesc &desc) {
+    auto pipeline = std::make_unique<VulkanComputePipeline>(
+        _device, _descriptors, _uniformRing, desc, shaderModule(desc.shader),
+        _shaderCompiler.reflection(desc.shader));
+    pipeline->init();
     _device.setObjectName(VK_OBJECT_TYPE_PIPELINE,
-                          reinterpret_cast<uint64_t>(pipeline->handle()), "gpu-scene:merge");
+                          reinterpret_cast<uint64_t>(toVulkanComputePipeline(*pipeline).handle()),
+                          "compute:" + desc.shader);
     return pipeline;
 }
 

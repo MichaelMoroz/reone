@@ -37,11 +37,13 @@ void VulkanUniformRing::deinit() {
     _arenas.clear();
     _capacity = 0;
     _offset = 0;
+    _globalsOffset = 0;
 }
 
 void VulkanUniformRing::beginFrame(int frame) {
     _frame = frame;
     _offset = 0;
+    _globalsOffset = 0;
 }
 
 uint32_t VulkanUniformRing::push(const void *data, uint64_t size) {

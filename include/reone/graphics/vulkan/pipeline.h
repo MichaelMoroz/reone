@@ -19,10 +19,11 @@
 
 #include <volk.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "reone/graphics/rendering/gpuscenecontext.h"
+#include "reone/graphics/rhi/computepipeline.h"
 #include "reone/graphics/types.h"
 #include "reone/graphics/vulkan/descriptorwrites.h"
 #include "reone/graphics/vulkan/rhi.h"
@@ -32,8 +33,10 @@ namespace reone {
 namespace graphics {
 
 class VulkanDevice;
+class VulkanDescriptors;
+class VulkanUniformRing;
 
-class VulkanPipeline : public IGpuSceneMergePipeline, boost::noncopyable {
+class VulkanPipeline : boost::noncopyable {
 public:
     struct LayoutBinding {
         DescriptorBinding binding;
@@ -97,8 +100,6 @@ public:
     ::reone::graphics::DescriptorSet descriptorSetHandle(uint32_t set, uint32_t copy) const {
         return toDescriptorSet(descriptorSet(set, copy));
     }
-    void merge(ICommandBuffer &commandBuffer, const GpuSceneMerge &merge) override;
-
 private:
     VulkanDevice &_device;
 
@@ -113,6 +114,41 @@ private:
     std::vector<OwnedSet> _ownedSets;
     std::vector<std::vector<VkDescriptorSet>> _sets;
 };
+
+/** Vulkan implementation of a Slang-reflected compute pipeline. */
+class VulkanComputePipeline : public IComputePipeline, boost::noncopyable {
+public:
+    VulkanComputePipeline(VulkanDevice &device, VulkanDescriptors &descriptors,
+                          VulkanUniformRing &uniformRing,
+                          const ComputePipelineDesc &desc,
+                          std::vector<uint32_t> spirv, ShaderReflection reflection);
+
+    void init();
+    std::vector<ComputeResourceSlot> resolveBindings(
+        std::initializer_list<const char *> names) const override;
+    const std::vector<ShaderBindingDescription> &bindings() const override {
+        return _bindings;
+    }
+    VkPipeline handle() const { return _pipeline.handle(); }
+    void dispatch(VkCommandBuffer commandBuffer, uint32_t frameIndex, glm::uvec3 groups,
+                  const ComputeBindingSet &bindings,
+                  const ComputeBindingSet *overrides,
+                  const void *pushConstants, uint32_t pushConstantSize);
+
+private:
+    VulkanDevice &_device;
+    VulkanDescriptors &_descriptors;
+    VulkanUniformRing &_uniformRing;
+    ComputePipelineDesc _desc;
+    std::vector<uint32_t> _spirv;
+    std::vector<ShaderBindingDescription> _bindings;
+    std::vector<const ComputeBinding *> _resolvedBindings;
+    std::optional<uint32_t> _frameUniformSet;
+    uint32_t _pushConstantSize {0};
+    VulkanPipeline _pipeline;
+};
+
+VulkanComputePipeline &toVulkanComputePipeline(IComputePipeline &pipeline);
 
 } // namespace graphics
 

@@ -32,6 +32,7 @@ namespace graphics {
 
 class Texture;
 class ICommandBuffer;
+class IComputePipeline;
 class IDescriptors;
 class IImage;
 class I2DRenderer;
@@ -122,6 +123,10 @@ public:
 
     /** The screen-space batcher used while the renderer owns the 2D scope. */
     virtual I2DRenderer &renderer2d() = 0;
+
+    /** Compile a compute pipeline whose descriptor layout comes from Slang. */
+    virtual std::unique_ptr<IComputePipeline> makeComputePipeline(
+        const ComputePipelineDesc &desc) = 0;
 
     /** The frame slot currently being recorded. */
     virtual int frameIndex() const = 0;

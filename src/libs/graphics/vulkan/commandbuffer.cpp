@@ -21,6 +21,7 @@
 #include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/tracingstructure.h"
+#include "reone/graphics/vulkan/pipeline.h"
 
 #include <array>
 
@@ -119,11 +120,6 @@ void VulkanCommandBuffer::bindPipeline(Pipeline pipeline) {
                       toVulkanPipeline(pipeline));
 }
 
-void VulkanCommandBuffer::bindComputePipeline(Pipeline pipeline) {
-    vkCmdBindPipeline(_commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                      toVulkanPipeline(pipeline));
-}
-
 void VulkanCommandBuffer::bindRayTracingPipeline(Pipeline pipeline) {
     vkCmdBindPipeline(_commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
                       toVulkanPipeline(pipeline));
@@ -135,16 +131,6 @@ void VulkanCommandBuffer::bindDescriptorSet(PipelineLayout layout, uint32_t inde
                                              uint32_t dynamicOffsetCount) {
     auto nativeSet = toVulkanDescriptorSet(set);
     vkCmdBindDescriptorSets(_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            toVulkanPipelineLayout(layout), index, 1, &nativeSet,
-                            dynamicOffsetCount, dynamicOffsets);
-}
-
-void VulkanCommandBuffer::bindComputeDescriptorSet(PipelineLayout layout, uint32_t index,
-                                                    DescriptorSet set,
-                                                    const uint32_t *dynamicOffsets,
-                                                    uint32_t dynamicOffsetCount) {
-    auto nativeSet = toVulkanDescriptorSet(set);
-    vkCmdBindDescriptorSets(_commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                             toVulkanPipelineLayout(layout), index, 1, &nativeSet,
                             dynamicOffsetCount, dynamicOffsets);
 }
@@ -240,20 +226,19 @@ void VulkanCommandBuffer::pushFragmentConstants(PipelineLayout layout, const voi
                        VK_SHADER_STAGE_FRAGMENT_BIT, 0, size, data);
 }
 
-void VulkanCommandBuffer::pushComputeConstants(PipelineLayout layout, const void *data,
-                                                uint32_t size) {
-    vkCmdPushConstants(_commandBuffer, toVulkanPipelineLayout(layout),
-                       VK_SHADER_STAGE_COMPUTE_BIT, 0, size, data);
-}
-
 void VulkanCommandBuffer::pushRayTracingConstants(PipelineLayout layout, const void *data,
                                                    uint32_t size) {
     vkCmdPushConstants(_commandBuffer, toVulkanPipelineLayout(layout),
                        VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, size, data);
 }
 
-void VulkanCommandBuffer::dispatch(glm::uvec3 groups) {
-    vkCmdDispatch(_commandBuffer, groups.x, groups.y, groups.z);
+void VulkanCommandBuffer::dispatch(IComputePipeline &shader, glm::uvec3 groups,
+                                   const ComputeBindingSet &bindings,
+                                   const ComputeBindingSet *overrides,
+                                   const void *pushConstants, uint32_t pushConstantSize) {
+    toVulkanComputePipeline(shader).dispatch(_commandBuffer, _frameIndex, groups,
+                                             bindings, overrides,
+                                             pushConstants, pushConstantSize);
 }
 
 void VulkanCommandBuffer::clearColor(IImage &image, glm::vec4 color) {

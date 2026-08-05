@@ -23,6 +23,7 @@
 #include <volk.h>
 
 #include "reone/graphics/rendering/rayquery.h"
+#include "reone/graphics/rhi/computepipeline.h"
 
 namespace reone::graphics {
 
@@ -92,7 +93,8 @@ private:
     void *_nrdInstance {nullptr};
 #ifdef R_ENABLE_NRD
     std::unique_ptr<NrdDenoiser> _nrdDenoiser;
-    std::unique_ptr<VulkanPipeline> _compositePipeline;
+    std::unique_ptr<IComputePipeline> _compositePipeline;
+    std::vector<ComputeResourceSlot> _compositeBindings;
     glm::vec3 _prevCameraPosition {0.0f};
     bool _temporalHistoryValid {false};
 #endif
@@ -100,7 +102,8 @@ private:
     std::unique_ptr<FsrUpscaler> _fsr;
     std::unique_ptr<VulkanImage> _fsrColor;
     std::unique_ptr<VulkanImage> _fsrOutput;
-    std::unique_ptr<VulkanPipeline> _tonemapPipeline;
+    std::unique_ptr<IComputePipeline> _tonemapPipeline;
+    std::vector<ComputeResourceSlot> _tonemapBindings;
 #endif
 
     static constexpr int kNumAuxImages = 14;

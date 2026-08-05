@@ -23,6 +23,7 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/camera.h
     ${GRAPHICS_INCLUDE_DIR}/camera/orthographic.h
     ${GRAPHICS_INCLUDE_DIR}/camera/perspective.h
+    ${GRAPHICS_INCLUDE_DIR}/rhi/computepipeline.h
     ${GRAPHICS_INCLUDE_DIR}/rhi/commandbuffer.h
     ${GRAPHICS_INCLUDE_DIR}/cursor.h
     ${GRAPHICS_INCLUDE_DIR}/di/module.h

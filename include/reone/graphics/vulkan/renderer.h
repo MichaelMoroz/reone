@@ -103,7 +103,8 @@ public:
     void setClearColor(glm::vec4 color) { _clearColor = color; }
 
     std::unique_ptr<IBuffer> makeBuffer() override;
-    std::unique_ptr<IGpuSceneMergePipeline> makeGpuSceneMergePipeline() override;
+    std::unique_ptr<IComputePipeline> makeComputePipeline(
+        const ComputePipelineDesc &desc) override;
     void prepareMesh(const Mesh &mesh) override;
     uint64_t resourceGeneration() const override;
 

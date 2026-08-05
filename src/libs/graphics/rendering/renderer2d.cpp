@@ -60,6 +60,7 @@ void Renderer2D::begin(ICommandBuffer &commandBuffer, glm::ivec2 extent,
                                          0.0f, 100.0f);
     globals.projectionInv = glm::inverse(globals.projection);
     _globalsOffset = _ring.push(globals);
+    _ring.setGlobalsOffset(_globalsOffset);
 }
 
 void Renderer2D::end() {

@@ -493,6 +493,7 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
     // flipped viewport so triangle winding remains unchanged.
     auto globals = _uniforms.globals();
     auto globalsOffset = _renderer.uniformRing().push(globals);
+    _renderer.uniformRing().setGlobalsOffset(globalsOffset);
 
     if (_primaryRayMode) {
         cmd.transitionImage(*_output, ImageLayout::General);
