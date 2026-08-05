@@ -1,5 +1,5 @@
 // Opaque model, PBR pipeline - rewritten against the architecture in
-// doc/vulkan-rt-backend.md section 9, replacing the transliteration in
+// doc/tasks/RECORD.md, replacing the transliteration in
 // pbr_opaque_model.slang.
 //
 // The geometry paths are separate entry points over shared transform functions

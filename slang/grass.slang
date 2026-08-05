@@ -33,7 +33,7 @@ Varyings grassVertex(
     uint startInstance: SV_StartInstanceLocation) {
     // Adding the base back cancels the subtraction Slang lowers SV_InstanceID
     // to. The removed OpenGL SPIR-V path could not read those builtins; see
-    // doc/vulkan-rt-backend.md section 14.4.
+    // doc/tasks/CONVENTIONS.md.
     int instanceIndex = int(instanceId + startInstance);
     Varyings output;
 

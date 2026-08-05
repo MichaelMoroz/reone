@@ -3,7 +3,7 @@
 // references, so this touches all of them. It is never executed, and is not
 // packed into the shader pack.
 //
-// See src/apps/uniformgen and doc/vulkan-rt-backend.md section 4.2.
+// See src/apps/uniformgen and doc/tasks/CONVENTIONS.md.
 
 import uniforms;
 

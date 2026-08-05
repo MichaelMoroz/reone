@@ -132,7 +132,7 @@ struct alignas(16) LocalUniforms {
     glm::vec4 selfIllumColor;
     /**
      * Formerly loose uniforms set by name per draw. Vulkan has no equivalent, so
-     * they live in the block; see doc/vulkan-rt-backend.md section 3.1.
+     * they live in the block; see doc/tasks/CONVENTIONS.md.
      */
     glm::vec4 saberDisplacement;
     int featureMask;

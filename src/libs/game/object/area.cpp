@@ -1208,8 +1208,12 @@ void Area::updateRoomVisibility() {
     // reintroducing selection machinery this project already measured and
     // rejected: removing ~9000 frustum tests per frame changed frame time by
     // nothing, because the tests cost tens of nanoseconds and the GPU does not
-    // need the help at this triangle count (doc/cleanup-plan.md). Raster's cost
+    // need the help at this triangle count (doc/tasks/RECORD.md). Raster's cost
     // is CPU work per draw, which drawing fewer rooms does not address.
+    //
+    // That argument is about performance only. Whether retro should draw rooms
+    // the original hid is a separate, unsettled question — doc/tasks/DECISIONS.md
+    // D1, and doc/tasks/FIDELITY.md row 17.
     for (auto &room : _rooms) {
         room.second->setVisible(true);
     }

@@ -4,7 +4,7 @@
 // This file exists so that Slang's reflection can compute the std140 offsets and
 // a generator can assert them against the C++ structs, replacing a contract that
 // was previously maintained by hand and checked by nothing. See
-// doc/vulkan-rt-backend.md section 4.2.
+// doc/tasks/CONVENTIONS.md.
 //
 // Struct and member names deliberately match the C++ ones rather than the
 // u-prefixed GLSL ones, so the generated assertions need no name mapping. The
@@ -69,7 +69,7 @@ struct LocalUniforms {
     float4 diffuseColor;
     float4 selfIllumColor;
     // Former loose uniforms. Vulkan has no equivalent, so they move into the
-    // block; see doc/vulkan-rt-backend.md section 3.1.
+    // block; see doc/tasks/CONVENTIONS.md.
     float4 saberDisplacement;
     int featureMask;
     int bumpMapFrame;
