@@ -24,6 +24,8 @@ public:
     TracingStructure handle() const override;
     void deinit() override;
     void build(VkCommandBuffer commandBuffer, const SceneTracingGeometry &geometry);
+    void traceRays(VkCommandBuffer commandBuffer, VkPipeline pipeline,
+                   glm::uvec2 extent);
 
 private:
     VulkanDevice &_device;
@@ -31,8 +33,11 @@ private:
     std::unique_ptr<VulkanBuffer> _blasStorage;
     std::unique_ptr<VulkanBuffer> _tlasStorage;
     std::unique_ptr<VulkanBuffer> _scratch;
+    std::unique_ptr<VulkanBuffer> _raygenSbt;
     VkAccelerationStructureKHR _blas {VK_NULL_HANDLE};
     VkAccelerationStructureKHR _tlas {VK_NULL_HANDLE};
+    VkPipeline _raygenPipeline {VK_NULL_HANDLE};
+    VkStridedDeviceAddressRegionKHR _raygenSbtRegion {};
     VkDeviceSize _blasStorageCapacity {0};
     VkDeviceSize _tlasStorageCapacity {0};
     VkDeviceSize _scratchCapacity {0};

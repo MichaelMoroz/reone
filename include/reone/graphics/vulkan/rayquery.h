@@ -63,8 +63,6 @@ private:
     GraphicsOptions &_options;
     glm::ivec2 _extent;
     std::unique_ptr<VulkanPipeline> _pipeline;
-    std::unique_ptr<VulkanBuffer> _raygenSbt;
-    VkStridedDeviceAddressRegionKHR _raygenSbtRegion {};
     std::array<Frame, 2> _frames;
     uint32_t _lastInstances {0};
     uint32_t _lastTriangles {0};

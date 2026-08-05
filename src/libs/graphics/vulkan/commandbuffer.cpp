@@ -190,6 +190,12 @@ void VulkanCommandBuffer::buildSceneTracingStructure(
     toVulkanTracingStructure(structure).build(_commandBuffer, geometry);
 }
 
+void VulkanCommandBuffer::traceRays(Pipeline pipeline, ITracingStructure &structure,
+                                    glm::uvec2 extent) {
+    toVulkanTracingStructure(structure).traceRays(_commandBuffer,
+                                                   toVulkanPipeline(pipeline), extent);
+}
+
 } // namespace graphics
 
 } // namespace reone

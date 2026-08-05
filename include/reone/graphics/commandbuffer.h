@@ -82,6 +82,9 @@ public:
     /** Build this frame's scene-wide tracing structure over merged geometry. */
     virtual void buildSceneTracingStructure(ITracingStructure &structure,
                                             const SceneTracingGeometry &geometry) = 0;
+    /** Trace a ray grid against this frame's scene-wide tracing structure. */
+    virtual void traceRays(Pipeline pipeline, ITracingStructure &structure,
+                           glm::uvec2 extent) = 0;
 };
 
 } // namespace graphics

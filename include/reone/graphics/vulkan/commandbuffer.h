@@ -47,6 +47,8 @@ public:
     void publishMergedScene() override;
     void buildSceneTracingStructure(ITracingStructure &structure,
                                     const SceneTracingGeometry &geometry) override;
+    void traceRays(Pipeline pipeline, ITracingStructure &structure,
+                   glm::uvec2 extent) override;
 
     VkCommandBuffer handle() const { return _commandBuffer; }
 

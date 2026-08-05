@@ -33,7 +33,6 @@
 
 #include <chrono>
 #include <cstddef>
-#include <cstring>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -157,34 +156,6 @@ void VulkanRayQuery::init() {
         auxWrites.apply();
     }
 
-    VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtProperties {
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR};
-    VkPhysicalDeviceProperties2 properties {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-    properties.pNext = &rtProperties;
-    vkGetPhysicalDeviceProperties2(device.physicalDevice(), &properties);
-    const auto alignUp = [](VkDeviceSize value, VkDeviceSize alignment) {
-        return (value + alignment - 1) & ~(alignment - 1);
-    };
-    const VkDeviceSize recordSize = alignUp(rtProperties.shaderGroupHandleSize,
-                                            rtProperties.shaderGroupHandleAlignment);
-    const VkDeviceSize allocationSize = recordSize + rtProperties.shaderGroupBaseAlignment - 1;
-    std::vector<uint8_t> handle(rtProperties.shaderGroupHandleSize);
-    if (vkGetRayTracingShaderGroupHandlesKHR(device.handle(), _pipeline->handle(), 0, 1, handle.size(),
-                                             handle.data()) != VK_SUCCESS) {
-        throw std::runtime_error("Vulkan: raygen shader-group handle query failed");
-    }
-    _raygenSbt = std::make_unique<VulkanBuffer>(device);
-    _raygenSbt->initHostVisible(
-        allocationSize, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
-    const VkDeviceAddress sbtAddress = alignUp(_raygenSbt->deviceAddress(),
-                                               rtProperties.shaderGroupBaseAlignment);
-    const VkDeviceSize sbtOffset = sbtAddress - _raygenSbt->deviceAddress();
-    std::memcpy(static_cast<uint8_t *>(_raygenSbt->mapped()) + sbtOffset, handle.data(),
-                handle.size());
-    _raygenSbtRegion.deviceAddress = sbtAddress;
-    _raygenSbtRegion.stride = recordSize;
-    _raygenSbtRegion.size = recordSize;
     device.setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(_pipeline->handle()), "rayquery:primaryRay");
 
 #ifdef R_ENABLE_NRD
@@ -434,13 +405,11 @@ void VulkanRayQuery::deinit() {
     }
 #endif
     auto &device = _renderer.device();
-    _raygenSbt.reset();
     _pipeline.reset();
     for (auto &frame : _auxImages) {
         for (auto &image : frame)
             image.reset();
     }
-    _raygenSbtRegion = {};
 #ifdef R_ENABLE_FSR
     // Before the device goes: the upscaler owns Vulkan objects of its own, and
     // the two images own VMA allocations that must not outlive the allocator.
@@ -676,11 +645,11 @@ void VulkanRayQuery::render(VkCommandBuffer cmd, uint32_t globalsOffset,
                                   scene.opaqueTriangleCount,
                                   skyBaked ? 1u : 0u};
     vkCmdPushConstants(cmd, _pipeline->layout(), VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, sizeof(constants), &constants);
-    const VkStridedDeviceAddressRegionKHR emptySbt {};
     {
         R_PROFILE_ZONE("VulkanRayQuery::dispatch record");
-        vkCmdTraceRaysKHR(cmd, &_raygenSbtRegion, &emptySbt, &emptySbt, &emptySbt,
-                          static_cast<uint32_t>(_extent.x), static_cast<uint32_t>(_extent.y), 1);
+        _renderer.recordingCommandBuffer().traceRays(
+            toPipeline(_pipeline->handle()), *frame.tracingStructure,
+            {static_cast<uint32_t>(_extent.x), static_cast<uint32_t>(_extent.y)});
     }
 #ifdef R_ENABLE_NRD
     if (_nrdDenoiser) {

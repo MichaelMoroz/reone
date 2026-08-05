@@ -12,6 +12,7 @@
 #include <array>
 #include <cstring>
 #include <limits>
+#include <vector>
 
 namespace reone::graphics {
 namespace {
@@ -59,6 +60,9 @@ TracingStructure VulkanTracingStructure::handle() const {
 
 void VulkanTracingStructure::deinit() {
     _instances.reset();
+    _raygenSbt.reset();
+    _raygenPipeline = VK_NULL_HANDLE;
+    _raygenSbtRegion = {};
     if (_blas) {
         vkDestroyAccelerationStructureKHR(_device.handle(), _blas, nullptr);
         _blas = VK_NULL_HANDLE;
@@ -73,6 +77,44 @@ void VulkanTracingStructure::deinit() {
     _blasStorageCapacity = 0;
     _tlasStorageCapacity = 0;
     _scratchCapacity = 0;
+}
+
+void VulkanTracingStructure::traceRays(VkCommandBuffer commandBuffer, VkPipeline pipeline,
+                                       glm::uvec2 extent) {
+    if (_raygenPipeline != pipeline) {
+        VkPhysicalDeviceRayTracingPipelinePropertiesKHR properties {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR};
+        VkPhysicalDeviceProperties2 deviceProperties {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        deviceProperties.pNext = &properties;
+        vkGetPhysicalDeviceProperties2(_device.physicalDevice(), &deviceProperties);
+        const auto alignUp = [](VkDeviceSize value, VkDeviceSize alignment) {
+            return (value + alignment - 1) & ~(alignment - 1);
+        };
+        const VkDeviceSize recordSize = alignUp(properties.shaderGroupHandleSize,
+                                                properties.shaderGroupHandleAlignment);
+        const VkDeviceSize allocationSize =
+            recordSize + properties.shaderGroupBaseAlignment - 1;
+        std::vector<uint8_t> handle(properties.shaderGroupHandleSize);
+        if (vkGetRayTracingShaderGroupHandlesKHR(_device.handle(), pipeline, 0, 1,
+                                                 handle.size(), handle.data()) != VK_SUCCESS) {
+            throw std::runtime_error("Vulkan: raygen shader-group handle query failed");
+        }
+        _raygenSbt = std::make_unique<VulkanBuffer>(_device);
+        _raygenSbt->initHostVisible(
+            allocationSize, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
+                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+        const VkDeviceAddress address = alignUp(_raygenSbt->deviceAddress(),
+                                                properties.shaderGroupBaseAlignment);
+        const VkDeviceSize offset = address - _raygenSbt->deviceAddress();
+        std::memcpy(static_cast<uint8_t *>(_raygenSbt->mapped()) + offset, handle.data(),
+                    handle.size());
+        _raygenSbtRegion = {address, recordSize, recordSize};
+        _raygenPipeline = pipeline;
+    }
+    const VkStridedDeviceAddressRegionKHR emptySbt {};
+    vkCmdTraceRaysKHR(commandBuffer, &_raygenSbtRegion, &emptySbt, &emptySbt, &emptySbt,
+                      extent.x, extent.y, 1);
 }
 
 void VulkanTracingStructure::build(VkCommandBuffer commandBuffer,
