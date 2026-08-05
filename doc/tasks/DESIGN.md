@@ -1266,6 +1266,43 @@ goal: a second graphics API" above.
 `rg 'Vulkan' src include --glob '!**/vulkan/**'` empty — **this is the stage-3
 gate**; captures byte-identical, since every step here is a move or a rename.
 
+## S5 as built — 2026-08-05
+
+The track is complete. Both gate lines are zero:
+
+    rg 'vk[A-Z]|Vk[A-Z]|vma[A-Z]'       src include --glob '!**/graphics/vulkan/**'
+    rg 'VK_[A-Z0-9_]+|ImGui_ImplVulkan' src include --glob '!**/graphics/vulkan/**'
+
+and no Vulkan **type name** survives outside the backend either. All five
+clients hold zero Vulkan tokens: `GpuScene`, `Renderer2D`, `PBRTextures`,
+`ScenePipeline`, `RayQuery`.
+
+**What the estimate got right and wrong.** Stage 1 predicted ~1,100 lines out
+for ~350 in; actual was 1,495 out for 1,119 in, so the deletion side beat it and
+the addition side ran high. The seven high-level files were expected to fall
+from ~5,000 to ~3,300; instead they left `vulkan/` entirely, which was not the
+plan when the estimate was written.
+
+**Two premises did not survive contact.** Stage 2 was gated on V1c (TRC-020) so
+the frame shape would stop moving; it was built without V1c and nothing moved,
+so that gate was a stability preference rather than a dependency. And the seam
+was expected to be the large part; the measured API surface outside the backend
+was **six sites**, while the client internals were the work.
+
+**The shape that mattered was intent, not translation.** `RayQuery` began with
+27 distinct Vulkan types, 16 of them acceleration-structure machinery. Mirrored
+one-for-one it would have roughly doubled the seam for one client. Expressed as
+what it means — *build a structure over this geometry*, *trace these rays
+against it*, *give me the tracing pipeline I need* — the types stayed inside
+`vulkan/` and the seam did not grow. `gpuscene` is the smaller demonstration:
+four exposed barriers became one `merge()`, and a `VkBufferUsageFlags` bitfield
+became `initHostVisibleStorage(size)`.
+
+**The RHI is 18 parent interfaces** under `include/reone/graphics/`, with
+`Vulkan*` children inside `vulkan/`, which holds 7,457 `.cpp` lines: the RHI,
+two vendor bindings that take native handles by construction (`nrddenoiser`,
+`fsrupscaler`), and the renderer that is the RHI's own face.
+
 ## S6 — deletions the track leaves behind
 
 Trailing cleanup, each unblocked by an earlier step; none worth its own session

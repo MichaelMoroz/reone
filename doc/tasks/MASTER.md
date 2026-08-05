@@ -61,23 +61,23 @@ decisions already taken.
 | STR-011 | S4 — decide what "static" is provable from | open | P1 | S | S4 | — | backlog 9.1; the admission proof, not the authored hint |
 | STR-012 | S4 — static/dynamic partition of merged buffer and material table | open | P1 | L | S4 | STR-004, STR-011 | DESIGN.md; danm14ab 45k of 86k static |
 | STR-013 | S4 — remove the per-element binary search in the merge | open | P3 | S | S4 | STR-012 | backlog 8.12 |
-| STR-014 | S5 stage 1 — a layout-tracking image type | open | P2 | S | S5 | — | DESIGN.md; collapses 5 helpers + ~65 barrier sites |
-| STR-015 | S5 stage 1 — a `RenderPassScope` RAII type | open | P2 | S | S5 | — | DESIGN.md; ~182 preamble lines |
-| STR-016 | S5 stage 1 — a pipeline builder covering compute and RT | open | P2 | S | S5 | — | DESIGN.md |
-| STR-017 | S5 stage 1 — a descriptor-write builder | open | P2 | S | S5 | — | DESIGN.md; ~1,100 lines out for ~350 in |
-| STR-018 | S5 stage 2 — formalise the RHI seam | open | P2 | L | S5 | TRC-020, TOOL-007, STR-014..017 | DESIGN.md; grep gate on `Vk`/`vk`/`vma` outside the RHI |
+| STR-014 | S5 stage 1 — a layout-tracking image type | **done** | P2 | S | S5 | — | `65a9ff7f`; barriers 56→38, 3 latches deleted; DESIGN.md; collapses 5 helpers + ~65 barrier sites |
+| STR-015 | S5 stage 1 — a `RenderPassScope` RAII type | **done** | P2 | S | S5 | — | `65a9ff7f`; 55 sites → 0; DESIGN.md; ~182 preamble lines |
+| STR-016 | S5 stage 1 — a pipeline builder covering compute and RT | **done** | P2 | S | S5 | — | `65a9ff7f`; creation calls 32→18; DESIGN.md |
+| STR-017 | S5 stage 1 — a descriptor-write builder | **done** | P2 | S | S5 | — | `65a9ff7f`; 4 files → 0/0; DESIGN.md; ~1,100 lines out for ~350 in |
+| STR-018 | S5 stage 2 — formalise the RHI seam | **done** | P2 | L | S5 | — | `b1087464`..`eec7c0be`; both gates zero; done without TRC-020, which proved a stability preference not a dependency; DESIGN.md; grep gate on `Vk`/`vk`/`vma` outside the RHI |
 | STR-019 | S6 — delete the legacy per-mesh path | blocked | P3 | M | S6 | TRC-024 | DESIGN.md; last consumer is the runtime sky bake |
 | STR-020 | S6 — delete `Registered*` and the frame-phase surface | blocked | P3 | S | S6 | STR-004 | DESIGN.md |
-| STR-021 | S6 — delete the per-draw texture-set path | blocked | P3 | S | S6 | STR-018 | DESIGN.md |
+| STR-021 | S6 — delete the per-draw texture-set path | blocked | P3 | M | S6 | descriptor indexing | **premise corrected 2026-08-05**: DESIGN.md said this trails "once 2D rides the RHI". 2D now does, and it changed nothing — `acquireTextureSet` has five live callers (`pbrtextures` ×2, `renderer2d`, `scenepipeline`, `tracingpipeline`). Its own comment names the real blocker: it is the placeholder for descriptor indexing, and removing it means one bindless array indexed per draw, which changes how every shader declares its textures. Not a deletion; a feature. |
 | STR-022 | **Room visibility: the VIS graph is gone** | open | P1 | M | none | — | FIDELITY #17; `.vis` parsed and never read; see DECISIONS |
 | STR-023 | Debug geometry returns inside `GpuScene`, in a non-BLAS region | open | P2 | M | none | TRC-020 | backlog 7.8; the per-triangle material id makes `offMaterial` a non-blocker |
 | STR-024 | The `admitted` vs `drawn` distinction has no mechanism under ranges | open | P3 | S | none | — | RECORD.md |
 | STR-025 | Walkmesh geometry deletion is a game-model refactor | open | P3 | M | none | STR-023 | RECORD.md |
 | STR-026 | Frame floor outside the renderer (the ~2 ms update slot) | open | P2 | M | none | STR-001 | backlog 8.8 |
 | STR-027 | In-phase wind: every dangly tree moves identically forever | open | P3 | M | none | STR-007 | RECORD.md; `0.01*abs(sin(_windTime))` along world X |
-| STR-028 | S5 stage 3 — move the five RHI clients out of `vulkan/` | open | P2 | L | S5 | STR-018 | 2026-08-05 RHI sweep; 4,020 lines leave; `vulkan/` 9,398 → 5,378 `.cpp` lines |
-| STR-029 | S5 stage 3 — **no `Vulkan` identifier may appear outside `vulkan/`** | open | P1 | M | S5 | STR-028 | 2026-08-05 RHI sweep; 85 occurrences, 13 type names, incl. `IVulkanSceneCallbacks` and `scene/render/pipeline/vulkan.cpp` |
-| STR-030 | S5 stage 3 — parent class outside, `Vulkan*` child inside | open | P2 | M | S5 | STR-028, STR-029 | 2026-08-05 RHI sweep, revised same day; supersedes the interface-collapse reading |
+| STR-028 | S5 stage 3 — move the five RHI clients out of `vulkan/` | **done** | P2 | L | S5 | — | `06db928e`; 2026-08-05 RHI sweep; 4,020 lines leave; `vulkan/` 9,398 → 5,378 `.cpp` lines |
+| STR-029 | S5 stage 3 — **no `Vulkan` identifier may appear outside `vulkan/`** | **done** | P1 | M | S5 | — | `9c62f8aa`..`eec7c0be`; verified by both gate lines; 2026-08-05 RHI sweep; 85 occurrences, 13 type names, incl. `IVulkanSceneCallbacks` and `scene/render/pipeline/vulkan.cpp` |
+| STR-030 | S5 stage 3 — parent class outside, `Vulkan*` child inside | **done** | P2 | M | S5 | — | 18 parents under `include/reone/graphics/`; 2026-08-05 RHI sweep, revised same day; supersedes the interface-collapse reading |
 
 ## TRC — path tracing
 
