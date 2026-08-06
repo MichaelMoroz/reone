@@ -465,10 +465,21 @@ float4 sceneDrawBlendedFragment(Varyings input, uint primitiveId : SV_PrimitiveI
     // meant. What genuinely changes is that the hardware now interpolates
     // energy instead of encoded values, which is the physically correct blend
     // and is visibly different on a bright surface over a dark one.
-    color = pow(max(color, 0.0), float3(kGamma));
-
-    // Blended surfaces occlude in proportion to coverage; additive ones add
-    // and never occlude, which premultiplied output expresses as alpha zero.
-    return blended ? float4(color * objectAlpha, objectAlpha)
-                   : float4(color * objectAlpha, 0.0);
+    // Blended surfaces occlude in proportion to coverage; additive ones add and
+    // never occlude, which premultiplied output expresses as alpha zero.
+    //
+    // Where the gamma goes differs between them, and it is not a detail. For a
+    // COVERAGE blend the alpha is a fraction of the pixel the surface fills, so
+    // it scales energy and belongs outside: linear(colour) * coverage. For an
+    // ADDITIVE surface the alpha is not coverage at all - it is the
+    // premultiplication this shader just undid, recovered as luma - so
+    // colour * alpha is the authored display texel, and the gamma applies to
+    // that product. Applying it to the colour alone overstates every partially
+    // covered texel by alpha^(1-gamma): sevenfold at alpha 0.2, which is a
+    // saber blade's soft edge, while leaving its saturated core untouched. That
+    // is a glowing outline drawn around every additive sprite.
+    if (blended) {
+        return float4(pow(max(color, 0.0), float3(kGamma)) * objectAlpha, objectAlpha);
+    }
+    return float4(pow(max(color * objectAlpha, 0.0), float3(kGamma)), 0.0);
 }
