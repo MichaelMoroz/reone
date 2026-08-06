@@ -143,7 +143,8 @@ void applyCategoryOverride(InstanceMaterial &material,
 
 void populateMaterialResources(InstanceMaterial &dst,
                                const Material &src,
-                               IRenderer &renderer) {
+                               IRenderer &renderer,
+                               const GraphicsOptions &options) {
     const auto textureAt = [&src](MaterialTextureSlot slot) {
         return src.textures[static_cast<size_t>(slot)];
     };
@@ -155,7 +156,10 @@ void populateMaterialResources(InstanceMaterial &dst,
     const auto *mainTex = textureAt(MaterialTextureSlot::MainTex);
     dst.mainTex = textureId(mainTex);
     dst.normalMap = textureId(textureAt(MaterialTextureSlot::NormalMap));
-    dst.lightmap = textureId(textureAt(MaterialTextureSlot::Lightmap));
+    // The diagnostic lightmaps toggle strips the map at the material record,
+    // so every mode - raster and traced - sees the same lightmap-free scene
+    // and the cross-mode upload-hash equality is preserved within a run.
+    dst.lightmap = options.lightmaps ? textureId(textureAt(MaterialTextureSlot::Lightmap)) : UINT32_MAX;
 
     if (const auto *bumpMap = textureAt(MaterialTextureSlot::BumpMapArray)) {
         dst.bumpMapArray = textureId(bumpMap);
@@ -221,7 +225,7 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
     material.uv1 = mesh.material.uv[1];
     material.uv2 = mesh.material.uv[2];
     material.featureMask = static_cast<uint32_t>(materialFeatureMask(mesh.material));
-    populateMaterialResources(material, mesh.material, _renderer);
+    populateMaterialResources(material, mesh.material, _renderer, _options);
     const uint32_t categoryIndex = mesh.cullRoot
                                        ? static_cast<uint32_t>(mesh.cullRoot->usage())
                                        : 8u;
@@ -343,7 +347,7 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
         kind = AdmissionKind::AdditiveEmissive;
         break;
     }
-    populateMaterialResources(material, procedural.material, _renderer);
+    populateMaterialResources(material, procedural.material, _renderer, _options);
     return {{material, kind, GpuScene::ResidencyClass::Dynamic, nullptr}};
 }
 

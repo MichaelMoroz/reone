@@ -193,6 +193,8 @@ struct GraphicsOptions {
     /** Overrides the ARE's authored ShadowOpacity when >= 0. The retail data
         authors only two values, 50 and 205, so this is the knob for judging
         how that byte should map to a strength. */
+    /** Diagnostic toggle: strip lightmaps from every material record. */
+    bool lightmaps {true};
     float shadowOpacity {-1.0f};
     TextureQuality textureQuality {TextureQuality::High};
     int shadowResolution {2048};

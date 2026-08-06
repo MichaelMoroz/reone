@@ -82,6 +82,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ptexposure", value<float>()->default_value(options->graphics.ptExposure), "path tracing exposure")                   //
         ("ptpointemitterratio", value<float>()->default_value(options->graphics.ptPointEmitterRatio), "path tracing point-light emitter radius, as a fraction of influence radius") //
         ("ptsunangularsize", value<float>()->default_value(options->graphics.ptSunAngularSize), "path tracing sun angular size") //
+        ("lightmaps", value<bool>()->default_value(options->graphics.lightmaps), "apply lightmaps (diagnostic toggle)")        //
         ("ssao", value<bool>()->default_value(options->graphics.ssao), "enable screen-space ambient occlusion")                 //
         ("ssr", value<bool>()->default_value(options->graphics.ssr), "enable screen-space reflections")                         //
         ("fxaa", value<bool>()->default_value(options->graphics.fxaa), "enable anti-aliasing")                                  //
@@ -201,6 +202,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptExposure = std::max(0.05f, vars["ptexposure"].as<float>());
     options->graphics.ptPointEmitterRatio = std::clamp(vars["ptpointemitterratio"].as<float>(), 0.01f, 0.5f);
     options->graphics.ptSunAngularSize = std::max(0.05f, vars["ptsunangularsize"].as<float>());
+    options->graphics.lightmaps = vars["lightmaps"].as<bool>();
     options->graphics.ssao = vars["ssao"].as<bool>();
     options->graphics.ssr = vars["ssr"].as<bool>();
     options->graphics.fxaa = vars["fxaa"].as<bool>();
