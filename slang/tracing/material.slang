@@ -94,6 +94,40 @@ public interface ISurfaceModel {
     public PathSample sampleRay(HitGeometry hit, SurfaceShading shading, float3 view, inout uint rng);
 };
 
+/**
+ * The terminator shift (Hanika, RT Gems II): a ray origin lifted from the flat
+ * triangle onto the smooth surface the vertex normals describe. Low-poly
+ * geometry with aggressively smoothed normals - all of KotOR - otherwise
+ * shadows itself along the terminator in faceted bands, and the alternative, a
+ * larger global ray bias, detaches every contact shadow to fix one artefact.
+ *
+ * The min(0, .) is the CONVEX CLAMP and is not optional: each vertex term
+ * lifts the point only when it lies below that vertex's tangent plane. Without
+ * it a concave patch - normals converging rather than splaying - displaces the
+ * origin INTO the mesh, which is the artefact this exists to prevent, worse.
+ *
+ * It moves an origin and nothing else. The silhouette stays polygonal and the
+ * shading normal still claims a curvature the mesh does not have; this fixes
+ * the self-intersection that claim causes, not the claim.
+ */
+public float3 ptTerminatorShift(float3 position, float3 p0, float3 p1, float3 p2,
+                                uint3 indices, float3 weights) {
+    // A degenerate vertex normal means the mesh carries none worth trusting.
+    if (dot(mergedVertices[indices.x].normal, mergedVertices[indices.x].normal) <= 1e-10) {
+        return position;
+    }
+    float3 n0 = normalize(mergedVertices[indices.x].normal);
+    float3 n1 = normalize(mergedVertices[indices.y].normal);
+    float3 n2 = normalize(mergedVertices[indices.z].normal);
+    float3 u0 = position - p0;
+    float3 u1 = position - p1;
+    float3 u2 = position - p2;
+    u0 -= min(0.0, dot(u0, n0)) * n0;
+    u1 -= min(0.0, dot(u1, n1)) * n1;
+    u2 -= min(0.0, dot(u2, n2)) * n2;
+    return weights.x * (p0 + u0) + weights.y * (p1 + u1) + weights.z * (p2 + u2);
+}
+
 /** Builds the HitGeometry for a committed hit. */
 public HitGeometry ptMakeHitGeometry(TraceHit trace, RayDesc ray, float coneWidth) {
     uint3 indices = trace.indices;
@@ -114,23 +148,7 @@ public HitGeometry ptMakeHitGeometry(TraceHit trace, RayDesc ray, float coneWidt
     if (dot(hit.geometricNormal, rayDirection) > 0.0) hit.geometricNormal = -hit.geometricNormal;
     hit.uv = ptTransformedUV(trace.materialIndex, mergedVertices[indices.x].uv1 * weights.x + mergedVertices[indices.y].uv1 * weights.y + mergedVertices[indices.z].uv1 * weights.z);
     hit.uv2 = mergedVertices[indices.x].uv2 * weights.x + mergedVertices[indices.y].uv2 * weights.y + mergedVertices[indices.z].uv2 * weights.z;
-    // The terminator shift (Hanika, RT Gems II): the shadow-ray origin lifted
-    // onto the smooth surface the vertex normals describe. Low-poly geometry
-    // with aggressively smoothed normals - all of KotOR - otherwise shows the
-    // shadow terminator as faceted bands.
-    hit.shadowOrigin = hit.position;
-    if (dot(mergedVertices[indices.x].normal, mergedVertices[indices.x].normal) > 1e-10) {
-        float3 n0 = normalize(mergedVertices[indices.x].normal);
-        float3 n1 = normalize(mergedVertices[indices.y].normal);
-        float3 n2 = normalize(mergedVertices[indices.z].normal);
-        float3 u0 = hit.position - hit.p0;
-        float3 u1 = hit.position - hit.p1;
-        float3 u2 = hit.position - hit.p2;
-        u0 -= min(0.0, dot(u0, n0)) * n0;
-        u1 -= min(0.0, dot(u1, n1)) * n1;
-        u2 -= min(0.0, dot(u2, n2)) * n2;
-        hit.shadowOrigin = weights.x * (hit.p0 + u0) + weights.y * (hit.p1 + u1) + weights.z * (hit.p2 + u2);
-    }
+    hit.shadowOrigin = ptTerminatorShift(hit.position, hit.p0, hit.p1, hit.p2, indices, weights);
     return hit;
 }
 

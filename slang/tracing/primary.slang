@@ -50,20 +50,6 @@
 //
 //   PREVIOUS WORLD POSITION. The raster pass writes a SCREEN displacement, and
 //   one 2D vector does not determine a 3D one. NRD is owed world-space motion,
-//   so ptPrimaryWorldMotion below adds the one constraint the surface itself
-//   supplies - see there.
-//
-//   VERTEX COLOUR AND UVs. Folded into the stored texel and gone - recoverable
-//   from the triangle and the barycentrics below, but not needed, because the
-//   texel they produced is what the G-buffer already carries. Only one consumer
-//   notices: the flat-paint category override is a lerp toward an authored
-//   colour, and applying it after the vertex colour has already been multiplied
-//   in is not the same expression as before it.
-//
-//   ANY SURFACE THE RASTER PASS SKIPPED. The G-buffer holds opaque and cutout
-//   coverage alone. Additive layers - saber blades, glow planes - are drawn by
-//   the blended pass, which the traced mode does not run, so they are no longer
-//   the primary of any pixel. Rays still collect them at every deeper vertex.
 
 import uniforms;
 import lib.gbuf;
@@ -92,41 +78,6 @@ public struct PrimarySurface {
     public float distance;
 };
 
-/**
- * World-space motion for a surface the G-buffer describes.
- *
- * The stored vector is a screen displacement, and NRD wants a world one. Two
- * equations, three unknowns - so the surface supplies the third: the previous
- * position is taken to lie in the tangent plane through the current one. That
- * makes the answer EXACT for static geometry under any camera motion (the
- * solution is the point itself) and for any motion within the surface plane,
- * and it makes motion ALONG the normal unrepresentable, where it reads as zero.
- *
- * Solved as a 3x3 rather than by inverting the previous view-projection: two
- * rows are the perspective divide written out, the third is the plane.
- */
-float3 ptPrimaryWorldMotion(float3 position, float3 normal, float2 screenMotion) {
-    float4 current = mul(globalUniforms.viewProjection, float4(position, 1.0));
-    if (current.w <= 1e-6) return float3(0.0);
-    // computeMotion stores 0.5 * (current - previous) in NDC.
-    float2 previousNdc = current.xy / current.w - 2.0 * screenMotion;
-    float4x4 previous = globalUniforms.prevViewProjection;
-    float4 rowX = previous[0] - previousNdc.x * previous[3];
-    float4 rowY = previous[1] - previousNdc.y * previous[3];
-    float3 a0 = rowX.xyz;
-    float3 a1 = rowY.xyz;
-    float3 a2 = normal;
-    float3 b = float3(-rowX.w, -rowY.w, dot(normal, position));
-    float3 c0 = cross(a1, a2);
-    float3 c1 = cross(a2, a0);
-    float3 c2 = cross(a0, a1);
-    float determinant = dot(a0, c0);
-    // Degenerate exactly where the tangent plane is edge-on to the previous
-    // camera ray, which is where the reconstruction would be meaningless.
-    if (abs(determinant) < 1e-12) return float3(0.0);
-    float3 previousPosition = float3(dot(b, c0), dot(b, c1), dot(b, c2)) / determinant;
-    return previousPosition - position;
-}
 
 /**
  * Reconstructs the primary surface at one pixel.
@@ -286,7 +237,10 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     // The Hanika terminator shift stays unapplied. It is now recoverable - the
     // triangle and its vertex normals are both here - but it moves shadow-ray
     // origins, which is a separate change from getting the normal right.
-    hit.shadowOrigin = hit.position;
+    // The same shift every traced hit gets, convex clamp included - see
+    // ptTerminatorShift. The G-buffer primary lost it when it lost the
+    // triangle; the triangle is back, so this is back.
+    hit.shadowOrigin = ptTerminatorShift(hit.position, p0, p1, p2, indices, weights);
     // Recoverable from indices and weights; unread, because the G-buffer
     // already carries the texel these would have fetched.
     hit.uv = float2(0.0);
@@ -297,13 +251,18 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     primary.shading = shading;
     primary.worldPosition = world;
     primary.screenMotion = gbufMotion.SampleLevel(uv, 0.0).xy;
-    // The tangent plane the solve closes on is the triangle's own plane, so the
-    // constraint is now exact rather than nearly so; a normal-mapped normal
-    // tilted the plane away from the surface the point actually lies in.
-    primary.motion = shading.terminatesPath
-                         ? float3(0.0)
-                         : ptPrimaryWorldMotion(world, geometricNormal,
-                                                primary.screenMotion);
+    // The previous world position, interpolated from the triangle's own
+    // vertices exactly as a traced hit does it - not inferred. NRD is
+    // configured for world-space motion, and the inference this replaces could
+    // not represent movement along the surface normal at all: it solved two
+    // screen equations plus a tangent-plane constraint, so anything that left
+    // that plane read as zero and the denoiser rejected history it should have
+    // kept. Measured: per-frame instability over a traced sequence nearly
+    // doubled when the primary started inferring this instead of reading it.
+    float3 prevWorld = mergedVertices[indices.x].prevPosition * weights.x +
+                       mergedVertices[indices.y].prevPosition * weights.y +
+                       mergedVertices[indices.z].prevPosition * weights.z;
+    primary.motion = shading.terminatesPath ? float3(0.0) : prevWorld - world;
     primary.distance = distance;
     return primary;
 }
