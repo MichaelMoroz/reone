@@ -289,6 +289,22 @@ void main() {
         // ---- The bounce loop ----
         while (true) {
             float3 view = -path.Direction;
+            // Path regularisation. After the first scatter the lobe is widened
+            // to a floor, which is a deliberate bias and the standard one: a
+            // roughness of 0.2 puts the GGX peak near 200, so a path that
+            // bounces off one glossy surface onto another and then samples the
+            // sun returns a spike two orders of magnitude above its
+            // neighbours. That is a caustic, and an unbiased estimator
+            // converges on it only with sample counts a frame does not have.
+            //
+            // Measured on a sun-only, single-bounce, undenoised frame:
+            // suppressing bounce-vertex specular entirely removed 46 of the 47
+            // spikes above 150 while costing 0.5 of 19.2 luma - the energy is
+            // in the primary highlight, the variance is in the bounces. This
+            // keeps the energy and spends the bias where the variance is.
+            if (scatters > 0u) {
+                shading.roughness = max(shading.roughness, pushConstants.bounceRoughness);
+            }
             PathSample sample = ptSampleRay(hit, shading, view, rng);
             if (sample.terminate) break;
             if (!sample.passThrough) {
@@ -315,9 +331,20 @@ void main() {
                         pathWeight *= sample.demodulatedWeight;
                     }
                 } else {
-                    pathRadiance += pathWeight *
-                                    (nee.diffuse * diffuseMaterialResponse(shading, view) +
-                                     nee.specular);
+                    // The indirect ceiling, when one is set. Blunter than the
+                    // regularisation above - it truncates energy rather than
+                    // widening a lobe - so it is off by default and exists for
+                    // the cases regularisation alone does not settle.
+                    float3 indirect = pathWeight *
+                                      (nee.diffuse * diffuseMaterialResponse(shading, view) +
+                                       nee.specular);
+                    if (pushConstants.indirectClamp > 0.0) {
+                        float peak = max(indirect.r, max(indirect.g, indirect.b));
+                        if (peak > pushConstants.indirectClamp) {
+                            indirect *= pushConstants.indirectClamp / peak;
+                        }
+                    }
+                    pathRadiance += indirect;
                     pathWeight *= sample.weight;
                 }
                 primaryScatter = false;

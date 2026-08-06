@@ -121,6 +121,11 @@ public struct PtPushConstants {
     // The sun is not placed at a physical distance, so its angular radius
     // stays an authored number rather than falling out of a solid angle.
     public float sunAngularRadius;
+    // Path regularisation and its floor; see GraphicsOptions.
+    public float bounceRoughness;
+    public float roughnessFloor;
+    // Zero leaves indirect samples untouched.
+    public float indirectClamp;
     /** Scene-referred exposure applied before the tonemap. */
     public float exposure;
     public uint geometryBase0;

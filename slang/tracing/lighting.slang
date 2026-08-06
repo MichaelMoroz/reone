@@ -142,9 +142,14 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
     float3 toLight = light.position.xyz - hit.position;
     float lightDistance = length(toLight);
     float3 L = toLight / max(lightDistance, 1e-4);
-    // The smooth normal may claim this surface sees the light while the
-    // actual triangle faces away. Trust the geometry.
-    if (dot(L, hit.geometricNormal) <= 0.0) return result;
+    // Deliberately NOT culled against the geometric normal. That test is
+    // binary and the geometric normal is constant across a triangle, so on a
+    // smooth-shaded mesh whole facets fail it while their neighbours pass and
+    // direct light acquires visible triangle edges. What the surface receives
+    // is a shading question - NdotL below answers it continuously - and what
+    // the surface occludes is the shadow ray's answer, traced from an origin
+    // the terminator shift and the offset already lift clear of the facet.
+    if (dot(L, shading.normal) <= 0.0) return result;
     SphereLight sphere = ptSphereLight(light, lightDistance);
     float3 radiance = ptGammaToLinear(light.color.rgb) * light.multiplier;
     radiance *= directional ? pushConstants.sunIntensity
@@ -172,14 +177,21 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
     float D = ptDistributionGGX(NdotH * NdotH, ggxAlpha * ggxAlpha);
     float G = ptGeometrySmith(NdotL, NdotV, geomK);
     float3 F = ptFresnelSchlick(VdotH, F0);
-    float3 spec = (D * G * F) / max(1e-4, 4.0 * NdotL * NdotV);
+    // The BSDF is evaluated for a light direction, not sampled, so its NdotL
+    // cancels against the cosine factor analytically. Forming it numerically -
+    // dividing by 4*NdotL*NdotV and multiplying NdotL back in - is what
+    // produced high-intensity speckle with a single bounce and only the sun:
+    // where the sun grazes, NdotL*NdotV falls under the 1e-4 floor and the
+    // floor stops being a guard and becomes a ten-thousandfold gain on
+    // whichever pixels the cone sample happened to unshadow.
+    float3 spec = (D * G * F) / max(1e-4, 4.0 * NdotV);
     // The primary diffuse channel has no material response; its one shared
     // NRD factor restores the whole lobe after denoising. Raster's dynamic-
     // light specular is meaningful only on the same env-mapped surfaces the
     // tracer gives a specular lobe.
     result.diffuse = radiance * NdotL / kPtPi;
     if (shading.envmapped) {
-        result.specular = spec * radiance * NdotL;
+        result.specular = spec * radiance;
     }
     return result;
 }

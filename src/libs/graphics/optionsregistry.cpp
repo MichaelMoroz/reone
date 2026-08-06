@@ -288,6 +288,15 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(floatOpt("ptpointemitterratio", OptionApply::Live,
                              "point-light emitter radius, as a fraction of influence radius",
                              &GraphicsOptions::ptPointEmitterRatio, 0.01f, 0.5f));
+    descs.push_back(floatOpt("ptbounceroughness", OptionApply::Live,
+                             "roughness floor after the first scatter",
+                             &GraphicsOptions::ptBounceRoughness, 0.0f, 1.0f));
+    descs.push_back(floatOpt("ptroughnessfloor", OptionApply::Live,
+                             "lowest roughness any surface may take",
+                             &GraphicsOptions::ptRoughnessFloor, 0.0f, 1.0f));
+    descs.push_back(floatOpt("ptindirectclamp", OptionApply::Live,
+                             "ceiling on one indirect sample, 0 disables",
+                             &GraphicsOptions::ptIndirectClamp, 0.0f, 64.0f));
     descs.push_back(floatOpt("ptsunangularsize", OptionApply::Live,
                              "path tracing sun angular size, degrees",
                              &GraphicsOptions::ptSunAngularSize, 0.05f, 90.0f));

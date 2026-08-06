@@ -253,7 +253,7 @@ public struct PbrSurface : ISurfaceModel {
         // alpha is only a reflectance control on env-mapped materials, never
         // metalness, and roughness still uses alpha for every material.
         shading.metallic = 0.0;
-        shading.roughness = clamp(shading.alpha, 0.2, 1.0);
+        shading.roughness = clamp(shading.alpha, pushConstants.roughnessFloor, 1.0);
         // Curated per-object operations, then the per-category calibration
         // override - both baked into the material record CPU-side; the
         // shader only evaluates.
@@ -274,7 +274,8 @@ public struct PbrSurface : ISurfaceModel {
         shading.albedo *= color.rgb;
         shading.alpha *= color.a;
         if (material.overrideParams.x >= 0.0) shading.roughness = material.overrideParams.x;
-        shading.roughness = clamp(shading.roughness * material.roughnessScale, 0.2, 1.0);
+        shading.roughness = clamp(shading.roughness * material.roughnessScale,
+                                  pushConstants.roughnessFloor, 1.0);
 
         shading.normal = materialNormal(hit, hit.materialIndex);
         shading.envmapped = (material.featureMask & uint(kFeatureEnvMap)) != 0;
@@ -326,10 +327,17 @@ public struct PbrSurface : ISurfaceModel {
                                         ? clamp(luminanceOf(F), 1e-3, 1.0 - 1e-3)
                                         : 0.0;
         if (shading.envmapped && ptRandom01(rng) < specularProbability) {
-            float3 half = ptGgxHalfVector(shading.normal, shading.roughness,
-                                          float2(ptRandom01(rng), ptRandom01(rng)));
+            float3 half = ptGgxVisibleHalfVector(shading.normal, view, shading.roughness,
+                                                 float2(ptRandom01(rng), ptRandom01(rng)));
             sample.direction = normalize(reflect(-view, half));
-            sample.weight = F / specularProbability;
+            // Visible-normal sampling leaves F * G2/G1, and with the separable
+            // Smith form this codebase uses that ratio is G1 of the outgoing
+            // direction alone. Bounded by F, unlike the NDF-sampled weight this
+            // replaces, which owed a factor that diverges at grazing angles.
+            float NdotL = max(0.0, dot(shading.normal, sample.direction));
+            float geomK = shading.roughness + 1.0;
+            geomK = geomK * geomK * (1.0 / 8.0);
+            sample.weight = F * ptGeometrySchlick(NdotL, geomK) / specularProbability;
             sample.demodulatedWeight = sample.weight;
             sample.specularLobe = true;
         } else {

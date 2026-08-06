@@ -114,6 +114,9 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("tonemap", value<int>()->default_value(options->graphics.tonemap), "display transform: 0 off, 1 Gran Turismo curve")               //
         ("exposure", value<float>()->default_value(options->graphics.exposure), "scene-referred exposure ahead of the tonemap") //
         ("ptpointemitterratio", value<float>()->default_value(options->graphics.ptPointEmitterRatio), "path tracing point-light emitter radius, as a fraction of influence radius") //
+        ("ptbounceroughness", value<float>()->default_value(options->graphics.ptBounceRoughness), "roughness floor after the first scatter (path regularisation)") //
+        ("ptroughnessfloor", value<float>()->default_value(options->graphics.ptRoughnessFloor), "lowest roughness any surface may take") //
+        ("ptindirectclamp", value<float>()->default_value(options->graphics.ptIndirectClamp), "ceiling on one indirect sample, 0 to disable") //
         ("ptsunangularsize", value<float>()->default_value(options->graphics.ptSunAngularSize), "path tracing sun angular size") //
         ("lightmaps", value<bool>()->default_value(options->graphics.lightmaps), "apply lightmaps (diagnostic toggle)")        //
         ("ssao", value<bool>()->default_value(options->graphics.ssao), "enable screen-space ambient occlusion")                 //
@@ -232,6 +235,9 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptLightmapIntensity = vars["ptlightmapintensity"].as<float>();
     options->graphics.ptDirectIntensity = vars["ptdirectintensity"].as<float>();
     options->graphics.ptSunIntensity = vars["ptsunintensity"].as<float>();
+    options->graphics.ptBounceRoughness = std::clamp(vars["ptbounceroughness"].as<float>(), 0.0f, 1.0f);
+    options->graphics.ptRoughnessFloor = std::clamp(vars["ptroughnessfloor"].as<float>(), 0.0f, 1.0f);
+    options->graphics.ptIndirectClamp = std::max(0.0f, vars["ptindirectclamp"].as<float>());
     options->graphics.ptBounces = std::clamp(vars["ptbounces"].as<int>(), 1, 8);
     options->graphics.ptRayOffset = std::max(0.0001f, vars["ptrayoffset"].as<float>());
     options->graphics.ptTraceStats = vars["pttracestats"].as<bool>();

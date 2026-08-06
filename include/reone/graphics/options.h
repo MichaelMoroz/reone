@@ -191,6 +191,37 @@ struct GraphicsOptions {
      * fixed cone gave every light at every distance.
      */
     float ptPointEmitterRatio {0.2f};
+    /**
+     * Roughness a surface is treated as having after the path has scattered -
+     * path regularisation, and a deliberate bias.
+     *
+     * A tight lobe reached through a bounce is a caustic: the GGX peak at
+     * roughness 0.2 is near 200, so a glossy-to-glossy path that then samples
+     * the sun returns a spike two orders of magnitude above its neighbours,
+     * which no sample count a frame can afford will converge. Raising this
+     * blurs indirect reflections and removes more of the speckle; lowering it
+     * toward the floor below restores the fireflies.
+     *
+     * 0.8 rather than 0.5: measured on the specular floor that produced the
+     * caustic, 0.5 still left speckle and 0.8 cut it by roughly 4x. The cost is
+     * duller bounce reflections, which is the trade taken.
+     */
+    float ptBounceRoughness {0.8f};
+    /**
+     * The lowest roughness any surface may take, before regularisation.
+     *
+     * Odyssey has no roughness channel - diffuse alpha stands in - so this is
+     * what stops an authored mirror from becoming a perfect one. It is also
+     * why a roughness scale of zero does not produce a mirror; lower this to
+     * allow one, and expect the speckle above to come with it.
+     */
+    float ptRoughnessFloor {0.2f};
+    /**
+     * Ceiling on a single indirect sample's contribution, or 0 to leave it
+     * alone. The blunt instrument beside the two dials above: it truncates
+     * energy rather than widening a lobe, so it darkens what it fixes.
+     */
+    float ptIndirectClamp {0.0f};
     /** The sun is not at a physical distance, so it keeps an angle. Degrees. */
     float ptSunAngularSize {1.0f};
     /**

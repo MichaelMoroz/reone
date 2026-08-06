@@ -66,6 +66,9 @@ private:
         uint32_t bounceCount;
         float emitterRadiusRatio;
         float sunAngularRadius;
+        float bounceRoughness;
+        float roughnessFloor;
+        float indirectClamp;
         float exposure;
         uint32_t geometryBase0;
         uint32_t geometryBase1;

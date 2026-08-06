@@ -169,7 +169,7 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     // instead of a texture fetch. Alpha is only a reflectance control on
     // env-mapped materials, never metalness; roughness uses alpha everywhere.
     shading.metallic = 0.0;
-    shading.roughness = clamp(shading.alpha, 0.2, 1.0);
+    shading.roughness = clamp(shading.alpha, pushConstants.roughnessFloor, 1.0);
     shading.albedo *= material.curatedAlbedoMul.rgb;
     shading.roughness = curatedChannel(material.curatedRoughA, material.curatedRoughB,
                                        shading.albedo, shading.roughness);
@@ -183,7 +183,8 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     shading.albedo = lerp(shading.albedo, ptGammaToLinear(material.overrideColor.rgb),
                           material.overrideColor.w);
     if (material.overrideParams.x >= 0.0) shading.roughness = material.overrideParams.x;
-    shading.roughness = clamp(shading.roughness * material.roughnessScale, 0.2, 1.0);
+    shading.roughness = clamp(shading.roughness * material.roughnessScale,
+                              pushConstants.roughnessFloor, 1.0);
 
     bool envmapped, hasLightmap, staticObject, shadowsEnabled, fogEnabled;
     unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
