@@ -58,7 +58,7 @@ struct ShadowPushConstants {
 
 /** Mirrors PostProcessPushConstants in postprocess.slang. */
 struct PostProcessPushConstants {
-    uint32_t transform;
+    uint32_t grade;
     float exposure;
     uint32_t tonemap;
 };
@@ -145,12 +145,15 @@ void ScenePipeline::init() {
     _gbuffer = std::make_unique<GBuffer>(_renderer);
     _gbuffer->init(_targetSize);
 
-    // The raster modes resolve straight into display-space bytes, so their
-    // output keeps the swapchain's format and the tail is byte-exact over it.
-    // The traced mode hands linear HDR to the display transform, which an
-    // 8-bit unorm would clamp before the tonemap ever sees it.
-    const Format outputFormat = _primaryRayMode ? Format::R16G16B16A16Sfloat
-                                                : _renderer.sceneOutputFormat();
+    // Float in every mode, because every mode's scene output is now linear
+    // scene-referred colour and the display transform is the post-process pass
+    // for all of them. An 8-bit unorm here would clamp radiance above one
+    // before the tonemap ever saw it, and would quantise retro's gamma round
+    // trip - retro computes in the original's display space and converts back
+    // to linear on the way out, which only cancels exactly if the intermediate
+    // can hold the exponentiated value. The swapchain's format is where the
+    // frame becomes bytes, one blit later, and that has not moved.
+    const Format outputFormat = Format::R16G16B16A16Sfloat;
     _output = _renderer.resources().makeImage();
     _output->initColorAttachment(_targetSize, outputFormat);
     _tailColor = _renderer.resources().makeImage();
@@ -232,9 +235,14 @@ void ScenePipeline::init() {
 
     if (_options.antialiasing == AntiAliasing::Fsr) {
         try {
-            // The colour it will resolve is linear only in the traced mode;
-            // every raster resolve hands it display-referred bytes.
-            _upscaler = _renderer.makeUpscaler(_targetSize, _primaryRayMode);
+            // High dynamic range in every mode. FSR reads the scene image
+            // before the display transform, and that image is now linear and
+            // unbounded whichever pass produced it - which is precisely what
+            // the flag declares. It was false for raster because raster used to
+            // hand over display-referred colour already in [0,1]; that is no
+            // longer true of any mode, and claiming otherwise would have FSR
+            // reproject linear radiance with its HDR handling switched off.
+            _upscaler = _renderer.makeUpscaler(_targetSize, true);
         } catch (const std::exception &e) {
             warn(std::string("Upscaler unavailable, the anti-aliasing slot is empty: ") + e.what(),
                  LogChannel::Graphics);
@@ -825,10 +833,20 @@ void ScenePipeline::upscalePass(ICommandBuffer &cmd) {
 
 void ScenePipeline::antiAliasingPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::antiAliasingPass record");
-    // A new resolve in this slot is a new case here; the ping-pong and the
-    // ordering are already common. Nothing in this slot applies a display
-    // transform, in any mode - that belongs to the post-process pass alone,
-    // and a resolve that tonemapped to find edges would be applying it twice.
+    // A new resolve in this slot is a new case here; the ping-pong is common.
+    // Nothing in this slot applies a display transform, in any mode - that
+    // belongs to the post-process pass alone, and a resolve that tonemapped to
+    // find edges would be applying it twice.
+    //
+    // Where the slot SITS depends on which resolve occupies it, and that is
+    // physics rather than a wart. A temporal resolve reprojects and accumulates
+    // radiance, so it wants pre-tonemap linear colour and the widest range it
+    // can get: FSR runs before the display transform. A spatial filter judges
+    // the picture by luma contrast against fixed thresholds, so it wants the
+    // encoded image a viewer sees: FXAA runs after it. On linear input FXAA's
+    // edge detection under-triggers exactly where the encode compresses most,
+    // which is the bright edges it is most needed on. RenderPipeline::render
+    // places the step accordingly.
     const char *fragmentEntry = nullptr;
     switch (_options.antialiasing) {
     case AntiAliasing::None:
@@ -854,11 +872,28 @@ void ScenePipeline::antiAliasingPass(ICommandBuffer &cmd, uint32_t globalsOffset
 
 void ScenePipeline::postProcessPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::postProcessPass record");
-    // The raster resolves already write display-space colour, so the transform
-    // is an identity over them and their bytes are preserved exactly. Only the
-    // traced chain arrives linear, carrying the dials its calibration is
-    // defined in.
-    PostProcessPushConstants push {_primaryRayMode ? 1u : 0u,
+    // Unconditional, and the same in every mode: the scene chain stops at
+    // linear everywhere now, so this pass is the encode. It used to be an
+    // identity over the raster modes, which is why switching it off did nothing
+    // to them and presented the traced mode's raw linear image as though it
+    // were already display-referred.
+    //
+    // The dial gates the grade, not the encode. Ungraded still means a
+    // correctly encoded picture - unit exposure, no tone curve - which is what
+    // makes it a comparable diagnostic in all three modes.
+    //
+    // Retro is never graded, and that is a fact about its colour rather than a
+    // preference. Its resolve computes in the original's display space - that
+    // is the fidelity constraint of the mode - and inverts the result into
+    // linear only so it can travel a linear pipeline. Those numbers are not
+    // scene radiance, so an exposure stop and a tone curve have nothing to act
+    // on: they would regrade a finished picture. Left alone, the encode here
+    // cancels that inversion exactly and retro presents the frame it always
+    // has. The same reasoning keeps SSAO and screen-space reflections out of
+    // the mode. Delete the mode test to grade it, and it will look tonemapped,
+    // because it will be.
+    const bool grade = _options.grade && _options.mode != RenderMode::Retro;
+    PostProcessPushConstants push {grade ? 1u : 0u,
                                    std::max(0.01f, _options.exposure),
                                    static_cast<uint32_t>(std::clamp(_options.tonemap, 0, 1))};
     tailPass(cmd, "postProcessFragment", globalsOffset, 0, &push, sizeof(push));
@@ -1215,12 +1250,14 @@ void ScenePipeline::dumpTargets(const std::filesystem::path &dir,
         }
         auto raw = entry.image->readBack(entry.depth);
         auto extent = entry.image->extent();
-        // The output image carries the swapchain's format, which is BGRA here
-        // while every G-buffer target is RGBA. A dump exists to be compared
-        // against the OpenGL backend, so it is written in one channel order
-        // rather than leaving whoever reads it to know which target is which -
-        // getting that wrong once already turned an 0.9 difference into an
-        // apparent 11.7 and invented a colour cast that was not there.
+        // Kept for any target whose format stores blue first. The scene output
+        // no longer is one - it is RGBA float in every mode now, where it used
+        // to inherit the swapchain's BGRA in the raster modes - but a dump
+        // exists to be compared against another backend, so it is written in
+        // one channel order rather than leaving whoever reads it to know which
+        // target is which. Getting that wrong once already turned an 0.9
+        // difference into an apparent 11.7 and invented a colour cast that was
+        // not there.
         if (isBGRA(entry.image->pixelFormat())) {
             for (size_t i = 0; i + 3 < raw.size(); i += 4) {
                 std::swap(raw[i], raw[i + 2]);

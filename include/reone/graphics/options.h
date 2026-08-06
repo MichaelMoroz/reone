@@ -228,21 +228,33 @@ struct GraphicsOptions {
      * not stack a separate sharpen pass on top of it.
      */
     float fsrSharpness {0.0f};
-    /** Display transform: 0 off, 1 the Gran Turismo curve. On by default -
-        the calibration
-        programme is defined in tonemapped terms. Owned by the post-process
-        pass, which is the only stage in any mode that applies it. */
+    /** The tone curve of the grade: 0 none, 1 the Gran Turismo curve. On by
+        default - the calibration programme is defined in tonemapped terms.
+        Owned by the post-process pass, which is the only stage in any mode
+        that applies it, and read there only when @ref grade is set. Not the
+        display transform itself, which is never optional. */
     int tonemap {1};
-    /** Scene-referred exposure ahead of the tonemap. */
+    /** Scene-referred exposure ahead of the tone curve; part of the grade. */
     float exposure {1.0f};
     /**
-     * Run the common post-process pass, which owns the display transform.
+     * Apply the creative grade - the exposure and the tone curve - in the
+     * common post-process pass.
      *
-     * Off is diagnostic: the raster modes lose nothing they can see, since
-     * their resolves already write display-space colour and the pass is an
-     * identity over it, while the traced mode presents its linear image raw.
+     * Not a switch for the pass itself, which always runs and always performs
+     * the one display transform: every mode's scene chain stops at linear
+     * scene-referred colour, so without the encode the frame would be
+     * presented raw. Off is the ungraded diagnostic - unit exposure, no curve,
+     * correctly encoded - and it means the same thing in all three modes.
+     *
+     * Read only outside retro. That mode's colour is the original's, carried
+     * through this pipeline as the inverse of its own encode rather than as
+     * radiance, and there is nothing there for an exposure stop or a tone
+     * curve to grade. See ScenePipeline::postProcessPass.
+     *
+     * Spelled `post` on the command line as well, for scripts written before
+     * the pass stopped being optional.
      */
-    bool post {true};
+    bool grade {true};
     /**
      * Unsharp mask over display colour, the last pass of the frame.
      *

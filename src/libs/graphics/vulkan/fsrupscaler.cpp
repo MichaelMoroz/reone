@@ -87,10 +87,15 @@ void FsrUpscaler::init() {
     _context = std::make_unique<FfxFsr2Context>();
     FfxFsr2ContextDescription description {};
     // HIGH_DYNAMIC_RANGE says the input is linear and unbounded, so FSR applies
-    // its own tonemap before reprojecting and inverts it after. A raster resolve
-    // hands over display-referred colour already in [0,1]; claiming HDR for that
-    // would tonemap a tonemapped image. Auto exposure rides with it, having
-    // nothing to measure on an image that is already graded.
+    // its own tonemap before reprojecting and inverts it after; claiming it for
+    // an already display-referred image would tonemap a tonemapped one. Auto
+    // exposure rides with it, having nothing to measure on a graded image.
+    //
+    // Every mode now hands over linear scene colour - the slot sits ahead of
+    // the single display transform - so the caller passes true throughout. The
+    // flag is kept a parameter rather than hard-coded because it describes the
+    // colour a caller supplies, and a future consumer upscaling something
+    // already encoded would still have to say so.
     description.flags = FFX_FSR2_ENABLE_DEBUG_CHECKING;
     if (_highDynamicRange) {
         description.flags |= FFX_FSR2_ENABLE_HIGH_DYNAMIC_RANGE |

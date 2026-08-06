@@ -110,7 +110,7 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"antialiasing", options.antialiasing == graphics::AntiAliasing::Fxaa  ? "fxaa"
                          : options.antialiasing == graphics::AntiAliasing::Fsr ? "fsr"
                                                                                : "off"},
-        {"post", std::to_string(options.post)},
+        {"grade", std::to_string(options.grade)},
         {"sharpen", std::to_string(options.sharpen)},
         {"texquality", std::to_string(static_cast<int>(options.textureQuality))},
         {"shadowres", std::to_string(std::max(0, static_cast<int>(glm::log2(options.shadowResolution)) - 10))},
@@ -752,8 +752,8 @@ void Editor::graphicsSettings() {
     ImGui::SeparatorText("General");
     ImGui::TextDisabled("Live - applies next frame.");
     renderModeCombo();
-    ImGui::Checkbox("Post-process", &options.post);
-    ImGui::TextDisabled("The pass that owns the display transform. Off is\ndiagnostic: the traced mode then presents linear.");
+    ImGui::Checkbox("Grade", &options.grade);
+    ImGui::TextDisabled("Exposure and the tone curve. The display transform\nitself always runs; off is the ungraded diagnostic.\nRetro is never graded - its colour is the original's,\nnot radiance.");
     ImGui::Checkbox("Sharpen", &options.sharpen);
     ImGui::SliderFloat("Sharpen amount", &options.sharpenAmount, 0.0f, 2.0f, "%.2f");
     ImGui::TextDisabled("An unsharp mask, last of all, over display colour.\nSeparate from FSR's RCAS below: running both sharpens\none image twice.");

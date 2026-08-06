@@ -139,12 +139,12 @@ SurfaceParams defaultSurface() {
 
 
 
+// Only one direction is needed here now. Odyssey's authored colours - texels,
+// material colours, light colours, the fog colour - are display-referred and
+// come in through this; the resolve then stays linear all the way out, and the
+// encode belongs to the shared post-process pass alone.
 float3 gammaToLinear(float3 rgb) {
-    return pow(rgb, float3(kGamma));
-}
-
-float3 linearToGamma(float3 rgb) {
-    return pow(rgb, float3(1.0 / kGamma));
+    return pow(max(rgb, 0.0), float3(kGamma));
 }
 
 /**
@@ -271,7 +271,7 @@ float getFog(float3 worldPos) {
     return 1.0 - saturate(f);
 }
 
-/** One pixel of the resolved image, in the display space the frame is in. */
+/** One pixel of the resolved image, as linear scene-referred radiance. */
 float3 resolveSurface(float2 uv, int2 pixel) {
     float4 mainTexSample = sGBufDiffuse.SampleLevel(uv, 0.0);
     float4 lightmapSample = sGBufLightmap.SampleLevel(uv, 0.0);
@@ -290,7 +290,9 @@ float3 resolveSurface(float2 uv, int2 pixel) {
         float3 direction = skyDirection(uv, globalUniforms.projectionInv,
                                         globalUniforms.viewInv,
                                         globalUniforms.cameraPosition.xyz);
-        return skyToDisplay(skyRadiance(sSkyCube, direction, 1.0));
+        // The bake already stores linear radiance and this pass writes linear,
+        // so the cube is composited at identity; the encode is the post pass's.
+        return skyRadiance(sSkyCube, direction, 1.0);
     }
     InstanceMaterial material = instanceMaterials[materialId];
 
@@ -476,20 +478,30 @@ float3 resolveSurface(float2 uv, int2 pixel) {
     // A self-illuminated surface does not take a specular highlight.
     color += (1.0 - selfIllumed) * directVisibility * max(float3(0.0), directS);
 
-    color = linearToGamma(color);
+    // No encode here any more. This pass hands linear scene-referred colour to
+    // the tail, exactly as the tracer does, and the shared post-process pass
+    // owns the one display transform. The two terms that used to be added
+    // after the encode were authored in display space and are converted on the
+    // way in instead, so each is still the value the artist wrote.
+    //
     // Authored mirror and roughness-varying IBL are distinct. The IBL above
-    // keeps the ordinary dielectric response; this gamma-space add reserves
-    // (1 - diffuse alpha) for the original game's sharp mirror term, so that
-    // authored strength is not counted in both lobes.
+    // keeps the ordinary dielectric response; this add reserves (1 - diffuse
+    // alpha) for the original game's sharp mirror term, so that authored
+    // strength is not counted in both lobes.
     //
     // Unshadowed, like the other environment lobe. The cube is a static
     // capture of the whole surround, not of the shadow-casting light, so a
     // depth test against that one light says nothing about how much of the
     // cube this surface can see.
     if (envmapped) {
-        color += sampleAuthoredMirror(material, eyeR) * (1.0 - mainTexSample.a);
+        color += gammaToLinear(sampleAuthoredMirror(material, eyeR)) *
+                 (1.0 - mainTexSample.a);
     }
-    color = lerp(color, globalUniforms.fogColor.rgb, fog);
+    // Fog now mixes energy rather than encoded values. The authored colour is
+    // a display-space swatch, so it is linearised before the mix; the mix
+    // itself is a light-transport interpolation and belongs in linear space in
+    // this mode. Retro keeps the original's gamma-space lerp, in its own pass.
+    color = lerp(color, gammaToLinear(globalUniforms.fogColor.rgb), fog);
 
     return color;
 }

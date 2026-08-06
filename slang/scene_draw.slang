@@ -29,6 +29,10 @@ import lib.scene_schema;
 
 
 static const uint kNoTexture = 0xffffffffu;
+/** Authored colour is display-referred; the blended pass converts on the way
+    out, because the scene target it draws into is linear. Must match the
+    exponent the post-process encode inverts. */
+static const float kGamma = 2.2;
 static const uint kMegaFeaturePremulAlpha = 1u << 12;
 static const uint kMegaFeaturePunchThrough = 1u << 26;
 static const float kMegaAlphaTestThreshold = 0.5;
@@ -434,6 +438,20 @@ float4 sceneDrawBlendedFragment(Varyings input, uint primitiveId : SV_PrimitiveI
         objectAlpha *= coverage;
     }
     if (objectAlpha <= 0.0) discard;
+
+    // Everything above works on authored, display-referred texels - the main
+    // texture, the vertex colour, the lightmap, the environment cube - which is
+    // how the original composed these surfaces and how the material fields are
+    // written. The target is linear now, so the composed colour is converted
+    // once here, at the point it leaves the shader.
+    //
+    // Only the colour. The coverage is a fraction of the pixel, not a light
+    // value, so it is not a quantity gamma applies to: alpha stays exactly what
+    // it was and the fixed ONE / ONE_MINUS_SRC_ALPHA state still means what it
+    // meant. What genuinely changes is that the hardware now interpolates
+    // energy instead of encoded values, which is the physically correct blend
+    // and is visibly different on a bright surface over a dark one.
+    color = pow(max(color, 0.0), float3(kGamma));
 
     // Blended surfaces occlude in proportion to coverage; additive ones add
     // and never occlude, which premultiplied output expresses as alpha zero.

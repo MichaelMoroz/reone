@@ -345,8 +345,10 @@ std::vector<GraphicsOptionDesc> buildDescs() {
             to.antialiasing = from.antialiasing;
         }));
 
-    descs.push_back(boolOpt("post", OptionApply::Live, "enable the post-process pass",
-                            &GraphicsOptions::post));
+    descs.push_back(boolOpt("grade", OptionApply::Live,
+                            "apply exposure and the tone curve; the display "
+                            "transform itself is never optional",
+                            &GraphicsOptions::grade));
     descs.push_back(boolOpt("sharpen", OptionApply::Live,
                             "sharpen the finished frame, after the display transform",
                             &GraphicsOptions::sharpen));
@@ -516,11 +518,32 @@ const std::vector<GraphicsOptionDesc> &graphicsOptionDescs() {
     return descs;
 }
 
+/**
+ * Names an option answers to that are not its own.
+ *
+ * One entry so far: `post` used to switch the post-process pass on and off,
+ * back when that pass was an effect rather than the frame's encode. The dial
+ * that replaced it grades the frame, so it is spelled `grade` - but scripts and
+ * commands files written against the old name keep working, and land on the
+ * option that inherited its meaning. Aliases are resolved on lookup only, so
+ * `gfx list` still names every option exactly once.
+ */
+static const std::unordered_map<std::string, std::string> &optionAliases() {
+    static const std::unordered_map<std::string, std::string> aliases {
+        {"post", "grade"}};
+    return aliases;
+}
+
 const GraphicsOptionDesc *findGraphicsOptionDesc(const std::string &name) {
     static const std::unordered_map<std::string, const GraphicsOptionDesc *> byName = []() {
         std::unordered_map<std::string, const GraphicsOptionDesc *> result;
         for (const auto &desc : graphicsOptionDescs())
             result.emplace(desc.name, &desc);
+        for (const auto &[alias, target] : optionAliases()) {
+            const auto found = result.find(target);
+            if (found != result.end())
+                result.emplace(alias, found->second);
+        }
         return result;
     }();
     const auto found = byName.find(name);

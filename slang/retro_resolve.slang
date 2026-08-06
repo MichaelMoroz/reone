@@ -51,6 +51,16 @@ static const uint kResolveFlagSky = 1u;
 static const uint kNoMaterial = 0xffffu;
 static const uint kNoTexture = 0xffffffffu;
 
+/**
+ * The exponent this pass converts its finished colour back through.
+ *
+ * Held locally, as pbr_resolve.slang holds its own, because it must be the same
+ * number the post-process encode inverts - kPtGamma in tracing/brdf.slang - and
+ * a mismatch between the two would show up as a global contrast shift rather
+ * than as anything that names itself.
+ */
+static const float kGamma = 2.2;
+
 static const int kLightDynamicTypeAll = 1;
 
 struct Varyings {
@@ -117,7 +127,11 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
         float3 direction = skyDirection(input.uv, globalUniforms.projectionInv,
                                         globalUniforms.viewInv,
                                         globalUniforms.cameraPosition.xyz);
-        return float4(skyToDisplay(skyRadiance(sSkyCube, direction, 1.0)), 1.0);
+        // The bake stores linear radiance and this pass writes linear, so the
+        // cube is composited at identity. The post-process encode reproduces
+        // the authored skybox texel exactly, which is what the gamma round trip
+        // through display space used to do here.
+        return float4(skyRadiance(sSkyCube, direction, 1.0), 1.0);
     }
     InstanceMaterial material = instanceMaterials[materialId];
 
@@ -223,5 +237,15 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
                                    max(0.0001, globalUniforms.fogFar - globalUniforms.fogNear));
         color = lerp(color, globalUniforms.fogColor.rgb, fog);
     }
-    return float4(color, 1.0);
+    // Everything above is deliberately the original's gamma-space arithmetic,
+    // down to the fog lerp and the radius-squared cull, and none of it is
+    // linearised: that model IS the fidelity target of this mode. What changes
+    // is only where the result is handed over. The scene pipeline is linear
+    // end-to-end now, so the display-space colour this pass computes is
+    // converted back to linear here and the shared post-process encode undoes
+    // the conversion exactly. With no exposure and no tone curve the pair
+    // cancel, so the presented frame is the frame this pass has always drawn.
+    // The round trip is why the target is float: an 8-bit intermediate would
+    // quantise the exponentiated value and the cancellation would not be exact.
+    return float4(pow(max(color, 0.0), float3(kGamma)), 1.0);
 }

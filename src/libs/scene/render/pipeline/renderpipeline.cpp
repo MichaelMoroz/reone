@@ -263,14 +263,29 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         if (pbr && _options.ssr)
             plan.steps.push_back(graphics::SceneStep::ScreenSpaceReflections);
     }
-    // The common tail. Anti-aliasing resolves the opaque image, transparency
-    // is drawn over the result, and the single display transform closes the
-    // frame. A traced debug view is excluded from all of it because it is not
+    // The common tail. Every mode reaches it with linear scene-referred colour,
+    // and it ends with the one display transform that turns that into a
+    // picture. A traced debug view is excluded from all of it because it is not
     // a picture - the kernel writes a diagnostic that is already
     // display-referred, and filtering or transforming it would change the
     // values it exists to show.
     const bool diagnosticImage = _primaryRayMode && _options.ptDebugView != 0;
-    if (_options.antialiasing != graphics::AntiAliasing::None && !diagnosticImage)
+    const bool antialiased =
+        _options.antialiasing != graphics::AntiAliasing::None && !diagnosticImage;
+    // Which side of the display transform the anti-aliasing slot falls on is
+    // decided by its occupant, because the two kinds want opposite inputs.
+    //
+    // A temporal resolve accumulates and reprojects radiance across frames, so
+    // it belongs on linear pre-tonemap colour - where FSR already sat, and
+    // where it stays. A spatial filter is a judgement about the finished
+    // picture: FXAA thresholds luma differences against constants tuned for
+    // display-referred colour, and on linear input those thresholds are far too
+    // coarse in the highlights, so the brightest edges - the ones aliasing is
+    // most visible on - fall below its early-out and are never touched. It
+    // therefore runs after the transform.
+    const bool temporalResolve =
+        antialiased && _options.antialiasing == graphics::AntiAliasing::Fsr;
+    if (temporalResolve)
         plan.steps.push_back(graphics::SceneStep::AntiAliasing);
     if (!_primaryRayMode) {
         // After the resolve, not before it. A temporal resolve cannot
@@ -281,9 +296,16 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         // and drawing them here would double them.
         plan.steps.push_back(graphics::SceneStep::Blended);
     }
-    if (_options.post && !diagnosticImage)
+    // Unconditional. This pass is the encode, not an effect: without it a
+    // linear image would be presented as though it were already display
+    // colour. What used to switch it off is now GraphicsOptions::grade, which
+    // the pass reads itself - it gates the exposure and the tone curve, and an
+    // ungraded frame is still a correctly encoded one.
+    if (!diagnosticImage)
         plan.steps.push_back(graphics::SceneStep::PostProcess);
-    // After it: the mask judges the displayed picture, so it wants the
+    if (antialiased && !temporalResolve)
+        plan.steps.push_back(graphics::SceneStep::AntiAliasing);
+    // Last, after both. The mask judges the displayed picture, so it wants the
     // colour a viewer sees rather than scene radiance.
     if (_options.sharpen && !diagnosticImage)
         plan.steps.push_back(graphics::SceneStep::Sharpen);

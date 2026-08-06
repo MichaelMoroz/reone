@@ -56,10 +56,17 @@ struct Varyings {
  * what every graphics pipeline layout here declares.
  */
 struct PostProcessPushConstants {
-    /** 0 pass the image through, 1 linear scene colour to display colour. */
-    uint transform;
+    /**
+     * 0 encode only, 1 encode with the creative grade.
+     *
+     * The encode is never optional - the scene arrives linear in every mode and
+     * something has to put it into display space. What this word gates is the
+     * grade: the exposure and the tone curve. Off, the frame is still a correct
+     * picture, simply ungraded, which is what makes it a usable diagnostic.
+     */
+    uint grade;
     float exposure;
-    /** 0 none, 1 the Gran Turismo curve; ignored by a pass-through. */
+    /** 0 none, 1 the Gran Turismo curve; only read when grade is 1. */
     uint tonemap;
 };
 [[vk::push_constant]] PostProcessPushConstants pushConstants;
@@ -87,20 +94,22 @@ float rgbToLuma(float3 rgb) {
  * The last pass of every mode, and the only one that decides what display
  * colour is.
  *
- * A pass-through is not a no-op that could be skipped: the raster resolves
- * write display-space colour already, so the identity is what keeps their
- * bytes exactly what they were while the traced chain, which stops at linear,
- * is finished here. One shader with a dial rather than one per mode, because
- * two implementations of a transform drift.
+ * Every mode's scene chain now stops at linear scene-referred colour, so this
+ * pass is the encode rather than a decoration: nothing before it is in display
+ * space and nothing after it is not. There is no pass-through branch, because
+ * a pass-through would present linear radiance as if it were already encoded -
+ * which is exactly the bug that made turning post off look like MORE
+ * processing rather than less. One shader with dials rather than one per mode,
+ * because two implementations of a transform drift.
  */
 [shader("fragment")]
 float4 postProcessFragment(Varyings input) : SV_Target {
     float4 texel = sMainTex.SampleLevel(input.uv, 0.0);
-    if (pushConstants.transform == 0) {
-        return texel;
-    }
-    return float4(ptDisplayTransform(max(texel.rgb, 0.0), pushConstants.exposure,
-                                     pushConstants.tonemap),
+    // Ungraded means unit exposure and no curve, not an unencoded image.
+    const bool graded = pushConstants.grade != 0;
+    const float exposure = graded ? pushConstants.exposure : 1.0;
+    const uint tonemap = graded ? pushConstants.tonemap : 0;
+    return float4(ptDisplayTransform(max(texel.rgb, 0.0), exposure, tonemap),
                   texel.a);
 }
 
@@ -163,6 +172,14 @@ static const float kEdgeThresholdMin = 0.0833;
  */
 static const float kSearchSteps[4] = {1.5, 2.0, 4.0, 12.0};
 
+/**
+ * Runs AFTER the display transform, unlike the temporal resolve that shares its
+ * slot. Every threshold below is a luma difference measured against constants
+ * (kEdgeThreshold, kEdgeThresholdMin) that were tuned for display-referred
+ * colour: on linear input the same scene contrast collapses in the highlights,
+ * so bright edges fall under the early-out and are never anti-aliased at all.
+ * See ScenePipeline::antiAliasingPass for the rule this follows.
+ */
 [shader("fragment")]
 float4 fxaaFragment(Varyings input) : SV_Target {
     float2 rcp = screenEffectUniforms.screenResolutionRcp;

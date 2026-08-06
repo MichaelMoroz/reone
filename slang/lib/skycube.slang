@@ -58,13 +58,9 @@ public float3 skyDirection(float2 uv, float4x4 projectionInv, float4x4 viewInv,
     return normalize(worldPos - cameraPosition);
 }
 
-/**
- * Linear sky radiance encoded into the display space the raster resolves write.
- *
- * Inverting the bake's own gamma reproduces the authored skybox texel exactly.
- * The traced mode does not call this: it stays linear all the way to the shared
- * post-process pass, which owns the one display transform.
- */
-public float3 skyToDisplay(float3 radiance) {
-    return pow(max(radiance, 0.0), 1.0 / 2.2);
-}
+// skyToDisplay is gone. It existed because the raster resolves encoded their
+// own output, so the one caller that had linear radiance in hand had to push it
+// into display space itself. Every mode now writes linear and the shared
+// post-process pass performs the single encode, which reproduces the authored
+// skybox texel exactly where this function used to - so there is nothing left
+// for a second gamma helper to do.

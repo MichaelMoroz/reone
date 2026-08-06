@@ -120,7 +120,10 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ssr", value<bool>()->default_value(options->graphics.ssr), "enable screen-space reflections")                         //
         ("antialiasing", value<std::string>()->default_value(antiAliasingName(options->graphics.antialiasing)),
          "anti-aliasing in the common slot: off, fxaa or fsr; defaults per render mode")                                       //
-        ("post", value<bool>()->default_value(options->graphics.post), "enable the post-process pass")                          //
+        ("grade", value<bool>()->default_value(options->graphics.grade),
+         "apply exposure and the tone curve; the display transform itself always runs")                                        //
+        ("post", value<bool>()->default_value(options->graphics.grade),
+         "deprecated alias for --grade")                                                                                       //
         ("sharpen", value<bool>()->default_value(options->graphics.sharpen), "sharpen the finished frame (unsharp mask, after the display transform)") //
         ("sharpenamount", value<float>()->default_value(options->graphics.sharpenAmount), "strength of that mask")       //
         ("ptdenoise", value<bool>()->default_value(options->graphics.ptDenoise), "enable the path tracing denoiser")           //
@@ -250,7 +253,15 @@ std::unique_ptr<Options> OptionsParser::parse() {
         options->graphics.antialiasing =
             parseAntiAliasing(vars["antialiasing"].as<std::string>());
     }
-    options->graphics.post = vars["post"].as<bool>();
+    // The dial the post-process pass reads is `grade`: that pass is no longer
+    // optional - it is the frame's only encode - so what is switchable is the
+    // exposure and the tone curve it applies. `post` is the name that dial had
+    // when it did switch the pass itself, kept working here rather than broken
+    // for every script and commands file already written against it. An
+    // explicit --grade wins; otherwise --post is read, and it defaults to the
+    // same value, so a run that passes neither is unaffected.
+    options->graphics.grade = vars["grade"].defaulted() ? vars["post"].as<bool>()
+                                                        : vars["grade"].as<bool>();
     options->graphics.sharpen = vars["sharpen"].as<bool>();
     options->graphics.sharpenAmount = std::max(0.0f, vars["sharpenamount"].as<float>());
     options->graphics.ptDenoise = vars["ptdenoise"].as<bool>();
