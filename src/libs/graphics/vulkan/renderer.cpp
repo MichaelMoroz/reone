@@ -91,28 +91,30 @@ void VulkanRenderer::init() {
     _uniformRing.init(kFramesInFlight, 16u << 20);
     _descriptors.init(kFramesInFlight, _uniformRing);
     _pbrTextures.init();
-    // The source tree wins wherever it exists, so that editing a shader and
-    // asking for a recompile compiles the file that was edited. The build
-    // deposits a copy beside the executable, and preferring that copy is what
-    // made runtime recompilation appear not to work at all: the reload
-    // faithfully rebuilt a stale duplicate of every module, including the
-    // imported ones, and the frame never changed. An installed build has no
-    // source tree and takes the copy, which is what it is for.
-    bool sourceDirSet = false;
-#ifdef REONE_SHADER_SOURCE_DIR
-    std::filesystem::path shaderSource {REONE_SHADER_SOURCE_DIR};
-    if (std::filesystem::is_directory(shaderSource)) {
-        _shaderCompiler.setSourceDir(std::move(shaderSource));
-        sourceDirSet = true;
+    // Shaders come from beside the executable if a build put them there, which
+    // means an installed build, and from the source tree otherwise. Nothing
+    // copies them next to the executable at build time any more - see
+    // src/apps/engine/CMakeLists.txt - so on a development machine there is one
+    // shader tree and it is the one being edited. That is what makes a runtime
+    // recompile mean something: the previous arrangement kept a copy that was
+    // only ever added to, so a reload faithfully rebuilt deleted modules and
+    // the frame never changed.
+    std::filesystem::path shaderSource;
+    if (auto *base = SDL_GetBasePath()) {
+        auto deployed = std::filesystem::path(base) / "slang";
+        SDL_free(const_cast<char *>(base));
+        if (std::filesystem::is_directory(deployed))
+            shaderSource = std::move(deployed);
     }
+#ifdef REONE_SHADER_SOURCE_DIR
+    if (shaderSource.empty() && std::filesystem::is_directory(REONE_SHADER_SOURCE_DIR))
+        shaderSource = REONE_SHADER_SOURCE_DIR;
 #endif
-    if (!sourceDirSet) {
-        if (auto *base = SDL_GetBasePath()) {
-            auto deployedSource = std::filesystem::path(base) / "slang";
-            SDL_free(const_cast<char *>(base));
-            if (std::filesystem::is_directory(deployedSource))
-                _shaderCompiler.setSourceDir(std::move(deployedSource));
-        }
+    if (!shaderSource.empty()) {
+        // Named out loud: which tree a shader edit lands in is the first thing
+        // to check when a change appears not to have taken.
+        info("Slang: shader source is " + shaderSource.string(), LogChannel::Graphics);
+        _shaderCompiler.setSourceDir(std::move(shaderSource));
     }
     _shaderCompiler.init();
     _shaderCompiler.validateSchemas();

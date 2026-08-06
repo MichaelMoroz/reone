@@ -45,7 +45,10 @@ target_link_libraries(engine PRIVATE game ${Boost_PROGRAM_OPTIONS_LIBRARY} imgui
 target_link_libraries(engine PRIVATE graphicsvulkan)
 
 reone_copy_slang_runtime(engine)
-add_custom_command(TARGET engine POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/slang $<TARGET_FILE_DIR:engine>/slang)
+# Deliberately no build-time copy of slang/ beside the executable. copy_directory
+# adds and overwrites but never deletes, so a renamed or removed shader survived
+# there and was loaded in preference to the source tree - a shader bug present in
+# no source file. An installed build gets the directory from the install rule in
+# the root CMakeLists; a development build reads the source tree it is editing.
 
 list(APPEND InstallTargets engine)
