@@ -538,7 +538,7 @@ void ScenePipeline::skyCompositePass(ICommandBuffer &cmd, uint32_t globalsOffset
     cmd.transitionImage(*_output, ImageLayout::ColorAttachment);
 
     PipelineKey key;
-    key.module = "sky_composite";
+    key.module = "sky";
     key.vertexEntry = "skyCompositeVertex";
     key.fragmentEntry = "skyCompositeFragment";
     key.colorFormats = {_output->pixelFormat()};

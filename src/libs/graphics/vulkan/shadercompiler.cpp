@@ -39,8 +39,8 @@ namespace reone::graphics {
 namespace {
 
 constexpr const char *kModules[] = {
-    "megadraw", "shadow_megadraw", "sky", "sky_composite", "pbr_ibl",
-    "pbr_resolve", "retro_resolve", "pbr_ssao", "pbr_ssr", "rayquery", "skin",
+    "megadraw", "shadow_megadraw", "sky", "pbr_ibl",
+    "pbr_resolve", "retro_resolve", "pbr_screen", "rayquery", "skin",
     "nrd_composite", "postprocess", "vk2d"};
 
 const char *parameterCategoryName(slang::ParameterCategory category) {
@@ -534,7 +534,7 @@ void SlangShaderCompiler::invalidate() {
 }
 
 void SlangShaderCompiler::validateSchemas() {
-    const auto program = _impl->load(_sourceDir, "scene_schema_reflect");
+    const auto program = _impl->load(_sourceDir, "reflect");
     Slang::ComPtr<slang::IBlob> diagnostic;
     auto *layout = program.linked->getLayout(0, diagnostic.writeRef());
     if (!layout)
@@ -706,7 +706,7 @@ void SlangShaderCompiler::validateSchemas() {
            REONE_SCHEMA_FIELD(GrassRange, pad)});
 #undef REONE_STORAGE_LAYOUT
 
-    const auto uniformProgram = _impl->load(_sourceDir, "uniformreflect");
+    const auto uniformProgram = _impl->load(_sourceDir, "reflect");
     diagnostic.setNull();
     auto *uniformLayout = uniformProgram.linked->getLayout(0, diagnostic.writeRef());
     if (!uniformLayout)
