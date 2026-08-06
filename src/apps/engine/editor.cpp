@@ -332,6 +332,34 @@ struct ObjectGroupView {
     size_t clusters {0};
 };
 
+/**
+ * The explanation for the control just submitted, shown on hover.
+ *
+ * These were paragraphs printed under every dial, which made the settings
+ * window mostly prose: the reasoning is wanted when a dial is in question and
+ * is noise the rest of the time. The text is unchanged, only relocated.
+ *
+ * Written against IsItemHovered rather than SetItemTooltip because a wrap
+ * position has to be pushed inside the tooltip window - the paragraphs are
+ * long, and an unwrapped tooltip is one line as wide as the screen. Disabled
+ * controls do not report hover unless asked to, and two of them (FSR sharpness,
+ * the restart-only pair) carry the explanation of why they are disabled, which
+ * is exactly when it is wanted.
+ */
+void settingHint(const char *text, bool whenDisabled = false) {
+    ImGuiHoveredFlags flags = ImGuiHoveredFlags_ForTooltip;
+    if (whenDisabled) {
+        flags |= ImGuiHoveredFlags_AllowWhenDisabled;
+    }
+    if (!ImGui::IsItemHovered(flags) || !ImGui::BeginTooltip()) {
+        return;
+    }
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
+}
+
 } // namespace
 
 // Editor::handle should take priority over ImGui event processing, so it close
@@ -741,43 +769,61 @@ void Editor::warp() {
 
 void Editor::graphicsSettings() {
     dockNext();
-    ImGui::SetNextWindowSize(ImVec2(410, 640), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(520, 720), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Graphics settings", &_showGraphicsSettings)) {
         ImGui::End();
         return;
     }
+
+    // The commit row is pinned to the bottom of the window rather than left at
+    // the end of the flow. A staged control can be in any tab - the
+    // anti-aliasing slot is in Renderer, the resolution in Quality - and the
+    // one button that commits them all has to be reachable without knowing
+    // which tab scrolled it away. Two text lines are reserved under the row for
+    // the pending list and the save result.
+    const float footerHeight = ImGui::GetFrameHeightWithSpacing() +
+                               2.0f * ImGui::GetTextLineHeightWithSpacing() +
+                               ImGui::GetStyle().ItemSpacing.y;
+    // The tab bar stays outside the scrolling region. It is navigation, not a
+    // setting: on a long tab it would otherwise scroll out of reach and leave no
+    // way back to another tab without scrolling up first.
+    auto tab = [this, footerHeight](const char *label, void (Editor::*body)()) {
+        if (!ImGui::BeginTabItem(label)) {
+            return;
+        }
+        if (ImGui::BeginChild("##scroll", ImVec2(0.0f, -footerHeight))) {
+            // Labels sit to the right of their widget, so a widget allowed to
+            // take the full width clips its own label. Half the row leaves
+            // room for the longest of them ("Bounce roughness") at the
+            // width this window is usually docked to.
+            ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.45f);
+            (this->*body)();
+            ImGui::PopItemWidth();
+        }
+        ImGui::EndChild();
+        ImGui::EndTabItem();
+    };
+    // Ordered by how often a dial is reached for: what changes the picture
+    // first, then what it costs, then the tracer, then the dials that only a
+    // specific artefact sends you looking for.
+    if (ImGui::BeginTabBar("##graphics-tabs")) {
+        tab("Renderer", &Editor::graphicsRendererTab);
+        tab("Quality", &Editor::graphicsQualityTab);
+        tab("Path tracing", &Editor::graphicsPathTracingTab);
+        tab("Advanced", &Editor::graphicsAdvancedTab);
+        tab("Materials", &Editor::graphicsMaterialsTab);
+        ImGui::EndTabBar();
+    }
+
+    graphicsCommitFooter();
+    ImGui::End();
+}
+
+void Editor::graphicsRendererTab() {
     auto &options = _engine._options.graphics;
     auto &staged = _engine.stagedGraphicsOptions();
 
-    ImGui::SeparatorText("General");
-    ImGui::TextDisabled("Live - applies next frame.");
     renderModeCombo();
-    ImGui::Checkbox("Grade", &options.grade);
-    ImGui::TextDisabled("Exposure and the tone curve. The display transform\nitself always runs; off is the ungraded diagnostic.\nRetro is never graded - its colour is the original's,\nnot radiance.");
-    ImGui::Checkbox("Sharpen", &options.sharpen);
-    ImGui::SliderFloat("Sharpen amount", &options.sharpenAmount, 0.0f, 2.0f, "%.2f");
-    ImGui::TextDisabled("An unsharp mask, last of all, over display colour.\nSeparate from FSR's RCAS below: running both sharpens\none image twice.");
-    // Both belong to the PBR resolve: occlusion is a term inside it and
-    // reflections are a dispatch over the image it produced. Retro is the
-    // original's model, which had neither, so the pair sit disabled there
-    // rather than quietly doing nothing.
-    ImGui::BeginDisabled(options.mode != graphics::RenderMode::PBR);
-    ImGui::Checkbox("SSAO", &options.ssao);
-    ImGui::TextDisabled("Folded into the PBR resolve, where the depth and\nnormals it needs are already read. Off, the branch\nis not taken.");
-    ImGui::Checkbox("SSR", &options.ssr);
-    ImGui::TextDisabled("A second dispatch over the resolved image, ahead of\nanti-aliasing and transparency. Off, the pass is not\nrecorded at all.");
-    ImGui::EndDisabled();
-    ImGui::Checkbox("Grass", &options.grass);
-    // Wired straight: density is a GPU gate over budgets baked at the slider
-    // maximum (kGrassDensityCap), so dragging costs a push-constant change.
-    // The old committed-on-release dance existed to avoid re-materialising
-    // every cluster per mouse-move; that rebuild no longer exists.
-    ImGui::SliderFloat("Grass density", &options.grassDensity, 0.0f, 8.0f, "%.2fx",
-                       ImGuiSliderFlags_Logarithmic);
-    ImGui::TextDisabled("Multiplies the area's authored density, so areas keep\n"
-                        "their relative variation. Live: the dial gates the\n"
-                        "active cluster prefix on the GPU.");
-    ImGui::SliderFloat("Draw distance", &options.drawDistance, 1.0f, 1000.0f, "%.0f");
 
     // One slot with one occupant, the same in every mode. The choice is staged
     // rather than live: FSR builds a context and device images in the
@@ -786,34 +832,125 @@ void Editor::graphicsSettings() {
     // Ordered as the enum is, so the index is the value.
     static const char *kAntiAliasingNames[] = {"Off", "FXAA", "FSR 2 (NativeAA)"};
     int antiAliasing = static_cast<int>(staged.antialiasing);
-    if (ImGui::Combo("Method (requires reapply)", &antiAliasing, kAntiAliasingNames,
+    if (ImGui::Combo("Method", &antiAliasing, kAntiAliasingNames,
                      IM_ARRAYSIZE(kAntiAliasingNames))) {
         staged.antialiasing = static_cast<graphics::AntiAliasing>(antiAliasing);
     }
+    settingHint("Runs after the opaque resolve, before transparency and the display transform. "
+                "It never tonemaps. Apply is at the bottom of this window.");
     if (staged.antialiasing != options.antialiasing) {
         // Staged options are invisible until Apply, and this one has a visible
         // consequence: jitter follows the resolver, so a pending FSR-to-FXAA
         // change leaves the projection jittering while the combo already reads
         // FXAA. Naming what is actually running is the difference between a
-        // change that is pending and one that looks broken.
+        // change that is pending and one that looks broken. Inline rather than
+        // on hover for the same reason: it is a state, not an explanation.
         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Running: %s until Apply.",
                            kAntiAliasingNames[static_cast<int>(options.antialiasing)]);
     }
-    ImGui::TextDisabled("Runs after the opaque resolve, before transparency and\nthe display transform. It never tonemaps. Apply is at\nthe bottom of this window.");
     ImGui::BeginDisabled(options.antialiasing != graphics::AntiAliasing::Fsr);
     ImGui::SliderFloat("FSR sharpness", &options.fsrSharpness, 0.0f, 1.0f, "%.2f");
-    ImGui::TextDisabled("RCAS, inside FSR. Compensates for upscaling\nsoftness, of which NativeAA has none - keep it\nlow. Never stack the postprocess sharpen on top.");
+    // Wanted precisely while it is greyed out, so the hover has to survive that.
+    settingHint("RCAS, inside FSR. Compensates for upscaling softness, of which NativeAA has none - "
+                "keep it low. Never stack the postprocess sharpen on top.",
+                true);
     ImGui::EndDisabled();
 
     // Not path-tracing settings: the post-process pass applies these in every
     // mode that arrives with linear colour, which today is the traced one.
     // They are here rather than beside the tracer because the pass is common.
     ImGui::SeparatorText("Display");
+    ImGui::Checkbox("Grade", &options.grade);
+    settingHint("Exposure and the tone curve. The display transform itself always runs; off is the "
+                "ungraded diagnostic. Retro is never graded - its colour is the original's, not "
+                "radiance.");
     static constexpr const char *kTonemapNames[] = {"Off (linear)", "Gran Turismo"};
     ImGui::Combo("Tonemap", &options.tonemap, kTonemapNames, 2);
+    settingHint("The raster resolves already write display colour, so the transform passes them "
+                "through untouched.");
     ImGui::SliderFloat("Exposure", &options.exposure, 0.05f, 8.0f, "%.2f",
                        ImGuiSliderFlags_Logarithmic);
-    ImGui::TextDisabled("The raster resolves already write display colour, so\nthe transform passes them through untouched.");
+    settingHint("The raster resolves already write display colour, so the transform passes them "
+                "through untouched.");
+
+    static constexpr const char *kSharpenHint =
+        "An unsharp mask, last of all, over display colour. Separate from FSR's RCAS above: "
+        "running both sharpens one image twice.";
+    ImGui::Checkbox("Sharpen", &options.sharpen);
+    settingHint(kSharpenHint);
+    ImGui::SliderFloat("Sharpen amount", &options.sharpenAmount, 0.0f, 2.0f, "%.2f");
+    settingHint(kSharpenHint);
+}
+
+void Editor::graphicsQualityTab() {
+    auto &options = _engine._options.graphics;
+
+    // Both belong to the PBR resolve: occlusion is a term inside it and
+    // reflections are a dispatch over the image it produced. Retro is the
+    // original's model, which had neither, so the pair sit disabled there
+    // rather than quietly doing nothing.
+    ImGui::BeginDisabled(options.mode != graphics::RenderMode::PBR);
+    ImGui::Checkbox("SSAO", &options.ssao);
+    settingHint("Folded into the PBR resolve, where the depth and normals it needs are already "
+                "read. Off, the branch is not taken.",
+                true);
+    ImGui::Checkbox("SSR", &options.ssr);
+    settingHint("A second dispatch over the resolved image, ahead of anti-aliasing and "
+                "transparency. Off, the pass is not recorded at all.",
+                true);
+    ImGui::EndDisabled();
+    ImGui::Checkbox("Grass", &options.grass);
+    // Wired straight: density is a GPU gate over budgets baked at the slider
+    // maximum (kGrassDensityCap), so dragging costs a push-constant change.
+    // The old committed-on-release dance existed to avoid re-materialising
+    // every cluster per mouse-move; that rebuild no longer exists.
+    ImGui::SliderFloat("Grass density", &options.grassDensity, 0.0f, 8.0f, "%.2fx",
+                       ImGuiSliderFlags_Logarithmic);
+    settingHint("Multiplies the area's authored density, so areas keep their relative variation. "
+                "Live: the dial gates the active cluster prefix on the GPU.");
+    ImGui::SliderFloat("Draw distance", &options.drawDistance, 1.0f, 1000.0f, "%.0f");
+
+    graphicsReapplySection();
+
+    ImGui::SeparatorText("Requires restart");
+    int textureQuality = static_cast<int>(options.textureQuality);
+    int anisotropic = options.anisotropicFiltering;
+    static constexpr const char *kRestartHint =
+        "Read once, before anything a rebuild could reach: the texture pack is chosen while the "
+        "game directory is opened, and anisotropy is baked into each texture's sampler as it "
+        "loads.";
+    ImGui::BeginDisabled();
+    ImGui::SliderInt("Texture quality", &textureQuality, 0, 2);
+    settingHint(kRestartHint, true);
+    ImGui::SliderInt("Anisotropy", &anisotropic, 0, 4);
+    settingHint(kRestartHint, true);
+    ImGui::EndDisabled();
+}
+
+void Editor::graphicsPathTracingTab() {
+    auto &options = _engine._options.graphics;
+
+    if (options.mode != graphics::RenderMode::PathTracing) {
+        ImGui::TextDisabled("Inactive - run with --mode path-tracing.");
+        settingHint("Settings still save and apply when it is.");
+    }
+    // Everything here rides in push constants, so a change applies on the next
+    // frame with nothing rebuilt. The editor remains the place to tune beside
+    // the picture; config and command-line values make a calibration repeatable.
+    if (ImGui::SliderInt("Samples per pixel", &options.pathTracingSamples, 1, 64)) {
+        options.pathTracingSamples = std::max(1, options.pathTracingSamples);
+    }
+    settingHint("Cost is near linear; noise falls as sqrt.");
+    if (ImGui::SliderInt("Bounces", &options.ptBounces, 1, 8)) {
+        options.ptBounces = std::clamp(options.ptBounces, 1, 8);
+    }
+    settingHint("Path depth after the primary hit. Deeper paths carry light around corners; the "
+                "lightmap cache already answers much of it on static geometry.");
+#ifdef R_ENABLE_NRD
+    ImGui::Checkbox("NRD denoiser", &options.ptDenoise);
+    settingHint("REBLUR diffuse+specular. Off shows the raw traced frame; debug views always "
+                "bypass it. Its own tuning is under Advanced.");
+#endif
 
     // Scene light, not a renderer's treatment of it - the tracer is only the
     // consumer these have today. Logarithmic, and to 32 rather than 4: the
@@ -824,78 +961,133 @@ void Editor::graphicsSettings() {
     static constexpr ImGuiSliderFlags kIntensityFlags = ImGuiSliderFlags_Logarithmic;
     ImGui::SliderFloat("Sky", &options.skyIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
     ImGui::SliderFloat("Emissive", &options.ptEmissiveIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
-    ImGui::SliderFloat("Lightmap cache", &options.ptLightmapIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
     ImGui::SliderFloat("Direct light", &options.ptDirectIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
     ImGui::SliderFloat("Sun", &options.ptSunIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::SliderFloat("Lightmap cache", &options.ptLightmapIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
     ImGui::SliderFloat("Sun angular size", &options.ptSunAngularSize, 0.05f, 10.0f, "%.2f deg");
-    ImGui::TextDisabled("Ctrl+click to type a value. The sun is not at a\nphysical distance, so it keeps an authored angle.");
+    settingHint("Ctrl+click to type a value. The sun is not at a physical distance, so it keeps an "
+                "authored angle.");
 
-    ImGui::SeparatorText("Path tracing");
-    if (options.mode != graphics::RenderMode::PathTracing) {
-        ImGui::TextDisabled("Inactive - run with --mode path-tracing.");
-        ImGui::TextDisabled("Settings still save and apply when it is.");
-    }
-    // Everything here rides in push constants, so a change applies on the next
-    // frame with nothing rebuilt. The editor remains the place to tune beside
-    // the picture; config and command-line values make a calibration repeatable.
-    if (ImGui::SliderInt("Samples per pixel", &options.pathTracingSamples, 1, 64)) {
-        options.pathTracingSamples = std::max(1, options.pathTracingSamples);
-    }
-    ImGui::TextDisabled("Cost is near linear; noise falls as sqrt.");
-    if (ImGui::SliderInt("Bounces", &options.ptBounces, 1, 8)) {
-        options.ptBounces = std::clamp(options.ptBounces, 1, 8);
-    }
-    ImGui::TextDisabled("Path depth after the primary hit. Deeper paths\ncarry light around corners; the lightmap cache\nalready answers much of it on static geometry.");
     ImGui::SeparatorText("Ray setup");
     ImGui::SliderFloat("Origin offset", &options.ptRayOffset, 0.0001f, 0.1f, "%.4f",
                        ImGuiSliderFlags_Logarithmic);
-    ImGui::TextDisabled("Too small: acne and black speckling.\nToo large: light leaks at contact edges.");
+    settingHint("Too small: acne and black speckling.\nToo large: light leaks at contact edges.");
+    ImGui::SliderFloat("Emitter radius", &options.ptPointEmitterRatio, 0.01f, 0.5f, "%.2f x radius");
+    settingHint("Point lights are spheres sized as a fraction of their influence radius, so falloff "
+                "and penumbra are one quantity: the solid angle the emitter subtends.\n\n"
+                "Brightness-neutral - this grades how soft shadows are and how hot a surface gets "
+                "against a lamp, not the overall level.");
+}
+
+void Editor::graphicsAdvancedTab() {
+    graphicsDebugViewSection();
+
+    auto &options = _engine._options.graphics;
+
+    // The three dials that decide how the tracer trades speckle against
+    // sharpness. Here rather than buried in a constant because the right
+    // value is content-dependent and only the picture decides it.
+    ImGui::SeparatorText("Variance and gloss");
+    ImGui::SliderFloat("Bounce roughness", &options.ptBounceRoughness, 0.0f, 1.0f, "%.2f");
+    settingHint("Path regularisation: the roughness a surface is treated as having after the first "
+                "scatter. A tight lobe reached through a bounce is a caustic, and a caustic at one "
+                "sample per pixel is a firefly. Raise for less speckle and duller indirect "
+                "reflections; 0 disables it.");
+    ImGui::SliderFloat("Roughness floor", &options.ptRoughnessFloor, 0.0f, 1.0f, "%.2f");
+    settingHint("The lowest roughness any surface may take. Odyssey has no roughness channel - "
+                "diffuse alpha stands in - so this is what keeps an authored mirror from being a "
+                "perfect one, and why a roughness scale of zero does not give you a mirror.");
+    ImGui::SliderFloat("Indirect clamp", &options.ptIndirectClamp, 0.0f, 16.0f, "%.2f");
+    settingHint("Ceiling on a single indirect sample; 0 is off. The blunt one: it truncates energy "
+                "rather than widening a lobe, so it darkens whatever it fixes. For the cases "
+                "regularisation alone will not settle.");
+
 #ifdef R_ENABLE_NRD
-    ImGui::Checkbox("NRD denoiser", &options.ptDenoise);
-    ImGui::TextDisabled("REBLUR diffuse+specular. Off shows the raw\ntraced frame; debug views always bypass it.");
     if (ImGui::TreeNode("Denoiser tuning")) {
-        ImGui::TextDisabled("Temporal accumulation");
+        ImGui::SeparatorText("Temporal accumulation");
         ImGui::SliderInt("Max frames", &options.ptNrdMaxAccumulatedFrames, 0, 63);
         ImGui::SliderInt("Fast frames", &options.ptNrdMaxFastAccumulatedFrames, 0, 32);
         ImGui::SliderInt("Stabilized frames", &options.ptNrdMaxStabilizedFrames, 0, 63);
         ImGui::SliderInt("History fix frames", &options.ptNrdHistoryFixFrames, 0, 8);
-        ImGui::TextDisabled("Spatial filtering (pixels)");
+        ImGui::SeparatorText("Spatial filtering (pixels)");
         ImGui::SliderFloat("Diffuse prepass radius", &options.ptNrdDiffusePrepassBlurRadius, 0.0f, 60.0f, "%.0f");
         ImGui::SliderFloat("Specular prepass radius", &options.ptNrdSpecularPrepassBlurRadius, 0.0f, 60.0f, "%.0f");
         ImGui::SliderFloat("Min blur radius", &options.ptNrdMinBlurRadius, 0.0f, 10.0f, "%.1f");
         ImGui::SliderFloat("Max blur radius", &options.ptNrdMaxBlurRadius, 0.0f, 60.0f, "%.0f");
-        ImGui::TextDisabled("History rejection: larger = more tolerant.\nGrass and foliage reject on normals and plane\ndistance; raise these if they stay noisy.");
+        ImGui::SeparatorText("History rejection");
+        static constexpr const char *kRejectionHint =
+            "Larger = more tolerant. Grass and foliage reject on normals and plane distance; raise "
+            "these if they stay noisy.";
         ImGui::SliderFloat("Lobe angle fraction", &options.ptNrdLobeAngleFraction, 0.01f, 1.0f, "%.2f");
+        settingHint(kRejectionHint);
         ImGui::SliderFloat("Roughness fraction", &options.ptNrdRoughnessFraction, 0.01f, 1.0f, "%.2f");
+        settingHint(kRejectionHint);
         ImGui::SliderFloat("Plane sensitivity", &options.ptNrdPlaneDistanceSensitivity, 0.005f, 0.5f, "%.3f",
                            ImGuiSliderFlags_Logarithmic);
+        settingHint(kRejectionHint);
         ImGui::SliderFloat("Disocclusion threshold", &options.ptNrdDisocclusionThreshold, 0.001f, 0.2f, "%.3f",
                            ImGuiSliderFlags_Logarithmic);
+        settingHint(kRejectionHint);
         ImGui::Checkbox("Anti-firefly", &options.ptNrdAntiFirefly);
         ImGui::TreePop();
     }
 #endif
-    ImGui::SeparatorText("Light shape");
-    ImGui::SliderFloat("Point emitter radius", &options.ptPointEmitterRatio, 0.01f, 0.5f, "%.2f x radius");
-    ImGui::TextDisabled("Point lights are spheres sized as a fraction of their\ninfluence radius, so falloff and penumbra are one\nquantity: the solid angle the emitter subtends.\nBrightness-neutral - this grades how soft shadows are\nand how hot a surface gets against a lamp, not the\noverall level.");
-    ImGui::TextDisabled("Diagnostics");
+
+    ImGui::SeparatorText("Diagnostics");
     ImGui::Checkbox("Trace stats", &options.ptTraceStats);
-    ImGui::TextDisabled("GPU counters in the engine log. Costs frame time;\nleave off when measuring.");
+    settingHint("GPU counters in the engine log. Costs frame time; leave off when measuring.");
+}
+
+void Editor::graphicsDebugViewSection() {
+    auto &options = _engine._options.graphics;
+
+    // Heads Advanced rather than holding a tab of its own: it was the only
+    // diagnostic control in the window, and a tab with one combo in it is a tab
+    // you stop opening. Not a tracer tool either - the channels are G-buffer
+    // quantities and every mode draws that G-buffer, so one selection answers
+    // in all three.
+    // Order must match the kDebug* numbering in slang/debug_view.slang.
+    ImGui::SeparatorText("Debug view");
+    static constexpr const char *kDebugViewNames[] = {
+        "Off", "Object categories", "Emissive highlight", "Normals",
+        "Roughness", "Metallic", "Lightmap", "Albedo",
+        "Traced: diffuse radiance", "Traced: specular radiance",
+        "Depth", "Traced: noise-free", "Motion", "Material id", "Feature bits"};
+    ImGui::Combo("Channel", &options.debugView, kDebugViewNames,
+                 static_cast<int>(std::size(kDebugViewNames)));
+    settingHint("Replaces the shaded image. Categories: blue rooms, red creatures, green "
+                "placeables, magenta doors, yellow equipment, cyan sky. Roughness, metallic and "
+                "depth are raw, not shaded. Feature bits: red env-map, green lightmap, blue "
+                "static, dimmed when unshadowed.\n\n"
+                "The three Traced channels are the tracer's own output split and exist nowhere "
+                "else; outside path tracing they draw a magenta 'not available' hatch rather than "
+                "black or some other channel. Any active view skips anti-aliasing, grade and "
+                "sharpen - it is not a picture.");
+}
+
+void Editor::graphicsMaterialsTab() {
+    auto &options = _engine._options.graphics;
 
     // Not a traced-only tool: these edit the shared material records, which
     // the raster PBR resolve reads as well - see applyCategoryOverride in
     // scene/render/admission.cpp.
-    ImGui::SeparatorText("Category overrides");
     static constexpr const char *kCategoryNames[] = {
         "GUI", "Rooms", "Creatures", "Placeables", "Doors",
         "Equipment", "Projectiles", "Cameras", "Uncategorized"};
+    static constexpr const char *kCategoryHint =
+        "Applied to every surface of the category as its material record is built. Color weight 1 "
+        "flat-paints for bug isolation.";
     for (int i = 0; i < 9; ++i) {
         // GUI, projectile and camera models never reach the TLAS.
         if (i == 0 || i == 6 || i == 7) {
             continue;
         }
         auto &override = options.categoryOverrides[i];
-        if (ImGui::TreeNode(kCategoryNames[i])) {
+        // Opened separately from the hint so the hint hangs off the header,
+        // which is the row that is there whether the node is open or shut.
+        const bool open = ImGui::TreeNode(kCategoryNames[i]);
+        settingHint(kCategoryHint);
+        if (open) {
             ImGui::ColorEdit3("Color", override.color);
             ImGui::SliderFloat("Color weight", &override.colorWeight, 0.0f, 1.0f, "%.2f");
             bool overrideRoughness = override.roughness >= 0.0f;
@@ -909,24 +1101,17 @@ void Editor::graphicsSettings() {
             ImGui::SliderFloat("Emission scale", &override.emissionScale, 0.0f, 8.0f, "%.2f");
             ImGui::SliderFloat("Env strength scale", &override.envScale, 0.0f, 4.0f, "%.2f");
             ImGui::SliderFloat("Metalness scale", &override.metallicScale, 0.0f, 8.0f, "%.2f");
-            ImGui::TextDisabled("Scales curated metalness, not an override.\nAbove zero it tints Rf0 toward albedo, which is\nwhat makes the specular factor chromatic - every\nstock material here is dielectric.");
+            settingHint("Scales curated metalness, not an override. Above zero it tints Rf0 toward "
+                        "albedo, which is what makes the specular factor chromatic - every stock "
+                        "material here is dielectric.");
             ImGui::TreePop();
         }
     }
-    ImGui::TextDisabled("Applied to every surface of the category as its material\nrecord is built. Color weight 1 flat-paints for bug\nisolation.");
+}
 
-    graphicsReapplySection();
-
-    ImGui::Spacing();
-    ImGui::TextUnformatted("Requires restart");
-    ImGui::Separator();
-    int textureQuality = static_cast<int>(options.textureQuality);
-    int anisotropic = options.anisotropicFiltering;
-    ImGui::BeginDisabled();
-    ImGui::SliderInt("Texture quality", &textureQuality, 0, 2);
-    ImGui::SliderInt("Anisotropic filtering", &anisotropic, 0, 4);
-    ImGui::EndDisabled();
-    ImGui::TextDisabled("Read once, before anything a rebuild could reach: the\ntexture pack is chosen while the game directory is\nopened, and anisotropy is baked into each texture's\nsampler as it loads.");
+void Editor::graphicsCommitFooter() {
+    auto &options = _engine._options.graphics;
+    auto changed = _engine.stagedGraphicsChanges();
 
     ImGui::Separator();
     if (ImGui::Button("Save settings")) {
@@ -938,11 +1123,34 @@ void Editor::graphicsSettings() {
             _settingsSaveStatus = "Settings saved to reone.cfg.";
         }
     }
+    settingHint("Writes the owned keys of reone.cfg, leaving every foreign line alone. Anything "
+                "staged is applied first, so the file matches the running frame.");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(changed.empty());
+    if (ImGui::Button("Apply")) {
+        _engine.applyStagedGraphics();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Revert")) {
+        _engine.revertStagedGraphics();
+    }
+    ImGui::EndDisabled();
+    if (changed.empty()) {
+        ImGui::TextDisabled("Nothing staged.");
+    } else {
+        // Named, because a staged control may be in any tab of this window -
+        // the anti-aliasing slot is in Renderer, the resolution in Quality -
+        // and the button that commits it is down here.
+        std::string pending = "Pending:";
+        for (const auto &name : changed) {
+            pending += " " + name;
+        }
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%s", pending.c_str());
+    }
     if (!_settingsSaveStatus.empty()) {
         ImGui::TextColored(_settingsSaveSucceeded ? ImVec4(0.3f, 0.9f, 0.4f, 1.0f) : ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
                            "%s", _settingsSaveStatus.c_str());
     }
-    ImGui::End();
 }
 
 void Editor::renderModeCombo() {
@@ -971,38 +1179,41 @@ void Editor::renderModeCombo() {
     }
     // Written from the CURRENT pair rather than fixed, so the hint never
     // promises a rebuild for a change that is instant, or the reverse.
-    if (staged.mode == graphics::RenderMode::PathTracing ||
-        options.mode == graphics::RenderMode::PathTracing) {
-        ImGui::TextDisabled("Path tracing is staged: it decides whether the tracer\nexists and what format the scene output carries, both\nfixed when the pipeline is built. Apply is at the\nbottom of this window.");
-    } else {
-        ImGui::TextDisabled("Retro and PBR switch on the next frame - a raster\npipeline carries both resolves and picks per frame.");
-    }
-    ImGui::TextDisabled("Primary visibility is rasterized in every mode; this\nselects who shades it. The anti-aliasing slot does not\nfollow the mode here - only --mode at startup defaults\nit - so set it yourself if you are comparing frames.");
-
-    // Here rather than in the Path tracing panel, because it is no longer a
-    // tracer tool: the channels are G-buffer quantities and every mode draws
-    // that G-buffer, so the same selection answers in all three. It sits beside
-    // the mode combo precisely so the two can be moved together when comparing.
-    ImGui::SeparatorText("Debug view");
-    // Order must match the kDebug* numbering in slang/debug_view.slang.
-    static constexpr const char *kDebugViewNames[] = {
-        "Off", "Object categories", "Emissive highlight", "Normals",
-        "Roughness", "Metallic", "Lightmap", "Albedo",
-        "Traced: diffuse radiance", "Traced: specular radiance",
-        "Depth", "Traced: noise-free", "Motion", "Material id", "Feature bits"};
-    ImGui::Combo("Channel", &options.debugView, kDebugViewNames,
-                 static_cast<int>(std::size(kDebugViewNames)));
-    ImGui::TextDisabled("Replaces the shaded image. Categories: blue rooms,\nred creatures, green placeables, magenta doors,\nyellow equipment, cyan sky. Roughness, metallic and\ndepth are raw, not shaded. Feature bits: red env-map,\ngreen lightmap, blue static, dimmed when unshadowed.");
-    ImGui::TextDisabled("The three Traced channels are the tracer's own output\nsplit and exist nowhere else; outside path tracing\nthey draw a magenta 'not available' hatch rather than\nblack or some other channel. Any active view skips\nanti-aliasing, grade and sharpen - it is not a picture.");
+    const bool staging = staged.mode == graphics::RenderMode::PathTracing ||
+                         options.mode == graphics::RenderMode::PathTracing;
+    settingHint(staging
+                    ? "Path tracing is staged: it decides whether the tracer exists and what "
+                      "format the scene output carries, both fixed when the pipeline is built. "
+                      "Apply is at the bottom of this window.\n\n"
+                      "Primary visibility is rasterized in every mode; this selects who shades it. "
+                      "The anti-aliasing slot does not follow the mode here - only --mode at "
+                      "startup defaults it - so set it yourself if you are comparing frames."
+                    : "Retro and PBR switch on the next frame - a raster pipeline carries both "
+                      "resolves and picks per frame.\n\n"
+                      "Primary visibility is rasterized in every mode; this selects who shades it. "
+                      "The anti-aliasing slot does not follow the mode here - only --mode at "
+                      "startup defaults it - so set it yourself if you are comparing frames.");
 }
 
 void Editor::graphicsReapplySection() {
     auto &staged = _engine.stagedGraphicsOptions();
 
-    ImGui::Spacing();
-    ImGui::TextUnformatted("Requires reapply");
-    ImGui::Separator();
-    ImGui::TextDisabled("These change what the pipeline allocates, so they are\nedited here and take effect on Apply, not as you drag.");
+    ImGui::SeparatorText("Requires Apply");
+
+    // Powers of two above 1024, which is exactly what the --shadowres exponent
+    // can express. A free slider could stage a value the console could neither
+    // report nor reproduce, and the two have to agree on what is set.
+    static const char *kShadowResolutions[] = {"1024", "2048", "4096", "8192"};
+    int shadowExponent = 0;
+    while (shadowExponent < 3 && (1 << (10 + shadowExponent)) < staged.shadowResolution) {
+        ++shadowExponent;
+    }
+    if (ImGui::Combo("Shadow resolution", &shadowExponent, kShadowResolutions,
+                     IM_ARRAYSIZE(kShadowResolutions))) {
+        staged.shadowResolution = 1 << (10 + shadowExponent);
+    }
+    settingHint("These change what the pipeline allocates, so they are edited here and take effect "
+                "on Apply, not as you drag.");
 
     static const struct {
         const char *name;
@@ -1029,42 +1240,7 @@ void Editor::graphicsReapplySection() {
     ImGui::InputInt("Height", &staged.height);
     staged.width = std::max(1, staged.width);
     staged.height = std::max(1, staged.height);
-    // Powers of two above 1024, which is exactly what the --shadowres exponent
-    // can express. A free slider could stage a value the console could neither
-    // report nor reproduce, and the two have to agree on what is set.
-    static const char *kShadowResolutions[] = {"1024", "2048", "4096", "8192"};
-    int shadowExponent = 0;
-    while (shadowExponent < 3 && (1 << (10 + shadowExponent)) < staged.shadowResolution) {
-        ++shadowExponent;
-    }
-    if (ImGui::Combo("Shadow resolution", &shadowExponent, kShadowResolutions,
-                     IM_ARRAYSIZE(kShadowResolutions))) {
-        staged.shadowResolution = 1 << (10 + shadowExponent);
-    }
     ImGui::Checkbox("V-sync", &staged.vsync);
-
-    auto changed = _engine.stagedGraphicsChanges();
-    ImGui::BeginDisabled(changed.empty());
-    if (ImGui::Button("Apply")) {
-        _engine.applyStagedGraphics();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Revert")) {
-        _engine.revertStagedGraphics();
-    }
-    ImGui::EndDisabled();
-    if (changed.empty()) {
-        ImGui::TextDisabled("Nothing staged.");
-        return;
-    }
-    // Named, because a staged control may be anywhere in this window - the
-    // anti-aliasing slot is up in its own section - and the button that commits
-    // it is down here.
-    std::string pending = "Pending:";
-    for (const auto &name : changed) {
-        pending += " " + name;
-    }
-    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%s", pending.c_str());
 }
 
 void Editor::frameTimes() {

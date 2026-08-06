@@ -112,11 +112,35 @@ private:
     bool _freeCameraUnavailable {false};
 
     /**
+     * One tab each, in the order a frame is usually worked on: what shades the
+     * image, what it costs, the tracer, the dials only an artefact sends you
+     * looking for, the diagnostic channels, and the shared material records.
+     *
+     * Their explanations are hover text rather than printed under each control
+     * - see settingHint in the implementation.
+     */
+    void graphicsRendererTab();
+    void graphicsQualityTab();
+    void graphicsPathTracingTab();
+    void graphicsAdvancedTab();
+    void graphicsDebugViewSection();
+    void graphicsMaterialsTab();
+
+    /**
+     * Save, Apply and Revert, pinned below the scrolling tabs.
+     *
+     * A staged control can be in any tab, so the row that commits them cannot
+     * be part of the flow that scrolls one of them out of sight.
+     */
+    void graphicsCommitFooter();
+
+    /**
      * Every control whose option changes what the pipeline allocates edits
-     * Engine::stagedGraphicsOptions() rather than the live struct, and one
-     * Apply button copies the staged reapply fields across and schedules the
-     * rebuild. The staging buffer lives on the Engine, not here, because the
-     * console drives the same one - the two must not be separate mechanisms.
+     * Engine::stagedGraphicsOptions() rather than the live struct, and the one
+     * Apply button in the footer copies the staged reapply fields across and
+     * schedules the rebuild. The staging buffer lives on the Engine, not here,
+     * because the console drives the same one - the two must not be separate
+     * mechanisms.
      */
     void graphicsReapplySection();
     /** The one render-mode control; live or staged depending on the value. */
