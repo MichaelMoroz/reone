@@ -82,9 +82,14 @@ float2 transformedUV(InstanceMaterial material, float2 uv) {
                   material.uv0.y * h.x + material.uv1.y * h.y + material.uv2.y * h.z);
 }
 
-// Keep the cutout thresholds in lockstep with candidateAlpha/commitsCoverage
-// in tracing/trace.slang. The gated draw publishes CUTOUT COVERAGE ONLY:
-// blended and additive surfaces contribute nothing until G8.
+// Keep the cutout thresholds in lockstep with candidateAlpha and
+// kAlphaTestThreshold in tracing/trace.slang. That agreement is now load
+// bearing rather than a nicety: the tracer reads its primary surface out of
+// this G-buffer, so if the two disagreed about which texels are there, the
+// traced mode would shade a surface no ray could have found.
+//
+// The gated draw publishes CUTOUT COVERAGE ONLY: blended and additive surfaces
+// contribute nothing until G8.
 bool commitsTracedCoverage(InstanceMaterial material, float2 uv, float vertexAlpha) {
     if (pushConstants.materialGated == kMegaCoverageUngated) return true;
 
@@ -263,7 +268,16 @@ struct GBufferOutput {
     float4 lightmapColor : SV_Target2;
     float4 selfIllumColor : SV_Target3;
     float2 motion : SV_Target4;
-    uint materialId : SV_Target5;
+    /**
+     * The merged-geometry triangle, R32Uint, cleared to 0xffffffff.
+     *
+     * This is the whole surface record rather than a decoded field of it: a
+     * consumer expands it back into the three vertices and so recovers the
+     * GEOMETRIC normal - which no interpolated, normal-mapped stored normal can
+     * stand in for - along with the material, through mergedMaterialIds. It
+     * replaced a separate material-id target for exactly that reason.
+     */
+    uint triangleId : SV_Target5;
 };
 
 float3 safeNormal(float3 value, float3 fallback) {
@@ -362,7 +376,7 @@ GBufferOutput sceneDrawFragment(Varyings input, uint primitiveId : SV_PrimitiveI
     output.selfIllumColor = float4(material.selfIllumColor.rgb,
                                    material.envMapDerivedLayer / 255.0);
     output.motion = computeMotion(input.curClipPos, input.prevClipPos);
-    output.materialId = materialIndex;
+    output.triangleId = triangleId;
     return output;
 }
 

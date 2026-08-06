@@ -52,7 +52,7 @@ static VkImageLayout sampledLayoutFor(const VulkanImage &image) {
 
 // The layout is generated from the binding points rather than written out, so
 // there is one place to change and no chance of the two drifting apart.
-static_assert(TextureUnits::gBufMaterialId == VulkanDescriptors::kNumTextures - 1,
+static_assert(TextureUnits::gBufTriangleId == VulkanDescriptors::kNumTextures - 1,
               "kNumTextures must cover every unit in TextureUnits");
 
 static_assert(UniformBlockBindingPoints::screenEffect ==

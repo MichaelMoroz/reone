@@ -30,7 +30,11 @@ import lib.skycube;
 [[vk::binding(4, 1)]] Sampler2D sGBufSelfIllum;
 [[vk::binding(5, 1)]] Sampler2D sGBufDepth;
 [[vk::binding(17, 1)]] SamplerCubeArray sPrefilteredEnvMapArray;
-[[vk::binding(21, 1), vk::image_format("r16ui")]] Sampler2D<uint> sGBufMaterialId;
+[[vk::binding(21, 1), vk::image_format("r32ui")]] Sampler2D<uint> sGBufTriangleId;
+// The merged triangle-to-material table. The G-buffer stores the triangle
+// because the tracer needs the geometry behind it; the material follows from
+// the triangle, so there is no material-id target for this pass to read.
+[[vk::binding(1, 2)]] StructuredBuffer<uint> mergedMaterialIds;
 [[vk::binding(2, 2)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
 [[vk::binding(3, 2)]] Sampler2D bindlessTextures[];
 [[vk::binding(5, 2)]] SamplerCube bindlessTextureCubes[];
@@ -48,7 +52,7 @@ struct ResolvePushConstants {
 
 static const uint kResolveFlagSky = 1u;
 
-static const uint kNoMaterial = 0xffffu;
+static const uint kNoTriangle = 0xffffffffu;
 static const uint kNoTexture = 0xffffffffu;
 
 /**
@@ -112,15 +116,15 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     float4 diffuseSample = sGBufDiffuse.Sample(input.uv);
     float4 lightmapSample = sGBufLightmap.Sample(input.uv);
     float4 selfIllumSample = sGBufSelfIllum.Sample(input.uv);
-    uint materialId = sGBufMaterialId.Load(int3(int2(input.position.xy), 0)).r;
+    uint triangleId = sGBufTriangleId.Load(int3(int2(input.position.xy), 0)).r;
 
-    // The material-id clear and an uncovered alpha-tested pixel both carry this
-    // sentinel, and nothing wrote depth there either - the material id and the
+    // The triangle-id clear and an uncovered alpha-tested pixel both carry this
+    // sentinel, and nothing wrote depth there either - the triangle id and the
     // depth come from one fragment - so this is exactly the set the sky
     // composite pass used to paint over. It is now the sky's own branch.
     // Without a bake the cube is black by construction, so skipping it writes
     // the same black rather than a different one.
-    if (materialId == kNoMaterial) {
+    if (triangleId == kNoTriangle) {
         if ((pushConstants.flags & kResolveFlagSky) == 0) {
             return float4(0.0, 0.0, 0.0, 1.0);
         }
@@ -133,7 +137,7 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
         // through display space used to do here.
         return float4(skyRadiance(sSkyCube, direction, 1.0), 1.0);
     }
-    InstanceMaterial material = instanceMaterials[materialId];
+    InstanceMaterial material = instanceMaterials[mergedMaterialIds[triangleId]];
 
     float3 eyePos = reconstructViewPos(input.uv);
     float3 eyeNormal = normalize(2.0 * sGBufEyeNormal.Sample(input.uv).xyz - 1.0);

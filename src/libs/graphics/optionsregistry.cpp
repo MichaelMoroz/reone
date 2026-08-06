@@ -356,6 +356,13 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                              "strength of the sharpen mask",
                              &GraphicsOptions::sharpenAmount, 0.0f, 4.0f));
 
+    // Common, not traced-only: the channels are G-buffer quantities and every
+    // mode draws that G-buffer. Sits here with the other frame-wide dials
+    // rather than in the path tracing block it used to belong to.
+    descs.push_back(intOpt("debugview", OptionApply::Live,
+                           "debug channel view in any render mode, 0 off",
+                           &GraphicsOptions::debugView, 0, 14));
+
     // Decided at the point of use, in SceneGraph::computeJitter, so it follows
     // the active resolver on the next frame with nothing rebuilt.
 
@@ -364,8 +371,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(boolOpt("ptdenoise", OptionApply::Live,
                             "enable the path tracing denoiser",
                             &GraphicsOptions::ptDenoise));
-    descs.push_back(intOpt("ptdebugview", OptionApply::Live, "path tracing debug view, 0 off",
-                           &GraphicsOptions::ptDebugView, 0, 12));
     descs.push_back(intOpt("ptnrdstabilized", OptionApply::Live, "REBLUR stabilized frames",
                            &GraphicsOptions::ptNrdMaxStabilizedFrames, 0, 63));
     descs.push_back(intOpt("ptnrdaccum", OptionApply::Live, "REBLUR accumulated frames",
@@ -521,16 +526,22 @@ const std::vector<GraphicsOptionDesc> &graphicsOptionDescs() {
 /**
  * Names an option answers to that are not its own.
  *
- * One entry so far: `post` used to switch the post-process pass on and off,
- * back when that pass was an effect rather than the frame's encode. The dial
- * that replaced it grades the frame, so it is spelled `grade` - but scripts and
- * commands files written against the old name keep working, and land on the
- * option that inherited its meaning. Aliases are resolved on lookup only, so
- * `gfx list` still names every option exactly once.
+ * `post` used to switch the post-process pass on and off, back when that pass
+ * was an effect rather than the frame's encode. The dial that replaced it
+ * grades the frame, so it is spelled `grade`.
+ *
+ * `ptdebugview` selected the path tracer's own channel views, back when only
+ * the traced mode honoured them. The same numbers now select the same channels
+ * in every mode, so the dial has dropped the prefix.
+ *
+ * In both cases scripts and commands files written against the old name keep
+ * working and land on the option that inherited the meaning. Aliases are
+ * resolved on lookup only, so `gfx list` still names every option exactly once.
  */
 static const std::unordered_map<std::string, std::string> &optionAliases() {
     static const std::unordered_map<std::string, std::string> aliases {
-        {"post", "grade"}};
+        {"post", "grade"},
+        {"ptdebugview", "debugview"}};
     return aliases;
 }
 

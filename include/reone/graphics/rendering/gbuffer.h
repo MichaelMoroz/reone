@@ -32,7 +32,16 @@ enum class GBufferAttachment {
     Lightmap,
     SelfIllum,
     Motion,
-    MaterialId,
+    /**
+     * The merged-geometry triangle the fragment came from.
+     *
+     * The one field a consumer can expand back into geometry rather than
+     * decode: the triangle's own vertices give the GEOMETRIC normal exactly,
+     * which an interpolated, normal-mapped stored normal cannot, and
+     * mergedMaterialIds indexed by it gives the material - so this attachment
+     * replaced the material id rather than joining it.
+     */
+    TriangleId,
 };
 
 inline constexpr std::array<GBufferAttachment, 6> kGBufferAttachments {
@@ -41,14 +50,21 @@ inline constexpr std::array<GBufferAttachment, 6> kGBufferAttachments {
     GBufferAttachment::Lightmap,
     GBufferAttachment::SelfIllum,
     GBufferAttachment::Motion,
-    GBufferAttachment::MaterialId,
+    GBufferAttachment::TriangleId,
 };
 
 /** A named, fixed-order set of deferred attachments. */
 class GBuffer {
 public:
-    /** R16_UINT clear value; valid material indices stop at 0xfffe. */
-    static constexpr uint32_t kNoMaterial = 0xffffu;
+    /**
+     * R32_UINT clear value: no geometry covered this pixel.
+     *
+     * Every consumer's sky test. Merged triangle ids are dense from zero, so
+     * the sentinel is the top of the range and a scene would have to reach
+     * 4294967295 triangles to collide with it; prepareMergedScene refuses
+     * before that can happen.
+     */
+    static constexpr uint32_t kNoTriangle = 0xffffffffu;
 
     explicit GBuffer(IRenderer &renderer) :
         _renderer(renderer) {
@@ -60,7 +76,7 @@ public:
     void init(glm::ivec2 extent);
     void deinit();
 
-    void setSamplers(Sampler color, Sampler depth, Sampler materialId);
+    void setSamplers(Sampler color, Sampler depth, Sampler triangleId);
     IImage &color(GBufferAttachment attachment);
     IImage &depth() { return *_depth; }
     std::vector<IImage *> colorImages();

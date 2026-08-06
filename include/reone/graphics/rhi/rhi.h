@@ -29,7 +29,7 @@ enum class Format {
     R8Unorm,
     R16Sfloat,
     R16G16Sfloat,
-    R16Uint,
+    R32Uint,
     R16G16B16A16Sfloat,
     R32Sfloat,
     R8G8B8A8Unorm,

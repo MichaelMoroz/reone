@@ -78,7 +78,7 @@ void RayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
                        IImage &output, const glm::mat4 &view,
                        const glm::mat4 &projection, const glm::vec4 &jitter,
                        RayQuerySubmission submission, const GpuScene::View &scene,
-                       const SkyBinding &sky) {
+                       const SkyBinding &sky, const GBufferBinding &gbuffer) {
     R_PROFILE_ZONE("RayQuery::render");
     const int frameIndex = _renderer.frameIndex();
     auto &frame = _frames[frameIndex];
@@ -114,7 +114,7 @@ void RayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
     const auto stats = _pipeline->render({commandBuffer, globalsOffset, output,
                                           view, projection, jitter, scene,
                                           *frame.tracingStructure, frameIndex,
-                                          _frameNumber, sky});
+                                          _frameNumber, sky, gbuffer});
     _lastSecondaryRays = stats.secondaryRays;
     _lastSecondaryMisses = stats.secondaryMisses;
     _lastSurvivingLights = stats.survivingLights;

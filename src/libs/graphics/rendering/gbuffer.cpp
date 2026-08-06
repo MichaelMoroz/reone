@@ -29,7 +29,7 @@ size_t GBuffer::attachmentIndex(GBufferAttachment attachment) {
     case GBufferAttachment::Lightmap: return 2;
     case GBufferAttachment::SelfIllum: return 3;
     case GBufferAttachment::Motion: return 4;
-    case GBufferAttachment::MaterialId: return 5;
+    case GBufferAttachment::TriangleId: return 5;
     }
     throw std::invalid_argument("Unknown G-buffer attachment");
 }
@@ -62,11 +62,11 @@ void GBuffer::deinit() {
 }
 
 void GBuffer::setSamplers(Sampler colorSampler, Sampler depthSampler,
-                          Sampler materialIdSampler) {
+                          Sampler triangleIdSampler) {
     for (auto &image : _color) {
         image->setSampler(colorSampler);
     }
-    color(GBufferAttachment::MaterialId).setSampler(materialIdSampler);
+    color(GBufferAttachment::TriangleId).setSampler(triangleIdSampler);
     _depth->setSampler(depthSampler);
 }
 
@@ -86,7 +86,7 @@ std::vector<IImage *> GBuffer::colorImages() {
 std::vector<Format> GBuffer::colorFormats() const {
     return {Format::R8G8B8A8Unorm, Format::R8G8B8A8Unorm,
             Format::R8G8B8A8Unorm, Format::R8G8B8A8Unorm,
-            Format::R16G16Sfloat, Format::R16Uint};
+            Format::R16G16Sfloat, Format::R32Uint};
 }
 
 } // namespace reone::graphics

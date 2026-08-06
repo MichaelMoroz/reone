@@ -17,16 +17,28 @@
 
 // Ray traversal. Exactly two kinds of ray exist:
 //
-//   ptTraceNearest - the normal ray: commits the nearest surface whose
-//                    has nonzero coverage. Compositing is the path's job,
-//                    not traversal's: punch-through coverage is binary,
-//                    blended coverage is a transmitting surface.
-//   ptTraceGuideNearest - the primary guide ray: commits only opaque or
-//                    binary cutout coverage; blended and additive surfaces
-//                    are invisible to it.
-//   ptShadowTransmittance - the shadow ray: accumulates transmittance to a
-//                    light, attenuated by punch-through coverage; additive
-//                    surfaces cast nothing and the sky never occludes.
+//   ptTraceNearest - the normal ray: commits the nearest surface a ray can
+//                    see at all.
+//   ptShadowTransmittance - the shadow ray: visibility to a light, blocked by
+//                    the same surfaces; the sky never occludes.
+//
+// Only two coverage kinds survive traversal, and they are named at every site:
+//
+//   CUTOUT coverage (kPtMaskPunchThrough) - a binary in-or-out alpha test on
+//   the authored texel. Decided here, once, with no RNG; a committed texel is
+//   solid substance from then on.
+//
+//   PURELY EMISSIVE surfaces (kPtSurfaceUnlitTransparent) - saber blades and
+//   glow planes. They occupy no volume: the ray commits them so the path can
+//   collect their radiance, then continues through unattenuated.
+//
+// Everything else non-opaque - a translucent surface that tints or attenuates
+// what is behind it - is NOT TRACED. Traversal skips those candidates outright,
+// so no ray, shadow ray included, can see one. That path used to shade the
+// surface and carry the transmitted remainder onward; it cost more than it
+// bought and a ray marcher is to replace it. The marcher's seam is exactly the
+// two `isBlendedCoverage` skips below and the blended branches that used to sit
+// beside the emissive ones in path_trace.slang.
 
 import lib.math;
 import tracing.resources;
@@ -78,20 +90,16 @@ bool isCutout(uint materialIndex) {
     return (instanceMaterials[materialIndex].featureMask & kPtMaskPunchThrough) != 0;
 }
 
+/** Non-emissive translucency. Not traced: rays skip these candidates. */
 bool isBlendedCoverage(uint materialIndex) {
     return (instanceMaterials[materialIndex].featureMask & kPtMaskBlendedCoverage) != 0;
 }
 
-bool commitsCoverage(uint materialIndex, float alpha) {
-    if (alpha < kPtAlphaTestEpsilon) return false;
-    return !isCutout(materialIndex) || alpha >= kAlphaTestThreshold;
-}
-
 /**
- * The nearest ray. Opaque geometry commits in hardware. For non-opaque
- * coverage candidates, clear texels are skipped outright; cutouts commit at
- * their binary threshold and blended surfaces commit at every remaining
- * coverage value. Additive surfaces always commit and pass through later.
+ * The nearest ray. Opaque geometry commits in hardware. Of the non-opaque
+ * candidates, PURELY EMISSIVE surfaces always commit (the path collects their
+ * radiance and passes through), CUTOUT coverage commits at its binary
+ * threshold, and non-emissive translucency is skipped - it is not traced.
  */
 public TraceHit ptTraceNearest(RayDesc ray) {
     RayQuery<RAY_FLAG_NONE> query;
@@ -100,48 +108,24 @@ public TraceHit ptTraceNearest(RayDesc ray) {
         if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
         uint geometryIndex = query.CandidateGeometryIndex();
         uint materialIndex = materialIndexFor(geometryIndex, query.CandidatePrimitiveIndex());
+        // PURELY EMISSIVE.
         if (instanceMaterials[materialIndex].surfaceType == kPtSurfaceUnlitTransparent) {
             query.CommitNonOpaqueTriangleHit();
             continue;
         }
-        if (!isCutout(materialIndex) && !isBlendedCoverage(materialIndex)) {
-            query.CommitNonOpaqueTriangleHit();
-            continue;
-        }
-        uint3 indices = ptTriangleIndices(geometryIndex, query.CandidatePrimitiveIndex());
-        float2 barycentrics = query.CandidateTriangleBarycentrics();
-        float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
-        if (commitsCoverage(materialIndex, candidateAlpha(materialIndex, indices, weights))) {
-            query.CommitNonOpaqueTriangleHit();
-        }
-    }
-    return committedHit(query);
-}
-
-/**
- * The primary guide ray. Hardware-opaque geometry still commits directly.
- * Of the non-opaque candidates, only binary cutout coverage is a guide
- * surface; blended coverage and additive emission are transparent. Other
- * terminating candidates retain their existing surface semantics.
- */
-public TraceHit ptTraceGuideNearest(RayDesc ray) {
-    RayQuery<RAY_FLAG_NONE> query;
-    query.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, ray);
-    while (query.Proceed()) {
-        if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
-        uint geometryIndex = query.CandidateGeometryIndex();
-        uint materialIndex = materialIndexFor(geometryIndex, query.CandidatePrimitiveIndex());
-        if (instanceMaterials[materialIndex].surfaceType == kPtSurfaceUnlitTransparent ||
-            isBlendedCoverage(materialIndex)) continue;
+        // The marcher's seam: what this skip drops is every translucent
+        // surface that tints or attenuates what is behind it.
+        if (isBlendedCoverage(materialIndex)) continue;
         if (!isCutout(materialIndex)) {
             query.CommitNonOpaqueTriangleHit();
             continue;
         }
+        // CUTOUT.
         uint3 indices = ptTriangleIndices(geometryIndex, query.CandidatePrimitiveIndex());
         float2 barycentrics = query.CandidateTriangleBarycentrics();
-        float3 weights = float3(1.0 - barycentrics.x - barycentrics.y,
-                                barycentrics.x, barycentrics.y);
-        if (candidateAlpha(materialIndex, indices, weights) >= kAlphaTestThreshold) {
+        float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
+        float alpha = candidateAlpha(materialIndex, indices, weights);
+        if (alpha >= kAlphaTestThreshold && alpha >= kPtAlphaTestEpsilon) {
             query.CommitNonOpaqueTriangleHit();
         }
     }
@@ -152,9 +136,11 @@ public TraceHit ptTraceGuideNearest(RayDesc ray) {
  * The shadow ray. Instance mask 0x1: the sky rides mask 0x2, visible to
  * normal rays that shade it as the environment but never an occluder - the
  * promoted sun sits beyond the dome, and with the full mask every sun ray
- * committed on it and the sun lit nothing at all. Additive surfaces are
- * emitters, not occluders. Cutouts above their threshold fully block; blended
- * coverage attenuates continuously. Clear texels do neither.
+ * committed on it and the sun lit nothing at all. PURELY EMISSIVE surfaces are
+ * emitters, not occluders. CUTOUT coverage above its threshold fully blocks and
+ * clear texels do not. Non-emissive translucency is skipped along with the
+ * partial transmittance it used to accumulate, so visibility is now binary and
+ * the walk stops at the first blocker.
  */
 public float ptShadowTransmittance(float3 origin, float3 geometricNormal, float3 direction,
                                    float lightDistance) {
@@ -178,22 +164,20 @@ public float ptShadowTransmittance(float3 origin, float3 geometricNormal, float3
         // shadow behavior only when the safety fallback keeps them in the TLAS.
         if (pushConstants.skyAvailable == 0 &&
             (instanceMaterials[materialIndex].featureMask & kPtMaskSky) != 0) continue;
+        // PURELY EMISSIVE surfaces cast nothing.
         if (instanceMaterials[materialIndex].surfaceType == kPtSurfaceUnlitTransparent) continue;
-        if (isCutout(materialIndex) || isBlendedCoverage(materialIndex)) {
+        // The marcher's seam: translucent occlusion is no longer traced.
+        if (isBlendedCoverage(materialIndex)) continue;
+        if (isCutout(materialIndex)) {
             uint3 indices = ptTriangleIndices(geometryIndex, query.CandidatePrimitiveIndex());
             float2 barycentrics = query.CandidateTriangleBarycentrics();
             float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
             float alpha = candidateAlpha(materialIndex, indices, weights);
             if (alpha < kPtAlphaTestEpsilon) continue;
-            if (isCutout(materialIndex)) {
-                if (alpha >= kAlphaTestThreshold) {
-                    transmittance = 0.0;
-                    break;
-                }
-            } else {
-                transmittance = clamp(transmittance * (1.0 - alpha), 0.0, 1.0);
+            if (alpha >= kAlphaTestThreshold) {
+                transmittance = 0.0;
+                break;
             }
-            if (transmittance < kShadowEpsilon) break;
         }
     }
     return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : transmittance;

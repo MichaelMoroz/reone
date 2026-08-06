@@ -52,8 +52,8 @@ inline VkFormat toVulkanFormat(Format format) {
         return VK_FORMAT_R16_SFLOAT;
     case Format::R16G16Sfloat:
         return VK_FORMAT_R16G16_SFLOAT;
-    case Format::R16Uint:
-        return VK_FORMAT_R16_UINT;
+    case Format::R32Uint:
+        return VK_FORMAT_R32_UINT;
     case Format::R16G16B16A16Sfloat:
         return VK_FORMAT_R16G16B16A16_SFLOAT;
     case Format::R32Sfloat:
@@ -82,8 +82,8 @@ inline Format fromVulkanFormat(VkFormat format) {
         return Format::R16Sfloat;
     case VK_FORMAT_R16G16_SFLOAT:
         return Format::R16G16Sfloat;
-    case VK_FORMAT_R16_UINT:
-        return Format::R16Uint;
+    case VK_FORMAT_R32_UINT:
+        return Format::R32Uint;
     case VK_FORMAT_R16G16B16A16_SFLOAT:
         return Format::R16G16B16A16Sfloat;
     case VK_FORMAT_R32_SFLOAT:

@@ -30,6 +30,8 @@
 #include "reone/graphics/rhi/commandbuffer.h"
 #include "reone/graphics/rendering/gpuscene.h"
 #include "reone/graphics/rendering/sky.h"
+// GBufferBinding: the rasterized primary the tracer is handed.
+#include "reone/graphics/rhi/pipelinecache.h"
 #include "reone/graphics/rhi/renderer.h"
 #include "reone/graphics/rhi/upscaler.h"
 
@@ -73,7 +75,32 @@ enum class SceneStep {
     /** After the display transform: an unsharp mask over display colour. */
     Sharpen,
     PostProcess,
+    /**
+     * A debug channel view, over the shaded image, in any render mode.
+     *
+     * Last and alone: it overwrites every pixel with a diagnostic rather than a
+     * picture, and the plan omits the anti-aliasing, grade and sharpen steps
+     * whenever it is present - filtering or tone-mapping a channel would change
+     * the values the view exists to show. Not appended in the traced mode when
+     * the selected channel is one of the tracer's own, because the kernel has
+     * already written that channel itself.
+     */
+    DebugView,
 };
+
+/**
+ * The debug channels that exist only inside the path tracer.
+ *
+ * Its demodulated diffuse and specular radiance and its noise-free channel are
+ * the kernel's own intermediates; no raster mode has anything to show for them,
+ * and substituting a different channel would make the diagnostic lie. The
+ * traced mode writes them from the kernel and skips the shared debug pass; the
+ * other modes run the pass, which paints an explicit "not available" card.
+ * Mirrors the kDebug* numbering in slang/debug_view.slang.
+ */
+inline bool isTracedOnlyDebugView(int view) {
+    return view == 8 || view == 9 || view == 11;
+}
 
 enum class SceneShadow {
     None,
@@ -106,6 +133,8 @@ struct PrimaryRayContext {
     glm::mat4 view {1.0f};
     glm::mat4 projection {1.0f};
     glm::vec4 jitter {0.0f};
+    /** The primary the geometry pass just rasterized; the tracer starts here. */
+    GBufferBinding gbuffer;
 };
 
 struct ExternalTarget {
@@ -249,6 +278,8 @@ private:
     void screenSpaceReflectionPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** The two bindings a resolve cannot hold in its persistent table. */
     DescriptorSet resolveSet(IImage *output);
+    /** This frame's rasterized primary, as the tracer is handed it. */
+    GBufferBinding gbufferBinding();
     /** Word zero of the resolve push constants, from this frame's state. */
     uint32_t resolveFlags() const;
     /** The common anti-aliasing slot; the option selects the occupant. */
@@ -257,6 +288,7 @@ private:
     void upscalePass(ICommandBuffer &cmd);
     /** The one place a mode's colour becomes display-referred. */
     void postProcessPass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    void debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     void sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** One tail pass: full-screen triangle from _output onto _tailColor, then
         the swap that makes the result the output. */

@@ -40,7 +40,8 @@ namespace {
 
 constexpr const char *kModules[] = {
     "scene_draw", "sky", "pbr_ibl", "pbr_resolve", "retro_resolve",
-    "path_trace", "nrd_resolve", "scene_resolve", "postprocess", "vk2d"};
+    "path_trace", "nrd_resolve", "scene_resolve", "postprocess", "vk2d",
+    "debug_view"};
 
 const char *parameterCategoryName(slang::ParameterCategory category) {
     switch (category) {

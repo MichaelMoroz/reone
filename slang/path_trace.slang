@@ -14,25 +14,35 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-// The path-tracing kernel. Every hit reads its material and vertex
-// attributes from GPU-resident data; no raster draw state is used.
+// The path-tracing kernel. Every hit past the primary reads its material and
+// vertex attributes from GPU-resident data; no raster draw state is used.
 //
-// The structure is exactly: visibility ray -> SPP loop -> bounce loop.
-// Transparent materials are surfaces like any other, committed nearest and
-// resolved by their surface model: additive light passes the ray through,
-// sky and prelit imagery terminate. The one exception is the visibility ray,
-// which walks past additive layers rather than letting them own the pixel -
-// see the walk below for why the guides cannot come from a glow plane.
+// The structure is: read the primary -> SPP loop -> bounce loop.
+//
+// There is no camera ray. Primary visibility is rasterized in this mode as in
+// every other, so the geometry pass has already resolved which surface each
+// pixel shows; tracing a ray to find it a second time was work spent proving
+// the two agree. tracing/primary.slang reconstructs that surface from the
+// G-buffer and lists, in one place, everything the G-buffer cannot answer that
+// a hit record could.
+//
+// Two coverage kinds are traced and no others. CUTOUT coverage is a binary
+// visibility test and is resolved in traversal. PURELY EMISSIVE surfaces
+// contribute their own radiance and let the ray through. Non-emissive
+// translucency - a surface that tints or attenuates what is behind it - is not
+// traced at all; a ray marcher is to take that over, and the seams it attaches
+// to are the two skips in tracing/trace.slang.
+//
 // Modules:
 //
 //   tracing.resources - bindings, the instance material record, fetches
 //   tracing.rng       - hashing and directional sampling
 //   tracing.brdf      - microfacet terms and color transforms
 //   tracing.material  - the three surface models behind ISurfaceModel
+//   tracing.primary   - the G-buffer primary
 //   tracing.trace     - the two ray kinds: nearest and shadow
 //   tracing.lighting  - per-vertex next-event estimation
 //   tracing.outputs   - the NRD-facing output split
-//   tracing.debug     - the debug views
 //
 // Material assignment and calibration overrides are CPU registry work; the
 // shader only evaluates what the admission baked into the material records.
@@ -42,47 +52,25 @@ import tracing.rng;
 import tracing.brdf;
 import tracing.resources;
 import tracing.material;
+import tracing.primary;
 import tracing.trace;
 import tracing.lighting;
 import tracing.outputs;
 
-// --- Debug channel views: the tracer's own diagnostics, its only consumer ---
-/*
- * Copyright (c) 2026 The reone project contributors
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// --- Debug channel views ---
+//
+// The channel selector is common to every render mode now, and most of what it
+// selects are G-buffer quantities every mode has. Those are rendered by the
+// shared debug pass (slang/debug_view.slang), which is also what paints the
+// "not available in this mode" card for the three below when the mode is not
+// this one. What is left here is exactly the set that exists only inside the
+// tracer, so only the tracer can show it. Numbering is the common one; the
+// gaps are the channels the shared pass owns.
 
-// Debug views, grouped behind one struct. Surface views (categories through
-// albedo) replace shading at the primary hit; channel views inspect the NRD
-// output split after it exists; the motion view renders the vectors
-// themselves. All numbering matches the Path tracing panel's combo.
-
-
-static const uint kPtDebugOff = 0;
-static const uint kPtDebugCategories = 1;
-static const uint kPtDebugEmissive = 2;
-static const uint kPtDebugNormals = 3;
-static const uint kPtDebugRoughness = 4;
-static const uint kPtDebugMetallic = 5;
-static const uint kPtDebugLightmap = 6;
-static const uint kPtDebugAlbedo = 7;
-static const uint kPtDebugDiffuseChannel = 8;
-static const uint kPtDebugSpecularChannel = 9;
-static const uint kPtDebugViewZ = 10;
-static const uint kPtDebugNoiseFree = 11;
-static const uint kPtDebugMotion = 12;
-
-static const float3 kCategoryPalette[9] = {
-    float3(0.5, 0.5, 0.5),  // GUI - never traced
-    float3(0.3, 0.5, 0.9),  // Room
-    float3(0.9, 0.3, 0.3),  // Creature
-    float3(0.3, 0.9, 0.4),  // Placeable
-    float3(0.9, 0.2, 0.9),  // Door
-    float3(0.9, 0.8, 0.2),  // Equipment
-    float3(0.5, 0.5, 0.5),  // Projectile - never traced
-    float3(0.5, 0.5, 0.5),  // Camera - never traced
-    float3(0.9, 0.5, 0.1),  // no model root
-};
+static const uint kDebugOff = 0;
+static const uint kDebugDiffuseChannel = 8;
+static const uint kDebugSpecularChannel = 9;
+static const uint kDebugNoiseFree = 11;
 
 struct PtDebug {
     uint view;
@@ -93,116 +81,51 @@ struct PtDebug {
         return debug;
     }
 
-    bool active() { return view != kPtDebugOff; }
-
-    /** Views 1-6 replace shading entirely at the primary hit. */
-    bool wantsSurfaceView() {
-        return view >= kPtDebugCategories && view <= kPtDebugAlbedo;
-    }
-
-    /** Views 7-11 inspect the output split at the end of the kernel. */
-    bool wantsChannelView() { return view >= kPtDebugDiffuseChannel; }
-
-    /** A baked background has no hit record but remains the sky category. */
-    float3 skyMissColor() { return float3(0.1, 0.8, 0.9); }
-
-    float3 surfaceColor(HitGeometry hit, SurfaceShading shading, float3 rayDirection) {
-        float shape = 0.35 + 0.65 * abs(dot(shading.normal, -rayDirection));
-        switch (view) {
-        case kPtDebugCategories: {
-            uint category = (instanceMaterials[hit.materialIndex].featureMask >> kPtCategoryShift) & kPtCategoryMask;
-            float3 color = kCategoryPalette[min(category, 8u)] * shape;
-            if ((instanceMaterials[hit.materialIndex].featureMask & kPtMaskSky) != 0) color = float3(0.1, 0.8, 0.9);
-            return color;
-        }
-        case kPtDebugEmissive: {
-            float emissiveLuma = dot(shading.emission, float3(0.2126, 0.7152, 0.0722));
-            return emissiveLuma > 0.001
-                       ? float3(1.0, 0.25 + 0.75 * saturate(emissiveLuma), 0.0)
-                       : dot(shading.albedo, float3(0.333, 0.333, 0.333)) * shape * float3(0.35);
-        }
-        case kPtDebugNormals:
-            return shading.normal * 0.5 + 0.5;
-        // Raw, deliberately: these two are the values NRD is handed, and the
-        // point of looking at them is to read the number off the screen.
-        // Multiplying by `shape` - as roughness used to - turns a data channel
-        // into a lit render and makes a wrong value indistinguishable from a
-        // steep surface. Normals and albedo above are unshaded for the same
-        // reason; only the categorical views get the shape cue.
-        case kPtDebugRoughness:
-            return float3(shading.roughness);
-        case kPtDebugMetallic:
-            return float3(shading.metallic);
-        case kPtDebugLightmap:
-            return shading.hasLightmap ? ptLinearToGamma(shading.lightmap)
-                                       : float3(0.9, 0.0, 0.9) * shape * 0.4;
-        default:
-            return ptLinearToGamma(shading.albedo);
-        }
+    /** True only for the channels no other mode can produce. */
+    bool wantsChannelView() {
+        return view == kDebugDiffuseChannel || view == kDebugSpecularChannel ||
+               view == kDebugNoiseFree;
     }
 
     /** Returns true and sets color when a channel view replaces the image. */
     bool channelColor(TraceOutputs outputs, out float3 color) {
         switch (view) {
-        case kPtDebugDiffuseChannel:
+        case kDebugDiffuseChannel:
             color = outputs.diffuse;
             return true;
-        case kPtDebugSpecularChannel:
+        case kDebugSpecularChannel:
             color = outputs.specular;
             return true;
-        case kPtDebugViewZ:
-            color = float3(saturate(abs(outputs.viewZ) / 100.0));
-            return true;
-        case kPtDebugNoiseFree:
+        case kDebugNoiseFree:
             color = outputs.noiseFree;
-            return true;
-        case kPtDebugMotion:
-            // xy around mid-grey, magnitude in blue: statics read flat,
-            // movers light up.
-            color = float3(saturate(outputs.motion.x * 4.0 + 0.5),
-                           saturate(outputs.motion.y * 4.0 + 0.5),
-                           saturate(length(outputs.motion) * 4.0));
             return true;
         default:
             color = float3(0.0);
             return false;
         }
     }
-
-    /** ViewZ and motion views bypass the display transform. */
-    bool rawChannelView() {
-        return view == kPtDebugViewZ || view == kPtDebugMotion;
-    }
 };
 
 /** Additive layers (sabers, glow planes) per path. */
 static const uint kMaxPassThroughSteps = 16;
-/**
- * Real transmitting hits (smoke) per path. This is independent of ptBounces:
- * a short stack of puffs must not consume the two scattering vertices, but a
- * malformed overlapping emitter stack must never spin a GPU ray forever.
- */
-static const uint kMaxTransmissionSteps = 12;
 
 /**
- * The one exit: write the split, then the image - a channel debug view when
- * one is active, the assembled color otherwise. Every path out of the kernel
- * ends here, so the debug views see sky and miss pixels too.
+ * The one exit: write the split, then the image - a channel debug view when one
+ * is active, the assembled color otherwise. Every path out of the kernel ends
+ * here, so the debug views see sky and miss pixels too.
  *
- * The assembled image leaves here linear. Every traced frame ends in the
- * common post-process pass, which owns the display transform, and a second
- * one applied here would be applied twice. A debug view is the exception in
- * both directions: it is a final diagnostic image the common tail is skipped
- * for, so it still finishes itself.
+ * The assembled image leaves here linear. Every traced frame ends in the common
+ * post-process pass, which owns the display transform, and a second one applied
+ * here would be applied twice. A debug view is the exception in both directions:
+ * it is a final diagnostic image the common tail is skipped for, so it still
+ * finishes itself.
  */
 void finishPixel(uint2 pixel, TraceOutputs outputs, PtDebug debug) {
     outputs.write(pixel);
     float3 color;
     if (debug.wantsChannelView() && debug.channelColor(outputs, color)) {
-        if (!debug.rawChannelView()) {
-            color = ptDisplayTransform(color, pushConstants.exposure, ptTonemapOperator());
-        }
-        outputImage[pixel] = float4(color, 1.0);
+        outputImage[pixel] = float4(
+            ptDisplayTransform(color, pushConstants.exposure, ptTonemapOperator()), 1.0);
         return;
     }
     outputImage[pixel] = float4(outputs.assemble(), 1.0);
@@ -231,10 +154,13 @@ void main() {
     uint height = dispatchDimensions.y;
     uint2 pixel = dispatchId.xy;
 
-    // Unproject both depth-range ends rather than assuming a perspective
-    // frustum: GUI scenes render through orthographic cameras, whose rays
-    // are parallel with per-pixel origins. The projection carries the TAA
-    // jitter, so the rays are jittered with it.
+    // The camera ray is no longer traced, but it is still the pixel's own
+    // direction: the BRDF needs a view vector, the normal is faced forward
+    // against it, and the ray cone is sized from it. Both depth-range ends are
+    // unprojected rather than assuming a perspective frustum, because GUI
+    // scenes render through orthographic cameras whose rays are parallel with
+    // per-pixel origins. The projection carries the TAA jitter, exactly as the
+    // geometry pass rasterised with it, so the two agree at sub-pixel scale.
     float2 ndc = ((float2(pixel) + 0.5) / float2(width, height)) * 2.0 - 1.0;
     ndc.y = -ndc.y;
     float4 nearH = mul(globalUniforms.projectionInv, float4(ndc, 0.0, 1.0));
@@ -257,165 +183,74 @@ void main() {
     TraceOutputs outputs = TraceOutputs.makeDefault();
     PtDebug debug = PtDebug.make();
 
-    // ---- The visibility ray ----
-    // Coverage is a plain fixed-threshold alpha test: no RNG, no dither, so
-    // the surface never flickers and the TAA jitter is the frame's only
-    // stochastic input.
-    //
-    // Additive layers own nothing but their own light. A saber blade or a
-    // glow plane in front of a wall contributes emission and nothing else -
-    // it must not publish depth, motion, normal, roughness or albedo, because
-    // those guides belong to the wall behind it. Letting the blade write them
-    // reprojects the pixel along the blade's motion and drags the background
-    // through TAA and the denoiser as a smear. So the ray walks the additive
-    // layers, paying each one's emission into the noise-free channel, until a
-    // surface with substance commits. That surface is the pixel.
-    float3 layerEmission = float3(0.0);
-    RayDesc probe = ray;
-    TraceHit primary;
-    HitGeometry primaryHit;
-    SurfaceShading primaryShading;
-    float primaryDistance = 0.0;
-    uint layers = 0;
-    while (true) {
-        primary = ptTraceNearest(probe);
-        if (!primary.hit) break;
-        primaryDistance += primary.hitT;
-        primaryHit = ptMakeHitGeometry(primary, probe, spreadAngle * primaryDistance);
-        primaryShading = ptShade(primaryHit);
-        if (instanceMaterials[primaryHit.materialIndex].surfaceType != kPtSurfaceUnlitTransparent) break;
-        layerEmission += primaryShading.emission;
-        if (++layers > kMaxPassThroughSteps) {
-            primary.hit = false;
-            break;
-        }
-        // Continue through the layer, not off it.
-        probe.Origin = primaryHit.position + probe.Direction * 1e-3;
-        probe.TMin = 0.001;
-    }
-    outputs.noiseFree = layerEmission;
-    if (!primary.hit) {
+    // ---- The primary surface ----
+    PrimarySurface primary = ptReadPrimary(pixel, uint2(width, height), ray, spreadAngle);
+    if (!primary.covered) {
+        // The sentinel material id: nothing was drawn here, so this is the sky.
+        // The same cube, through the same shared read, that both raster
+        // resolves composite - all three modes therefore keep one sky.
         if (pushConstants.skyAvailable != 0) {
             outputs.noiseFree += ptSkyRadiance(ray.Direction);
-            if (debug.wantsSurfaceView()) {
-                outputImage[pixel] = float4(debug.skyMissColor(), 1.0);
-                return;
-            }
         }
         finishPixel(pixel, outputs, debug);
         return;
     }
 
-    if (debug.wantsSurfaceView()) {
-        outputImage[pixel] = float4(debug.surfaceColor(primaryHit, primaryShading, ray.Direction), 1.0);
-        return;
-    }
+    HitGeometry primaryHit = primary.hit;
+    SurfaceShading primaryShading = primary.shading;
+    float primaryDistance = primary.distance;
+    // The continuation ray starts at the primary, pointing the way the camera
+    // looked. Nothing traverses it before the first scatter.
+    RayDesc probe = ray;
+    probe.Origin = primaryHit.position;
 
     // Transport remains tied to the shaded primary. In particular, its
     // demodulation factors cannot follow a different guide surface without
     // changing both the dumped radiance channels and the undenoised image.
     bool pbrPrimary = instanceMaterials[primaryHit.materialIndex].surfaceType == kPtSurfacePbr;
-    bool primaryBlendedCoverage =
-        (instanceMaterials[primaryHit.materialIndex].featureMask & kPtMaskBlendedCoverage) != 0;
-    float transportViewZ = primaryShading.terminatesPath
-                               ? kPtInfDistance
-                               : mul(globalUniforms.view,
-                                     float4(primaryHit.position, 1.0)).z;
-    if (pbrPrimary && !primaryBlendedCoverage) {
+    float surfaceViewZ = mul(globalUniforms.view, float4(primary.worldPosition, 1.0)).z;
+    // The denoiser's environment sentinel, not the surface's own depth: a
+    // terminating surface is radiance with nothing behind it.
+    float transportViewZ = primaryShading.terminatesPath ? kPtInfDistance : surfaceViewZ;
+    if (pbrPrimary) {
         float3 Rf0 = lerp(lerp(float3(0.04), primaryShading.albedo, primaryShading.metallic),
                           float3(1.0), primaryShading.envStrength);
-        ptNrdMaterialFactors(primaryShading.normal, -probe.Direction, primaryShading.albedo,
+        ptNrdMaterialFactors(primaryShading.normal, -ray.Direction, primaryShading.albedo,
                              primaryShading.metallic, Rf0, primaryShading.roughness,
                              outputs.transportDiffFactor, outputs.transportSpecFactor);
     }
 
-    // The guide surface is usually the transport primary, at no additional
-    // traversal cost. A blended primary is the exceptional path: continue
-    // just beyond it with a query that ignores every blended/additive layer.
-    bool guideNeedsTrace = primaryBlendedCoverage ||
-                           instanceMaterials[primaryHit.materialIndex].surfaceType ==
-                               kPtSurfaceUnlitTransparent;
-    TraceHit guide = primary;
-    HitGeometry guideHit = primaryHit;
-    SurfaceShading guideShading = primaryShading;
-    bool guideHitFound = true;
-    if (guideNeedsTrace) {
-        RayDesc guideRay = probe;
-        guideRay.Origin = primaryHit.position + guideRay.Direction *
-                          max(pushConstants.rayOriginOffset, 1e-3);
-        guideRay.TMin = 0.001;
-        guide = ptTraceGuideNearest(guideRay);
-        guideHitFound = guide.hit;
-        if (guideHitFound) {
-            guideHit = ptMakeHitGeometry(guide, guideRay,
-                                         spreadAngle * (primaryDistance + guide.hitT));
-            guideShading = ptShade(guideHit);
-        }
+    // The guide surface and the transport primary are now the same surface by
+    // construction: the G-buffer holds opaque and cutout coverage only, so
+    // there is no blended layer in front of the pixel for the guides to have to
+    // see past, and the second traversal that used to resolve one is gone.
+    //
+    // The sky sits at environment depth for the denoiser; every real surface
+    // reports its own depth and motion. An unlit surface keeps the default
+    // white factors because its radiance is emission.
+    outputs.normal = primaryShading.normal;
+    outputs.roughness = primaryShading.roughness;
+    outputs.viewZ = transportViewZ;
+    outputs.motion = primary.motion;
+    outputs.diffFactor = outputs.transportDiffFactor;
+    outputs.specFactor = outputs.transportSpecFactor;
+    // The comparison G-buffer follows raster exactly - and, now that the raster
+    // G-buffer is where these values came from, tautologically so. They are
+    // retained as the traced-side dump targets --dumptargets already names.
+    outputs.gBufferDiffuse = float4(ptLinearToGamma(primaryShading.albedo),
+                                    primaryShading.alpha);
+    outputs.gBufferEyeNormal = 0.5 * mul(primaryShading.normal,
+                                         (float3x3)globalUniforms.viewInv) + 0.5;
+    outputs.gBufferDepth = max(0.0, -surfaceViewZ);
+    outputs.gBufferMotion = primary.screenMotion;
+    // The sky keeps the far-plane defaults: it has no position to reproject and
+    // an upscaler must not try to chase one.
+    if (!primaryShading.terminatesPath) {
+        outputs.setUpscalerGuides(pixel, uint2(width, height), primary.worldPosition,
+                                  outputs.motion);
     }
 
-    if (guideHitFound) {
-        // The sky sits at environment depth for the denoiser; every real
-        // guide surface reports its own depth and motion. An unlit guide keeps
-        // the default white factors because its radiance is emission.
-        outputs.normal = guideShading.normal;
-        outputs.roughness = guideShading.roughness;
-        outputs.viewZ = guideShading.terminatesPath
-                            ? kPtInfDistance
-                            : mul(globalUniforms.view,
-                                  float4(guideHit.position, 1.0)).z;
-        outputs.motion = guideShading.terminatesPath
-                             ? float3(0.0)
-                             : ptMotionVector(guideHit);
-        if (instanceMaterials[guideHit.materialIndex].surfaceType == kPtSurfacePbr) {
-            if (!guideNeedsTrace) {
-                outputs.diffFactor = outputs.transportDiffFactor;
-                outputs.specFactor = outputs.transportSpecFactor;
-            } else {
-                float3 Rf0 = lerp(lerp(float3(0.04), guideShading.albedo,
-                                      guideShading.metallic),
-                                  float3(1.0), guideShading.envStrength);
-                ptNrdMaterialFactors(guideShading.normal, -ray.Direction,
-                                     guideShading.albedo, guideShading.metallic, Rf0,
-                                     guideShading.roughness, outputs.diffFactor,
-                                     outputs.specFactor);
-            }
-        }
-        // The comparison G-buffer follows raster exactly: diffuse is
-        // pre-lighting albedo, eye normal is signed view-space normal packed
-        // into [0,1], depth is positive linear view distance, and motion is
-        // current-minus-previous UV displacement from unjittered matrices.
-        // VulkanGBuffer stores the authored gamma-encoded texture colour (the
-        // deferred resolve converts it later), whereas tracing shades linear.
-        outputs.gBufferDiffuse = float4(ptLinearToGamma(guideShading.albedo),
-                                        guideShading.alpha);
-        outputs.gBufferEyeNormal = 0.5 * mul(guideShading.normal,
-                                             (float3x3)globalUniforms.viewInv) + 0.5;
-        float guideViewZ = mul(globalUniforms.view, float4(guideHit.position, 1.0)).z;
-        outputs.gBufferDepth = max(0.0, -guideViewZ);
-        if (!guideShading.terminatesPath) {
-            float4 currentClip = mul(globalUniforms.viewProjection,
-                                     float4(guideHit.position, 1.0));
-            float4 previousClip = mul(globalUniforms.prevViewProjection,
-                                      float4(guideHit.position + outputs.motion, 1.0));
-            if (currentClip.w > 1e-6 && previousClip.w > 1e-6) {
-                outputs.gBufferMotion = 0.5 * (currentClip.xy / currentClip.w -
-                                               previousClip.xy / previousClip.w);
-            }
-        }
-        // The sky keeps the far-plane defaults: it has no position to
-        // reproject and an upscaler must not try to chase one.
-        if (!guideShading.terminatesPath) {
-            outputs.setUpscalerGuides(pixel, uint2(width, height), guideHit.position,
-                                      outputs.motion);
-        }
-    }
-    // A transmitting primary carries radiance from surfaces behind it. That
-    // mixed signal cannot be demodulated by the particle's material factor:
-    // multiplying it back at composite would tint and darken the transmitted
-    // background. Keep the channel in radiance space and apply the smoke's
-    // response only to its own local contribution below.
-    float primaryOpacity = primaryBlendedCoverage ? primaryShading.alpha : 1.0;
-    outputs.noiseFree = layerEmission + primaryShading.emission * primaryOpacity;
+    outputs.noiseFree = primaryShading.emission;
 
     if (primaryShading.terminatesPath) {
         finishPixel(pixel, outputs, debug);
@@ -450,15 +285,12 @@ void main() {
         float firstScatterT = -1.0;
         uint scatters = 0;
         uint passThroughs = 0;
-        uint transmissions = 0;
 
         // ---- The bounce loop ----
         while (true) {
             float3 view = -path.Direction;
             PathSample sample = ptSampleRay(hit, shading, view, rng);
             if (sample.terminate) break;
-            bool blendedCoverage =
-                (instanceMaterials[hit.materialIndex].featureMask & kPtMaskBlendedCoverage) != 0;
             if (!sample.passThrough) {
                 DirectLight nee = ptDirectLight(hit, shading, view, rng);
                 if (!pathDecided) {
@@ -491,50 +323,17 @@ void main() {
                 primaryScatter = false;
                 if (++scatters > scatterBudget) break;
                 path.Origin = hit.position + hit.geometricNormal * pushConstants.rayOriginOffset;
-            } else if (!blendedCoverage) {
-                // Additive layers pass through unattenuated. The visibility
-                // walk already stepped past primary layers, so this is always
-                // a deeper vertex.
+            } else {
+                // PURELY EMISSIVE: the only pass-through left. Additive light
+                // occupies no volume, so the ray continues unattenuated; the
+                // radiance was already paid at the vertex below. This is always
+                // a deeper vertex - the G-buffer primary is never one of these
+                // unless it is also cutout, and that case terminates.
                 primaryScatter = false;
                 if (++passThroughs > kMaxPassThroughSteps) break;
                 pathWeight *= sample.weight;
                 // Continue through the surface, not off it.
                 path.Origin = hit.position + path.Direction * 1e-3;
-            } else {
-                // Blended coverage is a real, lit surface plus straight
-                // transmission. Its scatter contribution is alpha-weighted;
-                // only the transmitted remainder continues, and this does
-                // not spend a scattering bounce.
-                DirectLight nee = ptDirectLight(hit, shading, view, rng);
-                float opacity = shading.alpha;
-                if (!pathDecided) {
-                    pathDecided = true;
-                    specularPath = false;
-                }
-                if (primaryScatter) {
-                    // Transmitted background and the particle's local light
-                    // share one radiance-space channel. Demodulating both by
-                    // the particle response makes a 2%-opaque puff multiply
-                    // the entire background by its dark texture.
-                    diffuseChannel += opacity *
-                                      (nee.diffuse * diffuseMaterialResponse(shading, view) +
-                                       nee.specular);
-                } else {
-                    pathRadiance += pathWeight * opacity *
-                                    (nee.diffuse * diffuseMaterialResponse(shading, view) +
-                                     nee.specular);
-                }
-                primaryScatter = false;
-                // This is a hard termination condition. Retain every local
-                // contribution accumulated above, but never trace a 13th
-                // transmitting hit along this path.
-                if (++transmissions > kMaxTransmissionSteps) break;
-                pathWeight *= sample.weight;
-                // Offset along the outgoing ray: a transmissive surface must
-                // begin beyond the triangle it just hit, otherwise it can
-                // repeatedly re-hit itself and hang the device.
-                path.Origin = hit.position + path.Direction *
-                              max(pushConstants.rayOriginOffset, 1e-3);
             }
             if (max(pathWeight.x, max(pathWeight.y, pathWeight.z)) < 1e-3) break;
             path.Direction = sample.direction;
@@ -563,13 +362,8 @@ void main() {
             // is a sampling outcome and varies per sample and per frame.
             // Routing that to the noise-free target - as this did - put raw
             // path-tracer noise in the one channel that bypasses the
-            // denoiser, and TAA alone was left to average it. Only the
-            // visibility ray's deterministic layer walk earns that channel.
-            float hitOpacity =
-                (instanceMaterials[hit.materialIndex].featureMask & kPtMaskBlendedCoverage) != 0
-                    ? shading.alpha
-                    : 1.0;
-            pathRadiance += pathWeight * shading.emission * hitOpacity;
+            // denoiser, and TAA alone was left to average it.
+            pathRadiance += pathWeight * shading.emission;
             if (shading.terminatesPath) break;
             if (shading.hasLightmap) {
                 pathRadiance += pathWeight * shading.albedo * shading.lightmap *

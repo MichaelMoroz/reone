@@ -240,6 +240,25 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
     frameBindings.back().hasImageView = true;
     _pipeline->updateBindings(1, _renderer.frameIndex(),
                               {frameBindings.data(), static_cast<uint32_t>(frameBindings.size())});
+    // The rasterized primary. The kernel no longer traces a camera ray: the
+    // geometry pass has already decided which surface each pixel shows, and
+    // these are the attachments it decided it in. Written every frame with the
+    // rest of set 1 rather than once, because a pipeline rebuild or a resize
+    // hands over new images and nothing else would notice.
+    {
+        const std::array<TracingBinding, 7> gbufferBindings {{
+            {"gbufDiffuse", *input.gbuffer.diffuse},
+            {"gbufEyeNormal", *input.gbuffer.eyeNormal},
+            {"gbufLightmap", *input.gbuffer.lightmap},
+            {"gbufSelfIllum", *input.gbuffer.selfIllum},
+            {"gbufMotion", *input.gbuffer.motion},
+            {"gbufDepth", *input.gbuffer.depth},
+            {"gbufTriangleId", *input.gbuffer.triangleId},
+        }};
+        _pipeline->updateBindings(
+            1, _renderer.frameIndex(),
+            {gbufferBindings.data(), static_cast<uint32_t>(gbufferBindings.size())});
+    }
     // Texture ids are assigned by the resource cache at upload time. The set is
     // update-after-bind and partially-bound so new assets can take a slot
     // without rebuilding it or populating unrelated descriptors.
@@ -295,7 +314,7 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                                   std::max(0.0001f, _options.ptRayOffset),
                                   std::max(0.0f, _options.ptSunIntensity),
                                   (_options.ptTraceStats ? 1u : 0u) |
-                                      (static_cast<uint32_t>(std::clamp(_options.ptDebugView, 0, 12)) << 4) |
+                                      (static_cast<uint32_t>(std::clamp(_options.debugView, 0, 14)) << 4) |
                                       (static_cast<uint32_t>(std::clamp(_options.tonemap, 0, 1)) << 8),
                                   static_cast<uint32_t>(std::clamp(_options.ptBounces, 1, 8)),
                                   std::clamp(_options.ptPointEmitterRatio, 0.01f, 0.5f),
@@ -353,7 +372,7 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
         _restartHistoryRequested = false;
         _nrdDenoiser->denoise(commandBuffer, _renderer.frameIndex(), inputs, tuning, view, unjitteredProjection,
                                jitterPixels, frameNumber, restartHistory);
-        if (_options.ptDenoise && _options.ptDebugView == 0) {
+        if (_options.ptDenoise && _options.debugView == 0) {
             // The assembly from denoised channels, overwriting the trace
             // kernel's own write. Debug views keep the kernel's output.
             //

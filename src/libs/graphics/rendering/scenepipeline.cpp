@@ -68,6 +68,11 @@ struct ResolvePushConstants {
     uint32_t flags;
 };
 
+/** Mirrors DebugViewPushConstants in debug_view.slang. */
+struct DebugViewPushConstants {
+    uint32_t view;
+};
+
 /** A sky bake is available this frame; without it the resolves write black. */
 static constexpr uint32_t kResolveFlagSky = 1u;
 /** Screen-space occlusion; read by the PBR resolve alone. */
@@ -163,13 +168,16 @@ void ScenePipeline::init() {
         getTextureProperties(TextureUsage::ColorBuffer));
     auto depthSampler = _renderer.resources().sampler(
         getTextureProperties(TextureUsage::DepthBuffer));
-    auto materialIdProperties = getTextureProperties(TextureUsage::ColorBuffer);
-    materialIdProperties.minFilter = Texture::Filtering::Nearest;
-    materialIdProperties.magFilter = Texture::Filtering::Nearest;
-    auto materialIdSampler = _renderer.resources().sampler(materialIdProperties);
+    // An integer target admits no filtering at all, and a triangle id is a name
+    // rather than a quantity: interpolating two of them would name a third
+    // triangle that covers neither pixel.
+    auto triangleIdProperties = getTextureProperties(TextureUsage::ColorBuffer);
+    triangleIdProperties.minFilter = Texture::Filtering::Nearest;
+    triangleIdProperties.magFilter = Texture::Filtering::Nearest;
+    auto triangleIdSampler = _renderer.resources().sampler(triangleIdProperties);
     _output->setSampler(colorSampler);
     _tailColor->setSampler(colorSampler);
-    _gbuffer->setSamplers(colorSampler, depthSampler, materialIdSampler);
+    _gbuffer->setSamplers(colorSampler, depthSampler, triangleIdSampler);
 
     if (!_primaryRayMode) {
         glm::ivec2 shadowSize {_options.shadowResolution, _options.shadowResolution};
@@ -208,7 +216,7 @@ void ScenePipeline::init() {
              {15, _dirShadows.get()},
              {17, &_renderer.pbrTextures().prefilteredArray()},
              {19, _pointShadows.get()},
-             {21, &_gbuffer->color(GBufferAttachment::MaterialId)}});
+             {21, &_gbuffer->color(GBufferAttachment::TriangleId)}});
         _pbrResolveSet = descriptors.createPersistentTextureSet(
             {{1, &_gbuffer->color(GBufferAttachment::Diffuse)},
              {2, &_gbuffer->color(GBufferAttachment::EyeNormal)},
@@ -220,7 +228,7 @@ void ScenePipeline::init() {
              {16, &_renderer.pbrTextures().irradianceArray()},
              {17, &_renderer.pbrTextures().prefilteredArray()},
              {19, _pointShadows.get()},
-             {21, &_gbuffer->color(GBufferAttachment::MaterialId)}});
+             {21, &_gbuffer->color(GBufferAttachment::TriangleId)}});
     }
 
     _outputHandle = std::make_shared<Texture>(
@@ -322,15 +330,16 @@ const GpuScene::View &ScenePipeline::prepareMergedScene(
     if (!_mergedScene.vertices.buffer || _mergedScene.triangleCount == 0) {
         return _mergedScene;
     }
-    const auto materialCount =
-        _mergedScene.materials.size / sizeof(InstanceMaterial);
-    if (materialCount > GBuffer::kNoMaterial) {
-        warn("Vulkan: G-buffer R16_UINT material ID exhausted by " +
-                 std::to_string(materialCount) +
-                 " material records; refusing to wrap into the 0xffff sentinel",
+    // The G-buffer names the triangle, not the material, and every consumer
+    // reads the sentinel as "no geometry here". A merge that reached the
+    // sentinel would paint its last triangle as sky.
+    if (_mergedScene.triangleCount >= GBuffer::kNoTriangle) {
+        warn("Vulkan: G-buffer R32_UINT triangle ID exhausted by " +
+                 std::to_string(_mergedScene.triangleCount) +
+                 " merged triangles; refusing to wrap into the 0xffffffff sentinel",
              LogChannel::Graphics);
         throw std::runtime_error(
-            "Vulkan: too many materials for the G-buffer material ID");
+            "Vulkan: too many triangles for the G-buffer triangle ID");
     }
     _resolveMaterialSet = _renderer.descriptors().updateMegaDrawSet(
         _renderer.frameIndex(), _mergedScene, _renderer.resources());
@@ -436,9 +445,9 @@ void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
         RenderAttachment attachment {
             _gbuffer->color(gbufferAttachment).sampleView(),
             ImageLayout::ColorAttachment, AttachmentLoad::Clear, AttachmentStore::Store};
-        if (gbufferAttachment == GBufferAttachment::MaterialId) {
+        if (gbufferAttachment == GBufferAttachment::TriangleId) {
             attachment.clear.integer = true;
-            attachment.clear.uintValue = GBuffer::kNoMaterial;
+            attachment.clear.uintValue = GBuffer::kNoTriangle;
         }
         colors.push_back(attachment);
     }
@@ -548,6 +557,18 @@ uint32_t ScenePipeline::resolveFlags() const {
         flags |= kResolveFlagSSAO;
     }
     return flags;
+}
+
+GBufferBinding ScenePipeline::gbufferBinding() {
+    GBufferBinding binding;
+    binding.diffuse = &_gbuffer->color(GBufferAttachment::Diffuse);
+    binding.eyeNormal = &_gbuffer->color(GBufferAttachment::EyeNormal);
+    binding.lightmap = &_gbuffer->color(GBufferAttachment::Lightmap);
+    binding.selfIllum = &_gbuffer->color(GBufferAttachment::SelfIllum);
+    binding.motion = &_gbuffer->color(GBufferAttachment::Motion);
+    binding.depth = &_gbuffer->depth();
+    binding.triangleId = &_gbuffer->color(GBufferAttachment::TriangleId);
+    return binding;
 }
 
 DescriptorSet ScenePipeline::resolveSet(IImage *output) {
@@ -899,6 +920,60 @@ void ScenePipeline::postProcessPass(ICommandBuffer &cmd, uint32_t globalsOffset)
     tailPass(cmd, "postProcessFragment", globalsOffset, 0, &push, sizeof(push));
 }
 
+void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("ScenePipeline::debugViewPass record");
+    if (!_resolveMaterialSet) {
+        // No merged geometry, so no material records to index and nothing to
+        // report. Leave whatever the degenerate frame already published.
+        return;
+    }
+    transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
+    cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
+    // Written through a storage descriptor, over the whole image: the view
+    // replaces the shaded frame rather than compositing onto it.
+    cmd.transitionImage(*_output, ImageLayout::General);
+
+    PipelineKey key;
+    key.module = "debug_view";
+    key.computeEntry = "debugViewMain";
+    PipelineBinding pipeline = _renderer.pipelines().get(key);
+
+    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+
+    // Its own set rather than either resolve's: this pass wants the motion
+    // target, which neither resolve binds, and wants none of the shadow,
+    // irradiance or BRDF tables both of them do. Unit numbering is the
+    // resolves' own, which the modules declare once each.
+    auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
+        _renderer.uniformRing().frame(),
+        {{1, &_gbuffer->color(GBufferAttachment::Diffuse)},
+         {2, &_gbuffer->color(GBufferAttachment::EyeNormal)},
+         {3, &_gbuffer->color(GBufferAttachment::Lightmap)},
+         {4, &_gbuffer->color(GBufferAttachment::SelfIllum)},
+         {5, &_gbuffer->depth()},
+         {TextureUnits::gBufMotion, &_gbuffer->color(GBufferAttachment::Motion)},
+         {TextureUnits::gBufTriangleId, &_gbuffer->color(GBufferAttachment::TriangleId)}});
+
+    auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
+    cmd.bindComputePipeline(pipeline.pipeline);
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                 offsets.data(), static_cast<uint32_t>(offsets.size()));
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet,
+                                 nullptr, 0);
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kMegaDrawSet,
+                                 _resolveMaterialSet, nullptr, 0);
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kResolveSet,
+                                 resolveSet(_output.get()), nullptr, 0);
+    const DebugViewPushConstants push {
+        static_cast<uint32_t>(std::clamp(_options.debugView, 0, 14))};
+    cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));
+    cmd.dispatchCompute({(_targetSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
+                         (_targetSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});
+
+    cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+}
+
 void ScenePipeline::sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::sharpenPass record");
     // Last, after the display transform, because an unsharp mask is a
@@ -930,34 +1005,43 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
     _renderer.uniformRing().setGlobalsOffset(globalsOffset);
 
     if (_primaryRayMode) {
-        // V1b deliberately records primary visibility before tracing. The
-        // tracer still owns the rendered image in this step; the G-buffer is
-        // a validation target only and its read layout is published below.
+        // Primary visibility is recorded before the trace, and the tracer now
+        // READS it: the kernel reconstructs its primary surface from these
+        // attachments instead of tracing a camera ray to find the same surface
+        // a second time. They are therefore published as sampled BEFORE the
+        // trace rather than after it, which is where they used to be published
+        // when they were a validation target the trace was kept blind to.
         for (const auto step : plan.steps) {
             if (step == SceneStep::Geometry) {
                 geometryPass(cmd, globalsOffset, callbacks);
             }
         }
+        transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
+        cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
         cmd.transitionImage(*_output, ImageLayout::General);
         callbacks.renderPrimary(
             {&cmd, globalsOffset, _output.get(), _mergedScene,
-             globals.view, globals.projection, globals.jitter});
+             globals.view, globals.projection, globals.jitter, gbufferBinding()});
         cmd.transitionImage(*_output, ImageLayout::ShaderRead);
-        // Keep the raster result available to target previews and dumps, but
-        // never bind it into the trace path. This explicit handoff makes the
-        // independent validation channels insensitive to command ordering.
-        transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
-        cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
         // The common tail runs over the traced image exactly as it does over a
         // resolved one; the tracer stops at linear and the display transform
         // is the pass below, not the kernel.
         for (const auto step : plan.steps) {
-            if (step == SceneStep::AntiAliasing) {
+            if (step == SceneStep::Blended) {
+                // The traced tail runs the same transparency pass the raster
+                // tail does, and for the same reason: additive layers - saber
+                // blades, glow planes - are primary visibility that does not
+                // fit in a G-buffer, and since the tracer stopped traversing
+                // blended surfaces nothing else draws them.
+                blendedPass(cmd, globalsOffset, callbacks);
+            } else if (step == SceneStep::AntiAliasing) {
                 antiAliasingPass(cmd, globalsOffset);
             } else if (step == SceneStep::Sharpen) {
                 sharpenPass(cmd, globalsOffset);
             } else if (step == SceneStep::PostProcess) {
                 postProcessPass(cmd, globalsOffset);
+            } else if (step == SceneStep::DebugView) {
+                debugViewPass(cmd, globalsOffset);
             }
         }
         // The traced image is sampleable by now, so the preview can read it
@@ -1011,6 +1095,9 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
         case SceneStep::PostProcess:
             postProcessPass(cmd, globalsOffset);
             break;
+        case SceneStep::DebugView:
+            debugViewPass(cmd, globalsOffset);
+            break;
         }
     }
 
@@ -1059,8 +1146,8 @@ static std::optional<DumpFormat> dumpFormatFor(Format format) {
         return DumpFormat {4, NpyType::UInt8, false};
     case Format::R8Unorm:
         return DumpFormat {1, NpyType::UInt8, false};
-    case Format::R16Uint:
-        return DumpFormat {1, NpyType::UInt16, false};
+    case Format::R32Uint:
+        return DumpFormat {1, NpyType::UInt32, false};
     case Format::R16Sfloat:
         return DumpFormat {1, NpyType::Float32, true};
     case Format::R16G16Sfloat:
@@ -1136,10 +1223,10 @@ std::vector<ScenePipeline::Target> ScenePipeline::targetEntries(
     }
     static const char *kDisplayNames[kGBufferAttachments.size()] = {
         "G-buffer diffuse", "G-buffer eye normal", "G-buffer lightmap",
-        "G-buffer self-illum", "G-buffer motion", "G-buffer material ID"};
+        "G-buffer self-illum", "G-buffer motion", "G-buffer triangle ID"};
     static const char *kDumpNames[kGBufferAttachments.size()] = {
         "g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_lightmap",
-        "g_buffer_self_illum", "g_buffer_motion", "g_buffer_material_id"};
+        "g_buffer_self_illum", "g_buffer_motion", "g_buffer_triangle_id"};
     for (size_t i = 0; i < kGBufferAttachments.size(); ++i) {
         auto attachment = kGBufferAttachments[i];
         auto kind = attachment == GBufferAttachment::EyeNormal ? TargetKind::EyeNormal : attachment == GBufferAttachment::Motion ? TargetKind::Motion

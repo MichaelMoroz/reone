@@ -74,6 +74,27 @@ public static const float kPtAlphaTestEpsilon = 0.01;
 // most one selected sky room per module.
 [[vk::binding(9, 1)]] public SamplerCube skyCube;
 
+// The rasterized primary. Every mode draws this G-buffer before shading, so in
+// this one the tracer reads its primary surface out of it rather than tracing a
+// camera ray to find the same surface twice. Formats and encodings are
+// VulkanGBuffer's, so these are the identical texels pbr_resolve.slang and
+// retro_resolve.slang read - see tracing/primary.slang for the decode.
+[[vk::binding(10, 1)]] public Sampler2D gbufDiffuse;
+[[vk::binding(11, 1)]] public Sampler2D gbufEyeNormal;
+[[vk::binding(12, 1)]] public Sampler2D gbufLightmap;
+[[vk::binding(13, 1)]] public Sampler2D gbufSelfIllum;
+[[vk::binding(14, 1)]] public Sampler2D gbufMotion;
+[[vk::binding(15, 1)]] public Sampler2D gbufDepth;
+// The triangle the fragment came from, in the same merged numbering
+// ptTriangleIndices and mergedMaterialIds are addressed by. It is the one
+// attachment that is expanded rather than decoded: primary.slang fetches its
+// three vertices to build the geometric normal the stored normal cannot supply,
+// and takes the material from mergedMaterialIds at the same index.
+[[vk::binding(16, 1), vk::image_format("r32ui")]] public Sampler2D<uint> gbufTriangleId;
+
+/** The G-buffer's cleared triangle id: nothing was drawn, so this is the sky. */
+public static const uint kPtNoTriangle = 0xffffffffu;
+
 public struct PtPushConstants {
     public uint frameIndex;
     public uint samplesPerPixel;
@@ -129,9 +150,20 @@ public bool ptStatsEnabled() {
 
 public uint geometryBase(uint geometryIndex) { return geometryIndex == 0 ? pushConstants.geometryBase0 : pushConstants.geometryBase1; }
 public uint materialIndexFor(uint geometryIndex, uint primitive) { return mergedMaterialIds[geometryBase(geometryIndex) + primitive]; }
-public uint3 ptTriangleIndices(uint geometryIndex, uint primitive) {
-    uint first = (geometryBase(geometryIndex) + primitive) * 3;
+/**
+ * The triangle's three merged vertex indices, from a triangle id.
+ *
+ * Traversal names a triangle as (geometry, primitive) and adds the base; the
+ * raster pass writes the summed id straight into the G-buffer. Both end up
+ * indexing this one array, which is what lets primary.slang recover a traced
+ * hit record's geometry exactly.
+ */
+public uint3 ptTriangleIndicesById(uint triangleId) {
+    uint first = triangleId * 3;
     return uint3(mergedIndices[first], mergedIndices[first + 1], mergedIndices[first + 2]);
+}
+public uint3 ptTriangleIndices(uint geometryIndex, uint primitive) {
+    return ptTriangleIndicesById(geometryBase(geometryIndex) + primitive);
 }
 
 public float2 ptTransformedUV(InstanceMaterial material, float2 uv) {

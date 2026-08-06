@@ -64,7 +64,13 @@ import lib.skycube;
 [[vk::binding(13, 1)]] Sampler2D sBRDFLUT;
 [[vk::binding(16, 1)]] SamplerCubeArray sIrradianceMapArray;
 [[vk::binding(17, 1)]] SamplerCubeArray sPrefilteredEnvMapArray;
-[[vk::binding(21, 1), vk::image_format("r16ui")]] Sampler2D<uint> sGBufMaterialId;
+[[vk::binding(21, 1), vk::image_format("r32ui")]] Sampler2D<uint> sGBufTriangleId;
+// The merged triangle-to-material table, the same array scene_draw.slang read
+// to decide what to shade. This pass now takes the material through it rather
+// than from a G-buffer target of its own: the triangle id is stored because the
+// tracer needs the geometry, and once it is there a material target is a second
+// copy of something already on the pixel.
+[[vk::binding(1, 2)]] StructuredBuffer<uint> mergedMaterialIds;
 [[vk::binding(2, 2)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
 [[vk::binding(3, 2)]] Sampler2D bindlessTextures[];
 [[vk::binding(5, 2)]] SamplerCube bindlessTextureCubes[];
@@ -85,7 +91,7 @@ struct ResolvePushConstants {
 static const uint kResolveFlagSky = 1u;
 static const uint kResolveFlagSSAO = 2u;
 
-static const uint kNoMaterial = 0xffffu;
+static const uint kNoTriangle = 0xffffffffu;
 static const uint kNoTexture = 0xffffffffu;
 
 /** Roughness spans this many prefiltered mips; see VulkanPBRTextures. */
@@ -276,14 +282,14 @@ float3 resolveSurface(float2 uv, int2 pixel) {
     float4 mainTexSample = sGBufDiffuse.SampleLevel(uv, 0.0);
     float4 lightmapSample = sGBufLightmap.SampleLevel(uv, 0.0);
     float4 selfIllumSample = sGBufSelfIllum.SampleLevel(uv, 0.0);
-    uint materialId = sGBufMaterialId.Load(int3(pixel, 0)).r;
+    uint triangleId = sGBufTriangleId.Load(int3(pixel, 0)).r;
 
-    // Nothing was drawn here, and nothing wrote depth either - the material id
+    // Nothing was drawn here, and nothing wrote depth either - the triangle id
     // and the depth come from one fragment - so this is exactly the set the sky
     // composite pass used to paint over, and it is now the sky's own branch.
     // Lighting it would tint the whole background; without a bake the cube is
     // black by construction, so skipping it writes the same black as before.
-    if (materialId == kNoMaterial) {
+    if (triangleId == kNoTriangle) {
         if ((pushConstants.flags & kResolveFlagSky) == 0) {
             return float3(0.0);
         }
@@ -294,7 +300,7 @@ float3 resolveSurface(float2 uv, int2 pixel) {
         // so the cube is composited at identity; the encode is the post pass's.
         return skyRadiance(sSkyCube, direction, 1.0);
     }
-    InstanceMaterial material = instanceMaterials[materialId];
+    InstanceMaterial material = instanceMaterials[mergedMaterialIds[triangleId]];
 
     float3 eyePos = reconstructViewPos(uv);
     float3 eyeNormal = normalize(2.0 * sGBufEyeNormal.SampleLevel(uv, 0.0).xyz - 1.0);

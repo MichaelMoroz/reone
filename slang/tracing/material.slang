@@ -197,7 +197,10 @@ public float ptRayConeLod(InstanceMaterial material, uint3 indices, float coneWi
 // Curated channel op: mode 0 passes the derived value through, mode 1
 // overrides with a constant, mode 2 evaluates
 // lerp(base, smoothstep(a, b, dot(albedo, weights)), t).
-float curatedChannel(float4 A, float4 B, float3 albedo, float current) {
+//
+// Public because tracing/primary.slang evaluates the same curation over a
+// G-buffer texel instead of over a hit record, and the two must not drift.
+public float curatedChannel(float4 A, float4 B, float3 albedo, float current) {
     if (A.x < 0.5) return current;
     if (A.x < 1.5) return A.y;
     return lerp(A.y, smoothstep(A.z, A.w, dot(albedo, B.yzw)), B.x);
@@ -279,18 +282,14 @@ public struct PbrSurface : ISurfaceModel {
 
     public PathSample sampleRay(HitGeometry hit, SurfaceShading shading, float3 view, inout uint rng) {
         PathSample sample;
-        // Coverage is transport, not traversal roulette. A blended particle
-        // shades at this vertex, then carries the unoccluded ray onward in
-        // the same direction. Cutout and ordinary opaque PBR still scatter.
-        if ((instanceMaterials[hit.materialIndex].featureMask & kPtMaskBlendedCoverage) != 0) {
-            sample.direction = hit.rayDirection;
-            sample.weight = float3(1.0 - shading.alpha);
-            sample.demodulatedWeight = sample.weight;
-            sample.specularLobe = false;
-            sample.passThrough = true;
-            sample.terminate = false;
-            return sample;
-        }
+        // Non-emissive translucency is not traced. A blended surface used to
+        // shade here and carry the remainder of the ray onward, accumulating
+        // transmission through every puff and pane it crossed; that path cost
+        // more than it bought and a ray marcher is to replace it. Rays no
+        // longer see such a surface at all - traversal skips it - so the only
+        // coverage this model still resolves is CUTOUT, which traversal has
+        // already decided as a binary in-or-out and which therefore scatters
+        // exactly like opaque PBR from here on.
         sample.terminate = false;
         sample.passThrough = false;
         sample.demodulatedWeight = sample.weight;

@@ -25,6 +25,7 @@ namespace graphics {
 enum class NpyType {
     UInt8,
     UInt16,
+    UInt32,
     Float16,
     Float32
 };

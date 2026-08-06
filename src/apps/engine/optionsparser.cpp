@@ -127,8 +127,10 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("sharpen", value<bool>()->default_value(options->graphics.sharpen), "sharpen the finished frame (unsharp mask, after the display transform)") //
         ("sharpenamount", value<float>()->default_value(options->graphics.sharpenAmount), "strength of that mask")       //
         ("ptdenoise", value<bool>()->default_value(options->graphics.ptDenoise), "enable the path tracing denoiser")           //
-        ("ptdebugview", value<int>()->default_value(options->graphics.ptDebugView),
-         "path tracing debug view, 0 off")                                                                                //
+        ("debugview", value<int>()->default_value(options->graphics.debugView),
+         "debug channel view in any render mode, 0 off")                                                                  //
+        ("ptdebugview", value<int>()->default_value(options->graphics.debugView),
+         "deprecated alias for --debugview")                                                                              //
         ("ptnrdstabilized", value<int>()->default_value(options->graphics.ptNrdMaxStabilizedFrames),
          "REBLUR stabilized frames; 0 disables its temporal stabilization pass")                                              //
         ("ptnrdaccum", value<int>()->default_value(options->graphics.ptNrdMaxAccumulatedFrames),
@@ -265,7 +267,15 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.sharpen = vars["sharpen"].as<bool>();
     options->graphics.sharpenAmount = std::max(0.0f, vars["sharpenamount"].as<float>());
     options->graphics.ptDenoise = vars["ptdenoise"].as<bool>();
-    options->graphics.ptDebugView = std::clamp(vars["ptdebugview"].as<int>(), 0, 12);
+    // Same shape as --grade / --post above: the dial dropped its pt prefix when
+    // the views stopped being tracer-only, and the old spelling keeps working
+    // rather than breaking every script already written against it. An explicit
+    // --debugview wins; otherwise --ptdebugview is read, and both default to
+    // the same value, so a run that passes neither is unaffected.
+    options->graphics.debugView =
+        std::clamp(vars["debugview"].defaulted() ? vars["ptdebugview"].as<int>()
+                                                 : vars["debugview"].as<int>(),
+                   0, 14);
     options->graphics.ptNrdMaxStabilizedFrames = std::max(0, vars["ptnrdstabilized"].as<int>());
     options->graphics.ptNrdMaxAccumulatedFrames = std::clamp(vars["ptnrdaccum"].as<int>(), 0, 63);
     options->graphics.ptNrdMaxFastAccumulatedFrames = std::max(0, vars["ptnrdfastaccum"].as<int>());

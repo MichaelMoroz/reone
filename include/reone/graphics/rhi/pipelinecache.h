@@ -48,6 +48,25 @@ struct TracingStats {
     uint32_t bindlessTextures {0};
 };
 
+/**
+ * The rasterized primary, handed to the tracer instead of a camera ray.
+ *
+ * Every mode runs the geometry pass before it shades anything, so by the time
+ * the tracer starts these attachments already say which surface each pixel
+ * shows. The kernel reads its primary out of them and traces only outwards; the
+ * images must therefore be published as sampled before the trace is recorded,
+ * not after it as they were when they were validation targets only.
+ */
+struct GBufferBinding {
+    IImage *diffuse {nullptr};
+    IImage *eyeNormal {nullptr};
+    IImage *lightmap {nullptr};
+    IImage *selfIllum {nullptr};
+    IImage *motion {nullptr};
+    IImage *depth {nullptr};
+    IImage *triangleId {nullptr};
+};
+
 /** Everything the tracing implementation needs to turn one merged scene into pixels. */
 struct TracingPipelineInput {
     ICommandBuffer &commandBuffer;
@@ -61,6 +80,7 @@ struct TracingPipelineInput {
     int frameIndex {0};
     uint32_t frameNumber {0};
     SkyBinding sky;
+    GBufferBinding gbuffer;
 };
 
 struct TracingChannel {

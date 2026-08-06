@@ -84,7 +84,7 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"ptrayoffset", formatConfigFloat(options.ptRayOffset)},
         {"pttracestats", std::to_string(options.ptTraceStats)},
         {"ptdenoise", std::to_string(options.ptDenoise)},
-        {"ptdebugview", std::to_string(options.ptDebugView)},
+        {"debugview", std::to_string(options.debugView)},
         {"tonemap", std::to_string(options.tonemap)},
         {"exposure", formatConfigFloat(options.exposure)},
         {"ptpointemitterratio", formatConfigFloat(options.ptPointEmitterRatio)},
@@ -878,16 +878,6 @@ void Editor::graphicsSettings() {
     ImGui::SeparatorText("Light shape");
     ImGui::SliderFloat("Point emitter radius", &options.ptPointEmitterRatio, 0.01f, 0.5f, "%.2f x radius");
     ImGui::TextDisabled("Point lights are spheres sized as a fraction of their\ninfluence radius, so falloff and penumbra are one\nquantity: the solid angle the emitter subtends.\nBrightness-neutral - this grades how soft shadows are\nand how hot a surface gets against a lamp, not the\noverall level.");
-    ImGui::SeparatorText("Debug view");
-    // Order must match kPtDebug* in slang/tracing/debug.slang.
-    static constexpr const char *kDebugViewNames[] = {
-        "Off", "Object categories", "Emissive highlight", "Normals",
-        "Roughness", "Metallic", "Lightmap", "Albedo",
-        "Denoiser: diffuse channel", "Denoiser: specular channel",
-        "Denoiser: viewZ", "Denoiser: noise-free", "Denoiser: motion"};
-    ImGui::Combo("View", &options.ptDebugView, kDebugViewNames,
-                 static_cast<int>(std::size(kDebugViewNames)));
-    ImGui::TextDisabled("Replaces shading at the primary hit. Categories:\nblue rooms, red creatures, green placeables,\nmagenta doors, yellow equipment, cyan sky.\nRoughness and metallic are raw, not shaded.\nDenoiser views show the NRD output split, with\ndiffuse demodulated - it is transport, not colour.");
     ImGui::TextDisabled("Diagnostics");
     ImGui::Checkbox("Trace stats", &options.ptTraceStats);
     ImGui::TextDisabled("GPU counters in the engine log. Costs frame time;\nleave off when measuring.");
@@ -988,6 +978,22 @@ void Editor::renderModeCombo() {
         ImGui::TextDisabled("Retro and PBR switch on the next frame - a raster\npipeline carries both resolves and picks per frame.");
     }
     ImGui::TextDisabled("Primary visibility is rasterized in every mode; this\nselects who shades it. The anti-aliasing slot does not\nfollow the mode here - only --mode at startup defaults\nit - so set it yourself if you are comparing frames.");
+
+    // Here rather than in the Path tracing panel, because it is no longer a
+    // tracer tool: the channels are G-buffer quantities and every mode draws
+    // that G-buffer, so the same selection answers in all three. It sits beside
+    // the mode combo precisely so the two can be moved together when comparing.
+    ImGui::SeparatorText("Debug view");
+    // Order must match the kDebug* numbering in slang/debug_view.slang.
+    static constexpr const char *kDebugViewNames[] = {
+        "Off", "Object categories", "Emissive highlight", "Normals",
+        "Roughness", "Metallic", "Lightmap", "Albedo",
+        "Traced: diffuse radiance", "Traced: specular radiance",
+        "Depth", "Traced: noise-free", "Motion", "Material id", "Feature bits"};
+    ImGui::Combo("Channel", &options.debugView, kDebugViewNames,
+                 static_cast<int>(std::size(kDebugViewNames)));
+    ImGui::TextDisabled("Replaces the shaded image. Categories: blue rooms,\nred creatures, green placeables, magenta doors,\nyellow equipment, cyan sky. Roughness, metallic and\ndepth are raw, not shaded. Feature bits: red env-map,\ngreen lightmap, blue static, dimmed when unshadowed.");
+    ImGui::TextDisabled("The three Traced channels are the tracer's own output\nsplit and exist nowhere else; outside path tracing\nthey draw a magenta 'not available' hatch rather than\nblack or some other channel. Any active view skips\nanti-aliasing, grade and sharpen - it is not a picture.");
 }
 
 void Editor::graphicsReapplySection() {

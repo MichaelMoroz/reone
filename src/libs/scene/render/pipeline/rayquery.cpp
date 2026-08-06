@@ -68,7 +68,8 @@ void RayQueryPipeline::render(const PrimaryRayContext &context,
     // it for every mode. The tracer only consumes the cube.
     _native->render(*context.commandBuffer, context.globalsOffset, *context.output,
                     context.view, context.projection, context.jitter,
-                    std::move(admission.submission), context.scene, sky);
+                    std::move(admission.submission), context.scene, sky,
+                    context.gbuffer);
 }
 
 } // namespace reone::scene

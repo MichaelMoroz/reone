@@ -164,8 +164,18 @@ struct GraphicsOptions {
     float ptNrdPlaneDistanceSensitivity {0.099f};
     float ptNrdDisocclusionThreshold {0.003f};
     bool ptNrdAntiFirefly {true};
-    /** Debug view: 0 off, then the values in tracing/debug.slang. */
-    int ptDebugView {0};
+    /**
+     * The debug channel view: 0 off, then the numbering in
+     * slang/debug_view.slang.
+     *
+     * Not tracer-only, which is why it has lost the pt prefix. Almost every
+     * channel is a G-buffer quantity, and every mode rasterizes that G-buffer,
+     * so the selection is honoured in retro and PBR as well; the three channels
+     * that exist only inside the kernel keep their numbers and are drawn as an
+     * explicit "not available in this mode" card elsewhere. `ptdebugview`
+     * remains an alias so existing scripts and config files keep working.
+     */
+    int debugView {0};
     /**
      * A point light's emitter radius as a fraction of its authored influence
      * radius - it is a sphere, so its subtended solid angle is both its

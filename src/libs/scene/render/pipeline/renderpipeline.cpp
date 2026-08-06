@@ -265,11 +265,15 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
     }
     // The common tail. Every mode reaches it with linear scene-referred colour,
     // and it ends with the one display transform that turns that into a
-    // picture. A traced debug view is excluded from all of it because it is not
-    // a picture - the kernel writes a diagnostic that is already
-    // display-referred, and filtering or transforming it would change the
-    // values it exists to show.
-    const bool diagnosticImage = _primaryRayMode && _options.ptDebugView != 0;
+    // picture. A debug view is excluded from all of it because it is not a
+    // picture - what is written is a diagnostic, already display-referred, and
+    // filtering or transforming it would change the values it exists to show.
+    //
+    // In every mode now, for the same reason. The channels are G-buffer
+    // quantities and every mode draws that G-buffer, so the selection is
+    // answerable anywhere; it would be strange for the same view to be a raw
+    // diagnostic in one mode and a tonemapped, sharpened one in the next.
+    const bool diagnosticImage = _options.debugView != 0;
     const bool antialiased =
         _options.antialiasing != graphics::AntiAliasing::None && !diagnosticImage;
     // Which side of the display transform the anti-aliasing slot falls on is
@@ -287,13 +291,19 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         antialiased && _options.antialiasing == graphics::AntiAliasing::Fsr;
     if (temporalResolve)
         plan.steps.push_back(graphics::SceneStep::AntiAliasing);
-    if (!_primaryRayMode) {
+    if (!diagnosticImage) {
         // After the resolve, not before it. A temporal resolve cannot
         // reproject a billboard - transparency writes no motion and no depth,
         // so drawn ahead of one it smears behind the camera. It also keeps the
         // depth the resolve reads free of transparency by construction.
-        // Raster only: in the traced mode additive sprites belong to the march
-        // and drawing them here would double them.
+        //
+        // Every mode, the traced one included. It used to be raster-only
+        // because the march collected additive layers itself and drawing them
+        // again here would have doubled them - but the tracer no longer
+        // traverses blended surfaces at all, so nothing draws them unless this
+        // does, and a lightsaber came out as a hilt with no blade. Primary
+        // visibility is rasterized in every mode; this is the part of it that
+        // does not fit in a G-buffer.
         plan.steps.push_back(graphics::SceneStep::Blended);
     }
     // Unconditional. This pass is the encode, not an effect: without it a
@@ -309,6 +319,15 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
     // colour a viewer sees rather than scene radiance.
     if (_options.sharpen && !diagnosticImage)
         plan.steps.push_back(graphics::SceneStep::Sharpen);
+    // The debug view, over whatever the mode shaded. Skipped in exactly one
+    // case: the traced mode showing one of the tracer's own channels, which the
+    // kernel has already written into the output itself. Everywhere else the
+    // shared pass runs - to answer a G-buffer channel, or to say plainly that
+    // this mode cannot answer a traced one.
+    if (diagnosticImage &&
+        !(_primaryRayMode && graphics::isTracedOnlyDebugView(_options.debugView))) {
+        plan.steps.push_back(graphics::SceneStep::DebugView);
+    }
     return _executor->render(plan, *_callbacks);
 }
 

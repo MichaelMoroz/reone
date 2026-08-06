@@ -49,6 +49,53 @@ const char *resourceKindName(ShaderResourceKind kind) {
 
 } // namespace
 
+namespace {
+
+/**
+ * The entry points an SPIR-V module actually declares.
+ *
+ * Slang names a module's only entry point "main" in the binary while keeping
+ * the authored names when a module has several - so a shader with one kernel
+ * silently stops answering to the name it was written with, and Vulkan
+ * reports that as an opaque pipeline-creation failure. Reading the names lets
+ * the mismatch be resolved where it is unambiguous and named where it is not.
+ */
+std::vector<std::string> spirvEntryPoints(const std::vector<uint32_t> &words) {
+    std::vector<std::string> names;
+    if (words.size() < 5 || words[0] != 0x07230203u)
+        return names;
+    for (size_t i = 5; i < words.size();) {
+        const uint32_t count = words[i] >> 16;
+        const uint32_t opcode = words[i] & 0xFFFFu;
+        if (count == 0 || i + count > words.size())
+            break;
+        // OpEntryPoint: execution model, id, then the name as literal words.
+        if (opcode == 15u && count > 3) {
+            // The literal string runs from word 3 until its NUL; the words
+            // after it are interface ids, so the terminator has to end the
+            // whole scan and not just the word it sits in.
+            std::string name;
+            bool terminated = false;
+            for (size_t w = i + 3; w < i + count && !terminated; ++w) {
+                const uint32_t word = words[w];
+                for (int b = 0; b < 4; ++b) {
+                    const char c = static_cast<char>((word >> (8 * b)) & 0xFFu);
+                    if (c == char {0}) {
+                        terminated = true;
+                        break;
+                    }
+                    name.push_back(c);
+                }
+            }
+            names.push_back(std::move(name));
+        }
+        i += count;
+    }
+    return names;
+}
+
+} // namespace
+
 void VulkanPipeline::init(const Config &config) {
     deinit();
     try {
@@ -186,7 +233,25 @@ void VulkanPipeline::init(const Config &config) {
         VkComputePipelineCreateInfo pipelineInfo {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
         pipelineInfo.stage = stages[0];
         pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        pipelineInfo.stage.pName = config.computeEntry.c_str();
+        // Resolve the entry name against what the module declares. One
+        // unambiguous candidate is used whatever it is called; anything else
+        // is named rather than left to Vulkan's opaque failure.
+        std::string entry = config.computeEntry;
+        const auto declared = spirvEntryPoints(config.spirv);
+        if (!declared.empty() &&
+            std::find(declared.begin(), declared.end(), entry) == declared.end()) {
+            if (declared.size() == 1) {
+                entry = declared.front();
+            } else {
+                std::string available;
+                for (const auto &name : declared)
+                    available += (available.empty() ? "" : ", ") + name;
+                vkDestroyShaderModule(_device.handle(), module, nullptr);
+                throw std::runtime_error("Vulkan: compute entry '" + config.computeEntry +
+                                         "' not in module; it declares: " + available);
+            }
+        }
+        pipelineInfo.stage.pName = entry.c_str();
         pipelineInfo.layout = _layout;
         const auto result = vkCreateComputePipelines(_device.handle(), VK_NULL_HANDLE, 1,
                                                      &pipelineInfo, nullptr, &_pipeline);
