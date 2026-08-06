@@ -310,7 +310,7 @@ void ScenePipeline::shadowPass(ICommandBuffer &cmd,
                 return;
             }
             PipelineKey key;
-            key.module = "shadow_megadraw";
+            key.module = "megadraw";
             key.vertexEntry = directional ? "directionalShadowMegadrawVertex"
                                           : "pointShadowMegadrawVertex";
             key.fragmentEntry = directional

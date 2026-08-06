@@ -4,8 +4,183 @@
 import uniforms;
 import lib.gbuf;
 import lib.math;
-import lib.megadraw_geometry;
 import lib.scene_schema;
+
+// --- Merged-geometry addressing, shared by both variants ---
+// Shared declarations for raster passes over the canonical merged geometry.
+// Both the G-buffer and shadow mega-draws use the same material gate so a
+// punch-through surface cannot disagree about coverage between the two.
+
+
+static const uint kNoTexture = 0xffffffffu;
+static const uint kMegaFeaturePremulAlpha = 1u << 12;
+static const uint kMegaFeaturePunchThrough = 1u << 26;
+static const float kMegaAlphaTestThreshold = 0.5;
+
+[[vk::binding(0, 2)]] StructuredBuffer<MergedVertex> mergedVertices;
+[[vk::binding(1, 2)]] StructuredBuffer<uint> mergedMaterialIds;
+[[vk::binding(2, 2)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
+[[vk::binding(3, 2)]] Sampler2D bindlessTextures[];
+[[vk::binding(4, 2)]] Sampler2DArray bindlessTextureArrays[];
+[[vk::binding(5, 2)]] SamplerCube bindlessTextureCubes[];
+
+// materialGated selects which coverage a pass publishes over the same range.
+// Ungated is the opaque range. Cutout is the punch-through gate the G-buffer
+// and both shadow passes share. Blended is G8's forward pass, which draws the
+// surfaces the G-buffer deliberately leaves out.
+static const uint kMegaCoverageUngated = 0u;
+static const uint kMegaCoverageCutout = 1u;
+static const uint kMegaCoverageBlended = 2u;
+
+// The object category the admission path packs into every material record;
+// mirrors scene::ModelUsage and the shift in scene/render/admission.cpp.
+static const uint kMegaCategoryShift = 27;
+static const uint kMegaCategoryMask = 0xFu;
+/** Every category casts. The shadow pass compares against this to skip the
+    per-fragment material fetch entirely when nothing is being filtered. */
+static const uint kMegaCastersAll = 0xFFFFFFFFu;
+
+struct PushConstants {
+    uint triangleBase;
+    uint materialGated;
+    /**
+     * Bit per object category allowed to write the shadow map, from
+     * kMegaCategoryShift of the material's feature mask.
+     *
+     * The shadow pass is the only stage that pushes this third word; the
+     * G-buffer and blended passes push two and never read it. Adding a fourth
+     * would need the pipeline layout's fragment range widened past the three
+     * words every graphics pipeline here declares.
+     */
+    uint casterCategories;
+};
+[[vk::push_constant]] PushConstants pushConstants;
+
+float2 transformedUV(InstanceMaterial material, float2 uv) {
+    float3 h = float3(uv, 1.0);
+    return float2(material.uv0.x * h.x + material.uv1.x * h.y + material.uv2.x * h.z,
+                  material.uv0.y * h.x + material.uv1.y * h.y + material.uv2.y * h.z);
+}
+
+// Keep the cutout thresholds in lockstep with candidateAlpha/commitsCoverage
+// in tracing/trace.slang. The gated draw publishes CUTOUT COVERAGE ONLY:
+// blended and additive surfaces contribute nothing until G8.
+bool commitsTracedCoverage(InstanceMaterial material, float2 uv, float vertexAlpha) {
+    if (pushConstants.materialGated == kMegaCoverageUngated) return true;
+
+    if ((material.featureMask & kMegaFeaturePunchThrough) == 0) return false;
+
+    float alpha = 1.0;
+    if (material.mainTex != kNoTexture) {
+        float4 texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)]
+                           .SampleLevel(uv, 0.0);
+        alpha = (material.featureMask & kMegaFeaturePremulAlpha) != 0
+                    ? rgbToLuma(texel.rgb)
+                    : texel.a;
+        alpha *= vertexAlpha;
+    }
+    return alpha >= kMegaAlphaTestThreshold;
+}
+
+// --- The depth-only variant: the same merged geometry, written to a
+// shadow map instead of a G-buffer ---
+// Shadow map rendering from canonical merged geometry. Unlike shadow.slang,
+// this stage has no per-mesh vertex input or LocalUniforms model matrix: the
+// merge has already produced world-space positions and one indexed buffer.
+
+
+static const float kPointShadowFar = 2500.0;
+// Point shadows replace raster depth with radial distance. Pipeline depth bias
+// is therefore replaced along with it, so reproduce the same constant+slope
+// model in radial-depth units. Receiver normal offset now handles most grazing
+// cases, leaving only a small write-side slope term here.
+static const float kPointShadowConstantBias = 0.0;
+static const float kPointShadowSlopeBias = 1.0;
+
+struct DirectionalShadowVaryings {
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+    float vertexAlpha : TEXCOORD1;
+};
+
+[shader("vertex")]
+DirectionalShadowVaryings directionalShadowMegadrawVertex(
+    uint vertexId : SV_VertexID, uint viewId : SV_ViewID) {
+    MergedVertex vertex = mergedVertices[vertexId];
+    DirectionalShadowVaryings output;
+    output.position = mul(globalUniforms.shadowLightSpace[viewId],
+                          float4(vertex.position, 1.0));
+    output.uv = vertex.uv1;
+    output.vertexAlpha = vertex.color.a;
+    return output;
+}
+
+/**
+ * The two gates a caster has to pass: which objects this mode lets cast at
+ * all, and - on the gated range - whether the texel is there.
+ *
+ * The caster set is a category filter rather than a separate submission
+ * because the merge produces one buffer per frame ordered by coverage, not by
+ * object kind; splitting it by category would rebuild that ordering on the CPU
+ * every frame to save a fragment-shader test that costs nothing when nothing
+ * is filtered. Whole-category filtering also means the range stays contiguous,
+ * so the draw count does not depend on how many creatures are in the room.
+ */
+void applyShadowGates(float2 rawUv, float vertexAlpha, uint primitiveId) {
+    // Nothing filtered and no coverage gate: the common case reads no memory.
+    if (pushConstants.casterCategories == kMegaCastersAll &&
+        pushConstants.materialGated == kMegaCoverageUngated) {
+        return;
+    }
+    uint triangleId = pushConstants.triangleBase + primitiveId;
+    uint materialIndex = mergedMaterialIds[triangleId];
+    InstanceMaterial material = instanceMaterials[materialIndex];
+
+    uint category = (material.featureMask >> kMegaCategoryShift) & kMegaCategoryMask;
+    if ((pushConstants.casterCategories & (1u << category)) == 0) discard;
+
+    if (pushConstants.materialGated == kMegaCoverageUngated) return;
+    float2 uv = transformedUV(material, rawUv);
+    if (!commitsTracedCoverage(material, uv, vertexAlpha)) discard;
+}
+
+[shader("fragment")]
+void directionalShadowMegadrawFragment(DirectionalShadowVaryings input,
+                                       uint primitiveId : SV_PrimitiveID) {
+    applyShadowGates(input.uv, input.vertexAlpha, primitiveId);
+}
+
+struct PointShadowVaryings {
+    float4 position : SV_Position;
+    float3 worldPos : TEXCOORD0;
+    float2 uv : TEXCOORD1;
+    float vertexAlpha : TEXCOORD2;
+};
+
+[shader("vertex")]
+PointShadowVaryings pointShadowMegadrawVertex(
+    uint vertexId : SV_VertexID, uint viewId : SV_ViewID) {
+    MergedVertex vertex = mergedVertices[vertexId];
+    PointShadowVaryings output;
+    output.worldPos = vertex.position;
+    output.position = mul(globalUniforms.shadowLightSpace[viewId],
+                          float4(vertex.position, 1.0));
+    output.uv = vertex.uv1;
+    output.vertexAlpha = vertex.color.a;
+    return output;
+}
+
+[shader("fragment")]
+float pointShadowMegadrawFragment(PointShadowVaryings input,
+                                  uint primitiveId : SV_PrimitiveID) : SV_Depth {
+    applyShadowGates(input.uv, input.vertexAlpha, primitiveId);
+    float lightDistance = length(input.worldPos -
+                                 globalUniforms.shadowLightPosition.xyz);
+    float radialDepth = lightDistance / kPointShadowFar;
+    float radialSlope = max(abs(ddx(radialDepth)), abs(ddy(radialDepth)));
+    return min(1.0, radialDepth + kPointShadowConstantBias +
+                        kPointShadowSlopeBias * radialSlope);
+}
 
 static const uint kMegaFeatureLightmap = 1u << 0;
 static const uint kMegaFeatureEnvMap = 1u << 1;
