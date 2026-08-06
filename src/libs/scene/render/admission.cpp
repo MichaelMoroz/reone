@@ -131,7 +131,7 @@ std::string describeUploadDifference(const GpuSceneUpload &left,
 void applyCategoryOverride(InstanceMaterial &material,
                            const GraphicsOptions &options,
                            uint32_t categoryIndex) {
-    const auto &src = options.ptCategoryOverrides[std::min<uint32_t>(categoryIndex, 8u)];
+    const auto &src = options.categoryOverrides[std::min<uint32_t>(categoryIndex, 8u)];
     material.overrideColor = glm::vec4(src.color[0], src.color[1], src.color[2],
                                        std::clamp(src.colorWeight, 0.0f, 1.0f));
     material.overrideParams = glm::vec4(src.roughness,
@@ -419,8 +419,8 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
     _submission = {};
 
     uint64_t optionsFingerprint = 14695981039346656037ull;
-    hashBytes(optionsFingerprint, _options.ptCategoryOverrides,
-              sizeof(_options.ptCategoryOverrides));
+    hashBytes(optionsFingerprint, _options.categoryOverrides,
+              sizeof(_options.categoryOverrides));
     if (_optionsFingerprint != 0 && _optionsFingerprint != optionsFingerprint)
         ++_admissionGeneration;
     _optionsFingerprint = optionsFingerprint;

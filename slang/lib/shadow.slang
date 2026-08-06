@@ -28,16 +28,29 @@ static const float kPCFSampleRadius = 0.1;
 static const float kPointShadowFar = 2500.0;
 // Receiver normal offset handles grazing surfaces without moving every caster
 // away from its contact point as a large constant depth bias does.
-static const float kDirectionalNormalOffset = 0.0115;
+//
+// In texels, not world units. A cascade's texel covers a world area that grows
+// with its far plane - the outermost spans some fifty times what the innermost
+// does - so one world-space offset cannot serve all four: sized for the near
+// cascade it leaves distant receivers inside their own texel and they stipple
+// themselves, and sized for the far one it detaches every near contact shadow.
+// Scaling by the cascade's own texel diagonal makes the offset mean the same
+// thing everywhere.
+static const float kDirectionalNormalOffsetTexels = 2.5;
 static const float kPointNormalOffset = 0.005;
 
-struct ShadowResult {
-    // Display-space visibility for the directly lit term. Back-facing and
-    // grazing surfaces fade to one because their BRDF already rejects the sun.
-    float factor;
-    // Depth-tested visibility without the NdotL cutoff, for ambient/IBL.
-    float iblFactor;
-};
+// One visibility value, and it means one thing: how much of the DIRECT light
+// from the shadow-casting light reaches this surface. It is never applied to
+// lightmap irradiance, to flat world ambient, or to an environment reflection.
+//
+// A shadow map answers "is this point occluded from that one light". Baked
+// irradiance already contains its own occlusion, and flat ambient is a constant
+// standing in for everything the renderer does not simulate; attenuating either
+// by a depth test against a single light darkens surfaces for a reason that has
+// nothing to do with them. That deviation is what made lightmapped geometry go
+// dark under the shadow term, and it is why the second, NdotL-free factor this
+// struct used to carry no longer exists - every consumer of it was a term that
+// should not have been shadowed at all.
 
 /** Cascade whose far plane first contains this depth; the last one otherwise. */
 int cascadeFor(float3 viewPos) {
@@ -53,7 +66,21 @@ int cascadeFor(float3 viewPos) {
 float shadowInCascade(int cascade, float3 worldPos, float3 normal, float3 lightVector) {
     float NdotL = dot(normal, lightVector);
     float sinAngle = sqrt(max(0.0, 1.0 - NdotL * NdotL));
-    float3 offsetWorldPos = worldPos + normal * sinAngle * kDirectionalNormalOffset;
+    // The cascade's world units per texel, read off its own matrix: an
+    // orthographic light-space transform scales the world extent it covers
+    // into [-1,1], so the extent is 2 / the row's length, and a texel is that
+    // over the map's resolution.
+    uint width;
+    uint height;
+    uint layers;
+    sShadowMap.GetDimensions(width, height, layers);
+    float2 texelSize = 1.0 / float2(width, height);
+    float3 lightSpaceX = float3(globalUniforms.shadowLightSpace[cascade][0][0],
+                                globalUniforms.shadowLightSpace[cascade][1][0],
+                                globalUniforms.shadowLightSpace[cascade][2][0]);
+    float texelWorldSize = 2.0 / (max(1e-6, length(lightSpaceX)) * float(width));
+    float3 offsetWorldPos =
+        worldPos + normal * sinAngle * kDirectionalNormalOffsetTexels * texelWorldSize;
     float4 lightSpacePos = mul(globalUniforms.shadowLightSpace[cascade], float4(offsetWorldPos, 1.0));
     float3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
     projCoords.xy = 0.5 * projCoords.xy + 0.5;
@@ -62,12 +89,6 @@ float shadowInCascade(int cascade, float3 worldPos, float3 normal, float3 lightV
     if (currentDepth > 1.0) {
         return 0.0;
     }
-
-    uint width;
-    uint height;
-    uint layers;
-    sShadowMap.GetDimensions(width, height, layers);
-    float2 texelSize = 1.0 / float2(width, height);
 
     // Hold the penumbra to a fixed width in WORLD units rather than in texels.
     // The cascade divisors step 0.005 / 0.015 / 0.045, so each cascade covers
@@ -168,7 +189,15 @@ float getPointLightShadow(float3 worldPos, float3 normal) {
     return shadow;
 }
 
-ShadowResult getShadow(float3 viewPos, float3 worldPos, float3 normal) {
+/**
+ * Display-space visibility of the shadow-casting light, at the authored
+ * ShadowOpacity strength.
+ *
+ * Back-facing and grazing surfaces fade to one: their own NdotL already
+ * rejects that light, so shadowing them again would darken a surface twice
+ * for the same geometric fact.
+ */
+float getShadow(float3 viewPos, float3 worldPos, float3 normal) {
     float shadow = globalUniforms.shadowLightPosition.w == 0.0
                        ? getDirectionalLightShadow(viewPos, worldPos, normal)
                        : getPointLightShadow(worldPos, normal);
@@ -177,9 +206,5 @@ ShadowResult getShadow(float3 viewPos, float3 worldPos, float3 normal) {
                              ? -normalize(globalUniforms.shadowLightPosition.xyz)
                              : normalize(globalUniforms.shadowLightPosition.xyz - worldPos);
     float normalFade = saturate(dot(normal, lightVector) * 10.0);
-
-    ShadowResult result;
-    result.factor = lerp(1.0, visibility, normalFade);
-    result.iblFactor = visibility;
-    return result;
+    return lerp(1.0, visibility, normalFade);
 }

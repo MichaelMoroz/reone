@@ -25,6 +25,8 @@ struct GlobalUniformsLight {
     float radius;
     int ambientOnly;
     int dynamicType;
+    /** Non-zero on the one light the shadow map was rendered from. */
+    int shadowCaster;
 };
 
 struct GlobalUniforms {

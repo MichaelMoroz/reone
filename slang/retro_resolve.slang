@@ -123,22 +123,34 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
         }
     }
 
-    ShadowResult shadow;
-    shadow.factor = 1.0;
-    shadow.iblFactor = 1.0;
+    float shadowFactor = 1.0;
     if (shadowsEnabled) {
-        shadow = getShadow(eyePos, worldPos, normal);
+        shadowFactor = getShadow(eyePos, worldPos, normal);
     }
     float3 color;
     if (hasLightmap) {
         // Every reference engine - xoreos, KotOR.js, and the original's own
         // captured GL state - multiplies the lightmap against the diffuse
-        // texel at full strength: never shadow-attenuated, never clamped
-        // against the dynamic sum, with lighting replaced by the bake rather
-        // than added to it. Dynamic (flicker) lights join after the product,
-        // and self-illum is an additive term the albedo never modulates -
-        // the original drew it as a separate additive blend pass.
-        color = (lightmapSample.rgb + ambient + shadow.factor * max(float3(0.0), direct)) *
+        // texel at full strength, never clamped against the dynamic sum, with
+        // lighting replaced by the bake rather than added to it. Dynamic
+        // (flicker) lights join after the product, and self-illum is an
+        // additive term the albedo never modulates - the original drew it as a
+        // separate additive blend pass.
+        //
+        // The shadow term multiplies that whole product, which is a deliberate
+        // departure from "never shadow the lightmap" and only defensible
+        // because of what casts in this mode. Retro's shadow map holds
+        // characters and nothing else, so a factor below one here means a
+        // character is standing between this texel and the light - never that
+        // the terrain occluded itself, which is the case the rule was written
+        // against. The original drew exactly this as a stencil pass that
+        // darkened the ground beneath a character, at the module's authored
+        // ShadowOpacity; getShadow already folds that strength in. Attenuating
+        // only the dynamic term instead would put no shadow at all under a
+        // character on baked ground, which is where the original always had
+        // one.
+        color = shadowFactor *
+                    (lightmapSample.rgb + ambient + max(float3(0.0), direct)) *
                     diffuseSample.rgb +
                 selfIllumSample.rgb;
     } else if (staticObject) {
@@ -149,9 +161,13 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
         // draw with lighting disabled.
         color = diffuseSample.rgb + selfIllumSample.rgb;
     } else {
+        // Dynamic geometry: the shadow term takes the direct sum and leaves
+        // the flat ambient alone. Ambient here is materialAmbient against the
+        // world ambient colour plus any ambient-only lights - a constant
+        // standing in for unsimulated light, not something one light's depth
+        // test has any claim on.
         color = min(float3(1.0),
-                    shadow.iblFactor * ambient +
-                        shadow.factor * max(float3(0.0), direct) +
+                    ambient + shadowFactor * max(float3(0.0), direct) +
                         selfIllumSample.rgb) *
                 diffuseSample.rgb;
     }
@@ -160,7 +176,10 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
         // Odyssey generated eye-space reflection coordinates per vertex from
         // the geometric normal. A deferred resolve necessarily does this per
         // pixel from the normal-mapped, quantized G-buffer normal instead.
-        color += shadow.iblFactor * sampleAuthoredMirror(material, eyeReflection) *
+        //
+        // Unshadowed: the authored mirror is a static capture of the surround,
+        // and the original applied no shadow to it either.
+        color += sampleAuthoredMirror(material, eyeReflection) *
                  (1.0 - diffuseSample.a);
     }
 

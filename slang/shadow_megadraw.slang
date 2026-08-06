@@ -32,21 +32,39 @@ DirectionalShadowVaryings directionalShadowMegadrawVertex(
     return output;
 }
 
-void applyDirectionalShadowCoverage(DirectionalShadowVaryings input,
-                                    uint primitiveId) {
-    if (pushConstants.materialGated == 0) return;
-
+/**
+ * The two gates a caster has to pass: which objects this mode lets cast at
+ * all, and - on the gated range - whether the texel is there.
+ *
+ * The caster set is a category filter rather than a separate submission
+ * because the merge produces one buffer per frame ordered by coverage, not by
+ * object kind; splitting it by category would rebuild that ordering on the CPU
+ * every frame to save a fragment-shader test that costs nothing when nothing
+ * is filtered. Whole-category filtering also means the range stays contiguous,
+ * so the draw count does not depend on how many creatures are in the room.
+ */
+void applyShadowGates(float2 rawUv, float vertexAlpha, uint primitiveId) {
+    // Nothing filtered and no coverage gate: the common case reads no memory.
+    if (pushConstants.casterCategories == kMegaCastersAll &&
+        pushConstants.materialGated == kMegaCoverageUngated) {
+        return;
+    }
     uint triangleId = pushConstants.triangleBase + primitiveId;
     uint materialIndex = mergedMaterialIds[triangleId];
     InstanceMaterial material = instanceMaterials[materialIndex];
-    float2 uv = transformedUV(material, input.uv);
-    if (!commitsTracedCoverage(material, uv, input.vertexAlpha)) discard;
+
+    uint category = (material.featureMask >> kMegaCategoryShift) & kMegaCategoryMask;
+    if ((pushConstants.casterCategories & (1u << category)) == 0) discard;
+
+    if (pushConstants.materialGated == kMegaCoverageUngated) return;
+    float2 uv = transformedUV(material, rawUv);
+    if (!commitsTracedCoverage(material, uv, vertexAlpha)) discard;
 }
 
 [shader("fragment")]
 void directionalShadowMegadrawFragment(DirectionalShadowVaryings input,
                                        uint primitiveId : SV_PrimitiveID) {
-    applyDirectionalShadowCoverage(input, primitiveId);
+    applyShadowGates(input.uv, input.vertexAlpha, primitiveId);
 }
 
 struct PointShadowVaryings {
@@ -69,20 +87,10 @@ PointShadowVaryings pointShadowMegadrawVertex(
     return output;
 }
 
-void applyPointShadowCoverage(PointShadowVaryings input, uint primitiveId) {
-    if (pushConstants.materialGated == 0) return;
-
-    uint triangleId = pushConstants.triangleBase + primitiveId;
-    uint materialIndex = mergedMaterialIds[triangleId];
-    InstanceMaterial material = instanceMaterials[materialIndex];
-    float2 uv = transformedUV(material, input.uv);
-    if (!commitsTracedCoverage(material, uv, input.vertexAlpha)) discard;
-}
-
 [shader("fragment")]
 float pointShadowMegadrawFragment(PointShadowVaryings input,
                                   uint primitiveId : SV_PrimitiveID) : SV_Depth {
-    applyPointShadowCoverage(input, primitiveId);
+    applyShadowGates(input.uv, input.vertexAlpha, primitiveId);
     float lightDistance = length(input.worldPos -
                                  globalUniforms.shadowLightPosition.xyz);
     float radialDepth = lightDistance / kPointShadowFar;

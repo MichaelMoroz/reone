@@ -175,17 +175,37 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
                            shadowsEnabled, fogEnabled);
 
-    ShadowResult shadow;
-    shadow.factor = 1.0;
-    shadow.iblFactor = 1.0;
+    // Static geometry without a lightmap is the unlit backdrop (far hills,
+    // sky shells): authored self-lit, drawn by the original with lighting
+    // off. The corrected model keeps the authored texel too - running it
+    // through the BRDF would relight what the original never lit. Mirrors
+    // the same branch in retro_resolve.slang.
+    if (staticObject && !hasLightmap) {
+        float3 unlit = mainTexSample.rgb + selfIllumSample.rgb;
+        if (fogEnabled) {
+            float unlitDistance = length(worldPos - globalUniforms.cameraPosition.xyz);
+            float unlitFog = 1.0 - saturate((globalUniforms.fogFar - unlitDistance) /
+                                            max(0.0001, globalUniforms.fogFar - globalUniforms.fogNear));
+            unlit = lerp(unlit, globalUniforms.fogColor.rgb, unlitFog);
+        }
+        return float4(unlit, 1.0);
+    }
+
+    float shadowFactor = 1.0;
     if (shadowsEnabled) {
-        shadow = getShadow(eyePos, worldPos, normal);
+        shadowFactor = getShadow(eyePos, worldPos, normal);
     }
     // ShadowOpacity was authored for the original gamma-space renderer. PBR
     // applies lighting in linear space, so convert the display visibility to
-    // an energy multiplier before using it on BRDF and IBL terms.
-    float directVisibility = pow(shadow.factor, kGamma);
-    float iblVisibility = pow(shadow.iblFactor, kGamma);
+    // an energy multiplier before using it on the direct BRDF terms.
+    //
+    // Direct terms only. It used to scale the ambient/IBL lobes as well, and
+    // since irradiance is the LIGHTMAP on lightmapped geometry and the flat
+    // materialAmbient * worldAmbient product everywhere else, that made a
+    // depth test against one light attenuate baked and ambient light. That is
+    // what darkened lightmapped rooms in this mode while retro - whose
+    // lightmapped branch never took the shadow term - kept the authored tone.
+    float directVisibility = pow(shadowFactor, kGamma);
     float fog = fogEnabled ? getFog(worldPos) : 0.0;
 
     float NdotV = max(0.0, dot(normal, V));
@@ -224,7 +244,18 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
 
     for (int i = 0; i < globalUniforms.numLights; ++i) {
         GlobalUniformsLight light = globalUniforms.lights[i];
-        if (staticObject && light.dynamicType != 1) {
+        // The original excluded all but dynamicType 1 from static geometry,
+        // because a lightmap already held that light and the hardware could
+        // not have afforded it twice. Retro keeps that rule; the corrected
+        // model keeps it only for lights that cast nothing, for one concrete
+        // reason: a shadow is visible only on the light it attenuates, and
+        // the shadow-casting light is exactly what this test dropped. Static
+        // geometry therefore took no direct light at all, and a shadow on it
+        // had nothing to darken. Letting that one light through double-counts
+        // the bake's own share of it, which is bounded by the lightmap's
+        // weight and is the honest price of shadows that are not painted onto
+        // baked light.
+        if (staticObject && light.dynamicType != 1 && light.shadowCaster == 0) {
             continue;
         }
 
@@ -281,11 +312,24 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     // Self-illumination is a coefficient on the light reaching the surface, not
     // a colour added on top of it. Adding it instead saturates anything fully
     // self-illuminated - a sky - to white.
+    // Ambient occlusion still weights the ambient lobes; the shadow term does
+    // not. AO is a property of the surface's own neighbourhood and applies to
+    // light arriving from everywhere, which is exactly what these lobes are.
+    // Received exactly as retro receives it: one visibility over the whole lit
+    // product, not a term applied to direct light alone. On content whose
+    // light budget is mostly a baked lightmap, a shadow that may only touch
+    // the dynamic share is a shadow nobody can see - measured at 14/255
+    // against 89 for the same scene in retro. What differs between the modes
+    // is the caster set, not this expression: retro's map holds characters,
+    // this one holds every opaque surface, so terrain shadowing terrain is
+    // present here and is geometry, not error. Self-shadowing acne is the
+    // failure to watch for, and it belongs to the depth bias and the receiver
+    // normal offset in lib/shadow.slang - not to this line.
     float3 color = min(float3(1.0),
-                       iblVisibility * ao * ambientD +
-                           directVisibility * max(float3(0.0), directD) + emission) *
+                       directVisibility * (ao * ambientD +
+                           max(float3(0.0), directD)) + emission) *
                    albedo;
-    color += iblVisibility * ao * ambientS;
+    color += ao * ambientS;
     // A self-illuminated surface does not take a specular highlight.
     color += (1.0 - selfIllumed) * directVisibility * max(float3(0.0), directS);
 
@@ -294,9 +338,13 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     // keeps the ordinary dielectric response; this gamma-space add reserves
     // (1 - diffuse alpha) for the original game's sharp mirror term, so that
     // authored strength is not counted in both lobes.
+    //
+    // Unshadowed, like the other environment lobe. The cube is a static
+    // capture of the whole surround, not of the shadow-casting light, so a
+    // depth test against that one light says nothing about how much of the
+    // cube this surface can see.
     if (envmapped) {
-        color += shadow.iblFactor * sampleAuthoredMirror(material, eyeR) *
-                 (1.0 - mainTexSample.a);
+        color += sampleAuthoredMirror(material, eyeR) * (1.0 - mainTexSample.a);
     }
     color = lerp(color, globalUniforms.fogColor.rgb, fog);
 

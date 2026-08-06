@@ -350,22 +350,21 @@ RetroOutput retroOpaqueFragment(Varyings input) {
     // space position as the deferred resolve does. Passing the same thing keeps
     // the two backends comparable; correcting it is a change to both at once.
     float3 cascadeSelector = globalUniforms.cameraPosition.xyz - input.worldPos.xyz;
-    ShadowResult shadow;
-    shadow.factor = 1.0;
-    shadow.iblFactor = 1.0;
+    float shadowFactor = 1.0;
     if (isFeatureEnabled(kFeatureShadows)) {
-        shadow = getShadow(cascadeSelector, input.worldPos.xyz, surface.normal);
+        shadowFactor = getShadow(cascadeSelector, input.worldPos.xyz, surface.normal);
     }
+    // Direct only, matching the deferred resolves: ambient and the environment
+    // reflection are not this light's to attenuate.
     float3 color = min(float3(1.0),
-                       shadow.iblFactor * ambient +
-                           shadow.factor * max(float3(0.0), direct) +
+                       ambient + shadowFactor * max(float3(0.0), direct) +
                            localUniforms.selfIllumColor.rgb) *
                    surface.albedo;
     if (isFeatureEnabled(kFeatureEnvMap)) {
         float3 viewDir = normalize(globalUniforms.cameraPosition.xyz - input.worldPos.xyz);
         float3 worldR = reflect(-viewDir, surface.normal);
         float3 eyeR = normalize(mul(globalUniforms.view, float4(worldR, 0.0)).xyz);
-        color += shadow.iblFactor * sampleEnvMap(eyeR).rgb * (1.0 - surface.alpha);
+        color += sampleEnvMap(eyeR).rgb * (1.0 - surface.alpha);
     }
     if (isFeatureEnabled(kFeatureFog)) {
         float d = length(input.worldPos.xyz - globalUniforms.cameraPosition.xyz);

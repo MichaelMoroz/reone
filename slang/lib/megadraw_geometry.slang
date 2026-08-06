@@ -25,9 +25,27 @@ static const uint kMegaCoverageUngated = 0u;
 static const uint kMegaCoverageCutout = 1u;
 static const uint kMegaCoverageBlended = 2u;
 
+// The object category the admission path packs into every material record;
+// mirrors scene::ModelUsage and the shift in scene/render/admission.cpp.
+static const uint kMegaCategoryShift = 27;
+static const uint kMegaCategoryMask = 0xFu;
+/** Every category casts. The shadow pass compares against this to skip the
+    per-fragment material fetch entirely when nothing is being filtered. */
+static const uint kMegaCastersAll = 0xFFFFFFFFu;
+
 struct PushConstants {
     uint triangleBase;
     uint materialGated;
+    /**
+     * Bit per object category allowed to write the shadow map, from
+     * kMegaCategoryShift of the material's feature mask.
+     *
+     * The shadow pass is the only stage that pushes this third word; the
+     * G-buffer and blended passes push two and never read it. Adding a fourth
+     * would need the pipeline layout's fragment range widened past the three
+     * words every graphics pipeline here declares.
+     */
+    uint casterCategories;
 };
 [[vk::push_constant]] PushConstants pushConstants;
 

@@ -61,6 +61,14 @@ struct alignas(16) GlobalUniformsLight {
     float radius {1.0f};
     int ambientOnly {0};
     int dynamicType {0};
+    /**
+     * Non-zero on the one light the shadow map was rendered from.
+     *
+     * A shadow is only visible on the light it attenuates, so the corrected
+     * model has to let this light reach static geometry even where the
+     * original's dynamic-type rule would drop it.
+     */
+    int shadowCaster {0};
 };
 
 struct GlobalUniforms {
