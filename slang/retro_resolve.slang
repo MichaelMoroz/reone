@@ -100,11 +100,7 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
 
     float3 ambient = float3(0.0);
     float3 direct = float3(0.0);
-    if (hasLightmap) {
-        // Lightmaps are baked static irradiance. Dynamic visibility is
-        // applied to this ambient term only through the bounded factor below.
-        ambient += lightmapSample.rgb;
-    } else if (!staticObject) {
+    if (!hasLightmap && !staticObject) {
         ambient += materialAmbient * globalUniforms.worldAmbientColor.rgb;
     }
 
@@ -133,11 +129,32 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     if (shadowsEnabled) {
         shadow = getShadow(eyePos, worldPos, normal);
     }
-    float3 color = min(float3(1.0),
-                       shadow.iblFactor * ambient +
-                           shadow.factor * max(float3(0.0), direct) +
-                           selfIllumSample.rgb) *
-                   diffuseSample.rgb;
+    float3 color;
+    if (hasLightmap) {
+        // Every reference engine - xoreos, KotOR.js, and the original's own
+        // captured GL state - multiplies the lightmap against the diffuse
+        // texel at full strength: never shadow-attenuated, never clamped
+        // against the dynamic sum, with lighting replaced by the bake rather
+        // than added to it. Dynamic (flicker) lights join after the product,
+        // and self-illum is an additive term the albedo never modulates -
+        // the original drew it as a separate additive blend pass.
+        color = (lightmapSample.rgb + ambient + shadow.factor * max(float3(0.0), direct)) *
+                    diffuseSample.rgb +
+                selfIllumSample.rgb;
+    } else if (staticObject) {
+        // Static geometry without a lightmap is the unlit backdrop (far
+        // hills, sky shells). xoreos renders it full-bright - the generated
+        // shader for a non-lightmapped surface is the diffuse texel with no
+        // lighting terms at all - and the original's GL path is the same
+        // draw with lighting disabled.
+        color = diffuseSample.rgb + selfIllumSample.rgb;
+    } else {
+        color = min(float3(1.0),
+                    shadow.iblFactor * ambient +
+                        shadow.factor * max(float3(0.0), direct) +
+                        selfIllumSample.rgb) *
+                diffuseSample.rgb;
+    }
     if (envmapped) {
         float3 eyeReflection = reflect(normalize(eyePos), eyeNormal);
         // Odyssey generated eye-space reflection coordinates per vertex from
