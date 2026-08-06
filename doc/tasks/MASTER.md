@@ -39,6 +39,7 @@ acceptance criteria; these rows are the index into it.
 | RAS-018 | Per-pass instance re-copy in the draw walk | open | P2 | S | none | — | backlog 9.5 |
 | RAS-019 | SSAO — unowned, decide | open | P3 | M | none | — | DESIGN.md; screen-space approximation of what PT computes properly |
 | RAS-020 | SSR — unowned, decide | open | P3 | M | none | — | DESIGN.md |
+| RAS-022 | Far-hills shadow breakdown: cascade seam + undersampled far cascades | open | P2 | M | none | — | 2026-08-06, user-spotted in the V2 gallery, measured: shadowres 1→4 changes 72% of hills-band pixels (vs 21% frame-wide), and a 12.9-luma step sits exactly at the cascade-1→2 boundary (depth 37.5 of divisors {0.005,0.015,0.045,0.135}×far). Pre-existing in both raster modes; candidates are divisor retuning, seam blending, and a beyond-last-cascade decision |
 | RAS-021 | Measure phase F on low-end hardware; per-mesh draws may win | open | P3 | M | none | — | RECORD.md; "raster keeps per-mesh draws" is an acceptable answer |
 
 ## STR — scene and structural
