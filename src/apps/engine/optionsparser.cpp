@@ -123,7 +123,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("post", value<bool>()->default_value(options->graphics.post), "enable the post-process pass")                          //
         ("sharpen", value<bool>()->default_value(options->graphics.sharpen), "sharpen the finished frame (unsharp mask, after the display transform)") //
         ("sharpenamount", value<float>()->default_value(options->graphics.sharpenAmount), "strength of that mask")       //
-        ("taajitter", value<std::string>()->default_value("auto"), "sub-pixel projection jitter: auto|on|off (auto follows the temporal resolver)") //
         ("ptdenoise", value<bool>()->default_value(options->graphics.ptDenoise), "enable the path tracing denoiser")           //
         ("ptdebugview", value<int>()->default_value(options->graphics.ptDebugView),
          "path tracing debug view, 0 off")                                                                                //
@@ -254,22 +253,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.post = vars["post"].as<bool>();
     options->graphics.sharpen = vars["sharpen"].as<bool>();
     options->graphics.sharpenAmount = std::max(0.0f, vars["sharpenamount"].as<float>());
-    {
-        // The parser only names the policy; the decision lives at the point
-        // of use (SceneGraph::computeJitter), where it follows the active
-        // resolver even across a runtime AA switch. 1/0 stay accepted for
-        // the capture harness's existing --taajitter 0 invocations.
-        const auto &jitter = vars["taajitter"].as<std::string>();
-        if (jitter == "auto") {
-            options->graphics.taaJitter = JitterMode::Auto;
-        } else if (jitter == "on" || jitter == "1") {
-            options->graphics.taaJitter = JitterMode::On;
-        } else if (jitter == "off" || jitter == "0") {
-            options->graphics.taaJitter = JitterMode::Off;
-        } else {
-            throw std::invalid_argument("Invalid taajitter mode: " + jitter);
-        }
-    }
     options->graphics.ptDenoise = vars["ptdenoise"].as<bool>();
     options->graphics.ptDebugView = std::clamp(vars["ptdebugview"].as<int>(), 0, 12);
     options->graphics.ptNrdMaxStabilizedFrames = std::max(0, vars["ptnrdstabilized"].as<int>());

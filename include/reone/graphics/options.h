@@ -67,13 +67,6 @@ enum class RenderMode {
     PathTracing,
 };
 
-/** Whether the projection carries a per-frame sub-pixel jitter. */
-enum class JitterMode {
-    Auto, /**< jitter exactly when a temporal resolver consumes it */
-    On,
-    Off,
-};
-
 struct GraphicsOptions {
     int width {1024};
     int height {768};
@@ -260,16 +253,6 @@ struct GraphicsOptions {
     bool sharpen {false};
     /** Strength of that mask; the neighbour weight of its five-tap cross. */
     float sharpenAmount {0.25f};
-    /**
-     * Offset the projection by a sub-pixel jitter each frame. Motion vectors
-     * are produced regardless; this only controls the jitter itself.
-     *
-     * Auto follows the active resolver at the point of use - FSR in the
-     * common slot, or the traced mode's accumulation - so a runtime switch
-     * of the AA method carries its jitter with it. On and Off are explicit
-     * overrides for diagnostics.
-     */
-    JitterMode taaJitter {JitterMode::Auto};
     /** Overrides the ARE's authored ShadowOpacity when >= 0. The retail data
         authors only two values, 50 and 205, so this is the knob for judging
         how that byte should map to a strength. */

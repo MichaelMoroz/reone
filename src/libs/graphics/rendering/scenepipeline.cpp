@@ -796,10 +796,9 @@ void ScenePipeline::upscalePass(ICommandBuffer &cmd) {
                           static_cast<float>(_targetSize.y)};
 
     // The sub-pixel offset this frame's projection was built with, in pixels
-    // with y down. Raster only jitters when the taajitter option is on; with
-    // it off this is zero, and the resolve still reprojects and still cleans
-    // edges - it simply has no sub-pixel information to accumulate, so it
-    // anti-aliases less.
+    // with y down. Non-zero exactly when this pass is FSR, which is the rule
+    // SceneGraph::computeJitter applies - so the offset the projection carried
+    // is the offset handed over here, with no dial in between to disagree.
     const glm::vec2 jitterPixels {globals.jitter.x * 0.5f * static_cast<float>(_targetSize.x),
                                   -globals.jitter.y * 0.5f * static_cast<float>(_targetSize.y)};
     const float verticalFov =

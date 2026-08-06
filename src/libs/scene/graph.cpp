@@ -616,20 +616,14 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
 }
 
 glm::vec2 SceneGraph::computeJitter() const {
-    // The one place jitter is decided, for every mode, read fresh each frame
-    // so a runtime switch of the AA method carries its jitter with it.
-    // Auto means: jitter exactly when FSR resolves it - the rule is the same
-    // in the traced mode, whose rays derive from this projection. NRD does
-    // not need it, and jittered rays without FSR downstream are unresolved
-    // shimmer on top of the path noise, exactly like unresolved raster
-    // jitter (measured 6-12% of pixels changing per frame on a frozen
-    // scene). That is why the answer follows the resolver and not a bare
-    // config flag or the render mode.
-    if (_graphicsOpt.taaJitter == graphics::JitterMode::Off) {
-        return glm::vec2(0.0f);
-    }
-    if (_graphicsOpt.taaJitter == graphics::JitterMode::Auto &&
-        _graphicsOpt.antialiasing != graphics::AntiAliasing::Fsr) {
+    // Jitter exists when, and only when, something resolves it - which is FSR
+    // in the common anti-aliasing slot, in every render mode, because the
+    // traced mode's rays derive from this same projection. There is no dial:
+    // an override could only ever ask for jitter nothing resolves, and that is
+    // shimmer rather than anti-aliasing (measured at 6-12% of pixels changing
+    // per frame on a frozen scene). Turning it off means turning the resolver
+    // off, which the anti-aliasing option already does.
+    if (_graphicsOpt.antialiasing != graphics::AntiAliasing::Fsr) {
         return glm::vec2(0.0f);
     }
     // Halton(2, 3), the usual low-discrepancy sequence for temporal sampling,

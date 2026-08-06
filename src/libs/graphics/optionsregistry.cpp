@@ -356,36 +356,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
 
     // Decided at the point of use, in SceneGraph::computeJitter, so it follows
     // the active resolver on the next frame with nothing rebuilt.
-    descs.push_back(enumOpt(
-        "taajitter", OptionApply::Live,
-        "sub-pixel projection jitter: auto, on or off",
-        [](const GraphicsOptions &o) -> std::string {
-            switch (o.taaJitter) {
-            case JitterMode::On:
-                return "on";
-            case JitterMode::Off:
-                return "off";
-            default:
-                return "auto";
-            }
-        },
-        [](GraphicsOptions &o, const std::string &value) {
-            if (value == "auto") {
-                o.taaJitter = JitterMode::Auto;
-            } else if (value == "on" || value == "1") {
-                o.taaJitter = JitterMode::On;
-            } else if (value == "off" || value == "0") {
-                o.taaJitter = JitterMode::Off;
-            } else {
-                throw std::invalid_argument(
-                    "Graphics option 'taajitter': unknown mode '" + value +
-                    "'; expected auto, on or off");
-            }
-        },
-        [](const GraphicsOptions &a, const GraphicsOptions &b) {
-            return a.taaJitter == b.taaJitter;
-        },
-        [](const GraphicsOptions &from, GraphicsOptions &to) { to.taaJitter = from.taaJitter; }));
 
     // The denoiser is built whenever the build carries NRD, regardless of this
     // dial; the dial only selects whether its composite overwrites the trace.

@@ -45,11 +45,6 @@ import tracing.brdf;
 // anyway - and Slang's implicit-LOD Sample() emits the MinLod capability,
 // which needs a device feature that nothing else here wants.
 [[vk::binding(0, 1)]] Sampler2D sMainTex;
-// Read by oitBlendFragment alone. The units are the ones TextureUnits names,
-// so the pipeline binds them the same way it binds anything else.
-[[vk::binding(10, 1)]] Sampler2D sOITAccum;
-[[vk::binding(11, 1)]] Sampler2D sOITRevealage;
-[[vk::binding(9, 1)]] Sampler2D sHilights;
 
 struct Varyings {
     float4 position : SV_Position;
@@ -109,18 +104,6 @@ float4 postProcessFragment(Varyings input) : SV_Target {
                   texel.a);
 }
 
-/** The small square blur used to soften half-resolution SSAO. */
-[shader("fragment")]
-float4 boxBlur4Fragment(Varyings input) : SV_Target {
-    float3 color = float3(0.0);
-    for (int x = -2; x < 2; ++x) {
-        for (int y = -2; y < 2; ++y) {
-            color += sMainTex.SampleLevel(input.uv, 0.0, int2(x, y)).rgb;
-        }
-    }
-    return float4(color * (1.0 / 16.0), 1.0);
-}
-
 /** Convert renderer-owned targets into the forms used by the target viewer. */
 [shader("fragment")]
 float4 debugTextureFragment(Varyings input) : SV_Target {
@@ -147,81 +130,6 @@ float4 debugTextureFragment(Varyings input) : SV_Target {
         color = scale * texel.rgb;
     }
     return float4(color, 1.0);
-}
-
-/**
- * Resolve the weighted-blended transparency targets onto the opaque image,
- * ported from glsl/f_oit_blend.glsl.
- *
- * The accumulated colour is a weighted sum, so it is divided by the sum of the
- * weights to get an average, and revealage says how much of the opaque image
- * survives underneath. Both come out of the pass's blend state rather than
- * being computed here; see BlendMode::OIT_Transparent.
- */
-[shader("fragment")]
-float4 oitBlendFragment(Varyings input) : SV_Target {
-    float4 mainTexSample = sMainTex.SampleLevel(input.uv, 0.0);
-    float4 accumSample = sOITAccum.SampleLevel(input.uv, 0.0);
-    float accumWeight = sOITRevealage.SampleLevel(input.uv, 0.0).r;
-
-    float3 hilights = sHilights.SampleLevel(input.uv, 0.0).rgb;
-
-    float revealage = accumSample.a;
-    float alpha = 1.0 - revealage;
-    float3 color = alpha * (accumSample.rgb / max(0.0001, accumWeight)) +
-                   (1.0 - alpha) * (mainTexSample.rgb + hilights);
-    return float4(color, alpha + mainTexSample.a);
-}
-
-/**
- * Nine-tap Gaussian, separated: the pipeline runs it twice, once per axis, with
- * blurDirection saying which. The taps are the usual linear-sampling trick -
- * five texture reads standing in for nine, by landing between texels and
- * letting the bilinear filter do the pairwise sum.
- */
-[shader("fragment")]
-float4 gausBlur9Fragment(Varyings input) : SV_Target {
-    float2 uv = input.uv;
-    float2 direction = screenEffectUniforms.blurDirection;
-    float2 rcp = screenEffectUniforms.screenResolutionRcp;
-
-    float4 color = sMainTex.SampleLevel(uv, 0.0);
-    color.rgb *= 0.2270270270;
-
-    float2 off1 = 1.3846153846 * direction;
-    float2 off2 = 3.2307692308 * direction;
-    color.rgb += sMainTex.SampleLevel(uv + off1 * rcp, 0.0).rgb * 0.3162162162;
-    color.rgb += sMainTex.SampleLevel(uv - off1 * rcp, 0.0).rgb * 0.3162162162;
-    color.rgb += sMainTex.SampleLevel(uv + off2 * rcp, 0.0).rgb * 0.0702702703;
-    color.rgb += sMainTex.SampleLevel(uv - off2 * rcp, 0.0).rgb * 0.0702702703;
-    return color;
-}
-
-/**
- * Thirteen-tap Gaussian, same separated scheme with a wider kernel.
- *
- * Unlike the nine-tap, this one filters alpha along with colour rather than
- * carrying the centre tap's alpha through. That difference is in the originals
- * and is preserved here; the two are used on different targets.
- */
-[shader("fragment")]
-float4 gausBlur13Fragment(Varyings input) : SV_Target {
-    float2 uv = input.uv;
-    float2 direction = screenEffectUniforms.blurDirection;
-    float2 rcp = screenEffectUniforms.screenResolutionRcp;
-
-    float2 off1 = 1.411764705882353 * direction;
-    float2 off2 = 3.2941176470588234 * direction;
-    float2 off3 = 5.176470588235294 * direction;
-
-    float4 color = sMainTex.SampleLevel(uv, 0.0) * 0.1964825501511404;
-    color += sMainTex.SampleLevel(uv + off1 * rcp, 0.0) * 0.2969069646728344;
-    color += sMainTex.SampleLevel(uv - off1 * rcp, 0.0) * 0.2969069646728344;
-    color += sMainTex.SampleLevel(uv + off2 * rcp, 0.0) * 0.09447039785044732;
-    color += sMainTex.SampleLevel(uv - off2 * rcp, 0.0) * 0.09447039785044732;
-    color += sMainTex.SampleLevel(uv + off3 * rcp, 0.0) * 0.010381362401148057;
-    color += sMainTex.SampleLevel(uv - off3 * rcp, 0.0) * 0.010381362401148057;
-    return color;
 }
 
 /** An unsharp mask: a five-tap cross, centre weighted up and neighbours down. */

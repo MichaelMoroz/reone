@@ -112,9 +112,6 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
                                                                                : "off"},
         {"post", std::to_string(options.post)},
         {"sharpen", std::to_string(options.sharpen)},
-        {"taajitter", options.taaJitter == graphics::JitterMode::Auto ? "auto"
-                      : options.taaJitter == graphics::JitterMode::On ? "on"
-                                                                      : "off"},
         {"texquality", std::to_string(static_cast<int>(options.textureQuality))},
         {"shadowres", std::to_string(std::max(0, static_cast<int>(glm::log2(options.shadowResolution)) - 10))},
         {"anisofilter", std::to_string(options.anisotropicFiltering)},
@@ -780,23 +777,6 @@ void Editor::graphicsSettings() {
     ImGui::TextDisabled("Multiplies the area's authored density, so areas keep\n"
                         "their relative variation. Live: the dial gates the\n"
                         "active cluster prefix on the GPU.");
-    {
-        // Auto follows the temporal resolver, so this is live: switching the
-        // AA slot re-decides jitter on the next frame with no rebuild.
-        static const char *kJitterNames[] = {"Auto", "On", "Off"};
-        int jitterIndex = static_cast<int>(options.taaJitter);
-        if (ImGui::Combo("TAA jitter", &jitterIndex, kJitterNames, 3)) {
-            options.taaJitter = static_cast<graphics::JitterMode>(jitterIndex);
-        }
-        // Auto is a rule, not a state, and it reads the ACTIVE slot - so say
-        // which way it currently falls rather than leaving the reader to work
-        // it out from a combo further down the window.
-        const bool jitterOn = options.taaJitter == graphics::JitterMode::On ||
-                              (options.taaJitter == graphics::JitterMode::Auto &&
-                               options.antialiasing == graphics::AntiAliasing::Fsr);
-        ImGui::TextDisabled("Currently %s. Auto jitters only for FSR, the one\nresolver that reads it; unresolved jitter is shimmer.",
-                            jitterOn ? "ON" : "off");
-    }
     ImGui::SliderFloat("Draw distance", &options.drawDistance, 1.0f, 1000.0f, "%.0f");
 
     // One slot with one occupant, the same in every mode. The choice is staged
