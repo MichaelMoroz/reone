@@ -67,6 +67,11 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"width", std::to_string(options.width)},
         {"height", std::to_string(options.height)},
         {"vsync", std::to_string(options.vsync)},
+        // Both are editable in this window now, so both have to be written or a
+        // saved configuration would not reproduce the frame that was graded.
+        // The launcher owns the same two keys and writes them the same way.
+        {"mode", options.mode},
+        {"pbr", std::to_string(options.pbr)},
         {"grass", std::to_string(options.grass)},
         {"grassdensity", formatConfigFloat(options.grassDensity)},
         {"ptspp", std::to_string(options.pathTracingSamples)},
@@ -745,13 +750,16 @@ void Editor::graphicsSettings() {
         return;
     }
     auto &options = _engine._options.graphics;
-    if (!_pendingAntiAliasingInitialized) {
-        _pendingAntiAliasing = static_cast<int>(options.antialiasing);
-        _pendingAntiAliasingInitialized = true;
-    }
+    auto &staged = _engine.stagedGraphicsOptions();
 
     ImGui::SeparatorText("General");
     ImGui::TextDisabled("Live - applies next frame.");
+    // The resolve step and the shadow-caster policy are chosen per frame, and a
+    // raster pipeline builds both resolve descriptor sets, so this needs no
+    // rebuild. It used to sit disabled under "requires a reload", which was
+    // never true of the raster resolve pair.
+    ImGui::Checkbox("PBR resolve", &options.pbr);
+    ImGui::TextDisabled("Off is the retro resolve: the original's lighting and\nits characters-only shadow casters.");
     ImGui::Checkbox("Post-process", &options.post);
     ImGui::TextDisabled("The pass that owns the display transform. Off is\ndiagnostic: the traced mode then presents linear.");
     ImGui::Checkbox("Sharpen", &options.sharpen);
@@ -784,15 +792,12 @@ void Editor::graphicsSettings() {
     ImGui::SeparatorText("Anti-aliasing");
     // Ordered as the enum is, so the index is the value.
     static const char *kAntiAliasingNames[] = {"Off", "FXAA", "FSR 2 (NativeAA)"};
-    ImGui::Combo("Method", &_pendingAntiAliasing, kAntiAliasingNames,
-                 IM_ARRAYSIZE(kAntiAliasingNames));
-    ImGui::TextDisabled("Runs after the opaque resolve, before transparency and\nthe display transform. It never tonemaps. Changing it\nneeds a graphics rebuild.");
-    if (_pendingAntiAliasing != static_cast<int>(options.antialiasing)) {
-        if (ImGui::SmallButton("Apply##antialiasing")) {
-            options.antialiasing = static_cast<graphics::AntiAliasing>(_pendingAntiAliasing);
-            _engine.requestGraphicsRebuild();
-        }
+    int antiAliasing = static_cast<int>(staged.antialiasing);
+    if (ImGui::Combo("Method (requires reapply)", &antiAliasing, kAntiAliasingNames,
+                     IM_ARRAYSIZE(kAntiAliasingNames))) {
+        staged.antialiasing = static_cast<graphics::AntiAliasing>(antiAliasing);
     }
+    ImGui::TextDisabled("Runs after the opaque resolve, before transparency and\nthe display transform. It never tonemaps. Apply is at\nthe bottom of this window.");
     ImGui::BeginDisabled(options.antialiasing != graphics::AntiAliasing::Fsr);
     ImGui::SliderFloat("FSR sharpness", &options.fsrSharpness, 0.0f, 1.0f, "%.2f");
     ImGui::TextDisabled("RCAS, inside FSR. Compensates for upscaling\nsoftness, of which NativeAA has none - keep it\nlow. Never stack the postprocess sharpen on top.");
@@ -918,78 +923,24 @@ void Editor::graphicsSettings() {
     }
     ImGui::TextDisabled("Applied to every surface of the category as its material\nrecord is built. Color weight 1 flat-paints for bug\nisolation.");
 
-    ImGui::Spacing();
-    ImGui::TextUnformatted("Requires graphics rebuild");
-    ImGui::Separator();
-    if (_pendingWidth == 0) {
-        _pendingWidth = options.width;
-        _pendingHeight = options.height;
-        _pendingShadowResolution = options.shadowResolution;
-        _pendingVsync = options.vsync;
-    }
-    static const struct {
-        const char *name;
-        int width;
-        int height;
-    } kResolutions[] {
-        {"1280x720", 1280, 720},
-        {"1600x900", 1600, 900},
-        {"1920x1080", 1920, 1080},
-        {"2560x1440", 2560, 1440},
-        {"3840x2160", 3840, 2160}};
-    std::string current = std::to_string(_pendingWidth) + "x" + std::to_string(_pendingHeight);
-    if (ImGui::BeginCombo("Preset", current.c_str())) {
-        for (const auto &res : kResolutions) {
-            bool selected = res.width == _pendingWidth && res.height == _pendingHeight;
-            if (ImGui::Selectable(res.name, selected)) {
-                _pendingWidth = res.width;
-                _pendingHeight = res.height;
-            }
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::InputInt("Width", &_pendingWidth);
-    ImGui::InputInt("Height", &_pendingHeight);
-    ImGui::SliderInt("Shadow resolution", &_pendingShadowResolution, 512, 8192, "%d", ImGuiSliderFlags_Logarithmic);
-    ImGui::Checkbox("V-sync", &_pendingVsync);
-    if (ImGui::Button("Rebuild graphics targets")) {
-        options.width = std::max(1, _pendingWidth);
-        options.height = std::max(1, _pendingHeight);
-        options.shadowResolution = _pendingShadowResolution;
-        options.vsync = _pendingVsync;
-        _engine.requestGraphicsRebuild();
-    }
+    graphicsReapplySection();
 
     ImGui::Spacing();
-    ImGui::TextUnformatted("Requires scene or asset reload");
+    ImGui::TextUnformatted("Requires restart");
     ImGui::Separator();
-    bool pbr = options.pbr;
     int textureQuality = static_cast<int>(options.textureQuality);
     int anisotropic = options.anisotropicFiltering;
     ImGui::BeginDisabled();
-    ImGui::Checkbox("PBR", &pbr);
     ImGui::SliderInt("Texture quality", &textureQuality, 0, 2);
-    ImGui::SliderInt("Anisotropic filtering", &anisotropic, 1, 16);
+    ImGui::SliderInt("Anisotropic filtering", &anisotropic, 0, 4);
     ImGui::EndDisabled();
-    ImGui::TextDisabled("These settings take effect after reloading.");
+    ImGui::TextDisabled("Read once, before anything a rebuild could reach: the\ntexture pack is chosen while the game directory is\nopened, and anisotropy is baked into each texture's\nsampler as it loads.");
+
     ImGui::Separator();
     if (ImGui::Button("Save settings")) {
-        if (options.width != std::max(1, _pendingWidth) ||
-            options.height != std::max(1, _pendingHeight) ||
-            options.shadowResolution != _pendingShadowResolution ||
-            options.vsync != _pendingVsync) {
-            options.width = std::max(1, _pendingWidth);
-            options.height = std::max(1, _pendingHeight);
-            options.shadowResolution = _pendingShadowResolution;
-            options.vsync = _pendingVsync;
-            _engine.requestGraphicsRebuild();
-        }
-        // Saving a staged slot without applying it would write a config the
-        // running frame does not match.
-        if (_pendingAntiAliasing != static_cast<int>(options.antialiasing)) {
-            options.antialiasing = static_cast<graphics::AntiAliasing>(_pendingAntiAliasing);
-            _engine.requestGraphicsRebuild();
-        }
+        // Saving a staged value without applying it would write a config the
+        // running frame does not match, so the save commits first.
+        _engine.applyStagedGraphics();
         _settingsSaveSucceeded = saveGraphicsOptions(options, _settingsSaveStatus);
         if (_settingsSaveSucceeded) {
             _settingsSaveStatus = "Settings saved to reone.cfg.";
@@ -1000,6 +951,87 @@ void Editor::graphicsSettings() {
                            "%s", _settingsSaveStatus.c_str());
     }
     ImGui::End();
+}
+
+void Editor::graphicsReapplySection() {
+    auto &staged = _engine.stagedGraphicsOptions();
+
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Requires reapply");
+    ImGui::Separator();
+    ImGui::TextDisabled("These change what the pipeline allocates, so they are\nedited here and take effect on Apply, not as you drag.");
+
+    // The render mode is the reason this section can no longer be "targets":
+    // it decides whether the ray-query pipeline exists at all, and what format
+    // the scene output carries, both of which are fixed at construction.
+    static const char *kModeNames[] = {"Raster", "Path tracing"};
+    int modeIndex = staged.mode == "path-tracing" ? 1 : 0;
+    if (ImGui::Combo("Render mode", &modeIndex, kModeNames, IM_ARRAYSIZE(kModeNames))) {
+        staged.mode = modeIndex == 1 ? "path-tracing" : "raster";
+    }
+    ImGui::TextDisabled("Primary visibility is rasterized either way; this\nselects who shades it. The anti-aliasing slot does not\nfollow the mode here - only --mode at startup defaults\nit - so set it yourself if you are comparing frames.");
+
+    static const struct {
+        const char *name;
+        int width;
+        int height;
+    } kResolutions[] {
+        {"1280x720", 1280, 720},
+        {"1600x900", 1600, 900},
+        {"1920x1080", 1920, 1080},
+        {"2560x1440", 2560, 1440},
+        {"3840x2160", 3840, 2160}};
+    std::string current = std::to_string(staged.width) + "x" + std::to_string(staged.height);
+    if (ImGui::BeginCombo("Preset", current.c_str())) {
+        for (const auto &res : kResolutions) {
+            bool selected = res.width == staged.width && res.height == staged.height;
+            if (ImGui::Selectable(res.name, selected)) {
+                staged.width = res.width;
+                staged.height = res.height;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::InputInt("Width", &staged.width);
+    ImGui::InputInt("Height", &staged.height);
+    staged.width = std::max(1, staged.width);
+    staged.height = std::max(1, staged.height);
+    // Powers of two above 1024, which is exactly what the --shadowres exponent
+    // can express. A free slider could stage a value the console could neither
+    // report nor reproduce, and the two have to agree on what is set.
+    static const char *kShadowResolutions[] = {"1024", "2048", "4096", "8192"};
+    int shadowExponent = 0;
+    while (shadowExponent < 3 && (1 << (10 + shadowExponent)) < staged.shadowResolution) {
+        ++shadowExponent;
+    }
+    if (ImGui::Combo("Shadow resolution", &shadowExponent, kShadowResolutions,
+                     IM_ARRAYSIZE(kShadowResolutions))) {
+        staged.shadowResolution = 1 << (10 + shadowExponent);
+    }
+    ImGui::Checkbox("V-sync", &staged.vsync);
+
+    auto changed = _engine.stagedGraphicsChanges();
+    ImGui::BeginDisabled(changed.empty());
+    if (ImGui::Button("Apply")) {
+        _engine.applyStagedGraphics();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Revert")) {
+        _engine.revertStagedGraphics();
+    }
+    ImGui::EndDisabled();
+    if (changed.empty()) {
+        ImGui::TextDisabled("Nothing staged.");
+        return;
+    }
+    // Named, because a staged control may be anywhere in this window - the
+    // anti-aliasing slot is up in its own section - and the button that commits
+    // it is down here.
+    std::string pending = "Pending:";
+    for (const auto &name : changed) {
+        pending += " " + name;
+    }
+    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%s", pending.c_str());
 }
 
 void Editor::frameTimes() {

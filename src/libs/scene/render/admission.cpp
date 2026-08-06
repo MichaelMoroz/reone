@@ -421,6 +421,11 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
     uint64_t optionsFingerprint = 14695981039346656037ull;
     hashBytes(optionsFingerprint, _options.categoryOverrides,
               sizeof(_options.categoryOverrides));
+    // Every option that reaches a material record has to be in here, or the
+    // classification cache answers from before the change and the dial sits
+    // inert. The lightmaps toggle strips the map at the record (see
+    // applyCategoryOverride's neighbourhood below), so it belongs.
+    hashBytes(optionsFingerprint, &_options.lightmaps, sizeof(_options.lightmaps));
     if (_optionsFingerprint != 0 && _optionsFingerprint != optionsFingerprint)
         ++_admissionGeneration;
     _optionsFingerprint = optionsFingerprint;

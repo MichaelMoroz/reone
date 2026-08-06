@@ -156,6 +156,7 @@ public:
         const std::vector<std::pair<int, const VulkanImage *>> &bindings);
     DescriptorSet createPersistentTextureSet(
         const std::vector<std::pair<int, const IImage *>> &bindings) override;
+    void freePersistentTextureSet(DescriptorSet set) override;
 
 private:
     VulkanDevice &_device;

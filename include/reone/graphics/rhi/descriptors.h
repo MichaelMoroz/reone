@@ -64,6 +64,17 @@ public:
     /** A texture table that remains fixed for the lifetime of a scene target. */
     virtual DescriptorSet createPersistentTextureSet(
         const std::vector<std::pair<int, const IImage *>> &bindings) = 0;
+    /**
+     * Give a persistent set back.
+     *
+     * Persistent sets outlive a frame by definition, so nothing recycles them
+     * per frame the way the transient pools are recycled. Without this, every
+     * graphics rebuild - a resolution change, an anti-aliasing change, a render
+     * mode switch - leaks the sets its old scene pipeline allocated, and the
+     * pool runs out after a handful of them. The caller owns the wait: the GPU
+     * must have finished with the set before it is freed.
+     */
+    virtual void freePersistentTextureSet(DescriptorSet set) = 0;
 };
 
 } // namespace graphics

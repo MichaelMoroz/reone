@@ -111,6 +111,22 @@ private:
     bool _showCursor {true};
     bool _relativeMouseMode {false};
 
+    /**
+     * The edit buffer for options that cannot take effect inside a frame.
+     *
+     * Options classified OptionApply::Reapply change what the pipeline
+     * allocates, so a control that wrote them straight through would leave the
+     * running frame describing a pipeline that does not exist. They are edited
+     * here instead and copied across by applyStagedGraphics, which is also what
+     * schedules the rebuild. Live options are not staged: they are written to
+     * _options.graphics directly and only the Reapply fields of this copy are
+     * ever read, so the two never disagree about anything else.
+     *
+     * One buffer, shared by the editor's Apply button and the console's
+     * "gfx apply", so there is a single path rather than two.
+     */
+    graphics::GraphicsOptions _stagedGraphics;
+
     void processEvents(bool &quit);
     void loadInputScript();
     void runCommandsFile(const std::string &path);
@@ -135,7 +151,39 @@ private:
     void showCursor(bool show);
     void setRelativeMouseMode(bool relative);
     void requestGraphicsRebuild() { _graphicsRebuildRequested = true; }
-    void applyGraphicsRebuildVulkan();
+    /**
+     * Take a requested rebuild, between frames.
+     *
+     * Deliberately not inside the frame: the editor submits ImGui image handles
+     * owned by the scene pipeline while the update slot's ImGui frame is open,
+     * so a rebuild taken after that point would free a descriptor the recorded
+     * draw data still names. It waits the device idle itself rather than
+     * relying on a swapchain recreate to have done so, because a change that
+     * leaves the extent alone - the render mode, the anti-aliasing slot - never
+     * triggers one.
+     */
+    void applyGraphicsRebuild();
+
+    // Runtime graphics options. The editor reaches these as a friend; the
+    // console reaches them through the commands registered in init.
+
+    graphics::GraphicsOptions &stagedGraphicsOptions() { return _stagedGraphics; }
+    /** Names of the staged reapply options that differ from the live ones. */
+    std::vector<std::string> stagedGraphicsChanges() const;
+    /** Copy the staged reapply options into the live ones and rebuild. */
+    void applyStagedGraphics();
+    /** Discard staged edits, restoring the running configuration. */
+    void revertStagedGraphics();
+    /**
+     * Set one option by its command-line name, into the live options or the
+     * staged copy according to its class.
+     *
+     * @return a line describing what happened, for the console to print.
+     * @throws std::invalid_argument naming the option, on an unknown name or
+     *         an unreadable value.
+     */
+    std::string setGraphicsOption(const std::string &name, const std::string &value);
+    void registerGraphicsCommands();
 
     std::optional<input::Event> eventFromSDLEvent(const SDL_Event &sdlEvent) const;
 };

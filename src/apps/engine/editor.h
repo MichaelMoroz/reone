@@ -111,15 +111,14 @@ private:
     bool _showGraphicsSettings {false};
     bool _freeCameraUnavailable {false};
 
-    int _pendingWidth {0};
-    int _pendingHeight {0};
-    int _pendingShadowResolution {0};
-    bool _pendingVsync {true};
-    /** Staged until Apply: a temporal slot is built in the pipeline's init,
-        so the choice cannot change inside a frame. Held as the enum's integer
-        because that is what the combo edits. */
-    int _pendingAntiAliasing {0};
-    bool _pendingAntiAliasingInitialized {false};
+    /**
+     * Every control whose option changes what the pipeline allocates edits
+     * Engine::stagedGraphicsOptions() rather than the live struct, and one
+     * Apply button copies the staged reapply fields across and schedules the
+     * rebuild. The staging buffer lives on the Engine, not here, because the
+     * console drives the same one - the two must not be separate mechanisms.
+     */
+    void graphicsReapplySection();
     std::string _settingsSaveStatus;
     bool _settingsSaveSucceeded {false};
 

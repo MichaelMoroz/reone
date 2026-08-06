@@ -30,6 +30,7 @@
 #include "renderdoc_app.h"
 
 #include "reone/graphics/format/tgawriter.h"
+#include "reone/graphics/optionsregistry.h"
 #include "reone/graphics/window.h"
 #include "reone/resource/exception/notfound.h"
 #include "reone/resource/gameprobe.h"
@@ -279,6 +280,10 @@ void Engine::init() {
                                                           ? "Slang shaders recompiled."
                                                           : "Slang errors kept one or more last-good shaders; see log.");
                               });
+    // Seeded before any command can stage anything. Only the reapply fields of
+    // this copy are ever read back.
+    _stagedGraphics = _options.graphics;
+    registerGraphicsCommands();
 
     _game = std::make_unique<Game>(
         gameId,
@@ -446,6 +451,14 @@ int Engine::run() {
             // the harness wall-clocks end to end, so the two reconcile.
             _profiler->resetAccumulation(kMainThreadName);
         }
+        // Ahead of the update slot, because the slot opens the ImGui frame and
+        // the editor's render-target viewer submits an ImGui image handle owned
+        // by the scene pipeline. Rebuilding after that point would free the
+        // handle out from under draw data that has already been recorded, and
+        // the frame would be presented with a descriptor that no longer exists.
+        // A rebuild asked for during this frame's input or commands file is
+        // therefore taken now, before anything can reference the old pipeline.
+        applyGraphicsRebuild();
         _profiler->measure(kMainThreadName, kProfilerUpdateTimeIndex, [this, &frameTime]() {
             R_PROFILE_ZONE("update");
             imguiBeginFrame();
@@ -685,14 +698,9 @@ void Engine::renderFrame(bool &quit) {
 
 void Engine::renderVulkanFrame(bool &quit) {
     glm::ivec2 extent {_options.graphics.width, _options.graphics.height};
-    if (_graphicsRebuildRequested) {
-        _window->resize(_options.graphics.width, _options.graphics.height);
-        _renderer->setVsync(_options.graphics.vsync);
-    }
     // Before the frame's rendering scope: the scene pipeline begins render
     // passes of its own, and one cannot be nested inside another.
     _renderer->beginFrame(extent);
-    applyGraphicsRebuildVulkan();
     imguiBeginFrame();
     _game->renderSceneOffscreen();
 
@@ -712,14 +720,213 @@ void Engine::renderVulkanFrame(bool &quit) {
     R_PROFILE_FRAME_MARK();
 }
 
-void Engine::applyGraphicsRebuildVulkan() {
+void Engine::applyGraphicsRebuild() {
     if (!_graphicsRebuildRequested) {
         return;
     }
-    // beginFrame recreated the swapchain and waited for old work before this
-    // point, which makes releasing the old scene images safe.
-    _sceneModule->graphs().invalidateRenderPipelines();
     _graphicsRebuildRequested = false;
+    // The window and the swapchain first; setVsync flags the swapchain for
+    // recreation, which the next beginFrame acts on with the new extent.
+    _window->resize(_options.graphics.width, _options.graphics.height);
+    _renderer->setVsync(_options.graphics.vsync);
+    // Everything below releases device memory, image views and descriptor sets
+    // that frames still in flight may be reading, and this now runs outside a
+    // frame, so nothing has waited for them. The blunt wait is the correct one:
+    // a rebuild is a rare, deliberate act, and it must not depend on which
+    // other option happened to change alongside.
+    _renderer->waitIdle();
+    // Destroying a scene's pipeline destroys its scene pipeline, its ray-query
+    // pipeline if it had one, the sky bake, the device-side GpuScene and the
+    // admission layer. The next SceneGraph::render rebuilds all of it, reading
+    // the render mode afresh, so this is also what makes a mode switch happen.
+    _sceneModule->graphs().invalidateRenderPipelines();
+}
+
+std::vector<std::string> Engine::stagedGraphicsChanges() const {
+    return graphics::graphicsOptionsDiffering(_stagedGraphics, _options.graphics,
+                                              graphics::OptionApply::Reapply);
+}
+
+void Engine::applyStagedGraphics() {
+    auto changed = stagedGraphicsChanges();
+    if (changed.empty()) {
+        return;
+    }
+    graphics::copyGraphicsOptions(_stagedGraphics, _options.graphics,
+                                  graphics::OptionApply::Reapply);
+    std::string message = "Graphics options reapplied:";
+    for (const auto &name : changed) {
+        message += " " + name + "=" +
+                   graphics::findGraphicsOptionDesc(name)->get(_options.graphics) + ";";
+    }
+    info(message, LogChannel::Graphics);
+    requestGraphicsRebuild();
+}
+
+void Engine::revertStagedGraphics() {
+    graphics::copyGraphicsOptions(_options.graphics, _stagedGraphics,
+                                  graphics::OptionApply::Reapply);
+}
+
+std::string Engine::setGraphicsOption(const std::string &name, const std::string &value) {
+    const auto *desc = graphics::findGraphicsOptionDesc(name);
+    if (!desc) {
+        throw std::invalid_argument("Unknown graphics option '" + name +
+                                    "'; 'gfx list' names them all");
+    }
+    switch (desc->apply) {
+    case graphics::OptionApply::Reapply: {
+        // Into the staged copy only. Writing the live struct here would leave
+        // the running frame describing targets that were never allocated.
+        desc->set(_stagedGraphics, value);
+        std::string report;
+        if (desc->equal(_stagedGraphics, _options.graphics)) {
+            report = name + " = " + desc->get(_stagedGraphics) +
+                     " (unchanged; requires reapply)";
+        } else {
+            report = name + " = " + desc->get(_stagedGraphics) + " staged, was " +
+                     desc->get(_options.graphics) + "; run 'gfx apply' to rebuild";
+        }
+        if (name == "mode") {
+            // The command line resolves the anti-aliasing default from the
+            // render mode, in optionsparser.cpp, because it is the only place
+            // that sees both before either is used. A runtime switch cannot:
+            // the slot already holds whatever it was given. Say what it holds,
+            // or a mode reached through the console quietly differs from the
+            // same mode given as --mode at startup.
+            const auto *slot = graphics::findGraphicsOptionDesc("antialiasing");
+            report += "; the anti-aliasing slot stays '" +
+                      slot->get(_stagedGraphics) + "' (--mode would default it to " +
+                      (desc->get(_stagedGraphics) == "path-tracing" ? "fsr" : "fxaa") + ")";
+        }
+        return report;
+    }
+    case graphics::OptionApply::Restart:
+        // Recorded, and said so. The consumer ran before anything that could be
+        // rebuilt existed, so pretending otherwise would be the silent failure.
+        desc->set(_options.graphics, value);
+        desc->set(_stagedGraphics, value);
+        return name + " = " + desc->get(_options.graphics) +
+               " recorded, but it is only read at startup; this run is unaffected";
+    default:
+        desc->set(_options.graphics, value);
+        desc->set(_stagedGraphics, value);
+        return name + " = " + desc->get(_options.graphics) + " (live, from the next frame)";
+    }
+}
+
+void Engine::registerGraphicsCommands() {
+    _console->registerCommand(
+        "gfx",
+        "graphics options: gfx set <option> <value> | gfx apply | gfx revert | "
+        "gfx get <option> | gfx list [substring]",
+        [this](const game::ConsoleArgs &args) {
+            // A commands file is the only way a capture run can be scripted, so
+            // every failure here has to reach the log as well as the console -
+            // a headless run has nobody watching the console, and a typo that
+            // printed nowhere would leave the capture silently describing the
+            // options the run started with.
+            const auto fail = [this](const std::string &message) {
+                error("gfx: " + message, LogChannel::Graphics);
+                _console->printLine("gfx: " + message);
+            };
+            const auto say = [this](const std::string &message) {
+                info("gfx: " + message, LogChannel::Graphics);
+                _console->printLine("gfx: " + message);
+            };
+            const auto token = [&args](size_t index) {
+                return std::string(args[index].value_or(std::string_view {}));
+            };
+            const auto subcommand = token(1);
+            if (subcommand.empty()) {
+                fail("expected a subcommand: set, apply, revert, get or list");
+                return;
+            }
+            if (subcommand == "set") {
+                if (args.size() < 4) {
+                    fail("set expects an option name and a value");
+                    return;
+                }
+                // Values carry no spaces today, but joining the tail keeps a
+                // trailing comment or a stray separator in a commands file from
+                // being dropped without a word.
+                std::string value = token(3);
+                for (size_t i = 4; i < args.size(); ++i) {
+                    value += " " + token(i);
+                }
+                try {
+                    say(setGraphicsOption(token(2), value));
+                } catch (const std::exception &ex) {
+                    fail(ex.what());
+                }
+                return;
+            }
+            if (subcommand == "apply") {
+                auto changed = stagedGraphicsChanges();
+                if (changed.empty()) {
+                    say("nothing staged");
+                    return;
+                }
+                applyStagedGraphics();
+                std::string message = "reapplying";
+                for (const auto &name : changed) {
+                    message += " " + name;
+                }
+                say(message);
+                return;
+            }
+            if (subcommand == "revert") {
+                const auto count = stagedGraphicsChanges().size();
+                revertStagedGraphics();
+                say(count == 0 ? "nothing staged"
+                               : "discarded " + std::to_string(count) + " staged change(s)");
+                return;
+            }
+            if (subcommand == "get") {
+                const auto name = token(2);
+                if (name.empty()) {
+                    fail("get expects an option name");
+                    return;
+                }
+                const auto *desc = graphics::findGraphicsOptionDesc(name);
+                if (!desc) {
+                    fail("unknown graphics option '" + name + "'; 'gfx list' names them all");
+                    return;
+                }
+                std::string line = desc->name + " = " + desc->get(_options.graphics) +
+                                   " [" + graphics::optionApplyName(desc->apply) + "]";
+                if (desc->apply == graphics::OptionApply::Reapply &&
+                    !desc->equal(_stagedGraphics, _options.graphics)) {
+                    line += ", staged " + desc->get(_stagedGraphics);
+                }
+                say(line);
+                return;
+            }
+            if (subcommand == "list") {
+                const auto filter = token(2);
+                int shown = 0;
+                for (const auto &desc : graphics::graphicsOptionDescs()) {
+                    if (!filter.empty() && desc.name.find(filter) == std::string::npos) {
+                        continue;
+                    }
+                    ++shown;
+                    std::string line = desc.name + " = " + desc.get(_options.graphics) +
+                                       " [" + graphics::optionApplyName(desc.apply) + "] " +
+                                       desc.help;
+                    if (desc.apply == graphics::OptionApply::Reapply &&
+                        !desc.equal(_stagedGraphics, _options.graphics)) {
+                        line += " (staged " + desc.get(_stagedGraphics) + ")";
+                    }
+                    say(line);
+                }
+                if (shown == 0) {
+                    fail("no graphics option matches '" + filter + "'");
+                }
+                return;
+            }
+            fail("unknown subcommand '" + subcommand +
+                 "'; expected set, apply, revert, get or list");
+        });
 }
 
 void Engine::runCommandsFile(const std::string &path) {

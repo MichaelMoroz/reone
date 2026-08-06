@@ -231,6 +231,15 @@ void ScenePipeline::deinit() {
     _pointShadows.reset();
     _gbuffer.reset();
     _outputHandle.reset();
+    // Persistent sets are not recycled by any per-frame pool reset, so a
+    // pipeline that is thrown away on a graphics rebuild has to hand its own
+    // back. Left leaked, a dozen rebuilds exhaust the pool and the next one
+    // fails to allocate. The caller has waited the device idle before getting
+    // here, so the GPU is done with them.
+    if (_retroResolveSet)
+        _renderer.descriptors().freePersistentTextureSet(_retroResolveSet);
+    if (_pbrResolveSet)
+        _renderer.descriptors().freePersistentTextureSet(_pbrResolveSet);
     _retroResolveSet = {};
     _pbrResolveSet = {};
     _resolveMaterialSet = {};

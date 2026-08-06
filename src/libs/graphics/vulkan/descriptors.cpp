@@ -331,6 +331,11 @@ VkDescriptorSet VulkanDescriptors::createPersistentTextureSet(
         size.descriptorCount = kNumTextures * kMaxPersistentTextureSets;
 
         VkDescriptorPoolCreateInfo info {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        // Individually freeable, because these sets outlive a frame and are
+        // therefore not reclaimed by any pool reset. A rebuild that discards a
+        // scene pipeline has to give its sets back or the pool is exhausted
+        // after a dozen of them.
+        info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
         info.maxSets = kMaxPersistentTextureSets;
         info.poolSizeCount = 1;
         info.pPoolSizes = &size;
@@ -372,6 +377,14 @@ DescriptorSet VulkanDescriptors::createPersistentTextureSet(
         native.emplace_back(unit, image ? &toVulkanImage(*image) : nullptr);
     }
     return toDescriptorSet(createPersistentTextureSet(native));
+}
+
+void VulkanDescriptors::freePersistentTextureSet(DescriptorSet set) {
+    auto native = toVulkanDescriptorSet(set);
+    if (!native || _persistentPool == VK_NULL_HANDLE) {
+        return;
+    }
+    vkFreeDescriptorSets(_device.handle(), _persistentPool, 1, &native);
 }
 
 void VulkanDescriptors::writeTextureSet(

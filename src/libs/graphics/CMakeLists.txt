@@ -60,6 +60,7 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/npyutil.h
     ${GRAPHICS_INCLUDE_DIR}/modelnode.h
     ${GRAPHICS_INCLUDE_DIR}/options.h
+    ${GRAPHICS_INCLUDE_DIR}/optionsregistry.h
     ${GRAPHICS_INCLUDE_DIR}/rhi/descriptors.h
     ${GRAPHICS_INCLUDE_DIR}/rhi/pipelinecache.h
     ${GRAPHICS_INCLUDE_DIR}/rhi/renderer.h
@@ -104,6 +105,7 @@ set(GRAPHICS_SOURCES
     ${GRAPHICS_SOURCE_DIR}/model.cpp
     ${GRAPHICS_SOURCE_DIR}/npyutil.cpp
     ${GRAPHICS_SOURCE_DIR}/modelnode.cpp
+    ${GRAPHICS_SOURCE_DIR}/optionsregistry.cpp
     ${GRAPHICS_SOURCE_DIR}/rendering/pbrtextures.cpp
     ${GRAPHICS_SOURCE_DIR}/rendering/rayquery.cpp
     ${GRAPHICS_SOURCE_DIR}/rendering/sky.cpp
