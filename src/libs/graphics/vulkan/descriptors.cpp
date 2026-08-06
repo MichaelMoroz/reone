@@ -376,28 +376,35 @@ DescriptorSet VulkanDescriptors::createPersistentTextureSet(
 
 void VulkanDescriptors::writeTextureSet(
     VkDescriptorSet set,
-    const std::vector<std::pair<int, const VulkanImage *>> &bindings) {
+    const std::vector<NativeTextureBinding> &bindings) {
     DescriptorWriteBuilder writes(_device.handle());
     for (int i = 0; i < kNumTextures; ++i) {
         auto image = _standing[i];
+        VkImageView view = VK_NULL_HANDLE;
         for (const auto &binding : bindings) {
-            if (binding.first == i && binding.second) {
-                image = binding.second;
+            if (binding.unit == i && binding.image) {
+                image = binding.image;
+                view = binding.view;
             }
         }
         writes.writeImage(set, {static_cast<uint32_t>(i), VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-                          {image->sampler() ? image->sampler() : _sampler, image->view(), sampledLayoutFor(*image)});
+                          {image->sampler() ? image->sampler() : _sampler,
+                           view ? view : image->view(), sampledLayoutFor(*image)});
     }
     writes.apply();
 }
 
 VkDescriptorSet VulkanDescriptors::acquireTextureSet(
     int frame,
-    const std::vector<std::pair<int, const VulkanImage *>> &bindings) {
+    const std::vector<NativeTextureBinding> &bindings) {
     size_t key = bindings.size();
     for (const auto &binding : bindings) {
-        key ^= (std::hash<const void *> {}(binding.second) ^
-                static_cast<size_t>(binding.first) * 0x9e3779b9u) +
+        // The view is part of the identity, not a detail of the image: two
+        // bindings of one cube-array image through different cube views are
+        // different descriptors and must not share a cached set.
+        key ^= (std::hash<const void *> {}(binding.image) ^
+                std::hash<const void *> {}(reinterpret_cast<const void *>(binding.view)) ^
+                static_cast<size_t>(binding.unit) * 0x9e3779b9u) +
                (key << 6) + (key >> 2);
     }
 
@@ -453,11 +460,14 @@ DescriptorSet VulkanDescriptors::acquireTextureDescriptorSet(int frame, const II
 }
 
 DescriptorSet VulkanDescriptors::acquireTextureDescriptorSet(
-    int frame, const std::vector<std::pair<int, const IImage *>> &bindings) {
-    std::vector<std::pair<int, const VulkanImage *>> nativeBindings;
+    int frame, const std::vector<TextureBinding> &bindings) {
+    std::vector<NativeTextureBinding> nativeBindings;
     nativeBindings.reserve(bindings.size());
-    for (const auto &[unit, image] : bindings) {
-        nativeBindings.push_back({unit, image ? &toVulkanImage(*image) : nullptr});
+    for (const auto &binding : bindings) {
+        nativeBindings.push_back(
+            {binding.unit,
+             binding.image ? &toVulkanImage(*binding.image) : nullptr,
+             binding.view ? toVulkanImageView(binding.view) : VK_NULL_HANDLE});
     }
     return toDescriptorSet(acquireTextureSet(frame, nativeBindings));
 }

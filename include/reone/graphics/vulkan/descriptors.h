@@ -47,6 +47,13 @@ class VulkanResources;
  */
 class VulkanDescriptors : public IDescriptors, boost::noncopyable {
 public:
+    /** The native form of TextureBinding; a null view means the image's own. */
+    struct NativeTextureBinding {
+        int unit {0};
+        const VulkanImage *image {nullptr};
+        VkImageView view {VK_NULL_HANDLE};
+    };
+
     /** Must match the number of blocks in uniforms.h and uniforms.slang. */
     static constexpr int kNumUniformBlocks = 10;
 
@@ -131,10 +138,10 @@ public:
      */
     VkDescriptorSet acquireTextureSet(
         int frame,
-        const std::vector<std::pair<int, const VulkanImage *>> &bindings);
+        const std::vector<NativeTextureBinding> &bindings);
     DescriptorSet acquireTextureDescriptorSet(
         int frame,
-        const std::vector<std::pair<int, const IImage *>> &bindings) override;
+        const std::vector<TextureBinding> &bindings) override;
 
     /**
      * A texture set written once and never recycled, for passes whose textures
@@ -198,7 +205,7 @@ private:
 
     void writeTextureSet(VkDescriptorSet set, const VulkanImage *mainTex);
     void writeTextureSet(VkDescriptorSet set,
-                         const std::vector<std::pair<int, const VulkanImage *>> &bindings);
+                         const std::vector<NativeTextureBinding> &bindings);
 };
 
 } // namespace graphics

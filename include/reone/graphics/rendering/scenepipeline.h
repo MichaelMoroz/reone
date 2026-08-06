@@ -29,6 +29,7 @@
 #include "reone/graphics/rendering/gbuffer.h"
 #include "reone/graphics/rhi/commandbuffer.h"
 #include "reone/graphics/rendering/gpuscene.h"
+#include "reone/graphics/rendering/sky.h"
 #include "reone/graphics/rhi/renderer.h"
 
 namespace reone::graphics {
@@ -44,6 +45,8 @@ enum class SceneStep {
     Geometry,
     PBRResolve,
     RetroResolve,
+    /** Between the resolve and transparency; see skyCompositePass. */
+    SkyComposite,
     Blended,
 };
 
@@ -80,6 +83,14 @@ public:
     virtual void renderPrimary(const PrimaryRayContext &context) = 0;
     virtual GpuScene::View mergeGeometry(ICommandBuffer &commandBuffer) = 0;
     virtual std::vector<ExternalTarget> primaryTargets() const = 0;
+    /**
+     * This frame's sky cube, baking the detected room first if it changed.
+     *
+     * The bake needs the scene's registered meshes, so the decision of what to
+     * bake stays scene-side and only the resulting cube crosses over. It
+     * records into @p commandBuffer, so it must be called outside a pass.
+     */
+    virtual SkyBinding prepareSky(ICommandBuffer &commandBuffer) = 0;
 };
 
 enum class TargetKind { Color,
@@ -161,6 +172,9 @@ private:
     void geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                       ISceneCallbacks &callbacks);
     void retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    /** V2: the sky, composited where the geometry pass left the far plane. */
+    void skyCompositePass(ICommandBuffer &cmd, uint32_t globalsOffset,
+                          ISceneCallbacks &callbacks);
     /** G8: the transparent surfaces the G-buffer deliberately leaves out,
         drawn forward onto the resolved image in submission order. */
     void blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,

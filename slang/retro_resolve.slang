@@ -75,7 +75,9 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     uint materialId = sGBufMaterialId.Load(int3(int2(input.position.xy), 0)).r;
 
     // The material-id clear and an uncovered alpha-tested pixel both carry this
-    // sentinel. Sky will eventually composite over these black pixels.
+    // sentinel. sky_composite.slang paints over these black pixels afterwards,
+    // testing far depth rather than the sentinel - the two sets coincide,
+    // since the material id and the depth are written by one fragment.
     if (materialId == kNoMaterial) {
         return float4(0.0, 0.0, 0.0, 1.0);
     }

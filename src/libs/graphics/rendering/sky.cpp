@@ -199,7 +199,7 @@ bool Sky::bakeSkyRoom(ICommandBuffer &commandBuffer,
 
     commandBuffer.transitionImage(*_skyCube, ImageLayout::ShaderRead);
     _skyCubeReady = true;
-    info("Tracing: baked sky room '" + room.name + "' into a " + std::to_string(kSkyCubeSize) + "px cubemap",
+    info("Sky: baked sky room '" + room.name + "' into a " + std::to_string(kSkyCubeSize) + "px cubemap",
          LogChannel::Graphics);
     return true;
 }

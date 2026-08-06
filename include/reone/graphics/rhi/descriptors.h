@@ -30,6 +30,22 @@ namespace graphics {
 class IImage;
 class IResources;
 
+/**
+ * One entry of a texture set: the unit, the image, and optionally the view to
+ * read it through.
+ *
+ * The view is only needed when the image's own view has the wrong shape for
+ * the sampler the shader declares - a cube array holding a single cube is the
+ * case that forced it, since the baked sky cube and the fallback cube are
+ * different image shapes behind one binding. Leaving it null binds the image's
+ * own view, which is what every other caller wants.
+ */
+struct TextureBinding {
+    int unit {0};
+    const IImage *image {nullptr};
+    ImageView view;
+};
+
 /** Descriptor operations used by the 2D and image-based-lighting clients. */
 class IDescriptors {
 public:
@@ -44,7 +60,7 @@ public:
                                             const IResources &resources) = 0;
     virtual DescriptorSet acquireTextureDescriptorSet(int frame, const IImage *mainTex) = 0;
     virtual DescriptorSet acquireTextureDescriptorSet(
-        int frame, const std::vector<std::pair<int, const IImage *>> &bindings) = 0;
+        int frame, const std::vector<TextureBinding> &bindings) = 0;
     /** A texture table that remains fixed for the lifetime of a scene target. */
     virtual DescriptorSet createPersistentTextureSet(
         const std::vector<std::pair<int, const IImage *>> &bindings) = 0;

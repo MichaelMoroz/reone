@@ -16,16 +16,18 @@
  */
 #pragma once
 
+#include "reone/graphics/rendering/sky.h"
+
 #include "../admission.h"
 #include "../pipeline.h"
 
 namespace reone::graphics {
+class ICommandBuffer;
 class IMeshRegistry;
 class Uniforms;
 class IRenderer;
 class ScenePipeline;
 class GpuScene;
-class Sky;
 } // namespace reone::graphics
 
 namespace reone::scene {
@@ -56,6 +58,16 @@ public:
 
 private:
     class Callbacks;
+
+    /**
+     * This frame's sky cube, baking the admitted sky room when it changes.
+     *
+     * Both middles reach it: the tracer binds it as an environment light and
+     * the raster sky composite reads it as the picture. One instance, one
+     * bake, one set of latches - the gather and its guards are here rather
+     * than in either consumer so neither can drift from the other.
+     */
+    graphics::SkyBinding skyBinding(graphics::ICommandBuffer &commandBuffer);
 
     glm::ivec2 _targetSize;
     graphics::GraphicsOptions &_options;

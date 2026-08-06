@@ -235,7 +235,7 @@ void PBRTextures::renderCubeFaces(ICommandBuffer &commandBuffer,
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
     offsets[UniformBlockBindingPoints::locals] = _ring.push(locals);
 
-    std::vector<std::pair<int, const IImage *>> textures;
+    std::vector<TextureBinding> textures;
     if (envMap) {
         auto unit = envMap->isCubeMap() ? TextureUnits::envMapCube : TextureUnits::envMap;
         textures.push_back({unit, &_resources.get(*envMap)});

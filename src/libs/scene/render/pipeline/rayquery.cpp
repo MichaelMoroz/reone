@@ -17,12 +17,10 @@
 #include "reone/scene/render/pipeline/rayquery.h"
 
 #include "reone/graphics/options.h"
-#include "reone/graphics/texture.h"
 #include "reone/graphics/rendering/rayquery.h"
 #include "reone/graphics/rendering/sky.h"
 #include "reone/graphics/rhi/renderer.h"
 #include "reone/graphics/rendering/scenepipeline.h"
-#include "reone/scene/node/model.h"
 #include "reone/scene/render/admission.h"
 #include "reone/system/logutil.h"
 
@@ -32,11 +30,8 @@ namespace reone::scene {
 
 RayQueryPipeline::RayQueryPipeline(IRenderer &renderer,
                                     glm::ivec2 extent,
-                                    GraphicsOptions &options,
-                                    GpuScene &gpuScene,
-                                    Sky &sky) :
-    _renderer(renderer), _extent(extent), _options(options), _gpuScene(gpuScene),
-    _sky(sky) {}
+                                    GraphicsOptions &options) :
+    _renderer(renderer), _extent(extent), _options(options) {}
 
 RayQueryPipeline::~RayQueryPipeline() {
     deinit();
@@ -67,67 +62,13 @@ const RayQuery &RayQueryPipeline::native() const {
 }
 
 void RayQueryPipeline::render(const PrimaryRayContext &context,
-                              GpuSceneAdmissionResult admission) {
-    auto &commandBuffer = *context.commandBuffer;
-    bool skyBaked = false;
-    if (admission.skyRoom) {
-        RayQuerySkyRoom bake;
-        bake.identity = reinterpret_cast<uint64_t>(admission.skyRoom);
-        bake.name = admission.skyRoom->model().name();
-        bake.origin = admission.skyOrigin;
-        bool valid = true;
-        for (const auto &object : _gpuScene.objects()) {
-            const auto *mesh = std::get_if<RegisteredMesh>(&object);
-            if (!mesh || mesh->cullRoot != admission.skyRoom ||
-                !_gpuScene.isObjectEnabled(mesh->id.index)) {
-                continue;
-            }
-            if ((mesh->categories & (renderCategory(RenderCategory::Opaque) |
-                                     renderCategory(RenderCategory::Transparent))) == 0) {
-                continue;
-            }
-            if (!std::holds_alternative<std::monostate>(mesh->deformation)) {
-                valid = false;
-                break;
-            }
-            const auto *texture = mesh->material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)];
-            if (!texture || !_sky.supportsSkyTexture(*texture)) {
-                valid = false;
-                break;
-            }
-            bake.meshes.push_back({&mesh->mesh.get(), texture, mesh->transform,
-                                   mesh->transformInv, mesh->prevTransform,
-                                   mesh->material.uv});
-        }
-        if (!valid)
-            bake.meshes.clear();
-        // A valid room with an empty gather is not a failed room - it is a room
-        // whose meshes have not activated yet. Loading from a save staggers room
-        // visibility, so the first frames here can see zero enabled shell
-        // meshes; attempting the bake then would latch bakeSkyRoom's sticky
-        // per-room failure and leave the fallback cube - no sky, no sun - for
-        // the whole session. Skip the attempt and retry next frame; only a
-        // genuinely invalid room (unsupported texture, deforming shell) is
-        // handed over empty so the stickiness still applies to it.
-        if (valid && bake.meshes.empty()) {
-            skyBaked = false;
-        } else {
-            try {
-            skyBaked = _sky.bakeSkyRoom(commandBuffer, bake);
-            } catch (const std::exception &e) {
-                warn("Sky bake failed for '" + admission.skyRoom->model().name() +
-                         "': " + e.what() + "; using fallback cube",
-                     LogChannel::Graphics);
-            }
-        }
-    } else {
-        _sky.clearSkyRoom();
-    }
-
-    _native->render(commandBuffer, context.globalsOffset, *context.output,
+                              GpuSceneAdmissionResult admission,
+                              const SkyBinding &sky) {
+    // The bake that produced this binding ran in RenderPipeline, which drives
+    // it for every mode. The tracer only consumes the cube.
+    _native->render(*context.commandBuffer, context.globalsOffset, *context.output,
                     context.view, context.projection, context.jitter,
-                    std::move(admission.submission), context.scene,
-                    _sky.binding(skyBaked));
+                    std::move(admission.submission), context.scene, sky);
 }
 
 } // namespace reone::scene

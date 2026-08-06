@@ -20,11 +20,13 @@
 #include <sstream>
 
 #include "reone/graphics/options.h"
+#include "reone/graphics/texture.h"
 #include "reone/graphics/rhi/renderer.h"
 #include "reone/graphics/rendering/rayquery.h"
 #include "reone/graphics/rendering/gpuscene.h"
 #include "reone/graphics/rendering/scenepipeline.h"
 #include "reone/graphics/rendering/sky.h"
+#include "reone/scene/node/model.h"
 #include "reone/scene/render/pipeline/rayquery.h"
 #include "reone/system/logutil.h"
 
@@ -35,8 +37,16 @@ public:
     explicit Callbacks(RenderPipeline &owner) : _owner(owner) {}
 
     void renderPrimary(const graphics::PrimaryRayContext &context) override {
-        if (_owner._rayQuery)
-            _owner._rayQuery->render(context, std::move(_owner._admissionResult));
+        if (!_owner._rayQuery)
+            return;
+        // Ordered: the bake records before the trace that samples the cube,
+        // and the admission result is still intact when the gather reads it.
+        const auto sky = _owner.skyBinding(*context.commandBuffer);
+        _owner._rayQuery->render(context, std::move(_owner._admissionResult), sky);
+    }
+
+    graphics::SkyBinding prepareSky(graphics::ICommandBuffer &commandBuffer) override {
+        return _owner.skyBinding(commandBuffer);
     }
 
     graphics::GpuScene::View mergeGeometry(graphics::ICommandBuffer &commandBuffer) override {
@@ -89,13 +99,13 @@ void RenderPipeline::init() {
     _deviceGpuScene = std::make_unique<graphics::GpuScene>();
     _deviceGpuScene->init(_renderer);
     _admission = std::make_unique<GpuSceneAdmission>(_renderer, _options, _gpuScene);
+    // Every mode: the tracer samples the cube as an environment light and the
+    // raster modes composite it as the picture, from one bake.
+    _sky = std::make_unique<graphics::Sky>(_renderer);
+    _sky->init();
     if (_primaryRayMode) {
-        // Gated with the tracer only because the tracer is still the sole
-        // consumer; nothing in Sky is mode-specific.
-        _sky = std::make_unique<graphics::Sky>(_renderer);
-        _sky->init();
         _rayQuery = std::make_unique<RayQueryPipeline>(
-            _renderer, _targetSize, _options, _gpuScene, *_sky);
+            _renderer, _targetSize, _options);
         _rayQuery->init();
     }
     _callbacks = std::make_unique<Callbacks>(*this);
@@ -121,6 +131,66 @@ void RenderPipeline::deinit() {
     _deviceGpuScene.reset();
     _executor.reset();
     _inited = false;
+}
+
+graphics::SkyBinding RenderPipeline::skyBinding(graphics::ICommandBuffer &commandBuffer) {
+    if (!_sky)
+        return {};
+    bool skyBaked = false;
+    if (_admissionResult.skyRoom) {
+        graphics::RayQuerySkyRoom bake;
+        bake.identity = reinterpret_cast<uint64_t>(_admissionResult.skyRoom);
+        bake.name = _admissionResult.skyRoom->model().name();
+        bake.origin = _admissionResult.skyOrigin;
+        bool valid = true;
+        for (const auto &object : _gpuScene.objects()) {
+            const auto *mesh = std::get_if<RegisteredMesh>(&object);
+            if (!mesh || mesh->cullRoot != _admissionResult.skyRoom ||
+                !_gpuScene.isObjectEnabled(mesh->id.index)) {
+                continue;
+            }
+            if ((mesh->categories & (renderCategory(RenderCategory::Opaque) |
+                                     renderCategory(RenderCategory::Transparent))) == 0) {
+                continue;
+            }
+            if (!std::holds_alternative<std::monostate>(mesh->deformation)) {
+                valid = false;
+                break;
+            }
+            const auto *texture = mesh->material.textures[static_cast<size_t>(graphics::MaterialTextureSlot::MainTex)];
+            if (!texture || !_sky->supportsSkyTexture(*texture)) {
+                valid = false;
+                break;
+            }
+            bake.meshes.push_back({&mesh->mesh.get(), texture, mesh->transform,
+                                   mesh->transformInv, mesh->prevTransform,
+                                   mesh->material.uv});
+        }
+        if (!valid)
+            bake.meshes.clear();
+        // A valid room with an empty gather is not a failed room - it is a room
+        // whose meshes have not activated yet. Loading from a save staggers room
+        // visibility, so the first frames here can see zero enabled shell
+        // meshes; attempting the bake then would latch bakeSkyRoom's sticky
+        // per-room failure and leave the fallback cube - no sky, no sun - for
+        // the whole session. Skip the attempt and retry next frame; only a
+        // genuinely invalid room (unsupported texture, deforming shell) is
+        // handed over empty so the stickiness still applies to it.
+        if (valid && bake.meshes.empty()) {
+            skyBaked = false;
+        } else {
+            try {
+                skyBaked = _sky->bakeSkyRoom(commandBuffer, bake);
+            } catch (const std::exception &e) {
+                warn("Sky bake failed for '" + _admissionResult.skyRoom->model().name() +
+                         "': " + e.what() + "; using fallback cube",
+                     LogChannel::Graphics);
+            }
+        }
+    } else {
+        _sky->clearSkyRoom();
+    }
+    return _sky->binding(skyBaked);
 }
 
 graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
@@ -155,6 +225,10 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
             plan.steps.push_back(graphics::SceneStep::PBRResolve);
         else
             plan.steps.push_back(graphics::SceneStep::RetroResolve);
+        // V2: after the opaque resolve and before transparency. At the end of
+        // the chain it would sit past the transparent pass and paint over
+        // particles and lens flares.
+        plan.steps.push_back(graphics::SceneStep::SkyComposite);
         // Transparency composites onto the resolved image, so it follows
         // whichever resolve ran. Raster only: in the traced mode additive
         // sprites belong to the march and drawing them here would double them.

@@ -41,7 +41,8 @@ namespace {
 constexpr const char *kModules[] = {
     "pbr_model", "megadraw", "shadow_megadraw", "sky", "grass", "walkmesh", "common",
     "shadow", "pbr_ibl", "particles", "pbr_resolve", "retro_resolve", "pbr_ssao",
-    "pbr_ssr", "rayquery", "skin", "nrd_composite", "pt_tonemap", "postprocess", "vk2d"};
+    "pbr_ssr", "rayquery", "skin", "nrd_composite", "pt_tonemap", "postprocess", "vk2d",
+    "sky_composite"};
 
 const char *parameterCategoryName(slang::ParameterCategory category) {
     switch (category) {

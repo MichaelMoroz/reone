@@ -129,7 +129,11 @@ VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
     // Every cached graphics layout exposes the same tiny fragment range. This
     // keeps layouts shared by sky/resolve valid while allowing the mega-draw
     // shader to select the global triangle range without a per-draw buffer.
-    config.pushConstants = {{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 2 * sizeof(uint32_t)}};
+    // Three words, not two: the sky composite carries the tracer's intensity,
+    // exposure and tonemap dials so one dial family drives both sky paths. A
+    // draw may fill less of the range than it declares, so mega-draw's two
+    // words are unaffected.
+    config.pushConstants = {{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 3 * sizeof(uint32_t)}};
     config.blend = key.blend;
     config.cull = key.cull;
     config.depthTest = key.depthTest;

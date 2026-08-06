@@ -440,6 +440,63 @@ void ScenePipeline::retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
 
+void ScenePipeline::skyCompositePass(ICommandBuffer &cmd, uint32_t globalsOffset,
+                                     ISceneCallbacks &callbacks) {
+    R_PROFILE_ZONE("ScenePipeline::skyCompositePass record");
+    // Outside any pass: a first bake of a room records six cube-face passes of
+    // its own here.
+    const auto sky = callbacks.prepareSky(cmd);
+    if (!sky.cube) {
+        return;
+    }
+    // The bake pushes its own per-face globals through the ring and leaves the
+    // last face's offset latched. Nothing downstream of here reads the latch
+    // today, but restoring it keeps this frame's globals the frame's globals.
+    _renderer.uniformRing().setGlobalsOffset(globalsOffset);
+    if (!sky.baked) {
+        // The fallback cube is black by construction, so compositing it would
+        // write the black the resolve already left. Skipping keeps a module
+        // without a sky at exactly the pixels it had before.
+        return;
+    }
+    transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
+    cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
+    cmd.transitionImage(*_output, ImageLayout::ColorAttachment);
+
+    PipelineKey key;
+    key.module = "sky_composite";
+    key.vertexEntry = "skyCompositeVertex";
+    key.fragmentEntry = "skyCompositeFragment";
+    key.colorFormats = {_output->pixelFormat()};
+    PipelineBinding pipeline = _renderer.pipelines().get(key);
+
+    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+    // The cube is bound through the view the sky hands over rather than the
+    // image's own: the baked cube is one cube inside a cube-array image, and
+    // the shader declares a plain SamplerCube.
+    auto textureSet = _renderer.descriptors().acquireTextureDescriptorSet(
+        _renderer.frameIndex(),
+        {{TextureUnits::gBufDepth, &_gbuffer->depth()},
+         {TextureUnits::envMapCube, sky.cube, sky.view}});
+
+    {
+        // Loading preserves the resolved image; the shader discards every
+        // pixel the geometry pass wrote depth into.
+        RenderAttachment color {_output->sampleView(), ImageLayout::ColorAttachment,
+                                AttachmentLoad::Load, AttachmentStore::Store};
+        cmd.beginRendering(_targetSize, {color}, nullptr, 0, false);
+        cmd.bindPipeline(pipeline.pipeline);
+        auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                              offsets.data(), static_cast<uint32_t>(offsets.size()));
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, textureSet, nullptr, 0);
+        cmd.draw(3, 1);
+        cmd.endRendering();
+    }
+    cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+}
+
 void ScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::pbrResolvePass record");
     transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
@@ -537,6 +594,9 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
         case SceneStep::RetroResolve:
             retroResolvePass(cmd, globalsOffset);
             outputResolved = true;
+            break;
+        case SceneStep::SkyComposite:
+            skyCompositePass(cmd, globalsOffset, callbacks);
             break;
         }
     }
