@@ -70,6 +70,8 @@ enum class SceneStep {
         reproject it: billboards write no motion, so anything drawn before the
         resolve ghosts behind the camera. */
     AntiAliasing,
+    /** After the display transform: an unsharp mask over display colour. */
+    Sharpen,
     PostProcess,
 };
 
@@ -255,6 +257,7 @@ private:
     void upscalePass(ICommandBuffer &cmd);
     /** The one place a mode's colour becomes display-referred. */
     void postProcessPass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    void sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** One tail pass: full-screen triangle from _output onto _tailColor, then
         the swap that makes the result the output. */
     void tailPass(ICommandBuffer &cmd, const char *fragmentEntry,

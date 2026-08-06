@@ -250,7 +250,16 @@ struct GraphicsOptions {
      * identity over it, while the traced mode presents its linear image raw.
      */
     bool post {true};
-    bool sharpen {true};
+    /**
+     * Unsharp mask over display colour, the last pass of the frame.
+     *
+     * Off by default. It is a separate stage from FSR's own RCAS, which
+     * corrects that upscaler's softness from inside it; running both sharpens
+     * one image twice.
+     */
+    bool sharpen {false};
+    /** Strength of that mask; the neighbour weight of its five-tap cross. */
+    float sharpenAmount {0.25f};
     /**
      * Offset the projection by a sub-pixel jitter each frame. Motion vectors
      * are produced regardless; this only controls the jitter itself.

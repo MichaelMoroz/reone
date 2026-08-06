@@ -348,8 +348,11 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(boolOpt("post", OptionApply::Live, "enable the post-process pass",
                             &GraphicsOptions::post));
     descs.push_back(boolOpt("sharpen", OptionApply::Live,
-                            "enable image sharpening (currently unread)",
+                            "sharpen the finished frame, after the display transform",
                             &GraphicsOptions::sharpen));
+    descs.push_back(floatOpt("sharpenamount", OptionApply::Live,
+                             "strength of the sharpen mask",
+                             &GraphicsOptions::sharpenAmount, 0.0f, 4.0f));
 
     // Decided at the point of use, in SceneGraph::computeJitter, so it follows
     // the active resolver on the next frame with nothing rebuilt.

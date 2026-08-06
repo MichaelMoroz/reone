@@ -283,6 +283,10 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
     }
     if (_options.post && !diagnosticImage)
         plan.steps.push_back(graphics::SceneStep::PostProcess);
+    // After it: the mask judges the displayed picture, so it wants the
+    // colour a viewer sees rather than scene radiance.
+    if (_options.sharpen && !diagnosticImage)
+        plan.steps.push_back(graphics::SceneStep::Sharpen);
     return _executor->render(plan, *_callbacks);
 }
 

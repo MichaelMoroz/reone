@@ -865,6 +865,22 @@ void ScenePipeline::postProcessPass(ICommandBuffer &cmd, uint32_t globalsOffset)
     tailPass(cmd, "postProcessFragment", globalsOffset, 0, &push, sizeof(push));
 }
 
+void ScenePipeline::sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("ScenePipeline::sharpenPass record");
+    // Last, after the display transform, because an unsharp mask is a
+    // judgement about the picture a viewer sees rather than about scene
+    // radiance: sharpening linear colour weights a highlight far above what it
+    // looks like once the curve has compressed it. Separate from FSR's own
+    // RCAS, which corrects that upscaler's softness from inside it - running
+    // both stacks two sharpeners on one image, so each dial says so.
+    ScreenEffectUniforms screenEffect;
+    screenEffect.screenResolution = glm::vec2(_targetSize);
+    screenEffect.screenResolutionRcp = 1.0f / glm::vec2(_targetSize);
+    screenEffect.sharpenAmount = std::max(0.0f, _options.sharpenAmount);
+    auto screenEffectOffset = _renderer.uniformRing().push(screenEffect);
+    tailPass(cmd, "sharpenFragment", globalsOffset, screenEffectOffset, nullptr, 0);
+}
+
 Texture &ScenePipeline::render(const SceneFramePlan &plan,
                                      ISceneCallbacks &callbacks) {
     auto &cmd = _renderer.recordingCommandBuffer();
@@ -904,6 +920,8 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
         for (const auto step : plan.steps) {
             if (step == SceneStep::AntiAliasing) {
                 antiAliasingPass(cmd, globalsOffset);
+            } else if (step == SceneStep::Sharpen) {
+                sharpenPass(cmd, globalsOffset);
             } else if (step == SceneStep::PostProcess) {
                 postProcessPass(cmd, globalsOffset);
             }
@@ -952,6 +970,9 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
             break;
         case SceneStep::AntiAliasing:
             antiAliasingPass(cmd, globalsOffset);
+            break;
+        case SceneStep::Sharpen:
+            sharpenPass(cmd, globalsOffset);
             break;
         case SceneStep::PostProcess:
             postProcessPass(cmd, globalsOffset);

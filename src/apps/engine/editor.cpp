@@ -758,6 +758,8 @@ void Editor::graphicsSettings() {
     ImGui::Checkbox("Post-process", &options.post);
     ImGui::TextDisabled("The pass that owns the display transform. Off is\ndiagnostic: the traced mode then presents linear.");
     ImGui::Checkbox("Sharpen", &options.sharpen);
+    ImGui::SliderFloat("Sharpen amount", &options.sharpenAmount, 0.0f, 2.0f, "%.2f");
+    ImGui::TextDisabled("An unsharp mask, last of all, over display colour.\nSeparate from FSR's RCAS below: running both sharpens\none image twice.");
     // Both belong to the PBR resolve: occlusion is a term inside it and
     // reflections are a dispatch over the image it produced. Retro is the
     // original's model, which had neither, so the pair sit disabled there
@@ -786,6 +788,14 @@ void Editor::graphicsSettings() {
         if (ImGui::Combo("TAA jitter", &jitterIndex, kJitterNames, 3)) {
             options.taaJitter = static_cast<graphics::JitterMode>(jitterIndex);
         }
+        // Auto is a rule, not a state, and it reads the ACTIVE slot - so say
+        // which way it currently falls rather than leaving the reader to work
+        // it out from a combo further down the window.
+        const bool jitterOn = options.taaJitter == graphics::JitterMode::On ||
+                              (options.taaJitter == graphics::JitterMode::Auto &&
+                               options.antialiasing == graphics::AntiAliasing::Fsr);
+        ImGui::TextDisabled("Currently %s. Auto jitters only for FSR, the one\nresolver that reads it; unresolved jitter is shimmer.",
+                            jitterOn ? "ON" : "off");
     }
     ImGui::SliderFloat("Draw distance", &options.drawDistance, 1.0f, 1000.0f, "%.0f");
 
@@ -799,6 +809,15 @@ void Editor::graphicsSettings() {
     if (ImGui::Combo("Method (requires reapply)", &antiAliasing, kAntiAliasingNames,
                      IM_ARRAYSIZE(kAntiAliasingNames))) {
         staged.antialiasing = static_cast<graphics::AntiAliasing>(antiAliasing);
+    }
+    if (staged.antialiasing != options.antialiasing) {
+        // Staged options are invisible until Apply, and this one has a visible
+        // consequence: jitter follows the resolver, so a pending FSR-to-FXAA
+        // change leaves the projection jittering while the combo already reads
+        // FXAA. Naming what is actually running is the difference between a
+        // change that is pending and one that looks broken.
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Running: %s until Apply.",
+                           kAntiAliasingNames[static_cast<int>(options.antialiasing)]);
     }
     ImGui::TextDisabled("Runs after the opaque resolve, before transparency and\nthe display transform. It never tonemaps. Apply is at\nthe bottom of this window.");
     ImGui::BeginDisabled(options.antialiasing != graphics::AntiAliasing::Fsr);

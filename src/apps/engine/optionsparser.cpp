@@ -121,7 +121,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("antialiasing", value<std::string>()->default_value(antiAliasingName(options->graphics.antialiasing)),
          "anti-aliasing in the common slot: off, fxaa or fsr; defaults per render mode")                                       //
         ("post", value<bool>()->default_value(options->graphics.post), "enable the post-process pass")                          //
-        ("sharpen", value<bool>()->default_value(options->graphics.sharpen), "enable image sharpening")                         //
+        ("sharpen", value<bool>()->default_value(options->graphics.sharpen), "sharpen the finished frame (unsharp mask, after the display transform)") //
+        ("sharpenamount", value<float>()->default_value(options->graphics.sharpenAmount), "strength of that mask")       //
         ("taajitter", value<std::string>()->default_value("auto"), "sub-pixel projection jitter: auto|on|off (auto follows the temporal resolver)") //
         ("ptdenoise", value<bool>()->default_value(options->graphics.ptDenoise), "enable the path tracing denoiser")           //
         ("ptdebugview", value<int>()->default_value(options->graphics.ptDebugView),
@@ -252,6 +253,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     }
     options->graphics.post = vars["post"].as<bool>();
     options->graphics.sharpen = vars["sharpen"].as<bool>();
+    options->graphics.sharpenAmount = std::max(0.0f, vars["sharpenamount"].as<float>());
     {
         // The parser only names the policy; the decision lives at the point
         // of use (SceneGraph::computeJitter), where it follows the active
