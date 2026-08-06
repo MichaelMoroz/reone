@@ -127,9 +127,12 @@ LauncherFrame::LauncherFrame() :
     rendererChoices.Add("Path tracing");
 
     _choiceRenderer = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, rendererChoices);
-    // Path tracing is a mode rather than a third value of pbr, so it wins when
-    // set - the engine falls back to PBR anyway on a device that cannot trace.
-    _choiceRenderer->SetSelection(_config.mode == "path-tracing" ? 2 : (_config.pbr ? 1 : 0));
+    // One three-way option, in the same order the engine's enum declares it.
+    // "raster" is the old spelling of retro and still arrives from an existing
+    // config; the engine reads it the same way.
+    _choiceRenderer->SetSelection(_config.mode == "path-tracing" ? 2
+                                  : _config.mode == "pbr"       ? 1
+                                                                : 0);
     _choiceRenderer->Bind(wxEVT_COMMAND_CHOICE_SELECTED, [this](const wxCommandEvent &evt) {
         UpdateRendererDependentControls();
     });
@@ -416,7 +419,6 @@ void LauncherFrame::LoadConfiguration() {
         ("fullscreen", value<bool>()->default_value(_config.fullscreen))  //
         ("vsync", value<bool>()->default_value(_config.vsync))            //
         ("grass", value<bool>()->default_value(_config.grass))            //
-        ("pbr", value<bool>()->default_value(_config.pbr))                //
         ("mode", value<std::string>()->default_value(_config.mode))        //
         ("ptspp", value<int>()->default_value(_config.ptspp))              //
         ("ssao", value<bool>()->default_value(_config.ssao))              //
@@ -450,7 +452,6 @@ void LauncherFrame::LoadConfiguration() {
     _config.fullscreen = vars["fullscreen"].as<bool>();
     _config.vsync = vars["vsync"].as<bool>();
     _config.grass = vars["grass"].as<bool>();
-    _config.pbr = vars["pbr"].as<bool>();
     _config.mode = vars["mode"].as<std::string>();
     _config.ptspp = std::max(1, vars["ptspp"].as<int>());
     _config.ssao = vars["ssao"].as<bool>();
@@ -492,7 +493,6 @@ void LauncherFrame::SaveConfiguration() {
         "fullscreen=",
         "vsync=",
         "grass=",
-        "pbr=",
         "mode=",
         "ptspp=",
         "ssao=",
@@ -562,10 +562,9 @@ void LauncherFrame::SaveConfiguration() {
     _config.vsync = _checkBoxVSync->IsChecked();
     _config.grass = _checkBoxGrass->IsChecked();
     auto rendererSel = _choiceRenderer->GetStringSelection();
-    _config.mode = rendererSel == "Path tracing" ? "path-tracing" : "raster";
-    // Path tracing still needs a raster renderer configured behind it for the
-    // passes it does not replace, and PBR is the only sane one.
-    _config.pbr = rendererSel != "Retro";
+    _config.mode = rendererSel == "Path tracing" ? "path-tracing"
+                   : rendererSel == "PBR"        ? "pbr"
+                                                 : "retro";
     _config.ptspp = wxAtoi(_choicePathTracingSamples->GetStringSelection());
     _config.ssao = _checkBoxSSAO->IsChecked();
     _config.ssr = _checkBoxSSR->IsChecked();
@@ -611,7 +610,6 @@ void LauncherFrame::SaveConfiguration() {
     config << "fullscreen=" << (_config.fullscreen ? 1 : 0) << std::endl;
     config << "vsync=" << (_config.vsync ? 1 : 0) << std::endl;
     config << "grass=" << (_config.grass ? 1 : 0) << std::endl;
-    config << "pbr=" << (_config.pbr ? 1 : 0) << std::endl;
     config << "mode=" << _config.mode << std::endl;
     config << "ptspp=" << _config.ptspp << std::endl;
     config << "ssao=" << (_config.ssao ? 1 : 0) << std::endl;

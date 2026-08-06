@@ -142,7 +142,7 @@ they need re-expressing against textured inputs rather than against a derivation
 ## Two open claims left deliberately unclosed
 
 - **Bump has never been held to a fixture.** It rides in the material record and
-  `megadraw.slang` samples it, but nothing has checked it against authored
+  `scene_draw.slang` samples it, but nothing has checked it against authored
   content. Envmap was checked by the metal work; bump is still an unchecked claim
   and should be given a fixture rather than assumed.
 - **The authored mirror is pinned to explicit LOD 0**, which filters nothing at

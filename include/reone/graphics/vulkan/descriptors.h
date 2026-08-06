@@ -68,12 +68,20 @@ public:
     static constexpr int kUniformSet = 0;
     static constexpr int kTextureSet = 1;
     static constexpr int kMegaDrawSet = 2;
+    static constexpr int kResolveSet = 3;
+
+    /** Bindings of the resolve set; see acquireResolveDescriptorSet. */
+    static constexpr uint32_t kResolveOutputBinding = 0;
+    static constexpr uint32_t kResolveSkyCubeBinding = 1;
 
     /** Distinct textures one frame may draw with before the pool is exhausted. */
     static constexpr uint32_t kMaxTextureSetsPerFrame = 1024;
 
     /** Passes with fixed textures: the resolve, and later the post chain. */
     static constexpr uint32_t kMaxPersistentTextureSets = 32;
+
+    /** Resolve, reflections, and room to add a third without thinking. */
+    static constexpr uint32_t kMaxResolveSetsPerFrame = 8;
 
     VulkanDescriptors(VulkanDevice &device) :
         _device(device) {
@@ -92,6 +100,13 @@ public:
 
     VkDescriptorSetLayout textureLayout() const { return _textureLayout; }
     VkDescriptorSetLayout megaDrawLayout() const { return _megaDrawLayout; }
+    VkDescriptorSetLayout resolveLayout() const { return _resolveLayout; }
+
+    VkDescriptorSet acquireResolveSet(int frame, const VulkanImage *output,
+                                      const VulkanImage *skyCube, VkImageView skyView);
+    DescriptorSet acquireResolveDescriptorSet(int frame, const IImage *output,
+                                              const IImage *skyCube,
+                                              ImageView skyView) override;
 
     /** Publish one frame's merged geometry/material buffers and bindless
         texture tables to graphics set 2. */
@@ -166,6 +181,7 @@ private:
     std::vector<VkDescriptorSet> _uniformSets;
 
     VkDescriptorSetLayout _textureLayout {VK_NULL_HANDLE};
+    VkDescriptorSetLayout _resolveLayout {VK_NULL_HANDLE};
     VkDescriptorSetLayout _megaDrawLayout {VK_NULL_HANDLE};
     VkDescriptorPool _megaDrawPool {VK_NULL_HANDLE};
     std::vector<VkDescriptorSet> _megaDrawSets;
@@ -200,6 +216,8 @@ private:
         std::unordered_map<const VulkanImage *, VkDescriptorSet> byTexture;
         /** Keyed by a hash of the whole binding list, for material sets. */
         std::unordered_map<size_t, VkDescriptorSet> byBindings;
+        /** Keyed the same way, over the resolve set's two bindings. */
+        std::unordered_map<size_t, VkDescriptorSet> byResolve;
     };
     std::vector<TextureFrame> _textureFrames;
     VkDescriptorPool _persistentPool {VK_NULL_HANDLE};

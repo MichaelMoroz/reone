@@ -120,7 +120,7 @@ struct DirectionalShadowVaryings {
 };
 
 [shader("vertex")]
-DirectionalShadowVaryings directionalShadowMegadrawVertex(
+DirectionalShadowVaryings directionalShadowVertex(
     uint vertexId : SV_VertexID, uint viewId : SV_ViewID) {
     MergedVertex vertex = mergedVertices[vertexId];
     DirectionalShadowVaryings output;
@@ -161,7 +161,7 @@ void applyShadowGates(float2 rawUv, float vertexAlpha, uint primitiveId) {
 }
 
 [shader("fragment")]
-void directionalShadowMegadrawFragment(DirectionalShadowVaryings input,
+void directionalShadowFragment(DirectionalShadowVaryings input,
                                        uint primitiveId : SV_PrimitiveID) {
     applyShadowGates(input.uv, input.vertexAlpha, primitiveId);
 }
@@ -174,7 +174,7 @@ struct PointShadowVaryings {
 };
 
 [shader("vertex")]
-PointShadowVaryings pointShadowMegadrawVertex(
+PointShadowVaryings pointShadowVertex(
     uint vertexId : SV_VertexID, uint viewId : SV_ViewID) {
     MergedVertex vertex = mergedVertices[vertexId];
     PointShadowVaryings output;
@@ -187,7 +187,7 @@ PointShadowVaryings pointShadowMegadrawVertex(
 }
 
 [shader("fragment")]
-float pointShadowMegadrawFragment(PointShadowVaryings input,
+float pointShadowFragment(PointShadowVaryings input,
                                   uint primitiveId : SV_PrimitiveID) : SV_Depth {
     applyShadowGates(input.uv, input.vertexAlpha, primitiveId);
     float lightDistance = length(input.worldPos -
@@ -226,7 +226,7 @@ struct Varyings {
 };
 
 [shader("vertex")]
-Varyings megadrawVertex(uint vertexId : SV_VertexID) {
+Varyings sceneDrawVertex(uint vertexId : SV_VertexID) {
     MergedVertex vertex = mergedVertices[vertexId];
     Varyings output;
     output.curClipPos = mul(globalUniforms.viewProjection, float4(vertex.position, 1.0));
@@ -312,7 +312,7 @@ float3 sampleMegaEnvMap(InstanceMaterial material, float3 eyeReflection) {
 }
 
 [shader("fragment")]
-GBufferOutput megadrawFragment(Varyings input, uint primitiveId : SV_PrimitiveID,
+GBufferOutput sceneDrawFragment(Varyings input, uint primitiveId : SV_PrimitiveID,
                                bool isFrontFace : SV_IsFrontFace) {
     uint triangleId = pushConstants.triangleBase + primitiveId;
     uint materialIndex = mergedMaterialIds[triangleId];
@@ -375,7 +375,7 @@ GBufferOutput megadrawFragment(Varyings input, uint primitiveId : SV_PrimitiveID
 // reorders only true-opaque depth-writing batches and never touches blended
 // ones, so a distance sort would be a deviation before it was an improvement.
 [shader("fragment")]
-float4 megadrawBlendedFragment(Varyings input, uint primitiveId : SV_PrimitiveID,
+float4 sceneDrawBlendedFragment(Varyings input, uint primitiveId : SV_PrimitiveID,
                                bool isFrontFace : SV_IsFrontFace) {
     uint triangleId = pushConstants.triangleBase + primitiveId;
     uint materialIndex = mergedMaterialIds[triangleId];

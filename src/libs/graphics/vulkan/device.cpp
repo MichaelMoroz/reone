@@ -148,6 +148,12 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     // matching it needs this. Required rather than optional: every device
     // this targets has had it for well over a decade.
     features.samplerAnisotropy = VK_TRUE;
+    // Storage images written without a format decoration. The traced output and
+    // every NRD channel already relied on this - Slang emits Unknown for an
+    // undecorated RWTexture2D - and the raster resolve now writes the scene
+    // output, whose swapchain-matching BGRA format has no SPIR-V image-format
+    // enum at all and therefore cannot be decorated even in principle.
+    features.shaderStorageImageWriteWithoutFormat = VK_TRUE;
 
     // Keep the raster selection independent of ray tracing. The latter is an
     // optional Vulkan capability, so an otherwise suitable GPU must not become

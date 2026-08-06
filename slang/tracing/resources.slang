@@ -24,6 +24,7 @@
 // The shader only evaluates; it never classifies.
 
 import lib.scene_schema;
+import lib.skycube;
 
 public static const uint kPtNoTexture = 0xffffffffu;
 
@@ -139,8 +140,12 @@ public float2 ptTransformedUV(InstanceMaterial material, float2 uv) {
                   material.uv0.y * h.x + material.uv1.y * h.y + material.uv2.y * h.z);
 }
 
+/**
+ * This mode's binding and dial in front of the shared cube read. The body is
+ * lib/skycube.slang's, so the raster resolves and the tracer cannot drift.
+ */
 public float3 ptSkyRadiance(float3 direction) {
-    return skyCube.SampleLevel(normalize(direction), 0.0).rgb * pushConstants.skyIntensity;
+    return skyRadiance(skyCube, direction, pushConstants.skyIntensity);
 }
 
 /** Narrow material-buffer fetch for alpha-tested traversal. */

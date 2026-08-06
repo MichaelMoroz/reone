@@ -79,6 +79,16 @@ struct PipelineKey {
     std::string module;
     std::string vertexEntry;
     std::string fragmentEntry;
+    /**
+     * Set instead of the two above to build a compute pipeline over the same
+     * descriptor set layouts every graphics pipeline here uses.
+     *
+     * The cache exists so that a pass can name a kernel and get one back with
+     * the frame uniforms, the texture table, the merged material set and the
+     * resolve set already in its layout. A dispatch whose resources are its own
+     * wants IRenderer::makeComputePipeline instead, which reflects them.
+     */
+    std::string computeEntry;
     std::vector<Format> colorFormats;
     Format depthFormat {Format::D32Sfloat};
     uint32_t viewMask {0};

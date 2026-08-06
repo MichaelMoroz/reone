@@ -45,7 +45,7 @@ output image, TLAS, instance materials, merged vertex/index/material buffers,
 the bindless texture and texture-array arrays, the sky cube — in **set 1**
 (`slang/tracing/resources.slang:44-62`), and its outputs in **set 2**
 (`slang/tracing/outputs.slang:22-42`). Compute modules that take no uniform
-block use set 0 for their storage buffers instead (`slang/skin.slang:9-12`). The
+block use set 0 for their storage buffers instead (`slang/scene_resolve.slang:9-12`). The
 rule to carry forward is therefore *set index is part of the shader's contract
 with the C++ side and is never left implicit*, with 0/1 the raster default.
 
@@ -286,7 +286,7 @@ camera rays: in primary-ray mode the pipeline allocates only the output target
 and returns before G-buffer allocation, and `render()` calls
 `callbacks.renderPrimary()` and returns before the raster passes
 (`src/libs/graphics/vulkan/scenepipeline.cpp:171-187,770-806`;
-`slang/rayquery.slang:126-137` traces the primary hit directly). `AGENTS.md`
+`slang/path_trace.slang:126-137` traces the primary hit directly). `AGENTS.md`
 states the same, and the staleness audit flagged the rt-backend document's
 present-tense phrasing as its most consequential error. Track it as phase-F V1.
 

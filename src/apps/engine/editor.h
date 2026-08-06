@@ -119,6 +119,8 @@ private:
      * console drives the same one - the two must not be separate mechanisms.
      */
     void graphicsReapplySection();
+    /** The one render-mode control; live or staged depending on the value. */
+    void renderModeCombo();
     std::string _settingsSaveStatus;
     bool _settingsSaveSucceeded {false};
 

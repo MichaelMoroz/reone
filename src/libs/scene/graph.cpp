@@ -493,16 +493,10 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
     R_PROFILE_ZONE("SceneGraph::render");
     if (!_renderPipeline) {
         // The mode is what was asked for; the factory decides what the current
-        // backend can actually give. Deciding here on the backend is what made
-        // --pbr silently inert in the renderer.
-        RenderMode mode;
-        if (_graphicsOpt.mode == "raster") {
-            mode = _graphicsOpt.pbr ? RenderMode::PBR : RenderMode::Retro;
-        } else if (_graphicsOpt.mode == "path-tracing") {
-            mode = RenderMode::PathTracing;
-        } else {
-            throw std::invalid_argument("Unsupported render mode: " + _graphicsOpt.mode);
-        }
+        // backend can actually give. There is nothing to reconstruct here any
+        // more: the option is the enum. Collapsing a string and a bool at this
+        // point is what made --pbr silently inert in the renderer once.
+        const RenderMode mode = _graphicsOpt.mode;
         _renderPipeline = _renderPipelineFactory.create(mode, dim, _gpuScene);
         _renderPipeline->init();
         info("Scene '" + _name + "': render pipeline created, mode=" +

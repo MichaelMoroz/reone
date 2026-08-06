@@ -60,6 +60,24 @@ enum class OptionApply {
 const char *optionApplyName(OptionApply apply);
 
 /**
+ * The written form of a render mode - the one the command line, reone.cfg, the
+ * console and the launcher all use.
+ */
+const char *renderModeName(RenderMode mode);
+
+/**
+ * Read a render mode from that written form.
+ *
+ * "raster" is accepted as a spelling of retro. It was this option's old value
+ * for the whole raster family, chosen between by a separate pbr flag that no
+ * longer exists; keeping the spelling means an existing script or config still
+ * names a mode rather than failing to launch.
+ *
+ * @throws std::invalid_argument naming the offending text.
+ */
+RenderMode parseRenderMode(const std::string &value);
+
+/**
  * One named graphics option: how to read it, how to parse it, and how to tell
  * two option sets apart on it.
  *
@@ -68,7 +86,25 @@ const char *optionApplyName(OptionApply apply);
  */
 struct GraphicsOptionDesc {
     std::string name;
+    /**
+     * How a change to this option applies, when that does not depend on the
+     * value. Where it does, this is the worst case and @ref applyFor decides.
+     */
     OptionApply apply {OptionApply::Live};
+    /**
+     * The class of a change from one option set to another, when the option has
+     * values that differ in what changing them costs.
+     *
+     * The render mode is the case that needs it: retro and PBR pick a resolve
+     * step per frame over targets that already exist, while path tracing
+     * decides whether the tracer exists at all. One option, two costs, decided
+     * per value rather than per option - and nothing that edits an option needs
+     * to know which option this is, only to ask.
+     *
+     * Null for every option whose class is a property of the option alone.
+     * Must be symmetric in its arguments: callers pass them in either order.
+     */
+    std::function<OptionApply(const GraphicsOptions &, const GraphicsOptions &)> applyFor;
     std::string help;
     /** The value in the same written form the command line and reone.cfg use. */
     std::function<std::string(const GraphicsOptions &)> get;
@@ -83,6 +119,18 @@ const std::vector<GraphicsOptionDesc> &graphicsOptionDescs();
 
 /** Null when no option carries that name; callers must say so out loud. */
 const GraphicsOptionDesc *findGraphicsOptionDesc(const std::string &name);
+
+/**
+ * The class of a change to @p desc between these two option sets.
+ *
+ * Ask this rather than reading GraphicsOptionDesc::apply: a value-dependent
+ * option answers "live" for one pair of values and "requires reapply" for
+ * another, and a caller that read the field would show the wrong hint for one
+ * of them.
+ */
+OptionApply graphicsOptionApply(const GraphicsOptionDesc &desc,
+                                const GraphicsOptions &left,
+                                const GraphicsOptions &right);
 
 /** Names of the options of class @p apply on which @p left and @p right differ. */
 std::vector<std::string> graphicsOptionsDiffering(const GraphicsOptions &left,

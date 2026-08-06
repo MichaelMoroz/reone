@@ -46,6 +46,27 @@ enum class AntiAliasing {
     Fsr,
 };
 
+/**
+ * Which renderer shades the frame.
+ *
+ * One option with three values rather than two options that had to be read
+ * together. It maps 1:1 onto what the pipeline factory takes, so nothing
+ * downstream reconstructs it from a string and a bool - which is exactly where
+ * a mode could be, and once was, silently ignored.
+ *
+ * The values do not share a cost of changing. Retro and PBR pick a resolve step
+ * per frame over targets a raster pipeline has already allocated, so moving
+ * between them is live; path tracing decides whether a ray-query pipeline
+ * exists at all and what format the scene output carries, so crossing into or
+ * out of it needs a rebuild. See graphicsOptionApply.
+ */
+enum class RenderMode {
+    /** The original's lighting model, kept as a reference rather than improved. */
+    Retro,
+    PBR,
+    PathTracing,
+};
+
 /** Whether the projection carries a per-frame sub-pixel jitter. */
 enum class JitterMode {
     Auto, /**< jitter exactly when a temporal resolver consumes it */
@@ -69,9 +90,12 @@ struct GraphicsOptions {
     bool grass {true};
     /** Multiplier on the area's authored Grass_Density, so areas keep their variation. */
     float grassDensity {1.0f};
-    bool pbr {true};
-    /** "raster" normally follows pbr; "path-tracing" selects Vulkan ray queries. */
-    std::string mode {"raster"};
+    /**
+     * The renderer, as one three-way choice. "raster" is still accepted as an
+     * input spelling for Retro so existing scripts and configs keep working;
+     * see optionsregistry.cpp.
+     */
+    RenderMode mode {RenderMode::PBR};
     /**
      * Hash the GpuScene upload every frame so --dumptargets can log it. The
      * hash walks every uploaded byte, which is measurable CPU per frame, so
@@ -211,7 +235,8 @@ struct GraphicsOptions {
      * not stack a separate sharpen pass on top of it.
      */
     float fsrSharpness {0.0f};
-    /** Display transform: 0 off, 1 ACES. On by default - the calibration
+    /** Display transform: 0 off, 1 the Gran Turismo curve. On by default -
+        the calibration
         programme is defined in tonemapped terms. Owned by the post-process
         pass, which is the only stage in any mode that applies it. */
     int tonemap {1};

@@ -108,9 +108,12 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
         textureBindings[i].binding = i;
         textureBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         textureBindings[i].descriptorCount = 1;
-        // Fragment only for now. Vertex-stage sampling exists in the shadow and
-        // displacement paths and can be widened when those arrive.
-        textureBindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        // Fragment and compute. The PBR resolve reads this same table from a
+        // dispatch, and one table serving both is the point of it; vertex-stage
+        // sampling exists in the shadow and displacement paths and can be
+        // added when those arrive.
+        textureBindings[i].stageFlags =
+            VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     }
     VkDescriptorSetLayoutCreateInfo textureLayoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     textureLayoutInfo.bindingCount = static_cast<uint32_t>(textureBindings.size());
@@ -119,24 +122,62 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
         throw std::runtime_error("Vulkan: texture descriptor set layout creation failed");
     }
 
+    // The resolve set. Two bindings, because a resolve needs exactly two things
+    // its persistent table cannot hold: the image it writes, which alternates
+    // between the scene output and the tail target, and the sky cube, which is
+    // a view into whichever room was last baked.
+    //
+    // The storage image is partially bound: the retro resolve is a fragment
+    // pass, writes an attachment rather than a storage image, and never
+    // declares that binding at all.
+    std::array<VkDescriptorSetLayoutBinding, 2> resolveBindings {};
+    resolveBindings[kResolveOutputBinding].binding = kResolveOutputBinding;
+    resolveBindings[kResolveOutputBinding].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    resolveBindings[kResolveOutputBinding].descriptorCount = 1;
+    resolveBindings[kResolveOutputBinding].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    resolveBindings[kResolveSkyCubeBinding].binding = kResolveSkyCubeBinding;
+    resolveBindings[kResolveSkyCubeBinding].descriptorType =
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    resolveBindings[kResolveSkyCubeBinding].descriptorCount = 1;
+    resolveBindings[kResolveSkyCubeBinding].stageFlags =
+        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+    std::array<VkDescriptorBindingFlags, 2> resolveBindingFlags {
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0};
+    VkDescriptorSetLayoutBindingFlagsCreateInfo resolveFlagsInfo {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+    resolveFlagsInfo.bindingCount = static_cast<uint32_t>(resolveBindingFlags.size());
+    resolveFlagsInfo.pBindingFlags = resolveBindingFlags.data();
+    VkDescriptorSetLayoutCreateInfo resolveLayoutInfo {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    resolveLayoutInfo.pNext = &resolveFlagsInfo;
+    resolveLayoutInfo.bindingCount = static_cast<uint32_t>(resolveBindings.size());
+    resolveLayoutInfo.pBindings = resolveBindings.data();
+    if (vkCreateDescriptorSetLayout(_device.handle(), &resolveLayoutInfo, nullptr,
+                                    &_resolveLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: resolve descriptor set layout creation failed");
+    }
+
     _bindlessTextureCapacity = _device.maxBindlessSampledImages();
     if (_bindlessTextureCapacity == 0) {
         throw std::runtime_error("Vulkan: mega-draw bindless texture capacity is zero");
     }
     std::array<VkDescriptorSetLayoutBinding, 6> megaBindings {};
+    // Compute alongside fragment throughout: the PBR resolve reads the material
+    // records and the bindless tables from a dispatch.
     for (uint32_t i = 0; i < 3; ++i) {
         megaBindings[i].binding = i;
         megaBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         megaBindings[i].descriptorCount = 1;
-        megaBindings[i].stageFlags = i == 0
-                                         ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
-                                         : VK_SHADER_STAGE_FRAGMENT_BIT;
+        megaBindings[i].stageFlags = (i == 0 ? VK_SHADER_STAGE_VERTEX_BIT : 0) |
+                                     VK_SHADER_STAGE_FRAGMENT_BIT |
+                                     VK_SHADER_STAGE_COMPUTE_BIT;
     }
     for (uint32_t i = 3; i < 6; ++i) {
         megaBindings[i].binding = i;
         megaBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         megaBindings[i].descriptorCount = _bindlessTextureCapacity;
-        megaBindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        megaBindings[i].stageFlags =
+            VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     }
     std::array<VkDescriptorBindingFlags, 6> megaBindingFlags {};
     for (uint32_t i = 3; i < 6; ++i) {
@@ -254,18 +295,77 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
     // frame may draw with; exceeding it throws rather than corrupting.
     _textureFrames.resize(framesInFlight);
     for (auto &frame : _textureFrames) {
-        VkDescriptorPoolSize size {};
-        size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        size.descriptorCount = kNumTextures * kMaxTextureSetsPerFrame;
+        // Resolve sets come out of the same per-frame pool, so they are
+        // reclaimed by the same reset. A handful per frame at most, so the
+        // storage-image reserve is deliberately small.
+        std::array<VkDescriptorPoolSize, 2> sizes {};
+        sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        sizes[0].descriptorCount = kNumTextures * kMaxTextureSetsPerFrame;
+        sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        sizes[1].descriptorCount = kMaxResolveSetsPerFrame;
 
         VkDescriptorPoolCreateInfo info {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        info.maxSets = kMaxTextureSetsPerFrame;
-        info.poolSizeCount = 1;
-        info.pPoolSizes = &size;
+        info.maxSets = kMaxTextureSetsPerFrame + kMaxResolveSetsPerFrame;
+        info.poolSizeCount = static_cast<uint32_t>(sizes.size());
+        info.pPoolSizes = sizes.data();
         if (vkCreateDescriptorPool(_device.handle(), &info, nullptr, &frame.pool) != VK_SUCCESS) {
             throw std::runtime_error("Vulkan: texture descriptor pool creation failed");
         }
     }
+}
+
+VkDescriptorSet VulkanDescriptors::acquireResolveSet(int frame, const VulkanImage *output,
+                                                     const VulkanImage *skyCube,
+                                                     VkImageView skyView) {
+    size_t key = std::hash<const void *> {}(output);
+    key ^= (std::hash<const void *> {}(skyCube) ^
+            std::hash<const void *> {}(reinterpret_cast<const void *>(skyView))) +
+           0x9e3779b9u + (key << 6) + (key >> 2);
+
+    auto &f = _textureFrames[frame];
+    auto existing = f.byResolve.find(key);
+    if (existing != f.byResolve.end()) {
+        return existing->second;
+    }
+    if (f.byResolve.size() >= kMaxResolveSetsPerFrame) {
+        throw std::runtime_error("Vulkan: too many resolve sets in one frame");
+    }
+
+    VkDescriptorSetAllocateInfo info {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    info.descriptorPool = f.pool;
+    info.descriptorSetCount = 1;
+    info.pSetLayouts = &_resolveLayout;
+    VkDescriptorSet set {VK_NULL_HANDLE};
+    if (vkAllocateDescriptorSets(_device.handle(), &info, &set) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: resolve descriptor set allocation failed");
+    }
+
+    DescriptorWriteBuilder writes(_device.handle());
+    if (output) {
+        writes.writeStorageImage(toDescriptorSet(set),
+                                 {kResolveOutputBinding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                                 output->sampleView());
+    }
+    // A cube is always bound, baked or not: the fallback is black by
+    // construction, so an unbaked frame samples black rather than nothing, and
+    // the resolves skip the read entirely on their own flag.
+    const auto *cube = skyCube ? skyCube : _defaultCube.get();
+    writes.writeImage(set, {kResolveSkyCubeBinding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                      {cube->sampler() ? cube->sampler() : _sampler,
+                       skyView && skyCube ? skyView : cube->view(),
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    writes.apply();
+    f.byResolve.insert({key, set});
+    return set;
+}
+
+DescriptorSet VulkanDescriptors::acquireResolveDescriptorSet(int frame, const IImage *output,
+                                                             const IImage *skyCube,
+                                                             ImageView skyView) {
+    return toDescriptorSet(acquireResolveSet(
+        frame, output ? &toVulkanImage(*output) : nullptr,
+        skyCube ? &toVulkanImage(*skyCube) : nullptr,
+        skyView ? toVulkanImageView(skyView) : VK_NULL_HANDLE));
 }
 
 void VulkanDescriptors::setTexture(int unit, const VulkanImage &image) {
@@ -278,6 +378,7 @@ void VulkanDescriptors::beginFrame(int frame) {
     vkResetDescriptorPool(_device.handle(), f.pool, 0);
     f.byTexture.clear();
     f.byBindings.clear();
+    f.byResolve.clear();
 }
 
 DescriptorSet VulkanDescriptors::updateMegaDrawSet(
@@ -541,6 +642,10 @@ void VulkanDescriptors::deinit() {
     if (_textureLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(_device.handle(), _textureLayout, nullptr);
         _textureLayout = VK_NULL_HANDLE;
+    }
+    if (_resolveLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(_device.handle(), _resolveLayout, nullptr);
+        _resolveLayout = VK_NULL_HANDLE;
     }
     if (_pool != VK_NULL_HANDLE) {
         // Frees the sets with it.

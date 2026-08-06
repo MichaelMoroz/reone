@@ -93,7 +93,7 @@ void GpuScene::init(IGpuSceneContext &context) {
     if (_inited)
         return;
     _context = &context;
-    _mergePipeline = _context->makeComputePipeline({"skin", "main", 2});
+    _mergePipeline = _context->makeComputePipeline({"scene_resolve", "main", 2});
     _mergeBindings = _mergePipeline->resolveBindings(
         {"objects", "bones", "vertices", "indices", "materialIds", "sourceVertices",
          "sourceIndices", "proceduralQuads", "danglyPositions", "grassFaces", "grassRanges"});

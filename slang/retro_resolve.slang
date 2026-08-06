@@ -22,6 +22,7 @@ import uniforms;
 import lib.gbuf;
 import lib.shadow;
 import lib.scene_schema;
+import lib.skycube;
 
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
 [[vk::binding(2, 1)]] Sampler2D sGBufEyeNormal;
@@ -33,6 +34,19 @@ import lib.scene_schema;
 [[vk::binding(2, 2)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
 [[vk::binding(3, 2)]] Sampler2D bindlessTextures[];
 [[vk::binding(5, 2)]] SamplerCube bindlessTextureCubes[];
+// Set 3 is the resolve set: this frame's storage output, which only the compute
+// PBR resolve writes, and the baked sky cube, which both resolves read. Retro
+// stays a fragment pass and therefore leaves binding 0 alone.
+[[vk::binding(1, 3)]] SamplerCube sSkyCube;
+
+/** Mirrors ResolvePushConstants in scenepipeline.cpp. */
+struct ResolvePushConstants {
+    /** Bit 0: a sky bake is available this frame. Bit 1 is the PBR resolve's. */
+    uint flags;
+};
+[[vk::push_constant]] ResolvePushConstants pushConstants;
+
+static const uint kResolveFlagSky = 1u;
 
 static const uint kNoMaterial = 0xffffu;
 static const uint kNoTexture = 0xffffffffu;
@@ -91,11 +105,19 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     uint materialId = sGBufMaterialId.Load(int3(int2(input.position.xy), 0)).r;
 
     // The material-id clear and an uncovered alpha-tested pixel both carry this
-    // sentinel. sky_composite.slang paints over these black pixels afterwards,
-    // testing far depth rather than the sentinel - the two sets coincide,
-    // since the material id and the depth are written by one fragment.
+    // sentinel, and nothing wrote depth there either - the material id and the
+    // depth come from one fragment - so this is exactly the set the sky
+    // composite pass used to paint over. It is now the sky's own branch.
+    // Without a bake the cube is black by construction, so skipping it writes
+    // the same black rather than a different one.
     if (materialId == kNoMaterial) {
-        return float4(0.0, 0.0, 0.0, 1.0);
+        if ((pushConstants.flags & kResolveFlagSky) == 0) {
+            return float4(0.0, 0.0, 0.0, 1.0);
+        }
+        float3 direction = skyDirection(input.uv, globalUniforms.projectionInv,
+                                        globalUniforms.viewInv,
+                                        globalUniforms.cameraPosition.xyz);
+        return float4(skyToDisplay(skyRadiance(sSkyCube, direction, 1.0)), 1.0);
     }
     InstanceMaterial material = instanceMaterials[materialId];
 

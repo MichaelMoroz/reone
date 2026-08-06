@@ -47,6 +47,14 @@ public:
     void endDebugScope() override;
     void bindPipeline(Pipeline pipeline) override;
     void bindRayTracingPipeline(Pipeline pipeline) override;
+    void bindComputePipeline(Pipeline pipeline) override;
+    void bindComputeDescriptorSet(PipelineLayout layout, uint32_t index,
+                                  DescriptorSet set,
+                                  const uint32_t *dynamicOffsets,
+                                  uint32_t dynamicOffsetCount) override;
+    void pushComputeConstants(PipelineLayout layout, const void *data,
+                              uint32_t size) override;
+    void dispatchCompute(glm::uvec3 groups) override;
     void bindDescriptorSet(PipelineLayout layout, uint32_t index,
                            DescriptorSet set,
                            const uint32_t *dynamicOffsets,

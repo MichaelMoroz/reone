@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "reone/graphics/optionsregistry.h"
 #include "reone/system/types.h"
 
 using namespace boost::program_options;
@@ -98,8 +99,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("vsync", value<bool>()->default_value(options->graphics.vsync), "enable v-sync")                                       //
         ("grass", value<bool>()->default_value(options->graphics.grass), "enable grass")                                        //
         ("grassdensity", value<float>()->default_value(options->graphics.grassDensity), "grass density multiplier")           //
-        ("pbr", value<bool>()->default_value(options->graphics.pbr), "enable physically-based rendering")                       //
-        ("mode", value<std::string>()->default_value(options->graphics.mode), "render mode: raster or path-tracing")            //
+        ("mode", value<std::string>()->default_value(renderModeName(options->graphics.mode)), "render mode: retro, pbr or path-tracing ('raster' is accepted as a spelling of retro)") //
         ("admissionshadow", value<bool>()->default_value(false), "compare incremental and full scene admission every frame") //
         ("admissionforcefull", value<bool>()->default_value(false), "force full scene collection and classification")        //
         ("ptspp", value<int>()->default_value(options->graphics.pathTracingSamples), "path tracing samples per pixel")          //
@@ -111,7 +111,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ptbounces", value<int>()->default_value(options->graphics.ptBounces), "path tracing bounces")                       //
         ("ptrayoffset", value<float>()->default_value(options->graphics.ptRayOffset), "path tracing ray origin offset")        //
         ("pttracestats", value<bool>()->default_value(options->graphics.ptTraceStats), "enable path tracing statistics")       //
-        ("tonemap", value<int>()->default_value(options->graphics.tonemap), "display transform: 0 off, 1 ACES")               //
+        ("tonemap", value<int>()->default_value(options->graphics.tonemap), "display transform: 0 off, 1 Gran Turismo curve")               //
         ("exposure", value<float>()->default_value(options->graphics.exposure), "scene-referred exposure ahead of the tonemap") //
         ("ptpointemitterratio", value<float>()->default_value(options->graphics.ptPointEmitterRatio), "path tracing point-light emitter radius, as a fraction of influence radius") //
         ("ptsunangularsize", value<float>()->default_value(options->graphics.ptSunAngularSize), "path tracing sun angular size") //
@@ -218,8 +218,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.vsync = vars["vsync"].as<bool>();
     options->graphics.grass = vars["grass"].as<bool>();
     options->graphics.grassDensity = vars["grassdensity"].as<float>();
-    options->graphics.pbr = vars["pbr"].as<bool>();
-    options->graphics.mode = vars["mode"].as<std::string>();
+    options->graphics.mode = parseRenderMode(vars["mode"].as<std::string>());
     options->graphics.admissionShadow = vars["admissionshadow"].as<bool>();
     options->graphics.admissionForceFull = vars["admissionforcefull"].as<bool>();
     options->graphics.pathTracingSamples = std::max(1, vars["ptspp"].as<int>());
@@ -244,7 +243,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     // temporal resolve wants, so it takes FSR; raster keeps the cheap spatial
     // filter it has always had. An explicit flag always wins.
     if (vars["antialiasing"].defaulted()) {
-        options->graphics.antialiasing = options->graphics.mode == "path-tracing"
+        options->graphics.antialiasing = options->graphics.mode == RenderMode::PathTracing
                                              ? AntiAliasing::Fsr
                                              : AntiAliasing::Fxaa;
     } else {

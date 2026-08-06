@@ -461,7 +461,7 @@ a capability to work around it.
 
 Shipped as `9b98c37c`: one BLAS at `graphics/vulkan/rayquery.cpp:892`, one TLAS instance at `:987`,
 two geometries split opaque/non-opaque at `:917-920`, per-triangle material ids written by the merge
-kernel (`slang/skin.slang:60,376`). The analysis is kept because it is where the triangle count, the
+kernel (`slang/scene_resolve.slang:60,376`). The analysis is kept because it is where the triangle count, the
 build-cost and memory tables, and the static/dynamic argument live.
 
 #### The whole scene is 86k triangles
@@ -755,7 +755,7 @@ black, white or garbage depending on the path it takes.
 Ruled out as causes of the smoke NaN: the premultiplied-alpha flag is never set for these textures
 (`fx_smoke01`/`fx_smoke`, DXT5, `Blending::None`); a plain alpha sign flip makes it worse; `mainTex`
 resolves to a valid bindless id; and the blended-coverage branch was rewritten (`befa8791`,
-`slang/rayquery.slang:300-323`) to do no division at all, with the two surviving `/ outputs.specFactor`
+`slang/path_trace.slang:300-323`) to do no division at all, with the two surviving `/ outputs.specFactor`
 sites (`:269`, `:271`) non-blended and floored by `kDemodulationFloor = 0.02`
 (`slang/tracing/brdf.slang:14`).
 
@@ -1445,7 +1445,7 @@ a retained protocol.**
 
 ### 4.2 Per-node BLAS and refit scheduling — abandoned on purpose
 
-The deformation compute pass landed (`slang/skin.slang` — dangly `:217-221`, saber `:223-228`, skinning
+The deformation compute pass landed (`slang/scene_resolve.slang` — dangly `:217-221`, saber `:223-228`, skinning
 `:231-257`). **Per-node BLAS did not land and is not wanted**: `9b98c37c` replaced 714 structures with
 one, and a grep for `refit` or `MODE_UPDATE` across `src/` and `include/` returns nothing, **so no refit
 path exists to hang them on.**

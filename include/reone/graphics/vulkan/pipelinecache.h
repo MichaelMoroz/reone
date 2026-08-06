@@ -57,6 +57,8 @@ public:
         std::string module;
         std::string vertexEntry;
         std::string fragmentEntry;
+        /** Non-empty for a compute kernel; see PipelineKey::computeEntry. */
+        std::string computeEntry;
         std::vector<VkFormat> colorFormats;
         VkFormat depthFormat {VK_FORMAT_UNDEFINED};
         /** See VulkanPipeline::Config::viewMask. */

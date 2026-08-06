@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "reone/graphics/options.h"
 #include "reone/graphics/texture.h"
 
 #include "../gpuscene.h"
@@ -53,13 +54,12 @@ class CameraSceneNode;
 
 /**
  * Which renderer to run.
+ *
+ * The graphics option itself, not a copy of it: the render mode is a graphics
+ * choice, the option maps 1:1 onto these values, and a second enum here would
+ * be one more place for the two to disagree.
  */
-enum class RenderMode {
-    Retro,
-    PBR,
-    /** Vulkan-only primary-ray view. Kept here for the future tracer. */
-    PathTracing
-};
+using RenderMode = graphics::RenderMode;
 
 /** Shadow light selected by the scene graph for this frame. */
 enum class RenderShadowKind {

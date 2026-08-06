@@ -47,9 +47,12 @@ private:
         bool fullscreen {false};
         bool vsync {false};
         bool grass {true};
-        bool pbr {true};
-        /** "raster" or "path-tracing", matching the engine's --mode. */
-        std::string mode {"raster"};
+        /**
+         * "retro", "pbr" or "path-tracing", matching the engine's --mode. The
+         * engine also reads "raster" as retro, so a config written before this
+         * became one option still launches.
+         */
+        std::string mode {"pbr"};
         int ptspp {8};
         bool ssao {true};
         bool ssr {true};

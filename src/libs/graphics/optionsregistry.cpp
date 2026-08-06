@@ -221,29 +221,33 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(floatOpt("grassdensity", OptionApply::Live, "grass density multiplier",
                              &GraphicsOptions::grassDensity, 0.0f, 8.0f));
 
-    // The resolve step and the shadow-caster policy are chosen per frame in
-    // RenderPipeline::render, and a raster pipeline builds both resolve
-    // descriptor sets, so this switches without rebuilding anything.
-    descs.push_back(boolOpt("pbr", OptionApply::Live,
-                            "physically-based raster resolve, rather than retro",
-                            &GraphicsOptions::pbr));
-
-    // What the pipeline is. Decided once, at construction: the ray-query
-    // pipeline exists only in the traced mode, and the scene output format
-    // follows from it.
+    // What the renderer is, as one three-way choice.
+    //
+    // Its class is per VALUE, not per option. Retro and PBR pick a resolve step
+    // per frame over targets a raster pipeline has already allocated, so moving
+    // between them is live and must stay live. Path tracing decides whether the
+    // ray-query pipeline exists and what format the scene output carries, both
+    // fixed at construction, so crossing into or out of it takes a rebuild.
     descs.push_back(enumOpt(
-        "mode", OptionApply::Reapply, "render mode: raster or path-tracing",
-        [](const GraphicsOptions &o) { return o.mode; },
+        "mode", OptionApply::Reapply,
+        "render mode: retro, pbr or path-tracing ('raster' is accepted for retro)",
+        [](const GraphicsOptions &o) -> std::string { return renderModeName(o.mode); },
         [](GraphicsOptions &o, const std::string &value) {
-            if (value != "raster" && value != "path-tracing") {
+            try {
+                o.mode = parseRenderMode(value);
+            } catch (const std::invalid_argument &) {
                 throw std::invalid_argument(
                     "Graphics option 'mode': unknown render mode '" + value +
-                    "'; expected raster or path-tracing");
+                    "'; expected retro, pbr or path-tracing");
             }
-            o.mode = value;
         },
         [](const GraphicsOptions &a, const GraphicsOptions &b) { return a.mode == b.mode; },
         [](const GraphicsOptions &from, GraphicsOptions &to) { to.mode = from.mode; }));
+    descs.back().applyFor = [](const GraphicsOptions &a, const GraphicsOptions &b) {
+        return a.mode == RenderMode::PathTracing || b.mode == RenderMode::PathTracing
+                   ? OptionApply::Reapply
+                   : OptionApply::Live;
+    };
 
     descs.push_back(boolOpt("admissionshadow", OptionApply::Live,
                             "compare incremental and full scene admission every frame",
@@ -276,7 +280,7 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(boolOpt("pttracestats", OptionApply::Live,
                             "enable path tracing statistics",
                             &GraphicsOptions::ptTraceStats));
-    descs.push_back(intOpt("tonemap", OptionApply::Live, "display transform: 0 off, 1 ACES",
+    descs.push_back(intOpt("tonemap", OptionApply::Live, "display transform: 0 off, 1 Gran Turismo curve",
                            &GraphicsOptions::tonemap, 0, 1));
     descs.push_back(floatOpt("exposure", OptionApply::Live,
                              "scene-referred exposure ahead of the tonemap",
@@ -295,13 +299,15 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                             "apply lightmaps (diagnostic toggle)",
                             &GraphicsOptions::lightmaps));
 
-    // Nothing in the render path reads these two today; they are carried so the
-    // command line, the config and the console agree on the vocabulary.
+    // Both gate work inside the PBR mode, and both are read where the frame is
+    // planned or a push constant is filled, so the next frame follows. Off,
+    // neither costs anything: the occlusion branch is not taken and the
+    // reflection step is not appended.
     descs.push_back(boolOpt("ssao", OptionApply::Live,
-                            "enable screen-space ambient occlusion (currently unread)",
+                            "screen-space ambient occlusion, inside the PBR resolve",
                             &GraphicsOptions::ssao));
     descs.push_back(boolOpt("ssr", OptionApply::Live,
-                            "enable screen-space reflections (currently unread)",
+                            "screen-space reflections over the PBR resolve",
                             &GraphicsOptions::ssr));
 
     // The temporal occupant of the slot owns device images of its own, built in
@@ -499,6 +505,28 @@ std::vector<GraphicsOptionDesc> buildDescs() {
 
 } // namespace
 
+const char *renderModeName(RenderMode mode) {
+    switch (mode) {
+    case RenderMode::Retro:
+        return "retro";
+    case RenderMode::PathTracing:
+        return "path-tracing";
+    default:
+        return "pbr";
+    }
+}
+
+RenderMode parseRenderMode(const std::string &value) {
+    if (value == "retro" || value == "raster")
+        return RenderMode::Retro;
+    if (value == "pbr")
+        return RenderMode::PBR;
+    if (value == "path-tracing")
+        return RenderMode::PathTracing;
+    throw std::invalid_argument("Unknown render mode '" + value +
+                                "'; expected retro, pbr or path-tracing");
+}
+
 const char *optionApplyName(OptionApply apply) {
     switch (apply) {
     case OptionApply::Reapply:
@@ -526,12 +554,18 @@ const GraphicsOptionDesc *findGraphicsOptionDesc(const std::string &name) {
     return found != byName.end() ? found->second : nullptr;
 }
 
+OptionApply graphicsOptionApply(const GraphicsOptionDesc &desc,
+                                const GraphicsOptions &left,
+                                const GraphicsOptions &right) {
+    return desc.applyFor ? desc.applyFor(left, right) : desc.apply;
+}
+
 std::vector<std::string> graphicsOptionsDiffering(const GraphicsOptions &left,
                                                   const GraphicsOptions &right,
                                                   OptionApply apply) {
     std::vector<std::string> names;
     for (const auto &desc : graphicsOptionDescs()) {
-        if (desc.apply == apply && !desc.equal(left, right))
+        if (graphicsOptionApply(desc, left, right) == apply && !desc.equal(left, right))
             names.push_back(desc.name);
     }
     return names;
@@ -540,7 +574,11 @@ std::vector<std::string> graphicsOptionsDiffering(const GraphicsOptions &left,
 void copyGraphicsOptions(const GraphicsOptions &from, GraphicsOptions &to,
                          OptionApply apply) {
     for (const auto &desc : graphicsOptionDescs()) {
-        if (desc.apply == apply)
+        // Classified against the pair being reconciled, so a value-dependent
+        // option is copied by the same rule that listed it as differing. Asking
+        // desc.apply here instead would carry a live mode change into a rebuild
+        // batch, or leave a rebuilding one behind.
+        if (graphicsOptionApply(desc, from, to) == apply)
             desc.copy(from, to);
     }
 }

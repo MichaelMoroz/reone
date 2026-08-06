@@ -106,6 +106,23 @@ public:
     virtual void endDebugScope() = 0;
     virtual void bindPipeline(Pipeline pipeline) = 0;
     virtual void bindRayTracingPipeline(Pipeline pipeline) = 0;
+    /**
+     * A compute pipeline built by the pipeline cache, bound and driven by the
+     * caller.
+     *
+     * Distinct from the reflected dispatch below, which owns its own resources.
+     * A pass that shares the graphics descriptor sets - the frame uniforms, the
+     * texture table, the merged material set - binds them itself and the cache
+     * only supplies the kernel.
+     */
+    virtual void bindComputePipeline(Pipeline pipeline) = 0;
+    virtual void bindComputeDescriptorSet(PipelineLayout layout, uint32_t index,
+                                          DescriptorSet set,
+                                          const uint32_t *dynamicOffsets,
+                                          uint32_t dynamicOffsetCount) = 0;
+    virtual void pushComputeConstants(PipelineLayout layout, const void *data,
+                                      uint32_t size) = 0;
+    virtual void dispatchCompute(glm::uvec3 groups) = 0;
     virtual void bindDescriptorSet(PipelineLayout layout, uint32_t index,
                                    DescriptorSet set,
                                    const uint32_t *dynamicOffsets,

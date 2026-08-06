@@ -774,7 +774,13 @@ std::string Engine::setGraphicsOption(const std::string &name, const std::string
         throw std::invalid_argument("Unknown graphics option '" + name +
                                     "'; 'gfx list' names them all");
     }
-    switch (desc->apply) {
+    // Classified against the value being set, not against the option: the
+    // render mode is live between the two raster resolves and a rebuild only
+    // when it crosses into or out of path tracing. Parsing into a candidate
+    // first also means an unreadable value throws before anything is written.
+    graphics::GraphicsOptions candidate = _options.graphics;
+    desc->set(candidate, value);
+    switch (graphics::graphicsOptionApply(*desc, _options.graphics, candidate)) {
     case graphics::OptionApply::Reapply: {
         // Into the staged copy only. Writing the live struct here would leave
         // the running frame describing targets that were never allocated.
@@ -893,10 +899,14 @@ void Engine::registerGraphicsCommands() {
                     fail("unknown graphics option '" + name + "'; 'gfx list' names them all");
                     return;
                 }
+                // The class of a change FROM the current value, which for a
+                // value-dependent option is not the same as the option's own.
                 std::string line = desc->name + " = " + desc->get(_options.graphics) +
-                                   " [" + graphics::optionApplyName(desc->apply) + "]";
-                if (desc->apply == graphics::OptionApply::Reapply &&
-                    !desc->equal(_stagedGraphics, _options.graphics)) {
+                                   " [" +
+                                   graphics::optionApplyName(graphics::graphicsOptionApply(
+                                       *desc, _options.graphics, _stagedGraphics)) +
+                                   "]";
+                if (!desc->equal(_stagedGraphics, _options.graphics)) {
                     line += ", staged " + desc->get(_stagedGraphics);
                 }
                 say(line);
@@ -911,10 +921,11 @@ void Engine::registerGraphicsCommands() {
                     }
                     ++shown;
                     std::string line = desc.name + " = " + desc.get(_options.graphics) +
-                                       " [" + graphics::optionApplyName(desc.apply) + "] " +
-                                       desc.help;
-                    if (desc.apply == graphics::OptionApply::Reapply &&
-                        !desc.equal(_stagedGraphics, _options.graphics)) {
+                                       " [" +
+                                       graphics::optionApplyName(graphics::graphicsOptionApply(
+                                           desc, _options.graphics, _stagedGraphics)) +
+                                       "] " + desc.help;
+                    if (!desc.equal(_stagedGraphics, _options.graphics)) {
                         line += " (staged " + desc.get(_stagedGraphics) + ")";
                     }
                     say(line);

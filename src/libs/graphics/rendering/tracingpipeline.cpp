@@ -62,7 +62,7 @@ void TracingPipeline::init() {
     if (_inited)
         return;
     _pipeline = _renderer.makeTracingPipeline(
-        {"rayquery", _renderer.reflection("rayquery"), sizeof(TracePushConstants),
+        {"path_trace", _renderer.reflection("path_trace"), sizeof(TracePushConstants),
          "rayquery:primaryRay"});
     _bindlessTextureCapacity = _pipeline->bindlessTextureCapacity();
 
@@ -112,7 +112,7 @@ void TracingPipeline::init() {
         _nrdDenoiser = _renderer.makeTracingDenoiser(_extent);
         if (_nrdDenoiser) {
 
-            _compositePipeline = _renderer.makeComputePipeline({"nrd_composite", "main", 2});
+            _compositePipeline = _renderer.makeComputePipeline({"nrd_resolve", "main", 2});
             _compositeBindings = _compositePipeline->resolveBindings(
                 {"outputImage", "inNoiseFree", "inDiffFactor", "inSpecFactor",
                  "inDenoisedDiffuse", "inDenoisedSpecular", "inViewZ", "inRawDiffuse",

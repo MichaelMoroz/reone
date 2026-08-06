@@ -282,6 +282,11 @@ include_directories(${Boost_INCLUDE_DIRS} ${SDL3_INCLUDE_DIRS} ${MAD_INCLUDE_DIR
 
 add_compile_definitions(BOOST_BIND_GLOBAL_PLACEHOLDERS)
 
+# The shader source tree, so a development build can compile the files being
+# edited rather than the copy the build deposits beside the executable. An
+# installed build will not find this path and falls back to that copy.
+add_compile_definitions(REONE_SHADER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/slang")
+
 # GLM GTX extensions (euler_angles et al.) are gated behind this define in
 # recent GLM releases; required when a system/vcpkg GLM shadows extern/glm.
 add_compile_definitions(GLM_ENABLE_EXPERIMENTAL)

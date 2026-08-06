@@ -63,6 +63,56 @@ struct PostProcessPushConstants {
     uint32_t tonemap;
 };
 
+/** Mirrors ResolvePushConstants in pbr_resolve.slang and retro_resolve.slang. */
+struct ResolvePushConstants {
+    uint32_t flags;
+};
+
+/** A sky bake is available this frame; without it the resolves write black. */
+static constexpr uint32_t kResolveFlagSky = 1u;
+/** Screen-space occlusion; read by the PBR resolve alone. */
+static constexpr uint32_t kResolveFlagSSAO = 2u;
+
+/** Both resolve dispatches, and their shader, agree on this tile. */
+static constexpr uint32_t kResolveGroupSize = 8;
+
+/**
+ * A cosine-weighted hemisphere kernel, packed toward the origin.
+ *
+ * Built from a Hammersley sequence rather than from random numbers so that it
+ * is the same kernel on every machine and in every run - the point of an
+ * occlusion term is that it describes the geometry, and a capture that differed
+ * between two builds for kernel reasons would be unreadable. The quadratic ramp
+ * on the radius is the usual one: it concentrates samples near the point being
+ * shaded, which is where occlusion actually varies.
+ */
+static std::array<glm::vec4, kNumSSAOSamples> buildSSAOKernel() {
+    std::array<glm::vec4, kNumSSAOSamples> kernel {};
+    for (int i = 0; i < kNumSSAOSamples; ++i) {
+        // Radical inverse base 2, the second Hammersley coordinate.
+        uint32_t bits = static_cast<uint32_t>(i);
+        bits = (bits << 16u) | (bits >> 16u);
+        bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+        bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+        bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+        bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+        const float radical = static_cast<float>(bits) * 2.3283064365386963e-10f;
+        const float u = (static_cast<float>(i) + 0.5f) / static_cast<float>(kNumSSAOSamples);
+
+        const float phi = 2.0f * 3.14159265358979323846f * radical;
+        // Cosine-weighted: z is the square root of a uniform, so the density
+        // follows the diffuse lobe the term stands in for.
+        const float cosTheta = std::sqrt(1.0f - u);
+        const float sinTheta = std::sqrt(std::max(0.0f, 1.0f - cosTheta * cosTheta));
+        glm::vec3 sample {std::cos(phi) * sinTheta, std::sin(phi) * sinTheta, cosTheta};
+
+        float scale = static_cast<float>(i) / static_cast<float>(kNumSSAOSamples);
+        scale = 0.1f + 0.9f * scale * scale;
+        kernel[i] = glm::vec4(sample * scale, 0.0f);
+    }
+    return kernel;
+}
+
 ScenePipeline::ScenePipeline(glm::ivec2 targetSize,
                                          GraphicsOptions &options,
                                          IRenderer &renderer,
@@ -203,6 +253,8 @@ void ScenePipeline::init() {
     // first dispatch is therefore a reset.
     _temporalHistoryValid = false;
     _prevCameraPosition = glm::vec3(0.0f);
+    _ssaoKernel = buildSSAOKernel();
+    _skyBinding = {};
 
     _inited = true;
 }
@@ -310,12 +362,12 @@ void ScenePipeline::shadowPass(ICommandBuffer &cmd,
                 return;
             }
             PipelineKey key;
-            key.module = "megadraw";
-            key.vertexEntry = directional ? "directionalShadowMegadrawVertex"
-                                          : "pointShadowMegadrawVertex";
+            key.module = "scene_draw";
+            key.vertexEntry = directional ? "directionalShadowVertex"
+                                          : "pointShadowVertex";
             key.fragmentEntry = directional
-                                    ? "directionalShadowMegadrawFragment"
-                                    : "pointShadowMegadrawFragment";
+                                    ? "directionalShadowFragment"
+                                    : "pointShadowFragment";
             key.depthFormat = Format::D32Sfloat;
             key.viewMask = viewMask;
             key.depthTest = true;
@@ -389,9 +441,9 @@ void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
 
     if (scene.vertices.buffer && scene.triangleCount != 0) {
         PipelineKey key;
-        key.module = "megadraw";
-        key.vertexEntry = "megadrawVertex";
-        key.fragmentEntry = "megadrawFragment";
+        key.module = "scene_draw";
+        key.vertexEntry = "sceneDrawVertex";
+        key.fragmentEntry = "sceneDrawFragment";
         key.colorFormats = _gbuffer->colorFormats();
         key.depthFormat = _gbuffer->depthFormat();
         key.depthTest = true;
@@ -442,9 +494,9 @@ void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
 
     // The resolve already wrote this image; loading preserves it.
     PipelineKey key;
-    key.module = "megadraw";
-    key.vertexEntry = "megadrawVertex";
-    key.fragmentEntry = "megadrawBlendedFragment";
+    key.module = "scene_draw";
+    key.vertexEntry = "sceneDrawVertex";
+    key.fragmentEntry = "sceneDrawBlendedFragment";
     key.colorFormats = {_output->pixelFormat()};
     key.depthFormat = _gbuffer->depthFormat();
     key.depthTest = true;
@@ -468,7 +520,7 @@ void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                               offsets.data(), static_cast<uint32_t>(offsets.size()));
         cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
         cmd.bindIndexBuffer(*scene.indices.buffer, scene.indices.offset);
-        // Submission order, deliberately. See megadraw.slang.
+        // Submission order, deliberately. See scene_draw.slang.
         const MegaDrawPushConstants push {scene.opaqueTriangleCount, 2};
         cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
         cmd.drawIndexed(nonOpaqueTriangles * 3, scene.opaqueTriangleCount * 3);
@@ -479,12 +531,33 @@ void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
 
+uint32_t ScenePipeline::resolveFlags() const {
+    uint32_t flags = 0;
+    if (_skyBinding.cube && _skyBinding.baked) {
+        flags |= kResolveFlagSky;
+    }
+    if (_options.ssao) {
+        flags |= kResolveFlagSSAO;
+    }
+    return flags;
+}
+
+DescriptorSet ScenePipeline::resolveSet(IImage *output) {
+    return _renderer.descriptors().acquireResolveDescriptorSet(
+        _renderer.uniformRing().frame(), output, _skyBinding.cube, _skyBinding.view);
+}
+
 void ScenePipeline::retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::retroResolvePass record");
     transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
     cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
     cmd.transitionImage(*_output, ImageLayout::ColorAttachment);
 
+    // Deliberately still a fragment pass. Retro is the original's lighting
+    // model and this project's fixed reference for it; it has no occlusion term
+    // to fold in and writes one value per pixel from one read of the G-buffer,
+    // so a dispatch would buy it nothing and cost it a rewrite. The asymmetry
+    // with the PBR resolve beside it is the point, not an oversight.
     PipelineKey key;
     key.module = "retro_resolve";
     key.vertexEntry = "retroResolveVertex";
@@ -494,6 +567,9 @@ void ScenePipeline::retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset
 
     std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+    // No storage image: this pass writes an attachment, and the binding is
+    // partially bound precisely so it can be left out here.
+    auto skySet = resolveSet(nullptr);
 
     {
         RenderAttachment color {_output->sampleView(), ImageLayout::ColorAttachment,
@@ -505,67 +581,14 @@ void ScenePipeline::retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset
         cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
                               offsets.data(), static_cast<uint32_t>(offsets.size()));
         cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, _retroResolveSet, nullptr, 0);
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kResolveSet, skySet, nullptr, 0);
         if (_resolveMaterialSet) {
-            cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
+            cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kMegaDrawSet,
+                                  _resolveMaterialSet, nullptr, 0);
+            const ResolvePushConstants push {resolveFlags()};
+            cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
             cmd.draw(3, 1);
         }
-        cmd.endRendering();
-    }
-    cmd.transitionImage(*_output, ImageLayout::ShaderRead);
-}
-
-void ScenePipeline::skyCompositePass(ICommandBuffer &cmd, uint32_t globalsOffset,
-                                     ISceneCallbacks &callbacks) {
-    R_PROFILE_ZONE("ScenePipeline::skyCompositePass record");
-    // Outside any pass: a first bake of a room records six cube-face passes of
-    // its own here.
-    const auto sky = callbacks.prepareSky(cmd);
-    if (!sky.cube) {
-        return;
-    }
-    // The bake pushes its own per-face globals through the ring and leaves the
-    // last face's offset latched. Nothing downstream of here reads the latch
-    // today, but restoring it keeps this frame's globals the frame's globals.
-    _renderer.uniformRing().setGlobalsOffset(globalsOffset);
-    if (!sky.baked) {
-        // The fallback cube is black by construction, so compositing it would
-        // write the black the resolve already left. Skipping keeps a module
-        // without a sky at exactly the pixels it had before.
-        return;
-    }
-    transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
-    cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
-    cmd.transitionImage(*_output, ImageLayout::ColorAttachment);
-
-    PipelineKey key;
-    key.module = "sky";
-    key.vertexEntry = "skyCompositeVertex";
-    key.fragmentEntry = "skyCompositeFragment";
-    key.colorFormats = {_output->pixelFormat()};
-    PipelineBinding pipeline = _renderer.pipelines().get(key);
-
-    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
-    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
-    // The cube is bound through the view the sky hands over rather than the
-    // image's own: the baked cube is one cube inside a cube-array image, and
-    // the shader declares a plain SamplerCube.
-    auto textureSet = _renderer.descriptors().acquireTextureDescriptorSet(
-        _renderer.frameIndex(),
-        {{TextureUnits::gBufDepth, &_gbuffer->depth()},
-         {TextureUnits::envMapCube, sky.cube, sky.view}});
-
-    {
-        // Loading preserves the resolved image; the shader discards every
-        // pixel the geometry pass wrote depth into.
-        RenderAttachment color {_output->sampleView(), ImageLayout::ColorAttachment,
-                                AttachmentLoad::Load, AttachmentStore::Store};
-        cmd.beginRendering(_targetSize, {color}, nullptr, 0, false);
-        cmd.bindPipeline(pipeline.pipeline);
-        auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
-        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
-                              offsets.data(), static_cast<uint32_t>(offsets.size()));
-        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, textureSet, nullptr, 0);
-        cmd.draw(3, 1);
         cmd.endRendering();
     }
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
@@ -573,37 +596,120 @@ void ScenePipeline::skyCompositePass(ICommandBuffer &cmd, uint32_t globalsOffset
 
 void ScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::pbrResolvePass record");
+    if (!_resolveMaterialSet) {
+        // No merged geometry: there is nothing to bind and nothing to shade,
+        // so publish the black the clear used to leave and stop.
+        cmd.transitionImage(*_output, ImageLayout::General);
+        cmd.clearColor(*_output, {0.0f, 0.0f, 0.0f, 1.0f});
+        cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+        return;
+    }
     transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
     cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
-    cmd.transitionImage(*_output, ImageLayout::ColorAttachment);
+    // General, not a colour attachment: the dispatch writes this image through
+    // a storage descriptor. Every pixel is written, so there is no clear to
+    // replace - the attachment clear this pass used to declare existed only for
+    // the pixels the shader returns black for, which it still returns.
+    cmd.transitionImage(*_output, ImageLayout::General);
 
     PipelineKey key;
     key.module = "pbr_resolve";
-    key.vertexEntry = "resolveVertex";
-    key.fragmentEntry = "resolveFragment";
-    key.colorFormats = {_output->pixelFormat()};
+    key.computeEntry = "resolveMain";
     PipelineBinding pipeline = _renderer.pipelines().get(key);
+
+    // The occlusion kernel and the screen size the kernel projects through.
+    // Pushed per frame rather than held: the block is the frame's, and a resize
+    // must not leave a stale resolution behind.
+    ScreenEffectUniforms screenEffect;
+    screenEffect.screenResolution = glm::vec2(_targetSize);
+    screenEffect.screenResolutionRcp = 1.0f / glm::vec2(_targetSize);
+    screenEffect.clipNear = _uniforms.globals().clipNear;
+    screenEffect.clipFar = _uniforms.globals().clipFar;
+    std::copy(_ssaoKernel.begin(), _ssaoKernel.end(), screenEffect.ssaoSamples);
+    auto screenEffectOffset = _renderer.uniformRing().push(screenEffect);
 
     std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+    offsets[UniformBlockBindingPoints::screenEffect] = screenEffectOffset;
 
-    {
-        RenderAttachment color {_output->sampleView(), ImageLayout::ColorAttachment,
-                                AttachmentLoad::Clear, AttachmentStore::Store};
-        color.clear.color = {0.0f, 0.0f, 0.0f, 1.0f};
-        cmd.beginRendering(_targetSize, {color}, nullptr, 0, false);
-        cmd.bindPipeline(pipeline.pipeline);
-        auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
-        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
-                              offsets.data(), static_cast<uint32_t>(offsets.size()));
-        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, _pbrResolveSet, nullptr, 0);
-        if (_resolveMaterialSet) {
-            cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
-            cmd.draw(3, 1);
-        }
-        cmd.endRendering();
-    }
+    auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
+    cmd.bindComputePipeline(pipeline.pipeline);
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                 offsets.data(), static_cast<uint32_t>(offsets.size()));
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, _pbrResolveSet,
+                                 nullptr, 0);
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kMegaDrawSet,
+                                 _resolveMaterialSet, nullptr, 0);
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kResolveSet,
+                                 resolveSet(_output.get()), nullptr, 0);
+    const ResolvePushConstants push {resolveFlags()};
+    cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));
+    cmd.dispatchCompute({(_targetSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
+                         (_targetSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});
+
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+}
+
+void ScenePipeline::screenSpaceReflectionPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("ScenePipeline::screenSpaceReflectionPass record");
+    // Reads the resolved image, writes the tail target, and the two exchange
+    // identities - the same ping-pong every tail pass uses, for the same reason:
+    // a kernel cannot march over an image it is writing.
+    cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+    cmd.transitionImage(*_tailColor, ImageLayout::General);
+    // Already published by the resolve on any frame that had geometry to shade,
+    // and a no-op when they are; stated here because this pass reads them and a
+    // degenerate frame reaches it without a resolve having run.
+    transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
+    cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
+
+    PipelineKey key;
+    key.module = "pbr_resolve";
+    key.computeEntry = "ssrMain";
+    PipelineBinding pipeline = _renderer.pipelines().get(key);
+
+    ScreenEffectUniforms screenEffect;
+    screenEffect.screenResolution = glm::vec2(_targetSize);
+    screenEffect.screenResolutionRcp = 1.0f / glm::vec2(_targetSize);
+    screenEffect.clipNear = _uniforms.globals().clipNear;
+    screenEffect.clipFar = _uniforms.globals().clipFar;
+    auto screenEffectOffset = _renderer.uniformRing().push(screenEffect);
+
+    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+    offsets[UniformBlockBindingPoints::screenEffect] = screenEffectOffset;
+
+    // The march needs the lit colour, plus the depth and normal of the pixel it
+    // starts from and the diffuse alpha that says how much of a mirror it is.
+    // Units are the resolve's own numbering, which the module declares once.
+    auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
+        _renderer.uniformRing().frame(),
+        {{TextureUnits::mainTex, _output.get()},
+         {1, &_gbuffer->color(GBufferAttachment::Diffuse)},
+         {2, &_gbuffer->color(GBufferAttachment::EyeNormal)},
+         {5, &_gbuffer->depth()}});
+
+    auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
+    cmd.bindComputePipeline(pipeline.pipeline);
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                 offsets.data(), static_cast<uint32_t>(offsets.size()));
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet,
+                                 nullptr, 0);
+    // Unused by this kernel - it shades nothing - but bound while it is there,
+    // so the set the layout declares is never left dangling.
+    if (_resolveMaterialSet) {
+        cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kMegaDrawSet,
+                                     _resolveMaterialSet, nullptr, 0);
+    }
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kResolveSet,
+                                 resolveSet(_tailColor.get()), nullptr, 0);
+    const ResolvePushConstants push {resolveFlags()};
+    cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));
+    cmd.dispatchCompute({(_targetSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
+                         (_targetSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});
+
+    cmd.transitionImage(*_tailColor, ImageLayout::ShaderRead);
+    std::swap(_output, _tailColor);
 }
 
 void ScenePipeline::tailPass(ICommandBuffer &cmd, const char *fragmentEntry,
@@ -810,6 +916,14 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
         return *_outputHandle;
     }
 
+    // Outside any pass, and before the resolve that reads it: a first bake of a
+    // room records six cube-face passes of its own, which cannot happen inside
+    // one. The bake pushes its own per-face globals through the ring and leaves
+    // the last face's offset latched, so this frame's offset is restored
+    // afterwards - the resolve binds it a few lines later.
+    _skyBinding = callbacks.prepareSky(cmd);
+    _renderer.uniformRing().setGlobalsOffset(globalsOffset);
+
     bool outputResolved = false;
     for (const auto step : plan.steps) {
         switch (step) {
@@ -833,8 +947,8 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
             retroResolvePass(cmd, globalsOffset);
             outputResolved = true;
             break;
-        case SceneStep::SkyComposite:
-            skyCompositePass(cmd, globalsOffset, callbacks);
+        case SceneStep::ScreenSpaceReflections:
+            screenSpaceReflectionPass(cmd, globalsOffset);
             break;
         case SceneStep::AntiAliasing:
             antiAliasingPass(cmd, globalsOffset);
@@ -1144,7 +1258,7 @@ void ScenePipeline::dumpTargets(const std::filesystem::path &dir,
             writeNpy(path, raw.data(), extent.x, extent.y, format->channels, format->type);
         }
     }
-    if (_options.pbr) {
+    if (_options.mode != RenderMode::Retro) {
         // Cube arrays are unrolled face-after-face: layer 0 +X..-Z, then
         // layer 1 +X..-Z, and so on. Keeping every layer makes the dump useful
         // even when a scene derives more than one environment map.

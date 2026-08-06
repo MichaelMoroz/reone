@@ -134,7 +134,7 @@ void RenderPipeline::deinit() {
 }
 
 uint32_t RenderPipeline::shadowCasterCategories() const {
-    if (_options.pbr) {
+    if (_options.mode != graphics::RenderMode::Retro) {
         // The corrected renderer shadows the scene it actually lights, so
         // everything opaque casts.
         return graphics::kAllShadowCasters;
@@ -241,14 +241,27 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         plan.steps.push_back(graphics::SceneStep::ProcessPBRTextures);
         plan.steps.push_back(graphics::SceneStep::Shadow);
         plan.steps.push_back(graphics::SceneStep::Geometry);
-        if (_options.pbr)
+        // Anything that is not retro resolves with PBR. That covers the traced
+        // mode reaching this branch, which it does on a device that cannot
+        // trace: the factory falls back to a raster pipeline, and falling back
+        // to the ORIGINAL's lighting model would be a second, unasked-for
+        // change of renderer.
+        const bool pbr = _options.mode != graphics::RenderMode::Retro;
+        if (pbr)
             plan.steps.push_back(graphics::SceneStep::PBRResolve);
         else
             plan.steps.push_back(graphics::SceneStep::RetroResolve);
-        // V2: after the opaque resolve and before transparency. At the end of
-        // the chain it would sit past the transparent pass and paint over
-        // particles and lens flares.
-        plan.steps.push_back(graphics::SceneStep::SkyComposite);
+        // The sky is no longer a step: both resolves shade it themselves at the
+        // pixels nothing covered, from one shared function. The bake that fills
+        // its cube still runs, outside any pass, at the top of the frame.
+        //
+        // Screen-space reflections are PBR's alone. Retro is the original's
+        // model and the original had none; giving it reflections it never had
+        // would be an improvement in the one mode that exists not to improve.
+        // Off, the step is not appended at all, so the frame is untouched
+        // rather than passed through a kernel that decides to change nothing.
+        if (pbr && _options.ssr)
+            plan.steps.push_back(graphics::SceneStep::ScreenSpaceReflections);
     }
     // The common tail. Anti-aliasing resolves the opaque image, transparency
     // is drawn over the result, and the single display transform closes the

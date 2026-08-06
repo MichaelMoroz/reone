@@ -24,7 +24,7 @@ appear in commit messages and older docs and mean nothing now.
 | **`GpuScene`** | The one path by which scene geometry becomes GPU data: admission, then one compute dispatch, then merged world-space geometry, plus stable primitive-to-object identity, residency and lifetime. Must not require ray tracing. | `RECORD.md` |
 | **admission** | The shared, renderer-neutral decision about which objects are merged and how they are classified. Extracted in G3 so neither renderer owns it. | `DESIGN.md` |
 | **merged geometry** | One world-space vertex and index stream for the whole scene with a per-triangle material id, consumed by both the BLAS build and the raster draws. | `RECORD.md` |
-| **merge / skin dispatch** | The single compute dispatch (`slang/skin.slang`) that writes the merged buffer, applying skinning, dangly, saber displacement and grass expansion. | `RECORD.md` |
+| **merge / skin dispatch** | The single compute dispatch (`slang/scene_resolve.slang`) that writes the merged buffer, applying skinning, dangly, saber displacement and grass expansion. | `RECORD.md` |
 | **megadraw** | One indexed draw over the merged buffer pulling vertices by `SV_VertexID` — the raster counterpart of the single BLAS. `shadow_megadraw` is the shadow pass form. | `DESIGN.md` |
 | **procedural quad** | The one device-side record kind that grass, particles and billboards all lower into. | `DESIGN.md` |
 | **residency class / Region** | The contract-level declaration that a range of merged geometry is static or dynamic. Present since Phase C, still unused — S4 is what consumes it. | `DESIGN.md` |

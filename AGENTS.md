@@ -135,12 +135,15 @@ generates on the GPU from integer hashes; culling buys nothing here
 **The capture harness** (full detail in the diagnostics skill):
 
 ```
-build/bin/engine.exe --game <GAME_DIR> --dev 0 --mode <mode> --pbr <0|1> \
+build/bin/engine.exe --game <GAME_DIR> --dev 0 --mode <retro|pbr|path-tracing> \
     --grassdensity 1 --headless 1 --commands-file <abs-path>\warp.txt \
     --capture out.tga --captureframe 310
 ```
 
-- Pass `--dev 0`, `--mode`, `--pbr` **explicitly every time** — untracked
+- `--mode` is the whole renderer choice: `retro`, `pbr` or `path-tracing`.
+  There is no `--pbr` flag any more, and passing one is a hard error rather
+  than a warning. `--mode raster` is still accepted and means `retro`.
+- Pass `--dev 0` and `--mode` **explicitly every time** — untracked
   `build/bin/reone.cfg` wins any flag you omit, and `dev=1` draws a live FPS
   readout into the captured image, forging regressions.
 - Frames below ~300 are the splash screen and prove nothing. Iterate at 310;

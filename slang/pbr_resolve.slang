@@ -24,13 +24,38 @@
 // The important part is the shape rather than the lighting. SurfaceParams is
 // filled here from a G-buffer, and a path tracer will fill the same struct from
 // a hit record; everything downstream of it is shared. Keep that boundary.
+//
+// A compute dispatch rather than a full-screen triangle. Nothing about the
+// lighting wanted a rasterizer: every pixel is independent, the output is
+// written once, and a dispatch can therefore both fold in screen-space
+// occlusion - which needs a second read of depth and normals, not a second
+// pass - and skip the attachment machinery. The retro resolve deliberately
+// stays a fragment pass: it is the original's model, it has no occlusion term
+// to fold in, and converting it would buy nothing while putting the one thing
+// this project treats as a fixed reference through a rewrite.
+//
+// The one consequence to know: a compute shader has no implicit derivatives, so
+// every texture read here takes an explicit level. Every target it samples is
+// mip-free, where level zero is what an implicit lookup resolved to anyway; the
+// exception is the authored 2D mirror in sampleAuthoredMirror, which now takes
+// its base level exactly as the cube branch beside it always did.
 
 import uniforms;
 import lib.math;
 import lib.gbuf;
 import lib.shadow;
 import lib.scene_schema;
+import lib.skycube;
 
+/**
+ * The resolved scene colour, read by the screen-space reflection pass alone.
+ *
+ * That pass runs as a second dispatch over the image this one produces, which
+ * is the whole reason it is a second dispatch: reflections march the screen and
+ * need the lit colour of the pixel they land on, and a kernel cannot read the
+ * image it is still writing.
+ */
+[[vk::binding(0, 1)]] Sampler2D sSceneColor;
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
 [[vk::binding(2, 1)]] Sampler2D sGBufEyeNormal;
 [[vk::binding(3, 1)]] Sampler2D sGBufLightmap;
@@ -43,12 +68,31 @@ import lib.scene_schema;
 [[vk::binding(2, 2)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
 [[vk::binding(3, 2)]] Sampler2D bindlessTextures[];
 [[vk::binding(5, 2)]] SamplerCube bindlessTextureCubes[];
+// Set 3 is the resolve set: the image this dispatch writes, and the baked sky
+// cube both resolves read. The output is a storage image because a dispatch has
+// no attachments; it is acquired per frame because the scene output and the
+// tail target exchange identities every time a tail pass runs.
+[[vk::binding(0, 3)]] RWTexture2D<float4> outImage;
+[[vk::binding(1, 3)]] SamplerCube sSkyCube;
+
+/** Mirrors ResolvePushConstants in scenepipeline.cpp. */
+struct ResolvePushConstants {
+    /** Bit 0: a sky bake is available. Bit 1: screen-space occlusion is on. */
+    uint flags;
+};
+[[vk::push_constant]] ResolvePushConstants pushConstants;
+
+static const uint kResolveFlagSky = 1u;
+static const uint kResolveFlagSSAO = 2u;
 
 static const uint kNoMaterial = 0xffffu;
 static const uint kNoTexture = 0xffffffffu;
 
 /** Roughness spans this many prefiltered mips; see VulkanPBRTextures. */
 static const float kMaxReflectionLOD = 4.0;
+
+/** View-space distance past which the occlusion kernel measures only noise. */
+static const float kSsaoMaxDistance = 500.0;
 
 static const float kGamma = 2.2;
 
@@ -95,20 +139,6 @@ SurfaceParams defaultSurface() {
 
 
 
-struct Varyings {
-    float4 position : SV_Position;
-    float2 uv : TEXCOORD0;
-};
-
-[shader("vertex")]
-Varyings resolveVertex(uint vertexId: SV_VertexID) {
-    float2 uv = float2((vertexId << 1) & 2, vertexId & 2);
-    Varyings output;
-    output.position = float4(uv * 2.0f - 1.0f, 0.0f, 1.0f);
-    output.uv = uv;
-    return output;
-}
-
 float3 gammaToLinear(float3 rgb) {
     return pow(rgb, float3(kGamma));
 }
@@ -131,10 +161,60 @@ float3 linearToGamma(float3 rgb) {
  * that flip has to be undone to recover the clip-space y a fragment really had.
  */
 float3 reconstructViewPos(float2 uv) {
-    float depth = sGBufDepth.Sample(uv).r;
+    float depth = sGBufDepth.SampleLevel(uv, 0.0).r;
     float3 ndc = float3(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y, depth);
     float4 viewPos = mul(globalUniforms.projectionInv, float4(ndc, 1.0));
     return viewPos.xyz / viewPos.w;
+}
+
+/**
+ * Screen-space ambient occlusion, folded into the resolve rather than run as a
+ * pass of its own.
+ *
+ * It needs depth and normals and nothing else, both of which this dispatch has
+ * already read, and it produces one scalar that is consumed a few lines later.
+ * As a separate full-screen pass it cost a target, a blur to hide its noise and
+ * a third read of the same G-buffer; here it costs a loop.
+ *
+ * The rotation comes from a hash of the pixel rather than from the 4x4 noise
+ * texture the old fragment pass sampled: that texture is not bound in either
+ * resolve's descriptor set, and a hash is one less resource to keep in step for
+ * the same purpose - decorrelating neighbouring kernels so the occlusion reads
+ * as noise rather than as banding.
+ */
+float screenSpaceOcclusion(float2 uv, int2 pixel, float3 pos, float3 normal) {
+    // Wang-style integer hash: cheap, and its low bits vary between adjacent
+    // pixels, which is the whole requirement.
+    uint h = uint(pixel.x) * 73856093u ^ uint(pixel.y) * 19349663u;
+    h ^= h >> 13;
+    h *= 0x85ebca6bu;
+    h ^= h >> 16;
+    float angle = float(h & 0xffffu) * (kPi * 2.0 / 65536.0);
+    float3 random = float3(cos(angle), sin(angle), 0.0);
+    float3 tangent = normalize(random - normal * dot(random, normal));
+    float3 bitangent = cross(normal, tangent);
+    float3x3 tbn = float3x3(tangent, bitangent, normal);
+
+    float occlusion = 0.0;
+    for (int i = 0; i < kNumSSAOSamples; ++i) {
+        // GLSL mat3 takes these basis vectors as columns. Slang lowers this
+        // constructor as the same SPIR-V columns, so multiply the sample from
+        // the left to obtain tangent*x + bitangent*y + normal*z.
+        float3 samplePos = pos + screenEffectUniforms.ssaoSampleRadius *
+                                     mul(screenEffectUniforms.ssaoSamples[i].xyz, tbn);
+        float4 sampleClip = mul(globalUniforms.projection, float4(samplePos, 1.0));
+        float2 sampleUV = sampleClip.xy / sampleClip.w;
+        sampleUV = float2(sampleUV.x * 0.5 + 0.5, 0.5 - sampleUV.y * 0.5);
+        float sceneZ = reconstructViewPos(sampleUV).z;
+        float rangeCheck = smoothstep(
+            0.0, 1.0, screenEffectUniforms.ssaoSampleRadius / abs(pos.z - sceneZ));
+        occlusion += (sceneZ >= samplePos.z + screenEffectUniforms.ssaoBias ? 1.0 : 0.0) *
+                     rangeCheck;
+    }
+    // Faded out with distance exactly as the fragment pass faded it: a kernel
+    // whose world radius is a pixel wide measures nothing but depth precision.
+    return 1.0 - (occlusion / float(kNumSSAOSamples)) *
+                     (1.0 - smoothstep(0.0, kSsaoMaxDistance, abs(pos.z)));
 }
 
 float lightAttenuationQuadratic(GlobalUniformsLight light, float distance) {
@@ -154,8 +234,12 @@ float3 sampleAuthoredMirror(InstanceMaterial material, float3 eyeReflection) {
     float m = 2.0 * sqrt(r.x * r.x + r.y * r.y +
                          (r.z + 1.0) * (r.z + 1.0));
     float2 uv = float2(r.x / m + 0.5, r.y / m + 0.5);
+    // Base level, like the cube branch above. A dispatch has no implicit
+    // derivatives at all, so there is no mip selection to be had here; this is
+    // the one read in the resolve whose value the move to compute changes, and
+    // it changes it in the direction the cube branch was already committed to.
     return bindlessTextures[NonUniformResourceIndex(material.envMap)]
-        .Sample(uv).rgb;
+        .SampleLevel(uv, 0.0).rgb;
 }
 
 float distributionGGX(float NdotH2, float a2) {
@@ -187,24 +271,31 @@ float getFog(float3 worldPos) {
     return 1.0 - saturate(f);
 }
 
-[shader("fragment")]
-float4 resolveFragment(Varyings input) : SV_Target0 {
-    float2 uv = input.uv;
+/** One pixel of the resolved image, in the display space the frame is in. */
+float3 resolveSurface(float2 uv, int2 pixel) {
+    float4 mainTexSample = sGBufDiffuse.SampleLevel(uv, 0.0);
+    float4 lightmapSample = sGBufLightmap.SampleLevel(uv, 0.0);
+    float4 selfIllumSample = sGBufSelfIllum.SampleLevel(uv, 0.0);
+    uint materialId = sGBufMaterialId.Load(int3(pixel, 0)).r;
 
-    float4 mainTexSample = sGBufDiffuse.Sample(uv);
-    float4 lightmapSample = sGBufLightmap.Sample(uv);
-    float4 selfIllumSample = sGBufSelfIllum.Sample(uv);
-    uint materialId = sGBufMaterialId.Load(int3(int2(input.position.xy), 0)).r;
-
-    // Nothing was drawn here: leave the clear colour alone rather than lighting
-    // it, which would tint the whole background.
+    // Nothing was drawn here, and nothing wrote depth either - the material id
+    // and the depth come from one fragment - so this is exactly the set the sky
+    // composite pass used to paint over, and it is now the sky's own branch.
+    // Lighting it would tint the whole background; without a bake the cube is
+    // black by construction, so skipping it writes the same black as before.
     if (materialId == kNoMaterial) {
-        return float4(0.0, 0.0, 0.0, 1.0);
+        if ((pushConstants.flags & kResolveFlagSky) == 0) {
+            return float3(0.0);
+        }
+        float3 direction = skyDirection(uv, globalUniforms.projectionInv,
+                                        globalUniforms.viewInv,
+                                        globalUniforms.cameraPosition.xyz);
+        return skyToDisplay(skyRadiance(sSkyCube, direction, 1.0));
     }
     InstanceMaterial material = instanceMaterials[materialId];
 
     float3 eyePos = reconstructViewPos(uv);
-    float3 eyeNormal = normalize(2.0 * sGBufEyeNormal.Sample(uv).xyz - 1.0);
+    float3 eyeNormal = normalize(2.0 * sGBufEyeNormal.SampleLevel(uv, 0.0).xyz - 1.0);
     float3 worldPos = mul(globalUniforms.viewInv, float4(eyePos, 1.0)).xyz;
     float3 normal = normalize(mul(globalUniforms.viewInv, float4(eyeNormal, 0.0)).xyz);
 
@@ -221,8 +312,12 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     // Odyssey assets carry no roughness channel; the diffuse alpha stands in,
     // floored so that nothing turns into a perfect mirror.
     float roughness = clamp(mainTexSample.a, 0.2, 1.0);
-    // SSAO is not part of the shared executor yet; its neutral term is one.
-    float ao = 1.0;
+    // Screen-space occlusion, when it is switched on. With it off this is the
+    // neutral one the resolve has always used and the branch is not taken, so
+    // the frame is the frame that was rendered before it existed.
+    float ao = (pushConstants.flags & kResolveFlagSSAO) != 0
+                   ? screenSpaceOcclusion(uv, pixel, eyePos, eyeNormal)
+                   : 1.0;
 
     bool envmapped;
     bool hasLightmap;
@@ -277,7 +372,7 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
                                   gammaToLinear(globalUniforms.worldAmbientColor.rgb);
     if (envmapped) {
         irradiance += gammaToLinear(
-            sIrradianceMapArray.Sample(float4(eyeR, float(envLayer))).rgb);
+            sIrradianceMapArray.SampleLevel(float4(eyeR, float(envLayer)), 0.0).rgb);
         environment = gammaToLinear(
             sPrefilteredEnvMapArray.SampleLevel(float4(eyeR, float(envLayer)),
                                                 roughness * kMaxReflectionLOD).rgb);
@@ -346,7 +441,7 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     // weighted by the split-sum approximation's scale and bias.
     float3 ambientS = float3(0.0);
     if (envmapped) {
-        float2 brdf = sBRDFLUT.Sample(float2(NdotV, roughness)).xy;
+        float2 brdf = sBRDFLUT.SampleLevel(float2(NdotV, roughness), 0.0).xy;
         // Diffuse alpha partitions the environment response: (1 - alpha)
         // belongs to the authored mirror below, while IBL fills the remaining
         // alpha share with roughness-varying specular. The two lobes therefore
@@ -396,5 +491,158 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     }
     color = lerp(color, globalUniforms.fogColor.rgb, fog);
 
-    return float4(color, 1.0);
+    return color;
+}
+
+/**
+ * The resolve itself.
+ *
+ * The half-texel offset is not decoration: a full-screen triangle interpolated
+ * uv to the pixel CENTRE, so anything else here would sample the G-buffer
+ * between texels and shift the whole image.
+ */
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void resolveMain(uint3 dispatchId : SV_DispatchThreadID) {
+    uint width, height;
+    outImage.GetDimensions(width, height);
+    if (dispatchId.x >= width || dispatchId.y >= height) {
+        return;
+    }
+    int2 pixel = int2(dispatchId.xy);
+    float2 uv = (float2(pixel) + 0.5) / float2(width, height);
+    outImage[pixel] = float4(resolveSurface(uv, pixel), 1.0);
+}
+
+// --- Screen-space reflections ---
+//
+// A second dispatch, reading the image the resolve wrote and writing the tail
+// target, which the pipeline then exchanges for the scene output. It cannot be
+// folded into the resolve the way occlusion was: a reflection lands on some
+// OTHER pixel, and a kernel that read the image it is writing would be reading
+// whichever neighbouring workgroups happened to have run.
+//
+// It reflects the lit image rather than the G-buffer product the OpenGL pass
+// reflected - a hit therefore carries the shadows, the lightmap and the sky
+// that pixel actually shows, which is the entire reason to reflect the resolved
+// image rather than to re-derive one.
+//
+// Composited as a lerp weighted by the authored mirror share, never as an add.
+// The resolve has already put the authored cube into these pixels at exactly
+// (1 - diffuse alpha); replacing that share where the screen holds a real hit
+// is a substitution, while adding would light the surface twice.
+
+static const float kSsrMaxDistance = 100.0;
+static const float kEdgeFadeStart = 0.8;
+
+float distanceSquared(float2 a, float2 b) { float2 d = a - b; return dot(d, d); }
+void swapIfGreater(inout float a, inout float b) { if (a > b) { float t = a; a = b; b = t; } }
+
+/**
+ * The DDA march of Morgan McGuire's efficient screen-space ray trace, in view
+ * space, stepping in whichever screen axis the ray covers faster.
+ */
+bool traceScreenSpaceRay(float3 rayOrigin, float3 rayDirection, float jitter,
+                         out float2 hitUV, out float numSteps) {
+    hitUV = float2(0.0);
+    numSteps = 0.0;
+    float rayLength =
+        rayOrigin.z + rayDirection.z * kSsrMaxDistance > -screenEffectUniforms.clipNear
+            ? (-screenEffectUniforms.clipNear - rayOrigin.z) / rayDirection.z
+            : kSsrMaxDistance;
+    float3 rayEnd = rayOrigin + rayDirection * rayLength;
+    float4 h0 = mul(globalUniforms.projection, float4(rayOrigin, 1.0));
+    float k0 = 1.0 / h0.w;
+    float3 q0 = rayOrigin * k0;
+    float2 p0 = float2(h0.x * k0 * 0.5 + 0.5, 0.5 - h0.y * k0 * 0.5) *
+                screenEffectUniforms.screenResolution;
+    float4 h1 = mul(globalUniforms.projection, float4(rayEnd, 1.0));
+    float k1 = 1.0 / h1.w;
+    float3 q1 = rayEnd * k1;
+    float2 p1 = float2(h1.x * k1 * 0.5 + 0.5, 0.5 - h1.y * k1 * 0.5) *
+                screenEffectUniforms.screenResolution;
+    p1 += distanceSquared(p0, p1) < 0.0001 ? float2(0.01) : float2(0.0);
+    float2 delta = p1 - p0;
+    bool permute = abs(delta.x) < abs(delta.y);
+    if (permute) { delta = delta.yx; p0 = p0.yx; p1 = p1.yx; }
+    float stepDir = sign(delta.x);
+    float invdx = stepDir / delta.x;
+    float3 dQ = (q1 - q0) * invdx;
+    float dk = (k1 - k0) * invdx;
+    float2 dP = float2(stepDir, delta.y * invdx);
+    float stride = screenEffectUniforms.ssrPixelStride;
+    dP *= stride; dQ *= stride; dk *= stride;
+    p0 += (1.0 + jitter) * dP;
+    q0 += (1.0 + jitter) * dQ;
+    k0 += (1.0 + jitter) * dk;
+    float2 p = p0;
+    float3 q = q0;
+    float k = k0;
+    float end = p1.x * stepDir;
+    float previousZMax = rayOrigin.z;
+    for (float i = 0.0; i < screenEffectUniforms.ssrMaxSteps && p.x * stepDir <= end; i += 1.0) {
+        float2 sceneUV = (permute ? p.yx : p) * screenEffectUniforms.screenResolutionRcp;
+        float rayZMin = previousZMax;
+        float rayZMax = (dQ.z * 0.5 + q.z) / (dk * 0.5 + k);
+        previousZMax = rayZMax;
+        swapIfGreater(rayZMin, rayZMax);
+        float sceneZ = reconstructViewPos(sceneUV).z;
+        if (rayZMin <= sceneZ && rayZMax >= sceneZ - screenEffectUniforms.ssrBias) {
+            hitUV = sceneUV;
+            numSteps = i;
+            return true;
+        }
+        p += dP; q += dQ; k += dk;
+    }
+    return false;
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void ssrMain(uint3 dispatchId : SV_DispatchThreadID) {
+    uint width, height;
+    outImage.GetDimensions(width, height);
+    if (dispatchId.x >= width || dispatchId.y >= height) {
+        return;
+    }
+    int2 pixel = int2(dispatchId.xy);
+    float2 uv = (float2(pixel) + 0.5) / float2(width, height);
+    // Every pixel is written: this dispatch produces the whole image, not a
+    // reflection layer somebody else composites.
+    float4 scene = sSceneColor.SampleLevel(uv, 0.0);
+
+    // Nothing was drawn here, so there is no surface to reflect off. Far depth
+    // is the sky, which the resolve has already written into this pixel.
+    float depth = sGBufDepth.SampleLevel(uv, 0.0).r;
+    float4 mainTexSample = sGBufDiffuse.SampleLevel(uv, 0.0);
+    float mirror = 1.0 - mainTexSample.a;
+    if (depth >= 1.0 || mirror <= 0.0) {
+        outImage[pixel] = scene;
+        return;
+    }
+
+    float3 position = reconstructViewPos(uv);
+    float3 eyeNormal = normalize(2.0 * sGBufEyeNormal.SampleLevel(uv, 0.0).xyz - 1.0);
+    float3 reflection = reflect(normalize(position), eyeNormal);
+    // Half a stride on a checkerboard, so that neighbouring rays do not all
+    // test the same depths and step the same misses.
+    float jitter = float((pixel.x + pixel.y) & 1) * 0.5;
+
+    float2 hitUV;
+    float numSteps;
+    float3 reflectionColor = float3(0.0);
+    float strength = 0.0;
+    if (traceScreenSpaceRay(position, reflection, jitter, hitUV, numSteps)) {
+        float2 hitNDC = hitUV * 2.0 - 1.0;
+        float maxDim = min(1.0, max(abs(hitNDC.x), abs(hitNDC.y)));
+        reflectionColor = sSceneColor.SampleLevel(hitUV, 0.0).rgb;
+        // Three confidences, all of them about how much the screen actually
+        // knows: a ray leaving toward the camera has nothing in front of it, a
+        // ray that marched to its step limit never converged, and a hit near
+        // the border reflects a surface that leaves the screen next frame.
+        strength = 1.0 - clamp(reflection.z, 0.0, 1.0);
+        strength *= 1.0 - numSteps / screenEffectUniforms.ssrMaxSteps;
+        strength *= 1.0 - max(0.0, (maxDim - kEdgeFadeStart) / (1.0 - kEdgeFadeStart));
+    }
+    outImage[pixel] = float4(lerp(scene.rgb, reflectionColor, mirror * strength), scene.a);
 }

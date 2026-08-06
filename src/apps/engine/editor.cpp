@@ -21,6 +21,7 @@
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
+#include "reone/graphics/optionsregistry.h"
 #include "reone/graphics/textureutil.h"
 #include "reone/resource/container/erf.h"
 #include "reone/resource/container/rim.h"
@@ -67,11 +68,10 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"width", std::to_string(options.width)},
         {"height", std::to_string(options.height)},
         {"vsync", std::to_string(options.vsync)},
-        // Both are editable in this window now, so both have to be written or a
-        // saved configuration would not reproduce the frame that was graded.
-        // The launcher owns the same two keys and writes them the same way.
-        {"mode", options.mode},
-        {"pbr", std::to_string(options.pbr)},
+        // Editable in this window, so it has to be written or a saved
+        // configuration would not reproduce the frame that was graded. The
+        // launcher owns the same key and writes it the same way.
+        {"mode", graphics::renderModeName(options.mode)},
         {"grass", std::to_string(options.grass)},
         {"grassdensity", formatConfigFloat(options.grassDensity)},
         {"ptspp", std::to_string(options.pathTracingSamples)},
@@ -754,17 +754,20 @@ void Editor::graphicsSettings() {
 
     ImGui::SeparatorText("General");
     ImGui::TextDisabled("Live - applies next frame.");
-    // The resolve step and the shadow-caster policy are chosen per frame, and a
-    // raster pipeline builds both resolve descriptor sets, so this needs no
-    // rebuild. It used to sit disabled under "requires a reload", which was
-    // never true of the raster resolve pair.
-    ImGui::Checkbox("PBR resolve", &options.pbr);
-    ImGui::TextDisabled("Off is the retro resolve: the original's lighting and\nits characters-only shadow casters.");
+    renderModeCombo();
     ImGui::Checkbox("Post-process", &options.post);
     ImGui::TextDisabled("The pass that owns the display transform. Off is\ndiagnostic: the traced mode then presents linear.");
     ImGui::Checkbox("Sharpen", &options.sharpen);
+    // Both belong to the PBR resolve: occlusion is a term inside it and
+    // reflections are a dispatch over the image it produced. Retro is the
+    // original's model, which had neither, so the pair sit disabled there
+    // rather than quietly doing nothing.
+    ImGui::BeginDisabled(options.mode != graphics::RenderMode::PBR);
     ImGui::Checkbox("SSAO", &options.ssao);
+    ImGui::TextDisabled("Folded into the PBR resolve, where the depth and\nnormals it needs are already read. Off, the branch\nis not taken.");
     ImGui::Checkbox("SSR", &options.ssr);
+    ImGui::TextDisabled("A second dispatch over the resolved image, ahead of\nanti-aliasing and transparency. Off, the pass is not\nrecorded at all.");
+    ImGui::EndDisabled();
     ImGui::Checkbox("Grass", &options.grass);
     // Wired straight: density is a GPU gate over budgets baked at the slider
     // maximum (kGrassDensityCap), so dragging costs a push-constant change.
@@ -807,7 +810,7 @@ void Editor::graphicsSettings() {
     // mode that arrives with linear colour, which today is the traced one.
     // They are here rather than beside the tracer because the pass is common.
     ImGui::SeparatorText("Display");
-    static constexpr const char *kTonemapNames[] = {"Off (linear)", "ACES"};
+    static constexpr const char *kTonemapNames[] = {"Off (linear)", "Gran Turismo"};
     ImGui::Combo("Tonemap", &options.tonemap, kTonemapNames, 2);
     ImGui::SliderFloat("Exposure", &options.exposure, 0.05f, 8.0f, "%.2f",
                        ImGuiSliderFlags_Logarithmic);
@@ -829,7 +832,7 @@ void Editor::graphicsSettings() {
     ImGui::TextDisabled("Ctrl+click to type a value. The sun is not at a\nphysical distance, so it keeps an authored angle.");
 
     ImGui::SeparatorText("Path tracing");
-    if (options.mode != "path-tracing") {
+    if (options.mode != graphics::RenderMode::PathTracing) {
         ImGui::TextDisabled("Inactive - run with --mode path-tracing.");
         ImGui::TextDisabled("Settings still save and apply when it is.");
     }
@@ -953,6 +956,41 @@ void Editor::graphicsSettings() {
     ImGui::End();
 }
 
+void Editor::renderModeCombo() {
+    auto &options = _engine._options.graphics;
+    auto &staged = _engine.stagedGraphicsOptions();
+
+    // Ordered as the enum is, so the index is the value.
+    static const char *kModeNames[] = {"Retro", "PBR", "Path tracing"};
+    // The staged value is what the control shows: for a live change the two are
+    // the same by construction, and for a staged one this is the value Apply
+    // would install.
+    int modeIndex = static_cast<int>(staged.mode);
+    if (ImGui::Combo("Render mode", &modeIndex, kModeNames, IM_ARRAYSIZE(kModeNames))) {
+        const auto chosen = static_cast<graphics::RenderMode>(modeIndex);
+        // What a change costs depends on the values, not on the option. Retro
+        // and PBR pick a resolve step per frame over targets that already
+        // exist, so the frame follows immediately and the live struct is
+        // written; crossing into or out of path tracing decides whether the
+        // tracer exists at all, so it is staged for Apply.
+        const bool live = chosen != graphics::RenderMode::PathTracing &&
+                          options.mode != graphics::RenderMode::PathTracing;
+        staged.mode = chosen;
+        if (live) {
+            options.mode = chosen;
+        }
+    }
+    // Written from the CURRENT pair rather than fixed, so the hint never
+    // promises a rebuild for a change that is instant, or the reverse.
+    if (staged.mode == graphics::RenderMode::PathTracing ||
+        options.mode == graphics::RenderMode::PathTracing) {
+        ImGui::TextDisabled("Path tracing is staged: it decides whether the tracer\nexists and what format the scene output carries, both\nfixed when the pipeline is built. Apply is at the\nbottom of this window.");
+    } else {
+        ImGui::TextDisabled("Retro and PBR switch on the next frame - a raster\npipeline carries both resolves and picks per frame.");
+    }
+    ImGui::TextDisabled("Primary visibility is rasterized in every mode; this\nselects who shades it. The anti-aliasing slot does not\nfollow the mode here - only --mode at startup defaults\nit - so set it yourself if you are comparing frames.");
+}
+
 void Editor::graphicsReapplySection() {
     auto &staged = _engine.stagedGraphicsOptions();
 
@@ -960,16 +998,6 @@ void Editor::graphicsReapplySection() {
     ImGui::TextUnformatted("Requires reapply");
     ImGui::Separator();
     ImGui::TextDisabled("These change what the pipeline allocates, so they are\nedited here and take effect on Apply, not as you drag.");
-
-    // The render mode is the reason this section can no longer be "targets":
-    // it decides whether the ray-query pipeline exists at all, and what format
-    // the scene output carries, both of which are fixed at construction.
-    static const char *kModeNames[] = {"Raster", "Path tracing"};
-    int modeIndex = staged.mode == "path-tracing" ? 1 : 0;
-    if (ImGui::Combo("Render mode", &modeIndex, kModeNames, IM_ARRAYSIZE(kModeNames))) {
-        staged.mode = modeIndex == 1 ? "path-tracing" : "raster";
-    }
-    ImGui::TextDisabled("Primary visibility is rasterized either way; this\nselects who shades it. The anti-aliasing slot does not\nfollow the mode here - only --mode at startup defaults\nit - so set it yourself if you are comparing frames.");
 
     static const struct {
         const char *name;

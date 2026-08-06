@@ -91,14 +91,28 @@ void VulkanRenderer::init() {
     _uniformRing.init(kFramesInFlight, 16u << 20);
     _descriptors.init(kFramesInFlight, _uniformRing);
     _pbrTextures.init();
-    // Installed builds carry the Slang source beside the executable. Keep the
-    // source-tree path as a development fallback so edits are picked up
-    // without rebuilding or copying files first.
-    if (auto *base = SDL_GetBasePath()) {
-        auto deployedSource = std::filesystem::path(base) / "slang";
-        SDL_free(const_cast<char *>(base));
-        if (std::filesystem::is_directory(deployedSource))
-            _shaderCompiler.setSourceDir(std::move(deployedSource));
+    // The source tree wins wherever it exists, so that editing a shader and
+    // asking for a recompile compiles the file that was edited. The build
+    // deposits a copy beside the executable, and preferring that copy is what
+    // made runtime recompilation appear not to work at all: the reload
+    // faithfully rebuilt a stale duplicate of every module, including the
+    // imported ones, and the frame never changed. An installed build has no
+    // source tree and takes the copy, which is what it is for.
+    bool sourceDirSet = false;
+#ifdef REONE_SHADER_SOURCE_DIR
+    std::filesystem::path shaderSource {REONE_SHADER_SOURCE_DIR};
+    if (std::filesystem::is_directory(shaderSource)) {
+        _shaderCompiler.setSourceDir(std::move(shaderSource));
+        sourceDirSet = true;
+    }
+#endif
+    if (!sourceDirSet) {
+        if (auto *base = SDL_GetBasePath()) {
+            auto deployedSource = std::filesystem::path(base) / "slang";
+            SDL_free(const_cast<char *>(base));
+            if (std::filesystem::is_directory(deployedSource))
+                _shaderCompiler.setSourceDir(std::move(deployedSource));
+        }
     }
     _shaderCompiler.init();
     _shaderCompiler.validateSchemas();

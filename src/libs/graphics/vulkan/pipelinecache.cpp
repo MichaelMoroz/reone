@@ -36,6 +36,7 @@ bool VulkanPipelineCache::Key::operator==(const Key &other) const {
     if (module != other.module ||
         vertexEntry != other.vertexEntry ||
         fragmentEntry != other.fragmentEntry ||
+        computeEntry != other.computeEntry ||
         depthFormat != other.depthFormat ||
         viewMask != other.viewMask ||
         blend != other.blend ||
@@ -74,6 +75,7 @@ size_t VulkanPipelineCache::KeyHash::operator()(const Key &key) const {
     };
     mix(std::hash<std::string> {}(key.vertexEntry));
     mix(std::hash<std::string> {}(key.fragmentEntry));
+    mix(std::hash<std::string> {}(key.computeEntry));
     for (auto format : key.colorFormats) {
         mix(static_cast<size_t>(format));
     }
@@ -114,26 +116,36 @@ VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
         module = _modules.insert({key.module, _moduleLoader(key.module)}).first;
     }
 
+    const bool compute = !key.computeEntry.empty();
     VulkanPipeline::Config config;
+    config.type = compute ? VulkanPipeline::Config::Type::Compute
+                          : VulkanPipeline::Config::Type::Graphics;
     config.spirv = module->second;
     config.vertexEntry = key.vertexEntry;
     config.fragmentEntry = key.fragmentEntry;
+    config.computeEntry = key.computeEntry;
     config.colorFormats = key.colorFormats;
     config.depthFormat = key.depthFormat;
     config.viewMask = key.viewMask;
     config.vertexBindings = key.vertexBindings;
     config.vertexAttributes = key.vertexAttributes;
+    // One layout shape for every cached pipeline, compute included. The fourth
+    // set is what a resolve writes through and reads the sky from; a pipeline
+    // that declares neither simply never binds it.
     config.descriptorSets = {{_descriptors.uniformLayout()},
                              {_descriptors.textureLayout()},
-                             {_descriptors.megaDrawLayout()}};
-    // Every cached graphics layout exposes the same tiny fragment range. This
-    // keeps layouts shared by sky/resolve valid while allowing the mega-draw
-    // shader to select the global triangle range without a per-draw buffer.
-    // Three words, not two: the sky composite carries the tracer's intensity,
-    // exposure and tonemap dials so one dial family drives both sky paths. A
-    // draw may fill less of the range than it declares, so mega-draw's two
-    // words are unaffected.
-    config.pushConstants = {{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 3 * sizeof(uint32_t)}};
+                             {_descriptors.megaDrawLayout()},
+                             {_descriptors.resolveLayout()}};
+    // Every cached layout exposes the same tiny range, in the one stage that
+    // pipeline has. This keeps layouts shared by sky/resolve valid while
+    // allowing the mega-draw shader to select the global triangle range without
+    // a per-draw buffer. Three words, not two: the sky bake carries the
+    // tracer's intensity, exposure and tonemap dials so one dial family drives
+    // both sky paths. A draw may fill less of the range than it declares, so
+    // mega-draw's two words are unaffected.
+    const VkShaderStageFlags pushStage = compute ? VK_SHADER_STAGE_COMPUTE_BIT
+                                                 : VK_SHADER_STAGE_FRAGMENT_BIT;
+    config.pushConstants = {{pushStage, 0, 3 * sizeof(uint32_t)}};
     config.blend = key.blend;
     config.cull = key.cull;
     config.depthTest = key.depthTest;
@@ -146,13 +158,14 @@ VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
     pipeline->init(config);
     // Named after the shaders it was built from, so a capture says which
     // program a draw used instead of a bare handle.
-    auto label = key.module + ":" + key.vertexEntry + "/" + key.fragmentEntry;
+    auto label = compute ? key.module + ":" + key.computeEntry
+                         : key.module + ":" + key.vertexEntry + "/" + key.fragmentEntry;
     _device.setObjectName(VK_OBJECT_TYPE_PIPELINE,
                           reinterpret_cast<uint64_t>(pipeline->handle()), label);
     _device.setObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
                           reinterpret_cast<uint64_t>(pipeline->layout()), label + " layout");
-    debug(str(boost::format("Vulkan: built pipeline %s:%s/%s (%d cached)") %
-              key.module % key.vertexEntry % key.fragmentEntry % (_pipelines.size() + 1)),
+    debug(str(boost::format("Vulkan: built pipeline %s (%d cached)") %
+              label % (_pipelines.size() + 1)),
           LogChannel::Graphics);
     return *_pipelines.insert({key, std::move(pipeline)}).first->second;
 }
@@ -162,6 +175,7 @@ PipelineBinding VulkanPipelineCache::get(const PipelineKey &key) {
     nativeKey.module = key.module;
     nativeKey.vertexEntry = key.vertexEntry;
     nativeKey.fragmentEntry = key.fragmentEntry;
+    nativeKey.computeEntry = key.computeEntry;
     nativeKey.viewMask = key.viewMask;
     nativeKey.blend = key.blend;
     nativeKey.depthTest = key.depthTest;

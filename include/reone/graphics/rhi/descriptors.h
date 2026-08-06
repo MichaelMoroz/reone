@@ -54,6 +54,9 @@ public:
     static constexpr int kNumUniformBlocks = 10;
     static constexpr int kUniformSet = 0;
     static constexpr int kTextureSet = 1;
+    static constexpr int kMegaDrawSet = 2;
+    /** The resolve set; see acquireResolveDescriptorSet. */
+    static constexpr int kResolveSet = 3;
 
     virtual DescriptorSet uniformDescriptorSet(int frame) const = 0;
     virtual DescriptorSet updateMegaDrawSet(int frame, const GpuScene::View &scene,
@@ -61,6 +64,23 @@ public:
     virtual DescriptorSet acquireTextureDescriptorSet(int frame, const IImage *mainTex) = 0;
     virtual DescriptorSet acquireTextureDescriptorSet(
         int frame, const std::vector<TextureBinding> &bindings) = 0;
+    /**
+     * The two bindings a resolve needs that its persistent texture table cannot
+     * hold: the image it writes, and this frame's sky cube.
+     *
+     * Both change from frame to frame for reasons the persistent set cannot
+     * express. The scene output and the tail target exchange identities every
+     * time a tail pass runs, so "the image the resolve writes" is not one image;
+     * and the sky cube is a view into whichever room was last baked, which a set
+     * written once at pipeline construction could never have named.
+     *
+     * @p output may be null - the retro resolve is a fragment pass and writes an
+     * attachment - in which case that binding is left unwritten, which the
+     * layout permits because nothing that omits it declares it.
+     */
+    virtual DescriptorSet acquireResolveDescriptorSet(int frame, const IImage *output,
+                                                      const IImage *skyCube,
+                                                      ImageView skyView) = 0;
     /** A texture table that remains fixed for the lifetime of a scene target. */
     virtual DescriptorSet createPersistentTextureSet(
         const std::vector<std::pair<int, const IImage *>> &bindings) = 0;

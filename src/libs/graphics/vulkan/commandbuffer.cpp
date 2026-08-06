@@ -125,6 +125,31 @@ void VulkanCommandBuffer::bindRayTracingPipeline(Pipeline pipeline) {
                       toVulkanPipeline(pipeline));
 }
 
+void VulkanCommandBuffer::bindComputePipeline(Pipeline pipeline) {
+    vkCmdBindPipeline(_commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      toVulkanPipeline(pipeline));
+}
+
+void VulkanCommandBuffer::bindComputeDescriptorSet(PipelineLayout layout, uint32_t index,
+                                                    DescriptorSet set,
+                                                    const uint32_t *dynamicOffsets,
+                                                    uint32_t dynamicOffsetCount) {
+    auto nativeSet = toVulkanDescriptorSet(set);
+    vkCmdBindDescriptorSets(_commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            toVulkanPipelineLayout(layout), index, 1, &nativeSet,
+                            dynamicOffsetCount, dynamicOffsets);
+}
+
+void VulkanCommandBuffer::pushComputeConstants(PipelineLayout layout, const void *data,
+                                                uint32_t size) {
+    vkCmdPushConstants(_commandBuffer, toVulkanPipelineLayout(layout),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, size, data);
+}
+
+void VulkanCommandBuffer::dispatchCompute(glm::uvec3 groups) {
+    vkCmdDispatch(_commandBuffer, groups.x, groups.y, groups.z);
+}
+
 void VulkanCommandBuffer::bindDescriptorSet(PipelineLayout layout, uint32_t index,
                                              DescriptorSet set,
                                              const uint32_t *dynamicOffsets,

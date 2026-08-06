@@ -192,11 +192,18 @@ float getPointLightShadow(float3 worldPos, float3 normal) {
     float3 fragToLight = offsetWorldPos - globalUniforms.shadowLightPosition.xyz;
     float currentDepth = length(fragToLight);
 
+    // Explicit level, like every other tap here. The PBR resolve is a compute
+    // dispatch and compute has no implicit derivatives, so an implicit-LOD
+    // sample makes Slang emit SPV_KHR_compute_shader_derivatives - a device
+    // feature this engine does not request, which the validation layers
+    // report and which is undefined behaviour where it is not supported.
+    // The map has no mip chain anyway, so level zero is what the implicit
+    // form resolved to.
     float shadow = 0.0;
     for (int i = 0; i < kNumPCFSamples; ++i) {
         float closestDepth = kPointShadowFar *
-                             sShadowMapCube.Sample(
-                                 fragToLight + kPCFSampleRadius * kPCFOffsets[i]).r;
+                             sShadowMapCube.SampleLevel(
+                                 fragToLight + kPCFSampleRadius * kPCFOffsets[i], 0.0).r;
         shadow += currentDepth > closestDepth ? 1.0 : 0.0;
     }
     shadow /= float(kNumPCFSamples);

@@ -85,7 +85,7 @@ static_assert(offsetof(InstanceMaterial, ambientColor) == 256);
 static_assert(offsetof(InstanceMaterial, envMapDerivedLayer) == 272);
 static_assert(sizeof(InstanceMaterial) == 288);
 
-/** Three row vectors encode a float3x4 exactly as skin.slang reads it. */
+/** Three row vectors encode a float3x4 exactly as scene_resolve.slang reads it. */
 struct alignas(16) Matrix3x4 {
     glm::vec4 row0 {1.0f, 0.0f, 0.0f, 0.0f};
     glm::vec4 row1 {0.0f, 1.0f, 0.0f, 0.0f};
@@ -93,7 +93,7 @@ struct alignas(16) Matrix3x4 {
 };
 static_assert(sizeof(Matrix3x4) == 48);
 
-/** std430-compatible canonical vertex used by skin.slang and consumers. */
+/** std430-compatible canonical vertex used by scene_resolve.slang and consumers. */
 struct alignas(16) MergedVertex {
     glm::vec3 position {0.0f};
     float positionPad {0.0f};

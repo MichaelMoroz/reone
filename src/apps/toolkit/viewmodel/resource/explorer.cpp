@@ -101,7 +101,7 @@ private:
 
 ResourceExplorerViewModel::ResourceExplorerViewModel() {
     _graphicsOpt.grass = false;
-    _graphicsOpt.pbr = false;
+    _graphicsOpt.mode = graphics::RenderMode::Retro;
     _graphicsOpt.ssao = false;
     _graphicsOpt.ssr = false;
     _graphicsOpt.antialiasing = graphics::AntiAliasing::None;

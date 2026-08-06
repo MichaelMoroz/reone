@@ -64,7 +64,7 @@ public struct InstanceMaterial {
     public int envMapDerivedLayer;
 };
 
-/** Three row vectors encode a float3x4 exactly as skin.slang reads it. */
+/** Three row vectors encode a float3x4 exactly as scene_resolve.slang reads it. */
 public struct Matrix3x4 {
     public float4 row0;
     public float4 row1;

@@ -46,8 +46,19 @@ enum class SceneStep {
     Geometry,
     PBRResolve,
     RetroResolve,
-    /** Between the resolve and transparency; see skyCompositePass. */
-    SkyComposite,
+    /**
+     * Screen-space reflections, over the image the PBR resolve produced.
+     *
+     * A step of its own rather than part of the resolve because a reflection
+     * lands on some other pixel: the dispatch has to read a finished image, and
+     * the resolve's own dispatch has not finished writing one. It sits ahead of
+     * the anti-aliasing slot because reflections belong to the opaque image a
+     * temporal resolve resolves, and ahead of transparency because nothing
+     * transparent is in the buffer it marches through.
+     *
+     * Appended only when the option is on, so off costs nothing at all.
+     */
+    ScreenSpaceReflections,
     Blended,
     /** The common tail, in this order and in every mode: the anti-aliasing
         slot resolves the opaque image, then transparency is drawn over the
@@ -181,6 +192,24 @@ private:
     DescriptorSet _resolveMaterialSet;
     GpuScene::View _mergedScene;
     bool _mergedScenePrepared {false};
+    /**
+     * This frame's sky, prepared before the resolve reads it.
+     *
+     * The bake records six cube-face passes on the frame a room changes, so it
+     * cannot happen inside a pass; the resolve is inside no pass either, but it
+     * is a consumer, so the bake runs once at the top of the frame and both
+     * resolves bind what it left.
+     */
+    SkyBinding _skyBinding;
+    /**
+     * The occlusion kernel, in tangent space, generated once.
+     *
+     * Deterministic rather than drawn from the render random stream: a kernel
+     * that differed between runs - or between one graphics rebuild and the
+     * next - would make two captures of the same frame differ for a reason that
+     * is not the renderer.
+     */
+    std::array<glm::vec4, kNumSSAOSamples> _ssaoKernel {};
 
     struct Preview {
         std::unique_ptr<IImage> image;
@@ -209,14 +238,17 @@ private:
     void geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                       ISceneCallbacks &callbacks);
     void retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
-    /** V2: the sky, composited where the geometry pass left the far plane. */
-    void skyCompositePass(ICommandBuffer &cmd, uint32_t globalsOffset,
-                          ISceneCallbacks &callbacks);
     /** G8: the transparent surfaces the G-buffer deliberately leaves out,
         drawn forward onto the resolved image in submission order. */
     void blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                      ISceneCallbacks &callbacks);
     void pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    /** A second dispatch over the resolved image; see SceneStep. */
+    void screenSpaceReflectionPass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    /** The two bindings a resolve cannot hold in its persistent table. */
+    DescriptorSet resolveSet(IImage *output);
+    /** Word zero of the resolve push constants, from this frame's state. */
+    uint32_t resolveFlags() const;
     /** The common anti-aliasing slot; the option selects the occupant. */
     void antiAliasingPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** The temporal occupant of that slot, reprojecting through the G-buffer. */

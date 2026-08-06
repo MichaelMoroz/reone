@@ -39,8 +39,8 @@ namespace reone::graphics {
 namespace {
 
 constexpr const char *kModules[] = {
-    "megadraw", "sky", "pbr_ibl", "pbr_resolve", "retro_resolve",
-    "rayquery", "nrd_composite", "skin", "postprocess", "vk2d"};
+    "scene_draw", "sky", "pbr_ibl", "pbr_resolve", "retro_resolve",
+    "path_trace", "nrd_resolve", "scene_resolve", "postprocess", "vk2d"};
 
 const char *parameterCategoryName(slang::ParameterCategory category) {
     switch (category) {

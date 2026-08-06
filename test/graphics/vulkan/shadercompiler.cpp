@@ -30,8 +30,8 @@ namespace reone::graphics {
 TEST(SlangShaderCompiler, compiles_engine_modules_and_validates_schemas) {
     SlangShaderCompiler compiler {REONE_SHADER_SOURCE_DIR};
     compiler.init();
-    EXPECT_FALSE(compiler.module("megadraw").empty());
-    EXPECT_FALSE(compiler.module("rayquery").empty());
+    EXPECT_FALSE(compiler.module("scene_draw").empty());
+    EXPECT_FALSE(compiler.module("path_trace").empty());
     EXPECT_TRUE(compiler.recompileAll());
     EXPECT_NO_THROW(compiler.validateSchemas());
     compiler.deinit();
@@ -40,7 +40,7 @@ TEST(SlangShaderCompiler, compiles_engine_modules_and_validates_schemas) {
 TEST(SlangShaderCompiler, preserves_unbounded_descriptor_arrays) {
     SlangShaderCompiler compiler {REONE_SHADER_SOURCE_DIR};
     compiler.init();
-    const auto reflection = compiler.reflection("rayquery");
+    const auto reflection = compiler.reflection("path_trace");
     EXPECT_EQ(reflection.stage, ShaderStage::RayGeneration);
     const auto find = [&reflection](const char *name) {
         return std::find_if(reflection.bindings.begin(), reflection.bindings.end(),
@@ -136,12 +136,12 @@ TEST(SlangShaderCompiler, retains_a_last_good_module_after_a_source_error) {
     TemporaryShaderSources sources;
     SlangShaderCompiler compiler {sources.path()};
     compiler.init();
-    const auto lastGood = compiler.module("megadraw");
+    const auto lastGood = compiler.module("scene_draw");
 
     std::ofstream {sources.path() / "lib" / "scene_schema.slang", std::ios::app}
         << "\nthis is deliberately invalid Slang\n";
 
-    const auto &retained = compiler.module("megadraw");
+    const auto &retained = compiler.module("scene_draw");
     EXPECT_EQ(retained, lastGood);
     compiler.deinit();
 }
@@ -150,9 +150,9 @@ TEST(SlangShaderCompiler, recompiles_a_changed_module_at_runtime) {
     TemporaryShaderSources sources;
     SlangShaderCompiler compiler {sources.path()};
     compiler.init();
-    const auto before = compiler.module("megadraw");
+    const auto before = compiler.module("scene_draw");
 
-    const auto shaderPath = sources.path() / "megadraw.slang";
+    const auto shaderPath = sources.path() / "scene_draw.slang";
     std::ifstream input(shaderPath);
     std::string shader {std::istreambuf_iterator<char> {input}, {}};
     const auto needle = "static const uint kMegaFeatureLightmap = 1u << 0;";
@@ -165,7 +165,7 @@ TEST(SlangShaderCompiler, recompiles_a_changed_module_at_runtime) {
     std::ofstream {shaderPath, std::ios::trunc} << shader;
 
     EXPECT_TRUE(compiler.recompileAll());
-    EXPECT_NE(compiler.module("megadraw"), before);
+    EXPECT_NE(compiler.module("scene_draw"), before);
     compiler.deinit();
 }
 
