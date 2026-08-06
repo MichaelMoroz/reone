@@ -98,19 +98,28 @@ private:
     std::string _materialEditNode;
     scene::CuratedMaterial _materialEdit;
 
+    /**
+     * One window for every graphics dial, traced or not.
+     *
+     * The split into a separate path-tracing panel stopped describing the
+     * engine: the display transform is one common pass across the modes, and
+     * the category overrides edit the shared material records the raster PBR
+     * resolve reads too. What remains genuinely traced-only is a section, not
+     * a window.
+     */
     void graphicsSettings();
     bool _showGraphicsSettings {false};
     bool _freeCameraUnavailable {false};
 
-    void pathTracingSettings();
-    bool _showPathTracing {false};
     int _pendingWidth {0};
     int _pendingHeight {0};
     int _pendingShadowResolution {0};
     bool _pendingVsync {true};
-    /** Staged until Apply: the upscaler is built in the pipeline's init. */
-    bool _pendingFsr {true};
-    bool _pendingFsrInitialized {false};
+    /** Staged until Apply: a temporal slot is built in the pipeline's init,
+        so the choice cannot change inside a frame. Held as the enum's integer
+        because that is what the combo edits. */
+    int _pendingAntiAliasing {0};
+    bool _pendingAntiAliasingInitialized {false};
     std::string _settingsSaveStatus;
     bool _settingsSaveSucceeded {false};
 

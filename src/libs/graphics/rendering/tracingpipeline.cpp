@@ -81,8 +81,11 @@ void TracingPipeline::init() {
             Format::R16G16B16A16Sfloat, // motion
             Format::R16G16B16A16Sfloat, // noise-free
             Format::R16G16B16A16Sfloat, // diffuse material factor
-            Format::R32Sfloat,          // device depth, for the upscaler
-            Format::R16G16B16A16Sfloat, // screen-space motion, for the upscaler
+            // Diagnostics only since the upscaler moved to the common tail and
+            // took its guides from the G-buffer instead. Kept because they are
+            // the traced counterparts the G-buffer pair is compared against.
+            Format::R32Sfloat,          // device depth
+            Format::R16G16B16A16Sfloat, // screen-space motion
             Format::R16G16B16A16Sfloat, // specular material factor
             Format::R8G8B8A8Unorm,      // canonical raster/tracer diffuse
             Format::R8G8B8A8Unorm,      // canonical packed eye normal
@@ -117,28 +120,6 @@ void TracingPipeline::init() {
         }
     }
 #endif
-#ifdef R_ENABLE_FSR
-    if (_options.ptFsr) {
-        // Both at render resolution: NativeAA does not change the size, and the
-        // composite/tonemap pair either side of FSR work on the same grid.
-        _fsrColor = _renderer.resources().makeImage();
-        _fsrColor->initColorAttachment(_extent, Format::R16G16B16A16Sfloat);
-        _fsrOutput = _renderer.resources().makeImage();
-        _fsrOutput->initColorAttachment(_extent, Format::R16G16B16A16Sfloat);
-
-        _tonemapPipeline = _renderer.makeComputePipeline({"pt_tonemap", "main", 2});
-        _tonemapBindings = _tonemapPipeline->resolveBindings({"outputImage", "inColor"});
-
-        try {
-            _fsr = _renderer.makeTracingUpscaler(_extent);
-        } catch (const std::exception &e) {
-            // Losing the upscaler must not lose the frame; it costs the
-            // anti-aliasing, since FSR is the only temporal resolve left.
-            warn(std::string("FSR unavailable, rendering without anti-aliasing: ") + e.what());
-            _fsr.reset();
-        }
-    }
-#endif
     _inited = true;
 }
 
@@ -156,7 +137,6 @@ void TracingPipeline::deinit() {
 #ifdef R_ENABLE_NRD
     _compositePipeline.reset();
     _compositeBindings.clear();
-    _temporalHistoryValid = false;
     _nrdDenoiser.reset();
 #endif
     _pipeline.reset();
@@ -164,15 +144,6 @@ void TracingPipeline::deinit() {
         for (auto &image : frame)
             image.reset();
     }
-#ifdef R_ENABLE_FSR
-    // Before the device goes: the upscaler owns native objects of its own, and
-    // the two images own VMA allocations that must not outlive the allocator.
-    _fsr.reset();
-    _fsrColor.reset();
-    _fsrOutput.reset();
-    _tonemapPipeline.reset();
-    _tonemapBindings.clear();
-#endif
     _bindlessTextureCapacity = 0;
     _lastBindlessTextureCount = 0;
     _lastAuxFrame = -1;
@@ -181,9 +152,6 @@ void TracingPipeline::deinit() {
 
 void TracingPipeline::restartTemporalHistory() {
     _restartHistoryRequested = true;
-#ifdef R_ENABLE_NRD
-    _temporalHistoryValid = false;
-#endif
 }
 
 std::vector<TracingChannel> TracingPipeline::channels() const {
@@ -320,7 +288,7 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
     // and a zero would divide the accumulated radiance by zero.
     TracePushConstants constants {frameNumber,
                                   static_cast<uint32_t>(std::max(1, _options.pathTracingSamples)),
-                                  std::max(0.0f, _options.ptSkyIntensity),
+                                  std::max(0.0f, _options.skyIntensity),
                                   std::max(0.0f, _options.ptEmissiveIntensity),
                                   std::max(0.0f, _options.ptLightmapIntensity),
                                   std::max(0.0f, _options.ptDirectIntensity),
@@ -328,11 +296,11 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                                   std::max(0.0f, _options.ptSunIntensity),
                                   (_options.ptTraceStats ? 1u : 0u) |
                                       (static_cast<uint32_t>(std::clamp(_options.ptDebugView, 0, 12)) << 4) |
-                                      (static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)) << 8),
+                                      (static_cast<uint32_t>(std::clamp(_options.tonemap, 0, 1)) << 8),
                                   static_cast<uint32_t>(std::clamp(_options.ptBounces, 1, 8)),
                                   std::clamp(_options.ptPointEmitterRatio, 0.01f, 0.5f),
                                   glm::radians(std::clamp(_options.ptSunAngularSize, 0.05f, 10.0f)),
-                                  std::max(0.01f, _options.ptExposure),
+                                  std::max(0.01f, _options.exposure),
                                   0,
                                   scene.opaqueTriangleCount,
                                   sky.baked ? 1u : 0u};
@@ -386,40 +354,19 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
         _nrdDenoiser->denoise(commandBuffer, _renderer.frameIndex(), inputs, tuning, view, unjitteredProjection,
                                jitterPixels, frameNumber, restartHistory);
         if (_options.ptDenoise && _options.ptDebugView == 0) {
-            // The noise-free history resets whenever NRD's would: first
-            // frame, or a teleport-sized camera jump.
-            const auto cameraPosition = glm::vec3(glm::inverse(view)[3]);
-            if (frameNumber == 0 ||
-                glm::distance(cameraPosition, _prevCameraPosition) > 20.0f) {
-                _temporalHistoryValid = false;
-            }
-            _prevCameraPosition = cameraPosition;
-            const bool temporalReset = !_temporalHistoryValid;
-
             // The assembly from denoised channels, overwriting the trace
             // kernel's own write. Debug views keep the kernel's output.
-            // History ping-pong: the frame at index i reads what the previous
-            // frame (index 1-i) wrote into slot i, and writes slot 1-i.
-            // With FSR the composite hands off linear HDR to the upscaler
-            // instead of writing the finished frame; the display transform
-            // happens after, in pt_tonemap.
-            bool fsrActive = false;
-#ifdef R_ENABLE_FSR
-            fsrActive = static_cast<bool>(_fsr);
-#endif
-            ImageView compositeTarget = output.sampleView();
-#ifdef R_ENABLE_FSR
-            if (fsrActive) {
-                commandBuffer.transitionImage(*_fsrColor, ImageLayout::General);
-                commandBuffer.transitionImage(*_fsrOutput, ImageLayout::General);
-                compositeTarget = _fsrColor->sampleView();
-            }
-#endif
-            // Motion is not among them: it existed only for the removed TAA's
-            // reprojection. NRD still consumes it directly.
+            //
+            // It writes the scene output directly and stops at linear HDR. The
+            // temporal resolve and the display transform both live in the
+            // common tail now, so this pass no longer has to know whether
+            // either of them is running.
+            //
+            // Motion is not among the bindings: it existed only for the removed
+            // TAA's reprojection. NRD still consumes it directly.
             constexpr uint32_t kCompositeBindings = 9;
             const std::array<ComputeBinding, kCompositeBindings> compositeBindings {{
-                {_compositeBindings[0], compositeTarget},
+                {_compositeBindings[0], output.sampleView()},
                 {_compositeBindings[1], aux[5]->sampleView()},
                 {_compositeBindings[2], aux[6]->sampleView()},
                 {_compositeBindings[3], aux[9]->sampleView()},
@@ -429,80 +376,11 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                 {_compositeBindings[7], aux[0]->sampleView()},
                 {_compositeBindings[8], aux[1]->sampleView()},
             }};
-            struct CompositePush {
-                uint32_t tonemap;
-                float exposure;
-                uint32_t linearOutput;
-            } compositePush {static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)),
-                             std::max(0.01f, _options.ptExposure),
-                             fsrActive ? 1u : 0u};
             commandBuffer.dispatch(*_compositePipeline,
                                    {static_cast<uint32_t>((_extent.x + 7) / 8),
                                     static_cast<uint32_t>((_extent.y + 7) / 8), 1},
                                    {compositeBindings.data(),
-                                    static_cast<uint32_t>(compositeBindings.size())},
-                                   nullptr,
-                                   &compositePush, sizeof(compositePush));
-            _temporalHistoryValid = true;
-#ifdef R_ENABLE_FSR
-            if (fsrActive) {
-                // Composite writes, FSR reads. FSR's backend barriers its own
-                // internal resources but not ours, so the handoff is ours.
-                commandBuffer.imageBarrier(*_fsrColor, ImageUse::ComputeStore,
-                                           ImageUse::ComputeRead);
-
-                TracingUpscalerInputs fsrInputs;
-                fsrInputs.color = _fsrColor.get();
-                fsrInputs.depth = aux[7].get();
-                fsrInputs.motion = aux[8].get();
-                fsrInputs.output = _fsrOutput.get();
-                // The same sub-pixel offset NRD is given: FSR's jitter
-                // convention and ours already agree, both being a pixel-space
-                // Halton(2,3) with y negated for the UV-down axis.
-                const float verticalFov =
-                    2.0f * std::atan(1.0f / std::max(1e-4f, projection[1][1]));
-                // Read the planes back out of the native projection
-                // rather than plumbing them down: unprojecting both ends of
-                // the depth range avoids depending on its coefficient layout.
-                const glm::mat4 projectionInv = glm::inverse(projection);
-                const glm::vec4 nearH = projectionInv * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-                const glm::vec4 farH = projectionInv * glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
-                const float cameraNear = std::abs(nearH.z / nearH.w);
-                const float cameraFar = std::abs(farH.z / farH.w);
-                _fsr->dispatch(commandBuffer, fsrInputs, jitterPixels, 1.0f / 60.0f,
-                               cameraNear, cameraFar, verticalFov, _options.ptFsrSharpness,
-                                frameNumber == 0 || temporalReset);
-
-                // The backend deliberately leaves its inputs ready for sampled
-                // reads. The trace and composite passes write these images as
-                // storage images again on the next frame, so restore GENERAL.
-                commandBuffer.imageBarrier(*_fsrColor, ImageUse::ComputeSample,
-                                           ImageUse::ComputeStore);
-                commandBuffer.imageBarrier(*aux[7], ImageUse::ComputeSample,
-                                           ImageUse::ComputeStore);
-                commandBuffer.imageBarrier(*aux[8], ImageUse::ComputeSample,
-                                           ImageUse::ComputeStore);
-                commandBuffer.imageBarrier(*_fsrOutput, ImageUse::ComputeStore,
-                                           ImageUse::ComputeStorageRead);
-
-                const std::array<ComputeBinding, 2> tonemapBindings {{
-                    {_tonemapBindings[0], output.sampleView()},
-                    {_tonemapBindings[1], _fsrOutput->sampleView()},
-                }};
-                struct TonemapPush {
-                    uint32_t tonemap;
-                    float exposure;
-                } tonemapPush {static_cast<uint32_t>(std::clamp(_options.ptTonemap, 0, 1)),
-                               std::max(0.01f, _options.ptExposure)};
-                commandBuffer.dispatch(*_tonemapPipeline,
-                                       {static_cast<uint32_t>((_extent.x + 7) / 8),
-                                        static_cast<uint32_t>((_extent.y + 7) / 8), 1},
-                                       {tonemapBindings.data(),
-                                        static_cast<uint32_t>(tonemapBindings.size())},
-                                       nullptr,
-                                       &tonemapPush, sizeof(tonemapPush));
-            }
-#endif
+                                    static_cast<uint32_t>(compositeBindings.size())});
         }
     }
 #endif

@@ -18,6 +18,8 @@
 #include "optionsparser.h"
 
 #include <algorithm>
+#include <stdexcept>
+#include <string>
 
 #include "reone/system/types.h"
 
@@ -29,6 +31,37 @@ using namespace reone::graphics;
 namespace reone {
 
 static constexpr char kConfigFilename[] = "reone.cfg";
+
+/** The written form of the anti-aliasing slot, as reone.cfg stores it. */
+static const char *antiAliasingName(AntiAliasing value) {
+    switch (value) {
+    case AntiAliasing::Fxaa:
+        return "fxaa";
+    case AntiAliasing::Fsr:
+        return "fsr";
+    default:
+        return "off";
+    }
+}
+
+/**
+ * A misspelt mode is rejected rather than silently taken as none: the slot
+ * changes what every frame looks like, and a typo that quietly disables
+ * anti-aliasing is indistinguishable from the engine ignoring the flag.
+ */
+static AntiAliasing parseAntiAliasing(const std::string &value) {
+    if (value == "off" || value == "none") {
+        return AntiAliasing::None;
+    }
+    if (value == "fxaa") {
+        return AntiAliasing::Fxaa;
+    }
+    if (value == "fsr") {
+        return AntiAliasing::Fsr;
+    }
+    throw std::invalid_argument("Unknown anti-aliasing mode '" + value +
+                                "'; expected off, fxaa or fsr");
+}
 
 std::unique_ptr<Options> OptionsParser::parse() {
     auto options = std::make_unique<Options>();
@@ -70,7 +103,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("admissionshadow", value<bool>()->default_value(false), "compare incremental and full scene admission every frame") //
         ("admissionforcefull", value<bool>()->default_value(false), "force full scene collection and classification")        //
         ("ptspp", value<int>()->default_value(options->graphics.pathTracingSamples), "path tracing samples per pixel")          //
-        ("ptskyintensity", value<float>()->default_value(options->graphics.ptSkyIntensity), "path tracing sky intensity")       //
+        ("skyintensity", value<float>()->default_value(options->graphics.skyIntensity), "sky light intensity")                //
         ("ptemissiveintensity", value<float>()->default_value(options->graphics.ptEmissiveIntensity), "path tracing emissive intensity") //
         ("ptlightmapintensity", value<float>()->default_value(options->graphics.ptLightmapIntensity), "path tracing lightmap intensity") //
         ("ptdirectintensity", value<float>()->default_value(options->graphics.ptDirectIntensity), "path tracing direct-light intensity") //
@@ -78,16 +111,18 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ptbounces", value<int>()->default_value(options->graphics.ptBounces), "path tracing bounces")                       //
         ("ptrayoffset", value<float>()->default_value(options->graphics.ptRayOffset), "path tracing ray origin offset")        //
         ("pttracestats", value<bool>()->default_value(options->graphics.ptTraceStats), "enable path tracing statistics")       //
-        ("pttonemap", value<int>()->default_value(options->graphics.ptTonemap), "path tracing display transform")              //
-        ("ptexposure", value<float>()->default_value(options->graphics.ptExposure), "path tracing exposure")                   //
+        ("tonemap", value<int>()->default_value(options->graphics.tonemap), "display transform: 0 off, 1 ACES")               //
+        ("exposure", value<float>()->default_value(options->graphics.exposure), "scene-referred exposure ahead of the tonemap") //
         ("ptpointemitterratio", value<float>()->default_value(options->graphics.ptPointEmitterRatio), "path tracing point-light emitter radius, as a fraction of influence radius") //
         ("ptsunangularsize", value<float>()->default_value(options->graphics.ptSunAngularSize), "path tracing sun angular size") //
         ("lightmaps", value<bool>()->default_value(options->graphics.lightmaps), "apply lightmaps (diagnostic toggle)")        //
         ("ssao", value<bool>()->default_value(options->graphics.ssao), "enable screen-space ambient occlusion")                 //
         ("ssr", value<bool>()->default_value(options->graphics.ssr), "enable screen-space reflections")                         //
-        ("fxaa", value<bool>()->default_value(options->graphics.fxaa), "enable anti-aliasing")                                  //
+        ("antialiasing", value<std::string>()->default_value(antiAliasingName(options->graphics.antialiasing)),
+         "anti-aliasing in the common slot: off, fxaa or fsr; defaults per render mode")                                       //
+        ("post", value<bool>()->default_value(options->graphics.post), "enable the post-process pass")                          //
         ("sharpen", value<bool>()->default_value(options->graphics.sharpen), "enable image sharpening")                         //
-        ("taajitter", value<bool>()->default_value(options->graphics.taaJitter), "enable sub-pixel projection jitter")          //
+        ("taajitter", value<std::string>()->default_value("auto"), "sub-pixel projection jitter: auto|on|off (auto follows the temporal resolver)") //
         ("ptdenoise", value<bool>()->default_value(options->graphics.ptDenoise), "enable the path tracing denoiser")           //
         ("ptdebugview", value<int>()->default_value(options->graphics.ptDebugView),
          "path tracing debug view, 0 off")                                                                                //
@@ -117,9 +152,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
          "REBLUR disocclusion threshold")                                                                                     //
         ("ptnrdantifirefly", value<bool>()->default_value(options->graphics.ptNrdAntiFirefly),
          "enable REBLUR anti-firefly")                                                                                        //
-        ("ptfsr", value<bool>()->default_value(options->graphics.ptFsr),
-         "anti-alias with FidelityFX Super Resolution at NativeAA")                                           //
-        ("ptfsrsharpness", value<float>()->default_value(options->graphics.ptFsrSharpness),
+        ("fsrsharpness", value<float>()->default_value(options->graphics.fsrSharpness),
          "FSR RCAS sharpening, 0 disables the pass")                                                                          //
         ("texquality", value<int>()->default_value(static_cast<int>(options->graphics.textureQuality)), "texture quality")      //
         ("shadowres", value<int>()->default_value(glm::log2(options->graphics.shadowResolution) - 10), "shadow map resolution") //
@@ -134,18 +167,18 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("logch", value<int>()->default_value(defaultLogChannels), "log channel mask");
 
     for (int i = 0; i < 9; ++i) {
-        auto &override = options->graphics.ptCategoryOverrides[i];
-        auto key = "ptcat" + std::to_string(i);
+        auto &override = options->graphics.categoryOverrides[i];
+        auto key = "cat" + std::to_string(i);
         descCommon.add_options()                                                                                               //
-            ((key + "color0").c_str(), value<float>()->default_value(override.color[0]), "path tracing category color red")   //
-            ((key + "color1").c_str(), value<float>()->default_value(override.color[1]), "path tracing category color green") //
-            ((key + "color2").c_str(), value<float>()->default_value(override.color[2]), "path tracing category color blue")  //
-            ((key + "colorweight").c_str(), value<float>()->default_value(override.colorWeight), "path tracing category color weight") //
-            ((key + "roughness").c_str(), value<float>()->default_value(override.roughness), "path tracing category roughness") //
-            ((key + "roughnessscale").c_str(), value<float>()->default_value(override.roughnessScale), "path tracing category roughness scale") //
-            ((key + "emission").c_str(), value<float>()->default_value(override.emissionScale), "path tracing category emission scale") //
-            ((key + "env").c_str(), value<float>()->default_value(override.envScale), "path tracing category environment scale") //
-            ((key + "metallic").c_str(), value<float>()->default_value(override.metallicScale), "path tracing category metallic scale");
+            ((key + "color0").c_str(), value<float>()->default_value(override.color[0]), "material category color red")   //
+            ((key + "color1").c_str(), value<float>()->default_value(override.color[1]), "material category color green") //
+            ((key + "color2").c_str(), value<float>()->default_value(override.color[2]), "material category color blue")  //
+            ((key + "colorweight").c_str(), value<float>()->default_value(override.colorWeight), "material category color weight") //
+            ((key + "roughness").c_str(), value<float>()->default_value(override.roughness), "material category roughness") //
+            ((key + "roughnessscale").c_str(), value<float>()->default_value(override.roughnessScale), "material category roughness scale") //
+            ((key + "emission").c_str(), value<float>()->default_value(override.emissionScale), "material category emission scale") //
+            ((key + "env").c_str(), value<float>()->default_value(override.envScale), "material category environment scale") //
+            ((key + "metallic").c_str(), value<float>()->default_value(override.metallicScale), "material category metallic scale");
     }
 
     options_description descCmdLine {"Usage"};
@@ -190,7 +223,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.admissionShadow = vars["admissionshadow"].as<bool>();
     options->graphics.admissionForceFull = vars["admissionforcefull"].as<bool>();
     options->graphics.pathTracingSamples = std::max(1, vars["ptspp"].as<int>());
-    options->graphics.ptSkyIntensity = vars["ptskyintensity"].as<float>();
+    options->graphics.skyIntensity = vars["skyintensity"].as<float>();
     options->graphics.ptEmissiveIntensity = vars["ptemissiveintensity"].as<float>();
     options->graphics.ptLightmapIntensity = vars["ptlightmapintensity"].as<float>();
     options->graphics.ptDirectIntensity = vars["ptdirectintensity"].as<float>();
@@ -198,16 +231,44 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptBounces = std::clamp(vars["ptbounces"].as<int>(), 1, 8);
     options->graphics.ptRayOffset = std::max(0.0001f, vars["ptrayoffset"].as<float>());
     options->graphics.ptTraceStats = vars["pttracestats"].as<bool>();
-    options->graphics.ptTonemap = std::clamp(vars["pttonemap"].as<int>(), 0, 1);
-    options->graphics.ptExposure = std::max(0.05f, vars["ptexposure"].as<float>());
+    options->graphics.tonemap = std::clamp(vars["tonemap"].as<int>(), 0, 1);
+    options->graphics.exposure = std::max(0.05f, vars["exposure"].as<float>());
     options->graphics.ptPointEmitterRatio = std::clamp(vars["ptpointemitterratio"].as<float>(), 0.01f, 0.5f);
     options->graphics.ptSunAngularSize = std::max(0.05f, vars["ptsunangularsize"].as<float>());
     options->graphics.lightmaps = vars["lightmaps"].as<bool>();
     options->graphics.ssao = vars["ssao"].as<bool>();
     options->graphics.ssr = vars["ssr"].as<bool>();
-    options->graphics.fxaa = vars["fxaa"].as<bool>();
+    // Resolved here, where the render mode is also known, so that nothing
+    // deeper has to ask again: below this point the option says what the slot
+    // runs, full stop. A traced frame is noisy and carries the motion a
+    // temporal resolve wants, so it takes FSR; raster keeps the cheap spatial
+    // filter it has always had. An explicit flag always wins.
+    if (vars["antialiasing"].defaulted()) {
+        options->graphics.antialiasing = options->graphics.mode == "path-tracing"
+                                             ? AntiAliasing::Fsr
+                                             : AntiAliasing::Fxaa;
+    } else {
+        options->graphics.antialiasing =
+            parseAntiAliasing(vars["antialiasing"].as<std::string>());
+    }
+    options->graphics.post = vars["post"].as<bool>();
     options->graphics.sharpen = vars["sharpen"].as<bool>();
-    options->graphics.taaJitter = vars["taajitter"].as<bool>();
+    {
+        // The parser only names the policy; the decision lives at the point
+        // of use (SceneGraph::computeJitter), where it follows the active
+        // resolver even across a runtime AA switch. 1/0 stay accepted for
+        // the capture harness's existing --taajitter 0 invocations.
+        const auto &jitter = vars["taajitter"].as<std::string>();
+        if (jitter == "auto") {
+            options->graphics.taaJitter = JitterMode::Auto;
+        } else if (jitter == "on" || jitter == "1") {
+            options->graphics.taaJitter = JitterMode::On;
+        } else if (jitter == "off" || jitter == "0") {
+            options->graphics.taaJitter = JitterMode::Off;
+        } else {
+            throw std::invalid_argument("Invalid taajitter mode: " + jitter);
+        }
+    }
     options->graphics.ptDenoise = vars["ptdenoise"].as<bool>();
     options->graphics.ptDebugView = std::clamp(vars["ptdebugview"].as<int>(), 0, 12);
     options->graphics.ptNrdMaxStabilizedFrames = std::max(0, vars["ptnrdstabilized"].as<int>());
@@ -223,25 +284,15 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptNrdPlaneDistanceSensitivity = std::max(0.0f, vars["ptnrdplanedistancesensitivity"].as<float>());
     options->graphics.ptNrdDisocclusionThreshold = std::max(0.0f, vars["ptnrddisocclusionthreshold"].as<float>());
     options->graphics.ptNrdAntiFirefly = vars["ptnrdantifirefly"].as<bool>();
-    options->graphics.ptFsr = vars["ptfsr"].as<bool>();
-    options->graphics.ptFsrSharpness = std::clamp(vars["ptfsrsharpness"].as<float>(), 0.0f, 1.0f);
-#ifdef R_ENABLE_NRD
-    // Jitter feeds NRD's temporal accumulation, and the tracer picks it up
-    // through the jittered projection for free. On by default for path
-    // tracing in NRD builds - deliberately, it changes every screenshot -
-    // while an explicit --taajitter flag still wins.
-    if (vars["mode"].as<std::string>() == "path-tracing" && vars["taajitter"].defaulted()) {
-        options->graphics.taaJitter = true;
-    }
-#endif
+    options->graphics.fsrSharpness = std::clamp(vars["fsrsharpness"].as<float>(), 0.0f, 1.0f);
     options->graphics.textureQuality = static_cast<TextureQuality>(vars["texquality"].as<int>());
     options->graphics.shadowResolution = 1 << (10 + vars["shadowres"].as<int>());
     options->graphics.shadowOpacity = vars["shadowopacity"].as<float>();
     options->graphics.anisotropicFiltering = vars["anisofilter"].as<int>();
     options->graphics.drawDistance = vars["drawdist"].as<float>();
     for (int i = 0; i < 9; ++i) {
-        auto &override = options->graphics.ptCategoryOverrides[i];
-        auto key = "ptcat" + std::to_string(i);
+        auto &override = options->graphics.categoryOverrides[i];
+        auto key = "cat" + std::to_string(i);
         override.color[0] = vars[key + "color0"].as<float>();
         override.color[1] = vars[key + "color1"].as<float>();
         override.color[2] = vars[key + "color2"].as<float>();

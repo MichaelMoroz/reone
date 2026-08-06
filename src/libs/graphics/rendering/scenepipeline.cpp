@@ -32,6 +32,8 @@
 #include "reone/graphics/rhi/uniformring.h"
 #include "reone/system/logutil.h"
 
+#include <algorithm>
+#include <cmath>
 #include <string_view>
 
 using namespace reone::graphics;
@@ -45,6 +47,20 @@ static constexpr char kPostProcessModule[] = "postprocess";
 struct MegaDrawPushConstants {
     uint32_t triangleBase;
     uint32_t materialGated;
+};
+
+/** The shadow pass's third word: which categories may write the map. */
+struct ShadowPushConstants {
+    uint32_t triangleBase;
+    uint32_t materialGated;
+    uint32_t casterCategories;
+};
+
+/** Mirrors PostProcessPushConstants in postprocess.slang. */
+struct PostProcessPushConstants {
+    uint32_t transform;
+    float exposure;
+    uint32_t tonemap;
 };
 
 ScenePipeline::ScenePipeline(glm::ivec2 targetSize,
@@ -79,8 +95,16 @@ void ScenePipeline::init() {
     _gbuffer = std::make_unique<GBuffer>(_renderer);
     _gbuffer->init(_targetSize);
 
+    // The raster modes resolve straight into display-space bytes, so their
+    // output keeps the swapchain's format and the tail is byte-exact over it.
+    // The traced mode hands linear HDR to the display transform, which an
+    // 8-bit unorm would clamp before the tonemap ever sees it.
+    const Format outputFormat = _primaryRayMode ? Format::R16G16B16A16Sfloat
+                                                : _renderer.sceneOutputFormat();
     _output = _renderer.resources().makeImage();
-    _output->initColorAttachment(_targetSize, _renderer.sceneOutputFormat());
+    _output->initColorAttachment(_targetSize, outputFormat);
+    _tailColor = _renderer.resources().makeImage();
+    _tailColor->initColorAttachment(_targetSize, outputFormat);
 
     auto colorSampler = _renderer.resources().sampler(
         getTextureProperties(TextureUsage::ColorBuffer));
@@ -91,6 +115,7 @@ void ScenePipeline::init() {
     materialIdProperties.magFilter = Texture::Filtering::Nearest;
     auto materialIdSampler = _renderer.resources().sampler(materialIdProperties);
     _output->setSampler(colorSampler);
+    _tailColor->setSampler(colorSampler);
     _gbuffer->setSamplers(colorSampler, depthSampler, materialIdSampler);
 
     if (!_primaryRayMode) {
@@ -152,7 +177,32 @@ void ScenePipeline::init() {
 
     _renderer.immediateSubmit([this](ICommandBuffer &cmd) {
         cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+        cmd.transitionImage(*_tailColor, ImageLayout::ShaderRead);
     });
+
+    if (_options.antialiasing == AntiAliasing::Fsr) {
+        try {
+            // The colour it will resolve is linear only in the traced mode;
+            // every raster resolve hands it display-referred bytes.
+            _upscaler = _renderer.makeUpscaler(_targetSize, _primaryRayMode);
+        } catch (const std::exception &e) {
+            warn(std::string("Upscaler unavailable, the anti-aliasing slot is empty: ") + e.what(),
+                 LogChannel::Graphics);
+            _upscaler.reset();
+        }
+        if (!_upscaler) {
+            // A build without the upscaler compiled in. Loud rather than
+            // silent, because the frame that comes out has no anti-aliasing at
+            // all and nothing else in the image says so.
+            warn("Anti-aliasing is set to FSR, which this build does not carry; "
+                 "the slot is empty",
+                 LogChannel::Graphics);
+        }
+    }
+    // No history on the first frame either; init leaves the flag clear and the
+    // first dispatch is therefore a reset.
+    _temporalHistoryValid = false;
+    _prevCameraPosition = glm::vec3(0.0f);
 
     _inited = true;
 }
@@ -172,7 +222,11 @@ void ScenePipeline::deinit() {
     if (_outputHandle) {
         _renderer.resources().unregisterExternal(*_outputHandle);
     }
+    // Before the images it reprojects: the backend holds device objects of its
+    // own and must not outlive the allocator either.
+    _upscaler.reset();
     _output.reset();
+    _tailColor.reset();
     _dirShadows.reset();
     _pointShadows.reset();
     _gbuffer.reset();
@@ -242,7 +296,7 @@ void ScenePipeline::shadowPass(ICommandBuffer &cmd,
         cmd.bindIndexBuffer(*scene.indices.buffer, scene.indices.offset);
 
         auto drawRange = [&](uint32_t triangleBase, uint32_t triangleCount,
-                             bool gated, FaceCullMode cull) {
+                             bool gated) {
             if (triangleCount == 0) {
                 return;
             }
@@ -261,28 +315,39 @@ void ScenePipeline::shadowPass(ICommandBuffer &cmd,
             // D32_SFLOAT constant bias is expressed in representable depth
             // increments; the slope term supplies the useful offset on curved
             // surfaces that approach parallel to the light.
-            key.depthBiasConstantFactor = 0.0f;
-            key.depthBiasSlopeFactor = 1.0f;
-            key.cull = cull;
+            //
+            // Both terms carry more than they used to because nothing is
+            // culled any more. Rendering back faces alone put the stored depth
+            // a wall's thickness behind the lit surface, which is a free bias
+            // - but only for geometry that HAS a back face. Odyssey's exterior
+            // shells are single-sided, so from the sun's side they wrote
+            // nothing at all and light poured into the rooms behind them. With
+            // both faces written, a lit surface now finds its own depth in the
+            // map and needs a real offset instead. The receiver-side normal
+            // offset in lib/shadow.slang remains the primary defence; these
+            // are the dials to turn if acne or peter-panning shows up.
+            key.depthBiasConstantFactor = 2.0f;
+            key.depthBiasSlopeFactor = 2.0f;
+            // Never cull. A single-sided wall has to occlude from whichever
+            // side the light is on, and a cutout fence or leaf card likewise.
+            key.cull = FaceCullMode::None;
             PipelineBinding pipeline = _renderer.pipelines().get(key);
             cmd.bindPipeline(pipeline.pipeline);
             cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
                                   offsets.data(), static_cast<uint32_t>(offsets.size()));
             cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
-            const MegaDrawPushConstants push {triangleBase, gated ? 1u : 0u};
+            // Three words here, two everywhere else: only this pass reads the
+            // caster filter. See PushConstants in lib/megadraw_geometry.slang.
+            const ShadowPushConstants push {triangleBase, gated ? 1u : 0u,
+                                            _shadowCasterCategories};
             cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
             cmd.drawIndexed(triangleCount * 3, triangleBase * 3);
         };
 
-        // Back faces put the stored depth behind an opaque receiver and avoid
-        // self-shadowing without changing the retained sampling code. Cutout
-        // cards remain two-sided: a one-sided fence or leaf must cast from
-        // either light direction, with its alpha gate still applied.
-        drawRange(0, scene.opaqueTriangleCount, false, FaceCullMode::Front);
+        drawRange(0, scene.opaqueTriangleCount, false);
         const uint32_t gatedTriangles =
             scene.triangleCount - scene.opaqueTriangleCount;
-        drawRange(scene.opaqueTriangleCount, gatedTriangles, true,
-                  FaceCullMode::None);
+        drawRange(scene.opaqueTriangleCount, gatedTriangles, true);
         }
         cmd.endRendering();
     }
@@ -532,10 +597,164 @@ void ScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) 
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
 
+void ScenePipeline::tailPass(ICommandBuffer &cmd, const char *fragmentEntry,
+                             uint32_t globalsOffset, uint32_t screenEffectOffset,
+                             const void *pushConstants, uint32_t pushConstantSize) {
+    cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+    cmd.transitionImage(*_tailColor, ImageLayout::ColorAttachment);
+
+    PipelineKey key;
+    key.module = kPostProcessModule;
+    key.vertexEntry = "postVertex";
+    key.fragmentEntry = fragmentEntry;
+    key.colorFormats = {_tailColor->pixelFormat()};
+    PipelineBinding pipeline = _renderer.pipelines().get(key);
+
+    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+    offsets[UniformBlockBindingPoints::screenEffect] = screenEffectOffset;
+    auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
+        _renderer.uniformRing().frame(), _output.get());
+
+    {
+        // Every pixel is written, so the previous contents of the target are
+        // never read back.
+        RenderAttachment color {_tailColor->sampleView(), ImageLayout::ColorAttachment,
+                                AttachmentLoad::DontCare, AttachmentStore::Store};
+        cmd.beginRendering(_targetSize, {color}, nullptr, 0, false);
+        cmd.bindPipeline(pipeline.pipeline);
+        auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                              offsets.data(), static_cast<uint32_t>(offsets.size()));
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet, nullptr, 0);
+        if (pushConstants && pushConstantSize != 0) {
+            cmd.pushFragmentConstants(pipeline.layout, pushConstants, pushConstantSize);
+        }
+        cmd.draw(3, 1);
+        cmd.endRendering();
+    }
+    cmd.transitionImage(*_tailColor, ImageLayout::ShaderRead);
+    // The pair are interchangeable, so the result becomes the output by
+    // exchanging the handles rather than by copying pixels back.
+    std::swap(_output, _tailColor);
+}
+
+void ScenePipeline::restartTemporalHistory() {
+    _temporalHistoryValid = false;
+}
+
+void ScenePipeline::upscalePass(ICommandBuffer &cmd) {
+    R_PROFILE_ZONE("ScenePipeline::upscalePass record");
+    if (!_upscaler) {
+        return;
+    }
+    const auto &globals = _uniforms.globals();
+    auto &motion = _gbuffer->color(GBufferAttachment::Motion);
+    auto &depth = _gbuffer->depth();
+
+    // Primary visibility is rasterized in every mode, traced included, so
+    // these two attachments describe the same surfaces the colour was shaded
+    // for whichever pass shaded it. That invariant is what lets one temporal
+    // resolve serve every mode.
+    //
+    // The backend transitions each image from the state it is told it is in,
+    // so all three inputs are published as plain sampled images first: the
+    // depth attachment otherwise sits in a depth-read layout that no upscaler
+    // state maps to. They are left sampled afterwards and the depth is put
+    // back before anything reads it as a depth attachment again.
+    cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+    cmd.transitionImage(motion, ImageLayout::ShaderRead);
+    cmd.transitionImage(depth, ImageLayout::ShaderRead);
+    cmd.transitionImage(*_tailColor, ImageLayout::General);
+
+    UpscalerInputs inputs;
+    inputs.color = _output.get();
+    inputs.depth = &depth;
+    inputs.motion = &motion;
+    inputs.output = _tailColor.get();
+    // The G-buffer stores current minus previous, as half a clip-space delta
+    // with y up. FSR wants previous minus current, in pixels, with y down.
+    // Both corrections are a sign per axis, so they ride in the scale rather
+    // than in a rewrite of an attachment several passes and both dump paths
+    // already read.
+    inputs.motionScale = {-static_cast<float>(_targetSize.x),
+                          static_cast<float>(_targetSize.y)};
+
+    // The sub-pixel offset this frame's projection was built with, in pixels
+    // with y down. Raster only jitters when the taajitter option is on; with
+    // it off this is zero, and the resolve still reprojects and still cleans
+    // edges - it simply has no sub-pixel information to accumulate, so it
+    // anti-aliases less.
+    const glm::vec2 jitterPixels {globals.jitter.x * 0.5f * static_cast<float>(_targetSize.x),
+                                  -globals.jitter.y * 0.5f * static_cast<float>(_targetSize.y)};
+    const float verticalFov =
+        2.0f * std::atan(1.0f / std::max(1e-4f, globals.projection[1][1]));
+
+    // History is worthless across a cut, and a teleport-sized step is a cut
+    // whether or not anything announced one.
+    const auto cameraPosition = glm::vec3(globals.cameraPosition);
+    if (glm::distance(cameraPosition, _prevCameraPosition) > 20.0f) {
+        _temporalHistoryValid = false;
+    }
+    _prevCameraPosition = cameraPosition;
+    const bool reset = !_temporalHistoryValid;
+    _temporalHistoryValid = true;
+
+    _upscaler->dispatch(cmd, inputs, jitterPixels, 1.0f / 60.0f,
+                        globals.clipNear, globals.clipFar, verticalFov,
+                        std::clamp(_options.fsrSharpness, 0.0f, 1.0f), reset);
+
+    cmd.transitionImage(*_tailColor, ImageLayout::ShaderRead);
+    cmd.transitionImage(depth, ImageLayout::DepthRead);
+    std::swap(_output, _tailColor);
+}
+
+void ScenePipeline::antiAliasingPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("ScenePipeline::antiAliasingPass record");
+    // A new resolve in this slot is a new case here; the ping-pong and the
+    // ordering are already common. Nothing in this slot applies a display
+    // transform, in any mode - that belongs to the post-process pass alone,
+    // and a resolve that tonemapped to find edges would be applying it twice.
+    const char *fragmentEntry = nullptr;
+    switch (_options.antialiasing) {
+    case AntiAliasing::None:
+        return;
+    case AntiAliasing::Fsr:
+        upscalePass(cmd);
+        return;
+    case AntiAliasing::Fxaa:
+        fragmentEntry = "fxaaFragment";
+        break;
+    }
+    if (!fragmentEntry) {
+        return;
+    }
+    // FXAA works off neighbouring texel offsets, which nothing else in this
+    // pipeline publishes; the block is otherwise irrelevant to the pass.
+    ScreenEffectUniforms screenEffect;
+    screenEffect.screenResolution = glm::vec2(_targetSize);
+    screenEffect.screenResolutionRcp = 1.0f / glm::vec2(_targetSize);
+    auto screenEffectOffset = _renderer.uniformRing().push(screenEffect);
+    tailPass(cmd, fragmentEntry, globalsOffset, screenEffectOffset, nullptr, 0);
+}
+
+void ScenePipeline::postProcessPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("ScenePipeline::postProcessPass record");
+    // The raster resolves already write display-space colour, so the transform
+    // is an identity over them and their bytes are preserved exactly. Only the
+    // traced chain arrives linear, carrying the dials its calibration is
+    // defined in.
+    PostProcessPushConstants push {_primaryRayMode ? 1u : 0u,
+                                   std::max(0.01f, _options.exposure),
+                                   static_cast<uint32_t>(std::clamp(_options.tonemap, 0, 1))};
+    tailPass(cmd, "postProcessFragment", globalsOffset, 0, &push, sizeof(push));
+}
+
 Texture &ScenePipeline::render(const SceneFramePlan &plan,
                                      ISceneCallbacks &callbacks) {
     auto &cmd = _renderer.recordingCommandBuffer();
     _shadow = plan.shadow;
+    _shadowCasterCategories = plan.shadowCasterCategories;
     _mergedScene = {};
     _mergedScenePrepared = false;
     // The scene graph stores the frame's Vulkan-native uniform values here;
@@ -564,6 +783,16 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
         // independent validation channels insensitive to command ordering.
         transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
         cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
+        // The common tail runs over the traced image exactly as it does over a
+        // resolved one; the tracer stops at linear and the display transform
+        // is the pass below, not the kernel.
+        for (const auto step : plan.steps) {
+            if (step == SceneStep::AntiAliasing) {
+                antiAliasingPass(cmd, globalsOffset);
+            } else if (step == SceneStep::PostProcess) {
+                postProcessPass(cmd, globalsOffset);
+            }
+        }
         // The traced image is sampleable by now, so the preview can read it
         // like any other target. Without this the window would offer a target
         // it never draws, which is only marginally better than crashing.
@@ -597,6 +826,12 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
             break;
         case SceneStep::SkyComposite:
             skyCompositePass(cmd, globalsOffset, callbacks);
+            break;
+        case SceneStep::AntiAliasing:
+            antiAliasingPass(cmd, globalsOffset);
+            break;
+        case SceneStep::PostProcess:
+            postProcessPass(cmd, globalsOffset);
             break;
         }
     }

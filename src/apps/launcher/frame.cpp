@@ -248,8 +248,27 @@ LauncherFrame::LauncherFrame() :
     _checkBoxSSR->SetValue(_config.ssr);
 
 
-    _checkBoxFXAA = new wxCheckBox(this, wxID_ANY, "Enable FXAA", wxDefaultPosition, wxDefaultSize);
-    _checkBoxFXAA->SetValue(_config.fxaa);
+    // Anti-aliasing
+
+    auto labelAntiAliasing = new wxStaticText(this, wxID_ANY, "Anti-aliasing",
+                                              wxDefaultPosition, wxDefaultSize);
+
+    wxArrayString antiAliasingChoices;
+    antiAliasingChoices.Add("Off");
+    antiAliasingChoices.Add("FXAA");
+    antiAliasingChoices.Add("FSR 2 (NativeAA)");
+
+    _choiceAntiAliasing = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                       antiAliasingChoices);
+    _choiceAntiAliasing->SetSelection(_config.antialiasing == "fsr"    ? 2
+                                      : _config.antialiasing == "fxaa" ? 1
+                                                                       : 0);
+
+    auto antiAliasingSizer = new wxBoxSizer(wxVERTICAL);
+    antiAliasingSizer->Add(labelAntiAliasing, wxSizerFlags(0).Expand());
+    antiAliasingSizer->Add(_choiceAntiAliasing, wxSizerFlags(0).Expand());
+
+    // END Anti-aliasing
 
     _checkBoxSharpen = new wxCheckBox(this, wxID_ANY, "Enable Image Sharpening", wxDefaultPosition, wxDefaultSize);
     _checkBoxSharpen->SetValue(_config.sharpen);
@@ -270,7 +289,7 @@ LauncherFrame::LauncherFrame() :
     graphicsSizer->Add(_checkBoxGrass, wxSizerFlags(0).Expand());
     graphicsSizer->Add(_checkBoxSSAO, wxSizerFlags(0).Expand());
     graphicsSizer->Add(_checkBoxSSR, wxSizerFlags(0).Expand());
-    graphicsSizer->Add(_checkBoxFXAA, wxSizerFlags(0).Expand());
+    graphicsSizer->Add(antiAliasingSizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(_checkBoxSharpen, wxSizerFlags(0).Expand());
 
     // END Graphics
@@ -402,7 +421,7 @@ void LauncherFrame::LoadConfiguration() {
         ("ptspp", value<int>()->default_value(_config.ptspp))              //
         ("ssao", value<bool>()->default_value(_config.ssao))              //
         ("ssr", value<bool>()->default_value(_config.ssr))                //
-        ("fxaa", value<bool>()->default_value(_config.fxaa))              //
+        ("antialiasing", value<std::string>()->default_value(_config.antialiasing)) //
         ("sharpen", value<bool>()->default_value(_config.sharpen))        //
         ("texquality", value<int>()->default_value(_config.texQuality))   //
         ("anisofilter", value<int>()->default_value(_config.anisofilter)) //
@@ -436,7 +455,7 @@ void LauncherFrame::LoadConfiguration() {
     _config.ptspp = std::max(1, vars["ptspp"].as<int>());
     _config.ssao = vars["ssao"].as<bool>();
     _config.ssr = vars["ssr"].as<bool>();
-    _config.fxaa = vars["fxaa"].as<bool>();
+    _config.antialiasing = vars["antialiasing"].as<std::string>();
     _config.sharpen = vars["sharpen"].as<bool>();
     _config.texQuality = vars["texquality"].as<int>();
     _config.shadowres = vars["shadowres"].as<int>();
@@ -478,7 +497,7 @@ void LauncherFrame::SaveConfiguration() {
         "ptspp=",
         "ssao=",
         "ssr=",
-        "fxaa=",
+        "antialiasing=",
         "sharpen=",
         "texquality=",
         "anisofilter=",
@@ -550,7 +569,11 @@ void LauncherFrame::SaveConfiguration() {
     _config.ptspp = wxAtoi(_choicePathTracingSamples->GetStringSelection());
     _config.ssao = _checkBoxSSAO->IsChecked();
     _config.ssr = _checkBoxSSR->IsChecked();
-    _config.fxaa = _checkBoxFXAA->IsChecked();
+    switch (_choiceAntiAliasing->GetSelection()) {
+    case 2: _config.antialiasing = "fsr"; break;
+    case 1: _config.antialiasing = "fxaa"; break;
+    default: _config.antialiasing = "off"; break;
+    }
     _config.sharpen = _checkBoxSharpen->IsChecked();
     _config.texQuality = _choiceTextureQuality->GetSelection();
     _config.shadowres = _choiceShadowResolution->GetSelection();
@@ -593,7 +616,7 @@ void LauncherFrame::SaveConfiguration() {
     config << "ptspp=" << _config.ptspp << std::endl;
     config << "ssao=" << (_config.ssao ? 1 : 0) << std::endl;
     config << "ssr=" << (_config.ssr ? 1 : 0) << std::endl;
-    config << "fxaa=" << (_config.fxaa ? 1 : 0) << std::endl;
+    config << "antialiasing=" << _config.antialiasing << std::endl;
     config << "sharpen=" << (_config.sharpen ? 1 : 0) << std::endl;
     config << "texquality=" << _config.texQuality << std::endl;
     config << "shadowres=" << _config.shadowres << std::endl;

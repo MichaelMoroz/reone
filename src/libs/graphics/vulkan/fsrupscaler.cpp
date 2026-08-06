@@ -35,14 +35,23 @@ namespace {
 
 /**
  * Wrap one of our images for FSR. The state must match reality or the backend
- * inserts the wrong barrier: every image the trace pipeline touches lives in
- * GENERAL, which is what FFX_RESOURCE_STATE_UNORDERED_ACCESS maps to.
+ * inserts the wrong barrier - it transitions from whatever it is told the
+ * resource is in, without checking. The two states used here are the only two
+ * it ever moves a resource to: SHADER_READ_ONLY for a sampled input and
+ * GENERAL for the storage output.
+ *
+ * The format need not be one FFX knows. It maps neither this swapchain's
+ * B8G8R8A8_UNORM nor D32_SFLOAT, but the description's format is read only for
+ * resources FFX allocates itself; for a registered one it takes the view we
+ * hand over, and only the extent and type are consulted. The depth aspect is
+ * derived from the format separately and does cover D32_SFLOAT.
  */
-FfxResource wrapImage(FfxFsr2Context *context, VulkanImage &image, const wchar_t *name) {
+FfxResource wrapImage(FfxFsr2Context *context, VulkanImage &image, const wchar_t *name,
+                      FfxResourceStates state) {
     return ffxGetTextureResourceVK(context, image.handle(), image.view(),
                                    static_cast<uint32_t>(image.extent().x),
                                    static_cast<uint32_t>(image.extent().y), image.format(), name,
-                                   FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+                                   state);
 }
 
 void fsrMessage(FfxFsr2MsgType, const wchar_t *message) {
@@ -54,9 +63,10 @@ void fsrMessage(FfxFsr2MsgType, const wchar_t *message) {
 
 } // namespace
 
-FsrUpscaler::FsrUpscaler(VulkanDevice &device, glm::ivec2 extent) :
+FsrUpscaler::FsrUpscaler(VulkanDevice &device, glm::ivec2 extent, bool highDynamicRange) :
     _device(device),
-    _extent(extent) {
+    _extent(extent),
+    _highDynamicRange(highDynamicRange) {
 }
 
 void FsrUpscaler::init() {
@@ -76,9 +86,16 @@ void FsrUpscaler::init() {
 
     _context = std::make_unique<FfxFsr2Context>();
     FfxFsr2ContextDescription description {};
-    description.flags = FFX_FSR2_ENABLE_HIGH_DYNAMIC_RANGE |
-                        FFX_FSR2_ENABLE_AUTO_EXPOSURE |
-                        FFX_FSR2_ENABLE_DEBUG_CHECKING;
+    // HIGH_DYNAMIC_RANGE says the input is linear and unbounded, so FSR applies
+    // its own tonemap before reprojecting and inverts it after. A raster resolve
+    // hands over display-referred colour already in [0,1]; claiming HDR for that
+    // would tonemap a tonemapped image. Auto exposure rides with it, having
+    // nothing to measure on an image that is already graded.
+    description.flags = FFX_FSR2_ENABLE_DEBUG_CHECKING;
+    if (_highDynamicRange) {
+        description.flags |= FFX_FSR2_ENABLE_HIGH_DYNAMIC_RANGE |
+                             FFX_FSR2_ENABLE_AUTO_EXPOSURE;
+    }
     description.maxRenderSize = {static_cast<uint32_t>(_extent.x), static_cast<uint32_t>(_extent.y)};
     description.displaySize = description.maxRenderSize;
     description.callbacks = _interface;
@@ -111,7 +128,7 @@ glm::vec2 FsrUpscaler::jitterOffset(int frameIndex, glm::ivec2 extent) {
     return {x, y};
 }
 
-void FsrUpscaler::dispatch(ICommandBuffer &commandBuffer, const TracingUpscalerInputs &inputs,
+void FsrUpscaler::dispatch(ICommandBuffer &commandBuffer, const UpscalerInputs &inputs,
                            const glm::vec2 &jitter,
                            float frameTimeSeconds, float cameraNear, float cameraFar,
                            float verticalFov, float sharpness, bool reset) {
@@ -121,10 +138,14 @@ void FsrUpscaler::dispatch(ICommandBuffer &commandBuffer, const TracingUpscalerI
     const auto cmd = toVulkanCommandBuffer(commandBuffer).handle();
     FfxFsr2DispatchDescription dispatch {};
     dispatch.commandList = ffxGetCommandListVK(cmd);
-    dispatch.color = wrapImage(_context.get(), toVulkanImage(*inputs.color), L"pt_color");
-    dispatch.depth = wrapImage(_context.get(), toVulkanImage(*inputs.depth), L"pt_depth");
-    dispatch.motionVectors = wrapImage(_context.get(), toVulkanImage(*inputs.motion), L"pt_motion");
-    dispatch.output = wrapImage(_context.get(), toVulkanImage(*inputs.output), L"pt_upscaled");
+    dispatch.color = wrapImage(_context.get(), toVulkanImage(*inputs.color), L"scene_color",
+                               FFX_RESOURCE_STATE_COMPUTE_READ);
+    dispatch.depth = wrapImage(_context.get(), toVulkanImage(*inputs.depth), L"scene_depth",
+                               FFX_RESOURCE_STATE_COMPUTE_READ);
+    dispatch.motionVectors = wrapImage(_context.get(), toVulkanImage(*inputs.motion), L"scene_motion",
+                                       FFX_RESOURCE_STATE_COMPUTE_READ);
+    dispatch.output = wrapImage(_context.get(), toVulkanImage(*inputs.output), L"scene_upscaled",
+                                FFX_RESOURCE_STATE_UNORDERED_ACCESS);
     // Auto exposure is on, so no exposure resource and no reactive masks. The
     // masks are worth revisiting: without them FSR falls back on its own
     // shading-change detection, which AMD says handles transparency "as best it
@@ -137,9 +158,9 @@ void FsrUpscaler::dispatch(ICommandBuffer &commandBuffer, const TracingUpscalerI
         _context.get(), nullptr, nullptr, 1, 1, VK_FORMAT_UNDEFINED, L"pt_transparency");
 
     dispatch.jitterOffset = {jitter.x, jitter.y};
-    // The tracer writes a UV-space delta, so the scale is the render size; a
-    // pixel-space encoding would want (1,1) and an NDC one (0.5W, -0.5H).
-    dispatch.motionVectorScale = {static_cast<float>(_extent.x), static_cast<float>(_extent.y)};
+    // Chosen by the caller, which knows the encoding of the attachment it
+    // passed; see the dispatch site for the derivation.
+    dispatch.motionVectorScale = {inputs.motionScale.x, inputs.motionScale.y};
     dispatch.renderSize = {static_cast<uint32_t>(_extent.x), static_cast<uint32_t>(_extent.y)};
     // RCAS runs as an extra pass, so skip it outright at zero rather than
     // paying for a no-op sharpen.

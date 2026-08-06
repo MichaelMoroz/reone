@@ -17,22 +17,12 @@
 // here, reprojecting through the same motion vectors NRD uses and clamping
 // against a 3x3 neighbourhood; FSR does that job properly and measured 4.6x
 // better on edges, so the history, the reprojection and the clamp are gone
-// rather than left switched off. The output is linear HDR either way -
-// pt_tonemap applies the display transform afterwards, which is where it
-// belongs when an upscaler sits in between.
-
-struct PushConstants {
-    uint tonemap;  /**< 0 none, 1 ACES - mirrors the trace kernel's dial */
-    float exposure;
-    /**
-     * Non-zero when FSR owns the rest of the frame. The pass then stops at
-     * linear HDR, because an upscaler must see pre-tonemap colour and the
-     * display transform moves to pt_tonemap after it. Without FSR there is
-     * nothing downstream, so this pass finishes the frame itself.
-     */
-    uint linearOutput;
-};
-[[vk::push_constant]] PushConstants pushConstants;
+// rather than left switched off.
+//
+// The output is linear HDR, unconditionally. The display transform belongs
+// downstream of the upscaler that may sit after this pass, and downstream of
+// transparency, so it is the common post-process pass's and no dial of it
+// reaches here.
 
 [[vk::binding(0, 1)]] RWTexture2D<float4> outputImage;
 [[vk::binding(1, 1)]] RWTexture2D<float4> inNoiseFree;
@@ -54,11 +44,6 @@ float3 yCoCgToLinear(float3 color) {
     return max(float3(b + color.y, g, b), 0.0);
 }
 
-// Duplicated from rayquery.slang and pt_tonemap.slang; keep the three in step.
-float3 acesTonemap(float3 x) {
-    return saturate((x * (2.51 * x + 0.03)) / (x * (x * 2.43 + 0.59) + 0.14));
-}
-
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void main(uint3 dispatchId : SV_DispatchThreadID) {
@@ -75,11 +60,5 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                                          : inRawSpecular[pixel].rgb;
     color += yCoCgToLinear(diffuse) * inDiffFactor[pixel].rgb +
              yCoCgToLinear(specular) * inSpecFactor[pixel].rgb;
-    if (pushConstants.linearOutput != 0) {
-        outputImage[pixel] = float4(color, 1.0);
-        return;
-    }
-    float3 mapped = max(color, 0.0) * pushConstants.exposure;
-    if (pushConstants.tonemap == 1) mapped = acesTonemap(mapped);
-    outputImage[pixel] = float4(pow(max(mapped, 0.0), 1.0 / 2.2), 1.0);
+    outputImage[pixel] = float4(color, 1.0);
 }

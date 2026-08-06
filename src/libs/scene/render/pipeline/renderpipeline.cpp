@@ -133,6 +133,25 @@ void RenderPipeline::deinit() {
     _inited = false;
 }
 
+uint32_t RenderPipeline::shadowCasterCategories() const {
+    if (_options.pbr) {
+        // The corrected renderer shadows the scene it actually lights, so
+        // everything opaque casts.
+        return graphics::kAllShadowCasters;
+    }
+    // Retro casts characters and what they carry, and nothing else, because
+    // that is all the original ever drew: a stencil volume per creature, no
+    // shadow from architecture or terrain at all. It is also what removes the
+    // mottling on distant hills at the root - that was terrain shadowing
+    // itself across cascade texels, and a terrain that never casts cannot.
+    // Equipment is in because a weapon or mask is part of the silhouette the
+    // creature it hangs on projects, not a separate object in the world.
+    const auto category = [](ModelUsage usage) {
+        return 1u << static_cast<uint32_t>(usage);
+    };
+    return category(ModelUsage::Creature) | category(ModelUsage::Equipment);
+}
+
 graphics::SkyBinding RenderPipeline::skyBinding(graphics::ICommandBuffer &commandBuffer) {
     if (!_sky)
         return {};
@@ -196,6 +215,7 @@ graphics::SkyBinding RenderPipeline::skyBinding(graphics::ICommandBuffer &comman
 graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
                                                 RenderShadowKind shadow) {
     graphics::SceneFramePlan plan;
+    plan.shadowCasterCategories = shadowCasterCategories();
     switch (shadow) {
     case RenderShadowKind::Directional:
         plan.shadow = graphics::SceneShadow::Directional;
@@ -229,11 +249,27 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         // the chain it would sit past the transparent pass and paint over
         // particles and lens flares.
         plan.steps.push_back(graphics::SceneStep::SkyComposite);
-        // Transparency composites onto the resolved image, so it follows
-        // whichever resolve ran. Raster only: in the traced mode additive
-        // sprites belong to the march and drawing them here would double them.
+    }
+    // The common tail. Anti-aliasing resolves the opaque image, transparency
+    // is drawn over the result, and the single display transform closes the
+    // frame. A traced debug view is excluded from all of it because it is not
+    // a picture - the kernel writes a diagnostic that is already
+    // display-referred, and filtering or transforming it would change the
+    // values it exists to show.
+    const bool diagnosticImage = _primaryRayMode && _options.ptDebugView != 0;
+    if (_options.antialiasing != graphics::AntiAliasing::None && !diagnosticImage)
+        plan.steps.push_back(graphics::SceneStep::AntiAliasing);
+    if (!_primaryRayMode) {
+        // After the resolve, not before it. A temporal resolve cannot
+        // reproject a billboard - transparency writes no motion and no depth,
+        // so drawn ahead of one it smears behind the camera. It also keeps the
+        // depth the resolve reads free of transparency by construction.
+        // Raster only: in the traced mode additive sprites belong to the march
+        // and drawing them here would double them.
         plan.steps.push_back(graphics::SceneStep::Blended);
     }
+    if (_options.post && !diagnosticImage)
+        plan.steps.push_back(graphics::SceneStep::PostProcess);
     return _executor->render(plan, *_callbacks);
 }
 
@@ -282,6 +318,10 @@ void RenderPipeline::dumpTargets(const std::filesystem::path &dir) {
 void RenderPipeline::restartTemporalHistory() {
     if (_rayQuery)
         _rayQuery->restartTemporalHistory();
+    // The common tail carries a temporal resolve of its own in every mode, so
+    // a cut has to reach it whether or not this frame is traced.
+    if (_executor)
+        _executor->restartTemporalHistory();
 }
 
 } // namespace reone::scene

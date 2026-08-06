@@ -41,7 +41,7 @@ namespace {
 constexpr const char *kModules[] = {
     "pbr_model", "megadraw", "shadow_megadraw", "sky", "grass", "walkmesh", "common",
     "shadow", "pbr_ibl", "particles", "pbr_resolve", "retro_resolve", "pbr_ssao",
-    "pbr_ssr", "rayquery", "skin", "nrd_composite", "pt_tonemap", "postprocess", "vk2d",
+    "pbr_ssr", "rayquery", "skin", "nrd_composite", "postprocess", "vk2d",
     "sky_composite"};
 
 const char *parameterCategoryName(slang::ParameterCategory category) {
@@ -799,7 +799,8 @@ void SlangShaderCompiler::validateSchemas() {
                   REONE_UNIFORM_FIELD(GlobalUniformsLight, multiplier),
                   REONE_UNIFORM_FIELD(GlobalUniformsLight, radius),
                   REONE_UNIFORM_FIELD(GlobalUniformsLight, ambientOnly),
-                  REONE_UNIFORM_FIELD(GlobalUniformsLight, dynamicType)});
+                  REONE_UNIFORM_FIELD(GlobalUniformsLight, dynamicType),
+                  REONE_UNIFORM_FIELD(GlobalUniformsLight, shadowCaster)});
     checkUniform("ParticleUniformsParticle", sizeof(ParticleUniformsParticle),
                  {REONE_UNIFORM_FIELD(ParticleUniformsParticle, positionFrame),
                   REONE_UNIFORM_FIELD(ParticleUniformsParticle, right),

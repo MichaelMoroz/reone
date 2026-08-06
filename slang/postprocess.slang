@@ -12,6 +12,10 @@
 // compared numerically, and a better antialiaser would end that.
 
 import uniforms;
+// For ptDisplayTransform. The transform is colour maths taking its dials as
+// arguments, so the shared post-process pass calls the same one the tracer's
+// own passes were written against rather than a second copy of it.
+import tracing.brdf;
 
 // Sampled with an explicit level throughout. These passes read images that
 // have no mip chain, so level zero is what OpenGL's texture() resolves to
@@ -30,6 +34,19 @@ struct Varyings {
 };
 
 /**
+ * The dials of the one display transform, three words wide because that is
+ * what every graphics pipeline layout here declares.
+ */
+struct PostProcessPushConstants {
+    /** 0 pass the image through, 1 linear scene colour to display colour. */
+    uint transform;
+    float exposure;
+    /** 0 none, 1 ACES; ignored when the transform is a pass-through. */
+    uint tonemap;
+};
+[[vk::push_constant]] PostProcessPushConstants pushConstants;
+
+/**
  * A single triangle covering the target.
  *
  * Larger than the screen and clipped, which beats two triangles: no seam along
@@ -46,6 +63,27 @@ Varyings postVertex(uint vertexId: SV_VertexID) {
 
 float rgbToLuma(float3 rgb) {
     return dot(rgb, float3(0.299, 0.587, 0.114));
+}
+
+/**
+ * The last pass of every mode, and the only one that decides what display
+ * colour is.
+ *
+ * A pass-through is not a no-op that could be skipped: the raster resolves
+ * write display-space colour already, so the identity is what keeps their
+ * bytes exactly what they were while the traced chain, which stops at linear,
+ * is finished here. One shader with a dial rather than one per mode, because
+ * two implementations of a transform drift.
+ */
+[shader("fragment")]
+float4 postProcessFragment(Varyings input) : SV_Target {
+    float4 texel = sMainTex.SampleLevel(input.uv, 0.0);
+    if (pushConstants.transform == 0) {
+        return texel;
+    }
+    return float4(ptDisplayTransform(max(texel.rgb, 0.0), pushConstants.exposure,
+                                     pushConstants.tonemap),
+                  texel.a);
 }
 
 /** The small square blur used to soften half-resolution SSAO. */

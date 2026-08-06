@@ -31,6 +31,7 @@
 #include "reone/graphics/rendering/gpuscene.h"
 #include "reone/graphics/rendering/sky.h"
 #include "reone/graphics/rhi/renderer.h"
+#include "reone/graphics/rhi/upscaler.h"
 
 namespace reone::graphics {
 
@@ -48,6 +49,17 @@ enum class SceneStep {
     /** Between the resolve and transparency; see skyCompositePass. */
     SkyComposite,
     Blended,
+    /** The common tail, in this order and in every mode: the anti-aliasing
+        slot resolves the opaque image, then transparency is drawn over the
+        result, then the display transform closes it. Both tail passes
+        ping-pong onto the tail target, so a step that does not run costs
+        nothing rather than a copy.
+
+        Transparency sits after the resolve because a temporal one cannot
+        reproject it: billboards write no motion, so anything drawn before the
+        resolve ghosts behind the camera. */
+    AntiAliasing,
+    PostProcess,
 };
 
 enum class SceneShadow {
@@ -56,8 +68,20 @@ enum class SceneShadow {
     Point,
 };
 
+/** Every object category casts; see SceneFramePlan::shadowCasterCategories. */
+constexpr uint32_t kAllShadowCasters = 0xFFFFFFFFu;
+
 struct SceneFramePlan {
     SceneShadow shadow {SceneShadow::None};
+    /**
+     * Bit per scene::ModelUsage allowed into the shadow map.
+     *
+     * The policy is the scene layer's - it is the only one that knows what a
+     * category means - and the shadow pass only applies it. Retro admits
+     * characters alone, which is both what the original drew and what keeps
+     * terrain from self-shadowing; PBR admits everything.
+     */
+    uint32_t shadowCasterCategories {kAllShadowCasters};
     std::vector<SceneStep> steps;
 };
 
@@ -116,6 +140,8 @@ public:
 
     void init();
     void deinit();
+    /** Drop the temporal resolve's history: a camera cut it cannot reproject. */
+    void restartTemporalHistory();
     Texture &render(const SceneFramePlan &plan, ISceneCallbacks &callbacks);
     std::vector<TargetInfo> targets(const ISceneCallbacks &callbacks) const;
     void *renderTargetPreview(const std::string &name, int mode, float scale,
@@ -133,9 +159,20 @@ private:
     bool _inited {false};
     bool _primaryRayMode {false};
     SceneShadow _shadow {SceneShadow::None};
+    uint32_t _shadowCasterCategories {kAllShadowCasters};
 
     std::unique_ptr<GBuffer> _gbuffer;
     std::unique_ptr<IImage> _output;
+    /** The other half of the tail's ping-pong; identical to _output, and
+        swapped with it after every tail pass so the finished image is always
+        _output. Allocated once, never per frame. */
+    std::unique_ptr<IImage> _tailColor;
+    /** Present only while the anti-aliasing slot is running a temporal
+        resolve; it owns device memory of its own, so the choice is fixed for
+        the lifetime of these targets rather than per frame. */
+    std::unique_ptr<IUpscaler> _upscaler;
+    glm::vec3 _prevCameraPosition {0.0f};
+    bool _temporalHistoryValid {false};
     std::unique_ptr<IImage> _dirShadows;
     std::unique_ptr<IImage> _pointShadows;
     std::shared_ptr<Texture> _outputHandle;
@@ -180,6 +217,17 @@ private:
     void blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                      ISceneCallbacks &callbacks);
     void pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    /** The common anti-aliasing slot; the option selects the occupant. */
+    void antiAliasingPass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    /** The temporal occupant of that slot, reprojecting through the G-buffer. */
+    void upscalePass(ICommandBuffer &cmd);
+    /** The one place a mode's colour becomes display-referred. */
+    void postProcessPass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    /** One tail pass: full-screen triangle from _output onto _tailColor, then
+        the swap that makes the result the output. */
+    void tailPass(ICommandBuffer &cmd, const char *fragmentEntry,
+                  uint32_t globalsOffset, uint32_t screenEffectOffset,
+                  const void *pushConstants, uint32_t pushConstantSize);
     std::vector<Target> targetEntries(const ISceneCallbacks &callbacks) const;
 };
 

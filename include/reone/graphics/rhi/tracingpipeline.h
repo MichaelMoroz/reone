@@ -114,21 +114,4 @@ public:
     virtual IImage &denoisedSpecular() = 0;
 };
 
-struct TracingUpscalerInputs {
-    IImage *color {nullptr};
-    IImage *depth {nullptr};
-    IImage *motion {nullptr};
-    IImage *output {nullptr};
-};
-
-class ITracingUpscaler {
-public:
-    virtual ~ITracingUpscaler() = default;
-
-    virtual void dispatch(ICommandBuffer &commandBuffer, const TracingUpscalerInputs &inputs,
-                          const glm::vec2 &jitter, float frameTimeSeconds,
-                          float cameraNear, float cameraFar, float verticalFov,
-                          float sharpness, bool reset) = 0;
-};
-
 } // namespace reone::graphics

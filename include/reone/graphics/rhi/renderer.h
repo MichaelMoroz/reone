@@ -22,6 +22,7 @@
 
 #include "rhi.h"
 #include "tracingpipeline.h"
+#include "upscaler.h"
 #include "../rendering/gpuscenecontext.h"
 
 struct ImDrawData;
@@ -139,8 +140,17 @@ public:
     /** Create the vendor denoiser behind its image-based tracing interface. */
     virtual std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(glm::ivec2 extent) = 0;
 
-    /** Create the vendor temporal upscaler behind its image-based tracing interface. */
-    virtual std::unique_ptr<ITracingUpscaler> makeTracingUpscaler(glm::ivec2 extent) = 0;
+    /**
+     * Create the vendor temporal upscaler behind its image-based interface.
+     *
+     * @param highDynamicRange the colour it will be handed is linear and may
+     *                         exceed one, as the traced chain's is; false for a
+     *                         display-referred image, as every raster resolve
+     *                         writes. The two need different internal handling
+     *                         and the choice is fixed for the object's life.
+     */
+    virtual std::unique_ptr<IUpscaler> makeUpscaler(glm::ivec2 extent,
+                                                    bool highDynamicRange) = 0;
 
     /** Create the frame-local structure used by the trace pass. */
     virtual std::unique_ptr<ITracingStructure> makeTracingStructure() = 0;

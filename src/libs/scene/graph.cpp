@@ -521,7 +521,7 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
             computeLightSpaceMatrices();
         }
         _graphicsSvc.uniforms.setGlobals([this, &camera, &jitter, &viewProjection](auto &globals) {
-            if (_graphicsOpt.taaJitter) {
+            if (jitter != glm::vec2(0.0f)) {
                 // Sub-pixel offset in clip space, applied after the projection so
                 // that it shifts the raster grid without altering the frustum.
                 globals.projection = glm::translate(glm::vec3(jitter, 0.0f)) * camera->projection();
@@ -548,6 +548,7 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
                 light.radius = _activeLights[i]->radius();
                 light.ambientOnly = static_cast<int>(_activeLights[i]->modelNode().light()->ambientOnly);
                 light.dynamicType = _activeLights[i]->modelNode().light()->dynamicType;
+                light.shadowCaster = _activeLights[i] == _shadowLight ? 1 : 0;
             }
             if (hasShadowLight()) {
                 for (int i = 0; i < kNumShadowLightSpace; ++i) {
@@ -621,18 +622,20 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
 }
 
 glm::vec2 SceneGraph::computeJitter() const {
-    if (!_graphicsOpt.taaJitter) {
+    // The one place jitter is decided, for every mode, read fresh each frame
+    // so a runtime switch of the AA method carries its jitter with it.
+    // Auto means: jitter exactly when FSR resolves it - the rule is the same
+    // in the traced mode, whose rays derive from this projection. NRD does
+    // not need it, and jittered rays without FSR downstream are unresolved
+    // shimmer on top of the path noise, exactly like unresolved raster
+    // jitter (measured 6-12% of pixels changing per frame on a frozen
+    // scene). That is why the answer follows the resolver and not a bare
+    // config flag or the render mode.
+    if (_graphicsOpt.taaJitter == graphics::JitterMode::Off) {
         return glm::vec2(0.0f);
     }
-    // Jitter is only correct when something resolves it. Path tracing has FSR
-    // and NRD's accumulation; the raster modes have had no temporal resolve
-    // since G1 boxed the old post chain, so jittering there is pure shimmer -
-    // measured on a frozen scene with a static camera, 6-12% of pixels change
-    // per frame jittered against 0.19% unjittered. The option cannot be
-    // trusted to mean "a consumer exists": reone.cfg ships taajitter=1
-    // globally and it reaches every mode. G9 gives raster an AA stage and
-    // opens this gate for it.
-    if (_graphicsOpt.mode != "path-tracing") {
+    if (_graphicsOpt.taaJitter == graphics::JitterMode::Auto &&
+        _graphicsOpt.antialiasing != graphics::AntiAliasing::Fsr) {
         return glm::vec2(0.0f);
     }
     // Halton(2, 3), the usual low-discrepancy sequence for temporal sampling,

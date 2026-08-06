@@ -69,6 +69,15 @@ private:
      */
     graphics::SkyBinding skyBinding(graphics::ICommandBuffer &commandBuffer);
 
+    /**
+     * Which object categories this mode lets into the shadow map.
+     *
+     * The decision lives here because only the scene layer knows what a
+     * category is; the pass downstream applies the mask without interpreting
+     * it.
+     */
+    uint32_t shadowCasterCategories() const;
+
     glm::ivec2 _targetSize;
     graphics::GraphicsOptions &_options;
     graphics::IRenderer &_renderer;

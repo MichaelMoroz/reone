@@ -70,7 +70,7 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"grass", std::to_string(options.grass)},
         {"grassdensity", formatConfigFloat(options.grassDensity)},
         {"ptspp", std::to_string(options.pathTracingSamples)},
-        {"ptskyintensity", formatConfigFloat(options.ptSkyIntensity)},
+        {"skyintensity", formatConfigFloat(options.skyIntensity)},
         {"ptemissiveintensity", formatConfigFloat(options.ptEmissiveIntensity)},
         {"ptlightmapintensity", formatConfigFloat(options.ptLightmapIntensity)},
         {"ptdirectintensity", formatConfigFloat(options.ptDirectIntensity)},
@@ -80,8 +80,8 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"pttracestats", std::to_string(options.ptTraceStats)},
         {"ptdenoise", std::to_string(options.ptDenoise)},
         {"ptdebugview", std::to_string(options.ptDebugView)},
-        {"pttonemap", std::to_string(options.ptTonemap)},
-        {"ptexposure", formatConfigFloat(options.ptExposure)},
+        {"tonemap", std::to_string(options.tonemap)},
+        {"exposure", formatConfigFloat(options.exposure)},
         {"ptpointemitterratio", formatConfigFloat(options.ptPointEmitterRatio)},
         {"ptsunangularsize", formatConfigFloat(options.ptSunAngularSize)},
         {"ptnrdstabilized", std::to_string(options.ptNrdMaxStabilizedFrames)},
@@ -97,21 +97,27 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"ptnrdplanedistancesensitivity", formatConfigFloat(options.ptNrdPlaneDistanceSensitivity)},
         {"ptnrddisocclusionthreshold", formatConfigFloat(options.ptNrdDisocclusionThreshold)},
         {"ptnrdantifirefly", std::to_string(options.ptNrdAntiFirefly)},
-        {"ptfsr", std::to_string(options.ptFsr)},
-        {"ptfsrsharpness", formatConfigFloat(options.ptFsrSharpness)},
+        {"fsrsharpness", formatConfigFloat(options.fsrSharpness)},
         {"ssao", std::to_string(options.ssao)},
         {"ssr", std::to_string(options.ssr)},
-        {"fxaa", std::to_string(options.fxaa)},
+        // Written as the parser spells it; an unwritable value would silently
+        // save as "off" and change the image on the next launch.
+        {"antialiasing", options.antialiasing == graphics::AntiAliasing::Fxaa  ? "fxaa"
+                         : options.antialiasing == graphics::AntiAliasing::Fsr ? "fsr"
+                                                                               : "off"},
+        {"post", std::to_string(options.post)},
         {"sharpen", std::to_string(options.sharpen)},
-        {"taajitter", std::to_string(options.taaJitter)},
+        {"taajitter", options.taaJitter == graphics::JitterMode::Auto ? "auto"
+                      : options.taaJitter == graphics::JitterMode::On ? "on"
+                                                                      : "off"},
         {"texquality", std::to_string(static_cast<int>(options.textureQuality))},
         {"shadowres", std::to_string(std::max(0, static_cast<int>(glm::log2(options.shadowResolution)) - 10))},
         {"anisofilter", std::to_string(options.anisotropicFiltering)},
         {"drawdist", formatConfigFloat(options.drawDistance)}};
 
     for (int i = 0; i < 9; ++i) {
-        const auto &override = options.ptCategoryOverrides[i];
-        auto key = "ptcat" + std::to_string(i);
+        const auto &override = options.categoryOverrides[i];
+        auto key = "cat" + std::to_string(i);
         values.emplace_back(key + "color0", formatConfigFloat(override.color[0]));
         values.emplace_back(key + "color1", formatConfigFloat(override.color[1]));
         values.emplace_back(key + "color2", formatConfigFloat(override.color[2]));
@@ -731,22 +737,96 @@ void Editor::warp() {
     }
 }
 
-void Editor::pathTracingSettings() {
+void Editor::graphicsSettings() {
     dockNext();
-    ImGui::SetNextWindowSize(ImVec2(360, 300), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Path tracing", &_showPathTracing)) {
+    ImGui::SetNextWindowSize(ImVec2(410, 640), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Graphics settings", &_showGraphicsSettings)) {
         ImGui::End();
         return;
     }
     auto &options = _engine._options.graphics;
-    if (!_pendingFsrInitialized) {
-        _pendingFsr = options.ptFsr;
-        _pendingFsrInitialized = true;
+    if (!_pendingAntiAliasingInitialized) {
+        _pendingAntiAliasing = static_cast<int>(options.antialiasing);
+        _pendingAntiAliasingInitialized = true;
     }
+
+    ImGui::SeparatorText("General");
+    ImGui::TextDisabled("Live - applies next frame.");
+    ImGui::Checkbox("Post-process", &options.post);
+    ImGui::TextDisabled("The pass that owns the display transform. Off is\ndiagnostic: the traced mode then presents linear.");
+    ImGui::Checkbox("Sharpen", &options.sharpen);
+    ImGui::Checkbox("SSAO", &options.ssao);
+    ImGui::Checkbox("SSR", &options.ssr);
+    ImGui::Checkbox("Grass", &options.grass);
+    // Wired straight: density is a GPU gate over budgets baked at the slider
+    // maximum (kGrassDensityCap), so dragging costs a push-constant change.
+    // The old committed-on-release dance existed to avoid re-materialising
+    // every cluster per mouse-move; that rebuild no longer exists.
+    ImGui::SliderFloat("Grass density", &options.grassDensity, 0.0f, 8.0f, "%.2fx",
+                       ImGuiSliderFlags_Logarithmic);
+    ImGui::TextDisabled("Multiplies the area's authored density, so areas keep\n"
+                        "their relative variation. Live: the dial gates the\n"
+                        "active cluster prefix on the GPU.");
+    {
+        // Auto follows the temporal resolver, so this is live: switching the
+        // AA slot re-decides jitter on the next frame with no rebuild.
+        static const char *kJitterNames[] = {"Auto", "On", "Off"};
+        int jitterIndex = static_cast<int>(options.taaJitter);
+        if (ImGui::Combo("TAA jitter", &jitterIndex, kJitterNames, 3)) {
+            options.taaJitter = static_cast<graphics::JitterMode>(jitterIndex);
+        }
+    }
+    ImGui::SliderFloat("Draw distance", &options.drawDistance, 1.0f, 1000.0f, "%.0f");
+
+    // One slot with one occupant, the same in every mode. The choice is staged
+    // rather than live: FSR builds a context and device images in the
+    // pipeline's init, so it cannot be switched inside a frame.
+    ImGui::SeparatorText("Anti-aliasing");
+    // Ordered as the enum is, so the index is the value.
+    static const char *kAntiAliasingNames[] = {"Off", "FXAA", "FSR 2 (NativeAA)"};
+    ImGui::Combo("Method", &_pendingAntiAliasing, kAntiAliasingNames,
+                 IM_ARRAYSIZE(kAntiAliasingNames));
+    ImGui::TextDisabled("Runs after the opaque resolve, before transparency and\nthe display transform. It never tonemaps. Changing it\nneeds a graphics rebuild.");
+    if (_pendingAntiAliasing != static_cast<int>(options.antialiasing)) {
+        if (ImGui::SmallButton("Apply##antialiasing")) {
+            options.antialiasing = static_cast<graphics::AntiAliasing>(_pendingAntiAliasing);
+            _engine.requestGraphicsRebuild();
+        }
+    }
+    ImGui::BeginDisabled(options.antialiasing != graphics::AntiAliasing::Fsr);
+    ImGui::SliderFloat("FSR sharpness", &options.fsrSharpness, 0.0f, 1.0f, "%.2f");
+    ImGui::TextDisabled("RCAS, inside FSR. Compensates for upscaling\nsoftness, of which NativeAA has none - keep it\nlow. Never stack the postprocess sharpen on top.");
+    ImGui::EndDisabled();
+
+    // Not path-tracing settings: the post-process pass applies these in every
+    // mode that arrives with linear colour, which today is the traced one.
+    // They are here rather than beside the tracer because the pass is common.
+    ImGui::SeparatorText("Display");
+    static constexpr const char *kTonemapNames[] = {"Off (linear)", "ACES"};
+    ImGui::Combo("Tonemap", &options.tonemap, kTonemapNames, 2);
+    ImGui::SliderFloat("Exposure", &options.exposure, 0.05f, 8.0f, "%.2f",
+                       ImGuiSliderFlags_Logarithmic);
+    ImGui::TextDisabled("The raster resolves already write display colour, so\nthe transform passes them through untouched.");
+
+    // Scene light, not a renderer's treatment of it - the tracer is only the
+    // consumer these have today. Logarithmic, and to 32 rather than 4: the
+    // defaults sit at 2.5, so the old ceiling gave 1.6x of headroom and no way
+    // to push a source hard enough to see what it actually contributes.
+    ImGui::SeparatorText("Lighting");
+    static constexpr float kIntensityMax = 32.0f;
+    static constexpr ImGuiSliderFlags kIntensityFlags = ImGuiSliderFlags_Logarithmic;
+    ImGui::SliderFloat("Sky", &options.skyIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::SliderFloat("Emissive", &options.ptEmissiveIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::SliderFloat("Lightmap cache", &options.ptLightmapIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::SliderFloat("Direct light", &options.ptDirectIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::SliderFloat("Sun", &options.ptSunIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::SliderFloat("Sun angular size", &options.ptSunAngularSize, 0.05f, 10.0f, "%.2f deg");
+    ImGui::TextDisabled("Ctrl+click to type a value. The sun is not at a\nphysical distance, so it keeps an authored angle.");
+
+    ImGui::SeparatorText("Path tracing");
     if (options.mode != "path-tracing") {
         ImGui::TextDisabled("Inactive - run with --mode path-tracing.");
         ImGui::TextDisabled("Settings still save and apply when it is.");
-        ImGui::Separator();
     }
     // Everything here rides in push constants, so a change applies on the next
     // frame with nothing rebuilt. The editor remains the place to tune beside
@@ -759,48 +839,10 @@ void Editor::pathTracingSettings() {
         options.ptBounces = std::clamp(options.ptBounces, 1, 8);
     }
     ImGui::TextDisabled("Path depth after the primary hit. Deeper paths\ncarry light around corners; the lightmap cache\nalready answers much of it on static geometry.");
-    ImGui::SeparatorText("Source intensities");
-    // Logarithmic, and to 32 rather than 4. The defaults sit at 2.5, so the old
-    // ceiling gave 1.6x of headroom and no way to push a source hard enough to
-    // see what it actually contributes. Log keeps the fine control where the
-    // graded values live instead of squeezing 0-4 into a tenth of the track.
-    static constexpr float kIntensityMax = 32.0f;
-    static constexpr ImGuiSliderFlags kIntensityFlags = ImGuiSliderFlags_Logarithmic;
-    ImGui::SliderFloat("Sky", &options.ptSkyIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
-    ImGui::SliderFloat("Emissive", &options.ptEmissiveIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
-    ImGui::SliderFloat("Lightmap cache", &options.ptLightmapIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
-    ImGui::SliderFloat("Direct light", &options.ptDirectIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
-    ImGui::SliderFloat("Sun", &options.ptSunIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
-    ImGui::TextDisabled("Ctrl+click to type a value.");
     ImGui::SeparatorText("Ray setup");
     ImGui::SliderFloat("Origin offset", &options.ptRayOffset, 0.0001f, 0.1f, "%.4f",
                        ImGuiSliderFlags_Logarithmic);
     ImGui::TextDisabled("Too small: acne and black speckling.\nToo large: light leaks at contact edges.");
-    ImGui::SeparatorText("Display");
-    static constexpr const char *kTonemapNames[] = {"Off (linear)", "ACES"};
-    ImGui::Combo("Tonemap", &options.ptTonemap, kTonemapNames, 2);
-    ImGui::SliderFloat("Exposure", &options.ptExposure, 0.05f, 8.0f, "%.2f",
-                       ImGuiSliderFlags_Logarithmic);
-#ifdef R_ENABLE_FSR
-    ImGui::SeparatorText("Anti-aliasing");
-    // The toggle is deferred: the upscaler builds its context and its two
-    // images in the pipeline's init, so it cannot be switched mid-frame.
-    if (ImGui::Checkbox("FSR 2 upscaler (NativeAA)", &_pendingFsr)) {
-        // no-op until the rebuild below; the checkbox only stages the choice
-    }
-    ImGui::TextDisabled("The only temporal resolve in the frame. Off means\nno anti-aliasing at all. Needs a graphics rebuild\nto take effect.");
-    if (_pendingFsr != options.ptFsr) {
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Apply##fsr")) {
-            options.ptFsr = _pendingFsr;
-            _engine.requestGraphicsRebuild();
-        }
-    }
-    ImGui::BeginDisabled(!options.ptFsr);
-    ImGui::SliderFloat("FSR sharpness", &options.ptFsrSharpness, 0.0f, 1.0f, "%.2f");
-    ImGui::TextDisabled("RCAS, inside FSR. Compensates for upscaling\nsoftness, of which NativeAA has none - keep it\nlow. Never stack the postprocess sharpen on top.");
-    ImGui::EndDisabled();
-#endif
 #ifdef R_ENABLE_NRD
     ImGui::Checkbox("NRD denoiser", &options.ptDenoise);
     ImGui::TextDisabled("REBLUR diffuse+specular. Off shows the raw\ntraced frame; debug views always bypass it.");
@@ -828,8 +870,7 @@ void Editor::pathTracingSettings() {
 #endif
     ImGui::SeparatorText("Light shape");
     ImGui::SliderFloat("Point emitter radius", &options.ptPointEmitterRatio, 0.01f, 0.5f, "%.2f x radius");
-    ImGui::SliderFloat("Sun angular size", &options.ptSunAngularSize, 0.05f, 10.0f, "%.2f deg");
-    ImGui::TextDisabled("Point lights are spheres sized as a fraction of their\ninfluence radius, so falloff and penumbra are one\nquantity: the solid angle the emitter subtends.\nBrightness-neutral - this grades how soft shadows are\nand how hot a surface gets against a lamp, not the\noverall level. The sun keeps an authored angle.");
+    ImGui::TextDisabled("Point lights are spheres sized as a fraction of their\ninfluence radius, so falloff and penumbra are one\nquantity: the solid angle the emitter subtends.\nBrightness-neutral - this grades how soft shadows are\nand how hot a surface gets against a lamp, not the\noverall level.");
     ImGui::SeparatorText("Debug view");
     // Order must match kPtDebug* in slang/tracing/debug.slang.
     static constexpr const char *kDebugViewNames[] = {
@@ -840,6 +881,13 @@ void Editor::pathTracingSettings() {
     ImGui::Combo("View", &options.ptDebugView, kDebugViewNames,
                  static_cast<int>(std::size(kDebugViewNames)));
     ImGui::TextDisabled("Replaces shading at the primary hit. Categories:\nblue rooms, red creatures, green placeables,\nmagenta doors, yellow equipment, cyan sky.\nRoughness and metallic are raw, not shaded.\nDenoiser views show the NRD output split, with\ndiffuse demodulated - it is transport, not colour.");
+    ImGui::TextDisabled("Diagnostics");
+    ImGui::Checkbox("Trace stats", &options.ptTraceStats);
+    ImGui::TextDisabled("GPU counters in the engine log. Costs frame time;\nleave off when measuring.");
+
+    // Not a traced-only tool: these edit the shared material records, which
+    // the raster PBR resolve reads as well - see applyCategoryOverride in
+    // scene/render/admission.cpp.
     ImGui::SeparatorText("Category overrides");
     static constexpr const char *kCategoryNames[] = {
         "GUI", "Rooms", "Creatures", "Placeables", "Doors",
@@ -849,7 +897,7 @@ void Editor::pathTracingSettings() {
         if (i == 0 || i == 6 || i == 7) {
             continue;
         }
-        auto &override = options.ptCategoryOverrides[i];
+        auto &override = options.categoryOverrides[i];
         if (ImGui::TreeNode(kCategoryNames[i])) {
             ImGui::ColorEdit3("Color", override.color);
             ImGui::SliderFloat("Color weight", &override.colorWeight, 0.0f, 1.0f, "%.2f");
@@ -868,57 +916,7 @@ void Editor::pathTracingSettings() {
             ImGui::TreePop();
         }
     }
-    ImGui::TextDisabled("Applied at trace time to every surface of the category.\nColor weight 1 flat-paints for bug isolation.");
-    ImGui::SeparatorText("Diagnostics");
-    ImGui::Checkbox("Trace stats", &options.ptTraceStats);
-    ImGui::TextDisabled("GPU counters in the engine log. Costs frame time;\nleave off when measuring.");
-    ImGui::Separator();
-    if (ImGui::Button("Save settings")) {
-#ifdef R_ENABLE_FSR
-        if (_pendingFsr != options.ptFsr) {
-            options.ptFsr = _pendingFsr;
-            _engine.requestGraphicsRebuild();
-        }
-#endif
-        _settingsSaveSucceeded = saveGraphicsOptions(options, _settingsSaveStatus);
-        if (_settingsSaveSucceeded) {
-            _settingsSaveStatus = "Settings saved to reone.cfg.";
-        }
-    }
-    if (!_settingsSaveStatus.empty()) {
-        ImGui::TextColored(_settingsSaveSucceeded ? ImVec4(0.3f, 0.9f, 0.4f, 1.0f) : ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
-                           "%s", _settingsSaveStatus.c_str());
-    }
-    ImGui::End();
-}
-
-void Editor::graphicsSettings() {
-    dockNext();
-    ImGui::SetNextWindowSize(ImVec2(410, 520), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Graphics settings", &_showGraphicsSettings)) {
-        ImGui::End();
-        return;
-    }
-    auto &options = _engine._options.graphics;
-
-    ImGui::TextUnformatted("Live (applies next frame)");
-    ImGui::Separator();
-    ImGui::Checkbox("FXAA", &options.fxaa);
-    ImGui::Checkbox("Sharpen", &options.sharpen);
-    ImGui::Checkbox("SSAO", &options.ssao);
-    ImGui::Checkbox("SSR", &options.ssr);
-    ImGui::Checkbox("Grass", &options.grass);
-    // Wired straight: density is a GPU gate over budgets baked at the slider
-    // maximum (kGrassDensityCap), so dragging costs a push-constant change.
-    // The old committed-on-release dance existed to avoid re-materialising
-    // every cluster per mouse-move; that rebuild no longer exists.
-    ImGui::SliderFloat("Grass density", &options.grassDensity, 0.0f, 8.0f, "%.2fx",
-                       ImGuiSliderFlags_Logarithmic);
-    ImGui::TextDisabled("Multiplies the area's authored density, so areas keep\n"
-                        "their relative variation. Live: the dial gates the\n"
-                        "active cluster prefix on the GPU.");
-    ImGui::Checkbox("TAA jitter", &options.taaJitter);
-    ImGui::SliderFloat("Draw distance", &options.drawDistance, 1.0f, 1000.0f, "%.0f");
+    ImGui::TextDisabled("Applied to every surface of the category as its material\nrecord is built. Color weight 1 flat-paints for bug\nisolation.");
 
     ImGui::Spacing();
     ImGui::TextUnformatted("Requires graphics rebuild");
@@ -984,6 +982,12 @@ void Editor::graphicsSettings() {
             options.height = std::max(1, _pendingHeight);
             options.shadowResolution = _pendingShadowResolution;
             options.vsync = _pendingVsync;
+            _engine.requestGraphicsRebuild();
+        }
+        // Saving a staged slot without applying it would write a config the
+        // running frame does not match.
+        if (_pendingAntiAliasing != static_cast<int>(options.antialiasing)) {
+            options.antialiasing = static_cast<graphics::AntiAliasing>(_pendingAntiAliasing);
             _engine.requestGraphicsRebuild();
         }
         _settingsSaveSucceeded = saveGraphicsOptions(options, _settingsSaveStatus);
@@ -1484,7 +1488,6 @@ void Editor::update(float dt) {
             ImGui::MenuItem("Objects", nullptr, &_showObjects);
             ImGui::MenuItem("Render targets", nullptr, &_showRenderTargets);
             ImGui::MenuItem("Graphics settings", nullptr, &_showGraphicsSettings);
-            ImGui::MenuItem("Path tracing", nullptr, &_showPathTracing);
             ImGui::MenuItem("Warp", nullptr, &_showWarp);
             ImGui::MenuItem("Frame times", nullptr, &_showFrameTimes);
             ImGui::EndMenu();
@@ -1559,9 +1562,6 @@ void Editor::update(float dt) {
     }
     if (_showGraphicsSettings) {
         graphicsSettings();
-    }
-    if (_showPathTracing) {
-        pathTracingSettings();
     }
 
     if (_showFrameTimes) {

@@ -78,15 +78,6 @@ private:
     std::unique_ptr<ITracingDenoiser> _nrdDenoiser;
     std::unique_ptr<IComputePipeline> _compositePipeline;
     std::vector<ComputeResourceSlot> _compositeBindings;
-    glm::vec3 _prevCameraPosition {0.0f};
-    bool _temporalHistoryValid {false};
-#endif
-#ifdef R_ENABLE_FSR
-    std::unique_ptr<ITracingUpscaler> _fsr;
-    std::unique_ptr<IImage> _fsrColor;
-    std::unique_ptr<IImage> _fsrOutput;
-    std::unique_ptr<IComputePipeline> _tonemapPipeline;
-    std::vector<ComputeResourceSlot> _tonemapBindings;
 #endif
 
     static constexpr int kNumAuxImages = 14;

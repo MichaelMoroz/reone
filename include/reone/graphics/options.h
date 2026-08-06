@@ -23,6 +23,36 @@ namespace reone {
 
 namespace graphics {
 
+/**
+ * What occupies the common anti-aliasing slot, between transparency and the
+ * display transform.
+ *
+ * A slot rather than a switch: every mode runs the same one, so a new resolve
+ * is a new case here and a new branch in the pass, not another place in the
+ * chain. One slot means one occupant - running a temporal resolve and then a
+ * spatial one over its output is two anti-aliasers stacked, which is what this
+ * enum exists to make unrepresentable.
+ */
+enum class AntiAliasing {
+    None,
+    Fxaa,
+    /**
+     * FidelityFX Super Resolution 2 at NativeAA (1.0x): a temporal resolve
+     * over the G-buffer's depth and motion. Available in every mode because
+     * primary visibility is rasterized in every mode. Selecting it changes
+     * what the pipeline allocates, so it is applied on a graphics rebuild
+     * rather than on the next frame.
+     */
+    Fsr,
+};
+
+/** Whether the projection carries a per-frame sub-pixel jitter. */
+enum class JitterMode {
+    Auto, /**< jitter exactly when a temporal resolver consumes it */
+    On,
+    Off,
+};
+
 struct GraphicsOptions {
     int width {1024};
     int height {768};
@@ -66,17 +96,21 @@ struct GraphicsOptions {
     int pathTracingSamples {3};
 
     /**
-     * Light-balance knobs for the traced mode. They scale sources, not the
-     * image: sky is authored background geometry (semantic, never
-     * color-based), emissive is every other emitter, and lightmap scales
-     * the baked radiance cache that stands in for light sources the tracer
-     * cannot see yet.
+     * Light-balance knobs. They scale sources, not the image: sky is authored
+     * background geometry (semantic, never color-based), emissive is every
+     * other emitter, and lightmap scales the baked radiance cache that stands
+     * in for light sources the tracer cannot see yet.
+     *
+     * These describe the scene's light rather than a renderer's treatment of
+     * it; the tracer is only their consumer today. Sky loses the prefix
+     * because the sky bake is common infrastructure - the raster composite
+     * takes the same cube, at texel identity, without scaling it.
      */
     /** Calibration session of 2026-07-29: sky and emissive at 2.5, the
         lightmap cache retired to zero - two bounces of real transport
         replace it - and the sun at 2.5 where the Dantooine dusk reads as a
         sun. All still dials; these are the graded defaults. */
-    float ptSkyIntensity {2.5f};
+    float skyIntensity {2.5f};
     float ptEmissiveIntensity {2.5f};
     float ptLightmapIntensity {0.0f};
     float ptDirectIntensity {1.0f};
@@ -113,32 +147,8 @@ struct GraphicsOptions {
     float ptNrdPlaneDistanceSensitivity {0.099f};
     float ptNrdDisocclusionThreshold {0.003f};
     bool ptNrdAntiFirefly {true};
-    /**
-     * Anti-alias with FidelityFX Super Resolution at NativeAA.
-     *
-     * This is the only temporal resolve left. The composite used to carry a
-     * hand-rolled TAA behind a blend dial; FSR measured 4.6x better on edges,
-     * so that one is gone rather than kept as a switchable alternative. With
-     * FSR on the composite stops at linear HDR for it to resolve and
-     * pt_tonemap to finish; with it off, or in a build without FSR, the
-     * composite tonemaps directly and the frame has no anti-aliasing.
-     */
-    bool ptFsr {true};
-    /**
-     * FSR's built-in RCAS sharpening, 0 to skip the pass entirely.
-     *
-     * RCAS exists to claw back the softness of upscaling, and at NativeAA there
-     * is no upscaling to compensate for - hence the conservative default. Do
-     * not stack a separate sharpen pass on top of it.
-     */
-    float ptFsrSharpness {0.0f};
     /** Debug view: 0 off, then the values in tracing/debug.slang. */
     int ptDebugView {0};
-    /** Display transform: 0 off, 1 ACES. On by default - the calibration
-        programme is defined in tonemapped terms. */
-    int ptTonemap {1};
-    /** Scene-referred exposure ahead of the tonemap. */
-    float ptExposure {1.0f};
     /**
      * A point light's emitter radius as a fraction of its authored influence
      * radius - it is a sphere, so its subtended solid angle is both its
@@ -157,13 +167,15 @@ struct GraphicsOptions {
     /** The sun is not at a physical distance, so it keeps an angle. Degrees. */
     float ptSunAngularSize {1.0f};
     /**
-     * Live per-category material overrides for the traced image - the
-     * calibration programme's primary instrument, ImGui-driven. Indexed by
-     * scene::ModelUsage (0-7) plus 8 for meshes without a model root. A
-     * colorWeight of 1 flat-paints the category, which makes
-     * lighting-interaction bugs self-identifying.
+     * Live per-category material overrides - the calibration programme's
+     * primary instrument, ImGui-driven. Indexed by scene::ModelUsage (0-7)
+     * plus 8 for meshes without a model root. A colorWeight of 1 flat-paints
+     * the category, which makes lighting-interaction bugs self-identifying.
+     *
+     * Not traced-only: they are applied while the shared material records are
+     * built, which the PBR raster resolve reads from as well.
      */
-    struct PtCategoryOverride {
+    struct CategoryOverride {
         float color[3] {1.0f, 1.0f, 1.0f};
         float colorWeight {0.0f};
         float roughness {-1.0f}; /**< negative: no override */
@@ -179,17 +191,51 @@ struct GraphicsOptions {
          */
         float metallicScale {1.0f};
     };
-    PtCategoryOverride ptCategoryOverrides[9] {};
+    CategoryOverride categoryOverrides[9] {};
     bool ssao {true};
     bool ssr {true};
-    bool fxaa {true};
+    /**
+     * The occupant of the common anti-aliasing slot.
+     *
+     * The default is resolved at the command line, where the render mode is
+     * also known - see optionsparser.cpp. There is no mode-dependent fallback
+     * below that point: whatever this says is what the slot runs.
+     */
+    AntiAliasing antialiasing {AntiAliasing::Fxaa};
+    /**
+     * FSR's built-in RCAS sharpening, 0 to skip the pass entirely. Inert
+     * unless the slot is running FSR.
+     *
+     * RCAS exists to claw back the softness of upscaling, and at NativeAA there
+     * is no upscaling to compensate for - hence the conservative default. Do
+     * not stack a separate sharpen pass on top of it.
+     */
+    float fsrSharpness {0.0f};
+    /** Display transform: 0 off, 1 ACES. On by default - the calibration
+        programme is defined in tonemapped terms. Owned by the post-process
+        pass, which is the only stage in any mode that applies it. */
+    int tonemap {1};
+    /** Scene-referred exposure ahead of the tonemap. */
+    float exposure {1.0f};
+    /**
+     * Run the common post-process pass, which owns the display transform.
+     *
+     * Off is diagnostic: the raster modes lose nothing they can see, since
+     * their resolves already write display-space colour and the pass is an
+     * identity over it, while the traced mode presents its linear image raw.
+     */
+    bool post {true};
     bool sharpen {true};
     /**
-     * Offset the projection by a sub-pixel jitter each frame. Motion vectors are
-     * produced regardless; this only controls the jitter itself, and is off by
-     * default because nothing resolves it yet.
+     * Offset the projection by a sub-pixel jitter each frame. Motion vectors
+     * are produced regardless; this only controls the jitter itself.
+     *
+     * Auto follows the active resolver at the point of use - FSR in the
+     * common slot, or the traced mode's accumulation - so a runtime switch
+     * of the AA method carries its jitter with it. On and Off are explicit
+     * overrides for diagnostics.
      */
-    bool taaJitter {false};
+    JitterMode taaJitter {JitterMode::Auto};
     /** Overrides the ARE's authored ShadowOpacity when >= 0. The retail data
         authors only two values, 50 and 205, so this is the knob for judging
         how that byte should map to a strength. */

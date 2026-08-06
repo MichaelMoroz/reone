@@ -44,6 +44,12 @@ static const uint kMaxTransmissionSteps = 12;
  * The one exit: write the split, then the image - a channel debug view when
  * one is active, the assembled color otherwise. Every path out of the kernel
  * ends here, so the debug views see sky and miss pixels too.
+ *
+ * The assembled image leaves here linear. Every traced frame ends in the
+ * common post-process pass, which owns the display transform, and a second
+ * one applied here would be applied twice. A debug view is the exception in
+ * both directions: it is a final diagnostic image the common tail is skipped
+ * for, so it still finishes itself.
  */
 void finishPixel(uint2 pixel, TraceOutputs outputs, PtDebug debug) {
     outputs.write(pixel);
@@ -55,8 +61,7 @@ void finishPixel(uint2 pixel, TraceOutputs outputs, PtDebug debug) {
         outputImage[pixel] = float4(color, 1.0);
         return;
     }
-    outputImage[pixel] = float4(ptDisplayTransform(outputs.assemble(), pushConstants.exposure,
-                                                   ptTonemapOperator()), 1.0);
+    outputImage[pixel] = float4(outputs.assemble(), 1.0);
 }
 
 /**

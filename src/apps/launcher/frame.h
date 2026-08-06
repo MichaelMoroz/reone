@@ -53,7 +53,8 @@ private:
         int ptspp {8};
         bool ssao {true};
         bool ssr {true};
-        bool fxaa {true};
+        /** "off" or "fxaa", matching the engine's --antialiasing. */
+        std::string antialiasing {"fxaa"};
         bool sharpen {true};
         int texQuality {0};
         int shadowres {1};
@@ -82,7 +83,7 @@ private:
     wxCheckBox *_checkBoxGrass;
     wxCheckBox *_checkBoxSSAO;
     wxCheckBox *_checkBoxSSR;
-    wxCheckBox *_checkBoxFXAA;
+    wxChoice *_choiceAntiAliasing;
     wxCheckBox *_checkBoxSharpen;
     wxSlider *_sliderVolumeMusic;
     wxSlider *_sliderVolumeVoice;

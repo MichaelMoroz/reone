@@ -104,7 +104,7 @@ ResourceExplorerViewModel::ResourceExplorerViewModel() {
     _graphicsOpt.pbr = false;
     _graphicsOpt.ssao = false;
     _graphicsOpt.ssr = false;
-    _graphicsOpt.fxaa = false;
+    _graphicsOpt.antialiasing = graphics::AntiAliasing::None;
     _graphicsOpt.sharpen = false;
 
     _clock = std::make_unique<wxClock>();

@@ -24,7 +24,7 @@
 #include <vector>
 
 #include "reone/graphics/vulkan/image.h"
-#include "reone/graphics/rhi/tracingpipeline.h"
+#include "reone/graphics/rhi/upscaler.h"
 
 #include <ffx_fsr2.h>
 #include <ffx_fsr2_vk.h>
@@ -46,9 +46,9 @@ class VulkanDevice;
  * reflection and descriptor-layout creation. Its few direct entry points are
  * compiled through volk so the process has exactly one Vulkan loader owner.
  */
-class FsrUpscaler : public ITracingUpscaler, boost::noncopyable {
+class FsrUpscaler : public IUpscaler, boost::noncopyable {
 public:
-    FsrUpscaler(graphics::VulkanDevice &device, glm::ivec2 extent);
+    FsrUpscaler(graphics::VulkanDevice &device, glm::ivec2 extent, bool highDynamicRange);
     ~FsrUpscaler() { deinit(); }
 
     void init();
@@ -61,7 +61,7 @@ public:
      * @param frameTimeSeconds converted to the milliseconds FSR expects
      * @param reset true on the first frame and after a camera cut
      */
-    void dispatch(ICommandBuffer &commandBuffer, const TracingUpscalerInputs &inputs,
+    void dispatch(ICommandBuffer &commandBuffer, const UpscalerInputs &inputs,
                   const glm::vec2 &jitter,
                   float frameTimeSeconds, float cameraNear, float cameraFar, float verticalFov,
                   float sharpness, bool reset) override;
@@ -76,6 +76,8 @@ public:
 private:
     graphics::VulkanDevice &_device;
     glm::ivec2 _extent;
+    /** Fixed at construction: it selects context flags, not per-dispatch state. */
+    bool _highDynamicRange {true};
     bool _inited {false};
 
     /** The backend scratch arena must outlive the FSR context. */
