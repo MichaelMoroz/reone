@@ -244,18 +244,18 @@ static bool isLightingEnabledByUsage(ModelUsage usage) {
 // Anything occupying the world receives. GUI and camera models are not in the
 // world at all, and background scenery is excluded by the caller, which knows
 // whether this particular mesh resolved as sky.
+/**
+ * Everything lit receives shadows; only the authored backdrop is exempt,
+ * because it is not lit at all.
+ *
+ * The usage whitelist this replaces predated the caster policy. It excluded
+ * whole classes - grass, the sky shell's neighbours, anything not one of six
+ * usages - so a shadow could fall on one surface and stop dead at the edge of
+ * another for reasons the picture never explains. What a surface receives is
+ * a property of the light reaching it, not of what kind of object it is.
+ */
 static bool isReceivingShadows(const ModelSceneNode &model, const MeshSceneNode &modelNode) {
-    switch (model.usage()) {
-    case ModelUsage::Room:
-    case ModelUsage::Creature:
-    case ModelUsage::Placeable:
-    case ModelUsage::Door:
-    case ModelUsage::Equipment:
-    case ModelUsage::Projectile:
-        return true;
-    default:
-        return false;
-    }
+    return true;
 }
 
 void MeshSceneNode::collectInto(GpuScene &scene) {

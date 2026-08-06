@@ -99,8 +99,10 @@ GBufferOutput pbrFragment(Varyings input) {
         discard;
     }
 
+    // Grass takes shadows now - everything lit does - and is never the
+    // authored backdrop.
     float features = packGeometryFeatures(false, surface.hasLightmap, false,
-                                          false, false);
+                                          true, false);
     float3 eyeNormal = mul(surface.normal, (float3x3)globalUniforms.viewInv);
     eyeNormal = 0.5 * eyeNormal + 0.5;
 

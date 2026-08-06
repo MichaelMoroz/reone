@@ -175,22 +175,6 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
                            shadowsEnabled, fogEnabled);
 
-    // Static geometry without a lightmap is the unlit backdrop (far hills,
-    // sky shells): authored self-lit, drawn by the original with lighting
-    // off. The corrected model keeps the authored texel too - running it
-    // through the BRDF would relight what the original never lit. Mirrors
-    // the same branch in retro_resolve.slang.
-    if (staticObject && !hasLightmap) {
-        float3 unlit = mainTexSample.rgb + selfIllumSample.rgb;
-        if (fogEnabled) {
-            float unlitDistance = length(worldPos - globalUniforms.cameraPosition.xyz);
-            float unlitFog = 1.0 - saturate((globalUniforms.fogFar - unlitDistance) /
-                                            max(0.0001, globalUniforms.fogFar - globalUniforms.fogNear));
-            unlit = lerp(unlit, globalUniforms.fogColor.rgb, unlitFog);
-        }
-        return float4(unlit, 1.0);
-    }
-
     float shadowFactor = 1.0;
     if (shadowsEnabled) {
         shadowFactor = getShadow(eyePos, worldPos, normal);
@@ -223,8 +207,15 @@ float4 resolveFragment(Varyings input) : SV_Target0 {
     // sky hemisphere integral already is ambient, so adding both doubles it.
     // Interiors consequently lose this small raster-only baseline; direct
     // scene lights are the intentionally shared illumination there.
-    float3 irradiance = hasLightmap
-                            ? gammaToLinear(lightmapSample.rgb)
+    // Static geometry with no lightmap authored reads as a white bake, not
+    // as an absence of light: whole exteriors ship without lightmaps (the
+    // Tatooine dune sea has none at all), and calling that unlit either
+    // blackens them or exempts them from shadows. Dynamic objects keep flat
+    // world ambient - they were never lightmapped and the light loop shades
+    // them. Mirrors the same choice in retro_resolve.slang.
+    float3 irradiance = hasLightmap ? gammaToLinear(lightmapSample.rgb)
+                        : staticObject
+                            ? float3(1.0)
                             : materialAmbient *
                                   gammaToLinear(globalUniforms.worldAmbientColor.rgb);
     if (envmapped) {
