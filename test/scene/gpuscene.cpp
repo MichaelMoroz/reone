@@ -123,6 +123,19 @@ TEST(GpuScene, grass_uses_face_band_prefix_ranges_without_cpu_quads) {
     scene.addGrass(renderCategory(RenderCategory::Opaque), {4, 0}, {}, material,
                    faces, 1);
 
+    // Pinned rather than left to the defaults, and deliberately not the default
+    // values: the counts below are the blade arithmetic, and a test that reads
+    // them out of whatever the defaults happen to be stops measuring it the
+    // moment someone retunes the grass. Which is how this test came to assert
+    // the old cardboard quad long after blades replaced it. The radius has to
+    // keep the near camera in reach of the first two faces and out of reach of
+    // the third, since selection is by distance.
+    GrassParams params;
+    params.radius = 32.0f;
+    params.segments = 3;
+    params.bladesPerCluster = 2;
+    scene.setGrassParams(params);
+
     int classifications = 0;
     auto classify = [&classifications](const RegisteredProcedural &object) {
         ++classifications;
@@ -144,8 +157,12 @@ TEST(GpuScene, grass_uses_face_band_prefix_ranges_without_cpu_quads) {
     EXPECT_EQ(1, near.grassRanges[1].faceIndex);
     EXPECT_EQ(3, near.grassRanges[1].clusterOffset);
     EXPECT_EQ(5, near.grassRanges[1].clusterCount);
-    EXPECT_EQ(32, near.objects[0].data.vertexCount);
-    EXPECT_EQ(16, near.objects[0].data.triangleCount);
+    // 8 granted clusters * 2 blades, each a strip of 3 quads closed by a tip:
+    // 2n+3 = 9 vertices and 2n+1 = 7 triangles. Spelled as literals rather than
+    // through grassVertsPerBlade, so an error in that helper cannot satisfy
+    // both the recorder and its test.
+    EXPECT_EQ(144, near.objects[0].data.vertexCount);
+    EXPECT_EQ(112, near.objects[0].data.triangleCount);
     EXPECT_EQ(2, near.objects[0].data.srcIndexOffset);
     EXPECT_EQ(near.objects[0].data.materialIndex,
               near.grassFaces[0].faceBudgetMaterialVariants.z);
@@ -161,8 +178,9 @@ TEST(GpuScene, grass_uses_face_band_prefix_ranges_without_cpu_quads) {
     EXPECT_EQ(0, far.grassRanges[0].clusterOffset);
     EXPECT_EQ(2, far.grassRanges[0].clusterCount);
     ASSERT_EQ(1, far.objects.size());
-    EXPECT_EQ(8, far.objects[0].data.vertexCount);
-    EXPECT_EQ(4, far.objects[0].data.triangleCount);
+    // Only the far face is in reach now: 2 clusters * 2 blades * 9 and * 7.
+    EXPECT_EQ(36, far.objects[0].data.vertexCount);
+    EXPECT_EQ(28, far.objects[0].data.triangleCount);
 
     faces[0].faceBudgetMaterialVariants.y = 9;
     scene.addGrass(renderCategory(RenderCategory::Opaque), {4, 0}, {}, material,
