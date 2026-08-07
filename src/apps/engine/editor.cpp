@@ -1282,7 +1282,7 @@ void Editor::graphicsDebugViewSection() {
         "Traced: diffuse radiance", "Traced: specular radiance",
         "Depth", "Traced: noise-free", "Motion", "Material id", "Feature bits",
         "Traced: direct shadow", "Traced: penumbra",
-        "Denoised: diffuse", "Denoised: specular", "Denoised: direct"};
+        "Denoised: diffuse", "Denoised: specular", "Direct: filtered"};
     // Unsized, with the count asserted, because the last three were produced by
     // the resolve and routed by isResolveDebugView for as long as they have
     // existed and were still unreachable here: the list simply stopped at 16,
@@ -1302,10 +1302,14 @@ void Editor::graphicsDebugViewSection() {
                 "the Denoised ones are what came back, still demodulated - before the material is "
                 "put back and the components are reassembled - so each shows its own noise rather "
                 "than an albedo multiplied over it. Comparing a Traced channel against its "
-                "Denoised counterpart is what the pair is for. Both exist only under path "
-                "tracing; elsewhere they draw a magenta 'not available' hatch rather than black or "
-                "some other channel. Any active view skips anti-aliasing, grade and sharpen - it "
-                "is not a picture.");
+                "Denoised counterpart is what the pair is for.\n\n"
+                "Direct: filtered is neither. Direct light at the primary vertex bypasses NRD "
+                "entirely - that is why it exists - and this is that channel after the engine's "
+                "own penumbra-sized blur, or the raw channel when the shadow filter is off. "
+                "Nothing NRD did shows up here.\n\n"
+                "All of them exist only under path tracing; elsewhere they draw a magenta 'not "
+                "available' hatch rather than black or some other channel. Any active view skips "
+                "anti-aliasing, grade and sharpen - it is not a picture.");
 }
 
 void Editor::graphicsMaterialsTab() {
