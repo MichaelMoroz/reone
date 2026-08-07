@@ -1281,17 +1281,31 @@ void Editor::graphicsDebugViewSection() {
         "Roughness", "Metallic", "Lightmap", "Albedo",
         "Traced: diffuse radiance", "Traced: specular radiance",
         "Depth", "Traced: noise-free", "Motion", "Material id", "Feature bits",
-        "Traced: direct shadow", "Traced: penumbra"};
+        "Traced: direct shadow", "Traced: penumbra",
+        "Denoised: diffuse", "Denoised: specular", "Denoised: direct"};
+    // Unsized, with the count asserted, because the last three were produced by
+    // the resolve and routed by isResolveDebugView for as long as they have
+    // existed and were still unreachable here: the list simply stopped at 16,
+    // and a combo cannot offer an entry it has no name for. Same shape of
+    // omission as the aux-image name tables, and the same guard - adding a
+    // channel without naming it is now a build error rather than a channel
+    // nobody can select.
+    static_assert(std::size(kDebugViewNames) == static_cast<size_t>(graphics::kMaxDebugView) + 1,
+                  "every debug channel through kMaxDebugView needs a name here");
     ImGui::Combo("Channel", &options.debugView, kDebugViewNames,
                  static_cast<int>(std::size(kDebugViewNames)));
     settingHint("Replaces the shaded image. Categories: blue rooms, red creatures, green "
                 "placeables, magenta doors, yellow equipment, cyan sky. Roughness, metallic and "
                 "depth are raw, not shaded. Feature bits: red env-map, green lightmap, blue "
                 "static, dimmed when unshadowed.\n\n"
-                "The three Traced channels are the tracer's own output split and exist nowhere "
-                "else; outside path tracing they draw a magenta 'not available' hatch rather than "
-                "black or some other channel. Any active view skips anti-aliasing, grade and "
-                "sharpen - it is not a picture.");
+                "The Traced channels are the tracer's output split as it was fed to the denoiser; "
+                "the Denoised ones are what came back, still demodulated - before the material is "
+                "put back and the components are reassembled - so each shows its own noise rather "
+                "than an albedo multiplied over it. Comparing a Traced channel against its "
+                "Denoised counterpart is what the pair is for. Both exist only under path "
+                "tracing; elsewhere they draw a magenta 'not available' hatch rather than black or "
+                "some other channel. Any active view skips anti-aliasing, grade and sharpen - it "
+                "is not a picture.");
 }
 
 void Editor::graphicsMaterialsTab() {
