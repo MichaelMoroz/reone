@@ -280,6 +280,13 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                            &GraphicsOptions::ptBounces, 1, 8));
     descs.push_back(floatOpt("ptrayoffset", OptionApply::Live, "path tracing ray origin offset",
                              &GraphicsOptions::ptRayOffset, 0.0001f, 1.0f));
+    descs.push_back(floatOpt("albedogamma", OptionApply::Live,
+                             "authored albedo decode exponent, PBR and path tracing alike "
+                             "(2.2 is sRGB-correct, 1.0 matches the reference engines)",
+                             &GraphicsOptions::albedoGamma, 0.1f, 4.0f));
+    descs.push_back(floatOpt("pbrlightmapintensity", OptionApply::Live,
+                             "PBR baked-irradiance intensity",
+                             &GraphicsOptions::pbrLightmapIntensity, 0.0f, 1024.0f));
     descs.push_back(boolOpt("pttracestats", OptionApply::Live,
                             "enable path tracing statistics",
                             &GraphicsOptions::ptTraceStats));

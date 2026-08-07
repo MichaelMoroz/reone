@@ -143,8 +143,22 @@ public struct PtPushConstants {
     public uint geometryBase1;
     /** A successful sky-room bake exists; otherwise geometry remains admitted. */
     public uint skyAvailable;
+    /** Exponent authored surface colour is decoded with; see GraphicsOptions. */
+    public float albedoGamma;
 };
 [[vk::push_constant]] public PtPushConstants pushConstants;
+
+/**
+ * Authored surface colour to linear.
+ *
+ * Separate from ptGammaToLinear, which is a fixed 2.2 and stays that way: it
+ * is also the encode the post-process inverts, and the two must agree. This is
+ * only the decode applied to reflectance, so it can move without putting a
+ * global contrast shift through the frame.
+ */
+public float3 ptDecodeAlbedo(float3 rgb) {
+    return pow(max(rgb, 0.0), float3(pushConstants.albedoGamma));
+}
 
 public static const uint kPtFlagStats = 1u;
 /**

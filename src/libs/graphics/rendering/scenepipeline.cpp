@@ -67,6 +67,9 @@ struct PostProcessPushConstants {
 struct ResolvePushConstants {
     uint32_t flags;
     float thinTransmission;
+    float albedoGamma;
+    float roughnessFloor;
+    float lightmapIntensity;
 };
 
 /** Mirrors DebugViewPushConstants in debug_view.slang. */
@@ -560,6 +563,26 @@ uint32_t ScenePipeline::resolveFlags() const {
     return flags;
 }
 
+namespace {
+
+/**
+ * Every field, at every call site.
+ *
+ * The PBR resolve used to build this from resolveFlags() alone, which left the
+ * remaining members value-initialised: thin surfaces transmitted zero light in
+ * that mode while retro passed the authored fraction, so a blade of grass lit
+ * from behind was black there and lit here for no reason either mode stated.
+ */
+ResolvePushConstants resolvePush(uint32_t flags, const GraphicsOptions &options) {
+    return {flags,
+            std::clamp(options.thinTransmission, 0.0f, 1.0f),
+            std::clamp(options.albedoGamma, 0.1f, 4.0f),
+            std::clamp(options.ptRoughnessFloor, 0.0f, 1.0f),
+            std::max(0.0f, options.pbrLightmapIntensity)};
+}
+
+} // namespace
+
 GBufferBinding ScenePipeline::gbufferBinding() {
     GBufferBinding binding;
     binding.diffuse = &_gbuffer->color(GBufferAttachment::Diffuse);
@@ -615,8 +638,7 @@ void ScenePipeline::retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset
         if (_resolveMaterialSet) {
             cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kMegaDrawSet,
                                   _resolveMaterialSet, nullptr, 0);
-            const ResolvePushConstants push {resolveFlags(),
-                                             std::clamp(_options.thinTransmission, 0.0f, 1.0f)};
+            const ResolvePushConstants push = resolvePush(resolveFlags(), _options);
             cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
             cmd.draw(3, 1);
         }
@@ -673,7 +695,7 @@ void ScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) 
                                  _resolveMaterialSet, nullptr, 0);
     cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kResolveSet,
                                  resolveSet(_output.get()), nullptr, 0);
-    const ResolvePushConstants push {resolveFlags()};
+    const ResolvePushConstants push = resolvePush(resolveFlags(), _options);
     cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));
     cmd.dispatchCompute({(_targetSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
                          (_targetSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});
@@ -734,7 +756,7 @@ void ScenePipeline::screenSpaceReflectionPass(ICommandBuffer &cmd, uint32_t glob
     }
     cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kResolveSet,
                                  resolveSet(_tailColor.get()), nullptr, 0);
-    const ResolvePushConstants push {resolveFlags()};
+    const ResolvePushConstants push = resolvePush(resolveFlags(), _options);
     cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));
     cmd.dispatchCompute({(_targetSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
                          (_targetSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});

@@ -55,6 +55,7 @@ import uniforms;
 import lib.gbuf;
 import lib.math;
 import lib.scene_schema;
+import lib.material_ops;
 import tracing.brdf;
 import tracing.resources;
 import tracing.material;
@@ -162,7 +163,7 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     shading.terminatesPath = false;
     // VulkanGBuffer stores the authored gamma-encoded texel with the vertex
     // colour already multiplied in; tracing shades linear.
-    shading.albedo = ptGammaToLinear(diffuseSample.rgb);
+    shading.albedo = ptDecodeAlbedo(diffuseSample.rgb);
     shading.alpha = diffuseSample.a;
     shading.normal = normal;
     // Exactly PbrSurface::shade's stand-ins and curation, over a G-buffer texel
@@ -180,7 +181,7 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     // the vertex colour has already scaled, where the hit record applied it
     // first. Identical wherever overrideColor.w is zero, which is every
     // material no category override has been pointed at.
-    shading.albedo = lerp(shading.albedo, ptGammaToLinear(material.overrideColor.rgb),
+    shading.albedo = lerp(shading.albedo, ptDecodeAlbedo(material.overrideColor.rgb),
                           material.overrideColor.w);
     if (material.overrideParams.x >= 0.0) shading.roughness = material.overrideParams.x;
     shading.roughness = clamp(shading.roughness * material.roughnessScale,
@@ -194,7 +195,8 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     shading.envStrength = (envmapped ? (1.0 - shading.alpha) : 0.0) *
                           material.overrideParams.z;
     shading.hasLightmap = hasLightmap;
-    shading.lightmap = hasLightmap ? ptGammaToLinear(lightmapSample.rgb) : float3(0.0);
+    // White where there is no bake - see the note in tracing/material.slang.
+    shading.lightmap = hasLightmap ? ptGammaToLinear(lightmapSample.rgb) : float3(1.0);
 
     float3 emission = ptGammaToLinear(selfIllumSample);
     if (material.curatedEmission.w > 1.5) {

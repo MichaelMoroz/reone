@@ -45,6 +45,7 @@ import lib.math;
 import lib.gbuf;
 import lib.shadow;
 import lib.scene_schema;
+import lib.material_ops;
 import lib.skycube;
 
 /**
@@ -87,6 +88,16 @@ struct ResolvePushConstants {
     uint flags;
     /** Fraction of light a thin surface passes to its far side. */
     float thinTransmission;
+    /** Exponent authored surface colour is decoded with; shared with the tracer. */
+    float albedoGamma;
+    /** Lowest roughness any surface may take; shared with the tracer. */
+    float roughnessFloor;
+    /**
+     * Strength of the baked irradiance. Not shared with the tracer's dial of
+     * the same name, and the only material-facing number that is not: see the
+     * irradiance term below.
+     */
+    float lightmapIntensity;
 };
 [[vk::push_constant]] ResolvePushConstants pushConstants;
 
@@ -311,17 +322,24 @@ float3 resolveSurface(float2 uv, int2 pixel) {
 
     float3 V = normalize(globalUniforms.cameraPosition.xyz - worldPos);
 
-    float3 albedo = gammaToLinear(mainTexSample.rgb);
-    float3 emission = gammaToLinear(selfIllumSample.rgb);
-    float3 materialAmbient = gammaToLinear(material.ambientColor.rgb);
-    float3 materialDiffuse = gammaToLinear(material.diffuseColor.rgb);
+    // The same chain the tracer runs, from lib/material_ops.slang: the decode,
+    // the curated per-object operations and the per-category calibration
+    // override. This resolve used to run none of it - albedo was the raw texel
+    // and roughness a hardcoded floor over the alpha - so every object a
+    // curation or category dial touched was a different brightness here than
+    // in path tracing, and the dials themselves did nothing in this mode.
+    MaterialSurface surface = resolveMaterial(material, mainTexSample.rgb, mainTexSample.a,
+                                              pushConstants.albedoGamma,
+                                              pushConstants.roughnessFloor);
+    float3 albedo = surface.albedo;
     // Odyssey assets carry neither metalness nor roughness. Diffuse alpha is
     // the authored mirror strength, handled separately below exactly as the
     // original renderer did; it is not a second F0 for the IBL lobe.
-    float metallic = 0.0;
-    // Odyssey assets carry no roughness channel; the diffuse alpha stands in,
-    // floored so that nothing turns into a perfect mirror.
-    float roughness = clamp(mainTexSample.a, 0.2, 1.0);
+    float metallic = surface.metallic;
+    float roughness = surface.roughness;
+    float3 emission = gammaToLinear(selfIllumSample.rgb);
+    float3 materialAmbient = gammaToLinear(material.ambientColor.rgb);
+    float3 materialDiffuse = gammaToLinear(material.diffuseColor.rgb);
     // Screen-space occlusion, when it is switched on. With it off this is the
     // neutral one the resolve has always used and the branch is not taken, so
     // the frame is the frame that was rendered before it existed.
@@ -375,9 +393,16 @@ float3 resolveSurface(float2 uv, int2 pixel) {
     // blackens them or exempts them from shadows. Dynamic objects keep flat
     // world ambient - they were never lightmapped and the light loop shades
     // them. Mirrors the same choice in retro_resolve.slang.
-    float3 irradiance = hasLightmap ? gammaToLinear(lightmapSample.rgb)
+    //
+    // The lightmap takes its own intensity here, and it is deliberately not the
+    // tracer's. This is the one dial that must differ between the two modes:
+    // the bake IS the indirect light in this mode, where the tracer computes
+    // that transport outright and scales the bake toward zero to avoid counting
+    // it twice. Everything else about the surface is shared.
+    float3 irradiance = hasLightmap
+                            ? gammaToLinear(lightmapSample.rgb) * pushConstants.lightmapIntensity
                         : staticObject
-                            ? float3(1.0)
+                            ? float3(pushConstants.lightmapIntensity)
                             : materialAmbient *
                                   gammaToLinear(globalUniforms.worldAmbientColor.rgb);
     if (envmapped) {

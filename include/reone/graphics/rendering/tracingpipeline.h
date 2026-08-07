@@ -75,6 +75,7 @@ private:
         uint32_t geometryBase0;
         uint32_t geometryBase1;
         uint32_t skyAvailable;
+        float albedoGamma;
     };
 
     bool _restartHistoryRequested {false};

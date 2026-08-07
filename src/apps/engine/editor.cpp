@@ -118,6 +118,8 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"exposure", formatConfigFloat(options.exposure)},
         {"ptpointemitterratio", formatConfigFloat(options.ptPointEmitterRatio)},
         {"ptsunangularsize", formatConfigFloat(options.ptSunAngularSize)},
+        {"albedogamma", formatConfigFloat(options.albedoGamma)},
+        {"pbrlightmapintensity", formatConfigFloat(options.pbrLightmapIntensity)},
         {"ptdenoiser", options.ptDenoiser == graphics::Denoiser::Reblur ? "reblur" : "relax"},
         {"ptnrdstabilizationtime", formatConfigFloat(options.ptNrdStabilizationTime)},
         {"ptnrdaccumtime", formatConfigFloat(options.ptNrdAccumulationTime)},
@@ -933,6 +935,13 @@ void Editor::graphicsQualityTab() {
     settingHint("A second dispatch over the resolved image, ahead of anti-aliasing and "
                 "transparency. Off, the pass is not recorded at all.",
                 true);
+    ImGui::SliderFloat("Lightmap intensity", &options.pbrLightmapIntensity, 0.0f, 4.0f, "%.2f");
+    settingHint("Strength of the area's baked irradiance, which is this mode's indirect light, so "
+                "it belongs at full strength. The tracer has its own dial for the same bake - "
+                "Lightmap cache, on the Path tracing tab - kept near zero because it computes that "
+                "transport for real and would otherwise count it twice. That pair is the one "
+                "number the two modes are meant to disagree on.",
+                true);
     ImGui::EndDisabled();
     ImGui::Checkbox("Grass", &options.grass);
     // Wired straight: density is a GPU gate over budgets baked at the slider
@@ -1050,6 +1059,7 @@ void Editor::graphicsQualityTab() {
     ImGui::EndDisabled();
 }
 
+
 void Editor::graphicsPathTracingTab() {
     auto &options = _engine._options.graphics;
     auto &staged = _engine.stagedGraphicsOptions();
@@ -1141,6 +1151,9 @@ void Editor::graphicsPathTracingTab() {
     ImGui::SliderFloat("Direct light", &options.ptDirectIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
     ImGui::SliderFloat("Sun", &options.ptSunIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
     ImGui::SliderFloat("Lightmap cache", &options.ptLightmapIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    settingHint("Near zero on purpose: the tracer computes that transport for real, so adding the "
+                "bake on top counts it twice. PBR keeps its own strength for the same bake, on the "
+                "PBR tab - that pair is the one number the two modes are meant to disagree on.");
     ImGui::SliderFloat("Sun angular size", &options.ptSunAngularSize, 0.05f, 10.0f, "%.2f deg");
     settingHint("Ctrl+click to type a value. The sun is not at a physical distance, so it keeps an "
                 "authored angle.");
@@ -1173,7 +1186,8 @@ void Editor::graphicsAdvancedTab() {
     ImGui::SliderFloat("Roughness floor", &options.ptRoughnessFloor, 0.0f, 1.0f, "%.2f");
     settingHint("The lowest roughness any surface may take. Odyssey has no roughness channel - "
                 "diffuse alpha stands in - so this is what keeps an authored mirror from being a "
-                "perfect one, and why a roughness scale of zero does not give you a mirror.");
+                "perfect one, and why a roughness scale of zero does not give you a mirror. The "
+                "PBR resolve clamps against this too.");
     ImGui::SliderFloat("Indirect clamp", &options.ptIndirectClamp, 0.0f, 16.0f, "%.2f");
     settingHint("Ceiling on a single indirect sample; 0 is off. The blunt one: it truncates energy "
                 "rather than widening a lobe, so it darkens whatever it fixes. For the cases "
@@ -1283,9 +1297,20 @@ void Editor::graphicsDebugViewSection() {
 void Editor::graphicsMaterialsTab() {
     auto &options = _engine._options.graphics;
 
-    // Not a traced-only tool: these edit the shared material records, which
-    // the raster PBR resolve reads as well - see applyCategoryOverride in
-    // scene/render/admission.cpp.
+    // Governs every material record in both shading modes, so it leads the tab
+    // the records belong to rather than sitting under one mode's heading.
+    ImGui::SliderFloat("Albedo gamma", &options.albedoGamma, 0.1f, 4.0f, "%.2f");
+    settingHint("Exponent authored surface colour is decoded with, in PBR and path tracing alike. "
+                "2.2 is sRGB-correct and is the default, but Odyssey content was not authored to "
+                "be decoded at all - xoreos, KotOR.js and kvp all multiply the texel by light "
+                "unconverted, as the original did. So 2.2 squares an albedo the artist picked "
+                "directly (0.5 becomes 0.22) and a path tracer compounds that every bounce; 1.0 "
+                "reproduces the reference engines. Reflectance only: light colour, emission and "
+                "the output encode are untouched.");
+    ImGui::Separator();
+
+    // These edit the shared material records, read by both PBR and the tracer
+    // - see applyCategoryOverride in scene/render/admission.cpp.
     static constexpr const char *kCategoryNames[] = {
         "GUI", "Rooms", "Creatures", "Placeables", "Doors",
         "Equipment", "Projectiles", "Cameras", "Uncategorized"};

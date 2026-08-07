@@ -30,6 +30,7 @@
 
 import lib.math;
 import lib.scene_schema;
+import lib.material_ops;
 import uniforms;
 import tracing.rng;
 import tracing.brdf;
@@ -221,17 +222,9 @@ public float ptRayConeLod(InstanceMaterial material, uint3 indices, float coneWi
     return max(0.0, 0.5 * log2(max(density, 1e-12)) + log2(max(coneWidth, 1e-9)));
 }
 
-// Curated channel op: mode 0 passes the derived value through, mode 1
-// overrides with a constant, mode 2 evaluates
-// lerp(base, smoothstep(a, b, dot(albedo, weights)), t).
-//
-// Public because tracing/primary.slang evaluates the same curation over a
-// G-buffer texel instead of over a hit record, and the two must not drift.
-public float curatedChannel(float4 A, float4 B, float3 albedo, float current) {
-    if (A.x < 0.5) return current;
-    if (A.x < 1.5) return A.y;
-    return lerp(A.y, smoothstep(A.z, A.w, dot(albedo, B.yzw)), B.x);
-}
+// The curated channel op now lives in lib/material_ops.slang, with the rest of
+// the authored-texel chain, because the raster PBR resolve evaluates it too -
+// it is not a tracer detail.
 
 public struct PbrSurface : ISurfaceModel {
     public SurfaceShading shade(HitGeometry hit) {
@@ -245,7 +238,7 @@ public struct PbrSurface : ISurfaceModel {
             // Textures are stored gamma-encoded; every term this shader
             // computes is linear, exactly as the raster resolve does it.
             float4 sample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleGrad(hit.uv, gradients.x, gradients.y);
-            shading.albedo = ptGammaToLinear(sample.rgb);
+            shading.albedo = ptDecodeAlbedo(sample.rgb);
             shading.alpha = sample.a;
             if ((material.featureMask & kPtMaskPremulAlpha) != 0) {
                 // Colour is already multiplied by coverage and the alpha
@@ -277,7 +270,7 @@ public struct PbrSurface : ISurfaceModel {
         // demodulation factor chromatic - KotOR's own materials are all
         // dielectric, so without this dial that path cannot be exercised.
         shading.metallic = saturate(shading.metallic * material.overrideParams.w);
-        shading.albedo = lerp(shading.albedo, ptGammaToLinear(material.overrideColor.rgb),
+        shading.albedo = lerp(shading.albedo, ptDecodeAlbedo(material.overrideColor.rgb),
                               material.overrideColor.w);
         float4 color = vertexColor(hit);
         shading.albedo *= color.rgb;
@@ -291,7 +284,15 @@ public struct PbrSurface : ISurfaceModel {
         shading.envStrength = (shading.envmapped ? (1.0 - shading.alpha) : 0.0) *
                               material.overrideParams.z;
         shading.hasLightmap = (material.featureMask & uint(kFeatureLightmap)) != 0;
-        shading.lightmap = float3(0.0);
+        // White, not black, where a surface declares a bake it has no texture
+        // for. Zero is not "no lightmap", it is "a lightmap that absorbs all
+        // light", and it reaches more surfaces than it looks: the lightmaps
+        // diagnostic toggle clears the texture id and leaves the feature bit
+        // set, so turning it off blackened every lightmapped surface in this
+        // mode while raster - which substitutes white in scene_draw.slang -
+        // was unaffected. Same rule both resolves state for unlightmapped
+        // static geometry.
+        shading.lightmap = float3(1.0);
         if (shading.hasLightmap && material.lightmap != kPtNoTexture) {
             shading.lightmap = ptGammaToLinear(
                 bindlessTextures[NonUniformResourceIndex(material.lightmap)].SampleLevel(hit.uv2, 0.0).rgb);
@@ -444,7 +445,7 @@ public struct UnlitTransparentSurface : ISurfaceModel {
         shading.roughness = 1.0;
         shading.metallic = 0.0;
         shading.hasLightmap = false;
-        shading.lightmap = float3(0.0);
+        shading.lightmap = float3(1.0);
         shading.envmapped = false;
         shading.envStrength = 0.0;
         // Additive diffuse textures are authored as light even when no
@@ -483,7 +484,7 @@ public struct UnlitEmissiveSurface : ISurfaceModel {
         shading.roughness = 1.0;
         shading.metallic = 0.0;
         shading.hasLightmap = false;
-        shading.lightmap = float3(0.0);
+        shading.lightmap = float3(1.0);
         shading.envmapped = false;
         shading.envStrength = 0.0;
         // The texture is the radiance: the sky takes its own dial, prelit

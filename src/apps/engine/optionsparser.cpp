@@ -120,6 +120,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ptroughnessfloor", value<float>()->default_value(options->graphics.ptRoughnessFloor), "lowest roughness any surface may take") //
         ("ptindirectclamp", value<float>()->default_value(options->graphics.ptIndirectClamp), "ceiling on one indirect sample, 0 to disable") //
         ("ptsunangularsize", value<float>()->default_value(options->graphics.ptSunAngularSize), "path tracing sun angular size") //
+        ("albedogamma", value<float>()->default_value(options->graphics.albedoGamma), "authored albedo decode exponent, PBR and path tracing alike (2.2 is sRGB-correct, 1.0 matches the reference engines)") //
+        ("pbrlightmapintensity", value<float>()->default_value(options->graphics.pbrLightmapIntensity), "PBR baked-irradiance intensity") //
         ("lightmaps", value<bool>()->default_value(options->graphics.lightmaps), "apply lightmaps (diagnostic toggle)")        //
         ("ssao", value<bool>()->default_value(options->graphics.ssao), "enable screen-space ambient occlusion")                 //
         ("ssr", value<bool>()->default_value(options->graphics.ssr), "enable screen-space reflections")                         //
@@ -296,6 +298,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.exposure = std::max(0.05f, vars["exposure"].as<float>());
     options->graphics.ptPointEmitterRatio = std::clamp(vars["ptpointemitterratio"].as<float>(), 0.01f, 0.5f);
     options->graphics.ptSunAngularSize = std::max(0.05f, vars["ptsunangularsize"].as<float>());
+    options->graphics.albedoGamma = std::clamp(vars["albedogamma"].as<float>(), 0.1f, 4.0f);
+    options->graphics.pbrLightmapIntensity = std::max(0.0f, vars["pbrlightmapintensity"].as<float>());
     options->graphics.lightmaps = vars["lightmaps"].as<bool>();
     options->graphics.ssao = vars["ssao"].as<bool>();
     options->graphics.ssr = vars["ssr"].as<bool>();

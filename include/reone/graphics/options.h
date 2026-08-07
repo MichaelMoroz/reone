@@ -138,6 +138,25 @@ struct GraphicsOptions {
      * so the number is a look rather than a measurement.
      */
     float thinTransmission {0.8f};
+    /**
+     * Exponent authored surface colour is decoded with, in PBR and in path
+     * tracing alike.
+     *
+     * Not a path-tracing setting: the two modes are meant to differ only in
+     * how light reaches a surface - analytical lights with shadow maps and
+     * lightmaps on one side, traced transport on the other - and never in what
+     * the surface is. A decode that applied to one of them would be a material
+     * difference, which is the thing that must not exist.
+     *
+     * 2.2 is the sRGB-correct value. It is not what Odyssey content was
+     * authored for: xoreos, KotOR.js and kvp all multiply the texel by light
+     * unconverted, as the original did, so decoding squares an albedo the
+     * artist picked directly - 0.5 becomes 0.22 - and a path tracer compounds
+     * that per bounce. 1.0 reproduces the reference engines exactly.
+     * Reflectance only; light colour, emission and the output encode are not
+     * affected, the last because post-process inverts a fixed 2.2.
+     */
+    float albedoGamma {2.2f};
     bool grass {true};
     /** Multiplier on the area's authored Grass_Density, so areas keep their variation. */
     float grassDensity {8.0f};
@@ -297,6 +316,18 @@ struct GraphicsOptions {
     float skyIntensity {2.5f};
     float ptEmissiveIntensity {2.5f};
     float ptLightmapIntensity {0.0f};
+    /**
+     * Strength of the baked irradiance in PBR, and deliberately a separate dial
+     * from ptLightmapIntensity.
+     *
+     * The two modes are meant to agree on what a surface is and differ only in
+     * how light gets to it, so this is the one number that has to be allowed to
+     * disagree: the bake is the indirect light in PBR, while the tracer
+     * computes that transport for real and scales the bake toward zero so it is
+     * not counted twice. Sharing one dial would mean either PBR interiors go
+     * unlit or the tracer double-counts them.
+     */
+    float pbrLightmapIntensity {1.0f};
     float ptDirectIntensity {1.0f};
     float ptSunIntensity {2.5f};
     /** Path depth after the primary hit. */
