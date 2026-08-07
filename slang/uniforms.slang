@@ -68,6 +68,9 @@ struct GlobalUniforms {
     float shadowRadius;
     float fogNear;
     float fogFar;
+    /** Seconds since startup, this frame and the previous - see uniforms.h. */
+    float time;
+    float prevTime;
 };
 
 struct LocalUniforms {

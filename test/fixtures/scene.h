@@ -101,6 +101,7 @@ public:
     MOCK_METHOD(float, shadowStrength, (), (const override));
     MOCK_METHOD(float, shadowRadius, (), (const override));
     MOCK_METHOD(void, invalidateRenderPipeline, (), (override));
+    MOCK_METHOD(bool, consumeRenderPipelineRebuild, (), (override));
 
     MOCK_METHOD(uint32_t, internName, (std::string_view), (override));
     MOCK_METHOD(std::string_view, nameText, (uint32_t), (const override));
@@ -115,6 +116,7 @@ public:
     MOCK_METHOD(ISceneGraph &, get, (const std::string &name), (override));
     MOCK_METHOD(std::set<std::string>, sceneNames, (), (const override));
     MOCK_METHOD(void, invalidateRenderPipelines, (), (override));
+    MOCK_METHOD(bool, consumeRenderPipelineRebuild, (), (override));
 };
 
 class MockRenderPipeline : public IRenderPipeline, boost::noncopyable {

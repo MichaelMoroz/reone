@@ -383,6 +383,9 @@ void Area::applySceneProperties() {
     fogProperties.farPlane = _fogFar;
     fogProperties.color = _fogColor;
     sceneGraph.setFog(fogProperties);
+    debug("Area fog: " + std::string(_fogEnabled ? "on" : "off") + ", near " +
+              std::to_string(_fogNear) + ", far " + std::to_string(_fogFar),
+          LogChannel::Graphics);
 }
 
 void Area::loadGIT(const resource::generated::GIT &git, const resource::Gff &gff) {

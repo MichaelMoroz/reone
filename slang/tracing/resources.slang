@@ -48,6 +48,8 @@ public static const uint kPtMaskBlendedCoverage = 1u << 25;
 // same or it is shading a different surface than raster is.
 public static const uint kPtMaskPremulAlpha = 1u << 12;
 public static const uint kPtMaskPunchThrough = 1u << 26; // alpha-tested coverage in traversal
+/** No meaningful thickness: lit from both sides and passes light through. */
+public static const uint kPtMaskThin = 1u << 15;
 public static const uint kPtCategoryShift = 27;
 public static const uint kPtCategoryMask = 0xFu;
 
@@ -133,6 +135,8 @@ public struct PtPushConstants {
     public float roughnessFloor;
     // Zero leaves indirect samples untouched.
     public float indirectClamp;
+    /** Fraction of light a thin surface passes to its far side. */
+    public float thinTransmission;
     /** Scene-referred exposure applied before the tonemap. */
     public float exposure;
     public uint geometryBase0;

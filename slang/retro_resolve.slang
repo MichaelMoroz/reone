@@ -45,8 +45,10 @@ import lib.skycube;
 
 /** Mirrors ResolvePushConstants in scenepipeline.cpp. */
 struct ResolvePushConstants {
+    /** Kept in step with pbr_resolve.slang; retro reads only the flags. */
     /** Bit 0: a sky bake is available this frame. Bit 1 is the PBR resolve's. */
     uint flags;
+    float thinTransmission;
 };
 [[vk::push_constant]] ResolvePushConstants pushConstants;
 
@@ -148,9 +150,13 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     bool hasLightmap;
     bool staticObject;
     bool shadowsEnabled;
-    bool fogEnabled;
+    bool fogEnabled, thinSurface;
     unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
-                           shadowsEnabled, fogEnabled);
+                           shadowsEnabled, fogEnabled, thinSurface);
+    // Retro takes the shadow-through, so a cutout is not lit as though it were
+    // solid, but not the two-sided diffuse: its lighting model is the
+    // reference, and brightening the far side of every leaf would be an
+    // improvement to it rather than a correction of it.
     float3 materialAmbient = material.ambientColor.rgb;
     float3 materialDiffuse = material.diffuseColor.rgb;
 
@@ -198,7 +204,7 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
 
     float shadowFactor = 1.0;
     if (shadowsEnabled) {
-        shadowFactor = getShadow(eyePos, worldPos, normal);
+        shadowFactor = getShadow(eyePos, worldPos, normal, thinSurface);
     }
     float3 color;
     {

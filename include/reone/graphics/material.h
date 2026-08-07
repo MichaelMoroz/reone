@@ -148,6 +148,13 @@ inline int materialFeatureMask(const Material &material) {
     if (material.affectedByShadows) {
         mask |= UniformsFeatureFlags::shadows;
     }
+    // A punch-through texture is the format's way of writing "this is a leaf,
+    // a frond, a piece of cloth". Those have no thickness, so they are lit from
+    // both sides - and they receive shadows whatever the model says, because a
+    // cutout that cannot be shadowed reads as a hole cut in the lighting.
+    if (mask & UniformsFeatureFlags::hashedalphatest) {
+        mask |= UniformsFeatureFlags::thin | UniformsFeatureFlags::shadows;
+    }
     if (material.affectedByFog) {
         mask |= UniformsFeatureFlags::fog;
     }

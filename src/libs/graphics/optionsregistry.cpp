@@ -218,6 +218,9 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     // Scene content pushed every update.
     descs.push_back(boolOpt("grass", OptionApply::Live, "enable grass",
                             &GraphicsOptions::grass));
+    descs.push_back(floatOpt("thintransmission", OptionApply::Live,
+                             "light a thin surface passes to its far side",
+                             &GraphicsOptions::thinTransmission, 0.0f, 1.0f));
     descs.push_back(floatOpt("grassdensity", OptionApply::Live, "grass density multiplier",
                              &GraphicsOptions::grassDensity, 0.0f, 64.0f));
 
@@ -391,6 +394,30 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(floatOpt("grassradius", OptionApply::Live,
                              "grass draw radius, world units",
                              &GraphicsOptions::grassRadius, 0.0f, 512.0f));
+    descs.push_back(intOpt("grasssegments", OptionApply::Live,
+                           "quad segments up a blade; 2n+1 triangles each",
+                           &GraphicsOptions::grassSegments, kMinGrassSegments, kMaxGrassSegments));
+    descs.push_back(floatOpt("grasswindstrength", OptionApply::Live,
+                             "extra bend at full gust, radians; 0 is still air",
+                             &GraphicsOptions::grassWindStrength, 0.0f, 2.0f));
+    descs.push_back(floatOpt("grasswinddirection", OptionApply::Live,
+                             "wind direction, radians",
+                             &GraphicsOptions::grassWindDirection, -6.2832f, 6.2832f));
+    descs.push_back(floatOpt("grasswindspeed", OptionApply::Live,
+                             "how fast the rustle travels",
+                             &GraphicsOptions::grassWindSpeed, 0.0f, 10.0f));
+    descs.push_back(floatOpt("grasswindwavelength", OptionApply::Live,
+                             "distance between wind crests, world units",
+                             &GraphicsOptions::grassWindWavelength, 0.1f, 64.0f));
+    descs.push_back(floatOpt("grasswindgust", OptionApply::Live,
+                             "share of the strength carried by the slow gust",
+                             &GraphicsOptions::grassWindGust, 0.0f, 1.0f));
+    descs.push_back(floatOpt("grassorientation", OptionApply::Live,
+                             "which way a blade faces, radians",
+                             &GraphicsOptions::grassOrientation, -6.2832f, 6.2832f));
+    descs.push_back(floatOpt("grassorientationvariance", OptionApply::Live,
+                             "how far a blade may stray from that, radians; 0 aligns them all",
+                             &GraphicsOptions::grassOrientationVariance, 0.0f, 6.2832f));
     descs.push_back(floatOpt("grasscurvature", OptionApply::Live,
                              "total bend of a blade, radians",
                              &GraphicsOptions::grassCurvature, -2.0f, 2.0f));

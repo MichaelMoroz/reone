@@ -70,6 +70,7 @@ private:
         float bounceRoughness;
         float roughnessFloor;
         float indirectClamp;
+        float thinTransmission;
         float exposure;
         uint32_t geometryBase0;
         uint32_t geometryBase1;

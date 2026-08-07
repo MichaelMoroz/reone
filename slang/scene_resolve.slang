@@ -134,9 +134,17 @@ struct PushConstants {
     uint grassCardboard;
     uint grassBudgetBlades;
     float grassDensity;
-    float grassPad2;
-    float grassPad3;
+    float grassOrientation;
+    float grassOrientationVariance;
     float4 grassColor;
+    float grassWindStrength;
+    float grassWindDirection;
+    float grassWindSpeed;
+    float grassWindWavelength;
+    float grassWindGust;
+    uint grassSegments;
+    float grassWindPad1;
+    float grassWindPad2;
 };
 
 [[vk::push_constant]] PushConstants pushConstants;
@@ -286,8 +294,14 @@ uint grassVariant(GrassFace face, uint faceIndex, uint clusterIndex) {
  * collapsed quad. A zero-area triangle would take the geometric normal in the
  * tracer through normalize(cross(...)) of the zero vector.
  */
-public static const uint kGrassVertsPerBlade = 11;
-public static const uint kGrassTrisPerBlade = 9;
+/**
+ * A blade is a strip of grassSegments quads closed by one triangle, so it has
+ * 2n+3 vertices and 2n+1 triangles. Both are read from the push constant rather
+ * than fixed, because the count is the dial that trades a blade's silhouette
+ * against how many of them a triangle ceiling buys.
+ */
+uint grassVertsPerBlade() { return pushConstants.grassSegments * 2 + 3; }
+uint grassTrisPerBlade() { return pushConstants.grassSegments * 2 + 1; }
 
 /** One blade, positioned and oriented; the vertices are derived from it. */
 struct GrassBlade {
@@ -299,6 +313,8 @@ struct GrassBlade {
     float width;
     float curvature;
     float2 lightmapUV;
+    /** Per-blade phase offset, so neighbours do not sway as one sheet. */
+    float windPhase;
     bool culled;
 };
 
@@ -336,7 +352,12 @@ GrassBlade expandGrassBlade(SceneObject object, uint bladeId) {
                            grassRandom01(sourceFace, localCluster, 5)) * 2.0 - 1.0;
     position.xy += jitter * pushConstants.grassDisplacement * quadSize;
 
-    float yaw = 6.28318530717958647692 * grassRandom01(sourceFace, localCluster, 3);
+    // Centred on the orientation rather than starting from it, so narrowing
+    // the variation closes in on the angle asked for instead of sweeping away
+    // from it. A full turn of variation is the same uniform scatter as before.
+    float yaw = pushConstants.grassOrientation +
+        pushConstants.grassOrientationVariance *
+            (grassRandom01(sourceFace, localCluster, 3) - 0.5);
     blade.bendDir = float3(cos(yaw), sin(yaw), 0.0);
     blade.widthDir = float3(-sin(yaw), cos(yaw), 0.0);
 
@@ -346,6 +367,7 @@ GrassBlade expandGrassBlade(SceneObject object, uint bladeId) {
     blade.width = blade.length * pushConstants.grassWidth;
     blade.curvature = pushConstants.grassCurvature + pushConstants.grassCurvatureVariance
         * (grassRandom01(sourceFace, localCluster, 7) * 2.0 - 1.0);
+    blade.windPhase = 6.28318530717958647692 * grassRandom01(sourceFace, localCluster, 9);
 
     // Grown in rather than switched on. A face is admitted whole, so without
     // this every cluster on it arrives at once and the field advances in
@@ -375,6 +397,35 @@ GrassBlade expandGrassBlade(SceneObject object, uint bladeId) {
 }
 
 /**
+ * How hard the wind is pushing at a point, at a time.
+ *
+ * Two travelling waves along the wind direction: a fast short one for the
+ * rustle and a slow long one for the gust, mixed by grassWindGust. Both are
+ * functions of position and time only, so the same blade evaluated at two
+ * times gives two positions and the difference is a true motion vector - which
+ * is the only reason this is written as a field rather than as an animation
+ * with state.
+ *
+ * The per-blade phase keeps neighbours from moving as one sheet without
+ * breaking the travelling wave, which is what carries a gust across a field.
+ */
+float grassWindBend(float3 position, float phase, float time) {
+    float2 windDir = float2(cos(pushConstants.grassWindDirection),
+                            sin(pushConstants.grassWindDirection));
+    float along = dot(position.xy, windDir);
+    float k = 6.28318530717958647692 / max(0.01, pushConstants.grassWindWavelength);
+    float rustle = sin(k * along - pushConstants.grassWindSpeed * time * k + phase);
+    // A quarter the frequency and a third the speed: the gust is the thing you
+    // watch cross the field, the rustle is what the blade does while it waits.
+    float gust = sin(0.25 * k * along - 0.33 * pushConstants.grassWindSpeed * time * k
+                     + phase * 0.5);
+    float mixed = lerp(rustle, gust, pushConstants.grassWindGust);
+    // Wind pushes; it does not pull the blade upwind. Biased to [0,1] so the
+    // rest position is the unbent blade rather than the average of a sway.
+    return pushConstants.grassWindStrength * (0.5 + 0.5 * mixed);
+}
+
+/**
  * A point on the blade at t in [0,1], with the surface normal there.
  *
  * The spine is a circular arc of total angle A, which keeps the blade's length
@@ -383,8 +434,12 @@ GrassBlade expandGrassBlade(SceneObject object, uint bladeId) {
  * zero the radius diverges, so the straight case is taken separately rather
  * than left to the limit.
  */
-void grassSpine(GrassBlade blade, float t, out float3 point, out float3 tangent) {
-    float a = blade.curvature;
+void grassSpine(GrassBlade blade, float t, float windBend, out float3 point,
+                out float3 tangent) {
+    // The wind rotates the arc rather than displacing the tip: bending a blade
+    // is what wind does to it, and an arc that stays an arc keeps the length it
+    // was authored with, so a blade in a gust does not stretch.
+    float a = blade.curvature + windBend;
     if (abs(a) < 1e-3) {
         point = blade.root + float3(0.0, 0.0, blade.length * t);
         tangent = float3(0.0, 0.0, 1.0);
@@ -452,8 +507,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
         // the grass branch has to come before the shared quad path rather than
         // inside it.
         if (object.srcVertexStride == 0 && pushConstants.grassCardboard == 0) {
-            uint bladeId = vertexId / kGrassVertsPerBlade;
-            uint local = vertexId % kGrassVertsPerBlade;
+            uint perBladeVerts = grassVertsPerBlade();
+            uint bladeId = vertexId / perBladeVerts;
+            uint local = vertexId % perBladeVerts;
             GrassBlade blade = expandGrassBlade(object, bladeId);
 
             // The tip is vertex 10 and sits on the spine; the rest are pairs
@@ -463,11 +519,24 @@ void main(uint3 tid : SV_DispatchThreadID) {
             // the last pair at t=1 with the tip on top of it, so the closing
             // triangle had no height and the blade ended in a flat edge - the
             // tip was being drawn, it was just zero tall.
-            bool isTip = local == kGrassVertsPerBlade - 1;
-            uint pair = isTip ? 4 : local / 2;
-            float t = isTip ? 1.0 : float(pair) * 0.2;
+            uint segments = max(1u, pushConstants.grassSegments);
+            bool isTip = local == perBladeVerts - 1;
+            uint pair = isTip ? segments : local / 2;
+            // Pairs span all but the last band, and the tip stands alone above
+            // them; spreading them over the whole length would put the last
+            // pair at t=1 with the tip on top of it and the closing triangle
+            // would have no height.
+            float t = isTip ? 1.0 : float(pair) / float(segments + 1);
+            // Evaluated twice: once at this frame's time and once at the
+            // previous frame's. Reporting a moving vertex as having been where
+            // it now is hands the temporal resolve a zero motion vector, and it
+            // smears the blade across the frames it is averaging.
+            float windNow = grassWindBend(blade.root, blade.windPhase, globalUniforms.time);
+            float windPrev = grassWindBend(blade.root, blade.windPhase, globalUniforms.prevTime);
             float3 spine, tangent;
-            grassSpine(blade, t, spine, tangent);
+            grassSpine(blade, t, windNow, spine, tangent);
+            float3 prevSpine, prevTangent;
+            grassSpine(blade, t, windPrev, prevSpine, prevTangent);
             // Tapered to a quarter width at the last pair, so the closing
             // triangle is a point rather than a spike off a full-width edge.
             float halfWidth = isTip ? 0.0 : 0.5 * blade.width * (1.0 - 0.75 * t);
@@ -477,7 +546,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
             mergedVertex.position = blade.culled
                 ? blade.root
                 : spine + blade.widthDir * (halfWidth * side);
-            mergedVertex.prevPosition = mergedVertex.position;
+            mergedVertex.prevPosition = blade.culled
+                ? blade.root
+                : prevSpine + blade.widthDir * (halfWidth * side);
             // Off the spine, not off the triangle: a blade is a ribbon, and the
             // normal that lights it is the one facing out of its face.
             // Turned to face the viewer. A blade is a single-sided ribbon that
@@ -682,14 +753,16 @@ void main(uint3 tid : SV_DispatchThreadID) {
             - object.dstTriangleBase;
         uint destinationIndex = id * 3;
         if (object.srcVertexStride == 0 && pushConstants.grassCardboard == 0) {
-            uint bladeId = localId / kGrassTrisPerBlade;
-            uint tri = localId % kGrassTrisPerBlade;
-            uint base = object.dstVertexBase + bladeId * kGrassVertsPerBlade;
-            if (tri == kGrassTrisPerBlade - 1) {
+            uint perBladeTris = grassTrisPerBlade();
+            uint perBladeVerts = grassVertsPerBlade();
+            uint bladeId = localId / perBladeTris;
+            uint tri = localId % perBladeTris;
+            uint base = object.dstVertexBase + bladeId * perBladeVerts;
+            if (tri == perBladeTris - 1) {
                 // The closing triangle: last pair to the tip.
-                indices[destinationIndex] = base + 8;
-                indices[destinationIndex + 1] = base + 9;
-                indices[destinationIndex + 2] = base + 10;
+                indices[destinationIndex] = base + perBladeVerts - 3;
+                indices[destinationIndex + 1] = base + perBladeVerts - 2;
+                indices[destinationIndex + 2] = base + perBladeVerts - 1;
             } else {
                 // Two triangles per segment, wound so both faces agree with the
                 // normal the vertices carry.
@@ -727,7 +800,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         }
         if (object.srcVertexStride == 0) {
             uint perBlade = pushConstants.grassCardboard == 0
-                                ? kGrassTrisPerBlade * max(1u, pushConstants.grassBladesPerCluster)
+                                ? grassTrisPerBlade() * max(1u, pushConstants.grassBladesPerCluster)
                                 : 2;
             GrassRange range = findGrassRange(object, localId / perBlade);
             materialIds[id] = grassFaces[range.faceIndex].faceBudgetMaterialVariants.z;

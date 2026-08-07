@@ -85,6 +85,8 @@ import lib.skycube;
 struct ResolvePushConstants {
     /** Bit 0: a sky bake is available. Bit 1: screen-space occlusion is on. */
     uint flags;
+    /** Fraction of light a thin surface passes to its far side. */
+    float thinTransmission;
 };
 [[vk::push_constant]] ResolvePushConstants pushConstants;
 
@@ -331,13 +333,13 @@ float3 resolveSurface(float2 uv, int2 pixel) {
     bool hasLightmap;
     bool staticObject;
     bool shadowsEnabled;
-    bool fogEnabled;
+    bool fogEnabled, thinSurface;
     unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
-                           shadowsEnabled, fogEnabled);
+                           shadowsEnabled, fogEnabled, thinSurface);
 
     float shadowFactor = 1.0;
     if (shadowsEnabled) {
-        shadowFactor = getShadow(eyePos, worldPos, normal);
+        shadowFactor = getShadow(eyePos, worldPos, normal, thinSurface);
     }
     // ShadowOpacity was authored for the original gamma-space renderer. PBR
     // applies lighting in linear space, so convert the display visibility to
@@ -426,19 +428,26 @@ float3 resolveSurface(float2 uv, int2 pixel) {
         }
 
         float3 L = normalize(fragToLight);
+        // Lit from whichever side the light is on. The specular lobe keeps the
+        // true normal - a leaf does not transmit a highlight - so only the
+        // diffuse half is two-sided, and it is dimmed by the transmission the
+        // surface is assumed to have rather than being as bright as the front.
+        float3 shadeNormal = thinSurface ? thinFacingNormal(normal, L) : normal;
+        float transmission =
+            thinSurface && dot(normal, L) < 0.0 ? pushConstants.thinTransmission : 1.0;
         float3 H = normalize(V + L);
-        float NdotL = max(0.0, dot(normal, L));
+        float NdotL = max(0.0, dot(shadeNormal, L));
         float NdotH = max(0.0, dot(normal, H));
         float VdotH = max(0.0, dot(V, H));
 
         float D = distributionGGX(NdotH * NdotH, a2);
-        float G = geometrySmith(NdotL, NdotV, k);
+        float G = geometrySmith(max(0.0, dot(normal, L)), NdotV, k);
         float3 F = fresnelSchlick(VdotH, F0);
-        float3 spec = (D * G * F) / max(1e-4, 4.0 * NdotL * NdotV);
+        float3 spec = (D * G * F) / max(1e-4, 4.0 * max(0.0, dot(normal, L)) * NdotV);
 
         float3 kD = (1.0 - F) * (1.0 - metallic);
-        directD += materialDiffuse * kD / kPi * radiance * NdotL;
-        directS += spec * radiance * NdotL;
+        directD += materialDiffuse * kD / kPi * radiance * NdotL * transmission;
+        directS += spec * radiance * max(0.0, dot(normal, L));
     }
 
     float3 F = fresnelSchlickRoughness(NdotV, F0, roughness);

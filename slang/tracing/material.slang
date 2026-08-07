@@ -64,6 +64,15 @@ public struct SurfaceShading {
     public bool envmapped;
     public float envStrength;
     public bool terminatesPath;
+    /**
+     * A surface with no thickness - a leaf, cloth, a blade of grass.
+     *
+     * It is lit from whichever side the light is on, and the shadow ray leaves
+     * from that side rather than from the side that was hit. Shading one as a
+     * solid puts the whole far half in its own shadow, which is what an alpha
+     * cutout has always looked like and what it never should have.
+     */
+    public bool thin;
 };
 
 float4 vertexColor(HitGeometry hit) {

@@ -54,6 +54,17 @@ void SceneGraphs::invalidateRenderPipelines() {
     }
 }
 
+bool SceneGraphs::consumeRenderPipelineRebuild() {
+    // Every scene is asked, not just until one answers: the request is a
+    // one-shot flag and leaving it set on the others would rebuild again next
+    // frame, and the frame after that.
+    bool requested = false;
+    for (auto &[name, scene] : _scenes) {
+        requested |= scene->consumeRenderPipelineRebuild();
+    }
+    return requested;
+}
+
 } // namespace scene
 
 } // namespace reone

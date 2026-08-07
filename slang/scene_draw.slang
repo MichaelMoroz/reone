@@ -216,6 +216,7 @@ static const uint kMegaFeatureFog = 1u << 9;
 static const uint kMegaFeatureWater = 1u << 8;
 static const uint kMegaFeatureEnvMapCube = 1u << 13;
 static const uint kMegaFeatureStatic = 1u << 14;
+static const uint kMegaFeatureThin = 1u << 15;
 static const uint kMegaFeatureBlendedCoverage = 1u << 25;
 static const uint kMegaSurfaceUnlitTransparent = 1;
 static const float kMegaAlphaTestEpsilon = 0.01;
@@ -366,7 +367,8 @@ GBufferOutput sceneDrawFragment(Varyings input, uint primitiveId : SV_PrimitiveI
         hasLightmap,
         (material.featureMask & kMegaFeatureStatic) != 0,
         (material.featureMask & kMegaFeatureShadows) != 0,
-        (material.featureMask & kMegaFeatureFog) != 0);
+        (material.featureMask & kMegaFeatureFog) != 0,
+        (material.featureMask & kMegaFeatureThin) != 0);
     float3 eyeNormal = 0.5 * mul(normal, (float3x3)globalUniforms.viewInv) + 0.5;
 
     GBufferOutput output;

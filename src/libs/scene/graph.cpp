@@ -129,6 +129,15 @@ void SceneGraph::clear() {
     _shadowGpuScene.clear();
     _incrementalSceneReady = false;
     _shadowProperties = {};
+    // The shadow light is a bare pointer into the lights just destroyed above.
+    // Leaving it set is a dangling read, and it also strands the sun: the next
+    // update sees a light already chosen, so it fades the old one out before it
+    // will look for a new one, and then adopts that one dimmed because the
+    // no-cross-fade-on-a-fresh-scene path is gated on there having been none.
+    // The module gets no sun until something else resets this.
+    _shadowLight = nullptr;
+    _shadowActive = false;
+    _shadowStrength = 0.0f;
     // The pipeline outlives the scene it drew, and everything temporal it holds
     // describes geometry that no longer exists: NRD's accumulation, the common
     // tail's resolve history, the previous view and projection the reprojection
@@ -141,8 +150,17 @@ void SceneGraph::clear() {
     // discontinuity already passes through - a warp, a transition, a save load -
     // and a caller that empties the scene should not also have to remember
     // this.
+    // A rebuild, not just a history restart. The pipeline caches more of the
+    // module than its temporal filters: the sky bake, the admission layer and
+    // the device-side scene all outlive a clear, so the next module renders
+    // against the previous one's sky and its lighting is wrong until a graphics
+    // Apply happens to throw the same things away. This is what makes a warp or
+    // a save load reach as far as Apply does.
+    //
+    // Requested rather than performed - see consumeRenderPipelineRebuild.
     if (_renderPipeline) {
         _renderPipeline->restartTemporalHistory();
+        _renderPipelineRebuildRequested = true;
     }
 }
 
@@ -219,6 +237,12 @@ void SceneGraph::removeRoot(SoundSceneNode &node) {
 
 void SceneGraph::update(float dt) {
     R_PROFILE_ZONE("SceneGraph::update");
+    // Advanced here rather than read from a wall clock, so it stops when the
+    // scene stops: the freeze-frame diagnostic holds dt at zero to prove the
+    // filters converge on a scene that is not moving, and a clock that kept
+    // running would keep the grass moving under it.
+    _prevTime = _time;
+    _time += dt;
     if (_updateRoots) {
         for (auto &root : _modelRoots) {
             root->update(dt);
@@ -573,6 +597,8 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
                 globals.shadowStrength = shadowStrength() * opacity;
                 globals.shadowRadius = shadowRadius();
             }
+            globals.time = _time;
+            globals.prevTime = _prevTime;
             if (isFogEnabled()) {
                 globals.fogNear = fogNear();
                 globals.fogFar = fogFar();

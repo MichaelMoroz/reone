@@ -274,6 +274,20 @@ private:
         uint32_t authored;
     };
     std::vector<GrassFaceCandidate> _grassFaceScratch;
+    /**
+     * Clusters granted to each grass face, indexed by its global face index.
+     *
+     * The ceiling has to be spent across the whole scene, and an area is
+     * several grass objects: deciding inside each one in turn means the first
+     * takes everything it can and the rest are bald, whichever of them the
+     * camera happens to be standing in. So the candidates from every object are
+     * gathered, sorted by distance once, and granted here before any object
+     * record is built - after which each object simply reads what it was given.
+     */
+    std::vector<uint32_t> _grassGrants;
+
+    /** Chooses which grass faces get clusters, scene-wide. See the field above. */
+    void selectGrass(const graphics::GpuSceneUpload &upload);
     bool _grassPrimitiveChanged {false};
 
     struct CachedClassification {

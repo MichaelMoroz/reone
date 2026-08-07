@@ -220,14 +220,35 @@ float getPointLightShadow(float3 worldPos, float3 normal) {
  * rejects that light, so shadowing them again would darken a surface twice
  * for the same geometric fact.
  */
-float getShadow(float3 viewPos, float3 worldPos, float3 normal) {
-    float shadow = globalUniforms.shadowLightPosition.w == 0.0
-                       ? getDirectionalLightShadow(viewPos, worldPos, normal)
-                       : getPointLightShadow(worldPos, normal);
-    float visibility = 1.0 - shadow * globalUniforms.shadowStrength;
+/**
+ * The side of a thin surface that faces the light.
+ *
+ * A leaf lit from behind is still lit; treating it as a solid sends the whole
+ * back face black. Flipping the normal is the two-sided half of that, and the
+ * caller pays for it with a transmission factor rather than getting the front
+ * face's brightness for free.
+ */
+public float3 thinFacingNormal(float3 normal, float3 toLight) {
+    return dot(normal, toLight) < 0.0 ? -normal : normal;
+}
+
+// Public because thinFacingNormal above is: marking one declaration in a Slang
+// module switches the rest from implicit visibility to internal, so the first
+// export turns every other entry point into a compile error at its caller.
+public float getShadow(float3 viewPos, float3 worldPos, float3 normal, bool thin = false) {
     float3 lightVector = globalUniforms.shadowLightPosition.w == 0.0
                              ? -normalize(globalUniforms.shadowLightPosition.xyz)
                              : normalize(globalUniforms.shadowLightPosition.xyz - worldPos);
-    float normalFade = saturate(dot(normal, lightVector) * 10.0);
+    // A thin surface is sampled from the side the light is on, which is the
+    // whole of "the shadow passes through to the other side": the receiver
+    // offset then pushes toward the light instead of away from it, and the
+    // fade below stops treating a back-facing leaf as something that cannot be
+    // lit. Without this a blade lit from behind is in its own shadow.
+    float3 facing = thin ? thinFacingNormal(normal, lightVector) : normal;
+    float shadow = globalUniforms.shadowLightPosition.w == 0.0
+                       ? getDirectionalLightShadow(viewPos, worldPos, facing)
+                       : getPointLightShadow(worldPos, facing);
+    float visibility = 1.0 - shadow * globalUniforms.shadowStrength;
+    float normalFade = saturate(dot(facing, lightVector) * 10.0);
     return lerp(1.0, visibility, normalFade);
 }

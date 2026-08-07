@@ -85,7 +85,8 @@ SphereLight ptSphereLight(GlobalUniformsLight light, float lightDistance) {
 // path tracing - while directionals are promoted to sampled suns even when
 // authored ambient-only: raster has no direct sun at all, so there is no
 // parity target and the Sun dial grades it.
-float directLightWeight(GlobalUniformsLight light, float3 position, float3 shadingNormal) {
+float directLightWeight(GlobalUniformsLight light, float3 position, float3 shadingNormal,
+                        bool thin) {
     bool directional = light.position.w == 0.0;
     float3 fragToLight = light.position.xyz - position;
     float lightDistance = length(fragToLight);
@@ -94,7 +95,19 @@ float directLightWeight(GlobalUniformsLight light, float3 position, float3 shadi
     // makes a distant one improbable in this table, which is the same saving
     // without the terminator the hard cutoff drew across large surfaces.
     float attenuation = directional ? 1.0 : ptSphereAttenuation(light, lightDistance);
-    float NdotL = max(0.0, dot(shadingNormal, fragToLight / max(lightDistance, 1e-4)));
+    float cosine = dot(shadingNormal, fragToLight / max(lightDistance, 1e-4));
+    // A thin surface is lit from behind too, so a light on the far side has to
+    // be selectable. Clamping the cosine at zero here excluded it from the
+    // table outright, and no amount of flipping the normal downstream can
+    // recover a light that was never drawn - the back-lit branch simply never
+    // ran.
+    //
+    // Weighted by the transmission it will actually receive, not by the front
+    // face's cosine: this table is an importance distribution, and the
+    // estimator divides by the weight it picked with, so a weight that
+    // overstates the contribution just moves the noise rather than the mean.
+    float NdotL = thin && cosine < 0.0 ? -cosine * pushConstants.thinTransmission
+                                       : max(0.0, cosine);
     float luma = dot(ptGammaToLinear(light.color.rgb), float3(0.2126, 0.7152, 0.0722));
     return max(0.0, luma * light.multiplier * attenuation * NdotL);
 }
@@ -138,7 +151,8 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
     result.penumbra = 0.0;
     float totalWeight = 0.0;
     for (int i = 0; i < globalUniforms.numLights; ++i) {
-        totalWeight += directLightWeight(globalUniforms.lights[i], hit.position, shading.normal);
+        totalWeight += directLightWeight(globalUniforms.lights[i], hit.position, shading.normal,
+                                         shading.thin);
     }
     if (totalWeight <= 0.0) return result;
     float pick = ptRandom01(rng) * totalWeight;
@@ -146,7 +160,8 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
     float selectedWeight = 0.0;
     float accum = 0.0;
     for (int i = 0; i < globalUniforms.numLights; ++i) {
-        float w = directLightWeight(globalUniforms.lights[i], hit.position, shading.normal);
+        float w = directLightWeight(globalUniforms.lights[i], hit.position, shading.normal,
+                                    shading.thin);
         if (w <= 0.0) continue;
         accum += w;
         selectedIndex = i;
@@ -168,7 +183,13 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
     // is a shading question - NdotL below answers it continuously - and what
     // the surface occludes is the shadow ray's answer, traced from an origin
     // the terminator shift and the offset already lift clear of the facet.
-    if (dot(L, shading.normal) <= 0.0) return result;
+    //
+    // A thin surface has no far side to be in shadow: it is lit from whichever
+    // side the light is on, and pays a transmission factor for the privilege.
+    bool litFromBehind = dot(L, shading.normal) <= 0.0;
+    if (litFromBehind && !shading.thin) return result;
+    float3 shadeNormal = shading.thin && litFromBehind ? -shading.normal : shading.normal;
+    float transmission = litFromBehind ? pushConstants.thinTransmission : 1.0;
     SphereLight sphere = ptSphereLight(light, lightDistance);
     float3 radiance = ptGammaToLinear(light.color.rgb) * light.multiplier;
     radiance *= directional ? pushConstants.sunIntensity
@@ -180,7 +201,14 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
     float3 shadowDirection = ptConeSample(L, angular, lightXi);
     // Stop at the emitter's near surface. Running to the centre lets the
     // fixture the lamp is mounted in occlude its own light.
-    ShadowRay shadow = ptShadowRay(hit.shadowOrigin, hit.geometricNormal, shadowDirection,
+    // Leaving from the side the light is on. The offset exists to lift the ray
+    // clear of the surface it started on; pointed the wrong way on a back-lit
+    // thin surface it buries the origin inside that surface instead, and every
+    // sample comes back occluded by the very triangle being shaded.
+    float3 shadowNormal = shading.thin && dot(hit.geometricNormal, L) < 0.0
+                              ? -hit.geometricNormal
+                              : hit.geometricNormal;
+    ShadowRay shadow = ptShadowRay(hit.shadowOrigin, shadowNormal, shadowDirection,
                                    directional ? 10000.0 : sphere.shadowDistance);
     radiance *= shadow.transmittance * (totalWeight / max(selectedWeight, 1e-6));
     // The small-angle form for both kinds. Exact for a directional source; for
@@ -191,7 +219,7 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
     result.penumbra = shadow.occluderDistance < kPtNoOccluder
                           ? shadow.occluderDistance * tan(angular)
                           : 0.0;
-    float NdotL = max(0.0, dot(shading.normal, L));
+    float NdotL = max(0.0, dot(shadeNormal, L));
     float NdotV = max(0.0, dot(shading.normal, view));
     float3 F0 = lerp(lerp(float3(0.04), shading.albedo, shading.metallic), float3(1.0),
                      shading.envStrength);
@@ -216,8 +244,10 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
     // NRD factor restores the whole lobe after denoising. Raster's dynamic-
     // light specular is meaningful only on the same env-mapped surfaces the
     // tracer gives a specular lobe.
-    result.diffuse = radiance * NdotL / kPtPi;
-    if (shading.envmapped) {
+    result.diffuse = radiance * NdotL * transmission / kPtPi;
+    // Specular keeps the true normal and the true side: a leaf transmits light,
+    // not a highlight.
+    if (shading.envmapped && !litFromBehind) {
         result.specular = spec * radiance;
     }
     return result;

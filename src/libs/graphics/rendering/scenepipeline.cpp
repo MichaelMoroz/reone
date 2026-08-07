@@ -66,6 +66,7 @@ struct PostProcessPushConstants {
 /** Mirrors ResolvePushConstants in pbr_resolve.slang and retro_resolve.slang. */
 struct ResolvePushConstants {
     uint32_t flags;
+    float thinTransmission;
 };
 
 /** Mirrors DebugViewPushConstants in debug_view.slang. */
@@ -614,7 +615,8 @@ void ScenePipeline::retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset
         if (_resolveMaterialSet) {
             cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kMegaDrawSet,
                                   _resolveMaterialSet, nullptr, 0);
-            const ResolvePushConstants push {resolveFlags()};
+            const ResolvePushConstants push {resolveFlags(),
+                                             std::clamp(_options.thinTransmission, 0.0f, 1.0f)};
             cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
             cmd.draw(3, 1);
         }

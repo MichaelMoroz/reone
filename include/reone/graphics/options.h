@@ -70,7 +70,11 @@ constexpr int kMaxDebugView = 19;
  * times a handful of blades each runs to millions. A ceiling below that turns
  * every other grass dial into a no-op, which is what it did.
  */
-constexpr int kMaxGrassTriangleBudget = 524288;
+constexpr int kMaxGrassTriangleBudget = 1048576;
+
+/** Bounds on GraphicsOptions::grassSegments. */
+constexpr int kMinGrassSegments = 1;
+constexpr int kMaxGrassSegments = 8;
 
 /** Channels the post-denoise resolve produces, rather than the trace kernel. */
 constexpr bool isResolveDebugView(int view) {
@@ -118,6 +122,22 @@ struct GraphicsOptions {
      */
     bool headless {false};
     bool vsync {true};
+    /**
+     * How much light a thin surface passes to its far side.
+     *
+     * Leaves, cloth and grass are cutouts standing in for things with no
+     * thickness, and a solid-surface model sends the half of one facing away
+     * from the sun to black. They are lit from both sides instead, the far side
+     * dimmed by this rather than matching the near side.
+     *
+     * A flat scalar, and graded rather than derived: there is no thickness, no
+     * angle dependence and no forward lobe behind it, so it says how much
+     * light comes through and nothing about how. Real foliage transmits far
+     * more at grazing angles and scatters it toward the light, which is what
+     * makes a backlit leaf glow at its silhouette - none of that is modelled,
+     * so the number is a look rather than a measurement.
+     */
+    float thinTransmission {0.8f};
     bool grass {true};
     /** Multiplier on the area's authored Grass_Density, so areas keep their variation. */
     float grassDensity {8.0f};
@@ -130,6 +150,46 @@ struct GraphicsOptions {
      * than world units, so an area that authored small grass keeps it.
      */
     float grassRadius {25.0f};
+    /**
+     * Which way a blade faces, and how far from that it may stray, in radians.
+     *
+     * The variation is a full turn by default, which is the random scatter a
+     * field wants. At zero every blade in the area points the same way, which
+     * is what a wind direction or a mown lawn looks like; between the two it
+     * leans without marching in step.
+     */
+    float grassOrientation {0.0f};
+    float grassOrientationVariance {6.28318531f};
+    /**
+     * Wind. Strength is the extra bend at full gust, in radians, and zero is
+     * still air.
+     *
+     * The model is two travelling waves rather than noise: a fast one that
+     * carries the rustle and a slow, longer one that carries the gust, summed
+     * and phase-shifted per blade so neighbours do not move in lockstep. Both
+     * bend the blade downwind by rotating its arc toward the wind direction,
+     * so a blade already leaning that way straightens and one leaning against
+     * it folds over - which is what makes a field look like it is being
+     * crossed rather than shaken.
+     */
+    /**
+     * Quad segments up a blade, closed by one triangle at the tip: 2n+1
+     * triangles and 2n+3 vertices.
+     *
+     * The dial that trades silhouette for count. Four segments carry a curved
+     * blade convincingly; two make the arc a dogleg but cost half as much, so
+     * under a fixed triangle ceiling they buy nearly twice the blades. Which
+     * side of that is worth more depends on how close the camera gets.
+     */
+    int grassSegments {4};
+    float grassWindStrength {0.35f};
+    /** Where it blows from, radians, in the same frame as the blade orientation. */
+    float grassWindDirection {0.0f};
+    /** How fast the rustle travels, and how far apart its crests are in world units. */
+    float grassWindSpeed {1.4f};
+    float grassWindWavelength {6.0f};
+    /** Share of the strength carried by the slow gust rather than the rustle. */
+    float grassWindGust {0.6f};
     /** Total bend of the arc, radians, and how much it varies between blades. */
     float grassCurvature {0.45f};
     float grassCurvatureVariance {0.25f};

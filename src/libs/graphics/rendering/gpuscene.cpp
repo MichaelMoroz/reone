@@ -431,7 +431,7 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
                      static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount),
                      static_cast<uint32_t>(opaqueTriangleCount), {}, upload.cameraPosition,
                      upload.grass};
-        static_assert(sizeof(PushConstants) == 128);
+        static_assert(sizeof(PushConstants) == 160);
         std::array<ComputeBinding, 11> mergeBindings {{
             {_mergeBindings[0], buffers[0]}, {_mergeBindings[1], buffers[1]},
             {_mergeBindings[2], buffers[2]}, {_mergeBindings[3], buffers[3]},

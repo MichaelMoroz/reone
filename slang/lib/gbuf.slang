@@ -24,25 +24,29 @@ static const int kGeometryFeatureShadows = 1 << 1;
 static const int kGeometryFeatureFog = 1 << 2;
 static const int kGeometryFeatureLightmap = 1 << 3;
 static const int kGeometryFeatureStatic = 1 << 4;
+static const int kGeometryFeatureThin = 1 << 5;
 
 public float packGeometryFeatures(bool envmap, bool lightmap, bool staticObject,
-                                  bool shadows, bool fog) {
+                                  bool shadows, bool fog, bool thin) {
     int mask = 0;
     mask |= int(envmap) * kGeometryFeatureEnvMap;
     mask |= int(shadows) * kGeometryFeatureShadows;
     mask |= int(fog) * kGeometryFeatureFog;
     mask |= int(lightmap) * kGeometryFeatureLightmap;
     mask |= int(staticObject) * kGeometryFeatureStatic;
+    mask |= int(thin) * kGeometryFeatureThin;
     return mask / 255.0;
 }
 
 public void unpackGeometryFeatures(float packed, out bool envmap,
                                    out bool lightmap, out bool staticObject,
-                                   out bool shadows, out bool fog) {
+                                   out bool shadows, out bool fog, out bool thin) {
     int mask = int(round(packed * 255.0));
     envmap = (mask & kGeometryFeatureEnvMap) != 0;
     lightmap = (mask & kGeometryFeatureLightmap) != 0;
     staticObject = (mask & kGeometryFeatureStatic) != 0;
     shadows = (mask & kGeometryFeatureShadows) != 0;
     fog = (mask & kGeometryFeatureFog) != 0;
+    thin = (mask & kGeometryFeatureThin) != 0;
 }
+

@@ -554,6 +554,66 @@ void GpuScene::addGrass(RenderCategories categories, SceneNodeId id,
     upsert(std::move(procedural));
 }
 
+void GpuScene::selectGrass(const graphics::GpuSceneUpload &upload) {
+    R_PROFILE_ZONE("SceneAdmission::grass selection");
+    _grassFaceScratch.clear();
+    const glm::vec3 cameraPosition(upload.cameraPosition);
+    const float radius = std::max(1.0f, _grassParams.radius);
+    uint32_t faceBase = 0;
+    for (const auto &object : _objects) {
+        const auto *candidate = std::get_if<RegisteredProcedural>(&object);
+        if (!candidate || candidate->kind != ProceduralKind::Grass || !candidate->grassFaces)
+            continue;
+        // Walked for every grass object whether or not it is admitted, so this
+        // base stays in step with the one the record loop derives.
+        for (size_t faceOffset = 0; faceOffset < candidate->grassFaces->size(); ++faceOffset) {
+            const auto &face = (*candidate->grassFaces)[faceOffset];
+            const uint32_t authored = face.faceBudgetMaterialVariants.y;
+            if (authored == 0)
+                continue;
+            const glm::vec3 closest = glm::clamp(cameraPosition, glm::vec3(face.boundsMin),
+                                                 glm::vec3(face.boundsMax));
+            const float distanceSq = glm::distance2(cameraPosition, closest);
+            if (distanceSq > radius * radius)
+                continue;
+            _grassFaceScratch.push_back(
+                {distanceSq, faceBase + static_cast<uint32_t>(faceOffset), authored});
+        }
+        faceBase += static_cast<uint32_t>(candidate->grassFaces->size());
+    }
+    _grassGrants.assign(faceBase, 0u);
+    if (_grassFaceScratch.empty())
+        return;
+
+    // Nearest first, so the ceiling buys the grass being looked at. A face's
+    // grant depends on nothing but that face, which is what keeps blades from
+    // blinking as the totals shift underneath them; only the cut point moves,
+    // and it lands on the farthest face accepted, where the merge kernel's size
+    // ramp has already taken the blades to nothing.
+    {
+        R_PROFILE_ZONE("SceneAdmission::grass distance sort");
+        std::sort(_grassFaceScratch.begin(), _grassFaceScratch.end(),
+                  [](const auto &a, const auto &b) { return a.distanceSq < b.distanceSq; });
+    }
+    const uint64_t blades = std::max(1u, _grassParams.bladesPerCluster);
+    const uint64_t ceiling = _grassParams.budgetBlades != 0
+                                 ? _grassParams.budgetBlades
+                                 : std::numeric_limits<uint64_t>::max();
+    uint64_t used = 0;
+    for (const auto &candidate : _grassFaceScratch) {
+        auto granted = static_cast<uint64_t>(
+            std::llround(static_cast<double>(candidate.authored) * _grassParams.density));
+        if (granted == 0)
+            continue;
+        const uint64_t remaining = ceiling > used ? (ceiling - used) / blades : 0;
+        if (remaining == 0)
+            break;
+        granted = std::min(granted, remaining);
+        _grassGrants[candidate.faceIndex] = static_cast<uint32_t>(granted);
+        used += granted * blades;
+    }
+}
+
 graphics::GpuSceneUpload GpuScene::prepare(
     const Classifier &classifier,
     const ProceduralClassifier &proceduralClassifier,
@@ -565,6 +625,15 @@ graphics::GpuSceneUpload GpuScene::prepare(
     auto upload = std::move(reuse);
     // Before anything reads it: the object records below size themselves by it.
     upload.grass = _grassParams;
+    // Blades already granted, across every grass object in this scene.
+    //
+    // Declared here and not beside the loop that spends it, which is the whole
+    // point: an area is several grass objects, and a ceiling reset per object
+    // is not a ceiling. Five of them each granted the full budget and the frame
+    // drew five times the cap - and measuring the largest single object against
+    // the budget showed a perfect match, because that is exactly what a
+    // per-object ceiling produces.
+    uint64_t grassBladesUsed = 0;
 
     upload.materials.clear();
     upload.objects.clear();
@@ -587,6 +656,14 @@ graphics::GpuSceneUpload GpuScene::prepare(
     // _objects is maintained in canonical SceneNodeId order. Partitioning into
     // these two vectors therefore yields opaque-first, stable-id order without
     // a per-frame sort.
+    // Grass selection, for the whole scene, before a single record is sized by
+    // it. Its own pass over the objects because the loop below both decides and
+    // allocates as it goes: choosing inside that loop means each grass object
+    // spends against whatever the previous ones left, so the first takes all it
+    // can and the rest are bald - and which object is first has nothing to do
+    // with where the camera is.
+    selectGrass(upload);
+
     uint32_t grassFaceBase = 0;
     for (const auto &object : _objects) {
         uint32_t objectGrassFaceBase = grassFaceBase;
@@ -718,86 +795,45 @@ graphics::GpuSceneUpload GpuScene::prepare(
         uint32_t grassRangeBase = 0;
         uint32_t grassRangeCount = 0;
         if (procedural->kind == ProceduralKind::Grass) {
-            R_PROFILE_ZONE("SceneAdmission::grass face-band scan");
+            R_PROFILE_ZONE("SceneAdmission::grass range build");
+            // The choosing is done - see selectGrass. This only records what
+            // each face was granted, in the layout the merge kernel indexes.
             grassRangeBase = static_cast<uint32_t>(upload.grassRanges.size());
             instanceCount = 0;
-            _grassFaceScratch.clear();
             uint64_t candidateClusters = 0;
-            // Was a hard 32 units, which silently capped the draw radius at 32.
-            const float kMaxClusterDistance = std::max(1.0f, _grassParams.radius);
-            const glm::vec3 cameraPosition(upload.cameraPosition);
             for (size_t faceOffset = 0; faceOffset < procedural->grassFaces->size();
                  ++faceOffset) {
-                const auto &face = (*procedural->grassFaces)[faceOffset];
-                const glm::vec3 closest = glm::clamp(
-                    cameraPosition, glm::vec3(face.boundsMin),
-                    glm::vec3(face.boundsMax));
-                if (glm::distance2(cameraPosition, closest) >
-                    kMaxClusterDistance * kMaxClusterDistance)
-                    continue;
-                const uint32_t budget = face.faceBudgetMaterialVariants.y;
-                if (budget == 0)
-                    continue;
-                _grassFaceScratch.push_back(
-                    {glm::distance2(cameraPosition, closest),
-                     objectGrassFaceBase + static_cast<uint32_t>(faceOffset), budget});
-                candidateClusters += budget;
-            }
-            // Nearest first, then take whole faces until the ceiling is gone.
-            //
-            // Every accepted face gets its full density-scaled grant, and that
-            // grant depends on nothing but the face. An earlier version scaled
-            // all faces by a factor derived from the live candidate total -
-            // which changes as faces cross the radius - so every face's grant
-            // wobbled by a cluster or two and blades all over the field blinked
-            // in and out. Making a grant depend only on its own face is what
-            // stops that, and sorting is what keeps the ceiling spent on the
-            // grass nearest the camera.
-            //
-            // The cut point still moves as the camera does, but it lands on the
-            // farthest accepted face, where the size ramp in the merge kernel
-            // has already taken the blades to nothing.
-            std::sort(_grassFaceScratch.begin(), _grassFaceScratch.end(),
-                      [](const auto &a, const auto &b) { return a.distanceSq < b.distanceSq; });
-            const uint64_t blades = std::max(1u, _grassParams.bladesPerCluster);
-            const uint64_t bladeCeiling =
-                _grassParams.budgetBlades != 0 ? _grassParams.budgetBlades
-                                               : std::numeric_limits<uint64_t>::max();
-            uint64_t bladesUsed = 0;
-            for (const auto &candidate : _grassFaceScratch) {
-                auto granted = static_cast<uint64_t>(
-                    std::llround(static_cast<double>(candidate.authored) * _grassParams.density));
+                const uint32_t faceIndex =
+                    objectGrassFaceBase + static_cast<uint32_t>(faceOffset);
+                const uint32_t granted =
+                    faceIndex < _grassGrants.size() ? _grassGrants[faceIndex] : 0u;
                 if (granted == 0)
                     continue;
-                const uint64_t remaining =
-                    bladeCeiling > bladesUsed ? (bladeCeiling - bladesUsed) / blades : 0;
-                if (remaining == 0)
-                    break;
-                granted = std::min(granted, remaining);
+                candidateClusters += (*procedural->grassFaces)[faceOffset]
+                                         .faceBudgetMaterialVariants.y;
                 if (upload.grassRanges.size() == std::numeric_limits<uint32_t>::max())
                     throw std::runtime_error("Grass face ranges exceed shader index range");
                 upload.grassRanges.push_back(
-                    {candidate.faceIndex, static_cast<uint32_t>(instanceCount),
-                     static_cast<uint32_t>(granted), 0u});
+                    {faceIndex, static_cast<uint32_t>(instanceCount), granted, 0u});
                 instanceCount += granted;
-                bladesUsed += granted * blades;
             }
             grassRangeCount = static_cast<uint32_t>(upload.grassRanges.size()) -
                               grassRangeBase;
             if (Logger::instance.isChannelEnabled(LogChannel::Graphics)) {
                 // The numbers the selection actually produced, rather than an
                 // inference from what the frame looks like.
-                debug("Grass: " + std::to_string(_grassFaceScratch.size()) + " faces in radius " +
+                debug("Grass: " + std::to_string(grassRangeCount) + " granted faces of " +
+                          std::to_string(_grassFaceScratch.size()) + " scene-wide in radius " +
                           std::to_string(_grassParams.radius) + ", " +
                           std::to_string(candidateClusters) + " candidate clusters, " +
                           std::to_string(instanceCount) + " granted, x" +
                           std::to_string(_grassParams.bladesPerCluster) + " blades = " +
                           std::to_string(instanceCount *
                                          std::max(1u, _grassParams.bladesPerCluster) *
-                                         graphics::kGrassTrisPerBlade) +
+                                         graphics::grassTrisPerBlade(_grassParams.segments)) +
                           " triangles, ceiling " +
                           std::to_string(_grassParams.budgetBlades *
-                                         graphics::kGrassTrisPerBlade),
+                                         graphics::grassTrisPerBlade(_grassParams.segments)),
                       LogChannel::Graphics);
             }
             if (instanceCount == 0)
@@ -830,10 +866,10 @@ graphics::GpuSceneUpload GpuScene::prepare(
             // here is one that gets built.
             const uint64_t blades =
                 instanceCount * std::max(1u, upload.grass.bladesPerCluster);
-            sceneObject.vertexCount =
-                static_cast<uint32_t>(blades) * graphics::kGrassVertsPerBlade;
-            sceneObject.triangleCount =
-                static_cast<uint32_t>(blades) * graphics::kGrassTrisPerBlade;
+            sceneObject.vertexCount = static_cast<uint32_t>(blades) *
+                                      graphics::grassVertsPerBlade(upload.grass.segments);
+            sceneObject.triangleCount = static_cast<uint32_t>(blades) *
+                                        graphics::grassTrisPerBlade(upload.grass.segments);
         } else {
             sceneObject.vertexCount = static_cast<uint32_t>(instanceCount) * 4;
             sceneObject.triangleCount = static_cast<uint32_t>(instanceCount) * 2;

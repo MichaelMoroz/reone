@@ -74,7 +74,16 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"mode", graphics::renderModeName(options.mode)},
         {"grass", std::to_string(options.grass)},
         {"grassdensity", formatConfigFloat(options.grassDensity)},
+        {"thintransmission", formatConfigFloat(options.thinTransmission)},
         {"grassradius", formatConfigFloat(options.grassRadius)},
+        {"grasssegments", std::to_string(options.grassSegments)},
+        {"grasswindstrength", formatConfigFloat(options.grassWindStrength)},
+        {"grasswinddirection", formatConfigFloat(options.grassWindDirection)},
+        {"grasswindspeed", formatConfigFloat(options.grassWindSpeed)},
+        {"grasswindwavelength", formatConfigFloat(options.grassWindWavelength)},
+        {"grasswindgust", formatConfigFloat(options.grassWindGust)},
+        {"grassorientation", formatConfigFloat(options.grassOrientation)},
+        {"grassorientationvariance", formatConfigFloat(options.grassOrientationVariance)},
         {"grasscurvature", formatConfigFloat(options.grassCurvature)},
         {"grasscurvaturevariance", formatConfigFloat(options.grassCurvatureVariance)},
         {"grasssparsity", formatConfigFloat(options.grassSparsity)},
@@ -930,6 +939,11 @@ void Editor::graphicsQualityTab() {
     // maximum (kGrassDensityCap), so dragging costs a push-constant change.
     // The old committed-on-release dance existed to avoid re-materialising
     // every cluster per mouse-move; that rebuild no longer exists.
+    ImGui::SliderFloat("Thin transmission", &options.thinTransmission, 0.0f, 1.0f, "%.2f");
+    settingHint("Light a surface with no thickness passes to its far side. Leaves, cloth and grass "
+                "are alpha cutouts standing in for exactly that, so they are lit from both sides "
+                "and shadowed from whichever side the light is on. Zero shades them as solids, "
+                "which sends every back-facing leaf black.");
     ImGui::SliderFloat("Grass density", &options.grassDensity, 0.0f, 64.0f, "%.2fx",
                        ImGuiSliderFlags_Logarithmic);
     settingHint("Multiplies the area's authored density, so areas keep their relative variation. "
@@ -948,6 +962,30 @@ void Editor::graphicsQualityTab() {
         ImGui::SliderFloat("Width", &options.grassWidth, 0.0f, 0.5f, "%.3f");
         settingHint("As a fraction of length. Thin blades are subpixel at distance, which is where "
                     "a temporal resolver starts to shimmer - widening costs less than it looks.");
+        ImGui::SliderInt("Segments", &options.grassSegments, graphics::kMinGrassSegments,
+                         graphics::kMaxGrassSegments);
+        settingHint("Quad segments up a blade, closed by one triangle: 2n+1 triangles each. The "
+                    "trade against blade count - four carries a curve convincingly, two makes it a "
+                    "dogleg but costs half as much, so under a fixed ceiling it buys nearly twice "
+                    "the blades.");
+        ImGui::SliderFloat("Wind strength", &options.grassWindStrength, 0.0f, 2.0f, "%.2f rad");
+        settingHint("Extra bend at full gust; zero is still air. The wind rotates each blade's arc "
+                    "downwind rather than displacing its tip, so a blade keeps the length it was "
+                    "authored with however hard it is blowing.");
+        ImGui::SliderFloat("Wind direction", &options.grassWindDirection, -3.1416f, 3.1416f, "%.2f rad");
+        ImGui::SliderFloat("Wind speed", &options.grassWindSpeed, 0.0f, 10.0f, "%.2f");
+        ImGui::SliderFloat("Wind wavelength", &options.grassWindWavelength, 0.1f, 64.0f, "%.1f");
+        settingHint("Distance between crests. This is what you watch cross a field, so it wants to "
+                    "be several blades wide - shorter than that and the field boils instead.");
+        ImGui::SliderFloat("Wind gust", &options.grassWindGust, 0.0f, 1.0f, "%.2f");
+        settingHint("Share of the strength carried by the slow, long wave rather than the fast "
+                    "short one. At zero the grass rustles in place; at one it heaves.");
+        ImGui::SliderFloat("Orientation", &options.grassOrientation, -3.1416f, 3.1416f, "%.2f rad");
+        ImGui::SliderFloat("Orientation variance", &options.grassOrientationVariance, 0.0f, 6.2832f,
+                           "%.2f rad");
+        settingHint("A full turn of variance is the random scatter a field wants. Zero points every "
+                    "blade the same way - a wind direction, or a lawn that has been mown - and the "
+                    "orientation above is the way they point.");
         ImGui::SliderFloat("Curvature", &options.grassCurvature, -2.0f, 2.0f, "%.2f rad");
         settingHint("Total bend of the blade's arc. The spine is a true arc, so a bent blade keeps "
                     "the length a straight one has.");
@@ -992,10 +1030,23 @@ void Editor::graphicsQualityTab() {
         "game directory is opened, and anisotropy is baked into each texture's sampler as it "
         "loads.";
     ImGui::BeginDisabled();
-    ImGui::SliderInt("Texture quality", &textureQuality, 0, 2);
+    // Named, not numbered. Both of these are stored as indices whose meaning is
+    // the opposite of how a slider reads: TextureQuality::High is 0, so the
+    // slider sat at its minimum while the setting was its best, and anisotropy
+    // is an exponent - exp2 of it, in resource/provider/textures.cpp - so a 4
+    // meant 16x. Against the launcher, which spells both out, the engine looked
+    // like it was disagreeing when it was only being read wrong.
+    static const char *kTextureQualityNames[] = {"High", "Medium", "Low"};
+    ImGui::Combo("Texture quality", &textureQuality, kTextureQualityNames,
+                 IM_ARRAYSIZE(kTextureQualityNames));
     settingHint(kRestartHint, true);
-    ImGui::SliderInt("Anisotropy", &anisotropic, 0, 4);
-    settingHint(kRestartHint, true);
+    static const char *kAnisotropyNames[] = {"Off", "2x", "4x", "8x", "16x"};
+    ImGui::Combo("Anisotropy", &anisotropic, kAnisotropyNames, IM_ARRAYSIZE(kAnisotropyNames));
+    settingHint("Stored as an exponent: the sampler is built at two to this power, so 4 is 16x. "
+                "The launcher's list is the same one.\n\n"
+                "Read once, before anything a rebuild could reach: the texture pack is chosen "
+                "while the game directory is opened, and anisotropy is baked into each texture's "
+                "sampler as it loads.", true);
     ImGui::EndDisabled();
 }
 

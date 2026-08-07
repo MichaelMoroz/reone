@@ -52,6 +52,16 @@ struct UniformsFeatureFlags {
     static constexpr int premulalpha = 1 << 12;
     static constexpr int envmapcube = 1 << 13;
     static constexpr int staticobj = 1 << 14;
+    /**
+     * A surface with no meaningful thickness: leaves, cloth, grass - whatever
+     * an alpha cutout was standing in for.
+     *
+     * It is lit from both sides and it lets light through. Treating one as a
+     * solid means the half of it facing away from the sun goes black, which is
+     * wrong for a leaf and very visible on a curved blade of grass, where the
+     * normal sweeps through the light and back out again.
+     */
+    static constexpr int thin = 1 << 15;
 };
 
 struct alignas(16) GlobalUniformsLight {
@@ -98,6 +108,17 @@ struct GlobalUniforms {
     float shadowRadius {0.0f};
     float fogNear {0.0f};
     float fogFar {0.0f};
+    /**
+     * Seconds since startup, this frame and the previous one.
+     *
+     * Two of them rather than one because anything that moves with time has to
+     * be evaluable at both: a vertex animated to time() and reported as having
+     * been in the same place last frame hands the temporal resolve a motion
+     * vector of zero and it smears. Whatever reads time to place a vertex reads
+     * prevTime to place where that vertex was.
+     */
+    float time {0.0f};
+    float prevTime {0.0f};
 
     void reset() {
         projection = glm::mat4(1.0f);

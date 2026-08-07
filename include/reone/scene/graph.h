@@ -94,6 +94,16 @@ public:
     virtual IRenderPipeline *renderPipeline() = 0;
     /** Discard target-sized state before the next render recreates it. */
     virtual void invalidateRenderPipeline() = 0;
+    /**
+     * True once if the scene has asked for its pipeline to be rebuilt.
+     *
+     * Asked for rather than done, because the caller that knows a rebuild is
+     * needed - clear(), during a module load - is inside a frame that is still
+     * rendering the loading screen, and the pipeline owns images those frames
+     * are reading. The engine performs it at the same point a graphics Apply
+     * does: outside a frame, after waiting for the device.
+     */
+    virtual bool consumeRenderPipelineRebuild() = 0;
     virtual std::optional<std::reference_wrapper<CameraSceneNode>> camera() = 0;
 
     /** The completed frame snapshot. Editor update intentionally sees frame N-1. */
@@ -180,8 +190,22 @@ public:
     }
 
     void update(float dt) override;
+
+private:
+    /** Scene time and the previous frame's, in seconds. See update(). */
+    float _time {0.0f};
+    float _prevTime {0.0f};
+    bool _renderPipelineRebuildRequested {false};
+
+public:
     graphics::Texture &render(const glm::ivec2 &dim) override;
     void invalidateRenderPipeline() override { _renderPipeline.reset(); }
+
+    bool consumeRenderPipelineRebuild() override {
+        const bool requested = _renderPipelineRebuildRequested;
+        _renderPipelineRebuildRequested = false;
+        return requested;
+    }
 
     void collectInto(GpuScene &scene, bool full = true);
 

@@ -740,7 +740,9 @@ void SlangShaderCompiler::validateSchemas() {
                   REONE_UNIFORM_FIELD(GlobalUniforms, shadowStrength),
                   REONE_UNIFORM_FIELD(GlobalUniforms, shadowRadius),
                   REONE_UNIFORM_FIELD(GlobalUniforms, fogNear),
-                  REONE_UNIFORM_FIELD(GlobalUniforms, fogFar)});
+                  REONE_UNIFORM_FIELD(GlobalUniforms, fogFar),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, time),
+                  REONE_UNIFORM_FIELD(GlobalUniforms, prevTime)});
     checkUniform("LocalUniforms", sizeof(LocalUniforms),
                  {REONE_UNIFORM_FIELD(LocalUniforms, model),
                   REONE_UNIFORM_FIELD(LocalUniforms, modelInv),

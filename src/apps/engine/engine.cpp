@@ -721,7 +721,11 @@ void Engine::renderVulkanFrame(bool &quit) {
 }
 
 void Engine::applyGraphicsRebuild() {
-    if (!_graphicsRebuildRequested) {
+    // Asked first, unconditionally, so the flag is cleared even on the frames a
+    // graphics Apply is also pending: leaving it set would rebuild once more on
+    // the following frame for nothing.
+    const bool sceneAsked = _sceneModule->graphs().consumeRenderPipelineRebuild();
+    if (!_graphicsRebuildRequested && !sceneAsked) {
         return;
     }
     _graphicsRebuildRequested = false;

@@ -186,9 +186,10 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     shading.roughness = clamp(shading.roughness * material.roughnessScale,
                               pushConstants.roughnessFloor, 1.0);
 
-    bool envmapped, hasLightmap, staticObject, shadowsEnabled, fogEnabled;
+    bool envmapped, hasLightmap, staticObject, shadowsEnabled, fogEnabled, thinSurface;
     unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
-                           shadowsEnabled, fogEnabled);
+                           shadowsEnabled, fogEnabled, thinSurface);
+    shading.thin = thinSurface;
     shading.envmapped = envmapped;
     shading.envStrength = (envmapped ? (1.0 - shading.alpha) : 0.0) *
                           material.overrideParams.z;

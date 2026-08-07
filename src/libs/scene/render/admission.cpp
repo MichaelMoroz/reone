@@ -314,6 +314,13 @@ namespace {
 graphics::GrassParams grassParamsFrom(const graphics::GraphicsOptions &options) {
     graphics::GrassParams params;
     params.radius = std::max(0.0f, options.grassRadius);
+    params.windStrength = options.grassWindStrength;
+    params.windDirection = options.grassWindDirection;
+    params.windSpeed = options.grassWindSpeed;
+    params.windWavelength = std::max(0.01f, options.grassWindWavelength);
+    params.windGust = std::clamp(options.grassWindGust, 0.0f, 1.0f);
+    params.orientation = options.grassOrientation;
+    params.orientationVariance = std::max(0.0f, options.grassOrientationVariance);
     params.curvature = options.grassCurvature;
     params.curvatureVariance = std::max(0.0f, options.grassCurvatureVariance);
     params.sparsity = std::clamp(options.grassSparsity, 0.0f, 0.99f);
@@ -326,10 +333,14 @@ graphics::GrassParams grassParamsFrom(const graphics::GraphicsOptions &options) 
     params.bladesPerCluster = static_cast<uint32_t>(std::clamp(options.grassBladesPerCluster, 1, 32));
     // The ceiling as blades, which is the unit the allocator works in. Zero
     // means no ceiling, and the density dials answer for the triangle count.
-    params.budgetBlades = options.grassTriangleBudget > 0
-                              ? static_cast<uint32_t>(options.grassTriangleBudget /
-                                                      graphics::kGrassTrisPerBlade)
-                              : 0u;
+    params.segments = static_cast<uint32_t>(
+        std::clamp<int>(options.grassSegments, graphics::kMinGrassSegments,
+                        graphics::kMaxGrassSegments));
+    params.budgetBlades =
+        options.grassTriangleBudget > 0
+            ? static_cast<uint32_t>(options.grassTriangleBudget /
+                                    graphics::grassTrisPerBlade(params.segments))
+            : 0u;
     // Not clamped to 1. One is the density the faces were authored at, and
     // stopping there made the authored budget a second ceiling: raising the
     // triangle budget past what the bake happens to contain then did nothing,
@@ -369,7 +380,9 @@ float grassDensityFraction(const graphics::GraphicsOptions &options, size_t area
     const bool retro = options.mode == graphics::RenderMode::Retro;
     const float perCluster =
         retro ? 2.0f
-              : static_cast<float>(graphics::kGrassTrisPerBlade) *
+              : static_cast<float>(graphics::grassTrisPerBlade(static_cast<uint32_t>(
+                    std::clamp<int>(options.grassSegments, graphics::kMinGrassSegments,
+                                    graphics::kMaxGrassSegments)))) *
                     static_cast<float>(std::clamp(options.grassBladesPerCluster, 1, 32));
     const float allowed = static_cast<float>(options.grassTriangleBudget) / perCluster;
     return std::min(byDensity, std::clamp(allowed / static_cast<float>(areaBlades), 0.0f, 1.0f));
@@ -402,6 +415,17 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
             if (!strands) {
                 features |= UniformsFeatureFlags::hashedalphatest;
             }
+            // Grass is the archetype of a thin surface, and it receives
+            // shadows. Neither is authored: the area records grass as a
+            // decoration, so nothing in the source data asks for either, and
+            // without them a field is lit as though every blade were a solid
+            // slab that nothing can fall across.
+            // Fog too, for the same reason: grass is world geometry standing on
+            // terrain that fogs, and an area records it as decoration, so
+            // nothing in the source data asks for it. Unfogged blades in front
+            // of fogged ground read as a hole in the weather.
+            features |= UniformsFeatureFlags::thin | UniformsFeatureFlags::shadows |
+                        UniformsFeatureFlags::fog;
             material.featureMask = features | (8u << 27);
             applyCategoryOverride(material, _options, 8);
             kind = strands ? AdmissionKind::Opaque : AdmissionKind::Cutout;

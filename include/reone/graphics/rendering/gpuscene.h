@@ -241,14 +241,27 @@ struct GrassParams {
     uint32_t budgetBlades {0};
     /** The author's density dial, as a fraction of the cap budgets were baked at. */
     float density {1.0f};
-    float pad2 {0.0f};
-    float pad3 {0.0f};
+    float orientation {0.0f};
+    float orientationVariance {6.28318531f};
     glm::vec4 color {1.0f};
+    float windStrength {0.35f};
+    float windDirection {0.0f};
+    float windSpeed {1.4f};
+    float windWavelength {6.0f};
+    float windGust {0.6f};
+    uint32_t segments {4};
+    float windPad1 {0.0f};
+    float windPad2 {0.0f};
 };
 
 /** Vertices and triangles a single blade contributes - see scene_resolve.slang. */
-constexpr uint32_t kGrassVertsPerBlade = 11;
-constexpr uint32_t kGrassTrisPerBlade = 9;
+/**
+ * Geometry of one blade for a given segment count - see scene_resolve.slang.
+ * A strip of n quads sharing n+1 vertex pairs, plus a single tip vertex.
+ */
+constexpr uint32_t grassVertsPerBlade(uint32_t segments) { return segments * 2 + 3; }
+constexpr uint32_t grassTrisPerBlade(uint32_t segments) { return segments * 2 + 1; }
+
 
 struct GpuSceneUpload {
     std::vector<InstanceMaterial> materials;

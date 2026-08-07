@@ -197,9 +197,9 @@ float3 channelColor(float2 uv, int2 pixel) {
     float3 eyeNormal = normalize(2.0 * sGBufEyeNormal.SampleLevel(uv, 0.0).xyz - 1.0);
     float3 normal = normalize(mul(globalUniforms.viewInv, float4(eyeNormal, 0.0)).xyz);
 
-    bool envmapped, hasLightmap, staticObject, shadowsEnabled, fogEnabled;
+    bool envmapped, hasLightmap, staticObject, shadowsEnabled, fogEnabled, thinSurface;
     unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
-                           shadowsEnabled, fogEnabled);
+                           shadowsEnabled, fogEnabled, thinSurface);
 
     // The shape cue: only the categorical views take it. A data channel
     // multiplied by a lighting term is a lit render, and a wrong value in one

@@ -99,6 +99,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("vsync", value<bool>()->default_value(options->graphics.vsync), "enable v-sync")                                       //
         ("grass", value<bool>()->default_value(options->graphics.grass), "enable grass")                                        //
         ("grassdensity", value<float>()->default_value(options->graphics.grassDensity), "grass density multiplier")           //
+        ("thintransmission", value<float>()->default_value(options->graphics.thinTransmission),
+         "light a thin surface (leaf, cloth, grass) passes to its far side")                                                  //
         ("mode", value<std::string>()->default_value(renderModeName(options->graphics.mode)), "render mode: retro, pbr or path-tracing ('raster' is accepted as a spelling of retro)") //
         ("admissionshadow", value<bool>()->default_value(false), "compare incremental and full scene admission every frame") //
         ("admissionforcefull", value<bool>()->default_value(false), "force full scene collection and classification")        //
@@ -135,6 +137,15 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ptshadowfiltermaxradius", value<float>()->default_value(options->graphics.ptShadowFilterMaxRadius),
          "ceiling on the shadow filter radius, pixels")                                                                       //
         ("grassradius", value<float>()->default_value(options->graphics.grassRadius), "grass draw radius")             //
+        ("grasssegments", value<int>()->default_value(options->graphics.grassSegments), "quad segments up a blade") //
+        ("grasswindstrength", value<float>()->default_value(options->graphics.grassWindStrength), "wind bend, radians") //
+        ("grasswinddirection", value<float>()->default_value(options->graphics.grassWindDirection), "wind direction, radians") //
+        ("grasswindspeed", value<float>()->default_value(options->graphics.grassWindSpeed), "wind rustle speed")          //
+        ("grasswindwavelength", value<float>()->default_value(options->graphics.grassWindWavelength), "wind crest spacing") //
+        ("grasswindgust", value<float>()->default_value(options->graphics.grassWindGust), "gust share of the strength")   //
+        ("grassorientation", value<float>()->default_value(options->graphics.grassOrientation), "blade facing, radians") //
+        ("grassorientationvariance", value<float>()->default_value(options->graphics.grassOrientationVariance),
+         "spread around that facing, radians; 0 aligns them all")                                                             //
         ("grasscurvature", value<float>()->default_value(options->graphics.grassCurvature), "blade bend, radians")       //
         ("grasscurvaturevariance", value<float>()->default_value(options->graphics.grassCurvatureVariance), "bend variance") //
         ("grasssparsity", value<float>()->default_value(options->graphics.grassSparsity), "fraction of slots left empty") //
@@ -265,6 +276,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.vsync = vars["vsync"].as<bool>();
     options->graphics.grass = vars["grass"].as<bool>();
     options->graphics.grassDensity = vars["grassdensity"].as<float>();
+    options->graphics.thinTransmission = std::clamp(vars["thintransmission"].as<float>(), 0.0f, 1.0f);
     options->graphics.mode = parseRenderMode(vars["mode"].as<std::string>());
     options->graphics.admissionShadow = vars["admissionshadow"].as<bool>();
     options->graphics.admissionForceFull = vars["admissionforcefull"].as<bool>();
@@ -331,6 +343,20 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptShadowFilterMaxRadius =
         std::clamp(vars["ptshadowfiltermaxradius"].as<float>(), 1.0f, 64.0f);
     options->graphics.grassRadius = std::max(0.0f, vars["grassradius"].as<float>());
+    options->graphics.grassSegments =
+        std::clamp<int>(vars["grasssegments"].as<int>(), graphics::kMinGrassSegments,
+                        graphics::kMaxGrassSegments);
+    options->graphics.grassWindStrength = std::clamp(vars["grasswindstrength"].as<float>(), 0.0f, 2.0f);
+    options->graphics.grassWindDirection =
+        std::clamp(vars["grasswinddirection"].as<float>(), -6.2832f, 6.2832f);
+    options->graphics.grassWindSpeed = std::clamp(vars["grasswindspeed"].as<float>(), 0.0f, 10.0f);
+    options->graphics.grassWindWavelength =
+        std::clamp(vars["grasswindwavelength"].as<float>(), 0.1f, 64.0f);
+    options->graphics.grassWindGust = std::clamp(vars["grasswindgust"].as<float>(), 0.0f, 1.0f);
+    options->graphics.grassOrientation =
+        std::clamp(vars["grassorientation"].as<float>(), -6.2832f, 6.2832f);
+    options->graphics.grassOrientationVariance =
+        std::clamp(vars["grassorientationvariance"].as<float>(), 0.0f, 6.2832f);
     options->graphics.grassCurvature = std::clamp(vars["grasscurvature"].as<float>(), -2.0f, 2.0f);
     options->graphics.grassCurvatureVariance = std::clamp(vars["grasscurvaturevariance"].as<float>(), 0.0f, 2.0f);
     options->graphics.grassSparsity = std::clamp(vars["grasssparsity"].as<float>(), 0.0f, 0.99f);
