@@ -374,6 +374,7 @@ void RenderPipeline::dumpTargets(const std::filesystem::path &dir) {
 }
 
 void RenderPipeline::restartTemporalHistory() {
+    debug("Temporal history restarted", LogChannel::Graphics);
     if (_rayQuery)
         _rayQuery->restartTemporalHistory();
     // The common tail carries a temporal resolve of its own in every mode, so

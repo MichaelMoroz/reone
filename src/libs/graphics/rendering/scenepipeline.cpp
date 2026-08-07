@@ -835,6 +835,8 @@ void ScenePipeline::upscalePass(ICommandBuffer &cmd) {
 
     // History is worthless across a cut, and a teleport-sized step is a cut
     // whether or not anything announced one.
+    // As in the denoiser: the scene being emptied restarts this explicitly, so
+    // what this catches is a cut that keeps the same scene.
     const auto cameraPosition = glm::vec3(globals.cameraPosition);
     if (glm::distance(cameraPosition, _prevCameraPosition) > 20.0f) {
         _temporalHistoryValid = false;

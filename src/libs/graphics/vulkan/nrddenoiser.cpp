@@ -342,10 +342,12 @@ void NrdDenoiser::denoise(ICommandBuffer &commandBuffer,
     poolImages.push_back(_outSpecular.get());
     VulkanImage::transitionTo(cmd, poolImages, VK_IMAGE_LAYOUT_GENERAL);
 
-    // A warp is not camera motion: reprojecting across it drags the previous
-    // module's history over the new scene. A teleport-sized jump resets the
-    // accumulation instead. Twenty units comfortably exceeds any legitimate
-    // per-frame camera move and is far under any warp.
+    // A backstop, not the mechanism. Emptying the scene now restarts the
+    // history explicitly - see SceneGraph::clear - which covers a warp, a
+    // module transition and a save load. What is left for a distance test is
+    // the discontinuity that keeps the same scene: a scripted camera cut, a
+    // teleport within one area. Twenty units comfortably exceeds any legitimate
+    // per-frame camera move.
     const glm::vec3 cameraPosition = glm::vec3(glm::inverse(view)[3]);
     if (_hasHistory && glm::distance(cameraPosition, _prevCameraPosition) > 20.0f) {
         restartHistory = true;

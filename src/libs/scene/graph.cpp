@@ -129,6 +129,21 @@ void SceneGraph::clear() {
     _shadowGpuScene.clear();
     _incrementalSceneReady = false;
     _shadowProperties = {};
+    // The pipeline outlives the scene it drew, and everything temporal it holds
+    // describes geometry that no longer exists: NRD's accumulation, the common
+    // tail's resolve history, the previous view and projection the reprojection
+    // is built from. Carried into a new module they are not stale so much as
+    // wrong - the reprojection maps them onto whatever now occupies those
+    // pixels, and the filters spend their convergence dragging one area's light
+    // off another's surfaces.
+    //
+    // Here rather than in Game::loadModule because this is the point every
+    // discontinuity already passes through - a warp, a transition, a save load -
+    // and a caller that empties the scene should not also have to remember
+    // this.
+    if (_renderPipeline) {
+        _renderPipeline->restartTemporalHistory();
+    }
 }
 
 void SceneGraph::addRoot(std::shared_ptr<ModelSceneNode> node) {
