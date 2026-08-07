@@ -38,6 +38,7 @@
 #include "reone/resource/provider/textures.h"
 #include "reone/resource/provider/visibilities.h"
 #include "reone/resource/provider/walkmeshes.h"
+#include "reone/resource/replacements.h"
 #include "reone/resource/resources.h"
 #include "reone/resource/strings.h"
 
@@ -66,6 +67,15 @@ public:
 
     MOCK_METHOD(Resource, get, (const ResourceId &id), (override));
     MOCK_METHOD(std::optional<Resource>, find, (const ResourceId &id), (override));
+};
+
+class MockResourceReplacements : public IResourceReplacements, boost::noncopyable {
+public:
+    MOCK_METHOD(void, replaceResource, (ResourceId id, ByteBuffer data), (override));
+    MOCK_METHOD(void, removeResourceReplacement, (const ResourceId &id), (override));
+    MOCK_METHOD(void, clearResourceReplacements, (), (override));
+    MOCK_METHOD(std::optional<Resource>, findResourceReplacement, (const ResourceId &id), (const override));
+    MOCK_METHOD(uint64_t, revision, (const ResourceId &id), (const override));
 };
 
 class MockStrings : public IStrings, boost::noncopyable {
@@ -182,6 +192,7 @@ public:
     void init() {
         _gffs = std::make_unique<MockGffs>();
         _resources = std::make_unique<MockResources>();
+        _replacements = std::make_unique<MockResourceReplacements>();
         _strings = std::make_unique<MockStrings>();
         _twoDas = std::make_unique<MockTwoDAs>();
         _scripts = std::make_unique<MockScripts>();
@@ -204,6 +215,7 @@ public:
         _services = std::make_unique<ResourceServices>(
             *_gffs,
             *_resources,
+            *_replacements,
             *_strings,
             *_twoDas,
             *_scripts,
@@ -275,6 +287,7 @@ public:
 private:
     std::unique_ptr<MockGffs> _gffs;
     std::unique_ptr<MockResources> _resources;
+    std::unique_ptr<MockResourceReplacements> _replacements;
     std::unique_ptr<MockStrings> _strings;
     std::unique_ptr<MockTwoDAs> _twoDas;
     std::unique_ptr<MockScripts> _scripts;

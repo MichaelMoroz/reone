@@ -51,7 +51,11 @@ set(TESTS_SOURCES
     ${TESTS_SOURCE_DIR}/game/journal.cpp
     ${TESTS_SOURCE_DIR}/game/messagebus.cpp
     ${TESTS_SOURCE_DIR}/game/object.cpp
+    ${TESTS_SOURCE_DIR}/game/pazaak.cpp
+    ${TESTS_SOURCE_DIR}/game/pazaakintegration.cpp
+    ${TESTS_SOURCE_DIR}/game/pazaaksession.cpp
     ${TESTS_SOURCE_DIR}/game/pathfinder.cpp
+    ${TESTS_SOURCE_DIR}/game/reputes.cpp
     ${TESTS_SOURCE_DIR}/game/statussummary.cpp
     ${TESTS_SOURCE_DIR}/game/transitioncandidate.cpp
     ${TESTS_SOURCE_DIR}/graphics/aabb.cpp
@@ -66,6 +70,8 @@ set(TESTS_SOURCES
     ${TESTS_SOURCE_DIR}/graphics/walkmesh.cpp
     ${TESTS_SOURCE_DIR}/json/gff.cpp
     ${TESTS_SOURCE_DIR}/resource/extractresources.cpp
+    ${TESTS_SOURCE_DIR}/resource/modulepolicy.cpp
+    ${TESTS_SOURCE_DIR}/resource/replacements.cpp
     ${TESTS_SOURCE_DIR}/resource/format/2dareader.cpp
     ${TESTS_SOURCE_DIR}/resource/format/2dawriter.cpp
     ${TESTS_SOURCE_DIR}/resource/format/bifreader.cpp
@@ -83,6 +89,7 @@ set(TESTS_SOURCES
     ${TESTS_SOURCE_DIR}/resource/provider/2das.cpp
     ${TESTS_SOURCE_DIR}/resource/provider/dialogs.cpp
     ${TESTS_SOURCE_DIR}/resource/provider/gffs.cpp
+    ${TESTS_SOURCE_DIR}/resource/provider/scripts.cpp
     ${TESTS_SOURCE_DIR}/resource/resources.cpp
     ${TESTS_SOURCE_DIR}/resource/resref.cpp
     ${TESTS_SOURCE_DIR}/resource/strings.cpp

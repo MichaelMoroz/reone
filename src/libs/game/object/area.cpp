@@ -918,6 +918,10 @@ void Area::loadPartyMember(const std::shared_ptr<Creature> &member, int index, b
 }
 
 void Area::unloadPartyMember(const std::shared_ptr<Creature> &member) {
+    // Party creatures persist across modules, but combat does not. Reset it
+    // before rebuilding their models in the destination area so powered
+    // weapons do not leak their active state through a transition.
+    member->deactivateCombat(0.0f);
     doDestroyObject(member->id());
 }
 
@@ -970,8 +974,9 @@ void Area::update(float dt) {
     }
     Object::update(dt);
 
-    for (auto &object : _objects) {
-        object->update(dt);
+    // Update can create new objects, so iterate with indices.
+    for (size_t i = 0; i < _objects.size(); ++i) {
+        _objects[i]->update(dt);
     }
     updateLeaderTriggerOccupancy();
     updatePerception(dt);
@@ -1494,24 +1499,26 @@ std::shared_ptr<Creature> Area::getNearestCreature(const std::shared_ptr<Object>
     return nth < candidates.size() ? candidates[nth].first : nullptr;
 }
 
-static bool matchesReputation(const Creature &creature, const Object *target,
+// The criteria describe the candidate's standing with the creature the search
+// is centred on, so that creature is the source of every disposition query.
+static bool matchesReputation(const Creature &candidate, const Object *target,
                               ReputationType reputation, IReputes &reputes) {
     if (!target || target->type() != ObjectType::Creature) {
         return false;
     }
-    const Creature &targetCreature = static_cast<const Creature &>(*target);
+    const Creature &searching = static_cast<const Creature &>(*target);
 
     switch (reputation) {
     case ReputationType::Friend:
-        return reputes.getIsFriend(creature, targetCreature);
+        return reputes.getIsFriend(searching, candidate);
     case ReputationType::Enemy: {
         // Do not consider dead enemies as enemies. Scripts use
         // GetNearestCreature to find a new target, and targeting dead bodies is
         // a poor tactic.
-        return !creature.isDead() && reputes.getIsEnemy(creature, targetCreature);
+        return !candidate.isDead() && reputes.getIsEnemy(searching, candidate);
     }
     case ReputationType::Neutral:
-        return reputes.getIsNeutral(creature, targetCreature);
+        return reputes.getIsNeutral(searching, candidate);
     }
     return false;
 }

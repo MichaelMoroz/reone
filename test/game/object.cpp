@@ -439,7 +439,9 @@ std::shared_ptr<Item> makeItem(Game &game, std::string tag, int baseItem, int st
     return item;
 }
 
-std::shared_ptr<graphics::Animation> makeAnimation(std::string name) {
+std::shared_ptr<graphics::Animation> makeAnimation(
+    std::string name,
+    std::vector<graphics::Animation::Event> events = {}) {
     auto root = std::make_shared<graphics::ModelNode>(
         0,
         "root_node",
@@ -455,12 +457,13 @@ std::shared_ptr<graphics::Animation> makeAnimation(std::string name) {
         0.0f,
         "root_node",
         std::move(root),
-        std::vector<graphics::Animation::Event>());
+        std::move(events));
 }
 
 std::shared_ptr<graphics::Model> makeModel(
     std::string name,
-    std::vector<std::shared_ptr<graphics::Animation>> animations) {
+    std::vector<std::shared_ptr<graphics::Animation>> animations,
+    int classification = graphics::MdlClassification::other) {
     auto root = std::make_shared<graphics::ModelNode>(
         0,
         "root_node",
@@ -470,7 +473,7 @@ std::shared_ptr<graphics::Model> makeModel(
         nullptr);
     return std::make_shared<graphics::Model>(
         std::move(name),
-        0,
+        classification,
         std::move(root),
         std::move(animations),
         "",
@@ -524,6 +527,96 @@ TEST(Conversation, should_finish_active_presentation_before_starting_replacement
 
     conversation.cleanupForModuleTransition();
     EXPECT_FALSE(secondOwner->isInConversation());
+}
+
+TEST(Creature, should_activate_and_deactivate_lightsabers_in_both_hands_with_combat) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto bodyRoot = std::make_shared<graphics::ModelNode>(
+        0, "root_node", glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+    bodyRoot->addChild(std::make_shared<graphics::ModelNode>(
+        1, "rhand", glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, bodyRoot.get()));
+    bodyRoot->addChild(std::make_shared<graphics::ModelNode>(
+        2, "lhand", glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, bodyRoot.get()));
+    graphics::Model body(
+        "body",
+        graphics::MdlClassification::character,
+        bodyRoot,
+        {makeAnimation("pause1", {{0.5f, "draw_weapon"}})},
+        "",
+        1.0f);
+
+    auto saberAnimations = std::vector<std::shared_ptr<graphics::Animation>> {
+        makeAnimation("off"),
+        makeAnimation("powerup"),
+        makeAnimation("powered"),
+        makeAnimation("powerdown")};
+    auto rightSaber = makeModel("right_saber", saberAnimations, graphics::MdlClassification::lightsaber);
+    auto leftSaber = makeModel("left_saber", saberAnimations, graphics::MdlClassification::lightsaber);
+
+    graphics::GraphicsOptions graphicsOptions;
+    scene::SceneGraph graph(
+        "test",
+        engine.sceneModule().renderPipelineFactory(),
+        graphicsOptions,
+        engine.services().graphics,
+        engine.services().audio,
+        engine.services().resource);
+    auto bodyNode = graph.newModel(body, scene::ModelUsage::Creature);
+    auto rightSaberNode = graph.newModel(*rightSaber, scene::ModelUsage::Equipment);
+    auto leftSaberNode = graph.newModel(*leftSaber, scene::ModelUsage::Equipment);
+    bodyNode->attach("rhand", *rightSaberNode);
+    bodyNode->attach("lhand", *leftSaberNode);
+    ASSERT_EQ(bodyNode->getAttachment("rhand"), rightSaberNode.get());
+    ASSERT_EQ(bodyNode->getAttachment("lhand"), leftSaberNode.get());
+
+    rightSaberNode->playAnimation("off");
+    leftSaberNode->playAnimation("off");
+    bodyNode->playAnimation(
+        "pause1",
+        nullptr,
+        scene::AnimationProperties::fromFlags(scene::AnimationFlags::propagate));
+
+    EXPECT_EQ(rightSaberNode->activeAnimationName(), "off");
+    EXPECT_EQ(leftSaberNode->activeAnimationName(), "off");
+
+    TestCreature creature(1, "test", game, engine.services());
+    creature.setSceneNode(bodyNode);
+    bodyNode->setAnimationEventListener(creature);
+    bodyNode->update(0.6f);
+
+    EXPECT_EQ(rightSaberNode->activeAnimationName(), "powerup");
+    EXPECT_EQ(leftSaberNode->activeAnimationName(), "powerup");
+
+    creature.update(7.9f);
+    EXPECT_EQ(rightSaberNode->activeAnimationName(), "powerup");
+    EXPECT_EQ(leftSaberNode->activeAnimationName(), "powerup");
+
+    creature.update(0.2f);
+    EXPECT_EQ(rightSaberNode->activeAnimationName(), "powerdown");
+    EXPECT_EQ(leftSaberNode->activeAnimationName(), "powerdown");
+
+    rightSaberNode->playAnimation("off");
+    leftSaberNode->playAnimation("off");
+    creature.activateCombat();
+
+    EXPECT_EQ(rightSaberNode->activeAnimationName(), "powerup");
+    EXPECT_EQ(leftSaberNode->activeAnimationName(), "powerup");
+
+    creature.deactivateCombat(8.0f);
+    creature.update(8.1f);
+
+    EXPECT_EQ(rightSaberNode->activeAnimationName(), "powerdown");
+    EXPECT_EQ(leftSaberNode->activeAnimationName(), "powerdown");
+
+    creature.activateCombat();
+    creature.deactivateCombat(0.0f);
+
+    EXPECT_FALSE(creature.isInCombat());
+    EXPECT_EQ(rightSaberNode->activeAnimationName(), "powerdown");
+    EXPECT_EQ(leftSaberNode->activeAnimationName(), "powerdown");
 }
 
 TEST(Conversation, should_advance_script_only_auto_routing_entry_without_presenting_it) {
@@ -2032,4 +2125,28 @@ TEST(Reputes, should_use_authored_creature_faction_dispositions) {
     EXPECT_FALSE(reputes.getIsEnemy(*neutral, *friendly1));
     EXPECT_TRUE(reputes.getIsNeutral(*friendly1, *neutral));
     EXPECT_TRUE(reputes.getIsNeutral(*neutral, *friendly1));
+}
+
+TEST(AreaReputationSearch, treats_the_creature_being_searched_around_as_the_source) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    testSceneGraph(engine);
+    auto area = game.newArea();
+    auto searching = game.newCreature();
+    searching->setFaction(Faction::Hostile1);
+    auto candidate = game.newCreature();
+    candidate->setFaction(Faction::Friendly1);
+    area->add(candidate);
+    auto &reputes = static_cast<MockReputes &>(engine.services().game.reputes);
+
+    // The search is centred on `searching`, so a candidate's hostility is
+    // judged from that creature's point of view, not the other way round.
+    EXPECT_CALL(reputes, getIsEnemy(Ref(*searching), Ref(*candidate)))
+        .WillOnce(Return(true));
+
+    Area::SearchCriteriaList criterias {
+        {CreatureType::Reputation, static_cast<int>(ReputationType::Enemy)}};
+
+    EXPECT_EQ(candidate, area->getNearestCreature(searching, criterias));
 }

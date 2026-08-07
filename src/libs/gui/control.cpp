@@ -206,10 +206,11 @@ void Control::render(const glm::ivec2 &screenSize,
         return;
     }
     glm::ivec2 size(_extent.width, _extent.height);
+    if (_border && (!_selected || _hilightOverBorder || !_hilight)) {
+        renderBorder(*_border, offset, size);
+    }
     if (_selected && _hilight) {
         renderBorder(*_hilight, offset, size);
-    } else if (_border) {
-        renderBorder(*_border, offset, size);
     }
     if (!_textLines.empty()) {
         renderText(_textLines, offset, size);
@@ -524,9 +525,11 @@ void Control::setBorderFill(std::string resRef) {
         texture = _resourceSvc.textures.get(resRef, TextureUsage::GUI);
     }
     setBorderFill(std::move(texture));
+    _borderFillResRef = std::move(resRef);
 }
 
 void Control::setBorderFill(std::shared_ptr<Texture> texture) {
+    _borderFillResRef.clear();
     if (!texture && _border) {
         _border->fill.reset();
         return;
@@ -574,9 +577,11 @@ void Control::setHilightFill(std::string resRef) {
         texture = _resourceSvc.textures.get(resRef, TextureUsage::GUI);
     }
     setHilightFill(texture);
+    _hilightFillResRef = std::move(resRef);
 }
 
 void Control::setHilightFill(std::shared_ptr<Texture> texture) {
+    _hilightFillResRef.clear();
     if (!texture && _hilight) {
         _hilight->fill.reset();
         return;
