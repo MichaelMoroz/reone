@@ -100,9 +100,12 @@ void VulkanRenderer::init() {
     // only ever added to, so a reload faithfully rebuilt deleted modules and
     // the frame never changed.
     std::filesystem::path shaderSource;
-    if (auto *base = SDL_GetBasePath()) {
+    // SDL3 owns this string; SDL2 did not. Freeing it corrupts the CRT heap,
+    // which surfaces as a heap-corruption abort somewhere later and entirely
+    // unrelated - see SDL_GetBasePath against SDL_GetPrefPath, where only the
+    // latter is documented as "should be freed with SDL_free()".
+    if (const auto *base = SDL_GetBasePath()) {
         auto deployed = std::filesystem::path(base) / "slang";
-        SDL_free(const_cast<char *>(base));
         if (std::filesystem::is_directory(deployed))
             shaderSource = std::move(deployed);
     }
