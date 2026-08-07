@@ -94,7 +94,17 @@ GpuScene::PrimitiveClass applyAdmissionKind(GpuScene::Classification &classifica
     case GpuScene::AdmissionKind::Opaque:
         return GpuScene::PrimitiveClass::Opaque;
     case GpuScene::AdmissionKind::Cutout:
-        classification.material.featureMask |= kPunchThrough;
+        // Thin follows the cutout decision, not the TXI. A cutout is a surface
+        // with no interior - a leaf, a banner, a frond - so it is lit from both
+        // sides and shadowed from whichever side the light is on.
+        //
+        // It used to be derived in materialFeatureMask from the TXI declaring
+        // punchthrough blending, which is a much narrower signal than the one
+        // that decides the cutout here: Dantooine's canopy is 1564 meshes of
+        // lda_leaf02, a TPC carrying no TXI at all, so it alpha-tested
+        // correctly and was still lit as a solid slab with a black underside.
+        classification.material.featureMask |=
+            kPunchThrough | UniformsFeatureFlags::thin | UniformsFeatureFlags::shadows;
         return GpuScene::PrimitiveClass::NonOpaque;
     case GpuScene::AdmissionKind::LitBlended:
         classification.material.featureMask |= kBlendedCoverage;
