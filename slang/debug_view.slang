@@ -79,6 +79,13 @@ static const uint kDebugTracedNoiseFree = 11; // tracer only
 static const uint kDebugMotion = 12;
 static const uint kDebugMaterialId = 13;
 static const uint kDebugFeatures = 14;
+static const uint kDebugDirectShadow = 15;      // tracer only
+static const uint kDebugPenumbra = 16;         // tracer only
+// Produced after denoising rather than before it, so that each component can be
+// judged on what the denoiser did to it rather than on what it was handed.
+static const uint kDebugDenoisedDiffuse = 17;  // tracer only
+static const uint kDebugDenoisedSpecular = 18; // tracer only
+static const uint kDebugFilteredDirect = 19;   // tracer only
 
 static const uint kNoTriangle = 0xffffffffu;
 static const uint kNoTexture = 0xffffffffu;
@@ -110,7 +117,9 @@ float3 gammaToLinear(float3 rgb) { return pow(max(rgb, 0.0), float3(kGamma)); }
 
 bool tracedOnly(uint view) {
     return view == kDebugTracedDiffuse || view == kDebugTracedSpecular ||
-           view == kDebugTracedNoiseFree;
+           view == kDebugTracedNoiseFree || view == kDebugDirectShadow ||
+           view == kDebugPenumbra || view == kDebugDenoisedDiffuse ||
+           view == kDebugDenoisedSpecular || view == kDebugFilteredDirect;
 }
 
 /**

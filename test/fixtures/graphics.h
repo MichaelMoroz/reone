@@ -50,7 +50,8 @@ public:
     MOCK_METHOD(ShaderReflection, reflection, (const std::string &), (const override));
     MOCK_METHOD(std::unique_ptr<ITracingPipeline>, makeTracingPipeline,
                 (const TracingPipelineDesc &), (override));
-    MOCK_METHOD(std::unique_ptr<ITracingDenoiser>, makeTracingDenoiser, (glm::ivec2), (override));
+    MOCK_METHOD(std::unique_ptr<ITracingDenoiser>, makeTracingDenoiser,
+                (glm::ivec2, TracingDenoiserKind), (override));
     MOCK_METHOD(std::unique_ptr<IUpscaler>, makeUpscaler, (glm::ivec2, bool), (override));
     MOCK_METHOD(std::unique_ptr<ITracingStructure>, makeTracingStructure, (), (override));
     MOCK_METHOD(void, prepareMesh, (const Mesh &), (override));

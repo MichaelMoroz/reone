@@ -966,7 +966,7 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kResolveSet,
                                  resolveSet(_output.get()), nullptr, 0);
     const DebugViewPushConstants push {
-        static_cast<uint32_t>(std::clamp(_options.debugView, 0, 14))};
+        static_cast<uint32_t>(std::clamp(_options.debugView, 0, kMaxDebugView))};
     cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));
     cmd.dispatchCompute({(_targetSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
                          (_targetSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});

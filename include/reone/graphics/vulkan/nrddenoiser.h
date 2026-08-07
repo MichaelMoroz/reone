@@ -25,6 +25,8 @@
 
 #include <NRD.h>
 
+#include <chrono>
+
 namespace reone {
 
 namespace graphics {
@@ -46,8 +48,10 @@ class VulkanDevice;
 class NrdDenoiser : public ITracingDenoiser, boost::noncopyable {
 public:
     NrdDenoiser(VulkanDevice &device, nrd::Instance &instance, glm::ivec2 extent,
-                bool ownsInstance = false) :
-        _device(device), _instance(instance), _extent(extent), _ownsInstance(ownsInstance) {}
+                bool ownsInstance = false,
+                TracingDenoiserKind kind = TracingDenoiserKind::Relax) :
+        _device(device), _instance(instance), _extent(extent), _ownsInstance(ownsInstance),
+        _kind(kind) {}
 
     ~NrdDenoiser() override {
         deinit();
@@ -104,13 +108,24 @@ private:
     glm::vec2 _prevJitter {0.0f};
     glm::vec3 _prevCameraPosition {0.0f};
     bool _hasHistory {false};
+    TracingDenoiserKind _kind {TracingDenoiserKind::Relax};
+    /**
+     * Smoothed frame time, the denominator that turns an accumulation time into
+     * the frame count NRD is configured with. Measured here rather than plumbed
+     * through four layers, and smoothed because a single long frame - a shader
+     * recompile, a level load - would otherwise collapse the history for the
+     * frames that follow it.
+     */
+    float _frameTimeMs {16.667f};
+    std::chrono::steady_clock::time_point _lastFrameTime {};
 
     VkImageView viewFor(const nrd::ResourceDesc &resource,
                         const TracingDenoiserInputs &inputs) const;
 };
 
 std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(VulkanDevice &device,
-                                                       glm::ivec2 extent);
+                                                       glm::ivec2 extent,
+                                                       TracingDenoiserKind kind);
 
 } // namespace graphics
 

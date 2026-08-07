@@ -52,15 +52,27 @@ import tracing.resources;
 [[vk::binding(11, 2)]] RWTexture2D<float4> outGBufferEyeNormal;
 [[vk::binding(12, 2)]] RWTexture2D<float> outGBufferDepth;
 [[vk::binding(13, 2)]] RWTexture2D<float2> outGBufferMotion;
+// Direct diffuse light at the primary vertex, which does not go through NRD.
+// Written linear and unpacked: no YCoCg, no hit distance, nothing a denoiser
+// reads. Diffuse only - the specular half stays in the denoised channel, where
+// its hit distance and roughness drive a kernel built for it.
+[[vk::binding(14, 2)]] RWTexture2D<float4> outDirectDiffuse;
 
 /** Environment / miss distance: beyond any scene, inside NRD's defaults. */
 public static const float kPtInfDistance = 1.0e6;
 
 public struct TraceOutputs {
     public float3 diffuse;      // demodulated diffuse radiance
+    /** Primary-vertex direct diffuse, demodulated the same way, denoiser-free. */
+    public float3 directDiffuse;
+    /** Expected penumbra half-width in world units; 0 where nothing blocked. */
+    public float penumbra;
     public float diffuseHitDist;
     public float3 specular;
     public float specularHitDist;
+    /** What REBLUR's hit-distance curve is evaluated at, when it is the one running. */
+    public float hitDistViewZ;
+    public float hitDistRoughness;
     public float3 normal;
     public float roughness;
     public float viewZ;
@@ -92,9 +104,13 @@ public struct TraceOutputs {
     public static TraceOutputs makeDefault() {
         TraceOutputs outputs;
         outputs.diffuse = float3(0.0);
+        outputs.directDiffuse = float3(0.0);
+        outputs.penumbra = 0.0;
         outputs.diffuseHitDist = 0.0;
         outputs.specular = float3(0.0);
         outputs.specularHitDist = 0.0;
+        outputs.hitDistViewZ = kPtInfDistance;
+        outputs.hitDistRoughness = 1.0;
         outputs.normal = float3(0.0);
         outputs.roughness = 1.0;
         outputs.viewZ = kPtInfDistance;
@@ -139,13 +155,25 @@ public struct TraceOutputs {
 
     /** The assembled image the kernel writes when the denoiser is off. */
     public float3 assemble() {
-        return noiseFree + diffuse * transportDiffFactor +
+        return noiseFree + (diffuse + directDiffuse) * transportDiffFactor +
                specular * transportSpecFactor;
     }
 
     public void write(uint2 pixel) {
-        outDiffuse[pixel] = float4(ptLinearToYCoCg(diffuse), diffuseHitDist);
-        outSpecular[pixel] = float4(ptLinearToYCoCg(specular), specularHitDist);
+        // RELAX reads linear radiance and a raw world-space hit distance;
+        // REBLUR reads YCoCg and one normalized against its own curve. Feeding
+        // either the other's packing is silent - both are four floats in range
+        // - so the branch lives here, next to the write.
+        if (ptDenoiserIsRelax()) {
+            outDiffuse[pixel] = float4(diffuse, diffuseHitDist);
+            outSpecular[pixel] = float4(specular, specularHitDist);
+        } else {
+            outDiffuse[pixel] = float4(ptLinearToYCoCg(diffuse),
+                                       ptNormalizeHitDist(diffuseHitDist, hitDistViewZ, 1.0));
+            outSpecular[pixel] = float4(ptLinearToYCoCg(specular),
+                                        ptNormalizeHitDist(specularHitDist, hitDistViewZ,
+                                                           hitDistRoughness));
+        }
         outNormalRoughness[pixel] = float4(normal, roughness);
         outViewZ[pixel] = viewZ;
         outMotion[pixel] = float4(motion, 0.0);
@@ -160,6 +188,8 @@ public struct TraceOutputs {
         // than using NRD's large environment sentinel.
         outGBufferDepth[pixel] = min(gBufferDepth, globalUniforms.clipFar);
         outGBufferMotion[pixel] = gBufferMotion;
+        // Alpha was carrying a constant; the penumbra rides there for free.
+        outDirectDiffuse[pixel] = float4(directDiffuse, penumbra);
     }
 };
 

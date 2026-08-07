@@ -16,7 +16,14 @@
  */
 
 // Random number generation and low-level directional sampling for the path
-// tracer. Pure functions only: no resources, no push constants.
+// tracer. Pure functions, with one exception: the blue-noise atlas below is a
+// table, and a table the sampler reads is not the same thing as a dependency on
+// the scene.
+
+import tracing.resources;
+
+public static const uint kPtBlueNoiseSize = 64u;
+public static const uint kPtBlueNoiseTiles = 64u;
 
 public static const float kPtPi = 3.14159265359;
 public static const float kPtTwoPi = 6.28318530718;
@@ -88,6 +95,86 @@ public float3 ptGgxVisibleHalfVector(float3 normal, float3 view, float roughness
     float3 halfHemi = p1 * t1 + p2 * t2 + sqrt(max(0.0, 1.0 - p1 * p1 - p2 * p2)) * viewHemi;
     float3 halfLocal = normalize(float3(a * halfHemi.x, a * halfHemi.y, max(0.0, halfHemi.z)));
     return tangent * halfLocal.x + bitangent * halfLocal.y + normal * halfLocal.z;
+}
+
+/**
+ * Interleaved gradient noise (Jimenez, "Next Generation Post Processing in Call
+ * of Duty: Advanced Warfare"). A per-pixel dither value whose error is arranged
+ * into a fine screen-space pattern rather than scattered white noise, which is
+ * what makes it resolve under a temporal filter instead of fighting one.
+ */
+public float ptInterleavedGradientNoise(float2 pixel) {
+    return frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
+}
+
+/**
+ * Interleaved gradient noise along a second, different projection.
+ *
+ * Not the same function with a shifted argument. IGN is a scalar built from one
+ * projection of the pixel, dot(p, k); shifting p by a constant only adds a
+ * constant to that projection, so the shifted field is the original plus an
+ * offset and the two are locked together. A pair built that way lands on a
+ * single diagonal of the unit square and never samples off it. Rotating the
+ * projection instead gives a genuinely independent field.
+ */
+float ptInterleavedGradientNoise2(float2 pixel) {
+    return frac(52.9829189 * frac(dot(pixel, float2(0.00583715, 0.06711056))));
+}
+
+/**
+ * A dithered 2D sample for the first shadow ray, decorrelated over time.
+ *
+ * The temporal offset is applied to the coordinate the noise is evaluated at,
+ * not added to its result. That distinction is the whole of it: adding a
+ * per-draw constant to the value shifts every pixel on screen by the same
+ * amount, so the dither field does not change between draws, it translates
+ * rigidly - and along a penumbra, where the threshold between lit and shadowed
+ * falls somewhere inside that field, the pattern is seen to scroll. Offsetting
+ * the coordinate resamples a different field each draw, which is what the
+ * technique is for.
+ *
+ * What this does not fix, and cannot: IGN is a diagonally striped field, and
+ * every animation of it moves all pixels by very nearly the same amount per
+ * draw - measured over a 256x256 tile, the spread of the per-pixel step is
+ * 0.008 against a step of order 0.5. A near-uniform shift of a striped field is
+ * seen as the stripes marching, which is what animated IGN looks like on a
+ * penumbra. Breaking the lockstep needs a per-pixel, per-draw offset, and
+ * adding one turns the spatial distribution white: high-frequency energy over
+ * the same tile falls from 0.967 to 0.805, which is white noise's own value.
+ * The two properties are not simultaneously available from one scalar field.
+ * A spatiotemporal blue-noise texture is what provides both, and is the
+ * intended replacement here.
+ */
+public float2 ptShadowSample(uint2 pixel, uint sequence) {
+    // The counter picks the tile, and a hashed toroidal offset picks where the
+    // tile is anchored.
+    //
+    // The tiles alone are not enough. Sixty-four of them consumed a sample at a
+    // time is a period of 64/spp frames - at 2 spp and 300 fps that is 32
+    // frames, about a tenth of a second, and a noise field that repeats ten
+    // times a second is a field that pulses rather than averages. The offset
+    // removes the period: these tiles are built to wrap, so shifting one
+    // toroidally yields another valid blue-noise field rather than a damaged
+    // one, and a hash of the counter gives a different anchor every draw.
+    //
+    // Shifting the anchor is not the same mistake as shifting the value. A
+    // value offset moves every pixel by one amount and slides the pattern
+    // rigidly; this re-anchors the whole field somewhere unrelated each draw,
+    // so consecutive draws are independent rather than adjacent.
+    uint tile = sequence % kPtBlueNoiseTiles;
+    uint2 origin = uint2(tile % 8u, tile / 8u) * kPtBlueNoiseSize;
+    uint2 anchor = uint2(ptHash(sequence), ptHash(sequence ^ 0x9e3779b9u)) % kPtBlueNoiseSize;
+    uint2 texel = origin + ((pixel + anchor) % kPtBlueNoiseSize);
+    // R and G are decorrelated within a tile (measured 0.022), so they serve as
+    // the two dimensions directly.
+    return blueNoise.Load(int3(int2(texel), 0)).rg;
+}
+
+/** The interleaved-gradient fallback, kept for comparison against the texture. */
+public float2 ptShadowSampleIgn(uint2 pixel, uint sequence) {
+    float2 p = float2(pixel) + float2(47.0, 17.0) * 0.695 * float(sequence % 64u);
+    return float2(ptInterleavedGradientNoise(p),
+                  ptInterleavedGradientNoise2(p + float2(23.0, 71.0)));
 }
 
 // Uniform direction inside a cone: light sources are never points, so every

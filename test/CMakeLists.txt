@@ -57,6 +57,7 @@ set(TESTS_SOURCES
     ${TESTS_SOURCE_DIR}/graphics/aabb.cpp
     ${TESTS_SOURCE_DIR}/graphics/format/bwmreader.cpp
     ${TESTS_SOURCE_DIR}/graphics/format/mdlmdxreader.cpp
+    ${TESTS_SOURCE_DIR}/graphics/bluenoise.cpp
     ${TESTS_SOURCE_DIR}/graphics/format/tgareader.cpp
     ${TESTS_SOURCE_DIR}/graphics/format/tpcreader.cpp
     ${TESTS_SOURCE_DIR}/graphics/format/txireader.cpp
@@ -123,6 +124,8 @@ target_include_directories(tests PRIVATE ${GTEST_INCLUDE_DIRS})
 
 target_precompile_headers(tests PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(tests PRIVATE tools json graphicsvulkan GTest::gmock_main)
+target_compile_definitions(tests PRIVATE
+    REONE_ASSET_SOURCE_DIR="${CMAKE_SOURCE_DIR}/assets")
 
 reone_copy_slang_runtime(tests)
 

@@ -47,6 +47,34 @@ enum class AntiAliasing {
 };
 
 /**
+ * Which NRD denoiser resolves the traced channels.
+ *
+ * The pair are not interchangeable at the input: REBLUR takes radiance in YCoCg
+ * with the hit distance normalized against its own curve, RELAX takes linear
+ * radiance and a raw world-space distance. The trace kernel therefore has to
+ * know which one it is writing for, so this value reaches the shader rather
+ * than staying on the CPU.
+ */
+/**
+ * Highest debug channel, matching the kDebug* numbering in
+ * slang/debug_view.slang. Channels above 14 are produced by the tracer or its
+ * resolve and have no counterpart in the raster modes.
+ */
+constexpr int kMaxDebugView = 19;
+
+/** Channels the post-denoise resolve produces, rather than the trace kernel. */
+constexpr bool isResolveDebugView(int view) {
+    return view >= 17 && view <= 19;
+}
+
+enum class Denoiser {
+    /** Cheaper, and spends its budget on spatial filtering. */
+    Reblur,
+    /** An a-trous edge-stopping filter: keeps edges and gloss, costs more. */
+    Relax,
+};
+
+/**
  * Which renderer shades the frame.
  *
  * One option with three values rather than two options that had to be read
@@ -145,25 +173,102 @@ struct GraphicsOptions {
      */
     bool ptDenoise {true};
     /**
-     * REBLUR tuning, exposed 1:1 in the Path tracing panel. NRD's defaults
-     * are graded for 0.5-1 spp production signals and over-commit against
-     * this tracer's 4 spp; these are the user-graded values from the
-     * 2026-07-29 session: minimal spatial filtering, moderate accumulation,
-     * rejection opened wide so foliage accumulates.
+     * Direct light at the primary vertex bypasses the denoiser and is applied
+     * at the resolve.
+     *
+     * A denoiser is built for indirect light: smooth, slow, and worth a wide
+     * spatial kernel. A shadow edge is the opposite, and the kernel that
+     * settles bounce noise is the kernel that softens contact. This channel is
+     * stratified where it is sampled - a dithered, low-discrepancy point on the
+     * light - and whatever noise is left is the temporal resolve's to take.
+     *
+     * Off restores the previous routing, through the denoiser, for comparison.
      */
-    int ptNrdMaxAccumulatedFrames {6};
-    int ptNrdMaxFastAccumulatedFrames {1};
-    int ptNrdMaxStabilizedFrames {30};
-    int ptNrdHistoryFixFrames {4};
-    float ptNrdDiffusePrepassBlurRadius {1.0f};
-    float ptNrdSpecularPrepassBlurRadius {1.0f};
-    float ptNrdMinBlurRadius {0.5f};
-    float ptNrdMaxBlurRadius {32.0f};
-    float ptNrdLobeAngleFraction {0.77f};
-    float ptNrdRoughnessFraction {0.74f};
-    float ptNrdPlaneDistanceSensitivity {0.099f};
-    float ptNrdDisocclusionThreshold {0.003f};
+    bool ptDirectChannel {true};
+    /**
+     * Filter the direct channel with a radius derived from the penumbra the
+     * geometry implies, rather than a fixed one.
+     *
+     * The tracer records how far away whatever blocked each shadow ray was; a
+     * source of known angular size at that distance implies a penumbra of a
+     * particular width, and that width in pixels is the only radius that blurs
+     * a soft shadow by as much as it is soft while leaving a contact edge
+     * untouched. It is what a general denoiser cannot know.
+     *
+     * Off by default, because with a temporal resolver in the slot it makes the
+     * picture worse rather than better. Blue noise is built so that its error
+     * sits at high spatial frequency, which is exactly the part a temporal
+     * resolve averages away and the part FSR's neighbourhood clamp is willing
+     * to reject. A spatial blur moves that error down into low frequency, and a
+     * low-frequency blob that changes between frames is indistinguishable from
+     * signal to a clamp - so it survives, and then it boils.
+     *
+     * Measured over 32 FSR frames on the region the filter touches: mean
+     * frame-to-frame luma delta 0.7429 with it off, 0.7584 at the physical
+     * radius, 0.7507 forced to 8 pixels. Every filtered variant is less stable
+     * than none, and none of them is quieter. It stays available for the case
+     * with no temporal resolver, where nothing else is averaging.
+     */
+    bool ptShadowFilter {false};
+    /** Ceiling on that radius in pixels, whatever the geometry asks for. */
+    float ptShadowFilterMaxRadius {24.0f};
+    /**
+     * Multiplier on the radius the geometry implies. 1 is the physical answer;
+     * above it trades penumbra fidelity for a quieter shadow.
+     */
+    float ptShadowFilterRadiusScale {1.0f};
+    /**
+     * Floor on the radius, in pixels, applied only where something actually
+     * blocked the light. Unphysical by construction: it exists because the
+     * residual noise in this channel is not penumbra-scale, and a filter sized
+     * strictly by the geometry will not touch it. Zero leaves the estimate
+     * alone; a contact edge stays sharp either way, since an unshadowed pixel
+     * has no penumbra for the floor to apply to.
+     */
+    float ptShadowFilterMinRadius {0.0f};
+    /** Relative view-depth difference a tap may have before it is rejected. */
+    float ptShadowFilterDepthTolerance {0.02f};
+    /** Minimum normal agreement a tap may have before it is rejected. */
+    float ptShadowFilterNormalTolerance {0.9f};
+    /**
+     * Which NRD denoiser runs. REBLUR is the cheaper, blurrier one and was the
+     * only choice here; RELAX keeps edges and specular detail at a higher cost,
+     * which is the trade this content wants. Staged, not live: NRD fixes the
+     * denoiser when the instance is built.
+     */
+    Denoiser ptDenoiser {Denoiser::Relax};
+    /**
+     * Denoiser tuning, exposed in the Path tracing panel. Accumulation is in
+     * seconds, which is what NRD asks to be configured in - a frame count is
+     * only its internal unit, and holding one fixed is why the picture got
+     * worse as the frame rate rose.
+     *
+     * The rejection fractions are back at NRD's own values. The graded set they
+     * replace ran roughly five times wider - lobe angle 0.77 against 0.15,
+     * plane distance 0.099 against 0.02 - which reuses history across normals
+     * and depths that do not belong together, and is what took the contact
+     * shadows and the sharp folds with it.
+     */
+    float ptNrdAccumulationTime {0.5f};
+    float ptNrdFastAccumulationTime {0.1f};
+    float ptNrdStabilizationTime {0.0f};
+    int ptNrdHistoryFixFrames {3};
+    float ptNrdDiffusePrepassBlurRadius {30.0f};
+    float ptNrdSpecularPrepassBlurRadius {50.0f};
+    float ptNrdLobeAngleFraction {0.15f};
+    float ptNrdRoughnessFraction {0.15f};
+    float ptNrdDisocclusionThreshold {0.01f};
     bool ptNrdAntiFirefly {true};
+    /** REBLUR only. */
+    float ptNrdMinBlurRadius {1.0f};
+    float ptNrdMaxBlurRadius {30.0f};
+    float ptNrdPlaneDistanceSensitivity {0.02f};
+    /** RELAX only. */
+    int ptNrdAtrousIterations {5};
+    float ptNrdDiffusePhiLuminance {2.0f};
+    float ptNrdSpecularPhiLuminance {1.0f};
+    float ptNrdDepthThreshold {0.003f};
+    float ptNrdSpecularLobeAngleSlack {0.15f};
     /**
      * The debug channel view: 0 off, then the numbering in
      * slang/debug_view.slang.

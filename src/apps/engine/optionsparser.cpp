@@ -130,16 +130,42 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("sharpen", value<bool>()->default_value(options->graphics.sharpen), "sharpen the finished frame (unsharp mask, after the display transform)") //
         ("sharpenamount", value<float>()->default_value(options->graphics.sharpenAmount), "strength of that mask")       //
         ("ptdenoise", value<bool>()->default_value(options->graphics.ptDenoise), "enable the path tracing denoiser")           //
+        ("ptshadowfilter", value<bool>()->default_value(options->graphics.ptShadowFilter),
+         "filter the direct channel by the penumbra the geometry implies")                                                    //
+        ("ptshadowfiltermaxradius", value<float>()->default_value(options->graphics.ptShadowFilterMaxRadius),
+         "ceiling on the shadow filter radius, pixels")                                                                       //
+        ("ptshadowfilterscale", value<float>()->default_value(options->graphics.ptShadowFilterRadiusScale),
+         "multiplier on the radius the geometry implies")                                                                     //
+        ("ptshadowfilterminradius", value<float>()->default_value(options->graphics.ptShadowFilterMinRadius),
+         "floor on the shadow filter radius where light is blocked, pixels")                                                  //
+        ("ptshadowfilterdepthtolerance", value<float>()->default_value(options->graphics.ptShadowFilterDepthTolerance),
+         "relative view-depth difference a filter tap may have")                                                              //
+        ("ptshadowfilternormaltolerance", value<float>()->default_value(options->graphics.ptShadowFilterNormalTolerance),
+         "minimum normal agreement a filter tap may have")                                                                    //
+        ("ptdirectchannel", value<bool>()->default_value(options->graphics.ptDirectChannel),
+         "apply primary-vertex direct light at the resolve instead of through the denoiser")                                  //
         ("debugview", value<int>()->default_value(options->graphics.debugView),
          "debug channel view in any render mode, 0 off")                                                                  //
         ("ptdebugview", value<int>()->default_value(options->graphics.debugView),
          "deprecated alias for --debugview")                                                                              //
-        ("ptnrdstabilized", value<int>()->default_value(options->graphics.ptNrdMaxStabilizedFrames),
-         "REBLUR stabilized frames; 0 disables its temporal stabilization pass")                                              //
-        ("ptnrdaccum", value<int>()->default_value(options->graphics.ptNrdMaxAccumulatedFrames),
-         "REBLUR accumulated frames, up to 63")                                                                               //
-        ("ptnrdfastaccum", value<int>()->default_value(options->graphics.ptNrdMaxFastAccumulatedFrames),
-         "REBLUR fast accumulated frames")                                                                                    //
+        ("ptdenoiser", value<std::string>()->default_value(options->graphics.ptDenoiser == graphics::Denoiser::Reblur ? "reblur" : "relax"),
+         "NRD denoiser: reblur or relax")                                                                                     //
+        ("ptnrdstabilizationtime", value<float>()->default_value(options->graphics.ptNrdStabilizationTime),
+         "REBLUR stabilization, seconds; 0 disables its temporal stabilization pass")                                         //
+        ("ptnrdaccumtime", value<float>()->default_value(options->graphics.ptNrdAccumulationTime),
+         "denoiser history, seconds")                                                                                         //
+        ("ptnrdfastaccumtime", value<float>()->default_value(options->graphics.ptNrdFastAccumulationTime),
+         "denoiser responsive history, seconds")                                                                              //
+        ("ptnrdatrous", value<int>()->default_value(options->graphics.ptNrdAtrousIterations),
+         "RELAX a-trous iterations")                                                                                          //
+        ("ptnrddiffusephi", value<float>()->default_value(options->graphics.ptNrdDiffusePhiLuminance),
+         "RELAX diffuse luminance edge stopper")                                                                              //
+        ("ptnrdspecularphi", value<float>()->default_value(options->graphics.ptNrdSpecularPhiLuminance),
+         "RELAX specular luminance edge stopper")                                                                             //
+        ("ptnrddepththreshold", value<float>()->default_value(options->graphics.ptNrdDepthThreshold),
+         "RELAX depth threshold for spatial passes")                                                                          //
+        ("ptnrdspecularlobeslack", value<float>()->default_value(options->graphics.ptNrdSpecularLobeAngleSlack),
+         "RELAX specular lobe angle slack, degrees")                                                                          //
         ("ptnrdhistoryfix", value<int>()->default_value(options->graphics.ptNrdHistoryFixFrames),
          "REBLUR history fix frames")                                                                                         //
         ("ptnrddiffuseprepassblurradius", value<float>()->default_value(options->graphics.ptNrdDiffusePrepassBlurRadius),
@@ -281,10 +307,32 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.debugView =
         std::clamp(vars["debugview"].defaulted() ? vars["ptdebugview"].as<int>()
                                                  : vars["debugview"].as<int>(),
-                   0, 14);
-    options->graphics.ptNrdMaxStabilizedFrames = std::max(0, vars["ptnrdstabilized"].as<int>());
-    options->graphics.ptNrdMaxAccumulatedFrames = std::clamp(vars["ptnrdaccum"].as<int>(), 0, 63);
-    options->graphics.ptNrdMaxFastAccumulatedFrames = std::max(0, vars["ptnrdfastaccum"].as<int>());
+                   0, graphics::kMaxDebugView);
+    {
+        const std::string denoiser = vars["ptdenoiser"].as<std::string>();
+        options->graphics.ptDenoiser = denoiser == "reblur" ? graphics::Denoiser::Reblur
+                                                            : graphics::Denoiser::Relax;
+    }
+    options->graphics.ptDirectChannel = vars["ptdirectchannel"].as<bool>();
+    options->graphics.ptShadowFilter = vars["ptshadowfilter"].as<bool>();
+    options->graphics.ptShadowFilterMaxRadius =
+        std::clamp(vars["ptshadowfiltermaxradius"].as<float>(), 1.0f, 64.0f);
+    options->graphics.ptShadowFilterRadiusScale =
+        std::clamp(vars["ptshadowfilterscale"].as<float>(), 0.0f, 8.0f);
+    options->graphics.ptShadowFilterMinRadius =
+        std::clamp(vars["ptshadowfilterminradius"].as<float>(), 0.0f, 32.0f);
+    options->graphics.ptShadowFilterDepthTolerance =
+        std::clamp(vars["ptshadowfilterdepthtolerance"].as<float>(), 0.0f, 1.0f);
+    options->graphics.ptShadowFilterNormalTolerance =
+        std::clamp(vars["ptshadowfilternormaltolerance"].as<float>(), -1.0f, 1.0f);
+    options->graphics.ptNrdStabilizationTime = std::clamp(vars["ptnrdstabilizationtime"].as<float>(), 0.0f, 2.0f);
+    options->graphics.ptNrdAccumulationTime = std::clamp(vars["ptnrdaccumtime"].as<float>(), 0.0f, 2.0f);
+    options->graphics.ptNrdFastAccumulationTime = std::clamp(vars["ptnrdfastaccumtime"].as<float>(), 0.0f, 2.0f);
+    options->graphics.ptNrdAtrousIterations = std::clamp(vars["ptnrdatrous"].as<int>(), 2, 8);
+    options->graphics.ptNrdDiffusePhiLuminance = std::max(0.0f, vars["ptnrddiffusephi"].as<float>());
+    options->graphics.ptNrdSpecularPhiLuminance = std::max(0.0f, vars["ptnrdspecularphi"].as<float>());
+    options->graphics.ptNrdDepthThreshold = std::max(0.0f, vars["ptnrddepththreshold"].as<float>());
+    options->graphics.ptNrdSpecularLobeAngleSlack = std::max(0.0f, vars["ptnrdspecularlobeslack"].as<float>());
     options->graphics.ptNrdHistoryFixFrames = std::max(0, vars["ptnrdhistoryfix"].as<int>());
     options->graphics.ptNrdDiffusePrepassBlurRadius = std::max(0.0f, vars["ptnrddiffuseprepassblurradius"].as<float>());
     options->graphics.ptNrdSpecularPrepassBlurRadius = std::max(0.0f, vars["ptnrdspecularprepassblurradius"].as<float>());

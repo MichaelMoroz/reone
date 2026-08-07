@@ -103,6 +103,17 @@ public struct DirectLight {
     /** Diffuse irradiance transport before the surface response. */
     public float3 diffuse;
     public float3 specular;
+    /**
+     * Half-width, in world units, of the penumbra this sample expects, or 0
+     * where nothing blocked the light.
+     *
+     * Geometry, not a guess: a source subtending half-angle t, seen from the
+     * shaded point, projects an edge blurred over roughly d*tan(t) at a blocker
+     * distance d. It is the quantity a filter downstream needs in order to blur
+     * a soft shadow by exactly as much as it is soft and leave a contact edge
+     * alone.
+     */
+    public float penumbra;
 };
 
 /**
@@ -111,12 +122,20 @@ public struct DirectLight {
  * origin. Geometry decides visibility - a light below the actual triangle
  * contributes nothing however curved the smooth normal pretends the surface
  * is - and the smooth normal only shades.
+ *
+ * The point on the light comes from the caller rather than from rng, because
+ * the two call sites want different sequences. The primary vertex feeds a
+ * dithered, stratified pair (ptShadowSample) since its result is the shadow the
+ * viewer looks straight at and is resolved temporally rather than denoised;
+ * bounce vertices pass white noise, which is all their contribution needs
+ * before NRD sees it.
  */
 public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3 view,
-                                 inout uint rng) {
+                                 float2 lightXi, inout uint rng) {
     DirectLight result;
     result.diffuse = float3(0.0);
     result.specular = float3(0.0);
+    result.penumbra = 0.0;
     float totalWeight = 0.0;
     for (int i = 0; i < globalUniforms.numLights; ++i) {
         totalWeight += directLightWeight(globalUniforms.lights[i], hit.position, shading.normal);
@@ -158,12 +177,20 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
     // the same quantity: how much of the sky this emitter covers from here.
     // The sun keeps its own dial - it is not placed at a physical distance.
     float angular = directional ? pushConstants.sunAngularRadius : sphere.angularRadius;
-    float3 shadowDirection = ptConeSample(L, angular, float2(ptRandom01(rng), ptRandom01(rng)));
+    float3 shadowDirection = ptConeSample(L, angular, lightXi);
     // Stop at the emitter's near surface. Running to the centre lets the
     // fixture the lamp is mounted in occlude its own light.
-    radiance *= ptShadowTransmittance(hit.shadowOrigin, hit.geometricNormal, shadowDirection,
-                                      directional ? 10000.0 : sphere.shadowDistance) *
-                (totalWeight / max(selectedWeight, 1e-6));
+    ShadowRay shadow = ptShadowRay(hit.shadowOrigin, hit.geometricNormal, shadowDirection,
+                                   directional ? 10000.0 : sphere.shadowDistance);
+    radiance *= shadow.transmittance * (totalWeight / max(selectedWeight, 1e-6));
+    // The small-angle form for both kinds. Exact for a directional source; for
+    // a local one it reads the angle from the receiver and so understates the
+    // penumbra as the blocker approaches the light, which is the regime where
+    // the blocker is nearly the light's own fixture and the shadow is already
+    // wide enough that a filter is not what decides the picture.
+    result.penumbra = shadow.occluderDistance < kPtNoOccluder
+                          ? shadow.occluderDistance * tan(angular)
+                          : 0.0;
     float NdotL = max(0.0, dot(shading.normal, L));
     float NdotV = max(0.0, dot(shading.normal, view));
     float3 F0 = lerp(lerp(float3(0.04), shading.albedo, shading.metallic), float3(1.0),

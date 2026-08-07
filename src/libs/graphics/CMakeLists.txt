@@ -134,7 +134,8 @@ target_link_libraries(graphics PUBLIC
     volk::volk_headers
     GPUOpen::VulkanMemoryAllocator)
 target_compile_definitions(graphics PRIVATE
-    REONE_SHADER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/slang")
+    REONE_SHADER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/slang"
+    REONE_ASSET_SOURCE_DIR="${CMAKE_SOURCE_DIR}/assets")
 
 if(ENABLE_FSR)
     target_link_libraries(graphics PRIVATE fsr2)

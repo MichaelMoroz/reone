@@ -84,20 +84,55 @@ struct TracingDenoiserInputs {
     IImage *specRadianceHitDist {nullptr};
 };
 
+/**
+ * Which NRD denoiser the tracer feeds. The two want incompatible inputs - see
+ * TracingDenoiserTuning - so the choice reaches the trace kernel as well, and
+ * changing it rebuilds the instance rather than being live.
+ */
+enum class TracingDenoiserKind {
+    Reblur,
+    Relax
+};
+
+/**
+ * Live tuning, in NRD's own units where they are shared and its own names where
+ * they are not. Several fields apply to one denoiser only, marked below; the
+ * other reads its own set and ignores the rest.
+ *
+ * Accumulation is expressed in seconds rather than frames. NRD measures history
+ * in frames for simplicity but says not to configure it that way: "recalculate
+ * the number of accumulated frames from the accumulation time... it allows to
+ * minimize lags if FPS is low and maximize IQ if FPS is high", its own defaults
+ * being quoted for 60 FPS. A fixed frame count is why the denoiser got worse
+ * the faster the frame rate went - at 200 FPS a thirty-frame history is 150 ms
+ * of light, and the spatial filter widens to cover what the history no longer
+ * carries.
+ */
 struct TracingDenoiserTuning {
-    int maxAccumulatedFrames {6};
-    int maxFastAccumulatedFrames {1};
-    int maxStabilizedFrames {30};
-    int historyFixFrames {4};
-    float diffusePrepassBlurRadius {1.0f};
-    float specularPrepassBlurRadius {1.0f};
-    float minBlurRadius {0.5f};
-    float maxBlurRadius {32.0f};
-    float lobeAngleFraction {0.77f};
-    float roughnessFraction {0.74f};
-    float planeDistanceSensitivity {0.099f};
-    float disocclusionThreshold {0.003f};
+    TracingDenoiserKind kind {TracingDenoiserKind::Relax};
+    /** Seconds of history. NRD's constant for both denoisers is 0.5. */
+    float accumulationTime {0.5f};
+    /** Seconds of responsive history, clamped below the above. */
+    float fastAccumulationTime {0.1f};
+    /** Seconds of REBLUR's own stabilization; 0 disables the pass. */
+    float stabilizationTime {0.0f};
+    int historyFixFrames {3};
+    float diffusePrepassBlurRadius {30.0f};
+    float specularPrepassBlurRadius {50.0f};
+    float lobeAngleFraction {0.15f};
+    float roughnessFraction {0.15f};
+    float disocclusionThreshold {0.01f};
     bool antiFirefly {true};
+    /** REBLUR only. */
+    float minBlurRadius {1.0f};
+    float maxBlurRadius {30.0f};
+    float planeDistanceSensitivity {0.02f};
+    /** RELAX only. */
+    int atrousIterations {5};
+    float diffusePhiLuminance {2.0f};
+    float specularPhiLuminance {1.0f};
+    float depthThreshold {0.003f};
+    float specularLobeAngleSlack {0.15f};
 };
 
 class ITracingDenoiser {

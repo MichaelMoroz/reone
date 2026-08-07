@@ -27,7 +27,13 @@
 #include "reone/graphics/rhi/pipelinecache.h"
 #include "reone/graphics/rhi/resources.h"
 
+#include "reone/graphics/format/tgareader.h"
 #include "reone/system/logutil.h"
+#include "reone/system/stream/fileinput.h"
+
+#include <SDL3/SDL_filesystem.h>
+
+#include <filesystem>
 
 #include <chrono>
 #include <cstddef>
@@ -56,6 +62,57 @@ TracingPipeline::TracingPipeline(IRenderer &renderer,
 
 TracingPipeline::~TracingPipeline() {
     deinit();
+}
+
+void TracingPipeline::loadBlueNoise() {
+    if (_blueNoise) {
+        return;
+    }
+    // Resolved exactly as the shader tree is: a deployed copy beside the
+    // executable wins, and the source tree is the fallback a developer build
+    // lands on. Same rule, so there is one answer to "which copy is live".
+    std::filesystem::path path;
+    // SDL3 owns this string; SDL2 did not. Freeing it corrupts the CRT heap,
+    // which surfaces as a heap-corruption abort somewhere later and entirely
+    // unrelated - see SDL_GetBasePath against SDL_GetPrefPath, where only the
+    // latter is documented as "should be freed with SDL_free()".
+    if (const auto *base = SDL_GetBasePath()) {
+        auto deployed = std::filesystem::path(base) / "assets" / kBlueNoiseFile;
+        if (std::filesystem::is_regular_file(deployed)) {
+            path = std::move(deployed);
+        }
+    }
+#ifdef REONE_ASSET_SOURCE_DIR
+    if (path.empty()) {
+        auto source = std::filesystem::path(REONE_ASSET_SOURCE_DIR) / kBlueNoiseFile;
+        if (std::filesystem::is_regular_file(source)) {
+            path = std::move(source);
+        }
+    }
+#endif
+    if (path.empty()) {
+        throw std::runtime_error("Blue noise atlas not found: expected " +
+                                 std::string(kBlueNoiseFile) + " beside the executable or in the "
+                                 "asset source tree");
+    }
+    FileInputStream stream {path};
+    TgaReader reader {stream, "bluenoise", TextureUsage::Noise};
+    reader.load();
+    _blueNoise = reader.texture();
+    if (!_blueNoise) {
+        throw std::runtime_error("Blue noise atlas failed to decode: " + path.string());
+    }
+    // The tracer indexes tiles by arithmetic on these, so a differently sized
+    // atlas would silently read the wrong field rather than fail.
+    const int expected = static_cast<int>(kBlueNoiseTileSize * kBlueNoiseGrid);
+    if (_blueNoise->width() != expected || _blueNoise->height() != expected) {
+        throw std::runtime_error("Blue noise atlas is " +
+                                 std::to_string(_blueNoise->width()) + "x" +
+                                 std::to_string(_blueNoise->height()) + "; the tracer indexes it as " +
+                                 std::to_string(expected) + " square");
+    }
+    _blueNoise->init();
+    info("Blue noise atlas: " + path.string(), LogChannel::Graphics);
 }
 
 void TracingPipeline::init() {
@@ -91,11 +148,14 @@ void TracingPipeline::init() {
             Format::R8G8B8A8Unorm,      // canonical packed eye normal
             Format::R32Sfloat,          // canonical positive linear view depth
             Format::R16G16Sfloat,       // canonical current-minus-previous UV motion
+            // Direct diffuse at the primary vertex, straight to the resolve.
+            Format::R16G16B16A16Sfloat, // direct diffuse + expected penumbra
         };
         static constexpr const char *kAuxBindingNames[kNumAuxImages] {
             "outDiffuse", "outSpecular", "outNormalRoughness", "outViewZ", "outMotion",
             "outNoiseFree", "outDiffFactor", "outDeviceDepth", "outScreenMotion", "outSpecFactor",
-            "outGBufferDiffuse", "outGBufferEyeNormal", "outGBufferDepth", "outGBufferMotion"};
+            "outGBufferDiffuse", "outGBufferEyeNormal", "outGBufferDepth", "outGBufferMotion",
+            "outDirectDiffuse"};
         for (int frame = 0; frame < 2; ++frame) {
             for (int i = 0; i < kNumAuxImages; ++i) {
                 auto image = _renderer.resources().makeImage();
@@ -104,19 +164,29 @@ void TracingPipeline::init() {
                 _pipeline->updateBindings(2, frame, {&binding, 1});
                 _auxImages[frame][i] = std::move(image);
             }
+            auto filtered = _renderer.resources().makeImage();
+            filtered->initColorAttachment(_extent, Format::R16G16B16A16Sfloat);
+            _shadowFiltered[frame] = std::move(filtered);
         }
     }
 
+    loadBlueNoise();
+
 #ifdef R_ENABLE_NRD
     {
-        _nrdDenoiser = _renderer.makeTracingDenoiser(_extent);
+        _denoiserKind = _options.ptDenoiser == Denoiser::Reblur ? TracingDenoiserKind::Reblur
+                                                                : TracingDenoiserKind::Relax;
+        _nrdDenoiser = _renderer.makeTracingDenoiser(_extent, _denoiserKind);
         if (_nrdDenoiser) {
 
+            _shadowFilterPipeline = _renderer.makeComputePipeline({"shadow_filter", "main", 2});
+            _shadowFilterBindings = _shadowFilterPipeline->resolveBindings(
+                {"outFiltered", "inDirectDiffuse", "inViewZ", "inNormalRoughness"});
             _compositePipeline = _renderer.makeComputePipeline({"nrd_resolve", "main", 2});
             _compositeBindings = _compositePipeline->resolveBindings(
                 {"outputImage", "inNoiseFree", "inDiffFactor", "inSpecFactor",
                  "inDenoisedDiffuse", "inDenoisedSpecular", "inViewZ", "inRawDiffuse",
-                 "inRawSpecular"});
+                 "inRawSpecular", "inDirectDiffuse"});
         }
     }
 #endif
@@ -226,7 +296,7 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
     frame.traceStats->initHostVisibleReadback(sizeof(TraceStats));
     std::memset(frame.traceStats->mapped(), 0, sizeof(TraceStats));
 
-    std::array<TracingBinding, 8> frameBindings {{
+    std::array<TracingBinding, 9> frameBindings {{
         {"outputImage", output},
         {"sceneTLAS", input.structure},
         {"instanceMaterials", {scene.materials.buffer, 0, scene.materials.size}},
@@ -235,9 +305,12 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
         {"mergedIndices", scene.indices},
         {"mergedMaterialIds", scene.materialIds},
         {"skyCube", *sky.cube},
+        {"blueNoise", _renderer.resources().get(*_blueNoise)},
     }};
-    frameBindings.back().imageView = sky.view;
-    frameBindings.back().hasImageView = true;
+    // The sky's cube view is the one that needs naming explicitly; it is no
+    // longer the last entry, so say which.
+    frameBindings[7].imageView = sky.view;
+    frameBindings[7].hasImageView = true;
     _pipeline->updateBindings(1, _renderer.frameIndex(),
                               {frameBindings.data(), static_cast<uint32_t>(frameBindings.size())});
     // The rasterized primary. The kernel no longer traces a camera ray: the
@@ -314,8 +387,10 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                                   std::max(0.0001f, _options.ptRayOffset),
                                   std::max(0.0f, _options.ptSunIntensity),
                                   (_options.ptTraceStats ? 1u : 0u) |
-                                      (static_cast<uint32_t>(std::clamp(_options.debugView, 0, 14)) << 4) |
-                                      (static_cast<uint32_t>(std::clamp(_options.tonemap, 0, 1)) << 8),
+                                      (_denoiserKind == TracingDenoiserKind::Relax ? 2u : 0u) |
+                                      (_options.ptDirectChannel ? 4u : 0u) |
+                                      (static_cast<uint32_t>(std::clamp(_options.debugView, 0, kMaxDebugView)) << 4) |
+                                      (static_cast<uint32_t>(std::clamp(_options.tonemap, 0, 1)) << 10),
                                   static_cast<uint32_t>(std::clamp(_options.ptBounces, 1, 8)),
                                   std::clamp(_options.ptPointEmitterRatio, 0.01f, 0.5f),
                                   glm::radians(std::clamp(_options.ptSunAngularSize, 0.05f, 10.0f)),
@@ -358,24 +433,35 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
         glm::vec2 jitterPixels {jitter.x * 0.5f * static_cast<float>(_extent.x),
                                 -jitter.y * 0.5f * static_cast<float>(_extent.y)};
         TracingDenoiserTuning tuning;
-        tuning.maxAccumulatedFrames = _options.ptNrdMaxAccumulatedFrames;
-        tuning.maxFastAccumulatedFrames = _options.ptNrdMaxFastAccumulatedFrames;
-        tuning.maxStabilizedFrames = _options.ptNrdMaxStabilizedFrames;
+        tuning.kind = _denoiserKind;
+        tuning.accumulationTime = _options.ptNrdAccumulationTime;
+        tuning.fastAccumulationTime = _options.ptNrdFastAccumulationTime;
+        tuning.stabilizationTime = _options.ptNrdStabilizationTime;
         tuning.historyFixFrames = _options.ptNrdHistoryFixFrames;
         tuning.diffusePrepassBlurRadius = _options.ptNrdDiffusePrepassBlurRadius;
         tuning.specularPrepassBlurRadius = _options.ptNrdSpecularPrepassBlurRadius;
-        tuning.minBlurRadius = _options.ptNrdMinBlurRadius;
-        tuning.maxBlurRadius = _options.ptNrdMaxBlurRadius;
         tuning.lobeAngleFraction = _options.ptNrdLobeAngleFraction;
         tuning.roughnessFraction = _options.ptNrdRoughnessFraction;
-        tuning.planeDistanceSensitivity = _options.ptNrdPlaneDistanceSensitivity;
         tuning.disocclusionThreshold = _options.ptNrdDisocclusionThreshold;
         tuning.antiFirefly = _options.ptNrdAntiFirefly;
+        tuning.minBlurRadius = _options.ptNrdMinBlurRadius;
+        tuning.maxBlurRadius = _options.ptNrdMaxBlurRadius;
+        tuning.planeDistanceSensitivity = _options.ptNrdPlaneDistanceSensitivity;
+        tuning.atrousIterations = _options.ptNrdAtrousIterations;
+        tuning.diffusePhiLuminance = _options.ptNrdDiffusePhiLuminance;
+        tuning.specularPhiLuminance = _options.ptNrdSpecularPhiLuminance;
+        tuning.depthThreshold = _options.ptNrdDepthThreshold;
+        tuning.specularLobeAngleSlack = _options.ptNrdSpecularLobeAngleSlack;
         const bool restartHistory = frameNumber == 0 || _restartHistoryRequested;
         _restartHistoryRequested = false;
         _nrdDenoiser->denoise(commandBuffer, _renderer.frameIndex(), inputs, tuning, view, unjitteredProjection,
                                jitterPixels, frameNumber, restartHistory);
-        if (_options.ptDenoise && _options.debugView == 0) {
+        // The composite normally stands aside for a debug view, because the
+        // kernel has already written the channel it was asked for. Three of
+        // them are this pass's own output and cannot exist before it runs, so
+        // for those it goes ahead and writes them itself.
+        if (_options.ptDenoise &&
+            (_options.debugView == 0 || isResolveDebugView(_options.debugView))) {
             // The assembly from denoised channels, overwriting the trace
             // kernel's own write. Debug views keep the kernel's output.
             //
@@ -386,7 +472,7 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
             //
             // Motion is not among the bindings: it existed only for the removed
             // TAA's reprojection. NRD still consumes it directly.
-            constexpr uint32_t kCompositeBindings = 9;
+            constexpr uint32_t kCompositeBindings = 10;
             const std::array<ComputeBinding, kCompositeBindings> compositeBindings {{
                 {_compositeBindings[0], output.sampleView()},
                 {_compositeBindings[1], aux[5]->sampleView()},
@@ -397,12 +483,60 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                 {_compositeBindings[6], aux[3]->sampleView()},
                 {_compositeBindings[7], aux[0]->sampleView()},
                 {_compositeBindings[8], aux[1]->sampleView()},
+                {_compositeBindings[9],
+                 _options.ptShadowFilter
+                     ? _shadowFiltered[_renderer.frameIndex()]->sampleView()
+                     : aux[14]->sampleView()},
             }};
+            if (_options.ptShadowFilter) {
+                // Mirrors ShadowFilterPushConstants in slang/shadow_filter.slang.
+                struct ShadowFilterPushConstants {
+                    float pixelWorldPerDepth;
+                    float maxRadius;
+                    float depthTolerance;
+                    float normalTolerance;
+                    float radiusScale;
+                    float minRadius;
+                } filterConstants {
+                    // 2*tan(fovY/2)/height, read back off the projection rather
+                    // than from a field: projection[1][1] is 1/tan(fovY/2), and
+                    // taking it from here cannot disagree with the matrix the
+                    // frame was actually rendered with.
+                    2.0f / (projection[1][1] * static_cast<float>(_extent.y)),
+                    std::max(1.0f, _options.ptShadowFilterMaxRadius),
+                    std::max(1e-4f, _options.ptShadowFilterDepthTolerance),
+                    _options.ptShadowFilterNormalTolerance,
+                    std::max(0.0f, _options.ptShadowFilterRadiusScale),
+                    std::max(0.0f, _options.ptShadowFilterMinRadius)};
+                auto &filtered = *_shadowFiltered[_renderer.frameIndex()];
+                const std::array<ComputeBinding, 4> filterBindings {{
+                    {_shadowFilterBindings[0], filtered.sampleView()},
+                    {_shadowFilterBindings[1], aux[14]->sampleView()},
+                    {_shadowFilterBindings[2], aux[3]->sampleView()},
+                    {_shadowFilterBindings[3], aux[2]->sampleView()},
+                }};
+                commandBuffer.dispatch(*_shadowFilterPipeline,
+                                       {static_cast<uint32_t>((_extent.x + 7) / 8),
+                                        static_cast<uint32_t>((_extent.y + 7) / 8), 1},
+                                       {filterBindings.data(),
+                                        static_cast<uint32_t>(filterBindings.size())},
+                                       nullptr, &filterConstants, sizeof(filterConstants));
+                commandBuffer.imageBarrier(filtered, ImageUse::ComputeStore, ImageUse::ComputeRead);
+            }
+            // Mirrors NrdResolvePushConstants in slang/nrd_resolve.slang.
+            struct NrdResolvePushConstants {
+                uint32_t relax;
+                uint32_t debugView;
+            } resolveConstants {_denoiserKind == TracingDenoiserKind::Relax ? 1u : 0u,
+                                isResolveDebugView(_options.debugView)
+                                    ? static_cast<uint32_t>(_options.debugView)
+                                    : 0u};
             commandBuffer.dispatch(*_compositePipeline,
                                    {static_cast<uint32_t>((_extent.x + 7) / 8),
                                     static_cast<uint32_t>((_extent.y + 7) / 8), 1},
                                    {compositeBindings.data(),
-                                    static_cast<uint32_t>(compositeBindings.size())});
+                                    static_cast<uint32_t>(compositeBindings.size())},
+                                   nullptr, &resolveConstants, sizeof(resolveConstants));
         }
     }
 #endif

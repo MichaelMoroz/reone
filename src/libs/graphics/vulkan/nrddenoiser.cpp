@@ -34,9 +34,17 @@ namespace reone {
 namespace graphics {
 
 std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(VulkanDevice &device,
-                                                       glm::ivec2 extent) {
+                                                       glm::ivec2 extent,
+                                                       TracingDenoiserKind kind) {
     const nrd::LibraryDesc &libraryDesc = *nrd::GetLibraryDesc();
-    nrd::DenoiserDesc denoiserDesc {0, nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR};
+    // The denoiser is fixed at instance creation: NRD compiles a pipeline set
+    // per denoiser, and the two take different inputs anyway - RELAX wants
+    // linear radiance and a raw hit distance where REBLUR wants YCoCg and a
+    // normalized one - so switching is a rebuild, not a setting.
+    const nrd::Denoiser type = kind == TracingDenoiserKind::Relax
+                                   ? nrd::Denoiser::RELAX_DIFFUSE_SPECULAR
+                                   : nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
+    nrd::DenoiserDesc denoiserDesc {0, type};
     nrd::InstanceCreationDesc creationDesc {};
     creationDesc.denoisers = &denoiserDesc;
     creationDesc.denoisersNum = 1;
@@ -49,10 +57,11 @@ std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(VulkanDevice &device,
     info("NRD " + std::to_string(libraryDesc.versionMajor) + "." +
          std::to_string(libraryDesc.versionMinor) + "." +
          std::to_string(libraryDesc.versionBuild) + " up: " +
+         (kind == TracingDenoiserKind::Relax ? "RELAX" : "REBLUR") + ", " +
          std::to_string(instanceDesc.pipelinesNum) + " pipelines, " +
          std::to_string(instanceDesc.permanentPoolSize) + " permanent + " +
          std::to_string(instanceDesc.transientPoolSize) + " transient pool textures");
-    auto result = std::make_unique<NrdDenoiser>(device, *instance, extent, true);
+    auto result = std::make_unique<NrdDenoiser>(device, *instance, extent, true, kind);
     result->init();
     return result;
 }
@@ -343,7 +352,22 @@ void NrdDenoiser::denoise(ICommandBuffer &commandBuffer,
     }
     _prevCameraPosition = cameraPosition;
 
+    // A frame time of its own, smoothed. Restarting history also restarts the
+    // measurement: the frame that follows a warp or a resize is not evidence
+    // about how fast the game is running.
+    const auto now = std::chrono::steady_clock::now();
+    if (_hasHistory && !restartHistory) {
+        const float delta = std::chrono::duration<float, std::milli>(now - _lastFrameTime).count();
+        if (delta > 0.0f && delta < 1000.0f) {
+            _frameTimeMs = glm::mix(_frameTimeMs, delta, 0.1f);
+        }
+    } else {
+        _frameTimeMs = 16.667f;
+    }
+    _lastFrameTime = now;
+
     nrd::CommonSettings common {};
+    common.timeDeltaBetweenFrames = _frameTimeMs;
     std::memcpy(common.viewToClipMatrix, &projection[0][0], sizeof(float) * 16);
     std::memcpy(common.worldToViewMatrix, &view[0][0], sizeof(float) * 16);
     const auto &prevProjection = _hasHistory ? _prevProjection : projection;
@@ -374,22 +398,65 @@ void NrdDenoiser::denoise(ICommandBuffer &commandBuffer,
         warn("NRD: SetCommonSettings failed");
         return;
     }
-    nrd::ReblurSettings reblur {};
-    reblur.maxAccumulatedFrameNum = static_cast<uint32_t>(glm::max(0, tuning.maxAccumulatedFrames));
-    reblur.maxFastAccumulatedFrameNum = static_cast<uint32_t>(glm::max(0, tuning.maxFastAccumulatedFrames));
-    reblur.maxStabilizedFrameNum = static_cast<uint32_t>(glm::max(0, tuning.maxStabilizedFrames));
-    reblur.historyFixFrameNum = static_cast<uint32_t>(glm::max(0, tuning.historyFixFrames));
-    reblur.diffusePrepassBlurRadius = glm::max(0.0f, tuning.diffusePrepassBlurRadius);
-    reblur.specularPrepassBlurRadius = glm::max(0.0f, tuning.specularPrepassBlurRadius);
-    reblur.minBlurRadius = glm::max(0.0f, tuning.minBlurRadius);
-    reblur.maxBlurRadius = glm::max(tuning.minBlurRadius, tuning.maxBlurRadius);
-    reblur.lobeAngleFraction = glm::clamp(tuning.lobeAngleFraction, 0.0f, 1.0f);
-    reblur.roughnessFraction = glm::clamp(tuning.roughnessFraction, 0.0f, 1.0f);
-    reblur.planeDistanceSensitivity = glm::clamp(tuning.planeDistanceSensitivity, 0.001f, 1.0f);
-    reblur.enableAntiFirefly = tuning.antiFirefly;
-    if (nrd::SetDenoiserSettings(_instance, 0, &reblur) != nrd::Result::SUCCESS) {
-        warn("NRD: SetDenoiserSettings failed");
-        return;
+    // Accumulation arrives in seconds and is converted here against the
+    // measured frame rate, which is the conversion NRD asks for and the reason
+    // this class keeps a clock at all.
+    const float fps = 1000.0f / glm::max(_frameTimeMs, 0.1f);
+    const auto frames = [fps](float seconds, uint32_t ceiling) {
+        return glm::min(nrd::GetMaxAccumulatedFrameNum(glm::max(0.0f, seconds), fps), ceiling);
+    };
+    // The tracer picks one lobe per pixel, so a pixel that went diffuse carries
+    // no specular hit distance at all. That is what NRD means by probabilistic
+    // sampling, and it asks for two things in return: reconstruct the missing
+    // distances from the 3x3 neighbourhood, and keep a real pre-pass blur.
+    // Without them the spatial filter sees a signal full of holes and widens to
+    // cover them, which is most of the detail loss the frame showed.
+    const auto reconstruction = nrd::HitDistanceReconstructionMode::AREA_3X3;
+    if (_kind == TracingDenoiserKind::Relax) {
+        nrd::RelaxSettings relax {};
+        relax.diffuseMaxAccumulatedFrameNum = frames(tuning.accumulationTime, nrd::RELAX_MAX_HISTORY_FRAME_NUM);
+        relax.specularMaxAccumulatedFrameNum = relax.diffuseMaxAccumulatedFrameNum;
+        relax.diffuseMaxFastAccumulatedFrameNum = frames(tuning.fastAccumulationTime, relax.diffuseMaxAccumulatedFrameNum);
+        relax.specularMaxFastAccumulatedFrameNum = relax.diffuseMaxFastAccumulatedFrameNum;
+        relax.historyFixFrameNum = static_cast<uint32_t>(glm::max(0, tuning.historyFixFrames));
+        relax.diffusePrepassBlurRadius = glm::max(0.0f, tuning.diffusePrepassBlurRadius);
+        relax.specularPrepassBlurRadius = glm::max(0.0f, tuning.specularPrepassBlurRadius);
+        relax.diffusePhiLuminance = glm::max(0.0f, tuning.diffusePhiLuminance);
+        relax.specularPhiLuminance = glm::max(0.0f, tuning.specularPhiLuminance);
+        relax.lobeAngleFraction = glm::clamp(tuning.lobeAngleFraction, 0.0f, 1.0f);
+        relax.roughnessFraction = glm::clamp(tuning.roughnessFraction, 0.0f, 1.0f);
+        relax.specularLobeAngleSlack = glm::max(0.0f, tuning.specularLobeAngleSlack);
+        relax.atrousIterationNum = static_cast<uint32_t>(glm::clamp(tuning.atrousIterations, 2, 8));
+        relax.depthThreshold = glm::max(1e-4f, tuning.depthThreshold);
+        relax.hitDistanceReconstructionMode = reconstruction;
+        relax.enableAntiFirefly = tuning.antiFirefly;
+        if (nrd::SetDenoiserSettings(_instance, 0, &relax) != nrd::Result::SUCCESS) {
+            warn("NRD: SetDenoiserSettings failed");
+            return;
+        }
+    } else {
+        nrd::ReblurSettings reblur {};
+        reblur.maxAccumulatedFrameNum = frames(tuning.accumulationTime, nrd::REBLUR_MAX_HISTORY_FRAME_NUM);
+        reblur.maxFastAccumulatedFrameNum = frames(tuning.fastAccumulationTime, reblur.maxAccumulatedFrameNum);
+        // Zero disables the pass. REBLUR's stabilization is a small temporal
+        // anti-aliaser, and running one in front of FSR is two of them in
+        // series: the lag adds up and the second cannot recover what the first
+        // already smeared.
+        reblur.maxStabilizedFrameNum = frames(tuning.stabilizationTime, reblur.maxAccumulatedFrameNum);
+        reblur.historyFixFrameNum = static_cast<uint32_t>(glm::max(0, tuning.historyFixFrames));
+        reblur.diffusePrepassBlurRadius = glm::max(0.0f, tuning.diffusePrepassBlurRadius);
+        reblur.specularPrepassBlurRadius = glm::max(0.0f, tuning.specularPrepassBlurRadius);
+        reblur.minBlurRadius = glm::max(0.0f, tuning.minBlurRadius);
+        reblur.maxBlurRadius = glm::max(tuning.minBlurRadius, tuning.maxBlurRadius);
+        reblur.lobeAngleFraction = glm::clamp(tuning.lobeAngleFraction, 0.0f, 1.0f);
+        reblur.roughnessFraction = glm::clamp(tuning.roughnessFraction, 0.0f, 1.0f);
+        reblur.planeDistanceSensitivity = glm::clamp(tuning.planeDistanceSensitivity, 0.001f, 1.0f);
+        reblur.hitDistanceReconstructionMode = reconstruction;
+        reblur.enableAntiFirefly = tuning.antiFirefly;
+        if (nrd::SetDenoiserSettings(_instance, 0, &reblur) != nrd::Result::SUCCESS) {
+            warn("NRD: SetDenoiserSettings failed");
+            return;
+        }
     }
     _prevView = view;
     _prevProjection = projection;

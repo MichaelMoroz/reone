@@ -70,6 +70,8 @@ import tracing.outputs;
 static const uint kDebugOff = 0;
 static const uint kDebugDiffuseChannel = 8;
 static const uint kDebugSpecularChannel = 9;
+static const uint kDebugDirectShadow = 15;
+static const uint kDebugPenumbra = 16;
 static const uint kDebugNoiseFree = 11;
 
 struct PtDebug {
@@ -84,7 +86,8 @@ struct PtDebug {
     /** True only for the channels no other mode can produce. */
     bool wantsChannelView() {
         return view == kDebugDiffuseChannel || view == kDebugSpecularChannel ||
-               view == kDebugNoiseFree;
+               view == kDebugNoiseFree || view == kDebugDirectShadow ||
+               view == kDebugPenumbra;
     }
 
     /** Returns true and sets color when a channel view replaces the image. */
@@ -98,6 +101,17 @@ struct PtDebug {
             return true;
         case kDebugNoiseFree:
             color = outputs.noiseFree;
+            return true;
+        case kDebugDirectShadow:
+            // The channel as the resolve receives it: demodulated, so this is
+            // the shadow signal itself rather than the lit picture.
+            color = outputs.directDiffuse;
+            return true;
+        case kDebugPenumbra:
+            // The expected penumbra half-width, in world units, scaled so a
+            // tenth of a unit reads as full white. Black is a contact edge or
+            // an unshadowed pixel; both ask the filter for no radius at all.
+            color = float3(saturate(outputs.penumbra * 10.0));
             return true;
         default:
             color = float3(0.0);
@@ -263,13 +277,36 @@ void main() {
     uint scatterBudget = max(pushConstants.bounceCount, 1u);
     float3 diffuseChannel = float3(0.0);
     float3 specularChannel = float3(0.0);
+    // Direct light at the pixel the viewer is looking at, kept apart from the
+    // two channels above because it does not want what happens to them. A
+    // denoiser earns its keep on indirect light, which is smooth and slow; a
+    // shadow edge is neither, and every spatial filter wide enough to settle
+    // the bounce noise is wide enough to take the contact edge with it. This
+    // channel is stratified at the source instead and resolved temporally.
+    float3 directDiffuseChannel = float3(0.0);
+    // Averaged over the samples that were actually blocked, which is the
+    // classic average-blocker-depth of percentage-closer soft shadows: a pixel
+    // straddling a shadow edge has some samples occluded and some not, and only
+    // the occluded ones say anything about how far away the blocker is.
+    float penumbraSum = 0.0;
+    float penumbraCount = 0.0;
     float diffHitSum = 0.0, diffHitCount = 0.0;
     float specHitSum = 0.0, specHitCount = 0.0;
     uint secondaryRays = 0, secondaryMisses = 0;
 
     for (uint sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
-        uint rng = ptHash(dispatchId.x * 0x9e3779b9u ^ dispatchId.y * 0x85ebca6bu ^
-                          sampleIndex * 0xc2b2ae35u ^ pushConstants.frameIndex);
+        // One counter across frames and samples both, so sample 3 of frame 10
+        // and sample 0 of frame 11 are consecutive draws rather than two
+        // independent seeds that may coincide. The previous form xored the
+        // frame index and the sample index into the same word, which lets
+        // (frame, sample) pairs alias: with 2 spp the pair that collides is
+        // every other frame, and a shadow edge that redraws the same point on
+        // the light stalls and then lurches when the collision breaks.
+        uint sequence = pushConstants.frameIndex * sampleCount + sampleIndex;
+        uint rng = ptHash(ptHash(dispatchId.x * 0x9e3779b9u ^ dispatchId.y * 0x85ebca6bu) +
+                          sequence * 0x9e3779b9u);
+        // Stratified and screen-dithered, for the primary vertex only.
+        float2 primaryLightXi = ptShadowSample(dispatchId.xy, sequence);
         HitGeometry hit = primaryHit;
         SurfaceShading shading = primaryShading;
         RayDesc path = probe;
@@ -308,7 +345,10 @@ void main() {
             PathSample sample = ptSampleRay(hit, shading, view, rng);
             if (sample.terminate) break;
             if (!sample.passThrough) {
-                DirectLight nee = ptDirectLight(hit, shading, view, rng);
+                float2 lightXi = primaryScatter && ptDirectChannelEnabled()
+                                     ? primaryLightXi
+                                     : float2(ptRandom01(rng), ptRandom01(rng));
+                DirectLight nee = ptDirectLight(hit, shading, view, lightXi, rng);
                 if (!pathDecided) {
                     pathDecided = true;
                     specularPath = sample.specularLobe;
@@ -316,7 +356,32 @@ void main() {
                 if (primaryScatter) {
                     // Invariant: channel * diffFactor equals the primary
                     // diffuse radiance, so direct irradiance stays unscaled.
-                    diffuseChannel += nee.diffuse;
+                    // The same invariant holds for the direct channel, which
+                    // carries the same quantity to the same factors - it simply
+                    // reaches the resolve without passing through NRD.
+                    // Only the diffuse half leaves the denoiser. Direct
+                    // specular stays in NRD's specular channel, which is built
+                    // for it - it arrives with a hit distance and a roughness,
+                    // and the kernel narrows as the surface gets glossier.
+                    //
+                    // Sending it out with the diffuse made a glossy floor
+                    // glitter. Not a routing mistake so much as a variance one
+                    // it stopped hiding: a tight lobe against a small light is
+                    // sampled here by drawing a point on the light and
+                    // evaluating the BSDF there, and that estimator has no
+                    // second strategy to fall back on when the drawn point
+                    // lands near the mirror direction and D spikes. Multiple
+                    // importance sampling is the fix, and until there is one
+                    // the denoiser is where this belongs.
+                    if (ptDirectChannelEnabled()) {
+                        directDiffuseChannel += nee.diffuse;
+                    } else {
+                        diffuseChannel += nee.diffuse;
+                    }
+                    if (nee.penumbra > 0.0) {
+                        penumbraSum += nee.penumbra;
+                        penumbraCount += 1.0;
+                    }
                     specularChannel += nee.specular / outputs.transportSpecFactor;
                     if (sample.specularLobe) {
                         pathWeight *= sample.weight / outputs.transportSpecFactor;
@@ -421,12 +486,18 @@ void main() {
 
     outputs.diffuse = diffuseChannel / float(sampleCount);
     outputs.specular = specularChannel / float(sampleCount);
-    outputs.diffuseHitDist = diffHitCount > 0.0
-                                 ? ptNormalizeHitDist(diffHitSum / diffHitCount, transportViewZ, 1.0)
-                                 : 0.0;
-    outputs.specularHitDist = specHitCount > 0.0
-                                  ? ptNormalizeHitDist(specHitSum / specHitCount, transportViewZ,
-                                                       primaryShading.roughness)
-                                  : 0.0;
+    outputs.directDiffuse = directDiffuseChannel / float(sampleCount);
+    outputs.penumbra = penumbraCount > 0.0 ? penumbraSum / penumbraCount : 0.0;
+    // World-space, unnormalized. Which of the two denoiser conventions this
+    // ends up in is decided where it is written, not here.
+    //
+    // Zero still means "this pixel has no distance to report", which happens
+    // whenever the lobe the path took was the other one. NRD is told to
+    // reconstruct those from the neighbourhood rather than read them as
+    // contact-close, which is what a zero would otherwise mean.
+    outputs.diffuseHitDist = diffHitCount > 0.0 ? diffHitSum / diffHitCount : 0.0;
+    outputs.specularHitDist = specHitCount > 0.0 ? specHitSum / specHitCount : 0.0;
+    outputs.hitDistViewZ = transportViewZ;
+    outputs.hitDistRoughness = primaryShading.roughness;
     finishPixel(pixel, outputs, debug);
 }

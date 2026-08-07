@@ -370,7 +370,7 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     // rather than in the path tracing block it used to belong to.
     descs.push_back(intOpt("debugview", OptionApply::Live,
                            "debug channel view in any render mode, 0 off",
-                           &GraphicsOptions::debugView, 0, 14));
+                           &GraphicsOptions::debugView, 0, kMaxDebugView));
 
     // Decided at the point of use, in SceneGraph::computeJitter, so it follows
     // the active resolver on the next frame with nothing rebuilt.
@@ -380,38 +380,103 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(boolOpt("ptdenoise", OptionApply::Live,
                             "enable the path tracing denoiser",
                             &GraphicsOptions::ptDenoise));
-    descs.push_back(intOpt("ptnrdstabilized", OptionApply::Live, "REBLUR stabilized frames",
-                           &GraphicsOptions::ptNrdMaxStabilizedFrames, 0, 63));
-    descs.push_back(intOpt("ptnrdaccum", OptionApply::Live, "REBLUR accumulated frames",
-                           &GraphicsOptions::ptNrdMaxAccumulatedFrames, 0, 63));
-    descs.push_back(intOpt("ptnrdfastaccum", OptionApply::Live, "REBLUR fast accumulated frames",
-                           &GraphicsOptions::ptNrdMaxFastAccumulatedFrames, 0, 63));
-    descs.push_back(intOpt("ptnrdhistoryfix", OptionApply::Live, "REBLUR history fix frames",
+    descs.push_back(boolOpt("ptshadowfilter", OptionApply::Live,
+                            "filter the direct channel by the penumbra the geometry implies",
+                            &GraphicsOptions::ptShadowFilter));
+    descs.push_back(floatOpt("ptshadowfiltermaxradius", OptionApply::Live,
+                             "ceiling on the shadow filter radius, pixels",
+                             &GraphicsOptions::ptShadowFilterMaxRadius, 1.0f, 64.0f));
+    descs.push_back(floatOpt("ptshadowfilterscale", OptionApply::Live,
+                             "multiplier on the radius the geometry implies",
+                             &GraphicsOptions::ptShadowFilterRadiusScale, 0.0f, 8.0f));
+    descs.push_back(floatOpt("ptshadowfilterminradius", OptionApply::Live,
+                             "floor on the shadow filter radius where light is blocked, pixels",
+                             &GraphicsOptions::ptShadowFilterMinRadius, 0.0f, 32.0f));
+    descs.push_back(floatOpt("ptshadowfilterdepthtolerance", OptionApply::Live,
+                             "relative view-depth difference a filter tap may have",
+                             &GraphicsOptions::ptShadowFilterDepthTolerance, 0.0f, 1.0f));
+    descs.push_back(floatOpt("ptshadowfilternormaltolerance", OptionApply::Live,
+                             "minimum normal agreement a filter tap may have",
+                             &GraphicsOptions::ptShadowFilterNormalTolerance, -1.0f, 1.0f));
+    descs.push_back(boolOpt("ptdirectchannel", OptionApply::Live,
+                            "apply primary-vertex direct light at the resolve "
+                            "instead of through the denoiser",
+                            &GraphicsOptions::ptDirectChannel));
+    // NRD fixes the denoiser when it builds its pipeline set, so this is staged
+    // like the anti-aliasing slot rather than live.
+    descs.push_back(enumOpt(
+        "ptdenoiser", OptionApply::Reapply,
+        "NRD denoiser for the traced channels: reblur or relax",
+        [](const GraphicsOptions &o) -> std::string {
+            return o.ptDenoiser == Denoiser::Reblur ? "reblur" : "relax";
+        },
+        [](GraphicsOptions &o, const std::string &value) {
+            if (value == "reblur") {
+                o.ptDenoiser = Denoiser::Reblur;
+            } else if (value == "relax") {
+                o.ptDenoiser = Denoiser::Relax;
+            } else {
+                throw std::invalid_argument(
+                    "Graphics option 'ptdenoiser': unknown denoiser '" + value +
+                    "'; expected reblur or relax");
+            }
+        },
+        [](const GraphicsOptions &a, const GraphicsOptions &b) {
+            return a.ptDenoiser == b.ptDenoiser;
+        },
+        [](const GraphicsOptions &from, GraphicsOptions &to) {
+            to.ptDenoiser = from.ptDenoiser;
+        }));
+    // Seconds, not frames - see TracingDenoiserTuning.
+    descs.push_back(floatOpt("ptnrdaccumtime", OptionApply::Live,
+                             "denoiser history, seconds",
+                             &GraphicsOptions::ptNrdAccumulationTime, 0.0f, 2.0f));
+    descs.push_back(floatOpt("ptnrdfastaccumtime", OptionApply::Live,
+                             "denoiser responsive history, seconds",
+                             &GraphicsOptions::ptNrdFastAccumulationTime, 0.0f, 2.0f));
+    descs.push_back(floatOpt("ptnrdstabilizationtime", OptionApply::Live,
+                             "REBLUR stabilization, seconds; 0 disables the pass",
+                             &GraphicsOptions::ptNrdStabilizationTime, 0.0f, 2.0f));
+    descs.push_back(intOpt("ptnrdhistoryfix", OptionApply::Live, "denoiser history fix frames",
                            &GraphicsOptions::ptNrdHistoryFixFrames, 0, 63));
     descs.push_back(floatOpt("ptnrddiffuseprepassblurradius", OptionApply::Live,
-                             "REBLUR diffuse prepass blur radius",
+                             "diffuse prepass blur radius",
                              &GraphicsOptions::ptNrdDiffusePrepassBlurRadius, 0.0f, 256.0f));
     descs.push_back(floatOpt("ptnrdspecularprepassblurradius", OptionApply::Live,
-                             "REBLUR specular prepass blur radius",
+                             "specular prepass blur radius",
                              &GraphicsOptions::ptNrdSpecularPrepassBlurRadius, 0.0f, 256.0f));
+    descs.push_back(floatOpt("ptnrdlobeanglefraction", OptionApply::Live,
+                             "lobe angle fraction: normal-based history rejection",
+                             &GraphicsOptions::ptNrdLobeAngleFraction, 0.01f, 1.0f));
+    descs.push_back(floatOpt("ptnrdroughnessfraction", OptionApply::Live,
+                             "roughness fraction: roughness-based history rejection",
+                             &GraphicsOptions::ptNrdRoughnessFraction, 0.01f, 1.0f));
+    descs.push_back(floatOpt("ptnrddisocclusionthreshold", OptionApply::Live,
+                             "disocclusion threshold",
+                             &GraphicsOptions::ptNrdDisocclusionThreshold, 0.0f, 16.0f));
+    descs.push_back(boolOpt("ptnrdantifirefly", OptionApply::Live, "enable anti-firefly",
+                            &GraphicsOptions::ptNrdAntiFirefly));
     descs.push_back(floatOpt("ptnrdminblurradius", OptionApply::Live, "REBLUR minimum blur radius",
                              &GraphicsOptions::ptNrdMinBlurRadius, 0.0f, 256.0f));
     descs.push_back(floatOpt("ptnrdmaxblurradius", OptionApply::Live, "REBLUR maximum blur radius",
                              &GraphicsOptions::ptNrdMaxBlurRadius, 0.0f, 256.0f));
-    descs.push_back(floatOpt("ptnrdlobeanglefraction", OptionApply::Live,
-                             "REBLUR lobe angle fraction",
-                             &GraphicsOptions::ptNrdLobeAngleFraction, 0.01f, 1.0f));
-    descs.push_back(floatOpt("ptnrdroughnessfraction", OptionApply::Live,
-                             "REBLUR roughness fraction",
-                             &GraphicsOptions::ptNrdRoughnessFraction, 0.01f, 1.0f));
     descs.push_back(floatOpt("ptnrdplanedistancesensitivity", OptionApply::Live,
                              "REBLUR plane distance sensitivity",
                              &GraphicsOptions::ptNrdPlaneDistanceSensitivity, 0.0f, 16.0f));
-    descs.push_back(floatOpt("ptnrddisocclusionthreshold", OptionApply::Live,
-                             "REBLUR disocclusion threshold",
-                             &GraphicsOptions::ptNrdDisocclusionThreshold, 0.0f, 16.0f));
-    descs.push_back(boolOpt("ptnrdantifirefly", OptionApply::Live, "enable REBLUR anti-firefly",
-                            &GraphicsOptions::ptNrdAntiFirefly));
+    descs.push_back(intOpt("ptnrdatrous", OptionApply::Live, "RELAX a-trous iterations",
+                           &GraphicsOptions::ptNrdAtrousIterations, 2, 8));
+    descs.push_back(floatOpt("ptnrddiffusephi", OptionApply::Live,
+                             "RELAX diffuse luminance edge stopper",
+                             &GraphicsOptions::ptNrdDiffusePhiLuminance, 0.0f, 16.0f));
+    descs.push_back(floatOpt("ptnrdspecularphi", OptionApply::Live,
+                             "RELAX specular luminance edge stopper",
+                             &GraphicsOptions::ptNrdSpecularPhiLuminance, 0.0f, 16.0f));
+    descs.push_back(floatOpt("ptnrddepththreshold", OptionApply::Live,
+                             "RELAX depth threshold for spatial passes",
+                             &GraphicsOptions::ptNrdDepthThreshold, 0.0f, 1.0f));
+    descs.push_back(floatOpt("ptnrdspecularlobeslack", OptionApply::Live,
+                             "RELAX specular lobe angle slack, degrees",
+                             &GraphicsOptions::ptNrdSpecularLobeAngleSlack, 0.0f, 4.0f));
 
     // Inert unless the slot runs FSR, but read per dispatch either way.
     descs.push_back(floatOpt("fsrsharpness", OptionApply::Live,

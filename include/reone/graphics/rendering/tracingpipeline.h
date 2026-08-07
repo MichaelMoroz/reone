@@ -33,6 +33,7 @@ public:
     ~TracingPipeline();
 
     void init();
+    void loadBlueNoise();
     void deinit();
     std::unique_ptr<ITracingStructure> makeTracingStructure();
     TracingStats render(const TracingPipelineInput &input);
@@ -78,12 +79,39 @@ private:
     bool _restartHistoryRequested {false};
     bool _inited {false};
 #ifdef R_ENABLE_NRD
+    /**
+     * Fixed when the instance is built, and read by the trace kernel as well:
+     * the two denoisers want their radiance packed differently, so the writer
+     * and the reader have to agree on one answer for the whole frame rather
+     * than each consulting the live option.
+     */
+    /**
+     * The blue-noise atlas, loaded once. Held as a Texture rather than an
+     * IImage because the resource cache owns the upload and hands back the
+     * image; this keeps the CPU-side pixels alive for as long as it is bound.
+     */
+    static constexpr const char *kBlueNoiseFile = "bluenoise_rgba_64x64x64.tga";
+    /** Mirrored by kPtBlueNoiseSize / kPtBlueNoiseTiles in slang/tracing/rng.slang. */
+    static constexpr uint32_t kBlueNoiseTileSize = 64;
+    static constexpr uint32_t kBlueNoiseGrid = 8;
+    std::shared_ptr<Texture> _blueNoise;
+    /**
+     * The shadow filter's target. Not an aux image: those are bound into the
+     * trace kernel's own set by name, and the kernel neither writes nor reads
+     * this one - it is produced by a later pass and consumed by a later one
+     * still. Double-buffered like the rest, so two frames in flight cannot be
+     * writing and reading the same texels.
+     */
+    std::array<std::unique_ptr<IImage>, 2> _shadowFiltered;
+    std::unique_ptr<IComputePipeline> _shadowFilterPipeline;
+    std::vector<ComputeResourceSlot> _shadowFilterBindings;
+    TracingDenoiserKind _denoiserKind {TracingDenoiserKind::Relax};
     std::unique_ptr<ITracingDenoiser> _nrdDenoiser;
     std::unique_ptr<IComputePipeline> _compositePipeline;
     std::vector<ComputeResourceSlot> _compositeBindings;
 #endif
 
-    static constexpr int kNumAuxImages = 14;
+    static constexpr int kNumAuxImages = 15;
     std::array<std::array<std::unique_ptr<IImage>, kNumAuxImages>, 2> _auxImages;
     int _lastAuxFrame {-1};
 

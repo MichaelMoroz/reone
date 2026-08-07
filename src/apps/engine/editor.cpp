@@ -84,14 +84,27 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"ptrayoffset", formatConfigFloat(options.ptRayOffset)},
         {"pttracestats", std::to_string(options.ptTraceStats)},
         {"ptdenoise", std::to_string(options.ptDenoise)},
+        {"ptdirectchannel", std::to_string(options.ptDirectChannel)},
+        {"ptshadowfilter", std::to_string(options.ptShadowFilter)},
+        {"ptshadowfiltermaxradius", formatConfigFloat(options.ptShadowFilterMaxRadius)},
+        {"ptshadowfilterscale", formatConfigFloat(options.ptShadowFilterRadiusScale)},
+        {"ptshadowfilterminradius", formatConfigFloat(options.ptShadowFilterMinRadius)},
+        {"ptshadowfilterdepthtolerance", formatConfigFloat(options.ptShadowFilterDepthTolerance)},
+        {"ptshadowfilternormaltolerance", formatConfigFloat(options.ptShadowFilterNormalTolerance)},
         {"debugview", std::to_string(options.debugView)},
         {"tonemap", std::to_string(options.tonemap)},
         {"exposure", formatConfigFloat(options.exposure)},
         {"ptpointemitterratio", formatConfigFloat(options.ptPointEmitterRatio)},
         {"ptsunangularsize", formatConfigFloat(options.ptSunAngularSize)},
-        {"ptnrdstabilized", std::to_string(options.ptNrdMaxStabilizedFrames)},
-        {"ptnrdaccum", std::to_string(options.ptNrdMaxAccumulatedFrames)},
-        {"ptnrdfastaccum", std::to_string(options.ptNrdMaxFastAccumulatedFrames)},
+        {"ptdenoiser", options.ptDenoiser == graphics::Denoiser::Reblur ? "reblur" : "relax"},
+        {"ptnrdstabilizationtime", formatConfigFloat(options.ptNrdStabilizationTime)},
+        {"ptnrdaccumtime", formatConfigFloat(options.ptNrdAccumulationTime)},
+        {"ptnrdfastaccumtime", formatConfigFloat(options.ptNrdFastAccumulationTime)},
+        {"ptnrdatrous", std::to_string(options.ptNrdAtrousIterations)},
+        {"ptnrddiffusephi", formatConfigFloat(options.ptNrdDiffusePhiLuminance)},
+        {"ptnrdspecularphi", formatConfigFloat(options.ptNrdSpecularPhiLuminance)},
+        {"ptnrddepththreshold", formatConfigFloat(options.ptNrdDepthThreshold)},
+        {"ptnrdspecularlobeslack", formatConfigFloat(options.ptNrdSpecularLobeAngleSlack)},
         {"ptnrdhistoryfix", std::to_string(options.ptNrdHistoryFixFrames)},
         {"ptnrddiffuseprepassblurradius", formatConfigFloat(options.ptNrdDiffusePrepassBlurRadius)},
         {"ptnrdspecularprepassblurradius", formatConfigFloat(options.ptNrdSpecularPrepassBlurRadius)},
@@ -929,6 +942,7 @@ void Editor::graphicsQualityTab() {
 
 void Editor::graphicsPathTracingTab() {
     auto &options = _engine._options.graphics;
+    auto &staged = _engine.stagedGraphicsOptions();
 
     if (options.mode != graphics::RenderMode::PathTracing) {
         ImGui::TextDisabled("Inactive - run with --mode path-tracing.");
@@ -948,8 +962,61 @@ void Editor::graphicsPathTracingTab() {
                 "lightmap cache already answers much of it on static geometry.");
 #ifdef R_ENABLE_NRD
     ImGui::Checkbox("NRD denoiser", &options.ptDenoise);
-    settingHint("REBLUR diffuse+specular. Off shows the raw traced frame; debug views always "
-                "bypass it. Its own tuning is under Advanced.");
+    settingHint("Diffuse and specular, through REBLUR or RELAX. Off shows the raw traced frame; "
+                "debug views always bypass it. Which denoiser, and its tuning, are under "
+                "Advanced.");
+    static const char *kDenoiserNames[] = {"REBLUR", "RELAX"};
+    int denoiser = static_cast<int>(staged.ptDenoiser);
+    if (ImGui::Combo("Denoiser", &denoiser, kDenoiserNames, IM_ARRAYSIZE(kDenoiserNames))) {
+        staged.ptDenoiser = static_cast<graphics::Denoiser>(denoiser);
+    }
+    settingHint("REBLUR is cheaper and spends its budget on spatial filtering; RELAX is an "
+                "a-trous edge-stopping filter that keeps edges and gloss for more time. NRD fixes "
+                "the choice when it builds its pipelines, so this one waits for Apply.");
+    if (staged.ptDenoiser != options.ptDenoiser) {
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Running: %s until Apply.",
+                           kDenoiserNames[static_cast<int>(options.ptDenoiser)]);
+    }
+    ImGui::Checkbox("Shadow filter", &options.ptShadowFilter);
+    settingHint("Blurs the direct channel by the penumbra the geometry implies: the tracer records "
+                "how far away each blocker was, and a source of known angular size at that "
+                "distance implies a penumbra of one particular width. A contact edge asks for no "
+                "radius at all and keeps its edge. Blurs demodulated light only, so it cannot "
+                "smear texture.\n\n"
+                "Off by default, and worth knowing why. Blue noise puts its error at high spatial "
+                "frequency, which is the part a temporal resolve averages away and the part FSR's "
+                "clamp will reject. Blurring moves that error down into low frequency, where it "
+                "reads as signal instead - it survives the clamp and boils. Measured over 32 FSR "
+                "frames it made the picture less stable, not more. Useful when no temporal "
+                "resolver is in the slot and nothing else is averaging.");
+    if (ImGui::TreeNode("Shadow filter tuning")) {
+        ImGui::SliderFloat("Radius scale", &options.ptShadowFilterRadiusScale, 0.0f, 8.0f, "%.2fx");
+        settingHint("Multiplier on the radius the geometry implies. 1 is the physical answer; "
+                    "above it you are trading penumbra fidelity for a quieter shadow, and the "
+                    "trade is yours to make.");
+        ImGui::SliderFloat("Radius floor", &options.ptShadowFilterMinRadius, 0.0f, 32.0f, "%.1f px");
+        settingHint("Unphysical, and here for a reason: measured on Dantooine, a one-degree sun "
+                    "implies a penumbra of about one pixel, so a filter sized strictly by the "
+                    "geometry has almost nothing to do - it touched 1.2%% of the frame. The noise "
+                    "left in this channel is not penumbra-scale. This floor blurs anyway, but only "
+                    "where something actually blocked the light, so a contact edge keeps its edge.");
+        ImGui::SliderFloat("Radius ceiling", &options.ptShadowFilterMaxRadius, 1.0f, 64.0f, "%.0f px");
+        settingHint("However wide the geometry asks for, no wider than this.");
+        ImGui::SliderFloat("Depth tolerance", &options.ptShadowFilterDepthTolerance, 0.0f, 0.2f, "%.3f",
+                           ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("Normal tolerance", &options.ptShadowFilterNormalTolerance, -1.0f, 1.0f, "%.2f");
+        settingHint("How far a tap may differ before it is rejected: relative view depth, and the "
+                    "cosine between normals. Loosen them and the filter reaches across corners; "
+                    "tighten them and it starves near geometry, which reads as noise that will not "
+                    "settle exactly where surfaces meet.");
+        ImGui::TreePop();
+    }
+    ImGui::Checkbox("Direct light at resolve", &options.ptDirectChannel);
+    settingHint("Direct light on the pixels you are looking at skips the denoiser and is applied "
+                "at the resolve. A denoiser is built for indirect light - smooth, slow, worth a "
+                "wide kernel - and the same kernel softens the contact edge of a shadow. This "
+                "channel is stratified where it is sampled instead, and the temporal resolve takes "
+                "what noise is left. Off routes it back through the denoiser.");
 #endif
 
     // Scene light, not a renderer's treatment of it - the tracer is only the
@@ -1004,31 +1071,68 @@ void Editor::graphicsAdvancedTab() {
 
 #ifdef R_ENABLE_NRD
     if (ImGui::TreeNode("Denoiser tuning")) {
+        const bool relax = _engine._options.graphics.ptDenoiser == graphics::Denoiser::Relax;
         ImGui::SeparatorText("Temporal accumulation");
-        ImGui::SliderInt("Max frames", &options.ptNrdMaxAccumulatedFrames, 0, 63);
-        ImGui::SliderInt("Fast frames", &options.ptNrdMaxFastAccumulatedFrames, 0, 32);
-        ImGui::SliderInt("Stabilized frames", &options.ptNrdMaxStabilizedFrames, 0, 63);
+        ImGui::SliderFloat("History", &options.ptNrdAccumulationTime, 0.0f, 2.0f, "%.2f s");
+        settingHint("How long light is remembered, in seconds rather than frames. NRD converts it "
+                    "against the measured frame rate, which is what it asks for: a fixed frame "
+                    "count is a shorter and shorter window as the frame rate rises, and the "
+                    "spatial filter widens to cover what the history stops carrying.");
+        ImGui::SliderFloat("Responsive history", &options.ptNrdFastAccumulationTime, 0.0f, 1.0f, "%.2f s");
+        settingHint("The short history the long one is clamped against. Shorter reacts faster to "
+                    "lighting changes and keeps more noise.");
         ImGui::SliderInt("History fix frames", &options.ptNrdHistoryFixFrames, 0, 8);
         ImGui::SeparatorText("Spatial filtering (pixels)");
         ImGui::SliderFloat("Diffuse prepass radius", &options.ptNrdDiffusePrepassBlurRadius, 0.0f, 60.0f, "%.0f");
         ImGui::SliderFloat("Specular prepass radius", &options.ptNrdSpecularPrepassBlurRadius, 0.0f, 60.0f, "%.0f");
-        ImGui::SliderFloat("Min blur radius", &options.ptNrdMinBlurRadius, 0.0f, 10.0f, "%.1f");
-        ImGui::SliderFloat("Max blur radius", &options.ptNrdMaxBlurRadius, 0.0f, 60.0f, "%.0f");
+        settingHint("Spatial reuse before accumulation. Not optional here: the tracer picks one "
+                    "lobe per pixel, so the pixels that went diffuse carry no specular distance at "
+                    "all, and NRD asks for a real prepass whenever the sampling is probabilistic.");
         ImGui::SeparatorText("History rejection");
         static constexpr const char *kRejectionHint =
-            "Larger = more tolerant. Grass and foliage reject on normals and plane distance; raise "
-            "these if they stay noisy.";
+            "Larger = more tolerant. This is the pair that decides whether a neighbour or a history "
+            "sample belongs to the same surface, so opening them up hides noise by reusing across "
+            "normals and depths that do not match - which is contact shadows and sharp folds gone. "
+            "NRD's own value for both is 0.15.";
         ImGui::SliderFloat("Lobe angle fraction", &options.ptNrdLobeAngleFraction, 0.01f, 1.0f, "%.2f");
         settingHint(kRejectionHint);
         ImGui::SliderFloat("Roughness fraction", &options.ptNrdRoughnessFraction, 0.01f, 1.0f, "%.2f");
-        settingHint(kRejectionHint);
-        ImGui::SliderFloat("Plane sensitivity", &options.ptNrdPlaneDistanceSensitivity, 0.005f, 0.5f, "%.3f",
-                           ImGuiSliderFlags_Logarithmic);
         settingHint(kRejectionHint);
         ImGui::SliderFloat("Disocclusion threshold", &options.ptNrdDisocclusionThreshold, 0.001f, 0.2f, "%.3f",
                            ImGuiSliderFlags_Logarithmic);
         settingHint(kRejectionHint);
         ImGui::Checkbox("Anti-firefly", &options.ptNrdAntiFirefly);
+
+        ImGui::BeginDisabled(relax);
+        ImGui::SeparatorText("REBLUR only");
+        ImGui::SliderFloat("Stabilization", &options.ptNrdStabilizationTime, 0.0f, 1.0f, "%.2f s");
+        settingHint("REBLUR's own temporal stabilization - a small anti-aliaser. Zero disables the "
+                    "pass, which is what you want with FSR in the slot behind it: two temporal "
+                    "filters in series add their lag, and the second cannot recover what the first "
+                    "already smeared.", true);
+        ImGui::SliderFloat("Min blur radius", &options.ptNrdMinBlurRadius, 0.0f, 10.0f, "%.1f");
+        ImGui::SliderFloat("Max blur radius", &options.ptNrdMaxBlurRadius, 0.0f, 60.0f, "%.0f");
+        settingHint("The ceiling REBLUR blurs to before history has converged. Read it together "
+                    "with the accumulation time: a short history never converges, so it sits near "
+                    "this number permanently.", true);
+        ImGui::SliderFloat("Plane sensitivity", &options.ptNrdPlaneDistanceSensitivity, 0.005f, 0.5f, "%.3f",
+                           ImGuiSliderFlags_Logarithmic);
+        settingHint(kRejectionHint, true);
+        ImGui::EndDisabled();
+
+        ImGui::BeginDisabled(!relax);
+        ImGui::SeparatorText("RELAX only");
+        ImGui::SliderInt("A-trous iterations", &options.ptNrdAtrousIterations, 2, 8);
+        settingHint("Wavelet passes. Each doubles the reach of the filter while its edge stoppers "
+                    "keep it off the edges - which is how RELAX covers ground without the flat "
+                    "blur.", true);
+        ImGui::SliderFloat("Diffuse luminance phi", &options.ptNrdDiffusePhiLuminance, 0.0f, 8.0f, "%.2f");
+        ImGui::SliderFloat("Specular luminance phi", &options.ptNrdSpecularPhiLuminance, 0.0f, 8.0f, "%.2f");
+        settingHint("Luminance edge stoppers. Smaller keeps more detail and more noise with it.", true);
+        ImGui::SliderFloat("Depth threshold", &options.ptNrdDepthThreshold, 0.0f, 0.05f, "%.4f",
+                           ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("Specular lobe slack", &options.ptNrdSpecularLobeAngleSlack, 0.0f, 2.0f, "%.2f deg");
+        ImGui::EndDisabled();
         ImGui::TreePop();
     }
 #endif
@@ -1052,7 +1156,8 @@ void Editor::graphicsDebugViewSection() {
         "Off", "Object categories", "Emissive highlight", "Normals",
         "Roughness", "Metallic", "Lightmap", "Albedo",
         "Traced: diffuse radiance", "Traced: specular radiance",
-        "Depth", "Traced: noise-free", "Motion", "Material id", "Feature bits"};
+        "Depth", "Traced: noise-free", "Motion", "Material id", "Feature bits",
+        "Traced: direct shadow", "Traced: penumbra"};
     ImGui::Combo("Channel", &options.debugView, kDebugViewNames,
                  static_cast<int>(std::size(kDebugViewNames)));
     settingHint("Replaces the shaded image. Categories: blue rooms, red creatures, green "

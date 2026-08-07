@@ -138,7 +138,8 @@ public:
         const TracingPipelineDesc &desc) = 0;
 
     /** Create the vendor denoiser behind its image-based tracing interface. */
-    virtual std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(glm::ivec2 extent) = 0;
+    virtual std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(glm::ivec2 extent,
+                                                                  TracingDenoiserKind kind) = 0;
 
     /**
      * Create the vendor temporal upscaler behind its image-based interface.

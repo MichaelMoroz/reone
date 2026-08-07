@@ -99,7 +99,11 @@ enum class SceneStep {
  * Mirrors the kDebug* numbering in slang/debug_view.slang.
  */
 inline bool isTracedOnlyDebugView(int view) {
-    return view == 8 || view == 9 || view == 11;
+    // Must agree with isTracedOnlyDebugView in slang/debug_view.slang: this
+    // decides whether the shared debug pass steps aside, and that one decides
+    // whether it paints the not-available card. Disagreeing means a channel
+    // that exists is covered over by the card that says it does not.
+    return view == 8 || view == 9 || view == 11 || (view >= 15 && view <= 19);
 }
 
 enum class SceneShadow {

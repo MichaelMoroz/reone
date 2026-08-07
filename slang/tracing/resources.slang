@@ -91,6 +91,13 @@ public static const float kPtAlphaTestEpsilon = 0.01;
 // three vertices to build the geometric normal the stored normal cannot supply,
 // and takes the material from mergedMaterialIds at the same index.
 [[vk::binding(16, 1), vk::image_format("r32ui")]] public Sampler2D<uint> gbufTriangleId;
+/**
+ * Sixty-four independent 64x64 blue-noise tiles in an 8x8 grid - see
+ * assets/README.md. Read with Load and integer coordinates, never sampled:
+ * neighbouring tiles are unrelated fields, so any filtering across a tile edge
+ * would blend two of them.
+ */
+[[vk::binding(17, 1)]] public Sampler2D blueNoise;
 
 /** The G-buffer's cleared triangle id: nothing was drawn, so this is the sky. */
 public static const uint kPtNoTriangle = 0xffffffffu;
@@ -136,9 +143,24 @@ public struct PtPushConstants {
 [[vk::push_constant]] public PtPushConstants pushConstants;
 
 public static const uint kPtFlagStats = 1u;
+/**
+ * The denoised channels are being written for RELAX rather than REBLUR, which
+ * changes how they are packed: linear radiance and a raw hit distance instead
+ * of YCoCg and one normalized against REBLUR's curve.
+ */
+public static const uint kPtFlagRelax = 2u;
+/**
+ * Primary-vertex direct light takes its own channel to the resolve instead of
+ * being accumulated into the denoised ones. Off routes it back through NRD,
+ * which is what this replaced and what it is compared against.
+ */
+public static const uint kPtFlagDirectChannel = 4u;
+// Six bits, not four. Four held fifteen channels and the sixteenth silently
+// wrapped to "off" - a debug view that quietly shows the ordinary picture is
+// worse than one that fails.
 public static const uint kPtDebugViewShift = 4;
-public static const uint kPtDebugViewMask = 0xFu;
-public static const uint kPtTonemapShift = 8;
+public static const uint kPtDebugViewMask = 0x3Fu;
+public static const uint kPtTonemapShift = 10;
 public static const uint kPtTonemapMask = 0x3u;
 
 public uint ptDebugView() {
@@ -151,6 +173,14 @@ public uint ptTonemapOperator() {
 
 public bool ptStatsEnabled() {
     return (pushConstants.traceFlags & kPtFlagStats) != 0;
+}
+
+public bool ptDenoiserIsRelax() {
+    return (pushConstants.traceFlags & kPtFlagRelax) != 0;
+}
+
+public bool ptDirectChannelEnabled() {
+    return (pushConstants.traceFlags & kPtFlagDirectChannel) != 0;
 }
 
 public uint geometryBase(uint geometryIndex) { return geometryIndex == 0 ? pushConstants.geometryBase0 : pushConstants.geometryBase1; }

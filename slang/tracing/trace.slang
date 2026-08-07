@@ -19,7 +19,8 @@
 //
 //   ptTraceNearest - the normal ray: commits the nearest surface a ray can
 //                    see at all.
-//   ptShadowTransmittance - the shadow ray: visibility to a light, blocked by
+//   ptShadowRay - the shadow ray: visibility to a light and the distance at
+//     which it was blocked, blocked by
 //                    the same surfaces; the sky never occludes.
 //
 // Only two coverage kinds survive traversal, and they are named at every site:
@@ -142,10 +143,27 @@ public TraceHit ptTraceNearest(RayDesc ray) {
  * partial transmittance it used to accumulate, so visibility is now binary and
  * the walk stops at the first blocker.
  */
-public float ptShadowTransmittance(float3 origin, float3 geometricNormal, float3 direction,
-                                   float lightDistance) {
+public struct ShadowRay {
+    /** Fraction of the light that reaches the surface along this ray. */
+    public float transmittance;
+    /**
+     * Distance from the shaded point to whatever blocked it, or kPtNoOccluder
+     * when nothing did. The penumbra estimate is built from this: a blocker
+     * close to the receiver casts a sharp edge however large the source, and a
+     * distant one casts a soft edge however small.
+     */
+    public float occluderDistance;
+};
+
+public static const float kPtNoOccluder = 1.0e6;
+
+public ShadowRay ptShadowRay(float3 origin, float3 geometricNormal, float3 direction,
+                             float lightDistance) {
+    ShadowRay result;
+    result.transmittance = 1.0;
+    result.occluderDistance = kPtNoOccluder;
     static const float kShadowEpsilon = 1e-3;
-    if (lightDistance <= kShadowEpsilon) return 1.0;
+    if (lightDistance <= kShadowEpsilon) return result;
     RayDesc ray;
     ray.Origin = origin + geometricNormal * pushConstants.rayOriginOffset;
     ray.Direction = direction;
@@ -156,6 +174,7 @@ public float ptShadowTransmittance(float3 origin, float3 geometricNormal, float3
     RayQuery<RAY_FLAG_NONE> query;
     query.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, ray);
     float transmittance = 1.0;
+    float cutoutDistance = kPtNoOccluder;
     while (query.Proceed()) {
         if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
         uint geometryIndex = query.CandidateGeometryIndex();
@@ -176,9 +195,19 @@ public float ptShadowTransmittance(float3 origin, float3 geometricNormal, float3
             if (alpha < kPtAlphaTestEpsilon) continue;
             if (alpha >= kAlphaTestThreshold) {
                 transmittance = 0.0;
+                cutoutDistance = min(cutoutDistance, query.CandidateTriangleRayT());
                 break;
             }
         }
     }
-    return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : transmittance;
+    if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+        result.transmittance = 0.0;
+        // Whichever blocked first: hardware commits opaque hits, the loop above
+        // resolves cutouts, and either may be the nearer.
+        result.occluderDistance = min(query.CommittedRayT(), cutoutDistance);
+    } else {
+        result.transmittance = transmittance;
+        result.occluderDistance = transmittance < 1.0 ? cutoutDistance : kPtNoOccluder;
+    }
+    return result;
 }
