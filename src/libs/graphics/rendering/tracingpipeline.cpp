@@ -229,16 +229,25 @@ std::vector<TracingChannel> TracingPipeline::channels() const {
         return {};
     }
     // Order and names follow the aux bindings in tracing/outputs.slang.
-    static constexpr const char *kNames[kNumAuxImages] {
+    // Unsized on purpose, with the count asserted below. Written as
+    // kNames[kNumAuxImages] these tables accept too few initialisers without a
+    // word of complaint - C++ value-initialises the rest to nullptr - and the
+    // missing entry only shows up as a null dereference when someone opens the
+    // viewer. Adding an aux image is now a build error until it is named.
+    static constexpr const char *kNames[] {
         "Traced diffuse radiance", "Traced specular radiance", "Traced normal/roughness",
         "Traced viewZ", "Traced NRD motion", "Traced noise-free", "Traced diffuse factor",
         "Traced device depth", "Traced screen motion", "Traced specular factor",
-        "Traced diffuse", "Traced eye normal", "Traced depth", "Traced motion"};
-    static constexpr const char *kDumpNames[kNumAuxImages] {
+        "Traced diffuse", "Traced eye normal", "Traced depth", "Traced motion",
+        "Traced direct diffuse"};
+    static constexpr const char *kDumpNames[] {
         "traced_radiance_diffuse", "traced_radiance_specular", "traced_normal_roughness",
         "traced_view_z", "traced_nrd_motion", "traced_noise_free", "traced_diff_factor",
         "traced_device_depth", "traced_screen_motion", "traced_spec_factor",
-        "traced_diffuse", "traced_eye_normal", "traced_depth", "traced_motion"};
+        "traced_diffuse", "traced_eye_normal", "traced_depth", "traced_motion",
+        "traced_direct_diffuse"};
+    static_assert(std::size(kNames) == kNumAuxImages);
+    static_assert(std::size(kDumpNames) == kNumAuxImages);
     const auto &aux = _auxImages[_lastAuxFrame];
     std::vector<TracingChannel> result;
     for (int i = 0; i < kNumAuxImages; ++i) {
@@ -253,6 +262,9 @@ std::vector<TracingChannel> TracingPipeline::channels() const {
     if (_nrdDenoiser) {
         result.push_back({"Denoised diffuse", "denoised_diffuse", &_nrdDenoiser->denoisedDiffuse()});
         result.push_back({"Denoised specular", "denoised_specular", &_nrdDenoiser->denoisedSpecular()});
+    }
+    if (auto &filtered = _shadowFiltered[_lastAuxFrame]) {
+        result.push_back({"Shadow filtered direct", "shadow_filtered", filtered.get()});
     }
 #endif
     return result;
