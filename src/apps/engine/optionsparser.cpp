@@ -134,6 +134,19 @@ std::unique_ptr<Options> OptionsParser::parse() {
          "filter the direct channel by the penumbra the geometry implies")                                                    //
         ("ptshadowfiltermaxradius", value<float>()->default_value(options->graphics.ptShadowFilterMaxRadius),
          "ceiling on the shadow filter radius, pixels")                                                                       //
+        ("grassradius", value<float>()->default_value(options->graphics.grassRadius), "grass draw radius")             //
+        ("grasscurvature", value<float>()->default_value(options->graphics.grassCurvature), "blade bend, radians")       //
+        ("grasscurvaturevariance", value<float>()->default_value(options->graphics.grassCurvatureVariance), "bend variance") //
+        ("grasssparsity", value<float>()->default_value(options->graphics.grassSparsity), "fraction of slots left empty") //
+        ("grassdisplacement", value<float>()->default_value(options->graphics.grassDisplacement), "slot displacement, cells") //
+        ("grasslength", value<float>()->default_value(options->graphics.grassLength), "blade length x authored quad size") //
+        ("grasslengthvariance", value<float>()->default_value(options->graphics.grassLengthVariance), "length variance")  //
+        ("grasswidth", value<float>()->default_value(options->graphics.grassWidth), "blade width, fraction of length")   //
+        ("grassyoffset", value<float>()->default_value(options->graphics.grassYOffset), "root offset, fraction of length") //
+        ("grasstrianglebudget", value<int>()->default_value(options->graphics.grassTriangleBudget), "grass triangle ceiling") //
+        ("grassroughness", value<float>()->default_value(options->graphics.grassRoughness), "blade roughness")            //
+        ("grassbladespercluster", value<int>()->default_value(options->graphics.grassBladesPerCluster), "blades grown per authored cluster") //
+        ("grasscolor", value<std::string>()->default_value(""), "blade albedo as \"r g b\"")                                 //
         ("ptshadowfilterscale", value<float>()->default_value(options->graphics.ptShadowFilterRadiusScale),
          "multiplier on the radius the geometry implies")                                                                     //
         ("ptshadowfilterminradius", value<float>()->default_value(options->graphics.ptShadowFilterMinRadius),
@@ -317,6 +330,26 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptShadowFilter = vars["ptshadowfilter"].as<bool>();
     options->graphics.ptShadowFilterMaxRadius =
         std::clamp(vars["ptshadowfiltermaxradius"].as<float>(), 1.0f, 64.0f);
+    options->graphics.grassRadius = std::max(0.0f, vars["grassradius"].as<float>());
+    options->graphics.grassCurvature = std::clamp(vars["grasscurvature"].as<float>(), -2.0f, 2.0f);
+    options->graphics.grassCurvatureVariance = std::clamp(vars["grasscurvaturevariance"].as<float>(), 0.0f, 2.0f);
+    options->graphics.grassSparsity = std::clamp(vars["grasssparsity"].as<float>(), 0.0f, 0.99f);
+    options->graphics.grassDisplacement = std::clamp(vars["grassdisplacement"].as<float>(), 0.0f, 3.0f);
+    options->graphics.grassLength = std::clamp(vars["grasslength"].as<float>(), 0.0f, 8.0f);
+    options->graphics.grassLengthVariance = std::clamp(vars["grasslengthvariance"].as<float>(), 0.0f, 1.0f);
+    options->graphics.grassWidth = std::clamp(vars["grasswidth"].as<float>(), 0.0f, 1.0f);
+    options->graphics.grassYOffset = std::clamp(vars["grassyoffset"].as<float>(), -1.0f, 1.0f);
+    options->graphics.grassTriangleBudget =
+        std::clamp(vars["grasstrianglebudget"].as<int>(), 0, graphics::kMaxGrassTriangleBudget);
+    options->graphics.grassRoughness = std::clamp(vars["grassroughness"].as<float>(), 0.0f, 1.0f);
+    options->graphics.grassBladesPerCluster = std::clamp(vars["grassbladespercluster"].as<int>(), 1, 32);
+    if (const auto color = vars["grasscolor"].as<std::string>(); !color.empty()) {
+        std::istringstream stream(color);
+        glm::vec3 parsed {0.0f};
+        if (stream >> parsed.r >> parsed.g >> parsed.b) {
+            options->graphics.grassColor = glm::max(parsed, glm::vec3(0.0f));
+        }
+    }
     options->graphics.ptShadowFilterRadiusScale =
         std::clamp(vars["ptshadowfilterscale"].as<float>(), 0.0f, 8.0f);
     options->graphics.ptShadowFilterMinRadius =

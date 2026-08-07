@@ -308,6 +308,76 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
     return {{material, kind, GpuScene::ResidencyClass::Dynamic, skinned}};
 }
 
+namespace {
+
+/** The shape dials, as the merge kernel takes them. */
+graphics::GrassParams grassParamsFrom(const graphics::GraphicsOptions &options) {
+    graphics::GrassParams params;
+    params.radius = std::max(0.0f, options.grassRadius);
+    params.curvature = options.grassCurvature;
+    params.curvatureVariance = std::max(0.0f, options.grassCurvatureVariance);
+    params.sparsity = std::clamp(options.grassSparsity, 0.0f, 0.99f);
+    params.displacement = std::max(0.0f, options.grassDisplacement);
+    params.length = std::max(0.0f, options.grassLength);
+    params.lengthVariance = std::clamp(options.grassLengthVariance, 0.0f, 1.0f);
+    params.width = std::max(0.0f, options.grassWidth);
+    params.yOffset = options.grassYOffset;
+    params.roughness = std::clamp(options.grassRoughness, 0.0f, 1.0f);
+    params.bladesPerCluster = static_cast<uint32_t>(std::clamp(options.grassBladesPerCluster, 1, 32));
+    // The ceiling as blades, which is the unit the allocator works in. Zero
+    // means no ceiling, and the density dials answer for the triangle count.
+    params.budgetBlades = options.grassTriangleBudget > 0
+                              ? static_cast<uint32_t>(options.grassTriangleBudget /
+                                                      graphics::kGrassTrisPerBlade)
+                              : 0u;
+    // Not clamped to 1. One is the density the faces were authored at, and
+    // stopping there made the authored budget a second ceiling: raising the
+    // triangle budget past what the bake happens to contain then did nothing,
+    // which is exactly what it looked like. Cluster indices are hashed, so
+    // there is nothing special about the authored count - it is a weight, not a
+    // limit.
+    params.density = std::max(0.0f, options.grassDensity / kGrassDensityCap);
+    params.color = glm::vec4(glm::max(options.grassColor, glm::vec3(0.0f)), 1.0f);
+    // Retro draws what the original drew. It is a raster mode, so the cutout
+    // never reaches the tracer and costs its shadow rays nothing.
+    params.cardboard = options.mode == graphics::RenderMode::Retro ? 1u : 0u;
+    return params;
+}
+
+/**
+ * The fraction of each face's baked budget that survives, as the merge kernel
+ * reads it from cameraPosition.w.
+ *
+ * Two ceilings share one number. The density dial is the author's, expressed
+ * against the cap the budgets were baked at. The triangle budget is the
+ * machine's, and what it costs is not the raster - it is the acceleration
+ * structure this geometry has to be rebuilt into. Taking the lower of the two
+ * lets both ride the prefix gate that already exists, so neither costs a
+ * rebuild of the face records.
+ */
+float grassDensityFraction(const graphics::GraphicsOptions &options, size_t areaBlades) {
+    const float byDensity = std::clamp(options.grassDensity / kGrassDensityCap, 0.0f, 1.0f);
+    if (areaBlades == 0 || options.grassTriangleBudget <= 0) {
+        return byDensity;
+    }
+    // Against the area's whole blade count, not the currently admitted one.
+    // Dividing by what happens to be admitted made the ceiling a function of
+    // where the camera was standing: the surviving prefix moved as you walked
+    // and blades appeared and vanished across the entire field. The area's
+    // total is fixed for as long as the module is loaded, so the same blade
+    // survives or does not regardless of where it is seen from.
+    const bool retro = options.mode == graphics::RenderMode::Retro;
+    const float perCluster =
+        retro ? 2.0f
+              : static_cast<float>(graphics::kGrassTrisPerBlade) *
+                    static_cast<float>(std::clamp(options.grassBladesPerCluster, 1, 32));
+    const float allowed = static_cast<float>(options.grassTriangleBudget) / perCluster;
+    return std::min(byDensity, std::clamp(allowed / static_cast<float>(areaBlades), 0.0f, 1.0f));
+}
+
+} // namespace
+
+
 std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
     const RegisteredProcedural &procedural) {
     InstanceMaterial material;
@@ -319,10 +389,23 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
         material.uv0 = procedural.material.uv[0];
         material.uv1 = procedural.material.uv[1];
         material.uv2 = procedural.material.uv[2];
-        material.featureMask = static_cast<uint32_t>(materialFeatureMask(procedural.material)) |
-                               UniformsFeatureFlags::hashedalphatest | (8u << 27);
-        applyCategoryOverride(material, _options, 8);
-        kind = AdmissionKind::Cutout;
+        {
+            // Strands carry no texture and no alpha, so they are ordinary
+            // opaque geometry. That is most of the point: a cutout cannot be
+            // committed by the hardware, so every shadow ray crossing a grass
+            // field ran the any-hit loop, fetched the material and alpha-tested
+            // it, once per blade it touched.
+            //
+            // Retro still draws the cardboard, and cardboard is still a cutout.
+            const bool strands = _options.mode != graphics::RenderMode::Retro;
+            uint32_t features = static_cast<uint32_t>(materialFeatureMask(procedural.material));
+            if (!strands) {
+                features |= UniformsFeatureFlags::hashedalphatest;
+            }
+            material.featureMask = features | (8u << 27);
+            applyCategoryOverride(material, _options, 8);
+            kind = strands ? AdmissionKind::Opaque : AdmissionKind::Cutout;
+        }
         break;
     case ProceduralKind::Particles:
         _submission.particles += static_cast<uint32_t>(procedural.instanceCount());
@@ -348,6 +431,18 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
         break;
     }
     populateMaterialResources(material, procedural.material, _renderer, _options);
+    if (procedural.kind == ProceduralKind::Grass &&
+        _options.mode != graphics::RenderMode::Retro) {
+        // A strand has no texture. The area's grass image is a picture of
+        // cardboard blades, and mapping it across a blade puts a vertical slice
+        // of that picture on every one - which modulates the configured colour
+        // by whatever happened to be in that column, and reads as the colour
+        // dial not working. Retro keeps it, because cardboard is what the
+        // texture is for.
+        material.mainTex = UINT32_MAX;
+        material.diffuseColor = glm::vec4(1.0f);
+        material.overrideParams.x = std::clamp(_options.grassRoughness, 0.0f, 1.0f);
+    }
     return {{material, kind, GpuScene::ResidencyClass::Dynamic, nullptr}};
 }
 
@@ -494,6 +589,7 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
         _classifiedSkyRoom = result.skyRoom;
     }
     _gpuScene.setSkyRoom(result.skyRoom);
+    _gpuScene.setGrassParams(grassParamsFrom(_options));
     _submission.upload = _gpuScene.prepare(
         [this, skyRoom = result.skyRoom](const RegisteredMesh &mesh) {
             return classifyMesh(mesh, skyRoom);
@@ -502,16 +598,18 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
             return classifyProcedural(procedural);
         },
         view, _admissionGeneration,
-        _options.admissionForceFull, std::move(reuse));
+        _options.admissionForceFull || _gpuScene.consumeGrassPrimitiveChange(),
+        std::move(reuse));
     // The live grass density rides to the merge kernel in cameraPosition.w as
     // density/cap; budgets are baked at the cap. Set before hashing so the
     // shadow path (below, same assignment) stays byte-comparable.
-    _submission.upload.cameraPosition.w =
-        std::clamp(_options.grassDensity / kGrassDensityCap, 0.0f, 1.0f);
     for (const auto &range : _submission.upload.grassRanges)
         _submission.grass += range.clusterCount;
+    _submission.upload.cameraPosition.w =
+        grassDensityFraction(_options, _gpuScene.counts().grassClusters);
     if (_options.admissionShadow && _gpuScene.shadowScene()) {
         auto savedSubmission = _submission;
+        _gpuScene.shadowScene()->setGrassParams(grassParamsFrom(_options));
         auto shadowUpload = _gpuScene.shadowScene()->prepare(
             [this, skyRoom = result.skyRoom](const RegisteredMesh &mesh) {
                 return classifyMesh(mesh, skyRoom);
@@ -521,8 +619,10 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
             },
             view, _admissionGeneration, true);
         _submission = std::move(savedSubmission);
+        // The same number, so the shadow scene admits the same blades and the
+        // upload comparison stays byte-for-byte.
         shadowUpload.cameraPosition.w =
-            std::clamp(_options.grassDensity / kGrassDensityCap, 0.0f, 1.0f);
+            grassDensityFraction(_options, _gpuScene.counts().grassClusters);
         const auto incrementalHash = hashUpload(_submission.upload);
         const auto shadowHash = hashUpload(shadowUpload);
         if (_submission.upload.objects.empty() != shadowUpload.objects.empty()) {

@@ -62,6 +62,16 @@ enum class AntiAliasing {
  */
 constexpr int kMaxDebugView = 19;
 
+/**
+ * Upper bound on GraphicsOptions::grassTriangleBudget.
+ *
+ * Eight million rather than a quarter of one: the budget has to be able to
+ * express what the density dials can ask for, and a module's authored clusters
+ * times a handful of blades each runs to millions. A ceiling below that turns
+ * every other grass dial into a no-op, which is what it did.
+ */
+constexpr int kMaxGrassTriangleBudget = 524288;
+
 /** Channels the post-denoise resolve produces, rather than the trace kernel. */
 constexpr bool isResolveDebugView(int view) {
     return view >= 17 && view <= 19;
@@ -110,7 +120,76 @@ struct GraphicsOptions {
     bool vsync {true};
     bool grass {true};
     /** Multiplier on the area's authored Grass_Density, so areas keep their variation. */
-    float grassDensity {1.0f};
+    float grassDensity {8.0f};
+    /**
+     * Grass is strands, not cutout cardboard: a strip of GrassSegments quad
+     * segments closed by one triangle at the tip, generated on the GPU from a
+     * hash of the blade's identity so the field is bit-identical frame to frame.
+     *
+     * Lengths and widths are multiples of the area's authored quad size rather
+     * than world units, so an area that authored small grass keeps it.
+     */
+    float grassRadius {25.0f};
+    /** Total bend of the arc, radians, and how much it varies between blades. */
+    float grassCurvature {0.45f};
+    float grassCurvatureVariance {0.25f};
+    /** Fraction of slots left empty. Buys clumping; density sets the grid. */
+    float grassSparsity {0.0f};
+    /** Displacement from the slot centre, in cells. Above 1 blades cross into neighbours. */
+    float grassDisplacement {0.03f};
+    /**
+     * The blade albedo outright, not a tint: strands carry no texture, so
+     * nothing else contributes. White here is white grass.
+     */
+    glm::vec3 grassColor {0.30f, 0.32f, 0.11f};
+    /**
+     * Blade roughness, set outright rather than derived.
+     *
+     * Roughness normally comes from the diffuse texture's alpha, and a strand
+     * has no texture - so without this every blade would take the fully-rough
+     * default and the field would have no sheen at all.
+     */
+    float grassRoughness {0.8f};
+    /**
+     * Blades grown from each authored cluster.
+     *
+     * The area's records were authored against cardboard, where one cluster is
+     * a card whose texture already depicts a tuft. Drawing one strand where a
+     * card used to stand therefore replaces a tuft with a single blade, which
+     * is why the same cluster count that looked like a field looks like
+     * stubble. Each cluster can now grow a small handful, hashed apart from one
+     * another inside the cell.
+     *
+     * Defaults to one, because while the triangle budget binds this only
+     * redistributes: the budget divides by blades-per-cluster, so raising it
+     * thins the surviving clusters by the same factor and gathers the same
+     * total into tufts. Measured green coverage fell from 0.017 to 0.010 per
+     * cent going from one to eight - but only because the ceiling was binding
+     * and divides by this. Raise the triangle budget alongside it and this
+     * multiplies density as intended.
+     */
+    int grassBladesPerCluster {1};
+    float grassLength {0.8f};
+    float grassLengthVariance {0.3f};
+    /** Blade width as a fraction of its length. */
+    float grassWidth {0.1f};
+    /** Sinks the root under the ground, as a fraction of length, so it does not float. */
+    float grassYOffset {-0.25f};
+    /**
+     * Ceiling on grass triangles in the scene, at nine per blade.
+     *
+     * A hard cap, not an allocator: blades lie across the whole module at the
+     * authored cluster density and this scales that set down uniformly. It does
+     * not concentrate anything near the camera - blades beyond the draw radius
+     * still hold their share - so a dense near field means raising this until
+     * the near field looks right and accepting that most of it is spent out of
+     * sight. Tightening that is a compaction pass, deliberately not built yet.
+     *
+     * Hence the headroom: 41k authored clusters at eight blades each is three
+     * million triangles, and the ceiling has to be able to say yes to that
+     * before any of the density dials mean anything. Zero disables the cap.
+     */
+    int grassTriangleBudget {524288};
     /**
      * The renderer, as one three-way choice. "raster" is still accepted as an
      * input spelling for Retro so existing scripts and configs keep working;

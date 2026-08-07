@@ -219,7 +219,7 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(boolOpt("grass", OptionApply::Live, "enable grass",
                             &GraphicsOptions::grass));
     descs.push_back(floatOpt("grassdensity", OptionApply::Live, "grass density multiplier",
-                             &GraphicsOptions::grassDensity, 0.0f, 8.0f));
+                             &GraphicsOptions::grassDensity, 0.0f, 64.0f));
 
     // What the renderer is, as one three-way choice.
     //
@@ -386,6 +386,67 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(floatOpt("ptshadowfiltermaxradius", OptionApply::Live,
                              "ceiling on the shadow filter radius, pixels",
                              &GraphicsOptions::ptShadowFilterMaxRadius, 1.0f, 64.0f));
+    // Grass shape. All live: the merge kernel reads them from a push constant,
+    // so a change costs a dispatch rather than a rebuild of the face records.
+    descs.push_back(floatOpt("grassradius", OptionApply::Live,
+                             "grass draw radius, world units",
+                             &GraphicsOptions::grassRadius, 0.0f, 512.0f));
+    descs.push_back(floatOpt("grasscurvature", OptionApply::Live,
+                             "total bend of a blade, radians",
+                             &GraphicsOptions::grassCurvature, -2.0f, 2.0f));
+    descs.push_back(floatOpt("grasscurvaturevariance", OptionApply::Live,
+                             "how much that bend varies between blades",
+                             &GraphicsOptions::grassCurvatureVariance, 0.0f, 2.0f));
+    descs.push_back(floatOpt("grasssparsity", OptionApply::Live,
+                             "fraction of slots left empty, which buys clumping",
+                             &GraphicsOptions::grassSparsity, 0.0f, 0.99f));
+    descs.push_back(floatOpt("grassdisplacement", OptionApply::Live,
+                             "displacement from the slot centre, in cells",
+                             &GraphicsOptions::grassDisplacement, 0.0f, 3.0f));
+    descs.push_back(floatOpt("grasslength", OptionApply::Live,
+                             "blade length, times the area's authored quad size",
+                             &GraphicsOptions::grassLength, 0.0f, 8.0f));
+    descs.push_back(floatOpt("grasslengthvariance", OptionApply::Live,
+                             "how much that length varies between blades",
+                             &GraphicsOptions::grassLengthVariance, 0.0f, 1.0f));
+    descs.push_back(floatOpt("grasswidth", OptionApply::Live,
+                             "blade width as a fraction of its length",
+                             &GraphicsOptions::grassWidth, 0.0f, 1.0f));
+    descs.push_back(floatOpt("grassyoffset", OptionApply::Live,
+                             "root offset as a fraction of length; negative sinks it",
+                             &GraphicsOptions::grassYOffset, -1.0f, 1.0f));
+    // A vector through the same string channel every other option uses, so it
+    // saves, parses and reaches the console without a second mechanism.
+    descs.push_back(enumOpt(
+        "grasscolor", OptionApply::Live,
+        "blade albedo as \"r g b\"",
+        [](const GraphicsOptions &o) -> std::string {
+            std::ostringstream stream;
+            stream << o.grassColor.r << " " << o.grassColor.g << " " << o.grassColor.b;
+            return stream.str();
+        },
+        [](GraphicsOptions &o, const std::string &value) {
+            std::istringstream stream(value);
+            glm::vec3 parsed {0.0f};
+            if (!(stream >> parsed.r >> parsed.g >> parsed.b)) {
+                throw std::invalid_argument(
+                    "Graphics option 'grasscolor': expected three numbers, got '" + value + "'");
+            }
+            o.grassColor = glm::max(parsed, glm::vec3(0.0f));
+        },
+        [](const GraphicsOptions &a, const GraphicsOptions &b) {
+            return a.grassColor == b.grassColor;
+        },
+        [](const GraphicsOptions &from, GraphicsOptions &to) { to.grassColor = from.grassColor; }));
+    descs.push_back(floatOpt("grassroughness", OptionApply::Live,
+                             "blade roughness, set outright rather than derived",
+                             &GraphicsOptions::grassRoughness, 0.0f, 1.0f));
+    descs.push_back(intOpt("grassbladespercluster", OptionApply::Live,
+                           "blades grown per authored cluster",
+                           &GraphicsOptions::grassBladesPerCluster, 1, 32));
+    descs.push_back(intOpt("grasstrianglebudget", OptionApply::Live,
+                           "ceiling on grass triangles in the scene",
+                           &GraphicsOptions::grassTriangleBudget, 0, kMaxGrassTriangleBudget));
     descs.push_back(floatOpt("ptshadowfilterscale", OptionApply::Live,
                              "multiplier on the radius the geometry implies",
                              &GraphicsOptions::ptShadowFilterRadiusScale, 0.0f, 8.0f));

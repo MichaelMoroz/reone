@@ -74,6 +74,19 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"mode", graphics::renderModeName(options.mode)},
         {"grass", std::to_string(options.grass)},
         {"grassdensity", formatConfigFloat(options.grassDensity)},
+        {"grassradius", formatConfigFloat(options.grassRadius)},
+        {"grasscurvature", formatConfigFloat(options.grassCurvature)},
+        {"grasscurvaturevariance", formatConfigFloat(options.grassCurvatureVariance)},
+        {"grasssparsity", formatConfigFloat(options.grassSparsity)},
+        {"grassdisplacement", formatConfigFloat(options.grassDisplacement)},
+        {"grasslength", formatConfigFloat(options.grassLength)},
+        {"grasslengthvariance", formatConfigFloat(options.grassLengthVariance)},
+        {"grasswidth", formatConfigFloat(options.grassWidth)},
+        {"grassyoffset", formatConfigFloat(options.grassYOffset)},
+        {"grasstrianglebudget", std::to_string(options.grassTriangleBudget)},
+        {"grasscolor", formatConfigFloat(options.grassColor.r) + " " +
+                           formatConfigFloat(options.grassColor.g) + " " +
+                           formatConfigFloat(options.grassColor.b)},
         {"ptspp", std::to_string(options.pathTracingSamples)},
         {"skyintensity", formatConfigFloat(options.skyIntensity)},
         {"ptemissiveintensity", formatConfigFloat(options.ptEmissiveIntensity)},
@@ -917,10 +930,56 @@ void Editor::graphicsQualityTab() {
     // maximum (kGrassDensityCap), so dragging costs a push-constant change.
     // The old committed-on-release dance existed to avoid re-materialising
     // every cluster per mouse-move; that rebuild no longer exists.
-    ImGui::SliderFloat("Grass density", &options.grassDensity, 0.0f, 8.0f, "%.2fx",
+    ImGui::SliderFloat("Grass density", &options.grassDensity, 0.0f, 64.0f, "%.2fx",
                        ImGuiSliderFlags_Logarithmic);
     settingHint("Multiplies the area's authored density, so areas keep their relative variation. "
                 "Live: the dial gates the active cluster prefix on the GPU.");
+    if (ImGui::TreeNode("Grass shape")) {
+        ImGui::TextDisabled("Strands in PBR and path tracing; Retro keeps the original cardboard.");
+        ImGui::ColorEdit3("Colour", &options.grassColor.x);
+        settingHint("Flat across the blade. Strands carry no texture, so this is the whole of it.");
+        ImGui::SliderFloat("Draw radius", &options.grassRadius, 0.0f, 256.0f, "%.0f");
+        settingHint("Blades past this are dropped outright rather than faded, so it reads as a "
+                    "hard edge if you set it inside the ground the camera can see.");
+        ImGui::SliderFloat("Length", &options.grassLength, 0.0f, 8.0f, "%.2fx");
+        settingHint("Multiplies the area's authored quad size rather than setting a world length, "
+                    "so an area that authored short grass keeps it short.");
+        ImGui::SliderFloat("Length variance", &options.grassLengthVariance, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Width", &options.grassWidth, 0.0f, 0.5f, "%.3f");
+        settingHint("As a fraction of length. Thin blades are subpixel at distance, which is where "
+                    "a temporal resolver starts to shimmer - widening costs less than it looks.");
+        ImGui::SliderFloat("Curvature", &options.grassCurvature, -2.0f, 2.0f, "%.2f rad");
+        settingHint("Total bend of the blade's arc. The spine is a true arc, so a bent blade keeps "
+                    "the length a straight one has.");
+        ImGui::SliderFloat("Curvature variance", &options.grassCurvatureVariance, 0.0f, 2.0f, "%.2f");
+        ImGui::SliderFloat("Sparsity", &options.grassSparsity, 0.0f, 0.99f, "%.2f");
+        settingHint("Fraction of slots left empty. Density sets the grid; this buys the clumping "
+                    "that keeps a field from looking planted.");
+        ImGui::SliderFloat("Displacement", &options.grassDisplacement, 0.0f, 3.0f, "%.2f cells");
+        settingHint("How far a blade may wander from its slot. Above one they cross into "
+                    "neighbouring cells, which breaks up the grid at the cost of wider bounds.");
+        ImGui::SliderFloat("Root offset", &options.grassYOffset, -0.5f, 0.5f, "%.3f");
+        settingHint("Sinks the root below the ground, as a fraction of length, so blades do not "
+                    "appear to float on uneven terrain.");
+        ImGui::SliderInt("Blades per cluster", &options.grassBladesPerCluster, 1, 32);
+        settingHint("The area authored its clusters for cardboard, where one cluster is a card "
+                    "whose texture already draws a tuft. One strand per cluster replaces that tuft "
+                    "with a single blade, which is why a field reads as stubble. Raise the "
+                    "triangle budget alongside this, or the ceiling divides by it and you get the "
+                    "same blades gathered into clumps rather than more of them.");
+        ImGui::SliderFloat("Roughness", &options.grassRoughness, 0.0f, 1.0f, "%.2f");
+        settingHint("Set outright, because a strand has no texture for roughness to be derived "
+                    "from. Reaches path tracing only - the raster resolve takes roughness from the "
+                    "G-buffer and does not read it.");
+        ImGui::SliderInt("Triangle budget", &options.grassTriangleBudget, 0,
+                         graphics::kMaxGrassTriangleBudget);
+        settingHint("A hard cap at nine triangles a blade, scaling the module's blades down "
+                    "uniformly. It does not concentrate them near you: blades past the draw radius "
+                    "still hold their share, so a dense near field means raising this until the "
+                    "near field looks right and spending most of it out of sight. Zero disables "
+                    "the cap.");
+        ImGui::TreePop();
+    }
     ImGui::SliderFloat("Draw distance", &options.drawDistance, 1.0f, 1000.0f, "%.0f");
 
     graphicsReapplySection();

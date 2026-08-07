@@ -228,6 +228,32 @@ public:
     const SceneCounts &counts() const { return _counts; }
     const std::vector<ObjectRecord> &objects() const { return _objects; }
 
+    /**
+     * The grass shape, set before prepare rather than after it.
+     *
+     * A blade is eleven vertices and a cardboard quad is four, and prepare is
+     * what writes those counts into the object records. Assigning the params to
+     * the finished upload leaves the records built against whatever the
+     * previous frame decided - and the merge kernel, which reads the params
+     * from a push constant, then addresses blades the records never allocated.
+     */
+    void setGrassParams(const graphics::GrassParams &params) {
+        // A blade and a quad are different vertex counts, and the counts live
+        // in object records that are cached across frames. Changing the
+        // primitive without rebuilding them leaves the merge kernel striding
+        // through records sized for the other one, which draws the scene as
+        // giant slabs of stretched texture.
+        _grassPrimitiveChanged = params.cardboard != _grassParams.cardboard;
+        _grassParams = params;
+    }
+
+    /** True for the one frame after the grass primitive changed. */
+    bool consumeGrassPrimitiveChange() {
+        const bool changed = _grassPrimitiveChanged;
+        _grassPrimitiveChanged = false;
+        return changed;
+    }
+
     graphics::GpuSceneUpload prepare(const Classifier &classifier,
                                      const ProceduralClassifier &proceduralClassifier,
                                      const glm::mat4 &cameraView,
@@ -236,6 +262,20 @@ public:
                                      graphics::GpuSceneUpload reuse = {});
 
 private:
+    graphics::GrassParams _grassParams;
+    /**
+     * In-radius faces gathered before any are granted, with the distance that
+     * orders them. A member rather than a local so the per-frame walk does not
+     * allocate; cleared at the top of each grass object.
+     */
+    struct GrassFaceCandidate {
+        float distanceSq;
+        uint32_t faceIndex;
+        uint32_t authored;
+    };
+    std::vector<GrassFaceCandidate> _grassFaceScratch;
+    bool _grassPrimitiveChanged {false};
+
     struct CachedClassification {
         bool dirty {true};
         bool classified {false};

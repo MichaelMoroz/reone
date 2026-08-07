@@ -23,6 +23,7 @@
 #include <limits>
 
 #include "reone/graphics/mesh.h"
+#include "reone/system/logger.h"
 #include "reone/system/logutil.h"
 
 namespace reone::graphics {
@@ -199,6 +200,7 @@ void GpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
         frame.grassRanges->initHostVisibleStorage(
             static_cast<uint64_t>(grassRangeCapacity) * sizeof(GrassRange));
     }
+
 }
 
 const GpuScene::SourceGeometry &GpuScene::appendSourceGeometry(const Mesh &mesh) {
@@ -424,10 +426,12 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
             uint32_t opaqueTriangleCount;
             uint32_t pad[3] {};
             glm::vec4 cameraPosition {0.0f};
+            GrassParams grass;
         } constants {static_cast<uint32_t>(upload.objects.size()), upload.opaqueObjectCount,
                      static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount),
-                     static_cast<uint32_t>(opaqueTriangleCount), {}, upload.cameraPosition};
-        static_assert(sizeof(PushConstants) == 48);
+                     static_cast<uint32_t>(opaqueTriangleCount), {}, upload.cameraPosition,
+                     upload.grass};
+        static_assert(sizeof(PushConstants) == 128);
         std::array<ComputeBinding, 11> mergeBindings {{
             {_mergeBindings[0], buffers[0]}, {_mergeBindings[1], buffers[1]},
             {_mergeBindings[2], buffers[2]}, {_mergeBindings[3], buffers[3]},

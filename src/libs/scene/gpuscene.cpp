@@ -25,6 +25,7 @@
 
 #include "reone/graphics/mesh.h"
 #include "reone/scene/node/model.h"
+#include "reone/system/logger.h"
 #include "reone/system/logutil.h"
 
 using namespace reone::graphics;
@@ -562,6 +563,9 @@ graphics::GpuSceneUpload GpuScene::prepare(
     graphics::GpuSceneUpload reuse) {
     R_PROFILE_ZONE("SceneAdmission::classification + dedup");
     auto upload = std::move(reuse);
+    // Before anything reads it: the object records below size themselves by it.
+    upload.grass = _grassParams;
+
     upload.materials.clear();
     upload.objects.clear();
     upload.bones.clear();
@@ -717,7 +721,10 @@ graphics::GpuSceneUpload GpuScene::prepare(
             R_PROFILE_ZONE("SceneAdmission::grass face-band scan");
             grassRangeBase = static_cast<uint32_t>(upload.grassRanges.size());
             instanceCount = 0;
-            constexpr float kMaxClusterDistance = 32.0f;
+            _grassFaceScratch.clear();
+            uint64_t candidateClusters = 0;
+            // Was a hard 32 units, which silently capped the draw radius at 32.
+            const float kMaxClusterDistance = std::max(1.0f, _grassParams.radius);
             const glm::vec3 cameraPosition(upload.cameraPosition);
             for (size_t faceOffset = 0; faceOffset < procedural->grassFaces->size();
                  ++faceOffset) {
@@ -731,19 +738,68 @@ graphics::GpuSceneUpload GpuScene::prepare(
                 const uint32_t budget = face.faceBudgetMaterialVariants.y;
                 if (budget == 0)
                     continue;
-                if (instanceCount + budget > std::numeric_limits<uint32_t>::max())
-                    throw std::runtime_error(
-                        "Grass cluster range exceeds shader index range");
+                _grassFaceScratch.push_back(
+                    {glm::distance2(cameraPosition, closest),
+                     objectGrassFaceBase + static_cast<uint32_t>(faceOffset), budget});
+                candidateClusters += budget;
+            }
+            // Nearest first, then take whole faces until the ceiling is gone.
+            //
+            // Every accepted face gets its full density-scaled grant, and that
+            // grant depends on nothing but the face. An earlier version scaled
+            // all faces by a factor derived from the live candidate total -
+            // which changes as faces cross the radius - so every face's grant
+            // wobbled by a cluster or two and blades all over the field blinked
+            // in and out. Making a grant depend only on its own face is what
+            // stops that, and sorting is what keeps the ceiling spent on the
+            // grass nearest the camera.
+            //
+            // The cut point still moves as the camera does, but it lands on the
+            // farthest accepted face, where the size ramp in the merge kernel
+            // has already taken the blades to nothing.
+            std::sort(_grassFaceScratch.begin(), _grassFaceScratch.end(),
+                      [](const auto &a, const auto &b) { return a.distanceSq < b.distanceSq; });
+            const uint64_t blades = std::max(1u, _grassParams.bladesPerCluster);
+            const uint64_t bladeCeiling =
+                _grassParams.budgetBlades != 0 ? _grassParams.budgetBlades
+                                               : std::numeric_limits<uint64_t>::max();
+            uint64_t bladesUsed = 0;
+            for (const auto &candidate : _grassFaceScratch) {
+                auto granted = static_cast<uint64_t>(
+                    std::llround(static_cast<double>(candidate.authored) * _grassParams.density));
+                if (granted == 0)
+                    continue;
+                const uint64_t remaining =
+                    bladeCeiling > bladesUsed ? (bladeCeiling - bladesUsed) / blades : 0;
+                if (remaining == 0)
+                    break;
+                granted = std::min(granted, remaining);
                 if (upload.grassRanges.size() == std::numeric_limits<uint32_t>::max())
-                    throw std::runtime_error(
-                        "Grass face ranges exceed shader index range");
+                    throw std::runtime_error("Grass face ranges exceed shader index range");
                 upload.grassRanges.push_back(
-                    {objectGrassFaceBase + static_cast<uint32_t>(faceOffset),
-                     static_cast<uint32_t>(instanceCount), budget, 0u});
-                instanceCount += budget;
+                    {candidate.faceIndex, static_cast<uint32_t>(instanceCount),
+                     static_cast<uint32_t>(granted), 0u});
+                instanceCount += granted;
+                bladesUsed += granted * blades;
             }
             grassRangeCount = static_cast<uint32_t>(upload.grassRanges.size()) -
                               grassRangeBase;
+            if (Logger::instance.isChannelEnabled(LogChannel::Graphics)) {
+                // The numbers the selection actually produced, rather than an
+                // inference from what the frame looks like.
+                debug("Grass: " + std::to_string(_grassFaceScratch.size()) + " faces in radius " +
+                          std::to_string(_grassParams.radius) + ", " +
+                          std::to_string(candidateClusters) + " candidate clusters, " +
+                          std::to_string(instanceCount) + " granted, x" +
+                          std::to_string(_grassParams.bladesPerCluster) + " blades = " +
+                          std::to_string(instanceCount *
+                                         std::max(1u, _grassParams.bladesPerCluster) *
+                                         graphics::kGrassTrisPerBlade) +
+                          " triangles, ceiling " +
+                          std::to_string(_grassParams.budgetBlades *
+                                         graphics::kGrassTrisPerBlade),
+                      LogChannel::Graphics);
+            }
             if (instanceCount == 0)
                 continue;
         }
@@ -763,8 +819,25 @@ graphics::GpuSceneUpload GpuScene::prepare(
                                          ? grassRangeCount
                                          : 0;
         sceneObject.srcVertexStride = procedural->kind == ProceduralKind::Grass ? 0 : 1;
-        sceneObject.vertexCount = static_cast<uint32_t>(instanceCount) * 4;
-        sceneObject.triangleCount = static_cast<uint32_t>(instanceCount) * 2;
+        // Grass is a strand of nine triangles unless Retro is drawing the
+        // original cardboard, in which case it is the same quad everything else
+        // here is. Both counts have to agree with the merge kernel's own
+        // arithmetic or the two loops address different blades.
+        const bool strands = procedural->kind == ProceduralKind::Grass &&
+                             upload.grass.cardboard == 0;
+        if (strands) {
+            // Exactly the blades the loop above granted: every slot allocated
+            // here is one that gets built.
+            const uint64_t blades =
+                instanceCount * std::max(1u, upload.grass.bladesPerCluster);
+            sceneObject.vertexCount =
+                static_cast<uint32_t>(blades) * graphics::kGrassVertsPerBlade;
+            sceneObject.triangleCount =
+                static_cast<uint32_t>(blades) * graphics::kGrassTrisPerBlade;
+        } else {
+            sceneObject.vertexCount = static_cast<uint32_t>(instanceCount) * 4;
+            sceneObject.triangleCount = static_cast<uint32_t>(instanceCount) * 2;
+        }
         const auto primitiveClass =
             cache.value->kind == AdmissionKind::Opaque
                 ? PrimitiveClass::Opaque

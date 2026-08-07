@@ -212,6 +212,44 @@ struct GpuSceneObjectInput {
 };
 
 /** Backend-free output of shared scene admission. */
+/**
+ * Grass shape, as the merge kernel needs it. Mirrors the tail of PushConstants
+ * in slang/scene_resolve.slang.
+ *
+ * Lengths are multiples of the face's authored quad size rather than world
+ * units, so the same numbers suit an area that authored short grass and one
+ * that authored tall.
+ */
+struct GrassParams {
+    float radius {32.0f};
+    float curvature {0.45f};
+    float curvatureVariance {0.26f};
+    float sparsity {0.25f};
+    float displacement {1.0f};
+    float length {1.0f};
+    float lengthVariance {0.3f};
+    float width {0.06f};
+    float yOffset {-0.05f};
+    float roughness {0.8f};
+    uint32_t bladesPerCluster {8};
+    /** Retro keeps the cutout cardboard; it never reaches the tracer. */
+    uint32_t cardboard {0};
+    // Four scalars to a row and the vector on its own boundary. A bare vec3 in
+    // a push-constant block packs one way in C++ and another in SPIR-V, and the
+    // disagreement is silent - the fields simply read as the wrong numbers.
+    /** Blades the ceiling allows in the scene; 0 means no ceiling. */
+    uint32_t budgetBlades {0};
+    /** The author's density dial, as a fraction of the cap budgets were baked at. */
+    float density {1.0f};
+    float pad2 {0.0f};
+    float pad3 {0.0f};
+    glm::vec4 color {1.0f};
+};
+
+/** Vertices and triangles a single blade contributes - see scene_resolve.slang. */
+constexpr uint32_t kGrassVertsPerBlade = 11;
+constexpr uint32_t kGrassTrisPerBlade = 9;
+
 struct GpuSceneUpload {
     std::vector<InstanceMaterial> materials;
     std::vector<GpuSceneObjectInput> objects;
@@ -221,6 +259,8 @@ struct GpuSceneUpload {
     std::vector<GrassFace> grassFaces;
     std::vector<GrassRange> grassRanges;
     glm::vec4 cameraPosition {0.0f, 0.0f, 0.0f, 1.0f};
+    GrassParams grass;
+
     uint64_t grassFaceGeneration {0};
     uint32_t opaqueObjectCount {0};
     uint32_t materialReferenceCount {0};
