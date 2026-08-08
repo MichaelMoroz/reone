@@ -419,6 +419,11 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
         // a chain, including ordinary 2D environment maps.
         // Leaving Vulkan at level zero makes every explicit source LOD in the
         // IBL prefilter clamp to that sharp base image instead.
+        //
+        // No `!compressed` term here, unlike the cube/layered path: this is the
+        // else of `if (compressedFormat(...))` above, so a BC image took the
+        // authored-levels branch and never arrives. The cube path needs the
+        // test written out because it serves both in one block.
         bool generateMips = authoredMips == 0 && fullMipCount > 1;
         uint32_t mipCount = authoredMips > 0 ? authoredMips + 1
                                              : (generateMips ? fullMipCount : 1);
