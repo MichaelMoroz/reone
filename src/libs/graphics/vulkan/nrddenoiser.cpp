@@ -44,10 +44,25 @@ std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(VulkanDevice &device,
     const nrd::Denoiser type = kind == TracingDenoiserKind::Relax
                                    ? nrd::Denoiser::RELAX_DIFFUSE_SPECULAR
                                    : nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
-    nrd::DenoiserDesc denoiserDesc {0, type};
+    // A second denoiser in the same instance, diffuse-only, for primary-vertex
+    // direct light. One instance rather than two: NRD sizes its pools for the
+    // whole instance and the pipeline set is shared, so the second denoiser
+    // costs its own passes and history but none of the integration.
+    //
+    // It exists because direct light is a different signal from indirect, not
+    // because one denoiser cannot cope. Summed together they get one variance
+    // estimate per pixel, dominated by the bounce noise, and a kernel sized for
+    // that erases shadow detail that had already converged. Apart, each gets
+    // its own variance, its own history and its own accumulation time.
+    const nrd::Denoiser directType = kind == TracingDenoiserKind::Relax
+                                         ? nrd::Denoiser::RELAX_DIFFUSE
+                                         : nrd::Denoiser::REBLUR_DIFFUSE;
+    const std::array<nrd::DenoiserDesc, 2> denoiserDescs {
+        nrd::DenoiserDesc {NrdDenoiser::kCombinedIdentifier, type},
+        nrd::DenoiserDesc {NrdDenoiser::kDirectIdentifier, directType}};
     nrd::InstanceCreationDesc creationDesc {};
-    creationDesc.denoisers = &denoiserDesc;
-    creationDesc.denoisersNum = 1;
+    creationDesc.denoisers = denoiserDescs.data();
+    creationDesc.denoisersNum = static_cast<uint32_t>(denoiserDescs.size());
     nrd::Instance *instance = nullptr;
     if (nrd::CreateInstance(creationDesc, instance) != nrd::Result::SUCCESS) {
         warn("NRD instance creation failed; denoising stays unavailable");
@@ -60,7 +75,8 @@ std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(VulkanDevice &device,
          (kind == TracingDenoiserKind::Relax ? "RELAX" : "REBLUR") + ", " +
          std::to_string(instanceDesc.pipelinesNum) + " pipelines, " +
          std::to_string(instanceDesc.permanentPoolSize) + " permanent + " +
-         std::to_string(instanceDesc.transientPoolSize) + " transient pool textures");
+         std::to_string(instanceDesc.transientPoolSize) + " transient pool textures, " +
+         "direct channel denoised separately");
     auto result = std::make_unique<NrdDenoiser>(device, *instance, extent, true, kind);
     result->init();
     return result;
@@ -69,8 +85,13 @@ std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(VulkanDevice &device,
 /**
  * Generous and unmeasured on purpose: a REBLUR_DIFFUSE_SPECULAR frame is
  * around two dozen dispatches, and the slack costs kilobytes.
+ *
+ * Covers both denoisers in the instance, since their batches are recorded into
+ * one frame's pools and one frame's constant slots. The descriptor pool sizes
+ * and the constant ring below are all derived from this number, so raising it
+ * is the only place that has to change.
  */
-static constexpr uint32_t kMaxDispatchesPerFrame = 64;
+static constexpr uint32_t kMaxDispatchesPerFrame = 128;
 /** Covers every minUniformBufferOffsetAlignment in the wild. */
 static constexpr VkDeviceSize kConstantAlignment = 256;
 
@@ -159,6 +180,8 @@ void NrdDenoiser::init() {
     _outDiffuse->initColorAttachment(_extent, VK_FORMAT_R16G16B16A16_SFLOAT);
     _outSpecular = std::make_unique<VulkanImage>(_device);
     _outSpecular->initColorAttachment(_extent, VK_FORMAT_R16G16B16A16_SFLOAT);
+    _outDirect = std::make_unique<VulkanImage>(_device);
+    _outDirect->initColorAttachment(_extent, VK_FORMAT_R16G16B16A16_SFLOAT);
 
     // One tight layout pair per NRD pipeline. NRD may put the constant
     // buffer and samplers in a different register space than the resources;
@@ -300,6 +323,7 @@ void NrdDenoiser::deinit() {
     _transientPool.clear();
     _outDiffuse.reset();
     _outSpecular.reset();
+    _outDirect.reset();
     _constants.reset();
     _hasHistory = false;
 }
@@ -310,9 +334,16 @@ VkImageView NrdDenoiser::viewFor(const nrd::ResourceDesc &resource,
     case nrd::ResourceType::IN_MV: return toVulkanImage(*inputs.motion).view();
     case nrd::ResourceType::IN_NORMAL_ROUGHNESS: return toVulkanImage(*inputs.normalRoughness).view();
     case nrd::ResourceType::IN_VIEWZ: return toVulkanImage(*inputs.viewZ).view();
-    case nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST: return toVulkanImage(*inputs.diffRadianceHitDist).view();
+    // The diffuse slot is whichever signal this batch is denoising - see
+    // _recordingDirect. Everything else is shared by both: one G-buffer, one
+    // set of motion vectors.
+    case nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST:
+        return toVulkanImage(*(_recordingDirect ? inputs.directRadianceHitDist
+                                                : inputs.diffRadianceHitDist))
+            .view();
     case nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST: return toVulkanImage(*inputs.specRadianceHitDist).view();
-    case nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST: return _outDiffuse->view();
+    case nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST:
+        return (_recordingDirect ? _outDirect : _outDiffuse)->view();
     case nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST: return _outSpecular->view();
     case nrd::ResourceType::PERMANENT_POOL: return _permanentPool[resource.indexInPool]->view();
     case nrd::ResourceType::TRANSIENT_POOL: return _transientPool[resource.indexInPool]->view();
@@ -340,6 +371,7 @@ void NrdDenoiser::denoise(ICommandBuffer &commandBuffer,
     for (auto &image : _transientPool) poolImages.push_back(image.get());
     poolImages.push_back(_outDiffuse.get());
     poolImages.push_back(_outSpecular.get());
+    poolImages.push_back(_outDirect.get());
     VulkanImage::transitionTo(cmd, poolImages, VK_IMAGE_LAYOUT_GENERAL);
 
     // A backstop, not the mechanism. Emptying the scene now restarts the
@@ -432,7 +464,7 @@ void NrdDenoiser::denoise(ICommandBuffer &commandBuffer,
         relax.depthThreshold = glm::max(1e-4f, tuning.depthThreshold);
         relax.hitDistanceReconstructionMode = reconstruction;
         relax.enableAntiFirefly = tuning.antiFirefly;
-        if (nrd::SetDenoiserSettings(_instance, 0, &relax) != nrd::Result::SUCCESS) {
+        if (nrd::SetDenoiserSettings(_instance, kCombinedIdentifier, &relax) != nrd::Result::SUCCESS) {
             warn("NRD: SetDenoiserSettings failed");
             return;
         }
@@ -455,26 +487,70 @@ void NrdDenoiser::denoise(ICommandBuffer &commandBuffer,
         reblur.planeDistanceSensitivity = glm::clamp(tuning.planeDistanceSensitivity, 0.001f, 1.0f);
         reblur.hitDistanceReconstructionMode = reconstruction;
         reblur.enableAntiFirefly = tuning.antiFirefly;
-        if (nrd::SetDenoiserSettings(_instance, 0, &reblur) != nrd::Result::SUCCESS) {
+        if (nrd::SetDenoiserSettings(_instance, kCombinedIdentifier, &reblur) != nrd::Result::SUCCESS) {
             warn("NRD: SetDenoiserSettings failed");
             return;
+        }
+    }
+    // The direct denoiser, settled separately from the one above. Its signal is
+    // converged everywhere but the penumbra, so it is given the dials that stop
+    // a filter widening over detail that is already there:
+    //
+    // - no prepass blur. That pass is unconditional, it runs ahead of every
+    //   variance estimate, and NRD says outright that "for relatively clean
+    //   signals pre-pass may introduce additional blur". This signal is one.
+    // - no hit-distance reconstruction. It is needed where a probabilistic lobe
+    //   split leaves holes; direct light is evaluated at every primary vertex,
+    //   so there are none to fill.
+    // - its own accumulation, shorter than the bounce channel's. A shadow edge
+    //   moves with the geometry that casts it, and history that suits slow
+    //   indirect light is lag here.
+    if (inputs.directRadianceHitDist && _outDirect) {
+        const auto directAccumulation = glm::max(0.0f, tuning.directAccumulationTime);
+        if (_kind == TracingDenoiserKind::Relax) {
+            nrd::RelaxSettings direct {};
+            direct.diffuseMaxAccumulatedFrameNum = frames(directAccumulation, nrd::RELAX_MAX_HISTORY_FRAME_NUM);
+            direct.diffuseMaxFastAccumulatedFrameNum =
+                frames(glm::min(tuning.fastAccumulationTime, directAccumulation),
+                       direct.diffuseMaxAccumulatedFrameNum);
+            direct.historyFixFrameNum = static_cast<uint32_t>(glm::max(0, tuning.historyFixFrames));
+            direct.diffusePrepassBlurRadius = 0.0f;
+            direct.diffusePhiLuminance = glm::max(0.0f, tuning.directPhiLuminance);
+            direct.lobeAngleFraction = glm::clamp(tuning.lobeAngleFraction, 0.0f, 1.0f);
+            direct.atrousIterationNum =
+                static_cast<uint32_t>(glm::clamp(tuning.directAtrousIterations, 2, 8));
+            direct.depthThreshold = glm::max(1e-4f, tuning.depthThreshold);
+            direct.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::OFF;
+            direct.enableAntiFirefly = tuning.antiFirefly;
+            if (nrd::SetDenoiserSettings(_instance, kDirectIdentifier, &direct) != nrd::Result::SUCCESS) {
+                warn("NRD: SetDenoiserSettings failed for the direct denoiser");
+                return;
+            }
+        } else {
+            nrd::ReblurSettings direct {};
+            direct.maxAccumulatedFrameNum = frames(directAccumulation, nrd::REBLUR_MAX_HISTORY_FRAME_NUM);
+            direct.maxFastAccumulatedFrameNum =
+                frames(glm::min(tuning.fastAccumulationTime, directAccumulation),
+                       direct.maxAccumulatedFrameNum);
+            direct.maxStabilizedFrameNum = frames(tuning.stabilizationTime, direct.maxAccumulatedFrameNum);
+            direct.historyFixFrameNum = static_cast<uint32_t>(glm::max(0, tuning.historyFixFrames));
+            direct.diffusePrepassBlurRadius = 0.0f;
+            direct.minBlurRadius = glm::max(0.0f, tuning.minBlurRadius);
+            direct.maxBlurRadius = glm::max(tuning.minBlurRadius, tuning.maxBlurRadius);
+            direct.lobeAngleFraction = glm::clamp(tuning.lobeAngleFraction, 0.0f, 1.0f);
+            direct.planeDistanceSensitivity = glm::clamp(tuning.planeDistanceSensitivity, 0.001f, 1.0f);
+            direct.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::OFF;
+            direct.enableAntiFirefly = tuning.antiFirefly;
+            if (nrd::SetDenoiserSettings(_instance, kDirectIdentifier, &direct) != nrd::Result::SUCCESS) {
+                warn("NRD: SetDenoiserSettings failed for the direct denoiser");
+                return;
+            }
         }
     }
     _prevView = view;
     _prevProjection = projection;
     _prevJitter = jitter;
     _hasHistory = true;
-
-    const nrd::Identifier identifier = 0;
-    const nrd::DispatchDesc *dispatches = nullptr;
-    uint32_t dispatchCount = 0;
-    if (nrd::GetComputeDispatches(_instance, &identifier, 1, dispatches, dispatchCount) != nrd::Result::SUCCESS) {
-        warn("NRD: GetComputeDispatches failed");
-        return;
-    }
-    if (dispatchCount > kMaxDispatchesPerFrame) {
-        throw std::runtime_error("NRD: dispatch count exceeds the frame budget");
-    }
 
     const auto pool = _descriptorPools[frameIndex];
     vkResetDescriptorPool(_device.handle(), pool, 0);
@@ -496,6 +572,29 @@ void NrdDenoiser::denoise(ICommandBuffer &commandBuffer,
     VkDependencyInfo computeDependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     computeDependency.memoryBarrierCount = 1;
     computeDependency.pMemoryBarriers = &computeBarrier;
+
+    // One batch per denoiser, recorded in turn. NRD owns the returned dispatch
+    // array and "will be overwritten by the next GetComputeDispatches call", so
+    // a batch has to be written into the command buffer before the next is
+    // asked for - which is why this is a loop over identifiers rather than one
+    // call with both.
+    const std::array<nrd::Identifier, 2> identifiers {kCombinedIdentifier, kDirectIdentifier};
+    const bool withDirect = inputs.directRadianceHitDist != nullptr && _outDirect;
+    uint32_t constantSlot = 0;
+    for (uint32_t batch = 0; batch < (withDirect ? 2u : 1u); ++batch) {
+        _recordingDirect = identifiers[batch] == kDirectIdentifier;
+        const nrd::DispatchDesc *dispatches = nullptr;
+        uint32_t dispatchCount = 0;
+        if (nrd::GetComputeDispatches(_instance, &identifiers[batch], 1, dispatches, dispatchCount) !=
+            nrd::Result::SUCCESS) {
+            warn("NRD: GetComputeDispatches failed");
+            _recordingDirect = false;
+            return;
+        }
+        if (constantSlot + dispatchCount > kMaxDispatchesPerFrame) {
+            _recordingDirect = false;
+            throw std::runtime_error("NRD: dispatch count exceeds the frame budget");
+        }
 
     for (uint32_t d = 0; d < dispatchCount; ++d) {
         const auto &dispatch = dispatches[d];
@@ -539,7 +638,11 @@ void NrdDenoiser::denoise(ICommandBuffer &commandBuffer,
             }
         }
         if (pipelineDesc.hasConstantData && dispatch.constantBufferDataSize > 0) {
-            auto *slot = constantBase + static_cast<VkDeviceSize>(d) * _constantSlotSize;
+            // Slots run across both batches, not per batch: the two share one
+            // frame's ring, and restarting the index would have the direct
+            // denoiser overwrite constants the first batch is still bound to.
+            const auto slotIndex = static_cast<VkDeviceSize>(constantSlot + d);
+            auto *slot = constantBase + slotIndex * _constantSlotSize;
             std::memcpy(slot, dispatch.constantBufferData, dispatch.constantBufferDataSize);
             writes.writeBuffer(
                 setForSpace(instanceDesc.constantBufferAndSamplersSpaceIndex),
@@ -547,7 +650,7 @@ void NrdDenoiser::denoise(ICommandBuffer &commandBuffer,
                  VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
                 {_constants->handle(),
                  static_cast<VkDeviceSize>(frameIndex) * _constantSlotSize * _constantSlotsPerFrame +
-                     static_cast<VkDeviceSize>(d) * _constantSlotSize,
+                     slotIndex * _constantSlotSize,
                  dispatch.constantBufferDataSize});
         }
         writes.apply();
@@ -560,6 +663,9 @@ void NrdDenoiser::denoise(ICommandBuffer &commandBuffer,
         }
         vkCmdDispatch(cmd, dispatch.gridWidth, dispatch.gridHeight, 1);
     }
+        constantSlot += dispatchCount;
+    }
+    _recordingDirect = false;
     // The composite reads the outputs with sampled or storage access; settle
     // the last writes before anything downstream.
     vkCmdPipelineBarrier2(cmd, &computeDependency);

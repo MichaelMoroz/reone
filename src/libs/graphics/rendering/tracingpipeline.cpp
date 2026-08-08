@@ -433,9 +433,31 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
         for (auto *image : traceOutputs) {
             commandBuffer.imageBarrier(*image, ImageUse::RayTracingStore, ImageUse::ComputeRead);
         }
+        // Which image the composite reads for direct light, given what settled
+        // it. Declared here so the binding list below stays one expression.
+        const auto directChannelView = [&](IImage *raw) {
+            switch (_options.ptShadowFilter) {
+            case graphics::ShadowFilter::Penumbra:
+                return _shadowFiltered[_renderer.frameIndex()]->sampleView();
+            case graphics::ShadowFilter::Denoiser:
+                if (auto *denoised = _nrdDenoiser->denoisedDirect())
+                    return denoised->sampleView();
+                return raw->sampleView();
+            default:
+                return raw->sampleView();
+            }
+        };
         TracingDenoiserInputs inputs;
         inputs.diffRadianceHitDist = aux[0].get();
         inputs.specRadianceHitDist = aux[1].get();
+        // Only when the direct channel exists as its own signal. With the
+        // channel off the tracer sums direct light into the diffuse one, so
+        // there is nothing separate to denoise and the second denoiser's
+        // batch is not recorded at all.
+        if (_options.ptDirectChannel &&
+            _options.ptShadowFilter == graphics::ShadowFilter::Denoiser) {
+            inputs.directRadianceHitDist = aux[14].get();
+        }
         inputs.normalRoughness = aux[2].get();
         inputs.viewZ = aux[3].get();
         inputs.motion = aux[4].get();
@@ -452,6 +474,9 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
         tuning.fastAccumulationTime = _options.ptNrdFastAccumulationTime;
         tuning.stabilizationTime = _options.ptNrdStabilizationTime;
         tuning.historyFixFrames = _options.ptNrdHistoryFixFrames;
+        tuning.directAccumulationTime = _options.ptNrdDirectAccumulationTime;
+        tuning.directAtrousIterations = _options.ptNrdDirectAtrousIterations;
+        tuning.directPhiLuminance = _options.ptNrdDirectPhiLuminance;
         tuning.diffusePrepassBlurRadius = _options.ptNrdDiffusePrepassBlurRadius;
         tuning.specularPrepassBlurRadius = _options.ptNrdSpecularPrepassBlurRadius;
         tuning.lobeAngleFraction = _options.ptNrdLobeAngleFraction;
@@ -497,12 +522,14 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                 {_compositeBindings[6], aux[3]->sampleView()},
                 {_compositeBindings[7], aux[0]->sampleView()},
                 {_compositeBindings[8], aux[1]->sampleView()},
+                // Whichever of the three settled this channel. The denoiser's
+                // output only exists when its batch actually ran, so this falls
+                // back to the raw channel rather than binding an image the
+                // denoiser never wrote.
                 {_compositeBindings[9],
-                 _options.ptShadowFilter
-                     ? _shadowFiltered[_renderer.frameIndex()]->sampleView()
-                     : aux[14]->sampleView()},
+                 directChannelView(aux[14].get())},
             }};
-            if (_options.ptShadowFilter) {
+            if (_options.ptShadowFilter == graphics::ShadowFilter::Penumbra) {
                 // Mirrors ShadowFilterPushConstants in slang/shadow_filter.slang.
                 struct ShadowFilterPushConstants {
                     float pixelWorldPerDepth;

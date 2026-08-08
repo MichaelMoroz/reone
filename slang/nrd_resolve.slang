@@ -51,9 +51,9 @@
 [[vk::binding(6, 1)]] RWTexture2D<float> inViewZ;
 [[vk::binding(7, 1)]] RWTexture2D<float4> inRawDiffuse;
 [[vk::binding(8, 1)]] RWTexture2D<float4> inRawSpecular;
-// Direct diffuse at the primary vertex. It never entered NRD, so there is no
-// denoised counterpart to fall back from and no unpacking to undo - it is added
-// here in the same currency as the rest, against the same guide factor.
+// Direct diffuse at the primary vertex, as whatever settled it: the raw
+// channel, the penumbra blur, or its own NRD denoiser. No unpacking to undo -
+// it is added in the same currency as the rest, against the same guide factor.
 [[vk::binding(9, 1)]] RWTexture2D<float4> inDirectDiffuse;
 
 /** Mirrors NrdResolvePushConstants in tracingpipeline.cpp. */
@@ -99,7 +99,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     int2 pixel = int2(dispatchId.xy);
 
     float3 color = inNoiseFree[pixel].rgb;
-    bool hasDenoisedSurface = abs(inViewZ[pixel]) < kDenoisedRange;
+    const bool hasDenoisedSurface = abs(inViewZ[pixel]) < kDenoisedRange;
     float3 diffuse = hasDenoisedSurface ? inDenoisedDiffuse[pixel].rgb
                                         : inRawDiffuse[pixel].rgb;
     float3 specular = hasDenoisedSurface ? inDenoisedSpecular[pixel].rgb
@@ -119,6 +119,20 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         return;
     default:
         break;
+    }
+    // Sky, and any path-terminating surface, carries viewZ at kPtInfDistance
+    // and has all of its radiance in the noise-free channel already. Nothing
+    // denoised is assembled onto it.
+    //
+    // Beyond NRD's range its outputs are undefined, not zero: they are
+    // temporally accumulated, and on sky - motion zero, nothing ever drawn -
+    // that is last frame's history reprojected. Adding it is what smeared the
+    // sky as soon as a denoiser sat behind the direct channel. The diffuse and
+    // specular channels only escaped because the tracer leaves them at zero
+    // there, which is luck rather than a guarantee.
+    if (!hasDenoisedSurface) {
+        outputImage[pixel] = float4(color, 1.0);
+        return;
     }
     color += (unpackRadiance(diffuse) + max(inDirectDiffuse[pixel].rgb, 0.0)) *
                  inDiffFactor[pixel].rgb +

@@ -82,6 +82,17 @@ struct TracingDenoiserInputs {
     IImage *viewZ {nullptr};
     IImage *diffRadianceHitDist {nullptr};
     IImage *specRadianceHitDist {nullptr};
+    /**
+     * Primary-vertex direct light, for the second denoiser.
+     *
+     * Its own channel and its own denoiser instance, because it is a different
+     * signal: converged almost everywhere and noisy only inside a penumbra,
+     * where the indirect channel is noisy throughout. Summed into the diffuse
+     * channel it gets a kernel chosen for the bounce noise - one variance per
+     * pixel, dominated by the wrong term - and the shadow detail goes with it.
+     * Null leaves the second denoiser unrecorded.
+     */
+    IImage *directRadianceHitDist {nullptr};
 };
 
 /**
@@ -133,6 +144,19 @@ struct TracingDenoiserTuning {
     float specularPhiLuminance {1.0f};
     float depthThreshold {0.003f};
     float specularLobeAngleSlack {0.15f};
+
+    /**
+     * The direct-light denoiser's own dials, separate on purpose.
+     *
+     * Shorter history than the bounce channel because a shadow edge moves with
+     * whatever casts it, where indirect light changes slowly; and fewer A-trous
+     * passes with a tighter luminance phi because the signal arrives converged
+     * outside the penumbra, so every extra iteration is width spent on detail
+     * rather than on noise.
+     */
+    float directAccumulationTime {0.15f};
+    int directAtrousIterations {3};
+    float directPhiLuminance {1.0f};
 };
 
 class ITracingDenoiser {
@@ -147,6 +171,8 @@ public:
                          bool restartHistory) = 0;
     virtual IImage &denoisedDiffuse() = 0;
     virtual IImage &denoisedSpecular() = 0;
+    /** Null unless the instance carries the direct-light denoiser. */
+    virtual IImage *denoisedDirect() = 0;
 };
 
 } // namespace reone::graphics

@@ -390,9 +390,35 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(boolOpt("ptdenoise", OptionApply::Live,
                             "enable the path tracing denoiser",
                             &GraphicsOptions::ptDenoise));
-    descs.push_back(boolOpt("ptshadowfilter", OptionApply::Live,
-                            "filter the direct channel by the penumbra the geometry implies",
-                            &GraphicsOptions::ptShadowFilter));
+    descs.push_back(enumOpt(
+        "ptshadowfilter", OptionApply::Live,
+        "what settles the direct channel: off, penumbra or denoiser",
+        [](const GraphicsOptions &o) -> std::string {
+            switch (o.ptShadowFilter) {
+            case ShadowFilter::Penumbra: return "penumbra";
+            case ShadowFilter::Denoiser: return "denoiser";
+            default: return "off";
+            }
+        },
+        [](GraphicsOptions &o, const std::string &value) {
+            if (value == "off" || value == "none" || value == "0") {
+                o.ptShadowFilter = ShadowFilter::Off;
+            } else if (value == "penumbra" || value == "1") {
+                o.ptShadowFilter = ShadowFilter::Penumbra;
+            } else if (value == "denoiser" || value == "nrd") {
+                o.ptShadowFilter = ShadowFilter::Denoiser;
+            } else {
+                throw std::invalid_argument(
+                    "Graphics option 'ptshadowfilter': unknown mode '" + value +
+                    "'; expected off, penumbra or denoiser");
+            }
+        },
+        [](const GraphicsOptions &a, const GraphicsOptions &b) {
+            return a.ptShadowFilter == b.ptShadowFilter;
+        },
+        [](const GraphicsOptions &from, GraphicsOptions &to) {
+            to.ptShadowFilter = from.ptShadowFilter;
+        }));
     descs.push_back(floatOpt("ptshadowfiltermaxradius", OptionApply::Live,
                              "ceiling on the shadow filter radius, pixels",
                              &GraphicsOptions::ptShadowFilterMaxRadius, 1.0f, 64.0f));
@@ -534,6 +560,15 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                              &GraphicsOptions::ptNrdStabilizationTime, 0.0f, 2.0f));
     descs.push_back(intOpt("ptnrdhistoryfix", OptionApply::Live, "denoiser history fix frames",
                            &GraphicsOptions::ptNrdHistoryFixFrames, 0, 63));
+    descs.push_back(floatOpt("ptnrddirectaccumtime", OptionApply::Live,
+                             "direct-light denoiser history, seconds",
+                             &GraphicsOptions::ptNrdDirectAccumulationTime, 0.0f, 2.0f));
+    descs.push_back(intOpt("ptnrddirectatrous", OptionApply::Live,
+                           "direct-light denoiser A-trous iterations",
+                           &GraphicsOptions::ptNrdDirectAtrousIterations, 2, 8));
+    descs.push_back(floatOpt("ptnrddirectphiluminance", OptionApply::Live,
+                             "direct-light denoiser luminance edge stopping",
+                             &GraphicsOptions::ptNrdDirectPhiLuminance, 0.0f, 16.0f));
     descs.push_back(floatOpt("ptnrddiffuseprepassblurradius", OptionApply::Live,
                              "diffuse prepass blur radius",
                              &GraphicsOptions::ptNrdDiffusePrepassBlurRadius, 0.0f, 256.0f));

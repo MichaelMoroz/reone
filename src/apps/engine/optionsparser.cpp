@@ -134,8 +134,14 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("sharpen", value<bool>()->default_value(options->graphics.sharpen), "sharpen the finished frame (unsharp mask, after the display transform)") //
         ("sharpenamount", value<float>()->default_value(options->graphics.sharpenAmount), "strength of that mask")       //
         ("ptdenoise", value<bool>()->default_value(options->graphics.ptDenoise), "enable the path tracing denoiser")           //
-        ("ptshadowfilter", value<bool>()->default_value(options->graphics.ptShadowFilter),
-         "filter the direct channel by the penumbra the geometry implies")                                                    //
+        ("ptshadowfilter", value<std::string>()->default_value("off"),
+         "what settles the direct channel: off, penumbra or denoiser")                                                        //
+        ("ptnrddirectaccumtime", value<float>()->default_value(options->graphics.ptNrdDirectAccumulationTime),
+         "direct-light denoiser history, seconds")                                                                            //
+        ("ptnrddirectatrous", value<int>()->default_value(options->graphics.ptNrdDirectAtrousIterations),
+         "direct-light denoiser A-trous iterations")                                                                          //
+        ("ptnrddirectphiluminance", value<float>()->default_value(options->graphics.ptNrdDirectPhiLuminance),
+         "direct-light denoiser luminance edge stopping")                                                                     //
         ("ptshadowfiltermaxradius", value<float>()->default_value(options->graphics.ptShadowFilterMaxRadius),
          "ceiling on the shadow filter radius, pixels")                                                                       //
         ("grassradius", value<float>()->default_value(options->graphics.grassRadius), "grass draw radius")             //
@@ -343,7 +349,28 @@ std::unique_ptr<Options> OptionsParser::parse() {
                                                             : graphics::Denoiser::Relax;
     }
     options->graphics.ptDirectChannel = vars["ptdirectchannel"].as<bool>();
-    options->graphics.ptShadowFilter = vars["ptshadowfilter"].as<bool>();
+    {
+        // Rejected rather than silently taken as "off", for the same reason the
+        // anti-aliasing slot is: a typo that quietly disables the thing you
+        // were measuring is indistinguishable from the thing not working.
+        const auto value = vars["ptshadowfilter"].as<std::string>();
+        if (value == "off" || value == "none" || value == "0") {
+            options->graphics.ptShadowFilter = graphics::ShadowFilter::Off;
+        } else if (value == "penumbra" || value == "1") {
+            options->graphics.ptShadowFilter = graphics::ShadowFilter::Penumbra;
+        } else if (value == "denoiser" || value == "nrd") {
+            options->graphics.ptShadowFilter = graphics::ShadowFilter::Denoiser;
+        } else {
+            throw std::invalid_argument("Unknown shadow filter '" + value +
+                                        "'; expected off, penumbra or denoiser");
+        }
+    }
+    options->graphics.ptNrdDirectAccumulationTime =
+        std::clamp(vars["ptnrddirectaccumtime"].as<float>(), 0.0f, 2.0f);
+    options->graphics.ptNrdDirectAtrousIterations =
+        std::clamp(vars["ptnrddirectatrous"].as<int>(), 2, 8);
+    options->graphics.ptNrdDirectPhiLuminance =
+        std::clamp(vars["ptnrddirectphiluminance"].as<float>(), 0.0f, 16.0f);
     options->graphics.ptShadowFilterMaxRadius =
         std::clamp(vars["ptshadowfiltermaxradius"].as<float>(), 1.0f, 64.0f);
     options->graphics.grassRadius = std::max(0.0f, vars["grassradius"].as<float>());

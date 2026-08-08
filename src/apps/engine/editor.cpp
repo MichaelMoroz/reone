@@ -107,7 +107,13 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"pttracestats", std::to_string(options.ptTraceStats)},
         {"ptdenoise", std::to_string(options.ptDenoise)},
         {"ptdirectchannel", std::to_string(options.ptDirectChannel)},
-        {"ptshadowfilter", std::to_string(options.ptShadowFilter)},
+        {"ptshadowfilter", options.ptShadowFilter == graphics::ShadowFilter::Penumbra ? "penumbra"
+                           : options.ptShadowFilter == graphics::ShadowFilter::Denoiser
+                               ? "denoiser"
+                               : "off"},
+        {"ptnrddirectaccumtime", formatConfigFloat(options.ptNrdDirectAccumulationTime)},
+        {"ptnrddirectatrous", std::to_string(options.ptNrdDirectAtrousIterations)},
+        {"ptnrddirectphiluminance", formatConfigFloat(options.ptNrdDirectPhiLuminance)},
         {"ptshadowfiltermaxradius", formatConfigFloat(options.ptShadowFilterMaxRadius)},
         {"ptshadowfilterscale", formatConfigFloat(options.ptShadowFilterRadiusScale)},
         {"ptshadowfilterminradius", formatConfigFloat(options.ptShadowFilterMinRadius)},
@@ -1097,19 +1103,42 @@ void Editor::graphicsPathTracingTab() {
         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Running: %s until Apply.",
                            kDenoiserNames[static_cast<int>(options.ptDenoiser)]);
     }
-    ImGui::Checkbox("Shadow filter", &options.ptShadowFilter);
-    settingHint("Blurs the direct channel by the penumbra the geometry implies: the tracer records "
-                "how far away each blocker was, and a source of known angular size at that "
-                "distance implies a penumbra of one particular width. A contact edge asks for no "
-                "radius at all and keeps its edge. Blurs demodulated light only, so it cannot "
-                "smear texture.\n\n"
-                "Off by default, and worth knowing why. Blue noise puts its error at high spatial "
-                "frequency, which is the part a temporal resolve averages away and the part FSR's "
-                "clamp will reject. Blurring moves that error down into low frequency, where it "
-                "reads as signal instead - it survives the clamp and boils. Measured over 32 FSR "
-                "frames it made the picture less stable, not more. Useful when no temporal "
-                "resolver is in the slot and nothing else is averaging.");
-    if (ImGui::TreeNode("Shadow filter tuning")) {
+    // Order matches the enum, so the index is the value.
+    static const char *kShadowFilterNames[] = {"Off", "Penumbra blur", "Denoiser"};
+    int shadowFilter = static_cast<int>(options.ptShadowFilter);
+    if (ImGui::Combo("Direct channel", &shadowFilter, kShadowFilterNames,
+                     IM_ARRAYSIZE(kShadowFilterNames))) {
+        options.ptShadowFilter = static_cast<graphics::ShadowFilter>(shadowFilter);
+    }
+    settingHint("What settles primary-vertex direct light. Three architectures, not three "
+                "strengths.\n\n"
+                "Off leaves it to the temporal resolve. Default, and worth knowing why: blue noise "
+                "puts its error at high spatial frequency, which is what a temporal resolve "
+                "averages away and what FSR's clamp rejects. Measured over 32 FSR frames, blurring "
+                "made the picture less stable, not more.\n\n"
+                "Penumbra blur sizes a kernel from geometry - the tracer records how far each "
+                "blocker was, and a source of known angular size at that distance implies one "
+                "particular width. It never asks whether this pixel needed filtering, so on a "
+                "converged signal it blurs detail that was already right.\n\n"
+                "Denoiser gives the channel its own NRD instance, which estimates variance per "
+                "pixel and sizes its kernel from that - so a clean region keeps its detail. Not "
+                "the same as turning the direct channel off, which sums this signal into the "
+                "diffuse one: there it gets a kernel chosen for the bounce noise, because the two "
+                "then share a single variance estimate dominated by the wrong term.");
+    if (ImGui::TreeNode("Direct denoiser tuning")) {
+        ImGui::SliderFloat("History", &options.ptNrdDirectAccumulationTime, 0.0f, 2.0f, "%.2f s");
+        settingHint("Deliberately shorter than the bounce channel's. A shadow edge moves with "
+                    "whatever casts it, so history that suits slow indirect light is lag here.");
+        ImGui::SliderInt("A-trous iterations", &options.ptNrdDirectAtrousIterations, 2, 8);
+        settingHint("Each iteration doubles the kernel's reach. Few, because this signal arrives "
+                    "converged outside the penumbra and the extra width is spent on detail.");
+        ImGui::SliderFloat("Luminance phi", &options.ptNrdDirectPhiLuminance, 0.0f, 16.0f, "%.2f");
+        settingHint("The edge-stopping term, divided by the estimated variance. Low keeps edges by "
+                    "rejecting any tap that differs; high lets the filter average across them. "
+                    "This is the dial that decides whether a converged penumbra gradient survives.");
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Penumbra blur tuning")) {
         ImGui::SliderFloat("Radius scale", &options.ptShadowFilterRadiusScale, 0.0f, 8.0f, "%.2fx");
         settingHint("Multiplier on the radius the geometry implies. 1 is the physical answer; "
                     "above it you are trading penumbra fidelity for a quieter shadow, and the "

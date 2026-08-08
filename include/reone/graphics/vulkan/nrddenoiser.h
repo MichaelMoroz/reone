@@ -79,6 +79,15 @@ public:
 
     IImage &denoisedDiffuse() override { return *_outDiffuse; }
     IImage &denoisedSpecular() override { return *_outSpecular; }
+    IImage *denoisedDirect() override { return _outDirect.get(); }
+
+    /**
+     * The two denoisers in the instance. Diffuse+specular for the traced
+     * bounce, diffuse-only for primary-vertex direct light - see the note at
+     * the instance creation for why they are not one signal.
+     */
+    static constexpr nrd::Identifier kCombinedIdentifier = 0;
+    static constexpr nrd::Identifier kDirectIdentifier = 1;
 
 private:
     VulkanDevice &_device;
@@ -98,6 +107,17 @@ private:
     std::vector<std::unique_ptr<VulkanImage>> _transientPool;
     std::unique_ptr<VulkanImage> _outDiffuse;
     std::unique_ptr<VulkanImage> _outSpecular;
+    std::unique_ptr<VulkanImage> _outDirect;
+    /**
+     * Which denoiser's dispatches are being recorded.
+     *
+     * NRD names resources by role, not by denoiser, so IN_DIFF_RADIANCE_HITDIST
+     * means two different images depending on which pass is being walked. The
+     * alternative - one mapping keyed on the identifier inside every dispatch -
+     * is the same state by a longer route, since the batches are recorded one
+     * after the other anyway.
+     */
+    bool _recordingDirect {false};
     std::array<VkSampler, 2> _samplers {};
     std::array<VkDescriptorPool, 2> _descriptorPools {};
     std::unique_ptr<VulkanBuffer> _constants;

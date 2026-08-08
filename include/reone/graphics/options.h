@@ -76,6 +76,21 @@ constexpr int kMaxGrassTriangleBudget = 1048576;
 constexpr int kMinGrassSegments = 1;
 constexpr int kMaxGrassSegments = 8;
 
+/**
+ * What settles the primary-vertex direct channel.
+ *
+ * Three architectures rather than a strength dial, and they are not variations
+ * on one idea: nothing, a blur sized from predicted geometry, or a denoiser
+ * that measures whether a pixel needs filtering at all.
+ */
+enum class ShadowFilter {
+    Off,
+    /** The engine's own blur, sized by the penumbra the geometry implies. */
+    Penumbra,
+    /** A second NRD denoiser, fed this channel alone. */
+    Denoiser
+};
+
 /** Channels the post-denoise resolve produces, rather than the trace kernel. */
 constexpr bool isResolveDebugView(int view) {
     return view >= 17 && view <= 19;
@@ -378,8 +393,16 @@ struct GraphicsOptions {
      * radius, 0.7507 forced to 8 pixels. Every filtered variant is less stable
      * than none, and none of them is quieter. It stays available for the case
      * with no temporal resolver, where nothing else is averaging.
+     *
+     * Denoiser is the third answer and a different one: not a wider or
+     * narrower blur but a filter that asks whether this pixel needs one. NRD
+     * estimates variance per pixel and sizes its kernel from it, so a converged
+     * region keeps its detail instead of being blurred by a radius predicted
+     * from geometry. It denoises this channel on its own - see
+     * TracingDenoiserInputs::directRadianceHitDist for why it cannot simply be
+     * summed into the diffuse one and denoised there.
      */
-    bool ptShadowFilter {false};
+    ShadowFilter ptShadowFilter {ShadowFilter::Off};
     /** Ceiling on that radius in pixels, whatever the geometry asks for. */
     float ptShadowFilterMaxRadius {24.0f};
     /**
@@ -423,6 +446,19 @@ struct GraphicsOptions {
     float ptNrdFastAccumulationTime {0.1f};
     float ptNrdStabilizationTime {0.0f};
     int ptNrdHistoryFixFrames {3};
+    /**
+     * The direct denoiser's own history and kernel, separate from the bounce
+     * channel's above.
+     *
+     * Short by comparison, and deliberately: a shadow edge moves with whatever
+     * casts it, so history that suits slow indirect light reads as lag here.
+     * Few A-trous passes and a tight luminance phi for the same reason the
+     * prepass is forced off for this denoiser - the signal arrives converged
+     * outside the penumbra, and width spent there is spent on detail.
+     */
+    float ptNrdDirectAccumulationTime {0.15f};
+    int ptNrdDirectAtrousIterations {3};
+    float ptNrdDirectPhiLuminance {1.0f};
     float ptNrdDiffusePrepassBlurRadius {30.0f};
     float ptNrdSpecularPrepassBlurRadius {50.0f};
     float ptNrdLobeAngleFraction {0.15f};
