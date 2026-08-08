@@ -107,6 +107,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ptspp", value<int>()->default_value(options->graphics.pathTracingSamples), "path tracing samples per pixel")          //
         ("skyintensity", value<float>()->default_value(options->graphics.skyIntensity), "sky light intensity")                //
         ("ptemissiveintensity", value<float>()->default_value(options->graphics.ptEmissiveIntensity), "path tracing emissive intensity") //
+        ("ptbackdropintensity", value<float>()->default_value(options->graphics.ptBackdropIntensity), "path tracing backdrop imagery intensity") //
         ("ptlightmapintensity", value<float>()->default_value(options->graphics.ptLightmapIntensity), "path tracing lightmap intensity") //
         ("ptdirectintensity", value<float>()->default_value(options->graphics.ptDirectIntensity), "path tracing direct-light intensity") //
         ("ptsunintensity", value<float>()->default_value(options->graphics.ptSunIntensity), "path tracing sun intensity")       //
@@ -121,6 +122,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ptindirectclamp", value<float>()->default_value(options->graphics.ptIndirectClamp), "ceiling on one indirect sample, 0 to disable") //
         ("ptsunangularsize", value<float>()->default_value(options->graphics.ptSunAngularSize), "path tracing sun angular size") //
         ("albedogamma", value<float>()->default_value(options->graphics.albedoGamma), "authored albedo decode exponent, PBR and path tracing alike (2.2 is sRGB-correct, 1.0 matches the reference engines)") //
+        ("emissivegamma", value<float>()->default_value(options->graphics.emissiveGamma), "authored radiance decode exponent (emission, sky, backdrop)") //
         ("pbrlightmapintensity", value<float>()->default_value(options->graphics.pbrLightmapIntensity), "PBR baked-irradiance intensity") //
         ("maxlights", value<int>()->default_value(options->graphics.maxLights), "lights a frame may carry")                    //
         ("maxdirectionalshadows", value<int>()->default_value(options->graphics.maxDirectionalShadows),
@@ -296,6 +298,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.pathTracingSamples = std::max(1, vars["ptspp"].as<int>());
     options->graphics.skyIntensity = vars["skyintensity"].as<float>();
     options->graphics.ptEmissiveIntensity = vars["ptemissiveintensity"].as<float>();
+    options->graphics.ptBackdropIntensity = std::max(0.0f, vars["ptbackdropintensity"].as<float>());
     options->graphics.ptLightmapIntensity = vars["ptlightmapintensity"].as<float>();
     options->graphics.ptDirectIntensity = vars["ptdirectintensity"].as<float>();
     options->graphics.ptSunIntensity = vars["ptsunintensity"].as<float>();
@@ -310,6 +313,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptPointEmitterRatio = std::clamp(vars["ptpointemitterratio"].as<float>(), 0.01f, 0.5f);
     options->graphics.ptSunAngularSize = std::max(0.05f, vars["ptsunangularsize"].as<float>());
     options->graphics.albedoGamma = std::clamp(vars["albedogamma"].as<float>(), 0.1f, 4.0f);
+    options->graphics.emissiveGamma = std::clamp(vars["emissivegamma"].as<float>(), 0.1f, 4.0f);
     options->graphics.pbrLightmapIntensity = std::max(0.0f, vars["pbrlightmapintensity"].as<float>());
     options->graphics.maxLights = std::clamp(vars["maxlights"].as<int>(), 1, graphics::kMaxLights);
     options->graphics.maxDirectionalShadows =

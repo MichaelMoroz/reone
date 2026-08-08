@@ -21,6 +21,8 @@
 #include "reone/resource/id.h"
 #include "reone/scene/gpuscene.h"
 
+#include <filesystem>
+
 #include "imgui.h" // ImGuiID
 
 #include <map>
@@ -68,6 +70,26 @@ public:
     void applyPendingTransition();
 
     bool isEnabled() const { return _enabled; }
+
+    /**
+     * Everything needed to name what is on screen, written to one folder.
+     *
+     * Exists because "that object over there" is not something a renderer can
+     * be asked about, and guessing from a screenshot is how several changes
+     * ended up aimed at the wrong geometry. A pixel gives a triangle id; the
+     * dumped records turn that into a material and an object record; the object
+     * list gives it a name.
+     *
+     * Public so the console can reach it - a button cannot be pressed by a
+     * scripted run, and those are the runs that most need the evidence.
+     *
+     * Requested rather than taken: a button press and a console command both
+     * land outside the render frame, where the renderer has nothing to read
+     * back and refuses a flush. The engine performs it where its own screenshot
+     * happens, with the finished frame still readable.
+     */
+    void requestSceneCapture() { _captureRequested = true; }
+    void performPendingSceneCapture();
 
 private:
     // Full-viewport dockspace, and the right-hand node new windows default into.
@@ -124,6 +146,14 @@ private:
     void graphicsPathTracingTab();
     void graphicsAdvancedTab();
     void graphicsDebugViewSection();
+    /** Opens the folder and writes everything that is not a debug channel. */
+    bool beginSceneCapture();
+    bool _captureRequested {false};
+    /** Channel the next finished frame carries, or -1 when idle. */
+    int _captureStep {-1};
+    int _captureRestoreView {0};
+    std::filesystem::path _captureDir;
+    std::string _lastCapturePath;
     void graphicsMaterialsTab();
 
     /**

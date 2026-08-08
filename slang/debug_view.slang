@@ -59,6 +59,8 @@ import lib.scene_schema;
 /** Mirrors DebugViewPushConstants in scenepipeline.cpp. */
 struct DebugViewPushConstants {
     uint view;
+    /** The floor the shading used; the roughness view must show that number. */
+    float roughnessFloor;
 };
 [[vk::push_constant]] DebugViewPushConstants pushConstants;
 
@@ -228,10 +230,15 @@ float3 channelColor(float2 uv, int2 pixel) {
         // The same stand-in and the same curation the shading applies: Odyssey
         // assets carry no roughness channel, so diffuse alpha is it.
         float3 albedo = gammaToLinear(diffuseSample.rgb) * material.curatedAlbedoMul.rgb;
+        // The live floor, not a hardcoded 0.2. This channel exists to show the
+        // number the shading used, and it was showing a different one.
         float roughness = curatedChannel(material.curatedRoughA, material.curatedRoughB,
-                                         albedo, clamp(diffuseSample.a, 0.2, 1.0));
+                                         albedo,
+                                         clamp(diffuseSample.a, pushConstants.roughnessFloor, 1.0));
         if (material.overrideParams.x >= 0.0) roughness = material.overrideParams.x;
-        return float3(clamp(roughness * material.roughnessScale, 0.2, 1.0));
+        // Saturate, matching lib/material_ops.slang - this view has to show the
+        // number the shading used, and the floor is not applied here.
+        return float3(saturate(roughness * material.roughnessScale));
     }
     case kDebugMetallic: {
         // Odyssey materials are all dielectric, so anything non-zero here is

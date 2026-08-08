@@ -268,6 +268,9 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(floatOpt("ptemissiveintensity", OptionApply::Live,
                              "path tracing emissive intensity",
                              &GraphicsOptions::ptEmissiveIntensity, 0.0f, 1024.0f));
+    descs.push_back(floatOpt("ptbackdropintensity", OptionApply::Live,
+                             "path tracing backdrop imagery intensity",
+                             &GraphicsOptions::ptBackdropIntensity, 0.0f, 1024.0f));
     descs.push_back(floatOpt("ptlightmapintensity", OptionApply::Live,
                              "path tracing lightmap intensity",
                              &GraphicsOptions::ptLightmapIntensity, 0.0f, 1024.0f));
@@ -284,6 +287,9 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                              "authored albedo decode exponent, PBR and path tracing alike "
                              "(2.2 is sRGB-correct, 1.0 matches the reference engines)",
                              &GraphicsOptions::albedoGamma, 0.1f, 4.0f));
+    descs.push_back(floatOpt("emissivegamma", OptionApply::Live,
+                             "authored radiance decode exponent (emission, sky, backdrop)",
+                             &GraphicsOptions::emissiveGamma, 0.1f, 4.0f));
     descs.push_back(floatOpt("pbrlightmapintensity", OptionApply::Live,
                              "PBR baked-irradiance intensity",
                              &GraphicsOptions::pbrLightmapIntensity, 0.0f, 1024.0f));

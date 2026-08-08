@@ -173,6 +173,21 @@ struct GraphicsOptions {
      */
     float albedoGamma {2.2f};
     /**
+     * Exponent authored radiance is decoded with: emission, sky and backdrop
+     * imagery.
+     *
+     * Separate from albedoGamma, and for a reason that is not symmetry. Albedo
+     * gamma is a look control - Odyssey art was authored to be multiplied by
+     * light unconverted, so any decode is a compromise and moving it is how an
+     * area is made to read right. Emission has no such argument: an authored
+     * glow colour is the colour emitted, and 2.2 is simply the encoding it was
+     * stored in, so this wants to stay there.
+     *
+     * They used to be one number, which meant grading a room's reflectance also
+     * changed how bright its lamps and its skyline were.
+     */
+    float emissiveGamma {2.2f};
+    /**
      * Lights a frame may carry, out of the kMaxLights the uniform block is
      * sized for.
      *
@@ -351,6 +366,21 @@ struct GraphicsOptions {
         sun. All still dials; these are the graded defaults. */
     float skyIntensity {2.5f};
     float ptEmissiveIntensity {2.5f};
+    /**
+     * Painted backdrop imagery - Taris' cityscape, Manaan's towers - on its own
+     * scale beside the sky's.
+     *
+     * These are not emissive in the sense the emissive dial means. That one
+     * grades lamps, screens and glowing panels: objects standing in the scene
+     * that also light it. A backdrop is a picture of a distance that was never
+     * modelled; it terminates the path exactly as the sky does, and nothing is
+     * behind it to receive what it might emit. Sharing a dial with the lamps
+     * meant grading the two against each other, which is a choice between the
+     * skyline reading right and the interiors reading right.
+     *
+     * 1.0 is what it was before it had a name: the texture, as authored.
+     */
+    float ptBackdropIntensity {1.0f};
     float ptLightmapIntensity {0.0f};
     /**
      * Strength of the baked irradiance in PBR, and deliberately a separate dial

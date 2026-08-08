@@ -120,6 +120,22 @@ public:
     virtual void dumpTargets(const std::filesystem::path &dir) = 0;
 
     /**
+     * The tables that turn a pixel back into an object.
+     *
+     * dumpTargets writes the triangle-id image; on its own that is a number
+     * with nothing to look it up in. This writes the two tables that close the
+     * loop: every device-side object record with the triangle range it owns and
+     * the material it uses, and every material record with its flags, surface
+     * model and texture ids. A triangle id read out of the image falls in
+     * exactly one record's range, and that record names a material.
+     *
+     * Lives here because the pipeline already holds the admitted upload; the
+     * scene graph does not keep one, and making it keep one would be per-frame
+     * cost for a debugging tool.
+     */
+    virtual void dumpSceneRecords(const std::filesystem::path &dir) {}
+
+    /**
      * Throw away every temporal history the pipeline holds, so the next frame
      * accumulates from nothing.
      *

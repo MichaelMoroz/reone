@@ -233,12 +233,17 @@ public struct PbrSurface : ISurfaceModel {
         shading.terminatesPath = false;
         shading.albedo = float3(1.0);
         shading.alpha = 1.0;
+        // The same texel read twice, under the two decodes, because it plays
+        // two roles: reflectance for the light it bounces, radiance for the
+        // light it emits. Only the first follows the albedo dial.
+        float3 radianceTexel = float3(1.0);
         if (material.mainTex != kPtNoTexture) {
             UvGradients gradients = anisotropicGradients(hit);
             // Textures are stored gamma-encoded; every term this shader
             // computes is linear, exactly as the raster resolve does it.
             float4 sample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleGrad(hit.uv, gradients.x, gradients.y);
             shading.albedo = ptDecodeAlbedo(sample.rgb);
+            radianceTexel = ptDecodeEmission(sample.rgb);
             shading.alpha = sample.a;
             if ((material.featureMask & kPtMaskPremulAlpha) != 0) {
                 // Colour is already multiplied by coverage and the alpha
@@ -249,6 +254,7 @@ public struct PbrSurface : ISurfaceModel {
                 // as particles.slang:64-71.
                 shading.alpha = rgbToLuma(sample.rgb);
                 shading.albedo *= 1.0 / max(1e-4, shading.alpha);
+                radianceTexel *= 1.0 / max(1e-4, shading.alpha);
             }
         }
         // Keep the tracer's stand-ins exactly aligned with pbr_resolve.slang:
@@ -276,8 +282,8 @@ public struct PbrSurface : ISurfaceModel {
         shading.albedo *= color.rgb;
         shading.alpha *= color.a;
         if (material.overrideParams.x >= 0.0) shading.roughness = material.overrideParams.x;
-        shading.roughness = clamp(shading.roughness * material.roughnessScale,
-                                  pushConstants.roughnessFloor, 1.0);
+        // Saturate rather than re-applying the floor - see lib/material_ops.slang.
+        shading.roughness = saturate(shading.roughness * material.roughnessScale);
 
         shading.normal = materialNormal(hit, hit.materialIndex);
         shading.envmapped = (material.featureMask & uint(kFeatureEnvMap)) != 0;
@@ -304,8 +310,9 @@ public struct PbrSurface : ISurfaceModel {
             emission *= material.curatedEmission.rgb;
         }
         // Emission is additive over shading, like raster self-illumination;
-        // the dial and the category emission scale ride along here.
-        shading.emission = emission * shading.albedo * pushConstants.emissiveIntensity;
+        // the dial and the category emission scale ride along here. Against the
+        // radiance decode, not the albedo one - see radianceTexel above.
+        shading.emission = emission * radianceTexel * pushConstants.emissiveIntensity;
         return shading;
     }
 
@@ -430,12 +437,14 @@ public struct UnlitTransparentSurface : ISurfaceModel {
         InstanceMaterial material = instanceMaterials[hit.materialIndex];
         SurfaceShading shading;
         shading.terminatesPath = false;
-        shading.albedo = ptGammaToLinear(material.diffuseColor.rgb);
+        // Radiance, not reflectance: this model is additive light, so the texel
+        // takes the emission decode rather than the albedo one.
+        shading.albedo = ptDecodeEmission(material.diffuseColor.rgb);
         shading.alpha = 1.0;
         if (material.mainTex != kPtNoTexture) {
             float lod = ptRayConeLod(material, hit.indices, hit.coneWidth);
             float4 sample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(hit.uv, lod);
-            shading.albedo = ptGammaToLinear(sample.rgb);
+            shading.albedo = ptDecodeEmission(sample.rgb);
             shading.alpha = sample.a;
         }
         float4 color = vertexColor(hit);
@@ -477,7 +486,9 @@ public struct UnlitEmissiveSurface : ISurfaceModel {
         shading.alpha = 1.0;
         if (material.mainTex != kPtNoTexture) {
             float lod = ptRayConeLod(material, hit.indices, hit.coneWidth);
-            shading.albedo = ptGammaToLinear(
+            // The emission decode: sky and backdrop imagery are radiance, and
+            // the albedo dial has no say over how bright a sky is.
+            shading.albedo = ptDecodeEmission(
                 bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(hit.uv, lod).rgb);
         }
         shading.normal = hit.geometricNormal;
@@ -487,10 +498,14 @@ public struct UnlitEmissiveSurface : ISurfaceModel {
         shading.lightmap = float3(1.0);
         shading.envmapped = false;
         shading.envStrength = 0.0;
-        // The texture is the radiance: the sky takes its own dial, prelit
-        // imagery renders as authored. Nothing exists behind either.
+        // The texture is the radiance, and each kind takes its own dial: the
+        // sky shell, and the painted backdrop standing in for a distance that
+        // was never modelled. Nothing exists behind either, which is why
+        // neither is graded by the emissive dial - that one is for lamps and
+        // screens, which are objects in the scene that also light it.
         bool sky = (material.featureMask & kPtMaskSky) != 0;
-        shading.emission = shading.albedo * (sky ? pushConstants.skyIntensity : 1.0);
+        shading.emission = shading.albedo *
+                           (sky ? pushConstants.skyIntensity : pushConstants.backdropIntensity);
         shading.terminatesPath = true;
         return shading;
     }

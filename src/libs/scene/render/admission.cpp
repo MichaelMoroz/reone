@@ -282,6 +282,30 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
             kind = AdmissionKind::Cutout;
         }
     }
+    // Backdrop cutouts are sky, and shaded as sky.
+    //
+    // The painted skyline: background scenery drawn as an alpha cutout rather
+    // than modelled. Measured on Taris upper city, three meshes in the whole
+    // module - m02ab_02l/line1650, line1651, line2045 - each carrying
+    // selfIllum 1,1,1, which made them ordinary lit geometry that also glowed,
+    // graded by the emissive dial. At an emissive intensity of 3.59 they came
+    // out white.
+    //
+    // They take the sky's dial rather than one of their own because that is
+    // what they are: far enough that their parallax does not matter, and drawn
+    // over the sky, so any brightness that is not the sky's reads as a seam.
+    //
+    // This is a shading classification, not a bake. The sky bake gathers by
+    // membership in the sky room, which these are not in - they stay admitted,
+    // rasterized and traced like the geometry they are. The bit only selects
+    // the unlit surface model and the sky intensity.
+    //
+    // Cutout is the discriminator, and it is the whole of it: the other 132
+    // self-illuminated scenery meshes in that module are modelled buildings,
+    // which are lit normally and stay that way.
+    if (mesh.material.backgroundGeometry && kind == AdmissionKind::Cutout) {
+        material.featureMask |= 1u << 24;
+    }
     if ((material.featureMask & (1u << 24)) != 0 ||
         (curated && curated->klass == TraceClass::Prelit)) {
         material.surfaceType = 2;

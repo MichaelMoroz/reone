@@ -54,6 +54,11 @@ public:
     std::vector<RenderTargetInfo> targets() const override;
     void *renderTargetPreview(const std::string &name, int mode, float scale) override;
     void dumpTargets(const std::filesystem::path &dir) override;
+    void dumpSceneRecords(const std::filesystem::path &dir) override;
+    /** Served from the merge, where the triangle ranges have just been filled. */
+    void serveRecordDump(const graphics::GpuScene::View &view);
+    /** Where the next render should write its record tables, or empty. */
+    std::filesystem::path _pendingRecordDump;
     void restartTemporalHistory() override;
 
 private:

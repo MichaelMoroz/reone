@@ -50,8 +50,13 @@ public:
     }
 
     graphics::GpuScene::View mergeGeometry(graphics::ICommandBuffer &commandBuffer) override {
-        return _owner._deviceGpuScene->update(commandBuffer,
-                                              _owner._admissionResult.submission.upload);
+        auto view = _owner._deviceGpuScene->update(commandBuffer,
+                                                   _owner._admissionResult.submission.upload);
+        // The one moment both halves exist: the merge has just filled the
+        // triangle bases and handed back the primitive-id ranges, and the
+        // tracer has not yet taken ownership of the upload.
+        _owner.serveRecordDump(view);
+        return view;
     }
 
     std::vector<graphics::ExternalTarget> primaryTargets() const override {
@@ -371,6 +376,54 @@ void RenderPipeline::dumpTargets(const std::filesystem::path &dir) {
              ", clusters=" + std::to_string(grassClusters),
          LogChannel::Graphics);
     _executor->dumpTargets(dir, *_callbacks);
+}
+
+void RenderPipeline::dumpSceneRecords(const std::filesystem::path &dir) {
+    // Served at the top of the next render, where the upload is still owned by
+    // this pipeline - see the note there.
+    _pendingRecordDump = dir;
+}
+
+void RenderPipeline::serveRecordDump(const graphics::GpuScene::View &view) {
+    if (_pendingRecordDump.empty()) {
+        return;
+    }
+    const auto dir = _pendingRecordDump;
+    _pendingRecordDump.clear();
+    const auto &upload = _admissionResult.submission.upload;
+    {
+        // The table that turns a pixel into a name. The triangle range comes
+        // from the merge's own primitive-id ranges rather than from the object
+        // record: dstTriangleBase is only filled during that merge, and the
+        // ranges already carry the opaque/non-opaque offset applied, so a
+        // triangle id sampled out of the G-buffer can be compared directly.
+        // object_id is the same number objects.tsv prints as id.
+        std::ofstream out(dir / "records.tsv");
+        out << "record\tobject_id\tfirst_triangle\ttriangle_count\tmaterial\tvertex_count"
+               "\tgeometry\n";
+        for (uint32_t i = 0; i < view.primitiveIds.rangeCount; ++i) {
+            const auto &range = view.primitiveIds.ranges[i];
+            const auto &data = upload.objects[i].data;
+            out << i << "\t" << range.first.objectIndex << "\t" << range.firstTriangle << "\t"
+                << range.triangleCount << "\t" << data.materialIndex << "\t" << data.vertexCount
+                << "\t" << data.geometryIndex << "\n";
+        }
+    }
+    {
+        std::ofstream out(dir / "materials.tsv");
+        out << "material\tsurface_type\tfeature_mask\tcategory\tmain_tex\tlightmap\tenvmap"
+               "\tself_illum_r\tself_illum_g\tself_illum_b\n";
+        for (size_t i = 0; i < upload.materials.size(); ++i) {
+            const auto &m = upload.materials[i];
+            out << i << "\t" << m.surfaceType << "\t" << m.featureMask << "\t"
+                << ((m.featureMask >> 27) & 0xFu) << "\t" << m.mainTex << "\t" << m.lightmap
+                << "\t" << m.envMap << "\t" << m.selfIllumColor.r << "\t" << m.selfIllumColor.g
+                << "\t" << m.selfIllumColor.b << "\n";
+        }
+    }
+    info("Wrote " + std::to_string(upload.objects.size()) + " object records and " +
+             std::to_string(upload.materials.size()) + " materials to " + dir.string(),
+         LogChannel::Graphics);
 }
 
 void RenderPipeline::restartTemporalHistory() {

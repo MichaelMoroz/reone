@@ -414,7 +414,9 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                                   0,
                                   scene.opaqueTriangleCount,
                                   sky.baked ? 1u : 0u,
-                                  std::clamp(_options.albedoGamma, 0.1f, 4.0f)};
+                                  std::clamp(_options.albedoGamma, 0.1f, 4.0f),
+                                  std::max(0.0f, _options.ptBackdropIntensity),
+                                  std::clamp(_options.emissiveGamma, 0.1f, 4.0f)};
     commandBuffer.pushRayTracingConstants(_pipeline->pipelineLayout(), &constants, sizeof(constants));
     {
         R_PROFILE_ZONE("RayQuery::dispatch record");

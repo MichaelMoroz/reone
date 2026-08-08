@@ -92,6 +92,18 @@ public MaterialSurface resolveMaterial(InstanceMaterial material, float3 texelRg
     s.albedo = lerp(s.albedo, decodeAlbedo(material.overrideColor.rgb, albedoGamma),
                     material.overrideColor.w);
     if (material.overrideParams.x >= 0.0) s.roughness = material.overrideParams.x;
-    s.roughness = clamp(s.roughness * material.roughnessScale, roughnessFloor, 1.0);
+    // Saturate, not the floor again. The floor guards the STAND-IN above:
+    // Odyssey has no roughness channel, diffuse alpha is standing in for one,
+    // and a floor keeps an authored mirror from becoming a perfect one by
+    // accident. An override and a scale are not accidents - they are somebody
+    // calibrating this category on purpose, and a guard against bad data has no
+    // business overruling that.
+    //
+    // Applied here it made the dial dead at both ends. Measured on Taris:
+    // scales 0, 0.05, 0.1 and 0.2 produced byte-identical frames, because every
+    // one of them landed on the 0.2 floor; scales 2, 4 and 8 likewise, because
+    // the stand-in is 1.0 on any opaque material and 1.0 is the ceiling. Two
+    // thirds of the slider did nothing.
+    s.roughness = saturate(s.roughness * material.roughnessScale);
     return s;
 }

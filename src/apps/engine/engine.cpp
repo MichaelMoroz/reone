@@ -301,6 +301,12 @@ void Engine::init() {
     });
 
     _editor = std::make_unique<Editor>(*this, _options.game.developer);
+    // The same capture the settings window's button takes, reachable from the
+    // console so a scripted run can ask for one too - which is also the only
+    // way to test it, since a button cannot be pressed headlessly.
+    _console->registerCommand(
+        "scenecapture", "write a full scene state capture beside the executable",
+        [this](const game::ConsoleArgs &) { _editor->requestSceneCapture(); });
     if (!_options.inputScript.empty()) {
         // UI automation must not inherit a developer's persisted docking
         // layout: its client coordinates describe the fresh default layout.
@@ -717,6 +723,12 @@ void Engine::renderVulkanFrame(bool &quit) {
 
     imguiRender();
     captureIfRequested(quit);
+    // Here for the same reason the screenshot above is: the finished frame is
+    // still readable, and the renderer will accept a flush. A capture asked for
+    // from the console or a button arrives outside any frame, where both fail.
+    if (_editor) {
+        _editor->performPendingSceneCapture();
+    }
     _renderer->endFrame();
     R_PROFILE_FRAME_MARK();
 }

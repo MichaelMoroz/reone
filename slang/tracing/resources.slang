@@ -145,6 +145,32 @@ public struct PtPushConstants {
     public uint skyAvailable;
     /** Exponent authored surface colour is decoded with; see GraphicsOptions. */
     public float albedoGamma;
+    /**
+     * Backdrop imagery's own scale, beside the sky's.
+     *
+     * The painted distance: Taris' cityscape, Manaan's towers. They terminate
+     * the path exactly as the sky does and for the same reason - nothing was
+     * ever modelled behind them - so they are radiance, not reflectance, and
+     * they belong on a dial of their own rather than on the emissive one that
+     * grades lamps and screens.
+     */
+    public float backdropIntensity;
+    /**
+     * Exponent a texel is decoded with when it is radiance rather than
+     * reflectance.
+     *
+     * Separate from albedoGamma because the two are calibrating different
+     * things. Albedo gamma is a look control - Odyssey art was authored to be
+     * multiplied by light unconverted, so the decode is a compromise and moving
+     * it is how an area is made to read right. Emission has no such argument:
+     * an authored glow colour is the colour that is emitted, and 2.2 is simply
+     * the encoding it was stored in.
+     *
+     * They were one number, which meant grading a room's reflectance also
+     * changed how bright its lamps and its skyline were - two effects with
+     * nothing in common riding one slider.
+     */
+    public float emissiveGamma;
 };
 [[vk::push_constant]] public PtPushConstants pushConstants;
 
@@ -158,6 +184,11 @@ public struct PtPushConstants {
  */
 public float3 ptDecodeAlbedo(float3 rgb) {
     return pow(max(rgb, 0.0), float3(pushConstants.albedoGamma));
+}
+
+/** Authored radiance to linear - emission, sky and backdrop imagery. */
+public float3 ptDecodeEmission(float3 rgb) {
+    return pow(max(rgb, 0.0), float3(pushConstants.emissiveGamma));
 }
 
 public static const uint kPtFlagStats = 1u;

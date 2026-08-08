@@ -76,6 +76,8 @@ private:
         uint32_t geometryBase1;
         uint32_t skyAvailable;
         float albedoGamma;
+        float backdropIntensity;
+        float emissiveGamma;
     };
 
     bool _restartHistoryRequested {false};

@@ -33,10 +33,17 @@
 #include "reone/scene/graph.h"
 #include "reone/scene/graphs.h"
 #include "reone/scene/render/pipeline.h"
+#include "reone/graphics/format/tgawriter.h"
 #include "reone/system/fileutil.h"
 #include "reone/system/stream/fileinput.h"
+#include "reone/system/stream/fileoutput.h"
 #include "reone/system/stream/memoryinput.h"
 #include "reone/system/stringutil.h"
+
+#include <SDL3/SDL_filesystem.h>
+
+#include <filesystem>
+#include <system_error>
 
 #include "imgui.h"
 #include "imgui_internal.h" // DockBuilder, for the default right-hand layout
@@ -125,6 +132,8 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"ptpointemitterratio", formatConfigFloat(options.ptPointEmitterRatio)},
         {"ptsunangularsize", formatConfigFloat(options.ptSunAngularSize)},
         {"albedogamma", formatConfigFloat(options.albedoGamma)},
+        {"emissivegamma", formatConfigFloat(options.emissiveGamma)},
+        {"ptbackdropintensity", formatConfigFloat(options.ptBackdropIntensity)},
         {"maxlights", std::to_string(options.maxLights)},
         {"maxdirectionalshadows", std::to_string(options.maxDirectionalShadows)},
         {"maxpointshadows", std::to_string(options.maxPointShadows)},
@@ -1194,6 +1203,22 @@ void Editor::graphicsPathTracingTab() {
     static constexpr float kIntensityMax = 32.0f;
     static constexpr ImGuiSliderFlags kIntensityFlags = ImGuiSliderFlags_Logarithmic;
     ImGui::SliderFloat("Sky", &options.skyIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::SliderFloat("Emissive gamma", &options.emissiveGamma, 0.1f, 4.0f, "%.2f");
+    settingHint("Exponent authored radiance is decoded with: emission, sky and backdrop imagery. "
+                "Separate from Albedo gamma under Materials, and it should stay at 2.2. That one "
+                "is a look control - Odyssey art was authored to be multiplied by light "
+                "unconverted, so any decode is a compromise. This one is not a compromise: an "
+                "authored glow colour is the colour emitted, and 2.2 is just the encoding it was "
+                "stored in. They used to be one number, so grading a room's reflectance also "
+                "changed how bright its lamps and its skyline were.");
+    ImGui::SliderFloat("Backdrop", &options.ptBackdropIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    settingHint("Painted distance: Taris' cityscape, Manaan's towers. Its own scale beside the "
+                "sky's, and deliberately not the emissive one. Emissive grades lamps, screens and "
+                "panels - objects standing in the scene that also light it. A backdrop is a "
+                "picture of a distance nobody modelled: it ends the path exactly as the sky does, "
+                "and there is nothing behind it to receive what it might emit. Sharing a dial "
+                "meant choosing between the skyline reading right and the interiors reading "
+                "right. 1.0 is the texture as authored.");
     ImGui::SliderFloat("Emissive", &options.ptEmissiveIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
     ImGui::SliderFloat("Direct light", &options.ptDirectIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
     ImGui::SliderFloat("Sun", &options.ptSunIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
@@ -1220,6 +1245,21 @@ void Editor::graphicsAdvancedTab() {
     graphicsDebugViewSection();
 
     auto &options = _engine._options.graphics;
+
+    ImGui::SeparatorText("Scene capture");
+    if (ImGui::Button("Capture scene state")) {
+        requestSceneCapture();
+    }
+    settingHint("Writes everything needed to identify what is on screen to a numbered folder "
+                "beside the executable: the frame, every pipeline target as .npy including the "
+                "triangle-id image, one image per debug channel, the object list with names and "
+                "classifications, the device-side object and material records, and the camera and "
+                "module. A triangle id read out of a pixel falls in exactly one record's range, "
+                "and that record names a material and an object - which is what turns 'that thing "
+                "over there' into a name.");
+    if (!_lastCapturePath.empty()) {
+        ImGui::TextDisabled("%s", _lastCapturePath.c_str());
+    }
 
     // The three dials that decide how the tracer trades speckle against
     // sharpness. Here rather than buried in a constant because the right
@@ -1311,6 +1351,184 @@ void Editor::graphicsAdvancedTab() {
     ImGui::SeparatorText("Diagnostics");
     ImGui::Checkbox("Trace stats", &options.ptTraceStats);
     settingHint("GPU counters in the engine log. Costs frame time; leave off when measuring.");
+}
+
+/**
+ * Runs across frames, not within one.
+ *
+ * The debug channels are the point of the capture, and each is a whole frame
+ * rendered a different way - the channel is read at trace and resolve time, not
+ * composited afterwards. Asking for them inside a frame does nothing at all:
+ * renderFrame refuses to nest, so the first attempt wrote twenty-one identical
+ * copies of the same picture and looked like it had worked.
+ *
+ * So one channel per frame. The image written on any given call is the one the
+ * frame that just finished was rendered with.
+ */
+void Editor::performPendingSceneCapture() {
+    if (_captureRequested) {
+        _captureRequested = false;
+        if (!beginSceneCapture()) {
+            return;
+        }
+    }
+    if (_captureStep < 0) {
+        return;
+    }
+    auto &options = _engine._options.graphics;
+    const int view = _captureStep;
+    std::ostringstream name;
+    name << "debug_" << std::setfill('0') << std::setw(2) << view << ".tga";
+    try {
+        auto shot = _engine._services->graphics.renderer.captureFrame();
+        auto stream = FileOutputStream(_captureDir / name.str());
+        graphics::TgaWriter(shot).save(stream);
+    } catch (const std::exception &e) {
+        warn(std::string("Scene capture: debug channel ") + std::to_string(view) +
+             " failed: " + e.what());
+    }
+    if (view >= graphics::kMaxDebugView) {
+        options.debugView = _captureRestoreView;
+        _captureStep = -1;
+        _lastCapturePath = _captureDir.string();
+        info("Scene state captured to " + _lastCapturePath);
+        return;
+    }
+    options.debugView = view + 1;
+    ++_captureStep;
+}
+
+bool Editor::beginSceneCapture() {
+    namespace fs = std::filesystem;
+    // Beside the executable, as asked. SDL3 owns this string - freeing it
+    // corrupts the heap, see TracingPipeline::loadBlueNoise.
+    fs::path root = "capture";
+    if (const auto *base = SDL_GetBasePath()) {
+        root = fs::path(base) / "capture";
+    }
+    // Numbered, never overwritten: two captures of the same scene taken a
+    // moment apart are usually the whole point of taking them.
+    int index = 0;
+    std::error_code ec;
+    fs::create_directories(root, ec);
+    for (const auto &entry : fs::directory_iterator(root, ec)) {
+        const auto name = entry.path().filename().string();
+        if (name.rfind("state_", 0) != 0)
+            continue;
+        try {
+            index = std::max(index, std::stoi(name.substr(6)) + 1);
+        } catch (const std::exception &) {
+        }
+    }
+    std::ostringstream stem;
+    stem << "state_" << std::setfill('0') << std::setw(4) << index;
+    const fs::path dir = root / stem.str();
+    fs::create_directories(dir, ec);
+
+    auto &graphs = _engine._services->scene.graphs;
+    auto &graph = graphs.get(game::kSceneMain);
+    auto &scene = graph.gpuScene();
+    auto &options = _engine._options.graphics;
+
+    // Each stage is independent. The images are the part most likely to fail -
+    // a headless run has no swapchain to read - and the tables are the part
+    // that actually names an object, so one must not take the other down.
+    auto stage = [](const char *what, auto &&body) {
+        try {
+            body();
+        } catch (const std::exception &e) {
+            warn(std::string("Scene capture: ") + what + " failed: " + e.what());
+        }
+    };
+
+    // The frame as shown. The debug channels follow one per frame, driven by
+    // performPendingSceneCapture - see the note there for why they cannot be
+    // taken here.
+    const int restoreDebugView = options.debugView;
+    stage("frame", [&] {
+        auto shot = _engine._services->graphics.renderer.captureFrame();
+        auto stream = FileOutputStream(dir / "frame.tga");
+        graphics::TgaWriter(shot).save(stream);
+    });
+
+    // Every pipeline target, and the tables that give the ids meaning.
+    stage("targets", [&] {
+        if (auto *pipeline = graph.renderPipeline()) {
+            _engine._renderer->flushFrame();
+            pipeline->dumpTargets(dir);
+            pipeline->dumpSceneRecords(dir);
+        }
+    });
+
+    stage("objects", [&] {
+        // id is the number records.tsv prints as object_id, which is what makes
+        // a triangle id sampled out of the G-buffer resolvable to a name.
+        std::ofstream out(dir / "objects.tsv");
+        out << "id\tkind\tmodel\tnode\tmaterial\tclassification\tclusters\tparticles\n";
+        for (const auto &object : scene.objects()) {
+            const auto view = makeObjectEntryView(graph, scene, object);
+            out << view.id << "\t" << view.kind << "\t" << view.modelName << "\t"
+                << view.nodeName << "\t" << view.material << "\t" << view.classification << "\t"
+                << view.clusters << "\t" << view.particles << "\n";
+        }
+    });
+
+    // How to use the folder, written into the folder. A capture read weeks
+    // later, or by somebody who did not build it, should not require reading
+    // this function to know which file answers which question.
+    stage("readme", [&] {
+        std::ofstream out(dir / "README.txt");
+        out << "Naming what is at pixel (x, y):\n"
+               "  1. g_buffer_triangle_id.npy[y][x] -> triangle id\n"
+               "  2. records.tsv: the row whose [first_triangle, first_triangle+triangle_count)\n"
+               "     contains it -> object_id and material\n"
+               "  3. objects.tsv: the row with that id -> model/node, kind, classification\n"
+               "  4. materials.tsv: that material -> surface type, feature mask, texture ids\n"
+               "\n"
+               "Feature mask bits in g_buffer_lightmap alpha (value * 255):\n"
+               "  1 envmap, 2 shadows, 4 fog, 8 lightmap, 16 static, 32 thin\n"
+               "  thin is set for alpha cutouts, so it doubles as 'this is a cutout'.\n"
+               "\n"
+               "Surface type in materials.tsv: 0 lit PBR, 1 additive/unlit, 2 unlit radiance\n"
+               "  (sky and backdrop imagery - the path ends there).\n"
+               "\n"
+               "debug_NN.tga is the frame rendered with debug channel NN; 00 is off, so it\n"
+               "matches frame.tga. Channel order is the kDebug* numbering in\n"
+               "slang/debug_view.slang.\n";
+    });
+
+    stage("scene", [&] {
+        std::ofstream out(dir / "scene.txt");
+        auto module = _engine._game ? _engine._game->module() : nullptr;
+        out << "module\t" << (module ? module->name() : "-") << "\n";
+        out << "mode\t" << graphics::renderModeName(options.mode) << "\n";
+        out << "resolution\t" << options.width << "x" << options.height << "\n";
+        if (auto camera = graph.camera()) {
+            const auto &m = camera->get().absoluteTransform();
+            const glm::vec3 position {m[3]};
+            const glm::vec3 forward {-m[2]};
+            out << "camera_position\t" << position.x << " " << position.y << " " << position.z
+                << "\n";
+            out << "camera_forward\t" << forward.x << " " << forward.y << " " << forward.z << "\n";
+        }
+        out << "objects\t" << scene.objects().size() << "\n";
+        out << "counts\t" << scene::formatSceneCounts(scene.counts()) << "\n";
+        out << "sky_room\t" << (scene.skyRoom() ? "yes" : "no") << "\n";
+        // The dials that change what any of the above means.
+        out << "albedo_gamma\t" << options.albedoGamma << "\n";
+        out << "sky_intensity\t" << options.skyIntensity << "\n";
+        out << "backdrop_intensity\t" << options.ptBackdropIntensity << "\n";
+        out << "emissive_intensity\t" << options.ptEmissiveIntensity << "\n";
+        out << "max_lights\t" << options.maxLights << "\n";
+        out << "debug_view_restored\t" << restoreDebugView << "\n";
+    });
+
+    // Hand over to the per-frame sweep: channel 0 renders next frame.
+    _captureDir = dir;
+    _captureRestoreView = restoreDebugView;
+    _captureStep = 0;
+    options.debugView = 0;
+    return true;
 }
 
 void Editor::graphicsDebugViewSection() {

@@ -256,6 +256,74 @@ directory, not the file. This is also the missing piece for the per-class
 isolation fixtures in `test/fixtures/render-isolation/`, which render nothing
 today for exactly this reason (backlog 7.7).
 
+## Scene state capture, for naming the object somebody is pointing at
+
+"The skyscrapers in the background", "that cardboard", "the grass walkmesh" are
+not questions a renderer can be asked. Guessing from a screenshot is how three
+separate changes in one session got aimed at the wrong geometry: first at every
+`backgroundGeometry` mesh, which on Taris is lamps; then at `AdditiveEmissive`,
+which is lightsaber blades; then at the sky bake, which those meshes are not in.
+All three were confident and all three were wrong.
+
+**Graphics → Advanced → "Capture scene state"**, or the console command
+`scenecapture`. Writes `<exe>/capture/state_NNNN/`, numbered, never overwritten.
+
+```
+frame.tga            the frame as shown
+debug_00..19.tga     the frame rendered with each debug channel
+*.npy                every pipeline target, values as stored
+objects.tsv          id, kind, model/node, material, classification
+records.tsv          object_id and the triangle range it owns
+materials.tsv        surface type, feature mask, category, texture ids
+scene.txt            module, mode, camera, counts, the live dials
+README.txt           the procedure below, written into the folder
+```
+
+**Naming a pixel:**
+
+```python
+import csv, numpy as np
+tri = np.load("g_buffer_triangle_id.npy")[:, :, 0]
+recs = list(csv.DictReader(open("records.tsv"), delimiter="\t"))
+objs = {r["id"]: r for r in csv.DictReader(open("objects.tsv"), delimiter="\t")}
+t = int(tri[y, x])                       # 4294967295 means sky - nothing drawn
+for r in recs:
+    f, c = int(r["first_triangle"]), int(r["triangle_count"])
+    if f <= t < f + c:
+        o = objs[r["object_id"]]
+        print(o["model"], o["node"], o["classification"], "mat", r["material"])
+```
+
+Ask the user for the pixel coordinate. Any image viewer reports it, and the
+capture is full resolution, so their number indexes the arrays directly.
+
+**The feature mask is in `g_buffer_lightmap` alpha**, as `value * 255`:
+`1` envmap, `2` shadows, `4` fog, `8` lightmap, `16` static, `32` thin. Thin is
+set for alpha cutouts, so **it doubles as "this is a cutout"** - which is what
+separated three painted skyline cards from 132 modelled buildings that were
+otherwise classified identically.
+
+**`g_buffer_self_illum` at 255 means the surface is graded by the emissive
+dial.** Read `emissive_intensity` out of `scene.txt` and check the arithmetic
+before blaming the shading: on Taris the white skyline was
+`albedo^albedoGamma × selfIllum × emissiveIntensity` = `0.235^1.16 × 1 × 3.59`
+= 0.68, against 0.67 measured in `traced_noise_free`. That closes a question
+that three rounds of reasoning had not.
+
+**Three things about this tool that were wrong on the first attempt**, all of
+which looked like success:
+
+- The debug channels are **one per frame**. `renderFrame` refuses to nest, so
+  asking for all twenty inside one frame wrote twenty-one identical copies of
+  the same picture. The capture is a state machine across frames.
+- A button press and a console command both land **outside** the render frame,
+  where the renderer has nothing to read back. The capture is deferred to the
+  point the engine takes its own `--capture` screenshot.
+- Triangle ranges come from `GpuScene::View::primitiveIds`, **not** from the
+  object records: `dstTriangleBase` is only filled during the device merge, and
+  the ranges already have the opaque/non-opaque offset applied. Dumping the
+  records instead produced a table of zeros that resolved nothing.
+
 ## Render target dumps, for localising a difference to a pass
 
 A screenshot is the end of a long chain, so when two backends disagree it says

@@ -198,26 +198,36 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     // White where there is no bake - see the note in tracing/material.slang.
     shading.lightmap = hasLightmap ? ptGammaToLinear(lightmapSample.rgb) : float3(1.0);
 
+    // The same texel decoded as radiance rather than as reflectance. Emission
+    // is the texture's colour being emitted, not reflected, so it does not
+    // follow the albedo dial - that one is a look control for how Odyssey art
+    // sits under traced light, and it has no business changing how bright a
+    // lamp or a skyline is.
+    const float3 radianceTexel = ptDecodeEmission(diffuseSample.rgb);
+
     float3 emission = ptGammaToLinear(selfIllumSample);
     if (material.curatedEmission.w > 1.5) {
         emission = material.curatedEmission.rgb;
     } else if (material.curatedEmission.w > 0.5) {
         emission *= material.curatedEmission.rgb;
     }
-    shading.emission = emission * shading.albedo * pushConstants.emissiveIntensity;
+    shading.emission = emission * radianceTexel * pushConstants.emissiveIntensity;
 
     // The two non-PBR surface models, when one of them reaches the G-buffer.
     // Both are radiance rather than reflectance, and both end the path here:
     // whatever stood behind them was never rasterized, so there is nothing for
     // a continuation to find.
     if (material.surfaceType == kPtSurfaceUnlitEmissive) {
-        // Prelit imagery and, if a bake ever fails, the sky shell.
+        // Backdrop imagery and, if a bake ever fails, the sky shell. Each on
+        // its own dial - see tracing/material.slang, which shades the same two
+        // kinds when a ray finds them instead of the camera.
         bool sky = (material.featureMask & kPtMaskSky) != 0;
-        shading.emission = shading.albedo * (sky ? pushConstants.skyIntensity : 1.0);
+        shading.emission = radianceTexel *
+                           (sky ? pushConstants.skyIntensity : pushConstants.backdropIntensity);
         shading.terminatesPath = true;
     } else if (material.surfaceType == kPtSurfaceUnlitTransparent) {
         // PURELY EMISSIVE, and in the G-buffer only when it is also cutout.
-        shading.emission = max(material.selfIllumColor.rgb, float3(1.0)) * shading.albedo *
+        shading.emission = max(material.selfIllumColor.rgb, float3(1.0)) * radianceTexel *
                            pushConstants.emissiveIntensity * material.overrideParams.y;
         shading.terminatesPath = true;
     }

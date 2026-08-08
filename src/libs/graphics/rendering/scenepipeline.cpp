@@ -75,6 +75,8 @@ struct ResolvePushConstants {
 /** Mirrors DebugViewPushConstants in debug_view.slang. */
 struct DebugViewPushConstants {
     uint32_t view;
+    /** The floor the shading used, so the roughness channel shows that number. */
+    float roughnessFloor;
 };
 
 /** A sky bake is available this frame; without it the resolves write black. */
@@ -992,7 +994,8 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kResolveSet,
                                  resolveSet(_output.get()), nullptr, 0);
     const DebugViewPushConstants push {
-        static_cast<uint32_t>(std::clamp(_options.debugView, 0, kMaxDebugView))};
+        static_cast<uint32_t>(std::clamp(_options.debugView, 0, kMaxDebugView)),
+        std::clamp(_options.ptRoughnessFloor, 0.0f, 1.0f)};
     cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));
     cmd.dispatchCompute({(_targetSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
                          (_targetSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});
