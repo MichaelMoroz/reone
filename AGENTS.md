@@ -112,10 +112,23 @@ generates on the GPU from integer hashes; culling buys nothing here
 
 **Build correctly before believing anything:**
 
-- `cmake --build build --config Release` → `build/bin`. The long-standing
+- Configure once with `cmake --preset ninja`, then
+  `cmake --build build --config Release` → `build/bin`. The long-standing
   `toolkit.exe` link failure is fixed; a red build is a real failure again, so
   do not learn to ignore one. If `engine.exe` fails with `LNK1104`, a running
   instance holds the binary — close it rather than killing by image name.
+- The preset is Ninja Multi-Config, so one tree serves both configs and every
+  documented `build/bin` path is unchanged. It needs `VCPKG_ROOT` set and a
+  shell that already has the host compiler and `ninja` on `PATH` — on Windows
+  that means a Developer PowerShell, not a plain one. Configuring from the
+  wrong shell fails at the compiler check, which reads like a broken preset
+  rather than a missing environment.
+- The Visual Studio generator still works (`cmake -S . -B build`) and needs no
+  developer shell, but then **pass `--parallel`**. CMake does not hand MSBuild
+  `/m`, so without it projects build one at a time and the tail of a full build
+  serializes badly while most cores idle. Ninja parallelizes by default and
+  wants no flag. The VS generator also pays a fixed several-second overhead on
+  *every* invocation, including a no-op, which dwarfs the one file you changed.
 - Named-target builds (`--target engine`) **skip the test suite**. Build the
   default target, then `--target tests` explicitly and run
   `build/bin/tests.exe` (~350 tests, under a second). A binary that links is

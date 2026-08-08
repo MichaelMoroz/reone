@@ -103,17 +103,35 @@ if(ENABLE_TRACY)
     # Upstream keeps these as standalone CMake projects because both own the
     # same server targets. Build them in isolated trees and put their Release
     # executables beside the engine for scriptable captures.
+    #
+    # An ExternalProject inherits the outer generator unless told otherwise,
+    # and under Ninja these tools' vendored dependencies (libcurl, zstd) emit
+    # an unexpanded ${CONFIGURATION} into their object paths and die with
+    # "C1083: Cannot open compiler generated file: ''". They are only ever
+    # wanted in Release, so pin them to single-config Ninja and let the build
+    # type carry what --config used to. Passing CMAKE_MAKE_PROGRAM through
+    # matters because ninja is often reachable only via the outer configure.
     include(ExternalProject)
+    set(tracy_tool_generator "")
+    set(tracy_tool_build_type "")
+    set(tracy_tool_build_command ${CMAKE_COMMAND} --build <BINARY_DIR> --config $<CONFIG>)
+    if(CMAKE_GENERATOR MATCHES "^Ninja")
+        set(tracy_tool_generator CMAKE_GENERATOR "Ninja")
+        set(tracy_tool_build_type -DCMAKE_BUILD_TYPE=Release -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM})
+        set(tracy_tool_build_command ${CMAKE_COMMAND} --build <BINARY_DIR>)
+    endif()
     foreach(tool capture csvexport)
         string(REPLACE "-" "_" tool_target "tracy_${tool}")
         ExternalProject_Add(${tool_target}
             SOURCE_DIR ${tracy_SOURCE_DIR}/${tool}
             BINARY_DIR ${CMAKE_BINARY_DIR}/_deps/${tool_target}-build
+            ${tracy_tool_generator}
             CMAKE_ARGS
+                ${tracy_tool_build_type}
                 -DCMAKE_RUNTIME_OUTPUT_DIRECTORY=${CMAKE_BINARY_DIR}/bin
                 -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=${CMAKE_BINARY_DIR}/bin
                 -DNO_ISA_EXTENSIONS=ON
-            BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config $<CONFIG>
+            BUILD_COMMAND ${tracy_tool_build_command}
             INSTALL_COMMAND "")
     endforeach()
 endif()
