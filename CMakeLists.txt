@@ -35,7 +35,7 @@ option(ENABLE_ASAN "enable address sanitizer" OFF)
 
 # Tracy is a local developer profiler. Builds without it do not fetch the
 # dependency and the project wrapper compiles every instrumentation call away.
-option(ENABLE_TRACY "fetch and enable the Tracy profiler and command-line tools" ON)
+option(ENABLE_TRACY "fetch and enable the Tracy profiler and command-line tools" OFF)
 
 # NRD ships under the proprietary NVIDIA RTX SDKs license, which both forbids
 # and is forbidden by GPL-3 in a distributed binary. It is therefore strictly
@@ -43,10 +43,17 @@ option(ENABLE_TRACY "fetch and enable the Tracy profiler and command-line tools"
 # enabled, and builds without it must remain fully functional.
 option(ENABLE_NRD "fetch and link the NVIDIA Real-time Denoisers SDK (local builds only)" OFF)
 
-# FidelityFX is MIT, so unlike NRD this one is distributable. It stays off by
-# default because its committed shader compiler is Windows-only; builds without
-# it must remain fully functional.
-option(ENABLE_FSR "fetch and link the AMD FidelityFX Super Resolution 2 upscaler" OFF)
+# FidelityFX is MIT, so unlike NRD this one is distributable and it is on by
+# default. The default follows the toolchain rather than being a flat ON: its
+# committed shader compiler is Windows-only, and enabling it elsewhere trips the
+# FATAL_ERROR below, so a bare ON would turn every GCC or Clang configure into a
+# hard failure. Builds without it must remain fully functional.
+if(MSVC)
+    set(ENABLE_FSR_DEFAULT ON)
+else()
+    set(ENABLE_FSR_DEFAULT OFF)
+endif()
+option(ENABLE_FSR "fetch and link the AMD FidelityFX Super Resolution 2 upscaler" ${ENABLE_FSR_DEFAULT})
 
 # END Options
 
@@ -168,9 +175,16 @@ if(ENABLE_FSR)
     # CMAKE_HOME_DIRECTORY. Fetch only its source and own the small static
     # library here so generated data remains in the build tree.
     include(FetchContent)
+    # Only src/ffx-fsr2-api is consumed below, but the repository registers a
+    # Cauldron sample framework and a Cauldron media submodule holding demo
+    # scene assets. Cloning them costs a large download for files nothing here
+    # reads, and their asset paths are long enough to fail a Windows checkout
+    # outright with "Filename too long" whenever the build tree sits a few
+    # directories deep. An empty GIT_SUBMODULES takes none of them.
     FetchContent_Declare(FSR2
         GIT_REPOSITORY https://github.com/GPUOpen-Effects/FidelityFX-FSR2.git
         GIT_TAG v2.2.1
+        GIT_SUBMODULES ""
         GIT_SHALLOW TRUE)
     FetchContent_GetProperties(FSR2)
     if(NOT fsr2_POPULATED)
@@ -392,9 +406,12 @@ endif()
 
 # Installation
 
-if(UNIX AND NOT APPLE)
-    include(GNUInstallDirs)
-endif()
+# Unconditional: the install rules below read CMAKE_INSTALL_BINDIR and
+# CMAKE_INSTALL_LIBDIR, and nothing else defines them. Guarding this on Linux
+# left Windows configures relying on a dependency including GNUInstallDirs for
+# its own reasons — which Tracy did, so the breakage stayed hidden until Tracy
+# defaulted off and install() failed with "given no DESTINATION".
+include(GNUInstallDirs)
 
 install(TARGETS ${InstallTargets} DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(DIRECTORY slang DESTINATION ${CMAKE_INSTALL_BINDIR})
