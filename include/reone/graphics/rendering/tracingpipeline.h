@@ -82,17 +82,13 @@ private:
 
     bool _restartHistoryRequested {false};
     bool _inited {false};
-#ifdef R_ENABLE_NRD
-    /**
-     * Fixed when the instance is built, and read by the trace kernel as well:
-     * the two denoisers want their radiance packed differently, so the writer
-     * and the reader have to agree on one answer for the whole frame rather
-     * than each consulting the live option.
-     */
     /**
      * The blue-noise atlas, loaded once. Held as a Texture rather than an
      * IImage because the resource cache owns the upload and hands back the
      * image; this keeps the CPU-side pixels alive for as long as it is bound.
+     *
+     * Denoiser-independent: the trace kernel binds this whether or not a
+     * denoiser is linked, so it lives outside the NRD guard.
      */
     static constexpr const char *kBlueNoiseFile = "bluenoise_rgba_64x64x64.tga";
     /** Mirrored by kPtBlueNoiseSize / kPtBlueNoiseTiles in slang/tracing/rng.slang. */
@@ -105,11 +101,22 @@ private:
      * this one - it is produced by a later pass and consumed by a later one
      * still. Double-buffered like the rest, so two frames in flight cannot be
      * writing and reading the same texels.
+     *
+     * Allocated alongside the aux images for every traced frame, so the image
+     * itself is not NRD-only even though the pass that fills it is.
      */
     std::array<std::unique_ptr<IImage>, 2> _shadowFiltered;
+    /**
+     * Fixed when the instance is built, and read by the trace kernel as well:
+     * the two denoisers want their radiance packed differently, so the writer
+     * and the reader have to agree on one answer for the whole frame rather
+     * than each consulting the live option. The kernel packs it into its own
+     * uniform flags, which is why it outlives the guard below.
+     */
+    TracingDenoiserKind _denoiserKind {TracingDenoiserKind::Relax};
+#ifdef R_ENABLE_NRD
     std::unique_ptr<IComputePipeline> _shadowFilterPipeline;
     std::vector<ComputeResourceSlot> _shadowFilterBindings;
-    TracingDenoiserKind _denoiserKind {TracingDenoiserKind::Relax};
     std::unique_ptr<ITracingDenoiser> _nrdDenoiser;
     std::unique_ptr<IComputePipeline> _compositePipeline;
     std::vector<ComputeResourceSlot> _compositeBindings;
