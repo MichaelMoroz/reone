@@ -146,6 +146,11 @@ rays; grass generates on the GPU from integer hashes; culling buys nothing here
   ineffective, check the log for a compile error before suspecting descriptors.
 - Debug (`--config Debug` → `build/debug/bin`) links the checked VMA — use it
   for teardown crashes; it names leaked allocations.
+- Every configuration now has its own directory: Release `build/bin`, Debug
+  `build/debug/bin`, RelWithDebInfo `build/relwithdebinfo/bin`, MinSizeRel
+  likewise. Until TOOL-027 only Debug did, so a RelWithDebInfo build overwrote
+  the Release binary in place and the timestamp check above could not tell you
+  — the timestamp moves either way.
 
 **The capture harness** (full detail in the diagnostics skill):
 

@@ -32,6 +32,6 @@ set(DATAMINER_SOURCES
     ${DATAMINER_SOURCE_DIR}/routines.cpp)
 
 add_executable(dataminer ${DATAMINER_SOURCES} ${DATAMINER_HEADERS} ${CLANG_FORMAT_PATH})
-set_target_properties(dataminer PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin)
+set_target_properties(dataminer PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${REONE_BIN_DIR})
 target_precompile_headers(dataminer PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(dataminer PRIVATE resource movie graphics audio script system ${Boost_PROGRAM_OPTIONS_LIBRARY})

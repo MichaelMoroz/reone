@@ -313,6 +313,18 @@ endfunction()
 set(REONE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
 include_directories(${Boost_INCLUDE_DIRS} ${SDL3_INCLUDE_DIRS} ${MAD_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/extern/glm ${REONE_INCLUDE_DIR})
 
+# Where a configuration's artifacts land, decided once instead of per target.
+# Release keeps `build/bin` and Debug keeps `build/debug/bin` because every
+# documented path, capture recipe and diagnostics command names them. The other
+# two configurations used to have nowhere of their own and so wrote into
+# `build/bin` alongside Release: a RelWithDebInfo build silently replaced the
+# binary a measurement had been taken with, and the standing advice to check the
+# binary's timestamp could not tell the two apart, because the timestamp moves
+# either way (TOOL-027).
+set(REONE_CONFIG_SUBDIR "$<$<CONFIG:Debug>:/debug>$<$<CONFIG:RelWithDebInfo>:/relwithdebinfo>$<$<CONFIG:MinSizeRel>:/minsizerel>")
+set(REONE_BIN_DIR "${CMAKE_BINARY_DIR}${REONE_CONFIG_SUBDIR}/bin")
+set(REONE_LIB_DIR "${CMAKE_BINARY_DIR}${REONE_CONFIG_SUBDIR}/lib")
+
 add_compile_definitions(BOOST_BIND_GLOBAL_PLACEHOLDERS)
 
 

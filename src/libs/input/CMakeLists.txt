@@ -20,6 +20,6 @@ set(INPUT_HEADERS
     ${INPUT_INCLUDE_DIR}/event.h)
 
 add_library(input INTERFACE ${INPUT_HEADERS} ${CLANG_FORMAT_PATH})
-set_target_properties(input PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/lib)
+set_target_properties(input PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${REONE_LIB_DIR})
 set_target_properties(input PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(input INTERFACE ${CMAKE_SOURCE_DIR}/src/pch.h)

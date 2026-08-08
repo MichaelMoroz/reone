@@ -17,6 +17,6 @@ set(SKYBAKE_SOURCES
     ${SKYBAKE_SOURCE_DIR}/skybaker.cpp)
 
 add_executable(skybake ${SKYBAKE_SOURCES} ${SKYBAKE_HEADERS} ${CLANG_FORMAT_PATH})
-set_target_properties(skybake PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin)
+set_target_properties(skybake PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${REONE_BIN_DIR})
 target_precompile_headers(skybake PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(skybake PRIVATE resource graphics system ${Boost_PROGRAM_OPTIONS_LIBRARY})

@@ -72,7 +72,7 @@ else()
     add_executable(toolkit ${TOOLKIT_HEADERS} ${TOOLKIT_SOURCES} ${CLANG_FORMAT_PATH})
 endif()
 
-set_target_properties(toolkit PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin)
+set_target_properties(toolkit PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${REONE_BIN_DIR})
 target_precompile_headers(toolkit PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(toolkit PRIVATE tools ${wxWidgets_LIBRARIES} ${Boost_PROGRAM_OPTIONS_LIBRARY} imgui::imgui)
 target_link_libraries(toolkit PRIVATE graphicsvulkan)
@@ -85,4 +85,4 @@ endif()
 
 list(APPEND InstallTargets toolkit)
 
-add_custom_target(copy_cmudict ALL ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/extern/cmudict/cmudict.dict ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin/cmudict.dict)
+add_custom_target(copy_cmudict ALL ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/extern/cmudict/cmudict.dict ${REONE_BIN_DIR}/cmudict.dict)

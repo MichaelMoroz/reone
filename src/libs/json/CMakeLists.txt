@@ -26,7 +26,7 @@ set(JSON_SOURCES
     ${JSON_SOURCE_DIR}/util.cpp)
 
 add_library(json STATIC ${JSON_HEADERS} ${JSON_SOURCES} ${CLANG_FORMAT_PATH})
-set_target_properties(json PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/lib)
+set_target_properties(json PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${REONE_LIB_DIR})
 set_target_properties(json PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(json PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(json PRIVATE resource ${Boost_JSON_LIBRARY})

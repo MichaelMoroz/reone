@@ -126,7 +126,7 @@ set(TESTS_SOURCES
     ${TESTS_SOURCE_DIR}/tools/script/exprtreeoptimizer.cpp)
 
 add_executable(tests ${TESTS_HEADERS} ${TESTS_SOURCES} ${CLANG_FORMAT_PATH})
-set_target_properties(tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin)
+set_target_properties(tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${REONE_BIN_DIR})
 target_include_directories(tests PRIVATE ${GTEST_INCLUDE_DIRS})
 
 target_precompile_headers(tests PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)

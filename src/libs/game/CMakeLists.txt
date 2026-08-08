@@ -550,7 +550,7 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/visualeffects.cpp)
 
 add_library(game STATIC ${GAME_HEADERS} ${GAME_SOURCES} ${CLANG_FORMAT_PATH})
-set_target_properties(game PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/lib)
+set_target_properties(game PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${REONE_LIB_DIR})
 set_target_properties(game PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(game PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(game PRIVATE gui scene resource movie graphics audio script system)

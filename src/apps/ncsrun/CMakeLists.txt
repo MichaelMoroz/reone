@@ -21,7 +21,7 @@ set(NCSRUN_SOURCES
     ${NCSRUN_SOURCE_DIR}/main.cpp)
 
 add_executable(ncsrun ${NCSRUN_SOURCES} ${NCSRUN_HEADERS} ${CLANG_FORMAT_PATH})
-set_target_properties(ncsrun PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin)
+set_target_properties(ncsrun PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${REONE_BIN_DIR})
 target_precompile_headers(ncsrun PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(ncsrun PRIVATE script system ${Boost_PROGRAM_OPTIONS_LIBRARY})
 

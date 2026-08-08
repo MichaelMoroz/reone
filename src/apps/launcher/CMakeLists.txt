@@ -30,7 +30,7 @@ else()
     add_executable(launcher ${LAUNCHER_HEADERS} ${LAUNCHER_SOURCES})
 endif()
 
-set_target_properties(launcher PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin)
+set_target_properties(launcher PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${REONE_BIN_DIR})
 target_precompile_headers(launcher PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(launcher PRIVATE system ${wxWidgets_LIBRARIES} ${Boost_PROGRAM_OPTIONS_LIBRARY})
 
