@@ -220,7 +220,9 @@ struct SlangShaderCompiler::Impl {
         if (SLANG_FAILED(global->createSession(desc, program.session.writeRef())))
             throw std::runtime_error("Slang: cannot create compilation session for '" + name + "'");
         Slang::ComPtr<slang::IModule> module;
-        module.attach(program.session->loadModule(name.c_str(), diagnostic.writeRef()));
+        // ISession retains loaded modules. acquire a reference for this local
+        // owner instead of attaching the session's borrowed cache entry.
+        module = program.session->loadModule(name.c_str(), diagnostic.writeRef());
         if (!module)
             throw std::runtime_error("Slang: cannot load '" + name + "'\n" + diagnostics(diagnostic));
         diagnostic.setNull();
