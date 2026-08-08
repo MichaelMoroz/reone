@@ -172,6 +172,27 @@ struct GraphicsOptions {
      * affected, the last because post-process inverts a fixed 2.2.
      */
     float albedoGamma {2.2f};
+    /**
+     * Lights a frame may carry, out of the kMaxLights the uniform block is
+     * sized for.
+     *
+     * Below the ceiling on purpose. The light loop runs per pixel in the raster
+     * resolves and the selection table is walked per path vertex in the tracer,
+     * so the cost is in how many are admitted rather than in how many could be;
+     * the ceiling only costs uniform bytes.
+     */
+    int maxLights {48};
+    /**
+     * Shadow-casting light budgets, by kind. Not read yet.
+     *
+     * Recorded here because the numbers are a decision about PBR's shadow
+     * atlas - how many cascaded directional maps and how many cube maps a frame
+     * may hold - and the decision is worth having in one place before the pass
+     * that spends them exists. Nothing reads these; changing them changes
+     * nothing until it does.
+     */
+    int maxDirectionalShadows {2};
+    int maxPointShadows {8};
     bool grass {true};
     /** Multiplier on the area's authored Grass_Density, so areas keep their variation. */
     float grassDensity {8.0f};

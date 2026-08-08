@@ -125,6 +125,9 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"ptpointemitterratio", formatConfigFloat(options.ptPointEmitterRatio)},
         {"ptsunangularsize", formatConfigFloat(options.ptSunAngularSize)},
         {"albedogamma", formatConfigFloat(options.albedoGamma)},
+        {"maxlights", std::to_string(options.maxLights)},
+        {"maxdirectionalshadows", std::to_string(options.maxDirectionalShadows)},
+        {"maxpointshadows", std::to_string(options.maxPointShadows)},
         {"pbrlightmapintensity", formatConfigFloat(options.pbrLightmapIntensity)},
         {"ptdenoiser", options.ptDenoiser == graphics::Denoiser::Reblur ? "reblur" : "relax"},
         {"ptnrdstabilizationtime", formatConfigFloat(options.ptNrdStabilizationTime)},
@@ -941,6 +944,21 @@ void Editor::graphicsQualityTab() {
     settingHint("A second dispatch over the resolved image, ahead of anti-aliasing and "
                 "transparency. Off, the pass is not recorded at all.",
                 true);
+    ImGui::EndDisabled();
+    ImGui::SliderInt("Max lights", &options.maxLights, 1, graphics::kMaxLights);
+    settingHint("Lights a frame may carry, out of the slots the uniform block is sized for. Below "
+                "the ceiling on purpose: the raster resolves walk this loop per pixel and the "
+                "tracer walks its selection table per path vertex, so the cost is in how many are "
+                "admitted. The ceiling only costs uniform bytes.");
+    if (ImGui::TreeNode("Shadow budgets (not yet used)")) {
+        ImGui::TextDisabled("Nothing reads these. Recorded ahead of the pass that will.");
+        ImGui::SliderInt("Directional shadows", &options.maxDirectionalShadows, 0, 4);
+        settingHint("Cascaded directional maps a frame may hold.");
+        ImGui::SliderInt("Point shadows", &options.maxPointShadows, 0, 32);
+        settingHint("Cube maps a frame may hold.");
+        ImGui::TreePop();
+    }
+    ImGui::BeginDisabled(options.mode != graphics::RenderMode::PBR);
     ImGui::SliderFloat("Lightmap intensity", &options.pbrLightmapIntensity, 0.0f, 4.0f, "%.2f");
     settingHint("Strength of the area's baked irradiance, which is this mode's indirect light, so "
                 "it belongs at full strength. The tracer has its own dial for the same bake - "

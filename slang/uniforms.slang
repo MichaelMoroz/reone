@@ -24,7 +24,8 @@
 // u-prefixed GLSL ones, so the generated assertions need no name mapping. The
 // Vulkan shaders written in phase 4 will use these blocks directly.
 //
-static const int kMaxLights = 32;
+/** Mirrors kMaxLights in include/reone/graphics/types.h - it sizes the block. */
+static const int kMaxLights = 64;
 static const int kNumShadowLightSpace = 6;
 static const int kMaxBones = 24;
 static const int kMaxDanglyVertices = 768;

@@ -302,8 +302,11 @@ void SceneGraph::update(float dt) {
 
 void SceneGraph::updateLighting() {
     R_PROFILE_ZONE("SceneGraph::updateLighting");
-    // Find closest lights and create a lookup
-    auto closestLights = computeClosestLights(kMaxLights, [](auto &light, float distance2) {
+    // Find closest lights and create a lookup. The option, not the array
+    // ceiling: the block is sized for the worst case once, and this is how many
+    // of its slots a frame is allowed to fill.
+    const int lightBudget = std::clamp(_graphicsOpt.maxLights, 1, kMaxLights);
+    auto closestLights = computeClosestLights(lightBudget, [](auto &light, float distance2) {
         float radius = light.radius() + kLightRadiusBias;
         return distance2 < radius * radius;
     });

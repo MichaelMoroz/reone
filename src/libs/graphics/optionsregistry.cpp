@@ -314,6 +314,16 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     // Read while the shared material records are built. The admission layer
     // caches classification, so its options fingerprint has to cover this or
     // the toggle would sit inert behind the cache - see admission.cpp.
+    descs.push_back(intOpt("maxlights", OptionApply::Live,
+                           "lights a frame may carry",
+                           &GraphicsOptions::maxLights, 1, kMaxLights));
+    // Not read by anything yet - see GraphicsOptions.
+    descs.push_back(intOpt("maxdirectionalshadows", OptionApply::Live,
+                           "shadow-casting directional lights (unused)",
+                           &GraphicsOptions::maxDirectionalShadows, 0, 4));
+    descs.push_back(intOpt("maxpointshadows", OptionApply::Live,
+                           "shadow-casting point lights (unused)",
+                           &GraphicsOptions::maxPointShadows, 0, 32));
     descs.push_back(boolOpt("lightmaps", OptionApply::Live,
                             "apply lightmaps (diagnostic toggle)",
                             &GraphicsOptions::lightmaps));

@@ -35,7 +35,15 @@ constexpr int kNumLipShapes = 16;
 
 constexpr int kMaxBones = 24;
 constexpr int kMaxDanglyVertices = 768;
-constexpr int kMaxLights = 32;
+/**
+ * Ceiling on the light array, not the number in use.
+ *
+ * It sizes the uniform block, so it is fixed at compile time and mirrored in
+ * slang/uniforms.slang. How many of those slots a frame actually fills is
+ * GraphicsOptions::maxLights, which is live - raising the ceiling costs uniform
+ * bytes whether or not the lights exist, while the option costs the light loop.
+ */
+constexpr int kMaxLights = 64;
 constexpr int kMaxParticles = 64;
 constexpr int kMaxTextChars = 128;
 constexpr int kMaxGrassClusters = 256;
