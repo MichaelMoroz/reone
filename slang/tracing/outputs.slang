@@ -52,10 +52,16 @@ import tracing.resources;
 [[vk::binding(11, 2)]] RWTexture2D<float4> outGBufferEyeNormal;
 [[vk::binding(12, 2)]] RWTexture2D<float> outGBufferDepth;
 [[vk::binding(13, 2)]] RWTexture2D<float2> outGBufferMotion;
-// Direct diffuse light at the primary vertex, which does not go through NRD.
-// Written linear and unpacked: no YCoCg, no hit distance, nothing a denoiser
-// reads. Diffuse only - the specular half stays in the denoised channel, where
+// Direct diffuse light at the primary vertex. Written linear and unpacked: no
+// YCoCg. Diffuse only - the specular half stays in the denoised channel, where
 // its hit distance and roughness drive a kernel built for it.
+//
+// This channel does reach a denoiser, under ShadowFilter::Denoiser, as its own
+// NRD instance rather than a summand of the diffuse one - see
+// TracingDenoiserInputs::directRadianceHitDist for why the two signals cannot
+// share a kernel. Alpha does not mean the same thing to both consumers:
+// shadow_filter.slang reads the penumbra written below, NRD reads that slot as
+// a normalized hit distance. TRC-048.
 [[vk::binding(14, 2)]] RWTexture2D<float4> outDirectDiffuse;
 
 /** Environment / miss distance: beyond any scene, inside NRD's defaults. */
@@ -188,7 +194,10 @@ public struct TraceOutputs {
         // than using NRD's large environment sentinel.
         outGBufferDepth[pixel] = min(gBufferDepth, globalUniforms.clipFar);
         outGBufferMotion[pixel] = gBufferMotion;
-        // Alpha was carrying a constant; the penumbra rides there for free.
+        // Alpha carried a constant before the penumbra took it, and it is only
+        // free while the shadow filter is the reader. NRD reads the same slot
+        // as a normalized hit distance, so under ShadowFilter::Denoiser it is
+        // handed a world-space width in its place. TRC-048.
         outDirectDiffuse[pixel] = float4(directDiffuse, penumbra);
     }
 };
