@@ -1,5 +1,15 @@
 # Doc staleness report — 2026-08-05
 
+> **None of the nine documents audited below still exists.** All nine went the
+> same day this audit was written: `retro-rendering-differences.md` was renamed
+> to `doc/tasks/FIDELITY.md` in `648bcbce`, and the other eight were deleted in
+> `9ab94580`. `doc/tasks/README.md` records where each one's content went. Every
+> `doc/*.md` path and line number below points into `63ea1c41^`, not into the
+> working tree. This is the evidence behind that consolidation, kept so its
+> closures stay answerable — it is not a current reading of either the documents
+> or the code, and its findings have not been rechecked since `c72f4e75`.
+> Noted 2026-08-09.
+
 ## Summary
 
 Audited the nine requested documents against the `path-tracing` working tree at

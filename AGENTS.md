@@ -72,9 +72,10 @@ for the whole scene, full rebuild per frame (per-mesh structures and refit
 schedules were deleted; the AMD caveat is TRC-035); the sky is a curated
 offline asset, never a runtime classification (the classifier was built,
 swept over 117 modules, and lost 46 skies — see RECORD.md); hybrid primary
-visibility is decided but **not landed** — raster will own the G-buffer in
-every mode (TRC-020), but today the tracer still traces camera rays; grass
-generates on the GPU from integer hashes; culling buys nothing here
+visibility **has landed** (TRC-020's V1c, `4980518c`) — raster owns primary
+visibility in every mode, the tracer reconstructs its primary surface from the
+G-buffer's triangle id and traces only secondary, shadow and continuation
+rays; grass generates on the GPU from integer hashes; culling buys nothing here
 (~9,000 frustum tests/frame measured at zero frame-time change).
 
 ## Coding style
@@ -131,8 +132,9 @@ generates on the GPU from integer hashes; culling buys nothing here
   *every* invocation, including a no-op, which dwarfs the one file you changed.
 - Named-target builds (`--target engine`) **skip the test suite**. Build the
   default target, then `--target tests` explicitly and run
-  `build/bin/tests.exe` (~350 tests, under a second). A binary that links is
-  not a suite that passes.
+  `build/bin/tests.exe` (554 tests, about ten seconds — nearly all of it the
+  six `SlangShaderCompiler` cases, which compile real modules). A binary that
+  links is not a suite that passes.
 - Check `build/bin/engine.exe`'s timestamp against your edit before trusting
   any run. Five consecutive runs once "proved" a fix using a stale binary.
 - **Shaders are not built.** Slang is linked into the engine and compiles
@@ -175,10 +177,19 @@ build/bin/engine.exe --game <GAME_DIR> --dev 0 --mode <retro|pbr|path-tracing> \
 - **Traced output is nondeterministic** (AS build order): compare
   distributions, N runs a side, never a single pair against a stored
   baseline. `--ptdenoise 0` makes traced *energy* stable to six decimals; NRD
-  is the entire source of run-to-run variance.
-- **Cross-mode geometry comparisons need `--taajitter 0` on both sides**, or
+  is the entire source of run-to-run variance. `ENABLE_NRD` is now OFF by
+  default (`490df946`) and the whole denoise path sits behind `R_ENABLE_NRD`,
+  so in a stock build `--ptdenoise` is inert and that variance is already
+  gone — anything about the denoiser needs a tree configured
+  `-DENABLE_NRD=ON`, and so does `--ptshadowfilter`, which is inside the same
+  guard.
+- **Cross-mode geometry comparisons need the jitter off on both sides**, or
   alpha-edge sampling noise dominates (measured: 2.94% apparent vs 0.67%
-  real).
+  real). There is no `--taajitter` any more (`9accfedd`): jitter exists
+  exactly when FSR is the resolver, so turning it off means `--antialiasing
+  fxaa` (or `off`). Path tracing defaults to FSR and therefore jitters; retro
+  and PBR default to FXAA and do not — the flag is what silences the traced
+  side.
 - Localize before interpreting: `--dumptargets <dir>` writes every pipeline
   target as `.npy`; compare RGB not RGBA; diff per-region, not whole-frame.
 
@@ -188,9 +199,12 @@ build/bin/engine.exe --game <GAME_DIR> --dev 0 --mode <retro|pbr|path-tracing> \
   oracle: a full rebuild compared against the incremental scene every frame.
   Any registration/admission refactor runs acceptance with the oracle armed,
   including a module transition.
-- The traced-vs-raster G-buffer agreement numbers (G2: depth error
-  ~0.0128% of pixels) — the geometry-correctness instrument until V1c, and
-  the planned `RTDebug` mode after (backlog 7.9).
+- The traced-vs-raster G-buffer agreement numbers were the geometry-correctness
+  instrument until V1c, and V1c has landed (`4980518c`): the tracer takes its
+  primary from the raster G-buffer, so the two now agree by construction and
+  comparing them proves nothing. Nothing replaced it — `RTDebug` (TRC-021,
+  backlog 7.9) was supposed to pin the instrument *before* V1c removed it and
+  did not, so traced geometry currently has no independent oracle.
 - Isolation fixtures beat game modules: `warp testbed [grass|smoke|none]`,
   `scene empty`, `spawn`, and the `campos`/`camlook`/`camstatus` scripted
   camera. Build a scene where the answer is unmistakable instead of arguing
@@ -198,8 +212,11 @@ build/bin/engine.exe --game <GAME_DIR> --dev 0 --mode <retro|pbr|path-tracing> \
 
 **Measuring cost:**
 
-- CPU: Tracy is built in (headless: run engine, `tracy-capture.exe -s 10`,
-  `tracy-csvexport.exe`). Zone totals are **inclusive** — never sum parents
+- CPU: Tracy is opt-in. `ENABLE_TRACY` is OFF by default (`490df946`), so a
+  stock build compiles every zone away and never produces `tracy-capture.exe`;
+  reconfigure with `-DENABLE_TRACY=ON` before believing an empty capture means
+  an empty profile. Then, headless: run the engine, `tracy-capture.exe -s 10`,
+  `tracy-csvexport.exe`. Zone totals are **inclusive** — never sum parents
   with children. Attach at steady state, never during load. Absolute timings
   are hardware-specific — calibrate on the machine you measure on, and
   sanity-check the *shape* instead: the `update` slot dominates real CPU in

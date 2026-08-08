@@ -782,11 +782,15 @@ into cube faces, and writes the assets; the assets are gitignored, the config is
 
 Structure is **per game** — `GameID` already distinguishes them and model names collide across the
 two, so `override/k1/` and `override/k2/`, each holding `materials.ini` (today's `trace-classes.txt`,
-**971 curated entries** currently surviving **only** in `build/bin` and untracked — moving it finally
+**971 curated entries** surviving at the time **only** in `build/bin` and untracked — moving it finally
 version-controls them), `modules.ini` mapping each module to a sky and to **the room to suppress**
 (`sky = dantooine_plains`, `room = m14ab_02e`, or `sky = none`) — naming the room is what makes the
 classifier deletable rather than merely bypassed — and `sky/<name>/` holding six faces plus a small
 ini, LDR now and HDR later. Only `sky/` is gitignored.
+
+**Built as designed, the same day it was decided.** `53a9067c9` moved the 971 entries to
+`override/k1/materials.ini`; `d219bd6bd` added `modules.ini` for both games as a first-pass survey
+pending curation; `8fa4e55b6` added the `skybake` tool; `.gitignore:10` ignores `override/*/sky/`.
 
 Both games are installed and curatable: **117 K1 modules and 82 K2**, identical texturepack layout, so
 one tool covers both. The sky is **never in the BLAS** (already true) and is sampled on miss, so
@@ -863,7 +867,8 @@ never the reverse.**
 
 Direct lighting selects one light per sample by importance — contribution estimated as multiplier
 times attenuation times NdotL times colour luminance — which makes shadow-ray cost constant per sample
-instead of scaling with the area's light count (`kMaxLights` is 32). The selection scan itself is
+instead of scaling with the area's light count (`kMaxLights` was 32 then; `58c55eaab` widened the
+uniform array to 64 and moved the per-frame budget onto a `maxLights` dial). The selection scan itself is
 still linear over the active list, and the estimate ignores occlusion.
 
 **A flat power CDF is not a usable stage once emitter geometry joins the set**: importance must be

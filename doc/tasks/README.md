@@ -14,7 +14,7 @@ Where those two disagreed, the code won and the disagreement is recorded.
 | [FIDELITY.md](FIDELITY.md) | The retro fidelity audit: 37 rows with evidence, status and required proof. |
 | [GLOSSARY.md](GLOSSARY.md) | What the vocabulary means. Read this first if any term is unfamiliar. |
 | [DECISIONS.md](DECISIONS.md) | Contradictions a person has to settle, and work with no owner. |
-| [_generated/doc-staleness-report.md](../_generated/doc-staleness-report.md) | The raw staleness audit. Regenerate rather than edit. |
+| [_generated/doc-staleness-report.md](../_generated/doc-staleness-report.md) | The raw 2026-08-05 audit this folder was compiled from. It reads the nine retired documents, so it is provenance, not a live check. |
 
 ## IDs
 

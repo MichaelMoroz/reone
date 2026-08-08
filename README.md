@@ -24,10 +24,10 @@ To install reone, either download a prebuilt executable from the [releases](http
 Dear ImGui has to be built with a specific set of features, because CMake only asks for the package and will configure happily against a build that is missing them - the failure then arrives at compile time, in whichever file first includes a backend header. Under vcpkg:
 
 ```
-vcpkg install "imgui[docking-experimental,opengl3-binding,sdl3-binding,vulkan-binding]"
+vcpkg install "imgui[docking-experimental,sdl3-binding,vulkan-binding]"
 ```
 
-All four are required: the editor docks its windows, and each backend needs its own binding. Naming only the one you are adding will drop the others, since vcpkg treats the feature list as the whole set rather than as an addition to it.
+All three are required: the editor docks its windows, and the SDL3 platform backend and the Vulkan renderer backend each need their own binding. Naming only the one you are adding will drop the others, since vcpkg treats the feature list as the whole set rather than as an addition to it.
 
 reone is being developed and tested against unmodded Steam versions of both KotOR and TSL. Compatibility with any other version is not guaranteed, although GOG and retail versions should work with no or minor modification.
 
@@ -35,13 +35,15 @@ Install [Visual C++ Redistributable](https://aka.ms/vs/16/release/vc_redist.x64.
 
 ## Usage
 
-Use launcher application to choose a game directory and launch reone. Alternatively, reone can be started from the command line: `reone --game GAME_DIR`
+Use launcher application to choose a game directory and launch reone. Alternatively, the engine can be started from the command line: `engine --game GAME_DIR`
 
 ## Configuration
 
 reone can be configured via the launcher, the configuration file or the command line.
 
 Configuration file, named "reone.cfg", must be located in the current directory. See complete list of program options [here](https://github.com/seedhartha/reone/wiki/Program-options).
+
+The renderer has three modes, selected with `--mode retro`, `--mode pbr` or `--mode path-tracing`: retro keeps the original game's lighting model, PBR shades the same scene physically, and path tracing traces it. Path tracing needs a GPU with ray tracing support; without one the engine says so in the log and renders PBR instead.
 
 ## Contributing
 
@@ -68,4 +70,4 @@ In contrast, this is what reone offers:
 
 - KotOR and TSL only, unlike xoreos, which aims to reimplement all of Aurora engine games - codebase is lighter and development is more focused
 - Written in C++ - industry standard language, faster than the JavaScript implementation
-- Custom game engine based on SDL 3, with an OpenGL 3.3 renderer and a Vulkan one - does not depend on Unity, which is a proprietary software with a learning curve of itself
+- Custom game engine based on SDL 3, with a Vulkan renderer that can path trace the game - does not depend on Unity, which is a proprietary software with a learning curve of itself

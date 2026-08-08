@@ -45,7 +45,7 @@ engine.exe --game "<GAME_DIR>" \
 
 **Raster captures are byte-identical — but only with the debug UI off.** With
 developer mode on, the editor draws a live frame-time readout into the top-right
-of the frame (`editor.cpp:1583-1588`), and it lands *inside* the captured TGA:
+of the frame (`editor.cpp:2296-2307`), and it lands *inside* the captured TGA:
 
 ```
 run 1:  234.4 FPS  4.27 ms
@@ -58,9 +58,12 @@ three runs each of `danm14ab`, `ebo_m12aa` and `danm13`, in **both** PBR and
 retro, hash the same. Six groups, no exceptions:
 
 ```
-engine.exe --game ... --dev 0 --mode raster --pbr 0 \
+engine.exe --game ... --dev 0 --mode retro \
            --commands-file warp.txt --capture out.tga --captureframe 310
 ```
+
+(`--mode raster` still parses — `parseRenderMode` accepts it as a spelling of
+`retro` — but there is no longer a `--pbr` flag to pair it with. See below.)
 
 `dev` defaults to whatever `build/bin/reone.cfg` says, and that file has
 `dev=1`, so **the trap fires by default**. It cost this project four false
@@ -96,6 +99,15 @@ excursions, which is why both-on looks tamer than NRD-on. With `--ptdenoise 0`
 the traced mean is stable to six decimals, so a traced change can be judged from
 a handful of runs instead of sixteen a side.
 
+**NRD is not in a default build.** `ENABLE_NRD` is `OFF` by default (it is
+proprietary and GPL-incompatible in a distributed binary), so a tree configured
+without `-DENABLE_NRD=ON` has no denoiser at all: `--ptdenoise 1` changes
+nothing, the `denoised_*` dumps below do not appear, and `--ptshadowfilter
+denoiser` has nothing behind it. Check the configure before concluding the
+denoiser is broken. `ENABLE_FSR` is `ON` by default, but MSVC only — its
+committed shader compiler is Windows-only and a non-MSVC configure with it on
+is a hard `FATAL_ERROR`.
+
 That is also a real bug and not only a harness nuisance — REBLUR returning a
 different result from identical input is temporal instability. It is backlog
 7.5; measuring around it is the workaround, not the fix.
@@ -130,7 +142,8 @@ of a 38 ms frame; see the plan's light-hierarchy postmortem). Leave them off
 for any timing measurement.
 
 Four things buy that, and all four key off the same predicate
-(`Engine::isCaptureRun`, true when `--capture` or `--dumptargets` is given):
+(`Engine::isCaptureRun`, true when `--capture`, `--dumptargets` or
+`--dumpobjects` is given):
 
 - **Fixed 1/60 timestep.** Wall-clock timing lands the same frame number on
   different animation state every run.
@@ -150,9 +163,13 @@ every time, and it does not affect what is captured.
 Run it twice with whatever you are comparing - two commits, two settings - then
 diff. **There is no `--backend` any more**: OpenGL was deleted in `df1aa375`,
 Vulkan is the only backend, and any example below that still passes `--backend`
-predates that and will fail to parse. Cross-backend comparison is history; what
-remains is comparing a change against the commit before it. TGA here is BGR and
-bottom-up:
+predates that and will fail to parse. **There is no `--pbr` either**: the two
+raster renderers and the tracer are one slot now, `--mode retro|pbr|path-tracing`
+(`raster` is accepted as a spelling of `retro`). Boost rejects an unknown
+command-line option outright, so a leftover `--pbr 1` does not silently do
+nothing - the run exits before it renders. Cross-backend comparison is history;
+what remains is comparing a change against the commit before it. TGA here is BGR
+and bottom-up:
 
 ```python
 from PIL import Image, ImageChops
@@ -192,7 +209,7 @@ Note the command word: it is **`warp testbed`**, not `scene testbed`.
 The `smoke` variant emits `fx_smoke01` — deliberately the same texture the main
 menu and the Dantooine vents use, so the fixture exercises the asset actually
 under investigation. **An emitter resolves its texture by name through the
-registry** (`node/emitter.cpp:255`), so a runtime-generated texture returns null
+registry** (`node/emitter.cpp:256`), so a runtime-generated texture returns null
 and the emitter registers *nothing at all* — which reads as "the tracer cannot
 see particles" rather than as a missing asset. Do not point a fixture emitter at
 a texture you built in memory.
@@ -331,27 +348,29 @@ nothing about where. `--dumptargets <dir>` writes every target the scene
 pipeline exposes as a `.npy`, on the same frame as the screenshot:
 
 ```
-engine.exe --dev 0 --pbr 1 --dumptargets out_a --captureframe 900 ...
+engine.exe --dev 0 --mode pbr --dumptargets out_a --captureframe 900 ...
 # rebuild the other commit, then:
-engine.exe --dev 0 --pbr 1 --dumptargets out_b --captureframe 900 ...
+engine.exe --dev 0 --mode pbr --dumptargets out_b --captureframe 900 ...
 ```
 
 ```python
 import numpy as np
 for n in ["g_buffer_diffuse", "g_buffer_eye_normal", "g_buffer_lightmap",
           "g_buffer_self_illum", "g_buffer_depth", "output"]:
-    a = np.load(f"out_vk/{n}.npy").astype(np.float64)
-    b = np.load(f"out_gl/{n}.npy").astype(np.float64)
+    a = np.load(f"out_a/{n}.npy").astype(np.float64)
+    b = np.load(f"out_b/{n}.npy").astype(np.float64)
     c = min(a.shape[2], b.shape[2], 3)       # RGB only - see below
     d = np.abs(a[..., :c] - b[..., :c])
     print(f"{n:22s} meanabs={d.mean():8.4f} max={d.max():8.4f}")
 ```
 
-**Compare RGB, not RGBA.** Alpha in `output` is 255 on both backends, so averaging
+**Compare RGB, not RGBA.** Alpha in `output` was 255 on both sides, so averaging
 it in divides the error by exactly four thirds - every figure quoted during this
 work was 25% under until that was noticed. It is consistent, so trends still
-held, but the absolute number was wrong. `min(..., 3)` also keeps the
-GL-RGB8-vs-Vulkan-RGBA8 mismatch on the normal buffer from mattering.
+held, but the absolute number was wrong. `min(..., 3)` also kept the
+GL-RGB8-vs-Vulkan-RGBA8 mismatch on the normal buffer from mattering. The
+channel-count mismatch is gone with OpenGL; the constant-alpha arithmetic is
+not, so keep the clamp.
 
 Values arrive exactly as stored - depth as 32-bit float, motion as float, no
 rounding into bytes - because the point is to find small differences.
@@ -362,16 +381,35 @@ couple of levels of 255, and `output` differing by 17%. The geometry pass was ri
 the whole discrepancy was in the resolve. Reason about a screenshot only after
 the dumps say which pass to look at.
 
-`--dumptargets` works with or without `--capture`: on Vulkan it flushes the
-current frame before reading targets back. Only the OpenGL **PBR** pipeline
-exposes targets; the retro pipeline exposes none and dumps nothing.
+`--dumptargets` works with or without `--capture`: it flushes the current frame
+before reading targets back (`Engine::dumpTargetsIfRequested`). **Every render
+mode dumps** - there is one `RenderPipeline`/`ScenePipeline` now, and the
+G-buffer set plus `g_buffer_depth` comes out of retro, PBR and path tracing
+alike. What differs is the last entry (`output` in the raster modes,
+`traced_output` plus the traced split in `--mode path-tracing`) and the
+environment cube arrays - `irradiance_map_array`,
+`prefiltered_env_map_array_mip*` and the decoded source maps - which every mode
+except `retro` also writes. It also dumps
+**every scene that has rendered**, not just `main`: the main menu draws into the
+`mainmenu` graph, and when more than one graph rendered each gets its own
+subdirectory under the given path. A dump that appears to be in the wrong place
+is usually that.
 
 ### The path tracer dumps its whole split, not just the image
 
 In `--mode path-tracing` the dump carries every channel behind the assembled
-frame: `traced_noise_free`, `traced_albedo`, `traced_normal_roughness`,
-`traced_view_z`, `traced_motion`, `traced_diffuse`, `traced_specular`, and
-NRD's `denoised_diffuse` / `denoised_specular`, alongside `traced_output`.
+frame, named after the aux bindings in `tracing/outputs.slang`:
+`traced_radiance_diffuse`, `traced_radiance_specular`, `traced_normal_roughness`,
+`traced_view_z`, `traced_nrd_motion`, `traced_noise_free`, `traced_diff_factor`,
+`traced_device_depth`, `traced_screen_motion`, `traced_spec_factor`,
+`traced_diffuse`, `traced_eye_normal`, `traced_depth`, `traced_motion` and
+`traced_direct_diffuse`, alongside `traced_output`. A build with
+`-DENABLE_NRD=ON` adds `denoised_diffuse`, `denoised_specular` and, when the
+shadow filter is on, `shadow_filtered`; without it those files simply are not
+written. The four radiance channels (`traced_radiance_*`, `denoised_*`) live in
+YCoCg on the GPU because that is what NRD consumes, but `dumpTargets` converts
+them to RGB on the way out, so every `.npy` is one colour space. If you read
+those images back off the GPU by any other route, convert them yourself.
 
 That distinction is what separates *the tracer is noisy* from *the denoiser is
 not clearing it*, and neither is visible in the final image. It is also the only
@@ -405,19 +443,26 @@ frames: with nothing in the world moving, whatever still changes between
 consecutive frames is exactly the residual the filters have not removed.
 
 ```
-engine.exe --game "<GAME_DIR>" --dev 0 --pbr 1 --mode path-tracing \
+engine.exe --game "<GAME_DIR>" --dev 0 --mode path-tracing \
     --headless 1 --commands-file warp.txt \
     --capture <SCRATCH>\seq\f.tga --captureframe 350 --captureframes 51 \
-    --freezeframe 350 --pttaablend 0.9
+    --freezeframe 350 --antialiasing fsr
 ```
 
 - `--freezeframe N` holds the simulation from frame N (`frameTime` becomes 0) and
   restarts every temporal history once. Rendering is untouched: the jitter
-  sequence, the tracer's frame index, NRD's accumulation and the TAA history all
-  keep advancing over a scene that no longer moves.
+  sequence, the tracer's frame index and NRD's accumulation all keep advancing
+  over a scene that no longer moves.
 - `--captureframes K` writes K consecutive frames as `f_0350.tga`, `f_0351.tga`…
   A count of 1 keeps the path exactly as given, so old baselines still match.
-- `--pttaablend` and `--ptdenoise` set the two dials from the command line.
+- **The engine's own composite TAA is gone, and so is `--pttaablend`.** The
+  temporal resolve in the common anti-aliasing slot is FSR2, selected with
+  `--antialiasing off|fxaa|fsr` and sharpened with `--fsrsharpness`. The slot
+  defaults per render mode - FSR in `--mode path-tracing`, FXAA otherwise - and
+  an explicit flag always wins (`optionsparser.cpp`, the
+  `vars["antialiasing"].defaulted()` branch). `--ptdenoise` still sets the NRD
+  dial from the command line. Any older commands file or note passing
+  `--pttaablend` will now fail to parse.
 
 **The pass criterion is geometric decay to a floor, not convergence to zero.**
 A blend-factor filter is an exponential moving average: it settles at a small
@@ -428,8 +473,14 @@ measurable, and the decay from cold to settled is the evidence:
 
 | | cold step | settled | decay |
 |---|---|---|---|
-| `--pttaablend 0.9` | 5.57 | 0.88 | 6.3x - accumulating |
-| `--pttaablend 0` | 5.34 | 3.14 | 1.7x - flat, no history at all |
+| history on (blend 0.9) | 5.57 | 0.88 | 6.3x - accumulating |
+| history off (blend 0) | 5.34 | 3.14 | 1.7x - flat, no history at all |
+
+Those two rows were measured on the composite TAA that has since been replaced
+by FSR2; the shape of the result is the point, not the constants. Read them as
+what a filter that accumulates looks like against one that does not, and
+re-measure the pair yourself with `--antialiasing fsr` against `--antialiasing
+off`.
 
 Without the restart the sequence is already settled by the first captured frame
 and reads as flat in both cases, which says nothing.
@@ -450,12 +501,20 @@ this file do all three.
 
 ### Determinism is the sharper test, and jitter has to be off for it
 
-With the scene frozen **and `--taajitter 0`**, every visibility-ray output is a
-pure function of the camera and must come back bit-identical between frames:
+**There is no jitter dial any more.** `--taajitter` is gone with the composite
+TAA; `SceneGraph::computeJitter` returns zero unless the anti-aliasing slot is
+FSR, and the comment there says why - an override could only ask for jitter that
+nothing resolves, which is shimmer rather than anti-aliasing. So the way to turn
+jitter off is **`--antialiasing off`** (or `fxaa`), and in `--mode path-tracing`
+that means passing it explicitly, because the traced default is FSR.
+
+With the scene frozen and the jitter off that way, every visibility-ray output
+is a pure function of the camera and must come back bit-identical between
+frames:
 
 ```
 traced_noise_free        0.00000   0.000%  identical
-traced_albedo            0.00000   0.000%  identical
+traced_eye_normal        0.00000   0.000%  identical
 traced_normal_roughness  0.00000   0.000%  identical
 traced_motion            0.00000   0.000%  identical
 traced_diffuse           0.07709  60.845%  VARIES    <- sampled, correct
@@ -463,19 +522,32 @@ traced_diffuse           0.07709  60.845%  VARIES    <- sampled, correct
 
 Anything deterministic that *varies* is a bug, located to one channel, with no
 image interpretation involved. Leave the jitter on and this test is worthless:
-the primary ray lands on a different sub-pixel every frame, so `traced_albedo`
-differed on 57% of pixels for entirely legitimate reasons and the real signal
-was invisible.
+the primary ray lands on a different sub-pixel every frame, so the geometric
+channels differed on 57% of pixels for entirely legitimate reasons and the real
+signal was invisible.
 
 ## CPU attribution: Tracy, headless
 
 Since `1c703dde` the engine carries Tracy (v0.13.1, `ENABLE_TRACY`, on-demand
 mode — zero cost until a capture attaches, macros compile out when the option
-is off). The whole loop is scriptable, no GUI needed:
+is off).
+
+**`ENABLE_TRACY` defaults to `OFF`, and none of this works in a default tree.**
+The option gates the FetchContent of Tracy *and* the two ExternalProjects that
+build `tracy-capture` and `tracy-csvexport` into `build/bin`, so in a tree
+configured without it there is no instrumentation to attach to and the two
+executables do not exist. Configure with it on first:
+
+```
+cmake --preset ninja -DENABLE_TRACY=ON
+cmake --build build --config Release
+```
+
+Then the whole loop is scriptable, no GUI needed:
 
 ```
 # terminal 1 (or Start-Process): a long-lived engine
-engine.exe --game ... --dev 0 --mode raster --pbr 0 --grassdensity 1 \
+engine.exe --game ... --dev 0 --mode retro --grassdensity 1 \
     --headless 1 --commands-file warp.txt --captureframe 3000 --capture out.tga
 # terminal 2, once it is past loading:
 tracy-capture.exe -o run.tracy -s 5      # both tools live in build/bin
@@ -486,8 +558,12 @@ tracy-csvexport.exe run.tracy > zones.csv
 **inclusive**, so do not sum parents with their children. The four top-level
 zones carry the frame-slot names (`input`/`update`/`graphics`/`audio`) so the
 log line and Tracy agree. Calibration point, danm14ab retro steady state,
-280 fps: `graphics` ≈ 1.9–2.3 ms with `collectInto` ≈ 0.73 and
-`SceneAdmission::prepare` ≈ 0.60 inside it.
+280 fps: `graphics` ≈ 1.9–2.3 ms with `SceneGraph::collectInto` ≈ 0.73 inside
+it. The admission work has since been split into several named zones
+(`SceneAdmission::classification + dedup`, `::grass selection`, `::grass
+distance sort`, `::grass range build`) rather than the single
+`SceneAdmission::prepare` an older reading quoted, so sum them before comparing
+against that 0.60.
 
 Two traps this section exists to prevent: the frame-slot log line measured
 over a loading-adjacent window reads several times higher than steady state —
@@ -509,12 +585,15 @@ per-frame = (t(900 frames) - t(300 frames)) / 600
 ```
 
 **Discard a warm-up run first.** The first run after a build pays a one-time
-shader, pipeline and texture cache cost. Land that inside the 300-frame
+shader, pipeline and texture cache cost - and since Slang compiles in-process at
+startup, a run whose shader sources hashed differently pays the whole transpile
+before frame 1 as well. Land that inside the 300-frame
 baseline and the difference is deflated - this produced a 1.755 ms/frame
 reading for a build that actually cost 4.5 ms, which read as a *speedup* from
 the commit under test. Take two samples after the warm-up; spread is around 2%.
 
-Numbers from `danm14ab`, OpenGL, `--pbr 1`, for calibration:
+Numbers from `danm14ab`, on the OpenGL backend in what is now `--mode pbr`, kept
+only as an order-of-magnitude calibration - that backend no longer exists:
 
 | | ms/frame |
 |---|---|
@@ -525,9 +604,11 @@ Numbers from `danm14ab`, OpenGL, `--pbr 1`, for calibration:
 ### Things that make a timing comparison meaningless
 
 - **Validation layers cost 3x.** 5.37 ms becomes 16.88 ms with `--vkvalidation 1`.
-  Vulkan and OpenGL are otherwise within noise of each other - 5.37 against
-  5.38 - so a "Vulkan is four times slower" result is almost always this.
-  Compare with validation off on both sides.
+  Back when there were two backends they were otherwise within noise of each
+  other - 5.37 against 5.38 - and every "Vulkan is four times slower" result
+  turned out to be this. It still is the first thing to rule out when a build
+  reads several times slower than the last one. Compare with validation off on
+  both sides.
 - **Window focus.** Outside a capture run the loop idles when the window is in
   the background, so a live FPS readout depends on focus. Capture runs ignore
   focus deliberately; live and captured numbers are not comparable.
@@ -643,17 +724,19 @@ touches, and how far it moves them.
 ## Traps that cost real time here
 
 - **Check the feature is switched on before debugging why it does not work.**
-  `ptTaaBlend` defaults to **0**, which disables the composite's TAA entirely -
-  `historyValid` goes false in the shader and the output is the raw jittered
-  frame. It was graded to zero deliberately, years of commits ago, while mip-0
-  aliasing made history clamping useless, and nothing since put it back. A
-  session went into reading the reprojection maths for a filter that was never
-  running. The tell was in the numbers before it was in the code: the
-  frame-to-frame residual repeated with **period 8**, exactly `kJitterPhases`,
-  which means the output was a pure function of the jitter phase and no history
-  was being mixed in at all. A periodic residual is not noise - it is a filter
-  that is not accumulating. Read the default in `GraphicsOptions` and log the
-  effective value before forming any hypothesis about the shader.
+  The composite's own TAA used to default to a blend of **0**, which disabled it
+  outright and left the output the raw jittered frame; a session went into
+  reading the reprojection maths for a filter that was never running. That
+  filter and its dial are both gone now - FSR2 owns the temporal resolve - but
+  the trap and its tell survive the rewrite. The tell was in the numbers before
+  it was in the code: the frame-to-frame residual repeated with **period 8**,
+  exactly `kJitterPhases` in `SceneGraph::computeJitter`, which means the output
+  was a pure function of the jitter phase and no history was being mixed in at
+  all. A periodic residual is not noise - it is a filter that is not
+  accumulating. Read the default in `GraphicsOptions` and log the effective
+  value before forming any hypothesis about the shader. The modern shape of the
+  same mistake: measuring a temporal filter in a mode whose anti-aliasing slot
+  resolved to `fxaa`, or a denoiser in a tree built without `ENABLE_NRD`.
 - **Vulkan readback before submission returns the previous frame.** The target
   images still contain frame N-1 while frame N is only recorded, so a dump can
   look correct wherever the scene is static while every moving thing is one
@@ -667,11 +750,12 @@ touches, and how far it moves them.
   `--vkvalidation 1 ... > val.txt 2>&1` and grep that. Sanity-check the
   mechanism once by confirming a known-bad build does print something; a count
   of zero is only evidence if a non-zero count was reachable.
-- **Channel order is not uniform across targets.** The Vulkan `output` image
-  carries the swapchain format, `B8G8R8A8_UNORM`, while every G-buffer target
-  is RGBA. `--dumptargets` now swizzles the output to RGBA on the way out so
-  every `.npy` is one order, but if a new target is added in a BGRA format,
-  add it to `isBGRA` in `dumpTargets` too. Comparing BGR against RGB once
+- **Channel order is not uniform across targets.** The scene `output` image used
+  to inherit the swapchain's `B8G8R8A8_UNORM` in the raster modes while every
+  G-buffer target was RGBA. It no longer does - `output` is RGBA float in every
+  mode - but the `isBGRA` swizzle in `ScenePipeline::dumpTargets` is still there
+  for any target whose format stores blue first, and a new target added in a
+  BGRA format has to be covered by it. Comparing BGR against RGB once
   turned a real 0.91 difference into an apparent 11.67 and produced a
   confident report of a colour cast that did not exist - blue ground where
   OpenGL had brown was entirely the analysis, not the renderer. If a diff
@@ -686,14 +770,19 @@ touches, and how far it moves them.
   shows. Related: the same panel is worth capturing at two dock widths, because
   a stretch column that looks fine at 800px can collapse to nothing at 480 while
   every fixed column keeps its size.
-- **Two build trees, and the one you want is not the default.** `cmake --build
-  build --config Release` writes `build/bin`; `--config Debug` writes
-  `build/debug/bin`. Every capture harness path in this file assumes
-  `build/bin`, so building Debug and then running `build/bin/engine.exe` runs
-  whatever was there before - silently, with a plausible-looking result. Five
-  consecutive runs during this work "proved" a crash had been fixed and that an
-  entire code path never executed; all five were a binary from before the patch
-  was applied. **Check `ls -la build/bin/engine.exe` against the clock** before
+- **Two build trees, and the one you want is not the default.** The tree is
+  configured with `cmake --preset ninja` (Ninja Multi-Config; it needs
+  `VCPKG_ROOT` set and a shell that has the host compiler and `ninja` on PATH -
+  a Developer PowerShell). One configure gives both configurations:
+  `cmake --build build --config Release` writes `build/bin`, `--config Debug`
+  writes `build/debug/bin`. The Visual Studio generator still works via
+  `cmake -S . -B build`, but then pass `--parallel` or the build is serial.
+  Every capture harness path in this file assumes `build/bin`, so building Debug
+  and then running `build/bin/engine.exe` runs whatever was there before -
+  silently, with a plausible-looking result. Five consecutive runs during this
+  work "proved" a crash had been fixed and that an entire code path never
+  executed; all five were a binary from before the patch was applied.
+  **Check the mtime of `build/bin/engine.exe` against the clock** before
   believing any run that contradicts what you expected.
 - **A segfault with no validation errors is usually teardown, not rendering.**
   Look at whether the screenshot was written first: if it was, the frame is
@@ -707,37 +796,38 @@ touches, and how far it moves them.
   then ran after `VulkanDevice::deinit` had already destroyed the allocator.
   Any object owning a VMA allocation and outliving the device must be reset in
   an explicit `deinit`, never left to its destructor.
-- **Stale shader modules.** Building *any* named target - `--target engine`,
-  `--target vulkanprobe` - skips the SPIR-V transpile. Separately, the
-  transpile rule used to depend only on the top-level `.slang` file, so editing
-  anything under `slang/lib/` left every `.spv` stale while the build reported
-  success. That is fixed - the rule now globs all of `slang/` - but the failure
-  mode is worth knowing, because it is silent and the measurements that follow
-  look real: a hash fix was measured as making parity *worse* when in fact only
-  the OpenGL half of it had been compiled. If a change should affect both
-  backends, confirm both actually moved before interpreting the direction.
-  This has now cost three separate investigations: three debugging probes against a module older than
-  the edit, and later a texture that sampled as flat white because the sample
-  was not in the compiled module at all. Build the default target, or the
-  `compile_spirv` target explicitly.
-  **When a shader edit seems not to take effect, disassemble the module first**
-  (`spirv-dis x.spv | grep Decorate`) and confirm the thing you just wrote is
-  actually in there. It is a five-second check that beats an hour of suspecting
-  descriptors.
-- **A broken `toolkit` trains you into the habit that hides everything else.**
-  The default `cmake --build build --config Release` fails at the end on
-  `toolkit.exe`, on pre-existing unresolved `ImGui_ImplVulkan_AddTexture` /
-  `RemoveTexture` symbols that nobody is fixing. `engine.exe` has already
-  linked by then, so the run is usable and the failure reads as known noise.
-  The natural response is `--target engine` - and that skips the SPIR-V
-  transpile above **and** the `tests` target.
+- **Stale shader modules — no longer a build step, but still a cache.** There is
+  no build-time SPIR-V transpile any more: there is no `compile_spirv` target,
+  the `shaderpack` app is deleted, and Slang compiles every module in-process at
+  engine startup. The compiler caches each result under a hash of *all* shader
+  sources, in `%TEMP%/reone/slang-cache/<name>-<hash>.spv`
+  (`vulkan/shadercompiler.cpp`), so editing anything under `slang/` changes the
+  hash and invalidates the whole cache - which is what makes the old failure
+  mode (a rule that watched only the top-level `.slang`) unreachable. It cost
+  three separate investigations while it lasted: debugging probes measured
+  against a module older than the edit, and later a texture that sampled as flat
+  white because the sample was not in the compiled module at all.
+  **When a shader edit seems not to take effect**, run the `recompileshaders`
+  console command - it recompiles and rebuilds the render pipelines in place,
+  and prints whether Slang errors made it keep a last-good module instead. That
+  last case is the one to watch for: a compile failure does not stop the engine,
+  it silently keeps rendering the previous shader. Check the log. If you still
+  suspect the module, disassemble the cached `.spv`
+  (`spirv-dis x.spv | grep Decorate`) and confirm the thing you just wrote is in
+  there; it is a five-second check that beats an hour of suspecting descriptors.
+- **Do not learn to ignore a failing build.** `toolkit.exe` used to fail to link
+  at the end of every `cmake --build build --config Release`, on unresolved
+  `ImGui_ImplVulkan_AddTexture` / `RemoveTexture` symbols. `engine.exe` had
+  already linked by then, so the run was usable and the failure read as known
+  noise; the natural response was `--target engine`, which skipped the `tests`
+  target with it. That is how `tests` stayed broken across four commits without
+  anyone noticing. It was fixed in `acc005b0c` ("Link imgui into toolkit so a
+  red build means something again") and a full build is clean now, so **a red
+  build is signal again — read it.**
 
-  That is how `tests` stayed broken across four commits without anyone
-  noticing: a full build failing looked exactly like the toolkit failure
-  everyone had learned to ignore, and no named-target build ever compiled the
-  suite. **Build `--target tests` explicitly and run `build/bin/tests.exe`
-  before believing a change is clean** - 350 tests take under a second, and a
-  binary that links is not the same claim as a suite that passes.
+  **Build everything and run `build/bin/tests.exe` before believing a change is
+  clean** - 554 tests take under a second, and a binary that links is not the
+  same claim as a suite that passes.
 
   The signature when it happens: `error C2259: cannot instantiate abstract
   class` on a `NiceMock<...>`, followed by a cascade of unrelated-looking
@@ -758,17 +848,18 @@ touches, and how far it moves them.
 - **Confirm the flag works.** A comparison flag that silently stopped being
   applied made two builds look identical for the wrong reason. Log the active
   state at startup and check it in the capture log.
-- **Check the screenshot contains what you think.** `glReadPixels` samples
-  whatever is bound as `GL_READ_FRAMEBUFFER`. Until this was fixed, every
-  capture read an offscreen scene target: the 3D scene appeared but the entire
-  2D layer - HUD, minimap, cursor, main menu - was missing, and the frames still
-  looked plausible enough to reason about. Look at the image and confirm the
+- **Check the screenshot contains what you think.** On the OpenGL backend
+  `glReadPixels` sampled whatever was bound as `GL_READ_FRAMEBUFFER`, and until
+  that was fixed every capture read an offscreen scene target: the 3D scene
+  appeared but the entire 2D layer - HUD, minimap, cursor, main menu - was
+  missing, and the frames still looked plausible enough to reason about. The
+  backend is gone; the habit is not optional. Look at the image and confirm the
   parts you care about are in it before diffing.
 - **Match the settings, not just the build.** The engine reads `reone.cfg` from
   its working directory. A second build tree without one silently runs a
-  different resolution *and* a different pipeline (`pbr=0` vs the default), so
-  92% of the frame differs for reasons that have nothing to do with the change.
-  Copy the cfg into the reference bin.
+  different resolution *and* a different render mode, so 92% of the frame
+  differs for reasons that have nothing to do with the change. Copy the cfg into
+  the reference bin.
 - **`reone.cfg` wins every flag you do not pass, and anyone can have edited it.**
   It is untracked, it lives in `build/bin`, `git stash` and `git checkout` do not
   touch it, and both the launcher and anyone testing a mode will write to it.
@@ -784,12 +875,19 @@ touches, and how far it moves them.
   second time an agent's change was blamed for it before the config was checked.
 
   **Pass the flags you are comparing on, explicitly, every time** - `--mode`,
-  `--pbr`, and `--dev 0` - rather than trusting any of them to default. That cuts
-  both ways: `reone.cfg` supplies `mode=path-tracing`, `pbr=1` *and* `dev=1`, so
-  omitting `--dev 0` silently puts a live FPS counter in every captured image.
-  And when a frame differs enormously for no reason the diff can explain, read
+  `--antialiasing`, `--ptdenoise` and `--dev 0` - rather than trusting any of
+  them to default. That cuts both ways: a typical `reone.cfg` here supplies
+  `mode=path-tracing`, `antialiasing=fsr` *and* `dev=1`, so omitting `--dev 0`
+  silently puts a live FPS counter in every captured image. And when a frame
+  differs enormously for no reason the diff can explain, read
   `build/bin/reone.cfg` and check its modification time *before* bisecting
   anything.
+
+  One asymmetry to know: the config file is parsed with unregistered keys
+  *allowed*, so the dead `pbr=`, `backend=`, `fxaa=` and `taajitter=` lines a
+  long-lived `reone.cfg` still carries are read and thrown away rather than
+  rejected. The command line is not that forgiving - an unknown `--flag` there
+  aborts the run. A stale cfg key is silent; a stale flag is loud.
 - **The mouse cursor is in the capture.** It is drawn at whatever position the
   game holds. Input is dropped during a capture, so it no longer wanders
   mid-run, but it is still in the image and still worth ruling out before
@@ -800,13 +898,14 @@ touches, and how far it moves them.
   reasons. This mattered more when runs were noisy; it still matters, because a
   large uniform difference in the sky will drown a small wrong one on a
   character.
-- **Compare the same renderer.** `--pbr` selects between two genuinely
-  different renderers - PBR deferred and retro - and they are 77% of pixels and
-  26 levels of mean luminance apart on the same module. An entire session's
-  comparisons were once made across that boundary before a zero-target dump gave
-  it away. Pass `--pbr` explicitly on both sides. (Retro *does* work on Vulkan,
-  whatever the older notes say: `VulkanRenderPipeline` branches on
-  `options.pbr` internally.)
+- **Compare the same renderer.** `--mode` selects between three genuinely
+  different renderers - `retro`, `pbr` and `path-tracing`. The two raster ones
+  are 77% of pixels and 26 levels of mean luminance apart on the same module. An
+  entire session's comparisons were once made across that boundary before a
+  zero-target dump gave it away. Pass `--mode` explicitly on both sides. A
+  misspelt mode is rejected rather than silently taken as a default -
+  `parseRenderMode` throws - so the only way to get the wrong one is to omit the
+  flag and inherit it from `reone.cfg`.
 - **Graphics warnings are off by default.** `--logch 9` enables the Graphics
   channel alongside Global. Missing textures, unsupported formats and
   unimplemented render-pass stubs all announce themselves there and nowhere
@@ -820,9 +919,12 @@ touches, and how far it moves them.
   capturing the **main menu**, which was also affected despite having no module,
   no AI and no scripts. If frames stop matching, look for order that depends on
   an address before looking at anything else.
-- **Keep renderer randomness out of the shared stream.** SSAO kernels and noise
-  textures draw from `renderRandomFloat`, not `randomFloat`, because the OpenGL
-  pipeline builds an SSAO kernel and the Vulkan one does not. When they shared a
-  generator the two backends began every comparison at different points in the
-  sequence, and particles and grass then differed for reasons unrelated to
-  rendering - about a third of the measured gap.
+- **Keep renderer randomness out of the shared stream.** Noise textures still
+  draw from `renderRandomFloat`, not `randomFloat` (`textureregistry.cpp`). The
+  split was forced by the two backends building different numbers of kernels:
+  sharing one generator left them at different points in the sequence, and
+  particles and grass then differed for reasons unrelated to rendering - about a
+  third of the measured gap. With one backend the symptom is gone, but the rule
+  holds for anything a render mode draws conditionally, because a capture run
+  seeds the shared generator to 0 and expects every draw from it to be the same
+  draw.

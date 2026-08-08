@@ -34,3 +34,14 @@ does not see the same field twice inside one accumulation window.
 
 TGA rather than PNG because the engine has a TGA reader and no PNG decoder;
 adding one for a single texture was not worth the dependency.
+
+## reone.rc, toolkit.rc, reone.ico, toolkit.ico, icons.xcf
+
+Build inputs, not runtime assets, and not resolved by the rule above. The `.rc`
+files are Windows resource scripts, each naming the matching `.ico`; the build
+appends one to a target's sources only under `WIN32` — `reone.rc` to `engine`
+(`src/apps/engine/CMakeLists.txt:35-36`) and `launcher`
+(`src/apps/launcher/CMakeLists.txt:26-27`), `toolkit.rc` to `toolkit`
+(`src/apps/toolkit/CMakeLists.txt:68-69`). The icons are therefore linked into
+the executables, never read from disk. `icons.xcf` is the GIMP artwork the two
+were exported from; nothing in the build refers to it.
