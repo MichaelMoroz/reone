@@ -34,7 +34,8 @@ namespace reone::graphics {
 class VulkanDevice;
 
 /**
- * AMD FidelityFX Super Resolution 2.2.1, at NativeAA (1.0x).
+ * AMD FidelityFX Super Resolution 2.2.1, upscaling renderExtent to displayExtent.
+ * Equal extents is NativeAA (1.0x), a temporal resolve with no upscaling.
  *
  * This is the anti-aliasing NRD deliberately does not do. NRD's own
  * documentation hands the problem over - "It naturally moves the problem of
@@ -48,7 +49,8 @@ class VulkanDevice;
  */
 class FsrUpscaler : public IUpscaler, boost::noncopyable {
 public:
-    FsrUpscaler(graphics::VulkanDevice &device, glm::ivec2 extent, bool highDynamicRange);
+    FsrUpscaler(graphics::VulkanDevice &device, glm::ivec2 renderExtent,
+                glm::ivec2 displayExtent, bool highDynamicRange);
     ~FsrUpscaler() { deinit(); }
 
     void init();
@@ -75,7 +77,10 @@ public:
 
 private:
     graphics::VulkanDevice &_device;
+    /** What the scene was traced and rastered at; FSR's renderSize. */
     glm::ivec2 _extent;
+    /** What FSR writes. Equal to _extent at NativeAA. */
+    glm::ivec2 _displayExtent;
     /** Fixed at construction: it selects context flags, not per-dispatch state. */
     bool _highDynamicRange {true};
     bool _inited {false};

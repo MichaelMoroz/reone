@@ -670,9 +670,15 @@ glm::vec2 SceneGraph::computeJitter() const {
     if (_graphicsOpt.antialiasing != graphics::AntiAliasing::Fsr) {
         return glm::vec2(0.0f);
     }
-    // Halton(2, 3), the usual low-discrepancy sequence for temporal sampling,
-    // recentred on zero and scaled to one pixel.
-    static constexpr int kJitterPhases = 8;
+    // FSR derives its phase count from the actual render and display widths,
+    // not the requested scale. The rounded render extent matters at ratios
+    // such as 0.667: repeating a phase one frame early makes the temporal
+    // sequence disagree with the resolver that consumes it.
+    const glm::ivec2 displaySize {_graphicsOpt.width, _graphicsOpt.height};
+    const glm::ivec2 renderSize = graphics::renderExtentFor(_graphicsOpt, displaySize);
+    const float ratio = static_cast<float>(displaySize.x) / static_cast<float>(renderSize.x);
+    const int kJitterPhases = std::max(
+        1, static_cast<int>(8.0f * ratio * ratio));
     auto halton = [](int index, int base) {
         float result = 0.0f;
         float fraction = 1.0f;
@@ -685,7 +691,9 @@ glm::vec2 SceneGraph::computeJitter() const {
     };
     int phase = static_cast<int>(_frameIndex % kJitterPhases) + 1;
     glm::vec2 offset {halton(phase, 2) - 0.5f, halton(phase, 3) - 0.5f};
-    return 2.0f * offset / glm::vec2(_graphicsOpt.width, _graphicsOpt.height);
+    // Clip-space offset of one RENDER pixel: the jitter shifts the raster grid
+    // the scene is actually drawn on, which is the smaller one when upscaling.
+    return 2.0f * offset / glm::vec2(renderSize);
 }
 
 void SceneGraph::snapshotPreviousFrame() {

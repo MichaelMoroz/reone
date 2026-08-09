@@ -109,8 +109,10 @@ void RenderPipeline::init() {
     _sky = std::make_unique<graphics::Sky>(_renderer);
     _sky->init();
     if (_primaryRayMode) {
+        // The tracer runs at render resolution, the same extent the G-buffer
+        // it reads its primary from was rastered at.
         _rayQuery = std::make_unique<RayQueryPipeline>(
-            _renderer, _targetSize, _options);
+            _renderer, graphics::renderExtentFor(_options, _targetSize), _options);
         _rayQuery->init();
     }
     _callbacks = std::make_unique<Callbacks>(*this);

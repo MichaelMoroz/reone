@@ -152,6 +152,7 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"ptnrdroughnessfraction", formatConfigFloat(options.ptNrdRoughnessFraction)},
         {"ptnrddisocclusionthreshold", formatConfigFloat(options.ptNrdDisocclusionThreshold)},
         {"ptnrdantifirefly", std::to_string(options.ptNrdAntiFirefly)},
+        {"renderscale", formatConfigFloat(options.renderScale)},
         {"fsrsharpness", formatConfigFloat(options.fsrSharpness)},
         {"ssao", std::to_string(options.ssao)},
         {"ssr", std::to_string(options.ssr)},
@@ -898,6 +899,11 @@ void Editor::graphicsRendererTab() {
         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Running: %s until Apply.",
                            kAntiAliasingNames[static_cast<int>(options.antialiasing)]);
     }
+    ImGui::BeginDisabled(staged.antialiasing != graphics::AntiAliasing::Fsr);
+    ImGui::SliderFloat("FSR render scale", &staged.renderScale, 0.25f, 1.0f, "%.3f");
+    settingHint("Raster and trace at this fraction of display resolution; FSR reconstructs the "
+                "display image. It changes target sizes, so Apply is required.", true);
+    ImGui::EndDisabled();
     ImGui::BeginDisabled(options.antialiasing != graphics::AntiAliasing::Fsr);
     ImGui::SliderFloat("FSR sharpness", &options.fsrSharpness, 0.0f, 1.0f, "%.2f");
     // Wanted precisely while it is greyed out, so the hover has to survive that.

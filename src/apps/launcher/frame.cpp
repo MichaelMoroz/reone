@@ -19,6 +19,9 @@
 
 #include "reone/graphics/types.h"
 
+#include <algorithm>
+#include <cmath>
+
 using namespace boost::program_options;
 
 using namespace reone::graphics;
@@ -266,12 +269,29 @@ LauncherFrame::LauncherFrame() :
     _choiceAntiAliasing->SetSelection(_config.antialiasing == "fsr"    ? 2
                                       : _config.antialiasing == "fxaa" ? 1
                                                                        : 0);
+    _choiceAntiAliasing->Bind(wxEVT_COMMAND_CHOICE_SELECTED, [this](const wxCommandEvent &evt) {
+        UpdateRendererDependentControls();
+    });
 
     auto antiAliasingSizer = new wxBoxSizer(wxVERTICAL);
     antiAliasingSizer->Add(labelAntiAliasing, wxSizerFlags(0).Expand());
     antiAliasingSizer->Add(_choiceAntiAliasing, wxSizerFlags(0).Expand());
 
     // END Anti-aliasing
+
+    // FSR render scale
+
+    auto labelRenderScale = new wxStaticText(this, wxID_ANY, "FSR Render Scale",
+                                             wxDefaultPosition, wxDefaultSize);
+    _sliderRenderScale = new wxSlider(
+        this, wxID_ANY, static_cast<int>(std::round(_config.renderScale * 100.0f)), 25, 100,
+        wxDefaultPosition, wxDefaultSize);
+
+    auto renderScaleSizer = new wxBoxSizer(wxVERTICAL);
+    renderScaleSizer->Add(labelRenderScale, wxSizerFlags(0).Expand());
+    renderScaleSizer->Add(_sliderRenderScale, wxSizerFlags(0).Expand());
+
+    // END FSR render scale
 
     _checkBoxSharpen = new wxCheckBox(this, wxID_ANY, "Enable Image Sharpening", wxDefaultPosition, wxDefaultSize);
     _checkBoxSharpen->SetValue(_config.sharpen);
@@ -293,6 +313,7 @@ LauncherFrame::LauncherFrame() :
     graphicsSizer->Add(_checkBoxSSAO, wxSizerFlags(0).Expand());
     graphicsSizer->Add(_checkBoxSSR, wxSizerFlags(0).Expand());
     graphicsSizer->Add(antiAliasingSizer, wxSizerFlags(0).Expand());
+    graphicsSizer->Add(renderScaleSizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(_checkBoxSharpen, wxSizerFlags(0).Expand());
 
     // END Graphics
@@ -406,6 +427,9 @@ void LauncherFrame::UpdateRendererDependentControls() {
     // Screen-space effects read a G-buffer the traced path never produces, and
     // the sample count means nothing to the two raster renderers.
     _choicePathTracingSamples->Enable(pathTracing);
+    // Rendering below display resolution is meaningful only when FSR owns the
+    // anti-aliasing slot. Keep the value visible and persistent when inactive.
+    _sliderRenderScale->Enable(_choiceAntiAliasing->GetSelection() == 2);
 }
 
 void LauncherFrame::LoadConfiguration() {
@@ -424,6 +448,7 @@ void LauncherFrame::LoadConfiguration() {
         ("ssao", value<bool>()->default_value(_config.ssao))              //
         ("ssr", value<bool>()->default_value(_config.ssr))                //
         ("antialiasing", value<std::string>()->default_value(_config.antialiasing)) //
+        ("renderscale", value<float>()->default_value(_config.renderScale)) //
         ("sharpen", value<bool>()->default_value(_config.sharpen))        //
         ("texquality", value<int>()->default_value(_config.texQuality))   //
         ("anisofilter", value<int>()->default_value(_config.anisofilter)) //
@@ -457,6 +482,7 @@ void LauncherFrame::LoadConfiguration() {
     _config.ssao = vars["ssao"].as<bool>();
     _config.ssr = vars["ssr"].as<bool>();
     _config.antialiasing = vars["antialiasing"].as<std::string>();
+    _config.renderScale = std::clamp(vars["renderscale"].as<float>(), 0.25f, 1.0f);
     _config.sharpen = vars["sharpen"].as<bool>();
     _config.texQuality = vars["texquality"].as<int>();
     _config.shadowres = vars["shadowres"].as<int>();
@@ -498,6 +524,7 @@ void LauncherFrame::SaveConfiguration() {
         "ssao=",
         "ssr=",
         "antialiasing=",
+        "renderscale=",
         "sharpen=",
         "texquality=",
         "anisofilter=",
@@ -573,6 +600,7 @@ void LauncherFrame::SaveConfiguration() {
     case 1: _config.antialiasing = "fxaa"; break;
     default: _config.antialiasing = "off"; break;
     }
+    _config.renderScale = _sliderRenderScale->GetValue() / 100.0f;
     _config.sharpen = _checkBoxSharpen->IsChecked();
     _config.texQuality = _choiceTextureQuality->GetSelection();
     _config.shadowres = _choiceShadowResolution->GetSelection();
@@ -615,6 +643,7 @@ void LauncherFrame::SaveConfiguration() {
     config << "ssao=" << (_config.ssao ? 1 : 0) << std::endl;
     config << "ssr=" << (_config.ssr ? 1 : 0) << std::endl;
     config << "antialiasing=" << _config.antialiasing << std::endl;
+    config << "renderscale=" << _config.renderScale << std::endl;
     config << "sharpen=" << (_config.sharpen ? 1 : 0) << std::endl;
     config << "texquality=" << _config.texQuality << std::endl;
     config << "shadowres=" << _config.shadowres << std::endl;

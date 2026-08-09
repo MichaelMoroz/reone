@@ -665,10 +665,12 @@ std::unique_ptr<ITracingDenoiser> VulkanRenderer::makeTracingDenoiser(glm::ivec2
 #endif
 }
 
-std::unique_ptr<IUpscaler> VulkanRenderer::makeUpscaler(glm::ivec2 extent,
+std::unique_ptr<IUpscaler> VulkanRenderer::makeUpscaler(glm::ivec2 renderExtent,
+                                                        glm::ivec2 displayExtent,
                                                         bool highDynamicRange) {
 #ifdef R_ENABLE_FSR
-    auto upscaler = std::make_unique<FsrUpscaler>(_device, extent, highDynamicRange);
+    auto upscaler = std::make_unique<FsrUpscaler>(_device, renderExtent, displayExtent,
+                                                  highDynamicRange);
     upscaler->init();
     return upscaler;
 #else

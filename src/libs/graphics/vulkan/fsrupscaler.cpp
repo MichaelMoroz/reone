@@ -63,9 +63,11 @@ void fsrMessage(FfxFsr2MsgType, const wchar_t *message) {
 
 } // namespace
 
-FsrUpscaler::FsrUpscaler(VulkanDevice &device, glm::ivec2 extent, bool highDynamicRange) :
+FsrUpscaler::FsrUpscaler(VulkanDevice &device, glm::ivec2 renderExtent,
+                         glm::ivec2 displayExtent, bool highDynamicRange) :
     _device(device),
-    _extent(extent),
+    _extent(renderExtent),
+    _displayExtent(displayExtent),
     _highDynamicRange(highDynamicRange) {
 }
 
@@ -102,7 +104,8 @@ void FsrUpscaler::init() {
                              FFX_FSR2_ENABLE_AUTO_EXPOSURE;
     }
     description.maxRenderSize = {static_cast<uint32_t>(_extent.x), static_cast<uint32_t>(_extent.y)};
-    description.displaySize = description.maxRenderSize;
+    description.displaySize = {static_cast<uint32_t>(_displayExtent.x),
+                               static_cast<uint32_t>(_displayExtent.y)};
     description.callbacks = _interface;
     description.device = ffxGetDeviceVK(_device.handle());
     description.fpMessage = fsrMessage;

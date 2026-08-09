@@ -153,8 +153,10 @@ void ScenePipeline::init() {
     if (_inited) {
         return;
     }
+    _renderSize = renderExtentFor(_options, _targetSize);
+
     _gbuffer = std::make_unique<GBuffer>(_renderer);
-    _gbuffer->init(_targetSize);
+    _gbuffer->init(_renderSize);
 
     // Float in every mode, because every mode's scene output is now linear
     // scene-referred colour and the display transform is the post-process pass
@@ -166,9 +168,18 @@ void ScenePipeline::init() {
     // frame becomes bytes, one blit later, and that has not moved.
     const Format outputFormat = Format::R16G16B16A16Sfloat;
     _output = _renderer.resources().makeImage();
-    _output->initColorAttachment(_targetSize, outputFormat);
+    _output->initColorAttachment(_renderSize, outputFormat);
     _tailColor = _renderer.resources().makeImage();
-    _tailColor->initColorAttachment(_targetSize, outputFormat);
+    _tailColor->initColorAttachment(_renderSize, outputFormat);
+    // Allocated only when the upscale actually changes resolution. At
+    // NativeAA the chain never swaps and these would be dead memory the size
+    // of the frame.
+    if (_renderSize != _targetSize) {
+        _displayColor = _renderer.resources().makeImage();
+        _displayColor->initColorAttachment(_targetSize, outputFormat);
+        _displayTail = _renderer.resources().makeImage();
+        _displayTail->initColorAttachment(_targetSize, outputFormat);
+    }
 
     auto colorSampler = _renderer.resources().sampler(
         getTextureProperties(TextureUsage::ColorBuffer));
@@ -183,6 +194,10 @@ void ScenePipeline::init() {
     auto triangleIdSampler = _renderer.resources().sampler(triangleIdProperties);
     _output->setSampler(colorSampler);
     _tailColor->setSampler(colorSampler);
+    if (_displayColor) {
+        _displayColor->setSampler(colorSampler);
+        _displayTail->setSampler(colorSampler);
+    }
     _gbuffer->setSamplers(colorSampler, depthSampler, triangleIdSampler);
 
     if (!_primaryRayMode) {
@@ -256,7 +271,7 @@ void ScenePipeline::init() {
             // hand over display-referred colour already in [0,1]; that is no
             // longer true of any mode, and claiming otherwise would have FSR
             // reproject linear radiance with its HDR handling switched off.
-            _upscaler = _renderer.makeUpscaler(_targetSize, true);
+            _upscaler = _renderer.makeUpscaler(_renderSize, _targetSize, true);
         } catch (const std::exception &e) {
             warn(std::string("Upscaler unavailable, the anti-aliasing slot is empty: ") + e.what(),
                  LogChannel::Graphics);
@@ -301,6 +316,9 @@ void ScenePipeline::deinit() {
     _upscaler.reset();
     _output.reset();
     _tailColor.reset();
+    _displayColor.reset();
+    _displayTail.reset();
+    _chainAtDisplaySize = false;
     _dirShadows.reset();
     _pointShadows.reset();
     _gbuffer.reset();
@@ -460,7 +478,7 @@ void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
     RenderAttachment depth {_gbuffer->depth().sampleView(), ImageLayout::DepthAttachment,
                             AttachmentLoad::Clear, AttachmentStore::Store};
     depth.clear.depthOnly = true;
-    cmd.beginRendering(_targetSize, colors, &depth, 0, true);
+    cmd.beginRendering(_renderSize, colors, &depth, 0, true);
 
     if (scene.vertices.buffer && scene.triangleCount != 0) {
         PipelineKey key;
@@ -537,7 +555,7 @@ void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                                 AttachmentLoad::Load, AttachmentStore::Store};
         RenderAttachment depth {_gbuffer->depth().sampleView(), ImageLayout::DepthRead,
                                 AttachmentLoad::Load, AttachmentStore::DontCare};
-        cmd.beginRendering(_targetSize, {color}, &depth, 0, true);
+        cmd.beginRendering(_renderSize, {color}, &depth, 0, true);
         cmd.bindPipeline(pipeline.pipeline);
         cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
                               offsets.data(), static_cast<uint32_t>(offsets.size()));
@@ -630,7 +648,7 @@ void ScenePipeline::retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset
         RenderAttachment color {_output->sampleView(), ImageLayout::ColorAttachment,
                                 AttachmentLoad::Clear, AttachmentStore::Store};
         color.clear.color = {0.0f, 0.0f, 0.0f, 1.0f};
-        cmd.beginRendering(_targetSize, {color}, nullptr, 0, false);
+        cmd.beginRendering(_renderSize, {color}, nullptr, 0, false);
         cmd.bindPipeline(pipeline.pipeline);
         auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
         cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
@@ -676,8 +694,8 @@ void ScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) 
     // Pushed per frame rather than held: the block is the frame's, and a resize
     // must not leave a stale resolution behind.
     ScreenEffectUniforms screenEffect;
-    screenEffect.screenResolution = glm::vec2(_targetSize);
-    screenEffect.screenResolutionRcp = 1.0f / glm::vec2(_targetSize);
+    screenEffect.screenResolution = glm::vec2(_renderSize);
+    screenEffect.screenResolutionRcp = 1.0f / glm::vec2(_renderSize);
     screenEffect.clipNear = _uniforms.globals().clipNear;
     screenEffect.clipFar = _uniforms.globals().clipFar;
     std::copy(_ssaoKernel.begin(), _ssaoKernel.end(), screenEffect.ssaoSamples);
@@ -699,8 +717,8 @@ void ScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) 
                                  resolveSet(_output.get()), nullptr, 0);
     const ResolvePushConstants push = resolvePush(resolveFlags(), _options);
     cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));
-    cmd.dispatchCompute({(_targetSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
-                         (_targetSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});
+    cmd.dispatchCompute({(_renderSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
+                         (_renderSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});
 
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
@@ -724,8 +742,8 @@ void ScenePipeline::screenSpaceReflectionPass(ICommandBuffer &cmd, uint32_t glob
     PipelineBinding pipeline = _renderer.pipelines().get(key);
 
     ScreenEffectUniforms screenEffect;
-    screenEffect.screenResolution = glm::vec2(_targetSize);
-    screenEffect.screenResolutionRcp = 1.0f / glm::vec2(_targetSize);
+    screenEffect.screenResolution = glm::vec2(_renderSize);
+    screenEffect.screenResolutionRcp = 1.0f / glm::vec2(_renderSize);
     screenEffect.clipNear = _uniforms.globals().clipNear;
     screenEffect.clipFar = _uniforms.globals().clipFar;
     auto screenEffectOffset = _renderer.uniformRing().push(screenEffect);
@@ -760,8 +778,8 @@ void ScenePipeline::screenSpaceReflectionPass(ICommandBuffer &cmd, uint32_t glob
                                  resolveSet(_tailColor.get()), nullptr, 0);
     const ResolvePushConstants push = resolvePush(resolveFlags(), _options);
     cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));
-    cmd.dispatchCompute({(_targetSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
-                         (_targetSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});
+    cmd.dispatchCompute({(_renderSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
+                         (_renderSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});
 
     cmd.transitionImage(*_tailColor, ImageLayout::ShaderRead);
     std::swap(_output, _tailColor);
@@ -791,7 +809,7 @@ void ScenePipeline::tailPass(ICommandBuffer &cmd, const char *fragmentEntry,
         // never read back.
         RenderAttachment color {_tailColor->sampleView(), ImageLayout::ColorAttachment,
                                 AttachmentLoad::DontCare, AttachmentStore::Store};
-        cmd.beginRendering(_targetSize, {color}, nullptr, 0, false);
+        cmd.beginRendering(chainSize(), {color}, nullptr, 0, false);
         cmd.bindPipeline(pipeline.pipeline);
         auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
         cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
@@ -832,30 +850,36 @@ void ScenePipeline::upscalePass(ICommandBuffer &cmd) {
     // depth attachment otherwise sits in a depth-read layout that no upscaler
     // state maps to. They are left sampled afterwards and the depth is put
     // back before anything reads it as a depth attachment again.
+    // Upscaling writes into the display-resolution pair rather than the tail
+    // it reads from; at NativeAA the two resolutions are equal and there is no
+    // second pair, so it stays the ping-pong it always was.
+    const bool upscaling = _renderSize != _targetSize;
+    IImage &target = upscaling ? *_displayColor : *_tailColor;
+
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
     cmd.transitionImage(motion, ImageLayout::ShaderRead);
     cmd.transitionImage(depth, ImageLayout::ShaderRead);
-    cmd.transitionImage(*_tailColor, ImageLayout::General);
+    cmd.transitionImage(target, ImageLayout::General);
 
     UpscalerInputs inputs;
     inputs.color = _output.get();
     inputs.depth = &depth;
     inputs.motion = &motion;
-    inputs.output = _tailColor.get();
+    inputs.output = &target;
     // The G-buffer stores current minus previous, as half a clip-space delta
     // with y up. FSR wants previous minus current, in pixels, with y down.
     // Both corrections are a sign per axis, so they ride in the scale rather
     // than in a rewrite of an attachment several passes and both dump paths
     // already read.
-    inputs.motionScale = {-static_cast<float>(_targetSize.x),
-                          static_cast<float>(_targetSize.y)};
+    inputs.motionScale = {-static_cast<float>(_renderSize.x),
+                          static_cast<float>(_renderSize.y)};
 
     // The sub-pixel offset this frame's projection was built with, in pixels
     // with y down. Non-zero exactly when this pass is FSR, which is the rule
     // SceneGraph::computeJitter applies - so the offset the projection carried
     // is the offset handed over here, with no dial in between to disagree.
-    const glm::vec2 jitterPixels {globals.jitter.x * 0.5f * static_cast<float>(_targetSize.x),
-                                  -globals.jitter.y * 0.5f * static_cast<float>(_targetSize.y)};
+    const glm::vec2 jitterPixels {globals.jitter.x * 0.5f * static_cast<float>(_renderSize.x),
+                                  -globals.jitter.y * 0.5f * static_cast<float>(_renderSize.y)};
     const float verticalFov =
         2.0f * std::atan(1.0f / std::max(1e-4f, globals.projection[1][1]));
 
@@ -875,9 +899,19 @@ void ScenePipeline::upscalePass(ICommandBuffer &cmd) {
                         globals.clipNear, globals.clipFar, verticalFov,
                         std::clamp(_options.fsrSharpness, 0.0f, 1.0f), reset);
 
-    cmd.transitionImage(*_tailColor, ImageLayout::ShaderRead);
+    cmd.transitionImage(target, ImageLayout::ShaderRead);
     cmd.transitionImage(depth, ImageLayout::DepthRead);
-    std::swap(_output, _tailColor);
+    if (upscaling) {
+        // Hand the display pair to the tail. Everything after this pass reads
+        // _output and writes _tailColor exactly as before and never learns
+        // that the resolution changed under it; chainSize() is what tells the
+        // render passes how big they now are. render() puts it back.
+        std::swap(_output, _displayColor);
+        std::swap(_tailColor, _displayTail);
+        _chainAtDisplaySize = true;
+    } else {
+        std::swap(_output, _tailColor);
+    }
 }
 
 void ScenePipeline::antiAliasingPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
@@ -913,8 +947,8 @@ void ScenePipeline::antiAliasingPass(ICommandBuffer &cmd, uint32_t globalsOffset
     // FXAA works off neighbouring texel offsets, which nothing else in this
     // pipeline publishes; the block is otherwise irrelevant to the pass.
     ScreenEffectUniforms screenEffect;
-    screenEffect.screenResolution = glm::vec2(_targetSize);
-    screenEffect.screenResolutionRcp = 1.0f / glm::vec2(_targetSize);
+    screenEffect.screenResolution = glm::vec2(chainSize());
+    screenEffect.screenResolutionRcp = 1.0f / glm::vec2(chainSize());
     auto screenEffectOffset = _renderer.uniformRing().push(screenEffect);
     tailPass(cmd, fragmentEntry, globalsOffset, screenEffectOffset, nullptr, 0);
 }
@@ -997,8 +1031,8 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
         static_cast<uint32_t>(std::clamp(_options.debugView, 0, kMaxDebugView)),
         std::clamp(_options.ptRoughnessFloor, 0.0f, 1.0f)};
     cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));
-    cmd.dispatchCompute({(_targetSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
-                         (_targetSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});
+    cmd.dispatchCompute({(chainSize().x + kResolveGroupSize - 1) / kResolveGroupSize,
+                         (chainSize().y + kResolveGroupSize - 1) / kResolveGroupSize, 1});
 
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
@@ -1012,8 +1046,8 @@ void ScenePipeline::sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     // RCAS, which corrects that upscaler's softness from inside it - running
     // both stacks two sharpeners on one image, so each dial says so.
     ScreenEffectUniforms screenEffect;
-    screenEffect.screenResolution = glm::vec2(_targetSize);
-    screenEffect.screenResolutionRcp = 1.0f / glm::vec2(_targetSize);
+    screenEffect.screenResolution = glm::vec2(chainSize());
+    screenEffect.screenResolutionRcp = 1.0f / glm::vec2(chainSize());
     screenEffect.sharpenAmount = std::max(0.0f, _options.sharpenAmount);
     auto screenEffectOffset = _renderer.uniformRing().push(screenEffect);
     tailPass(cmd, "sharpenFragment", globalsOffset, screenEffectOffset, nullptr, 0);
@@ -1022,6 +1056,15 @@ void ScenePipeline::sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
 Texture &ScenePipeline::render(const SceneFramePlan &plan,
                                      ISceneCallbacks &callbacks) {
     auto &cmd = _renderer.recordingCommandBuffer();
+    // Give the render-resolution pair back to the chain. The upscale hands the
+    // display pair over mid-frame and the tail finishes on it, so every frame
+    // starts by undoing that - otherwise the geometry pass would find itself
+    // rendering into display-sized attachments at render-sized extents.
+    if (_chainAtDisplaySize) {
+        std::swap(_output, _displayColor);
+        std::swap(_tailColor, _displayTail);
+        _chainAtDisplaySize = false;
+    }
     _shadow = plan.shadow;
     _shadowCasterCategories = plan.shadowCasterCategories;
     _mergedScene = {};
@@ -1139,7 +1182,7 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
             RenderAttachment color {_output->sampleView(), ImageLayout::ColorAttachment,
                                     AttachmentLoad::Clear, AttachmentStore::Store};
             color.clear.color = {0.0f, 0.0f, 0.0f, 1.0f};
-            cmd.beginRendering(_targetSize, {color}, nullptr, 0, false);
+            cmd.beginRendering(chainSize(), {color}, nullptr, 0, false);
             cmd.endRendering();
         }
         cmd.transitionImage(*_output, ImageLayout::ShaderRead);

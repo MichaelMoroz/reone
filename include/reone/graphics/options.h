@@ -619,6 +619,22 @@ struct GraphicsOptions {
      * not stack a separate sharpen pass on top of it.
      */
     float fsrSharpness {0.0f};
+    /**
+     * Trace and raster at this fraction of the display resolution, with FSR
+     * upscaling the result. 1 is NativeAA - the same resolution either side of
+     * the slot, which is what this engine ran exclusively until now.
+     *
+     * Only FSR can honour it: it is the one resolve in the slot that changes
+     * resolution, so the scale is forced back to 1 when anything else occupies
+     * the slot rather than silently rendering small and stretching. NRD sits
+     * upstream of the upscaler and denoises at this resolution, which is where
+     * its own guidance puts it.
+     *
+     * FSR's quality modes are 1/1.5 quality, 1/1.7 balanced, 1/2 performance,
+     * 1/3 ultra performance. A free scale rather than an enum because the
+     * jitter phase count derives from the ratio anyway.
+     */
+    float renderScale {1.0f};
     /** The tone curve of the grade: 0 none, 1 the Gran Turismo curve. On by
         default - the calibration programme is defined in tonemapped terms.
         Owned by the post-process pass, which is the only stage in any mode
@@ -667,6 +683,25 @@ struct GraphicsOptions {
     int anisotropicFiltering {2};
     float drawDistance {kDefaultObjectDrawDistance};
 };
+
+/**
+ * The resolution the scene is traced and rastered at, given what it presents to.
+ *
+ * One definition because two callers have to agree exactly: the scene pipeline
+ * sizes the G-buffer and the tail's first half with it, and the ray-query
+ * pipeline sizes the tracer with it. A disagreement is a tracer writing into
+ * aux images the resolve reads at a different extent, which is not a crash.
+ */
+inline glm::ivec2 renderExtentFor(const GraphicsOptions &options, glm::ivec2 displayExtent) {
+    // Only FSR changes resolution across the anti-aliasing slot, so only FSR
+    // can honour a scale; anything else renders at display resolution rather
+    // than small and stretched.
+    if (options.antialiasing != AntiAliasing::Fsr) {
+        return displayExtent;
+    }
+    const float scale = glm::clamp(options.renderScale, 0.25f, 1.0f);
+    return glm::max(glm::ivec2(1), glm::ivec2(glm::round(glm::vec2(displayExtent) * scale)));
+}
 
 } // namespace graphics
 

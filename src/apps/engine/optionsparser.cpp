@@ -215,6 +215,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
          "denoiser disocclusion threshold")                                                                                     //
         ("ptnrdantifirefly", value<bool>()->default_value(options->graphics.ptNrdAntiFirefly),
          "enable denoiser anti-firefly")                                                                                        //
+        ("renderscale", value<float>()->default_value(options->graphics.renderScale),
+         "trace/raster resolution as a fraction of display; FSR upscales (1 = NativeAA)")             //
         ("fsrsharpness", value<float>()->default_value(options->graphics.fsrSharpness),
          "FSR RCAS sharpening, 0 disables the pass")                                                                          //
         ("texquality", value<int>()->default_value(static_cast<int>(options->graphics.textureQuality)), "texture quality")      //
@@ -427,6 +429,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptNrdRoughnessFraction = std::clamp(vars["ptnrdroughnessfraction"].as<float>(), 0.01f, 1.0f);
     options->graphics.ptNrdDisocclusionThreshold = std::max(0.0f, vars["ptnrddisocclusionthreshold"].as<float>());
     options->graphics.ptNrdAntiFirefly = vars["ptnrdantifirefly"].as<bool>();
+    options->graphics.renderScale = std::clamp(vars["renderscale"].as<float>(), 0.25f, 1.0f);
     options->graphics.fsrSharpness = std::clamp(vars["fsrsharpness"].as<float>(), 0.0f, 1.0f);
     options->graphics.textureQuality = static_cast<TextureQuality>(vars["texquality"].as<int>());
     options->graphics.shadowResolution = 1 << (10 + vars["shadowres"].as<int>());

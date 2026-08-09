@@ -56,8 +56,10 @@ private:
         int ptspp {8};
         bool ssao {true};
         bool ssr {true};
-        /** "off" or "fxaa", matching the engine's --antialiasing. */
+        /** "off", "fxaa" or "fsr", matching the engine's --antialiasing. */
         std::string antialiasing {"fxaa"};
+        /** Raster and trace resolution as a fraction of display when FSR runs. */
+        float renderScale {1.0f};
         bool sharpen {true};
         int texQuality {0};
         int shadowres {1};
@@ -81,6 +83,7 @@ private:
     wxChoice *_choiceAnisoFilter;
     wxChoice *_choicePathTracingSamples;
     wxSlider *_sliderDrawDistance;
+    wxSlider *_sliderRenderScale;
     wxCheckBox *_checkBoxFullscreen;
     wxCheckBox *_checkBoxVSync;
     wxCheckBox *_checkBoxGrass;

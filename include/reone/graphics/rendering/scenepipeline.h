@@ -196,7 +196,15 @@ public:
                      const ISceneCallbacks &callbacks);
 
 private:
+    /** Display resolution: what leaves this pipeline, and what the tail runs at. */
     glm::ivec2 _targetSize;
+    /**
+     * Trace and raster resolution. Equal to _targetSize unless FSR is in the
+     * anti-aliasing slot with a render scale below 1, which is the only
+     * configuration where the two differ - FSR is the one resolve in the slot
+     * that changes resolution.
+     */
+    glm::ivec2 _renderSize;
     GraphicsOptions &_options;
     IRenderer &_renderer;
     Uniforms &_uniforms;
@@ -213,6 +221,18 @@ private:
         swapped with it after every tail pass so the finished image is always
         _output. Allocated once, never per frame. */
     std::unique_ptr<IImage> _tailColor;
+    /**
+     * The display-resolution pair, swapped in for _output/_tailColor by the
+     * upscale so every pass after the slot runs at display resolution without
+     * knowing that anything changed. Null when the two resolutions are equal,
+     * which is when nothing needs swapping.
+     */
+    std::unique_ptr<IImage> _displayColor;
+    std::unique_ptr<IImage> _displayTail;
+    /** True between the upscale and the end of the frame, so it can be undone. */
+    bool _chainAtDisplaySize {false};
+    /** What _output and _tailColor currently measure. */
+    glm::ivec2 chainSize() const { return _chainAtDisplaySize ? _targetSize : _renderSize; }
     /** Present only while the anti-aliasing slot is running a temporal
         resolve; it owns device memory of its own, so the choice is fixed for
         the lifetime of these targets rather than per frame. */

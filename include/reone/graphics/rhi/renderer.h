@@ -149,7 +149,14 @@ public:
      *                         writes. The two need different internal handling
      *                         and the choice is fixed for the object's life.
      */
-    virtual std::unique_ptr<IUpscaler> makeUpscaler(glm::ivec2 extent,
+    /**
+     * Create the vendor temporal upscaler. Two extents because it is the one
+     * stage that changes resolution: it reads renderExtent and writes
+     * displayExtent. Equal extents is NativeAA, a temporal resolve with no
+     * upscaling.
+     */
+    virtual std::unique_ptr<IUpscaler> makeUpscaler(glm::ivec2 renderExtent,
+                                                    glm::ivec2 displayExtent,
                                                     bool highDynamicRange) = 0;
 
     /** Create the frame-local structure used by the trace pass. */

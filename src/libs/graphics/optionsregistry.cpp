@@ -590,6 +590,10 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                              &GraphicsOptions::ptNrdSpecularLobeAngleSlack, 0.0f, 4.0f));
 
     // Inert unless the slot runs FSR, but read per dispatch either way.
+    // Reapply, not Live: it decides what the pipeline allocates.
+    descs.push_back(floatOpt("renderscale", OptionApply::Reapply,
+                             "trace and raster at this fraction of display resolution; FSR upscales",
+                             &GraphicsOptions::renderScale, 0.25f, 1.0f));
     descs.push_back(floatOpt("fsrsharpness", OptionApply::Live,
                              "FSR RCAS sharpening, 0 disables the pass",
                              &GraphicsOptions::fsrSharpness, 0.0f, 1.0f));
