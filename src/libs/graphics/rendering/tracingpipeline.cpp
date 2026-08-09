@@ -560,10 +560,25 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
             }
             // Mirrors NrdResolvePushConstants in slang/nrd_resolve.slang.
             struct NrdResolvePushConstants {
+                float denoisedJitter[2];
                 uint32_t debugView;
-            } resolveConstants {isResolveDebugView(_options.debugView)
-                                    ? static_cast<uint32_t>(_options.debugView)
-                                    : 0u};
+                uint32_t directDenoised;
+            };
+            static_assert(sizeof(NrdResolvePushConstants) == 16,
+                          "push constant block must stay free of padding");
+            // The content a jittered projection puts at a pixel sat one jitter
+            // offset earlier without it, so the denoised channels - which NRD
+            // settles on the pixel centre - are read from there to meet it.
+            // The sign is the negation of the offset handed to NRD, and it was
+            // checked by measurement rather than by reading: the wrong one
+            // doubles the mismatch instead of cancelling it, and reads as a
+            // worse grid correlation, not a better one.
+            NrdResolvePushConstants resolveConstants {
+                {-jitterPixels.x, -jitterPixels.y},
+                isResolveDebugView(_options.debugView)
+                    ? static_cast<uint32_t>(_options.debugView)
+                    : 0u,
+                _options.ptShadowFilter == graphics::ShadowFilter::Denoiser ? 1u : 0u};
             commandBuffer.dispatch(*_compositePipeline,
                                    {static_cast<uint32_t>((_extent.x + 7) / 8),
                                     static_cast<uint32_t>((_extent.y + 7) / 8), 1},

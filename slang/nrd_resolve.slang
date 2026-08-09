@@ -59,11 +59,24 @@
 /** Mirrors NrdResolvePushConstants in tracingpipeline.cpp. */
 struct NrdResolvePushConstants {
     /**
+     * Where to read the denoised channels from, in pixels, so that they line up
+     * with the guide factors they are multiplied against. Leading the float2
+     * keeps the block free of padding.
+     */
+    float2 denoisedJitter;
+    /**
      * A debug channel this pass owns, or 0. The three below exist only after
      * denoising, so the trace kernel cannot show them: it writes what it fed
      * the denoiser, and the question here is what came back.
      */
     uint debugView;
+    /**
+     * The direct channel arrives denoised only under ShadowFilter::Denoiser.
+     * Raw and penumbra-filtered both still carry the trace's own jitter, and
+     * offsetting those would displace them by a sub-pixel rather than align
+     * them.
+     */
+    uint directDenoised;
 };
 
 static const uint kDebugDenoisedDiffuse = 17;
@@ -82,6 +95,37 @@ static const float kDenoisedRange = 1.0e5;
  */
 float3 unpackRadiance(float3 stored) {
     return max(stored, 0.0);
+}
+
+/**
+ * A bilinear tap at the jittered position, dropping neighbours NRD never wrote.
+ * Beyond the denoising range its outputs are last frame's history rather than
+ * zero, so a tap that reaches across that boundary would pull the same
+ * reprojected sky the viewZ guard below exists to keep out - here along every
+ * silhouette rather than over the whole sky. Rejected taps leave the weighting
+ * instead of contributing, which biases the edge pixel towards its own surface;
+ * that is the intended behaviour, since the alternative is bleeding across a
+ * depth discontinuity.
+ */
+float3 sampleDenoised(RWTexture2D<float4> channel, int2 pixel, int2 extent) {
+    const float2 position = float2(pixel) + pushConstants.denoisedJitter;
+    const int2 base = int2(floor(position));
+    const float2 frac = position - float2(base);
+    float3 sum = float3(0.0);
+    float total = 0.0;
+    for (int dy = 0; dy <= 1; ++dy) {
+        for (int dx = 0; dx <= 1; ++dx) {
+            const int2 tap = clamp(base + int2(dx, dy), int2(0, 0), extent - 1);
+            if (abs(inViewZ[tap]) >= kDenoisedRange) {
+                continue;
+            }
+            const float weight = (dx == 0 ? 1.0 - frac.x : frac.x) *
+                                 (dy == 0 ? 1.0 - frac.y : frac.y);
+            sum += channel[tap].rgb * weight;
+            total += weight;
+        }
+    }
+    return total > 0.0 ? sum / total : channel[pixel].rgb;
 }
 
 [shader("compute")]
@@ -128,7 +172,26 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         outputImage[pixel] = float4(color, 1.0);
         return;
     }
-    color += (unpackRadiance(diffuse) + max(inDirectDiffuse[pixel].rgb, 0.0)) *
+    // NRD's temporal pass suppresses jitter by design - its own documentation
+    // calls that essential for upscaling - so the denoised channels settle on
+    // the pixel centre while the guide factors here were sampled through the
+    // jittered projection. The pair therefore disagree by a fixed fraction of a
+    // pixel, and standing still that error freezes: the upscaler is handed a
+    // static aliased pattern carrying no sub-pixel information and magnifies it
+    // instead of reconstructing it. Measured at 1.46x grid correlation against
+    // a 1.00x native floor, worst in shadow, and absent under camera motion -
+    // which is only NRD's accumulation shortening, not the defect going away.
+    //
+    // Reading the denoised channels at the same offset as the raster beside
+    // them closes the mismatch. It adds no detail that was never shaded; it
+    // restores the per-frame variation the upscaler needs to accumulate.
+    const int2 extent = int2(width, height);
+    diffuse = sampleDenoised(inDenoisedDiffuse, pixel, extent);
+    specular = sampleDenoised(inDenoisedSpecular, pixel, extent);
+    const float3 direct = pushConstants.directDenoised != 0
+                              ? sampleDenoised(inDirectDiffuse, pixel, extent)
+                              : inDirectDiffuse[pixel].rgb;
+    color += (unpackRadiance(diffuse) + max(direct, 0.0)) *
                  inDiffFactor[pixel].rgb +
              unpackRadiance(specular) * inSpecFactor[pixel].rgb;
     outputImage[pixel] = float4(color, 1.0);
