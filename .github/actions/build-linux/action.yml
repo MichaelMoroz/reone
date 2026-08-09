@@ -2,13 +2,23 @@ name: 'Build and run tests on Linux'
 runs:
   using: "composite"
   steps:
+      # INCOMPLETE, and this workflow cannot currently configure the project.
+      # CMakeLists requires imgui, VulkanHeaders, volk, VulkanMemoryAllocator
+      # and vk-bootstrap as CONFIG packages, plus Slang via SLANG_ROOT, and apt
+      # supplies none of them as such - so configure fails before compiling
+      # anything. The Windows job gets them from vcpkg. Resolving this means
+      # either bootstrapping vcpkg here too, or retiring the job until someone
+      # wants it enough to do that; see TOOL-026. Left visible rather than
+      # quietly deleted, because the README badge points at this workflow.
+      # SDL2 and GLEW are gone from the list: nothing in the build has referred
+      # to either since the OpenGL renderer was deleted in df1aa375.
       - name: Install dependencies
         shell: bash
         run: |-
           apt-get update
           apt install --no-install-recommends -y \
             cmake build-essential g++ \
-            libboost-all-dev libsdl2-dev libsdl3-dev libglew-dev libopenal-dev libmad0-dev libwxgtk3.2-dev libgmock-dev \
+            libboost-all-dev libsdl3-dev libopenal-dev libmad0-dev libwxgtk3.2-dev libgmock-dev \
             libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
 
       - name: Create Build Environment
