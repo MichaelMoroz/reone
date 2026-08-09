@@ -296,23 +296,26 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
     // therefore runs after the transform.
     const bool temporalResolve =
         antialiased && _options.antialiasing == graphics::AntiAliasing::Fsr;
-    if (temporalResolve)
-        plan.steps.push_back(graphics::SceneStep::AntiAliasing);
     if (!diagnosticImage) {
-        // After the resolve, not before it. A temporal resolve cannot
-        // reproject a billboard - transparency writes no motion and no depth,
-        // so drawn ahead of one it smears behind the camera. It also keeps the
-        // depth the resolve reads free of transparency by construction.
+        // Before the resolve, reversing the order this pass used to hold. The
+        // forward pass shares the G-buffer depth attachment, so it has to run
+        // while the colour chain is still at the render extent: once FSR has
+        // handed the display-sized image to the tail, pairing it with that
+        // render-sized depth opens a mismatched dynamic-rendering area and
+        // leaves the rest of the display target untouched. That is what showed
+        // as a menu's embedded scene filling only part of its panel.
         //
-        // Every mode, the traced one included. It used to be raster-only
-        // because the march collected additive layers itself and drawing them
-        // again here would have doubled them - but the tracer no longer
-        // traverses blended surfaces at all, so nothing draws them unless this
-        // does, and a lightsaber came out as a hilt with no blade. Primary
-        // visibility is rasterized in every mode; this is the part of it that
-        // does not fit in a G-buffer.
+        // The order it replaces existed for a reason that has not gone away: a
+        // temporal resolve cannot reproject a billboard, transparency writes
+        // no motion and no depth, and drawn ahead of one it smears behind the
+        // camera - a lightsaber once came out as a hilt with no blade. FSR's
+        // shading-change detection is the only thing standing in for that
+        // until a reactive mask exists, so this trades a smear that heuristic
+        // can partly absorb for a mismatch it cannot.
         plan.steps.push_back(graphics::SceneStep::Blended);
     }
+    if (temporalResolve)
+        plan.steps.push_back(graphics::SceneStep::AntiAliasing);
     // Unconditional. This pass is the encode, not an effect: without it a
     // linear image would be presented as though it were already display
     // colour. What used to switch it off is now GraphicsOptions::grade, which
