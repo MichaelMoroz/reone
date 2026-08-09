@@ -881,6 +881,113 @@ before it.
    starts** — it is the all-fog stress case and the render-and-look-at-it rule
    applies.
 
+### Revision 2026-08-09: the reservoirs go in a world-space hash grid
+
+The sequence above puts screen-space ReSTIR DI first and SHARC "on top, long
+term", as two structures. Discussion with the developer replaced that with one:
+**ReSTIR reservoirs stored in a world-space hash grid** — ReGIR in the
+literature — sharing the hashing scheme SHARC needs anyway. What follows is why,
+and the parts that are decided versus still open.
+
+**Screen-space reuse cannot retire the light-sampling problem.** It helps the
+primary vertex and nothing else, because vertex 2+ has no pixel to reuse from.
+The defect RECORD 2.6 names — bounce lighting does not exist for analytic
+lights, since NEE runs at the primary hit only — survives it untouched. A
+world-space structure is keyed by position, so every vertex hits it.
+
+**It also subtracts a temporal stage instead of adding one.** Screen-space reuse
+is a third temporal accumulator ahead of NRD and FSR, in a chain where
+stabilization is already pinned to zero because two temporal filters in series
+add their lag and the second cannot recover what the first smeared. World-
+anchored reservoirs need no reprojection and have no disocclusion — the same
+argument Part 3 already uses to reject froxels as the radiance store.
+
+**At our light counts it removes the need for a light BVH entirely.** Measured
+2026-08-09 across every module of both games: 15,270 lights total, K1 median 17
+per module and K2 median 72, worst module 628 (`302nar`), worst single room 120
+(`m44aa_01x`). Emissive triangles, counted from four scene captures, run 768
+(`danm14ab`) to 6,628 (`manm26ae`). A cell only has to narrow thousands to a
+handful, which a uniform or power-weighted candidate draw does; the O(log N)
+descent a Conty-Kulla BVH buys is answering a question this N does not pose.
+
+**Cell fill samples jittered points inside the voxel, not the cell centre.** The
+reservoir's target is then the cell *average*, which is the distribution the
+reservoirs are supposed to represent. A centre-point estimate is wrong exactly
+where LOD makes cells large — distance falloff is nonlinear across the cell, so
+the centre over-weights near lights for the far side — and worse, it can
+evaluate to zero for a light that is grazing at the centre and well-lit at a
+corner. A zero in the cell pdf where the true contribution is nonzero is lost
+energy. The unbiasedness condition is only that support: the per-point RIS at
+shade time re-weights against the true `NdotL·BRDF·attenuation`, so the estimator
+stays unbiased as long as the cell pdf is nonzero wherever the point target is.
+
+**The normal in the key is cheap here, contrary to the first estimate.** For a
+volumetric grid it multiplies cells by the bucket count. For a surface-anchored
+one it does not: a cell holding a floor patch has one normal, and bucketing only
+splits cells straddling a corner or an edge — call it 1.2-1.5x. That is what
+makes one key serve both payloads, and SHARC needs the normal regardless to
+defuse wall-leaking.
+
+**Occupancy is surface-scaled, which is what makes the whole thing affordable.**
+Entries exist where shading points land, so the count goes as area/cell², not
+volume/cell³. A 10x10x3 m room is ~320 m² of shadeable surface, so ~320 cells at
+1 m; a forty-room building ~13,000; a module with its exterior 30,000-40,000,
+and ~1.3x for normal splitting puts it near 50,000. At K=16 reservoirs of 16
+bytes that is 12.8 MB, with the hash table under 1 MB beside it. **Memory does
+not constrain this design and should not shape it.**
+
+**Fill cost does, and it decides where fill runs.** A full refresh is
+cells x K x M target evaluations — around 6.4M at those numbers — which is a
+sub-millisecond compute dispatch and impractical on the CPU, where a reference
+binned-SAH build already measured 0.55 us per primitive. Fill belongs in a GPU
+pass beside the merge kernel, amortisable across frames because the lights are
+static room-model nodes. The CPU-side build cost that framed the earlier BVH
+discussion is not a cost this design has.
+
+**The reservoir is two structures, not one.** Streaming form during fill carries
+the selected candidate, the running weight sum and the candidate count. Stored
+form carries only what shading reads: a tagged candidate index and the unbiased
+contribution weight `W = wSum / (M * p̂(y))`, eight bytes, extended to sixteen if
+cells accumulate across frames (capped `M`) or later store shadow-tested samples
+(a visibility bit and the tested point). Under 8,000 candidates fit in 13 bits
+with a type tag distinguishing analytic lights from emitter triangles, so the
+packing has room. **Do not store the surface point on an area light**: the cell
+target was averaged over jittered voxel positions, so a barycentric chosen
+against that average is meaningless at the shading point — re-pick it there.
+This is a GPU-shared struct and takes the schema treatment: one declaration in
+`slang/lib/scene_schema.slang`, a C++ mirror with `alignas` and `static_assert`ed
+offsets, both moving in the same commit. A reservoir array is the most
+stride-sensitive thing this design adds, so keep it a power of two — TRC-004 was
+a grown struct changing storage-buffer array stride into `VK_ERROR_DEVICE_LOST`.
+
+**SHARC's update pass is separate from the render pass, and that is a decision
+rather than a detail.** Point 2 above says "fed by the paths we already trace",
+which reads as updating the cache from the main path trace. The reference shape
+is a dedicated update pass at reduced resolution — a jittered subset of pixels,
+deeper paths than the render pass needs, depositing at every vertex — with the
+render pass only querying. Three reasons it wins here. FSR sits in the chain, so
+coupling makes cache density a function of render resolution and of whatever the
+upscaler is doing. Full-resolution deposits are badly distributed rather than
+merely wasteful: pixel density concentrates them near the camera on
+camera-facing surfaces, which is not where cell coverage is scarce. And `ptspp`
+is 1 in the live config and 3 by default, so coupling ties cache fill rate to a
+performance dial — turn spp down and the cache degrades with it, which is
+backwards. Either way SHARC is camera-anchored: cells exist where paths recently
+landed, and what the camera stops seeing ages out.
+
+**Sequencing, revised.** Per-vertex light sampling is a precondition for SHARC
+being worth reading, not a neighbour of it: the cache accumulates whatever the
+paths find, so with NEE at the primary only it caches the hemisphere-only
+estimate and bounce shortening propagates that deficiency faster. So the grid
+lands first, carrying reservoirs; SHARC's radiance payload joins the same
+hashing scheme afterwards. Items 1 and 2 above invert.
+
+**Open.** Whether the two payloads share one key and one table or share only the
+hashing scheme; cell size against world scale, which wants the real light-radius
+distribution rather than the 1 m assumed here; and whether cells store
+shadow-tested reservoirs, which is the one thing this design shares with the
+BVH's blind spot — a cell has a position and a normal but no visibility.
+
 ## The additive-gathering ladder
 
 The five-rung ladder for gathering additive emission along a segment — and why
