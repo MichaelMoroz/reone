@@ -22,9 +22,9 @@
 //   final = noiseFree + diffuse.rgb * diffFactor + specular.rgb * specFactor
 //
 // The radiance channels are demodulated by the primary material factors so the
-// denoiser sees transport rather than material variation, and each carries its REBLUR-
-// normalized average first-bounce hit distance in alpha, converted to YCoCg
-// at write. Normal/roughness match NRD's RGBA16_SNORM-with-FP encoding.
+// denoiser sees transport rather than material variation, and each carries its
+// average first-bounce hit distance in alpha, in world units, which is what
+// RELAX reads. Normal/roughness match NRD's RGBA16_SNORM-with-FP encoding.
 // Motion is world-space, previous minus current.
 
 import uniforms;
@@ -62,18 +62,14 @@ import tracing.resources;
 // share a kernel.
 //
 // NRD documents that slot as IN_DIFF_RADIANCE_HITDIST, so alpha ought to be a
-// hit distance rather than the penumbra written below. Under RELAX it is not,
-// and the reason is in our own settings: RELAX_PrePass is the only pass that
-// reads the incoming diffuse alpha as a distance, and the direct denoiser sets
-// diffusePrepassBlurRadius to 0 with hit-distance reconstruction off, so that
-// pass contributes nothing. Everything downstream in RELAX rewrites alpha with
-// its own variance, moments and history length. The slot has no reader, which
-// is what makes the penumbra free there. Measured 2026-08-09: correcting it
-// changed the frame by 0.30 mean against a 0.23 nondeterminism floor.
-//
-// It was not free under REBLUR, which feeds hit distance into accumulation and
-// history fix, and which also wanted YCoCg radiance this write never produced.
-// REBLUR is retired (TRC-049), which is what closed TRC-048.
+// hit distance rather than the penumbra written below. It is not, and nothing
+// reads it: RELAX_PrePass is the only pass that takes the incoming diffuse
+// alpha as a distance, and the direct denoiser sets diffusePrepassBlurRadius to
+// 0 with hit-distance reconstruction off, so that pass contributes nothing.
+// Everything downstream rewrites alpha with its own variance, moments and
+// history length. That is what makes the penumbra free here. Measured
+// 2026-08-09: correcting it moved the frame by 0.30 mean against a 0.23
+// nondeterminism floor. TRC-048, closed.
 [[vk::binding(14, 2)]] RWTexture2D<float4> outDirectDiffuse;
 
 /** Environment / miss distance: beyond any scene, inside NRD's defaults. */
@@ -88,9 +84,6 @@ public struct TraceOutputs {
     public float diffuseHitDist;
     public float3 specular;
     public float specularHitDist;
-    /** What REBLUR's hit-distance curve is evaluated at, when it is the one running. */
-    public float hitDistViewZ;
-    public float hitDistRoughness;
     public float3 normal;
     public float roughness;
     public float viewZ;
@@ -127,8 +120,6 @@ public struct TraceOutputs {
         outputs.diffuseHitDist = 0.0;
         outputs.specular = float3(0.0);
         outputs.specularHitDist = 0.0;
-        outputs.hitDistViewZ = kPtInfDistance;
-        outputs.hitDistRoughness = 1.0;
         outputs.normal = float3(0.0);
         outputs.roughness = 1.0;
         outputs.viewZ = kPtInfDistance;
@@ -178,20 +169,14 @@ public struct TraceOutputs {
     }
 
     public void write(uint2 pixel) {
-        // RELAX reads linear radiance and a raw world-space hit distance;
-        // REBLUR reads YCoCg and one normalized against its own curve. Feeding
-        // either the other's packing is silent - both are four floats in range
-        // - so the branch lives here, next to the write.
-        if (ptDenoiserIsRelax()) {
-            outDiffuse[pixel] = float4(diffuse, diffuseHitDist);
-            outSpecular[pixel] = float4(specular, specularHitDist);
-        } else {
-            outDiffuse[pixel] = float4(ptLinearToYCoCg(diffuse),
-                                       ptNormalizeHitDist(diffuseHitDist, hitDistViewZ, 1.0));
-            outSpecular[pixel] = float4(ptLinearToYCoCg(specular),
-                                        ptNormalizeHitDist(specularHitDist, hitDistViewZ,
-                                                           hitDistRoughness));
-        }
+        // RELAX reads linear radiance and a raw world-space hit distance, which
+        // is what these are. This was a branch while REBLUR was selectable:
+        // that one wants YCoCg and a hit distance normalized against its own
+        // curve, and feeding either denoiser the other's packing is silent,
+        // because both are four floats in range. One denoiser, one encoding,
+        // and no way left to get it wrong.
+        outDiffuse[pixel] = float4(diffuse, diffuseHitDist);
+        outSpecular[pixel] = float4(specular, specularHitDist);
         outNormalRoughness[pixel] = float4(normal, roughness);
         outViewZ[pixel] = viewZ;
         outMotion[pixel] = float4(motion, 0.0);
@@ -215,13 +200,3 @@ public struct TraceOutputs {
     }
 };
 
-/**
- * REBLUR's hit-distance normalization at its default parameters
- * (3.0, 0.1, 20.0, -25.0), roughness-dependent for the specular channel and
- * evaluated at roughness 1 for diffuse.
- */
-public float ptNormalizeHitDist(float hitDist, float viewZ, float roughness) {
-    float f = (3.0 + abs(viewZ) * 0.1) *
-              lerp(1.0, 20.0, saturate(exp2(-25.0 * roughness * roughness)));
-    return saturate(hitDist / f);
-}

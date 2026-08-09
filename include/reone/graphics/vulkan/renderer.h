@@ -110,8 +110,7 @@ public:
     }
     std::unique_ptr<ITracingPipeline> makeTracingPipeline(
         const TracingPipelineDesc &desc) override;
-    std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(glm::ivec2 extent,
-                                                          TracingDenoiserKind kind) override;
+    std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(glm::ivec2 extent) override;
     std::unique_ptr<IUpscaler> makeUpscaler(glm::ivec2 extent, bool highDynamicRange) override;
     std::unique_ptr<ITracingStructure> makeTracingStructure() override;
     void prepareMesh(const Mesh &mesh) override;

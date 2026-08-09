@@ -58,8 +58,6 @@
 
 /** Mirrors NrdResolvePushConstants in tracingpipeline.cpp. */
 struct NrdResolvePushConstants {
-    /** Non-zero when RELAX ran, whose channels are already linear. */
-    uint relax;
     /**
      * A debug channel this pass owns, or 0. The three below exist only after
      * denoising, so the trace kernel cannot show them: it writes what it fed
@@ -76,18 +74,14 @@ static const uint kDebugFilteredDirect = 19;
 /** Denoised channels are undefined beyond NRD's denoising range. */
 static const float kDenoisedRange = 1.0e5;
 
-/** _NRD_YCoCgToLinear from NRD.hlsli. REBLUR filters in YCoCg; RELAX does not. */
-float3 yCoCgToLinear(float3 color) {
-    float t = color.x - color.z;
-    float3 r;
-    r.y = color.x + color.z;
-    r.x = t + color.y;
-    r.z = t - color.y;
-    return max(r, 0.0);
-}
-
-float3 unpackRadiance(float3 packed) {
-    return pushConstants.relax != 0u ? max(packed, 0.0) : yCoCgToLinear(packed);
+/**
+ * RELAX filters linear radiance and hands it back linear, so there is nothing
+ * to decode - only the clamp against the small negatives an edge-stopping
+ * filter can produce. This was a branch while REBLUR was selectable, since that
+ * one filters in YCoCg and its output had to be converted back.
+ */
+float3 unpackRadiance(float3 stored) {
+    return max(stored, 0.0);
 }
 
 [shader("compute")]

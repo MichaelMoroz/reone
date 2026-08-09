@@ -130,30 +130,3 @@ public float3 ptDisplayTransform(float3 linearColor, float exposure, uint tonema
     return ptLinearToGamma(mapped);
 }
 
-/**
- * REBLUR filters radiance in YCoCg; the front end owes it the conversion on
- * the noisy channels and the composite undoes it on the denoised result.
- * RELAX takes linear radiance instead and neither of these runs for it.
- *
- * These are _NRD_LinearToYCoCg / _NRD_YCoCgToLinear from NRD.hlsli, transcribed
- * rather than reimplemented. What stood here before was the reversible lifting
- * transform, which agrees on luma but carries twice the chroma: the pair
- * round-tripped so colour came out right, and every chroma-sensitive decision
- * inside REBLUR - the fast-history colour box, the firefly clamp - silently saw
- * a box twice as wide as the one it was tuned for.
- */
-public float3 ptLinearToYCoCg(float3 color) {
-    float Y = dot(color, float3(0.25, 0.5, 0.25));
-    float Co = dot(color, float3(0.5, 0.0, -0.5));
-    float Cg = dot(color, float3(-0.25, 0.5, -0.25));
-    return float3(Y, Co, Cg);
-}
-
-public float3 ptYCoCgToLinear(float3 color) {
-    float t = color.x - color.z;
-    float3 r;
-    r.y = color.x + color.z;
-    r.x = t + color.y;
-    r.z = t - color.y;
-    return max(r, 0.0);
-}

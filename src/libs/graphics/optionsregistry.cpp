@@ -539,31 +539,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                             "apply primary-vertex direct light at the resolve "
                             "instead of through the denoiser",
                             &GraphicsOptions::ptDirectChannel));
-    // NRD fixes the denoiser when it builds its pipeline set, so this is staged
-    // like the anti-aliasing slot rather than live.
-    descs.push_back(enumOpt(
-        "ptdenoiser", OptionApply::Reapply,
-        "NRD denoiser for the traced channels: reblur or relax",
-        [](const GraphicsOptions &o) -> std::string {
-            return o.ptDenoiser == Denoiser::Reblur ? "reblur" : "relax";
-        },
-        [](GraphicsOptions &o, const std::string &value) {
-            if (value == "reblur") {
-                o.ptDenoiser = Denoiser::Reblur;
-            } else if (value == "relax") {
-                o.ptDenoiser = Denoiser::Relax;
-            } else {
-                throw std::invalid_argument(
-                    "Graphics option 'ptdenoiser': unknown denoiser '" + value +
-                    "'; expected reblur or relax");
-            }
-        },
-        [](const GraphicsOptions &a, const GraphicsOptions &b) {
-            return a.ptDenoiser == b.ptDenoiser;
-        },
-        [](const GraphicsOptions &from, GraphicsOptions &to) {
-            to.ptDenoiser = from.ptDenoiser;
-        }));
     // Seconds, not frames - see TracingDenoiserTuning.
     descs.push_back(floatOpt("ptnrdaccumtime", OptionApply::Live,
                              "denoiser history, seconds",
@@ -571,9 +546,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(floatOpt("ptnrdfastaccumtime", OptionApply::Live,
                              "denoiser responsive history, seconds",
                              &GraphicsOptions::ptNrdFastAccumulationTime, 0.0f, 2.0f));
-    descs.push_back(floatOpt("ptnrdstabilizationtime", OptionApply::Live,
-                             "REBLUR stabilization, seconds; 0 disables the pass",
-                             &GraphicsOptions::ptNrdStabilizationTime, 0.0f, 2.0f));
     descs.push_back(intOpt("ptnrdhistoryfix", OptionApply::Live, "denoiser history fix frames",
                            &GraphicsOptions::ptNrdHistoryFixFrames, 0, 63));
     descs.push_back(floatOpt("ptnrddirectaccumtime", OptionApply::Live,
@@ -602,13 +574,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                              &GraphicsOptions::ptNrdDisocclusionThreshold, 0.0f, 16.0f));
     descs.push_back(boolOpt("ptnrdantifirefly", OptionApply::Live, "enable anti-firefly",
                             &GraphicsOptions::ptNrdAntiFirefly));
-    descs.push_back(floatOpt("ptnrdminblurradius", OptionApply::Live, "REBLUR minimum blur radius",
-                             &GraphicsOptions::ptNrdMinBlurRadius, 0.0f, 256.0f));
-    descs.push_back(floatOpt("ptnrdmaxblurradius", OptionApply::Live, "REBLUR maximum blur radius",
-                             &GraphicsOptions::ptNrdMaxBlurRadius, 0.0f, 256.0f));
-    descs.push_back(floatOpt("ptnrdplanedistancesensitivity", OptionApply::Live,
-                             "REBLUR plane distance sensitivity",
-                             &GraphicsOptions::ptNrdPlaneDistanceSensitivity, 0.0f, 16.0f));
     descs.push_back(intOpt("ptnrdatrous", OptionApply::Live, "RELAX a-trous iterations",
                            &GraphicsOptions::ptNrdAtrousIterations, 2, 8));
     descs.push_back(floatOpt("ptnrddiffusephi", OptionApply::Live,

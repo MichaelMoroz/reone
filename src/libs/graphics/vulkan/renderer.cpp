@@ -657,10 +657,9 @@ std::unique_ptr<ITracingPipeline> VulkanRenderer::makeTracingPipeline(
                                           desc.pushConstantSize, desc.label);
 }
 
-std::unique_ptr<ITracingDenoiser> VulkanRenderer::makeTracingDenoiser(glm::ivec2 extent,
-                                                                      TracingDenoiserKind kind) {
+std::unique_ptr<ITracingDenoiser> VulkanRenderer::makeTracingDenoiser(glm::ivec2 extent) {
 #ifdef R_ENABLE_NRD
-    return ::reone::graphics::makeTracingDenoiser(_device, extent, kind);
+    return ::reone::graphics::makeTracingDenoiser(_device, extent);
 #else
     return nullptr;
 #endif

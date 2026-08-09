@@ -108,8 +108,8 @@ denoiser is broken. `ENABLE_FSR` is `ON` by default, but MSVC only — its
 committed shader compiler is Windows-only and a non-MSVC configure with it on
 is a hard `FATAL_ERROR`.
 
-That is also a real bug and not only a harness nuisance — REBLUR returning a
-different result from identical input is temporal instability. It is backlog
+That is also a real bug and not only a harness nuisance — the denoiser returning
+a different result from identical input is temporal instability. It is backlog
 7.5; measuring around it is the workaround, not the fix.
 
 So: **compare traced changes with the denoiser off.** Reach for the

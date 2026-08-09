@@ -453,6 +453,30 @@ a task genuinely cannot be verified by the permitted means, the agent should say
 so and stop — that is information the developer needs — rather than being handed
 a capability to work around it.
 
+### 1.19 A YCoCg pair that round-trips can still be the wrong YCoCg
+
+Kept because the code carrying it went with REBLUR (TRC-049) and the lesson is
+owed to whatever custom denoiser replaces NRD.
+
+REBLUR filters radiance in YCoCg, so the front end converted on the noisy
+channels and the composite converted back on the denoised result. What stood in
+`ptLinearToYCoCg` / `ptYCoCgToLinear` at first was the reversible *lifting*
+transform. It agrees with NRD's on luma and carries **twice the chroma**.
+
+Nothing looked wrong, because the pair round-tripped: convert in, convert out,
+and the colour that came back was the colour that went in. The damage was to
+every decision REBLUR made *in between* while the value sat in its own space —
+the fast-history colour box and the firefly clamp both saw a box twice as wide
+as the one they were tuned for. The fix was to transcribe `_NRD_LinearToYCoCg`
+and `_NRD_YCoCgToLinear` from `NRD.hlsli` rather than write an equivalent.
+
+The general form: when a value is handed to a black box in an agreed encoding,
+a self-consistent round trip proves nothing about what the box did with it.
+Only the box's own definition of the encoding counts. The same shape recurred in
+TRC-048, where the direct channel's alpha was in the right units for the reader
+that had been switched off and the wrong ones for NRD's contract, and nothing
+observable said so either.
+
 ---
 
 ## 2. Design analyses worth keeping, though the decision is made

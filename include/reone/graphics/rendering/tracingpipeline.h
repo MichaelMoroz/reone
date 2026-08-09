@@ -106,14 +106,6 @@ private:
      * itself is not NRD-only even though the pass that fills it is.
      */
     std::array<std::unique_ptr<IImage>, 2> _shadowFiltered;
-    /**
-     * Fixed when the instance is built, and read by the trace kernel as well:
-     * the two denoisers want their radiance packed differently, so the writer
-     * and the reader have to agree on one answer for the whole frame rather
-     * than each consulting the live option. The kernel packs it into its own
-     * uniform flags, which is why it outlives the guard below.
-     */
-    TracingDenoiserKind _denoiserKind {TracingDenoiserKind::Relax};
 #ifdef R_ENABLE_NRD
     std::unique_ptr<IComputePipeline> _shadowFilterPipeline;
     std::vector<ComputeResourceSlot> _shadowFilterBindings;

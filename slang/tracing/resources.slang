@@ -193,12 +193,6 @@ public float3 ptDecodeEmission(float3 rgb) {
 
 public static const uint kPtFlagStats = 1u;
 /**
- * The denoised channels are being written for RELAX rather than REBLUR, which
- * changes how they are packed: linear radiance and a raw hit distance instead
- * of YCoCg and one normalized against REBLUR's curve.
- */
-public static const uint kPtFlagRelax = 2u;
-/**
  * Primary-vertex direct light takes its own channel to the resolve instead of
  * being accumulated into the denoised ones. Off routes it back through NRD,
  * which is what this replaced and what it is compared against.
@@ -222,10 +216,6 @@ public uint ptTonemapOperator() {
 
 public bool ptStatsEnabled() {
     return (pushConstants.traceFlags & kPtFlagStats) != 0;
-}
-
-public bool ptDenoiserIsRelax() {
-    return (pushConstants.traceFlags & kPtFlagRelax) != 0;
 }
 
 public bool ptDirectChannelEnabled() {

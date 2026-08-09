@@ -100,11 +100,6 @@ struct TracingDenoiserInputs {
  * TracingDenoiserTuning - so the choice reaches the trace kernel as well, and
  * changing it rebuilds the instance rather than being live.
  */
-enum class TracingDenoiserKind {
-    Reblur,
-    Relax
-};
-
 /**
  * Live tuning, in NRD's own units where they are shared and its own names where
  * they are not. Several fields apply to one denoiser only, marked below; the
@@ -120,13 +115,10 @@ enum class TracingDenoiserKind {
  * carries.
  */
 struct TracingDenoiserTuning {
-    TracingDenoiserKind kind {TracingDenoiserKind::Relax};
     /** Seconds of history. NRD's constant for both denoisers is 0.5. */
     float accumulationTime {0.5f};
     /** Seconds of responsive history, clamped below the above. */
     float fastAccumulationTime {0.1f};
-    /** Seconds of REBLUR's own stabilization; 0 disables the pass. */
-    float stabilizationTime {0.0f};
     int historyFixFrames {3};
     float diffusePrepassBlurRadius {30.0f};
     float specularPrepassBlurRadius {50.0f};
@@ -134,11 +126,6 @@ struct TracingDenoiserTuning {
     float roughnessFraction {0.15f};
     float disocclusionThreshold {0.01f};
     bool antiFirefly {true};
-    /** REBLUR only. */
-    float minBlurRadius {1.0f};
-    float maxBlurRadius {30.0f};
-    float planeDistanceSensitivity {0.02f};
-    /** RELAX only. */
     int atrousIterations {5};
     float diffusePhiLuminance {2.0f};
     float specularPhiLuminance {1.0f};

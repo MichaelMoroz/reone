@@ -174,9 +174,7 @@ void TracingPipeline::init() {
 
 #ifdef R_ENABLE_NRD
     {
-        _denoiserKind = _options.ptDenoiser == Denoiser::Reblur ? TracingDenoiserKind::Reblur
-                                                                : TracingDenoiserKind::Relax;
-        _nrdDenoiser = _renderer.makeTracingDenoiser(_extent, _denoiserKind);
+        _nrdDenoiser = _renderer.makeTracingDenoiser(_extent);
         if (_nrdDenoiser) {
 
             _shadowFilterPipeline = _renderer.makeComputePipeline({"shadow_filter", "main", 2});
@@ -399,7 +397,6 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                                   std::max(0.0001f, _options.ptRayOffset),
                                   std::max(0.0f, _options.ptSunIntensity),
                                   (_options.ptTraceStats ? 1u : 0u) |
-                                      (_denoiserKind == TracingDenoiserKind::Relax ? 2u : 0u) |
                                       (_options.ptDirectChannel ? 4u : 0u) |
                                       (static_cast<uint32_t>(std::clamp(_options.debugView, 0, kMaxDebugView)) << 4) |
                                       (static_cast<uint32_t>(std::clamp(_options.tonemap, 0, 1)) << 10),
@@ -471,10 +468,8 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
         glm::vec2 jitterPixels {jitter.x * 0.5f * static_cast<float>(_extent.x),
                                 -jitter.y * 0.5f * static_cast<float>(_extent.y)};
         TracingDenoiserTuning tuning;
-        tuning.kind = _denoiserKind;
         tuning.accumulationTime = _options.ptNrdAccumulationTime;
         tuning.fastAccumulationTime = _options.ptNrdFastAccumulationTime;
-        tuning.stabilizationTime = _options.ptNrdStabilizationTime;
         tuning.historyFixFrames = _options.ptNrdHistoryFixFrames;
         tuning.directAccumulationTime = _options.ptNrdDirectAccumulationTime;
         tuning.directAtrousIterations = _options.ptNrdDirectAtrousIterations;
@@ -485,9 +480,6 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
         tuning.roughnessFraction = _options.ptNrdRoughnessFraction;
         tuning.disocclusionThreshold = _options.ptNrdDisocclusionThreshold;
         tuning.antiFirefly = _options.ptNrdAntiFirefly;
-        tuning.minBlurRadius = _options.ptNrdMinBlurRadius;
-        tuning.maxBlurRadius = _options.ptNrdMaxBlurRadius;
-        tuning.planeDistanceSensitivity = _options.ptNrdPlaneDistanceSensitivity;
         tuning.atrousIterations = _options.ptNrdAtrousIterations;
         tuning.diffusePhiLuminance = _options.ptNrdDiffusePhiLuminance;
         tuning.specularPhiLuminance = _options.ptNrdSpecularPhiLuminance;
@@ -568,10 +560,8 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
             }
             // Mirrors NrdResolvePushConstants in slang/nrd_resolve.slang.
             struct NrdResolvePushConstants {
-                uint32_t relax;
                 uint32_t debugView;
-            } resolveConstants {_denoiserKind == TracingDenoiserKind::Relax ? 1u : 0u,
-                                isResolveDebugView(_options.debugView)
+            } resolveConstants {isResolveDebugView(_options.debugView)
                                     ? static_cast<uint32_t>(_options.debugView)
                                     : 0u};
             commandBuffer.dispatch(*_compositePipeline,

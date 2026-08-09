@@ -138,8 +138,6 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"maxdirectionalshadows", std::to_string(options.maxDirectionalShadows)},
         {"maxpointshadows", std::to_string(options.maxPointShadows)},
         {"pbrlightmapintensity", formatConfigFloat(options.pbrLightmapIntensity)},
-        {"ptdenoiser", options.ptDenoiser == graphics::Denoiser::Reblur ? "reblur" : "relax"},
-        {"ptnrdstabilizationtime", formatConfigFloat(options.ptNrdStabilizationTime)},
         {"ptnrdaccumtime", formatConfigFloat(options.ptNrdAccumulationTime)},
         {"ptnrdfastaccumtime", formatConfigFloat(options.ptNrdFastAccumulationTime)},
         {"ptnrdatrous", std::to_string(options.ptNrdAtrousIterations)},
@@ -150,11 +148,8 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"ptnrdhistoryfix", std::to_string(options.ptNrdHistoryFixFrames)},
         {"ptnrddiffuseprepassblurradius", formatConfigFloat(options.ptNrdDiffusePrepassBlurRadius)},
         {"ptnrdspecularprepassblurradius", formatConfigFloat(options.ptNrdSpecularPrepassBlurRadius)},
-        {"ptnrdminblurradius", formatConfigFloat(options.ptNrdMinBlurRadius)},
-        {"ptnrdmaxblurradius", formatConfigFloat(options.ptNrdMaxBlurRadius)},
         {"ptnrdlobeanglefraction", formatConfigFloat(options.ptNrdLobeAngleFraction)},
         {"ptnrdroughnessfraction", formatConfigFloat(options.ptNrdRoughnessFraction)},
-        {"ptnrdplanedistancesensitivity", formatConfigFloat(options.ptNrdPlaneDistanceSensitivity)},
         {"ptnrddisocclusionthreshold", formatConfigFloat(options.ptNrdDisocclusionThreshold)},
         {"ptnrdantifirefly", std::to_string(options.ptNrdAntiFirefly)},
         {"fsrsharpness", formatConfigFloat(options.fsrSharpness)},
@@ -1115,21 +1110,8 @@ void Editor::graphicsPathTracingTab() {
                 "lightmap cache already answers much of it on static geometry.");
 #ifdef R_ENABLE_NRD
     ImGui::Checkbox("NRD denoiser", &options.ptDenoise);
-    settingHint("Diffuse and specular, through REBLUR or RELAX. Off shows the raw traced frame; "
-                "debug views always bypass it. Which denoiser, and its tuning, are under "
-                "Advanced.");
-    static const char *kDenoiserNames[] = {"REBLUR", "RELAX"};
-    int denoiser = static_cast<int>(staged.ptDenoiser);
-    if (ImGui::Combo("Denoiser", &denoiser, kDenoiserNames, IM_ARRAYSIZE(kDenoiserNames))) {
-        staged.ptDenoiser = static_cast<graphics::Denoiser>(denoiser);
-    }
-    settingHint("REBLUR is cheaper and spends its budget on spatial filtering; RELAX is an "
-                "a-trous edge-stopping filter that keeps edges and gloss for more time. NRD fixes "
-                "the choice when it builds its pipelines, so this one waits for Apply.");
-    if (staged.ptDenoiser != options.ptDenoiser) {
-        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Running: %s until Apply.",
-                           kDenoiserNames[static_cast<int>(options.ptDenoiser)]);
-    }
+    settingHint("Diffuse and specular, through RELAX. Off shows the raw traced frame; "
+                "debug views always bypass it. Its tuning is under Advanced.");
     // Order matches the enum, so the index is the value.
     static const char *kShadowFilterNames[] = {"Off", "Penumbra blur", "Denoiser"};
     int shadowFilter = static_cast<int>(options.ptShadowFilter);
@@ -1282,7 +1264,6 @@ void Editor::graphicsAdvancedTab() {
 
 #ifdef R_ENABLE_NRD
     if (ImGui::TreeNode("Denoiser tuning")) {
-        const bool relax = _engine._options.graphics.ptDenoiser == graphics::Denoiser::Relax;
         ImGui::SeparatorText("Temporal accumulation");
         ImGui::SliderFloat("History", &options.ptNrdAccumulationTime, 0.0f, 2.0f, "%.2f s");
         settingHint("How long light is remembered, in seconds rather than frames. NRD converts it "
@@ -1314,25 +1295,8 @@ void Editor::graphicsAdvancedTab() {
         settingHint(kRejectionHint);
         ImGui::Checkbox("Anti-firefly", &options.ptNrdAntiFirefly);
 
-        ImGui::BeginDisabled(relax);
-        ImGui::SeparatorText("REBLUR only");
-        ImGui::SliderFloat("Stabilization", &options.ptNrdStabilizationTime, 0.0f, 1.0f, "%.2f s");
-        settingHint("REBLUR's own temporal stabilization - a small anti-aliaser. Zero disables the "
-                    "pass, which is what you want with FSR in the slot behind it: two temporal "
-                    "filters in series add their lag, and the second cannot recover what the first "
-                    "already smeared.", true);
-        ImGui::SliderFloat("Min blur radius", &options.ptNrdMinBlurRadius, 0.0f, 10.0f, "%.1f");
-        ImGui::SliderFloat("Max blur radius", &options.ptNrdMaxBlurRadius, 0.0f, 60.0f, "%.0f");
-        settingHint("The ceiling REBLUR blurs to before history has converged. Read it together "
-                    "with the accumulation time: a short history never converges, so it sits near "
-                    "this number permanently.", true);
-        ImGui::SliderFloat("Plane sensitivity", &options.ptNrdPlaneDistanceSensitivity, 0.005f, 0.5f, "%.3f",
-                           ImGuiSliderFlags_Logarithmic);
-        settingHint(kRejectionHint, true);
-        ImGui::EndDisabled();
 
-        ImGui::BeginDisabled(!relax);
-        ImGui::SeparatorText("RELAX only");
+        ImGui::SeparatorText("RELAX");
         ImGui::SliderInt("A-trous iterations", &options.ptNrdAtrousIterations, 2, 8);
         settingHint("Wavelet passes. Each doubles the reach of the filter while its edge stoppers "
                     "keep it off the edges - which is how RELAX covers ground without the flat "
@@ -1343,7 +1307,6 @@ void Editor::graphicsAdvancedTab() {
         ImGui::SliderFloat("Depth threshold", &options.ptNrdDepthThreshold, 0.0f, 0.05f, "%.4f",
                            ImGuiSliderFlags_Logarithmic);
         ImGui::SliderFloat("Specular lobe slack", &options.ptNrdSpecularLobeAngleSlack, 0.0f, 2.0f, "%.2f deg");
-        ImGui::EndDisabled();
         ImGui::TreePop();
     }
 #endif

@@ -96,13 +96,6 @@ constexpr bool isResolveDebugView(int view) {
     return view >= 17 && view <= 19;
 }
 
-enum class Denoiser {
-    /** Cheaper, and spends its budget on spatial filtering. */
-    Reblur,
-    /** An a-trous edge-stopping filter: keeps edges and gloss, costs more. */
-    Relax,
-};
-
 /**
  * Which renderer shades the frame.
  *
@@ -480,7 +473,6 @@ struct GraphicsOptions {
      * which is the trade this content wants. Staged, not live: NRD fixes the
      * denoiser when the instance is built.
      */
-    Denoiser ptDenoiser {Denoiser::Relax};
     /**
      * Denoiser tuning, exposed in the Path tracing panel. Accumulation is in
      * seconds, which is what NRD asks to be configured in - a frame count is
@@ -495,7 +487,6 @@ struct GraphicsOptions {
      */
     float ptNrdAccumulationTime {0.5f};
     float ptNrdFastAccumulationTime {0.1f};
-    float ptNrdStabilizationTime {0.0f};
     int ptNrdHistoryFixFrames {3};
     /**
      * The direct denoiser's own history and kernel, separate from the bounce
@@ -517,9 +508,6 @@ struct GraphicsOptions {
     float ptNrdDisocclusionThreshold {0.01f};
     bool ptNrdAntiFirefly {true};
     /** REBLUR only. */
-    float ptNrdMinBlurRadius {1.0f};
-    float ptNrdMaxBlurRadius {30.0f};
-    float ptNrdPlaneDistanceSensitivity {0.02f};
     /** RELAX only. */
     int ptNrdAtrousIterations {5};
     float ptNrdDiffusePhiLuminance {2.0f};

@@ -497,7 +497,5 @@ void main() {
     // contact-close, which is what a zero would otherwise mean.
     outputs.diffuseHitDist = diffHitCount > 0.0 ? diffHitSum / diffHitCount : 0.0;
     outputs.specularHitDist = specHitCount > 0.0 ? specHitSum / specHitCount : 0.0;
-    outputs.hitDistViewZ = transportViewZ;
-    outputs.hitDistRoughness = primaryShading.roughness;
     finishPixel(pixel, outputs, debug);
 }

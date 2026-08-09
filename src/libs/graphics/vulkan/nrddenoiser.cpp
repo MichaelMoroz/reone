@@ -33,17 +33,13 @@ namespace reone {
 
 namespace graphics {
 
-std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(VulkanDevice &device,
-                                                       glm::ivec2 extent,
-                                                       TracingDenoiserKind kind) {
+std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(VulkanDevice &device, glm::ivec2 extent) {
     const nrd::LibraryDesc &libraryDesc = *nrd::GetLibraryDesc();
-    // The denoiser is fixed at instance creation: NRD compiles a pipeline set
-    // per denoiser, and the two take different inputs anyway - RELAX wants
-    // linear radiance and a raw hit distance where REBLUR wants YCoCg and a
-    // normalized one - so switching is a rebuild, not a setting.
-    const nrd::Denoiser type = kind == TracingDenoiserKind::Relax
-                                   ? nrd::Denoiser::RELAX_DIFFUSE_SPECULAR
-                                   : nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
+    // NRD compiles a pipeline set per denoiser, so this is fixed at instance
+    // creation rather than being a setting. REBLUR was the alternative and is
+    // gone (TRC-049); RELAX takes linear radiance and a raw hit distance, which
+    // is what the trace kernel now writes unconditionally.
+    const nrd::Denoiser type = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
     // A second denoiser in the same instance, diffuse-only, for primary-vertex
     // direct light. One instance rather than two: NRD sizes its pools for the
     // whole instance and the pipeline set is shared, so the second denoiser
@@ -54,9 +50,7 @@ std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(VulkanDevice &device,
     // estimate per pixel, dominated by the bounce noise, and a kernel sized for
     // that erases shadow detail that had already converged. Apart, each gets
     // its own variance, its own history and its own accumulation time.
-    const nrd::Denoiser directType = kind == TracingDenoiserKind::Relax
-                                         ? nrd::Denoiser::RELAX_DIFFUSE
-                                         : nrd::Denoiser::REBLUR_DIFFUSE;
+    const nrd::Denoiser directType = nrd::Denoiser::RELAX_DIFFUSE;
     const std::array<nrd::DenoiserDesc, 2> denoiserDescs {
         nrd::DenoiserDesc {NrdDenoiser::kCombinedIdentifier, type},
         nrd::DenoiserDesc {NrdDenoiser::kDirectIdentifier, directType}};
@@ -72,12 +66,12 @@ std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(VulkanDevice &device,
     info("NRD " + std::to_string(libraryDesc.versionMajor) + "." +
          std::to_string(libraryDesc.versionMinor) + "." +
          std::to_string(libraryDesc.versionBuild) + " up: " +
-         (kind == TracingDenoiserKind::Relax ? "RELAX" : "REBLUR") + ", " +
+         "RELAX, " +
          std::to_string(instanceDesc.pipelinesNum) + " pipelines, " +
          std::to_string(instanceDesc.permanentPoolSize) + " permanent + " +
          std::to_string(instanceDesc.transientPoolSize) + " transient pool textures, " +
          "direct channel denoised separately");
-    auto result = std::make_unique<NrdDenoiser>(device, *instance, extent, true, kind);
+    auto result = std::make_unique<NrdDenoiser>(device, *instance, extent, true);
     result->init();
     return result;
 }
@@ -446,51 +440,26 @@ void NrdDenoiser::denoise(ICommandBuffer &commandBuffer,
     // Without them the spatial filter sees a signal full of holes and widens to
     // cover them, which is most of the detail loss the frame showed.
     const auto reconstruction = nrd::HitDistanceReconstructionMode::AREA_3X3;
-    if (_kind == TracingDenoiserKind::Relax) {
-        nrd::RelaxSettings relax {};
-        relax.diffuseMaxAccumulatedFrameNum = frames(tuning.accumulationTime, nrd::RELAX_MAX_HISTORY_FRAME_NUM);
-        relax.specularMaxAccumulatedFrameNum = relax.diffuseMaxAccumulatedFrameNum;
-        relax.diffuseMaxFastAccumulatedFrameNum = frames(tuning.fastAccumulationTime, relax.diffuseMaxAccumulatedFrameNum);
-        relax.specularMaxFastAccumulatedFrameNum = relax.diffuseMaxFastAccumulatedFrameNum;
-        relax.historyFixFrameNum = static_cast<uint32_t>(glm::max(0, tuning.historyFixFrames));
-        relax.diffusePrepassBlurRadius = glm::max(0.0f, tuning.diffusePrepassBlurRadius);
-        relax.specularPrepassBlurRadius = glm::max(0.0f, tuning.specularPrepassBlurRadius);
-        relax.diffusePhiLuminance = glm::max(0.0f, tuning.diffusePhiLuminance);
-        relax.specularPhiLuminance = glm::max(0.0f, tuning.specularPhiLuminance);
-        relax.lobeAngleFraction = glm::clamp(tuning.lobeAngleFraction, 0.0f, 1.0f);
-        relax.roughnessFraction = glm::clamp(tuning.roughnessFraction, 0.0f, 1.0f);
-        relax.specularLobeAngleSlack = glm::max(0.0f, tuning.specularLobeAngleSlack);
-        relax.atrousIterationNum = static_cast<uint32_t>(glm::clamp(tuning.atrousIterations, 2, 8));
-        relax.depthThreshold = glm::max(1e-4f, tuning.depthThreshold);
-        relax.hitDistanceReconstructionMode = reconstruction;
-        relax.enableAntiFirefly = tuning.antiFirefly;
-        if (nrd::SetDenoiserSettings(_instance, kCombinedIdentifier, &relax) != nrd::Result::SUCCESS) {
-            warn("NRD: SetDenoiserSettings failed");
-            return;
-        }
-    } else {
-        nrd::ReblurSettings reblur {};
-        reblur.maxAccumulatedFrameNum = frames(tuning.accumulationTime, nrd::REBLUR_MAX_HISTORY_FRAME_NUM);
-        reblur.maxFastAccumulatedFrameNum = frames(tuning.fastAccumulationTime, reblur.maxAccumulatedFrameNum);
-        // Zero disables the pass. REBLUR's stabilization is a small temporal
-        // anti-aliaser, and running one in front of FSR is two of them in
-        // series: the lag adds up and the second cannot recover what the first
-        // already smeared.
-        reblur.maxStabilizedFrameNum = frames(tuning.stabilizationTime, reblur.maxAccumulatedFrameNum);
-        reblur.historyFixFrameNum = static_cast<uint32_t>(glm::max(0, tuning.historyFixFrames));
-        reblur.diffusePrepassBlurRadius = glm::max(0.0f, tuning.diffusePrepassBlurRadius);
-        reblur.specularPrepassBlurRadius = glm::max(0.0f, tuning.specularPrepassBlurRadius);
-        reblur.minBlurRadius = glm::max(0.0f, tuning.minBlurRadius);
-        reblur.maxBlurRadius = glm::max(tuning.minBlurRadius, tuning.maxBlurRadius);
-        reblur.lobeAngleFraction = glm::clamp(tuning.lobeAngleFraction, 0.0f, 1.0f);
-        reblur.roughnessFraction = glm::clamp(tuning.roughnessFraction, 0.0f, 1.0f);
-        reblur.planeDistanceSensitivity = glm::clamp(tuning.planeDistanceSensitivity, 0.001f, 1.0f);
-        reblur.hitDistanceReconstructionMode = reconstruction;
-        reblur.enableAntiFirefly = tuning.antiFirefly;
-        if (nrd::SetDenoiserSettings(_instance, kCombinedIdentifier, &reblur) != nrd::Result::SUCCESS) {
-            warn("NRD: SetDenoiserSettings failed");
-            return;
-        }
+    nrd::RelaxSettings relax {};
+    relax.diffuseMaxAccumulatedFrameNum = frames(tuning.accumulationTime, nrd::RELAX_MAX_HISTORY_FRAME_NUM);
+    relax.specularMaxAccumulatedFrameNum = relax.diffuseMaxAccumulatedFrameNum;
+    relax.diffuseMaxFastAccumulatedFrameNum = frames(tuning.fastAccumulationTime, relax.diffuseMaxAccumulatedFrameNum);
+    relax.specularMaxFastAccumulatedFrameNum = relax.diffuseMaxFastAccumulatedFrameNum;
+    relax.historyFixFrameNum = static_cast<uint32_t>(glm::max(0, tuning.historyFixFrames));
+    relax.diffusePrepassBlurRadius = glm::max(0.0f, tuning.diffusePrepassBlurRadius);
+    relax.specularPrepassBlurRadius = glm::max(0.0f, tuning.specularPrepassBlurRadius);
+    relax.diffusePhiLuminance = glm::max(0.0f, tuning.diffusePhiLuminance);
+    relax.specularPhiLuminance = glm::max(0.0f, tuning.specularPhiLuminance);
+    relax.lobeAngleFraction = glm::clamp(tuning.lobeAngleFraction, 0.0f, 1.0f);
+    relax.roughnessFraction = glm::clamp(tuning.roughnessFraction, 0.0f, 1.0f);
+    relax.specularLobeAngleSlack = glm::max(0.0f, tuning.specularLobeAngleSlack);
+    relax.atrousIterationNum = static_cast<uint32_t>(glm::clamp(tuning.atrousIterations, 2, 8));
+    relax.depthThreshold = glm::max(1e-4f, tuning.depthThreshold);
+    relax.hitDistanceReconstructionMode = reconstruction;
+    relax.enableAntiFirefly = tuning.antiFirefly;
+    if (nrd::SetDenoiserSettings(_instance, kCombinedIdentifier, &relax) != nrd::Result::SUCCESS) {
+        warn("NRD: SetDenoiserSettings failed");
+        return;
     }
     // The direct denoiser, settled separately from the one above. Its signal is
     // converged everywhere but the penumbra, so it is given the dials that stop
@@ -507,44 +476,23 @@ void NrdDenoiser::denoise(ICommandBuffer &commandBuffer,
     //   indirect light is lag here.
     if (inputs.directRadianceHitDist && _outDirect) {
         const auto directAccumulation = glm::max(0.0f, tuning.directAccumulationTime);
-        if (_kind == TracingDenoiserKind::Relax) {
-            nrd::RelaxSettings direct {};
-            direct.diffuseMaxAccumulatedFrameNum = frames(directAccumulation, nrd::RELAX_MAX_HISTORY_FRAME_NUM);
-            direct.diffuseMaxFastAccumulatedFrameNum =
-                frames(glm::min(tuning.fastAccumulationTime, directAccumulation),
-                       direct.diffuseMaxAccumulatedFrameNum);
-            direct.historyFixFrameNum = static_cast<uint32_t>(glm::max(0, tuning.historyFixFrames));
-            direct.diffusePrepassBlurRadius = 0.0f;
-            direct.diffusePhiLuminance = glm::max(0.0f, tuning.directPhiLuminance);
-            direct.lobeAngleFraction = glm::clamp(tuning.lobeAngleFraction, 0.0f, 1.0f);
-            direct.atrousIterationNum =
-                static_cast<uint32_t>(glm::clamp(tuning.directAtrousIterations, 2, 8));
-            direct.depthThreshold = glm::max(1e-4f, tuning.depthThreshold);
-            direct.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::OFF;
-            direct.enableAntiFirefly = tuning.antiFirefly;
-            if (nrd::SetDenoiserSettings(_instance, kDirectIdentifier, &direct) != nrd::Result::SUCCESS) {
-                warn("NRD: SetDenoiserSettings failed for the direct denoiser");
-                return;
-            }
-        } else {
-            nrd::ReblurSettings direct {};
-            direct.maxAccumulatedFrameNum = frames(directAccumulation, nrd::REBLUR_MAX_HISTORY_FRAME_NUM);
-            direct.maxFastAccumulatedFrameNum =
-                frames(glm::min(tuning.fastAccumulationTime, directAccumulation),
-                       direct.maxAccumulatedFrameNum);
-            direct.maxStabilizedFrameNum = frames(tuning.stabilizationTime, direct.maxAccumulatedFrameNum);
-            direct.historyFixFrameNum = static_cast<uint32_t>(glm::max(0, tuning.historyFixFrames));
-            direct.diffusePrepassBlurRadius = 0.0f;
-            direct.minBlurRadius = glm::max(0.0f, tuning.minBlurRadius);
-            direct.maxBlurRadius = glm::max(tuning.minBlurRadius, tuning.maxBlurRadius);
-            direct.lobeAngleFraction = glm::clamp(tuning.lobeAngleFraction, 0.0f, 1.0f);
-            direct.planeDistanceSensitivity = glm::clamp(tuning.planeDistanceSensitivity, 0.001f, 1.0f);
-            direct.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::OFF;
-            direct.enableAntiFirefly = tuning.antiFirefly;
-            if (nrd::SetDenoiserSettings(_instance, kDirectIdentifier, &direct) != nrd::Result::SUCCESS) {
-                warn("NRD: SetDenoiserSettings failed for the direct denoiser");
-                return;
-            }
+        nrd::RelaxSettings direct {};
+        direct.diffuseMaxAccumulatedFrameNum = frames(directAccumulation, nrd::RELAX_MAX_HISTORY_FRAME_NUM);
+        direct.diffuseMaxFastAccumulatedFrameNum =
+            frames(glm::min(tuning.fastAccumulationTime, directAccumulation),
+                   direct.diffuseMaxAccumulatedFrameNum);
+        direct.historyFixFrameNum = static_cast<uint32_t>(glm::max(0, tuning.historyFixFrames));
+        direct.diffusePrepassBlurRadius = 0.0f;
+        direct.diffusePhiLuminance = glm::max(0.0f, tuning.directPhiLuminance);
+        direct.lobeAngleFraction = glm::clamp(tuning.lobeAngleFraction, 0.0f, 1.0f);
+        direct.atrousIterationNum =
+            static_cast<uint32_t>(glm::clamp(tuning.directAtrousIterations, 2, 8));
+        direct.depthThreshold = glm::max(1e-4f, tuning.depthThreshold);
+        direct.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::OFF;
+        direct.enableAntiFirefly = tuning.antiFirefly;
+        if (nrd::SetDenoiserSettings(_instance, kDirectIdentifier, &direct) != nrd::Result::SUCCESS) {
+            warn("NRD: SetDenoiserSettings failed for the direct denoiser");
+            return;
         }
     }
     _prevView = view;

@@ -187,10 +187,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
          "debug channel view in any render mode, 0 off")                                                                  //
         ("ptdebugview", value<int>()->default_value(options->graphics.debugView),
          "deprecated alias for --debugview")                                                                              //
-        ("ptdenoiser", value<std::string>()->default_value(options->graphics.ptDenoiser == graphics::Denoiser::Reblur ? "reblur" : "relax"),
-         "NRD denoiser: reblur or relax")                                                                                     //
-        ("ptnrdstabilizationtime", value<float>()->default_value(options->graphics.ptNrdStabilizationTime),
-         "REBLUR stabilization, seconds; 0 disables its temporal stabilization pass")                                         //
         ("ptnrdaccumtime", value<float>()->default_value(options->graphics.ptNrdAccumulationTime),
          "denoiser history, seconds")                                                                                         //
         ("ptnrdfastaccumtime", value<float>()->default_value(options->graphics.ptNrdFastAccumulationTime),
@@ -206,25 +202,19 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ptnrdspecularlobeslack", value<float>()->default_value(options->graphics.ptNrdSpecularLobeAngleSlack),
          "RELAX specular lobe angle slack, degrees")                                                                          //
         ("ptnrdhistoryfix", value<int>()->default_value(options->graphics.ptNrdHistoryFixFrames),
-         "REBLUR history fix frames")                                                                                         //
+         "denoiser history fix frames")                                                                                         //
         ("ptnrddiffuseprepassblurradius", value<float>()->default_value(options->graphics.ptNrdDiffusePrepassBlurRadius),
-         "REBLUR diffuse prepass blur radius")                                                                                //
+         "denoiser diffuse prepass blur radius")                                                                                //
         ("ptnrdspecularprepassblurradius", value<float>()->default_value(options->graphics.ptNrdSpecularPrepassBlurRadius),
-         "REBLUR specular prepass blur radius")                                                                               //
-        ("ptnrdminblurradius", value<float>()->default_value(options->graphics.ptNrdMinBlurRadius),
-         "REBLUR minimum blur radius")                                                                                        //
-        ("ptnrdmaxblurradius", value<float>()->default_value(options->graphics.ptNrdMaxBlurRadius),
-         "REBLUR maximum blur radius")                                                                                        //
+         "denoiser specular prepass blur radius")                                                                               //
         ("ptnrdlobeanglefraction", value<float>()->default_value(options->graphics.ptNrdLobeAngleFraction),
-         "REBLUR lobe angle fraction")                                                                                        //
+         "denoiser lobe angle fraction")                                                                                        //
         ("ptnrdroughnessfraction", value<float>()->default_value(options->graphics.ptNrdRoughnessFraction),
-         "REBLUR roughness fraction")                                                                                         //
-        ("ptnrdplanedistancesensitivity", value<float>()->default_value(options->graphics.ptNrdPlaneDistanceSensitivity),
-         "REBLUR plane distance sensitivity")                                                                                 //
+         "denoiser roughness fraction")                                                                                         //
         ("ptnrddisocclusionthreshold", value<float>()->default_value(options->graphics.ptNrdDisocclusionThreshold),
-         "REBLUR disocclusion threshold")                                                                                     //
+         "denoiser disocclusion threshold")                                                                                     //
         ("ptnrdantifirefly", value<bool>()->default_value(options->graphics.ptNrdAntiFirefly),
-         "enable REBLUR anti-firefly")                                                                                        //
+         "enable denoiser anti-firefly")                                                                                        //
         ("fsrsharpness", value<float>()->default_value(options->graphics.fsrSharpness),
          "FSR RCAS sharpening, 0 disables the pass")                                                                          //
         ("texquality", value<int>()->default_value(static_cast<int>(options->graphics.textureQuality)), "texture quality")      //
@@ -356,11 +346,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
         std::clamp(vars["debugview"].defaulted() ? vars["ptdebugview"].as<int>()
                                                  : vars["debugview"].as<int>(),
                    0, graphics::kMaxDebugView);
-    {
-        const std::string denoiser = vars["ptdenoiser"].as<std::string>();
-        options->graphics.ptDenoiser = denoiser == "reblur" ? graphics::Denoiser::Reblur
-                                                            : graphics::Denoiser::Relax;
-    }
     options->graphics.ptDirectChannel = vars["ptdirectchannel"].as<bool>();
     {
         // Rejected rather than silently taken as "off", for the same reason the
@@ -428,7 +413,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
         std::clamp(vars["ptshadowfilterdepthtolerance"].as<float>(), 0.0f, 1.0f);
     options->graphics.ptShadowFilterNormalTolerance =
         std::clamp(vars["ptshadowfilternormaltolerance"].as<float>(), -1.0f, 1.0f);
-    options->graphics.ptNrdStabilizationTime = std::clamp(vars["ptnrdstabilizationtime"].as<float>(), 0.0f, 2.0f);
     options->graphics.ptNrdAccumulationTime = std::clamp(vars["ptnrdaccumtime"].as<float>(), 0.0f, 2.0f);
     options->graphics.ptNrdFastAccumulationTime = std::clamp(vars["ptnrdfastaccumtime"].as<float>(), 0.0f, 2.0f);
     options->graphics.ptNrdAtrousIterations = std::clamp(vars["ptnrdatrous"].as<int>(), 2, 8);
@@ -439,11 +423,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptNrdHistoryFixFrames = std::max(0, vars["ptnrdhistoryfix"].as<int>());
     options->graphics.ptNrdDiffusePrepassBlurRadius = std::max(0.0f, vars["ptnrddiffuseprepassblurradius"].as<float>());
     options->graphics.ptNrdSpecularPrepassBlurRadius = std::max(0.0f, vars["ptnrdspecularprepassblurradius"].as<float>());
-    options->graphics.ptNrdMinBlurRadius = std::max(0.0f, vars["ptnrdminblurradius"].as<float>());
-    options->graphics.ptNrdMaxBlurRadius = std::max(0.0f, vars["ptnrdmaxblurradius"].as<float>());
     options->graphics.ptNrdLobeAngleFraction = std::clamp(vars["ptnrdlobeanglefraction"].as<float>(), 0.01f, 1.0f);
     options->graphics.ptNrdRoughnessFraction = std::clamp(vars["ptnrdroughnessfraction"].as<float>(), 0.01f, 1.0f);
-    options->graphics.ptNrdPlaneDistanceSensitivity = std::max(0.0f, vars["ptnrdplanedistancesensitivity"].as<float>());
     options->graphics.ptNrdDisocclusionThreshold = std::max(0.0f, vars["ptnrddisocclusionthreshold"].as<float>());
     options->graphics.ptNrdAntiFirefly = vars["ptnrdantifirefly"].as<bool>();
     options->graphics.fsrSharpness = std::clamp(vars["fsrsharpness"].as<float>(), 0.0f, 1.0f);

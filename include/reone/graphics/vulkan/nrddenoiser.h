@@ -48,10 +48,8 @@ class VulkanDevice;
 class NrdDenoiser : public ITracingDenoiser, boost::noncopyable {
 public:
     NrdDenoiser(VulkanDevice &device, nrd::Instance &instance, glm::ivec2 extent,
-                bool ownsInstance = false,
-                TracingDenoiserKind kind = TracingDenoiserKind::Relax) :
-        _device(device), _instance(instance), _extent(extent), _ownsInstance(ownsInstance),
-        _kind(kind) {}
+                bool ownsInstance = false) :
+        _device(device), _instance(instance), _extent(extent), _ownsInstance(ownsInstance) {}
 
     ~NrdDenoiser() override {
         deinit();
@@ -128,7 +126,6 @@ private:
     glm::vec2 _prevJitter {0.0f};
     glm::vec3 _prevCameraPosition {0.0f};
     bool _hasHistory {false};
-    TracingDenoiserKind _kind {TracingDenoiserKind::Relax};
     /**
      * Smoothed frame time, the denominator that turns an accumulation time into
      * the frame count NRD is configured with. Measured here rather than plumbed
@@ -143,9 +140,7 @@ private:
                         const TracingDenoiserInputs &inputs) const;
 };
 
-std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(VulkanDevice &device,
-                                                       glm::ivec2 extent,
-                                                       TracingDenoiserKind kind);
+std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(VulkanDevice &device, glm::ivec2 extent);
 
 } // namespace graphics
 
