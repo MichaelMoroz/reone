@@ -123,6 +123,16 @@ public:
     bool isBackgroundScenery() const { return _backgroundScenery; }
     void setBackgroundScenery(bool background) { _backgroundScenery = background; }
 
+    /**
+     * Named by the curated sky list, not inferred. Kept apart from
+     * background scenery, which still means the K1 no-walkmesh convention and
+     * still drives material shading: a TSL sky room has a walkmesh and is not
+     * background scenery, and a K1 room can be background scenery without
+     * being the sky.
+     */
+    bool isSkyRoom() const { return _skyRoom; }
+    void setSkyRoom(bool sky) { _skyRoom = sky; }
+
     void setModel(graphics::Model &model);
     void setDrawDistance(float distance) { _drawDistance = distance; }
     void setMainTexture(graphics::Texture *texture);
@@ -161,6 +171,7 @@ private:
     graphics::Model *_model;
     ModelUsage _usage;
     bool _backgroundScenery {false};
+    bool _skyRoom {false};
 
     IAnimationEventListener *_animEventListener {nullptr};
     float _drawDistance {std::numeric_limits<float>::max()};

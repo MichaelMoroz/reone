@@ -117,6 +117,7 @@ public:
     MOCK_METHOD(std::set<std::string>, sceneNames, (), (const override));
     MOCK_METHOD(void, invalidateRenderPipelines, (), (override));
     MOCK_METHOD(bool, consumeRenderPipelineRebuild, (), (override));
+    MOCK_METHOD(bool, isSkyRoom, (const std::string &roomName), (const override));
 };
 
 class MockRenderPipeline : public IRenderPipeline, boost::noncopyable {

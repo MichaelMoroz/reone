@@ -532,10 +532,19 @@ void Area::loadLYT() {
             sceneGraph.addRoot(walkmeshSceneNode);
         } else {
             // A room without a walkmesh is background scenery - the K1
-            // skybox convention, and the semantic signal tracing keys its
-            // sky classification on (K1 area models do not author the
-            // per-mesh background-geometry flag).
+            // convention. This still drives material shading; it no longer
+            // decides which room is the sky, because TSL does not follow it.
             modelSceneNode->setBackgroundScenery(true);
+        }
+
+        // Which room is the sky is curated, never guessed. The old guess was
+        // the line above - no walkmesh means sky - which is a K1 convention
+        // TSL does not share: TSL authors a per-mesh background-geometry flag
+        // on rooms that do have walkmeshes, so every TSL sky went unclassified
+        // and rendered as ordinary lit geometry. Silence here is an answer: a
+        // module absent from the list has no sky room.
+        if (_services.scene.graphs.isSkyRoom(lytRoom.name)) {
+            modelSceneNode->setSkyRoom(true);
         }
 
         // Grass

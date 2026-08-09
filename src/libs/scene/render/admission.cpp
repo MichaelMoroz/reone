@@ -576,17 +576,21 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
     GpuSceneAdmissionResult result;
     const auto sceneGeneration = _gpuScene.admissionGeneration();
     if (_skyCacheGeneration != sceneGeneration) {
-        static constexpr float kSkyOverlapThreshold = 0.5f;
-        glm::vec3 sceneMin(std::numeric_limits<float>::max());
-        glm::vec3 sceneMax(std::numeric_limits<float>::lowest());
-        struct SkyRoomCandidate {
-            glm::vec3 boundsMin {std::numeric_limits<float>::max()};
-            glm::vec3 boundsMax {std::numeric_limits<float>::lowest()};
-        };
-        std::map<const ModelSceneNode *, SkyRoomCandidate> sceneryRooms;
+        // The sky room is the one the curated list named, flagged on the node
+        // when the area loaded it. What stood here was a guess - the largest
+        // background-scenery room whose bounds covered at least half the scene
+        // on every axis - and background scenery meant "no walkmesh", which is
+        // a K1 convention. TSL authors a per-mesh background-geometry flag on
+        // rooms that do have walkmeshes, so no TSL room ever became a
+        // candidate and every TSL sky rendered as ordinary lit geometry.
+        //
+        // Bounds are still needed, for the origin the sky is baked about, but
+        // they are now measured rather than used to decide anything.
+        glm::vec3 skyMin(std::numeric_limits<float>::max());
+        glm::vec3 skyMax(std::numeric_limits<float>::lowest());
         for (const auto &object : _gpuScene.objects()) {
             const auto *mesh = std::get_if<RegisteredMesh>(&object);
-            if (!mesh || !mesh->cullRoot || mesh->cullRoot->usage() != ModelUsage::Room)
+            if (!mesh || !mesh->cullRoot || !mesh->cullRoot->isSkyRoom())
                 continue;
             if (!_gpuScene.isObjectEnabled(mesh->id.index))
                 continue;
@@ -594,31 +598,12 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
                                      renderCategory(RenderCategory::Transparent))) == 0)
                 continue;
             const auto worldAabb = mesh->mesh.get().aabb() * mesh->transform;
-            sceneMin = glm::min(sceneMin, worldAabb.min());
-            sceneMax = glm::max(sceneMax, worldAabb.max());
-            if (mesh->cullRoot->isBackgroundScenery()) {
-                auto &candidate = sceneryRooms[mesh->cullRoot];
-                candidate.boundsMin = glm::min(candidate.boundsMin, worldAabb.min());
-                candidate.boundsMax = glm::max(candidate.boundsMax, worldAabb.max());
-            }
+            skyMin = glm::min(skyMin, worldAabb.min());
+            skyMax = glm::max(skyMax, worldAabb.max());
+            result.skyRoom = mesh->cullRoot;
         }
-        if (!sceneryRooms.empty()) {
-            const glm::vec3 sceneExtent =
-                glm::max(sceneMax - sceneMin, glm::vec3(1e-3f));
-            float bestVolume = 0.0f;
-            for (const auto &[room, candidate] : sceneryRooms) {
-                const glm::vec3 extent = candidate.boundsMax - candidate.boundsMin;
-                const glm::vec3 ratios = extent / sceneExtent;
-                if (glm::min(ratios.x, glm::min(ratios.y, ratios.z)) <
-                    kSkyOverlapThreshold)
-                    continue;
-                const float volume = extent.x * extent.y * extent.z;
-                if (volume > bestVolume) {
-                    bestVolume = volume;
-                    result.skyRoom = room;
-                    result.skyOrigin = 0.5f * (candidate.boundsMin + candidate.boundsMax);
-                }
-            }
+        if (result.skyRoom) {
+            result.skyOrigin = 0.5f * (skyMin + skyMax);
         }
         _cachedSkyRoom = result.skyRoom;
         _cachedSkyOrigin = result.skyOrigin;

@@ -6,6 +6,4 @@ build/
 # Written beside whatever binary is run, including the repo root.
 engine.log
 
-# Generated skybox assets - rebuild with build/bin/skybake, never committed
-override/*/sky/
 /override/mod_stuff

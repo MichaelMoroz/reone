@@ -25,6 +25,7 @@ set(SCENE_HEADERS
     ${SCENE_INCLUDE_DIR}/fogproperties.h
     ${SCENE_INCLUDE_DIR}/graph.h
     ${SCENE_INCLUDE_DIR}/graphs.h
+    ${SCENE_INCLUDE_DIR}/skyrooms.h
     ${SCENE_INCLUDE_DIR}/grassproperties.h
     ${SCENE_INCLUDE_DIR}/gpuscene.h
     ${SCENE_INCLUDE_DIR}/node.h
@@ -53,6 +54,7 @@ set(SCENE_SOURCES
     ${SCENE_SOURCE_DIR}/di/module.cpp
     ${SCENE_SOURCE_DIR}/graph.cpp
     ${SCENE_SOURCE_DIR}/graphs.cpp
+    ${SCENE_SOURCE_DIR}/skyrooms.cpp
     ${SCENE_SOURCE_DIR}/gpuscene.cpp
     ${SCENE_SOURCE_DIR}/node.cpp
     ${SCENE_SOURCE_DIR}/node/camera.cpp
