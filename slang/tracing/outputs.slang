@@ -194,10 +194,14 @@ public struct TraceOutputs {
         // than using NRD's large environment sentinel.
         outGBufferDepth[pixel] = min(gBufferDepth, globalUniforms.clipFar);
         outGBufferMotion[pixel] = gBufferMotion;
-        // Alpha carried a constant before the penumbra took it, and it is only
-        // free while the shadow filter is the reader. NRD reads the same slot
-        // as a normalized hit distance, so under ShadowFilter::Denoiser it is
-        // handed a world-space width in its place. TRC-048.
+        // Written outside the branch above, and both halves of that branch
+        // apply here too when ShadowFilter::Denoiser sends this channel to the
+        // second NRD instance as IN_DIFF_RADIANCE_HITDIST. RELAX wants linear
+        // radiance, which this is, and a hit distance, which the penumbra is
+        // not - it is the width of the soft region, not the distance to the
+        // blocker. REBLUR wants YCoCg and a normalized distance and gets
+        // neither. Silent in both cases, for the reason given above: four
+        // floats in range either way. TRC-048.
         outDirectDiffuse[pixel] = float4(directDiffuse, penumbra);
     }
 };
