@@ -59,9 +59,21 @@ import tracing.resources;
 // This channel does reach a denoiser, under ShadowFilter::Denoiser, as its own
 // NRD instance rather than a summand of the diffuse one - see
 // TracingDenoiserInputs::directRadianceHitDist for why the two signals cannot
-// share a kernel. Alpha does not mean the same thing to both consumers:
-// shadow_filter.slang reads the penumbra written below, NRD reads that slot as
-// a normalized hit distance. TRC-048.
+// share a kernel.
+//
+// NRD documents that slot as IN_DIFF_RADIANCE_HITDIST, so alpha ought to be a
+// hit distance rather than the penumbra written below. Under RELAX it is not,
+// and the reason is in our own settings: RELAX_PrePass is the only pass that
+// reads the incoming diffuse alpha as a distance, and the direct denoiser sets
+// diffusePrepassBlurRadius to 0 with hit-distance reconstruction off, so that
+// pass contributes nothing. Everything downstream in RELAX rewrites alpha with
+// its own variance, moments and history length. The slot has no reader, which
+// is what makes the penumbra free there. Measured 2026-08-09: correcting it
+// changed the frame by 0.30 mean against a 0.23 nondeterminism floor.
+//
+// It was not free under REBLUR, which feeds hit distance into accumulation and
+// history fix, and which also wanted YCoCg radiance this write never produced.
+// REBLUR is retired (TRC-049), which is what closed TRC-048.
 [[vk::binding(14, 2)]] RWTexture2D<float4> outDirectDiffuse;
 
 /** Environment / miss distance: beyond any scene, inside NRD's defaults. */
@@ -194,14 +206,11 @@ public struct TraceOutputs {
         // than using NRD's large environment sentinel.
         outGBufferDepth[pixel] = min(gBufferDepth, globalUniforms.clipFar);
         outGBufferMotion[pixel] = gBufferMotion;
-        // Written outside the branch above, and both halves of that branch
-        // apply here too when ShadowFilter::Denoiser sends this channel to the
-        // second NRD instance as IN_DIFF_RADIANCE_HITDIST. RELAX wants linear
-        // radiance, which this is, and a hit distance, which the penumbra is
-        // not - it is the width of the soft region, not the distance to the
-        // blocker. REBLUR wants YCoCg and a normalized distance and gets
-        // neither. Silent in both cases, for the reason given above: four
-        // floats in range either way. TRC-048.
+        // Deliberately outside the branch above: alpha is the penumbra for the
+        // spatial shadow filter, and RELAX never reads it - see the binding
+        // comment for which pass would have, and why it is switched off. Do not
+        // "fix" this to a hit distance without first checking that something
+        // consumes one; that was tried, measured at the noise floor, reverted.
         outDirectDiffuse[pixel] = float4(directDiffuse, penumbra);
     }
 };
