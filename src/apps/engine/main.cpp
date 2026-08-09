@@ -56,18 +56,25 @@ int main(int argc, char **argv) {
         std::cerr << "Error initializing logging: " << ex.what() << std::endl;
         return 2;
     }
-    Engine engine {*options};
-    try {
-        engine.init();
-        int exitCode = engine.run();
-        return exitCode;
-    } catch (const std::exception &ex) {
-        auto message = str(boost::format("Engine failure: %1%") % ex.what());
+    int exitCode = 0;
+    {
+        Engine engine {*options};
         try {
-            error(message);
-        } catch (...) {
-            std::cerr << message << std::endl;
+            engine.init();
+            exitCode = engine.run();
+        } catch (const std::exception &ex) {
+            auto message = str(boost::format("Engine failure: %1%") % ex.what());
+            try {
+                error(message);
+            } catch (...) {
+                std::cerr << message << std::endl;
+            }
+            exitCode = 3;
         }
-        return 3;
     }
+    // Init-time diagnostics commonly remain below the logger's per-thread
+    // flush threshold. Engine has now emitted its teardown diagnostics too, so
+    // flush the main thread's complete run before process exit.
+    Logger::instance.flush();
+    return exitCode;
 }
