@@ -1777,231 +1777,171 @@ void Editor::frameTimes() {
     ImGui::End();
 }
 
+namespace {
+
+/**
+ * Rows from the renderer's admitted set rather than from the scene graph.
+ *
+ * What is in the graph and what reached the frame are different questions, and
+ * for tracing work the second is the one worth asking: an object missing here
+ * was culled or never registered, which the graph cannot tell you. The trade
+ * is that the set is one frame old - see the note in Editor::drawObjects.
+ */
+class GpuSceneObjectSource : public IObjectSource {
+public:
+    GpuSceneObjectSource(Editor &editor, scene::SceneGraphs &graphs) :
+        _editor(editor),
+        _graphs(graphs) {
+    }
+
+    std::vector<ObjectRow> rows(const std::string &sceneName) override {
+        _entries.clear();
+        auto &graph = _graphs.get(sceneName);
+        auto &scene = graph.gpuScene();
+        _scene = &scene;
+        _materials = &scene.traceMaterials();
+
+        std::vector<ObjectRow> result;
+        for (const auto &object : scene.objects()) {
+            auto entry = makeObjectEntryView(graph, scene, object);
+            ObjectRow row;
+            row.id = entry.id;
+            row.groupKey = entry.root;
+            row.groupId = entry.root ? entry.root->id().index : 0;
+            row.groupLabel = groupLabelFor(graph, entry);
+            row.model = std::string(entry.modelName);
+            row.name = std::string(entry.nodeName);
+            row.kind = entry.kind;
+            result.push_back(std::move(row));
+            _entries.push_back(std::move(entry));
+        }
+        return result;
+    }
+
+    std::string summary(const std::string &sceneName) override {
+        auto &scene = _graphs.get(sceneName).gpuScene();
+        return "objects " + std::to_string(scene.counts().entries);
+    }
+
+    bool isEnabled(const ObjectRow &row) override {
+        return _scene && _scene->isObjectEnabled(row.id);
+    }
+
+    void setEnabled(const ObjectRow &row, bool enabled) override {
+        if (_scene) {
+            _scene->setObjectEnabled(row.id, enabled);
+        }
+    }
+
+    int extraColumnCount() const override { return 2; }
+
+    void setupExtraColumns() override {
+        ImGui::TableSetupColumn("Material", ImGuiTableColumnFlags_WidthFixed, 158.0f);
+        ImGui::TableSetupColumn("Class", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+    }
+
+    void drawExtraColumns(const ObjectRow &row) override {
+        const ObjectEntryView *entry = find(row);
+        ImGui::TableSetColumnIndex(3);
+        ImGui::TextUnformatted(entry ? entry->material : "-");
+        ImGui::TableSetColumnIndex(4);
+        ImGui::TextUnformatted(entry ? entry->classification.c_str() : "");
+    }
+
+    void drawGroupExtras(const std::vector<const ObjectRow *> &rows) override {
+        // Instance counts belong on the group, not on its rows: grass is one
+        // entry holding 1482 clusters, so a per-row column would read "1" and
+        // hide the only number that matters for it.
+        size_t particles = 0;
+        size_t clusters = 0;
+        for (const ObjectRow *row : rows) {
+            if (const ObjectEntryView *entry = find(*row)) {
+                particles += entry->particles;
+                clusters += entry->clusters;
+            }
+        }
+        if (clusters == 0 && particles == 0) {
+            return;
+        }
+        ImGui::TableSetColumnIndex(3);
+        ImGui::TextDisabled("%zu %s",
+                            clusters != 0 ? clusters : particles,
+                            clusters != 0 ? "clusters" : "particles");
+    }
+
+    void drawRowContextMenu(const ObjectRow &row) override {
+        if (!_materials) {
+            return;
+        }
+        // Right-click classifies: the mechanical per-level pass, written
+        // straight to trace-classes.txt.
+        if (!ImGui::BeginPopupContextItem("##classify")) {
+            return;
+        }
+        auto curated = _materials->curatedFor(row.model, row.name);
+        auto item = [this, &row, &curated](const char *label, scene::TraceClass klass) {
+            if (ImGui::MenuItem(label, nullptr, curated.klass == klass)) {
+                curated.klass = curated.klass == klass ? scene::TraceClass::Default : klass;
+                _materials->setCurated(row.model, row.name, curated);
+            }
+        };
+        ImGui::TextDisabled("Classify");
+        ImGui::Separator();
+        item("Prelit (fullbright, casts nothing)", scene::TraceClass::Prelit);
+        item("Emissive (glows and casts)", scene::TraceClass::Emissive);
+        item("None (strip selfIllum)", scene::TraceClass::None);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Edit material...")) {
+            _editor.openMaterialEditor(row.model, row.name, curated);
+        }
+        ImGui::EndPopup();
+    }
+
+    scene::TraceMaterialOverrides *materials() { return _materials; }
+
+private:
+    Editor &_editor;
+    scene::SceneGraphs &_graphs;
+    scene::GpuScene *_scene {nullptr};
+    scene::TraceMaterialOverrides *_materials {nullptr};
+    std::vector<ObjectEntryView> _entries;
+
+    static std::string groupLabelFor(const scene::ISceneGraph &graph, const ObjectEntryView &entry) {
+        if (entry.root) {
+            std::string label(graph.nameText(entry.root->nameIds().model));
+            return label.empty() ? "[unnamed model]" : label;
+        }
+        if (entry.kind == std::string_view("grass")) {
+            return "[grass]";
+        }
+        if (entry.kind == std::string_view("particles")) {
+            return "[emitters]";
+        }
+        return "[rootless]";
+    }
+
+    const ObjectEntryView *find(const ObjectRow &row) const {
+        for (const auto &entry : _entries) {
+            if (entry.id == row.id) {
+                return &entry;
+            }
+        }
+        return nullptr;
+    }
+};
+
+} // namespace
+
 void Editor::drawObjects() {
     dockNext();
-    ImGui::SetNextWindowSize(ImVec2(700, 620), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Objects", &_showObjects, ImGuiWindowFlags_HorizontalScrollbar)) {
-        ImGui::End();
-        return;
-    }
-
-    auto &graphs = _engine._sceneModule->graphs();
-    auto sceneNames = graphs.sceneNames();
-    if (sceneNames.empty()) {
-        ImGui::TextUnformatted("No scenes registered.");
-        ImGui::End();
-        return;
-    }
-    if (_objectsScene.empty() || sceneNames.count(_objectsScene) == 0) {
-        auto main = sceneNames.find(game::kSceneMain);
-        _objectsScene = main != sceneNames.end() ? *main : *sceneNames.begin();
-    }
-    ImGui::SetNextItemWidth(180.0f);
-    if (ImGui::BeginCombo("##objects-scene", _objectsScene.c_str())) {
-        for (const auto &name : sceneNames) {
-            if (ImGui::Selectable(name.c_str(), name == _objectsScene)) {
-                _objectsScene = name;
-            }
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("scene");
-
-    auto &graph = graphs.get(_objectsScene);
     // Editor::update runs before SceneGraph::render resets and fills the
-    // GpuScene, so this is deliberately the previous frame's complete
-    // snapshot. Reading it during render would expose a partial frame.
-    auto &scene = graph.gpuScene();
-    auto &materials = scene.traceMaterials();
-    const auto &counts = scene.counts();
-    ImGui::Text("objects %zu", counts.entries);
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##objects-filter", "Filter model or node", _objectsFilter,
-                             sizeof(_objectsFilter));
-    ImGui::Spacing();
-
-    std::vector<ObjectGroupView> groups;
-    for (const auto &object : scene.objects()) {
-        auto entry = makeObjectEntryView(graph, scene, object);
-        std::string label;
-        if (entry.root) {
-            label = std::string(graph.nameText(entry.root->nameIds().model));
-            if (label.empty()) {
-                label = "[unnamed model]";
-            }
-        } else if (entry.kind == std::string_view("grass")) {
-            label = "[grass]";
-        } else if (entry.kind == std::string_view("particles")) {
-            label = "[emitters]";
-        } else {
-            label = "[rootless]";
-        }
-        auto group = std::find_if(groups.begin(), groups.end(), [&](const auto &candidate) {
-            return candidate.root == entry.root && candidate.label == label;
-        });
-        if (group == groups.end()) {
-            groups.push_back({entry.root, std::move(label)});
-            group = std::prev(groups.end());
-        }
-        group->particles += entry.particles;
-        group->clusters += entry.clusters;
-        group->entries.push_back(std::move(entry));
+    // GpuScene, so the source reads the previous frame's complete snapshot.
+    // Reading it during render would expose a partial frame.
+    GpuSceneObjectSource source {*this, _engine._sceneModule->graphs()};
+    _objectsPanel.draw(_engine._sceneModule->graphs(), source, _showObjects);
+    if (auto *materials = source.materials()) {
+        drawMaterialEditor(*materials);
     }
-    std::sort(groups.begin(), groups.end(), [](const auto &a, const auto &b) {
-        return a.label < b.label;
-    });
-    // A resref names a model, not an instance, and an area places the same one
-    // many times - danm14ab has eight c_khounda. Groups are already distinct,
-    // being keyed on the root node, but on screen they were eight identical
-    // rows. Disambiguate only where it is needed, so the common case stays
-    // clean.
-    for (size_t i = 0; i < groups.size();) {
-        size_t j = i;
-        while (j < groups.size() && groups[j].label == groups[i].label) {
-            ++j;
-        }
-        if (j - i > 1) {
-            for (size_t k = i; k < j; ++k) {
-                if (groups[k].root) {
-                    groups[k].label += " #" + std::to_string(groups[k].root->id().index);
-                }
-            }
-        }
-        i = j;
-    }
-
-    // A table rather than formatted text: entry rows are the thing being
-    // compared against each other, and columns are what make them comparable.
-    // Padded text drifts as soon as a name is longer than the padding.
-    // ScrollX with every column fixed, rather than letting the name column
-    // stretch. Docked narrow, a stretch column is what gives way first, and
-    // the names are the one thing the panel exists to show - a 480px dock
-    // collapsed them to nothing while the count columns kept their width.
-    // Scrolling is the honest response to a window too small for the data.
-    static constexpr ImGuiTableFlags kTableFlags =
-        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
-        ImGuiTableFlags_ScrollX | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingFixedFit;
-    if (!ImGui::BeginTable("##objects-table", 6, kTableFlags)) {
-        ImGui::End();
-        return;
-    }
-    ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 26.0f);
-    ImGui::TableSetupColumn("Model / node", ImGuiTableColumnFlags_WidthFixed, 250.0f);
-    ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 64.0f);
-    ImGui::TableSetupColumn("Material", ImGuiTableColumnFlags_WidthFixed, 158.0f);
-    ImGui::TableSetupColumn("Class", ImGuiTableColumnFlags_WidthFixed, 130.0f);
-    ImGui::TableSetupColumn("Entries", ImGuiTableColumnFlags_WidthFixed, 68.0f);
-    ImGui::TableSetupScrollFreeze(0, 1);
-    ImGui::TableHeadersRow();
-
-    std::string_view filter(_objectsFilter);
-    for (size_t groupIndex = 0; groupIndex < groups.size(); ++groupIndex) {
-        auto &group = groups[groupIndex];
-        std::vector<const ObjectEntryView *> visible;
-        visible.reserve(group.entries.size());
-        for (const auto &entry : group.entries) {
-            if (containsInsensitive(entry.modelName, filter) ||
-                containsInsensitive(entry.nodeName, filter)) {
-                visible.push_back(&entry);
-            }
-        }
-        if (visible.empty()) {
-            continue;
-        }
-        ImGui::PushID(static_cast<int>(groupIndex));
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        // The kill switch: unticking removes the object from every render
-        // mode. The group box drives all
-        // of its entries at once.
-        bool groupEnabled = std::all_of(visible.begin(), visible.end(), [&](const auto *entry) {
-            return scene.isObjectEnabled(entry->id);
-        });
-        if (ImGui::Checkbox("##group-on", &groupEnabled)) {
-            for (const auto *entry : visible) {
-                scene.setObjectEnabled(entry->id, groupEnabled);
-            }
-        }
-        ImGui::TableSetColumnIndex(1);
-        const bool open = ImGui::TreeNodeEx(group.label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
-
-        // The instance counts belong on the group, not on its rows: grass is one
-        // entry holding 1482 clusters, so a per-entry column would read "1" and
-        // hide the only number that matters for it.
-        if (group.clusters != 0 || group.particles != 0) {
-            ImGui::TableSetColumnIndex(3);
-            ImGui::TextDisabled("%zu %s",
-                                group.clusters != 0 ? group.clusters : group.particles,
-                                group.clusters != 0 ? "clusters" : "particles");
-        }
-        ImGui::TableSetColumnIndex(5);
-        objectRightAligned(std::to_string(visible.size()));
-
-        if (open) {
-            ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(visible.size()));
-            while (clipper.Step()) {
-                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                    const auto &entry = *visible[i];
-                    ImGui::PushID(static_cast<int>(i));
-                    const std::string_view node = entry.nodeName.empty()
-                                                      ? std::string_view("[unnamed]")
-                                                      : entry.nodeName;
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    bool enabled = scene.isObjectEnabled(entry.id);
-                    if (ImGui::Checkbox("##on", &enabled)) {
-                        scene.setObjectEnabled(entry.id, enabled);
-                    }
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::TextUnformatted(node.data(), node.data() + node.size());
-                    // Right-click classifies: the mechanical per-level pass,
-                    // written straight to trace-classes.txt.
-                    if (ImGui::BeginPopupContextItem("##classify")) {
-                        auto model = std::string(entry.modelName);
-                        auto nodeName2 = std::string(entry.nodeName);
-                        auto curated = materials.curatedFor(model, nodeName2);
-                        auto item = [&](const char *label, scene::TraceClass klass) {
-                            if (ImGui::MenuItem(label, nullptr, curated.klass == klass)) {
-                                curated.klass = curated.klass == klass
-                                                    ? scene::TraceClass::Default
-                                                    : klass;
-                                materials.setCurated(model, nodeName2, curated);
-                            }
-                        };
-                        ImGui::TextDisabled("Classify");
-                        ImGui::Separator();
-                        item("Prelit (fullbright, casts nothing)", scene::TraceClass::Prelit);
-                        item("Emissive (glows and casts)", scene::TraceClass::Emissive);
-                        item("None (strip selfIllum)", scene::TraceClass::None);
-                        ImGui::Separator();
-                        if (ImGui::MenuItem("Edit material...")) {
-                            _showMaterialEditor = true;
-                            _materialEditModel = model;
-                            _materialEditNode = nodeName2;
-                            _materialEdit = curated;
-                        }
-                        ImGui::EndPopup();
-                    }
-                    ImGui::TableSetColumnIndex(2);
-                    ImGui::TextUnformatted(entry.kind);
-                    ImGui::TableSetColumnIndex(3);
-                    ImGui::TextUnformatted(entry.material);
-                    ImGui::TableSetColumnIndex(4);
-                    ImGui::TextUnformatted(entry.classification.c_str());
-                    ImGui::PopID();
-                }
-            }
-            ImGui::TreePop();
-        }
-        ImGui::PopID();
-    }
-
-    ImGui::EndTable();
-    ImGui::End();
-
-    drawMaterialEditor(materials);
 }
 
 void Editor::drawMaterialEditor(scene::TraceMaterialOverrides &materials) {

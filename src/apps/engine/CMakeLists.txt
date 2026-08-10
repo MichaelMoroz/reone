@@ -21,7 +21,8 @@ set(ENGINE_HEADERS
     ${ENGINE_SOURCE_DIR}/options.h
     ${ENGINE_SOURCE_DIR}/optionsparser.h
     ${ENGINE_SOURCE_DIR}/profiler.h
-    ${ENGINE_SOURCE_DIR}/editor.h)
+    ${ENGINE_SOURCE_DIR}/editor.h
+    ${ENGINE_SOURCE_DIR}/objectspanel.h)
 
 set(ENGINE_HEADERS
     ${CMAKE_SOURCE_DIR}/src/apps/highperfgfx.cpp
@@ -30,7 +31,8 @@ set(ENGINE_HEADERS
     ${ENGINE_SOURCE_DIR}/main.cpp
     ${ENGINE_SOURCE_DIR}/optionsparser.cpp
     ${ENGINE_SOURCE_DIR}/profiler.cpp
-    ${ENGINE_SOURCE_DIR}/editor.cpp)
+    ${ENGINE_SOURCE_DIR}/editor.cpp
+    ${ENGINE_SOURCE_DIR}/objectspanel.cpp)
 
 if(WIN32)
     list(APPEND ENGINE_HEADERS ${CMAKE_SOURCE_DIR}/assets/reone.rc)

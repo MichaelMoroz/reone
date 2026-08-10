@@ -18,6 +18,8 @@
 #pragma once
 
 #include "reone/graphics/texture.h"
+#include "objectspanel.h"
+
 #include "reone/resource/id.h"
 #include "reone/scene/gpuscene.h"
 
@@ -91,6 +93,14 @@ public:
     void requestSceneCapture() { _captureRequested = true; }
     void performPendingSceneCapture();
 
+    /** Open the curated-material editor on one node. Called from the row menu. */
+    void openMaterialEditor(std::string model, std::string node, scene::CuratedMaterial curated) {
+        _showMaterialEditor = true;
+        _materialEditModel = std::move(model);
+        _materialEditNode = std::move(node);
+        _materialEdit = std::move(curated);
+    }
+
 private:
     // Full-viewport dockspace, and the right-hand node new windows default into.
     void dockSpace();
@@ -112,8 +122,9 @@ private:
     void drawObjects();
     void drawMaterialEditor(scene::TraceMaterialOverrides &materials);
     bool _showObjects {false};
-    std::string _objectsScene;
-    char _objectsFilter[128] {};
+    // Presentation lives in ObjectsPanel, which is shared verbatim with
+    // upstream; this build only supplies the rows and its own columns.
+    ObjectsPanel _objectsPanel;
     // Curated-material editor state: which key is open, live working copy.
     bool _showMaterialEditor {false};
     std::string _materialEditModel;
