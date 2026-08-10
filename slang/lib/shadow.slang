@@ -16,8 +16,13 @@
  */
 import uniforms;
 
-[[vk::binding(15, 1)]] Sampler2DArray sShadowMap;
-[[vk::binding(19, 1)]] SamplerCube sShadowMapCube;
+// Comparison samplers. The filtering unit performs the depth test itself and
+// returns the filtered fraction that passed, so each tap below is already a
+// 2x2 percentage-closer filter rather than a single binary answer. Both must
+// be declared this way together: a comparison sampler cannot be read with a
+// plain sample, nor a plain sampler with SampleCmp.
+[[vk::binding(15, 1)]] Sampler2DArrayShadow sShadowMap;
+[[vk::binding(19, 1)]] SamplerCubeShadow sShadowMapCube;
 
 static const int kNumShadowCascades = 4;
 static const int kNumPCFSamples = 20;
@@ -144,11 +149,14 @@ float shadowInCascade(int cascade, float3 worldPos, float3 normal, float3 lightV
         float2 rotated = float2(disk.x * rot.x - disk.y * rot.y,
                                 disk.x * rot.y + disk.y * rot.x);
         float2 offset = rotated * texelSize * radiusTexels;
-        // Explicit LOD: the kernel diverges across a quad, and there are no
-        // mips on a depth target to select anyway.
-        float pcfDepth = sShadowMap.SampleLevel(
-            float3(projCoords.xy + offset, float(cascade)), 0.0).r;
-        shadow += currentDepth > pcfDepth ? 1.0 : 0.0;
+        // The comparison is the sampler's, and it returns the fraction of the
+        // 2x2 neighbourhood the receiver is behind rather than a binary answer.
+        // Each disk tap therefore carries four texels of evidence, which is why
+        // the same sample count reads smoother than the hand-rolled test it
+        // replaces. Level zero explicitly: the kernel diverges across a quad,
+        // and a depth target has no mip chain to select anyway.
+        shadow += 1.0 - sShadowMap.SampleCmpLevelZero(
+                            float3(projCoords.xy + offset, float(cascade)), currentDepth);
     }
     return shadow / float(kNumDirectionalPCFSamples);
 }
@@ -199,12 +207,14 @@ float getPointLightShadow(float3 worldPos, float3 normal) {
     // report and which is undefined behaviour where it is not supported.
     // The map has no mip chain anyway, so level zero is what the implicit
     // form resolved to.
+    // The cube map holds distance normalised by the far plane, so the reference
+    // is divided rather than the stored value multiplied - the comparison
+    // happens inside the sampler and cannot scale what it reads.
+    float referenceDepth = currentDepth / kPointShadowFar;
     float shadow = 0.0;
     for (int i = 0; i < kNumPCFSamples; ++i) {
-        float closestDepth = kPointShadowFar *
-                             sShadowMapCube.SampleLevel(
-                                 fragToLight + kPCFSampleRadius * kPCFOffsets[i], 0.0).r;
-        shadow += currentDepth > closestDepth ? 1.0 : 0.0;
+        shadow += 1.0 - sShadowMapCube.SampleCmpLevelZero(
+                            fragToLight + kPCFSampleRadius * kPCFOffsets[i], referenceDepth);
     }
     shadow /= float(kNumPCFSamples);
     shadow *= 1.0 - smoothstep(globalUniforms.shadowRadius,

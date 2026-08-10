@@ -208,8 +208,20 @@ void ScenePipeline::init() {
         _pointShadows = _renderer.resources().makeImage();
         _pointShadows->initLayeredDepthAttachment(shadowSize, Format::D32Sfloat,
                                                   kNumCubeFaces, true);
-        _dirShadows->setSampler(depthSampler);
-        _pointShadows->setSampler(depthSampler);
+        // A comparison sampler, and linear where the G-buffer's depth sampler is
+        // nearest: the filtering unit compares the four texels around the lookup
+        // against the receiver's depth and returns the fraction that passed, so
+        // one tap is already a 2x2 percentage-closer filter. Nearest would make
+        // it compare one texel and hand back 0 or 1, which is the hand-rolled
+        // test with extra steps. The white border still reads as far, so a
+        // lookup off the edge of a cascade stays lit.
+        auto shadowProperties = getTextureProperties(TextureUsage::DepthBuffer);
+        shadowProperties.minFilter = Texture::Filtering::Linear;
+        shadowProperties.magFilter = Texture::Filtering::Linear;
+        shadowProperties.compare = true;
+        auto shadowSampler = _renderer.resources().sampler(shadowProperties);
+        _dirShadows->setSampler(shadowSampler);
+        _pointShadows->setSampler(shadowSampler);
 
         // Both resolve sets always bind both sampler shapes. Clear each target to
         // the far plane once so the inactive light kind is a valid no-shadow map.

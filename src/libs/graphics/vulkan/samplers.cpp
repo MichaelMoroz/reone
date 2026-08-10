@@ -29,6 +29,7 @@ size_t VulkanSamplers::KeyHash::operator()(const Key &key) const {
     mix(std::hash<int>()(static_cast<int>(key.magFilter)));
     mix(std::hash<int>()(static_cast<int>(key.wrap)));
     mix(std::hash<float>()(key.anisotropy));
+    mix(std::hash<bool>()(key.compare));
     for (int i = 0; i < 4; ++i) {
         mix(std::hash<float>()(key.borderColor[i]));
     }
@@ -98,7 +99,7 @@ static VkBorderColor borderColor(const glm::vec4 &color) {
 
 VkSampler VulkanSamplers::get(const Texture::Properties &properties) {
     Key key {properties.minFilter, properties.magFilter, properties.wrap,
-             properties.borderColor, properties.anisotropy};
+             properties.borderColor, properties.anisotropy, properties.compare};
     auto existing = _samplers.find(key);
     if (existing != _samplers.end()) {
         return existing->second;
@@ -116,6 +117,15 @@ VkSampler VulkanSamplers::get(const Texture::Properties &properties) {
     // range open would let a render target or a GUI image minify into levels
     // that were never uploaded.
     info.maxLod = isMipmapped(properties.minFilter) ? VK_LOD_CLAMP_NONE : 0.0f;
+
+    // LESS, matching the shadow test the shaders used to write out by hand:
+    // a fragment is lit where its own depth is nearer than what the map holds.
+    // With linear filtering the unit returns the fraction of the 2x2 that
+    // passed, which is a percentage-closer filter the hardware runs for free.
+    if (properties.compare) {
+        info.compareEnable = VK_TRUE;
+        info.compareOp = VK_COMPARE_OP_LESS;
+    }
 
     // Anisotropy only means anything alongside mip filtering, and the device
     // has its own ceiling regardless of what the configuration asked for.

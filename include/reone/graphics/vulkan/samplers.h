@@ -63,13 +63,15 @@ private:
         Texture::Wrapping wrap;
         glm::vec4 borderColor;
         float anisotropy;
+        bool compare;
 
         bool operator==(const Key &other) const {
             return minFilter == other.minFilter &&
                    magFilter == other.magFilter &&
                    wrap == other.wrap &&
                    borderColor == other.borderColor &&
-                   anisotropy == other.anisotropy;
+                   anisotropy == other.anisotropy &&
+                   compare == other.compare;
         }
     };
 

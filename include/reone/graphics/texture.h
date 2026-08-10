@@ -69,6 +69,17 @@ public:
         Wrapping wrap {Wrapping::Repeat};
         glm::vec4 borderColor {0.0f};
         float anisotropy {1.0f};
+        /**
+         * A depth-comparison sampler: the filtering unit compares each texel
+         * against a reference the shader supplies and returns the filtered
+         * fraction that passed, rather than the depth itself. One tap becomes a
+         * 2x2 percentage-closer filter for free.
+         *
+         * Not a mode a texture can be sampled either way through. A comparison
+         * sampler is only usable with SampleCmp, and a plain one is only usable
+         * without it, so this is decided where the image is bound.
+         */
+        bool compare {false};
     };
 
     struct Features {
