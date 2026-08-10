@@ -181,7 +181,14 @@ void ObjectsPanel::draw(scene::SceneGraphs &graphs, IObjectSource &source, bool 
             }
         }
         ImGui::TableSetColumnIndex(1);
-        const bool openGroup = ImGui::TreeNodeEx(group.label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
+        // NoTreePushOnOpen because the indent a tree node pushes is window
+        // state, not cell state: it stays applied while the rows underneath are
+        // submitted and shifts every one of their cells, so the enable boxes
+        // marched right along with the names. Only the name is nested here, and
+        // it is nested by moving the cursor inside its own cell below.
+        const bool openGroup = ImGui::TreeNodeEx(
+            group.label.c_str(),
+            ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_NoTreePushOnOpen);
         source.drawGroupExtras(group.rows);
         ImGui::TableSetColumnIndex(entriesColumn);
         rightAligned(std::to_string(group.rows.size()));
@@ -202,6 +209,9 @@ void ObjectsPanel::draw(scene::SceneGraphs &graphs, IObjectSource &source, bool 
                         source.setEnabled(row, enabled);
                     }
                     ImGui::TableSetColumnIndex(1);
+                    // Cell-local, so the nesting reads without disturbing the
+                    // columns either side of it.
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetStyle().IndentSpacing);
                     const std::string &name = row.name;
                     if (name.empty()) {
                         ImGui::TextUnformatted("[unnamed]");
@@ -215,7 +225,6 @@ void ObjectsPanel::draw(scene::SceneGraphs &graphs, IObjectSource &source, bool 
                     ImGui::PopID();
                 }
             }
-            ImGui::TreePop();
         }
         ImGui::PopID();
     }
