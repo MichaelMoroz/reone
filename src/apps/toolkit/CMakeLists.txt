@@ -74,7 +74,7 @@ endif()
 
 set_target_properties(toolkit PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${REONE_BIN_DIR})
 target_precompile_headers(toolkit PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
-target_link_libraries(toolkit PRIVATE tools ${wxWidgets_LIBRARIES} ${Boost_PROGRAM_OPTIONS_LIBRARY} imgui::imgui)
+target_link_libraries(toolkit PRIVATE tools ${wxWidgets_LIBRARIES} ${Boost_PROGRAM_OPTIONS_LIBRARY} imgui)
 target_link_libraries(toolkit PRIVATE graphicsvulkan)
 target_include_directories(toolkit PRIVATE ${CMAKE_SOURCE_DIR}/extern)
 if(MSVC)

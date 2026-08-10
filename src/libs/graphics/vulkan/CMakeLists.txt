@@ -104,7 +104,8 @@ target_link_libraries(graphicsvulkan PUBLIC
     volk::volk_headers
     GPUOpen::VulkanMemoryAllocator
     vk-bootstrap::vk-bootstrap
-    slang::slang)
+    slang::slang
+    imgui)
 
 if(MSVC)
     target_link_libraries(graphicsvulkan PUBLIC SDL3::SDL3)

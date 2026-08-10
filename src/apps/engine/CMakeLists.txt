@@ -40,7 +40,7 @@ add_executable(engine ${ENGINE_HEADERS} ${ENGINE_HEADERS} ${CLANG_FORMAT_PATH})
 set_target_properties(engine PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${REONE_BIN_DIR})
 target_include_directories(engine PRIVATE ${CMAKE_SOURCE_DIR}/extern)
 target_precompile_headers(engine PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
-target_link_libraries(engine PRIVATE game ${Boost_PROGRAM_OPTIONS_LIBRARY} imgui::imgui)
+target_link_libraries(engine PRIVATE game ${Boost_PROGRAM_OPTIONS_LIBRARY} imgui)
 
 target_link_libraries(engine PRIVATE graphicsvulkan)
 

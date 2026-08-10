@@ -90,6 +90,8 @@
 #include "reone/system/smallset.h"
 #include "reone/system/threadutil.h"
 
+#include <imgui.h>
+
 using namespace reone::audio;
 using namespace reone::graphics;
 using namespace reone::gui;
@@ -475,6 +477,7 @@ void Game::initConsole() {
         registerConsoleCommand("swoopstate", "print the current swoop race progress/lateral state", &Game::consoleSwoopState);
         registerConsoleCommand("startswooprace", "enter a swoop module from the current one and auto-start the race", &Game::consoleStartSwoopRace);
         registerConsoleCommand("finishswoop", "finish the lifecycle swoop race (forced success) and return to origin", &Game::consoleFinishSwoop);
+        registerConsoleCommand("showimgui", "open imgui demo", &Game::consoleShowImGui);
     }
 }
 
@@ -608,6 +611,7 @@ void Game::update(float frameTime) {
 
     bool updModule = !_movie && _module && (_screen == Screen::InGame || _screen == Screen::Conversation);
     if (updModule && !_paused) {
+        _floatingText.update(dt);
         _module->update(dt);
         _combat.update(dt);
     }
@@ -624,6 +628,9 @@ void Game::update(float frameTime) {
         gui->update(dt);
     }
     updateSceneGraph(dt);
+    if (_showImGui) {
+        updateImGui(dt);
+    }
 }
 
 void Game::render() {
@@ -786,6 +793,7 @@ void Game::loadModule(const std::string &name, std::string entry, bool fromSave)
             // Do not carry a displayed or pending batch, indicator, or GUI
             // controls across module teardown. OnLoad events below start a new
             // batch for the destination module.
+            _floatingText.reset();
             _statusSummary.reset();
             if (_hud) {
                 _hud->resetStatusSummaryPresentation();
@@ -881,6 +889,8 @@ void Game::resetGame() {
     _party.reset();
     _combat.reset();
     _journal.reset();
+    _messageLog.reset();
+    _floatingText.reset();
     _statusSummary.reset();
     if (_hud) {
         _hud->resetStatusSummaryPresentation();
@@ -3006,6 +3016,10 @@ CameraType Game::getConversationCamera(int &cameraId) const {
     return _conversation->getCamera(cameraId);
 }
 
+void Game::updateImGui(float dt) {
+    ImGui::ShowDemoWindow(&_showImGui);
+}
+
 std::shared_ptr<Object> Game::getConsoleTargetObject() {
     auto object = getConsoleArea()->selectedObject();
     if (!object) {
@@ -4255,6 +4269,12 @@ void Game::consoleSwoopState(const ConsoleArgs &args) {
     }
     glm::vec3 pos = _swoopRace.position();
     _console.printLine(str(boost::format("swoop: progress=%.1f finish=%.1f lateral=%.2f speed=%.1f elapsed=%.1f pos=[%.1f,%.1f,%.1f] bounds=[-%.1f,+%.1f] mode=track-progress") % _swoopRace.progress() % _swoopRace.finishProgress() % _swoopRace.lateralOffset() % _swoopRace.speed() % _swoopRace.elapsed() % pos.x % pos.y % pos.z % _swoopRace.lateralLeftBound() % _swoopRace.lateralRightBound()));
+}
+
+void Game::consoleShowImGui(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "1|0");
+    bool show = args.get<int>(1).value();
+    _showImGui = show;
 }
 
 } // namespace game

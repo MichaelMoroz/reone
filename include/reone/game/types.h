@@ -559,6 +559,13 @@ enum class FeatType {
     ImprovedRapidShot = 92,
     ProficiencyAll = 93,
     BattleMeditation = 94,
+    WookieEndurance = 95,
+    ForceImmunityStun = 99,
+    ForceImmunityParalysis = 100,
+    Dueling = 113,
+    ImprovedDueling = 114,
+    MasterDueling = 115,
+    ImprovedToughness = 123,
 
     // TSL
 
@@ -1216,6 +1223,7 @@ enum class DamagePower {
 };
 
 enum class ACBonus {
+    Invalid = -1,
     Dodge = 0,
     Natural = 1,
     ArmourEnchantment = 2,

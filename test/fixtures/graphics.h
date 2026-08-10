@@ -94,7 +94,7 @@ public:
     MOCK_METHOD(void, drawImage, (Texture &, const glm::mat4 &, const glm::vec4 &, const glm::mat3x4 &), (override));
     MOCK_METHOD(void, drawRect, (const glm::vec2 &, const glm::vec2 &, const glm::vec4 &), (override));
     MOCK_METHOD(void, drawFullTargetImage, (Texture &, const glm::mat3x4 &), (override));
-    MOCK_METHOD(void, drawText, (Font &, std::string_view, const glm::vec3 &, const glm::vec3 &, TextGravity), (override));
+    MOCK_METHOD(void, drawText, (Font &, std::string_view, const glm::vec3 &, const glm::vec4 &, TextGravity), (override));
     MOCK_METHOD(void, withBlendMode, (BlendMode, const std::function<void()> &), (override));
     MOCK_METHOD(void, withScissor, (const glm::ivec4 &, const std::function<void()> &), (override));
 };

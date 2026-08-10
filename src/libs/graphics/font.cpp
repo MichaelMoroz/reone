@@ -48,6 +48,10 @@ void Font::load(std::shared_ptr<Texture> texture) {
 }
 
 void Font::render(std::string_view text, const glm::vec3 &position, const glm::vec3 &color, TextGravity gravity) {
+    render(text, position, glm::vec4(color, 1.0f), gravity);
+}
+
+void Font::render(std::string_view text, const glm::vec3 &position, const glm::vec4 &color, TextGravity gravity) {
     _renderer2d.drawText(*this, text, position, color, gravity);
 }
 

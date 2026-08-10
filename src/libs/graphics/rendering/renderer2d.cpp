@@ -171,14 +171,14 @@ void Renderer2D::drawFullTargetImage(Texture &texture, const glm::mat3x4 &uv) {
 void Renderer2D::drawText(Font &font,
                                 std::string_view text,
                                 const glm::vec3 &position,
-                                const glm::vec3 &color,
+                                const glm::vec4 &color,
                                 TextGravity gravity) {
     if (text.empty()) {
         return;
     }
     LocalUniforms locals;
     locals.reset();
-    locals.color = glm::vec4(color, 1.0f);
+    locals.color = color;
 
     const auto &glyphs = font.glyphs();
     glm::vec2 offset = font.textOffset(text, gravity);

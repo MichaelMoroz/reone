@@ -318,7 +318,7 @@ void Console::renderLines() {
             break;
         }
         line = string_strip(line);
-        _graphicsSvc.renderer2d.drawText(*_font, line, position, glm::vec3(1.0f),
+        _graphicsSvc.renderer2d.drawText(*_font, line, position, glm::vec4(1.0f),
                                          TextGravity::RightCenter);
         position.y -= _font->height();
     }

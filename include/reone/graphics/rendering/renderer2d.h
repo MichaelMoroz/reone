@@ -101,7 +101,7 @@ public:
     virtual void drawText(Font &font,
                           std::string_view text,
                           const glm::vec3 &position,
-                          const glm::vec3 &color = glm::vec3(1.0f),
+                          const glm::vec4 &color = glm::vec4(1.0f),
                           TextGravity gravity = TextGravity::CenterCenter) = 0;
 
     /**
@@ -188,7 +188,7 @@ public:
     void drawText(Font &font,
                   std::string_view text,
                   const glm::vec3 &position,
-                  const glm::vec3 &color = glm::vec3(1.0f),
+                  const glm::vec4 &color = glm::vec4(1.0f),
                   TextGravity gravity = TextGravity::CenterCenter) override;
 
     void withBlendMode(BlendMode mode, const std::function<void()> &block) override;

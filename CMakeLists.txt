@@ -86,7 +86,7 @@ if(BUILD_LAUNCHER OR BUILD_TOOLKIT)
     include(${wxWidgets_USE_FILE})
 endif()
 
-find_package(imgui CONFIG REQUIRED)
+set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/extern/dearimgui)
 
 # Headers only: volk loads every entry point at runtime, so nothing links
 # vulkan-1 and the build does not depend on a loader being present.
@@ -310,7 +310,7 @@ function(reone_copy_slang_runtime target)
 endfunction()
 
 set(REONE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
-include_directories(${Boost_INCLUDE_DIRS} ${SDL3_INCLUDE_DIRS} ${MAD_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/extern/glm ${REONE_INCLUDE_DIR})
+include_directories(${Boost_INCLUDE_DIRS} ${SDL3_INCLUDE_DIRS} ${MAD_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/extern/glm ${REONE_INCLUDE_DIR} ${IMGUI_DIR})
 
 # Where a configuration's artifacts land, decided once instead of per target.
 # Release keeps `build/bin` and Debug keeps `build/debug/bin` because every
@@ -342,6 +342,40 @@ if(MSVC)
 endif()
 
 # END Dependencies
+
+# Dear ImGui
+#
+# Declared here rather than beside the engine as on master: graphicsvulkan owns
+# the Vulkan backend calls and is added first, so the target has to exist before
+# any subdirectory is.
+add_library(imgui STATIC
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_demo.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
+    ${IMGUI_DIR}/misc/cpp/imgui_stdlib.cpp)
+
+# Same treatment as FSR2: volk owns the Vulkan entry points in this process, so
+# force volk.h in ahead of the backend's own Vulkan header and let its calls
+# resolve through the loaded table. Without this the backend declares loader
+# prototypes and the link wants a vulkan-1 nothing here links.
+target_compile_definitions(imgui PRIVATE VK_NO_PROTOTYPES VOLK_NAMESPACE)
+if(MSVC)
+    target_compile_options(imgui PRIVATE /FIvolk.h)
+else()
+    target_compile_options(imgui PRIVATE -include volk.h)
+endif()
+target_link_libraries(imgui PUBLIC Vulkan::Headers volk::volk_headers)
+if(MSVC)
+    target_link_libraries(imgui PUBLIC SDL3::SDL3)
+else()
+    target_link_libraries(imgui PUBLIC ${SDL3_LIBRARIES})
+endif()
+
+# END Dear ImGui
 
 # Compile options
 

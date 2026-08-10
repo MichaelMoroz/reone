@@ -31,6 +31,7 @@
 #include "di/services.h"
 #include "effect.h"
 #include "event.h"
+#include "floatingtext.h"
 #include "gui/chargen.h"
 #include "gui/computer.h"
 #include "gui/container.h"
@@ -46,6 +47,7 @@
 #include "gui/saveload.h"
 #include "journal.h"
 #include "location.h"
+#include "messagelog.h"
 #include "object/area.h"
 #include "object/camera/animated.h"
 #include "object/camera/dialog.h"
@@ -124,7 +126,8 @@ public:
         _party(*this),
         _combat(*this, services),
         _swoopRace(*this),
-        _journal(services.resource.gffs, services.resource.strings) {
+        _journal(services.resource.gffs, services.resource.strings),
+        _floatingText(*this, services) {
         initJournalNotifications();
     }
 
@@ -179,6 +182,8 @@ public:
     Party &party() { return _party; }
     Combat &combat() { return _combat; }
     Journal &journal() { return _journal; }
+    MessageLog &messageLog() { return _messageLog; }
+    FloatingText &floatingText() { return _floatingText; }
     ScriptRunner &scriptRunner() { return *_scriptRunner; }
     Map &map() { return *_map; }
     script::IRoutines &routines() { return *_routines; }
@@ -269,6 +274,11 @@ public:
 
     Screen currentScreen() const {
         return _screen;
+    }
+
+    /** True while a conversation owns the screen, i.e. a dialogue is running. */
+    bool isConversationActive() const {
+        return _screen == Screen::Conversation;
     }
 
     std::shared_ptr<movie::IMovie> movie() const {
@@ -505,6 +515,7 @@ private:
     std::set<std::string> _saveNames;
     bool _quitRequested {false};
     bool _relativeMouseMode {false};
+    bool _showImGui {false};
 
     uint32_t _nextObjectId {2}; // ids 0 and 1 are reserved
     std::map<uint32_t, std::shared_ptr<Object>> _objectById;
@@ -515,6 +526,8 @@ private:
     Combat _combat;
     SwoopRace _swoopRace;
     Journal _journal;
+    MessageLog _messageLog;
+    FloatingText _floatingText;
     StatusSummaryAccumulator _statusSummary;
 
     std::unique_ptr<script::IRoutines> _routines;
@@ -640,6 +653,7 @@ private:
     void updateMusic();
     void updateCamera(float dt);
     void updateSceneGraph(float dt);
+    void updateImGui(float dt);
 
     // END Updates
 
@@ -775,6 +789,7 @@ private:
     void consoleSwoopState(const ConsoleArgs &tokens);
     void consoleStartSwoopRace(const ConsoleArgs &tokens);
     void consoleFinishSwoop(const ConsoleArgs &tokens);
+    void consoleShowImGui(const ConsoleArgs &tokens);
 
     // The raw model most recently admitted by `spawn`.  Emitter and saber
     // fixtures use this deliberately narrow handle rather than an editor-wide

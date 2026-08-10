@@ -74,7 +74,6 @@ void HUD::preload(IGUI &gui) {
 
 void HUD::onGUILoaded() {
     bindControls();
-
     _actionBar.addDescription(
         findControl<gui::Label>("LBL_ACTIONDESC"),
         findControl<gui::Label>("LBL_ACTIONDESCBG"));
@@ -421,6 +420,7 @@ void HUD::render() {
     }
     _select.render();
     _actionBar.render();
+    _game.floatingText().render();
 
     if (_statusSummary && _statusSummary->isVisible()) {
         _statusSummary->render();
