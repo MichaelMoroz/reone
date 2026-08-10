@@ -273,6 +273,13 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
         throw std::runtime_error("Vulkan: sampler creation failed");
     }
 
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(_device.handle(), &samplerInfo, nullptr, &_clampSampler) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: clamped sampler creation failed");
+    }
+
     const uint32_t white = 0xffffffff;
     _default2D = std::make_unique<VulkanImage>(_device);
     _default2D->initSampled2D({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, &white);
@@ -638,6 +645,10 @@ void VulkanDescriptors::deinit() {
     if (_sampler != VK_NULL_HANDLE) {
         vkDestroySampler(_device.handle(), _sampler, nullptr);
         _sampler = VK_NULL_HANDLE;
+    }
+    if (_clampSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(_device.handle(), _clampSampler, nullptr);
+        _clampSampler = VK_NULL_HANDLE;
     }
     if (_textureLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(_device.handle(), _textureLayout, nullptr);

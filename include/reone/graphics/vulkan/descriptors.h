@@ -173,6 +173,14 @@ public:
         const std::vector<std::pair<int, const IImage *>> &bindings) override;
     void freePersistentTextureSet(DescriptorSet set) override;
 
+    /**
+     * Linear filtering with clamped addressing, for compute passes that sample
+     * a screen-sized image at a sub-pixel offset. The general-purpose sampler
+     * repeats, which for a full-screen read wraps the opposite edge into the
+     * kernel rather than holding the border.
+     */
+    VkSampler clampSampler() const { return _clampSampler; }
+
 private:
     VulkanDevice &_device;
 
@@ -187,6 +195,7 @@ private:
     std::vector<VkDescriptorSet> _megaDrawSets;
     uint32_t _bindlessTextureCapacity {0};
     VkSampler _sampler {VK_NULL_HANDLE};
+    VkSampler _clampSampler {VK_NULL_HANDLE};
     /**
      * One default per view shape. A unit declared Sampler2DArray in the shader
      * must be bound with an array view even when nothing has filled it in.

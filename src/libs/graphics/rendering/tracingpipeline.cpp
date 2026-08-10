@@ -183,8 +183,8 @@ void TracingPipeline::init() {
             _compositePipeline = _renderer.makeComputePipeline({"nrd_resolve", "main", 2});
             _compositeBindings = _compositePipeline->resolveBindings(
                 {"outputImage", "inNoiseFree", "inDiffFactor", "inSpecFactor",
-                 "inDenoisedDiffuse", "inDenoisedSpecular", "inViewZ", "inRawDiffuse",
-                 "inRawSpecular", "inDirectDiffuse"});
+                 "sDenoisedDiffuse", "sDenoisedSpecular", "inViewZ", "inRawDiffuse",
+                 "inRawSpecular", "sDirectDiffuse"});
         }
     }
 #endif

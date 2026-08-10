@@ -46,15 +46,18 @@
 [[vk::binding(1, 1)]] RWTexture2D<float4> inNoiseFree;
 [[vk::binding(2, 1)]] RWTexture2D<float4> inDiffFactor;
 [[vk::binding(3, 1)]] RWTexture2D<float4> inSpecFactor;
-[[vk::binding(4, 1)]] RWTexture2D<float4> inDenoisedDiffuse;
-[[vk::binding(5, 1)]] RWTexture2D<float4> inDenoisedSpecular;
+// Sampled, not storage: these three are read at a sub-pixel offset and the
+// filtering unit does the interpolation. The sampler clamps, so the offset
+// cannot wrap the opposite edge of the frame into the kernel.
+[[vk::binding(4, 1)]] Sampler2D sDenoisedDiffuse;
+[[vk::binding(5, 1)]] Sampler2D sDenoisedSpecular;
 [[vk::binding(6, 1)]] RWTexture2D<float> inViewZ;
 [[vk::binding(7, 1)]] RWTexture2D<float4> inRawDiffuse;
 [[vk::binding(8, 1)]] RWTexture2D<float4> inRawSpecular;
 // Direct diffuse at the primary vertex, as whatever settled it: the raw
 // channel, the penumbra blur, or its own NRD denoiser. No unpacking to undo -
 // it is added in the same currency as the rest, against the same guide factor.
-[[vk::binding(9, 1)]] RWTexture2D<float4> inDirectDiffuse;
+[[vk::binding(9, 1)]] Sampler2D sDirectDiffuse;
 
 /** Mirrors NrdResolvePushConstants in tracingpipeline.cpp. */
 struct NrdResolvePushConstants {
@@ -98,34 +101,11 @@ float3 unpackRadiance(float3 stored) {
 }
 
 /**
- * A bilinear tap at the jittered position, dropping neighbours NRD never wrote.
- * Beyond the denoising range its outputs are last frame's history rather than
- * zero, so a tap that reaches across that boundary would pull the same
- * reprojected sky the viewZ guard below exists to keep out - here along every
- * silhouette rather than over the whole sky. Rejected taps leave the weighting
- * instead of contributing, which biases the edge pixel towards its own surface;
- * that is the intended behaviour, since the alternative is bleeding across a
- * depth discontinuity.
+ * The texture coordinate a denoised channel is read at: this pixel's centre,
+ * displaced by the sub-pixel offset the raster beside it was sampled through.
  */
-float3 sampleDenoised(RWTexture2D<float4> channel, int2 pixel, int2 extent) {
-    const float2 position = float2(pixel) + pushConstants.denoisedJitter;
-    const int2 base = int2(floor(position));
-    const float2 frac = position - float2(base);
-    float3 sum = float3(0.0);
-    float total = 0.0;
-    for (int dy = 0; dy <= 1; ++dy) {
-        for (int dx = 0; dx <= 1; ++dx) {
-            const int2 tap = clamp(base + int2(dx, dy), int2(0, 0), extent - 1);
-            if (abs(inViewZ[tap]) >= kDenoisedRange) {
-                continue;
-            }
-            const float weight = (dx == 0 ? 1.0 - frac.x : frac.x) *
-                                 (dy == 0 ? 1.0 - frac.y : frac.y);
-            sum += channel[tap].rgb * weight;
-            total += weight;
-        }
-    }
-    return total > 0.0 ? sum / total : channel[pixel].rgb;
+float2 denoisedUv(int2 pixel, float2 extent) {
+    return (float2(pixel) + 0.5 + pushConstants.denoisedJitter) / extent;
 }
 
 [shader("compute")]
@@ -136,11 +116,16 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     if (dispatchId.x >= width || dispatchId.y >= height) return;
     int2 pixel = int2(dispatchId.xy);
 
+    const float2 extent = float2(width, height);
+    // The debug views want what the denoiser produced, so they read at the
+    // pixel centre; only the composite below applies the offset.
+    const float2 centreUv = (float2(pixel) + 0.5) / extent;
+
     float3 color = inNoiseFree[pixel].rgb;
     const bool hasDenoisedSurface = abs(inViewZ[pixel]) < kDenoisedRange;
-    float3 diffuse = hasDenoisedSurface ? inDenoisedDiffuse[pixel].rgb
+    float3 diffuse = hasDenoisedSurface ? sDenoisedDiffuse.SampleLevel(centreUv, 0.0).rgb
                                         : inRawDiffuse[pixel].rgb;
-    float3 specular = hasDenoisedSurface ? inDenoisedSpecular[pixel].rgb
+    float3 specular = hasDenoisedSurface ? sDenoisedSpecular.SampleLevel(centreUv, 0.0).rgb
                                          : inRawSpecular[pixel].rgb;
     // Demodulated, deliberately: these show what the denoiser produced, not
     // what it looks like once the material is put back, because a channel that
@@ -153,7 +138,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         outputImage[pixel] = float4(unpackRadiance(specular), 1.0);
         return;
     case kDebugFilteredDirect:
-        outputImage[pixel] = float4(max(inDirectDiffuse[pixel].rgb, 0.0), 1.0);
+        outputImage[pixel] = float4(max(sDirectDiffuse.SampleLevel(centreUv, 0.0).rgb, 0.0), 1.0);
         return;
     default:
         break;
@@ -185,12 +170,18 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     // Reading the denoised channels at the same offset as the raster beside
     // them closes the mismatch. It adds no detail that was never shaded; it
     // restores the per-frame variation the upscaler needs to accumulate.
-    const int2 extent = int2(width, height);
-    diffuse = sampleDenoised(inDenoisedDiffuse, pixel, extent);
-    specular = sampleDenoised(inDenoisedSpecular, pixel, extent);
-    const float3 direct = pushConstants.directDenoised != 0
-                              ? sampleDenoised(inDirectDiffuse, pixel, extent)
-                              : inDirectDiffuse[pixel].rgb;
+    //
+    // The interpolation is the sampler's. A hand-rolled four-tap could reject
+    // neighbours past the denoising range, which the filtering unit cannot -
+    // but the offset is under half a pixel, so that bleed reaches one pixel at
+    // a silhouette rather than the whole sky the viewZ guard above prevents.
+    const float2 jitteredUv = denoisedUv(pixel, extent);
+    diffuse = sDenoisedDiffuse.SampleLevel(jitteredUv, 0.0).rgb;
+    specular = sDenoisedSpecular.SampleLevel(jitteredUv, 0.0).rgb;
+    const float3 direct = sDirectDiffuse
+                              .SampleLevel(pushConstants.directDenoised != 0 ? jitteredUv : centreUv,
+                                           0.0)
+                              .rgb;
     color += (unpackRadiance(diffuse) + max(direct, 0.0)) *
                  inDiffFactor[pixel].rgb +
              unpackRadiance(specular) * inSpecFactor[pixel].rgb;

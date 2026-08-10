@@ -47,6 +47,27 @@ const char *resourceKindName(ShaderResourceKind kind) {
     return "unknown";
 }
 
+/**
+ * The kinds a compute shader may declare, and nothing else. The layout and the
+ * descriptor write have to agree exactly, so they read the answer from here
+ * rather than each deciding it - they disagreed once, and a storage image
+ * written into a combined-sampler slot is silent until the validation layers
+ * are on.
+ */
+VkDescriptorType descriptorTypeFor(ShaderResourceKind kind) {
+    switch (kind) {
+    case ShaderResourceKind::StorageImage:
+        return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    case ShaderResourceKind::StorageBuffer:
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    case ShaderResourceKind::CombinedImageSampler:
+        return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    default:
+        throw std::runtime_error(std::string("Vulkan: compute shaders cannot bind a ") +
+                                 resourceKindName(kind));
+    }
+}
+
 } // namespace
 
 namespace {
@@ -516,15 +537,13 @@ void VulkanComputePipeline::init() {
                                      std::to_string(binding.set) + ": '" + binding.name +
                                      "' (kind " + std::to_string(static_cast<int>(binding.kind)) +
                                      ", binding " + std::to_string(binding.binding) + ")");
+        // A Sampler2D rather than an RWTexture2D is how a pass asks for the
+        // filtering unit: same image, same call site, hardware interpolation
+        // instead of taps in the shader.
         VkDescriptorType descriptorType;
-        switch (binding.kind) {
-        case ShaderResourceKind::StorageImage:
-            descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            break;
-        case ShaderResourceKind::StorageBuffer:
-            descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            break;
-        default:
+        try {
+            descriptorType = descriptorTypeFor(binding.kind);
+        } catch (const std::runtime_error &) {
             throw std::runtime_error("Vulkan: unsupported compute binding '" + binding.name +
                                      "' in shader '" + _desc.shader + "': " +
                                      resourceKindName(binding.kind));
@@ -620,8 +639,7 @@ void VulkanComputePipeline::dispatch(VkCommandBuffer commandBuffer, uint32_t fra
                                         " resources, got " + std::to_string(source->count));
         const auto set = _pipeline.descriptorSet(binding.set, frameIndex);
         const DescriptorBinding target {binding.binding,
-            binding.kind == ShaderResourceKind::StorageImage ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-                                                              : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+            descriptorTypeFor(binding.kind)};
         for (uint32_t i = 0; i < source->count; ++i) {
             if (binding.kind == ShaderResourceKind::StorageImage) {
                 if (source->type != ComputeBinding::Type::Image)
@@ -629,6 +647,21 @@ void VulkanComputePipeline::dispatch(VkCommandBuffer commandBuffer, uint32_t fra
                                                 binding.name + "' requires images");
                 writes.writeStorageImage(toDescriptorSet(set), target,
                                          source->imageArray ? source->imageArray[i] : source->image, i);
+            } else if (binding.kind == ShaderResourceKind::CombinedImageSampler) {
+                if (source->type != ComputeBinding::Type::Image)
+                    throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
+                                                binding.name + "' requires images");
+                // General, not shader-read-only. These are the same images other
+                // passes write as storage, and they are left in General for the
+                // frame rather than transitioned around each read; General is a
+                // legal layout to sample from, and a barrier pair per pass would
+                // buy nothing here.
+                writes.writeImage(set, target,
+                                  {_descriptors.clampSampler(),
+                                   toVulkanImageView(source->imageArray ? source->imageArray[i]
+                                                                        : source->image),
+                                   VK_IMAGE_LAYOUT_GENERAL},
+                                  i);
             } else if (binding.kind == ShaderResourceKind::StorageBuffer) {
                 if (source->type != ComputeBinding::Type::Buffer)
                     throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
