@@ -117,6 +117,8 @@ constexpr uint32_t kAllShadowCasters = 0xFFFFFFFFu;
 
 struct SceneFramePlan {
     SceneShadow shadow {SceneShadow::None};
+    /** GUI controls composite this output; alpha then follows primary coverage. */
+    bool transparentOutput {false};
     /**
      * Bit per scene::ModelUsage allowed into the shadow map.
      *
@@ -137,6 +139,7 @@ struct PrimaryRayContext {
     glm::mat4 view {1.0f};
     glm::mat4 projection {1.0f};
     glm::vec4 jitter {0.0f};
+    SkyBinding sky;
     /** The primary the geometry pass just rasterized; the tracer starts here. */
     GBufferBinding gbuffer;
 };
@@ -212,6 +215,7 @@ private:
     TextureRegistry &_textureRegistry;
     bool _inited {false};
     bool _primaryRayMode {false};
+    bool _transparentOutput {false};
     SceneShadow _shadow {SceneShadow::None};
     uint32_t _shadowCasterCategories {kAllShadowCasters};
 
@@ -298,6 +302,8 @@ private:
     void blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                      ISceneCallbacks &callbacks);
     void pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    /** Restores coverage alpha after FSR2, whose output alpha is always one. */
+    void coveragePass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** A second dispatch over the resolved image; see SceneStep. */
     void screenSpaceReflectionPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** The two bindings a resolve cannot hold in its persistent table. */

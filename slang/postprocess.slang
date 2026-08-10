@@ -71,6 +71,15 @@ struct PostProcessPushConstants {
 };
 [[vk::push_constant]] PostProcessPushConstants pushConstants;
 
+/** Mirrors CoveragePushConstants in scenepipeline.cpp. */
+struct CoveragePushConstants {
+    uint skyAvailable;
+};
+[[vk::push_constant]] CoveragePushConstants coveragePushConstants;
+
+[[vk::binding(21, 1), vk::image_format("r32ui")]] Sampler2D<uint> sGBufTriangleId;
+static const uint kNoTriangle = 0xffffffffu;
+
 /**
  * A single triangle covering the target.
  *
@@ -111,6 +120,23 @@ float4 postProcessFragment(Varyings input) : SV_Target {
     const uint tonemap = graded ? pushConstants.tonemap : 0;
     return float4(ptDisplayTransform(max(texel.rgb, 0.0), exposure, tonemap),
                   texel.a);
+}
+
+/**
+ * The GUI compositor uses alpha as primary coverage, not material opacity.
+ * The triangle attachment is render-sized while this pass can run after FSR,
+ * so normalized coordinates intentionally select the corresponding primary
+ * texel at either output resolution.
+ */
+[shader("fragment")]
+float4 coverageFragment(Varyings input) : SV_Target {
+    float4 texel = sMainTex.SampleLevel(input.uv, 0.0);
+    uint width, height;
+    sGBufTriangleId.GetDimensions(width, height);
+    int2 pixel = min(int2(input.uv * float2(width, height)), int2(width - 1, height - 1));
+    bool covered = sGBufTriangleId.Load(int3(pixel, 0)).r != kNoTriangle ||
+                   coveragePushConstants.skyAvailable != 0;
+    return float4(texel.rgb, covered ? 1.0 : 0.0);
 }
 
 /** Convert renderer-owned targets into the forms used by the target viewer. */

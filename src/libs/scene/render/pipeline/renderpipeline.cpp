@@ -39,10 +39,7 @@ public:
     void renderPrimary(const graphics::PrimaryRayContext &context) override {
         if (!_owner._rayQuery)
             return;
-        // Ordered: the bake records before the trace that samples the cube,
-        // and the admission result is still intact when the gather reads it.
-        const auto sky = _owner.skyBinding(*context.commandBuffer);
-        _owner._rayQuery->render(context, std::move(_owner._admissionResult), sky);
+        _owner._rayQuery->render(context, std::move(_owner._admissionResult), context.sky);
     }
 
     graphics::SkyBinding prepareSky(graphics::ICommandBuffer &commandBuffer) override {
@@ -220,8 +217,10 @@ graphics::SkyBinding RenderPipeline::skyBinding(graphics::ICommandBuffer &comman
 }
 
 graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
-                                                RenderShadowKind shadow) {
+                                                RenderShadowKind shadow,
+                                                SceneOutputAlpha alpha) {
     graphics::SceneFramePlan plan;
+    plan.transparentOutput = alpha == SceneOutputAlpha::Coverage;
     plan.shadowCasterCategories = shadowCasterCategories();
     switch (shadow) {
     case RenderShadowKind::Directional:

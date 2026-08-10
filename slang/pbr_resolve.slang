@@ -84,7 +84,7 @@ import lib.skycube;
 
 /** Mirrors ResolvePushConstants in scenepipeline.cpp. */
 struct ResolvePushConstants {
-    /** Bit 0: a sky bake is available. Bit 1: screen-space occlusion is on. */
+    /** Bit 0: sky. Bit 1: SSAO. Bit 2: uncovered pixels keep alpha zero. */
     uint flags;
     /** Fraction of light a thin surface passes to its far side. */
     float thinTransmission;
@@ -103,6 +103,7 @@ struct ResolvePushConstants {
 
 static const uint kResolveFlagSky = 1u;
 static const uint kResolveFlagSSAO = 2u;
+static const uint kResolveFlagTransparentOutput = 4u;
 
 static const uint kNoTriangle = 0xffffffffu;
 static const uint kNoTexture = 0xffffffffu;
@@ -563,7 +564,10 @@ void resolveMain(uint3 dispatchId : SV_DispatchThreadID) {
     }
     int2 pixel = int2(dispatchId.xy);
     float2 uv = (float2(pixel) + 0.5) / float2(width, height);
-    outImage[pixel] = float4(resolveSurface(uv, pixel), 1.0);
+    uint triangleId = sGBufTriangleId.Load(int3(pixel, 0)).r;
+    bool covered = triangleId != kNoTriangle || (pushConstants.flags & kResolveFlagSky) != 0;
+    float alpha = (pushConstants.flags & kResolveFlagTransparentOutput) != 0 && !covered ? 0.0 : 1.0;
+    outImage[pixel] = float4(resolveSurface(uv, pixel), alpha);
 }
 
 // --- Screen-space reflections ---

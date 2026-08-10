@@ -50,6 +50,12 @@ struct GraphicsOptions;
 
 namespace scene {
 
+/** Whether the finished scene target will be composited by a GUI control. */
+enum class SceneOutputAlpha {
+    Opaque,
+    Coverage,
+};
+
 class CameraSceneNode;
 
 /**
@@ -93,7 +99,8 @@ public:
     virtual void init() = 0;
 
     virtual graphics::Texture &render(const CameraSceneNode *camera,
-                                      RenderShadowKind shadow) = 0;
+                                      RenderShadowKind shadow,
+                                      SceneOutputAlpha alpha) = 0;
 
     /**
      * Intermediate targets, for inspection by development tooling. Empty unless

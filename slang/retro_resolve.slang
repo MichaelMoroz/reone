@@ -46,13 +46,14 @@ import lib.skycube;
 /** Mirrors ResolvePushConstants in scenepipeline.cpp. */
 struct ResolvePushConstants {
     /** Kept in step with pbr_resolve.slang; retro reads only the flags. */
-    /** Bit 0: a sky bake is available this frame. Bit 1 is the PBR resolve's. */
+    /** Bit 0: sky. Bit 1 is PBR's SSAO. Bit 2 preserves uncovered GUI alpha. */
     uint flags;
     float thinTransmission;
 };
 [[vk::push_constant]] ResolvePushConstants pushConstants;
 
 static const uint kResolveFlagSky = 1u;
+static const uint kResolveFlagTransparentOutput = 4u;
 
 static const uint kNoTriangle = 0xffffffffu;
 static const uint kNoTexture = 0xffffffffu;
@@ -128,7 +129,8 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     // the same black rather than a different one.
     if (triangleId == kNoTriangle) {
         if ((pushConstants.flags & kResolveFlagSky) == 0) {
-            return float4(0.0, 0.0, 0.0, 1.0);
+            float alpha = (pushConstants.flags & kResolveFlagTransparentOutput) != 0 ? 0.0 : 1.0;
+            return float4(0.0, 0.0, 0.0, alpha);
         }
         float3 direction = skyDirection(input.uv, globalUniforms.projectionInv,
                                         globalUniforms.viewInv,

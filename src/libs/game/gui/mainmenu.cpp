@@ -58,6 +58,7 @@ MainMenu::MainMenu(Game &game, ServicesView &services) :
 void MainMenu::preload(IGUI &gui) {
     GameGUI::preload(gui);
     gui.setResolution(800, 600);
+    gui.setControlSceneScaling("LBL_3DVIEW", GUI::ScalingMode::Stretch);
 }
 
 void MainMenu::onGUILoaded() {

@@ -72,6 +72,11 @@ struct ResolvePushConstants {
     float lightmapIntensity;
 };
 
+/** Mirrors CoveragePushConstants in postprocess.slang. */
+struct CoveragePushConstants {
+    uint32_t skyAvailable;
+};
+
 /** Mirrors DebugViewPushConstants in debug_view.slang. */
 struct DebugViewPushConstants {
     uint32_t view;
@@ -83,6 +88,8 @@ struct DebugViewPushConstants {
 static constexpr uint32_t kResolveFlagSky = 1u;
 /** Screen-space occlusion; read by the PBR resolve alone. */
 static constexpr uint32_t kResolveFlagSSAO = 2u;
+/** The target is composited by GUI and uncovered pixels must remain transparent. */
+static constexpr uint32_t kResolveFlagTransparentOutput = 4u;
 
 /** Both resolve dispatches, and their shader, agree on this tile. */
 static constexpr uint32_t kResolveGroupSize = 8;
@@ -592,6 +599,9 @@ uint32_t ScenePipeline::resolveFlags() const {
     if (_options.ssao) {
         flags |= kResolveFlagSSAO;
     }
+    if (_transparentOutput) {
+        flags |= kResolveFlagTransparentOutput;
+    }
     return flags;
 }
 
@@ -685,7 +695,7 @@ void ScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) 
         // No merged geometry: there is nothing to bind and nothing to shade,
         // so publish the black the clear used to leave and stop.
         cmd.transitionImage(*_output, ImageLayout::General);
-        cmd.clearColor(*_output, {0.0f, 0.0f, 0.0f, 1.0f});
+        cmd.clearColor(*_output, {0.0f, 0.0f, 0.0f, _transparentOutput ? 0.0f : 1.0f});
         cmd.transitionImage(*_output, ImageLayout::ShaderRead);
         return;
     }
@@ -733,6 +743,48 @@ void ScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) 
                          (_renderSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});
 
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+}
+
+void ScenePipeline::coveragePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    if (!_transparentOutput) {
+        return;
+    }
+    // FSR2 stores alpha as one regardless of its input. Reconstruct it from
+    // the primary coverage after the shared tail so an upscaled GUI target has
+    // exactly the same compositing contract as a native-resolution one.
+    cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+    auto &triangleId = _gbuffer->color(GBufferAttachment::TriangleId);
+    cmd.transitionImage(triangleId, ImageLayout::ShaderRead);
+    cmd.transitionImage(*_tailColor, ImageLayout::ColorAttachment);
+
+    PipelineKey key;
+    key.module = kPostProcessModule;
+    key.vertexEntry = "postVertex";
+    key.fragmentEntry = "coverageFragment";
+    key.colorFormats = {_tailColor->pixelFormat()};
+    PipelineBinding pipeline = _renderer.pipelines().get(key);
+
+    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+    auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
+        _renderer.uniformRing().frame(),
+        {{TextureUnits::mainTex, _output.get()}, {21, &triangleId}});
+    const CoveragePushConstants push {_skyBinding.baked ? 1u : 0u};
+    {
+        RenderAttachment color {_tailColor->sampleView(), ImageLayout::ColorAttachment,
+                                AttachmentLoad::DontCare, AttachmentStore::Store};
+        cmd.beginRendering(chainSize(), {color}, nullptr, 0, false);
+        cmd.bindPipeline(pipeline.pipeline);
+        auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                              offsets.data(), static_cast<uint32_t>(offsets.size()));
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet, nullptr, 0);
+        cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
+        cmd.draw(3, 1);
+        cmd.endRendering();
+    }
+    cmd.transitionImage(*_tailColor, ImageLayout::ShaderRead);
+    std::swap(_output, _tailColor);
 }
 
 void ScenePipeline::screenSpaceReflectionPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
@@ -1078,6 +1130,7 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
         _chainAtDisplaySize = false;
     }
     _shadow = plan.shadow;
+    _transparentOutput = plan.transparentOutput;
     _shadowCasterCategories = plan.shadowCasterCategories;
     _mergedScene = {};
     _mergedScenePrepared = false;
@@ -1089,6 +1142,9 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
     _renderer.uniformRing().setGlobalsOffset(globalsOffset);
 
     if (_primaryRayMode) {
+        // A traced sky is the same sky the coverage pass uses to decide that a
+        // GUI pixel is occupied. Prepare it once before either consumer.
+        _skyBinding = callbacks.prepareSky(cmd);
         // Primary visibility is recorded before the trace, and the tracer now
         // READS it: the kernel reconstructs its primary surface from these
         // attachments instead of tracing a camera ray to find the same surface
@@ -1105,7 +1161,8 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
         cmd.transitionImage(*_output, ImageLayout::General);
         callbacks.renderPrimary(
             {&cmd, globalsOffset, _output.get(), _mergedScene,
-             globals.view, globals.projection, globals.jitter, gbufferBinding()});
+             globals.view, globals.projection, globals.jitter, _skyBinding,
+             gbufferBinding()});
         cmd.transitionImage(*_output, ImageLayout::ShaderRead);
         // The common tail runs over the traced image exactly as it does over a
         // resolved one; the tracer stops at linear and the display transform
@@ -1131,6 +1188,7 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
         // The traced image is sampleable by now, so the preview can read it
         // like any other target. Without this the window would offer a target
         // it never draws, which is only marginally better than crashing.
+        coveragePass(cmd, globalsOffset);
         previewPass(cmd, globalsOffset, callbacks);
         _renderer.resources().registerExternal(*_outputHandle, *_output);
         return *_outputHandle;
@@ -1193,7 +1251,7 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
         {
             RenderAttachment color {_output->sampleView(), ImageLayout::ColorAttachment,
                                     AttachmentLoad::Clear, AttachmentStore::Store};
-            color.clear.color = {0.0f, 0.0f, 0.0f, 1.0f};
+            color.clear.color = {0.0f, 0.0f, 0.0f, _transparentOutput ? 0.0f : 1.0f};
             cmd.beginRendering(chainSize(), {color}, nullptr, 0, false);
             cmd.endRendering();
         }
@@ -1202,6 +1260,7 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
         cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
     }
 
+    coveragePass(cmd, globalsOffset);
     previewPass(cmd, globalsOffset, callbacks);
 
     _renderer.resources().registerExternal(*_outputHandle, *_output);

@@ -73,7 +73,8 @@ public:
     virtual ~ISceneGraph() = default;
 
     virtual void update(float dt) = 0;
-    virtual graphics::Texture &render(const glm::ivec2 &dim) = 0;
+    virtual graphics::Texture &render(const glm::ivec2 &dim,
+                                      SceneOutputAlpha alpha = SceneOutputAlpha::Opaque) = 0;
 
     virtual void clear() = 0;
 
@@ -198,7 +199,8 @@ private:
     bool _renderPipelineRebuildRequested {false};
 
 public:
-    graphics::Texture &render(const glm::ivec2 &dim) override;
+    graphics::Texture &render(const glm::ivec2 &dim,
+                              SceneOutputAlpha alpha = SceneOutputAlpha::Opaque) override;
     void invalidateRenderPipeline() override { _renderPipeline.reset(); }
 
     bool consumeRenderPipelineRebuild() override {

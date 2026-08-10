@@ -531,7 +531,7 @@ void SceneGraph::prepareTransparentLeafs() {
     }
 }
 
-Texture &SceneGraph::render(const glm::ivec2 &dim) {
+Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {
     R_PROFILE_ZONE("SceneGraph::render");
     if (!_renderPipeline) {
         // The mode is what was asked for; the factory decides what the current
@@ -654,7 +654,7 @@ Texture &SceneGraph::render(const glm::ivec2 &dim) {
                       : (isShadowLightDirectional()
                              ? RenderShadowKind::Directional
                              : RenderShadowKind::Point);
-    auto &output = pipeline.render(_activeCamera, shadow);
+    auto &output = pipeline.render(_activeCamera, shadow, alpha);
     snapshotPreviousFrame();
     return output;
 }

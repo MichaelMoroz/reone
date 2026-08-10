@@ -31,7 +31,8 @@ namespace scene {
 class MockSceneGraph : public ISceneGraph, boost::noncopyable {
 public:
     MOCK_METHOD(void, update, (float dt), (override));
-    MOCK_METHOD(graphics::Texture &, render, (const glm::ivec2 &dim), (override));
+    MOCK_METHOD(graphics::Texture &, render,
+                (const glm::ivec2 &dim, SceneOutputAlpha alpha), (override));
 
     MOCK_METHOD(void, clear, (), (override));
 
@@ -125,7 +126,7 @@ public:
     MOCK_METHOD(void, init, (), (override));
 
     MOCK_METHOD(graphics::Texture &, render,
-                (const CameraSceneNode *, RenderShadowKind),
+                (const CameraSceneNode *, RenderShadowKind, SceneOutputAlpha),
                 (override));
     MOCK_METHOD(std::vector<RenderTargetInfo>, targets, (), (const override));
 };

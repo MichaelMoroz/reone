@@ -217,10 +217,17 @@ void Control::render(const glm::ivec2 &screenSize,
         renderText(_textLines, offset, size);
     }
     if (_sceneOutput) {
-        _graphicsSvc.renderer2d.drawImage(
-            *_sceneOutput,
-            {sceneExtent().left + (_sceneExtent ? 0 : offset.x), sceneExtent().top + (_sceneExtent ? 0 : offset.y)},
-            {sceneExtent().width, sceneExtent().height});
+        // Blended, not blitted. The scene target is transparent wherever
+        // nothing was drawn, and an opaque copy paints that emptiness over
+        // whatever the control sits on - which turned the main menu black
+        // everywhere but the model once the scene covered the screen.
+        _graphicsSvc.renderer2d.withBlendMode(BlendMode::Normal, [this, offset]() {
+            _graphicsSvc.renderer2d.drawImage(
+                *_sceneOutput,
+                {sceneExtent().left + (_sceneExtent ? 0 : offset.x),
+                 sceneExtent().top + (_sceneExtent ? 0 : offset.y)},
+                {sceneExtent().width, sceneExtent().height});
+        });
         // Good for this frame only. A control that stops being visible, or a
         // frame where the offscreen phase did not run, must not composite a
         // target that no longer describes anything.
@@ -234,7 +241,8 @@ void Control::renderOffscreen() {
         return;
     }
     const Extent &extent = sceneExtent();
-    _sceneOutput = &_sceneGraphs.get(_sceneName).render({extent.width, extent.height});
+    _sceneOutput = &_sceneGraphs.get(_sceneName).render(
+        {extent.width, extent.height}, SceneOutputAlpha::Coverage);
 }
 
 void Control::renderBorder(const Border &border,
