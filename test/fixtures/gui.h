@@ -50,6 +50,7 @@ public:
     MOCK_METHOD(void, setControlSceneScaling, (const std::string &, ScalingMode), (override));
     MOCK_METHOD(void, setDefaultHilightColor, (glm::vec3), (override));
     MOCK_METHOD(void, setBackground, (std::shared_ptr<graphics::Texture>), (override));
+    MOCK_METHOD(void, setBackgroundAsArt, (bool), (override));
 
     MOCK_METHOD(std::unique_ptr<Control>, newControl, (ControlType, std::string), (override));
     MOCK_METHOD(void, addControlToFront, (std::shared_ptr<Control>), (override));

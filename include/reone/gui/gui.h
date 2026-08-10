@@ -85,6 +85,16 @@ public:
     virtual void setDefaultHilightColor(glm::vec3 color) = 0;
     virtual void setBackground(std::shared_ptr<graphics::Texture> texture) = 0;
 
+    /**
+     * Draw the background as its own artwork rather than as a black surround.
+     *
+     * The plate is tinted black by default because its framed window cannot be
+     * lined up with a layout fitted at a different aspect. A screen that does
+     * not sit inside that window - the main menu, whose buttons carry their own
+     * frame - is only using the plate as a backdrop and wants the art.
+     */
+    virtual void setBackgroundAsArt(bool asArt) = 0;
+
     virtual std::unique_ptr<Control> newControl(ControlType type, std::string tag) = 0;
     virtual void addControlToFront(std::shared_ptr<Control> control) = 0;
     virtual void addControlToBack(std::shared_ptr<Control> control) = 0;
@@ -188,6 +198,7 @@ public:
     }
 
     void setBackground(std::shared_ptr<graphics::Texture> texture) override;
+    void setBackgroundAsArt(bool asArt) override { _backgroundAsArt = asArt; }
 
     std::unique_ptr<Control> newControl(ControlType type, std::string tag) override;
 
@@ -207,6 +218,7 @@ private:
     glm::ivec2 _rootOffset {0};
     glm::ivec2 _controlOffset {0};
     std::shared_ptr<graphics::Texture> _background;
+    bool _backgroundAsArt {false};
     std::unordered_map<std::string, ScalingMode> _scalingByControlTag;
     std::unordered_map<std::string, ScalingMode> _sceneScalingByControlTag;
     bool _leftMouseDown {false};

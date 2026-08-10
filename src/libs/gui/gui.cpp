@@ -386,12 +386,13 @@ void GUI::renderOffscreen() {
 void GUI::renderBackground() {
     // The background plate is a surround with a framed window. At a different
     // aspect ratio no scaling lines that window up with the fitted layout, so
-    // tint it black: it still covers the screen and has no edge to misalign.
+    // it is tinted black by default: it still covers the screen and has no edge
+    // to misalign. A screen drawing it purely as a backdrop asks for the art.
     _graphicsSvc.renderer2d.drawImage(
         *_background,
         {0, 0},
         {_options.width, _options.height},
-        glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+        _backgroundAsArt ? glm::vec4(1.0f) : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
 }
 
 void GUI::clearSelection() {

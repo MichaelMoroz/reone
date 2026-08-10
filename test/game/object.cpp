@@ -1202,7 +1202,6 @@ TEST(GameGUIScaledDefault, should_apply_scaled_mode_to_main_menu) {
 
     EXPECT_CALL(gui, setScaling(gui::GUI::ScalingMode::Scaled));
     EXPECT_CALL(gui, setResolution(800, 600));
-    EXPECT_CALL(gui, setControlSceneScaling("LBL_3DVIEW", gui::GUI::ScalingMode::Stretch));
 
     menu.preload(gui);
 }

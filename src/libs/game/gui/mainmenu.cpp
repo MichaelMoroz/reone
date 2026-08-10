@@ -58,10 +58,17 @@ MainMenu::MainMenu(Game &game, ServicesView &services) :
 void MainMenu::preload(IGUI &gui) {
     GameGUI::preload(gui);
     gui.setResolution(800, 600);
-    gui.setControlSceneScaling("LBL_3DVIEW", GUI::ScalingMode::Stretch);
 }
 
 void MainMenu::onGUILoaded() {
+    // The main menu's backdrop is the plate drawn as artwork, not as the
+    // surround behind an inset layout: its buttons carry their own frame and
+    // never sit in the plate's window, so nothing here can misalign with it.
+    if (!_game.isTSL()) {
+        _gui->setBackgroundAsArt(true);
+        loadBackground(BackgroundType::Menu);
+    }
+
     bindControls();
 
     _controls.LB_MODULES->setVisible(false);
