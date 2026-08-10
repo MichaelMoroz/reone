@@ -745,13 +745,13 @@ void ScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) 
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
 
-void ScenePipeline::coveragePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+void ScenePipeline::primaryCoveragePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     if (!_transparentOutput) {
         return;
     }
-    // FSR2 stores alpha as one regardless of its input. Reconstruct it from
-    // the primary coverage after the shared tail so an upscaled GUI target has
-    // exactly the same compositing contract as a native-resolution one.
+    // The tracer writes alpha one for every pixel, including a miss. Correct
+    // it before the forward pass: normal transparent draws then accumulate
+    // coverage over this base, while additive draws retain their zero alpha.
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
     auto &triangleId = _gbuffer->color(GBufferAttachment::TriangleId);
     cmd.transitionImage(triangleId, ImageLayout::ShaderRead);
@@ -760,7 +760,7 @@ void ScenePipeline::coveragePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     PipelineKey key;
     key.module = kPostProcessModule;
     key.vertexEntry = "postVertex";
-    key.fragmentEntry = "coverageFragment";
+    key.fragmentEntry = "primaryCoverageFragment";
     key.colorFormats = {_tailColor->pixelFormat()};
     PipelineBinding pipeline = _renderer.pipelines().get(key);
 
@@ -780,6 +780,47 @@ void ScenePipeline::coveragePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
                               offsets.data(), static_cast<uint32_t>(offsets.size()));
         cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet, nullptr, 0);
         cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
+        cmd.draw(3, 1);
+        cmd.endRendering();
+    }
+    cmd.transitionImage(*_tailColor, ImageLayout::ShaderRead);
+    std::swap(_output, _tailColor);
+}
+
+void ScenePipeline::coveragePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    if (!_transparentOutput) {
+        return;
+    }
+    // FSR2 writes alpha one, so the display-sized colour needs coverage from
+    // the render-sized source it consumed. _displayColor holds that source
+    // after upscalePass swaps the display pair into the tail; without FSR the
+    // completed output has carried alpha through every tail pass itself.
+    IImage *coverage = _chainAtDisplaySize ? _displayColor.get() : _output.get();
+    cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+    cmd.transitionImage(*coverage, ImageLayout::ShaderRead);
+    cmd.transitionImage(*_tailColor, ImageLayout::ColorAttachment);
+
+    PipelineKey key;
+    key.module = kPostProcessModule;
+    key.vertexEntry = "postVertex";
+    key.fragmentEntry = "coverageFragment";
+    key.colorFormats = {_tailColor->pixelFormat()};
+    PipelineBinding pipeline = _renderer.pipelines().get(key);
+
+    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+    auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
+        _renderer.uniformRing().frame(),
+        {{TextureUnits::mainTex, _output.get()}, {22, coverage}});
+    {
+        RenderAttachment color {_tailColor->sampleView(), ImageLayout::ColorAttachment,
+                                AttachmentLoad::DontCare, AttachmentStore::Store};
+        cmd.beginRendering(chainSize(), {color}, nullptr, 0, false);
+        cmd.bindPipeline(pipeline.pipeline);
+        auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                              offsets.data(), static_cast<uint32_t>(offsets.size()));
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet, nullptr, 0);
         cmd.draw(3, 1);
         cmd.endRendering();
     }
@@ -1164,6 +1205,7 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
              globals.view, globals.projection, globals.jitter, _skyBinding,
              gbufferBinding()});
         cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+        primaryCoveragePass(cmd, globalsOffset);
         // The common tail runs over the traced image exactly as it does over a
         // resolved one; the tracer stops at linear and the display transform
         // is the pass below, not the kernel.

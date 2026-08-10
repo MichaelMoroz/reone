@@ -72,12 +72,13 @@ struct PostProcessPushConstants {
 [[vk::push_constant]] PostProcessPushConstants pushConstants;
 
 /** Mirrors CoveragePushConstants in scenepipeline.cpp. */
-struct CoveragePushConstants {
+struct PrimaryCoveragePushConstants {
     uint skyAvailable;
 };
-[[vk::push_constant]] CoveragePushConstants coveragePushConstants;
+[[vk::push_constant]] PrimaryCoveragePushConstants primaryCoveragePushConstants;
 
 [[vk::binding(21, 1), vk::image_format("r32ui")]] Sampler2D<uint> sGBufTriangleId;
+[[vk::binding(22, 1)]] Sampler2D sCoverageTex;
 static const uint kNoTriangle = 0xffffffffu;
 
 /**
@@ -123,20 +124,29 @@ float4 postProcessFragment(Varyings input) : SV_Target {
 }
 
 /**
- * The GUI compositor uses alpha as primary coverage, not material opacity.
- * The triangle attachment is render-sized while this pass can run after FSR,
- * so normalized coordinates intentionally select the corresponding primary
- * texel at either output resolution.
+ * The tracer has no primary alpha, so a GUI scene establishes the opaque and
+ * sky contribution before its forward transparent pass starts accumulating.
  */
 [shader("fragment")]
-float4 coverageFragment(Varyings input) : SV_Target {
+float4 primaryCoverageFragment(Varyings input) : SV_Target {
     float4 texel = sMainTex.SampleLevel(input.uv, 0.0);
     uint width, height;
     sGBufTriangleId.GetDimensions(width, height);
     int2 pixel = min(int2(input.uv * float2(width, height)), int2(width - 1, height - 1));
     bool covered = sGBufTriangleId.Load(int3(pixel, 0)).r != kNoTriangle ||
-                   coveragePushConstants.skyAvailable != 0;
+                   primaryCoveragePushConstants.skyAvailable != 0;
     return float4(texel.rgb, covered ? 1.0 : 0.0);
+}
+
+/**
+ * The GUI compositor uses alpha as coverage. The source is the image directly
+ * after transparent compositing; when FSR has run it remains at render size,
+ * because FSR writes its output alpha as one.
+ */
+[shader("fragment")]
+float4 coverageFragment(Varyings input) : SV_Target {
+    float4 texel = sMainTex.SampleLevel(input.uv, 0.0);
+    return float4(texel.rgb, sCoverageTex.SampleLevel(input.uv, 0.0).a);
 }
 
 /** Convert renderer-owned targets into the forms used by the target viewer. */

@@ -302,7 +302,9 @@ private:
     void blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                      ISceneCallbacks &callbacks);
     void pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
-    /** Restores coverage alpha after FSR2, whose output alpha is always one. */
+    /** Establishes opaque and sky coverage before the traced transparent draw. */
+    void primaryCoveragePass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    /** Restores the accumulated coverage alpha after FSR2, whose output alpha is always one. */
     void coveragePass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** A second dispatch over the resolved image; see SceneStep. */
     void screenSpaceReflectionPass(ICommandBuffer &cmd, uint32_t globalsOffset);

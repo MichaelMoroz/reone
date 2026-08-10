@@ -217,11 +217,12 @@ void Control::render(const glm::ivec2 &screenSize,
         renderText(_textLines, offset, size);
     }
     if (_sceneOutput) {
-        // Blended, not blitted. The scene target is transparent wherever
-        // nothing was drawn, and an opaque copy paints that emptiness over
-        // whatever the control sits on - which turned the main menu black
-        // everywhere but the model once the scene covered the screen.
-        _graphicsSvc.renderer2d.withBlendMode(BlendMode::Normal, [this, offset]() {
+        // The scene's transparent pass has already premultiplied normal
+        // coverage into RGB, while additive layers deliberately carry zero
+        // coverage. Compositing with the same premultiplied rule keeps the
+        // former from being multiplied twice and lets the latter add light
+        // without turning it into an occluder.
+        _graphicsSvc.renderer2d.withBlendMode(BlendMode::Premultiplied, [this, offset]() {
             _graphicsSvc.renderer2d.drawImage(
                 *_sceneOutput,
                 {sceneExtent().left + (_sceneExtent ? 0 : offset.x),
