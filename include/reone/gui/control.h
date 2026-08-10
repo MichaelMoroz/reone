@@ -59,6 +59,7 @@ public:
     static constexpr int kStretchWidth = 4;
     static constexpr int kStretchHeight = 8;
     static constexpr int kStretchAll = kStretchLeft | kStretchTop | kStretchWidth | kStretchHeight;
+    static constexpr float kTextScaleFactor = 0.5f;
 
     enum class TextAlign {
         LeftTop = 9,
@@ -146,6 +147,13 @@ public:
     int id() const { return _id; }
     int padding() const { return _padding; }
     Border &border() const { return *_border; }
+    const Extent &authoredExtent() const { return _authoredExtent; }
+    /** The uniform factor this control is laid out at; text takes it too. */
+    float scale() const { return _scale; }
+    void setScale(float scale) {
+        _scale = scale;
+        updateTextLines();
+    }
     const Extent &extent() const { return _extent; }
     const Border &hilight() const { return *_hilight; }
     const std::string &borderFillResRef() const { return _borderFillResRef; }
@@ -154,6 +162,7 @@ public:
     const Text &text() const { return _text; }
     const std::vector<std::string> &textLines() const { return _textLines; }
     const std::string &sceneName() const { return _sceneName; }
+    const Extent &sceneExtent() const { return _sceneExtent ? *_sceneExtent : _extent; }
 
     void setId(int id) { _id = id; }
     void setTag(std::string tag) { _tag = std::move(tag); }
@@ -178,6 +187,7 @@ public:
     void setHilightOverBorder(bool enabled) { _hilightOverBorder = enabled; }
     void setPadding(int padding);
     void setSceneName(std::string name);
+    void setSceneExtent(std::optional<Extent> extent) { _sceneExtent = std::move(extent); }
     void setText(Text text);
     void setTextColor(glm::vec3 color);
     void setTextMessage(std::string text);
@@ -230,11 +240,14 @@ protected:
     std::string _tag;
     std::string _borderFillResRef;
     std::string _hilightFillResRef;
+    Extent _authoredExtent;
+    float _scale {1.0f};
     Extent _extent;
     std::shared_ptr<Border> _border;
     std::shared_ptr<Border> _hilight;
     Text _text;
     std::string _sceneName;
+    std::optional<Extent> _sceneExtent;
     /** Produced by renderOffscreen, composited and cleared by render. */
     graphics::Texture *_sceneOutput {nullptr};
     int _padding {0};

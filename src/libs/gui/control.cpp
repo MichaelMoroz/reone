@@ -98,10 +98,11 @@ void Control::load(const resource::generated::GUI_BASECONTROL &gui, bool protoIt
 }
 
 void Control::loadExtent(const resource::generated::GUI_EXTENT &gui) {
-    _extent.left = gui.LEFT;
-    _extent.top = gui.TOP;
-    _extent.width = gui.WIDTH;
-    _extent.height = gui.HEIGHT;
+    _authoredExtent.left = gui.LEFT;
+    _authoredExtent.top = gui.TOP;
+    _authoredExtent.width = gui.WIDTH;
+    _authoredExtent.height = gui.HEIGHT;
+    _extent = _authoredExtent;
 }
 
 void Control::loadBorder(const resource::generated::GUI_BORDER &gui) {
@@ -140,7 +141,7 @@ void Control::loadText(const resource::generated::GUI_TEXT &gui) {
 void Control::updateTextLines() {
     _textLines.clear();
     if (_text.font && !_text.text.empty()) {
-        _textLines = breakText(_text.text, *_text.font, _extent.width);
+        _textLines = breakText(_text.text, *_text.font, _extent.width, _scale);
     }
 }
 
@@ -218,8 +219,8 @@ void Control::render(const glm::ivec2 &screenSize,
     if (_sceneOutput) {
         _graphicsSvc.renderer2d.drawImage(
             *_sceneOutput,
-            {_extent.left + offset.x, _extent.top + offset.y},
-            {_extent.width, _extent.height});
+            {sceneExtent().left + (_sceneExtent ? 0 : offset.x), sceneExtent().top + (_sceneExtent ? 0 : offset.y)},
+            {sceneExtent().width, sceneExtent().height});
         // Good for this frame only. A control that stops being visible, or a
         // frame where the offscreen phase did not run, must not composite a
         // target that no longer describes anything.
@@ -232,7 +233,8 @@ void Control::renderOffscreen() {
     if (_sceneName.empty() || !_visible) {
         return;
     }
-    _sceneOutput = &_sceneGraphs.get(_sceneName).render({_extent.width, _extent.height});
+    const Extent &extent = sceneExtent();
+    _sceneOutput = &_sceneGraphs.get(_sceneName).render({extent.width, extent.height});
 }
 
 void Control::renderBorder(const Border &border,
@@ -389,8 +391,8 @@ void Control::renderText(const std::vector<std::string> &lines,
     for (auto &line : lines) {
         linePosition.x = static_cast<float>(position.x + offset.x);
         linePosition.y = static_cast<float>(position.y + offset.y);
-        _text.font->render(line, linePosition, color, gravity);
-        position.y += static_cast<int>(_text.font->height());
+        _text.font->render(line, linePosition, color, gravity, _scale);
+        position.y += static_cast<int>(_text.font->height() * _scale);
     }
 }
 
@@ -425,14 +427,14 @@ void Control::getTextPosition(glm::ivec2 &position, int lineCount, const glm::iv
         position.y = _extent.top;
         break;
     case TextAlign::CenterBottom:
-        position.y = _extent.top + size.y - static_cast<int>(glm::max(0, lineCount - 1) * _text.font->height());
+        position.y = _extent.top + size.y - static_cast<int>(glm::max(0, lineCount - 1) * _text.font->height() * _scale);
         break;
     case TextAlign::RightCenter:
     case TextAlign::LeftCenter:
     case TextAlign::CenterCenter:
     case TextAlign::RightCenter2:
     default:
-        position.y = _extent.top + size.y / 2 - static_cast<int>(0.5f * (lineCount - 1) * _text.font->height());
+        position.y = _extent.top + size.y / 2 - static_cast<int>(0.5f * (lineCount - 1) * _text.font->height() * _scale);
         break;
     }
     // Horizontal alignment
@@ -456,18 +458,23 @@ void Control::getTextPosition(glm::ivec2 &position, int lineCount, const glm::iv
 
 void Control::stretch(float x, float y, int mask) {
     if (mask & kStretchLeft) {
-        _extent.left = static_cast<int>(_extent.left * x);
+        _extent.left = static_cast<int>(_authoredExtent.left * x);
     }
     if (mask & kStretchTop) {
-        _extent.top = static_cast<int>(_extent.top * y);
+        _extent.top = static_cast<int>(_authoredExtent.top * y);
     }
     if (mask & kStretchWidth) {
-        _extent.width = static_cast<int>(_extent.width * x);
+        _extent.width = static_cast<int>(_authoredExtent.width * x);
     }
     if (mask & kStretchHeight) {
-        _extent.height = static_cast<int>(_extent.height * y);
+        _extent.height = static_cast<int>(_authoredExtent.height * y);
     }
+    // Bitmap glyphs do not follow an extent on their own. The authored fonts
+    // target the 800x600-era screens, so full layout scale makes them about
+    // twice as large as the layouts were designed for.
+    _scale = (x == y) ? x * kTextScaleFactor : kTextScaleFactor;
     updateTransform();
+    updateTextLines();
 }
 
 void Control::setSelectable(bool selectable) {

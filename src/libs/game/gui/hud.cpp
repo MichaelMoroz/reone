@@ -437,7 +437,7 @@ void HUD::renderMinimap() {
     bounds[3] = static_cast<float>(extent.height);
 
     std::shared_ptr<Area> area(_game.module()->area());
-    _game.map().render(Map::Mode::Minimap, bounds);
+    _game.map().render(Map::Mode::Minimap, bounds, _gui->scale());
 }
 
 void HUD::renderHealth(int memberIndex) {

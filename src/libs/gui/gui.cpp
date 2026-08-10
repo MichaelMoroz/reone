@@ -49,6 +49,38 @@ namespace reone {
 
 namespace gui {
 
+namespace {
+
+constexpr glm::vec4 kBackgroundPlateWindow {
+    504.0f / 2048.0f,
+    250.0f / 1024.0f,
+    1539.0f / 2048.0f,
+    771.0f / 1024.0f};
+
+} // namespace
+
+GUI::Layout GUI::fitLayoutInArea(const glm::vec2 &areaOffset,
+                                 const glm::vec2 &areaSize,
+                                 const glm::ivec2 &layoutSize) {
+    float factor = std::min(areaSize.x / layoutSize.x, areaSize.y / layoutSize.y);
+    glm::vec2 size = glm::vec2(layoutSize) * factor;
+    return {
+        {static_cast<int>(areaOffset.x + (areaSize.x - size.x) / 2.0f),
+         static_cast<int>(areaOffset.y + (areaSize.y - size.y) / 2.0f)},
+        {factor, factor}};
+}
+
+GUI::Layout GUI::fitLayoutInBackgroundPlate(const glm::ivec2 &screenSize,
+                                            const glm::ivec2 &layoutSize) {
+    glm::vec2 areaOffset {
+        screenSize.x * kBackgroundPlateWindow.x,
+        screenSize.y * kBackgroundPlateWindow.y};
+    glm::vec2 areaSize {
+        screenSize.x * (kBackgroundPlateWindow.z - kBackgroundPlateWindow.x),
+        screenSize.y * (kBackgroundPlateWindow.w - kBackgroundPlateWindow.y)};
+    return fitLayoutInArea(areaOffset, areaSize, layoutSize);
+}
+
 void GUI::load(const Gff &gui) {
     auto guiParsed = resource::generated::parseGUI(gui);
     auto type = Control::getType(guiParsed);
@@ -59,31 +91,6 @@ void GUI::load(const Gff &gui) {
     _tagToControl.insert({tag, *rootControl});
     _rootControl = *rootControl;
     _controls.push_back(std::move(rootControl));
-
-    switch (_scaling) {
-    case ScalingMode::Center:
-        _rootOffset.x = screenCenter().x - _resolutionX / 2;
-        _rootOffset.y = screenCenter().y - _resolutionY / 2;
-        break;
-    case ScalingMode::CenterHorizontal:
-        _rootOffset.x = screenCenter().x - _resolutionX / 2;
-        break;
-    case ScalingMode::Stretch:
-        stretchControl(*_rootControl);
-        break;
-    case ScalingMode::Scaled: {
-        auto factors = scaledFactors();
-        _rootControl->get().stretch(factors.x, factors.y);
-        _rootOffset.x = (_options.width - static_cast<int>(_resolutionX * factors.x)) / 2;
-        _rootOffset.y = (_options.height - static_cast<int>(_resolutionY * factors.y)) / 2;
-        break;
-    }
-    default:
-        break;
-    }
-
-    const Control::Extent &rootExtent = _rootControl->get().extent();
-    _controlOffset = _rootOffset + glm::ivec2(rootExtent.left, rootExtent.top);
 
     for (auto &controlStruct : guiParsed.CONTROLS) {
         loadControl(controlStruct);
@@ -98,6 +105,8 @@ void GUI::load(const Gff &gui) {
             parent.addChildToBack(child);
         }
     }
+
+    applyLayout();
 }
 
 void GUI::stretchControl(Control &control) {
@@ -107,15 +116,17 @@ void GUI::stretchControl(Control &control) {
 }
 
 glm::vec2 GUI::scaledFactors() const {
-    // Three quarters of the full fit, uniform on both axes: the authored
-    // layout grows with the screen at its original aspect ratio, and the
-    // remaining margin centers it. Non-uniform factors stretched every 4:3
-    // layout into 16:9 distortion.
-    static constexpr float kScaledModeFactor = 0.75f;
-    float fit = std::min(_options.width / static_cast<float>(_resolutionX),
-                         _options.height / static_cast<float>(_resolutionY));
-    float s = kScaledModeFactor * fit;
-    return {s, s};
+    // The layout always fits the screen, never the background plate. The
+    // in-game menu draws its tab strip and content as separate GUIs, and
+    // keying the factor on only one background put them in different spaces.
+    return screenScaledFactors();
+}
+
+glm::vec2 GUI::screenScaledFactors() const {
+    // Full uniform fit preserves the authored 4:3 art without leaving the
+    // three-quarters margin used by the earlier scaled mode.
+    return fitLayoutInArea(
+        glm::vec2(0.0f), glm::vec2(_options.width, _options.height), glm::ivec2(_resolutionX, _resolutionY)).factors;
 }
 
 void GUI::loadControl(const resource::generated::GUI_CONTROLS &gui) {
@@ -134,27 +145,6 @@ void GUI::loadControl(const resource::generated::GUI_CONTROLS &gui) {
         control->setHilightColor(_defaultHilightColor);
     }
 
-    auto scaling = _scaling;
-    auto maybeScaling = _scalingByControlTag.find(tag);
-    if (maybeScaling != _scalingByControlTag.end()) {
-        scaling = maybeScaling->second;
-    }
-    switch (scaling) {
-    case ScalingMode::PositionRelativeToCenter:
-        positionRelativeToCenter(*control);
-        break;
-    case ScalingMode::Stretch:
-        stretchControl(*control);
-        break;
-    case ScalingMode::Scaled: {
-        auto factors = scaledFactors();
-        control->stretch(factors.x, factors.y);
-        break;
-    }
-    default:
-        break;
-    }
-
     _tagToControl.insert({tag, *control});
     _controlTagToChildren[parentTag].push_back(*control);
     _controls.push_back(std::move(control));
@@ -166,8 +156,8 @@ void GUI::positionRelativeToCenter(Control &control) {
     // authored screen-edge attachment: the inset from the anchored edge
     // scales with the same factor as the control itself. Before this they
     // kept their native 800x600-era pixel sizes on any screen.
-    float s = scaledFactors().x;
-    Control::Extent extent(control.extent());
+    float s = screenScaledFactors().x;
+    Control::Extent extent(control.authoredExtent());
     bool anchorRight = extent.left >= 0.5f * _resolutionX;
     bool anchorBottom = extent.top >= 0.5f * _resolutionY;
     int left = static_cast<int>(extent.left * s);
@@ -182,7 +172,77 @@ void GUI::positionRelativeToCenter(Control &control) {
     extent.top = top;
     extent.width = static_cast<int>(extent.width * s);
     extent.height = static_cast<int>(extent.height * s);
+    control.setScale(s * Control::kTextScaleFactor);
     control.setExtent(std::move(extent));
+}
+
+void GUI::applyLayout() {
+    if (!_rootControl) {
+        return;
+    }
+
+    _rootOffset = {0, 0};
+    if (_scaling == ScalingMode::Center) {
+        _rootOffset = {screenCenter().x - _resolutionX / 2, screenCenter().y - _resolutionY / 2};
+    } else if (_scaling == ScalingMode::CenterHorizontal) {
+        _rootOffset.x = screenCenter().x - _resolutionX / 2;
+    } else if (_scaling == ScalingMode::Scaled) {
+        auto factors = scaledFactors();
+        _rootOffset.x = static_cast<int>((_options.width - _resolutionX * factors.x) / 2.0f);
+        _rootOffset.y = static_cast<int>((_options.height - _resolutionY * factors.y) / 2.0f);
+    }
+
+    for (auto &control : _controls) {
+        switch (controlScaling(*control)) {
+        case ScalingMode::PositionRelativeToCenter:
+            if (control.get() != &_rootControl->get()) {
+                positionRelativeToCenter(*control);
+            }
+            break;
+        case ScalingMode::Stretch:
+            stretchControl(*control);
+            break;
+        case ScalingMode::Scaled: {
+            auto factors = scaledFactors();
+            control->stretch(factors.x, factors.y);
+            break;
+        }
+        default:
+            break;
+        }
+
+        auto sceneScaling = _sceneScalingByControlTag.find(control->tag());
+        if (sceneScaling != _sceneScalingByControlTag.end() && sceneScaling->second == ScalingMode::Stretch) {
+            control->setSceneExtent(Control::Extent(0, 0, _options.width, _options.height));
+        } else {
+            control->setSceneExtent(std::nullopt);
+        }
+    }
+
+    const Control::Extent &rootExtent = _rootControl->get().extent();
+    _controlOffset = _rootOffset + glm::ivec2(rootExtent.left, rootExtent.top);
+}
+
+GUI::ScalingMode GUI::controlScaling(const Control &control) const {
+    auto scaling = _scalingByControlTag.find(control.tag());
+    return scaling != _scalingByControlTag.end() ? scaling->second : _scaling;
+}
+
+glm::ivec2 GUI::renderOffset(const Control &control) const {
+    switch (controlScaling(control)) {
+    case ScalingMode::Stretch:
+    case ScalingMode::PositionRelativeToCenter:
+        return {0, 0};
+    default:
+        return &control == &_rootControl->get() ? _rootOffset : _controlOffset;
+    }
+}
+
+void GUI::setBackground(std::shared_ptr<Texture> texture) {
+    _background = std::move(texture);
+    if (_scaling == ScalingMode::Scaled) {
+        applyLayout();
+    }
 }
 
 bool GUI::handle(const input::Event &event) {
@@ -295,13 +355,13 @@ void GUI::render() {
             return;
         }
         std::queue<std::pair<std::reference_wrapper<Control>, glm::ivec2>> controls;
-        controls.push({*_rootControl, _rootOffset});
+        controls.push({*_rootControl, renderOffset(_rootControl->get())});
         while (!controls.empty()) {
             auto &[controlWrapper, offset] = controls.front();
             auto &control = controlWrapper.get();
             control.render({_options.width, _options.height}, offset);
             for (auto &child : control.children()) {
-                controls.push({child, _controlOffset});
+                controls.push({child, renderOffset(child)});
             }
             controls.pop();
         }
@@ -324,10 +384,14 @@ void GUI::renderOffscreen() {
 }
 
 void GUI::renderBackground() {
+    // The background plate is a surround with a framed window. At a different
+    // aspect ratio no scaling lines that window up with the fitted layout, so
+    // tint it black: it still covers the screen and has no edge to misalign.
     _graphicsSvc.renderer2d.drawImage(
         *_background,
         {0, 0},
-        {_options.width, _options.height});
+        {_options.width, _options.height},
+        glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
 }
 
 void GUI::clearSelection() {

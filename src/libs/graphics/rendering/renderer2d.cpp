@@ -172,7 +172,8 @@ void Renderer2D::drawText(Font &font,
                                 std::string_view text,
                                 const glm::vec3 &position,
                                 const glm::vec4 &color,
-                                TextGravity gravity) {
+                                TextGravity gravity,
+                                float scale) {
     if (text.empty()) {
         return;
     }
@@ -181,7 +182,7 @@ void Renderer2D::drawText(Font &font,
     locals.color = color;
 
     const auto &glyphs = font.glyphs();
-    glm::vec2 offset = font.textOffset(text, gravity);
+    glm::vec2 offset = font.textOffset(text, gravity, scale);
 
     // The text block holds a fixed number of glyphs, so a long run becomes
     // several instanced draws, as in the GL path.
@@ -199,13 +200,13 @@ void Renderer2D::drawText(Font &font,
             const auto &glyph = glyphs[static_cast<unsigned char>(line[i])];
             chars.chars[i].posScale = glm::vec4(position.x + offset.x,
                                                 position.y + offset.y,
-                                                glyph.size.x,
-                                                glyph.size.y);
+                                                Font::scaledMetric(glyph.size.x, scale),
+                                                Font::scaledMetric(glyph.size.y, scale));
             chars.chars[i].uv = glm::vec4(glyph.ul.x,
                                           glyph.lr.y,
                                           glyph.lr.x - glyph.ul.x,
                                           glyph.ul.y - glyph.lr.y);
-            offset.x += glyph.size.x;
+            offset.x += Font::scaledMetric(glyph.size.x, scale);
         }
         auto textOffset = _ring.push(chars);
         drawQuads("textVertex", "textFragment", locals, textOffset, numChars, &font.texture());

@@ -58,13 +58,10 @@ MainMenu::MainMenu(Game &game, ServicesView &services) :
 void MainMenu::preload(IGUI &gui) {
     GameGUI::preload(gui);
     gui.setResolution(800, 600);
+    gui.setControlSceneScaling("LBL_3DVIEW", GUI::ScalingMode::Stretch);
 }
 
 void MainMenu::onGUILoaded() {
-    if (!_game.isTSL()) {
-        loadBackground(BackgroundType::Menu);
-    }
-
     bindControls();
 
     _controls.LB_MODULES->setVisible(false);
@@ -129,7 +126,7 @@ void MainMenu::setup3DView() {
     }
 
     auto &sceneGraph = _services.scene.graphs.get(kSceneMainMenu);
-    const Control::Extent &extent = _controls.LBL_3DVIEW->extent();
+    const Control::Extent &extent = _controls.LBL_3DVIEW->sceneExtent();
     float aspect = extent.width / static_cast<float>(extent.height);
 
     SceneInitializer(sceneGraph)

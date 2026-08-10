@@ -54,7 +54,7 @@ void ListBox::addItem(Item &&item) {
     if (!_protoItem)
         return;
 
-    item._textLines = breakText(item.text, *_protoItem->text().font, getItemTextWidth());
+    item._textLines = breakText(item.text, *_protoItem->text().font, getItemTextWidth(), _protoItem->scale());
     _items.push_back(item);
 
     updateItemSlots();
@@ -71,7 +71,7 @@ void ListBox::addTextLinesAsItems(const std::string &text) {
         if (logicalLine.empty()) {
             lines.push_back("");
         } else {
-            lines = breakText(logicalLine, *_protoItem->text().font, getItemTextWidth());
+            lines = breakText(logicalLine, *_protoItem->text().font, getItemTextWidth(), _protoItem->scale());
         }
 
         for (auto &line : lines) {
@@ -107,6 +107,10 @@ void ListBox::load(const resource::generated::GUI_BASECONTROL &gui, bool protoIt
         _scrollBar = _gui.newControl(getType(*controlStruct.SCROLLBAR), getTag(*controlStruct.SCROLLBAR));
         _scrollBar->load(*controlStruct.SCROLLBAR);
     }
+
+    _authoredBorderDimension = _border ? _border->dimension : 0;
+    _authoredHilightDimension = _hilight ? _hilight->dimension : 0;
+    _authoredProtoBorderDimension = _protoItem ? _protoItem->border().dimension : 0;
 }
 
 bool ListBox::handleMouseMotion(int x, int y) {
@@ -131,7 +135,7 @@ int ListBox::getItemIndex(int y) const {
     for (size_t i = _itemOffset; i < _items.size(); ++i) {
         const Item &item = _items[i];
         itemy += getItemHeight(item);
-        itemy += _padding;
+        itemy += scaledPadding();
         if (y < itemy)
             return static_cast<int>(i);
     }
@@ -167,7 +171,7 @@ void ListBox::updateItemSlots() {
     int innerHeight = getInnerHeight();
     for (size_t i = _itemOffset; i < _items.size(); ++i) {
         y += getItemHeight(_items[i]);
-        y += _padding;
+        y += scaledPadding();
 
         if (y > innerHeight)
             break;
@@ -240,7 +244,7 @@ void ListBox::render(const glm::ivec2 &screenSize,
 
         _protoItem->setTextColor(originalTextColor);
 
-        itemOffset.y += getItemHeight(item) + _padding;
+        itemOffset.y += getItemHeight(item) + scaledPadding();
     }
 
     if (_scrollBar) {
@@ -257,15 +261,39 @@ void ListBox::render(const glm::ivec2 &screenSize,
 void ListBox::stretch(float x, float y, int mask) {
     Control::stretch(x, y, mask);
 
-    if (_protoItem) {
-        // Do not change height of the proto item
-        _protoItem->stretch(x, y, mask & ~kStretchHeight);
-    }
-    if (_scrollBar) {
-        // Do not change width of the scroll bar
-        _scrollBar->stretch(x, y, mask & ~kStretchWidth);
+    if (x == y) {
+        _layoutScale = x;
+        scaleBorderDimensions(x);
+        if (_protoItem) {
+            _protoItem->stretch(x, y, mask);
+        }
+        if (_scrollBar) {
+            _scrollBar->stretch(x, y, mask);
+        }
+    } else {
+        _layoutScale = 1.0f;
+        scaleBorderDimensions(1.0f);
+        if (_protoItem) {
+            // Preserve the legacy non-uniform Stretch behaviour.
+            _protoItem->stretch(x, y, mask & ~kStretchHeight);
+        }
+        if (_scrollBar) {
+            _scrollBar->stretch(x, y, mask & ~kStretchWidth);
+        }
     }
     updateItemsLayout();
+}
+
+void ListBox::scaleBorderDimensions(float factor) {
+    if (_border) {
+        _border->dimension = static_cast<int>(_authoredBorderDimension * factor);
+    }
+    if (_hilight) {
+        _hilight->dimension = static_cast<int>(_authoredHilightDimension * factor);
+    }
+    if (_protoItem) {
+        _protoItem->border().dimension = static_cast<int>(_authoredProtoBorderDimension * factor);
+    }
 }
 
 void ListBox::setSelected(bool selected) {
@@ -343,7 +371,7 @@ void ListBox::scrollToBottom() {
     while (offset > 0) {
         const Item &item = _items[offset - 1];
         float itemHeight = static_cast<float>(getItemHeight(item));
-        itemHeight += _padding;
+        itemHeight += scaledPadding();
 
         if (height > 0.0f && height + itemHeight > getInnerHeight()) {
             break;
@@ -369,7 +397,7 @@ void ListBox::updateItemsLayout() {
 
     int textWidth = getItemTextWidth();
     for (auto &item : _items) {
-        item._textLines = breakText(item.text, *_protoItem->text().font, textWidth);
+        item._textLines = breakText(item.text, *_protoItem->text().font, textWidth, _protoItem->scale());
     }
     updateItemSlots();
 }
@@ -390,7 +418,7 @@ int ListBox::getItemWidth() const {
     if (_border) {
         width -= 2 * _border->dimension;
     }
-    width -= 2 * _padding;
+    width -= 2 * scaledPadding();
     return std::max(width, 0);
 }
 
@@ -402,7 +430,7 @@ int ListBox::getItemHeight(const Item &item) const {
         return _protoItem->extent().height;
     }
 
-    float fontHeight = _protoItem->text().font->height();
+    float fontHeight = Font::scaledMetric(_protoItem->text().font->height(), _protoItem->scale());
     int textHeight = static_cast<int>(item._textLines.size() * fontHeight + 0.5f);
     if (static_cast<int>(fontHeight + 0.5f) <= 15) {
         ++textHeight;
@@ -472,8 +500,8 @@ void ListBox::renderItemWithButtonProtoIcon(
     if (!item.iconText.empty() && _protoItem->text().font) {
         glm::vec3 position(0.0f);
         position.x = static_cast<float>(iconPosition.x + iconSize.x);
-        position.y = static_cast<float>(iconPosition.y + iconSize.y - 0.5f * _protoItem->text().font->height());
-        _protoItem->text().font->render(item.iconText, position, _protoItem->text().color, TextGravity::LeftCenter);
+        position.y = static_cast<float>(iconPosition.y + iconSize.y - 0.5f * Font::scaledMetric(_protoItem->text().font->height(), _protoItem->scale()));
+        _protoItem->text().font->render(item.iconText, position, _protoItem->text().color, TextGravity::LeftCenter, _protoItem->scale());
     }
 }
 

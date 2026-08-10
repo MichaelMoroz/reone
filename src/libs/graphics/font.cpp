@@ -47,42 +47,43 @@ void Font::load(std::shared_ptr<Texture> texture) {
     }
 }
 
-void Font::render(std::string_view text, const glm::vec3 &position, const glm::vec3 &color, TextGravity gravity) {
-    render(text, position, glm::vec4(color, 1.0f), gravity);
+void Font::render(std::string_view text, const glm::vec3 &position, const glm::vec3 &color, TextGravity gravity, float scale) {
+    render(text, position, glm::vec4(color, 1.0f), gravity, scale);
 }
 
-void Font::render(std::string_view text, const glm::vec3 &position, const glm::vec4 &color, TextGravity gravity) {
-    _renderer2d.drawText(*this, text, position, color, gravity);
+void Font::render(std::string_view text, const glm::vec3 &position, const glm::vec4 &color, TextGravity gravity, float scale) {
+    _renderer2d.drawText(*this, text, position, color, gravity, scale);
 }
 
-glm::vec2 Font::textOffset(std::string_view text, TextGravity gravity) const {
-    float w = measure(text);
+glm::vec2 Font::textOffset(std::string_view text, TextGravity gravity, float scale) const {
+    float w = measure(text, scale);
+    float h = scaledMetric(_height, scale);
 
     switch (gravity) {
     case TextGravity::LeftCenter:
-        return glm::vec2(-w, -0.5f * _height);
+        return glm::vec2(-w, -0.5f * h);
     case TextGravity::LeftTop:
-        return glm::vec2(-w, -_height);
+        return glm::vec2(-w, -h);
     case TextGravity::CenterBottom:
         return glm::vec2(-0.5f * w, 0.0f);
     case TextGravity::CenterTop:
-        return glm::vec2(-0.5f * w, -_height);
+        return glm::vec2(-0.5f * w, -h);
     case TextGravity::RightBottom:
         return glm::vec2(0.0f, 0.0f);
     case TextGravity::RightCenter:
-        return glm::vec2(0.0f, -0.5f * _height);
+        return glm::vec2(0.0f, -0.5f * h);
     case TextGravity::RightTop:
-        return glm::vec2(0.0f, -_height);
+        return glm::vec2(0.0f, -h);
     case TextGravity::CenterCenter:
     default:
-        return glm::vec2(-0.5f * w, -0.5f * _height);
+        return glm::vec2(-0.5f * w, -0.5f * h);
     }
 }
 
-float Font::measure(std::string_view text) const {
+float Font::measure(std::string_view text, float scale) const {
     float w = 0.0f;
     for (const char &glyph : text) {
-        w += _glyphs[reinterpret_cast<const unsigned char &>(glyph)].size.x;
+        w += scaledMetric(_glyphs[reinterpret_cast<const unsigned char &>(glyph)].size.x, scale);
     }
     return w;
 }

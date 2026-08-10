@@ -73,18 +73,18 @@ void Map::loadTextures(const std::string &area) {
     }
 }
 
-void Map::render(Mode mode, const glm::vec4 &bounds) {
+void Map::render(Mode mode, const glm::vec4 &bounds, float scale) {
     if (!_areaTexture) {
         return;
     }
-    _services.graphics.renderer2d.withBlendMode(BlendMode::Normal, [this, &mode, &bounds]() {
-        renderArea(mode, bounds);
-        renderNotes(mode, bounds);
-        renderPartyLeader(mode, bounds);
+    _services.graphics.renderer2d.withBlendMode(BlendMode::Normal, [this, &mode, &bounds, scale]() {
+        renderArea(mode, bounds, scale);
+        renderNotes(mode, bounds, scale);
+        renderPartyLeader(mode, bounds, scale);
     });
 }
 
-void Map::renderArea(Mode mode, const glm::vec4 &bounds) {
+void Map::renderArea(Mode mode, const glm::vec4 &bounds, float scale) {
     if (mode == Mode::Minimap) {
         std::shared_ptr<Creature> partyLeader(_game.party().getLeader());
         if (!partyLeader) {
@@ -93,16 +93,18 @@ void Map::renderArea(Mode mode, const glm::vec4 &bounds) {
         glm::vec2 worldPos(partyLeader->position());
         glm::vec2 mapPos(getMapPosition(worldPos));
 
+        const float mapWidth = _areaTexture->width() * scale;
+        const float mapHeight = _areaTexture->height() * scale;
         glm::vec3 topLeft(0.0f);
-        topLeft.x = bounds[0] + 0.5f * bounds[2] - mapPos.x * 440.0f / static_cast<float>(_areaTexture->width()) * _areaTexture->width();
-        topLeft.y = bounds[1] + 0.5f * bounds[3] - mapPos.y * _areaTexture->height();
+        topLeft.x = bounds[0] + 0.5f * bounds[2] - mapPos.x * 440.0f * scale;
+        topLeft.y = bounds[1] + 0.5f * bounds[3] - mapPos.y * mapHeight;
 
         glm::ivec4 scissorBounds(bounds[0], bounds[1], bounds[2], bounds[3]);
-        _services.graphics.renderer2d.withScissor(scissorBounds, [this, &topLeft]() {
+        _services.graphics.renderer2d.withScissor(scissorBounds, [this, &topLeft, mapWidth, mapHeight]() {
             _services.graphics.renderer2d.drawImage(
                 *_areaTexture,
                 topLeft,
-                {_areaTexture->width(), _areaTexture->height()});
+                {mapWidth, mapHeight});
         });
 
     } else {
@@ -113,7 +115,7 @@ void Map::renderArea(Mode mode, const glm::vec4 &bounds) {
     }
 }
 
-void Map::renderNotes(Mode mode, const glm::vec4 &bounds) {
+void Map::renderNotes(Mode mode, const glm::vec4 &bounds, float scale) {
     if (mode != Mode::Default) {
         return;
     }
@@ -131,7 +133,7 @@ void Map::renderNotes(Mode mode, const glm::vec4 &bounds) {
         notePos.y = bounds[1] + mapPos.y * bounds[3];
 
         bool selected = waypoint == _selectedNote;
-        float noteSize = (selected ? kSelectedMapNoteScale : 1.0f) * kMapNoteSize;
+        float noteSize = (selected ? kSelectedMapNoteScale : 1.0f) * kMapNoteSize * scale;
 
         auto guiColorHilight = _game.isTSL() ? kTSLGUIColorHilight : kGUIColorHilight;
         auto guiColorBase = _game.isTSL() ? kTSLGUIColorBase : kGUIColorBase;
@@ -171,7 +173,7 @@ glm::vec2 Map::getMapPosition(const glm::vec2 &world) const {
     return result;
 }
 
-void Map::renderPartyLeader(Mode mode, const glm::vec4 &bounds) {
+void Map::renderPartyLeader(Mode mode, const glm::vec4 &bounds, float scale) {
     std::shared_ptr<Creature> partyLeader(_game.party().getLeader());
     if (!partyLeader) {
         return;
@@ -211,8 +213,9 @@ void Map::renderPartyLeader(Mode mode, const glm::vec4 &bounds) {
     glm::mat4 transform(1.0f);
     transform = glm::translate(transform, arrowPos);
     transform = glm::rotate(transform, facing, glm::vec3(0.0f, 0.0f, 1.0f));
-    transform = glm::translate(transform, glm::vec3(-0.5f * kArrowSize, -0.5f * kArrowSize, 0.0f));
-    transform = glm::scale(transform, glm::vec3(kArrowSize, kArrowSize, 1.0f));
+    const float arrowSize = kArrowSize * scale;
+    transform = glm::translate(transform, glm::vec3(-0.5f * arrowSize, -0.5f * arrowSize, 0.0f));
+    transform = glm::scale(transform, glm::vec3(arrowSize, arrowSize, 1.0f));
 
     _services.graphics.renderer2d.drawImage(*_arrowTexture, transform);
 }

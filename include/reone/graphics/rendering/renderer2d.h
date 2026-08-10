@@ -102,7 +102,8 @@ public:
                           std::string_view text,
                           const glm::vec3 &position,
                           const glm::vec4 &color = glm::vec4(1.0f),
-                          TextGravity gravity = TextGravity::CenterCenter) = 0;
+                          TextGravity gravity = TextGravity::CenterCenter,
+                          float scale = 1.0f) = 0;
 
     /**
      * Blending and scissoring apply to the draws inside the block. Scoped
@@ -189,7 +190,8 @@ public:
                   std::string_view text,
                   const glm::vec3 &position,
                   const glm::vec4 &color = glm::vec4(1.0f),
-                  TextGravity gravity = TextGravity::CenterCenter) override;
+                  TextGravity gravity = TextGravity::CenterCenter,
+                  float scale = 1.0f) override;
 
     void withBlendMode(BlendMode mode, const std::function<void()> &block) override;
     void withScissor(const glm::ivec4 &bounds, const std::function<void()> &block) override;

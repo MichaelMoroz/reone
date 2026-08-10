@@ -51,21 +51,26 @@ public:
         std::string_view text,
         const glm::vec3 &position,
         const glm::vec3 &color = glm::vec3(1.0f, 1.0f, 1.0f),
-        TextGravity align = TextGravity::CenterCenter);
+        TextGravity align = TextGravity::CenterCenter,
+        float scale = 1.0f);
 
     void render(
         std::string_view text,
         const glm::vec3 &position,
         const glm::vec4 &color,
-        TextGravity align = TextGravity::CenterCenter);
+        TextGravity align = TextGravity::CenterCenter,
+        float scale = 1.0f);
 
-    float measure(std::string_view text) const;
+    /** Scales a glyph metric in the same way as the renderer scales a glyph. */
+    static float scaledMetric(float metric, float scale) { return metric * scale; }
+
+    float measure(std::string_view text, float scale = 1.0f) const;
 
     /**
      * Where to start drawing so that @p text sits at the anchor the way
      * @p gravity asks for.
      */
-    glm::vec2 textOffset(std::string_view text, TextGravity gravity) const;
+    glm::vec2 textOffset(std::string_view text, TextGravity gravity, float scale = 1.0f) const;
 
     float height() const { return _height; }
 

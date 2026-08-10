@@ -47,7 +47,8 @@ public:
 
     void load(const std::string &area, const resource::generated::ARE_Map &map);
 
-    void render(Mode mode, const glm::vec4 &bounds);
+    /** @param scale the factor the owning GUI draws its layout at. */
+    void render(Mode mode, const glm::vec4 &bounds, float scale = 1.0f);
 
     bool isLoaded() const { return static_cast<bool>(_areaTexture); }
 
@@ -73,9 +74,9 @@ private:
     void loadProperties(const resource::generated::ARE_Map &map);
     void loadTextures(const std::string &area);
 
-    void renderArea(Mode mode, const glm::vec4 &bounds);
-    void renderPartyLeader(Mode mode, const glm::vec4 &bounds);
-    void renderNotes(Mode mode, const glm::vec4 &bounds);
+    void renderArea(Mode mode, const glm::vec4 &bounds, float scale);
+    void renderPartyLeader(Mode mode, const glm::vec4 &bounds, float scale);
+    void renderNotes(Mode mode, const glm::vec4 &bounds, float scale);
 
     glm::vec2 getMapPosition(const glm::vec2 &world) const;
 };

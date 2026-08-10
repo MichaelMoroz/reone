@@ -47,6 +47,7 @@ float2 quadUV(float2 corner) {
 struct Varyings {
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;
+    nointerpolation float4 glyphUV : TEXCOORD1;
 };
 
 /**
@@ -64,6 +65,7 @@ Varyings quadVertex(uint vertexId: SV_VertexID) {
     output.uv = mul(float3(quadUV(corner), 1.0f), float3x2(localUniforms.uv[0].xy,
                                                            localUniforms.uv[1].xy,
                                                            localUniforms.uv[2].xy));
+    output.glyphUV = float4(0.0f);
     return output;
 }
 
@@ -87,6 +89,7 @@ Varyings fullTargetVertex(uint vertexId: SV_VertexID) {
     output.uv = mul(float3(quadUV(corner), 1.0f), float3x2(localUniforms.uv[0].xy,
                                                            localUniforms.uv[1].xy,
                                                            localUniforms.uv[2].xy));
+    output.glyphUV = float4(0.0f);
     return output;
 }
 
@@ -106,10 +109,21 @@ Varyings textVertex(uint vertexId: SV_VertexID, uint glyph: SV_InstanceID) {
     // Same v convention as the sprites: the glyph rect starts at the atlas
     // bottom and grows upwards, while screen y grows downwards.
     output.uv = uv.xy + quadUV(corner) * uv.zw;
+    output.glyphUV = uv;
     return output;
 }
 
 [shader("fragment")]
 float4 textFragment(Varyings input) : SV_Target {
-    return sMainTex.Sample(input.uv) * localUniforms.color;
+    uint width, height;
+    sMainTex.GetDimensions(width, height);
+    float2 halfTexel = 0.5f / float2(width, height);
+    float2 inset = min(halfTexel, 0.5f * input.glyphUV.zw);
+    float2 uv = clamp(input.uv,
+                      input.glyphUV.xy + inset,
+                      input.glyphUV.xy + input.glyphUV.zw - inset);
+    float4 sample = sMainTex.Sample(uv);
+    float alphaWidth = max(0.5f * fwidth(sample.a), 1.0f / 255.0f);
+    float alpha = smoothstep(0.5f - alphaWidth, 0.5f + alphaWidth, sample.a);
+    return float4(localUniforms.color.rgb * sample.rgb, localUniforms.color.a * alpha);
 }

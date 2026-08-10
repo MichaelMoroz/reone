@@ -112,6 +112,10 @@ private:
     bool _itemsInteractive {true};
     bool _protoMatchContent {false}; /**< proto item height must match its content */
     bool _renderItemIconsForButtonProto {false};
+    float _layoutScale {1.0f};
+    int _authoredBorderDimension {0};
+    int _authoredHilightDimension {0};
+    int _authoredProtoBorderDimension {0};
 
     // Event listeners
 
@@ -122,8 +126,10 @@ private:
 
     void updateItemSlots();
     void updateItemsLayout();
+    void scaleBorderDimensions(float factor);
 
     int getInnerHeight() const;
+    int scaledPadding() const { return static_cast<int>(_padding * _layoutScale); }
     int getItemWidth() const;
     int getItemHeight(const Item &item) const;
     int getItemTextWidth() const;

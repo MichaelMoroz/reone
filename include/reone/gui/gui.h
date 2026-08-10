@@ -53,8 +53,7 @@ public:
         CenterHorizontal,
         PositionRelativeToCenter,
         Stretch,
-        /** Three quarters of the full stretch, centered: the authored layout
-            grows with the screen without pinning to its edges. The game-GUI
+        /** Uniformly fits the authored layout in the screen. The game-GUI
             default. */
         Scaled
     };
@@ -76,11 +75,13 @@ public:
 
     virtual const glm::ivec2 &rootOffset() const = 0;
     virtual const glm::ivec2 &controlOffset() const = 0;
+    virtual float scale() const = 0;
 
     virtual void setEventListener(IGUIEventListener &listener) = 0;
     virtual void setResolution(int x, int y) = 0;
     virtual void setScaling(ScalingMode scaling) = 0;
     virtual void setControlScaling(const std::string &tag, ScalingMode scaling) = 0;
+    virtual void setControlSceneScaling(const std::string &tag, ScalingMode scaling) = 0;
     virtual void setDefaultHilightColor(glm::vec3 color) = 0;
     virtual void setBackground(std::shared_ptr<graphics::Texture> texture) = 0;
 
@@ -93,6 +94,11 @@ public:
 
 class GUI : public IGUI, boost::noncopyable {
 public:
+    struct Layout {
+        glm::ivec2 offset;
+        glm::vec2 factors;
+    };
+
     GUI(
         graphics::GraphicsOptions &options,
         scene::ISceneGraphs &sceneGraphs,
@@ -113,6 +119,15 @@ public:
     glm::ivec2 screenCenter() const {
         return {_options.width / 2, _options.height / 2};
     }
+
+    /** Uniformly fits an authored layout in a screen-space rectangle. */
+    static Layout fitLayoutInArea(const glm::vec2 &areaOffset,
+                                  const glm::vec2 &areaSize,
+                                  const glm::ivec2 &layoutSize);
+
+    /** Uniformly fits an authored layout in the measured GUI background plate. */
+    static Layout fitLayoutInBackgroundPlate(const glm::ivec2 &screenSize,
+                                             const glm::ivec2 &layoutSize);
 
     void load(const resource::Gff &gui) override;
 
@@ -135,6 +150,17 @@ public:
         return _controlOffset;
     }
 
+    float scale() const override {
+        switch (_scaling) {
+        case ScalingMode::Scaled:
+            return scaledFactors().x;
+        case ScalingMode::PositionRelativeToCenter:
+            return screenScaledFactors().x;
+        default:
+            return 1.0f;
+        }
+    }
+
     void setEventListener(IGUIEventListener &listener) override {
         _eventListener = &listener;
     }
@@ -152,14 +178,16 @@ public:
         _scalingByControlTag[tag] = scaling;
     }
 
+    void setControlSceneScaling(const std::string &tag, ScalingMode scaling) override {
+        _sceneScalingByControlTag[tag] = scaling;
+    }
+
     void setDefaultHilightColor(glm::vec3 color) override {
         _hasDefaultHilightColor = true;
         _defaultHilightColor = color;
     }
 
-    void setBackground(std::shared_ptr<graphics::Texture> texture) override {
-        _background = texture;
-    }
+    void setBackground(std::shared_ptr<graphics::Texture> texture) override;
 
     std::unique_ptr<Control> newControl(ControlType type, std::string tag) override;
 
@@ -180,6 +208,7 @@ private:
     glm::ivec2 _controlOffset {0};
     std::shared_ptr<graphics::Texture> _background;
     std::unordered_map<std::string, ScalingMode> _scalingByControlTag;
+    std::unordered_map<std::string, ScalingMode> _sceneScalingByControlTag;
     bool _leftMouseDown {false};
 
     // Controls
@@ -224,7 +253,11 @@ private:
 
     void positionRelativeToCenter(Control &control);
     void stretchControl(Control &control);
+    void applyLayout();
+    ScalingMode controlScaling(const Control &control) const;
+    glm::ivec2 renderOffset(const Control &control) const;
     glm::vec2 scaledFactors() const;
+    glm::vec2 screenScaledFactors() const;
     void updateSelection(int x, int y);
 
     void renderBackground();

@@ -42,9 +42,11 @@
 #include "reone/game/reputes.h"
 #include "reone/game/script/routines.h"
 #include "reone/graphics/animation.h"
+#include "reone/graphics/font.h"
 #include "reone/graphics/model.h"
 #include "reone/graphics/modelnode.h"
 #include "reone/graphics/walkmesh.h"
+#include "reone/gui/gui.h"
 #include "reone/resource/2da.h"
 #include "reone/resource/gff.h"
 #include "reone/scene/collision.h"
@@ -1200,8 +1202,43 @@ TEST(GameGUIScaledDefault, should_apply_scaled_mode_to_main_menu) {
 
     EXPECT_CALL(gui, setScaling(gui::GUI::ScalingMode::Scaled));
     EXPECT_CALL(gui, setResolution(800, 600));
+    EXPECT_CALL(gui, setControlSceneScaling("LBL_3DVIEW", gui::GUI::ScalingMode::Stretch));
 
     menu.preload(gui);
+}
+
+TEST(GUIBackgroundPlateLayout, should_fit_authored_layout_inside_measured_plate_window) {
+    auto pauseMenu = gui::GUI::fitLayoutInBackgroundPlate({3840, 2160}, {640, 480});
+    auto mainMenu = gui::GUI::fitLayoutInBackgroundPlate({3840, 2160}, {800, 600});
+
+    EXPECT_NEAR(pauseMenu.factors.x, 2.2895508f, 0.0001f);
+    EXPECT_FLOAT_EQ(pauseMenu.factors.x, pauseMenu.factors.y);
+    EXPECT_EQ(pauseMenu.offset.x, 1182);
+    EXPECT_EQ(pauseMenu.offset.y, 527);
+
+    EXPECT_NEAR(mainMenu.factors.x, 1.8316406f, 0.0001f);
+    EXPECT_FLOAT_EQ(mainMenu.factors.x, mainMenu.factors.y);
+    EXPECT_EQ(mainMenu.offset.x, 1182);
+    EXPECT_EQ(mainMenu.offset.y, 527);
+}
+
+TEST(GUITextMetrics, should_scale_glyph_advance_with_the_rendered_glyph) {
+    EXPECT_FLOAT_EQ(graphics::Font::scaledMetric(12.0f, 1.6875f), 20.25f);
+    EXPECT_FLOAT_EQ(graphics::Font::scaledMetric(12.0f, 1.0f), 12.0f);
+}
+
+TEST(GUITextMetrics, should_measure_wrapped_text_at_its_rendered_scale) {
+    constexpr float layoutScale = 3.375f;
+    constexpr float textScale = layoutScale * gui::Control::kTextScaleFactor;
+    constexpr float authoredControlWidth = 200.0f;
+    constexpr float nativeTextWidth = 300.0f;
+
+    float controlWidth = graphics::Font::scaledMetric(authoredControlWidth, layoutScale);
+    float renderedTextWidth = graphics::Font::scaledMetric(nativeTextWidth, textScale);
+
+    EXPECT_FLOAT_EQ(controlWidth, 675.0f);
+    EXPECT_FLOAT_EQ(renderedTextWidth, 506.25f);
+    EXPECT_LT(renderedTextWidth, controlWidth);
 }
 
 TEST(TransitionPresentationPortals, should_expose_authored_transitions_without_touching_state) {
