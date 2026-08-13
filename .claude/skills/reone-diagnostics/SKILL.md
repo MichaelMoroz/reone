@@ -19,26 +19,44 @@ are not trivia; read them before trusting a number.
 
 ## Screenshot A/B, unattended
 
-The engine can warp somewhere, render, screenshot and exit with no human present:
+The engine can warp somewhere, render, screenshot and exit with no human present.
+Put the whole sequence in one commands file:
+
+```
+# capture.txt
+warp danm14ab
+pause 899
+capture out.tga
+quit
+```
+
+Then run it from `build/bin`:
 
 ```
 cd build/bin
-echo warp danm14ab > warp.txt
-engine.exe --game "<GAME_DIR>" \
-    --commands-file warp.txt --capture out.tga --captureframe 3
+engine.exe --game "<GAME_DIR>" --dev 0 --mode retro --headless 1 \
+    --commands-file "<ABSOLUTE PATH>\capture.txt"
 ```
 
-- `--commands-file` runs console commands at startup; `warp <module>` is the useful one.
-  It runs during init, so the module is loaded before the first frame.
-- `--capture <path>` writes a TGA on frame `--captureframe`, then exits.
+- `--commands-file` queues console commands at startup; `warp <module>` is the
+  useful first one.
+- `pause N` stops the file while N rendered frames pass. Because the first
+  commands run before frame 1, `pause 899` resumes in time to capture frame 900.
+- `capture <path> [count]` writes one or more rendered frames, and `quit` ends
+  the run after the capture completes.
+- **There is no engine `--capture`, `--captureframe`, `--captureframes` or
+  `--capture-file` any more.** They were deleted when capture moved to these
+  console commands; an older note that passes one will fail to parse. The
+  `--capture-file` below belongs to `renderdoccmd`, not to the engine.
 - **Frames below ~300 are the splash screen.** The logo plays before the module
-  is presented, so `--captureframe 3` writes a perfectly valid, perfectly
-  deterministic TGA of the splash - identical on both backends, identical
-  before and after any renderer change, and therefore evidence of nothing. Two
-  captures matching at a low frame number is the expected result whether the
-  change is correct or catastrophic. **Use `--captureframe 900`**, as the
-  `--dumptargets` examples below do, and look at the image before trusting a
-  comparison built on it.
+  is presented, so `pause 2` followed by `capture` writes a perfectly valid,
+  perfectly deterministic TGA of the splash - identical on both backends,
+  identical before and after any renderer change, and therefore evidence of
+  nothing. Two captures matching at a low frame number is the expected result
+  whether the change is correct or catastrophic. **Use `pause 899` to capture
+  frame 900**, as the `--dumptargets` examples below do, and look at the image
+  before trusting a comparison built on it.
+
 ### Capture runs are deterministic, and that is load-bearing
 
 ### Always pass `--dev 0`, or the FPS counter forges a regression
@@ -58,8 +76,16 @@ three runs each of `danm14ab`, `ebo_m12aa` and `danm13`, in **both** PBR and
 retro, hash the same. Six groups, no exceptions:
 
 ```
+# capture.txt
+warp danm14ab
+pause 309
+capture out.tga
+quit
+```
+
+```
 engine.exe --game ... --dev 0 --mode retro \
-           --commands-file warp.txt --capture out.tga --captureframe 310
+           --headless 1 --commands-file "<ABSOLUTE PATH>\capture.txt"
 ```
 
 (`--mode raster` still parses — `parseRenderMode` accepts it as a spelling of
@@ -141,9 +167,7 @@ off by default because their atomics once cost 95% of the traced frame (36 ms
 of a 38 ms frame; see the plan's light-hierarchy postmortem). Leave them off
 for any timing measurement.
 
-Four things buy that, and all four key off the same predicate
-(`Engine::isCaptureRun`, true when `--capture`, `--dumptargets` or
-`--dumpobjects` is given):
+Four things buy that, and all four key off `--headless 1`:
 
 - **Fixed 1/60 timestep.** Wall-clock timing lands the same frame number on
   different animation state every run.
@@ -254,6 +278,9 @@ warp danm14ab
 camera free
 campos 320.481415 106.536171 8.482998
 camlook 326.0 118.0 13.0
+pause 1080
+capture out.tga
+quit
 ```
 
 ### `--commands-frame N`, because `warp` finishes after the file does
@@ -264,9 +291,11 @@ to a scene that is then replaced. Run the file on a later frame instead:
 
 ```
 engine.exe --game "<GAME_DIR>" --dev 0 --mode path-tracing --ptdenoise 0 \
-    --commands-file "<ABSOLUTE PATH>\cam.txt" --commands-frame 120 \
-    --capture out.tga --captureframe 1200
+    --headless 1 --commands-file "<ABSOLUTE PATH>\cam.txt" --commands-frame 120
 ```
+
+Because `cam.txt` starts on frame 120, its `pause 1080` resumes in time to
+capture frame 1200.
 
 The path must be absolute; a relative one resolves against the working
 directory, not the file. This is also the missing piece for the per-class
@@ -335,7 +364,7 @@ which looked like success:
   the same picture. The capture is a state machine across frames.
 - A button press and a console command both land **outside** the render frame,
   where the renderer has nothing to read back. The capture is deferred to the
-  point the engine takes its own `--capture` screenshot.
+  point the engine services a pending console `capture` request.
 - Triangle ranges come from `GpuScene::View::primitiveIds`, **not** from the
   object records: `dstTriangleBase` is only filled during the device merge, and
   the ranges already have the opaque/non-opaque offset applied. Dumping the
@@ -348,9 +377,19 @@ nothing about where. `--dumptargets <dir>` writes every target the scene
 pipeline exposes as a `.npy`, on the same frame as the screenshot:
 
 ```
-engine.exe --dev 0 --mode pbr --dumptargets out_a --captureframe 900 ...
+# out_a.txt (out_b.txt differs only in the capture path)
+warp danm14ab
+pause 899
+capture out_a.tga
+quit
+```
+
+```
+engine.exe --dev 0 --mode pbr --headless 1 --dumptargets out_a \
+    --commands-file "<ABSOLUTE PATH>\out_a.txt" ...
 # rebuild the other commit, then:
-engine.exe --dev 0 --mode pbr --dumptargets out_b --captureframe 900 ...
+engine.exe --dev 0 --mode pbr --headless 1 --dumptargets out_b \
+    --commands-file "<ABSOLUTE PATH>\out_b.txt" ...
 ```
 
 ```python
@@ -381,11 +420,11 @@ couple of levels of 255, and `output` differing by 17%. The geometry pass was ri
 the whole discrepancy was in the resolve. Reason about a screenshot only after
 the dumps say which pass to look at.
 
-`--dumptargets` works with or without `--capture`: it flushes the current frame
-before reading targets back (`Engine::dumpTargetsIfRequested`). **Every render
-mode dumps** - there is one `RenderPipeline`/`ScenePipeline` now, and the
-G-buffer set plus `g_buffer_depth` comes out of retro, PBR and path tracing
-alike. What differs is the last entry (`output` in the raster modes,
+`--dumptargets` writes after the console `capture` request completes: it flushes
+that current frame before reading targets back (`Engine::dumpTargetsIfRequested`).
+**Every render mode dumps** - there is one `RenderPipeline`/`ScenePipeline` now,
+and the G-buffer set plus `g_buffer_depth` comes out of retro, PBR and path
+tracing alike. What differs is the last entry (`output` in the raster modes,
 `traced_output` plus the traced split in `--mode path-tracing`) and the
 environment cube arrays - `irradiance_map_array`,
 `prefiltered_env_map_array_mip*` and the decoded source maps - which every mode
@@ -422,10 +461,10 @@ reached the screen unfiltered and no amount of NRD tuning could touch it.
 
 ### Path tracing makes the harness slow, and frame 900 is usually not needed
 
-Every frame of a capture run renders at full cost, so `--captureframe 900` in
-`--mode path-tracing` traces nine hundred frames to keep one. At 32 samples per
-pixel that is well over a minute per capture, and iterating on a shader at that
-rate is miserable.
+Every frame of a capture run renders at full cost, so `pause 899` before
+`capture` in `--mode path-tracing` traces nine hundred frames to keep one. At 32
+samples per pixel that is well over a minute per capture, and iterating on a
+shader at that rate is miserable.
 
 **Use the lowest frame past the splash screen for iteration** - around 310.
 Frames below ~300 are the logo and are evidence of nothing, but 310 is a settled
@@ -443,9 +482,16 @@ frames: with nothing in the world moving, whatever still changes between
 consecutive frames is exactly the residual the filters have not removed.
 
 ```
+# seq.txt
+warp danm14ab
+pause 349
+capture <SCRATCH>\seq\f.tga 51
+quit
+```
+
+```
 engine.exe --game "<GAME_DIR>" --dev 0 --mode path-tracing \
-    --headless 1 --commands-file warp.txt \
-    --capture <SCRATCH>\seq\f.tga --captureframe 350 --captureframes 51 \
+    --headless 1 --commands-file "<ABSOLUTE PATH>\seq.txt" \
     --freezeframe 350 --antialiasing fsr
 ```
 
@@ -453,8 +499,8 @@ engine.exe --game "<GAME_DIR>" --dev 0 --mode path-tracing \
   restarts every temporal history once. Rendering is untouched: the jitter
   sequence, the tracer's frame index and NRD's accumulation all keep advancing
   over a scene that no longer moves.
-- `--captureframes K` writes K consecutive frames as `f_0350.tga`, `f_0351.tga`…
-  A count of 1 keeps the path exactly as given, so old baselines still match.
+- `capture <path> K` writes K consecutive frames as `f-0001.tga`,
+  `f-0002.tga`… A count of 1 keeps the path exactly as given.
 - **The engine's own composite TAA is gone, and so is `--pttaablend`.** The
   temporal resolve in the common anti-aliasing slot is FSR2, selected with
   `--antialiasing off|fxaa|fsr` and sharpened with `--fsrsharpness`. The slot
@@ -545,11 +591,21 @@ cmake --build build --config Release
 
 Then the whole loop is scriptable, no GUI needed:
 
+For terminal 1, put the long-lived run in `tracy.txt`:
+
 ```
-# terminal 1 (or Start-Process): a long-lived engine
+warp danm14ab
+pause 2999
+capture out.tga
+quit
+```
+
+Start that engine in terminal 1 (or with `Start-Process`), then attach from
+terminal 2 once it is past loading:
+
+```
 engine.exe --game ... --dev 0 --mode retro --grassdensity 1 \
-    --headless 1 --commands-file warp.txt --captureframe 3000 --capture out.tga
-# terminal 2, once it is past loading:
+    --headless 1 --commands-file "<ABSOLUTE PATH>\tracy.txt"
 tracy-capture.exe -o run.tracy -s 5      # both tools live in build/bin
 tracy-csvexport.exe run.tracy > zones.csv
 ```
@@ -641,10 +697,19 @@ in-application API itself: `--renderdoc 1` triggers a capture on the frame befor
 the screenshot. `extern/renderdoc_app.h` is vendored from the installation.
 
 ```
+# renderdoc.txt
+warp danm14ab
+pause 899
+capture rdc.tga
+quit
+```
+
+```
 & "C:\Program Files\RenderDoc\renderdoccmd.exe" capture --wait-for-exit \
     --working-dir "<BIN>" --capture-file "<BIN>\name" \
     "<BIN>\engine.exe" --game "<GAME_DIR>" \
-    --commands-file warp.txt --capture rdc.tga --captureframe 3 --renderdoc 1
+    --dev 0 --mode retro --headless 1 \
+    --commands-file "<ABSOLUTE PATH>\renderdoc.txt" --renderdoc 1
 ```
 
 Produces `name_frameNNN.rdc`.
@@ -919,6 +984,13 @@ touches, and how far it moves them.
   capturing the **main menu**, which was also affected despite having no module,
   no AI and no scripts. If frames stop matching, look for order that depends on
   an address before looking at anything else.
+- **Reseed the shared generator before every state in a multi-state batch.** A
+  commands file can capture many states in one engine process, and whatever one
+  state consumes shifts every state after it. Across two builds that drift
+  accumulates until the same state is dealt different cards and stocked with
+  different items while every frame, baseline and margin still matches to the
+  pixel. Put `seed <fixed>` before each state, not once per run;
+  `scripts/capture-gui-proof.ps1` does this.
 - **Keep renderer randomness out of the shared stream.** Noise textures still
   draw from `renderRandomFloat`, not `randomFloat` (`textureregistry.cpp`). The
   split was forced by the two backends building different numbers of kernels:

@@ -9,6 +9,7 @@ import sys
 import struct
 import glob
 import os
+import re
 import numpy as np
 
 
@@ -30,8 +31,22 @@ files = sorted(glob.glob(os.path.join(sys.argv[1], '*.tga')))
 if not files:
     sys.exit('no captures found')
 
-frames = [(int(os.path.basename(f).split('_')[-1].split('.')[0]), load_tga(f))
-          for f in files]
+def frame_index(path):
+    """Trailing run of digits, whatever separates it from the stem.
+
+    The engine numbers a multi-frame capture `<stem>-0001.tga`; older captures
+    written by the retired --capture CLI use `<stem>_0350.tga`. Splitting on one
+    separator throws on the other, which fails the whole run rather than the one
+    file, so match the digits themselves.
+    """
+    stem = os.path.splitext(os.path.basename(path))[0]
+    match = re.search(r'(\d+)$', stem)
+    if not match:
+        sys.exit(f'capture has no frame number in its name: {path}')
+    return int(match.group(1))
+
+
+frames = [(frame_index(f), load_tga(f)) for f in files]
 frames.sort()
 
 first = frames[0][1]
