@@ -23,6 +23,8 @@
 #include "../fixtures/engine.h"
 
 #include "reone/game/action/closedoor.h"
+#include "reone/game/action/movetopoint.h"
+#include "reone/game/action/opendoor.h"
 #include "reone/game/action/unlockobject.h"
 #include "reone/game/game.h"
 #include "reone/game/gui/areatransition.h"
@@ -37,9 +39,11 @@
 #include "reone/game/object/creature.h"
 #include "reone/game/object/door.h"
 #include "reone/game/object/item.h"
+#include "reone/game/object/module.h"
 #include "reone/game/object/placeable.h"
 #include "reone/game/object/trigger.h"
 #include "reone/game/reputes.h"
+#include "reone/game/room.h"
 #include "reone/game/script/routines.h"
 #include "reone/graphics/animation.h"
 #include "reone/graphics/font.h"
@@ -50,8 +54,10 @@
 #include "reone/resource/2da.h"
 #include "reone/resource/gff.h"
 #include "reone/scene/collision.h"
+#include "reone/scene/node/dummy.h"
 #include "reone/scene/node/model.h"
 #include "reone/scene/node/trigger.h"
+#include "reone/scene/node/walkmesh.h"
 #include "reone/script/executioncontext.h"
 #include "reone/script/program.h"
 
@@ -111,7 +117,24 @@ public:
 
     static bool applyAnimation(DialogGUI &gui, const std::string &tag, int ordinal) {
         auto animation = gui.getStuntParticipantAnimation(tag, ordinal);
-        return animation && gui.enterMixedStunt(gui._participantByTag.at(tag), animation);
+        if (!animation) {
+            return false;
+        }
+        auto cut = DialogGUI::decodeCutAnimation(ordinal);
+        return gui.enterMixedStunt(gui._participantByTag.at(tag), animation, cut && cut->looping);
+    }
+
+    static std::optional<DialogGUI::CutAnimation> decodeCut(int ordinal) {
+        return DialogGUI::decodeCutAnimation(ordinal);
+    }
+
+    static void setOwner(DialogGUI &gui, std::shared_ptr<Object> owner) {
+        gui._owner = std::move(owner);
+    }
+
+    static void updateAnimationsForEntry(DialogGUI &gui, const resource::Dialog::EntryReply &entry) {
+        gui._currentEntry = &entry;
+        gui.updateParticipantAnimations();
     }
 
     static bool isActive(DialogGUI &gui, const std::string &tag) {
@@ -132,6 +155,11 @@ public:
 
 std::pair<std::string, std::string> reone::game::TestGameModule::scheduledTransition(const Game &game) {
     return {game._nextModule, game._nextEntry};
+}
+
+void reone::game::TestGameModule::setActiveModuleArea(Game &game, std::shared_ptr<Area> area) {
+    game._module = game.newModule();
+    game._module->_area = std::move(area);
 }
 
 namespace {
@@ -218,6 +246,9 @@ std::shared_ptr<TwoDA> makeAppearanceTable() {
     builder.row({"S", "1", "1", "-1", "", "", ""});
     builder.row({"S", "1", "1", "-1", "", "", ""});
     builder.row({"S", "1", "1", "-1", "", "", ""});
+    // Row 3 is a body model rather than a creature model, so tests can cover
+    // the humanoid side of the animation naming split.
+    builder.row({"B", "1", "1", "-1", "", "", ""});
     return std::shared_ptr<TwoDA>(builder.build());
 }
 
@@ -268,13 +299,41 @@ std::shared_ptr<Gff> makeJournalWithPlotXP() {
             Gff::Field::newList("Categories", {category})});
 }
 
+// Obstruction reported by the shared testWalk stub. Null by default, so walking
+// is unobstructed unless a test opts in through ScopedWalkObstruction.
+scene::IUser *&walkObstruction() {
+    static scene::IUser *obstruction = nullptr;
+    return obstruction;
+}
+
+class ScopedWalkObstruction {
+public:
+    explicit ScopedWalkObstruction(scene::IUser &obstruction) {
+        walkObstruction() = &obstruction;
+    }
+
+    ~ScopedWalkObstruction() {
+        walkObstruction() = nullptr;
+    }
+};
+
 scene::MockSceneGraph &testSceneGraph(TestEngine &engine) {
     static NiceMock<scene::MockSceneGraph> graph;
+    // SceneNode activation is part of the current scene contract, including in
+    // collision-only fixtures where no render pipeline is constructed.
+    static scene::GpuScene gpuScene;
+    // A real SceneGraph keeps every node it hands out alive in its own set, and
+    // node trees rely on that: ModelSceneNode::buildNodeTree only keeps raw
+    // pointers to the child nodes it asks the graph for. The factories below
+    // have to retain them the same way.
+    static std::vector<std::shared_ptr<scene::SceneNode>> createdNodes;
     static bool initialized = false;
     if (!initialized) {
         EXPECT_CALL(engine.sceneModule().graphs(), get(_))
             .Times(AnyNumber())
             .WillRepeatedly(ReturnRef(graph));
+        ON_CALL(graph, gpuScene())
+            .WillByDefault(ReturnRef(gpuScene));
         ON_CALL(graph, newTrigger(_))
             .WillByDefault(Invoke([&engine](std::vector<glm::vec3> geometry) {
                 return std::make_shared<scene::TriggerSceneNode>(
@@ -284,8 +343,59 @@ scene::MockSceneGraph &testSceneGraph(TestEngine &engine) {
                     engine.services().audio,
                     engine.services().resource);
             }));
+        ON_CALL(graph, newModel(_, _))
+            .WillByDefault(Invoke([&engine](graphics::Model &model, scene::ModelUsage usage) {
+                auto node = std::make_shared<scene::ModelSceneNode>(
+                    model,
+                    usage,
+                    graph,
+                    engine.services().graphics,
+                    engine.services().audio,
+                    engine.services().resource);
+                createdNodes.push_back(node);
+                node->init();
+                return node;
+            }));
+        ON_CALL(graph, newWalkmesh(_))
+            .WillByDefault(Invoke([&engine](graphics::Walkmesh &walkmesh) {
+                // init() is skipped on purpose: it uploads a debug-render mesh,
+                // which needs the render thread. Collision only consults the
+                // node's enabled flag and transform.
+                auto node = std::make_shared<scene::WalkmeshSceneNode>(
+                    walkmesh,
+                    graph,
+                    engine.services().graphics,
+                    engine.services().audio,
+                    engine.services().resource);
+                createdNodes.push_back(node);
+                return node;
+            }));
+        ON_CALL(graph, newDummy(_))
+            .WillByDefault(Invoke([&engine](graphics::ModelNode &modelNode) {
+                auto node = std::make_shared<scene::DummySceneNode>(
+                    modelNode,
+                    graph,
+                    engine.services().graphics,
+                    engine.services().audio,
+                    engine.services().resource);
+                createdNodes.push_back(node);
+                return node;
+            }));
         ON_CALL(graph, testWalk(_, _, _, _))
-            .WillByDefault(Return(false));
+            .WillByDefault(Invoke([](const glm::vec3 &origin,
+                                     const glm::vec3 &dest,
+                                     const scene::IUser *excludeUser,
+                                     scene::Collision &collision) {
+                auto *obstruction = walkObstruction();
+                if (!obstruction || obstruction == excludeUser) {
+                    return false;
+                }
+                collision.user = obstruction;
+                collision.intersection = dest;
+                collision.normal = glm::vec3(0.0f, -1.0f, 0.0f);
+                collision.material = 0;
+                return true;
+            }));
         ON_CALL(graph, testElevation(_, _))
             .WillByDefault(Invoke([](const glm::vec3 &position, scene::Collision &collision) {
                 collision.intersection = position;
@@ -348,7 +458,49 @@ std::shared_ptr<Door> makeTransitionDoor(
     return door;
 }
 
-std::shared_ptr<Creature> makeMovingCreature(Game &game, TestEngine &engine) {
+// Door without linked-module metadata, so it blocks and opens without also
+// generating a transition trigger.
+std::shared_ptr<Door> makePlainDoor(
+    Game &game,
+    TestEngine &engine,
+    bool locked = false,
+    std::string onOpen = "",
+    glm::vec3 position = glm::vec3(0.0f)) {
+
+    testSceneGraph(engine);
+    auto walkmesh = makeDoorWalkmesh();
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("genericdoors"))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(makeGenericDoorsTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_))
+        .Times(AnyNumber());
+    EXPECT_CALL(engine.resourceModule().walkmeshes(), get("testdoor0", ResType::Dwk))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(walkmesh));
+    EXPECT_CALL(engine.resourceModule().walkmeshes(), get("testdoor1", ResType::Dwk))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(makeDoorWalkmesh()));
+
+    auto gff = Gff::Builder()
+                   .field(Gff::Field::newByte("GenericType", 1))
+                   .field(Gff::Field::newByte("Static", 0))
+                   .field(Gff::Field::newByte("Locked", locked ? 1 : 0))
+                   .field(Gff::Field::newShort("HP", 20))
+                   .field(Gff::Field::newResRef("OnOpen", std::move(onOpen)))
+                   .field(Gff::Field::newFloat("X", position.x))
+                   .field(Gff::Field::newFloat("Y", position.y))
+                   .field(Gff::Field::newFloat("Z", position.z))
+                   .build();
+    auto door = game.newDoor();
+    door->deserialize(*gff);
+    return door;
+}
+
+std::shared_ptr<Creature> makeMovingCreature(
+    Game &game,
+    TestEngine &engine,
+    std::string onBlocked = "") {
+
     EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
         .Times(AnyNumber())
         .WillRepeatedly(Return(makeAppearanceTable()));
@@ -362,10 +514,19 @@ std::shared_ptr<Creature> makeMovingCreature(Game &game, TestEngine &engine) {
                    .field(Gff::Field::newWord("SoundSetFile", 0xffff))
                    .field(Gff::Field::newByte("BodyBag", 0xff))
                    .field(Gff::Field::newByte("PerceptionRange", 0xff))
+                   .field(Gff::Field::newResRef("ScriptOnBlocked", std::move(onBlocked)))
                    .build();
     auto creature = game.newCreature();
     creature->deserialize(*gff);
     return creature;
+}
+
+// Navigation-driven step towards dest. Goes through Creature::advanceOnPath, so
+// it exercises the same path AI, scripts and actions take, unlike direct player
+// locomotion which calls Area::moveCreature.
+void navigationStep(Creature &creature, const glm::vec3 &dest, float dt = 1.0f) {
+    creature.setPath(dest, std::vector<glm::vec3> {dest}, 0);
+    creature.advanceOnPath(false, dt);
 }
 
 std::shared_ptr<Gff> makeTransitionTriggerGff(
@@ -911,6 +1072,388 @@ TEST(DialogGUI, should_leave_no_partial_mixed_stunt_state_when_inputs_are_missin
     EXPECT_FALSE(MixedStuntTestAccess::applyAnimation(gui, "PLAYER", 1200));
     EXPECT_FALSE(MixedStuntTestAccess::isActive(gui, "PLAYER"));
     EXPECT_FALSE(player->isStuntMode());
+}
+
+// Owns the graphics options the scene graph keeps a reference to.
+struct DialogAnimScene {
+    graphics::GraphicsOptions graphicsOptions;
+    scene::SceneGraph graph;
+
+    explicit DialogAnimScene(TestEngine &engine) :
+        graph(
+            "test",
+            engine.sceneModule().renderPipelineFactory(),
+            graphicsOptions,
+            engine.services().graphics,
+            engine.services().audio,
+            engine.services().resource) {
+    }
+
+    std::shared_ptr<TestCreature> newCreature(
+        Game &game,
+        TestEngine &engine,
+        uint32_t id,
+        std::string tag,
+        const std::shared_ptr<graphics::Model> &model) {
+        auto creature = std::make_shared<TestCreature>(id, std::move(tag), game, engine.services());
+        creature->setSceneNode(graph.newModel(*model, scene::ModelUsage::Creature));
+        return creature;
+    }
+};
+
+std::shared_ptr<scene::ModelSceneNode> modelNodeOf(const std::shared_ptr<Creature> &creature) {
+    return std::static_pointer_cast<scene::ModelSceneNode>(creature->sceneNode());
+}
+
+std::shared_ptr<TwoDA> makeDialogAnimationsTable() {
+    TwoDA::Builder builder;
+    builder.columns({"name"});
+    for (int i = 0; i < 30; ++i) {
+        builder.row({""});
+    }
+    builder.row({"Talk_Normal"});
+    return builder.build();
+}
+
+TEST(DialogGUI, should_decode_participant_animation_ordinals_by_cut_band) {
+    struct Expectation {
+        int ordinal;
+        const char *name;
+        bool looping;
+    };
+    const Expectation expectations[] {
+        {1000, "cut001", false},
+        {1011, "cut012", false},
+        {1013, "cut014", false},
+        {1199, "cut200", false},
+        {1200, "cut001w", false},
+        {1201, "cut002w", false},
+        {1399, "cut200w", false},
+        {1400, "cut001l", true},
+        {1409, "cut010l", true},
+        {1412, "cut013l", true},
+        {1599, "cut200l", true},
+        {1600, "cut001wl", true},
+        {1601, "cut002wl", true},
+        {1799, "cut200wl", true}};
+
+    for (auto &expected : expectations) {
+        auto cut = MixedStuntTestAccess::decodeCut(expected.ordinal);
+        ASSERT_TRUE(cut.has_value()) << "ordinal " << expected.ordinal;
+        EXPECT_EQ(cut->name, expected.name) << "ordinal " << expected.ordinal;
+        EXPECT_EQ(cut->looping, expected.looping) << "ordinal " << expected.ordinal;
+    }
+
+    // Ordinals outside the known cut bands keep their own meaning and must not
+    // be reinterpreted as clip names.
+    for (int ordinal : {0, 35, 40, 70, 999, 1800, 2000, 9999, 10000, 10038, 10511}) {
+        EXPECT_FALSE(MixedStuntTestAccess::decodeCut(ordinal).has_value()) << "ordinal " << ordinal;
+    }
+}
+
+TEST(DialogGUI, should_animate_the_real_player_when_an_animated_cut_authors_no_stunt_participants) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    DialogAnimScene scene(engine);
+
+    auto held = makeAnimation("cut010l");
+    auto oneShot = makeAnimation("cut012");
+    auto superModel = makeModel("supermodel", {held, oneShot});
+    auto bodyModel = makeModel("player_body", {makeAnimation("cpause1")});
+    bodyModel->setSuperModel(superModel);
+    auto player = scene.newCreature(game, engine, 1, "player", bodyModel);
+    game.party().addMember(kNpcPlayer, player);
+    game.party().setPlayer(player);
+    auto node = modelNodeOf(player);
+
+    auto dialog = std::make_shared<Dialog>();
+    dialog->animatedCutscene = true;
+    DialogGUI gui(game, engine.services());
+    MixedStuntTestAccess::loadParticipants(gui, dialog);
+    ASSERT_EQ(MixedStuntTestAccess::participantCount(gui), 0);
+
+    // A held clip resolves through the supermodel and stays on the creature.
+    Dialog::EntryReply inTank;
+    inTank.animations.push_back({"player", 1409});
+    MixedStuntTestAccess::updateAnimationsForEntry(gui, inTank);
+
+    ASSERT_EQ(node->animationChannels().size(), 1);
+    EXPECT_EQ(node->activeAnimationName(), "cut010l");
+    EXPECT_EQ(node->animationChannels().front().anim, held.get());
+    EXPECT_TRUE(node->animationChannels().front().properties.flags & scene::AnimationFlags::loop);
+    node->update(0.6f);
+    node->update(0.6f);
+    EXPECT_FALSE(node->isAnimationFinished());
+
+    // A one-shot clip from the same band group plays once.
+    Dialog::EntryReply draining;
+    draining.animations.push_back({"player", 1011});
+    MixedStuntTestAccess::updateAnimationsForEntry(gui, draining);
+
+    EXPECT_EQ(node->activeAnimationName(), "cut012");
+    EXPECT_EQ(node->animationChannels().front().anim, oneShot.get());
+    EXPECT_FALSE(node->animationChannels().front().properties.flags & scene::AnimationFlags::loop);
+    node->update(0.6f);
+    node->update(0.6f);
+    EXPECT_TRUE(node->isAnimationFinished());
+}
+
+TEST(DialogGUI, should_animate_an_ordinary_participant_from_a_cut_band_ordinal) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    DialogAnimScene scene(engine);
+
+    auto prone = makeAnimation("cut013l");
+    auto rise = makeAnimation("cut014");
+    auto ownerModel = makeModel("owner_body", {prone, rise});
+    auto owner = scene.newCreature(game, engine, 2, "owner", ownerModel);
+    auto node = modelNodeOf(owner);
+
+    auto dialog = std::make_shared<Dialog>();
+    dialog->animatedCutscene = false;
+    DialogGUI gui(game, engine.services());
+    MixedStuntTestAccess::loadParticipants(gui, dialog);
+    MixedStuntTestAccess::setOwner(gui, owner);
+
+    Dialog::EntryReply lying;
+    lying.animations.push_back({"owner", 1412});
+    MixedStuntTestAccess::updateAnimationsForEntry(gui, lying);
+    EXPECT_EQ(node->activeAnimationName(), "cut013l");
+    EXPECT_EQ(node->animationChannels().front().anim, prone.get());
+    EXPECT_TRUE(node->animationChannels().front().properties.flags & scene::AnimationFlags::loop);
+
+    Dialog::EntryReply standing;
+    standing.animations.push_back({"owner", 1013});
+    MixedStuntTestAccess::updateAnimationsForEntry(gui, standing);
+    EXPECT_EQ(node->activeAnimationName(), "cut014");
+    EXPECT_EQ(node->animationChannels().front().anim, rise.get());
+    EXPECT_FALSE(node->animationChannels().front().properties.flags & scene::AnimationFlags::loop);
+}
+
+TEST(DialogGUI, should_hold_an_authored_cut_pose_until_the_dialogue_releases_the_participant) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    DialogAnimScene scene(engine);
+
+    auto idle = makeAnimation("cpause1");
+    auto drain = makeAnimation("cut012");
+    auto prone = makeAnimation("cut013l");
+    auto ownerModel = makeModel("owner_body", {idle, drain, prone}, graphics::MdlClassification::character);
+    auto owner = scene.newCreature(game, engine, 7, "owner", ownerModel);
+    owner->resumeStateDrivenAnimation();
+    auto node = modelNodeOf(owner);
+    ASSERT_EQ(node->activeAnimationName(), "cpause1");
+
+    auto dialog = std::make_shared<Dialog>();
+    dialog->animatedCutscene = true;
+    DialogGUI gui(game, engine.services());
+    MixedStuntTestAccess::loadParticipants(gui, dialog);
+    MixedStuntTestAccess::setOwner(gui, owner);
+
+    // A one-shot cut clip runs to its end.
+    Dialog::EntryReply draining;
+    draining.animations.push_back({"owner", 1011});
+    MixedStuntTestAccess::updateAnimationsForEntry(gui, draining);
+    EXPECT_EQ(node->activeAnimationName(), "cut012");
+
+    node->update(0.6f);
+    owner->update(0.0f);
+    node->update(0.6f);
+    owner->update(0.0f);
+
+    // Having finished, it holds its final frame rather than falling back to the
+    // state-driven idle.
+    ASSERT_EQ(node->animationChannels().size(), 1);
+    EXPECT_TRUE(node->isAnimationFinished());
+    EXPECT_EQ(node->activeAnimationName(), "cut012");
+    EXPECT_EQ(node->animationChannels().front().anim, drain.get());
+
+    // The authored sequence puts a script-only entry between the two clips. It
+    // must not release the held pose.
+    Dialog::EntryReply scriptOnly;
+    MixedStuntTestAccess::updateAnimationsForEntry(gui, scriptOnly);
+    owner->update(0.0f);
+    EXPECT_EQ(node->activeAnimationName(), "cut012");
+    EXPECT_EQ(node->animationChannels().front().anim, drain.get());
+
+    // The next authored animation replaces it.
+    Dialog::EntryReply lying;
+    lying.animations.push_back({"owner", 1412});
+    MixedStuntTestAccess::updateAnimationsForEntry(gui, lying);
+    owner->update(0.0f);
+    EXPECT_EQ(node->activeAnimationName(), "cut013l");
+    EXPECT_TRUE(node->animationChannels().front().properties.flags & scene::AnimationFlags::loop);
+
+    // A looping clip is not dropped when it passes its end either.
+    node->update(0.6f);
+    owner->update(0.0f);
+    node->update(0.6f);
+    owner->update(0.0f);
+    EXPECT_FALSE(node->isAnimationFinished());
+    EXPECT_EQ(node->activeAnimationName(), "cut013l");
+
+    // Finishing the dialogue hands the creature back to state-driven animation.
+    MixedStuntTestAccess::finish(gui);
+    EXPECT_EQ(node->activeAnimationName(), "cpause1");
+}
+
+TEST(DialogGUI, should_drive_stunt_and_ordinary_participants_from_one_animated_cut_entry) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    DialogAnimScene scene(engine);
+
+    // Both models carry a clip of the same name, so the assertions below
+    // distinguish the model each participant was driven from.
+    auto stuntClip = makeAnimation("cut001w");
+    auto stuntModel = makeModel("principal_stunt", {stuntClip});
+    auto principalModel = makeModel("principal_body", {makeAnimation("cut001w")});
+    auto principal = scene.newCreature(game, engine, 3, "owner", principalModel);
+    auto extraClip = makeAnimation("cut001w");
+    auto extraModel = makeModel("extra_body", {extraClip});
+    auto extra = scene.newCreature(game, engine, 4, "player", extraModel);
+    game.party().addMember(kNpcPlayer, extra);
+    game.party().setPlayer(extra);
+
+    EXPECT_CALL(engine.resourceModule().models(), get("principal_stunt"))
+        .WillOnce(Return(stuntModel));
+
+    auto dialog = std::make_shared<Dialog>();
+    dialog->animatedCutscene = true;
+    dialog->stunts.push_back({"owner", "principal_stunt"});
+    DialogGUI gui(game, engine.services());
+    MixedStuntTestAccess::setOwner(gui, principal);
+    MixedStuntTestAccess::loadParticipants(gui, dialog);
+    ASSERT_EQ(MixedStuntTestAccess::participantCount(gui), 1);
+
+    Dialog::EntryReply entry;
+    entry.animations.push_back({"owner", 1200});
+    entry.animations.push_back({"player", 1200});
+    MixedStuntTestAccess::updateAnimationsForEntry(gui, entry);
+
+    // The stunt-bound principal is driven from the stunt model.
+    auto principalNode = modelNodeOf(principal);
+    ASSERT_EQ(principalNode->animationChannels().size(), 1);
+    EXPECT_EQ(principalNode->animationChannels().front().anim, stuntClip.get());
+
+    // The ordinary extra is driven from its own model in the same entry.
+    auto extraNode = modelNodeOf(extra);
+    ASSERT_EQ(extraNode->animationChannels().size(), 1);
+    EXPECT_EQ(extraNode->animationChannels().front().anim, extraClip.get());
+}
+
+TEST(DialogGUI, should_keep_driving_fully_stunted_animated_cuts_from_the_stunt_model) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    DialogAnimScene scene(engine);
+
+    auto first = makeAnimation("cut001w");
+    auto second = makeAnimation("cut002w");
+    auto stuntModel = makeModel("player_stunt", {first, second});
+    auto bodyModel = makeModel("player_body", {makeAnimation("cut001w"), makeAnimation("cpause1")});
+    auto player = scene.newCreature(game, engine, 5, "player", bodyModel);
+    game.party().addMember(kNpcPlayer, player);
+    game.party().setPlayer(player);
+    auto node = modelNodeOf(player);
+
+    EXPECT_CALL(engine.resourceModule().models(), get("player_stunt"))
+        .WillOnce(Return(stuntModel));
+
+    auto dialog = std::make_shared<Dialog>();
+    dialog->animatedCutscene = true;
+    dialog->stunts.push_back({"player", "player_stunt"});
+    DialogGUI gui(game, engine.services());
+    MixedStuntTestAccess::loadParticipants(gui, dialog);
+    ASSERT_EQ(MixedStuntTestAccess::participantCount(gui), 1);
+
+    Dialog::EntryReply entry;
+    entry.animations.push_back({"player", 1201});
+    MixedStuntTestAccess::updateAnimationsForEntry(gui, entry);
+
+    ASSERT_EQ(node->animationChannels().size(), 1);
+    EXPECT_EQ(node->activeAnimationName(), "cut002w");
+    EXPECT_EQ(node->animationChannels().front().anim, second.get());
+    EXPECT_FALSE(node->animationChannels().front().properties.flags & scene::AnimationFlags::loop);
+    EXPECT_TRUE(node->animationChannels().front().properties.flags & scene::AnimationFlags::propagate);
+}
+
+TEST(DialogGUI, should_not_animate_a_stunt_participant_from_its_own_model) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    DialogAnimScene scene(engine);
+
+    // The stunt model is the authored source, and it lacks the requested clip.
+    // The creature's own model carries a clip of that name, which must not be
+    // substituted for it.
+    auto stuntModel = makeModel("owner_stunt", {makeAnimation("cut001w")});
+    auto ownModel = makeModel("owner_body", {makeAnimation("cpause1"), makeAnimation("cut002w")},
+                              graphics::MdlClassification::character);
+    auto owner = scene.newCreature(game, engine, 8, "owner", ownModel);
+    owner->resumeStateDrivenAnimation();
+    auto node = modelNodeOf(owner);
+    ASSERT_EQ(node->activeAnimationName(), "cpause1");
+
+    EXPECT_CALL(engine.resourceModule().models(), get("owner_stunt"))
+        .WillOnce(Return(stuntModel));
+
+    auto dialog = std::make_shared<Dialog>();
+    dialog->animatedCutscene = true;
+    dialog->stunts.push_back({"owner", "owner_stunt"});
+    DialogGUI gui(game, engine.services());
+    MixedStuntTestAccess::setOwner(gui, owner);
+    MixedStuntTestAccess::loadParticipants(gui, dialog);
+    ASSERT_EQ(MixedStuntTestAccess::participantCount(gui), 1);
+
+    Dialog::EntryReply entry;
+    entry.animations.push_back({"owner", 1201});
+    MixedStuntTestAccess::updateAnimationsForEntry(gui, entry);
+
+    EXPECT_EQ(node->activeAnimationName(), "cpause1");
+}
+
+TEST(DialogGUI, should_not_resolve_dialoganimations_ordinals_against_a_stunt_model) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    DialogAnimScene scene(engine);
+
+    // Shape of 650DAN/650kreia: a stunt-bound participant that also receives a
+    // dialoganimations ordinal.
+    auto stuntClip = makeAnimation("cut001w");
+    auto stuntModel = makeModel("owner_stunt", {stuntClip});
+    auto talk = makeAnimation("tlknorm");
+    auto ownerModel = makeModel("owner_body", {talk, makeAnimation("cpause1")});
+    auto owner = scene.newCreature(game, engine, 6, "owner", ownerModel);
+    auto node = modelNodeOf(owner);
+
+    EXPECT_CALL(engine.resourceModule().models(), get("owner_stunt"))
+        .WillOnce(Return(stuntModel));
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("dialoganimations"))
+        .WillOnce(Return(makeDialogAnimationsTable()));
+
+    auto dialog = std::make_shared<Dialog>();
+    dialog->animatedCutscene = false;
+    dialog->stunts.push_back({"owner", "owner_stunt"});
+    DialogGUI gui(game, engine.services());
+    MixedStuntTestAccess::setOwner(gui, owner);
+    MixedStuntTestAccess::loadParticipants(gui, dialog);
+    ASSERT_EQ(MixedStuntTestAccess::participantCount(gui), 1);
+
+    Dialog::EntryReply entry;
+    entry.animations.push_back({"owner", 10030});
+    MixedStuntTestAccess::updateAnimationsForEntry(gui, entry);
+
+    // Resolved through dialoganimations.2da on the creature's own model, and
+    // the stunt model was never asked for a semantic animation name.
+    ASSERT_EQ(node->animationChannels().size(), 1);
+    EXPECT_EQ(node->animationChannels().front().anim, talk.get());
+    EXPECT_NE(node->animationChannels().front().anim, stuntClip.get());
+    EXPECT_FALSE(MixedStuntTestAccess::isActive(gui, "owner"));
 }
 
 TEST(Object, should_convert_credits_to_party_gold_when_looted_by_party_member) {
@@ -1642,6 +2185,419 @@ TEST(LinkedDoorTransition, should_allow_normal_close_action_and_reactivate_when_
         std::make_pair(std::string("destination_module"), std::string("destination_waypoint")));
 }
 
+namespace {
+
+// Every K1 and K2 door model carries these five animations. The three resting
+// poses are zero length in the shipped models; makeAnimation gives each a
+// length of one second, which is what lets the transitions be stepped.
+struct DoorAnimations {
+    bool opening {true};
+    bool closing {true};
+};
+
+std::shared_ptr<graphics::Model> makeDoorModel(DoorAnimations present) {
+    std::vector<std::shared_ptr<graphics::Animation>> animations {
+        makeAnimation("closed"),
+        makeAnimation("opened1"),
+        makeAnimation("opened2")};
+    if (present.opening) {
+        animations.push_back(makeAnimation("opening1"));
+    }
+    if (present.closing) {
+        animations.push_back(makeAnimation("closing1"));
+    }
+    return makeModel("testdoor", std::move(animations));
+}
+
+// A door with a live model and all three walkmeshes, authored into the given
+// resting state.
+std::shared_ptr<Door> makeLifecycleDoor(
+    Game &game,
+    TestEngine &engine,
+    int openState,
+    DoorAnimations present = DoorAnimations()) {
+
+    testSceneGraph(engine);
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("genericdoors"))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(makeGenericDoorsTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get("testdoor"))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(makeDoorModel(present)));
+    for (auto suffix : {"testdoor0", "testdoor1", "testdoor2"}) {
+        EXPECT_CALL(engine.resourceModule().walkmeshes(), get(suffix, ResType::Dwk))
+            .Times(AnyNumber())
+            .WillRepeatedly(Return(makeDoorWalkmesh()));
+    }
+
+    auto gff = Gff::Builder()
+                   .field(Gff::Field::newByte("GenericType", 1))
+                   .field(Gff::Field::newByte("Static", 0))
+                   .field(Gff::Field::newByte("OpenState", static_cast<uint8_t>(openState)))
+                   .build();
+    auto door = game.newDoor();
+    door->deserialize(*gff);
+    return door;
+}
+
+std::string doorPose(const Door &door) {
+    auto model = std::static_pointer_cast<scene::ModelSceneNode>(door.sceneNode());
+    return model ? model->activeAnimationName() : std::string();
+}
+
+// One frame, in the order Game::update runs them: objects first, then the scene
+// graph advances model animations. A door therefore notices that a transition
+// animation finished on the frame after it actually did.
+void stepDoor(Door &door, float dt) {
+    door.update(dt);
+    auto model = std::static_pointer_cast<scene::ModelSceneNode>(door.sceneNode());
+    if (model) {
+        model->update(dt);
+    }
+}
+
+// The doorway is obstructed exactly when the closed walkmesh is live.
+bool doorwayBlocks(const Door &door) {
+    return door.walkmeshClosed() && door.walkmeshClosed()->isEnabled();
+}
+
+} // namespace
+
+// A. A door authored closed keeps loading closed and blocking.
+TEST(DoorLifecycle, should_load_an_authored_closed_door_closed_and_blocking) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto door = makeLifecycleDoor(game, engine, /*openState=*/0);
+
+    EXPECT_EQ(DoorState::Closed, door->state());
+    EXPECT_FALSE(door->isOpen());
+    EXPECT_EQ(DoorTransition::None, door->transition());
+    EXPECT_TRUE(doorwayBlocks(*door));
+    EXPECT_FALSE(door->walkmeshOpen1()->isEnabled());
+    EXPECT_FALSE(door->walkmeshOpen2()->isEnabled());
+    EXPECT_EQ("closed", doorPose(*door));
+}
+
+// B. A door authored open loads open, non-blocking, and already in its opened
+// pose - not sitting shut, and not replaying an opening it finished offscreen.
+TEST(DoorLifecycle, should_load_an_authored_open1_door_open_and_passable) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto door = makeLifecycleDoor(game, engine, /*openState=*/1);
+
+    EXPECT_EQ(DoorState::Opened1, door->state());
+    EXPECT_TRUE(door->isOpen());
+    EXPECT_EQ(DoorTransition::None, door->transition());
+    EXPECT_FALSE(doorwayBlocks(*door));
+    EXPECT_TRUE(door->walkmeshOpen1()->isEnabled());
+    EXPECT_FALSE(door->walkmeshOpen2()->isEnabled());
+    EXPECT_EQ("opened1", doorPose(*door));
+}
+
+// The second open side is a distinct pose and a distinct walkmesh, so it must
+// not be folded into the first. K2 101PER PERDoor105 is authored this way.
+TEST(DoorLifecycle, should_load_an_authored_open2_door_on_its_second_side) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto door = makeLifecycleDoor(game, engine, /*openState=*/2);
+
+    EXPECT_EQ(DoorState::Opened2, door->state());
+    EXPECT_TRUE(door->isOpen());
+    EXPECT_FALSE(doorwayBlocks(*door));
+    EXPECT_FALSE(door->walkmeshOpen1()->isEnabled());
+    EXPECT_TRUE(door->walkmeshOpen2()->isEnabled());
+    EXPECT_EQ("opened2", doorPose(*door));
+}
+
+TEST(DoorLifecycle, should_treat_an_unsupported_authored_open_state_as_closed) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto door = makeLifecycleDoor(game, engine, /*openState=*/7);
+
+    EXPECT_EQ(DoorState::Closed, door->state());
+    EXPECT_TRUE(doorwayBlocks(*door));
+}
+
+// B. A door that is swinging open is still in the doorway. Retail K2 will not
+// let the player past one until the opening animation has finished.
+TEST(DoorLifecycle, should_keep_blocking_the_doorway_until_the_open_completes) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto door = makeLifecycleDoor(game, engine, /*openState=*/0);
+    ASSERT_TRUE(doorwayBlocks(*door));
+
+    door->open();
+
+    // The opening has begun. The door is on its way, but it has not arrived,
+    // so it is still standing where it was and still obstructs the doorway.
+    EXPECT_EQ(DoorState::Closed, door->state());
+    EXPECT_FALSE(door->isOpen());
+    EXPECT_TRUE(door->isOpening());
+    EXPECT_EQ("opening1", doorPose(*door));
+    EXPECT_TRUE(doorwayBlocks(*door));
+    EXPECT_FALSE(door->walkmeshOpen1()->isEnabled());
+    EXPECT_FALSE(door->walkmeshOpen2()->isEnabled());
+
+    // Part way through the opening animation: still blocking. The animation is
+    // one second long, so these steps stay well inside it.
+    stepDoor(*door, 0.4f);
+    EXPECT_TRUE(door->isOpening());
+    EXPECT_FALSE(door->isOpen());
+    EXPECT_TRUE(doorwayBlocks(*door));
+
+    stepDoor(*door, 0.4f);
+    EXPECT_TRUE(door->isOpening());
+    EXPECT_TRUE(doorwayBlocks(*door));
+
+    // The step that carries the animation to its end. The door is still
+    // blocking on this frame, because it polls before the model advances.
+    stepDoor(*door, 0.4f);
+    EXPECT_TRUE(doorwayBlocks(*door));
+
+    // Now the door observes the finished animation and the doorway opens up.
+    stepDoor(*door, 0.4f);
+    EXPECT_FALSE(door->isOpening());
+    EXPECT_FALSE(doorwayBlocks(*door));
+    EXPECT_TRUE(door->walkmeshOpen1()->isEnabled());
+    EXPECT_FALSE(door->walkmeshOpen2()->isEnabled());
+    EXPECT_TRUE(door->isOpen());
+    EXPECT_EQ(DoorState::Opened1, door->state());
+    EXPECT_EQ("opened1", doorPose(*door));
+}
+
+// C. The mirror image. A door that is swinging shut has not sealed the doorway
+// yet, which is what lets K2 103PER close TO102PER behind a walking player.
+TEST(DoorLifecycle, should_not_block_the_doorway_until_the_close_completes) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto door = makeLifecycleDoor(game, engine, /*openState=*/1);
+
+    door->close();
+
+    // The close has begun, but somebody in the doorway is not sealed in: the
+    // door is still standing open until the animation says otherwise.
+    EXPECT_EQ(DoorState::Opened1, door->state());
+    EXPECT_TRUE(door->isOpen());
+    EXPECT_TRUE(door->isClosing());
+    EXPECT_EQ("closing1", doorPose(*door));
+    EXPECT_FALSE(doorwayBlocks(*door));
+    EXPECT_TRUE(door->walkmeshOpen1()->isEnabled());
+
+    // Part way through the closing animation: still passable.
+    stepDoor(*door, 0.4f);
+    EXPECT_TRUE(door->isClosing());
+    EXPECT_FALSE(doorwayBlocks(*door));
+
+    stepDoor(*door, 0.4f);
+    EXPECT_TRUE(door->isClosing());
+    EXPECT_FALSE(doorwayBlocks(*door));
+
+    // The step that carries the animation to its end.
+    stepDoor(*door, 0.4f);
+    EXPECT_FALSE(doorwayBlocks(*door));
+
+    // Now the door observes the finished animation and the doorway goes solid.
+    stepDoor(*door, 0.4f);
+    EXPECT_FALSE(door->isClosing());
+    EXPECT_TRUE(doorwayBlocks(*door));
+    EXPECT_FALSE(door->walkmeshOpen1()->isEnabled());
+    EXPECT_FALSE(door->isOpen());
+    EXPECT_EQ(DoorState::Closed, door->state());
+    EXPECT_EQ("closed", doorPose(*door));
+}
+
+// D. Closing part way through an opening. The superseded opening must never
+// complete afterwards and hand the doorway over.
+TEST(DoorLifecycle, should_discard_a_pending_open_when_the_door_closes_again) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto door = makeLifecycleDoor(game, engine, /*openState=*/0);
+
+    door->open();
+    stepDoor(*door, 0.4f);
+    ASSERT_TRUE(door->isOpening());
+
+    door->close();
+    EXPECT_FALSE(door->isOpening());
+    EXPECT_TRUE(door->isClosing());
+    EXPECT_TRUE(doorwayBlocks(*door));
+
+    // Past where the original opening would have completed, and on past where
+    // the close completes. The doorway is never handed over at any point.
+    for (int i = 0; i < 5; ++i) {
+        stepDoor(*door, 0.4f);
+        EXPECT_TRUE(doorwayBlocks(*door)) << "step " << i;
+        EXPECT_FALSE(door->isOpen()) << "step " << i;
+    }
+
+    EXPECT_EQ(DoorTransition::None, door->transition());
+    EXPECT_EQ(DoorState::Closed, door->state());
+    EXPECT_EQ("closed", doorPose(*door));
+}
+
+// E. Reopening part way through a close. The superseded close must never
+// complete afterwards and seal the doorway.
+TEST(DoorLifecycle, should_discard_a_pending_close_when_the_door_reopens) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto door = makeLifecycleDoor(game, engine, /*openState=*/1);
+
+    door->close();
+    stepDoor(*door, 0.4f);
+    ASSERT_TRUE(door->isClosing());
+
+    door->open();
+    EXPECT_FALSE(door->isClosing());
+    EXPECT_TRUE(door->isOpening());
+    EXPECT_FALSE(doorwayBlocks(*door));
+    EXPECT_TRUE(door->isOpen());
+
+    // Past where the original close would have completed, and on past where the
+    // reopening completes. The doorway is never sealed at any point.
+    for (int i = 0; i < 5; ++i) {
+        stepDoor(*door, 0.4f);
+        EXPECT_FALSE(doorwayBlocks(*door)) << "step " << i;
+        EXPECT_TRUE(door->isOpen()) << "step " << i;
+    }
+
+    EXPECT_EQ(DoorTransition::None, door->transition());
+    EXPECT_EQ(DoorState::Opened1, door->state());
+    EXPECT_TRUE(door->walkmeshOpen1()->isEnabled());
+    EXPECT_EQ("opened1", doorPose(*door));
+}
+
+// F. A door with nothing to animate has to arrive anyway, in both directions.
+TEST(DoorLifecycle, should_open_immediately_when_there_is_no_opening_animation) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto door = makeLifecycleDoor(game, engine, /*openState=*/0, DoorAnimations {false, true});
+    ASSERT_TRUE(doorwayBlocks(*door));
+
+    door->open();
+
+    EXPECT_FALSE(door->isOpening());
+    EXPECT_FALSE(doorwayBlocks(*door));
+    EXPECT_TRUE(door->isOpen());
+    EXPECT_EQ(DoorState::Opened1, door->state());
+    EXPECT_EQ("opened1", doorPose(*door));
+}
+
+TEST(DoorLifecycle, should_block_immediately_when_there_is_no_closing_animation) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto door = makeLifecycleDoor(game, engine, /*openState=*/1, DoorAnimations {true, false});
+    ASSERT_FALSE(doorwayBlocks(*door));
+
+    door->close();
+
+    EXPECT_FALSE(door->isClosing());
+    EXPECT_TRUE(doorwayBlocks(*door));
+    EXPECT_FALSE(door->isOpen());
+    EXPECT_EQ("closed", doorPose(*door));
+}
+
+// G. Repeated commands are stable, and in particular never invert collision for
+// a frame on their way to the state the door is already in.
+TEST(DoorLifecycle, should_keep_a_closed_door_blocking_when_closed_again) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto door = makeLifecycleDoor(game, engine, /*openState=*/1);
+    door->close();
+    stepDoor(*door, 1.5f);
+    stepDoor(*door, 0.1f);
+    ASSERT_TRUE(doorwayBlocks(*door));
+
+    door->close();
+    EXPECT_TRUE(doorwayBlocks(*door));
+    stepDoor(*door, 0.1f);
+
+    EXPECT_TRUE(doorwayBlocks(*door));
+    EXPECT_FALSE(door->isOpen());
+    EXPECT_EQ(DoorTransition::None, door->transition());
+    EXPECT_EQ(DoorState::Closed, door->state());
+    EXPECT_EQ("closed", doorPose(*door));
+}
+
+TEST(DoorLifecycle, should_keep_an_open_door_passable_when_opened_again) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto door = makeLifecycleDoor(game, engine, /*openState=*/1);
+    ASSERT_FALSE(doorwayBlocks(*door));
+
+    door->open();
+    EXPECT_FALSE(doorwayBlocks(*door));
+    stepDoor(*door, 0.1f);
+
+    EXPECT_FALSE(doorwayBlocks(*door));
+    EXPECT_TRUE(door->isOpen());
+    EXPECT_EQ(DoorTransition::None, door->transition());
+    EXPECT_EQ(DoorState::Opened1, door->state());
+    EXPECT_TRUE(door->walkmeshOpen1()->isEnabled());
+    EXPECT_EQ("opened1", doorPose(*door));
+}
+
+// Opening an already opening door must not rewind the leaf, which would push
+// the moment the doorway frees up further and further out under a click spam.
+TEST(DoorLifecycle, should_not_restart_an_opening_that_is_already_running) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto door = makeLifecycleDoor(game, engine, /*openState=*/0);
+
+    door->open();
+    stepDoor(*door, 0.4f);
+    door->open();
+    ASSERT_TRUE(door->isOpening());
+
+    // Three more steps carry the original animation past its one second and let
+    // the door observe it. A restart would need a fourth.
+    stepDoor(*door, 0.4f);
+    stepDoor(*door, 0.4f);
+    stepDoor(*door, 0.4f);
+
+    EXPECT_FALSE(door->isOpening());
+    EXPECT_TRUE(door->isOpen());
+    EXPECT_FALSE(doorwayBlocks(*door));
+}
+
+// A door that is opening is on its way out of reach, so it must not be offered
+// for interaction again while it swings.
+TEST(DoorLifecycle, should_not_offer_an_opening_door_for_interaction) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto door = makeLifecycleDoor(game, engine, /*openState=*/0);
+    ASSERT_TRUE(door->isSelectable());
+
+    door->open();
+    EXPECT_FALSE(door->isSelectable());
+
+    stepDoor(*door, 0.4f);
+    EXPECT_FALSE(door->isSelectable());
+
+    stepDoor(*door, 0.4f);
+    stepDoor(*door, 0.4f);
+    stepDoor(*door, 0.4f);
+    ASSERT_TRUE(door->isOpen());
+    EXPECT_FALSE(door->isSelectable());
+}
+
 TEST(Party, should_award_xp_to_pool_and_sync_current_members) {
     TestEngine &engine = testEngine();
     StubConsole console;
@@ -2185,4 +3141,837 @@ TEST(AreaReputationSearch, treats_the_creature_being_searched_around_as_the_sour
         {CreatureType::Reputation, static_cast<int>(ReputationType::Enemy)}};
 
     EXPECT_EQ(candidate, area->getNearestCreature(searching, criterias));
+}
+
+namespace {
+
+// Script execution counts, keyed by resref. Static so the stub registered on the
+// shared scripts mock stays valid past the test that installed it.
+std::map<std::string, int> &scriptRunCounts() {
+    static std::map<std::string, int> counts;
+    return counts;
+}
+
+struct BlockedDoorFixtureBase {
+    TestEngine &engine;
+    StubConsole console;
+    Game game;
+    std::shared_ptr<Area> area;
+
+    BlockedDoorFixtureBase() :
+        engine(testEngine()),
+        game(GameID::KotOR, "", engine.options(), engine.services(), console) {
+
+        game.initLocalServices();
+        area = game.newArea();
+        TestGameModule::setActiveModuleArea(game, area);
+    }
+
+    std::shared_ptr<Creature> addCreature(std::string onBlocked) {
+        auto creature = makeMovingCreature(game, engine, std::move(onBlocked));
+        creature->setPosition(glm::vec3(0.0f));
+        area->add(creature);
+        return creature;
+    }
+
+    // Start counting executions of a script. The script itself resolves to
+    // nothing, which is enough to observe dispatch.
+    void countScriptRuns(const std::string &resRef) {
+        scriptRunCounts()[resRef] = 0;
+        EXPECT_CALL(engine.resourceModule().scripts(), get(resRef))
+            .Times(AnyNumber())
+            .WillRepeatedly(Invoke([](const std::string &key) {
+                ++scriptRunCounts()[key];
+                return std::shared_ptr<script::ScriptProgram>();
+            }));
+    }
+
+    int scriptRuns(const std::string &resRef) const {
+        return scriptRunCounts()[resRef];
+    }
+};
+
+// A door that swaps its collision the instant it is told to open: makePlainDoor
+// gives it no model, so there is no opening animation to wait on.
+struct BlockedDoorFixture : BlockedDoorFixtureBase {
+    std::shared_ptr<Door> door;
+
+    explicit BlockedDoorFixture(bool locked = false, std::string onOpen = "") {
+        door = makePlainDoor(game, engine, locked, std::move(onOpen));
+        area->add(door);
+    }
+};
+
+// A door that actually swings. makeLifecycleDoor gives it a real opening1
+// animation, so it spends several frames in the doorway on its way open, which
+// is the case the blocked event has to sit through without repeating.
+struct SwingingDoorFixture : BlockedDoorFixtureBase {
+    std::shared_ptr<Door> door;
+
+    SwingingDoorFixture() {
+        door = makeLifecycleDoor(game, engine, /*openState=*/0);
+        area->add(door);
+    }
+
+    // Keep the walk obstruction in step with what the door's own collision is
+    // doing, so navigation meets exactly the doorway the door presents.
+    void syncObstruction() {
+        if (doorwayBlocks(*door)) {
+            if (!_obstruction) {
+                _obstruction.emplace(*door);
+            }
+        } else {
+            _obstruction.reset();
+        }
+    }
+
+private:
+    std::optional<ScopedWalkObstruction> _obstruction;
+};
+
+const glm::vec3 kFarDestination {0.0f, 10.0f, 0.0f};
+
+} // namespace
+
+TEST(CreatureBlockedByDoor, should_record_the_door_that_obstructs_navigation) {
+    BlockedDoorFixture fixture;
+    auto npc = fixture.addCreature("k_def_blocked01");
+    fixture.countScriptRuns("k_def_blocked01");
+
+    EXPECT_EQ(script::kObjectInvalid, npc->blockingDoorId());
+
+    ScopedWalkObstruction obstruction(*fixture.door);
+    navigationStep(*npc, kFarDestination);
+
+    EXPECT_EQ(fixture.door->id(), npc->blockingDoorId());
+    EXPECT_EQ(1, fixture.scriptRuns("k_def_blocked01"));
+}
+
+TEST(CreatureBlockedByDoor, should_dispatch_authored_blocked_script_once_per_continuous_obstruction) {
+    BlockedDoorFixture fixture;
+    auto npc = fixture.addCreature("k_def_blocked01");
+
+    fixture.countScriptRuns("k_def_blocked01");
+
+    ScopedWalkObstruction obstruction(*fixture.door);
+    for (int i = 0; i < 10; ++i) {
+        navigationStep(*npc, kFarDestination);
+    }
+
+    // Ten obstructed steps against the same door, one dispatch.
+    EXPECT_EQ(1, fixture.scriptRuns("k_def_blocked01"));
+}
+
+TEST(CreatureBlockedByDoor, should_rearm_blocked_script_after_unobstructed_movement) {
+    BlockedDoorFixture fixture;
+    auto npc = fixture.addCreature("k_def_blocked01");
+    fixture.countScriptRuns("k_def_blocked01");
+
+    {
+        ScopedWalkObstruction obstruction(*fixture.door);
+        navigationStep(*npc, kFarDestination);
+        navigationStep(*npc, kFarDestination);
+    }
+    EXPECT_EQ(1, fixture.scriptRuns("k_def_blocked01"));
+
+    // An unobstructed step re-arms.
+    navigationStep(*npc, kFarDestination);
+    EXPECT_EQ(script::kObjectInvalid, npc->blockingDoorId());
+
+    ScopedWalkObstruction obstruction(*fixture.door);
+    navigationStep(*npc, kFarDestination);
+    EXPECT_EQ(fixture.door->id(), npc->blockingDoorId());
+    EXPECT_EQ(2, fixture.scriptRuns("k_def_blocked01"));
+}
+
+// A door keeps filling the doorway for the whole of its opening animation, so a
+// creature walking into one it has already reported keeps meeting the same
+// blocker for several frames. That is one obstruction, not one per frame.
+TEST(CreatureBlockedByDoor, should_not_repeat_while_the_door_it_reported_is_opening) {
+    SwingingDoorFixture fixture;
+    auto npc = fixture.addCreature("k_def_blocked01");
+    fixture.countScriptRuns("k_def_blocked01");
+
+    fixture.syncObstruction();
+    ASSERT_TRUE(doorwayBlocks(*fixture.door));
+
+    navigationStep(*npc, kFarDestination);
+    EXPECT_EQ(fixture.door->id(), npc->blockingDoorId());
+    EXPECT_EQ(1, fixture.scriptRuns("k_def_blocked01"));
+
+    // What the authored AI does in response to that one report.
+    fixture.door->open();
+    ASSERT_TRUE(fixture.door->isOpening());
+    ASSERT_TRUE(doorwayBlocks(*fixture.door));
+
+    // Frames inside the one-second opening animation. The door is on its way
+    // but has not arrived, so it is still standing in the doorway.
+    for (int frame = 0; frame < 3; ++frame) {
+        stepDoor(*fixture.door, 0.4f);
+        fixture.syncObstruction();
+        ASSERT_TRUE(doorwayBlocks(*fixture.door)) << "frame " << frame;
+        navigationStep(*npc, kFarDestination);
+        EXPECT_TRUE(fixture.door->isOpening()) << "frame " << frame;
+        EXPECT_EQ(fixture.door->id(), npc->blockingDoorId()) << "frame " << frame;
+    }
+    EXPECT_EQ(1, fixture.scriptRuns("k_def_blocked01"));
+
+    // The transition arrives and the doorway opens up.
+    stepDoor(*fixture.door, 0.4f);
+    fixture.syncObstruction();
+    ASSERT_FALSE(fixture.door->isOpening());
+    ASSERT_FALSE(doorwayBlocks(*fixture.door));
+    ASSERT_TRUE(fixture.door->isOpen());
+
+    // The movement that was blocked all along now makes progress, and the
+    // blocked state clears so this door can report again another time.
+    float before = npc->position().y;
+    navigationStep(*npc, kFarDestination);
+    EXPECT_GT(npc->position().y, before);
+    EXPECT_EQ(script::kObjectInvalid, npc->blockingDoorId());
+    EXPECT_EQ(1, fixture.scriptRuns("k_def_blocked01"));
+}
+
+// A different door taking over the doorway is a new obstruction, and reports in
+// its own right even though the creature never got an unobstructed step.
+TEST(CreatureBlockedByDoor, should_report_another_door_that_takes_over_the_obstruction) {
+    BlockedDoorFixture fixture;
+    auto other = makePlainDoor(fixture.game, fixture.engine, false, "", glm::vec3(0.0f, 2.0f, 0.0f));
+    fixture.area->add(other);
+    auto npc = fixture.addCreature("k_def_blocked01");
+    fixture.countScriptRuns("k_def_blocked01");
+
+    {
+        ScopedWalkObstruction obstruction(*fixture.door);
+        navigationStep(*npc, kFarDestination);
+    }
+    EXPECT_EQ(fixture.door->id(), npc->blockingDoorId());
+    EXPECT_EQ(1, fixture.scriptRuns("k_def_blocked01"));
+
+    {
+        ScopedWalkObstruction obstruction(*other);
+        navigationStep(*npc, kFarDestination);
+    }
+    EXPECT_EQ(other->id(), npc->blockingDoorId());
+    EXPECT_EQ(2, fixture.scriptRuns("k_def_blocked01"));
+}
+
+TEST(CreatureBlockedByDoor, should_run_the_script_authored_on_each_creature) {
+    BlockedDoorFixture fixture;
+    auto npc = fixture.addCreature("k_def_blocked01");
+    auto companion = fixture.addCreature("k_hen_blocked01");
+    fixture.game.party().addMember(0, companion);
+
+    // Each creature runs what its own template names. The engine picks neither
+    // the script nor the 1009/2009 event number those scripts pass on.
+    fixture.countScriptRuns("k_def_blocked01");
+    fixture.countScriptRuns("k_hen_blocked01");
+
+    ScopedWalkObstruction obstruction(*fixture.door);
+    navigationStep(*npc, kFarDestination);
+    navigationStep(*companion, kFarDestination);
+
+    EXPECT_EQ(1, fixture.scriptRuns("k_def_blocked01"));
+    EXPECT_EQ(1, fixture.scriptRuns("k_hen_blocked01"));
+}
+
+TEST(CreatureBlockedByDoor, should_not_dispatch_for_directly_controlled_player_locomotion) {
+    BlockedDoorFixture fixture;
+    auto leader = fixture.addCreature("k_hen_blocked01");
+    fixture.game.party().addMember(kNpcPlayer, leader);
+    fixture.game.party().setPlayer(leader);
+
+    // Player::update drives the leader through Area::moveCreature directly and
+    // never through navigation, so no blocked event is raised.
+    fixture.countScriptRuns("k_hen_blocked01");
+
+    ScopedWalkObstruction obstruction(*fixture.door);
+    EXPECT_FALSE(fixture.area->moveCreature(leader, glm::vec2(0.0f, 1.0f), false, 1.0f));
+
+    EXPECT_EQ(0, fixture.scriptRuns("k_hen_blocked01"));
+
+    // The collision layer still records what obstructed the leader.
+    EXPECT_EQ(fixture.door->id(), leader->blockingDoorId());
+}
+
+TEST(CreatureBlockedByDoor, should_ignore_obstructions_that_are_not_doors) {
+    BlockedDoorFixture fixture;
+    auto npc = fixture.addCreature("k_def_blocked01");
+    fixture.countScriptRuns("k_def_blocked01");
+
+    Room room("testroom", glm::vec3(0.0f), nullptr, nullptr, nullptr);
+    ScopedWalkObstruction obstruction(room);
+    navigationStep(*npc, kFarDestination);
+
+    EXPECT_EQ(script::kObjectInvalid, npc->blockingDoorId());
+    EXPECT_EQ(0, fixture.scriptRuns("k_def_blocked01"));
+}
+
+// Invoke GetBlockingDoor with the arguments a blocked-event run would carry.
+uint32_t callGetBlockingDoor(Routines &routines, const script::ExecutionContext &execution) {
+    script::ExecutionContext copy(execution);
+    return routines.get(336).invoke({}, copy).objectId;
+}
+
+script::ExecutionContext blockedEventContext(uint32_t callerId, uint32_t blockingDoorId) {
+    script::ExecutionContext execution;
+    execution.args.emplace_back(script::ArgKind::Caller, script::Variable::ofObject(callerId));
+    execution.args.emplace_back(script::ArgKind::BlockingDoor, script::Variable::ofObject(blockingDoorId));
+    return execution;
+}
+
+TEST(BlockingDoorRoutines, get_blocking_door_reports_the_door_captured_by_the_event) {
+    BlockedDoorFixture fixture;
+    auto npc = fixture.addCreature("k_def_blocked01");
+    Routines routines(GameID::KotOR, &fixture.game, &fixture.engine.services());
+    routines.init();
+
+    auto execution = blockedEventContext(npc->id(), fixture.door->id());
+
+    EXPECT_EQ(fixture.door->id(), callGetBlockingDoor(routines, execution));
+}
+
+TEST(BlockingDoorRoutines, get_blocking_door_reports_invalid_without_a_captured_door) {
+    BlockedDoorFixture fixture;
+    auto npc = fixture.addCreature("k_def_blocked01");
+    Routines routines(GameID::KotOR, &fixture.game, &fixture.engine.services());
+    routines.init();
+
+    // A run that is not a blocked event carries no such argument, whoever the
+    // caller is.
+    script::ExecutionContext execution;
+    execution.args.emplace_back(script::ArgKind::Caller, script::Variable::ofObject(npc->id()));
+
+    EXPECT_EQ(script::kObjectInvalid, callGetBlockingDoor(routines, execution));
+}
+
+TEST(BlockingDoorRoutines, get_blocking_door_keeps_the_captured_door_when_the_obstruction_moves_on) {
+    BlockedDoorFixture fixture;
+    auto npc = fixture.addCreature("k_def_blocked01");
+    fixture.countScriptRuns("k_def_blocked01");
+    auto other = makePlainDoor(fixture.game, fixture.engine);
+    fixture.area->add(other);
+    Routines routines(GameID::KotOR, &fixture.game, &fixture.engine.services());
+    routines.init();
+
+    // Blocked by the first door, and a continuation of that run holds it.
+    {
+        ScopedWalkObstruction obstruction(*fixture.door);
+        navigationStep(*npc, kFarDestination);
+    }
+    ASSERT_EQ(fixture.door->id(), npc->blockingDoorId());
+    auto execution = blockedEventContext(npc->id(), fixture.door->id());
+
+    // The creature then runs into a different door entirely.
+    {
+        ScopedWalkObstruction obstruction(*other);
+        navigationStep(*npc, kFarDestination);
+    }
+    ASSERT_EQ(other->id(), npc->blockingDoorId());
+
+    // The continuation still speaks for the event it came from.
+    EXPECT_EQ(fixture.door->id(), callGetBlockingDoor(routines, execution));
+}
+
+TEST(BlockingDoorRoutines, a_captured_door_that_is_destroyed_is_reported_but_not_valid) {
+    BlockedDoorFixture fixture;
+    auto npc = fixture.addCreature("k_def_blocked01");
+    Routines routines(GameID::KotOR, &fixture.game, &fixture.engine.services());
+    routines.init();
+
+    auto execution = blockedEventContext(npc->id(), fixture.door->id());
+    TestGameModule::removeObject(fixture.game, fixture.door->id());
+
+    // GetBlockingDoor keeps no validity policy of its own: the captured id comes
+    // back, and it is GetIsObjectValid that reports the object has gone.
+    EXPECT_EQ(fixture.door->id(), callGetBlockingDoor(routines, execution));
+
+    script::ExecutionContext validityCtx(execution);
+    std::vector<script::Variable> validityArgs {script::Variable::ofObject(fixture.door->id())};
+    EXPECT_EQ(0, routines.get(42).invoke(validityArgs, validityCtx).intValue);
+}
+
+TEST(BlockingDoorRoutines, the_authored_blocked_script_can_act_on_the_door_that_blocked_it) {
+    BlockedDoorFixture fixture;
+    auto npc = fixture.addCreature("k_def_blocked01");
+    ASSERT_FALSE(fixture.door->isLocked());
+
+    // An OnBlocked script that locks whatever door GetBlockingDoor hands it.
+    // SetLocked takes the object on top of the flag, matching how the shipped
+    // scripts push it.
+    auto program = std::make_shared<script::ScriptProgram>("k_def_blocked01");
+    program->add(script::Instruction::newCONSTI(1));
+    program->add(script::Instruction::newACTION(336, 0));
+    program->add(script::Instruction::newACTION(324, 2));
+    program->add(script::Instruction(script::InstructionType::RETN));
+    EXPECT_CALL(fixture.engine.resourceModule().scripts(), get("k_def_blocked01"))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(program));
+
+    {
+        ScopedWalkObstruction obstruction(*fixture.door);
+        navigationStep(*npc, kFarDestination);
+    }
+
+    // The door reached the script, so the argument survived dispatch.
+    EXPECT_TRUE(fixture.door->isLocked());
+}
+
+TEST(BlockingDoorRoutines, unlocked_door_is_openable_and_door_action_open_opens_it) {
+    BlockedDoorFixture fixture(false, "door_on_open");
+    auto npc = fixture.addCreature("k_def_blocked01");
+    fixture.countScriptRuns("door_on_open");
+    Routines routines(GameID::KotOR, &fixture.game, &fixture.engine.services());
+    routines.init();
+    script::ExecutionContext execution;
+    execution.args.emplace_back(script::ArgKind::Caller, script::Variable::ofObject(npc->id()));
+
+    auto possible = routines.get(337).invoke(
+        {script::Variable::ofObject(fixture.door->id()),
+         script::Variable::ofInt(static_cast<int>(DoorAction::Open))},
+        execution);
+    EXPECT_EQ(1, possible.intValue);
+
+    ASSERT_FALSE(fixture.door->isOpen());
+
+    routines.get(338).invoke(
+        {script::Variable::ofObject(fixture.door->id()),
+         script::Variable::ofInt(static_cast<int>(DoorAction::Open))},
+        execution);
+
+    // Opened, and the OnOpen event fired, exactly as for any other open.
+    EXPECT_TRUE(fixture.door->isOpen());
+    EXPECT_EQ(1, fixture.scriptRuns("door_on_open"));
+}
+
+TEST(BlockingDoorRoutines, door_action_open_leaves_the_same_state_as_open_door_action) {
+    BlockedDoorFixture routineFixture;
+    auto routineNpc = routineFixture.addCreature("k_def_blocked01");
+    Routines routines(GameID::KotOR, &routineFixture.game, &routineFixture.engine.services());
+    routines.init();
+    script::ExecutionContext execution;
+    execution.args.emplace_back(script::ArgKind::Caller, script::Variable::ofObject(routineNpc->id()));
+
+    routines.get(338).invoke(
+        {script::Variable::ofObject(routineFixture.door->id()),
+         script::Variable::ofInt(static_cast<int>(DoorAction::Open))},
+        execution);
+
+    BlockedDoorFixture actionFixture;
+    auto actionNpc = actionFixture.addCreature("k_def_blocked01");
+    actionNpc->setPosition(actionFixture.door->position());
+    auto action = actionFixture.game.newAction<OpenDoorAction>(actionFixture.door);
+    action->execute(action, *actionNpc, 0.0f);
+
+    // The routine and the action leave a door in the same state, because both
+    // go through Door::open.
+    EXPECT_EQ(actionFixture.door->isOpen(), routineFixture.door->isOpen());
+    EXPECT_EQ(actionFixture.door->isLocked(), routineFixture.door->isLocked());
+    EXPECT_EQ(actionFixture.door->isSelectable(), routineFixture.door->isSelectable());
+    EXPECT_TRUE(routineFixture.door->isOpen());
+}
+
+TEST(BlockingDoorRoutines, locked_door_is_not_openable_and_door_action_open_leaves_it_shut) {
+    BlockedDoorFixture fixture(true);
+    auto npc = fixture.addCreature("k_def_blocked01");
+    Routines routines(GameID::KotOR, &fixture.game, &fixture.engine.services());
+    routines.init();
+    script::ExecutionContext execution;
+    execution.args.emplace_back(script::ArgKind::Caller, script::Variable::ofObject(npc->id()));
+
+    auto possible = routines.get(337).invoke(
+        {script::Variable::ofObject(fixture.door->id()),
+         script::Variable::ofInt(static_cast<int>(DoorAction::Open))},
+        execution);
+    EXPECT_EQ(0, possible.intValue);
+
+    routines.get(338).invoke(
+        {script::Variable::ofObject(fixture.door->id()),
+         script::Variable::ofInt(static_cast<int>(DoorAction::Open))},
+        execution);
+
+    EXPECT_FALSE(fixture.door->isOpen());
+    EXPECT_TRUE(fixture.door->isLocked());
+}
+
+TEST(BlockingDoorRoutines, bash_follows_shared_eligibility_and_keeps_the_blocked_action) {
+    BlockedDoorFixture fixture(true);
+    auto npc = fixture.addCreature("k_def_blocked01");
+    fixture.door->setCurrentHitPoints(20);
+    auto &reputes = static_cast<MockReputes &>(fixture.engine.services().game.reputes);
+    Routines routines(GameID::KotOR, &fixture.game, &fixture.engine.services());
+    routines.init();
+    script::ExecutionContext execution;
+    execution.args.emplace_back(script::ArgKind::Caller, script::Variable::ofObject(npc->id()));
+
+    auto bashPossible = [&]() {
+        return routines.get(337)
+            .invoke(
+                {script::Variable::ofObject(fixture.door->id()),
+                 script::Variable::ofInt(static_cast<int>(DoorAction::Bash))},
+                execution)
+            .intValue;
+    };
+
+    // Not an enemy of the door: the same answer the player context action gives.
+    EXPECT_CALL(reputes, getIsEnemy(A<Faction>(), A<Faction>()))
+        .WillRepeatedly(Return(false));
+    EXPECT_EQ(0, bashPossible());
+
+    Mock::VerifyAndClearExpectations(&reputes);
+    EXPECT_CALL(reputes, getIsEnemy(A<Faction>(), A<Faction>()))
+        .WillRepeatedly(Return(true));
+    EXPECT_EQ(1, bashPossible());
+
+    // A plot door is never bashable, so the AI cannot get through it at all.
+    fixture.door->setPlotFlag(true);
+    EXPECT_EQ(0, bashPossible());
+    fixture.door->setPlotFlag(false);
+
+    // The movement the creature was blocked on stays queued behind the bash.
+    auto movement = fixture.game.newAction<MoveToPointAction>(kFarDestination);
+    npc->addAction(movement);
+
+    routines.get(338).invoke(
+        {script::Variable::ofObject(fixture.door->id()),
+         script::Variable::ofInt(static_cast<int>(DoorAction::Bash))},
+        execution);
+
+    ASSERT_EQ(2, npc->actions().size());
+    EXPECT_EQ(ActionType::AttackObject, npc->actions().front()->type());
+    EXPECT_EQ(movement, npc->actions().back());
+}
+
+TEST(BlockingDoorRoutines, unsupported_door_actions_are_impossible_and_do_nothing) {
+    BlockedDoorFixture fixture(true);
+    auto npc = fixture.addCreature("k_def_blocked01");
+    Routines routines(GameID::KotOR, &fixture.game, &fixture.engine.services());
+    routines.init();
+    script::ExecutionContext execution;
+    execution.args.emplace_back(script::ArgKind::Caller, script::Variable::ofObject(npc->id()));
+
+    for (auto action : {DoorAction::Unlock, DoorAction::Ignore, DoorAction::Knock}) {
+        auto possible = routines.get(337).invoke(
+            {script::Variable::ofObject(fixture.door->id()),
+             script::Variable::ofInt(static_cast<int>(action))},
+            execution);
+        EXPECT_EQ(0, possible.intValue);
+
+        routines.get(338).invoke(
+            {script::Variable::ofObject(fixture.door->id()),
+             script::Variable::ofInt(static_cast<int>(action))},
+            execution);
+    }
+
+    EXPECT_FALSE(fixture.door->isOpen());
+    EXPECT_TRUE(fixture.door->isLocked());
+    EXPECT_TRUE(npc->actions().empty());
+}
+
+TEST(BlockingDoorRoutines, are_registered_for_both_kotor_and_tsl) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    Routines k1Routines(GameID::KotOR, &game, &engine.services());
+    Routines k2Routines(GameID::TSL, &game, &engine.services());
+    k1Routines.init();
+    k2Routines.init();
+
+    for (auto *routines : {&k1Routines, &k2Routines}) {
+        EXPECT_EQ("GetBlockingDoor", routines->get(336).name());
+        EXPECT_EQ("GetIsDoorActionPossible", routines->get(337).name());
+        EXPECT_EQ("DoDoorAction", routines->get(338).name());
+        EXPECT_EQ(336, routines->getIndexByName("GetBlockingDoor"));
+        EXPECT_EQ(337, routines->getIndexByName("GetIsDoorActionPossible"));
+        EXPECT_EQ(338, routines->getIndexByName("DoDoorAction"));
+    }
+}
+
+TEST(OpenDoorAction, still_opens_an_unlocked_door_and_fires_on_open) {
+    BlockedDoorFixture fixture(false, "door_on_open");
+    auto npc = fixture.addCreature("k_def_blocked01");
+    fixture.countScriptRuns("door_on_open");
+    npc->setPosition(fixture.door->position());
+
+    auto action = fixture.game.newAction<OpenDoorAction>(fixture.door);
+    action->execute(action, *npc, 0.0f);
+
+    EXPECT_TRUE(action->isCompleted());
+    EXPECT_TRUE(fixture.door->isOpen());
+    EXPECT_EQ(1, fixture.scriptRuns("door_on_open"));
+}
+
+TEST(OpenDoorAction, still_refuses_a_locked_door_and_fires_on_fail_to_open) {
+    BlockedDoorFixture fixture(true);
+    auto npc = fixture.addCreature("k_def_blocked01");
+    auto gff = Gff::Builder()
+                   .field(Gff::Field::newResRef("OnFailToOpen", "door_on_fail"))
+                   .build();
+    fixture.door->deserialize(*gff);
+    fixture.countScriptRuns("door_on_fail");
+    npc->setPosition(fixture.door->position());
+
+    auto action = fixture.game.newAction<OpenDoorAction>(fixture.door);
+    action->execute(action, *npc, 0.0f);
+
+    EXPECT_TRUE(action->isCompleted());
+    EXPECT_FALSE(fixture.door->isOpen());
+    EXPECT_TRUE(fixture.door->isLocked());
+    EXPECT_EQ(1, fixture.scriptRuns("door_on_fail"));
+}
+
+namespace {
+
+// Locomotion is what an overlay has to survive, and Creature drives it with
+// loopBlend, so the base channel below the overlay is a blended looping one.
+constexpr int kLocomotionFlags = scene::AnimationFlags::loopBlend | scene::AnimationFlags::propagate;
+
+struct OverlayFixture {
+    graphics::GraphicsOptions graphicsOptions;
+    std::shared_ptr<graphics::Model> model;
+    std::unique_ptr<scene::SceneGraph> graph;
+    std::shared_ptr<scene::ModelSceneNode> node;
+
+    std::vector<std::string> channelNames() const {
+        std::vector<std::string> names;
+        for (auto &channel : node->animationChannels()) {
+            names.push_back(channel.anim->name());
+        }
+        return names;
+    }
+};
+
+// A creature with a live model carrying both spellings of the dive roll plus a
+// run clip to act as locomotion underneath it.
+void setUpOverlay(OverlayFixture &fixture, TestEngine &engine) {
+    fixture.model = makeModel(
+        "body",
+        {makeAnimation("run"),
+         makeAnimation("pause1"),
+         makeAnimation("diveroll"),
+         makeAnimation("cdiveroll")});
+    fixture.graph = std::make_unique<scene::SceneGraph>(
+        "test",
+        engine.sceneModule().renderPipelineFactory(),
+        fixture.graphicsOptions,
+        engine.services().graphics,
+        engine.services().audio,
+        engine.services().resource);
+    fixture.node = fixture.graph->newModel(*fixture.model, scene::ModelUsage::Creature);
+}
+
+// A creature whose appearance row makes it a body model, i.e. the humanoid
+// naming branch the player character takes.
+void makeHumanoid(TestCreature &creature, TestEngine &engine) {
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(static_cast<MockPortraits &>(engine.services().game.portraits), getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto gff = Gff::Builder()
+                   .field(Gff::Field::newDword("Appearance_Type", 3))
+                   .field(Gff::Field::newWord("SoundSetFile", 0xffff))
+                   .field(Gff::Field::newByte("BodyBag", 0xff))
+                   .field(Gff::Field::newByte("PerceptionRange", 0xff))
+                   .build();
+    creature.deserialize(*gff);
+    ASSERT_EQ(Creature::ModelType::Character, creature.modelType());
+}
+
+} // namespace
+
+// A. The dive roll resolves through the ordinary animation naming path, on both
+// sides of the creature/body model split.
+TEST(OverlayAnimation, should_resolve_the_dive_roll_for_a_body_model) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    OverlayFixture fixture;
+    setUpOverlay(fixture, engine);
+    TestCreature creature(1, "test", game, engine.services());
+    makeHumanoid(creature, engine);
+    creature.setSceneNode(fixture.node);
+
+    creature.playOverlayAnimation(AnimationType::FireForgetDiveRoll);
+
+    EXPECT_EQ("diveroll", fixture.node->activeAnimationName());
+}
+
+TEST(OverlayAnimation, should_resolve_the_dive_roll_for_a_creature_model) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    OverlayFixture fixture;
+    setUpOverlay(fixture, engine);
+    TestCreature creature(1, "test", game, engine.services());
+    ASSERT_EQ(Creature::ModelType::Creature, creature.modelType());
+    creature.setSceneNode(fixture.node);
+
+    creature.playOverlayAnimation(AnimationType::FireForgetDiveRoll);
+
+    EXPECT_EQ("cdiveroll", fixture.node->activeAnimationName());
+}
+
+// C and D. The overlay plays while the creature is running, and the locomotion
+// channel underneath survives it. The other playAnimation overloads refuse
+// outright while a creature is moving, which is exactly what an overlay must
+// not do.
+TEST(OverlayAnimation, should_layer_over_locomotion_without_displacing_it) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    OverlayFixture fixture;
+    setUpOverlay(fixture, engine);
+    TestCreature creature(1, "test", game, engine.services());
+    creature.setSceneNode(fixture.node);
+    creature.setMovementType(Creature::MovementType::Run);
+    fixture.node->playAnimation(
+        "run", nullptr, scene::AnimationProperties::fromFlags(kLocomotionFlags));
+    ASSERT_EQ("run", fixture.node->activeAnimationName());
+
+    creature.playOverlayAnimation(AnimationType::FireForgetDiveRoll);
+
+    // The overlay is on top, and the run it was layered over is still there.
+    EXPECT_EQ("cdiveroll", fixture.node->activeAnimationName());
+    EXPECT_THAT(fixture.channelNames(), ElementsAre("cdiveroll", "run"));
+}
+
+// A normal animation request is still refused while moving, so the overlay path
+// is doing something the ordinary one cannot.
+TEST(OverlayAnimation, should_still_refuse_a_plain_animation_while_moving) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    OverlayFixture fixture;
+    setUpOverlay(fixture, engine);
+    TestCreature creature(1, "test", game, engine.services());
+    creature.setSceneNode(fixture.node);
+    creature.setMovementType(Creature::MovementType::Run);
+    fixture.node->playAnimation(
+        "run", nullptr, scene::AnimationProperties::fromFlags(kLocomotionFlags));
+
+    creature.playAnimation("cdiveroll");
+
+    EXPECT_EQ("run", fixture.node->activeAnimationName());
+}
+
+// C. Queued actions are untouched: the routine places nothing on the queue and
+// completes nothing already on it.
+TEST(OverlayAnimation, should_leave_the_action_queue_alone) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    OverlayFixture fixture;
+    setUpOverlay(fixture, engine);
+    TestCreature creature(1, "test", game, engine.services());
+    creature.setSceneNode(fixture.node);
+    creature.setMovementType(Creature::MovementType::Run);
+    auto pending = game.newAction<PlayAnimationAction>(AnimationType::LoopingPause, 1.0f, 0.0f);
+    creature.addAction(pending);
+    ASSERT_EQ(1u, creature.actions().size());
+
+    creature.playOverlayAnimation(AnimationType::FireForgetDiveRoll);
+
+    EXPECT_EQ(1u, creature.actions().size());
+    EXPECT_EQ(pending, creature.getCurrentAction());
+    EXPECT_FALSE(pending->isCompleted());
+}
+
+// F. Fire and forget: the layer expires on its own and the locomotion beneath
+// it becomes current again.
+TEST(OverlayAnimation, should_expire_and_hand_back_to_locomotion) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    OverlayFixture fixture;
+    setUpOverlay(fixture, engine);
+    TestCreature creature(1, "test", game, engine.services());
+    creature.setSceneNode(fixture.node);
+    creature.setMovementType(Creature::MovementType::Run);
+    fixture.node->playAnimation(
+        "run", nullptr, scene::AnimationProperties::fromFlags(kLocomotionFlags));
+    creature.playOverlayAnimation(AnimationType::FireForgetDiveRoll);
+    ASSERT_EQ("cdiveroll", fixture.node->activeAnimationName());
+
+    // Part way through, the layer is still on top.
+    fixture.node->update(0.5f);
+    EXPECT_EQ("cdiveroll", fixture.node->activeAnimationName());
+
+    // The clip is one second long; once past it the layer is dropped.
+    fixture.node->update(0.6f);
+    fixture.node->update(0.1f);
+
+    EXPECT_EQ("run", fixture.node->activeAnimationName());
+    EXPECT_THAT(fixture.channelNames(), ElementsAre("run"));
+}
+
+// E. An animation with no mapping is a no-op rather than a corruption.
+TEST(OverlayAnimation, should_ignore_an_animation_it_cannot_name) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    OverlayFixture fixture;
+    setUpOverlay(fixture, engine);
+    TestCreature creature(1, "test", game, engine.services());
+    creature.setSceneNode(fixture.node);
+    fixture.node->playAnimation(
+        "run", nullptr, scene::AnimationProperties::fromFlags(kLocomotionFlags));
+
+    creature.playOverlayAnimation(AnimationType::FireForgetScream);
+
+    EXPECT_EQ("run", fixture.node->activeAnimationName());
+    EXPECT_THAT(fixture.channelNames(), ElementsAre("run"));
+}
+
+TEST(OverlayAnimation, should_ignore_an_overlay_on_a_creature_with_no_model) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    TestCreature creature(1, "test", game, engine.services());
+    ASSERT_FALSE(creature.sceneNode());
+
+    // Nothing to animate, so this must simply do nothing.
+    creature.playOverlayAnimation(AnimationType::FireForgetDiveRoll);
+
+    EXPECT_FALSE(creature.sceneNode());
+}
+
+// B and E. Routine 854 resolves its target and drives the overlay, and a
+// non-creature target is reported rather than crashing.
+TEST(OverlayAnimation, routine_854_plays_the_overlay_on_its_target) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    Routines routines(GameID::TSL, &game, &engine.services());
+    routines.init();
+    auto &routine = routines.get(854);
+    ASSERT_EQ("PlayOverlayAnimation", routine.name());
+
+    // Registered with the game so the routine can resolve it by id, and given a
+    // model so the overlay it plays is observable.
+    OverlayFixture fixture;
+    setUpOverlay(fixture, engine);
+    auto creature = game.newObject<TestCreature>("test", game, engine.services());
+    creature->setSceneNode(fixture.node);
+    fixture.node->playAnimation(
+        "run", nullptr, scene::AnimationProperties::fromFlags(kLocomotionFlags));
+    auto placeable = game.newPlaceable();
+    script::ExecutionContext ctx;
+
+    routine.invoke(
+        {script::Variable::ofObject(creature->id()), script::Variable::ofInt(123)}, ctx);
+
+    // The requested animation reached the creature and was layered on.
+    EXPECT_EQ("cdiveroll", fixture.node->activeAnimationName());
+    EXPECT_THAT(fixture.channelNames(), ElementsAre("cdiveroll", "run"));
+
+    // A non-creature target is rejected by argument checking, which the routine
+    // framework turns into a logged failure and a default return value, leaving
+    // the animation state alone.
+    auto result = routine.invoke(
+        {script::Variable::ofObject(placeable->id()), script::Variable::ofInt(123)}, ctx);
+    EXPECT_EQ(script::VariableType::Void, result.type);
+    EXPECT_EQ("cdiveroll", fixture.node->activeAnimationName());
 }

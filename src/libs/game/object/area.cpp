@@ -26,6 +26,7 @@
 #include "reone/game/di/services.h"
 #include "reone/game/game.h"
 #include "reone/game/location.h"
+#include "reone/game/object/door.h"
 #include "reone/game/party.h"
 #include "reone/game/reputes.h"
 #include "reone/game/room.h"
@@ -302,74 +303,7 @@ void Area::loadFog(const resource::generated::ARE &are) {
 }
 
 void Area::loadMiniGame(const resource::generated::ARE &are) {
-    if (are.MiniGame.Type == 0) {
-        return;
-    }
-    MinigameSpec spec;
-    spec.type = minigameTypeFromUint(are.MiniGame.Type);
-    spec.cameraViewAngle = are.MiniGame.CameraViewAngle;
-    spec.lateralAccel = are.MiniGame.LateralAccel;
-    spec.movementPerSec = are.MiniGame.MovementPerSec;
-    spec.useInertia = are.MiniGame.UseInertia != 0;
-    spec.bumpPlane = are.MiniGame.Bump_Plane;
-    spec.doBumping = are.MiniGame.DoBumping != 0;
-
-    const auto &src = are.MiniGame.Player;
-    spec.player.cameraResRef = src.Camera;
-    spec.player.trackResRef = src.Track;
-    spec.player.minimumSpeed = src.Minimum_Speed;
-    spec.player.maximumSpeed = src.Maximum_Speed;
-    spec.player.accelSecs = src.Accel_Secs;
-    spec.player.sphereRadius = src.Sphere_Radius;
-    spec.player.hitPoints = src.Hit_Points;
-    spec.player.tunnelXPos = src.TunnelXPos;
-    spec.player.tunnelXNeg = src.TunnelXNeg;
-    spec.player.tunnelYPos = src.TunnelYPos;
-    spec.player.tunnelYNeg = src.TunnelYNeg;
-    spec.player.tunnelZPos = src.TunnelZPos;
-    spec.player.tunnelZNeg = src.TunnelZNeg;
-    spec.player.scripts.onCreate = src.Scripts.OnCreate;
-    spec.player.scripts.onDeath = src.Scripts.OnDeath;
-    spec.player.scripts.onTrackLoop = src.Scripts.OnTrackLoop;
-    spec.player.scripts.onDamage = src.Scripts.OnDamage;
-    spec.player.scripts.onAccelerate = src.Scripts.OnAccelerate;
-    spec.player.scripts.onHeartbeat = src.Scripts.OnHeartbeat;
-    for (const auto &m : src.Models) {
-        if (!m.Model.empty()) {
-            spec.player.modelResRefs.push_back(m.Model);
-        }
-    }
-
-    std::set<std::string> seenTracks;
-    auto addTrack = [&](const std::string &ref) {
-        if (!ref.empty() && seenTracks.insert(ref).second) {
-            spec.trackResRefs.push_back(ref);
-        }
-    };
-    addTrack(src.Track);
-
-    for (const auto &e : are.MiniGame.Enemies) {
-        MinigameEnemySpec enemy;
-        enemy.trackResRef = e.Track;
-        enemy.hitPoints = e.Hit_Points;
-        enemy.onCreate = e.Scripts.OnCreate;
-        for (const auto &m : e.Models) {
-            if (!m.Model.empty()) {
-                enemy.modelResRefs.push_back(m.Model);
-            }
-        }
-        spec.enemies.push_back(std::move(enemy));
-        addTrack(e.Track);
-    }
-
-    for (const auto &o : are.MiniGame.Obstacles) {
-        MinigameObstacleSpec obs;
-        obs.name = o.Name;
-        obs.onCreate = o.Scripts.OnCreate;
-        spec.obstacles.push_back(std::move(obs));
-    }
-
-    _miniGameSpec = std::move(spec);
+    _miniGameSpec = parseMinigameSpec(are);
 }
 
 void Area::applySceneProperties() {
@@ -1017,7 +951,21 @@ bool Area::moveCreature(const std::shared_ptr<Creature> &creature, const glm::ve
     dest.x += dir.x * speedDt;
     dest.y += dir.y * speedDt;
 
-    if (sceneGraph.testWalk(origin, dest, creature.get(), collision)) {
+    bool obstructed = sceneGraph.testWalk(origin, dest, creature.get(), collision);
+
+    // Remember a door that obstructs the intended direction of travel, so that
+    // navigation can raise the blocked event and GetBlockingDoor can report it.
+    // This is taken from the test against the intended direction: the slide
+    // below may still salvage some sideways motion, but the door did block
+    // where the creature wanted to go.
+    auto *blockingDoor = obstructed ? dynamic_cast<Door *>(collision.user) : nullptr;
+    if (blockingDoor) {
+        creature->setBlockingDoor(blockingDoor->id());
+    } else {
+        creature->clearBlockingDoor();
+    }
+
+    if (obstructed) {
         // Try moving along the surface
         glm::vec2 right(glm::normalize(glm::vec2(glm::cross(up, collision.normal))));
         glm::vec2 newDir(glm::normalize(right * glm::dot(dir, right)));

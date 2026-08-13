@@ -173,6 +173,15 @@ public:
     bool playExternalAnimation(const std::shared_ptr<graphics::Animation> &anim, scene::AnimationProperties properties = scene::AnimationProperties());
     void resumeStateDrivenAnimation();
 
+    /**
+     * Play an animation as a layer over whatever the creature is already doing,
+     * including while it is walking or running. Unlike the other playAnimation
+     * overloads this neither waits for the creature to stand still nor takes
+     * over its state-driven animation, so locomotion carries on underneath and
+     * the layer disappears on its own once it has run.
+     */
+    void playOverlayAnimation(AnimationType type);
+
     void updateModelAnimation();
 
     // END Animation
@@ -204,6 +213,33 @@ public:
     std::shared_ptr<Path> &path() { return _path; }
 
     // END Pathfinding
+
+    // Blocking doors
+
+    /**
+     * Remember the door that obstructed the last attempted step. Written by the
+     * collision layer for every mover, including the directly controlled player.
+     *
+     * This lives only to carry the obstruction from the collision test to the
+     * blocked event raised after the step. It is not what scripts read:
+     * GetBlockingDoor answers from the argument captured when the event was
+     * raised, so it stays fixed for that run while this keeps changing.
+     */
+    void setBlockingDoor(uint32_t doorId) { _blockingDoorId = doorId; }
+
+    void clearBlockingDoor() { _blockingDoorId = script::kObjectInvalid; }
+
+    uint32_t blockingDoorId() const { return _blockingDoorId; }
+
+    /**
+     * Edge-trigger ScriptOnBlocked for the door currently obstructing this
+     * creature. Called by navigation after each attempted step, so it only
+     * applies to AI, script and action driven movement. A continuous
+     * obstruction by the same door reports once; an unobstructed step re-arms.
+     */
+    void dispatchBlockedEvent();
+
+    // END Blocking doors
 
     // Perception
 
@@ -289,6 +325,7 @@ public:
     // Scripts
 
     void runSpawnScript();
+    void runBlockedScript(uint32_t blockingDoorId);
     void runEndRoundScript();
     void runDialogueScript(uint32_t speakerId, int32_t listenNumber);
     void runAttackedScript(uint32_t attackerId);
@@ -363,6 +400,12 @@ private:
     std::string _onSpawn;
     std::string _onDeath;
     std::string _onBlocked;
+
+    // Door currently obstructing this creature, and the door the blocked event
+    // was last reported for. Object ids rather than pointers, so a door that is
+    // destroyed while remembered simply resolves to no object.
+    uint32_t _blockingDoorId {script::kObjectInvalid};
+    uint32_t _blockedEventDoorId {script::kObjectInvalid};
 
     resource::LocString _firstName;
     resource::LocString _lastName;

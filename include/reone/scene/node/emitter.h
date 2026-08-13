@@ -52,6 +52,7 @@ public:
     void collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) override;
 
     void detonate();
+    void rearmSingle();
 
     float getParticleSize(float time) const { return _particleSize.get(time); };
     glm::vec3 getColor(float time) const { return _color.get(time); };

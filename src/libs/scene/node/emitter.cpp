@@ -247,6 +247,13 @@ void EmitterSceneNode::detonate() {
     doSpawnParticle();
 }
 
+void EmitterSceneNode::rearmSingle() {
+    auto emitter = _modelNode.emitter();
+    if (emitter && emitter->updateMode == ModelNode::Emitter::UpdateMode::Single) {
+        _spawned = false;
+    }
+}
+
 void EmitterSceneNode::collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) {
     if (leafs.empty()) {
         scene.unregisterObject(id());

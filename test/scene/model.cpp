@@ -112,6 +112,128 @@ TEST(ModelSceneNode, should_build_from_model) {
     EXPECT_EQ(static_cast<int>(SceneNodeType::Emitter), static_cast<int>(emitterSceneNode->type()));
 }
 
+namespace {
+
+// A model carrying several zero-length animations on disjoint nodes, which is
+// the shape of the shipped minigame HUD: one heading pose plus a contact loop
+// per fighter, all needing to run at once.
+struct OverlayModelFixture {
+    GraphicsOptions graphicsOpt;
+    MockRenderPipelineFactory pipelineFactory;
+    TestGraphicsModule graphicsModule;
+    TestAudioModule audioModule;
+    TestResourceModule resourceModule;
+    std::unique_ptr<SceneGraph> scene;
+    std::shared_ptr<ModelNode> rootNode;
+    std::vector<std::shared_ptr<Animation>> animations;
+    std::unique_ptr<Model> model;
+    std::shared_ptr<ModelSceneNode> node;
+
+    explicit OverlayModelFixture(const std::vector<std::string> &names) {
+        graphicsModule.init();
+        audioModule.init();
+        resourceModule.init();
+        scene = std::make_unique<SceneGraph>("test", pipelineFactory, graphicsOpt,
+                                             graphicsModule.services(),
+                                             audioModule.services(),
+                                             resourceModule.services());
+        rootNode = std::make_shared<ModelNode>(0, "root_node", glm::vec3(0.0f),
+                                               glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+        for (const auto &name : names) {
+            auto animRoot = std::make_shared<ModelNode>(0, "root_node", glm::vec3(0.0f),
+                                                        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+            animations.push_back(std::make_shared<Animation>(
+                name, 0.0f, 0.0f, "", animRoot, std::vector<Animation::Event>()));
+        }
+        model = std::make_unique<Model>("hud_model", 0, rootNode, animations, "", 1.0f);
+        node = std::make_shared<ModelSceneNode>(*model, ModelUsage::Placeable, *scene,
+                                                graphicsModule.services(),
+                                                audioModule.services(),
+                                                resourceModule.services());
+        node->init();
+    }
+
+    void overlay(const std::string &name) {
+        node->playAnimation(name, nullptr,
+                            AnimationProperties::fromFlags(AnimationFlags::loopOverlay));
+    }
+};
+
+} // namespace
+
+TEST(ModelSceneNode, overlay_animations_on_disjoint_nodes_run_together) {
+    OverlayModelFixture fixture({"contact01", "contact02", "heading000"});
+
+    fixture.overlay("contact01");
+    fixture.overlay("contact02");
+    fixture.overlay("heading000");
+
+    EXPECT_EQ(fixture.node->animationChannelCount(), 3u);
+    EXPECT_TRUE(fixture.node->isAnimationPlaying("contact01"));
+    EXPECT_TRUE(fixture.node->isAnimationPlaying("heading000"));
+}
+
+TEST(ModelSceneNode, removing_one_overlay_leaves_the_others_running) {
+    OverlayModelFixture fixture({"contact01", "contact02", "heading000"});
+    fixture.overlay("contact01");
+    fixture.overlay("contact02");
+    fixture.overlay("heading000");
+
+    EXPECT_TRUE(fixture.node->removeAnimation("contact01"));
+
+    EXPECT_EQ(fixture.node->animationChannelCount(), 2u);
+    EXPECT_FALSE(fixture.node->isAnimationPlaying("contact01"));
+    EXPECT_TRUE(fixture.node->isAnimationPlaying("contact02"));
+    EXPECT_TRUE(fixture.node->isAnimationPlaying("heading000"));
+}
+
+TEST(ModelSceneNode, removing_an_animation_that_is_not_playing_is_harmless) {
+    OverlayModelFixture fixture({"contact01", "heading000"});
+    fixture.overlay("contact01");
+
+    EXPECT_FALSE(fixture.node->removeAnimation("heading000"));
+    EXPECT_FALSE(fixture.node->removeAnimation("no_such_animation"));
+
+    EXPECT_EQ(fixture.node->animationChannelCount(), 1u);
+    EXPECT_TRUE(fixture.node->isAnimationPlaying("contact01"));
+}
+
+TEST(ModelSceneNode, repeated_removal_is_idempotent) {
+    OverlayModelFixture fixture({"contact01"});
+    fixture.overlay("contact01");
+
+    EXPECT_TRUE(fixture.node->removeAnimation("contact01"));
+    EXPECT_FALSE(fixture.node->removeAnimation("contact01"));
+    EXPECT_FALSE(fixture.node->removeAnimation("contact01"));
+
+    EXPECT_EQ(fixture.node->animationChannelCount(), 0u);
+}
+
+TEST(ModelSceneNode, replacing_a_pose_keeps_the_channel_count_bounded) {
+    // Swapping one zero-length heading pose for the next, as the turret does
+    // every time its yaw crosses a whole degree, must not accumulate channels.
+    std::vector<std::string> names {"contact01"};
+    for (int i = 0; i < 8; ++i) {
+        names.push_back(str(boost::format("heading%03d") % i));
+    }
+    OverlayModelFixture fixture(names);
+    fixture.overlay("contact01");
+
+    std::string previous;
+    for (int i = 0; i < 8; ++i) {
+        std::string next = str(boost::format("heading%03d") % i);
+        if (!previous.empty()) {
+            fixture.node->removeAnimation(previous);
+        }
+        fixture.overlay(next);
+        previous = next;
+        EXPECT_EQ(fixture.node->animationChannelCount(), 2u) << "after " << next;
+    }
+
+    EXPECT_TRUE(fixture.node->isAnimationPlaying("contact01"));
+    EXPECT_TRUE(fixture.node->isAnimationPlaying("heading007"));
+}
+
 TEST(ModelSceneNode, should_play_single_fire_forget_animation) {
     // given
     auto graphicsOpt = GraphicsOptions();
@@ -215,6 +337,106 @@ TEST(ModelSceneNode, should_play_single_looping_animation) {
     EXPECT_NEAR(1.0f, rootPosition.x, 1e-5);
     EXPECT_NEAR(2.0f, rootPosition.y, 1e-5);
     EXPECT_NEAR(3.0f, rootPosition.z, 1e-5);
+}
+
+TEST(ModelSceneNode, should_restart_a_completed_queued_animation_explicitly) {
+    auto graphicsOpt = GraphicsOptions();
+    auto pipelineFactory = MockRenderPipelineFactory();
+    auto graphicsModule = TestGraphicsModule();
+    graphicsModule.init();
+    auto audioModule = TestAudioModule();
+    audioModule.init();
+    auto resourceModule = TestResourceModule();
+    resourceModule.init();
+    auto scene = std::make_unique<SceneGraph>("test", pipelineFactory, graphicsOpt, graphicsModule.services(), audioModule.services(), resourceModule.services());
+
+    auto rootNode = std::make_shared<ModelNode>(0, "root_node", glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+    auto animRootNode = std::make_shared<ModelNode>(0, "root_node", glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), false, nullptr);
+    animRootNode->vectorTracks()[ControllerTypes::position].add(0.0f, glm::vec3(0.0f));
+    animRootNode->vectorTracks()[ControllerTypes::position].add(1.0f, glm::vec3(4.0f, 0.0f, 0.0f));
+    auto animation = std::make_shared<Animation>("presentation", 1.0f, 0.0f, "root_node", animRootNode, std::vector<Animation::Event>());
+    auto model = Model("animated_model", 0, rootNode, std::vector<std::shared_ptr<Animation>> {animation}, "", 1.0f);
+    model.init();
+
+    auto modelSceneNode = scene->newModel(model, ModelUsage::GUI);
+    modelSceneNode->init();
+    modelSceneNode->playAnimation("presentation");
+    modelSceneNode->update(1.0f);
+    ASSERT_TRUE(modelSceneNode->isAnimationFinished());
+
+    modelSceneNode->playAnimation("presentation");
+    ASSERT_TRUE(modelSceneNode->isAnimationFinished());
+    ASSERT_FLOAT_EQ(1.0f, modelSceneNode->animationChannels().front().time);
+
+    ASSERT_TRUE(modelSceneNode->restartAnimation("presentation"));
+    ASSERT_FALSE(modelSceneNode->isAnimationFinished());
+    ASSERT_FLOAT_EQ(0.0f, modelSceneNode->animationChannels().front().time);
+    ASSERT_TRUE(modelSceneNode->animationChannels().front().stateByNodeNumber.empty());
+
+    modelSceneNode->update(0.25f);
+    EXPECT_FALSE(modelSceneNode->isAnimationFinished());
+    EXPECT_FLOAT_EQ(0.25f, modelSceneNode->animationChannels().front().time);
+    EXPECT_NEAR(1.0f, modelSceneNode->getNodeByName("root_node")->localTransform()[3].x, 1e-5);
+}
+
+TEST(ModelSceneNode, should_not_restart_an_animation_that_is_not_queued) {
+    auto graphicsOpt = GraphicsOptions();
+    auto pipelineFactory = MockRenderPipelineFactory();
+    auto graphicsModule = TestGraphicsModule();
+    graphicsModule.init();
+    auto audioModule = TestAudioModule();
+    audioModule.init();
+    auto resourceModule = TestResourceModule();
+    resourceModule.init();
+    auto scene = std::make_unique<SceneGraph>("test", pipelineFactory, graphicsOpt, graphicsModule.services(), audioModule.services(), resourceModule.services());
+
+    auto rootNode = std::make_shared<ModelNode>(0, "root_node", glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+    auto queued = std::make_shared<Animation>("queued", 1.0f, 0.0f, "root_node", nullptr, std::vector<Animation::Event>());
+    auto notQueued = std::make_shared<Animation>("not_queued", 1.0f, 0.0f, "root_node", nullptr, std::vector<Animation::Event>());
+    auto model = Model("animated_model", 0, rootNode, std::vector<std::shared_ptr<Animation>> {queued, notQueued}, "", 1.0f);
+    model.init();
+
+    auto modelSceneNode = scene->newModel(model, ModelUsage::GUI);
+    modelSceneNode->init();
+    modelSceneNode->playAnimation("queued");
+    modelSceneNode->update(0.25f);
+
+    ASSERT_FALSE(modelSceneNode->restartAnimation("not_queued"));
+    ASSERT_EQ(1, modelSceneNode->animationChannels().size());
+    EXPECT_EQ(queued.get(), modelSceneNode->animationChannels().front().anim);
+    EXPECT_FLOAT_EQ(0.25f, modelSceneNode->animationChannels().front().time);
+}
+
+TEST(ModelSceneNode, should_restart_only_the_requested_overlay_channel) {
+    auto graphicsOpt = GraphicsOptions();
+    auto pipelineFactory = MockRenderPipelineFactory();
+    auto graphicsModule = TestGraphicsModule();
+    graphicsModule.init();
+    auto audioModule = TestAudioModule();
+    audioModule.init();
+    auto resourceModule = TestResourceModule();
+    resourceModule.init();
+    auto scene = std::make_unique<SceneGraph>("test", pipelineFactory, graphicsOpt, graphicsModule.services(), audioModule.services(), resourceModule.services());
+
+    auto rootNode = std::make_shared<ModelNode>(0, "root_node", glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+    auto first = std::make_shared<Animation>("first", 2.0f, 0.0f, "root_node", nullptr, std::vector<Animation::Event>());
+    auto second = std::make_shared<Animation>("second", 2.0f, 0.0f, "root_node", nullptr, std::vector<Animation::Event>());
+    auto model = Model("animated_model", 0, rootNode, std::vector<std::shared_ptr<Animation>> {first, second}, "", 1.0f);
+    model.init();
+
+    auto modelSceneNode = scene->newModel(model, ModelUsage::GUI);
+    modelSceneNode->init();
+    auto overlay = AnimationProperties::fromFlags(AnimationFlags::loopOverlay);
+    modelSceneNode->playAnimation("first", nullptr, overlay);
+    modelSceneNode->playAnimation("second", nullptr, overlay);
+    modelSceneNode->update(0.5f);
+
+    ASSERT_TRUE(modelSceneNode->restartAnimation("first"));
+    ASSERT_EQ(2, modelSceneNode->animationChannels().size());
+    EXPECT_EQ(second.get(), modelSceneNode->animationChannels()[0].anim);
+    EXPECT_FLOAT_EQ(0.5f, modelSceneNode->animationChannels()[0].time);
+    EXPECT_EQ(first.get(), modelSceneNode->animationChannels()[1].anim);
+    EXPECT_FLOAT_EQ(0.0f, modelSceneNode->animationChannels()[1].time);
 }
 
 TEST(ModelSceneNode, should_play_two_overlayed_animations) {

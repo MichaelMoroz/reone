@@ -236,8 +236,12 @@ void ModelSceneNode::playAnimation(Animation &anim, std::shared_ptr<LipAnimation
 
     case AnimationBlendMode::Overlay:
         // In Overlay mode, clear channels only if previous mode is not
-        // Overlay and add animation on top
-        if (_animBlendMode != AnimationBlendMode::Overlay) {
+        // Overlay and add animation on top. A layered animation keeps them
+        // instead: it plays over whatever the model is already doing, so the
+        // channels underneath go on running and go on supplying every node the
+        // layered animation leaves alone.
+        if (_animBlendMode != AnimationBlendMode::Overlay &&
+            !(properties.flags & AnimationFlags::layer)) {
             _animChannels.clear();
         }
         _animChannels.push_front(AnimationChannel(anim, lipAnim, properties));
@@ -268,6 +272,51 @@ void ModelSceneNode::playAnimation(Animation &anim, std::shared_ptr<LipAnimation
             }
         }
     }
+}
+
+bool ModelSceneNode::removeAnimation(const std::string &name) {
+    std::string lower(boost::to_lower_copy(name));
+    bool removed = false;
+    for (auto it = _animChannels.begin(); it != _animChannels.end();) {
+        if (it->anim && it->anim->name() == lower) {
+            it = _animChannels.erase(it);
+            removed = true;
+            continue;
+        }
+        ++it;
+    }
+    if (removed && _animChannels.empty()) {
+        _animBlendMode = AnimationBlendMode::Single;
+    }
+    return removed;
+}
+
+bool ModelSceneNode::isAnimationPlaying(const std::string &name) const {
+    std::string lower(boost::to_lower_copy(name));
+    for (const auto &channel : _animChannels) {
+        if (channel.anim && channel.anim->name() == lower) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ModelSceneNode::restartAnimation(const std::string &name) {
+    auto anim = _model->getAnimation(name);
+    if (!anim) {
+        return false;
+    }
+    auto channel = std::find_if(_animChannels.begin(), _animChannels.end(), [&](const auto &channel) {
+        return channel.anim == anim.get();
+    });
+    if (channel == _animChannels.end()) {
+        return false;
+    }
+
+    channel->time = 0.0f;
+    channel->stateByNodeNumber.clear();
+    channel->finished = false;
+    return true;
 }
 
 ModelSceneNode::AnimationBlendMode ModelSceneNode::getAnimationBlendMode(int flags) {
@@ -347,6 +396,7 @@ void ModelSceneNode::updateAnimationChannel(AnimationChannel &channel, float dt)
         bool loop = channel.properties.flags & AnimationFlags::loop;
         if (loop) {
             channel.time = 0.0f;
+            rearmSingleEmitters(channel.anim->root());
         } else {
             channel.finished = true;
         }
@@ -365,6 +415,16 @@ static bool doesNodeHaveAncestor(const ModelNode &node, const std::string &name)
         return false;
     }
     return doesNodeHaveAncestor(*parent, name);
+}
+
+void ModelSceneNode::rearmSingleEmitters(const std::string &animationRoot) {
+    for (auto &[number, node] : _nodeByNumber) {
+        if (node->type() != SceneNodeType::Emitter ||
+            !doesNodeHaveAncestor(node->modelNode(), animationRoot)) {
+            continue;
+        }
+        static_cast<EmitterSceneNode *>(node)->rearmSingle();
+    }
 }
 
 void ModelSceneNode::computeAnimationStates(AnimationChannel &channel, float time, const ModelNode &modelNode) {
