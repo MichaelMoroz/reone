@@ -1493,7 +1493,7 @@ void Game::renderDeveloperTriggerOverlay(const glm::mat4 &projection, const glm:
         auto state = trigger->debugState();
         glm::vec4 color = trigger->debugColor();
         centroid /= static_cast<float>(geometry.size());
-        glm::vec3 labelScreen = glm::project(centroid, view, projection, viewport);
+        glm::vec3 labelScreen = glm::projectZO(centroid, view, projection, viewport);
         if (labelScreen.z >= 0.0f && labelScreen.z < 1.0f) {
             std::string label = str(boost::format("#%u %s") %
                                     trigger->id() %

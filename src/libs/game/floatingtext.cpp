@@ -55,7 +55,7 @@ static glm::vec2 projectToScreen(
     int height) {
 
     static const glm::vec4 viewport(0.0f, 0.0f, 1.0f, 1.0f);
-    glm::vec3 screen = glm::project(position, view, projection, viewport);
+    glm::vec3 screen = glm::projectZO(position, view, projection, viewport);
     return glm::vec2(
         width * screen.x,
         height * (1.0f - screen.y));

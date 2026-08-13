@@ -1084,7 +1084,7 @@ glm::vec3 Area::getSelectableScreenCoords(const std::shared_ptr<Object> &object,
 
     glm::vec3 position(object->getSelectablePosition());
 
-    return glm::project(position, view, projection, viewport);
+    return glm::projectZO(position, view, projection, viewport);
 }
 
 void Area::update3rdPersonCameraFacing() {

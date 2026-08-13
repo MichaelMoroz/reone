@@ -1060,8 +1060,8 @@ ModelSceneNode *SceneGraph::pickModelAt(int x, int y, IUser *except) const {
 
     auto camera = _activeCamera->camera();
     glm::vec4 viewport(0.0f, 0.0f, _graphicsOpt.width, _graphicsOpt.height);
-    glm::vec3 start(glm::unProject(glm::vec3(x, _graphicsOpt.height - y, 0.0f), camera->view(), camera->projection(), viewport));
-    glm::vec3 end(glm::unProject(glm::vec3(x, _graphicsOpt.height - y, 1.0f), camera->view(), camera->projection(), viewport));
+    glm::vec3 start(glm::unProjectZO(glm::vec3(x, _graphicsOpt.height - y, 0.0f), camera->view(), camera->projection(), viewport));
+    glm::vec3 end(glm::unProjectZO(glm::vec3(x, _graphicsOpt.height - y, 1.0f), camera->view(), camera->projection(), viewport));
     glm::vec3 dir(glm::normalize(end - start));
 
     std::vector<std::pair<ModelSceneNode *, float>> distances;

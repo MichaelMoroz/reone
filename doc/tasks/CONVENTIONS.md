@@ -125,6 +125,13 @@ OpenGL backend still existed that macro would have changed it too, and the
 per-call-site form remains the right habit because it keeps the convention
 visible where the matrix is built.
 
+`glm::project` and `glm::unProject` are a trap: unlike the named matrix
+builders, they take their depth convention from that macro. Because the macro
+is deliberately undefined here, the generic helpers select the `_NO` forms and
+disagree with the engine's `_ZO` matrices. Use `glm::projectZO` and
+`glm::unProjectZO` explicitly; the per-call-site habit does not protect a call
+whose name omits the convention.
+
 Clip-space **y points down**, so a screen-space orthographic projection passes
 `(0, w, 0, h)`, not the OpenGL `(0, w, h, 0)`.
 
