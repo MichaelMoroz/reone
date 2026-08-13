@@ -32,6 +32,11 @@ namespace graphics {
 class Font;
 class Texture;
 
+enum class ImageAlphaMode {
+    Default,
+    Sharpen
+};
+
 /**
  * Everything the game draws in screen space: sprites, filled rectangles, text
  * and full-target images.
@@ -71,7 +76,8 @@ public:
                            const glm::vec2 &position,
                            const glm::vec2 &size,
                            const glm::vec4 &color = glm::vec4(1.0f),
-                           const glm::mat3x4 &uv = glm::mat3x4(1.0f)) = 0;
+                           const glm::mat3x4 &uv = glm::mat3x4(1.0f),
+                           ImageAlphaMode alphaMode = ImageAlphaMode::Default) = 0;
 
     /**
      * A textured quad under an arbitrary transform, for the cases a rect cannot
@@ -81,7 +87,23 @@ public:
     virtual void drawImage(Texture &texture,
                            const glm::mat4 &transform,
                            const glm::vec4 &color = glm::vec4(1.0f),
-                           const glm::mat3x4 &uv = glm::mat3x4(1.0f)) = 0;
+                           const glm::mat3x4 &uv = glm::mat3x4(1.0f),
+                           ImageAlphaMode alphaMode = ImageAlphaMode::Default) = 0;
+
+    void drawIcon(Texture &texture,
+                  const glm::vec2 &position,
+                  const glm::vec2 &size,
+                  const glm::vec4 &color = glm::vec4(1.0f),
+                  const glm::mat3x4 &uv = glm::mat3x4(1.0f)) {
+        drawImage(texture, position, size, color, uv, ImageAlphaMode::Sharpen);
+    }
+
+    void drawIcon(Texture &texture,
+                  const glm::mat4 &transform,
+                  const glm::vec4 &color = glm::vec4(1.0f),
+                  const glm::mat3x4 &uv = glm::mat3x4(1.0f)) {
+        drawImage(texture, transform, color, uv, ImageAlphaMode::Sharpen);
+    }
 
     /** A solid-colour quad filling a pixel rect. */
     virtual void drawRect(const glm::vec2 &position,
@@ -175,12 +197,14 @@ public:
                    const glm::vec2 &position,
                    const glm::vec2 &size,
                    const glm::vec4 &color = glm::vec4(1.0f),
-                   const glm::mat3x4 &uv = glm::mat3x4(1.0f)) override;
+                   const glm::mat3x4 &uv = glm::mat3x4(1.0f),
+                   ImageAlphaMode alphaMode = ImageAlphaMode::Default) override;
 
     void drawImage(Texture &texture,
                    const glm::mat4 &transform,
                    const glm::vec4 &color = glm::vec4(1.0f),
-                   const glm::mat3x4 &uv = glm::mat3x4(1.0f)) override;
+                   const glm::mat3x4 &uv = glm::mat3x4(1.0f),
+                   ImageAlphaMode alphaMode = ImageAlphaMode::Default) override;
 
     void drawRect(const glm::vec2 &position,
                   const glm::vec2 &size,

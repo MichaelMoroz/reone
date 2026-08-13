@@ -50,6 +50,21 @@ struct Varyings {
     nointerpolation float4 glyphUV : TEXCOORD1;
 };
 
+// Coverage reconstruction is only valid while magnifying cutout artwork.
+// At native size or during minification the stored coverage is already the
+// best available signal, and thresholding it would discard detail.
+float sharpenMagnifiedAlpha(Sampler2D image, float2 uv, float alpha) {
+    uint width, height;
+    image.GetDimensions(width, height);
+    float2 sourceFootprint = fwidth(uv) * float2(width, height);
+    float largestFootprint = max(sourceFootprint.x, sourceFootprint.y);
+    float sharpenAmount = 1.0f - smoothstep(0.75f, 1.0f, largestFootprint);
+
+    float alphaWidth = max(0.5f * fwidth(alpha), 1.0f / 255.0f);
+    float sharpened = smoothstep(0.5f - alphaWidth, 0.5f + alphaWidth, alpha);
+    return lerp(alpha, sharpened, sharpenAmount);
+}
+
 /**
  * A quad placed by localUniforms.model and projected by
  * globalUniforms.projection, which the caller sets to a screen-space ortho.
@@ -72,6 +87,14 @@ Varyings quadVertex(uint vertexId: SV_VertexID) {
 [shader("fragment")]
 float4 imageFragment(Varyings input) : SV_Target {
     return sMainTex.Sample(input.uv) * localUniforms.color;
+}
+
+[shader("fragment")]
+float4 iconFragment(Varyings input) : SV_Target {
+    float2 uv = input.uv;
+    float4 mainTexSample = sMainTex.Sample(uv);
+    float alpha = sharpenMagnifiedAlpha(sMainTex, uv, mainTexSample.a);
+    return float4(localUniforms.color.rgb * mainTexSample.rgb, localUniforms.color.a * alpha);
 }
 
 [shader("fragment")]
@@ -104,8 +127,12 @@ Varyings textVertex(uint vertexId: SV_VertexID, uint glyph: SV_InstanceID) {
     float4 uv = textUniforms.chars[glyph].uv;
 
     Varyings output;
+    // The OpenGL path starts with the unit-quad vertex before adding the
+    // scaled corner, so its glyph is one pixel wider and taller. Reproduce
+    // that extra pixel deliberately for reference parity.
+    float2 screenPosition = posScale.xy + corner * (posScale.zw + 1.0f);
     output.position = mul(globalUniforms.projection,
-                          float4(posScale.xy + corner * posScale.zw, 0.0f, 1.0f));
+                          float4(screenPosition, 0.0f, 1.0f));
     // Same v convention as the sprites: the glyph rect starts at the atlas
     // bottom and grows upwards, while screen y grows downwards.
     output.uv = uv.xy + quadUV(corner) * uv.zw;
@@ -123,7 +150,6 @@ float4 textFragment(Varyings input) : SV_Target {
                       input.glyphUV.xy + inset,
                       input.glyphUV.xy + input.glyphUV.zw - inset);
     float4 sample = sMainTex.Sample(uv);
-    float alphaWidth = max(0.5f * fwidth(sample.a), 1.0f / 255.0f);
-    float alpha = smoothstep(0.5f - alphaWidth, 0.5f + alphaWidth, sample.a);
+    float alpha = sharpenMagnifiedAlpha(sMainTex, uv, sample.a);
     return float4(localUniforms.color.rgb * sample.rgb, localUniforms.color.a * alpha);
 }

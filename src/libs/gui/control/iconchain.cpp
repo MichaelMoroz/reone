@@ -180,7 +180,7 @@ void IconChain::render(const glm::ivec2 &screenSize,
         }
         if (item.iconTexture) {
             Extent iconExtent(getItemIconExtent(itemExtent));
-            renderer2d.drawImage(
+            renderer2d.drawIcon(
                 *item.iconTexture,
                 {offset.x + iconExtent.left, offset.y + iconExtent.top},
                 {iconExtent.width, iconExtent.height},

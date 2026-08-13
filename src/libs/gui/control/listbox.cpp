@@ -556,7 +556,7 @@ void ListBox::renderItemWithButtonProtoIcon(
         renderer2d.drawImage(*item.iconFrame, glm::vec2(iconPosition), glm::vec2(iconSize), glm::vec4(frameColor, 1.0f));
     }
     if (item.iconTexture) {
-        renderer2d.drawImage(*item.iconTexture, glm::vec2(iconPosition), glm::vec2(iconSize));
+        renderer2d.drawIcon(*item.iconTexture, glm::vec2(iconPosition), glm::vec2(iconSize));
     }
     if (!item.iconText.empty() && _protoItem->text().font) {
         glm::vec3 position(0.0f);

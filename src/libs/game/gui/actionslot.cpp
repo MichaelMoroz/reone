@@ -71,7 +71,7 @@ void renderContextActionIcon(const ContextAction &action, glm::mat4 transform, S
     if (!texture)
         return;
 
-    services.graphics.renderer2d.drawImage(*texture, transform);
+    services.graphics.renderer2d.drawIcon(*texture, transform);
 }
 
 } // namespace game

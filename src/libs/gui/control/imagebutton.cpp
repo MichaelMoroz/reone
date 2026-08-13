@@ -97,7 +97,7 @@ void ImageButton::renderIcon(
     }
 
     if (iconTexture) {
-        renderer2d.drawImage(
+        renderer2d.drawIcon(
             *iconTexture,
             {offset.x + _extent.left, offset.y + _extent.top},
             {_extent.height, _extent.height});

@@ -141,7 +141,7 @@ void Map::renderNotes(Mode mode, const glm::vec4 &bounds, float scale) {
         auto guiColorHilight = _game.isTSL() ? kTSLGUIColorHilight : kGUIColorHilight;
         auto guiColorBase = _game.isTSL() ? kTSLGUIColorBase : kGUIColorBase;
 
-        _services.graphics.renderer2d.drawImage(
+        _services.graphics.renderer2d.drawIcon(
             *_noteTexture,
             {notePos.x - 0.5f * noteSize, notePos.y - 0.5f * noteSize},
             {noteSize, noteSize},
@@ -225,7 +225,7 @@ void Map::renderPartyLeader(Mode mode, const glm::vec4 &bounds, float scale) {
     transform = glm::translate(transform, glm::vec3(-0.5f * arrowSize, -0.5f * arrowSize, 0.0f));
     transform = glm::scale(transform, glm::vec3(arrowSize, arrowSize, 1.0f));
 
-    _services.graphics.renderer2d.drawImage(*_arrowTexture, transform);
+    _services.graphics.renderer2d.drawIcon(*_arrowTexture, transform);
 }
 
 } // namespace game

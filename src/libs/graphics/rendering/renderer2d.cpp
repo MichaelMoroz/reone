@@ -112,10 +112,11 @@ void Renderer2D::drawImage(Texture &texture,
                                  const glm::vec2 &position,
                                  const glm::vec2 &size,
                                  const glm::vec4 &color,
-                                 const glm::mat3x4 &uv) {
+                                 const glm::mat3x4 &uv,
+                                 ImageAlphaMode alphaMode) {
     auto transform = glm::translate(glm::vec3(position, 0.0f));
     transform *= glm::scale(glm::vec3(size, 1.0f));
-    drawImage(texture, transform, color, uv);
+    drawImage(texture, transform, color, uv, alphaMode);
 }
 
 /**
@@ -141,13 +142,17 @@ static glm::mat3x4 cancelVFlip(const glm::mat3x4 &uv) {
 void Renderer2D::drawImage(Texture &texture,
                                  const glm::mat4 &transform,
                                  const glm::vec4 &color,
-                                 const glm::mat3x4 &uv) {
+                                 const glm::mat3x4 &uv,
+                                 ImageAlphaMode alphaMode) {
     LocalUniforms locals;
     locals.reset();
     locals.model = transform;
     locals.color = color;
     locals.uv = _resources.isExternal(texture) ? cancelVFlip(uv) : uv;
-    drawQuads("quadVertex", "imageFragment", locals, 0, 1, &texture);
+    const char *fragmentEntry = alphaMode == ImageAlphaMode::Sharpen
+                                    ? "iconFragment"
+                                    : "imageFragment";
+    drawQuads("quadVertex", fragmentEntry, locals, 0, 1, &texture);
 }
 
 void Renderer2D::drawRect(const glm::vec2 &position,
@@ -234,6 +239,13 @@ void Renderer2D::withScissor(const glm::ivec4 &bounds, const std::function<void(
         {static_cast<int32_t>(bounds[0] * scaleX), static_cast<int32_t>(bounds[1] * scaleY)},
         {static_cast<uint32_t>(bounds[2] * scaleX + 0.5f),
          static_cast<uint32_t>(bounds[3] * scaleY + 0.5f)});
+
+    // The reference path clears the colour attachment under the scissor before
+    // drawing. An unblended solid quad is this renderer's equivalent: it
+    // overwrites the region with the frame clear colour, transparent black.
+    withBlendMode(BlendMode::None, [this, &bounds]() {
+        drawRect({bounds[0], bounds[1]}, {bounds[2], bounds[3]}, glm::vec4(0.0f));
+    });
 
     block();
 

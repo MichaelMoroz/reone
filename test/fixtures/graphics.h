@@ -92,8 +92,8 @@ public:
     MOCK_METHOD(void, init, (), (override));
     MOCK_METHOD(void, deinit, (), (override));
     MOCK_METHOD(glm::ivec2, extent, (), (const override));
-    MOCK_METHOD(void, drawImage, (Texture &, const glm::vec2 &, const glm::vec2 &, const glm::vec4 &, const glm::mat3x4 &), (override));
-    MOCK_METHOD(void, drawImage, (Texture &, const glm::mat4 &, const glm::vec4 &, const glm::mat3x4 &), (override));
+    MOCK_METHOD(void, drawImage, (Texture &, const glm::vec2 &, const glm::vec2 &, const glm::vec4 &, const glm::mat3x4 &, ImageAlphaMode), (override));
+    MOCK_METHOD(void, drawImage, (Texture &, const glm::mat4 &, const glm::vec4 &, const glm::mat3x4 &, ImageAlphaMode), (override));
     MOCK_METHOD(void, drawRect, (const glm::vec2 &, const glm::vec2 &, const glm::vec4 &), (override));
     MOCK_METHOD(void, drawFullTargetImage, (Texture &, const glm::mat3x4 &), (override));
     MOCK_METHOD(void, drawText, (Font &, std::string_view, const glm::vec3 &, const glm::vec4 &, TextGravity, float), (override));

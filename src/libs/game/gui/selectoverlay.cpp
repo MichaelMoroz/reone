@@ -315,7 +315,7 @@ void SelectionOverlay::renderReticle(std::shared_ptr<Texture> texture, const glm
     glm::vec2 position(
         (opts.width * screenCoords.x) - width / 2,
         (opts.height * (1.0f - screenCoords.y)) - height / 2);
-    _services.graphics.renderer2d.drawImage(*texture, position, {width, height});
+    _services.graphics.renderer2d.drawIcon(*texture, position, {width, height});
 }
 
 void SelectionOverlay::renderTitleBar() {
@@ -428,7 +428,7 @@ void SelectionOverlay::renderActionArrow(int index, bool previous) {
                              glm::vec4(-1.0f, 0.0f, 0.0f, 0.0f),
                              glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
                              glm::vec4(1.0f, 1.0f, 0.0f, 0.0f));
-    _services.graphics.renderer2d.drawImage(
+    _services.graphics.renderer2d.drawIcon(
         *texture,
         {frameX, previous ? frameY : frameY + (kActionArrowHeight + kActionWidth) * scale},
         {kActionWidth * scale, kActionArrowHeight * scale},

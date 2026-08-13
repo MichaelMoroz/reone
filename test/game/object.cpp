@@ -2060,8 +2060,8 @@ TEST(GUIExternalRendererGeometry, should_scale_action_icons_to_their_button_rect
     ON_CALL(engine.resourceModule().textures(), get(_, _)).WillByDefault(Return(icon));
 
     glm::mat4 model;
-    EXPECT_CALL(engine.graphicsModule().renderer2d(), drawImage(_, _, _, _))
-        .WillOnce(Invoke([&](graphics::Texture &, const glm::mat4 &transform, const glm::vec4 &, const glm::mat3x4 &) {
+    EXPECT_CALL(engine.graphicsModule().renderer2d(), drawImage(_, _, _, _, graphics::ImageAlphaMode::Sharpen))
+        .WillOnce(Invoke([&](graphics::Texture &, const glm::mat4 &transform, const glm::vec4 &, const glm::mat3x4 &, graphics::ImageAlphaMode) {
             model = transform;
         }));
 
