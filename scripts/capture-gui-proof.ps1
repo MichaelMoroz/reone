@@ -127,6 +127,11 @@ foreach ($game in $games) {
                 $lines.Add($(if ($frame -eq 0) { "skipmovie" } else { "pause $($readyFrame - $frame)" }))
                 $frame = $readyFrame
             }
+            # Reseed per state, not once per batch: every state in a batch shares
+            # one engine process, so whatever randomness one state consumes shifts
+            # the next one. Comparing two builds, that drift accumulates until the
+            # same state is dealt different cards and stocked with different items.
+            if ($NoWorld) { $lines.Add("seed 1337") }
             if ($state.Commands) { $state.Commands | ForEach-Object { $lines.Add($_) } }
             $delay = if ($isStartup) { $state.Frame - $frame } else { $state.Frame }
             if ($isStartup) { $frame = $state.Frame }
