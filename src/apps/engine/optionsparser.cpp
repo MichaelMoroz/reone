@@ -18,6 +18,7 @@
 #include "optionsparser.h"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 
@@ -32,6 +33,14 @@ using namespace reone::graphics;
 namespace reone {
 
 static constexpr char kConfigFilename[] = "reone.cfg";
+
+static float positiveFiniteScale(const variables_map &vars, const char *name) {
+    float value = vars[name].as<float>();
+    if (!std::isfinite(value) || value <= 0.0f) {
+        throw std::invalid_argument(std::string("--") + name + " must be finite and greater than zero");
+    }
+    return value;
+}
 
 /** The written form of the anti-aliasing slot, as reone.cfg stores it. */
 static const char *antiAliasingName(AntiAliasing value) {
@@ -81,11 +90,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("commands-frame", value<int>()->default_value(0), "run the commands file on this frame instead of at startup")       //
         ("commands-frame-scheduled", value<std::string>()->default_value(""), "execute a second command file on commands-frame") //
         ("input-script", value<std::string>()->default_value(""), "run frame-indexed SDL mouse input script")                  //
-        ("capture", value<std::string>()->default_value(""), "write a screenshot to this path and exit")                        //
         ("dumptargets", value<std::string>()->default_value(""), "write the scene render targets to this directory as .npy")   //
         ("dumpobjects", value<std::string>()->default_value(""), "append the module's traced-emissive candidates to this file") //
-        ("captureframe", value<int>()->default_value(3), "frame to capture on, counted from the first rendered frame")         //
-        ("captureframes", value<int>()->default_value(1), "capture this many consecutive frames, numbered into the filename") //
         ("freezeframe", value<int>()->default_value(0), "stop advancing the simulation from this frame on, or 0 not to")      //
         ("randomseed", value<int>()->default_value(-1), "seed the random generator, or -1 to seed from the clock")             //
         ("vkvalidation", value<bool>()->default_value(false), "enable Vulkan validation layers")                              //
@@ -97,6 +103,11 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("fullscreen", value<bool>()->default_value(options->graphics.fullscreen), "enable fullscreen")                         //
         ("headless", value<bool>()->default_value(false), "never show the window; for scripted batch runs")                     //
         ("vsync", value<bool>()->default_value(options->graphics.vsync), "enable v-sync")                                       //
+        ("guiscale", value<float>()->default_value(options->graphics.guiScale), "GUI layout scale")                            //
+        ("guitextscale", value<float>()->default_value(options->graphics.guiTextScale), "GUI text scale")                      //
+        ("guidialogtextscale", value<float>()->default_value(options->graphics.guiDialogTextScale), "dialog text scale")      //
+        ("guiborderscale", value<float>()->default_value(options->graphics.guiBorderScale), "GUI border scale")                //
+        ("guilistscale", value<float>()->default_value(options->graphics.guiListScale), "GUI list row scale")                  //
         ("grass", value<bool>()->default_value(options->graphics.grass), "enable grass")                                        //
         ("grassdensity", value<float>()->default_value(options->graphics.grassDensity), "grass density multiplier")           //
         ("thintransmission", value<float>()->default_value(options->graphics.thinTransmission),
@@ -262,14 +273,11 @@ std::unique_ptr<Options> OptionsParser::parse() {
 
     options->game.path = vars.count("game") > 0 ? std::filesystem::path(vars["game"].as<std::string>()) : std::filesystem::current_path();
     options->game.developer = vars["dev"].as<bool>();
-    options->capturePath = vars["capture"].as<std::string>();
     options->dumpTargetsPath = vars["dumptargets"].as<std::string>();
     // The per-frame upload hash exists for the dump log line; do not pay for
     // it on frames nobody will ever compare.
     options->graphics.hashUploads = !options->dumpTargetsPath.empty();
     options->dumpObjectsPath = vars["dumpobjects"].as<std::string>();
-    options->captureFrame = vars["captureframe"].as<int>();
-    options->captureFrames = std::max(1, vars["captureframes"].as<int>());
     options->freezeFrame = vars["freezeframe"].as<int>();
     options->randomSeed = vars["randomseed"].as<int>();
     options->vulkanValidation = vars["vkvalidation"].as<bool>();
@@ -281,6 +289,11 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.winScale = vars["winscale"].as<int>();
     options->graphics.fullscreen = vars["fullscreen"].as<bool>();
     options->graphics.vsync = vars["vsync"].as<bool>();
+    options->graphics.guiScale = positiveFiniteScale(vars, "guiscale");
+    options->graphics.guiTextScale = positiveFiniteScale(vars, "guitextscale");
+    options->graphics.guiDialogTextScale = positiveFiniteScale(vars, "guidialogtextscale");
+    options->graphics.guiBorderScale = positiveFiniteScale(vars, "guiborderscale");
+    options->graphics.guiListScale = positiveFiniteScale(vars, "guilistscale");
     options->graphics.grass = vars["grass"].as<bool>();
     options->graphics.grassDensity = vars["grassdensity"].as<float>();
     options->graphics.thinTransmission = std::clamp(vars["thintransmission"].as<float>(), 0.0f, 1.0f);

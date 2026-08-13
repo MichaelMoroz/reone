@@ -24,6 +24,9 @@
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/textureutil.h"
 
+#include <algorithm>
+#include <cmath>
+
 using namespace reone::audio;
 using namespace reone::graphics;
 
@@ -98,7 +101,16 @@ void Movie::render() {
         glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
         glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
         glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
-    _graphicsSvc.renderer2d.drawFullTargetImage(*_texture, uv);
+    glm::ivec2 viewport = _graphicsSvc.renderer2d.extent();
+    float factor = std::min(
+        viewport.x / static_cast<float>(_width),
+        viewport.y / static_cast<float>(_height));
+    int width = static_cast<int>(std::lround(_width * factor));
+    int height = static_cast<int>(std::lround(_height * factor));
+    glm::vec2 position {
+        0.5f * (viewport.x - width),
+        0.5f * (viewport.y - height)};
+    _graphicsSvc.renderer2d.drawImage(*_texture, position, {width, height}, glm::vec4(1.0f), uv);
 }
 
 } // namespace movie

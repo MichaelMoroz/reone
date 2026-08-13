@@ -160,25 +160,15 @@ void Engine::init() {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         throw std::runtime_error("SDL_Init failed: " + std::string(SDL_GetError()));
     }
-    if (isCaptureRun()) {
-        // Fullscreen-capture behavior, as pbr/retro always had: a capture run
-        // renders, presents, and captures at the full configured resolution,
-        // whatever window scale a developer plays at. The Vulkan capture
-        // reads the swapchain, so the window must be full-size for the
-        // capture to be.
-        _options.graphics.winScale = 100;
-    }
     _window = std::make_unique<Window>(_options.graphics);
     _window->init();
 
     imguiCreateContext();
 
     if (_options.randomSeed >= 0) {
-        seedRandom(static_cast<uint32_t>(_options.randomSeed));
-    } else if (isCaptureRun()) {
-        // Any run that produces something to compare needs the same sequence
-        // every time, whether it writes a screenshot, a target dump, or both.
-        seedRandom(0);
+        setRandomSeed(static_cast<uint32_t>(_options.randomSeed));
+    } else if (_options.graphics.headless) {
+        setRandomSeed(0);
     }
 
     _optionsView = _options.toView();
@@ -285,6 +275,24 @@ void Engine::init() {
     // this copy are ever read back.
     _stagedGraphics = _options.graphics;
     registerGraphicsCommands();
+    _console->registerCommand("pause", "pause command-file execution for a number of rendered frames", [this](const auto &args) {
+        auto frames = args.template get<int>(1);
+        if (!frames || *frames < 1) {
+            throw std::invalid_argument("usage: pause <frames>, where frames is positive");
+        }
+        _scriptPauseFrames = *frames;
+    });
+    _console->registerCommand("capture", "capture one or more rendered frames", [this](const auto &args) {
+        auto path = args[1];
+        auto count = args.template get<int>(2).value_or(1);
+        if (!path || count < 1) {
+            throw std::invalid_argument("usage: capture <path> [frames], where frames is positive");
+        }
+        _captureRequest = CaptureRequest {std::filesystem::path(std::string(*path)), count, 0};
+    });
+    _console->registerCommand("quit", "end the engine run", [this](const auto &) {
+        _scriptQuitRequested = true;
+    });
 
     _game = std::make_unique<Game>(
         gameId,
@@ -382,7 +390,7 @@ int Engine::run() {
         // capture: the run is not being watched, it is being measured, and
         // stalling on focus makes the result depend on what else the desktop
         // was doing.
-        if (!_window->isInFocus() && !isCaptureRun()) {
+        if (!_window->isInFocus() && !_options.graphics.headless) {
             std::this_thread::sleep_for(std::chrono::milliseconds {100});
             continue;
         }
@@ -395,7 +403,7 @@ int Engine::run() {
         }
         auto frameTime = (ticks - _ticks) / 10e5f;
         _ticks = ticks;
-        if (isCaptureRun()) {
+        if (_options.graphics.headless) {
             // A capture run exists to be compared against another one, which
             // only works if both see the same sequence of frames. Wall-clock
             // timing does not give that: the same frame number lands on
@@ -459,10 +467,9 @@ int Engine::run() {
                                 ? _options.commandsFile
                                 : _options.commandsFrameScheduledFile);
         }
-        if (_frameIndex == 300 && _options.captureFrame > 0) {
-            // The dump below then averages the same 300..captureframe window
-            // the harness wall-clocks end to end, so the two reconcile.
-            _profiler->resetAccumulation(kMainThreadName);
+        processScriptedCommands(quit);
+        if (quit) {
+            break;
         }
         // Ahead of the update slot, because the slot opens the ImGui frame and
         // the editor's render-target viewer submits an ImGui image handle owned
@@ -507,23 +514,6 @@ int Engine::run() {
         }
     }
 
-    if (_options.captureFrame > 0) {
-        auto slots = _profiler->accumulation(kMainThreadName);
-        static constexpr const char *kSlotNames[] = {"input", "update", "graphics", "audio"};
-        std::string message = "Frame slot averages since frame 300:";
-        double total = 0.0;
-        for (size_t i = 0; i < slots.size(); ++i) {
-            double average = slots[i].second != 0
-                                 ? slots[i].first / static_cast<double>(slots[i].second) * 1000.0
-                                 : 0.0;
-            total += average;
-            message += " " + std::string(kSlotNames[i]) + " " + std::to_string(average) + " ms;";
-        }
-        message += " slot total " + std::to_string(total) + " ms over " +
-                   std::to_string(slots[0].second) + " frames";
-        info(message);
-    }
-
     return 0;
 }
 
@@ -557,57 +547,41 @@ static RENDERDOC_API_1_1_2 *renderdocApi() {
 }
 
 void Engine::captureIfRequested(bool &quit) {
-    if (!isCaptureRun() || _captured) {
+    if (!_captureRequest) {
         return;
     }
-    if (_frameIndex < _options.captureFrame) {
-        // Ask RenderDoc for the frame before the one we screenshot, so the
-        // capture holds a complete frame rather than one cut short by the exit.
-        if (_options.renderdoc && !_renderdocTriggered &&
-            _frameIndex + 1 >= _options.captureFrame) {
-            if (auto api = renderdocApi()) {
-                api->TriggerCapture();
-                info("RenderDoc capture triggered");
-                _renderdocTriggered = true;
-            } else {
-                warn("--renderdoc given but the process is not running under RenderDoc");
-                _renderdocTriggered = true;
-            }
+    if (_options.renderdoc && !_renderdocTriggered) {
+        if (auto api = renderdocApi()) {
+            api->TriggerCapture();
+            info("RenderDoc capture triggered");
+        } else {
+            warn("--renderdoc given but the process is not running under RenderDoc");
         }
-        return;
+        _renderdocTriggered = true;
     }
-    if (!_options.capturePath.empty()) {
-        // Read before endFrame, while the finished frame is still readable.
-        auto screenshot = _services->graphics.renderer.captureFrame();
-        auto path = capturePathForFrame(_frameIndex);
-        auto stream = FileOutputStream(path);
-        TgaWriter(screenshot).save(stream);
-        info("Wrote screenshot: " + path.string());
+    captureFrame(numberedCapturePath(*_captureRequest));
+    ++_captureRequest->index;
+    if (_captureRequest->index >= _captureRequest->count) {
+        _captureRequest.reset();
+        dumpTargetsIfRequested();
+        dumpObjectsIfRequested();
     }
-    // A sequence keeps going: only the last frame of it ends the run, and the
-    // target dump describes that same frame.
-    if (_frameIndex + 1 < _options.captureFrame + _options.captureFrames) {
-        return;
-    }
-    _captured = true;
-    dumpTargetsIfRequested();
-    dumpObjectsIfRequested();
-    quit = true;
 }
 
-/**
- * Where frame N of a capture goes. One frame keeps the path as given, so every
- * existing harness and baseline is untouched; a sequence numbers each frame
- * into the stem so the files sort in render order.
- */
-std::filesystem::path Engine::capturePathForFrame(int frame) const {
-    std::filesystem::path path {_options.capturePath};
-    if (_options.captureFrames <= 1) {
-        return path;
+void Engine::captureFrame(const std::filesystem::path &path) {
+    auto screenshot = _services->graphics.renderer.captureFrame();
+    auto stream = FileOutputStream(path);
+    TgaWriter(screenshot).save(stream);
+    info("Wrote screenshot: " + path.string());
+}
+
+std::filesystem::path Engine::numberedCapturePath(const CaptureRequest &request) const {
+    if (request.count == 1) {
+        return request.path;
     }
     std::ostringstream stem;
-    stem << path.stem().string() << "_" << std::setfill('0') << std::setw(4) << frame;
-    return path.parent_path() / (stem.str() + path.extension().string());
+    stem << request.path.stem().string() << '-' << std::setfill('0') << std::setw(4) << (request.index + 1);
+    return request.path.parent_path() / (stem.str() + request.path.extension().string());
 }
 
 /**
@@ -979,7 +953,35 @@ void Engine::runCommandsFile(const std::string &path) {
 
         std::string_view command = string_strip(line);
         if (!command.empty()) {
-            _console->execute(command);
+            _scriptedCommands.emplace_back(command);
+        }
+    }
+}
+
+void Engine::processScriptedCommands(bool &quit) {
+    if (_scriptQuitRequested) {
+        quit = true;
+        return;
+    }
+    if (_captureRequest) {
+        return;
+    }
+    if (_scriptPauseFrames > 0) {
+        --_scriptPauseFrames;
+        if (_scriptPauseFrames > 0) {
+            return;
+        }
+    }
+    while (!_scriptedCommands.empty()) {
+        std::string command(std::move(_scriptedCommands.front()));
+        _scriptedCommands.pop_front();
+        _console->execute(command);
+        if (_scriptQuitRequested) {
+            quit = true;
+            return;
+        }
+        if (_captureRequest || _scriptPauseFrames > 0) {
+            return;
         }
     }
 }
@@ -1005,7 +1007,7 @@ void Engine::processEvents(bool &quit) {
         if (!event) {
             return;
         }
-        if (isCaptureRun() && !automated) {
+        if (_options.graphics.headless && !automated) {
             // Dropped rather than handled. A single mouse move over the window
             // turns the camera, and from then on frame 900 is a different
             // frame - which is most of why two runs of the same build did not

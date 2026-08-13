@@ -18,10 +18,6 @@
 #include "reone/game/gui/hud.h"
 
 #include "reone/audio/mixer.h"
-#include "reone/graphics/rendering/renderer2d.h"
-#include "reone/graphics/mesh.h"
-#include "reone/graphics/meshregistry.h"
-#include "reone/graphics/uniforms.h"
 #include "reone/gui/control/label.h"
 #include "reone/resource/provider/audioclips.h"
 #include "reone/system/logutil.h"
@@ -51,6 +47,9 @@ namespace game {
 
 static std::string g_attackIcon("i_attack");
 
+/** Authored-canvas gap between the minimap frame and the TSL bark bubble. */
+static constexpr int kBarkBubbleMapGap = 8;
+
 static void tintK2HUDMenuButton(const std::shared_ptr<Button> &button, const glm::vec3 &baseColor) {
     if (!button) {
         return;
@@ -63,17 +62,45 @@ void HUD::preload(IGUI &gui) {
     gui.setResolution(800, 600);
     gui.setScaling(GUI::ScalingMode::PositionRelativeToCenter);
 
-    static std::string combatControlTags[] = {
+    static constexpr const char *kCentredCombatControls[] = {
         "BTN_CLEARALL", "BTN_CLEARONE", "BTN_CLEARONE2",
         "LBL_CMBTMODEMSG", "LBL_CMBTMSGBG", "LBL_COMBATBG1", "LBL_COMBATBG2", "LBL_COMBATBG3",
         "LBL_QUEUE0", "LBL_QUEUE1", "LBL_QUEUE2", "LBL_QUEUE3"};
-    for (auto &tag : combatControlTags) {
-        gui.setControlScaling(tag, GUI::ScalingMode::Stretch);
+    for (auto tag : kCentredCombatControls) {
+        gui.setControlScaling(tag, GUI::ScalingMode::ScaledRelativeToCenter);
     }
 }
 
 void HUD::onGUILoaded() {
     bindControls();
+
+    if (!_game.isTSL()) {
+        for (Control *control : {
+                 static_cast<Control *>(_controls.LBL_CMBTMODEMSG.get()),
+                 static_cast<Control *>(_controls.BTN_CLEARALL.get()),
+                 static_cast<Control *>(_controls.BTN_CLEARONE.get()),
+                 static_cast<Control *>(_controls.BTN_CLEARONE2.get())}) {
+            if (control) {
+                control->setScale(control->scale() * kK1CombatTextScale);
+            }
+        }
+        if (auto actionDescription = findControl<gui::Label>("LBL_ACTIONDESC")) {
+            actionDescription->setScale(actionDescription->scale() * kK1CombatTextScale);
+        }
+    }
+
+    // The menu strip and the action queue are icon artwork, magnified on any
+    // modern screen, so they get their alpha edge reconstructed.
+    for (auto &icon : {_controls.BTN_EQU, _controls.BTN_INV, _controls.BTN_CHAR,
+                       _controls.BTN_ABI, _controls.BTN_MSG, _controls.BTN_JOU,
+                       _controls.BTN_MAP, _controls.BTN_OPT}) {
+        icon->setSharpenBorderFillAlpha(true);
+    }
+    for (auto &icon : {_controls.LBL_QUEUE0, _controls.LBL_QUEUE1,
+                       _controls.LBL_QUEUE2, _controls.LBL_QUEUE3}) {
+        icon->setSharpenBorderFillAlpha(true);
+    }
+
     _actionBar.addDescription(
         findControl<gui::Label>("LBL_ACTIONDESC"),
         findControl<gui::Label>("LBL_ACTIONDESCBG"));
@@ -155,6 +182,11 @@ void HUD::onGUILoaded() {
         tintK2HUDMenuButton(_controls.BTN_JOU, _baseColor);
         tintK2HUDMenuButton(_controls.BTN_MAP, _baseColor);
         tintK2HUDMenuButton(_controls.BTN_OPT, _baseColor);
+        // The bar backings are colour masks like the rest of the TSL HUD.
+        for (auto &bar : {_controls.PB_VIT1, _controls.PB_VIT2, _controls.PB_VIT3,
+                          _controls.PB_FORCE1, _controls.PB_FORCE2, _controls.PB_FORCE3}) {
+            bar->setTintBorderFill(true);
+        }
     } else {
         _controls.LBL_COMBATBG1->setVisible(false);
         _controls.LBL_COMBATBG2->setVisible(false);
@@ -221,6 +253,12 @@ void HUD::onGUILoaded() {
     _select.init();
 
     _barkBubble = std::make_unique<BarkBubble>(_game, _services);
+    if (_game.isTSL()) {
+        // TSL authors the bark bubble over the minimap frame. Keep it below;
+        // both GUIs share the 800x600 authored canvas.
+        const auto &mapBorder = _controls.LBL_MAPBORDER->authoredExtent();
+        _barkBubble->setAuthoredTop(mapBorder.top + mapBorder.height + kBarkBubbleMapGap);
+    }
     _barkBubble->init();
 
     _statusSummary = std::make_unique<StatusSummary>(_game, _services, _game.statusSummary());
@@ -301,6 +339,14 @@ void HUD::update(float dt) {
         _controls.LBL_LEVELUP1.get(),
         _controls.LBL_LEVELUP2.get(),
         _controls.LBL_LEVELUP3.get()};
+    std::array<ProgressBar *, 3> vitalityBars {
+        _controls.PB_VIT1.get(),
+        _controls.PB_VIT2.get(),
+        _controls.PB_VIT3.get()};
+    std::array<ProgressBar *, 3> forceBars {
+        _controls.PB_FORCE1.get(),
+        _controls.PB_FORCE2.get(),
+        _controls.PB_FORCE3.get()};
 
     for (int i = 0; i < 3; ++i) {
         Label &LBL_CHAR = *charLabels[i];
@@ -321,6 +367,17 @@ void HUD::update(float dt) {
             if (!_game.isTSL()) {
                 LBL_LVLUPBG->setVisible(member->isLevelUpPending());
             }
+            int maxHitPoints = member->maxHitPoints();
+            vitalityBars[i]->setVisible(true);
+            vitalityBars[i]->setValue(maxHitPoints > 0
+                ? std::clamp(100 * member->currentHitPoints() / maxHitPoints, 0, 100)
+                : 0);
+
+            int forcePoints = member->forcePoints();
+            forceBars[i]->setVisible(forcePoints > 0);
+            forceBars[i]->setValue(forcePoints > 0
+                ? std::clamp(100 * member->currentForce() / forcePoints, 0, 100)
+                : 0);
         } else {
             LBL_CHAR.setVisible(false);
             LBL_BACK.setVisible(false);
@@ -328,6 +385,8 @@ void HUD::update(float dt) {
             if (!_game.isTSL()) {
                 LBL_LVLUPBG->setVisible(false);
             }
+            vitalityBars[i]->setVisible(false);
+            forceBars[i]->setVisible(false);
         }
     }
 
@@ -353,10 +412,57 @@ void HUD::update(float dt) {
 
     // Hide minimap when there is no image to display
     _controls.LBL_MAPBORDER->setVisible(_game.map().isLoaded());
+
+    if (_capturePresentation) {
+        _controls.LBL_CHAR1->setVisible(true);
+        _controls.LBL_BACK1->setVisible(true);
+        _controls.PB_HEALTH->setVisible(true);
+        _controls.PB_HEALTH->setValue(65);
+        _controls.PB_VIT1->setVisible(true);
+        _controls.PB_VIT1->setValue(65);
+        _controls.PB_FORCE1->setVisible(true);
+        _controls.PB_FORCE1->setValue(45);
+        if (_captureCombatPresentation) {
+            toggleCombat(true);
+            for (auto &queue : {_controls.LBL_QUEUE0, _controls.LBL_QUEUE1,
+                                _controls.LBL_QUEUE2, _controls.LBL_QUEUE3}) {
+                queue->setBorderFill(g_attackIcon);
+            }
+        }
+    }
+}
+
+void HUD::showCapturePresentation(bool combat) {
+    _capturePresentation = true;
+    _captureCombatPresentation = combat;
+    _gui->rootControl().setVisible(true);
+}
+
+void HUD::showTransitionCapturePresentation(const std::string &destination) {
+    if (!_areaTransition) {
+        throw std::runtime_error("Area-transition GUI is unavailable");
+    }
+    _captureTransitionPresentation = true;
+    _areaTransition->show(destination);
+}
+
+void HUD::clearCapturePresentation() {
+    _capturePresentation = false;
+    _captureCombatPresentation = false;
+    _captureTransitionPresentation = false;
+    if (_barkBubble) {
+        _barkBubble->setBarkText("", 0.0f);
+    }
+    if (_areaTransition) {
+        _areaTransition->hide();
+    }
 }
 
 void HUD::updateTransitionPresentation() {
     if (!_areaTransition) {
+        return;
+    }
+    if (_captureTransitionPresentation) {
         return;
     }
     auto candidate = currentTransitionCandidate();
@@ -393,6 +499,25 @@ std::optional<TransitionPortal> HUD::currentTransitionCandidate() const {
     return pickTransitionPortal(module->area()->transitionPresentationPortals(), view);
 }
 
+void HUD::render() {
+    _gui->render();
+
+    renderMinimap();
+
+
+    _barkBubble->render();
+    if (_areaTransition && _areaTransition->isVisible()) {
+        _areaTransition->render();
+    }
+    _select.render();
+    _actionBar.render(_gui->scale());
+    _game.floatingText().render();
+
+    if (_statusSummary && _statusSummary->isVisible()) {
+        _statusSummary->render();
+    }
+}
+
 void HUD::renderOffscreen() {
     GameGUI::renderOffscreen();
     _barkBubble->renderOffscreen();
@@ -401,29 +526,6 @@ void HUD::renderOffscreen() {
     }
     if (_statusSummary && _statusSummary->isVisible()) {
         _statusSummary->renderOffscreen();
-    }
-}
-
-void HUD::render() {
-    _gui->render();
-
-    renderMinimap();
-
-    Party &party = _game.party();
-    for (int i = 0; i < party.getSize(); ++i) {
-        renderHealth(i);
-    }
-
-    _barkBubble->render();
-    if (_areaTransition && _areaTransition->isVisible()) {
-        _areaTransition->render();
-    }
-    _select.render();
-    _actionBar.render();
-    _game.floatingText().render();
-
-    if (_statusSummary && _statusSummary->isVisible()) {
-        _statusSummary->render();
     }
 }
 
@@ -437,34 +539,9 @@ void HUD::renderMinimap() {
     bounds[3] = static_cast<float>(extent.height);
 
     std::shared_ptr<Area> area(_game.module()->area());
+    // The frame is a control and scales with the layout; the map drawn inside
+    // it is not, so it has to be told.
     _game.map().render(Map::Mode::Minimap, bounds, _gui->scale());
-}
-
-void HUD::renderHealth(int memberIndex) {
-    if (_game.isTSL())
-        return;
-
-    Party &party = _game.party();
-    std::vector<Label *> backLabels {
-        _controls.LBL_BACK1.get(),
-        _controls.LBL_BACK2.get(),
-        _controls.LBL_BACK3.get()};
-
-    if (memberIndex >= backLabels.size()) {
-        return;
-    }
-
-    Label &LBL_CHAR = *backLabels[memberIndex];
-    const Control::Extent &extent = LBL_CHAR.extent();
-
-    std::shared_ptr<Creature> member(party.getMember(memberIndex));
-    float w = 5.0f;
-    float h = glm::clamp(member->currentHitPoints() / static_cast<float>(member->hitPoints()), 0.0f, 1.0f) * extent.height;
-
-    glm::ivec2 position(
-        _gui->controlOffset().x + extent.left + extent.width - 14.0f,
-        _gui->controlOffset().y + extent.top + extent.height - h);
-    _services.graphics.renderer2d.drawRect(position, {w, h}, glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));
 }
 
 void HUD::toggleCombat(bool enabled) {
@@ -478,7 +555,11 @@ void HUD::toggleCombat(bool enabled) {
     _controls.LBL_QUEUE2->setVisible(enabled);
     _controls.LBL_QUEUE3->setVisible(enabled);
 
-    if (!_game.isTSL()) {
+    if (_game.isTSL()) {
+        // The first two TSL backings are persistent HUD art. The third is the
+        // combat-sequence extension and follows combat visibility.
+        _controls.LBL_COMBATBG3->setVisible(enabled);
+    } else {
         _controls.LBL_COMBATBG1->setVisible(enabled);
         _controls.LBL_COMBATBG2->setVisible(enabled);
         _controls.LBL_COMBATBG3->setVisible(enabled);

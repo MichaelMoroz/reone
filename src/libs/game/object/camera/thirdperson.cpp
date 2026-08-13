@@ -40,12 +40,11 @@ static constexpr float kTargetPadding = 0.05f;
 void ThirdPersonCamera::load() {
     auto &scene = _services.scene.graphs.get(_sceneName);
     _sceneNode = scene.newCamera();
-    // From the options rather than the value handed to the constructor: the
-    // area computes that once when it loads, so a resolution changed later
-    // would otherwise leave the projection stretched to the old shape.
-    auto &opts = _game.options().graphics;
-    float aspect = opts.width / static_cast<float>(opts.height);
-    cameraSceneNode()->setPerspectiveProjection(glm::radians(_style.viewAngle), aspect, kDefaultClipPlaneNear, kDefaultClipPlaneFar);
+    rebuildProjection();
+}
+
+float ThirdPersonCamera::projectionFovy() const {
+    return glm::radians(_style.viewAngle);
 }
 
 bool ThirdPersonCamera::handle(const input::Event &event) {
@@ -141,6 +140,8 @@ bool ThirdPersonCamera::handleMouseButtonUp(const input::MouseButtonEvent &event
 }
 
 void ThirdPersonCamera::update(float dt) {
+    Camera::update(dt);
+
     if (!_rotateCW && !_rotateCCW)
         return;
 

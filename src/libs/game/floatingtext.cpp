@@ -20,6 +20,7 @@
 #include <algorithm>
 
 #include "reone/game/game.h"
+#include "reone/game/gui.h"
 #include "reone/game/object.h"
 #include "reone/game/object/camera.h"
 #include "reone/game/object/creature.h"
@@ -189,7 +190,9 @@ void FloatingText::render() {
     const glm::mat4 &view = graphicsCamera->view();
     const glm::vec3 cameraForward = graphicsCamera->forward();
     const glm::vec3 cameraPosition = graphicsCamera->position();
-    const float lineHeight = _font->height();
+    const float layoutScale = std::min(options.width / 800.0f, options.height / 600.0f) * options.guiScale;
+    const float textScale = layoutScale * options.guiTextScale * kK1CombatTextScale;
+    const float lineHeight = _font->height() * textScale;
 
     for (auto it = _entries.rbegin(); it != _entries.rend(); ++it) {
         const Entry &entry = *it;
@@ -235,7 +238,7 @@ void FloatingText::render() {
 
         float x = screen.x + entry.anchorOffset->x;
         float y = screen.y + entry.anchorOffset->y -
-                  kFloatingTextOffsetY -
+                  kFloatingTextOffsetY * layoutScale -
                   (entry.stack - 0.5f) * lineHeight;
         float alpha = entry.remaining / kFloatingTextDuration;
 
@@ -243,7 +246,8 @@ void FloatingText::render() {
             entry.text,
             glm::vec3(x, y, 0.0f),
             glm::vec4(color, alpha),
-            TextGravity::CenterCenter);
+            TextGravity::CenterCenter,
+            textScale);
     }
 }
 

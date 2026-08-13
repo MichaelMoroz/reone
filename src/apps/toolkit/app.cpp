@@ -119,7 +119,7 @@ bool ToolkitApp::OnInit() {
     if (m_captureOptions.isCaptureRun()) {
         // Same deterministic basis as Engine::isCaptureRun: a fixed timestep
         // below, no interactive preview updates, and the shared generator at 0.
-        seedRandom(0);
+        setRandomSeed(0);
         CallAfter(&ToolkitApp::startCapture);
     }
     return true;

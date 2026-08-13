@@ -206,7 +206,7 @@ void Renderer2D::drawText(Font &font,
                                           glyph.lr.y,
                                           glyph.lr.x - glyph.ul.x,
                                           glyph.ul.y - glyph.lr.y);
-            offset.x += Font::scaledMetric(glyph.size.x, scale);
+            offset.x += font.glyphAdvance(glyph, scale);
         }
         auto textOffset = _ring.push(chars);
         drawQuads("textVertex", "textFragment", locals, textOffset, numChars, &font.texture());

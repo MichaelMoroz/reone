@@ -214,6 +214,21 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                             &GraphicsOptions::headless));
     descs.push_back(boolOpt("vsync", OptionApply::Reapply, "enable v-sync",
                             &GraphicsOptions::vsync));
+    descs.push_back(floatOpt("guiscale", OptionApply::Reapply, "GUI layout scale",
+                             &GraphicsOptions::guiScale,
+                             std::numeric_limits<float>::min(), std::numeric_limits<float>::max()));
+    descs.push_back(floatOpt("guitextscale", OptionApply::Reapply, "GUI text scale",
+                             &GraphicsOptions::guiTextScale,
+                             std::numeric_limits<float>::min(), std::numeric_limits<float>::max()));
+    descs.push_back(floatOpt("guidialogtextscale", OptionApply::Reapply, "dialog text scale",
+                             &GraphicsOptions::guiDialogTextScale,
+                             std::numeric_limits<float>::min(), std::numeric_limits<float>::max()));
+    descs.push_back(floatOpt("guiborderscale", OptionApply::Reapply, "GUI border scale",
+                             &GraphicsOptions::guiBorderScale,
+                             std::numeric_limits<float>::min(), std::numeric_limits<float>::max()));
+    descs.push_back(floatOpt("guilistscale", OptionApply::Reapply, "GUI list row scale",
+                             &GraphicsOptions::guiListScale,
+                             std::numeric_limits<float>::min(), std::numeric_limits<float>::max()));
 
     // Scene content pushed every update.
     descs.push_back(boolOpt("grass", OptionApply::Live, "enable grass",

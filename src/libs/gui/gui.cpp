@@ -18,10 +18,7 @@
 #include "reone/gui/gui.h"
 
 #include "reone/graphics/rendering/renderer2d.h"
-#include "reone/graphics/mesh.h"
-#include "reone/graphics/meshregistry.h"
 #include "reone/graphics/texture.h"
-#include "reone/graphics/uniforms.h"
 #include "reone/gui/control/button.h"
 #include "reone/gui/control/iconchain.h"
 #include "reone/gui/control/imagebutton.h"
@@ -48,38 +45,6 @@ using namespace reone::scene;
 namespace reone {
 
 namespace gui {
-
-namespace {
-
-constexpr glm::vec4 kBackgroundPlateWindow {
-    504.0f / 2048.0f,
-    250.0f / 1024.0f,
-    1539.0f / 2048.0f,
-    771.0f / 1024.0f};
-
-} // namespace
-
-GUI::Layout GUI::fitLayoutInArea(const glm::vec2 &areaOffset,
-                                 const glm::vec2 &areaSize,
-                                 const glm::ivec2 &layoutSize) {
-    float factor = std::min(areaSize.x / layoutSize.x, areaSize.y / layoutSize.y);
-    glm::vec2 size = glm::vec2(layoutSize) * factor;
-    return {
-        {static_cast<int>(areaOffset.x + (areaSize.x - size.x) / 2.0f),
-         static_cast<int>(areaOffset.y + (areaSize.y - size.y) / 2.0f)},
-        {factor, factor}};
-}
-
-GUI::Layout GUI::fitLayoutInBackgroundPlate(const glm::ivec2 &screenSize,
-                                            const glm::ivec2 &layoutSize) {
-    glm::vec2 areaOffset {
-        screenSize.x * kBackgroundPlateWindow.x,
-        screenSize.y * kBackgroundPlateWindow.y};
-    glm::vec2 areaSize {
-        screenSize.x * (kBackgroundPlateWindow.z - kBackgroundPlateWindow.x),
-        screenSize.y * (kBackgroundPlateWindow.w - kBackgroundPlateWindow.y)};
-    return fitLayoutInArea(areaOffset, areaSize, layoutSize);
-}
 
 void GUI::load(const Gff &gui) {
     auto guiParsed = resource::generated::parseGUI(gui);
@@ -109,24 +74,18 @@ void GUI::load(const Gff &gui) {
     applyLayout();
 }
 
-void GUI::stretchControl(Control &control) {
-    float aspectX = _options.width / static_cast<float>(_resolutionX);
-    float aspectY = _options.height / static_cast<float>(_resolutionY);
-    control.stretch(aspectX, aspectY);
-}
-
-glm::vec2 GUI::scaledFactors() const {
-    // The layout always fits the screen, never the background plate. The
-    // in-game menu draws its tab strip and content as separate GUIs, and
-    // keying the factor on only one background put them in different spaces.
-    return screenScaledFactors();
-}
-
-glm::vec2 GUI::screenScaledFactors() const {
-    // Full uniform fit preserves the authored 4:3 art without leaving the
-    // three-quarters margin used by the earlier scaled mode.
-    return fitLayoutInArea(
-        glm::vec2(0.0f), glm::vec2(_options.width, _options.height), glm::ivec2(_resolutionX, _resolutionY)).factors;
+float GUI::scaledFactor() const {
+    // KVP's retail draw-stream scaler uses the limiting axis: content is as
+    // large as possible without cropping or changing its authored aspect.
+    //
+    // Background artwork is a separate cover layer drawn by renderBackground,
+    // so it does not enter this factor: composite GUIs such as the in-game tab
+    // strip and its active tab must share one coordinate space regardless of
+    // whether either of them carries a backdrop.
+    return std::min(
+               _options.width / static_cast<float>(_resolutionX),
+               _options.height / static_cast<float>(_resolutionY)) *
+           _options.guiScale;
 }
 
 void GUI::loadControl(const resource::generated::GUI_CONTROLS &gui) {
@@ -156,7 +115,7 @@ void GUI::positionRelativeToCenter(Control &control) {
     // authored screen-edge attachment: the inset from the anchored edge
     // scales with the same factor as the control itself. Before this they
     // kept their native 800x600-era pixel sizes on any screen.
-    float s = screenScaledFactors().x;
+    float s = scaledFactor();
     Control::Extent extent(control.authoredExtent());
     bool anchorRight = extent.left >= 0.5f * _resolutionX;
     bool anchorBottom = extent.top >= 0.5f * _resolutionY;
@@ -172,8 +131,42 @@ void GUI::positionRelativeToCenter(Control &control) {
     extent.top = top;
     extent.width = static_cast<int>(extent.width * s);
     extent.height = static_cast<int>(extent.height * s);
-    control.setScale(s * Control::kTextScaleFactor);
+    control.setScale(s * textScale());
     control.setExtent(std::move(extent));
+}
+
+void GUI::scaleRelativeToCenter(Control &control) {
+    float s = scaledFactor();
+    Control::Extent extent(control.authoredExtent());
+    extent.left = screenCenter().x + static_cast<int>((extent.left - _resolutionX / 2) * s);
+    extent.top = screenCenter().y + static_cast<int>((extent.top - _resolutionY / 2) * s);
+    extent.width = static_cast<int>(extent.width * s);
+    extent.height = static_cast<int>(extent.height * s);
+    control.setPresentationScale(s);
+    control.setExtent(std::move(extent));
+}
+
+void GUI::applyControlLayout(Control &control) {
+    switch (controlScaling(control)) {
+    case ScalingMode::PositionRelativeToCenter:
+        if (&control != &_rootControl->get()) {
+            positionRelativeToCenter(control);
+        }
+        break;
+    case ScalingMode::ScaledRelativeToCenter:
+        if (&control != &_rootControl->get()) {
+            scaleRelativeToCenter(control);
+        }
+        break;
+    case ScalingMode::Scaled:
+    case ScalingMode::ScaledTopCenter: {
+        float factor = scaledFactor();
+        control.stretch(factor, factor);
+        break;
+    }
+    default:
+        break;
+    }
 }
 
 void GUI::applyLayout() {
@@ -182,37 +175,29 @@ void GUI::applyLayout() {
     }
 
     _rootOffset = {0, 0};
+
     if (_scaling == ScalingMode::Center) {
-        _rootOffset = {screenCenter().x - _resolutionX / 2, screenCenter().y - _resolutionY / 2};
+        _rootOffset = {
+            screenCenter().x - _resolutionX / 2,
+            screenCenter().y - _resolutionY / 2};
     } else if (_scaling == ScalingMode::CenterHorizontal) {
         _rootOffset.x = screenCenter().x - _resolutionX / 2;
-    } else if (_scaling == ScalingMode::Scaled) {
-        auto factors = scaledFactors();
-        _rootOffset.x = static_cast<int>((_options.width - _resolutionX * factors.x) / 2.0f);
-        _rootOffset.y = static_cast<int>((_options.height - _resolutionY * factors.y) / 2.0f);
+    } else if (_scaling == ScalingMode::Scaled || _scaling == ScalingMode::ScaledTopCenter) {
+        float factor = scaledFactor();
+        int scaledWidth = static_cast<int>(_resolutionX * factor);
+        int scaledHeight = static_cast<int>(_resolutionY * factor);
+        _rootOffset.x = (_options.width - scaledWidth) / 2;
+        if (_scaling == ScalingMode::Scaled) {
+            _rootOffset.y = (_options.height - scaledHeight) / 2;
+        }
     }
 
     for (auto &control : _controls) {
-        switch (controlScaling(*control)) {
-        case ScalingMode::PositionRelativeToCenter:
-            if (control.get() != &_rootControl->get()) {
-                positionRelativeToCenter(*control);
-            }
-            break;
-        case ScalingMode::Stretch:
-            stretchControl(*control);
-            break;
-        case ScalingMode::Scaled: {
-            auto factors = scaledFactors();
-            control->stretch(factors.x, factors.y);
-            break;
-        }
-        default:
-            break;
-        }
+        applyControlLayout(*control);
 
         auto sceneScaling = _sceneScalingByControlTag.find(control->tag());
-        if (sceneScaling != _sceneScalingByControlTag.end() && sceneScaling->second == ScalingMode::Stretch) {
+        if (sceneScaling != _sceneScalingByControlTag.end() &&
+            sceneScaling->second == ScalingMode::Stretch) {
             control->setSceneExtent(Control::Extent(0, 0, _options.width, _options.height));
         } else {
             control->setSceneExtent(std::nullopt);
@@ -224,25 +209,27 @@ void GUI::applyLayout() {
 }
 
 GUI::ScalingMode GUI::controlScaling(const Control &control) const {
-    auto scaling = _scalingByControlTag.find(control.tag());
-    return scaling != _scalingByControlTag.end() ? scaling->second : _scaling;
+    auto maybeScaling = _scalingByControlTag.find(control.tag());
+    return maybeScaling != _scalingByControlTag.end() ? maybeScaling->second : _scaling;
 }
 
 glm::ivec2 GUI::renderOffset(const Control &control) const {
     switch (controlScaling(control)) {
-    case ScalingMode::Stretch:
     case ScalingMode::PositionRelativeToCenter:
+    case ScalingMode::ScaledRelativeToCenter:
         return {0, 0};
     default:
         return &control == &_rootControl->get() ? _rootOffset : _controlOffset;
     }
 }
 
-void GUI::setBackground(std::shared_ptr<Texture> texture) {
+glm::ivec2 GUI::controlCoordinates(const Control &control, int screenX, int screenY) const {
+    auto offset = renderOffset(control);
+    return {screenX - offset.x, screenY - offset.y};
+}
+
+void GUI::setBackground(std::shared_ptr<graphics::Texture> texture) {
     _background = std::move(texture);
-    if (_scaling == ScalingMode::Scaled) {
-        applyLayout();
-    }
 }
 
 bool GUI::handle(const input::Event &event) {
@@ -254,9 +241,9 @@ bool GUI::handle(const input::Event &event) {
         return handleKeyUp(event.key.code);
 
     case input::EventType::MouseMotion: {
-        glm::ivec2 ctrlCoords(event.motion.x - _controlOffset.x, event.motion.y - _controlOffset.y);
-        updateSelection(ctrlCoords.x, ctrlCoords.y);
+        updateSelection(event.motion.x, event.motion.y);
         if (_selection) {
+            auto ctrlCoords = controlCoordinates(_selection->get(), event.motion.x, event.motion.y);
             _selection->get().handleMouseMotion(ctrlCoords.x, ctrlCoords.y);
         }
         break;
@@ -269,13 +256,13 @@ bool GUI::handle(const input::Event &event) {
     case input::EventType::MouseButtonUp:
         if (_leftMouseDown && event.button.button == input::MouseButton::Left) {
             _leftMouseDown = false;
-            glm::ivec2 ctrlCoords(event.button.x - _controlOffset.x, event.button.y - _controlOffset.y);
             auto control = findControlAt(
-                ctrlCoords.x, ctrlCoords.y,
+                event.button.x, event.button.y,
                 [](const auto &control) { return control.isSelectable(); });
             if (control) {
                 debug("Control clicked: " + control->get().tag(), LogChannel::GUI);
                 onClick(control->get().tag());
+                auto ctrlCoords = controlCoordinates(control->get(), event.button.x, event.button.y);
                 return control->get().handleClick(ctrlCoords.x, ctrlCoords.y, event.button.clicks);
             }
         }
@@ -298,9 +285,9 @@ bool GUI::handleKeyUp(input::KeyCode key) {
     return false;
 }
 
-void GUI::updateSelection(int x, int y) {
+void GUI::updateSelection(int screenX, int screenY) {
     auto control = findControlAt(
-        x, y,
+        screenX, screenY,
         [](const auto &control) { return control.isSelectable(); });
     if ((!_selection && !control) ||
         (_selection && control && _selection->get().id() == control->get().id())) {
@@ -327,8 +314,9 @@ std::optional<std::reference_wrapper<Control>> GUI::findControlAt(int x, int y,
     while (!controls.empty()) {
         auto &control = controls.top().get();
         controls.pop();
+        auto ctrlCoords = controlCoordinates(control, x, y);
         if (control.isVisible() && !control.isDisabled() &&
-            control.extent().contains(x, y) &&
+            control.extent().contains(ctrlCoords.x, ctrlCoords.y) &&
             test(control)) {
             return control;
         }
@@ -347,9 +335,10 @@ void GUI::update(float dt) {
 }
 
 void GUI::render() {
-    _graphicsSvc.renderer2d.withBlendMode(BlendMode::Normal, [this]() {
+    auto &renderer2d = _graphicsSvc.renderer2d;
+    renderer2d.withBlendMode(BlendMode::Normal, [this, &renderer2d]() {
         if (_background) {
-            renderBackground();
+            renderBackground(renderer2d);
         }
         if (!_rootControl) {
             return;
@@ -359,7 +348,7 @@ void GUI::render() {
         while (!controls.empty()) {
             auto &[controlWrapper, offset] = controls.front();
             auto &control = controlWrapper.get();
-            control.render({_options.width, _options.height}, offset);
+            control.render({_options.width, _options.height}, offset, renderer2d);
             for (auto &child : control.children()) {
                 controls.push({child, renderOffset(child)});
             }
@@ -383,16 +372,19 @@ void GUI::renderOffscreen() {
     }
 }
 
-void GUI::renderBackground() {
-    // The background plate is a surround with a framed window. At a different
-    // aspect ratio no scaling lines that window up with the fitted layout, so
-    // it is tinted black by default: it still covers the screen and has no edge
-    // to misalign. A screen drawing it purely as a backdrop asks for the art.
-    _graphicsSvc.renderer2d.drawImage(
+void GUI::renderBackground(I2DRenderer &renderer2d) {
+    // The outer background is a surround, not part of the control layout. It
+    // covers the viewport without changing aspect, while controls use the
+    // independent limiting-axis factor above.
+    float cover = std::max(_options.width / static_cast<float>(_resolutionX),
+                           _options.height / static_cast<float>(_resolutionY));
+    glm::ivec2 size {
+        static_cast<int>(_resolutionX * cover),
+        static_cast<int>(_resolutionY * cover)};
+    renderer2d.drawImage(
         *_background,
-        {0, 0},
-        {_options.width, _options.height},
-        _backgroundAsArt ? glm::vec4(1.0f) : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+        {0.5f * (_options.width - size.x), 0.5f * (_options.height - size.y)},
+        glm::vec2(size));
 }
 
 void GUI::clearSelection() {
@@ -457,13 +449,19 @@ std::unique_ptr<Control> GUI::newControl(
     return control;
 }
 
-void GUI::addControlToFront(std::shared_ptr<Control> control) {
+void GUI::addControlToFront(std::shared_ptr<Control> control, ControlCoordinates coordinates) {
+    if (coordinates == ControlCoordinates::Authored) {
+        applyControlLayout(*control);
+    }
     _rootControl->get().addChildToFront(*control);
     _tagToControl.insert({control->tag(), *control});
     _controls.push_back(std::move(control));
 }
 
-void GUI::addControlToBack(std::shared_ptr<Control> control) {
+void GUI::addControlToBack(std::shared_ptr<Control> control, ControlCoordinates coordinates) {
+    if (coordinates == ControlCoordinates::Authored) {
+        applyControlLayout(*control);
+    }
     _rootControl->get().addChildToBack(*control);
     _tagToControl.insert({control->tag(), *control});
     _controls.push_back(std::move(control));

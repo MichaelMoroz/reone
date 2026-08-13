@@ -64,6 +64,10 @@ public:
     /** Scales a glyph metric in the same way as the renderer scales a glyph. */
     static float scaledMetric(float metric, float scale) { return metric * scale; }
 
+    float glyphAdvance(const Glyph &glyph, float scale) const {
+        return (glyph.size.x + _spacingR) * scale;
+    }
+
     float measure(std::string_view text, float scale = 1.0f) const;
 
     /**
@@ -81,6 +85,7 @@ public:
 private:
     std::shared_ptr<Texture> _texture;
     float _height {0.0f};
+    float _spacingR {0.0f};
     std::vector<Glyph> _glyphs;
 
     I2DRenderer &_renderer2d;

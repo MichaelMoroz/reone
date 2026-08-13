@@ -51,36 +51,37 @@ void ScrollBar::load(const resource::generated::GUI_BASECONTROL &gui, bool proto
 }
 
 void ScrollBar::render(const glm::ivec2 &screenSize,
-                       const glm::ivec2 &offset) {
-    renderThumb(offset);
-    renderArrows(offset);
+                       const glm::ivec2 &offset,
+                       I2DRenderer &renderer2d) {
+    renderThumb(offset, renderer2d);
+    renderArrows(offset, renderer2d);
 }
 
-void ScrollBar::renderThumb(const glm::ivec2 &offset) {
+void ScrollBar::renderThumb(const glm::ivec2 &offset, I2DRenderer &renderer2d) {
     if (!_thumb.image || _state.numVisible >= _state.count) {
         return;
     }
 
     // Top edge
-    _graphicsSvc.renderer2d.drawImage(
+    renderer2d.drawImage(
         *_thumb.image,
         {_extent.left + offset.x, _extent.top + _extent.width + offset.y},
         {_extent.width, 1.0f});
 
     // Left edge
-    _graphicsSvc.renderer2d.drawImage(
+    renderer2d.drawImage(
         *_thumb.image,
         {_extent.left + offset.x, _extent.top + _extent.width + offset.y},
         {1.0f, _extent.height - 2.0f * _extent.width});
 
     // Right edge
-    _graphicsSvc.renderer2d.drawImage(
+    renderer2d.drawImage(
         *_thumb.image,
         {_extent.left + _extent.width - 1.0f + offset.x, _extent.top + _extent.width + offset.y},
         {1.0f, _extent.height - 2.0f * _extent.width});
 
     // Bottom edge
-    _graphicsSvc.renderer2d.drawImage(
+    renderer2d.drawImage(
         *_thumb.image,
         {_extent.left + offset.x, _extent.top + _extent.height - _extent.width - 1.0f + offset.y},
         {_extent.width, 1.0f});
@@ -89,13 +90,13 @@ void ScrollBar::renderThumb(const glm::ivec2 &offset) {
     float frameHeight = _extent.height - 2.0f * _extent.width - 4.0f;
     float thumbHeight = frameHeight * _state.numVisible / static_cast<float>(_state.count);
     float y = glm::mix(0.0f, frameHeight - thumbHeight, _state.offset / static_cast<float>(_state.count - _state.numVisible));
-    _graphicsSvc.renderer2d.drawImage(
+    renderer2d.drawImage(
         *_thumb.image,
         {_extent.left + 2.0f + offset.x, _extent.top + _extent.width + 2.0f + offset.y + y},
         {_extent.width - 4.0f, thumbHeight});
 }
 
-void ScrollBar::renderArrows(const glm::ivec2 &offset) {
+void ScrollBar::renderArrows(const glm::ivec2 &offset, I2DRenderer &renderer2d) {
     if (!_dir.image)
         return;
 
@@ -105,26 +106,26 @@ void ScrollBar::renderArrows(const glm::ivec2 &offset) {
         return;
 
     if (canScrollUp) {
-        renderUpArrow(offset);
+        renderUpArrow(offset, renderer2d);
     }
     if (canScrollDown) {
-        renderDownArrow(offset);
+        renderDownArrow(offset, renderer2d);
     }
 }
 
-void ScrollBar::renderUpArrow(const glm::ivec2 &offset) {
-    _graphicsSvc.renderer2d.drawImage(
+void ScrollBar::renderUpArrow(const glm::ivec2 &offset, I2DRenderer &renderer2d) {
+    renderer2d.drawImage(
         *_dir.image,
         {_extent.left + offset.x, _extent.top + offset.y},
         {_extent.width, _extent.width});
 }
 
-void ScrollBar::renderDownArrow(const glm::ivec2 &offset) {
+void ScrollBar::renderDownArrow(const glm::ivec2 &offset, I2DRenderer &renderer2d) {
     auto uv = glm::mat3x4(
         glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
         glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
         glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
-    _graphicsSvc.renderer2d.drawImage(
+    renderer2d.drawImage(
         *_dir.image,
         {_extent.left + offset.x, _extent.top + _extent.height - _extent.width + offset.y},
         {_extent.width, _extent.width},

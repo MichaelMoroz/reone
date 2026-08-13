@@ -17,13 +17,8 @@
 
 #include "reone/gui/control.h"
 
-#include "reone/system/logutil.h"
-
 #include "reone/graphics/rendering/renderer2d.h"
-#include "reone/graphics/mesh.h"
-#include "reone/graphics/meshregistry.h"
 #include "reone/graphics/textutil.h"
-#include "reone/graphics/uniforms.h"
 #include "reone/resource/gff.h"
 #include "reone/resource/provider/fonts.h"
 #include "reone/resource/provider/textures.h"
@@ -69,6 +64,7 @@ void Control::Extent::getCenter(int &x, int &y) const {
 void Control::load(const resource::generated::GUI_BASECONTROL &gui, bool protoItem) {
     loadExtent(gui.EXTENT);
     loadBorder(gui.BORDER);
+    _tintBorderFill = _gui.tintBorderFills();
 
     if (static_cast<ControlType>(gui.CONTROLTYPE) == ControlType::Panel) {
         _id = -1;
@@ -123,6 +119,7 @@ void Control::loadBorder(const resource::generated::GUI_BORDER &gui) {
     }
 
     _border->dimension = gui.DIMENSION;
+    _authoredBorderDimension = gui.DIMENSION;
     _border->color = gui.COLOR;
 }
 
@@ -163,6 +160,7 @@ void Control::loadHilight(const resource::generated::GUI_BORDER &gui) {
     }
 
     _hilight->dimension = gui.DIMENSION;
+    _authoredHilightDimension = gui.DIMENSION;
     _hilight->color = gui.COLOR;
 }
 
@@ -202,43 +200,36 @@ void Control::update(float dt) {
 }
 
 void Control::render(const glm::ivec2 &screenSize,
-                     const glm::ivec2 &offset) {
+                     const glm::ivec2 &offset,
+                     I2DRenderer &renderer2d) {
     if (!_visible) {
         return;
     }
     glm::ivec2 size(_extent.width, _extent.height);
     if (_border && (!_selected || _hilightOverBorder || !_hilight)) {
-        renderBorder(*_border, offset, size);
+        renderBorder(*_border, offset, size, renderer2d);
     }
     if (_selected && _hilight) {
-        renderBorder(*_hilight, offset, size);
+        renderBorder(*_hilight, offset, size, renderer2d);
     }
     if (!_textLines.empty()) {
-        renderText(_textLines, offset, size);
+        renderText(_textLines, offset, size, renderer2d);
     }
     if (_sceneOutput) {
-        // The scene's transparent pass has already premultiplied normal
-        // coverage into RGB, while additive layers deliberately carry zero
-        // coverage. Compositing with the same premultiplied rule keeps the
-        // former from being multiplied twice and lets the latter add light
-        // without turning it into an occluder.
-        _graphicsSvc.renderer2d.withBlendMode(BlendMode::Premultiplied, [this, offset]() {
-            _graphicsSvc.renderer2d.drawImage(
+        renderer2d.withBlendMode(BlendMode::Premultiplied, [this, &offset, &renderer2d]() {
+            renderer2d.drawImage(
                 *_sceneOutput,
                 {sceneExtent().left + (_sceneExtent ? 0 : offset.x),
                  sceneExtent().top + (_sceneExtent ? 0 : offset.y)},
                 {sceneExtent().width, sceneExtent().height});
         });
-        // Good for this frame only. A control that stops being visible, or a
-        // frame where the offscreen phase did not run, must not composite a
-        // target that no longer describes anything.
         _sceneOutput = nullptr;
     }
 }
 
 void Control::renderOffscreen() {
     _sceneOutput = nullptr;
-    if (_sceneName.empty() || !_visible) {
+    if (_sceneName.empty() || !_visible || !_gui.sceneRenderEnabled()) {
         return;
     }
     const Extent &extent = sceneExtent();
@@ -248,12 +239,23 @@ void Control::renderOffscreen() {
 
 void Control::renderBorder(const Border &border,
                            const glm::ivec2 &offset,
-                           const glm::ivec2 &size) {
+                           const glm::ivec2 &size,
+                           I2DRenderer &renderer2d) {
+
     glm::vec3 color(getBorderColor());
     glm::mat4 transform(1.0f);
     glm::mat3x4 uv(1.0f);
+    // Controls thinner than two authored slices - the TSL title bars - split
+    // the constrained axis between the opposing pieces so their translucent
+    // pixels meet rather than accumulating through the center. Controls with
+    // room for both slices keep the full authored dimension on every side.
+    int leftWidth = std::min(border.dimension, std::max(0, (size.x + 1) / 2));
+    int rightWidth = std::min(border.dimension, std::max(0, size.x - leftWidth));
+    int topHeight = std::min(border.dimension, std::max(0, (size.y + 1) / 2));
+    int bottomHeight = std::min(border.dimension, std::max(0, size.y - topHeight));
+    glm::ivec2 fillSize {size.x - leftWidth - rightWidth, size.y - topHeight - bottomHeight};
 
-    if (border.fill) {
+    if (border.fill && fillSize.x > 0 && fillSize.y > 0) {
         if (border.fillTransform == Border::FillTransform::Rotate180) {
             uv = glm::mat3x4(
                 glm::vec4(-1.0f, 0.0f, 0.0f, 0.0f),
@@ -263,33 +265,33 @@ void Control::renderBorder(const Border &border,
         auto blending = border.fill->features().blending == Texture::Blending::Additive
                             ? BlendMode::Additive
                             : BlendMode::Normal;
-        _graphicsSvc.renderer2d.withBlendMode(blending, [&]() {
-            _graphicsSvc.renderer2d.drawImage(
+        renderer2d.withBlendMode(blending, [&]() {
+            renderer2d.drawImage(
                 *border.fill,
-                {_extent.left + border.dimension + offset.x, _extent.top + border.dimension + offset.y},
-                {size.x - 2 * border.dimension, size.y - 2 * border.dimension},
+                {_extent.left + leftWidth + offset.x, _extent.top + topHeight + offset.y},
+                glm::vec2(fillSize),
                 _tintBorderFill ? glm::vec4(color, 1.0f) : glm::vec4(1.0f),
                 uv);
         });
     }
 
     if (border.edge) {
-        int width = size.x - 2 * border.dimension;
-        int height = size.y - 2 * border.dimension;
+        int width = fillSize.x;
+        int height = fillSize.y;
 
         if (height > 0.0f) {
             int x = _extent.left + offset.x;
-            int y = _extent.top + border.dimension + offset.y;
+            int y = _extent.top + topHeight + offset.y;
 
             // Left edge
             uv = glm::mat3x4(
                 glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
                 glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
                 glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
-            _graphicsSvc.renderer2d.drawImage(
+            renderer2d.drawImage(
                 *border.edge,
                 {x, y},
-                {border.dimension, height},
+                {leftWidth, height},
                 glm::vec4(color, 1.0f),
                 uv);
 
@@ -298,23 +300,23 @@ void Control::renderBorder(const Border &border,
                 glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
                 glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
                 glm::vec4(0.0f, 0.0f, 0.0f, 0.0f));
-            _graphicsSvc.renderer2d.drawImage(
+            renderer2d.drawImage(
                 *border.edge,
-                {x + size.x - border.dimension, y},
-                {border.dimension, height},
+                {x + size.x - rightWidth, y},
+                {rightWidth, height},
                 glm::vec4(color, 1.0f),
                 uv);
         }
 
         if (width > 0.0f) {
-            int x = _extent.left + border.dimension + offset.x;
+            int x = _extent.left + leftWidth + offset.x;
             int y = _extent.top + offset.y;
 
             // Top edge
-            _graphicsSvc.renderer2d.drawImage(
+            renderer2d.drawImage(
                 *border.edge,
                 {x, y},
-                {width, border.dimension},
+                {width, topHeight},
                 glm::vec4(color, 1.0f));
 
             // Bottom edge
@@ -322,10 +324,10 @@ void Control::renderBorder(const Border &border,
                 glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
                 glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
                 glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
-            _graphicsSvc.renderer2d.drawImage(
+            renderer2d.drawImage(
                 *border.edge,
-                {x, y + size.y - border.dimension},
-                {width, border.dimension},
+                {x, y + size.y - bottomHeight},
+                {width, bottomHeight},
                 glm::vec4(color, 1.0f),
                 uv);
         }
@@ -336,10 +338,10 @@ void Control::renderBorder(const Border &border,
         int y = _extent.top + offset.y;
 
         // Top left corner
-        _graphicsSvc.renderer2d.drawImage(
+        renderer2d.drawImage(
             *border.corner,
             {x, y},
-            {border.dimension, border.dimension},
+            {leftWidth, topHeight},
             glm::vec4(color, 1.0f));
 
         // Bottom left corner
@@ -347,10 +349,10 @@ void Control::renderBorder(const Border &border,
             glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
             glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
             glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
-        _graphicsSvc.renderer2d.drawImage(
+        renderer2d.drawImage(
             *border.corner,
-            {x, y + size.y - border.dimension},
-            {border.dimension, border.dimension},
+            {x, y + size.y - bottomHeight},
+            {leftWidth, bottomHeight},
             glm::vec4(color, 1.0f),
             uv);
 
@@ -359,10 +361,10 @@ void Control::renderBorder(const Border &border,
             glm::vec4(-1.0f, 0.0f, 0.0f, 0.0f),
             glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
             glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
-        _graphicsSvc.renderer2d.drawImage(
+        renderer2d.drawImage(
             *border.corner,
-            {x + size.x - border.dimension, y},
-            {border.dimension, border.dimension},
+            {x + size.x - rightWidth, y},
+            {rightWidth, topHeight},
             glm::vec4(color, 1.0f),
             uv);
 
@@ -371,10 +373,10 @@ void Control::renderBorder(const Border &border,
             glm::vec4(-1.0f, 0.0f, 0.0f, 0.0f),
             glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
             glm::vec4(1.0f, 1.0f, 0.0f, 0.0f));
-        _graphicsSvc.renderer2d.drawImage(
+        renderer2d.drawImage(
             *border.corner,
-            {x + size.x - border.dimension, y + size.y - border.dimension},
-            {border.dimension, border.dimension},
+            {x + size.x - rightWidth, y + size.y - bottomHeight},
+            {rightWidth, bottomHeight},
             glm::vec4(color, 1.0f),
             uv);
     }
@@ -389,7 +391,8 @@ const glm::vec3 &Control::getBorderColor() const {
 
 void Control::renderText(const std::vector<std::string> &lines,
                          const glm::ivec2 &offset,
-                         const glm::ivec2 &size) {
+                         const glm::ivec2 &size,
+                         I2DRenderer &renderer2d) {
     glm::ivec2 position;
     TextGravity gravity;
     getTextPosition(position, static_cast<int>(lines.size()), size, gravity);
@@ -400,7 +403,7 @@ void Control::renderText(const std::vector<std::string> &lines,
     for (auto &line : lines) {
         linePosition.x = static_cast<float>(position.x + offset.x);
         linePosition.y = static_cast<float>(position.y + offset.y);
-        _text.font->render(line, linePosition, color, gravity, _scale);
+        renderer2d.drawText(*_text.font, line, linePosition, glm::vec4(color, 1.0f), gravity, _scale);
         position.y += static_cast<int>(_text.font->height() * _scale);
     }
 }
@@ -450,7 +453,7 @@ void Control::getTextPosition(glm::ivec2 &position, int lineCount, const glm::iv
     switch (_text.align) {
     case TextAlign::LeftTop:
     case TextAlign::LeftCenter:
-        position.x = _extent.left;
+        position.x = _extent.left + textPaddingLeft();
         break;
     case TextAlign::RightCenter:
     case TextAlign::RightCenter2:
@@ -463,6 +466,20 @@ void Control::getTextPosition(glm::ivec2 &position, int lineCount, const glm::iv
         position.x = _extent.left + size.x / 2;
         break;
     }
+}
+
+int Control::textPaddingLeft() const {
+    if (_textPaddingLeft > 0) {
+        return _textPaddingLeft;
+    }
+    // Left-aligned text starts inside the authored frame art, not under its
+    // border slice. Image buttons use the same frame for the name plate next
+    // to their icon, so their item names need the same inset as labels.
+    if ((_type == ControlType::Label || _type == ControlType::ImageButton) &&
+        _border && (_border->corner || _border->edge)) {
+        return _border->dimension;
+    }
+    return 0;
 }
 
 void Control::stretch(float x, float y, int mask) {
@@ -478,11 +495,26 @@ void Control::stretch(float x, float y, int mask) {
     if (mask & kStretchHeight) {
         _extent.height = static_cast<int>(_authoredExtent.height * y);
     }
-    // Bitmap glyphs do not follow an extent on their own. The authored fonts
-    // target the 800x600-era screens, so full layout scale makes them about
-    // twice as large as the layouts were designed for.
-    _scale = (x == y) ? x * kTextScaleFactor : kTextScaleFactor;
+    float frameLayoutScale = x == y ? x : 1.0f;
+    setPresentationScale(frameLayoutScale, _gui.textLayoutScale(x, y));
     updateTransform();
+}
+
+void Control::setPresentationScale(float layoutScale) {
+    setPresentationScale(layoutScale, layoutScale);
+}
+
+void Control::setPresentationScale(float frameLayoutScale, float textLayoutScale) {
+    // Text and frame slices do not follow the extent on their own. Keeping
+    // this separate lets compound controls give their contents an independent
+    // density while retaining the parent's layout rectangle.
+    _scale = textLayoutScale * _gui.textScale();
+    if (_border) {
+        _border->dimension = static_cast<int>(_authoredBorderDimension * frameLayoutScale * _gui.borderScale());
+    }
+    if (_hilight) {
+        _hilight->dimension = static_cast<int>(_authoredHilightDimension * frameLayoutScale * _gui.borderScale());
+    }
     updateTextLines();
 }
 
@@ -533,6 +565,7 @@ void Control::setExtentTop(int top) {
 
 void Control::setBorder(Border border) {
     _border = std::make_shared<Border>(std::move(border));
+    _authoredBorderDimension = _border->dimension;
 }
 
 void Control::setBorderFill(std::string resRef) {
@@ -578,6 +611,7 @@ void Control::setUseBorderColorOverride(bool use) {
 
 void Control::setHilight(Border hilight) {
     _hilight = std::make_shared<Border>(hilight);
+    _authoredHilightDimension = _hilight->dimension;
 }
 
 void Control::setHilightColor(glm::vec3 color) {
@@ -619,6 +653,10 @@ void Control::setHilightFillTransform(Border::FillTransform transform) {
 void Control::setText(Text text) {
     _text = std::move(text);
     updateTextLines();
+}
+
+void Control::setTextAlignment(TextAlign align) {
+    _text.align = align;
 }
 
 void Control::setTextMessage(std::string text) {

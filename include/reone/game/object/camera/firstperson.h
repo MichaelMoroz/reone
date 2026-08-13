@@ -36,11 +36,11 @@ public:
         ServicesView &services) :
         Camera(
             id,
+            aspect,
             std::move(sceneName),
             game,
             services),
-        _fovy(fovy),
-        _aspect(aspect) {
+        _fovy(fovy) {
     }
 
     void load();
@@ -69,7 +69,6 @@ private:
     };
 
     float _fovy;
-    float _aspect;
 
     glm::vec3 _position {0.0f};
     float _pitch {0.0f};
@@ -81,6 +80,7 @@ private:
     bool handleKeyUp(const input::KeyEvent &event);
 
     void updateSceneNode();
+    float projectionFovy() const override;
 };
 
 } // namespace game

@@ -37,6 +37,9 @@ namespace game {
 static constexpr int kArrowSize = 32;
 static constexpr int kMapNoteSize = 16;
 static constexpr float kSelectedMapNoteScale = 1.5f;
+static constexpr float kKotorMapWidth = 440.0f;
+static constexpr float kTSLMapWidth = 512.0f;
+static constexpr float kMapHeight = 256.0f;
 
 Map::Map(Game &game, ServicesView &services) :
     _game(game),
@@ -96,7 +99,8 @@ void Map::renderArea(Mode mode, const glm::vec4 &bounds, float scale) {
         const float mapWidth = _areaTexture->width() * scale;
         const float mapHeight = _areaTexture->height() * scale;
         glm::vec3 topLeft(0.0f);
-        topLeft.x = bounds[0] + 0.5f * bounds[2] - mapPos.x * 440.0f * scale;
+        float logicalMapWidth = _game.isTSL() ? kTSLMapWidth : kKotorMapWidth;
+        topLeft.x = bounds[0] + 0.5f * bounds[2] - mapPos.x * logicalMapWidth * scale;
         topLeft.y = bounds[1] + 0.5f * bounds[3] - mapPos.y * mapHeight;
 
         glm::ivec4 scissorBounds(bounds[0], bounds[1], bounds[2], bounds[3]);
@@ -125,8 +129,7 @@ void Map::renderNotes(Mode mode, const glm::vec4 &bounds, float scale) {
             continue;
 
         glm::vec2 mapPos(getMapPosition(waypoint->position()));
-        mapPos.x *= bounds[2] / static_cast<float>(_areaTexture->width());
-        mapPos.y *= bounds[3] / static_cast<float>(_areaTexture->height());
+        normalizeMapPosition(mapPos);
 
         glm::vec2 notePos;
         notePos.x = bounds[0] + mapPos.x * bounds[2];
@@ -173,6 +176,12 @@ glm::vec2 Map::getMapPosition(const glm::vec2 &world) const {
     return result;
 }
 
+void Map::normalizeMapPosition(glm::vec2 &mapPos) const {
+    mapPos.x *= (_game.isTSL() ? kTSLMapWidth : kKotorMapWidth) /
+                static_cast<float>(_areaTexture->width());
+    mapPos.y *= kMapHeight / static_cast<float>(_areaTexture->height());
+}
+
 void Map::renderPartyLeader(Mode mode, const glm::vec4 &bounds, float scale) {
     std::shared_ptr<Creature> partyLeader(_game.party().getLeader());
     if (!partyLeader) {
@@ -184,8 +193,7 @@ void Map::renderPartyLeader(Mode mode, const glm::vec4 &bounds, float scale) {
         glm::vec2 worldPos(partyLeader->position());
         glm::vec2 mapPos(getMapPosition(worldPos));
 
-        mapPos.x *= bounds[2] / static_cast<float>(_areaTexture->width());
-        mapPos.y *= bounds[3] / static_cast<float>(_areaTexture->height());
+        normalizeMapPosition(mapPos);
 
         arrowPos.x = bounds[0] + mapPos.x * bounds[2];
         arrowPos.y = bounds[1] + mapPos.y * bounds[3];

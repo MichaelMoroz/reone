@@ -122,13 +122,10 @@ struct GraphicsOptions {
     int height {768};
     int winScale {100};
     bool fullscreen {false};
-    /**
-     * Never show the window. For scripted batch runs - a warp loop launching
-     * one process per module must not pop a window on the desktop every few
-     * seconds. Rendering and capture work as usual; only presentation goes to
-     * a hidden surface.
-     */
+    /** Hide the presentation window while retaining a renderable surface. */
     bool headless {false};
+    /** Draw 3D scene content: the world and scene-backed GUI panels. */
+    bool sceneRender {true};
     bool vsync {true};
     /**
      * How much light a thin surface passes to its far side.
@@ -682,6 +679,11 @@ struct GraphicsOptions {
     int shadowResolution {2048};
     int anisotropicFiltering {2};
     float drawDistance {kDefaultObjectDrawDistance};
+    float guiScale {1.0f};
+    float guiTextScale {0.5f};
+    float guiDialogTextScale {0.6f};
+    float guiBorderScale {1.0f};
+    float guiListScale {0.5f};
 };
 
 /**

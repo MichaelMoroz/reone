@@ -15,11 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "reone/game/game.h"
-
 #include "reone/game/object/camera/firstperson.h"
-
-#include <limits>
 
 #include "reone/game/di/services.h"
 #include "reone/graphics/types.h"
@@ -40,12 +36,11 @@ static constexpr float kMouseMultiplier = glm::pi<float>() / 4000.0f;
 void FirstPersonCamera::load() {
     auto &scene = _services.scene.graphs.get(_sceneName);
     _sceneNode = scene.newCamera();
-    // From the options rather than the value handed to the constructor: the
-    // area computes that once when it loads, so a resolution changed later
-    // would otherwise leave the projection stretched to the old shape.
-    auto &opts = _game.options().graphics;
-    float aspect = opts.width / static_cast<float>(opts.height);
-    cameraSceneNode()->setPerspectiveProjection(_fovy, aspect, kDefaultClipPlaneNear, kDefaultClipPlaneFar);
+    rebuildProjection();
+}
+
+float FirstPersonCamera::projectionFovy() const {
+    return _fovy;
 }
 
 bool FirstPersonCamera::handle(const input::Event &event) {
@@ -170,6 +165,8 @@ bool FirstPersonCamera::handleKeyUp(const input::KeyEvent &event) {
 }
 
 void FirstPersonCamera::update(float dt) {
+    Camera::update(dt);
+
     float facingSin = glm::sin(_facing) * _multiplier * kMovementSpeed * dt;
     float facingCos = glm::cos(_facing) * _multiplier * kMovementSpeed * dt;
     float pitchSin = glm::sin(_pitch) * _multiplier * kMovementSpeed * dt;
@@ -230,11 +227,6 @@ void FirstPersonCamera::setPosition(const glm::vec3 &pos) {
 
 void FirstPersonCamera::setFacing(float facing) {
     _facing = facing;
-    updateSceneNode();
-}
-
-void FirstPersonCamera::setPitch(float pitch) {
-    _pitch = glm::clamp(pitch, -glm::quarter_pi<float>(), glm::quarter_pi<float>());
     updateSceneNode();
 }
 

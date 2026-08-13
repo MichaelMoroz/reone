@@ -35,7 +35,7 @@ public:
         _renderer2d(renderer2d) {
     }
 
-    void render();
+    void render(float scale);
 
     void setPosition(glm::ivec2 position) { _position = std::move(position); }
     void setPressed(bool pressed) { _pressed = pressed; }

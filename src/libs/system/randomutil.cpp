@@ -25,7 +25,7 @@ static std::default_random_engine g_generator(static_cast<uint32_t>(time(nullptr
 // runs, and holding it apart from the shared stream is the point.
 static std::default_random_engine g_renderGenerator(0x5eed);
 
-void seedRandom(uint32_t seed) {
+void setRandomSeed(uint32_t seed) {
     g_generator.seed(seed);
 }
 

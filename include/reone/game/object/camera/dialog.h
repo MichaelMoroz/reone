@@ -44,11 +44,11 @@ public:
         ServicesView &services) :
         Camera(
             id,
+            aspect,
             std::move(sceneName),
             game,
             services),
-        _style(std::move(style)),
-        _aspect(aspect) {
+        _style(std::move(style)) {
     }
 
     void load();
@@ -59,13 +59,13 @@ public:
 
 private:
     CameraStyle _style;
-    float _aspect;
 
     glm::vec3 _speakerPosition {0.0f};
     glm::vec3 _listenerPosition {0.0f};
     Variant _variant {Variant::Both};
 
     void updateSceneNode();
+    float projectionFovy() const override;
 };
 
 } // namespace game

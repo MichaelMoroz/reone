@@ -22,7 +22,7 @@ namespace reone {
 namespace audio {
 
 struct AudioOptions {
-    /** Master kill switch: a headless batch run must be silent, not just invisible. */
+    /** Master silence for unattended headless runs. */
     bool muted {false};
     int musicVolume {85};
     int voiceVolume {85};

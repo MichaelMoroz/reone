@@ -15,8 +15,6 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "reone/game/game.h"
-
 #include "reone/game/object/camera/dialog.h"
 
 #include <cmath>
@@ -111,12 +109,11 @@ static bool resolveEndpoints(glm::vec3 &listenerPosition, glm::vec3 &speakerPosi
 void DialogCamera::load() {
     auto &scene = _services.scene.graphs.get(_sceneName);
     _sceneNode = scene.newCamera();
-    // From the options rather than the value handed to the constructor: the
-    // area computes that once when it loads, so a resolution changed later
-    // would otherwise leave the projection stretched to the old shape.
-    auto &opts = _game.options().graphics;
-    float aspect = opts.width / static_cast<float>(opts.height);
-    cameraSceneNode()->setPerspectiveProjection(glm::radians(_style.viewAngle), aspect, kDefaultClipPlaneNear, kDefaultClipPlaneFar);
+    rebuildProjection();
+}
+
+float DialogCamera::projectionFovy() const {
+    return glm::radians(_style.viewAngle);
 }
 
 void DialogCamera::setSpeakerPosition(glm::vec3 position) {

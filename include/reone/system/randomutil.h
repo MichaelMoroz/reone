@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace reone {
 
 /**
@@ -25,7 +27,7 @@ namespace reone {
  * SSAO noise texture all draw from here, so two runs of the same build render
  * differently. Seed it to compare frames between builds.
  */
-void seedRandom(uint32_t seed);
+void setRandomSeed(uint32_t seed);
 
 /**
  * Draw from a stream reserved for rendering, not the shared one.

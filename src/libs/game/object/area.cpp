@@ -80,8 +80,6 @@ static constexpr float kLineOfSightHeight = 1.7f;        // TODO: make it appear
 static constexpr float kMaxCollisionDistance = 8.0f;
 static constexpr float kMaxCollisionDistance2 = kMaxCollisionDistance * kMaxCollisionDistance;
 static constexpr float kCreatureCollisionEpsilon = 0.01f;
-/** Shadow darkness, chosen by eye across both authored ShadowOpacity groups. */
-static constexpr float kDefaultShadowOpacity = 0.5f;
 
 static constexpr std::array<glm::vec3, 2> kPartyFormationOffsets {{
     glm::vec3(1.5f, -0.7f, 0.0f),
@@ -157,9 +155,6 @@ Area::Area(
 }
 
 void Area::init() {
-    const GraphicsOptions &opts = _game.options().graphics;
-    _cameraAspect = opts.width / static_cast<float>(opts.height);
-
     _objectsByType.insert(std::make_pair(ObjectType::Creature, ObjectList()));
     _objectsByType.insert(std::make_pair(ObjectType::Item, ObjectList()));
     _objectsByType.insert(std::make_pair(ObjectType::Trigger, ObjectList()));
@@ -186,6 +181,9 @@ void Area::load(std::string name, const Gff &are, const Gff &git, bool fromSave)
 }
 
 void Area::activate() {
+    // Map is presentation state owned by Game, while loaded areas are cached.
+    // Restore this area's map whenever a cached module becomes active again.
+    _game.map().load(_name, _map);
     applySceneProperties();
 
     for (auto &pair : _rooms) {
@@ -203,7 +201,6 @@ void Area::loadARE(const resource::generated::ARE &are) {
 
     loadCameraStyle(are);
     loadAmbientColor(are);
-    loadShadows(are);
     loadScripts(are);
     loadMap(are);
     loadStealthXP(are);
@@ -237,30 +234,6 @@ void Area::loadAmbientColor(const resource::generated::ARE &are) {
     applySceneProperties();
 }
 
-void Area::loadShadows(const resource::generated::ARE &are) {
-    // ShadowOpacity is a BYTE, and the retail game authors exactly two values
-    // across all 96 modules: 50 in 22 of them and 205 in the other 74. Reading
-    // it as a percentage clamped 74 modules to fully black, which is why their
-    // shadows read far too contrasty. Neither of the arithmetic readings is
-    // right either: as a byte fraction the pair becomes 0.196 and 0.804, and
-    // judged side by side both modules want the same middle strength rather
-    // than either end. Two values that both want the same answer are not a
-    // parameter, so the authored byte is logged and not used. --shadowopacity
-    // overrides this when a module needs a different look.
-    _shadows.opacity = kDefaultShadowOpacity;
-    _shadows.sunShadows = are.SunShadows != 0;
-    _shadows.moonShadows = are.MoonShadows != 0;
-    // Authored per module and applied verbatim, so when a module's shadows
-    // read too dark the first question is what it actually asked for.
-    info("Area '" + _name + "': ShadowOpacity=" + std::to_string(are.ShadowOpacity) +
-             " -> strength " + std::to_string(_shadows.opacity) +
-             ", sun=" + std::to_string(_shadows.sunShadows) +
-             " moon=" + std::to_string(_shadows.moonShadows),
-         LogChannel::Graphics);
-
-    applySceneProperties();
-}
-
 void Area::loadScripts(const resource::generated::ARE &are) {
     _onEnter = are.OnEnter;
     _onExit = are.OnExit;
@@ -269,7 +242,8 @@ void Area::loadScripts(const resource::generated::ARE &are) {
 }
 
 void Area::loadMap(const resource::generated::ARE &are) {
-    _game.map().load(_name, are.Map);
+    _map = are.Map;
+    _game.map().load(_name, _map);
 }
 
 void Area::loadStealthXP(const resource::generated::ARE &are) {
@@ -309,7 +283,6 @@ void Area::loadMiniGame(const resource::generated::ARE &are) {
 void Area::applySceneProperties() {
     auto &sceneGraph = _services.scene.graphs.get(_sceneName);
     sceneGraph.setAmbientLightColor(_ambientColor);
-    sceneGraph.setShadowProperties(_shadows);
 
     auto fogProperties = FogProperties();
     fogProperties.enabled = _fogEnabled;
@@ -317,9 +290,6 @@ void Area::applySceneProperties() {
     fogProperties.farPlane = _fogFar;
     fogProperties.color = _fogColor;
     sceneGraph.setFog(fogProperties);
-    debug("Area fog: " + std::string(_fogEnabled ? "on" : "off") + ", near " +
-              std::to_string(_fogNear) + ", far " + std::to_string(_fogFar),
-          LogChannel::Graphics);
 }
 
 void Area::loadGIT(const resource::generated::GIT &git, const resource::Gff &gff) {
@@ -393,8 +363,10 @@ void Area::loadSounds(const resource::Gff &gff) {
 }
 
 void Area::loadCameras(const resource::Gff &gff) {
+    const auto &graphics = _game.options().graphics;
+    float aspect = graphics.width / static_cast<float>(graphics.height);
     for (auto &cameraGff : gff.getList("CameraList")) {
-        std::shared_ptr<StaticCamera> camera = _game.newStaticCamera(_cameraAspect, _sceneName);
+        std::shared_ptr<StaticCamera> camera = _game.newStaticCamera(aspect, _sceneName);
         camera->deserialize(*cameraGff);
         add(camera);
     }
@@ -464,27 +436,12 @@ void Area::loadLYT() {
         if (walkmesh) {
             walkmeshSceneNode = sceneGraph.newWalkmesh(*walkmesh);
             sceneGraph.addRoot(walkmeshSceneNode);
-        } else {
-            // A room without a walkmesh is background scenery - the K1
-            // convention. This still drives material shading; it no longer
-            // decides which room is the sky, because TSL does not follow it.
-            modelSceneNode->setBackgroundScenery(true);
-        }
-
-        // Which room is the sky is curated, never guessed. The old guess was
-        // the line above - no walkmesh means sky - which is a K1 convention
-        // TSL does not share: TSL authors a per-mesh background-geometry flag
-        // on rooms that do have walkmeshes, so every TSL sky went unclassified
-        // and rendered as ordinary lit geometry. Silence here is an answer: a
-        // module absent from the list has no sky room.
-        if (_services.scene.graphs.isSkyRoom(lytRoom.name)) {
-            modelSceneNode->setSkyRoom(true);
         }
 
         // Grass
         std::shared_ptr<GrassSceneNode> grassSceneNode;
         auto aabbNode = modelSceneNode->model().getAABBNode();
-        if (_grass.texture && aabbNode) {
+        if (_grass.texture && aabbNode && _game.options().graphics.grass) {
             auto grassProperties = GrassProperties();
             grassProperties.density = _grass.density;
             grassProperties.quadSize = _grass.quadSize;
@@ -548,26 +505,23 @@ void Area::initCameras(const glm::vec3 &entryPosition, float entryFacing) {
     position.z += 1.7f;
 
     auto &sceneGraph = _services.scene.graphs.get(_sceneName);
+    const auto &graphics = _game.options().graphics;
+    float aspect = graphics.width / static_cast<float>(graphics.height);
 
-    _firstPersonCamera = _game.newFirstPersonCamera(glm::radians(kDefaultFieldOfView), _cameraAspect, _sceneName);
+    _firstPersonCamera = _game.newFirstPersonCamera(glm::radians(kDefaultFieldOfView), aspect, _sceneName);
     _firstPersonCamera->load();
     _firstPersonCamera->setPosition(position);
     _firstPersonCamera->setFacing(entryFacing);
 
-    _freeCamera = _game.newFreeCamera(glm::radians(kDefaultFieldOfView), _cameraAspect, _sceneName);
-    _freeCamera->load();
-    _freeCamera->setPosition(position);
-    _freeCamera->setFacing(entryFacing);
-
-    _thirdPersonCamera = _game.newThirdPersonCamera(_camStyleDefault, _cameraAspect, _sceneName);
+    _thirdPersonCamera = _game.newThirdPersonCamera(_camStyleDefault, aspect, _sceneName);
     _thirdPersonCamera->load();
     _thirdPersonCamera->setTargetPosition(position);
     _thirdPersonCamera->setFacing(entryFacing);
 
-    _dialogCamera = _game.newDialogCamera(_camStyleDefault, _cameraAspect, _sceneName);
+    _dialogCamera = _game.newDialogCamera(_camStyleDefault, aspect, _sceneName);
     _dialogCamera->load();
 
-    _animatedCamera = _game.newAnimatedCamera(_cameraAspect, _sceneName);
+    _animatedCamera = _game.newAnimatedCamera(aspect, _sceneName);
     _animatedCamera->load();
 }
 
@@ -1164,23 +1118,32 @@ void Area::onPartyLeaderMoved(bool roomChanged) {
 }
 
 void Area::updateRoomVisibility() {
-    // Every room, always. The VIS graph selected rooms adjacent to the party
-    // leader's, but only when the camera happened to be third person - so the
-    // same area drew differently depending on input mode, and first person and
-    // the free camera silently drew everything already.
-    //
-    // Making the test camera-appropriate rather than deleting it would be
-    // reintroducing selection machinery this project already measured and
-    // rejected: removing ~9000 frustum tests per frame changed frame time by
-    // nothing, because the tests cost tens of nanoseconds and the GPU does not
-    // need the help at this triangle count (doc/tasks/RECORD.md). Raster's cost
-    // is CPU work per draw, which drawing fewer rooms does not address.
-    //
-    // That argument is about performance only. Whether retro should draw rooms
-    // the original hid is a separate, unsettled question — doc/tasks/DECISIONS.md
-    // D1, and doc/tasks/FIDELITY.md row 17.
-    for (auto &room : _rooms) {
-        room.second->setVisible(true);
+    std::shared_ptr<Creature> partyLeader(_game.party().getLeader());
+    Room *leaderRoom = partyLeader ? partyLeader->room() : nullptr;
+    bool allVisible = _game.cameraType() != CameraType::ThirdPerson || !leaderRoom;
+
+    if (allVisible) {
+        for (auto &room : _rooms) {
+            room.second->setVisible(true);
+        }
+    } else {
+        auto adjRoomNames = _visibility.equal_range(leaderRoom->name());
+        for (auto &room : _rooms) {
+            // Room is visible if either of the following is true:
+            // 1. party leader is not in a room
+            // 2. this room is the party leaders room
+            // 3. this room is adjacent to the party leaders room
+            bool visible = !leaderRoom || room.second.get() == leaderRoom;
+            if (!visible) {
+                for (auto adjRoom = adjRoomNames.first; adjRoom != adjRoomNames.second; adjRoom++) {
+                    if (adjRoom->second == room.first) {
+                        visible = true;
+                        break;
+                    }
+                }
+            }
+            room.second->setVisible(visible);
+        }
     }
 }
 
@@ -1276,8 +1239,6 @@ Camera *Area::getCamera(CameraType type) {
     switch (type) {
     case CameraType::FirstPerson:
         return _firstPersonCamera.get();
-    case CameraType::Free:
-        return _freeCamera.get();
     case CameraType::ThirdPerson:
         return _thirdPersonCamera.get();
     case CameraType::Static:

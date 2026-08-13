@@ -66,7 +66,6 @@ void MainMenu::onGUILoaded() {
     // surround behind an inset layout: its buttons carry their own frame and
     // never sit in the plate's window, so nothing here can misalign with it.
     if (!_game.isTSL()) {
-        _gui->setBackgroundAsArt(true);
         loadBackground(BackgroundType::Menu);
     }
 

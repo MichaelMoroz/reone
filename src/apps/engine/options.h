@@ -52,16 +52,6 @@ struct Options {
     int commandsFrame {0};
     /** Frame-indexed SDL mouse input script for deterministic UI automation. */
     std::string inputScript;
-    /**
-     * Write a screenshot to this path on frame captureFrame and exit. Lets two
-     * builds be rendered and compared without a human in the loop.
-     *
-     * Counted in frames rather than seconds because animations advance per frame:
-     * two runs stopped at the same wall-clock time differ by whatever idle
-     * animation, foliage movement and glow have done in between, which shows up
-     * in the diff as though it were a rendering difference.
-     */
-    std::string capturePath;
     /** Where to write the scene render targets, or empty not to. */
     std::string dumpTargetsPath;
     /**
@@ -72,19 +62,6 @@ struct Options {
      * list for name-based classification.
      */
     std::string dumpObjectsPath;
-    int captureFrame {3};
-    /**
-     * Capture this many consecutive frames ending the run, rather than one.
-     * Each gets its frame number appended to the stem, so capturePath
-     * "out.tga" with captureFrame 350 writes out_0350.tga, out_0351.tga...
-     *
-     * A single frame says nothing about whether a temporal filter converges.
-     * A run of them does: with the simulation frozen, the only thing still
-     * moving is the accumulation, so the difference between consecutive
-     * frames is the residual the denoiser and TAA have not yet removed, and
-     * it must fall towards zero.
-     */
-    int captureFrames {1};
     /**
      * Stop advancing the simulation from this frame on, or 0 not to.
      *

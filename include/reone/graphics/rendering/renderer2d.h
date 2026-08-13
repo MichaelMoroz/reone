@@ -60,6 +60,8 @@ public:
     virtual void init() = 0;
     virtual void deinit() = 0;
 
+    virtual glm::ivec2 extent() const = 0;
+
     /**
      * A textured quad filling a pixel rect. @p color multiplies the texture,
      * and @p uv transforms the texture coordinates - flipping an arrow, or
@@ -155,6 +157,7 @@ public:
 
     void init() override;
     void deinit() override;
+    glm::ivec2 extent() const override { return _extent; }
 
     /**
      * Bind this renderer to the command buffer being recorded. @p extent sets

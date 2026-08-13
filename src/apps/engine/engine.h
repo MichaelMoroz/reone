@@ -36,6 +36,7 @@
 #include "profiler.h"
 
 #include <filesystem>
+#include <deque>
 #include <vector>
 
 namespace reone {
@@ -59,6 +60,12 @@ public:
     int run();
 
 private:
+    struct CaptureRequest {
+        std::filesystem::path path;
+        int count {1};
+        int index {0};
+    };
+
     struct FrameStates {
         static constexpr int rendered = 0;
         static constexpr int updating = 1;
@@ -101,12 +108,15 @@ private:
     uint64_t _ticks {0};
 
     int _frameIndex {0};
-    bool _captured {false};
     bool _commandsRun {false};
     bool _inFrame {false};
     bool _renderdocTriggered {false};
     bool _historyRestarted {false};
     bool _graphicsRebuildRequested {false};
+    std::deque<std::string> _scriptedCommands;
+    int _scriptPauseFrames {0};
+    std::optional<CaptureRequest> _captureRequest;
+    bool _scriptQuitRequested {false};
 
     bool _showCursor {true};
     bool _relativeMouseMode {false};
@@ -133,18 +143,10 @@ private:
     /** Records the GUI through the 2D renderer, in its own rendering scope. */
     void renderFrame(bool &quit);
     void renderVulkanFrame(bool &quit);
-    /**
-     * Whether this run exists to produce a comparable frame, rather than to be
-     * played. Such a run has to see exactly the same sequence of frames every
-     * time, which costs it live input and focus handling.
-     */
-    bool isCaptureRun() const {
-        return !_options.capturePath.empty() || !_options.dumpTargetsPath.empty() ||
-               !_options.dumpObjectsPath.empty();
-    }
-
+    void processScriptedCommands(bool &quit);
     void captureIfRequested(bool &quit);
-    std::filesystem::path capturePathForFrame(int frame) const;
+    void captureFrame(const std::filesystem::path &path);
+    std::filesystem::path numberedCapturePath(const CaptureRequest &request) const;
     void dumpTargetsIfRequested();
     void dumpObjectsIfRequested();
 

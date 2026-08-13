@@ -51,6 +51,7 @@ public:
     void renderOffscreen() override;
 
     void openEquipment();
+    void openEquipmentItems();
     void openInventory();
     void openCharacter();
     void openAbilities();
@@ -190,6 +191,7 @@ private:
 
     void updateTabButtons();
     void changeTab(InGameMenuTab tab);
+    void updateK2SectionTitle();
     void refreshK2Footer();
 
     void loadCharacter();

@@ -47,6 +47,7 @@ static constexpr int kOffsetToReticle = 8;
 static constexpr int kTitleBarWidth = 250;
 static constexpr int kTitleBarPadding = 6;
 static constexpr int kHealthBarHeight = 6;
+static constexpr float kObjectTitleScale = 2.0f / 3.0f;
 static constexpr int kNumActionSlots = 3;
 static constexpr int kActionBarMargin = 3;
 static constexpr int kActionBarPadding = 3;
@@ -114,12 +115,13 @@ bool SelectionOverlay::handleMouseMotion(const input::MouseMotionEvent &event) {
     for (int i = 0; i < kNumActionSlots; ++i) {
         float x, y;
         getActionScreenCoords(i, x, y);
-        if (event.x >= x && event.y >= y && event.x < x + kActionWidth && event.y < y + kActionHeight) {
+        float scale = layoutScale();
+        if (event.x >= x && event.y >= y && event.x < x + kActionWidth * scale && event.y < y + kActionHeight * scale) {
             _selectedActionSlot = i;
             float actionY = event.y - y;
-            if (actionY < kActionArrowHeight) {
+            if (actionY < kActionArrowHeight * scale) {
                 _hilightedActionBand = ActionBand::Previous;
-            } else if (actionY >= kActionArrowHeight + kActionWidth) {
+            } else if (actionY >= (kActionArrowHeight + kActionWidth) * scale) {
                 _hilightedActionBand = ActionBand::Next;
             } else {
                 _hilightedActionBand = ActionBand::Icon;
@@ -142,16 +144,17 @@ bool SelectionOverlay::handleMouseButtonDown(const input::MouseButtonEvent &even
     float frameX, frameY;
     getActionScreenCoords(_selectedActionSlot, frameX, frameY);
 
+    float scale = layoutScale();
     if (event.x < frameX || event.y < frameY ||
-        event.x >= frameX + kActionWidth || event.y >= frameY + kActionHeight)
+        event.x >= frameX + kActionWidth * scale || event.y >= frameY + kActionHeight * scale)
         return false;
 
     float actionY = event.y - frameY;
-    if (actionY < kActionArrowHeight) {
+    if (actionY < kActionArrowHeight * scale) {
         cycleActionSlot(slot, true);
         return true;
     }
-    if (actionY >= kActionArrowHeight + kActionWidth) {
+    if (actionY >= (kActionArrowHeight + kActionWidth) * scale) {
         cycleActionSlot(slot, false);
         return true;
     }
@@ -305,10 +308,11 @@ void SelectionOverlay::render() {
 
 void SelectionOverlay::renderReticle(std::shared_ptr<Texture> texture, const glm::vec3 &screenCoords) {
     const GraphicsOptions &opts = _game.options().graphics;
-    int width = texture->width();
-    int height = texture->height();
+    float scale = layoutScale();
+    float width = texture->width() * scale;
+    float height = texture->height() * scale;
 
-    glm::ivec2 position(
+    glm::vec2 position(
         (opts.width * screenCoords.x) - width / 2,
         (opts.height * (1.0f - screenCoords.y)) - height / 2);
     _services.graphics.renderer2d.drawImage(*texture, position, {width, height});
@@ -319,42 +323,55 @@ void SelectionOverlay::renderTitleBar() {
         return;
 
     const GraphicsOptions &opts = _game.options().graphics;
-    float barHeight = _font->height() + kTitleBarPadding;
+    float scale = layoutScale();
+    float titleScale = scale * kObjectTitleScale;
+    float fontScale = titleScale * opts.guiTextScale * (_game.isTSL() ? 1.0f : kK1CombatTextScale);
+    float barWidth = kTitleBarWidth * titleScale;
+    float barHeight = _font->height() * fontScale + kTitleBarPadding * titleScale;
+    float reticleHeight = _reticleHeight * scale;
+    float offsetToReticle = kOffsetToReticle * scale;
+    float healthBarHeight = kHealthBarHeight * titleScale;
+    float actionHeight = kActionHeight * scale;
+    float actionMargin = kActionBarMargin * scale;
     {
-        float x = opts.width * _selectedScreenCoords.x - kTitleBarWidth / 2;
-        float y = opts.height * (1.0f - _selectedScreenCoords.y) - _reticleHeight / 2.0f - barHeight - kOffsetToReticle - kHealthBarHeight - 1.0f;
+        float x = opts.width * _selectedScreenCoords.x - barWidth / 2;
+        float y = opts.height * (1.0f - _selectedScreenCoords.y) - reticleHeight / 2.0f - barHeight - offsetToReticle - healthBarHeight - scale;
 
         if (_hasActions) {
-            y -= kActionHeight + 2 * kActionBarMargin;
+            y -= actionHeight + 2 * actionMargin;
         }
         _services.graphics.renderer2d.drawRect(
             {x, y},
-            {kTitleBarWidth, barHeight},
+            {barWidth, barHeight},
             glm::vec4(0.0f, 0.0f, 0.0f, 0.5f));
     }
     {
         float x = opts.width * _selectedScreenCoords.x;
-        float y = opts.height * (1.0f - _selectedScreenCoords.y) - (_reticleHeight + barHeight) / 2 - kOffsetToReticle - kHealthBarHeight - 1.0f;
+        float y = opts.height * (1.0f - _selectedScreenCoords.y) - (reticleHeight + barHeight) / 2 - offsetToReticle - healthBarHeight - scale;
         if (_hasActions) {
-            y -= kActionHeight + 2 * kActionBarMargin;
+            y -= actionHeight + 2 * actionMargin;
         }
         glm::vec3 position(x, y, 0.0f);
-        _font->render(_selectedObject->name(), position, getColorFromSelectedObject());
+        _font->render(_selectedObject->name(), position, getColorFromSelectedObject(), TextGravity::CenterCenter, fontScale);
     }
 }
 
 void SelectionOverlay::renderHealthBar() {
     const GraphicsOptions &opts = _game.options().graphics;
-    float x = opts.width * _selectedScreenCoords.x - kTitleBarWidth / 2;
-    float y = opts.height * (1.0f - _selectedScreenCoords.y) - _reticleHeight / 2.0f - kHealthBarHeight - kOffsetToReticle;
-    float w = glm::clamp(_selectedObject->currentHitPoints() / static_cast<float>(_selectedObject->hitPoints()), 0.0f, 1.0f) * kTitleBarWidth;
+    float scale = layoutScale();
+    float titleScale = scale * kObjectTitleScale;
+    float barWidth = kTitleBarWidth * titleScale;
+    float healthBarHeight = kHealthBarHeight * titleScale;
+    float x = opts.width * _selectedScreenCoords.x - barWidth / 2;
+    float y = opts.height * (1.0f - _selectedScreenCoords.y) - _reticleHeight * scale / 2.0f - healthBarHeight - kOffsetToReticle * scale;
+    float w = glm::clamp(_selectedObject->currentHitPoints() / static_cast<float>(_selectedObject->hitPoints()), 0.0f, 1.0f) * barWidth;
 
     if (_hasActions) {
-        y -= kActionHeight + 2 * kActionBarMargin;
+        y -= (kActionHeight + 2 * kActionBarMargin) * scale;
     }
     _services.graphics.renderer2d.drawRect(
         {x, y},
-        {w, kHealthBarHeight},
+        {w, healthBarHeight},
         glm::vec4(getColorFromSelectedObject(), 1.0f));
 }
 
@@ -380,11 +397,12 @@ void SelectionOverlay::renderActionFrame(int index) {
     }
     float frameX, frameY;
     getActionScreenCoords(index, frameX, frameY);
+    float scale = layoutScale();
 
     _services.graphics.renderer2d.drawImage(
         *frameTexture,
         {frameX, frameY},
-        {kActionWidth, kActionHeight});
+        {kActionWidth * scale, kActionHeight * scale});
 }
 
 void SelectionOverlay::renderActionArrows(int index) {
@@ -402,6 +420,7 @@ void SelectionOverlay::renderActionArrow(int index, bool previous) {
 
     float frameX, frameY;
     getActionScreenCoords(index, frameX, frameY);
+    float scale = layoutScale();
 
     // The "next" arrow is the "previous" one turned around.
     auto uv = previous ? glm::mat3x4(1.0f)
@@ -411,8 +430,8 @@ void SelectionOverlay::renderActionArrow(int index, bool previous) {
                              glm::vec4(1.0f, 1.0f, 0.0f, 0.0f));
     _services.graphics.renderer2d.drawImage(
         *texture,
-        {frameX, previous ? frameY : frameY + kActionArrowHeight + kActionWidth},
-        {kActionWidth, kActionArrowHeight},
+        {frameX, previous ? frameY : frameY + (kActionArrowHeight + kActionWidth) * scale},
+        {kActionWidth * scale, kActionArrowHeight * scale},
         glm::vec4(1.0f),
         uv);
 }
@@ -422,8 +441,9 @@ bool SelectionOverlay::getActionScreenCoords(int index, float &x, float &y) cons
         return false;
 
     const GraphicsOptions &opts = _game.options().graphics;
-    x = opts.width * _selectedScreenCoords.x + (static_cast<float>(index - 1) - 0.5f) * kActionWidth + (index - 1) * kActionBarMargin;
-    y = opts.height * (1.0f - _selectedScreenCoords.y) - _reticleHeight / 2.0f - kActionHeight - kOffsetToReticle - kActionBarMargin;
+    float scale = layoutScale();
+    x = opts.width * _selectedScreenCoords.x + ((static_cast<float>(index - 1) - 0.5f) * kActionWidth + (index - 1) * kActionBarMargin) * scale;
+    y = opts.height * (1.0f - _selectedScreenCoords.y) - (_reticleHeight / 2.0f + kActionHeight + kOffsetToReticle + kActionBarMargin) * scale;
 
     return true;
 }
@@ -439,13 +459,19 @@ void SelectionOverlay::renderActionIcon(int index) {
     getActionScreenCoords(index, frameX, frameY);
 
     const GraphicsOptions &opts = _game.options().graphics;
-    float y = opts.height * (1.0f - _selectedScreenCoords.y) - (_reticleHeight + kActionHeight + kActionWidth) / 2.0f - kOffsetToReticle - kActionBarMargin;
+    float scale = layoutScale();
+    float y = opts.height * (1.0f - _selectedScreenCoords.y) - ((_reticleHeight + kActionHeight + kActionWidth) / 2.0f + kOffsetToReticle + kActionBarMargin) * scale;
 
     glm::mat4 transform(1.0f);
     transform = glm::translate(transform, glm::vec3(frameX, y, 0.0f));
-    transform = glm::scale(transform, glm::vec3(kActionWidth, kActionWidth, 1.0f));
+    transform = glm::scale(transform, glm::vec3(kActionWidth * scale, kActionWidth * scale, 1.0f));
 
     renderContextActionIcon(action, transform, _services);
+}
+
+float SelectionOverlay::layoutScale() const {
+    const auto &opts = _game.options().graphics;
+    return std::min(opts.width / 800.0f, opts.height / 600.0f) * opts.guiScale;
 }
 
 glm::vec3 SelectionOverlay::getColorFromSelectedObject() const {

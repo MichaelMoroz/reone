@@ -29,14 +29,17 @@ void Font::load(std::shared_ptr<Texture> texture) {
 
     const Texture::Features &features = texture->features();
     _height = features.fontHeight * 100.0f;
+    _spacingR = features.spacingR * 100.0f;
     _glyphs.reserve(features.numChars);
+
+    float textureAspect = static_cast<float>(texture->width()) / texture->height();
 
     for (int i = 0; i < features.numChars; ++i) {
         glm::vec2 ul(features.upperLeftCoords[i]);
         glm::vec2 lr(features.lowerRightCoords[i]);
         float w = lr.x - ul.x;
         float h = ul.y - lr.y;
-        float aspect = w / h;
+        float aspect = h != 0.0f ? (w / h) * textureAspect : 0.0f;
 
         Glyph glyph;
         glyph.ul = std::move(ul);
@@ -83,7 +86,7 @@ glm::vec2 Font::textOffset(std::string_view text, TextGravity gravity, float sca
 float Font::measure(std::string_view text, float scale) const {
     float w = 0.0f;
     for (const char &glyph : text) {
-        w += scaledMetric(_glyphs[reinterpret_cast<const unsigned char &>(glyph)].size.x, scale);
+        w += glyphAdvance(_glyphs[reinterpret_cast<const unsigned char &>(glyph)], scale);
     }
     return w;
 }

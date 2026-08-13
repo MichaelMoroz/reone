@@ -33,10 +33,10 @@ public:
         ServicesView &services) :
         Camera(
             id,
+            aspect,
             std::move(sceneName),
             game,
-            services),
-        _aspect(aspect) {
+            services) {
     }
 
     void deserialize(const resource::Gff &gff);
@@ -52,7 +52,7 @@ private:
 
     // END Serializable
 
-    float _aspect;
+    float projectionFovy() const override;
 };
 
 } // namespace game

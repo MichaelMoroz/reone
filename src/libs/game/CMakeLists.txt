@@ -195,6 +195,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/gui/chargen/classselect.h
     ${GAME_INCLUDE_DIR}/gui/chargen/custom.h
     ${GAME_INCLUDE_DIR}/gui/chargen/feats.h
+    ${GAME_INCLUDE_DIR}/gui/chargen/iconselection.h
     ${GAME_INCLUDE_DIR}/gui/chargen/levelup.h
     ${GAME_INCLUDE_DIR}/gui/chargen/nameentry.h
     ${GAME_INCLUDE_DIR}/gui/chargen/portraitselect.h
@@ -479,6 +480,7 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/gui/chargen/classselect.cpp
     ${GAME_SOURCE_DIR}/gui/chargen/custom.cpp
     ${GAME_SOURCE_DIR}/gui/chargen/feats.cpp
+    ${GAME_SOURCE_DIR}/gui/chargen/iconselection.cpp
     ${GAME_SOURCE_DIR}/gui/chargen/levelup.cpp
     ${GAME_SOURCE_DIR}/gui/chargen/nameentry.cpp
     ${GAME_SOURCE_DIR}/gui/chargen/portraitselect.cpp
@@ -519,6 +521,7 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/minigame.cpp
     ${GAME_SOURCE_DIR}/object.cpp
     ${GAME_SOURCE_DIR}/object/area.cpp
+    ${GAME_SOURCE_DIR}/object/camera.cpp
     ${GAME_SOURCE_DIR}/object/camera/animated.cpp
     ${GAME_SOURCE_DIR}/object/camera/dialog.cpp
     ${GAME_SOURCE_DIR}/object/camera/firstperson.cpp

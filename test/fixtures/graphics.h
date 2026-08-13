@@ -58,6 +58,7 @@ public:
     MOCK_METHOD(uint64_t, resourceGeneration, (), (const override));
     MOCK_METHOD(void, init, (), (override));
     MOCK_METHOD(void, deinit, (), (override));
+    MOCK_METHOD(glm::ivec2, extent, (), (const override));
     MOCK_METHOD(void, initImGui, (), (override));
     MOCK_METHOD(void, beginImGuiFrame, (), (override));
     MOCK_METHOD(void, renderImGui, (ImDrawData &), (override));
@@ -90,6 +91,7 @@ class Mock2DRenderer : public I2DRenderer, boost::noncopyable {
 public:
     MOCK_METHOD(void, init, (), (override));
     MOCK_METHOD(void, deinit, (), (override));
+    MOCK_METHOD(glm::ivec2, extent, (), (const override));
     MOCK_METHOD(void, drawImage, (Texture &, const glm::vec2 &, const glm::vec2 &, const glm::vec4 &, const glm::mat3x4 &), (override));
     MOCK_METHOD(void, drawImage, (Texture &, const glm::mat4 &, const glm::vec4 &, const glm::mat3x4 &), (override));
     MOCK_METHOD(void, drawRect, (const glm::vec2 &, const glm::vec2 &, const glm::vec4 &), (override));
@@ -133,6 +135,10 @@ public:
 
     GraphicsServices &services() {
         return *_services;
+    }
+
+    Mock2DRenderer &renderer2d() {
+        return *_renderer2d;
     }
 
 private:

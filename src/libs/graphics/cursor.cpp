@@ -24,10 +24,13 @@ namespace reone {
 
 namespace graphics {
 
-void Cursor::render() {
+void Cursor::render(float scale) {
     std::shared_ptr<Texture> texture(_pressed ? _down : _up);
-    _renderer2d.withBlendMode(BlendMode::Normal, [this, &texture]() {
-        _renderer2d.drawImage(*texture, _position, {texture->width(), texture->height()});
+    _renderer2d.withBlendMode(BlendMode::Normal, [this, &texture, scale]() {
+        _renderer2d.drawImage(
+            *texture,
+            glm::vec2(_position),
+            {texture->width() * scale, texture->height() * scale});
     });
 }
 
