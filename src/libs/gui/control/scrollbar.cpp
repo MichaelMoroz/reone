@@ -90,10 +90,15 @@ void ScrollBar::renderThumb(const glm::ivec2 &offset, I2DRenderer &renderer2d) {
     float frameHeight = _extent.height - 2.0f * _extent.width - 4.0f;
     float thumbHeight = frameHeight * _state.numVisible / static_cast<float>(_state.count);
     float y = glm::mix(0.0f, frameHeight - thumbHeight, _state.offset / static_cast<float>(_state.count - _state.numVisible));
+    // The reference image API truncates both vectors to ivec2 at this call.
+    glm::ivec2 thumbPosition {
+        _extent.left + 2 + offset.x,
+        static_cast<int>(_extent.top + _extent.width + 2.0f + offset.y + y)};
+    glm::ivec2 thumbSize {_extent.width - 4, static_cast<int>(thumbHeight)};
     renderer2d.drawImage(
         *_thumb.image,
-        {_extent.left + 2.0f + offset.x, _extent.top + _extent.width + 2.0f + offset.y + y},
-        {_extent.width - 4.0f, thumbHeight});
+        glm::vec2(thumbPosition),
+        glm::vec2(thumbSize));
 }
 
 void ScrollBar::renderArrows(const glm::ivec2 &offset, I2DRenderer &renderer2d) {

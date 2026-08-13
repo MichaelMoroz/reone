@@ -381,9 +381,13 @@ void GUI::renderBackground(I2DRenderer &renderer2d) {
     glm::ivec2 size {
         static_cast<int>(_resolutionX * cover),
         static_cast<int>(_resolutionY * cover)};
+    // Keep the integer division used by the reference image call.
+    glm::ivec2 position {
+        (_options.width - size.x) / 2,
+        (_options.height - size.y) / 2};
     renderer2d.drawImage(
         *_background,
-        {0.5f * (_options.width - size.x), 0.5f * (_options.height - size.y)},
+        glm::vec2(position),
         glm::vec2(size));
 }
 

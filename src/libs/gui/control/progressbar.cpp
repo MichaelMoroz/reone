@@ -61,14 +61,20 @@ void ProgressBar::render(const glm::ivec2 &screenSize,
     // authored start edge.
     float fraction = _value / 100.0f;
     glm::mat3x4 uv(1.0f);
+    // The reference image API takes ivec2. Convert each completed position and
+    // size expression independently to preserve its truncation toward zero.
     if (_extent.height > _extent.width) {
         float h = _extent.height * fraction;
         uv[1][1] = fraction;
         uv[2][1] = 0.0f;
+        glm::ivec2 fillPosition {
+            _extent.left + offset.x,
+            static_cast<int>(_extent.top + _extent.height - h + offset.y)};
+        glm::ivec2 fillSize {_extent.width, static_cast<int>(h)};
         renderer2d.drawImage(
             *_progress.fill,
-            {_extent.left + offset.x, _extent.top + _extent.height - h + offset.y},
-            {_extent.width, h},
+            glm::vec2(fillPosition),
+            glm::vec2(fillSize),
             glm::vec4(_progress.color, 1.0f),
             uv);
     } else {
@@ -76,10 +82,14 @@ void ProgressBar::render(const glm::ivec2 &screenSize,
         float left = _startFromLeft ? _extent.left : _extent.left + _extent.width - w;
         uv[0][0] = fraction;
         uv[2][0] = _startFromLeft ? 0.0f : 1.0f - fraction;
+        glm::ivec2 fillPosition {
+            static_cast<int>(left + offset.x),
+            _extent.top + offset.y};
+        glm::ivec2 fillSize {static_cast<int>(w), _extent.height};
         renderer2d.drawImage(
             *_progress.fill,
-            {left + offset.x, _extent.top + offset.y},
-            {w, _extent.height},
+            glm::vec2(fillPosition),
+            glm::vec2(fillSize),
             glm::vec4(_progress.color, 1.0f),
             uv);
     }
