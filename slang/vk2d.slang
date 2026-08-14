@@ -127,10 +127,7 @@ Varyings textVertex(uint vertexId: SV_VertexID, uint glyph: SV_InstanceID) {
     float4 uv = textUniforms.chars[glyph].uv;
 
     Varyings output;
-    // The OpenGL path starts with the unit-quad vertex before adding the
-    // scaled corner, so its glyph is one pixel wider and taller. Reproduce
-    // that extra pixel deliberately for reference parity.
-    float2 screenPosition = posScale.xy + corner * (posScale.zw + 1.0f);
+    float2 screenPosition = posScale.xy + corner * posScale.zw;
     output.position = mul(globalUniforms.projection,
                           float4(screenPosition, 0.0f, 1.0f));
     // Same v convention as the sprites: the glyph rect starts at the atlas
