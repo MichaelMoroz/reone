@@ -1166,32 +1166,23 @@ void Area::onPartyLeaderMoved(bool roomChanged) {
 }
 
 void Area::updateRoomVisibility() {
-    std::shared_ptr<Creature> partyLeader(_game.party().getLeader());
-    Room *leaderRoom = partyLeader ? partyLeader->room() : nullptr;
-    bool allVisible = _game.cameraType() != CameraType::ThirdPerson || !leaderRoom;
-
-    if (allVisible) {
-        for (auto &room : _rooms) {
-            room.second->setVisible(true);
-        }
-    } else {
-        auto adjRoomNames = _visibility.equal_range(leaderRoom->name());
-        for (auto &room : _rooms) {
-            // Room is visible if either of the following is true:
-            // 1. party leader is not in a room
-            // 2. this room is the party leaders room
-            // 3. this room is adjacent to the party leaders room
-            bool visible = !leaderRoom || room.second.get() == leaderRoom;
-            if (!visible) {
-                for (auto adjRoom = adjRoomNames.first; adjRoom != adjRoomNames.second; adjRoom++) {
-                    if (adjRoom->second == room.first) {
-                        visible = true;
-                        break;
-                    }
-                }
-            }
-            room.second->setVisible(visible);
-        }
+    // Every room, always. The VIS graph selected rooms adjacent to the party
+    // leader's, but only when the camera happened to be third person - so the
+    // same area drew differently depending on input mode, and first person and
+    // the free camera silently drew everything already.
+    //
+    // Making the test camera-appropriate rather than deleting it would be
+    // reintroducing selection machinery this project already measured and
+    // rejected: removing ~9000 frustum tests per frame changed frame time by
+    // nothing, because the tests cost tens of nanoseconds and the GPU does not
+    // need the help at this triangle count (doc/tasks/RECORD.md). Raster's cost
+    // is CPU work per draw, which drawing fewer rooms does not address.
+    //
+    // That argument is about performance only. Whether retro should draw rooms
+    // the original hid is a separate, unsettled question — doc/tasks/DECISIONS.md
+    // D1, and doc/tasks/FIDELITY.md row 17.
+    for (auto &room : _rooms) {
+        room.second->setVisible(true);
     }
 }
 
