@@ -479,6 +479,64 @@ observable said so either.
 
 ---
 
+### 1.20 Two builds seeded once per batch deal each other different cards
+
+Merging `pr-285` was verified by capturing the same GUI states on this branch and
+on the OpenGL build the work came from, and comparing pixels with the scene off.
+Six K1 states refused to converge: container and inventory listed different items
+with different stack counts, and the Pazaak board showed a 9 where the reference
+showed a 5, at up to 255 per channel.
+
+Every rendering theory for it was wrong, and each cost a round: the icon
+sharpening shader, the item-slot art repaint, a scene-backed control the
+`graphics off` guard was failing to suppress. Two independent blind readings of
+the crops ended it by measuring rather than looking - the labels' centring axis,
+every panel stroke row, the scrollbar and the one row both sides shared were
+**bit-identical**. Same drawing, different data.
+
+The harness seeded the shared generator once at the head of a batch. A batch is
+one engine process running ~38 states in sequence, so whatever randomness one
+state consumes shifts every state after it, and two builds consuming even
+slightly differently drift apart as the batch proceeds. It is not visible early -
+the first states matched - and it does not look like a seeding problem, because
+the frames, baselines and margins all still land on the same pixel.
+
+Reseeding before each state closed all six to within one unit, and closed the
+other half of the same fault: twelve states that varied *between two runs of the
+same reference binary* by up to 246 became byte-identical, because randomness
+drawn during init from the wall clock no longer survived into the states.
+
+Two things worth keeping from it. **A pixel comparison is the wrong instrument
+for "same drawing, different data"** - it reports a large delta and says nothing
+about which of the two it is; blind description is what separates them. And **the
+noise floor has to be measured on the states being compared, not on one
+convenient state.** The determinism check here was run on the main menu, which
+has no random content, and passed - which is why none of this surfaced for
+several rounds of chasing rendering bugs that were not there.
+
+---
+
+### 1.21 A glyph quad a pixel too large, mistaken for an antialiasing gate
+
+Text in the same comparison differed everywhere by up to 196. The obvious
+suspect was the alpha-edge sharpen: this branch's `textFragment` carried the
+remap ungated where the reference gates it by magnification, so the gate was
+transcribed and the residual predicted to vanish. It did not - 176 became 160.
+
+The actual cause was geometry. The reference's text vertex shader starts `P` at
+the unit-quad vertex and *then* adds the scaled corner, so its glyph spans
+`posScale + 1` on both axes; this branch's spanned `posScale`. The glyph's uv
+rect maps across the whole quad either way, so the atlas was being resampled at a
+slightly different rate and every glyph edge landed differently. Reproducing the
+extra pixel took every text state to exact.
+
+The extra pixel looks unintended in the original - `aPosition` is added twice.
+It is reproduced deliberately and commented as such, because parity with the
+reference was the contract; if that changes, it is a fix to make upstream, not
+here.
+
+---
+
 ## 2. Design analyses worth keeping, though the decision is made
 
 ### 2.1 One BLAS for the whole scene — backlog 8.9
