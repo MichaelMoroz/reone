@@ -80,6 +80,8 @@ static constexpr float kLineOfSightHeight = 1.7f;        // TODO: make it appear
 static constexpr float kMaxCollisionDistance = 8.0f;
 static constexpr float kMaxCollisionDistance2 = kMaxCollisionDistance * kMaxCollisionDistance;
 static constexpr float kCreatureCollisionEpsilon = 0.01f;
+/** Shadow darkness, chosen by eye across both authored ShadowOpacity groups. */
+static constexpr float kDefaultShadowOpacity = 0.5f;
 
 static constexpr std::array<glm::vec3, 2> kPartyFormationOffsets {{
     glm::vec3(1.5f, -0.7f, 0.0f),
@@ -201,6 +203,7 @@ void Area::loadARE(const resource::generated::ARE &are) {
 
     loadCameraStyle(are);
     loadAmbientColor(are);
+    loadShadows(are);
     loadScripts(are);
     loadMap(are);
     loadStealthXP(are);
@@ -230,6 +233,30 @@ void Area::loadCameraStyle(const resource::generated::ARE &are) {
 
 void Area::loadAmbientColor(const resource::generated::ARE &are) {
     _ambientColor = are.DynAmbientColor > 0 ? Gff::colorFromUint32(are.DynAmbientColor) : g_defaultAmbientColor;
+
+    applySceneProperties();
+}
+
+void Area::loadShadows(const resource::generated::ARE &are) {
+    // ShadowOpacity is a BYTE, and the retail game authors exactly two values
+    // across all 96 modules: 50 in 22 of them and 205 in the other 74. Reading
+    // it as a percentage clamped 74 modules to fully black, which is why their
+    // shadows read far too contrasty. Neither of the arithmetic readings is
+    // right either: as a byte fraction the pair becomes 0.196 and 0.804, and
+    // judged side by side both modules want the same middle strength rather
+    // than either end. Two values that both want the same answer are not a
+    // parameter, so the authored byte is logged and not used. --shadowopacity
+    // overrides this when a module needs a different look.
+    _shadows.opacity = kDefaultShadowOpacity;
+    _shadows.sunShadows = are.SunShadows != 0;
+    _shadows.moonShadows = are.MoonShadows != 0;
+    // Authored per module and applied verbatim, so when a module's shadows
+    // read too dark the first question is what it actually asked for.
+    info("Area '" + _name + "': ShadowOpacity=" + std::to_string(are.ShadowOpacity) +
+             " -> strength " + std::to_string(_shadows.opacity) +
+             ", sun=" + std::to_string(_shadows.sunShadows) +
+             " moon=" + std::to_string(_shadows.moonShadows),
+         LogChannel::Graphics);
 
     applySceneProperties();
 }
@@ -283,6 +310,7 @@ void Area::loadMiniGame(const resource::generated::ARE &are) {
 void Area::applySceneProperties() {
     auto &sceneGraph = _services.scene.graphs.get(_sceneName);
     sceneGraph.setAmbientLightColor(_ambientColor);
+    sceneGraph.setShadowProperties(_shadows);
 
     auto fogProperties = FogProperties();
     fogProperties.enabled = _fogEnabled;
@@ -436,6 +464,21 @@ void Area::loadLYT() {
         if (walkmesh) {
             walkmeshSceneNode = sceneGraph.newWalkmesh(*walkmesh);
             sceneGraph.addRoot(walkmeshSceneNode);
+        } else {
+            // A room without a walkmesh is background scenery - the K1
+            // convention. This still drives material shading; it no longer
+            // decides which room is the sky, because TSL does not follow it.
+            modelSceneNode->setBackgroundScenery(true);
+        }
+
+        // Which room is the sky is curated, never guessed. The old guess was
+        // the line above - no walkmesh means sky - which is a K1 convention
+        // TSL does not share: TSL authors a per-mesh background-geometry flag
+        // on rooms that do have walkmeshes, so every TSL sky went unclassified
+        // and rendered as ordinary lit geometry. Silence here is an answer: a
+        // module absent from the list has no sky room.
+        if (_services.scene.graphs.isSkyRoom(lytRoom.name)) {
+            modelSceneNode->setSkyRoom(true);
         }
 
         // Grass
@@ -512,6 +555,11 @@ void Area::initCameras(const glm::vec3 &entryPosition, float entryFacing) {
     _firstPersonCamera->load();
     _firstPersonCamera->setPosition(position);
     _firstPersonCamera->setFacing(entryFacing);
+
+    _freeCamera = _game.newFreeCamera(glm::radians(kDefaultFieldOfView), aspect, _sceneName);
+    _freeCamera->load();
+    _freeCamera->setPosition(position);
+    _freeCamera->setFacing(entryFacing);
 
     _thirdPersonCamera = _game.newThirdPersonCamera(_camStyleDefault, aspect, _sceneName);
     _thirdPersonCamera->load();
@@ -1239,6 +1287,8 @@ Camera *Area::getCamera(CameraType type) {
     switch (type) {
     case CameraType::FirstPerson:
         return _firstPersonCamera.get();
+    case CameraType::Free:
+        return _freeCamera.get();
     case CameraType::ThirdPerson:
         return _thirdPersonCamera.get();
     case CameraType::Static:
