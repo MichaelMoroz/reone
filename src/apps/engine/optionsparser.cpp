@@ -113,6 +113,9 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("shadows", value<bool>()->default_value(options->graphics.shadows), "enable shadows")                                  //
         ("particles", value<bool>()->default_value(options->graphics.particles), "enable emitter particles")                    //
         ("lensflares", value<bool>()->default_value(options->graphics.lensFlares), "draw light halo billboards")                //
+        ("bloom", value<bool>()->default_value(options->graphics.bloom), "bloom emissive highlights")                           //
+        ("bloomthreshold", value<float>()->default_value(options->graphics.bloomThreshold), "level a texel must pass to bloom") //
+        ("bloomintensity", value<float>()->default_value(options->graphics.bloomIntensity), "scale on what bloom adds back")    //
         ("thintransmission", value<float>()->default_value(options->graphics.thinTransmission),
          "light a thin surface (leaf, cloth, grass) passes to its far side")                                                  //
         ("mode", value<std::string>()->default_value(renderModeName(options->graphics.mode)), "render mode: retro, pbr or path-tracing ('raster' is accepted as a spelling of retro)") //
@@ -302,6 +305,9 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.shadows = vars["shadows"].as<bool>();
     options->graphics.particles = vars["particles"].as<bool>();
     options->graphics.lensFlares = vars["lensflares"].as<bool>();
+    options->graphics.bloom = vars["bloom"].as<bool>();
+    options->graphics.bloomThreshold = vars["bloomthreshold"].as<float>();
+    options->graphics.bloomIntensity = std::max(0.0f, vars["bloomintensity"].as<float>());
     options->graphics.thinTransmission = std::clamp(vars["thintransmission"].as<float>(), 0.0f, 1.0f);
     options->graphics.mode = parseRenderMode(vars["mode"].as<std::string>());
     options->graphics.admissionShadow = vars["admissionshadow"].as<bool>();

@@ -61,6 +61,14 @@ enum class SceneStep {
      * Appended only when the option is on, so off costs nothing at all.
      */
     ScreenSpaceReflections,
+    /**
+     * Bloom, extracted from the resolved opaque image and added back over it.
+     *
+     * Ahead of transparency deliberately, which is where the reference build
+     * adds its own: a blended sprite or a particle must not feed the blur, or
+     * every additive surface acquires a halo of its own edge.
+     */
+    Bloom,
     Blended,
     /** The common tail, in this order and in every mode: the anti-aliasing
         slot resolves the opaque image, then transparency is drawn over the
@@ -226,6 +234,15 @@ private:
         _output. Allocated once, never per frame. */
     std::unique_ptr<IImage> _tailColor;
     /**
+     * Bloom's own ping-pong pair, at render size.
+     *
+     * Separate from the tail pair because the blur reads and writes its own
+     * image three times before the composite touches the scene at all, and
+     * borrowing the tail target would leave the frame half-written in between.
+     */
+    std::unique_ptr<IImage> _bloomA;
+    std::unique_ptr<IImage> _bloomB;
+    /**
      * The display-resolution pair, swapped in for _output/_tailColor by the
      * upscale so every pass after the slot runs at display resolution without
      * knowing that anything changed. Null when the two resolutions are equal,
@@ -322,6 +339,7 @@ private:
     void postProcessPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     void debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     void sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    void bloomPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** One tail pass: full-screen triangle from _output onto _tailColor, then
         the swap that makes the result the output. */
     void tailPass(ICommandBuffer &cmd, const char *fragmentEntry,

@@ -227,6 +227,20 @@ struct GraphicsOptions {
      * that has never been in them.
      */
     bool lensFlares {false};
+    /**
+     * Blur what self-illuminated surfaces put above the threshold back over the
+     * frame, in every render mode.
+     *
+     * A common stage rather than a retro-local one: the reference build derives
+     * its bloom from a second opaque attachment, but the quantity it extracts -
+     * emissive surfaces at the top of the range - is available to every mode
+     * from the G-buffer, so one pass serves all three.
+     */
+    bool bloom {true};
+    /** Display-space level a lit texel must pass before it blooms. */
+    float bloomThreshold {0.95f};
+    /** Scale on what the blur adds back. */
+    float bloomIntensity {1.0f};
     /** Multiplier on the area's authored Grass_Density, so areas keep their variation. */
     float grassDensity {8.0f};
     /**

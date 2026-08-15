@@ -311,6 +311,11 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         // shading-change detection is the only thing standing in for that
         // until a reactive mask exists, so this trades a smear that heuristic
         // can partly absorb for a mismatch it cannot.
+        // Before transparency, after the resolve: the reference adds its
+        // blurred hilights when the opaque image is complete and nothing
+        // blended has touched it yet.
+        if (_options.bloom)
+            plan.steps.push_back(graphics::SceneStep::Bloom);
         plan.steps.push_back(graphics::SceneStep::Blended);
     }
     if (temporalResolve)

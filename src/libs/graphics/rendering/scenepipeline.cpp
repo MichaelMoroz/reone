@@ -178,6 +178,10 @@ void ScenePipeline::init() {
     _output->initColorAttachment(_renderSize, outputFormat);
     _tailColor = _renderer.resources().makeImage();
     _tailColor->initColorAttachment(_renderSize, outputFormat);
+    _bloomA = _renderer.resources().makeImage();
+    _bloomA->initColorAttachment(_renderSize, outputFormat);
+    _bloomB = _renderer.resources().makeImage();
+    _bloomB->initColorAttachment(_renderSize, outputFormat);
     // Allocated only when the upscale actually changes resolution. At
     // NativeAA the chain never swaps and these would be dead memory the size
     // of the frame.
@@ -890,6 +894,79 @@ void ScenePipeline::screenSpaceReflectionPass(ICommandBuffer &cmd, uint32_t glob
     std::swap(_output, _tailColor);
 }
 
+namespace {
+
+/** Mirrors BloomPushConstants in postprocess.slang. */
+struct BloomPushConstants {
+    float threshold;
+    float intensity;
+    float texelStepX;
+    float texelStepY;
+};
+
+} // namespace
+
+void ScenePipeline::bloomPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("ScenePipeline::bloomPass record");
+    const glm::ivec2 size = chainSize();
+    const glm::vec2 texel = 1.0f / glm::vec2(glm::max(size, glm::ivec2(1)));
+
+    // One helper for all four steps: they differ only in what they read, what
+    // they write, and which entry point runs.
+    auto run = [&](const char *entry, IImage &target,
+                   const std::vector<TextureBinding> &sources,
+                   const BloomPushConstants &push) {
+        for (const auto &source : sources) {
+            cmd.transitionImage(const_cast<IImage &>(*source.image), ImageLayout::ShaderRead);
+        }
+        cmd.transitionImage(target, ImageLayout::ColorAttachment);
+
+        PipelineKey key;
+        key.module = kPostProcessModule;
+        key.vertexEntry = "postVertex";
+        key.fragmentEntry = entry;
+        key.colorFormats = {target.pixelFormat()};
+        PipelineBinding pipeline = _renderer.pipelines().get(key);
+
+        std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+        offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+        auto textureSet = _renderer.descriptors().acquireTextureDescriptorSet(
+            _renderer.uniformRing().frame(), sources);
+
+        RenderAttachment color {target.sampleView(), ImageLayout::ColorAttachment,
+                                AttachmentLoad::DontCare, AttachmentStore::Store};
+        cmd.beginRendering(size, {color}, nullptr, 0, false);
+        cmd.bindPipeline(pipeline.pipeline);
+        auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                              offsets.data(), static_cast<uint32_t>(offsets.size()));
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, textureSet, nullptr, 0);
+        cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
+        cmd.draw(3, 1);
+        cmd.endRendering();
+        cmd.transitionImage(target, ImageLayout::ShaderRead);
+    };
+
+    const float threshold = std::max(0.0f, _options.bloomThreshold);
+    const float intensity = std::max(0.0f, _options.bloomIntensity);
+
+    // Extract, gated on the self-illum channel the G-buffer already carries.
+    run("bloomExtractFragment", *_bloomA,
+        {{0, _output.get()}, {4, &_gbuffer->color(GBufferAttachment::SelfIllum)}},
+        {threshold, intensity, 0.0f, 0.0f});
+    // Separable blur: horizontal, then vertical back into the first image.
+    run("bloomBlurFragment", *_bloomB, {{0, _bloomA.get()}},
+        {threshold, intensity, texel.x, 0.0f});
+    run("bloomBlurFragment", *_bloomA, {{0, _bloomB.get()}},
+        {threshold, intensity, 0.0f, texel.y});
+    // Composite over the scene, onto the tail target, and swap as the other
+    // tail passes do.
+    run("bloomCompositeFragment", *_tailColor,
+        {{0, _output.get()}, {TextureUnits::hilights, _bloomA.get()}},
+        {threshold, intensity, 0.0f, 0.0f});
+    std::swap(_output, _tailColor);
+}
+
 void ScenePipeline::tailPass(ICommandBuffer &cmd, const char *fragmentEntry,
                              uint32_t globalsOffset, uint32_t screenEffectOffset,
                              const void *pushConstants, uint32_t pushConstantSize) {
@@ -1275,6 +1352,9 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
             break;
         case SceneStep::Sharpen:
             sharpenPass(cmd, globalsOffset);
+            break;
+        case SceneStep::Bloom:
+            bloomPass(cmd, globalsOffset);
             break;
         case SceneStep::PostProcess:
             postProcessPass(cmd, globalsOffset);

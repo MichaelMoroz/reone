@@ -381,3 +381,79 @@ float4 fxaaFragment(Varyings input) : SV_Target {
     }
     return float4(sMainTex.SampleLevel(posM, 0.0).rgb, rgbaM.a);
 }
+
+/**
+ * Bloom, as a stage every mode runs.
+ *
+ * The reference build extracts its bloom from the opaque pass alone: a second
+ * colour attachment holding `step(1e-4, selfIllum) * step(0.95, color) * color`,
+ * blurred twice and added back when transparency resolves. There is no such
+ * attachment here, so the same quantity is recovered from the finished image
+ * and the G-buffer's self-illum channel: the gate is what makes this bloom
+ * rather than a general glow, and dropping it would bleed light off every
+ * bright surface instead of only the ones authored to emit.
+ *
+ * It sits after the resolve and before transparency, which is where the
+ * reference adds it - a blend or a particle must not feed the blur, or a
+ * sprite's own edge blooms.
+ */
+struct BloomPushConstants {
+    /** Display-space level a lit texel must pass before it contributes. */
+    float threshold;
+    /** Scale on what is added back. */
+    float intensity;
+    /**
+     * One texel along the axis this pass blurs, zero on the other. The blur is
+     * separable, so the same entry point runs twice with this rotated.
+     */
+    float2 texelStep;
+};
+[[vk::push_constant]] BloomPushConstants bloomPushConstants;
+
+/** Self-illum, unit 4 - the same slot the resolves read it from. */
+[[vk::binding(4, 1)]] Sampler2D sBloomSelfIllum;
+/**
+ * The blurred hilights, for the composite.
+ *
+ * Unit 9, which TextureUnits has called `hilights` since the OpenGL renderer
+ * kept a second attachment for exactly this and nothing has used it since.
+ */
+[[vk::binding(9, 1)]] Sampler2D sBloomTex;
+
+[shader("fragment")]
+float4 bloomExtractFragment(Varyings input) : SV_Target {
+    float3 color = sMainTex.SampleLevel(input.uv, 0.0).rgb;
+    float3 selfIllum = sBloomSelfIllum.SampleLevel(input.uv, 0.0).rgb;
+    // Both gates are the reference's, term for term: a surface that emits at
+    // all, and a channel already at the top of the range.
+    float emits = step(1.0e-4, dot(selfIllum, float3(1.0)));
+    float3 hot = step(float3(bloomPushConstants.threshold), color) * color;
+    return float4(emits * hot, 1.0);
+}
+
+[shader("fragment")]
+float4 bloomBlurFragment(Varyings input) : SV_Target {
+    // The reference's 13-tap kernel, as two separable passes. Weights are the
+    // normalised binomial row; the offsets are whole texels so the pair costs
+    // 26 samples rather than the 169 a square kernel would.
+    static const float kWeights[7] = {0.196483, 0.174868, 0.121117, 0.065591,
+                                      0.027680, 0.009122, 0.002338};
+    float2 step = bloomPushConstants.texelStep;
+    float3 sum = sMainTex.SampleLevel(input.uv, 0.0).rgb * kWeights[0];
+    for (int i = 1; i < 7; ++i) {
+        float2 offset = step * float(i);
+        sum += sMainTex.SampleLevel(input.uv + offset, 0.0).rgb * kWeights[i];
+        sum += sMainTex.SampleLevel(input.uv - offset, 0.0).rgb * kWeights[i];
+    }
+    return float4(sum, 1.0);
+}
+
+[shader("fragment")]
+float4 bloomCompositeFragment(Varyings input) : SV_Target {
+    float4 scene = sMainTex.SampleLevel(input.uv, 0.0);
+    float3 bloom = sBloomTex.SampleLevel(input.uv, 0.0).rgb;
+    // Added, not blended: a halo is light arriving on top of what is already
+    // there. Alpha is carried through untouched, because a GUI-embedded scene
+    // composites on it and a glow must not make a transparent pixel opaque.
+    return float4(scene.rgb + bloom * bloomPushConstants.intensity, scene.a);
+}
