@@ -389,6 +389,10 @@ void SceneGraph::updateShadowLight(float dt) {
 }
 
 void SceneGraph::updateFlareLights() {
+    size_t authored = 0;
+    for (const auto &light : _lights) {
+        if (!light->modelNode().light()->flares.empty()) ++authored;
+    }
     _flareLights = computeClosestLights(kMaxFlareLights, [](auto &light, float distance2) {
         if (light.modelNode().light()->flares.empty()) {
             return false;
@@ -396,6 +400,15 @@ void SceneGraph::updateFlareLights() {
         float radius = light.modelNode().light()->flareRadius;
         return distance2 < radius * radius;
     });
+    // Says whether a scene has flares to draw at all, separately from whether
+    // any is close enough this frame. Without the first number an empty frame
+    // and an unreachable draw path look identical.
+    if (authored != _loggedFlareLights) {
+        _loggedFlareLights = authored;
+        debug("Scene '" + _name + "': " + std::to_string(authored) +
+                  " lights author flares, " + std::to_string(_flareLights.size()) + " in range",
+              LogChannel::Graphics);
+    }
 }
 
 void SceneGraph::updateSounds() {
@@ -495,13 +508,19 @@ void SceneGraph::prepareTransparentLeafs() {
             leafs.push_back(mesh);
         }
     }
-    for (auto &emitter : _emitters) {
-        for (auto &child : emitter->children()) {
-            if (child->type() != SceneNodeType::Particle) {
-                continue;
+    // Particles are dropped here rather than at the emitter, so the emitters
+    // still simulate and still advance the shared random sequence. A switch
+    // that also stopped the simulation would move every later draw's noise and
+    // make two builds disagree for a reason that is not what is being compared.
+    if (_graphicsOpt.particles) {
+        for (auto &emitter : _emitters) {
+            for (auto &child : emitter->children()) {
+                if (child->type() != SceneNodeType::Particle) {
+                    continue;
+                }
+                auto particle = static_cast<ParticleSceneNode *>(child);
+                leafs.push_back(particle);
             }
-            auto particle = static_cast<ParticleSceneNode *>(child);
-            leafs.push_back(particle);
         }
     }
 
@@ -764,7 +783,11 @@ void SceneGraph::collectInto(GpuScene &scene, bool full) {
                 node->collectLeafs(scene, leafs);
         }
     }
-    if (full) {
+    // Flares are collected only when asked for. The billboard they register
+    // was unreachable before - RenderCategory::LensFlare is in no admission
+    // filter - so this is the switch that decides whether a halo exists at
+    // all, in every render mode.
+    if (full && _graphicsOpt.lensFlares) {
         for (auto &light : _flareLights) {
             Collision collision;
             if (testLineOfSight(_activeCamera->origin(), light->origin(), collision)) {

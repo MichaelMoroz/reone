@@ -75,7 +75,11 @@ void LightSceneNode::collectLensFlare(GpuScene &scene, const ModelNode::LensFlar
     }
     auto color = glm::vec4(_color, 0.5f);
     auto transform = glm::translate(origin());
-    scene.addBillboard(renderCategory(RenderCategory::LensFlare),
+    // Transparent, not LensFlare: every admission filter admits Opaque and
+    // Transparent only, so a billboard registered under LensFlare is dropped
+    // before it can be classified. A flare is an additive transparent
+    // billboard, which is what classifyProcedural makes of it from here.
+    scene.addBillboard(renderCategory(RenderCategory::Transparent),
                          id(), nameIds(), *texture, color, transform, glm::inverse(transform), 0.2f * flare.size, &_model);
 }
 

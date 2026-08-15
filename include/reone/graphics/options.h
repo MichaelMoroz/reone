@@ -199,6 +199,34 @@ struct GraphicsOptions {
     int maxDirectionalShadows {2};
     int maxPointShadows {8};
     bool grass {true};
+    /**
+     * Draw the shadow of the selected shadow light, or none at all.
+     *
+     * Off means the scene has no shadow light for the frame: no shadow pass
+     * runs and no shadow term reaches the uniforms, rather than a pass that
+     * renders and resolves to nothing. It exists so a comparison against
+     * another build can exclude a subsystem whose two implementations are
+     * known to differ, and it must therefore mean the same thing in both
+     * builds - a switch that disables slightly different work on each side
+     * measures itself.
+     *
+     * Retro only in effect: path tracing's shadows come from the shadow ray,
+     * which this does not reach.
+     */
+    bool shadows {true};
+    /** Admit emitter particles, or leave them out of the frame entirely. */
+    bool particles {true};
+    /**
+     * Draw the halo billboards authored on flare-bearing lights.
+     *
+     * Off by default. The billboard path exists but has never been reachable:
+     * RenderCategory::LensFlare is absent from every admission filter, so the
+     * flares a light authors are registered, updated, and then dropped. Turning
+     * this on admits them in every render mode. It is a dial rather than a
+     * straight fix because it adds something to PBR and path-tracing frames
+     * that has never been in them.
+     */
+    bool lensFlares {false};
     /** Multiplier on the area's authored Grass_Density, so areas keep their variation. */
     float grassDensity {8.0f};
     /**

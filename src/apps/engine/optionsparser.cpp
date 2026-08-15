@@ -110,6 +110,9 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("guilistscale", value<float>()->default_value(options->graphics.guiListScale), "GUI list row scale")                  //
         ("grass", value<bool>()->default_value(options->graphics.grass), "enable grass")                                        //
         ("grassdensity", value<float>()->default_value(options->graphics.grassDensity), "grass density multiplier")           //
+        ("shadows", value<bool>()->default_value(options->graphics.shadows), "enable shadows")                                  //
+        ("particles", value<bool>()->default_value(options->graphics.particles), "enable emitter particles")                    //
+        ("lensflares", value<bool>()->default_value(options->graphics.lensFlares), "draw light halo billboards")                //
         ("thintransmission", value<float>()->default_value(options->graphics.thinTransmission),
          "light a thin surface (leaf, cloth, grass) passes to its far side")                                                  //
         ("mode", value<std::string>()->default_value(renderModeName(options->graphics.mode)), "render mode: retro, pbr or path-tracing ('raster' is accepted as a spelling of retro)") //
@@ -296,6 +299,9 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.guiListScale = positiveFiniteScale(vars, "guilistscale");
     options->graphics.grass = vars["grass"].as<bool>();
     options->graphics.grassDensity = vars["grassdensity"].as<float>();
+    options->graphics.shadows = vars["shadows"].as<bool>();
+    options->graphics.particles = vars["particles"].as<bool>();
+    options->graphics.lensFlares = vars["lensflares"].as<bool>();
     options->graphics.thinTransmission = std::clamp(vars["thintransmission"].as<float>(), 0.0f, 1.0f);
     options->graphics.mode = parseRenderMode(vars["mode"].as<std::string>());
     options->graphics.admissionShadow = vars["admissionshadow"].as<bool>();

@@ -233,6 +233,12 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     // Scene content pushed every update.
     descs.push_back(boolOpt("grass", OptionApply::Live, "enable grass",
                             &GraphicsOptions::grass));
+    descs.push_back(boolOpt("shadows", OptionApply::Live, "enable shadows",
+                            &GraphicsOptions::shadows));
+    descs.push_back(boolOpt("particles", OptionApply::Live, "enable emitter particles",
+                            &GraphicsOptions::particles));
+    descs.push_back(boolOpt("lensflares", OptionApply::Live, "draw light halo billboards",
+                            &GraphicsOptions::lensFlares));
     descs.push_back(floatOpt("thintransmission", OptionApply::Live,
                              "light a thin surface passes to its far side",
                              &GraphicsOptions::thinTransmission, 0.0f, 1.0f));
