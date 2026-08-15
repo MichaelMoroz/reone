@@ -64,6 +64,8 @@ public:
         int ambient {0};
         int diffuse {0};
         glm::vec4 probabilities {0.0f};
+        /** The area's authored grass cutout threshold; -1 where it authored none. */
+        float alphaTest {-1.0f};
     };
 
     using SearchCriteriaList = std::vector<std::pair<CreatureType, int>>;

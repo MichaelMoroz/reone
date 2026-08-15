@@ -20,6 +20,7 @@
 #include "reone/graphics/format/txireader.h"
 #include "reone/graphics/textureutil.h"
 #include "reone/system/exception/validation.h"
+#include "reone/system/logutil.h"
 #include "reone/system/stream/memoryinput.h"
 
 namespace reone {
@@ -29,7 +30,9 @@ namespace graphics {
 void TpcReader::load() {
     uint32_t dataSize = _tpc.readUint32();
 
-    _tpc.skipBytes(4);
+    // The authored cutout threshold. Skipped here for as long as this reader
+    // has existed, which is why every alpha test in the engine used a constant.
+    _alphaTest = _tpc.readFloat();
 
     uint16_t width = _tpc.readUint16();
     uint16_t height = _tpc.readUint16();
@@ -109,6 +112,21 @@ void TpcReader::loadTexture() {
         _numLayers == kNumCubeFaces ? TextureType::CubeMap : TextureType::TwoDim,
         getTextureProperties(_usage));
     _texture->setPixels(_width, _height, getPixelFormat(), _layers);
+    // The header value, applied after the TXI block so a texture with no TXI
+    // still carries it. 1.0 is the format's way of saying "no cutout", so it
+    // is left as the absent marker rather than stored as a threshold that
+    // would reject every texel below full opacity.
+    if (!(_alphaTest >= 0.0f && _alphaTest <= 1.0f)) {
+        // A coverage threshold outside [0,1] is not a threshold, it is a
+        // misread: the field would be whatever four bytes follow the size when
+        // the header layout is wrong. Worth saying out loud, because a wrong
+        // offset here silently rejects or admits every texel of the texture.
+        warn("TPC '" + _resRef + "': alpha test " + std::to_string(_alphaTest) +
+                 " out of range; ignoring",
+             LogChannel::Graphics);
+        _alphaTest = 1.0f;
+    }
+    _features.alphaTest = _alphaTest < 1.0f ? _alphaTest : -1.0f;
     _texture->setFeatures(_features);
 }
 

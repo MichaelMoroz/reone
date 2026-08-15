@@ -95,6 +95,14 @@ public:
     bool affectedByFog {false};
 
     std::optional<BlendMode> blending;
+    /**
+     * A cutout threshold the caller wants used in place of the diffuse
+     * texture's own, or -1 to take the texture's.
+     *
+     * Grass is the case that needs it: the threshold is authored on the area,
+     * not on the blade texture, so the area has to be able to say so.
+     */
+    float alphaTest {-1.0f};
     std::optional<FaceCullMode> faceCulling;
     std::optional<PolygonMode> polygonMode;
 };

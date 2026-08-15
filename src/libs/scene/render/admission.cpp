@@ -169,6 +169,15 @@ void populateMaterialResources(InstanceMaterial &dst,
     if (mainTex && mainTex->features().waterAlpha != -1.0f) {
         dst.waterAlpha = mainTex->features().waterAlpha;
     }
+    // The authored cutout threshold, straight from the TPC header. Negative
+    // where the texture carries none, which is what the shaders test against
+    // before falling back to the shared constant.
+    // The material's own value wins where it set one - grass takes its
+    // threshold from the area rather than from the blade texture - otherwise
+    // the texture's header value stands.
+    dst.alphaTest = src.alphaTest >= 0.0f
+                        ? src.alphaTest
+                        : (mainTex ? mainTex->features().alphaTest : -1.0f);
 
     auto *envMap = textureAt(MaterialTextureSlot::EnvMap);
     auto *envMapCube = textureAt(MaterialTextureSlot::EnvMapCube);

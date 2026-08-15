@@ -637,7 +637,8 @@ void SlangShaderCompiler::validateSchemas() {
            REONE_SCHEMA_FIELD(InstanceMaterial, overrideColor),
            REONE_SCHEMA_FIELD(InstanceMaterial, overrideParams),
            REONE_SCHEMA_FIELD(InstanceMaterial, ambientColor),
-           REONE_SCHEMA_FIELD(InstanceMaterial, envMapDerivedLayer)});
+           REONE_SCHEMA_FIELD(InstanceMaterial, envMapDerivedLayer),
+           REONE_SCHEMA_FIELD(InstanceMaterial, alphaTest)});
     check(layout, "Matrix3x4", sizeof(Matrix3x4),
           REONE_STORAGE_LAYOUT,
           {REONE_SCHEMA_FIELD(Matrix3x4, row0),

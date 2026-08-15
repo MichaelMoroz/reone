@@ -286,6 +286,9 @@ void Area::loadGrass(const resource::generated::ARE &are) {
     }
     _grass.density = are.Grass_Density;
     _grass.quadSize = are.Grass_QuadSize;
+    // Authored per area and read by nothing until now. Zero is the field's
+    // absent value rather than a threshold that would admit every texel.
+    _grass.alphaTest = are.AlphaTest > 0.0f ? are.AlphaTest : -1.0f;
     _grass.ambient = are.Grass_Ambient;
     _grass.diffuse = are.Grass_Diffuse;
     _grass.probabilities[0] = are.Grass_Prob_UL;
@@ -491,6 +494,7 @@ void Area::loadLYT() {
             grassProperties.probabilities = _grass.probabilities;
             grassProperties.materials = _services.game.surfaces.getGrassSurfaces();
             grassProperties.texture = _grass.texture.get();
+            grassProperties.alphaTest = _grass.alphaTest;
             grassSceneNode = sceneGraph.newGrass(grassProperties, *aabbNode);
             grassSceneNode->setLocalTransform(glm::translate(position) * aabbNode->absoluteTransform());
             sceneGraph.addRoot(grassSceneNode);

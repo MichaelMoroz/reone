@@ -104,7 +104,13 @@ bool commitsTracedCoverage(InstanceMaterial material, float2 uv, float vertexAlp
                     : texel.a;
         alpha *= vertexAlpha;
     }
-    return alpha >= kMegaAlphaTestThreshold;
+    // The texture's own threshold when it authored one. kMegaAlphaTestThreshold
+    // is the fallback for textures that do not - a TGA, or a TPC whose header
+    // says 1.0 - not a value the data ever asked for. Must stay in lockstep
+    // with ptAlphaTestThreshold in tracing/trace.slang.
+    float threshold = material.alphaTest >= 0.0 ? material.alphaTest
+                                                : kMegaAlphaTestThreshold;
+    return alpha >= threshold;
 }
 
 // --- The depth-only variant: the same merged geometry, written to a

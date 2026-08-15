@@ -62,6 +62,8 @@ public struct InstanceMaterial {
     public float4 overrideParams;
     public float4 ambientColor;
     public int envMapDerivedLayer;
+    /** Authored cutout threshold, or negative where the texture carries none. */
+    public float alphaTest;
 };
 
 /** Three row vectors encode a float3x4 exactly as scene_resolve.slang reads it. */

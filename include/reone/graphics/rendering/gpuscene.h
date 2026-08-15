@@ -69,7 +69,14 @@ struct alignas(16) InstanceMaterial {
     glm::vec4 overrideParams {-1.0f, 1.0f, 1.0f, 1.0f};
     glm::vec4 ambientColor {1.0f};
     int32_t envMapDerivedLayer {0};
-    float tailPad[3] {};
+    /**
+     * The texture's authored cutout threshold, or -1 where it carries none.
+     *
+     * Takes one of the tail pad words, so every offset above and the array
+     * stride are unchanged.
+     */
+    float alphaTest {-1.0f};
+    float tailPad[2] {};
 };
 static_assert(offsetof(InstanceMaterial, mainTex) == 80);
 static_assert(offsetof(InstanceMaterial, envMap) == 108);
@@ -83,6 +90,7 @@ static_assert(offsetof(InstanceMaterial, overrideColor) == 224);
 static_assert(offsetof(InstanceMaterial, overrideParams) == 240);
 static_assert(offsetof(InstanceMaterial, ambientColor) == 256);
 static_assert(offsetof(InstanceMaterial, envMapDerivedLayer) == 272);
+static_assert(offsetof(InstanceMaterial, alphaTest) == 276);
 static_assert(sizeof(InstanceMaterial) == 288);
 
 /** Three row vectors encode a float3x4 exactly as scene_resolve.slang reads it. */

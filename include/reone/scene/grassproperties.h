@@ -33,6 +33,12 @@ struct GrassProperties {
     glm::vec4 probabilities {0.0f};
     std::set<uint32_t> materials;
     graphics::Texture *texture {nullptr};
+    /**
+     * The area's authored cutout threshold for grass, from the ARE AlphaTest
+     * field. Negative where the area authored none, which leaves the blade
+     * texture's own header value to decide.
+     */
+    float alphaTest {-1.0f};
 };
 
 } // namespace scene

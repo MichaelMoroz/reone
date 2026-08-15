@@ -60,6 +60,8 @@ private:
 
     std::vector<Texture::Layer> _layers;
     Texture::Features _features;
+    /** The cutout threshold from the file header; 1.0 means none. */
+    float _alphaTest {1.0f};
 
     std::shared_ptr<Texture> _texture;
     ByteBuffer _txiData;

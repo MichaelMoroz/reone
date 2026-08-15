@@ -91,6 +91,19 @@ bool isCutout(uint materialIndex) {
     return (instanceMaterials[materialIndex].featureMask & kPtMaskPunchThrough) != 0;
 }
 
+/**
+ * The threshold this material's texture authored, or the shared constant.
+ *
+ * The raster gate in scene_draw.slang resolves it the same way, and it has to:
+ * the traced primary is read from the G-buffer raster produced, so a cutout
+ * admitted by one and rejected by the other would put a hole in the frame that
+ * neither pass drew.
+ */
+float ptAlphaTestThreshold(uint materialIndex) {
+    float authored = instanceMaterials[materialIndex].alphaTest;
+    return authored >= 0.0 ? authored : kAlphaTestThreshold;
+}
+
 /** Non-emissive translucency. Not traced: rays skip these candidates. */
 bool isBlendedCoverage(uint materialIndex) {
     return (instanceMaterials[materialIndex].featureMask & kPtMaskBlendedCoverage) != 0;
@@ -126,7 +139,7 @@ public TraceHit ptTraceNearest(RayDesc ray) {
         float2 barycentrics = query.CandidateTriangleBarycentrics();
         float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
         float alpha = candidateAlpha(materialIndex, indices, weights);
-        if (alpha >= kAlphaTestThreshold && alpha >= kPtAlphaTestEpsilon) {
+        if (alpha >= ptAlphaTestThreshold(materialIndex) && alpha >= kPtAlphaTestEpsilon) {
             query.CommitNonOpaqueTriangleHit();
         }
     }
@@ -193,7 +206,7 @@ public ShadowRay ptShadowRay(float3 origin, float3 geometricNormal, float3 direc
             float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
             float alpha = candidateAlpha(materialIndex, indices, weights);
             if (alpha < kPtAlphaTestEpsilon) continue;
-            if (alpha >= kAlphaTestThreshold) {
+            if (alpha >= ptAlphaTestThreshold(materialIndex)) {
                 transmittance = 0.0;
                 cutoutDistance = min(cutoutDistance, query.CandidateTriangleRayT());
                 break;

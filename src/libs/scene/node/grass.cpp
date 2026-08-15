@@ -147,6 +147,7 @@ void GrassSceneNode::collectInto(GpuScene &scene) {
             &lightmap->get();
     }
     material.faceCulling = FaceCullMode::None;
+    material.alphaTest = _properties.alphaTest;
     scene.addGrass(renderCategory(RenderCategory::Opaque), id(), nameIds(), material,
                    _faceRecords, _faceGeneration);
     _gpuSceneDirty = false;

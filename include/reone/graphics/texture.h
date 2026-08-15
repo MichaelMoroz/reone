@@ -84,6 +84,17 @@ public:
 
     struct Features {
         Blending blending {Blending::None};
+        /**
+         * The cutout threshold this texture was authored with, or -1 where the
+         * format carries none.
+         *
+         * A float in the TPC header, not a TXI key, and the only per-texture
+         * alpha threshold the data supplies. It was skipped by this reader
+         * until now, so every cutout used one constant instead - which is what
+         * the actively-maintained reimplementation of this engine reads, and
+         * what it feeds its alpha test.
+         */
+        float alphaTest {-1.0f};
         float waterAlpha {-1.0f};
         bool cube {false};
         bool decal {false};
