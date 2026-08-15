@@ -162,21 +162,16 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     float3 materialAmbient = material.ambientColor.rgb;
     float3 materialDiffuse = material.diffuseColor.rgb;
 
+    // Two accumulators, exactly as the reference keeps them: `ambient` is
+    // never shadowed, `diffuse` is. Self-illum seeds the shadowed one, so the
+    // albedo multiplies it and the clamp bounds it - it is not a separate
+    // additive term. The lightmap adds into the same accumulator, and world
+    // ambient is the alternative to a lightmap rather than an addition to it.
     float3 ambient = float3(0.0);
-    float3 direct = float3(0.0);
-    // Static geometry with no lightmap authored is read as a white bake
-    // rather than as an absence of light: the far hills and the whole
-    // Tatooine dune sea carry no lightmaps, and treating that as "unlit"
-    // either blackens them or, if bypassed entirely, exempts them from
-    // shadows. A white bake keeps the authored texel and still takes the
-    // shadow term below. Dynamic objects keep world ambient - they were
-    // never lightmapped and their shading comes from the light loop.
-    float3 baked = float3(0.0);
+    float3 diffuse = selfIllumSample.rgb;
     if (hasLightmap) {
-        baked = lightmapSample.rgb;
-    } else if (staticObject) {
-        baked = float3(1.0);
-    } else {
+        diffuse += lightmapSample.rgb;
+    } else if (!staticObject) {
         ambient += materialAmbient * globalUniforms.worldAmbientColor.rgb;
     }
 
@@ -198,9 +193,9 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
         if (light.ambientOnly != 0) {
             ambient += light.multiplier * attenuation * materialAmbient * light.color.rgb;
         } else {
-            direct += light.multiplier *
-                      max(0.0, dot(normal, lightVector / max(0.0001, distance))) *
-                      attenuation * materialDiffuse * light.color.rgb;
+            diffuse += light.multiplier *
+                       max(0.0, dot(normal, lightVector / max(0.0001, distance))) *
+                       attenuation * materialDiffuse * light.color.rgb;
         }
     }
 
@@ -208,28 +203,21 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     if (shadowsEnabled) {
         shadowFactor = getShadow(eyePos, worldPos, normal, thinSurface);
     }
-    float3 color;
-    {
-        // One expression for every lit surface. The bake carries the light
-        // the original baked - a white one where none was authored, see
-        // above - dynamic lights add to it, and the shadow term multiplies
-        // the product.
-        //
-        // Shadowing the whole product rather than the dynamic share alone is
-        // deliberate. The original drew a creature's shadow as a stencil pass
-        // that darkened the ground beneath it at the module's authored
-        // ShadowOpacity, which getShadow already folds in; attenuating only
-        // the dynamic term would leave no shadow at all on baked ground,
-        // which is exactly where the original always had one. Every
-        // reference engine multiplies the lightmap against the diffuse texel
-        // at full strength otherwise - never clamped against the dynamic sum,
-        // with lighting replaced by the bake rather than added to it - and
-        // self-illum stays an additive term the albedo never modulates,
-        // because the original drew it as a separate additive blend pass.
-        color = shadowFactor * (baked + ambient + max(float3(0.0), direct)) *
-                    diffuseSample.rgb +
-                selfIllumSample.rgb;
-    }
+    // The reference's expression, term for term:
+    //
+    //   min(vec3(1.0), (ambient + (1.0 - shadow) * max(vec3(0.0), diffuse)))
+    //       * mainTexSample.rgb
+    //
+    // Three things this branch previously did differently, all of them
+    // visible: the sum had no upper bound, the shadow term multiplied the
+    // ambient share as well as the diffuse one, and self-illum was added
+    // after the albedo multiply instead of before it. `shadowFactor` here is
+    // already the light-through fraction, so it stands where (1.0 - shadow)
+    // does there. The clamp precedes the envmap and fog terms in the
+    // reference too, so what leaves this function is still unbounded.
+    float3 color = min(float3(1.0),
+                       ambient + shadowFactor * max(float3(0.0), diffuse)) *
+                   diffuseSample.rgb;
 
     if (envmapped) {
         float3 eyeReflection = reflect(normalize(eyePos), eyeNormal);
