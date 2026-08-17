@@ -23,6 +23,7 @@ import lib.gbuf;
 import lib.shadow;
 import lib.scene_schema;
 import lib.skycube;
+import lib.envmap;
 
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
 [[vk::binding(2, 1)]] Sampler2D sGBufEyeNormal;
@@ -99,20 +100,16 @@ float lightAttenuationQuadratic(GlobalUniformsLight light, float distance) {
     return (light.radius * light.radius) / (d * d);
 }
 
-float3 sampleAuthoredMirror(InstanceMaterial material, float3 eyeReflection) {
+float3 sampleAuthoredMirror(InstanceMaterial material, float3 worldReflection) {
     if (material.envMapCube != kNoTexture) {
         // This fullscreen pass cannot derive a stable cube LOD from its
         // quantized normal. Minified-surface sharpness is a separate policy;
         // the authored mirror deliberately uses its base level here.
         return bindlessTextureCubes[NonUniformResourceIndex(material.envMapCube)]
-            .SampleLevel(eyeReflection, 0.0).rgb;
+            .SampleLevel(worldReflection, 0.0).rgb;
     }
-    float3 r = eyeReflection;
-    float m = 2.0 * sqrt(r.x * r.x + r.y * r.y +
-                         (r.z + 1.0) * (r.z + 1.0));
-    float2 uv = float2(r.x / m + 0.5, r.y / m + 0.5);
     return bindlessTextures[NonUniformResourceIndex(material.envMap)]
-        .Sample(uv).rgb;
+        .Sample(authoredMirrorUV(worldReflection)).rgb;
 }
 
 [shader("fragment")]
@@ -248,14 +245,15 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
                    diffuseSample.rgb;
 
     if (envmapped) {
-        float3 eyeReflection = reflect(normalize(eyePos), eyeNormal);
+        float3 worldReflection = authoredMirrorReflection(
+            worldPos, globalUniforms.cameraPosition.xyz, normal);
         // Odyssey generated eye-space reflection coordinates per vertex from
         // the geometric normal. A deferred resolve necessarily does this per
         // pixel from the normal-mapped, quantized G-buffer normal instead.
         //
         // Unshadowed: the authored mirror is a static capture of the surround,
         // and the original applied no shadow to it either.
-        color += sampleAuthoredMirror(material, eyeReflection) *
+        color += sampleAuthoredMirror(material, worldReflection) *
                  (1.0 - diffuseSample.a);
     }
 

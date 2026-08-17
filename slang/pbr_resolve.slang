@@ -43,6 +43,7 @@
 import uniforms;
 import lib.math;
 import lib.gbuf;
+import lib.envmap;
 import lib.shadow;
 import lib.scene_schema;
 import lib.material_ops;
@@ -242,18 +243,15 @@ float lightAttenuationQuadratic(GlobalUniformsLight light, float distance) {
     return (light.radius * light.radius) / (d * d);
 }
 
-float3 sampleAuthoredMirror(InstanceMaterial material, float3 eyeReflection) {
+float3 sampleAuthoredMirror(InstanceMaterial material, float3 worldReflection) {
     if (material.envMapCube != kNoTexture) {
         // This fullscreen pass cannot derive a stable cube LOD from its
         // quantized normal. Minified-surface sharpness is a separate policy;
         // the authored mirror deliberately uses its base level here.
         return bindlessTextureCubes[NonUniformResourceIndex(material.envMapCube)]
-            .SampleLevel(eyeReflection, 0.0).rgb;
+            .SampleLevel(worldReflection, 0.0).rgb;
     }
-    float3 r = eyeReflection;
-    float m = 2.0 * sqrt(r.x * r.x + r.y * r.y +
-                         (r.z + 1.0) * (r.z + 1.0));
-    float2 uv = float2(r.x / m + 0.5, r.y / m + 0.5);
+    float2 uv = authoredMirrorUV(worldReflection);
     // Base level, like the cube branch above. A dispatch has no implicit
     // derivatives at all, so there is no mip selection to be had here; this is
     // the one read in the resolve whose value the move to compute changes, and
@@ -535,7 +533,13 @@ float3 resolveSurface(float2 uv, int2 pixel) {
     // depth test against that one light says nothing about how much of the
     // cube this surface can see.
     if (envmapped) {
-        color += gammaToLinear(sampleAuthoredMirror(material, eyeR)) *
+        // World space, and only here. eyeR still serves the baked irradiance
+        // and prefiltered probes above, which this pipeline bakes in eye space
+        // and must keep reading that way; the AUTHORED map is a painting of the
+        // world and is oriented to it.
+        color += gammaToLinear(sampleAuthoredMirror(
+                     material,
+                     authoredMirrorReflection(worldPos, globalUniforms.cameraPosition.xyz, normal))) *
                  (1.0 - mainTexSample.a);
     }
     // Fog now mixes energy rather than encoded values. The authored colour is

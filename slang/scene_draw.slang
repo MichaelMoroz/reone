@@ -20,6 +20,7 @@
 import uniforms;
 import lib.gbuf;
 import lib.math;
+import lib.envmap;
 import lib.scene_schema;
 
 // --- Merged-geometry addressing, shared by both variants ---
@@ -326,19 +327,15 @@ float3 megaMaterialNormal(InstanceMaterial material, Varyings input, float2 uv,
     return normal;
 }
 
-float3 sampleMegaEnvMap(InstanceMaterial material, float3 eyeReflection) {
+float3 sampleMegaEnvMap(InstanceMaterial material, float3 worldReflection) {
     if ((material.featureMask & kMegaFeatureEnvMapCube) != 0 &&
         material.envMapCube != kNoTexture) {
         return bindlessTextureCubes[NonUniformResourceIndex(material.envMapCube)]
-            .Sample(eyeReflection).rgb;
+            .Sample(worldReflection).rgb;
     }
     if (material.envMap == kNoTexture) return float3(0.0);
-    float m = 2.0 * sqrt(eyeReflection.x * eyeReflection.x +
-                         eyeReflection.y * eyeReflection.y +
-                         (eyeReflection.z + 1.0) * (eyeReflection.z + 1.0));
-    float2 uv = float2(eyeReflection.x / m + 0.5,
-                       eyeReflection.y / m + 0.5);
-    return bindlessTextures[NonUniformResourceIndex(material.envMap)].Sample(uv).rgb;
+    return bindlessTextures[NonUniformResourceIndex(material.envMap)]
+        .Sample(authoredMirrorUV(worldReflection)).rgb;
 }
 
 [shader("fragment")]
@@ -451,12 +448,9 @@ float4 sceneDrawBlendedFragment(Varyings input, uint primitiveId : SV_PrimitiveI
         if (envmapped) {
             float3 normal = megaMaterialNormal(material, input, uv, false,
                                                isFrontFace);
-            float3 incident = normalize(input.worldPos -
-                                        globalUniforms.cameraPosition.xyz);
-            float3 worldReflection = reflect(incident, normal);
-            float3 eyeReflection = normalize(
-                mul(globalUniforms.view, float4(worldReflection, 0.0)).xyz);
-            color += sampleMegaEnvMap(material, eyeReflection) * (1.0 - coverage);
+            float3 worldReflection = authoredMirrorReflection(
+                input.worldPos, globalUniforms.cameraPosition.xyz, normal);
+            color += sampleMegaEnvMap(material, worldReflection) * (1.0 - coverage);
         }
         if ((material.featureMask & kMegaFeatureWater) != 0) {
             color *= material.waterAlpha;
