@@ -41,7 +41,7 @@ void addBillboard(reone::scene::GpuScene &scene, uint32_t index, Texture &textur
                   float size = 1.0f) {
     scene.addBillboard(renderCategory(RenderCategory::Transparent), {index, 0}, {},
                        texture, glm::vec4(1.0f), glm::mat4(1.0f), glm::mat4(1.0f),
-                       size, nullptr);
+                       glm::vec2(size), nullptr);
 }
 
 reone::scene::GpuScene::Classifier noMeshes() {

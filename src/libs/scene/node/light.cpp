@@ -73,9 +73,11 @@ void LightSceneNode::collectLensFlare(GpuScene &scene, const ModelNode::LensFlar
     if (!texture) {
         return;
     }
-    // A flare has its own authored tint; flare-only lights need not carry a
-    // light-colour controller, whose default would turn the billboard black.
-    auto color = glm::vec4(flare.colorShift, 0.5f);
+    // The reference flare pass submits the light controller colour. The
+    // similarly named colorShift is not a multiplier there: on danm14ab it is
+    // black for three fx_flare08 lights and underweights the dominant sun flare,
+    // while all four lights carry nonzero controller colours.
+    auto color = glm::vec4(_color, 0.5f);
     auto transform = glm::translate(origin());
     // The authored flare size is a SCREEN size, not a world one.
     //
