@@ -366,7 +366,21 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
     }
 
     applyCategoryOverride(material, _options, categoryIndex);
-    const float emissionScale = std::max(0.0f, material.overrideParams.y);
+    // The per-category emission dial is a PBR and path-tracing grading control,
+    // and it stops at their door.
+    //
+    // It reached retro by accident rather than by decision: one material record
+    // serves every mode, and retro's G-buffer writes its self-illum channel
+    // straight from selfIllumColor, so turning the dial regraded a mode whose
+    // whole purpose is to be the original's arithmetic untouched. Retro has no
+    // creative grade anywhere else - no exposure, no tone curve, no SSAO, no
+    // screen-space reflections - and this was the one that slipped through.
+    //
+    // At the shipped default of 1.0 it multiplies by one and nothing moves;
+    // the point is that it can no longer move.
+    const float emissionScale = _options.mode == graphics::RenderMode::Retro
+                                    ? 1.0f
+                                    : std::max(0.0f, material.overrideParams.y);
     // Additive emission reads overrideParams.y directly. Curated prelit still
     // takes the old baked scaling path because it terminates instead.
     if (kind != AdmissionKind::AdditiveEmissive || material.surfaceType == 2)
