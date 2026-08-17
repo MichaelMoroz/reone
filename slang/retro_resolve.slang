@@ -54,6 +54,7 @@ struct ResolvePushConstants {
 
 static const uint kResolveFlagSky = 1u;
 static const uint kResolveFlagTransparentOutput = 4u;
+static const uint kResolveFlagDisplayReferred = 8u;
 
 static const uint kNoTriangle = 0xffffffffu;
 static const uint kNoTexture = 0xffffffffu;
@@ -135,11 +136,18 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
         float3 direction = skyDirection(input.uv, globalUniforms.projectionInv,
                                         globalUniforms.viewInv,
                                         globalUniforms.cameraPosition.xyz);
-        // The bake stores linear radiance and this pass writes linear, so the
-        // cube is composited at identity. The post-process encode reproduces
-        // the authored skybox texel exactly, which is what the gamma round trip
-        // through display space used to do here.
-        return float4(skyRadiance(sSkyCube, direction, 1.0), 1.0);
+        // The bake stores LINEAR radiance, so what this pass owes the target
+        // depends on which space the target is in. Linear: hand it over at
+        // identity and let the post-process encode reproduce the authored
+        // skybox texel. Display-referred, which is retro's chain: encode it
+        // here, because nothing downstream will. Getting this wrong is not
+        // subtle - it presents the sky two stops dark and takes every exterior
+        // with it, which is how it was found.
+        float3 sky = skyRadiance(sSkyCube, direction, 1.0);
+        if ((pushConstants.flags & kResolveFlagDisplayReferred) != 0) {
+            sky = pow(max(sky, 0.0), float3(1.0 / kGamma));
+        }
+        return float4(sky, 1.0);
     }
     InstanceMaterial material = instanceMaterials[mergedMaterialIds[triangleId]];
 
@@ -239,13 +247,21 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     }
     // Everything above is deliberately the original's gamma-space arithmetic,
     // down to the fog lerp and the radius-squared cull, and none of it is
-    // linearised: that model IS the fidelity target of this mode. What changes
-    // is only where the result is handed over. The scene pipeline is linear
-    // end-to-end now, so the display-space colour this pass computes is
-    // converted back to linear here and the shared post-process encode undoes
-    // the conversion exactly. With no exposure and no tone curve the pair
-    // cancel, so the presented frame is the frame this pass has always drawn.
-    // The round trip is why the target is float: an 8-bit intermediate would
-    // quantise the exponentiated value and the cancellation would not be exact.
+    // linearised: that model IS the fidelity target of this mode.
+    //
+    // So the result is handed over as it was computed, and the post-process
+    // encode is a pass-through for this mode. It used to be converted to linear
+    // here and converted back there, on the reasoning that the pair cancel and
+    // the pipeline in between could then be uniformly linear. They do cancel -
+    // for the two ENDPOINTS. Every stage that reads or writes the target
+    // between them was quietly given a different image than the original had:
+    // the alpha blend, the bloom threshold and the bloom blur all produce
+    // different numbers in the two spaces, and the original did all three in
+    // display space on an 8-bit framebuffer. PBR and the tracer keep the linear
+    // chain, where the round trip does not cancel and linear is the right space
+    // to work in.
+    if ((pushConstants.flags & kResolveFlagDisplayReferred) != 0) {
+        return float4(max(color, 0.0), 1.0);
+    }
     return float4(pow(max(color, 0.0), float3(kGamma)), 1.0);
 }

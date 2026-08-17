@@ -49,6 +49,13 @@ struct MegaDrawPushConstants {
     uint32_t materialGated;
 };
 
+/** The blended pass's third word: kResolveFlag* bits the fragment must honour. */
+struct BlendedPushConstants {
+    uint32_t triangleBase;
+    uint32_t materialGated;
+    uint32_t flags;
+};
+
 /** The shadow pass's third word: which categories may write the map. */
 struct ShadowPushConstants {
     uint32_t triangleBase;
@@ -59,6 +66,7 @@ struct ShadowPushConstants {
 /** Mirrors PostProcessPushConstants in postprocess.slang. */
 struct PostProcessPushConstants {
     uint32_t grade;
+    uint32_t displayReferred;
     float exposure;
     uint32_t tonemap;
 };
@@ -90,6 +98,28 @@ static constexpr uint32_t kResolveFlagSky = 1u;
 static constexpr uint32_t kResolveFlagSSAO = 2u;
 /** The target is composited by GUI and uncovered pixels must remain transparent. */
 static constexpr uint32_t kResolveFlagTransparentOutput = 4u;
+/**
+ * The scene target holds DISPLAY-REFERRED colour for the rest of the chain.
+ *
+ * Retro only, and not an optimisation - a fidelity requirement. Retro's shading
+ * is the original's gamma-space arithmetic and its display transform is the
+ * identity, so encoding to linear on the way out of the resolve and decoding
+ * again in post is a round trip that cancels. It cancels for the ENDPOINTS. It
+ * does not cancel for anything that reads or writes the target in between:
+ * an alpha blend, a bloom threshold and a blur all give different answers in
+ * the two spaces, and the original performed every one of them in display
+ * space, on an 8-bit framebuffer with no sRGB.
+ *
+ * Measured on danm14aa once the classification change let foliage blend at all:
+ * compositing the same layer in display space instead of linear accounts for
+ * about two thirds of the difference from the reference build.
+ *
+ * PBR and path tracing keep the linear chain, deliberately. There the round
+ * trip does NOT cancel - exposure and a tone curve sit inside it - and linear
+ * compositing is the more correct of the two, which is the exception the
+ * all-modes rule allows for.
+ */
+static constexpr uint32_t kResolveFlagDisplayReferred = 8u;
 
 /** Both resolve dispatches, and their shader, agree on this tile. */
 static constexpr uint32_t kResolveGroupSize = 8;
@@ -547,6 +577,10 @@ void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
         scene.triangleCount > scene.opaqueTriangleCount
             ? scene.triangleCount - scene.opaqueTriangleCount
             : 0;
+    if (scene.depthIndependentTriangleCount > nonOpaqueTriangles) {
+        throw std::runtime_error(
+            "Depth-independent triangle range exceeds non-opaque scene");
+    }
     if (!scene.vertices.buffer || nonOpaqueTriangles == 0) {
         return;
     }
@@ -579,15 +613,46 @@ void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
         RenderAttachment depth {_gbuffer->depth().sampleView(), ImageLayout::DepthRead,
                                 AttachmentLoad::Load, AttachmentStore::DontCare};
         cmd.beginRendering(_renderSize, {color}, &depth, 0, true);
-        cmd.bindPipeline(pipeline.pipeline);
-        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
-                              offsets.data(), static_cast<uint32_t>(offsets.size()));
-        cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
         cmd.bindIndexBuffer(*scene.indices.buffer, scene.indices.offset);
-        // Submission order, deliberately. See scene_draw.slang.
-        const MegaDrawPushConstants push {scene.opaqueTriangleCount, 2};
-        cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
-        cmd.drawIndexed(nonOpaqueTriangles * 3, scene.opaqueTriangleCount * 3);
+        const uint32_t depthTestedTriangles =
+            nonOpaqueTriangles - scene.depthIndependentTriangleCount;
+        if (depthTestedTriangles != 0) {
+            cmd.bindPipeline(pipeline.pipeline);
+            cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                  offsets.data(), static_cast<uint32_t>(offsets.size()));
+            cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
+            // Submission order, deliberately. See scene_draw.slang.
+            const BlendedPushConstants push {scene.opaqueTriangleCount, 2, resolveFlags()};
+            cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
+            cmd.drawIndexed(depthTestedTriangles * 3,
+                            scene.opaqueTriangleCount * 3);
+        }
+        debug("blended: opaque=" + std::to_string(scene.opaqueTriangleCount) +
+                  " total=" + std::to_string(scene.triangleCount) +
+                  " depthIndependent=" + std::to_string(scene.depthIndependentTriangleCount),
+              LogChannel::Graphics);
+        if (scene.depthIndependentTriangleCount != 0) {
+            // Flare visibility was decided by the scene's walkmesh LOS query.
+            // The old flare pass therefore disabled depth testing: testing the
+            // endpoint against the richer opaque G-buffer rejects a halo at
+            // the light or against render geometry the LOS query never saw.
+            key.depthTest = false;
+            PipelineBinding depthIndependentPipeline =
+                _renderer.pipelines().get(key);
+            cmd.bindPipeline(depthIndependentPipeline.pipeline);
+            cmd.bindDescriptorSet(depthIndependentPipeline.layout,
+                                  IDescriptors::kUniformSet, uniformSet,
+                                  offsets.data(), static_cast<uint32_t>(offsets.size()));
+            cmd.bindDescriptorSet(depthIndependentPipeline.layout, 2,
+                                  _resolveMaterialSet, nullptr, 0);
+            const uint32_t triangleBase =
+                scene.triangleCount - scene.depthIndependentTriangleCount;
+            const BlendedPushConstants push {triangleBase, 2, resolveFlags()};
+            cmd.pushFragmentConstants(depthIndependentPipeline.layout, &push,
+                                      sizeof(push));
+            cmd.drawIndexed(scene.depthIndependentTriangleCount * 3,
+                            triangleBase * 3);
+        }
         cmd.endRendering();
     }
     // Publish the composited image in the layout expected by the preview and
@@ -605,6 +670,9 @@ uint32_t ScenePipeline::resolveFlags() const {
     }
     if (_transparentOutput) {
         flags |= kResolveFlagTransparentOutput;
+    }
+    if (_options.mode == RenderMode::Retro) {
+        flags |= kResolveFlagDisplayReferred;
     }
     return flags;
 }
@@ -1158,7 +1226,9 @@ void ScenePipeline::postProcessPass(ICommandBuffer &cmd, uint32_t globalsOffset)
     // the mode. Delete the mode test to grade it, and it will look tonemapped,
     // because it will be.
     const bool grade = _options.grade && _options.mode != RenderMode::Retro;
+    const bool displayReferred = (resolveFlags() & kResolveFlagDisplayReferred) != 0;
     PostProcessPushConstants push {grade ? 1u : 0u,
+                                   displayReferred ? 1u : 0u,
                                    std::max(0.01f, _options.exposure),
                                    static_cast<uint32_t>(std::clamp(_options.tonemap, 0, 1))};
     tailPass(cmd, "postProcessFragment", globalsOffset, 0, &push, sizeof(push));

@@ -65,6 +65,15 @@ struct PostProcessPushConstants {
      * picture, simply ungraded, which is what makes it a usable diagnostic.
      */
     uint grade;
+    /**
+     * The scene arrived DISPLAY-REFERRED and must not be transformed again.
+     *
+     * Only retro sets it, and only because retro's shading is the original's
+     * gamma-space arithmetic end to end - see retro_resolve.slang for why the
+     * linear round trip that used to bracket this pass was removed rather than
+     * kept as a cancelling pair.
+     */
+    uint displayReferred;
     float exposure;
     /** 0 none, 1 the Gran Turismo curve; only read when grade is 1. */
     uint tonemap;
@@ -115,6 +124,12 @@ float rgbToLuma(float3 rgb) {
 [shader("fragment")]
 float4 postProcessFragment(Varyings input) : SV_Target {
     float4 texel = sMainTex.SampleLevel(input.uv, 0.0);
+    // A display-referred scene is already a picture. Transforming it again
+    // would raise it by a second 1/2.2, which is what a mode whose own model
+    // is gamma-space needs this pass NOT to do.
+    if (pushConstants.displayReferred != 0) {
+        return float4(max(texel.rgb, 0.0), texel.a);
+    }
     // Ungraded means unit exposure and no curve, not an unencoded image.
     const bool graded = pushConstants.grade != 0;
     const float exposure = graded ? pushConstants.exposure : 1.0;

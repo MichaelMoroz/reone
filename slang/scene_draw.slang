@@ -59,18 +59,23 @@ static const uint kMegaCategoryMask = 0xFu;
 /** Every category casts. The shadow pass compares against this to skip the
     per-fragment material fetch entirely when nothing is being filtered. */
 static const uint kMegaCastersAll = 0xFFFFFFFFu;
+/** kResolveFlagDisplayReferred, as the blended pass receives it. */
+static const uint kMegaFlagDisplayReferred = 8u;
 
 struct PushConstants {
     uint triangleBase;
     uint materialGated;
     /**
-     * Bit per object category allowed to write the shadow map, from
-     * kMegaCategoryShift of the material's feature mask.
+     * The third word, whose meaning is the pass's own.
      *
-     * The shadow pass is the only stage that pushes this third word; the
-     * G-buffer and blended passes push two and never read it. Adding a fourth
-     * would need the pipeline layout's fragment range widened past the three
-     * words every graphics pipeline here declares.
+     * The shadow pass reads it as a bit per object category allowed to write
+     * the map, from kMegaCategoryShift of the material's feature mask. The
+     * blended pass reads it as the kResolveFlag* set, for which it needs
+     * exactly one bit. The G-buffer pass pushes two words and reads neither
+     * meaning. Adding a FOURTH word would need the pipeline layout's fragment
+     * range widened past the three every graphics pipeline here declares,
+     * which is why the two passes share this one rather than each taking their
+     * own.
      */
     uint casterCategories;
 };
@@ -486,6 +491,15 @@ float4 sceneDrawBlendedFragment(Varyings input, uint primitiveId : SV_PrimitiveI
     // covered texel by alpha^(1-gamma): sevenfold at alpha 0.2, which is a
     // saber blade's soft edge, while leaving its saturated core untouched. That
     // is a glowing outline drawn around every additive sprite.
+    //
+    // None of which applies when the target is already display-referred, which
+    // is retro's chain: there the composed colour goes out as it was composed,
+    // and the blend the hardware then performs is the one the original
+    // performed, in the space the original performed it in.
+    if ((pushConstants.casterCategories & kMegaFlagDisplayReferred) != 0) {
+        return blended ? float4(color * objectAlpha, objectAlpha)
+                       : float4(color * objectAlpha, 0.0);
+    }
     if (blended) {
         return float4(pow(max(color, 0.0), float3(kGamma)) * objectAlpha, objectAlpha);
     }
