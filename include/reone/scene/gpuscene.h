@@ -223,6 +223,15 @@ public:
     }
     const ModelSceneNode *skyRoom() const { return _skyRoom; }
     void setSkyRoom(const ModelSceneNode *room) { _skyRoom = room; }
+    /**
+     * The height the area is walked at, when it has walkmeshes to say so.
+     *
+     * Set beside the sky room and for the same consumer: the sky cube is baked
+     * about a point, and the point that matters is where the player's eye will
+     * be, not where the shell's bounding box happens to be centred.
+     */
+    std::optional<float> groundHeight() const { return _groundHeight; }
+    void setGroundHeight(std::optional<float> height) { _groundHeight = height; }
     TraceMaterialOverrides &traceMaterials() { return _traceMaterials; }
     const TraceMaterialOverrides &traceMaterials() const { return _traceMaterials; }
     const SceneCounts &counts() const { return _counts; }
@@ -313,6 +322,7 @@ private:
     std::unordered_set<SceneNodeId> _fullCollectionUnseen;
     std::unordered_set<uint32_t> _disabledObjects;
     const ModelSceneNode *_skyRoom {nullptr};
+    std::optional<float> _groundHeight;
     TraceMaterialOverrides _traceMaterials;
     SceneCounts _counts;
     std::vector<SceneNodeId> _previousFrameIds;

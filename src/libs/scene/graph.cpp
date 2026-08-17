@@ -114,6 +114,7 @@ glm::vec3 SceneGraph::shadowLightDirection() const {
 void SceneGraph::clear() {
     _modelRoots.clear();
     _walkmeshRoots.clear();
+    _groundHeightDirty = true;
     _triggerRoots.clear();
     _soundRoots.clear();
     _grassRoots.clear();
@@ -171,6 +172,38 @@ void SceneGraph::addRoot(std::shared_ptr<ModelSceneNode> node) {
 
 void SceneGraph::addRoot(std::shared_ptr<WalkmeshSceneNode> node) {
     _walkmeshRoots.push_back(std::move(node));
+    _groundHeightDirty = true;
+}
+
+std::optional<float> SceneGraph::groundHeight() const {
+    if (!_groundHeightDirty) {
+        return _groundHeight;
+    }
+    _groundHeightDirty = false;
+    _groundHeight.reset();
+    double weighted = 0.0;
+    double area = 0.0;
+    for (const auto &root : _walkmeshRoots) {
+        const auto transform = root->absoluteTransform();
+        for (const auto &face : root->walkmesh().faces()) {
+            if (face.vertices.size() < 3) {
+                continue;
+            }
+            const auto a = glm::vec3(transform * glm::vec4(face.vertices[0], 1.0f));
+            const auto b = glm::vec3(transform * glm::vec4(face.vertices[1], 1.0f));
+            const auto c = glm::vec3(transform * glm::vec4(face.vertices[2], 1.0f));
+            const float faceArea = 0.5f * glm::length(glm::cross(b - a, c - a));
+            if (!(faceArea > 0.0f)) {
+                continue;
+            }
+            weighted += static_cast<double>(faceArea) * (a.z + b.z + c.z) / 3.0;
+            area += faceArea;
+        }
+    }
+    if (area > 0.0) {
+        _groundHeight = static_cast<float>(weighted / area);
+    }
+    return _groundHeight;
 }
 
 void SceneGraph::addRoot(std::shared_ptr<TriggerSceneNode> node) {
@@ -208,6 +241,7 @@ void SceneGraph::removeRoot(WalkmeshSceneNode &node) {
         _walkmeshRoots.end(),
         [&node](auto &root) { return root.get() == &node; });
     _walkmeshRoots.erase(it, _walkmeshRoots.end());
+    _groundHeightDirty = true;
 }
 
 void SceneGraph::removeRoot(TriggerSceneNode &node) {
@@ -587,6 +621,10 @@ Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {
     }
     auto &pipeline = *_renderPipeline;
     _gpuScene.resetFrame();
+    // Handed over beside the rest of the per-frame scene state, and cached
+    // behind a dirty flag so a walkmesh-heavy area does not re-walk its faces
+    // every frame.
+    _gpuScene.setGroundHeight(groundHeight());
     auto cameraNode = this->camera();
     if (cameraNode) {
         auto camera = cameraNode->get().camera();

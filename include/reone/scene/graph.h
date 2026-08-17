@@ -348,6 +348,16 @@ public:
     std::shared_ptr<CameraSceneNode> newCamera() override;
     std::shared_ptr<ModelSceneNode> newModel(graphics::Model &model, ModelUsage usage) override;
     std::shared_ptr<WalkmeshSceneNode> newWalkmesh(graphics::Walkmesh &walkmesh) override;
+
+    /**
+     * The height this area is walked at, or nothing when it has no walkmesh.
+     *
+     * The area-weighted mean of every walkmesh face's centroid. Weighting by
+     * area is what makes it the FLOOR rather than the average of the room: a
+     * walkmesh carries its walls too, and a placeable's carries a footlocker,
+     * but floors are the overwhelming majority of the surface in both cases.
+     */
+    std::optional<float> groundHeight() const;
     std::shared_ptr<TriggerSceneNode> newTrigger(std::vector<glm::vec3> geometry) override;
     std::shared_ptr<SoundSceneNode> newSound() override;
 
@@ -400,6 +410,9 @@ private:
 
     std::list<std::shared_ptr<ModelSceneNode>> _modelRoots;
     std::list<std::shared_ptr<WalkmeshSceneNode>> _walkmeshRoots;
+    /** Area-weighted mean height of every walkmesh face; see groundHeight(). */
+    mutable std::optional<float> _groundHeight;
+    mutable bool _groundHeightDirty {true};
     std::list<std::shared_ptr<TriggerSceneNode>> _triggerRoots;
     std::list<std::shared_ptr<GrassSceneNode>> _grassRoots;
     std::list<std::shared_ptr<SoundSceneNode>> _soundRoots;

@@ -671,7 +671,22 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
             result.skyRoom = mesh->cullRoot;
         }
         if (result.skyRoom) {
+            // Horizontally the centre of the shell; vertically the ground.
+            //
+            // The cube is sampled by direction alone, with no parallax term, so
+            // whatever sat at skyOrigin.z when it was baked is re-anchored to
+            // the camera's eye level every frame. Baking about the shell's
+            // AABB centre therefore put the painted horizon wherever the middle
+            // of a dome happens to be - well above eye level - and the sky
+            // read as sitting too low.
+            //
+            // The walkmesh is where the game is played, so its area-weighted
+            // mean height is where the eye will be. An area with no walkmesh
+            // keeps the old centre, which is the only estimate available there.
             result.skyOrigin = 0.5f * (skyMin + skyMax);
+            if (const auto ground = _gpuScene.groundHeight()) {
+                result.skyOrigin.z = *ground;
+            }
         }
         _cachedSkyRoom = result.skyRoom;
         _cachedSkyOrigin = result.skyOrigin;
