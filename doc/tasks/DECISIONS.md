@@ -11,6 +11,33 @@ with the commit that did it, not deleted: a question that was worth asking is
 worth being able to find again, and the reasoning on both sides is what makes
 the answer checkable.
 
+## The standing rule for settling them
+
+**Anything that brings the picture closer to the original game goes into every
+render mode, unless it obviously regresses the advanced lighting or material
+features of PBR and path tracing.** Fidelity work is not retro's alone: retro is
+where a difference from the original is *measured*, not where the correction
+belongs. Where a fix is a correction to how authored data is read — a cutout
+threshold the format supplies, an animated texture the TXI declares, a
+classification the material asks for — it is a correction in all three modes,
+because all three read the same data and none of them benefits from reading it
+wrongly.
+
+The exception is narrow and has to be argued, not assumed: a change regresses
+the other modes when it would undo something they do *better*, not merely
+differently. Retro's non-inverse-square falloff and its radius-squared cull are
+the model of a difference that stays retro-only, because the corrected model is
+the point of the other two.
+
+This decides the default for every row below and every RAS/TRC item: propose it
+for all three modes, and say explicitly which mode it is confined to when it is
+confined at all.
+
+*Recorded 2026-08-16, from the fixture and force-field work: the TPC header
+cutout threshold and the ARE grass threshold went into the raster gate and both
+tracer gates together, and RAS-030's animated-grid indexing is the same kind of
+fix.*
+
 ## Contradictions a person must settle
 
 Ordered by how much downstream work they block. Each names both sides; where the
