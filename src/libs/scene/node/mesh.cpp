@@ -94,10 +94,10 @@ void MeshSceneNode::update(float dt) {
 
     std::shared_ptr<ModelNode::TriangleMesh> mesh(_modelNode.mesh());
     if (mesh) {
-        const auto oldUvOffset = _uvOffset;
+        const auto oldUv = materialUv();
         const auto oldBumpFrame = _bumpmapCycleFrame;
         updateUVAnimation(dt, *mesh);
-        updateBumpmapAnimation(dt, *mesh);
+        updateCycleAnimation(dt);
         if (mesh->danglymesh) {
             updateDanglyAnimation(dt, *mesh->danglymesh);
         }
@@ -106,14 +106,66 @@ void MeshSceneNode::update(float dt) {
         }
         if (oldBumpFrame != _bumpmapCycleFrame)
             _sceneGraph.gpuScene().patchBumpMapFrame(id(), _bumpmapCycleFrame);
-        if (std::memcmp(&oldUvOffset, &_uvOffset, sizeof(_uvOffset)) != 0) {
-            const glm::mat3x4 uv(
-                glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
-                glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
-                glm::vec4(_uvOffset.x, _uvOffset.y, 0.0f, 0.0f));
-            _sceneGraph.gpuScene().patchMaterialUv(id(), uv);
+        const auto newUv = materialUv();
+        if (std::memcmp(&oldUv, &newUv, sizeof(newUv)) != 0) {
+            _sceneGraph.gpuScene().patchMaterialUv(id(), newUv);
         }
     }
+}
+
+glm::mat3x4 MeshSceneNode::materialUv() const {
+    // The scroll and the cycle compose into the one transform the shaders
+    // already apply. A cycle is a window onto a sheet: scale the basis down to
+    // one cell and translate onto the cell the clock has reached.
+    glm::vec2 scale {1.0f};
+    glm::vec2 offset {_uvOffset};
+    if (const auto *diffuse = _nodeTextures.diffuse) {
+        const auto &features = diffuse->features();
+        if (features.procedureType == Texture::ProcedureType::Cycle &&
+            (features.numX > 1 || features.numY > 1)) {
+            const int numX = std::max(1, features.numX);
+            const int numY = std::max(1, features.numY);
+            const int col = _diffuseCycleFrame % numX;
+            const int row = (_diffuseCycleFrame / numX) % numY;
+            // Half a texel in from each edge of the cell, and the span one
+            // texel shorter to match.
+            //
+            // Without it the window runs to the exact cell boundary, where the
+            // bilinear tap straddles it and mixes the neighbouring frame in. On
+            // a 128-texel cell filling most of the screen that is not a hairline
+            // - it is a visible band of the wrong frame down the seam, which
+            // reads as the animation landing between two frames. This is the
+            // same half-texel clamp the text shader already applies to a glyph
+            // for the same reason.
+            const glm::vec2 sheet {std::max(1, diffuse->width()),
+                                   std::max(1, diffuse->height())};
+            const glm::vec2 cell {sheet.x / numX, sheet.y / numY};
+            scale = (cell - 1.0f) / sheet;
+            // The scroll is authored in whole-texture units. Inside a cycle
+            // window it has to move by the window, or a texture that both
+            // scrolls and cycles drags its window across the cell boundary and
+            // shows two frames at once.
+            offset = _uvOffset * scale + (glm::vec2 {col, row} * cell + 0.5f) / sheet;
+        }
+    }
+    return glm::mat3x4(glm::vec4(scale.x, 0.0f, 0.0f, 0.0f),
+                       glm::vec4(0.0f, scale.y, 0.0f, 0.0f),
+                       glm::vec4(offset.x, offset.y, 0.0f, 0.0f));
+}
+
+/**
+ * The frame a cycled texture is showing, from the game clock.
+ *
+ * floor of the wrapped time rather than round of the clamped time: rounding
+ * gave the first and last frames half the duration of every other one, and the
+ * reset depended on a float equality that only held because of the clamp.
+ * KotOR.js computes exactly this expression in its vertex shader.
+ */
+int MeshSceneNode::cycleFrame(const graphics::Texture &texture, float time) {
+    const auto &features = texture.features();
+    const int frameCount = std::max(1, features.numX * features.numY);
+    const float fps = features.fps > 0 ? static_cast<float>(features.fps) : 1.0f;
+    return static_cast<int>(glm::floor(time * fps)) % frameCount;
 }
 
 void MeshSceneNode::updateUVAnimation(float dt, const ModelNode::TriangleMesh &mesh) {
@@ -123,18 +175,20 @@ void MeshSceneNode::updateUVAnimation(float dt, const ModelNode::TriangleMesh &m
     }
 }
 
-void MeshSceneNode::updateBumpmapAnimation(float dt, const ModelNode::TriangleMesh &mesh) {
-    if (!_nodeTextures.bumpmap) {
-        return;
+void MeshSceneNode::updateCycleAnimation(float dt) {
+    // Every slot that can carry a cycle, not only the bumpmap. A TXI naming
+    // proceduretype cycle with numX/numY above one is an animation whatever
+    // slot it lands in - force fields, energy shields and scrolling panels are
+    // DIFFUSE cycles - and only the bumpmap was ever stepped.
+    _cycleTime += dt;
+    if (const auto *diffuse = _nodeTextures.diffuse) {
+        if (diffuse->features().procedureType == Texture::ProcedureType::Cycle) {
+            _diffuseCycleFrame = cycleFrame(*diffuse, _cycleTime);
+        }
     }
-    const Texture::Features &features = _nodeTextures.bumpmap->features();
-    if (features.procedureType == Texture::ProcedureType::Cycle) {
-        int frameCount = features.numX * features.numY;
-        float length = frameCount / static_cast<float>(features.fps);
-        _bumpmapCycleTime = glm::min(_bumpmapCycleTime + dt, length);
-        _bumpmapCycleFrame = static_cast<int>(glm::round((frameCount - 1) * (_bumpmapCycleTime / length)));
-        if (_bumpmapCycleTime == length) {
-            _bumpmapCycleTime = 0.0f;
+    if (const auto *bumpmap = _nodeTextures.bumpmap) {
+        if (bumpmap->features().procedureType == Texture::ProcedureType::Cycle) {
+            _bumpmapCycleFrame = cycleFrame(*bumpmap, _cycleTime);
         }
     }
 }
@@ -302,10 +356,7 @@ void MeshSceneNode::collectInto(GpuScene &scene) {
             }
         }
     }
-    material.uv = glm::mat3x4(
-        glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
-        glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
-        glm::vec4(_uvOffset.x, _uvOffset.y, 0.0f, 0.0f));
+    material.uv = materialUv();
     material.color = glm::vec4(1.0f, 1.0f, 1.0f, _alpha);
     material.ambientColor = mesh->ambient;
     material.diffuseColor = mesh->diffuse;

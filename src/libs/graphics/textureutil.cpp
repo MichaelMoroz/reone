@@ -76,6 +76,50 @@ static int getBytesPerPixel(PixelFormat format) {
     }
 }
 
+void convertArrayTextureToGrid(Texture &texture, int numX, int numY) {
+    const int frames = numX * numY;
+    if (frames <= 1 || static_cast<int>(texture.layers().size()) != frames) {
+        return;
+    }
+    auto layers = texture.layers();
+    auto format = texture.pixelFormat();
+    if (isCompressed(format)) {
+        PixelFormat decompressed = format;
+        for (auto &layer : layers) {
+            PixelFormat out;
+            decompressLayer(texture.width(), texture.height(), layer, format, out);
+            decompressed = out;
+        }
+        format = decompressed;
+    }
+    const int bpp = getBytesPerPixel(format);
+    const int frameW = texture.width();
+    const int frameH = texture.height();
+    const int sheetW = frameW * numX;
+    const int sheetH = frameH * numY;
+    auto sheet = std::make_shared<ByteBuffer>();
+    sheet->resize(static_cast<size_t>(sheetW) * sheetH * bpp);
+    for (int frame = 0; frame < frames; ++frame) {
+        const auto &src = *layers[frame].pixels;
+        const int col = frame % numX;
+        const int row = frame / numX;
+        for (int y = 0; y < frameH; ++y) {
+            const size_t srcOff = static_cast<size_t>(y) * frameW * bpp;
+            const size_t dstOff =
+                (static_cast<size_t>(row * frameH + y) * sheetW + col * frameW) * bpp;
+            if (srcOff + static_cast<size_t>(frameW) * bpp > src.size()) {
+                return;
+            }
+            std::memcpy(&(*sheet)[dstOff], &src[srcOff], static_cast<size_t>(frameW) * bpp);
+        }
+    }
+    texture.setType(TextureType::TwoDim);
+    texture.setPixelFormat(format);
+    std::vector<Texture::Layer> one;
+    one.push_back(Texture::Layer {std::move(sheet)});
+    texture.setPixels(sheetW, sheetH, format, std::move(one));
+}
+
 void convertGridTextureToArray(Texture &texture, int numX, int numY) {
     checkEqual("layers size", static_cast<int>(texture.layers().size()), 1);
     if (isCompressed(texture.pixelFormat())) {
@@ -114,6 +158,23 @@ void convertGridTextureToArray(Texture &texture, int numX, int numY) {
         frameSize.x, frameSize.y,
         texture.pixelFormat(),
         std::move(frameLayers));
+}
+
+/**
+ * A cycled sheet must not be minified across its own cell boundaries.
+ *
+ * Every mip level of a grid sheet averages neighbouring cells together, so a
+ * minified force field samples a blend of all four frames rather than the one
+ * the clock selected - the animation dissolves into a static average as the
+ * surface recedes. The cells are small to begin with (128 texels for
+ * door_field), so the chain buys nothing here that it does not immediately
+ * spend on cross-frame bleed.
+ */
+void applyCycleFiltering(Texture::Properties &properties, const Texture::Features &features) {
+    if (features.procedureType == Texture::ProcedureType::Cycle &&
+        (features.numX > 1 || features.numY > 1)) {
+        properties.minFilter = Texture::Filtering::Linear;
+    }
 }
 
 Texture::Properties getTextureProperties(TextureUsage usage) {

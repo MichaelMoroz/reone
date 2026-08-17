@@ -25,7 +25,20 @@ namespace graphics {
 
 void convertGridTextureToArray(Texture &texture, int numX, int numY);
 
+/**
+ * Lays an animation's per-frame layers out as one sheet, row-major.
+ *
+ * The inverse of the above, and the one the reader actually needs: a TPC stores
+ * an animated texture as one face per frame, so the frames arrive separated and
+ * it is the SHEET that has to be built. Decompresses first when it must, since
+ * block-compressed frames cannot be tiled in place.
+ */
+void convertArrayTextureToGrid(Texture &texture, int numX, int numY);
+
 Texture::Properties getTextureProperties(TextureUsage usage);
+
+/** Drops the mip chain for a cycled grid sheet; see the definition. */
+void applyCycleFiltering(Texture::Properties &properties, const Texture::Features &features);
 
 inline bool isCompressed(PixelFormat format) {
     return format == PixelFormat::DXT1 || format == PixelFormat::DXT5;

@@ -59,9 +59,69 @@ void TpcReader::load() {
         _dataSize = getMipMapDataSize(w, h);
     }
 
-    loadLayers();
+    // The TXI is read BEFORE the pixels, which is the opposite of the obvious
+    // order and is the whole point.
+    //
+    // An animated texture declares its frame grid in the TXI - numx, numy - and
+    // the header's width and height describe the assembled SHEET, not a frame.
+    // The file stores one face per frame, each with its own mip chain, exactly
+    // as a cubemap stores six. Read as a single face the byte count comes out
+    // identical - four 128x128 DXT1 frames with mips are the same 43,690 bytes
+    // as one 256x256 with mips - so nothing complains, and what lands in the
+    // image is frame 0's mip 0 followed by its smaller mips and then the other
+    // frames, all reinterpreted as one flat picture. That is the "high
+    // frequency stripes" a force field shows: its own mip chain, tiled into the
+    // image beside it.
+    //
+    // Seeking past the pixel data to reach the TXI first costs nothing, because
+    // that total is the same under either interpretation.
+    _tpc.seek(128 + totalPixelDataSize());
     loadFeatures();
+    if (_features.procedureType == Texture::ProcedureType::Cycle &&
+        (_features.numX > 1 || _features.numY > 1)) {
+        const int numX = std::max(1, _features.numX);
+        const int numY = std::max(1, _features.numY);
+        if (_width % numX == 0 && _height % numY == 0) {
+            _frameGrid = {numX, numY};
+            _width /= numX;
+            _height /= numY;
+            _numLayers = numX * numY;
+            if (!_compressed) {
+                int w, h;
+                getMipMapSize(0, w, h);
+                _dataSize = getMipMapDataSize(w, h);
+            } else {
+                _dataSize /= _numLayers;
+            }
+        } else {
+            warn("TPC '" + _resRef + "': " + std::to_string(_width) + "x" +
+                 std::to_string(_height) + " does not divide into a " +
+                 std::to_string(numX) + "x" + std::to_string(numY) +
+                 " frame grid; reading it as a single image");
+        }
+    }
+    loadLayers();
     loadTexture();
+}
+
+/**
+ * Bytes of pixel data for one face, base level and every mip below it.
+ *
+ * The same total however the faces are counted: a grid of N frames divides the
+ * dimensions and multiplies the count, and the geometric series comes out
+ * equal - four 128x128 DXT1 frames with mips are the same 43,690 bytes as one
+ * 256x256 with mips. That equality is what makes this usable as the offset of
+ * the TXI before the frame count is known, and it is also why reading an
+ * animation as a single image never tripped a size check.
+ */
+int TpcReader::totalPixelDataSize() const {
+    int total = _dataSize;
+    for (int j = 1; j < _numMipMaps; ++j) {
+        int w, h;
+        getMipMapSize(j, w, h);
+        total += getMipMapDataSize(w, h);
+    }
+    return total;
 }
 
 void TpcReader::loadLayers() {
@@ -107,10 +167,17 @@ void TpcReader::loadFeatures() {
 }
 
 void TpcReader::loadTexture() {
-    _texture = std::make_shared<Texture>(
-        _resRef,
-        _numLayers == kNumCubeFaces ? TextureType::CubeMap : TextureType::TwoDim,
-        getTextureProperties(_usage));
+    auto properties = getTextureProperties(_usage);
+    applyCycleFiltering(properties, _features);
+    // A frame grid arrives as one layer per frame, which is an array whatever
+    // the caller does with it next. The cubemap test is on the declared
+    // dimensions and cannot collide with this: a cycle sheet is not six times
+    // taller than it is wide.
+    const auto type = _frameGrid.x * _frameGrid.y > 1
+                          ? TextureType::TwoDimArray
+                          : (_numLayers == kNumCubeFaces ? TextureType::CubeMap
+                                                         : TextureType::TwoDim);
+    _texture = std::make_shared<Texture>(_resRef, type, properties);
     _texture->setPixels(_width, _height, getPixelFormat(), _layers);
     // The header value, applied after the TXI block so a texture with no TXI
     // still carries it. 1.0 is the format's way of saying "no cutout", so it
@@ -127,6 +194,11 @@ void TpcReader::loadTexture() {
         _alphaTest = 1.0f;
     }
     _features.alphaTest = _alphaTest < 1.0f ? _alphaTest : -1.0f;
+    if (_features.alphaTest >= 0.0f) {
+        debug("TPC '" + _resRef + "': authored alpha test " +
+                  std::to_string(_features.alphaTest),
+              LogChannel::Graphics);
+    }
     _texture->setFeatures(_features);
 }
 

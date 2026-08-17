@@ -60,6 +60,14 @@ private:
 
     std::vector<Texture::Layer> _layers;
     Texture::Features _features;
+    /**
+     * Frames across and down, when the TXI declares an animation.
+     *
+     * {1, 1} for an ordinary texture. When it is larger the file holds one face
+     * per frame and _width/_height describe a frame, so the sheet the rest of
+     * the engine expects has to be reassembled from them.
+     */
+    glm::ivec2 _frameGrid {1, 1};
     /** The cutout threshold from the file header; 1.0 means none. */
     float _alphaTest {1.0f};
 
@@ -73,6 +81,7 @@ private:
 
     void getMipMapSize(int index, int &width, int &height) const;
     int getMipMapDataSize(int width, int height) const;
+    int totalPixelDataSize() const;
 
     PixelFormat getPixelFormat() const;
 };

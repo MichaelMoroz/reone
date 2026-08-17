@@ -106,8 +106,10 @@ private:
     ModelSceneNode &_model;
 
     glm::vec2 _uvOffset {0.0f};
-    float _bumpmapCycleTime {0.0f};
+    /** Shared by every cycled slot on this mesh; each picks its own frame. */
+    float _cycleTime {0.0f};
     int _bumpmapCycleFrame {0};
+    int _diffuseCycleFrame {0};
     float _alpha {1.0f};
     glm::vec3 _selfIllumColor {0.0f};
 
@@ -131,7 +133,10 @@ private:
     // Animation
 
     void updateUVAnimation(float dt, const graphics::ModelNode::TriangleMesh &mesh);
-    void updateBumpmapAnimation(float dt, const graphics::ModelNode::TriangleMesh &mesh);
+    void updateCycleAnimation(float dt);
+    /** Scroll and cycle composed into the transform the shaders apply. */
+    glm::mat3x4 materialUv() const;
+    static int cycleFrame(const graphics::Texture &texture, float time);
     void updateDanglyAnimation(float dt, const graphics::ModelNode::Danglymesh &mesh);
     void updateSaberAnimation(float dt);
     RegisteredDeformation buildDeformation();
