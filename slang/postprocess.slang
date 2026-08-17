@@ -439,9 +439,19 @@ struct BloomPushConstants {
 float4 bloomExtractFragment(Varyings input) : SV_Target {
     float3 color = sMainTex.SampleLevel(input.uv, 0.0).rgb;
     float3 selfIllum = sBloomSelfIllum.SampleLevel(input.uv, 0.0).rgb;
-    // Both gates are the reference's, term for term: a surface that emits at
-    // all, and a channel already at the top of the range.
-    float emits = step(1.0e-4, dot(selfIllum, float3(1.0)));
+    // Both gates are the reference's, term for term, and both are PER CHANNEL:
+    //
+    //   step(1e-4, uSelfIllumColor.rgb) * step(0.95, color) * color
+    //
+    // The emit gate used to be scalar - step on the sum - which is a different
+    // rule wherever a surface emits in one channel and not another. A red
+    // warning strip then bloomed its blue and green as readily as its red, and
+    // the halo came out white instead of red.
+    //
+    // The threshold means what options.h says it means now that retro's chain
+    // is display-referred end to end; while the target held linear colour, 0.95
+    // was really 0.977 and quietly bloomed less than it was asked to.
+    float3 emits = step(float3(1.0e-4), selfIllum);
     float3 hot = step(float3(bloomPushConstants.threshold), color) * color;
     return float4(emits * hot, 1.0);
 }
@@ -451,6 +461,12 @@ float4 bloomBlurFragment(Varyings input) : SV_Target {
     // The reference's 13-tap kernel, as two separable passes. Weights are the
     // normalised binomial row; the offsets are whole texels so the pair costs
     // 26 samples rather than the 169 a square kernel would.
+    //
+    // Verified equal to the reference's own, which spends 7 bilinear taps where
+    // this spends 13 discrete ones: the centre weight is 0.196483 in both, and
+    // its pair at offset 1.4118 weighted 0.29691 is these taps 1 and 2, whose
+    // combined weight is 0.295985 at centroid 1.409. Same for the 3.2941 and
+    // 5.1765 pairs. Two spellings of one gaussian.
     static const float kWeights[7] = {0.196483, 0.174868, 0.121117, 0.065591,
                                       0.027680, 0.009122, 0.002338};
     float2 step = bloomPushConstants.texelStep;
