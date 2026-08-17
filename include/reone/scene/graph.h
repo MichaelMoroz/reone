@@ -392,6 +392,8 @@ private:
     std::vector<LightSceneNode *> _flareLights;
     /** Last reported count of flare-authoring lights, so the log fires on change only. */
     size_t _loggedFlareLights {std::numeric_limits<size_t>::max()};
+    /** Last reported count of flares that survived the line-of-sight test. */
+    size_t _loggedFlareVisible {std::numeric_limits<size_t>::max()};
     std::unordered_set<LightSceneNode *> _registeredFlareLights;
 
     // Roots

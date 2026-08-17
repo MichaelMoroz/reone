@@ -266,13 +266,26 @@ void SceneGraph::update(float dt) {
         std::unordered_set<LightSceneNode *> visible;
         for (auto *light : _flareLights) {
             Collision collision;
-            if (testLineOfSight(_activeCamera->origin(), light->origin(), collision)) {
+            // The dial belongs here, not only on the collection path: this is
+            // where a flare is registered every frame, so leaving it ungated
+            // meant the switch controlled nothing.
+            if (!_graphicsOpt.lensFlares ||
+                testLineOfSight(_activeCamera->origin(), light->origin(), collision)) {
                 _gpuScene.unregisterObject(light->id());
                 continue;
             }
             light->collectLensFlare(
                 _gpuScene, light->modelNode().light()->flares.front());
             visible.insert(light);
+        }
+        if (visible.size() != _loggedFlareVisible) {
+            _loggedFlareVisible = visible.size();
+            const glm::vec3 eye = _activeCamera ? _activeCamera->origin() : glm::vec3 {0.0f};
+            debug("Scene '" + _name + "': " + std::to_string(visible.size()) +
+                      " flares registered this frame, camera at (" +
+                      std::to_string(eye.x) + ", " + std::to_string(eye.y) + ", " +
+                      std::to_string(eye.z) + ")",
+                  LogChannel::Graphics);
         }
         for (auto *light : _registeredFlareLights) {
             if (visible.find(light) == visible.end())
@@ -405,8 +418,15 @@ void SceneGraph::updateFlareLights() {
     // and an unreachable draw path look identical.
     if (authored != _loggedFlareLights) {
         _loggedFlareLights = authored;
+        std::string where;
+        if (!_flareLights.empty()) {
+            const glm::vec3 origin = _flareLights.front()->origin();
+            where = "; nearest at (" + std::to_string(origin.x) + ", " +
+                    std::to_string(origin.y) + ", " + std::to_string(origin.z) + ")";
+        }
         debug("Scene '" + _name + "': " + std::to_string(authored) +
-                  " lights author flares, " + std::to_string(_flareLights.size()) + " in range",
+                  " lights author flares, " + std::to_string(_flareLights.size()) +
+                  " in range" + where,
               LogChannel::Graphics);
     }
 }

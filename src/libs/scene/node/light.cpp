@@ -73,14 +73,38 @@ void LightSceneNode::collectLensFlare(GpuScene &scene, const ModelNode::LensFlar
     if (!texture) {
         return;
     }
-    auto color = glm::vec4(_color, 0.5f);
+    // A flare has its own authored tint; flare-only lights need not carry a
+    // light-colour controller, whose default would turn the billboard black.
+    auto color = glm::vec4(flare.colorShift, 0.5f);
     auto transform = glm::translate(origin());
+    // The authored flare size is a SCREEN size, not a world one.
+    //
+    // The reference draws a flare by projecting its origin to clip space,
+    // dividing through, and offsetting the quad's corners in NDC - so
+    // 0.2 * flare.size is a fraction of the viewport and the halo stays the
+    // same size however far away the light is. Handing that number to a
+    // world-space quad instead gives a card 0.2 units across, which at any real
+    // distance is a few pixels: four flares registered on Dantooine and moved
+    // 32 pixels between them.
+    //
+    // The merged quad is built from world-space right/up vectors and cannot be
+    // told to work in NDC without a per-kind branch in the merge, so the world
+    // size that yields the intended NDC size is computed here instead. A world
+    // offset h at distance d projects to an NDC offset h * P[i][i] / d, so
+    // inverting that gives the size below - and because it scales with
+    // distance, the halo holds its screen size exactly as the reference's does.
+    const float ndcSize = 0.2f * flare.size;
+    const glm::mat4 &projection = camera->projection();
+    const float distance = std::max(0.01f, glm::length(origin() - camera->position()));
+    const glm::vec2 size {
+        ndcSize * distance / std::max(1e-4f, std::abs(projection[0][0])),
+        ndcSize * distance / std::max(1e-4f, std::abs(projection[1][1]))};
     // Transparent, not LensFlare: every admission filter admits Opaque and
     // Transparent only, so a billboard registered under LensFlare is dropped
     // before it can be classified. A flare is an additive transparent
     // billboard, which is what classifyProcedural makes of it from here.
     scene.addBillboard(renderCategory(RenderCategory::Transparent),
-                         id(), nameIds(), *texture, color, transform, glm::inverse(transform), 0.2f * flare.size, &_model);
+                         id(), nameIds(), *texture, color, transform, glm::inverse(transform), size, &_model);
 }
 
 bool LightSceneNode::isDirectional() const {

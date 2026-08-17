@@ -202,7 +202,7 @@ public:
     void addBillboard(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
                       graphics::Texture &texture, const glm::vec4 &color,
                       const glm::mat4 &transform, const glm::mat4 &transformInv,
-                      std::optional<float> size, ModelSceneNode *cullRoot);
+                      std::optional<glm::vec2> size, ModelSceneNode *cullRoot);
     void addParticles(RenderCategories categories, SceneNodeId id, SceneNodeNameIds nameIds,
                       const graphics::Material &material, const glm::ivec2 &gridSize,
                       std::vector<graphics::ProceduralQuad> quads,

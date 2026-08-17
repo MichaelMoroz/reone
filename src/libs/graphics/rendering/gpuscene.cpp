@@ -338,6 +338,13 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
         vertexCount += object.vertexCount;
         triangleBase += object.triangleCount;
     }
+    if (upload.depthIndependentObjectCount > upload.objects.size())
+        throw std::runtime_error("Depth-independent object range exceeds merged scene");
+    uint64_t depthIndependentTriangleCount = 0;
+    for (size_t i = upload.objects.size() - upload.depthIndependentObjectCount;
+         i < upload.objects.size(); ++i) {
+        depthIndependentTriangleCount += upload.objects[i].data.triangleCount;
+    }
     const uint64_t triangleCount = opaqueTriangleCount + nonOpaqueTriangleCount;
     if (vertexCount == 0 || triangleCount == 0)
         return empty;
@@ -484,6 +491,8 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
     view.opaqueObjectCount = upload.opaqueObjectCount;
     view.vertexCount = static_cast<uint32_t>(vertexCount);
     view.opaqueTriangleCount = static_cast<uint32_t>(opaqueTriangleCount);
+    view.depthIndependentTriangleCount =
+        static_cast<uint32_t>(depthIndependentTriangleCount);
     view.triangleCount = static_cast<uint32_t>(triangleCount);
     view.primitiveIds =
         {frame.primitiveIds.data(), static_cast<uint32_t>(frame.primitiveIds.size())};

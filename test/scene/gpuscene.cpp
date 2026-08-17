@@ -37,6 +37,13 @@ void addParticles(reone::scene::GpuScene &scene, uint32_t index, float color = 1
                        material, {1, 1}, oneQuad(static_cast<float>(index)), nullptr);
 }
 
+void addBillboard(reone::scene::GpuScene &scene, uint32_t index, Texture &texture,
+                  float size = 1.0f) {
+    scene.addBillboard(renderCategory(RenderCategory::Transparent), {index, 0}, {},
+                       texture, glm::vec4(1.0f), glm::mat4(1.0f), glm::mat4(1.0f),
+                       size, nullptr);
+}
+
 reone::scene::GpuScene::Classifier noMeshes() {
     return [](const RegisteredMesh &) -> std::optional<reone::scene::GpuScene::Classification> {
         ADD_FAILURE() << "unexpected mesh";
@@ -111,6 +118,46 @@ TEST(GpuScene, full_collection_unregisters_unseen_objects_and_clear_resets_world
     scene.clear();
     EXPECT_TRUE(scene.objects().empty());
     EXPECT_EQ(0, scene.counts().objects());
+}
+
+TEST(GpuScene, billboards_form_the_depth_independent_non_opaque_tail) {
+    reone::scene::GpuScene scene;
+    Texture texture("flare", TextureType::TwoDim, Texture::Properties {});
+    addBillboard(scene, 1, texture);
+    addParticles(scene, 2);
+
+    auto classify = [](const RegisteredProcedural &object) {
+        reone::scene::GpuScene::Classification result;
+        result.kind = object.kind == ProceduralKind::Billboard
+                          ? reone::scene::GpuScene::AdmissionKind::AdditiveEmissive
+                          : reone::scene::GpuScene::AdmissionKind::LitBlended;
+        return std::optional {result};
+    };
+
+    auto upload = scene.prepare(noMeshes(), classify, glm::mat4(1.0f), 1);
+    ASSERT_EQ(2, upload.objects.size());
+    EXPECT_EQ(0, upload.opaqueObjectCount);
+    EXPECT_EQ(1, upload.depthIndependentObjectCount);
+    EXPECT_EQ(2, upload.objects[0].objectIndex);
+    EXPECT_EQ(1, upload.objects[1].objectIndex);
+    EXPECT_EQ(2, upload.objects[1].data.triangleCount);
+}
+
+TEST(GpuScene, billboard_uses_authored_size_instead_of_translation_basis) {
+    reone::scene::GpuScene scene;
+    Texture texture("flare", TextureType::TwoDim, Texture::Properties {});
+    addBillboard(scene, 1, texture, 3.0f);
+
+    auto classify = [](const RegisteredProcedural &) {
+        reone::scene::GpuScene::Classification result;
+        result.kind = reone::scene::GpuScene::AdmissionKind::AdditiveEmissive;
+        return std::optional {result};
+    };
+
+    auto upload = scene.prepare(noMeshes(), classify, glm::mat4(1.0f), 1);
+    ASSERT_EQ(1, upload.proceduralQuads.size());
+    EXPECT_FLOAT_EQ(3.0f, upload.proceduralQuads[0].right.x);
+    EXPECT_FLOAT_EQ(3.0f, upload.proceduralQuads[0].up.y);
 }
 
 TEST(GpuScene, grass_uses_face_band_prefix_ranges_without_cpu_quads) {

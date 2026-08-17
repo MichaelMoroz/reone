@@ -508,14 +508,19 @@ void GpuScene::addMesh(RenderCategories categories, SceneNodeId id,
 void GpuScene::addBillboard(RenderCategories categories, SceneNodeId id,
                             SceneNodeNameIds nameIds, Texture &texture, const glm::vec4 &color,
                             const glm::mat4 &transform, const glm::mat4 &transformInv,
-                            std::optional<float> size, ModelSceneNode *cullRoot) {
+                            std::optional<glm::vec2> size, ModelSceneNode *cullRoot) {
     Material material {};
     material.type = MaterialType::Particle;
     material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)] = &texture;
     ProceduralInstance instance;
     instance.position = glm::vec3(transform[3]);
-    instance.size = {glm::length(glm::vec3(transform[0])),
-                     glm::length(glm::vec3(transform[1]))};
+    // The authored size when the caller gave one - a lens flare's transform is
+    // a pure translation, so deriving size from its basis vectors returns 1x1
+    // whatever the flare asked for, and the parameter carrying the real value
+    // was discarded.
+    const glm::vec2 transformSize {glm::length(glm::vec3(transform[0])),
+                                   glm::length(glm::vec3(transform[1]))};
+    instance.size = size ? *size : transformSize;
     instance.color = color;
     RegisteredProcedural procedural;
     procedural.categories = categories;
@@ -527,7 +532,6 @@ void GpuScene::addBillboard(RenderCategories categories, SceneNodeId id,
     procedural.cullRoot = cullRoot;
     upsert(std::move(procedural));
     (void)transformInv;
-    (void)size;
 }
 
 void GpuScene::addParticles(RenderCategories categories, SceneNodeId id,
@@ -653,10 +657,13 @@ graphics::GpuSceneUpload GpuScene::prepare(
     upload.grassRanges.clear();
     upload.cameraPosition = glm::inverse(cameraView)[3];
     upload.opaqueObjectCount = 0;
+    upload.depthIndependentObjectCount = 0;
     upload.materialReferenceCount = 0;
-    std::vector<graphics::GpuSceneObjectInput> opaqueObjects, nonOpaqueObjects;
+    std::vector<graphics::GpuSceneObjectInput> opaqueObjects, nonOpaqueObjects,
+        depthIndependentObjects;
     opaqueObjects.reserve(_objects.size());
     nonOpaqueObjects.reserve(_objects.size());
+    depthIndependentObjects.reserve(_objects.size());
     // ROWS, not columns. glm is column-major, so cameraView[i] is column i.
     // Billboards still use the primary-camera approximation; grass does not.
     const glm::mat3 viewRows = glm::transpose(glm::mat3(cameraView));
@@ -930,6 +937,12 @@ graphics::GpuSceneUpload GpuScene::prepare(
             }
         if (sceneObject.geometryIndex == 0) {
             opaqueObjects.push_back(input);
+        } else if (procedural->kind == ProceduralKind::Billboard) {
+            // A flare's walkmesh line-of-sight test has already decided its
+            // visibility. Keep it at the non-opaque tail so raster can retain
+            // the old no-depth-test draw without letting particles show
+            // through walls.
+            depthIndependentObjects.push_back(input);
         } else {
             nonOpaqueObjects.push_back(input);
         }
@@ -958,9 +971,14 @@ graphics::GpuSceneUpload GpuScene::prepare(
         upload.grassFaceGeneration = _grassFaceGeneration;
     }
     upload.opaqueObjectCount = static_cast<uint32_t>(opaqueObjects.size());
-    upload.objects.reserve(opaqueObjects.size() + nonOpaqueObjects.size());
+    upload.depthIndependentObjectCount =
+        static_cast<uint32_t>(depthIndependentObjects.size());
+    upload.objects.reserve(opaqueObjects.size() + nonOpaqueObjects.size() +
+                           depthIndependentObjects.size());
     upload.objects.insert(upload.objects.end(), opaqueObjects.begin(), opaqueObjects.end());
     upload.objects.insert(upload.objects.end(), nonOpaqueObjects.begin(), nonOpaqueObjects.end());
+    upload.objects.insert(upload.objects.end(), depthIndependentObjects.begin(),
+                          depthIndependentObjects.end());
     upload.materials.assign(_materials.size(), {});
     for (size_t i = 0; i < _materials.size(); ++i) {
         if (_materials[i].occupied)
