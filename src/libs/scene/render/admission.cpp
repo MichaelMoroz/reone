@@ -38,6 +38,20 @@ namespace {
 using InstanceMaterial = GpuScene::InstanceMaterial;
 using AdmissionKind = GpuScene::AdmissionKind;
 
+/**
+ * Blended coverage that is scene geometry rather than a procedural sprite.
+ *
+ * The raster passes never read it: blended is blended there. It exists for the
+ * tracer, whose candidate loop skips blended coverage outright - right for
+ * smoke, wrong for a window - so this separates the two populations without
+ * making either pass ask what kind of object it is drawing. Mirrored as
+ * kPtMaskTransmissive in slang/tracing/resources.slang.
+ *
+ * Bits 24-26 are the sky, blended-coverage and punch-through flags, and 27 up
+ * is the curated category index; 16-23 are free and this takes the top of them.
+ */
+constexpr uint32_t kMaskTracedTransmissive = 1u << 23;
+
 void hashBytes(uint64_t &hash, const void *data, size_t size) {
     constexpr uint64_t kPrime = 1099511628211ull;
     const auto *bytes = static_cast<const unsigned char *>(data);
@@ -65,6 +79,8 @@ uint64_t hashUpload(const GpuSceneUpload &upload) {
     hashVector(hash, upload.grassRanges);
     hashBytes(hash, &upload.cameraPosition, sizeof(upload.cameraPosition));
     hashBytes(hash, &upload.opaqueObjectCount, sizeof(upload.opaqueObjectCount));
+    hashBytes(hash, &upload.depthIndependentObjectCount,
+              sizeof(upload.depthIndependentObjectCount));
     return hash;
 }
 
@@ -124,7 +140,10 @@ std::string describeUploadDifference(const GpuSceneUpload &left,
                          std::to_string(right.grassRanges.size()) +
                          " first_grass_range=" +
                          std::to_string(firstDifferent(left.grassRanges,
-                                                       right.grassRanges));
+                                                       right.grassRanges)) +
+                         " depth_independent_objects=" +
+                         std::to_string(left.depthIndependentObjectCount) + "/" +
+                         std::to_string(right.depthIndependentObjectCount);
     return detail;
 }
 
@@ -278,17 +297,34 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
         if (diffuse->features().blending == Texture::Blending::Additive) {
             kind = AdmissionKind::AdditiveEmissive;
             ++_submission.additive;
-        } else if (diffuse->features().blending == Texture::Blending::PunchThrough ||
-                   mesh.material.type == MaterialType::TransparentModel) {
-            // TransparentModel stays a cutout. It is not a statement that the
-            // surface has continuous coverage: MeshSceneNode::isTransparent
-            // falls through to hasAlphaChannel, so any texture that merely
-            // carries an alpha channel lands here - which is most foliage.
-            // Routing those into the blended pass takes trees out of the
-            // G-buffer and visibly changes geometry that was correct before.
-            // Genuinely blended meshes need a narrower signal than this flag
-            // before they can be separated from alpha-tested ones.
+        } else if (diffuse->features().blending == Texture::Blending::PunchThrough) {
             kind = AdmissionKind::Cutout;
+        } else if (mesh.material.type == MaterialType::TransparentModel) {
+            // TransparentModel blends. It used to become a cutout here, on the
+            // reasoning that isTransparent falls through to hasAlphaChannel and
+            // so admits most foliage, which the blended pass would take out of
+            // the G-buffer.
+            //
+            // That reasoning described the population correctly and drew the
+            // wrong conclusion from it. The reference classifies with the
+            // IDENTICAL predicate - MeshSceneNode::isTransparent is
+            // byte-for-byte the same function in both trees - and routes every
+            // one of those meshes to its OIT pass. Foliage taken out of the
+            // G-buffer is what the original did: a leaf card is lit by its
+            // lightmap, or by 1.0 where it has none, and is composited rather
+            // than alpha-tested at half coverage. Alpha-testing them at 0.5
+            // instead is what made leaves black and aliased, cloth see-through,
+            // and every window in the game a stencil.
+            //
+            // Punch-through above keeps its own branch and stays a cutout: the
+            // TXI saying so IS the narrower signal this comment used to ask
+            // for, and it is authored rather than inferred.
+            kind = AdmissionKind::LitBlended;
+            // Raster wants nothing to do with this bit; the tracer does. Its
+            // candidate loop skips blended coverage outright, which is correct
+            // for a particle and wrong for a pane of glass, so mark the ones
+            // that are geometry.
+            material.featureMask |= kMaskTracedTransmissive;
         }
     }
     // Backdrop cutouts are sky, and shaded as sky.
@@ -312,6 +348,15 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
     // Cutout is the discriminator, and it is the whole of it: the other 132
     // self-illuminated scenery meshes in that module are modelled buildings,
     // which are lit normally and stay that way.
+    //
+    // It stays Cutout alone, and blended deliberately does not join it. That
+    // widening was tried and measured: `backgroundGeometry` is not authored
+    // here but INFERRED - mesh.cpp reads it as "a background-scenery room mesh
+    // with no lightmap" - and on Dantooine that description fits 372 tree
+    // branches. Extending the sky class to blended meshes shaded every one of
+    // them as unlit sky radiance at the sky dial, which the alpha test used to
+    // hide by discarding them and blending no longer does. Taris's three
+    // painted skyline cards are punch-through and keep the class.
     if (mesh.material.backgroundGeometry && kind == AdmissionKind::Cutout) {
         material.featureMask |= 1u << 24;
     }

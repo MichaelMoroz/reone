@@ -416,13 +416,20 @@ void main() {
                 if (++scatters > scatterBudget) break;
                 path.Origin = hit.position + hit.geometricNormal * pushConstants.rayOriginOffset;
             } else {
-                // PURELY EMISSIVE: the only pass-through left. Additive light
-                // occupies no volume, so the ray continues unattenuated; the
-                // radiance was already paid at the vertex below. This is always
-                // a deeper vertex - the G-buffer primary is never one of these
-                // unless it is also cutout, and that case terminates.
+                // A continuation rather than a scatter, of which there are two
+                // kinds. PURELY EMISSIVE light occupies no volume, so the ray
+                // passes unattenuated and the step is free - bounded only by
+                // the cap that stops a stack of glow planes looping. A
+                // TRANSMISSIVE surface is not free: the ray met a surface and
+                // took its tint, so it spends a bounce like any other
+                // interaction, which is also what stops a corridor of panes
+                // from tracing forever.
                 primaryScatter = false;
-                if (++passThroughs > kMaxPassThroughSteps) break;
+                if (sample.costsScatter) {
+                    if (++scatters > scatterBudget) break;
+                } else if (++passThroughs > kMaxPassThroughSteps) {
+                    break;
+                }
                 pathWeight *= sample.weight;
                 // Continue through the surface, not off it.
                 path.Origin = hit.position + path.Direction * 1e-3;

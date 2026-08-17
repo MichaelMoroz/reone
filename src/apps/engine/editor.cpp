@@ -82,6 +82,7 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"grass", std::to_string(options.grass)},
         {"grassdensity", formatConfigFloat(options.grassDensity)},
         {"thintransmission", formatConfigFloat(options.thinTransmission)},
+        {"ptrefraction", formatConfigFloat(options.ptRefraction)},
         {"grassradius", formatConfigFloat(options.grassRadius)},
         {"grasssegments", std::to_string(options.grassSegments)},
         {"grasswindstrength", formatConfigFloat(options.grassWindStrength)},

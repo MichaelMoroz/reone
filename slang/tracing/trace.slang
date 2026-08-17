@@ -33,13 +33,17 @@
 //   glow planes. They occupy no volume: the ray commits them so the path can
 //   collect their radiance, then continues through unattenuated.
 //
-// Everything else non-opaque - a translucent surface that tints or attenuates
-// what is behind it - is NOT TRACED. Traversal skips those candidates outright,
-// so no ray, shadow ray included, can see one. That path used to shade the
-// surface and carry the transmitted remainder onward; it cost more than it
-// bought and a ray marcher is to replace it. The marcher's seam is exactly the
-// two `isBlendedCoverage` skips below and the blended branches that used to sit
-// beside the emissive ones in path_trace.slang.
+//   TRANSMISSIVE geometry (kPtMaskTransmissive) - windows, force fields, leaf
+//   cards: blended coverage that is a surface rather than a volume. The ray
+//   commits, the path tints by what the surface passes and continues through,
+//   and a shadow ray attenuates instead of blocking. Coverage is tested only
+//   against the epsilon, so a hole in a leaf card costs nothing.
+//
+// What remains untraced is PROCEDURAL blended coverage - smoke, particle
+// plumes - which traversal still skips outright. That is volume a ray marcher
+// is to own, and shading it as a surface cost more than it bought. The
+// marcher's seam is now exactly the two `isBlendedCoverage` skips below, with
+// the transmissive population lifted back out of them.
 
 import lib.math;
 import tracing.resources;
@@ -110,6 +114,18 @@ bool isBlendedCoverage(uint materialIndex) {
 }
 
 /**
+ * Translucency that IS traced: blended coverage belonging to scene geometry.
+ *
+ * The ray commits, the path tints by what the surface lets through, and the
+ * continuation carries on. Procedural blends - smoke, particle plumes - do not
+ * carry this bit and keep the skip above, because they are volume the marcher
+ * owns rather than a surface.
+ */
+bool isTracedTransmissive(uint materialIndex) {
+    return (instanceMaterials[materialIndex].featureMask & kPtMaskTransmissive) != 0;
+}
+
+/**
  * The nearest ray. Opaque geometry commits in hardware. Of the non-opaque
  * candidates, PURELY EMISSIVE surfaces always commit (the path collects their
  * radiance and passes through), CUTOUT coverage commits at its binary
@@ -125,6 +141,22 @@ public TraceHit ptTraceNearest(RayDesc ray) {
         // PURELY EMISSIVE.
         if (instanceMaterials[materialIndex].surfaceType == kPtSurfaceUnlitTransparent) {
             query.CommitNonOpaqueTriangleHit();
+            continue;
+        }
+        // TRANSMISSIVE geometry. A hit like any other; the difference is what
+        // the path does with it, not whether traversal sees it. Coverage is
+        // still tested, and by the cutout's own epsilon rather than its
+        // threshold: a texel with no alpha at all is not a surface, so the ray
+        // passes through the hole in a leaf card as if nothing were there,
+        // while everything above that commits and lets the bounce loop decide
+        // how much light survives it.
+        if (isTracedTransmissive(materialIndex)) {
+            uint3 tIndices = ptTriangleIndices(geometryIndex, query.CandidatePrimitiveIndex());
+            float2 tBary = query.CandidateTriangleBarycentrics();
+            float3 tWeights = float3(1.0 - tBary.x - tBary.y, tBary.x, tBary.y);
+            if (candidateAlpha(materialIndex, tIndices, tWeights) >= kPtAlphaTestEpsilon) {
+                query.CommitNonOpaqueTriangleHit();
+            }
             continue;
         }
         // The marcher's seam: what this skip drops is every translucent
@@ -152,9 +184,13 @@ public TraceHit ptTraceNearest(RayDesc ray) {
  * promoted sun sits beyond the dome, and with the full mask every sun ray
  * committed on it and the sun lit nothing at all. PURELY EMISSIVE surfaces are
  * emitters, not occluders. CUTOUT coverage above its threshold fully blocks and
- * clear texels do not. Non-emissive translucency is skipped along with the
- * partial transmittance it used to accumulate, so visibility is now binary and
- * the walk stops at the first blocker.
+ * clear texels do not. PROCEDURAL translucency is skipped entirely.
+ *
+ * TRANSMISSIVE geometry is the one non-binary case: it multiplies the surviving
+ * fraction by its own coverage and the walk continues, so a stack of panes
+ * accumulates and an opaque texel still stops the ray. Visibility was binary
+ * between the marcher decision and this; it is binary again the moment a
+ * surface is fully covered, which is the common case.
  */
 public struct ShadowRay {
     /** Fraction of the light that reaches the surface along this ray. */
@@ -198,6 +234,25 @@ public ShadowRay ptShadowRay(float3 origin, float3 geometricNormal, float3 direc
             (instanceMaterials[materialIndex].featureMask & kPtMaskSky) != 0) continue;
         // PURELY EMISSIVE surfaces cast nothing.
         if (instanceMaterials[materialIndex].surfaceType == kPtSurfaceUnlitTransparent) continue;
+        // TRANSMISSIVE geometry attenuates rather than blocks. An opaque texel
+        // on a transmissive surface still blocks completely, which is what
+        // keeps a leaf's shadow a leaf's shadow: the alpha decides, not the
+        // classification. Visibility stops being binary here, and only here -
+        // the walk continues instead of breaking, so several panes accumulate.
+        if (isTracedTransmissive(materialIndex)) {
+            uint3 tIndices = ptTriangleIndices(geometryIndex, query.CandidatePrimitiveIndex());
+            float2 tBary = query.CandidateTriangleBarycentrics();
+            float3 tWeights = float3(1.0 - tBary.x - tBary.y, tBary.x, tBary.y);
+            float tAlpha = candidateAlpha(materialIndex, tIndices, tWeights);
+            if (tAlpha < kPtAlphaTestEpsilon) continue;
+            transmittance *= 1.0 - saturate(tAlpha);
+            cutoutDistance = min(cutoutDistance, query.CandidateTriangleRayT());
+            if (transmittance < kPtAlphaTestEpsilon) {
+                transmittance = 0.0;
+                break;
+            }
+            continue;
+        }
         // The marcher's seam: translucent occlusion is no longer traced.
         if (isBlendedCoverage(materialIndex)) continue;
         if (isCutout(materialIndex)) {

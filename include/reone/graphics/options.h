@@ -144,6 +144,21 @@ struct GraphicsOptions {
      */
     float thinTransmission {0.8f};
     /**
+     * How far the path tracer bends a ray passing through a transparent
+     * surface, 0 for not at all.
+     *
+     * Deliberately separate from thinTransmission, which answers a different
+     * question - how much light a thin surface passes to its far side, for
+     * shading - and would move two behaviours from one slider if it were
+     * reused here.
+     *
+     * Invention, and priced as such. Odyssey glass is a flat card with no
+     * thickness and no authored index of refraction, so any bend at all is
+     * something the original did not have; the default is therefore off, and
+     * the frame at 0 is the frame with the feature absent.
+     */
+    float ptRefraction {0.0f};
+    /**
      * Exponent authored surface colour is decoded with, in PBR and in path
      * tracing alike.
      *

@@ -118,6 +118,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("bloomintensity", value<float>()->default_value(options->graphics.bloomIntensity), "scale on what bloom adds back")    //
         ("thintransmission", value<float>()->default_value(options->graphics.thinTransmission),
          "light a thin surface (leaf, cloth, grass) passes to its far side")                                                  //
+        ("ptrefraction", value<float>()->default_value(options->graphics.ptRefraction),
+         "how far a traced ray bends passing through a transparent surface; 0 is straight")                                   //
         ("mode", value<std::string>()->default_value(renderModeName(options->graphics.mode)), "render mode: retro, pbr or path-tracing ('raster' is accepted as a spelling of retro)") //
         ("admissionshadow", value<bool>()->default_value(false), "compare incremental and full scene admission every frame") //
         ("admissionforcefull", value<bool>()->default_value(false), "force full scene collection and classification")        //
@@ -309,6 +311,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.bloomThreshold = vars["bloomthreshold"].as<float>();
     options->graphics.bloomIntensity = std::max(0.0f, vars["bloomintensity"].as<float>());
     options->graphics.thinTransmission = std::clamp(vars["thintransmission"].as<float>(), 0.0f, 1.0f);
+    options->graphics.ptRefraction = std::clamp(vars["ptrefraction"].as<float>(), 0.0f, 1.0f);
     options->graphics.mode = parseRenderMode(vars["mode"].as<std::string>());
     options->graphics.admissionShadow = vars["admissionshadow"].as<bool>();
     options->graphics.admissionForceFull = vars["admissionforcefull"].as<bool>();

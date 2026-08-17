@@ -48,6 +48,18 @@ public static const uint kPtMaskBlendedCoverage = 1u << 25;
 // same or it is shading a different surface than raster is.
 public static const uint kPtMaskPremulAlpha = 1u << 12;
 public static const uint kPtMaskPunchThrough = 1u << 26; // alpha-tested coverage in traversal
+/**
+ * Blended coverage that is scene geometry: a window, a force field, a leaf
+ * card. Set by admission (kMaskTracedTransmissive in
+ * src/libs/scene/render/admission.cpp), and by admission alone - the raster
+ * passes never read it, because to them blended is blended.
+ *
+ * It exists because the two populations behind kPtMaskBlendedCoverage want
+ * opposite treatment from a ray. A smoke puff is volume the marcher owns and
+ * traversal is right to skip it. A pane of glass is a surface: the ray has to
+ * see it, tint by what it passes through, and carry on.
+ */
+public static const uint kPtMaskTransmissive = 1u << 23;
 /** No meaningful thickness: lit from both sides and passes light through. */
 public static const uint kPtMaskThin = 1u << 15;
 public static const uint kPtCategoryShift = 27;
@@ -137,6 +149,13 @@ public struct PtPushConstants {
     public float indirectClamp;
     /** Fraction of light a thin surface passes to its far side. */
     public float thinTransmission;
+    /**
+     * How far a transmitted ray bends at a transparent surface, 0 for not at
+     * all. Artistic: Odyssey's glass is a flat card with no thickness and no
+     * authored index, so any bend here is invention. It is a dial rather than a
+     * constant for that reason, and at 0 the frame is the frame without it.
+     */
+    public float refraction;
     /** Scene-referred exposure applied before the tonemap. */
     public float exposure;
     public uint geometryBase0;

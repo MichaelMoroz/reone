@@ -407,6 +407,7 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                                   std::clamp(_options.ptRoughnessFloor, 0.0f, 1.0f),
                                   std::max(0.0f, _options.ptIndirectClamp),
                                   std::clamp(_options.thinTransmission, 0.0f, 1.0f),
+                                  std::clamp(_options.ptRefraction, 0.0f, 1.0f),
                                   std::max(0.01f, _options.exposure),
                                   0,
                                   scene.opaqueTriangleCount,

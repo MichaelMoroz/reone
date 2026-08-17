@@ -96,6 +96,14 @@ public struct PathSample {
     public float3 demodulatedWeight;
     public bool specularLobe;
     public bool passThrough;   // continuation, not a scattering event
+    /**
+     * A continuation that still costs a bounce.
+     *
+     * Additive light occupies no volume, so passing through it is free and
+     * bounded only by a step cap. Passing through glass is not free: the ray
+     * has interacted with a surface and the path is one event shorter for it.
+     */
+    public bool costsScatter;
     public bool terminate;
 };
 
@@ -328,6 +336,7 @@ public struct PbrSurface : ISurfaceModel {
         // exactly like opaque PBR from here on.
         sample.terminate = false;
         sample.passThrough = false;
+        sample.costsScatter = false;
         sample.demodulatedWeight = sample.weight;
         sample.specularLobe = false;
         // Cutout coverage was resolved deterministically in traversal: a
@@ -473,6 +482,7 @@ public struct UnlitTransparentSurface : ISurfaceModel {
         sample.demodulatedWeight = sample.weight;
         sample.specularLobe = false;
         sample.passThrough = true;
+        sample.costsScatter = false;
         sample.terminate = false;
         return sample;
     }
@@ -517,6 +527,7 @@ public struct UnlitEmissiveSurface : ISurfaceModel {
         sample.demodulatedWeight = sample.weight;
         sample.specularLobe = false;
         sample.passThrough = false;
+        sample.costsScatter = false;
         sample.terminate = true;
         return sample;
     }
@@ -556,7 +567,55 @@ public SurfaceShading ptShade(HitGeometry hit) {
     }
 }
 
+/**
+ * A transparent surface's continuation: tinted passthrough, costing a bounce.
+ *
+ * Odyssey transparency is a flat card with no thickness, no authored index and
+ * no interior, so there is no medium to model - what a pane does to a ray is
+ * take a fraction of it and colour the rest. Coverage decides the fraction and
+ * the texel decides the colour, which is the same composite the raster blended
+ * pass computes, expressed as throughput instead of as a blend.
+ *
+ * A fully covered texel terminates the path rather than continuing at zero:
+ * traversal already committed the hit, and carrying a black throughput onward
+ * would spend the rest of the path's bounces learning nothing.
+ *
+ * The bend is invention and is dialled from zero. It is skipped on thin
+ * surfaces - a double-sided card is one interface, not two, and refracting at
+ * both would bend a single pane twice.
+ */
+PathSample transmissiveSample(HitGeometry hit, SurfaceShading shading) {
+    PathSample sample;
+    float coverage = saturate(shading.alpha);
+    sample.direction = hit.rayDirection;
+    if (pushConstants.refraction > 0.0 && !shading.thin) {
+        // The geometric normal is already face-forward, so it opposes the
+        // incident ray and refract's convention is satisfied. A grazing ray can
+        // total-internally-reflect, which returns zero; keep the straight path
+        // there rather than reflecting a surface the original never reflected.
+        static const float kTransmissiveIor = 1.1;
+        float3 refracted = refract(hit.rayDirection, hit.geometricNormal, 1.0 / kTransmissiveIor);
+        if (dot(refracted, refracted) > 1e-6) {
+            sample.direction = normalize(lerp(hit.rayDirection, refracted,
+                                              saturate(pushConstants.refraction)));
+        }
+    }
+    sample.weight = (1.0 - coverage) * shading.albedo;
+    sample.demodulatedWeight = sample.weight;
+    sample.specularLobe = false;
+    sample.passThrough = true;
+    sample.costsScatter = true;
+    sample.terminate = coverage >= 1.0;
+    return sample;
+}
+
 public PathSample ptSampleRay(HitGeometry hit, SurfaceShading shading, float3 view, inout uint rng) {
+    // Before the type switch, because this is not a fourth surface type: a
+    // window is an ordinary lit surface that also lets light through, and it
+    // must keep shading as one. Only the continuation differs.
+    if ((instanceMaterials[hit.materialIndex].featureMask & kPtMaskTransmissive) != 0) {
+        return transmissiveSample(hit, shading);
+    }
     switch (instanceMaterials[hit.materialIndex].surfaceType) {
     case kPtSurfaceUnlitTransparent: {
         UnlitTransparentSurface surface;

@@ -242,6 +242,9 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(floatOpt("thintransmission", OptionApply::Live,
                              "light a thin surface passes to its far side",
                              &GraphicsOptions::thinTransmission, 0.0f, 1.0f));
+    descs.push_back(floatOpt("ptrefraction", OptionApply::Live,
+                             "bend of a traced ray through a transparent surface",
+                             &GraphicsOptions::ptRefraction, 0.0f, 1.0f));
     descs.push_back(floatOpt("grassdensity", OptionApply::Live, "grass density multiplier",
                              &GraphicsOptions::grassDensity, 0.0f, 64.0f));
 
