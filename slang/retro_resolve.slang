@@ -179,7 +179,27 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     float3 diffuse = selfIllumSample.rgb;
     if (hasLightmap) {
         diffuse += lightmapSample.rgb;
-    } else if (!staticObject) {
+    } else if (staticObject) {
+        // A white bake, which is the one place this expression departs from the
+        // reference's, and it departs deliberately.
+        //
+        // Static geometry is excluded from every dynamic light below because a
+        // lightmap is presumed to hold that light already. Where no lightmap
+        // was authored the presumption is simply false, and the reference's
+        // arithmetic then resolves to black: no lightmap, no ambient, no light
+        // that passes the static gate. Dantooine's far hills are exactly that
+        // case - `hillitop` carries no lightmap and no self-illumination - and
+        // they render at 4% of their albedo here against 90% in the reference
+        // build, which reaches that number through geometry this branch does
+        // not draw.
+        //
+        // Reading the absence as a white bake keeps the authored texel and
+        // still takes the shadow term and the clamp, which is what an
+        // unlightmapped surface looked like in the original. Restored from
+        // 92ababccf, which had it before c91c916c7 rewrote this expression to
+        // match the reference term for term and dropped it with the rest.
+        diffuse += float3(1.0);
+    } else {
         ambient += materialAmbient * globalUniforms.worldAmbientColor.rgb;
     }
 
