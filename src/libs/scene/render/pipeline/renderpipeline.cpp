@@ -242,6 +242,9 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
     _lastMaterialCount =
         static_cast<uint32_t>(_admissionResult.submission.upload.materials.size());
     if (_primaryRayMode) {
+        // The tracer resolves opaque shadows from rays, but the common forward
+        // transparency tail samples the raster map just like the raster modes.
+        plan.steps.push_back(graphics::SceneStep::Shadow);
         plan.steps.push_back(graphics::SceneStep::Geometry);
     } else {
         plan.steps.push_back(graphics::SceneStep::ProcessPBRTextures);
@@ -305,12 +308,10 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         // as a menu's embedded scene filling only part of its panel.
         //
         // The order it replaces existed for a reason that has not gone away: a
-        // temporal resolve cannot reproject a billboard, transparency writes
-        // no motion and no depth, and drawn ahead of one it smears behind the
-        // camera - a lightsaber once came out as a hilt with no blade. FSR's
-        // shading-change detection is the only thing standing in for that
-        // until a reactive mask exists, so this trades a smear that heuristic
-        // can partly absorb for a mismatch it cannot.
+        // Transparency has no depth and its coverage-weighted motion cannot
+        // identify disoccluded background on its own. FSR's shading-change
+        // detection is the only thing standing in for a reactive mask, so this
+        // still relies on that heuristic at changing transparent edges.
         // Before transparency, after the resolve: the reference adds its
         // blurred hilights when the opaque image is complete and nothing
         // blended has touched it yet.
@@ -338,7 +339,7 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
     // kernel has already written into the output itself. Everywhere else the
     // shared pass runs - to answer a G-buffer channel, or to say plainly that
     // this mode cannot answer a traced one.
-    if (diagnosticImage &&
+    if (_options.debugView != 0 &&
         !(_primaryRayMode && graphics::isTracedOnlyDebugView(_options.debugView))) {
         plan.steps.push_back(graphics::SceneStep::DebugView);
     }

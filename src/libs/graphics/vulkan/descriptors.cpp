@@ -52,7 +52,7 @@ static VkImageLayout sampledLayoutFor(const VulkanImage &image) {
 
 // The layout is generated from the binding points rather than written out, so
 // there is one place to change and no chance of the two drifting apart.
-static_assert(TextureUnits::gBufTriangleId == VulkanDescriptors::kNumTextures - 1,
+static_assert(TextureUnits::coverage == VulkanDescriptors::kNumTextures - 1,
               "kNumTextures must cover every unit in TextureUnits");
 
 static_assert(UniformBlockBindingPoints::screenEffect ==
@@ -161,7 +161,7 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
     if (_bindlessTextureCapacity == 0) {
         throw std::runtime_error("Vulkan: mega-draw bindless texture capacity is zero");
     }
-    std::array<VkDescriptorSetLayoutBinding, 6> megaBindings {};
+    std::array<VkDescriptorSetLayoutBinding, 9> megaBindings {};
     // Compute alongside fragment throughout: the PBR resolve reads the material
     // records and the bindless tables from a dispatch.
     for (uint32_t i = 0; i < 3; ++i) {
@@ -172,6 +172,14 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
                                      VK_SHADER_STAGE_FRAGMENT_BIT |
                                      VK_SHADER_STAGE_COMPUTE_BIT;
     }
+    for (uint32_t i = 6; i < 9; ++i) {
+        megaBindings[i].binding = i;
+        megaBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        megaBindings[i].descriptorCount = 1;
+        megaBindings[i].stageFlags = VK_SHADER_STAGE_VERTEX_BIT |
+                                     VK_SHADER_STAGE_FRAGMENT_BIT |
+                                     VK_SHADER_STAGE_COMPUTE_BIT;
+    }
     for (uint32_t i = 3; i < 6; ++i) {
         megaBindings[i].binding = i;
         megaBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -179,7 +187,7 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
         megaBindings[i].stageFlags =
             VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     }
-    std::array<VkDescriptorBindingFlags, 6> megaBindingFlags {};
+    std::array<VkDescriptorBindingFlags, 9> megaBindingFlags {};
     for (uint32_t i = 3; i < 6; ++i) {
         megaBindingFlags[i] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
                               VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
@@ -203,7 +211,7 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
         throw std::runtime_error("Vulkan: mega-draw descriptor set layout creation failed");
     }
     std::array<VkDescriptorPoolSize, 2> megaPoolSizes {{
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3u * static_cast<uint32_t>(framesInFlight)},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6u * static_cast<uint32_t>(framesInFlight)},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
          3u * _bindlessTextureCapacity * static_cast<uint32_t>(framesInFlight)},
     }};
@@ -392,15 +400,20 @@ DescriptorSet VulkanDescriptors::updateMegaDrawSet(
     int frame, const GpuScene::View &scene,
     const IResources &resources) {
     auto set = _megaDrawSets.at(frame);
-    std::array<VkDescriptorBufferInfo, 3> buffers {{
+    std::array<VkDescriptorBufferInfo, 6> buffers {{
         {toVulkanBuffer(*scene.vertices.buffer).handle(), scene.vertices.offset, scene.vertices.size},
         {toVulkanBuffer(*scene.materialIds.buffer).handle(), scene.materialIds.offset, scene.materialIds.size},
         {toVulkanBuffer(*scene.materials.buffer).handle(), scene.materials.offset, scene.materials.size},
+        {toVulkanBuffer(*scene.grassCardVertices.buffer).handle(), scene.grassCardVertices.offset, scene.grassCardVertices.size},
+        {toVulkanBuffer(*scene.grassCardIndices.buffer).handle(), scene.grassCardIndices.offset, scene.grassCardIndices.size},
+        {toVulkanBuffer(*scene.grassCardInstances.buffer).handle(), scene.grassCardInstances.offset, scene.grassCardInstances.size},
     }};
     DescriptorWriteBuilder bufferWrites(_device.handle());
-    for (uint32_t i = 0; i < buffers.size(); ++i) {
+    for (uint32_t i = 0; i < 3; ++i) {
         bufferWrites.writeBuffer(set, {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, buffers[i]);
     }
+    for (uint32_t i = 3; i < buffers.size(); ++i)
+        bufferWrites.writeBuffer(set, {i + 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, buffers[i]);
     bufferWrites.apply();
 
     auto writeImages = [&](uint32_t binding, const std::vector<IResources::IndexedImage> &images) {

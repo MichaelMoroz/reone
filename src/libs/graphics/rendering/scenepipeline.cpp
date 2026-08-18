@@ -120,6 +120,7 @@ static constexpr uint32_t kResolveFlagTransparentOutput = 4u;
  * all-modes rule allows for.
  */
 static constexpr uint32_t kResolveFlagDisplayReferred = 8u;
+/** Replace GUI-model shading with coverage, cutout threshold, and class in RGB. */
 
 /** Both resolve dispatches, and their shader, agree on this tile. */
 static constexpr uint32_t kResolveGroupSize = 8;
@@ -241,7 +242,10 @@ void ScenePipeline::init() {
     }
     _gbuffer->setSamplers(colorSampler, depthSampler, triangleIdSampler);
 
-    if (!_primaryRayMode) {
+    // The tracer resolves opaque shadows with rays, but its forward transparent
+    // tail is rasterized and samples these maps through the same texture set as
+    // PBR. Keep both resources valid in every mode that can record that tail.
+    {
         glm::ivec2 shadowSize {_options.shadowResolution, _options.shadowResolution};
         _dirShadows = _renderer.resources().makeImage();
         _dirShadows->initLayeredDepthAttachment(shadowSize, Format::D32Sfloat,
@@ -504,6 +508,33 @@ void ScenePipeline::shadowPass(ICommandBuffer &cmd,
             scene.triangleCount - scene.opaqueTriangleCount;
         drawRange(scene.opaqueTriangleCount, gatedTriangles, true);
         }
+        if (scene.grassCardCount != 0) {
+            PipelineKey key;
+            key.module = "scene_draw";
+            key.vertexEntry = directional ? "grassCardDirectionalShadowVertex"
+                                          : "grassCardPointShadowVertex";
+            key.fragmentEntry = directional ? "directionalShadowFragment"
+                                             : "pointShadowFragment";
+            key.depthFormat = Format::D32Sfloat;
+            key.viewMask = viewMask;
+            key.depthTest = true;
+            key.depthWrite = true;
+            key.depthBias = true;
+            key.depthBiasConstantFactor = 2.0f;
+            key.depthBiasSlopeFactor = 2.0f;
+            key.cull = FaceCullMode::None;
+            PipelineBinding pipeline = _renderer.pipelines().get(key);
+            auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.frameIndex());
+            std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+            offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+            cmd.bindPipeline(pipeline.pipeline);
+            cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                  offsets.data(), static_cast<uint32_t>(offsets.size()));
+            cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
+            const ShadowPushConstants push {0, 1, _shadowCasterCategories};
+            cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
+            cmd.draw(scene.grassCardTris * 3, scene.grassCardCount);
+        }
         cmd.endRendering();
     }
     cmd.transitionImage(image, ImageLayout::DepthRead);
@@ -566,6 +597,28 @@ void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
             cmd.drawIndexed(nonOpaqueTriangles * 3, scene.opaqueTriangleCount * 3);
         }
     }
+    if (scene.grassCardCount != 0) {
+        PipelineKey key;
+        key.module = "scene_draw";
+        key.vertexEntry = "grassCardDrawVertex";
+        key.fragmentEntry = "sceneDrawFragment";
+        key.colorFormats = _gbuffer->colorFormats();
+        key.depthFormat = _gbuffer->depthFormat();
+        key.depthTest = true;
+        key.depthWrite = true;
+        key.cull = FaceCullMode::None;
+        PipelineBinding pipeline = _renderer.pipelines().get(key);
+        auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.frameIndex());
+        std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+        offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+        cmd.bindPipeline(pipeline.pipeline);
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                              offsets.data(), static_cast<uint32_t>(offsets.size()));
+        cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
+        const MegaDrawPushConstants push {0, 1};
+        cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
+        cmd.draw(scene.grassCardTris * 3, scene.grassCardCount);
+    }
     cmd.endRendering();
 }
 
@@ -589,13 +642,15 @@ void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
     // one happened to be drawn first rather than on coverage.
     cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
     cmd.transitionImage(*_output, ImageLayout::ColorAttachment);
+    auto &motion = _gbuffer->color(GBufferAttachment::Motion);
+    cmd.transitionImage(motion, ImageLayout::ColorAttachment);
 
-    // The resolve already wrote this image; loading preserves it.
+    // The resolve already wrote this image; production loading preserves it.
     PipelineKey key;
     key.module = "scene_draw";
     key.vertexEntry = "sceneDrawVertex";
     key.fragmentEntry = "sceneDrawBlendedFragment";
-    key.colorFormats = {_output->pixelFormat()};
+    key.colorFormats = {_output->pixelFormat(), motion.pixelFormat()};
     key.depthFormat = _gbuffer->depthFormat();
     key.depthTest = true;
     key.depthWrite = false;
@@ -604,15 +659,21 @@ void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
     PipelineBinding pipeline = _renderer.pipelines().get(key);
 
     auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.frameIndex());
+    const auto shadowSet = _options.mode == RenderMode::Retro
+                               ? _retroResolveSet
+                               : _pbrResolveSet;
     std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
 
     {
         RenderAttachment color {_output->sampleView(), ImageLayout::ColorAttachment,
                                 AttachmentLoad::Load, AttachmentStore::Store};
+        RenderAttachment motionAttachment {
+            motion.sampleView(), ImageLayout::ColorAttachment,
+            AttachmentLoad::Load, AttachmentStore::Store};
         RenderAttachment depth {_gbuffer->depth().sampleView(), ImageLayout::DepthRead,
                                 AttachmentLoad::Load, AttachmentStore::DontCare};
-        cmd.beginRendering(_renderSize, {color}, &depth, 0, true);
+        cmd.beginRendering(_renderSize, {color, motionAttachment}, &depth, 0, true);
         cmd.bindIndexBuffer(*scene.indices.buffer, scene.indices.offset);
         const uint32_t depthTestedTriangles =
             nonOpaqueTriangles - scene.depthIndependentTriangleCount;
@@ -620,6 +681,8 @@ void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
             cmd.bindPipeline(pipeline.pipeline);
             cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
                                   offsets.data(), static_cast<uint32_t>(offsets.size()));
+            cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet,
+                                  shadowSet, nullptr, 0);
             cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
             // Submission order, deliberately. See scene_draw.slang.
             const BlendedPushConstants push {scene.opaqueTriangleCount, 2, resolveFlags()};
@@ -643,6 +706,8 @@ void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
             cmd.bindDescriptorSet(depthIndependentPipeline.layout,
                                   IDescriptors::kUniformSet, uniformSet,
                                   offsets.data(), static_cast<uint32_t>(offsets.size()));
+            cmd.bindDescriptorSet(depthIndependentPipeline.layout,
+                                  IDescriptors::kTextureSet, shadowSet, nullptr, 0);
             cmd.bindDescriptorSet(depthIndependentPipeline.layout, 2,
                                   _resolveMaterialSet, nullptr, 0);
             const uint32_t triangleBase =
@@ -840,7 +905,8 @@ void ScenePipeline::primaryCoveragePass(ICommandBuffer &cmd, uint32_t globalsOff
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
     auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
         _renderer.uniformRing().frame(),
-        {{TextureUnits::mainTex, _output.get()}, {21, &triangleId}});
+        {{TextureUnits::mainTex, _output.get()},
+         {TextureUnits::gBufTriangleId, &triangleId}});
     const CoveragePushConstants push {_skyBinding.baked ? 1u : 0u};
     {
         RenderAttachment color {_tailColor->sampleView(), ImageLayout::ColorAttachment,
@@ -883,7 +949,8 @@ void ScenePipeline::coveragePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
     auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
         _renderer.uniformRing().frame(),
-        {{TextureUnits::mainTex, _output.get()}, {22, coverage}});
+        {{TextureUnits::mainTex, _output.get()},
+         {TextureUnits::coverage, coverage}});
     {
         RenderAttachment color {_tailColor->sampleView(), ImageLayout::ColorAttachment,
                                 AttachmentLoad::DontCare, AttachmentStore::Store};
@@ -1340,7 +1407,9 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
         // trace rather than after it, which is where they used to be published
         // when they were a validation target the trace was kept blind to.
         for (const auto step : plan.steps) {
-            if (step == SceneStep::Geometry) {
+            if (step == SceneStep::Shadow) {
+                shadowPass(cmd, globalsOffset, callbacks);
+            } else if (step == SceneStep::Geometry) {
                 geometryPass(cmd, globalsOffset, callbacks);
             }
         }

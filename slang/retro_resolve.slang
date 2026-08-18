@@ -57,6 +57,12 @@ static const uint kResolveFlagSky = 1u;
 static const uint kResolveFlagTransparentOutput = 4u;
 static const uint kResolveFlagDisplayReferred = 8u;
 
+// Mirrors the merged-material contract in scene_draw.slang and admission.cpp.
+static const uint kMegaFeatureProcedural = 1u << 16;
+static const uint kMegaFeatureBumpMap = 1u << 3;
+static const uint kMegaCategoryShift = 27u;
+static const uint kMegaCategoryMask = 0xFu;
+
 static const uint kNoTriangle = 0xffffffffu;
 static const uint kNoTexture = 0xffffffffu;
 
@@ -283,3 +289,4 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     }
     return float4(pow(max(color, 0.0), float3(kGamma)), 1.0);
 }
+

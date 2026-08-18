@@ -70,15 +70,11 @@ enum class SceneStep {
      */
     Bloom,
     Blended,
-    /** The common tail, in this order and in every mode: the anti-aliasing
-        slot resolves the opaque image, then transparency is drawn over the
-        result, then the display transform closes it. Both tail passes
+    /** The common tail, in this order and in every mode: transparency is
+        composited with coverage-weighted motion, the anti-aliasing slot
+        resolves the result, then the display transform closes it. Both passes
         ping-pong onto the tail target, so a step that does not run costs
-        nothing rather than a copy.
-
-        Transparency sits after the resolve because a temporal one cannot
-        reproject it: billboards write no motion, so anything drawn before the
-        resolve ghosts behind the camera. */
+        nothing rather than a copy. */
     AntiAliasing,
     /** After the display transform: an unsharp mask over display colour. */
     Sharpen,

@@ -62,6 +62,8 @@ struct UniformsFeatureFlags {
      * normal sweeps through the light and back out again.
      */
     static constexpr int thin = 1 << 15;
+    /** Procedural quad/strand geometry rather than a model mesh. */
+    static constexpr int procedural = 1 << 16;
 };
 
 struct alignas(16) GlobalUniformsLight {

@@ -58,7 +58,7 @@ public:
     static constexpr int kNumUniformBlocks = 10;
 
     /** Must cover every unit in TextureUnits. */
-    static constexpr int kNumTextures = 22;
+    static constexpr int kNumTextures = 23;
 
     /**
      * Uniform blocks and textures both start numbering at zero, so they cannot

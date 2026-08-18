@@ -21,20 +21,33 @@ import uniforms;
 import lib.gbuf;
 import lib.math;
 import lib.envmap;
+import lib.grasscard;
 import lib.scene_schema;
+import lib.shadow;
 
 // --- Merged-geometry addressing, shared by both variants ---
 // Shared declarations for raster passes over the canonical merged geometry.
 // Both the G-buffer and shadow mega-draws use the same material gate so a
 // punch-through surface cannot disagree about coverage between the two.
 
-
 static const uint kNoTexture = 0xffffffffu;
 /** Authored colour is display-referred; the blended pass converts on the way
     out, because the scene target it draws into is linear. Must match the
     exponent the post-process encode inverts. */
 static const float kGamma = 2.2;
+static const uint kMegaFeatureLightmap = 1u << 0;
+static const uint kMegaFeatureEnvMap = 1u << 1;
+static const uint kMegaFeatureNormalMap = 1u << 2;
+static const uint kMegaFeatureBumpMap = 1u << 3;
+static const uint kMegaFeatureShadows = 1u << 7;
+static const uint kMegaFeatureWater = 1u << 8;
+static const uint kMegaFeatureFog = 1u << 9;
 static const uint kMegaFeaturePremulAlpha = 1u << 12;
+static const uint kMegaFeatureEnvMapCube = 1u << 13;
+static const uint kMegaFeatureStatic = 1u << 14;
+static const uint kMegaFeatureThin = 1u << 15;
+static const uint kMegaFeatureProcedural = 1u << 16;
+static const uint kMegaFeatureBlendedCoverage = 1u << 25;
 static const uint kMegaFeaturePunchThrough = 1u << 26;
 static const float kMegaAlphaTestThreshold = 0.5;
 
@@ -44,6 +57,9 @@ static const float kMegaAlphaTestThreshold = 0.5;
 [[vk::binding(3, 2)]] Sampler2D bindlessTextures[];
 [[vk::binding(4, 2)]] Sampler2DArray bindlessTextureArrays[];
 [[vk::binding(5, 2)]] SamplerCube bindlessTextureCubes[];
+[[vk::binding(6, 2)]] StructuredBuffer<float4> grassCardVertices;
+[[vk::binding(7, 2)]] StructuredBuffer<uint> grassCardIndices;
+[[vk::binding(8, 2)]] StructuredBuffer<GrassCardInstance> grassCardInstances;
 
 // materialGated selects which coverage a pass publishes over the same range.
 // Ungated is the opaque range. Cutout is the punch-through gate the G-buffer
@@ -62,6 +78,7 @@ static const uint kMegaCategoryMask = 0xFu;
 static const uint kMegaCastersAll = 0xFFFFFFFFu;
 /** kResolveFlagDisplayReferred, as the blended pass receives it. */
 static const uint kMegaFlagDisplayReferred = 8u;
+static const int kMegaLightDynamicTypeAll = 1;
 
 struct PushConstants {
     uint triangleBase;
@@ -125,7 +142,6 @@ bool commitsTracedCoverage(InstanceMaterial material, float2 uv, float vertexAlp
 // this stage has no per-mesh vertex input or LocalUniforms model matrix: the
 // merge has already produced world-space positions and one indexed buffer.
 
-
 static const float kPointShadowFar = 2500.0;
 // Point shadows replace raster depth with radial distance. Pipeline depth bias
 // is therefore replaced along with it, so reproduce the same constant+slope
@@ -134,10 +150,39 @@ static const float kPointShadowFar = 2500.0;
 static const float kPointShadowConstantBias = 0.0;
 static const float kPointShadowSlopeBias = 1.0;
 
+struct GrassCardDrawData {
+    GrassCardVertex vertex;
+    uint materialIndex;
+    uint triangleBase;
+};
+
+GrassCardDrawData grassCardDrawData(uint vertexId, uint instanceId) {
+    GrassCardInstance card = grassCardInstances[instanceId];
+    uint indexCount;
+    uint indexStride;
+    grassCardIndices.GetDimensions(indexCount, indexStride);
+    uint cardTris = indexCount / 12;
+    uint variant = uint(card.lightmapVariantCulled.z);
+    uint templateIndex = grassCardIndices[variant * cardTris * 3 + vertexId];
+    uint vertexCount;
+    uint vertexStride;
+    grassCardVertices.GetDimensions(vertexCount, vertexStride);
+    uint cardVerts = vertexCount / 4;
+    GrassCardDrawData result;
+    result.vertex = resolveGrassCardVertex(
+        card, grassCardVertices[variant * cardVerts + templateIndex],
+        globalUniforms.cameraPosition.xyz);
+    result.materialIndex = card.materialIndex.x;
+    result.triangleBase = 0x80000000u | (instanceId * cardTris);
+    return result;
+}
+
 struct DirectionalShadowVaryings {
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;
     float vertexAlpha : TEXCOORD1;
+    nointerpolation uint materialIndex : TEXCOORD2;
+    nointerpolation bool culled : TEXCOORD3;
 };
 
 [shader("vertex")]
@@ -149,42 +194,100 @@ DirectionalShadowVaryings directionalShadowVertex(
                           float4(vertex.position, 1.0));
     output.uv = vertex.uv1;
     output.vertexAlpha = vertex.color.a;
+    output.materialIndex = kNoTexture;
+    output.culled = false;
+    return output;
+}
+
+[shader("vertex")]
+DirectionalShadowVaryings grassCardDirectionalShadowVertex(
+    uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID,
+    uint viewId : SV_ViewID) {
+    GrassCardDrawData card = grassCardDrawData(vertexId, instanceId);
+    DirectionalShadowVaryings output;
+    output.position = mul(globalUniforms.shadowLightSpace[viewId],
+                          float4(card.vertex.position, 1.0));
+    output.uv = card.vertex.uv;
+    output.vertexAlpha = 1.0;
+    output.materialIndex = card.materialIndex;
+    output.culled = card.vertex.culled;
     return output;
 }
 
 /**
- * The two gates a caster has to pass: which objects this mode lets cast at
- * all, and - on the gated range - whether the texel is there.
+ * Opaque casters pass the mode's category filter. Non-opaque casters instead
+ * pass their authored coverage gate: cutouts are binary, while lit blends
+ * write a stable fraction of shadow texels for the PCF lookup to integrate.
  *
- * The caster set is a category filter rather than a separate submission
+ * The opaque caster set is a category filter rather than a separate submission
  * because the merge produces one buffer per frame ordered by coverage, not by
  * object kind; splitting it by category would rebuild that ordering on the CPU
  * every frame to save a fragment-shader test that costs nothing when nothing
  * is filtered. Whole-category filtering also means the range stays contiguous,
  * so the draw count does not depend on how many creatures are in the room.
  */
-void applyShadowGates(float2 rawUv, float vertexAlpha, uint primitiveId) {
+float shadowNoise(uint2 texel, uint triangleId, uint materialIndex) {
+    uint hash = texel.x * 0x8da6b343u ^ texel.y * 0xd8163841u ^
+                triangleId * 0xcb1ab31fu ^ materialIndex * 0x165667b1u;
+    hash ^= hash >> 16;
+    hash *= 0x7feb352du;
+    hash ^= hash >> 15;
+    return float(hash & 0x00ffffffu) / 16777216.0;
+}
+
+float blendedShadowCoverage(InstanceMaterial material, float2 uv,
+                            float vertexAlpha) {
+    float coverage = 1.0;
+    bool envmapped = (material.featureMask & kMegaFeatureEnvMap) != 0;
+    if (!envmapped && material.mainTex != kNoTexture) {
+        float4 texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)]
+                           .SampleLevel(uv, 0.0);
+        coverage = (material.featureMask & kMegaFeaturePremulAlpha) != 0
+                       ? rgbToLuma(texel.rgb)
+                       : texel.a;
+    }
+    return saturate(coverage * vertexAlpha * material.diffuseColor.a);
+}
+
+void applyShadowGates(float2 rawUv, float vertexAlpha, float2 fragCoord,
+                      uint primitiveId, uint directMaterialIndex, bool culled) {
+    if (culled) discard;
     // Nothing filtered and no coverage gate: the common case reads no memory.
     if (pushConstants.casterCategories == kMegaCastersAll &&
         pushConstants.materialGated == kMegaCoverageUngated) {
         return;
     }
     uint triangleId = pushConstants.triangleBase + primitiveId;
-    uint materialIndex = mergedMaterialIds[triangleId];
+    uint materialIndex = directMaterialIndex == kNoTexture
+        ? mergedMaterialIds[triangleId] : directMaterialIndex;
     InstanceMaterial material = instanceMaterials[materialIndex];
 
+    bool cutout = (material.featureMask & kMegaFeaturePunchThrough) != 0;
+    bool blended = (material.featureMask & kMegaFeatureBlendedCoverage) != 0;
     uint category = (material.featureMask >> kMegaCategoryShift) & kMegaCategoryMask;
-    if ((pushConstants.casterCategories & (1u << category)) == 0) discard;
+    if (!cutout && !blended &&
+        (pushConstants.casterCategories & (1u << category)) == 0) discard;
 
     if (pushConstants.materialGated == kMegaCoverageUngated) return;
     float2 uv = transformedUV(material, rawUv);
-    if (!commitsTracedCoverage(material, uv, vertexAlpha)) discard;
+    if (cutout) {
+        if (!commitsTracedCoverage(material, uv, vertexAlpha)) discard;
+        return;
+    }
+    // Additive-emissive sheets carry radiance, not coverage, and therefore do
+    // not remove light. A lit blend is scalar here because a depth map has no
+    // colour channel; stable texel coverage preserves density without turning
+    // glass into a wall or making its shadow crawl between frames.
+    if (!blended) discard;
+    float coverage = blendedShadowCoverage(material, uv, vertexAlpha);
+    if (coverage <= shadowNoise(uint2(fragCoord), triangleId, materialIndex)) discard;
 }
 
 [shader("fragment")]
 void directionalShadowFragment(DirectionalShadowVaryings input,
                                        uint primitiveId : SV_PrimitiveID) {
-    applyShadowGates(input.uv, input.vertexAlpha, primitiveId);
+    applyShadowGates(input.uv, input.vertexAlpha, input.position.xy, primitiveId,
+                     input.materialIndex, input.culled);
 }
 
 struct PointShadowVaryings {
@@ -192,6 +295,8 @@ struct PointShadowVaryings {
     float3 worldPos : TEXCOORD0;
     float2 uv : TEXCOORD1;
     float vertexAlpha : TEXCOORD2;
+    nointerpolation uint materialIndex : TEXCOORD3;
+    nointerpolation bool culled : TEXCOORD4;
 };
 
 [shader("vertex")]
@@ -204,13 +309,32 @@ PointShadowVaryings pointShadowVertex(
                           float4(vertex.position, 1.0));
     output.uv = vertex.uv1;
     output.vertexAlpha = vertex.color.a;
+    output.materialIndex = kNoTexture;
+    output.culled = false;
+    return output;
+}
+
+[shader("vertex")]
+PointShadowVaryings grassCardPointShadowVertex(
+    uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID,
+    uint viewId : SV_ViewID) {
+    GrassCardDrawData card = grassCardDrawData(vertexId, instanceId);
+    PointShadowVaryings output;
+    output.worldPos = card.vertex.position;
+    output.position = mul(globalUniforms.shadowLightSpace[viewId],
+                          float4(card.vertex.position, 1.0));
+    output.uv = card.vertex.uv;
+    output.vertexAlpha = 1.0;
+    output.materialIndex = card.materialIndex;
+    output.culled = card.vertex.culled;
     return output;
 }
 
 [shader("fragment")]
 float pointShadowFragment(PointShadowVaryings input,
                                   uint primitiveId : SV_PrimitiveID) : SV_Depth {
-    applyShadowGates(input.uv, input.vertexAlpha, primitiveId);
+    applyShadowGates(input.uv, input.vertexAlpha, input.position.xy, primitiveId,
+                     input.materialIndex, input.culled);
     float lightDistance = length(input.worldPos -
                                  globalUniforms.shadowLightPosition.xyz);
     float radialDepth = lightDistance / kPointShadowFar;
@@ -219,17 +343,6 @@ float pointShadowFragment(PointShadowVaryings input,
                         kPointShadowSlopeBias * radialSlope);
 }
 
-static const uint kMegaFeatureLightmap = 1u << 0;
-static const uint kMegaFeatureEnvMap = 1u << 1;
-static const uint kMegaFeatureNormalMap = 1u << 2;
-static const uint kMegaFeatureBumpMap = 1u << 3;
-static const uint kMegaFeatureShadows = 1u << 7;
-static const uint kMegaFeatureFog = 1u << 9;
-static const uint kMegaFeatureWater = 1u << 8;
-static const uint kMegaFeatureEnvMapCube = 1u << 13;
-static const uint kMegaFeatureStatic = 1u << 14;
-static const uint kMegaFeatureThin = 1u << 15;
-static const uint kMegaFeatureBlendedCoverage = 1u << 25;
 static const uint kMegaSurfaceUnlitTransparent = 1;
 static const float kMegaAlphaTestEpsilon = 0.01;
 
@@ -245,6 +358,9 @@ struct Varyings {
     float4 curClipPos : TEXCOORD7;
     float4 prevClipPos : TEXCOORD8;
     float3 worldPos : TEXCOORD9;
+    nointerpolation uint materialIndex : TEXCOORD10;
+    nointerpolation uint triangleId : TEXCOORD11;
+    nointerpolation bool culled : TEXCOORD12;
 };
 
 [shader("vertex")]
@@ -272,6 +388,34 @@ Varyings sceneDrawVertex(uint vertexId : SV_VertexID) {
     output.uv2 = vertex.uv2;
     output.color = vertex.color;
     output.worldPos = vertex.position;
+    output.materialIndex = kNoTexture;
+    output.triangleId = 0;
+    output.culled = false;
+    return output;
+}
+
+[shader("vertex")]
+Varyings grassCardDrawVertex(uint vertexId : SV_VertexID,
+                             uint instanceId : SV_InstanceID) {
+    GrassCardDrawData card = grassCardDrawData(vertexId, instanceId);
+    GrassCardVertex vertex = card.vertex;
+    Varyings output;
+    output.curClipPos = mul(globalUniforms.viewProjection, float4(vertex.position, 1.0));
+    output.prevClipPos = mul(globalUniforms.prevViewProjection,
+                             float4(vertex.prevPosition, 1.0));
+    output.position = mul(globalUniforms.projection,
+                          mul(globalUniforms.view, float4(vertex.position, 1.0)));
+    output.normal = vertex.normal;
+    output.tangent = float3(0.0);
+    output.bitangent = float3(0.0);
+    output.tanSpaceNormal = float3(0.0);
+    output.uv1 = vertex.uv;
+    output.uv2 = vertex.lightmapUV;
+    output.color = float4(1.0);
+    output.worldPos = vertex.position;
+    output.materialIndex = card.materialIndex;
+    output.triangleId = card.triangleBase;
+    output.culled = vertex.culled;
     return output;
 }
 
@@ -341,8 +485,13 @@ float3 sampleMegaEnvMap(InstanceMaterial material, float3 worldReflection) {
 [shader("fragment")]
 GBufferOutput sceneDrawFragment(Varyings input, uint primitiveId : SV_PrimitiveID,
                                bool isFrontFace : SV_IsFrontFace) {
-    uint triangleId = pushConstants.triangleBase + primitiveId;
-    uint materialIndex = mergedMaterialIds[triangleId];
+    if (input.culled) discard;
+    uint triangleId = input.materialIndex == kNoTexture
+        ? pushConstants.triangleBase + primitiveId
+        : input.triangleId + primitiveId;
+    uint materialIndex = input.materialIndex == kNoTexture
+        ? mergedMaterialIds[triangleId]
+        : input.materialIndex;
     InstanceMaterial material = instanceMaterials[materialIndex];
 
     float2 uv = transformedUV(material, input.uv1);
@@ -402,15 +551,28 @@ GBufferOutput sceneDrawFragment(Varyings input, uint primitiveId : SV_PrimitiveI
 // Order is submission order. kvp-main's replay of the retail draw stream
 // reorders only true-opaque depth-writing batches and never touches blended
 // ones, so a distance sort would be a deviation before it was an improvement.
+struct BlendedOutput {
+    float4 color : SV_Target0;
+    float4 motion : SV_Target1;
+};
+
 [shader("fragment")]
-float4 sceneDrawBlendedFragment(Varyings input, uint primitiveId : SV_PrimitiveID,
-                               bool isFrontFace : SV_IsFrontFace) {
-    uint triangleId = pushConstants.triangleBase + primitiveId;
-    uint materialIndex = mergedMaterialIds[triangleId];
+BlendedOutput sceneDrawBlendedFragment(Varyings input,
+                                       uint primitiveId : SV_PrimitiveID,
+                                       bool isFrontFace : SV_IsFrontFace) {
+    if (input.culled) discard;
+    uint triangleId = input.materialIndex == kNoTexture
+        ? pushConstants.triangleBase + primitiveId
+        : input.triangleId + primitiveId;
+    uint materialIndex = input.materialIndex == kNoTexture
+        ? mergedMaterialIds[triangleId]
+        : input.materialIndex;
     InstanceMaterial material = instanceMaterials[materialIndex];
 
+    bool punchThrough =
+        (material.featureMask & kMegaFeaturePunchThrough) != 0;
     // Cutouts share this range but are opaque and already in the G-buffer.
-    if ((material.featureMask & kMegaFeaturePunchThrough) != 0) discard;
+    if (punchThrough) discard;
 
     float2 uv = transformedUV(material, input.uv1);
     float4 texel = float4(1.0);
@@ -445,11 +607,25 @@ float4 sceneDrawBlendedFragment(Varyings input, uint primitiveId : SV_PrimitiveI
         }
         color *= lighting;
 
+        bool shadowed = (material.featureMask & kMegaFeatureShadows) != 0;
+        float3 materialNormal = input.normal;
+        if (envmapped || shadowed) {
+            materialNormal = megaMaterialNormal(material, input, uv, false,
+                                                isFrontFace);
+        }
+        if (shadowed) {
+            float3 viewPos = mul(globalUniforms.view,
+                                 float4(input.worldPos, 1.0)).xyz;
+            // Forward transparency has no separable direct-light lobe. Apply
+            // visibility to its authored diffuse contribution, while leaving
+            // the captured environment reflection below untouched.
+            color *= getShadow(
+                viewPos, input.worldPos, materialNormal,
+                (material.featureMask & kMegaFeatureThin) != 0);
+        }
         if (envmapped) {
-            float3 normal = megaMaterialNormal(material, input, uv, false,
-                                               isFrontFace);
             float3 worldReflection = authoredMirrorReflection(
-                input.worldPos, globalUniforms.cameraPosition.xyz, normal);
+                input.worldPos, globalUniforms.cameraPosition.xyz, materialNormal);
             color += sampleMegaEnvMap(material, worldReflection) * (1.0 - coverage);
         }
         if ((material.featureMask & kMegaFeatureWater) != 0) {
@@ -490,12 +666,27 @@ float4 sceneDrawBlendedFragment(Varyings input, uint primitiveId : SV_PrimitiveI
     // is retro's chain: there the composed colour goes out as it was composed,
     // and the blend the hardware then performs is the one the original
     // performed, in the space the original performed it in.
+    BlendedOutput output;
     if ((pushConstants.casterCategories & kMegaFlagDisplayReferred) != 0) {
-        return blended ? float4(color * objectAlpha, objectAlpha)
-                       : float4(color * objectAlpha, 0.0);
+        output.color = blended ? float4(color * objectAlpha, objectAlpha)
+                               : float4(color * objectAlpha, 0.0);
+    } else if (blended) {
+        output.color = float4(pow(max(color, 0.0), float3(kGamma)) * objectAlpha,
+                              objectAlpha);
+    } else {
+        output.color = float4(pow(max(color * objectAlpha, 0.0), float3(kGamma)),
+                              0.0);
     }
-    if (blended) {
-        return float4(pow(max(color, 0.0), float3(kGamma)) * objectAlpha, objectAlpha);
-    }
-    return float4(pow(max(color * objectAlpha, 0.0), float3(kGamma)), 0.0);
+
+    // The motion target uses the same premultiplied blend as colour. A
+    // partially covered surface therefore contributes in the same proportion
+    // as the visible layer, while the opaque motion already in the target
+    // remains the remainder. Additive colour still has alpha zero, but its
+    // separate motion output carries the texel intensity as coverage so a
+    // moving glow does not masquerade as stationary background.
+    float motionCoverage = saturate(objectAlpha);
+    output.motion = float4(
+        computeMotion(input.curClipPos, input.prevClipPos) * motionCoverage,
+        0.0, motionCoverage);
+    return output;
 }
