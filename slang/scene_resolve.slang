@@ -365,7 +365,21 @@ GrassBlade expandGrassBlade(SceneObject object, uint bladeId, bool card) {
     // scale a face carries; a cell is one of those across.
     float2 jitter = float2(grassRandom01(sourceFace, localCluster, 4),
                            grassRandom01(sourceFace, localCluster, 5)) * 2.0 - 1.0;
-    position.xy += jitter * pushConstants.grassDisplacement * quadSize;
+    // Displacement is a horizontal jitter, so on anything but level ground it
+    // walks the root off the face it was placed on - above the surface where
+    // the slope falls away, under it where the slope rises. Following the face
+    // plane down keeps the root on the ground it was scattered over, whichever
+    // way the jitter happened to push it.
+    //
+    // Both primitives, not just the card. A strand's base is a point and a
+    // card's is an edge, so the card shows it first, but a floating blade is
+    // as wrong as a floating tuft.
+    float2 displacement = jitter * pushConstants.grassDisplacement * quadSize;
+    float3 supportNormal = cross(face.vertex1Uv0y.xyz - face.vertex0Uv0x.xyz,
+                                 face.vertex2Uv1x.xyz - face.vertex0Uv0x.xyz);
+    position.xy += displacement;
+    if (abs(supportNormal.z) > 1e-5)
+        position.z -= dot(supportNormal.xy, displacement) / supportNormal.z;
 
     // Centred on the orientation rather than starting from it, so narrowing
     // the variation closes in on the angle asked for instead of sweeping away
@@ -375,6 +389,15 @@ GrassBlade expandGrassBlade(SceneObject object, uint bladeId, bool card) {
             (grassRandom01(sourceFace, localCluster, 3) - 0.5);
     blade.bendDir = float3(cos(yaw), sin(yaw), 0.0);
     blade.widthDir = float3(-sin(yaw), cos(yaw), 0.0);
+    // The base spans widthDir, so a horizontal widthDir lifts one end of it off
+    // a sloped face and buries the other. Laying it in the face plane sets the
+    // base on the ground along its whole width - an edge for a card, the first
+    // vertex pair for a strand, both of which straddle the root.
+    if (abs(supportNormal.z) > 1e-5) {
+        float3 tangentWidth = blade.widthDir;
+        tangentWidth.z = -dot(supportNormal.xy, tangentWidth.xy) / supportNormal.z;
+        blade.widthDir = safeNormalize(tangentWidth, blade.widthDir);
+    }
 
     float lengthJitter = 1.0 + pushConstants.grassLengthVariance
         * (grassRandom01(sourceFace, localCluster, 6) * 2.0 - 1.0);
