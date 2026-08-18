@@ -377,6 +377,19 @@ Tracy did, so the breakage stayed hidden until `ENABLE_TRACY` defaulted off
 (`CMakeLists.txt:414-419`). A variable arriving as a side effect of an optional
 dependency is a build that breaks when an unrelated option is turned off.
 
+### 2.17 Shaders do not handle raw GPU device addresses
+
+When a packed GPU record contains a device address, ownership is split by
+field: the backend fills the address lane when the referenced structure is
+created or recreated, and the shader writes the other lanes. A shader must not
+copy, compare, or otherwise expose the address as an integer.
+
+Representing an address as `uint64_t` in Slang declares the SPIR-V `Int64`
+capability even when the shader only copies it. That turns an implementation
+detail into a device requirement and can disable an otherwise supported ray
+query path. Address changes are structure-lifetime events, not per-frame data,
+so copying them in a per-frame kernel is also the wrong ownership boundary.
+
 ---
 
 ## 3. The hybrid primary-visibility decision

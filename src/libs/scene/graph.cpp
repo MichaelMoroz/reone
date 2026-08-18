@@ -602,6 +602,10 @@ void SceneGraph::prepareTransparentLeafs() {
     if (bucketParent && !bucket.empty()) {
         _transparentLeafs.push_back(std::make_pair(bucketParent, bucket));
     }
+
+    // The reference's menu has one transparent mesh even with particles off.
+    // Keep this audit behind the existing probe and log once per process: the
+    // two requested particle settings then yield directly comparable records.
 }
 
 Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {
@@ -837,8 +841,9 @@ void SceneGraph::collectInto(GpuScene &scene, bool full) {
     {
         R_PROFILE_ZONE("SceneGraph::transient collection");
         for (auto &[node, leafs] : _transparentLeafs) {
-            if (full)
+            if (full) {
                 node->collectLeafs(scene, leafs);
+            }
         }
     }
     // Flares are collected only when asked for. The billboard they register

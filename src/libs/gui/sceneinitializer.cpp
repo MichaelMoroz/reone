@@ -21,6 +21,7 @@
 #include "reone/scene/node/camera.h"
 #include "reone/scene/node/mesh.h"
 #include "reone/scene/node/model.h"
+#include "reone/system/logutil.h"
 
 using namespace reone::graphics;
 using namespace reone::scene;

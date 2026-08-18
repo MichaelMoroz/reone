@@ -202,7 +202,9 @@ private:
 public:
     graphics::Texture &render(const glm::ivec2 &dim,
                               SceneOutputAlpha alpha = SceneOutputAlpha::Opaque) override;
-    void invalidateRenderPipeline() override { _renderPipeline.reset(); }
+    void invalidateRenderPipeline() override {
+        _renderPipeline.reset();
+    }
 
     bool consumeRenderPipelineRebuild() override {
         const bool requested = _renderPipelineRebuildRequested;
@@ -381,6 +383,7 @@ private:
     resource::ResourceServices &_resourceSvc;
 
     std::unique_ptr<IRenderPipeline> _renderPipeline;
+    /** The immutable target size selected when this scene pipeline was created. */
     GpuScene _gpuScene;
     GpuScene _shadowGpuScene;
     bool _incrementalSceneReady {false};
