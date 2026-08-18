@@ -31,6 +31,7 @@ set(GRAPHICS_HEADERS
     ${GRAPHICS_INCLUDE_DIR}/dxtutil.h
     ${GRAPHICS_INCLUDE_DIR}/font.h
     ${GRAPHICS_INCLUDE_DIR}/frustum.h
+    ${GRAPHICS_INCLUDE_DIR}/grasscard.h
     ${GRAPHICS_INCLUDE_DIR}/rendering/gpuscene.h
     ${GRAPHICS_INCLUDE_DIR}/rendering/gpuscenecontext.h
     ${GRAPHICS_INCLUDE_DIR}/rhi/buffer.h
@@ -89,6 +90,7 @@ set(GRAPHICS_SOURCES
     ${GRAPHICS_SOURCE_DIR}/dxtutil.cpp
     ${GRAPHICS_SOURCE_DIR}/font.cpp
     ${GRAPHICS_SOURCE_DIR}/frustum.cpp
+    ${GRAPHICS_SOURCE_DIR}/grasscard.cpp
     ${GRAPHICS_SOURCE_DIR}/rendering/gpuscene.cpp
     ${GRAPHICS_SOURCE_DIR}/format/bwmreader.cpp
     ${GRAPHICS_SOURCE_DIR}/format/curreader.cpp
