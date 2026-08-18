@@ -100,6 +100,20 @@ std::shared_ptr<Texture> Textures::doGet(const std::string &resRef, TextureUsage
     }
 
     if (texture) {
+        // The material schema samples grayscale bump maps through a
+        // Sampler2DArray even when there is only one frame. Keep that view
+        // contract true at the resource boundary; otherwise the material id
+        // addresses an unpopulated array-descriptor slot.
+        if (usage == TextureUsage::BumpMap && texture->isGrayscale() &&
+            texture->is2D()) {
+            if (features &&
+                features->procedureType != Texture::ProcedureType::Invalid &&
+                (features->numX > 1 || features->numY > 1)) {
+                convertGridTextureToArray(*texture, features->numX, features->numY);
+            } else {
+                texture->setType(TextureType::TwoDimArray);
+            }
+        }
         // An animation arrives from the reader as one layer per frame, which
         // is what the file holds. Only the bumpmap slot can index a layer, so
         // every other slot gets those frames laid out as a sheet instead, which

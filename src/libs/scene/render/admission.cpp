@@ -182,6 +182,10 @@ void populateMaterialResources(InstanceMaterial &dst,
     dst.lightmap = options.lightmaps ? textureId(textureAt(MaterialTextureSlot::Lightmap)) : UINT32_MAX;
 
     if (const auto *bumpMap = textureAt(MaterialTextureSlot::BumpMapArray)) {
+        if (!bumpMap->is2DArray()) {
+            throw std::runtime_error("Bump map '" + bumpMap->name() +
+                                     "' is not a 2D-array texture");
+        }
         dst.bumpMapArray = textureId(bumpMap);
         dst.bumpMapFrame = src.bumpMapFrame;
         dst.bumpMapScale = bumpMap->features().bumpMapScaling;
