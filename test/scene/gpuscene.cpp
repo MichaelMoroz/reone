@@ -16,7 +16,12 @@
  */
 #include <gtest/gtest.h>
 
+#include "reone/graphics/grasscard.h"
+#include "reone/graphics/texture.h"
 #include "reone/scene/gpuscene.h"
+
+#include <cmath>
+#include <cstring>
 
 using namespace reone::graphics;
 using namespace reone::scene;
@@ -64,6 +69,59 @@ GrassFace grassFace(uint32_t sourceFace, uint32_t budget, float x) {
     return face;
 }
 
+std::shared_ptr<Texture> grassCardTexture() {
+    constexpr int kSize = 16;
+    auto pixels = std::make_shared<reone::ByteBuffer>(4 * kSize * kSize, '\0');
+    for (int y = 0; y < kSize; ++y) {
+        for (int x = 0; x < kSize; ++x) {
+            const int localX = x % (kSize / 2);
+            const int localY = y % (kSize / 2);
+            const bool opaque = localX == 3 || localX == 4 ||
+                                (localY >= 2 && localY <= 6 &&
+                                 std::abs(localX - localY) <= 1);
+            (*pixels)[4 * (y * kSize + x) + 3] =
+                opaque ? static_cast<char>(255) : 0;
+        }
+    }
+    auto texture = std::make_shared<Texture>(
+        "grass-card-state", TextureType::TwoDim, Texture::Properties {});
+    texture->setPixels(kSize, kSize, PixelFormat::RGBA8,
+                       Texture::Layer {std::move(pixels)});
+    return texture;
+}
+
+std::optional<reone::scene::GpuScene::Classification> classifyGrass(
+    const RegisteredProcedural &) {
+    reone::scene::GpuScene::Classification result;
+    result.kind = reone::scene::GpuScene::AdmissionKind::Cutout;
+    return result;
+}
+
+void expectGrassCardUpload(const GpuSceneUpload &upload, const Texture &texture,
+                           GrassCardShape shape) {
+    GrassCardParams params;
+    params.shape = shape;
+    params.sides = 5;
+    params.grid = 8;
+    const auto expected = fitGrassCards(texture, params);
+    std::vector<glm::vec4> vertices;
+    std::vector<uint32_t> indices;
+    for (const auto &variant : expected.variants) {
+        vertices.insert(vertices.end(), variant.vertices.begin(),
+                        variant.vertices.end());
+        indices.insert(indices.end(), variant.indices.begin(),
+                       variant.indices.end());
+    }
+    ASSERT_EQ(vertices.size(), upload.grassCardVertices.size());
+    EXPECT_EQ(0, std::memcmp(vertices.data(), upload.grassCardVertices.data(),
+                             vertices.size() * sizeof(glm::vec4)));
+    EXPECT_EQ(indices, upload.grassCardIndices);
+    EXPECT_EQ(expected.vertsPerCard, upload.grass.cardVerts);
+    EXPECT_EQ(expected.trisPerCard, upload.grass.cardTris);
+    ASSERT_EQ(1, upload.objects.size());
+    EXPECT_EQ(1u, upload.objects.front().data.cardCount);
+}
+
 } // namespace
 
 TEST(GpuScene, persists_objects_and_caches_classification_in_canonical_order) {
@@ -91,6 +149,10 @@ TEST(GpuScene, persists_objects_and_caches_classification_in_canonical_order) {
     EXPECT_EQ(3, first.objects[0].objectIndex);
     EXPECT_EQ(5, first.objects[1].objectIndex);
     EXPECT_EQ(2, first.objects[2].objectIndex);
+    const auto &blendedMaterial =
+        first.materials[first.objects[2].data.materialIndex];
+    EXPECT_NE(0u, blendedMaterial.featureMask & UniformsFeatureFlags::shadows);
+    EXPECT_NE(0u, blendedMaterial.featureMask & UniformsFeatureFlags::thin);
 
     const auto stableMaterial = first.objects[1].data.materialIndex;
     scene.resetFrame();
@@ -240,4 +302,55 @@ TEST(GpuScene, grass_uses_face_band_prefix_ranges_without_cpu_quads) {
     EXPECT_EQ(0, denser.grassRanges[0].clusterOffset);
     EXPECT_EQ(9, denser.grassRanges[0].clusterCount);
     EXPECT_EQ(9, denser.grassRanges[1].clusterOffset);
+}
+
+TEST(GpuScene, grass_card_shape_state_matches_at_startup_and_after_live_changes) {
+    const auto texture = grassCardTexture();
+    const std::vector<GrassFace> faces {grassFace(7, 1, 0.0f)};
+    Material material {};
+    material.type = MaterialType::Grass;
+    material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)] =
+        texture.get();
+    GrassParams grass;
+    grass.cardboard = 1;
+    grass.bladesPerCluster = 1;
+    const std::array shapes {
+        GrassCardShape::Quad, GrassCardShape::Aabb, GrassCardShape::Obb,
+        GrassCardShape::Kgon, GrassCardShape::Bgrid};
+
+    for (const auto shape : shapes) {
+        reone::scene::GpuScene scene;
+        scene.addGrass(renderCategory(RenderCategory::Opaque), {4, 0}, {},
+                       material, faces, 1);
+        scene.setGrassParams(grass);
+        scene.setGrassCardParams({shape, 5, 8, 0.5f}, 1.0f);
+        const bool forceFull = scene.consumeGrassPrimitiveChange();
+        auto upload = scene.prepare(noMeshes(), classifyGrass, glm::mat4(1.0f),
+                                    1, forceFull);
+        expectGrassCardUpload(upload, *texture, shape);
+    }
+
+    reone::scene::GpuScene liveScene;
+    liveScene.addGrass(renderCategory(RenderCategory::Opaque), {4, 0}, {},
+                       material, faces, 1);
+    std::array<uint64_t, 5> firstGeneration {};
+    GpuSceneUpload upload;
+    for (int pass = 0; pass < 2; ++pass) {
+        for (size_t i = 0; i < shapes.size(); ++i) {
+            liveScene.setGrassParams(grass);
+            liveScene.setGrassCardParams({shapes[i], 5, 8, 0.5f}, 1.0f);
+            const bool forceFull = liveScene.consumeGrassPrimitiveChange();
+            EXPECT_TRUE(forceFull);
+            upload = liveScene.prepare(noMeshes(), classifyGrass,
+                                       glm::mat4(1.0f), 1, forceFull,
+                                       std::move(upload));
+            expectGrassCardUpload(upload, *texture, shapes[i]);
+            ASSERT_NE(0u, upload.grassCardGeneration);
+            if (pass == 0)
+                firstGeneration[i] = upload.grassCardGeneration;
+            else
+                EXPECT_EQ(firstGeneration[i], upload.grassCardGeneration);
+            liveScene.consumeGrassPrimitiveChange();
+        }
+    }
 }

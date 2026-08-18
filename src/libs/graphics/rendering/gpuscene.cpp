@@ -53,6 +53,7 @@ struct GpuScene::Frame {
     std::unique_ptr<IBuffer> geometry;
     std::unique_ptr<IBuffer> proceduralQuads;
     std::unique_ptr<IBuffer> grassRanges;
+    std::unique_ptr<IBuffer> grassCardInstances;
     std::unique_ptr<IBuffer> materials;
     uint32_t sceneObjectCapacity {0};
     uint32_t boneCapacity {0};
@@ -61,6 +62,7 @@ struct GpuScene::Frame {
     uint32_t triangleCapacity {0};
     uint32_t proceduralQuadCapacity {0};
     uint32_t grassRangeCapacity {0};
+    uint32_t grassCardInstanceCapacity {0};
     std::vector<PrimitiveIdRange> primitiveIds;
 
     void deinit() {
@@ -68,6 +70,7 @@ struct GpuScene::Frame {
         releaseBuffer(geometry);
         releaseBuffer(proceduralQuads);
         releaseBuffer(grassRanges);
+        releaseBuffer(grassCardInstances);
         releaseBuffer(materials);
     }
 };
@@ -97,7 +100,8 @@ void GpuScene::init(IGpuSceneContext &context) {
     _mergePipeline = _context->makeComputePipeline({"scene_resolve", "main", 2});
     _mergeBindings = _mergePipeline->resolveBindings(
         {"objects", "bones", "vertices", "indices", "materialIds", "sourceVertices",
-         "sourceIndices", "proceduralQuads", "danglyPositions", "grassFaces", "grassRanges"});
+         "sourceIndices", "proceduralQuads", "danglyPositions", "grassFaces", "grassRanges",
+         "grassCardVertices", "grassCardIndices", "grassCardInstances"});
     for (auto &frame : _frames)
         frame = std::make_unique<Frame>();
     _inited = true;
@@ -113,7 +117,10 @@ void GpuScene::deinit() {
     _frames = {};
     clearSourceGeometry();
     releaseBuffer(_grassFaces);
+    releaseBuffer(_grassCardVertices);
+    releaseBuffer(_grassCardIndices);
     _grassFaceGeneration = 0;
+    _grassCardGeneration = 0;
     _mergePipeline.reset();
     _mergeBindings.clear();
     _context = nullptr;
@@ -137,7 +144,8 @@ void GpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
                                         uint32_t boneCount, uint32_t vertexCount,
                                         uint32_t triangleCount, uint32_t proceduralQuadCount,
                                         uint32_t danglyPositionCount,
-                                        uint32_t grassRangeCount) {
+                                        uint32_t grassRangeCount,
+                                        uint32_t grassCardInstanceCount) {
     constexpr uint32_t kInitialObjectCapacity = 64, kInitialBoneCapacity = 256;
     constexpr uint32_t kInitialVertexCapacity = 4096, kInitialTriangleCapacity = 4096;
     const auto objectCapacity =
@@ -199,6 +207,16 @@ void GpuScene::ensureMergeBuffers(Frame &frame, uint32_t objectCount,
         frame.grassRanges = _context->makeBuffer();
         frame.grassRanges->initHostVisibleStorage(
             static_cast<uint64_t>(grassRangeCapacity) * sizeof(GrassRange));
+    }
+    const auto grassCardInstanceCapacity =
+        grownCapacity(frame.grassCardInstanceCapacity, grassCardInstanceCount, 64);
+    if (!frame.grassCardInstances ||
+        grassCardInstanceCapacity != frame.grassCardInstanceCapacity) {
+        frame.grassCardInstanceCapacity = grassCardInstanceCapacity;
+        releaseBuffer(frame.grassCardInstances);
+        frame.grassCardInstances = _context->makeBuffer();
+        frame.grassCardInstances->initDeviceLocalStorage(
+            static_cast<uint64_t>(grassCardInstanceCapacity) * sizeof(GrassCardInstance));
     }
 
 }
@@ -297,9 +315,38 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
         _grassFaces = std::move(grassFaces);
         _grassFaceGeneration = upload.grassFaceGeneration;
     }
+    if (!_grassCardVertices || !_grassCardIndices ||
+        _grassCardGeneration != upload.grassCardGeneration) {
+        auto grassCardVertices = _context->makeBuffer();
+        auto grassCardIndices = _context->makeBuffer();
+        const glm::vec4 emptyVertex {};
+        const uint32_t emptyIndex = 0;
+        const uint64_t vertexCount = std::max<size_t>(1, upload.grassCardVertices.size());
+        const uint64_t indexCount = std::max<size_t>(1, upload.grassCardIndices.size());
+        const auto vertexBytes = vertexCount * sizeof(glm::vec4);
+        const auto indexBytes = indexCount * sizeof(uint32_t);
+        grassCardVertices->initDeviceLocalStorage(vertexBytes);
+        grassCardVertices->uploadDeviceStorage(
+            0, vertexBytes,
+            upload.grassCardVertices.empty() ? static_cast<const void *>(&emptyVertex)
+                                             : static_cast<const void *>(upload.grassCardVertices.data()));
+        grassCardIndices->initDeviceLocalStorage(indexBytes);
+        grassCardIndices->uploadDeviceStorage(
+            0, indexBytes,
+            upload.grassCardIndices.empty() ? static_cast<const void *>(&emptyIndex)
+                                            : static_cast<const void *>(upload.grassCardIndices.data()));
+        if (_grassCardVertices)
+            _retiredSourceBuffers.push_back(std::move(_grassCardVertices));
+        if (_grassCardIndices)
+            _retiredSourceBuffers.push_back(std::move(_grassCardIndices));
+        _grassCardVertices = std::move(grassCardVertices);
+        _grassCardIndices = std::move(grassCardIndices);
+        _grassCardGeneration = upload.grassCardGeneration;
+    }
     uint64_t vertexCount = 0;
     uint64_t opaqueTriangleCount = 0;
     uint64_t nonOpaqueTriangleCount = 0;
+    uint64_t grassCardCount = 0;
     for (auto &input : upload.objects) {
         auto &object = input.data;
         if (input.sourceMesh) {
@@ -335,8 +382,14 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
             throw std::runtime_error("Merged scene exceeds shader index range");
         object.dstVertexBase = static_cast<uint32_t>(vertexCount);
         object.dstTriangleBase = static_cast<uint32_t>(triangleBase);
+        object.dstCardBase = static_cast<uint32_t>(grassCardCount);
         vertexCount += object.vertexCount;
         triangleBase += object.triangleCount;
+        if (object.srcVertexStride == 0 && upload.grass.cardboard != 0) {
+            grassCardCount += object.cardCount;
+            if (grassCardCount > std::numeric_limits<uint32_t>::max())
+                throw std::runtime_error("Grass card instances exceed shader index range");
+        }
     }
     if (upload.depthIndependentObjectCount > upload.objects.size())
         throw std::runtime_error("Depth-independent object range exceeds merged scene");
@@ -363,9 +416,10 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
         ensureMergeBuffers(frame, static_cast<uint32_t>(upload.objects.size()),
                            static_cast<uint32_t>(upload.bones.size()),
                            static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount),
-                           static_cast<uint32_t>(upload.proceduralQuads.size()),
-                           static_cast<uint32_t>(upload.danglyPositions.size()),
-                           static_cast<uint32_t>(upload.grassRanges.size()));
+                            static_cast<uint32_t>(upload.proceduralQuads.size()),
+                            static_cast<uint32_t>(upload.danglyPositions.size()),
+                            static_cast<uint32_t>(upload.grassRanges.size()),
+                            static_cast<uint32_t>(grassCardCount));
         sceneObjectBytes =
             static_cast<uint64_t>(frame.sceneObjectCapacity) * sizeof(SceneObject);
         sceneBoneBytes =
@@ -406,7 +460,7 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
             _sourceVertices ? _sourceVertices.get() : frame.proceduralQuads.get();
         auto *sourceIndices =
             _sourceIndices ? _sourceIndices.get() : frame.proceduralQuads.get();
-        std::array<BufferView, 11> buffers {{{frame.scene.get(), 0, sceneObjectBytes},
+        std::array<BufferView, 14> buffers {{{frame.scene.get(), 0, sceneObjectBytes},
                                               {frame.scene.get(), sceneObjectBytes, sceneBoneBytes},
                                               {frame.geometry.get(), 0, vertexBytes},
                                               {frame.geometry.get(), vertexBytes, indexBytes},
@@ -419,8 +473,12 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
                                               {frame.scene.get(), sceneObjectBytes + sceneBoneBytes,
                                                danglyPositionBytes},
                                               {_grassFaces.get(), 0, _grassFaces->size()},
-                                              {frame.grassRanges.get(), 0,
-                                               frame.grassRanges->size()}}};
+                                               {frame.grassRanges.get(), 0,
+                                                frame.grassRanges->size()},
+                                               {_grassCardVertices.get(), 0, _grassCardVertices->size()},
+                                               {_grassCardIndices.get(), 0, _grassCardIndices->size()},
+                                               {frame.grassCardInstances.get(), 0,
+                                                frame.grassCardInstances->size()}}};
         commandBuffer.bufferBarrier(*sourceVertices, BufferUse::TransferWrite,
                                     BufferUse::ComputeRead);
         commandBuffer.bufferBarrier(*sourceIndices, BufferUse::TransferWrite,
@@ -431,29 +489,48 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
             uint32_t vertexCount;
             uint32_t triangleCount;
             uint32_t opaqueTriangleCount;
-            uint32_t pad[3] {};
+            float grassCardAspect;
+            uint32_t grassCardCount;
+            uint32_t pad {};
             glm::vec4 cameraPosition {0.0f};
             GrassParams grass;
         } constants {static_cast<uint32_t>(upload.objects.size()), upload.opaqueObjectCount,
-                     static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount),
-                     static_cast<uint32_t>(opaqueTriangleCount), {}, upload.cameraPosition,
+                      static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(triangleCount),
+                     static_cast<uint32_t>(opaqueTriangleCount), upload.grassCardAspect,
+                     static_cast<uint32_t>(grassCardCount), {}, upload.cameraPosition,
                      upload.grass};
+        static_assert(offsetof(PushConstants, cameraPosition) == 32);
         static_assert(sizeof(PushConstants) == 160);
-        std::array<ComputeBinding, 11> mergeBindings {{
+        std::array<ComputeBinding, 14> mergeBindings {{
             {_mergeBindings[0], buffers[0]}, {_mergeBindings[1], buffers[1]},
             {_mergeBindings[2], buffers[2]}, {_mergeBindings[3], buffers[3]},
             {_mergeBindings[4], buffers[4]}, {_mergeBindings[5], buffers[5]},
             {_mergeBindings[6], buffers[6]}, {_mergeBindings[7], buffers[7]},
             {_mergeBindings[8], buffers[8]}, {_mergeBindings[9], buffers[9]},
-            {_mergeBindings[10], buffers[10]},
+            {_mergeBindings[10], buffers[10]}, {_mergeBindings[11], buffers[11]},
+            {_mergeBindings[12], buffers[12]}, {_mergeBindings[13], buffers[13]},
         }};
-        const auto threads = std::max(constants.vertexCount, constants.triangleCount);
-        if (threads) {
+        const auto dispatchMerge = [&](const PushConstants &dispatchConstants) {
+            const auto threads = std::max(
+                {dispatchConstants.vertexCount, dispatchConstants.triangleCount,
+                 dispatchConstants.grassCardCount});
+            if (threads == 0)
+                return;
             commandBuffer.dispatch(*_mergePipeline, {(threads + 63) / 64, 1, 1},
                                    {mergeBindings.data(), static_cast<uint32_t>(mergeBindings.size())},
                                    nullptr,
-                                   &constants, sizeof(constants));
+                                   &dispatchConstants, sizeof(dispatchConstants));
+        };
+        if (constants.grassCardCount != 0) {
+            auto transformConstants = constants;
+            transformConstants.vertexCount = 0;
+            transformConstants.triangleCount = 0;
+            dispatchMerge(transformConstants);
+            commandBuffer.bufferBarrier(*frame.grassCardInstances, BufferUse::ComputeWrite,
+                                        BufferUse::ComputeRead);
         }
+        constants.grassCardCount = 0;
+        dispatchMerge(constants);
         commandBuffer.bufferBarrier(*frame.geometry, BufferUse::ComputeWrite,
                                     BufferUse::AccelerationStructureBuildRead);
         commandBuffer.bufferBarrier(*frame.geometry, BufferUse::ComputeWrite,
@@ -487,6 +564,10 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
     view.materialIds =
         {frame.geometry.get(), vertexBytes + indexBytes, writtenMaterialIdBytes};
     view.materials = {frame.materials.get(), 0, frame.materials->size()};
+    view.grassCardVertices = {_grassCardVertices.get(), 0, _grassCardVertices->size()};
+    view.grassCardIndices = {_grassCardIndices.get(), 0, _grassCardIndices->size()};
+    view.grassCardInstances = {frame.grassCardInstances.get(), 0,
+                               frame.grassCardInstances->size()};
     view.objectCount = static_cast<uint32_t>(upload.objects.size());
     view.opaqueObjectCount = upload.opaqueObjectCount;
     view.vertexCount = static_cast<uint32_t>(vertexCount);
@@ -494,6 +575,10 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
     view.depthIndependentTriangleCount =
         static_cast<uint32_t>(depthIndependentTriangleCount);
     view.triangleCount = static_cast<uint32_t>(triangleCount);
+    view.grassCardCount = static_cast<uint32_t>(grassCardCount);
+    view.grassCardVerts = upload.grass.cardVerts;
+    view.grassCardTris = upload.grass.cardTris;
+    view.grassCardGeneration = upload.grassCardGeneration;
     view.primitiveIds =
         {frame.primitiveIds.data(), static_cast<uint32_t>(frame.primitiveIds.size())};
     view.regions = {{GpuSceneResidencyClass::Dynamic, _revision, 0,

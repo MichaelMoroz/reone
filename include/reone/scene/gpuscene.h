@@ -29,6 +29,7 @@
 #include <glm/glm.hpp>
 
 #include "reone/graphics/frustum.h"
+#include "reone/graphics/grasscard.h"
 #include "reone/graphics/rendering/gpuscene.h"
 #include "reone/graphics/material.h"
 #include "reone/scene/node.h"
@@ -247,13 +248,31 @@ public:
      * from a push constant, then addresses blades the records never allocated.
      */
     void setGrassParams(const graphics::GrassParams &params) {
+        auto resolved = params;
+        if (resolved.cardboard != 0 && _grassParams.cardboard != 0) {
+            resolved.cardVerts = _grassParams.cardVerts;
+            resolved.cardTris = _grassParams.cardTris;
+        }
         // A blade and a quad are different vertex counts, and the counts live
         // in object records that are cached across frames. Changing the
         // primitive without rebuilding them leaves the merge kernel striding
         // through records sized for the other one, which draws the scene as
         // giant slabs of stretched texture.
-        _grassPrimitiveChanged = params.cardboard != _grassParams.cardboard;
-        _grassParams = params;
+        _grassPrimitiveChanged = _grassPrimitiveChanged ||
+                               resolved.cardboard != _grassParams.cardboard ||
+                               resolved.cardVerts != _grassParams.cardVerts ||
+                               resolved.cardTris != _grassParams.cardTris ||
+                               resolved.segments != _grassParams.segments ||
+                               resolved.bladesPerCluster != _grassParams.bladesPerCluster;
+        _grassParams = resolved;
+    }
+    void setGrassCardParams(const graphics::GrassCardParams &params, float aspect) {
+        _grassPrimitiveChanged = _grassPrimitiveChanged ||
+                               params.shape != _grassCardParams.shape ||
+                               params.sides != _grassCardParams.sides ||
+                               params.grid != _grassCardParams.grid;
+        _grassCardParams = params;
+        _grassCardAspect = aspect;
     }
 
     /** True for the one frame after the grass primitive changed. */
@@ -272,6 +291,17 @@ public:
 
 private:
     graphics::GrassParams _grassParams;
+    graphics::GrassCardParams _grassCardParams;
+    float _grassCardAspect {1.0f};
+    struct GrassCardCacheEntry {
+        const graphics::Texture *texture {nullptr};
+        graphics::GrassCardParams params;
+        graphics::GrassCardAtlas atlas;
+        uint64_t generation {0};
+    };
+    std::vector<GrassCardCacheEntry> _grassCardAtlases;
+    const graphics::Texture *_warnedGrassCardTexture {nullptr};
+    uint64_t _grassCardGeneration {0};
     /**
      * In-radius faces gathered before any are granted, with the distance that
      * orders them. A member rather than a local so the per-frame walk does not

@@ -247,6 +247,24 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                              &GraphicsOptions::ptRefraction, 0.0f, 1.0f));
     descs.push_back(floatOpt("grassdensity", OptionApply::Live, "grass density multiplier",
                              &GraphicsOptions::grassDensity, 0.0f, 64.0f));
+    descs.push_back(enumOpt(
+        "grassmode", OptionApply::Live, "grass primitive: auto, strand or card",
+        [](const GraphicsOptions &o) { return grassModeName(o.grassMode); },
+        [](GraphicsOptions &o, const std::string &value) { o.grassMode = parseGrassMode(value); },
+        [](const GraphicsOptions &a, const GraphicsOptions &b) { return a.grassMode == b.grassMode; },
+        [](const GraphicsOptions &from, GraphicsOptions &to) { to.grassMode = from.grassMode; }));
+    descs.push_back(enumOpt(
+        "grasscardshape", OptionApply::Live, "fitted grass card outline",
+        [](const GraphicsOptions &o) { return grassCardShapeName(o.grassCardShape); },
+        [](GraphicsOptions &o, const std::string &value) { o.grassCardShape = parseGrassCardShape(value); },
+        [](const GraphicsOptions &a, const GraphicsOptions &b) { return a.grassCardShape == b.grassCardShape; },
+        [](const GraphicsOptions &from, GraphicsOptions &to) { to.grassCardShape = from.grassCardShape; }));
+    descs.push_back(intOpt("grasscardsides", OptionApply::Live, "sides of a fitted grass k-gon",
+                           &GraphicsOptions::grassCardSides, 3, 16));
+    descs.push_back(intOpt("grasscardgrid", OptionApply::Live, "cells across a fitted grass grid",
+                           &GraphicsOptions::grassCardGrid, 2, 32));
+    descs.push_back(floatOpt("grasscardaspect", OptionApply::Live, "grass card width over length",
+                             &GraphicsOptions::grassCardAspect, 0.1f, 4.0f));
 
     // What the renderer is, as one three-way choice.
     //
@@ -421,7 +439,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(intOpt("debugview", OptionApply::Live,
                            "debug channel view in any render mode, 0 off",
                            &GraphicsOptions::debugView, 0, kMaxDebugView));
-
     // Decided at the point of use, in SceneGraph::computeJitter, so it follows
     // the active resolver on the next frame with nothing rebuilt.
 
@@ -718,6 +735,29 @@ RenderMode parseRenderMode(const std::string &value) {
         return RenderMode::PathTracing;
     throw std::invalid_argument("Unknown render mode '" + value +
                                 "'; expected retro, pbr or path-tracing");
+}
+
+const char *grassModeName(GrassMode mode) {
+    switch (mode) {
+    case GrassMode::Auto:
+        return "auto";
+    case GrassMode::Strand:
+        return "strand";
+    case GrassMode::Card:
+        return "card";
+    }
+    throw std::invalid_argument("Unknown grass mode");
+}
+
+GrassMode parseGrassMode(const std::string &value) {
+    if (value == "auto")
+        return GrassMode::Auto;
+    if (value == "strand")
+        return GrassMode::Strand;
+    if (value == "card")
+        return GrassMode::Card;
+    throw std::invalid_argument("Unknown grass mode '" + value +
+                                "'; expected auto, strand or card");
 }
 
 const char *optionApplyName(OptionApply apply) {

@@ -64,6 +64,7 @@ const char *optionApplyName(OptionApply apply);
  * console and the launcher all use.
  */
 const char *renderModeName(RenderMode mode);
+const char *grassModeName(GrassMode mode);
 
 /**
  * Read a render mode from that written form.
@@ -76,6 +77,7 @@ const char *renderModeName(RenderMode mode);
  * @throws std::invalid_argument naming the offending text.
  */
 RenderMode parseRenderMode(const std::string &value);
+GrassMode parseGrassMode(const std::string &value);
 
 /**
  * One named graphics option: how to read it, how to parse it, and how to tell

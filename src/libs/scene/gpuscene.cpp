@@ -43,6 +43,20 @@ bool isCountedMesh(const Material &material) {
            material.type == MaterialType::TransparentModel;
 }
 
+GrassCardAtlas fullGrassCardAtlas() {
+    GrassCardAtlas result;
+    for (auto &variant : result.variants) {
+        variant.vertices = {{-0.5f, 0.0f, 0.0f, 0.0f},
+                            {0.5f, 0.0f, 1.0f, 0.0f},
+                            {0.5f, 1.0f, 1.0f, 1.0f},
+                            {-0.5f, 1.0f, 0.0f, 1.0f}};
+        variant.indices = {0, 1, 2, 2, 3, 0};
+    }
+    result.vertsPerCard = 4;
+    result.trisPerCard = 2;
+    return result;
+}
+
 void countMesh(SceneCounts &counts, const RegisteredDeformation &deformation) {
     if (std::holds_alternative<RegisteredSkin>(deformation))
         ++counts.skinned;
@@ -107,7 +121,11 @@ GpuScene::PrimitiveClass applyAdmissionKind(GpuScene::Classification &classifica
             kPunchThrough | UniformsFeatureFlags::thin | UniformsFeatureFlags::shadows;
         return GpuScene::PrimitiveClass::NonOpaque;
     case GpuScene::AdmissionKind::LitBlended:
-        classification.material.featureMask |= kBlendedCoverage;
+        // A blend is still a surface in the light path. Mark it as a thin
+        // shadow receiver here, at the same classification seam that marks
+        // cutouts, so mesh and procedural admission cannot silently diverge.
+        classification.material.featureMask |=
+            kBlendedCoverage | UniformsFeatureFlags::thin | UniformsFeatureFlags::shadows;
         return GpuScene::PrimitiveClass::NonOpaque;
     case GpuScene::AdmissionKind::AdditiveEmissive:
         // Curated prelit remains the existing terminating surface model.
@@ -639,6 +657,77 @@ graphics::GpuSceneUpload GpuScene::prepare(
     auto upload = std::move(reuse);
     // Before anything reads it: the object records below size themselves by it.
     upload.grass = _grassParams;
+    upload.grassCardAspect = _grassCardAspect;
+    if (upload.grass.cardboard != 0) {
+        const RegisteredProcedural *firstGrass = nullptr;
+        for (const auto &object : _objects) {
+            const auto *procedural = std::get_if<RegisteredProcedural>(&object);
+            if (procedural && procedural->kind == ProceduralKind::Grass) {
+                firstGrass = procedural;
+                break;
+            }
+        }
+        GrassCardAtlas atlas = fullGrassCardAtlas();
+        if (firstGrass) {
+            const auto *texture = firstGrass->material.textures[
+                static_cast<size_t>(MaterialTextureSlot::MainTex)];
+            if (texture) {
+                auto params = _grassCardParams;
+                params.alphaTest = firstGrass->material.alphaTest >= 0.0f
+                    ? firstGrass->material.alphaTest
+                    : (texture->features().alphaTest >= 0.0f
+                           ? texture->features().alphaTest
+                           : 0.5f);
+                auto it = std::find_if(_grassCardAtlases.begin(), _grassCardAtlases.end(),
+                    [texture, &params](const auto &entry) {
+                        return entry.texture == texture && entry.params.shape == params.shape &&
+                               entry.params.sides == params.sides && entry.params.grid == params.grid &&
+                               entry.params.alphaTest == params.alphaTest;
+                    });
+                if (it == _grassCardAtlases.end()) {
+                    GrassCardCacheEntry entry;
+                    entry.texture = texture;
+                    entry.params = params;
+                    entry.atlas = fitGrassCards(*texture, params);
+                    entry.generation = ++_grassCardGeneration;
+                    _grassCardAtlases.push_back(std::move(entry));
+                    it = std::prev(_grassCardAtlases.end());
+                }
+                atlas = it->atlas;
+                upload.grassCardGeneration = it->generation;
+                for (const auto &candidate : _objects) {
+                    const auto *other = std::get_if<RegisteredProcedural>(&candidate);
+                    if (!other || other->kind != ProceduralKind::Grass)
+                        continue;
+                    const auto *otherTexture = other->material.textures[
+                        static_cast<size_t>(MaterialTextureSlot::MainTex)];
+                    if (otherTexture && otherTexture != texture &&
+                        _warnedGrassCardTexture != otherTexture) {
+                        warn("Grass cards use atlas '" + texture->name() +
+                                 "'; grass material texture '" + otherTexture->name() +
+                                 "' is not fitted by this card region",
+                             LogChannel::Graphics);
+                        _warnedGrassCardTexture = otherTexture;
+                    }
+                }
+            }
+        }
+        upload.grass.cardVerts = atlas.vertsPerCard;
+        upload.grass.cardTris = atlas.trisPerCard;
+        upload.grassCardVertices.clear();
+        upload.grassCardIndices.clear();
+        for (const auto &variant : atlas.variants) {
+            upload.grassCardVertices.insert(upload.grassCardVertices.end(),
+                                             variant.vertices.begin(), variant.vertices.end());
+            upload.grassCardIndices.insert(upload.grassCardIndices.end(),
+                                            variant.indices.begin(), variant.indices.end());
+        }
+        if (_grassParams.cardVerts != upload.grass.cardVerts ||
+            _grassParams.cardTris != upload.grass.cardTris)
+            _grassPrimitiveChanged = true;
+        _grassParams.cardVerts = upload.grass.cardVerts;
+        _grassParams.cardTris = upload.grass.cardTris;
+    }
     // Blades already granted, across every grass object in this scene.
     //
     // Declared here and not beside the loop that spends it, which is the whole
@@ -757,7 +846,6 @@ graphics::GpuSceneUpload GpuScene::prepare(
                     std::numeric_limits<uint32_t>::max())
                     throw std::runtime_error("Merged dangly position pool exceeds shader index range");
                 sceneObject.danglyBase = static_cast<uint32_t>(upload.danglyPositions.size());
-                sceneObject.danglyCount = static_cast<uint32_t>(vertexCount);
                 upload.danglyPositions.insert(upload.danglyPositions.end(),
                                               dangly->positions->begin(),
                                               dangly->positions->end());
@@ -872,24 +960,26 @@ graphics::GpuSceneUpload GpuScene::prepare(
                                          ? grassRangeCount
                                          : 0;
         sceneObject.srcVertexStride = procedural->kind == ProceduralKind::Grass ? 0 : 1;
-        // Grass is a strand of nine triangles unless Retro is drawing the
-        // original cardboard, in which case it is the same quad everything else
-        // here is. Both counts have to agree with the merge kernel's own
-        // arithmetic or the two loops address different blades.
+        // Both loops address the same per-cluster units. Their counts must
+        // agree with the merge kernel or stale record strides stretch cards.
         const bool strands = procedural->kind == ProceduralKind::Grass &&
                              upload.grass.cardboard == 0;
-        if (strands) {
-            // Exactly the blades the loop above granted: every slot allocated
-            // here is one that gets built.
-            const uint64_t blades =
-                instanceCount * std::max(1u, upload.grass.bladesPerCluster);
-            sceneObject.vertexCount = static_cast<uint32_t>(blades) *
-                                      graphics::grassVertsPerBlade(upload.grass.segments);
-            sceneObject.triangleCount = static_cast<uint32_t>(blades) *
-                                        graphics::grassTrisPerBlade(upload.grass.segments);
-        } else {
+        const uint64_t units = instanceCount * std::max(1u, upload.grass.bladesPerCluster);
+        if (procedural->kind != ProceduralKind::Grass) {
             sceneObject.vertexCount = static_cast<uint32_t>(instanceCount) * 4;
             sceneObject.triangleCount = static_cast<uint32_t>(instanceCount) * 2;
+        } else if (strands) {
+            sceneObject.vertexCount = static_cast<uint32_t>(units) *
+                                      graphics::grassVertsPerBlade(upload.grass.segments);
+            sceneObject.triangleCount = static_cast<uint32_t>(units) *
+                                        graphics::grassTrisPerBlade(upload.grass.segments);
+        } else {
+            // Cards have their own indexed instance region. Keeping these out
+            // of the merged ranges is what prevents the TLAS from seeing every
+            // blade once through the merged BLAS and once through card BLASes.
+            sceneObject.cardCount = static_cast<uint32_t>(units);
+            sceneObject.vertexCount = 0;
+            sceneObject.triangleCount = 0;
         }
         const auto primitiveClass =
             cache.value->kind == AdmissionKind::Opaque

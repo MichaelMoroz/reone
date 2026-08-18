@@ -151,12 +151,13 @@ struct alignas(16) SceneObject {
     uint32_t triangleCount {0};
     uint32_t dstVertexBase {0};
     uint32_t dstTriangleBase {0};
+    uint32_t dstCardBase {0};
+    uint32_t cardCount {0};
     uint32_t geometryIndex {0};
     uint32_t boneBase {UINT32_MAX};
     uint32_t boneCount {0};
     uint32_t materialIndex {0};
     uint32_t danglyBase {UINT32_MAX};
-    uint32_t danglyCount {0};
     alignas(16) glm::vec4 saberDisplacement {0.0f};
 };
 static_assert(offsetof(SceneObject, srcVertexOffset) == 192);
@@ -164,10 +165,34 @@ static_assert(offsetof(SceneObject, srcIndexOffset) == 196);
 static_assert(offsetof(SceneObject, srcVertexStride) == 200);
 static_assert(offsetof(SceneObject, offPosition) == 204);
 static_assert(offsetof(SceneObject, vertexCount) == 232);
-static_assert(offsetof(SceneObject, materialIndex) == 260);
-static_assert(offsetof(SceneObject, danglyBase) == 264);
-static_assert(offsetof(SceneObject, saberDisplacement) == 272);
-static_assert(sizeof(SceneObject) == 288);
+static_assert(offsetof(SceneObject, dstCardBase) == 248);
+static_assert(offsetof(SceneObject, cardCount) == 252);
+static_assert(offsetof(SceneObject, materialIndex) == 268);
+static_assert(offsetof(SceneObject, danglyBase) == 272);
+static_assert(offsetof(SceneObject, saberDisplacement) == 288);
+static_assert(sizeof(SceneObject) == 304);
+
+/**
+ * One grass card, as both consumers will read it.
+ *
+ * A card is a static template under an affine transform, because that is the
+ * most a TLAS instance can carry - so raster and the tracer can be handed the
+ * same matrix and cannot disagree about where a card is. Rows use Vulkan's
+ * row-major 3x4 instance-transform convention, so the current rows are a
+ * straight copy for VkAccelerationStructureInstanceKHR::transform.
+ */
+struct alignas(16) GrassCardInstance {
+    glm::vec4 row0 {0.0f};
+    glm::vec4 row1 {0.0f};
+    glm::vec4 row2 {0.0f};
+    glm::vec4 prevRow0 {0.0f};
+    glm::vec4 prevRow1 {0.0f};
+    glm::vec4 prevRow2 {0.0f};
+    /** xy lightmap UV, z the variant, w non-zero if the card is culled. */
+    glm::vec4 lightmapVariantCulled {0.0f};
+    glm::uvec4 materialIndex {0u};
+};
+static_assert(sizeof(GrassCardInstance) == sizeof(glm::vec4) * 8);
 
 struct alignas(16) ProceduralQuad {
     glm::vec4 positionVariant {0.0f};
@@ -258,9 +283,10 @@ struct GrassParams {
     float windWavelength {6.0f};
     float windGust {0.6f};
     uint32_t segments {4};
-    float windPad1 {0.0f};
-    float windPad2 {0.0f};
+    uint32_t cardVerts {4};
+    uint32_t cardTris {2};
 };
+static_assert(sizeof(GrassParams) == 112);
 
 /** Vertices and triangles a single blade contributes - see scene_resolve.slang. */
 /**
@@ -279,10 +305,14 @@ struct GpuSceneUpload {
     std::vector<ProceduralQuad> proceduralQuads;
     std::vector<GrassFace> grassFaces;
     std::vector<GrassRange> grassRanges;
+    std::vector<glm::vec4> grassCardVertices;
+    std::vector<uint32_t> grassCardIndices;
     glm::vec4 cameraPosition {0.0f, 0.0f, 0.0f, 1.0f};
     GrassParams grass;
+    float grassCardAspect {1.0f};
 
     uint64_t grassFaceGeneration {0};
+    uint64_t grassCardGeneration {0};
     uint32_t opaqueObjectCount {0};
     /** Tail objects drawn without opaque-scene depth testing. */
     uint32_t depthIndependentObjectCount {0};
@@ -323,12 +353,19 @@ public:
         BufferView indices;
         BufferView materialIds;
         BufferView materials;
+        BufferView grassCardVertices;
+        BufferView grassCardIndices;
+        BufferView grassCardInstances;
         uint32_t objectCount {0};
         uint32_t opaqueObjectCount {0};
         uint32_t vertexCount {0};
         uint32_t opaqueTriangleCount {0};
         uint32_t depthIndependentTriangleCount {0};
         uint32_t triangleCount {0};
+        uint32_t grassCardCount {0};
+        uint32_t grassCardVerts {0};
+        uint32_t grassCardTris {0};
+        uint64_t grassCardGeneration {0};
         PrimitiveIdView primitiveIds;
         std::vector<Region> regions;
     };
@@ -359,17 +396,20 @@ private:
     std::unique_ptr<IBuffer> _sourceVertices;
     std::unique_ptr<IBuffer> _sourceIndices;
     std::unique_ptr<IBuffer> _grassFaces;
+    std::unique_ptr<IBuffer> _grassCardVertices;
+    std::unique_ptr<IBuffer> _grassCardIndices;
     std::vector<std::unique_ptr<IBuffer>> _retiredSourceBuffers;
     uint32_t _sourceVertexCapacity {0};
     uint32_t _sourceIndexCapacity {0};
     uint64_t _grassFaceGeneration {0};
+    uint64_t _grassCardGeneration {0};
     uint64_t _sourceResourceGeneration {0};
     uint64_t _sceneScope {1};
     uint64_t _revision {0};
     bool _inited {false};
 
     void ensureMergeBuffers(Frame &, uint32_t, uint32_t, uint32_t, uint32_t,
-                            uint32_t, uint32_t, uint32_t);
+                            uint32_t, uint32_t, uint32_t, uint32_t);
     void clearSourceGeometry();
     const SourceGeometry &appendSourceGeometry(const Mesh &mesh);
 };

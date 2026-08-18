@@ -172,6 +172,11 @@ std::unique_ptr<Options> OptionsParser::parse() {
          "ceiling on the shadow filter radius, pixels")                                                                       //
         ("grassradius", value<float>()->default_value(options->graphics.grassRadius), "grass draw radius")             //
         ("grasssegments", value<int>()->default_value(options->graphics.grassSegments), "quad segments up a blade") //
+        ("grassmode", value<std::string>()->default_value(grassModeName(options->graphics.grassMode)), "grass primitive: auto, strand or card") //
+        ("grasscardshape", value<std::string>()->default_value(grassCardShapeName(options->graphics.grassCardShape)), "fitted grass card outline") //
+        ("grasscardsides", value<int>()->default_value(options->graphics.grassCardSides), "sides of a fitted grass k-gon") //
+        ("grasscardgrid", value<int>()->default_value(options->graphics.grassCardGrid), "cells across a fitted grass grid") //
+        ("grasscardaspect", value<float>()->default_value(options->graphics.grassCardAspect), "grass card width over length") //
         ("grasswindstrength", value<float>()->default_value(options->graphics.grassWindStrength), "wind bend, radians") //
         ("grasswinddirection", value<float>()->default_value(options->graphics.grassWindDirection), "wind direction, radians") //
         ("grasswindspeed", value<float>()->default_value(options->graphics.grassWindSpeed), "wind rustle speed")          //
@@ -405,6 +410,11 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.grassSegments =
         std::clamp<int>(vars["grasssegments"].as<int>(), graphics::kMinGrassSegments,
                         graphics::kMaxGrassSegments);
+    options->graphics.grassMode = parseGrassMode(vars["grassmode"].as<std::string>());
+    options->graphics.grassCardShape = parseGrassCardShape(vars["grasscardshape"].as<std::string>());
+    options->graphics.grassCardSides = std::clamp(vars["grasscardsides"].as<int>(), 3, 16);
+    options->graphics.grassCardGrid = std::clamp(vars["grasscardgrid"].as<int>(), 2, 32);
+    options->graphics.grassCardAspect = std::clamp(vars["grasscardaspect"].as<float>(), 0.1f, 4.0f);
     options->graphics.grassWindStrength = std::clamp(vars["grasswindstrength"].as<float>(), 0.0f, 2.0f);
     options->graphics.grassWindDirection =
         std::clamp(vars["grasswinddirection"].as<float>(), -6.2832f, 6.2832f);

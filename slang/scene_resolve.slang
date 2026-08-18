@@ -109,6 +109,9 @@ float3 tangentToWorld(TangentFrame frame, float3 n) {
 
 [[vk::binding(9, 1)]] StructuredBuffer<GrassFace> grassFaces;
 [[vk::binding(10, 1)]] StructuredBuffer<GrassRange> grassRanges;
+[[vk::binding(11, 1)]] StructuredBuffer<float4> grassCardVertices;
+[[vk::binding(12, 1)]] StructuredBuffer<uint> grassCardIndices;
+[[vk::binding(13, 1)]] RWStructuredBuffer<GrassCardInstance> grassCardInstances;
 
 struct PushConstants {
     uint objectCount;
@@ -116,7 +119,10 @@ struct PushConstants {
     uint vertexCount;
     uint triangleCount;
     uint opaqueTriangleCount;
-    /** xyz camera, w the live density fraction - see expandGrassBlade. */
+    float grassCardAspect;
+    uint grassCardCount;
+    uint pad1;
+    /** xyz camera. */
     float4 cameraPosition;
     /** Mirrors GrassParams in graphics/rendering/gpuscene.h. */
     float grassRadius;
@@ -130,7 +136,7 @@ struct PushConstants {
     float grassYOffset;
     float grassRoughness;
     uint grassBladesPerCluster;
-    /** Non-zero draws the original cutout cardboard instead of strands. */
+    /** Non-zero draws fitted cutout cards instead of strands. */
     uint grassCardboard;
     uint grassBudgetBlades;
     float grassDensity;
@@ -143,8 +149,8 @@ struct PushConstants {
     float grassWindWavelength;
     float grassWindGust;
     uint grassSegments;
-    float grassWindPad1;
-    float grassWindPad2;
+    uint grassCardVerts;
+    uint grassCardTris;
 };
 
 [[vk::push_constant]] PushConstants pushConstants;
@@ -236,6 +242,14 @@ uint findTriangleObject(uint id) {
     return low;
 }
 
+uint findCardObject(uint id) {
+    for (uint object = 0; object < pushConstants.objectCount; ++object) {
+        uint first = objects[object].dstCardBase;
+        if (id >= first && id - first < objects[object].cardCount) return object;
+    }
+    return 0;
+}
+
 GrassRange findGrassRange(SceneObject object, uint clusterId) {
     uint low = 0;
     uint high = object.srcIndexOffset;
@@ -315,10 +329,11 @@ struct GrassBlade {
     float2 lightmapUV;
     /** Per-blade phase offset, so neighbours do not sway as one sheet. */
     float windPhase;
+    uint variant;
     bool culled;
 };
 
-GrassBlade expandGrassBlade(SceneObject object, uint bladeId) {
+GrassBlade expandGrassBlade(SceneObject object, uint bladeId, bool card) {
     // Several blades share a cluster, so the cluster is what the face records
     // and the range lookup know about; the sub-index only ever reaches the
     // hash, where it separates siblings that would otherwise be identical.
@@ -364,10 +379,16 @@ GrassBlade expandGrassBlade(SceneObject object, uint bladeId) {
     float lengthJitter = 1.0 + pushConstants.grassLengthVariance
         * (grassRandom01(sourceFace, localCluster, 6) * 2.0 - 1.0);
     blade.length = quadSize * pushConstants.grassLength * max(0.0, lengthJitter);
-    blade.width = blade.length * pushConstants.grassWidth;
+    // grassWidth is a strand dial; grassCardAspect is the card counterpart.
+    // A card depicts a tuft and needs to be broad at its default, while a
+    // strand remains a thin ribbon, so the two cannot share a default.
+    blade.width = blade.length * (card ? pushConstants.grassCardAspect
+                                       : pushConstants.grassWidth);
     blade.curvature = pushConstants.grassCurvature + pushConstants.grassCurvatureVariance
         * (grassRandom01(sourceFace, localCluster, 7) * 2.0 - 1.0);
     blade.windPhase = 6.28318530717958647692 * grassRandom01(sourceFace, localCluster, 9);
+    if (card)
+        blade.variant = grassVariant(face, sourceFace, localCluster);
 
     // Grown in rather than switched on. A face is admitted whole, so without
     // this every cluster on it arrives at once and the field advances in
@@ -452,53 +473,35 @@ void grassSpine(GrassBlade blade, float t, float windBend, out float3 point,
     tangent = blade.bendDir * sin(phi) + float3(0.0, 0.0, cos(phi));
 }
 
-ProceduralQuad expandGrassCluster(SceneObject object, uint clusterId) {
-    GrassRange range = findGrassRange(object, clusterId);
-    GrassFace face = grassFaces[range.faceIndex];
-    uint localCluster = clusterId - range.clusterOffset;
-    uint sourceFace = face.faceBudgetMaterialVariants.x;
-    float r1sqrt = sqrt(grassRandom01(sourceFace, localCluster, 0));
-    float r2 = grassRandom01(sourceFace, localCluster, 1);
-    float3 baryPosition = float3(
-        1.0 - r1sqrt, r1sqrt * (1.0 - r2), r2 * r1sqrt);
-    float3 position = face.vertex0Uv0x.xyz * baryPosition.x
-        + face.vertex1Uv0y.xyz * baryPosition.y
-        + face.vertex2Uv1x.xyz * baryPosition.z;
-    float2 uv0 = float2(face.vertex0Uv0x.w, face.vertex1Uv0y.w);
-    float2 uv1 = float2(face.vertex2Uv1x.w, face.uv1yUv2QuadSize.x);
-    float2 uv2 = face.uv1yUv2QuadSize.yz;
-    float2 lightmapUV = uv0 * baryPosition.x
-        + uv1 * baryPosition.y + uv2 * baryPosition.z;
-    uint variant = grassVariant(face, sourceFace, localCluster);
-    float yaw = 6.28318530717958647692
-        * grassRandom01(sourceFace, localCluster, 3);
-    float sizeScale = saturate((32.0 - distance(position, pushConstants.cameraPosition.xyz)) / 4.0);
-    // Live density: budgets are baked at the density cap and the dial rides in
-    // cameraPosition.w as density/cap. Clusters beyond the active prefix emit
-    // degenerate quads, the same mechanism the distance ring uses, so the
-    // slider costs a push-constant change instead of a face-record rebuild.
-    uint activeBudget = uint(round(
-        float(face.faceBudgetMaterialVariants.y) * pushConstants.cameraPosition.w));
-    if (localCluster >= activeBudget)
-        sizeScale = 0.0;
-    float quadSize = face.uv1yUv2QuadSize.w * sizeScale;
-
-    ProceduralQuad cluster;
-    cluster.positionVariant = float4(position, float(variant));
-    cluster.right = float4(cos(yaw) * quadSize, sin(yaw) * quadSize, 0.0, 0.0);
-    cluster.up = float4(0.0, 0.0, quadSize, 0.0);
-    cluster.uvOffsetScale = float4(
-        0.5 * float(variant % 2), 0.5 * float(variant / 2), 0.5, 0.5);
-    cluster.lightmapUV = lightmapUV;
-    cluster.pad = float2(0.0);
-    cluster.color = float4(1.0);
-    return cluster;
-}
-
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
     uint id = tid.x;
+
+    if (id < pushConstants.grassCardCount) {
+        SceneObject object = objects[findCardObject(id)];
+        GrassBlade card = expandGrassBlade(object, id - object.dstCardBase, true);
+        float bendNow = card.curvature + grassWindBend(
+            card.root, card.windPhase, globalUniforms.time);
+        float bendPrev = card.curvature + grassWindBend(
+            card.root, card.windPhase, globalUniforms.prevTime);
+        float3 width = card.culled ? float3(0) : card.widthDir * card.width;
+        float3 upNow = card.culled ? float3(0)
+            : float3(0, 0, card.length) + card.bendDir * (bendNow * card.length);
+        float3 upPrev = card.culled ? float3(0)
+            : float3(0, 0, card.length) + card.bendDir * (bendPrev * card.length);
+        GrassCardInstance instance;
+        instance.row0 = float4(width.x, upNow.x, 0, card.root.x);
+        instance.row1 = float4(width.y, upNow.y, 0, card.root.y);
+        instance.row2 = float4(width.z, upNow.z, 0, card.root.z);
+        instance.prevRow0 = float4(width.x, upPrev.x, 0, card.root.x);
+        instance.prevRow1 = float4(width.y, upPrev.y, 0, card.root.y);
+        instance.prevRow2 = float4(width.z, upPrev.z, 0, card.root.z);
+        instance.lightmapVariantCulled = float4(
+            card.lightmapUV, float(card.variant), card.culled ? 1.0 : 0.0);
+        instance.materialIndex = uint4(object.materialIndex, 0, 0, 0);
+        grassCardInstances[id] = instance;
+    }
 
     if (id < pushConstants.vertexCount) {
         SceneObject object = objects[findVertexObject(id)];
@@ -510,7 +513,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
             uint perBladeVerts = grassVertsPerBlade();
             uint bladeId = vertexId / perBladeVerts;
             uint local = vertexId % perBladeVerts;
-            GrassBlade blade = expandGrassBlade(object, bladeId);
+            GrassBlade blade = expandGrassBlade(object, bladeId, false);
 
             // The tip is vertex 10 and sits on the spine; the rest are pairs
             // straddling it.
@@ -574,22 +577,40 @@ void main(uint3 tid : SV_DispatchThreadID) {
             // contact occlusion.
             mergedVertex.color = float4(pushConstants.grassColor.rgb, 1.0);
             vertices[id] = mergedVertex;
+        } else if (object.srcVertexStride == 0) {
+            uint cardVerts = pushConstants.grassCardVerts;
+            uint cardId = vertexId / cardVerts;
+            uint local = vertexId % cardVerts;
+            GrassCardInstance card = grassCardInstances[object.dstCardBase + cardId];
+            uint variant = uint(card.lightmapVariantCulled.z);
+            bool culled = card.lightmapVariantCulled.w != 0.0;
+            float4 tv = grassCardVertices[variant * cardVerts + local];
+            float4 templateVertex = float4(tv.x, tv.y, 0, 1);
+            float3 position = float3(dot(card.row0, templateVertex), dot(card.row1, templateVertex), dot(card.row2, templateVertex));
+            float3 prevPosition = float3(dot(card.prevRow0, templateVertex), dot(card.prevRow1, templateVertex), dot(card.prevRow2, templateVertex));
+            MergedVertex mergedVertex;
+            mergedVertex.position = position;
+            mergedVertex.prevPosition = prevPosition;
+            float3 normal = safeNormalize(cross(float3(card.row0.y, card.row1.y, card.row2.y), float3(card.row0.x, card.row1.x, card.row2.x)), float3(0, 0, 1));
+            mergedVertex.normal = culled || dot(normal, pushConstants.cameraPosition.xyz - position) < 0.0 ? -normal : normal;
+            mergedVertex.uv1 = float2(0.5 * float(variant % 2), 0.5 * float(variant / 2)) + tv.zw * 0.5;
+            mergedVertex.uv2 = card.lightmapVariantCulled.xy;
+            mergedVertex.bitangent = float3(0);
+            mergedVertex.tangent = float3(0);
+            mergedVertex.tanSpaceNormal = float3(0);
+            mergedVertex.pad = float2(0);
+            mergedVertex.color = float4(1.0);
+            vertices[id] = mergedVertex;
         } else if (object.srcVertexStride <= 1) {
-            ProceduralQuad cluster = object.srcVertexStride == 0
-                ? expandGrassCluster(object, vertexId / 4)
-                : proceduralQuads[object.srcVertexOffset + vertexId / 4];
+            ProceduralQuad cluster = proceduralQuads[object.srcVertexOffset + vertexId / 4];
             uint quadVertex = vertexId % 4;
             float x = (quadVertex == 0 || quadVertex == 3) ? -0.5 : 0.5;
-            // Stride zero is the bottom-anchored grass mesh. Stride one is a
-            // centered particle/billboard mesh, tagged by GpuScene so neither
-            // needs thousands of CPU-side SceneObject records.
-            float y = object.srcVertexStride == 0 ? (quadVertex < 2 ? 0.0 : 1.0)
-                                                   : (quadVertex < 2 ? -0.5 : 0.5);
+            float y = quadVertex < 2 ? -0.5 : 0.5;
             MergedVertex mergedVertex;
             mergedVertex.position = cluster.positionVariant.xyz + cluster.right.xyz * x + cluster.up.xyz * y;
             mergedVertex.prevPosition = mergedVertex.position;
             mergedVertex.normal = safeNormalize(cross(cluster.right.xyz, cluster.up.xyz), float3(0, 0, 1));
-            float2 uv = float2(x + 0.5, object.srcVertexStride == 0 ? y : y + 0.5);
+            float2 uv = float2(x + 0.5, y + 0.5);
             mergedVertex.uv1 = cluster.uvOffsetScale.xy + uv * cluster.uvOffsetScale.zw;
             mergedVertex.uv2 = cluster.lightmapUV;
             mergedVertex.bitangent = float3(0);
@@ -606,11 +627,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
             sourceVertices[sourceVertex + object.offPosition / 4 + 2],
             1.0);
         float4 prevPosition = position;
-        bool dangly = object.danglyBase != 0xffffffffu
-            && object.danglyCount == object.vertexCount;
+        bool dangly = object.danglyBase != 0xffffffffu;
         if (dangly) {
             position = danglyPositions[object.danglyBase + vertexId];
-            prevPosition = danglyPositions[object.danglyBase + object.danglyCount + vertexId];
+            prevPosition = danglyPositions[object.danglyBase + object.vertexCount + vertexId];
         }
         float saberSignum = 2.0 * float(vertexId / 88) - 1.0;
         float saberHdist = float((vertexId % 88) / 4) / 21.0;
@@ -778,6 +798,18 @@ void main(uint3 tid : SV_DispatchThreadID) {
                     indices[destinationIndex + 2] = a;
                 }
             }
+        } else if (object.srcVertexStride == 0) {
+            uint cardTris = pushConstants.grassCardTris;
+            uint cardVerts = pushConstants.grassCardVerts;
+            uint cardId = localId / cardTris;
+            uint tri = localId % cardTris;
+            GrassCardInstance card = grassCardInstances[object.dstCardBase + cardId];
+            uint variant = uint(card.lightmapVariantCulled.z);
+            uint base = object.dstVertexBase + cardId * cardVerts;
+            uint ibase = variant * cardTris * 3 + tri * 3;
+            indices[destinationIndex] = base + grassCardIndices[ibase];
+            indices[destinationIndex + 1] = base + grassCardIndices[ibase + 1];
+            indices[destinationIndex + 2] = base + grassCardIndices[ibase + 2];
         } else if (object.srcVertexStride <= 1) {
             uint clusterBase = object.dstVertexBase + (localId / 2) * 4;
             if ((localId % 2) == 0) {
@@ -799,9 +831,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
                 + object.dstVertexBase;
         }
         if (object.srcVertexStride == 0) {
-            uint perBlade = pushConstants.grassCardboard == 0
-                                ? grassTrisPerBlade() * max(1u, pushConstants.grassBladesPerCluster)
-                                : 2;
+            uint perBlade = (pushConstants.grassCardboard == 0
+                                  ? grassTrisPerBlade()
+                                  : pushConstants.grassCardTris) *
+                             max(1u, pushConstants.grassBladesPerCluster);
             GrassRange range = findGrassRange(object, localId / perBlade);
             materialIds[id] = grassFaces[range.faceIndex].faceBudgetMaterialVariants.z;
         } else {

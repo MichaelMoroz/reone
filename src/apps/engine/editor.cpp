@@ -81,6 +81,11 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"mode", graphics::renderModeName(options.mode)},
         {"grass", std::to_string(options.grass)},
         {"grassdensity", formatConfigFloat(options.grassDensity)},
+        {"grassmode", graphics::grassModeName(options.grassMode)},
+        {"grasscardshape", graphics::grassCardShapeName(options.grassCardShape)},
+        {"grasscardsides", std::to_string(options.grassCardSides)},
+        {"grasscardgrid", std::to_string(options.grassCardGrid)},
+        {"grasscardaspect", formatConfigFloat(options.grassCardAspect)},
         {"thintransmission", formatConfigFloat(options.thinTransmission)},
         {"ptrefraction", formatConfigFloat(options.ptRefraction)},
         {"grassradius", formatConfigFloat(options.grassRadius)},
@@ -993,7 +998,19 @@ void Editor::graphicsQualityTab() {
     settingHint("Multiplies the area's authored density, so areas keep their relative variation. "
                 "Live: the dial gates the active cluster prefix on the GPU.");
     if (ImGui::TreeNode("Grass shape")) {
-        ImGui::TextDisabled("Strands in PBR and path tracing; Retro keeps the original cardboard.");
+        const char *grassModes[] {"Auto", "Strand", "Card"};
+        int grassMode = static_cast<int>(options.grassMode);
+        if (ImGui::Combo("Primitive", &grassMode, grassModes, IM_ARRAYSIZE(grassModes)))
+            options.grassMode = static_cast<graphics::GrassMode>(grassMode);
+        const char *cardShapes[] {"Quad", "AABB", "OBB", "K-gon", "Grid"};
+        int cardShape = static_cast<int>(options.grassCardShape);
+        if (ImGui::Combo("Card outline", &cardShape, cardShapes, IM_ARRAYSIZE(cardShapes)))
+            options.grassCardShape = static_cast<graphics::GrassCardShape>(cardShape);
+        ImGui::SliderInt("Card sides", &options.grassCardSides, 3, 16);
+        ImGui::SliderInt("Card grid", &options.grassCardGrid, 2, 32);
+        ImGui::SliderFloat("Card aspect", &options.grassCardAspect, 0.1f, 4.0f, "%.2f");
+        settingHint("Auto keeps the old mode choice: cards in Retro and strands elsewhere. "
+                    "Cards use the fitted outline and their own width-over-length aspect.");
         ImGui::ColorEdit3("Colour", &options.grassColor.x);
         settingHint("Flat across the blade. Strands carry no texture, so this is the whole of it.");
         ImGui::SliderFloat("Draw radius", &options.grassRadius, 0.0f, 256.0f, "%.0f");

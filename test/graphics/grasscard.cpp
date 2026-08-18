@@ -96,6 +96,24 @@ void expectOpaqueCentresCovered(const Texture &texture, const GrassCardAtlas &at
     }
 }
 
+std::array<std::vector<bool>, 4> alphaTestedCoverage(
+    const GrassCardAtlas &atlas, const std::array<std::vector<bool>, 4> &mask,
+    int size) {
+    std::array<std::vector<bool>, 4> result;
+    for (int variant = 0; variant < 4; ++variant) {
+        result[variant].resize(static_cast<size_t>(size) * size);
+        for (int y = 0; y < size; ++y) {
+            for (int x = 0; x < size; ++x) {
+                const size_t index = static_cast<size_t>(y) * size + x;
+                result[variant][index] = mask[variant][index] &&
+                    contains(atlas.variants[variant], {
+                        (x + 0.5f) / size, (y + 0.5f) / size});
+            }
+        }
+    }
+    return result;
+}
+
 } // namespace
 
 TEST(GrassCard, fits_every_shape_conservatively) {
@@ -122,6 +140,38 @@ TEST(GrassCard, fits_every_shape_conservatively) {
             EXPECT_FLOAT_EQ(1.0f, atlas.coverage);
             expectOpaqueCentresCovered(*texture, atlas, mask);
         }
+    }
+}
+
+TEST(GrassCard, alpha_tested_coverage_is_identical_for_every_shape) {
+    constexpr int kSize = 16;
+    auto mask = masks(kSize);
+    for (int y = 0; y < kSize; ++y) {
+        for (int x = 0; x < kSize; ++x) {
+            const int dx = x - 8;
+            const int dy = y - 8;
+            mask[0][y * kSize + x] = dx * dx + dy * dy <= 25;
+            mask[1][y * kSize + x] = std::abs(x - y) <= 1 && x >= 3 && x <= 12;
+            mask[2][y * kSize + x] = x >= 7 && x <= 8 && y >= 2 && y <= 14;
+            mask[3][y * kSize + x] =
+                (x <= 4 && y <= 4) || (x >= 11 && y >= 10);
+        }
+    }
+    const auto texture = makeTexture(2 * kSize, 2 * kSize,
+                                     PixelFormat::RGBA8, mask);
+    for (const auto shape : {GrassCardShape::Quad, GrassCardShape::Aabb,
+                             GrassCardShape::Obb, GrassCardShape::Kgon,
+                             GrassCardShape::Bgrid}) {
+        GrassCardParams params;
+        params.shape = shape;
+        params.sides = 5;
+        params.grid = 8;
+        const auto coverage = alphaTestedCoverage(
+            fitGrassCards(*texture, params), mask, kSize);
+        for (int variant = 0; variant < 4; ++variant)
+            EXPECT_EQ(mask[variant], coverage[variant])
+                << "shape=" << grassCardShapeName(shape)
+                << " variant=" << variant;
     }
 }
 

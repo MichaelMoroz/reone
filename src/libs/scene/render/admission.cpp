@@ -28,6 +28,7 @@
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/rhi/renderer.h"
 #include "reone/graphics/rendering/pbrtextures.h"
+#include "reone/scene/graph.h"
 #include "reone/scene/node/model.h"
 #include "reone/system/logutil.h"
 
@@ -391,6 +392,10 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
                       material.curatedEmission.w);
     }
 
+    // Keep the menu's self-illum trail at the actual material boundary: the
+    // first value is what the node registered and the second is what the
+    // G-buffer will receive after curation and the mode-specific scale.
+
     _submission.dynamicTriangles +=
         (skinned || dangly || saber) ? static_cast<uint32_t>(mesh.mesh.get().faces().size()) : 0;
     if (!dangly && (!curated || curated->klass == TraceClass::Default) &&
@@ -401,6 +406,12 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
 }
 
 namespace {
+
+GrassMode resolvedGrassMode(const GraphicsOptions &options) {
+    if (options.grassMode != GrassMode::Auto)
+        return options.grassMode;
+    return options.mode == RenderMode::Retro ? GrassMode::Card : GrassMode::Strand;
+}
 
 /** The shape dials, as the merge kernel takes them. */
 graphics::GrassParams grassParamsFrom(const graphics::GraphicsOptions &options) {
@@ -441,15 +452,13 @@ graphics::GrassParams grassParamsFrom(const graphics::GraphicsOptions &options) 
     // limit.
     params.density = std::max(0.0f, options.grassDensity / kGrassDensityCap);
     params.color = glm::vec4(glm::max(options.grassColor, glm::vec3(0.0f)), 1.0f);
-    // Retro draws what the original drew. It is a raster mode, so the cutout
-    // never reaches the tracer and costs its shadow rays nothing.
-    params.cardboard = options.mode == graphics::RenderMode::Retro ? 1u : 0u;
+    params.cardboard = resolvedGrassMode(options) == GrassMode::Card ? 1u : 0u;
     return params;
 }
 
 /**
  * The fraction of each face's baked budget that survives, as the merge kernel
- * reads it from cameraPosition.w.
+ * used to ride in cameraPosition.w before selection moved entirely to the CPU.
  *
  * Two ceilings share one number. The density dial is the author's, expressed
  * against the cap the budgets were baked at. The triangle budget is the
@@ -458,7 +467,8 @@ graphics::GrassParams grassParamsFrom(const graphics::GraphicsOptions &options) 
  * lets both ride the prefix gate that already exists, so neither costs a
  * rebuild of the face records.
  */
-float grassDensityFraction(const graphics::GraphicsOptions &options, size_t areaBlades) {
+float grassDensityFraction(const graphics::GraphicsOptions &options, size_t areaBlades,
+                           uint32_t cardTris) {
     const float byDensity = std::clamp(options.grassDensity / kGrassDensityCap, 0.0f, 1.0f);
     if (areaBlades == 0 || options.grassTriangleBudget <= 0) {
         return byDensity;
@@ -469,9 +479,10 @@ float grassDensityFraction(const graphics::GraphicsOptions &options, size_t area
     // and blades appeared and vanished across the entire field. The area's
     // total is fixed for as long as the module is loaded, so the same blade
     // survives or does not regardless of where it is seen from.
-    const bool retro = options.mode == graphics::RenderMode::Retro;
+    const bool cards = resolvedGrassMode(options) == GrassMode::Card;
     const float perCluster =
-        retro ? 2.0f
+        cards ? static_cast<float>(cardTris) *
+                    static_cast<float>(std::clamp(options.grassBladesPerCluster, 1, 32))
               : static_cast<float>(graphics::grassTrisPerBlade(static_cast<uint32_t>(
                     std::clamp<int>(options.grassSegments, graphics::kMinGrassSegments,
                                     graphics::kMaxGrassSegments)))) *
@@ -501,8 +512,7 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
             // field ran the any-hit loop, fetched the material and alpha-tested
             // it, once per blade it touched.
             //
-            // Retro still draws the cardboard, and cardboard is still a cutout.
-            const bool strands = _options.mode != graphics::RenderMode::Retro;
+            const bool strands = resolvedGrassMode(_options) == GrassMode::Strand;
             uint32_t features = static_cast<uint32_t>(materialFeatureMask(procedural.material));
             if (!strands) {
                 features |= UniformsFeatureFlags::hashedalphatest;
@@ -546,9 +556,13 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
         kind = AdmissionKind::AdditiveEmissive;
         break;
     }
+    // The merged draw no longer carries its source SceneObject into the
+    // fragment stage. Preserve this distinction in the material mask so
+    // diagnostics can separate large particle/billboard quads from meshes.
+    material.featureMask |= UniformsFeatureFlags::procedural;
     populateMaterialResources(material, procedural.material, _renderer, _options);
     if (procedural.kind == ProceduralKind::Grass &&
-        _options.mode != graphics::RenderMode::Retro) {
+        resolvedGrassMode(_options) == GrassMode::Strand) {
         // A strand has no texture. The area's grass image is a picture of
         // cardboard blades, and mapping it across a blade puts a vertical slice
         // of that picture on every one - which modulates the configured colour
@@ -706,6 +720,12 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
     }
     _gpuScene.setSkyRoom(result.skyRoom);
     _gpuScene.setGrassParams(grassParamsFrom(_options));
+    _gpuScene.setGrassCardParams({
+        _options.grassCardShape,
+        _options.grassCardSides,
+        _options.grassCardGrid,
+        0.5f,
+    }, _options.grassCardAspect);
     _submission.upload = _gpuScene.prepare(
         [this, skyRoom = result.skyRoom](const RegisteredMesh &mesh) {
             return classifyMesh(mesh, skyRoom);
@@ -716,16 +736,22 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
         view, _admissionGeneration,
         _options.admissionForceFull || _gpuScene.consumeGrassPrimitiveChange(),
         std::move(reuse));
-    // The live grass density rides to the merge kernel in cameraPosition.w as
-    // density/cap; budgets are baked at the cap. Set before hashing so the
-    // shadow path (below, same assignment) stays byte-comparable.
+    // Kept in the upload hash for the shadow oracle. Grass selection itself is
+    // already complete on the CPU, so the merge kernel no longer reads w.
     for (const auto &range : _submission.upload.grassRanges)
         _submission.grass += range.clusterCount;
     _submission.upload.cameraPosition.w =
-        grassDensityFraction(_options, _gpuScene.counts().grassClusters);
+        grassDensityFraction(_options, _gpuScene.counts().grassClusters,
+                             _submission.upload.grass.cardTris);
     if (_options.admissionShadow && _gpuScene.shadowScene()) {
         auto savedSubmission = _submission;
         _gpuScene.shadowScene()->setGrassParams(grassParamsFrom(_options));
+        _gpuScene.shadowScene()->setGrassCardParams({
+            _options.grassCardShape,
+            _options.grassCardSides,
+            _options.grassCardGrid,
+            0.5f,
+        }, _options.grassCardAspect);
         auto shadowUpload = _gpuScene.shadowScene()->prepare(
             [this, skyRoom = result.skyRoom](const RegisteredMesh &mesh) {
                 return classifyMesh(mesh, skyRoom);
@@ -738,7 +764,8 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
         // The same number, so the shadow scene admits the same blades and the
         // upload comparison stays byte-for-byte.
         shadowUpload.cameraPosition.w =
-            grassDensityFraction(_options, _gpuScene.counts().grassClusters);
+            grassDensityFraction(_options, _gpuScene.counts().grassClusters,
+                                 shadowUpload.grass.cardTris);
         const auto incrementalHash = hashUpload(_submission.upload);
         const auto shadowHash = hashUpload(shadowUpload);
         if (_submission.upload.objects.empty() != shadowUpload.objects.empty()) {

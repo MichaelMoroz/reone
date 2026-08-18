@@ -110,13 +110,25 @@ public struct SceneObject {
     public uint triangleCount;
     public uint dstVertexBase;
     public uint dstTriangleBase;
+    public uint dstCardBase;
+    public uint cardCount;
     public uint geometryIndex;
     public uint boneBase;
     public uint boneCount;
     public uint materialIndex;
     public uint danglyBase;
-    public uint danglyCount;
     public float4 saberDisplacement;
+};
+
+public struct GrassCardInstance {
+    public float4 row0;
+    public float4 row1;
+    public float4 row2;
+    public float4 prevRow0;
+    public float4 prevRow1;
+    public float4 prevRow2;
+    public float4 lightmapVariantCulled;
+    public uint4 materialIndex;
 };
 
 public struct ProceduralQuad {

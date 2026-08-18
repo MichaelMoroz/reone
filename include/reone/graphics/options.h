@@ -18,6 +18,7 @@
 #pragma once
 
 #include "types.h"
+#include "grasscard.h"
 
 namespace reone {
 
@@ -258,8 +259,17 @@ struct GraphicsOptions {
     float bloomIntensity {1.0f};
     /** Multiplier on the area's authored Grass_Density, so areas keep their variation. */
     float grassDensity {8.0f};
+    GrassMode grassMode {GrassMode::Auto};
+    GrassCardShape grassCardShape {GrassCardShape::Quad};
+    /** Sides of a fitted k-gon, 3..16. */
+    int grassCardSides {5};
+    /** Cells across a fitted grid, 2..32. */
+    int grassCardGrid {8};
+    /** Card width over length; grassWidth is the corresponding strand dial. */
+    float grassCardAspect {1.0f};
     /**
-     * Grass is strands, not cutout cardboard: a strip of GrassSegments quad
+     * Grass defaults to the legacy primitive for its render mode: cards under
+     * Retro and strands elsewhere. A strand is a strip of GrassSegments quad
      * segments closed by one triangle at the tip, generated on the GPU from a
      * hash of the blade's identity so the field is bit-identical frame to frame.
      *
