@@ -58,7 +58,8 @@ MainMenu::MainMenu(Game &game, ServicesView &services) :
 void MainMenu::preload(IGUI &gui) {
     GameGUI::preload(gui);
     gui.setResolution(800, 600);
-    gui.setControlSceneScaling("LBL_3DVIEW", GUI::ScalingMode::Stretch);
+    // The reference renders this scene at the label's extent. A full-window
+    // target also exposes model coverage outside the control when composited.
 }
 
 void MainMenu::onGUILoaded() {

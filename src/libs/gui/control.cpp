@@ -216,7 +216,11 @@ void Control::render(const glm::ivec2 &screenSize,
         renderText(_textLines, offset, size, renderer2d);
     }
     if (_sceneOutput) {
-        renderer2d.withBlendMode(BlendMode::Premultiplied, [this, &offset, &renderer2d]() {
+        // The reference's RGBA scene target carries zero alpha where nothing
+        // drew and one for opaque model fragments, then the GUI samples it with
+        // normal blending. Keeping those two operations paired preserves plate
+        // art outside the model and replaces it beneath opaque geometry.
+        renderer2d.withBlendMode(BlendMode::Normal, [this, &offset, &renderer2d]() {
             renderer2d.drawImage(
                 *_sceneOutput,
                 {sceneExtent().left + (_sceneExtent ? 0 : offset.x),
