@@ -77,12 +77,19 @@ public:
 private:
     struct Frame {
         std::unique_ptr<ITracingStructure> tracingStructure;
+        std::unique_ptr<IBuffer> instances;
+        std::unique_ptr<IBuffer> variantCounts;
+        uint32_t cardRegionCapacity {0};
+        uint64_t instanceGeneration {0};
+        bool variantCountsValid {false};
     };
 
     IRenderer &_renderer;
     GraphicsOptions &_options;
     glm::ivec2 _extent;
     std::unique_ptr<TracingPipeline> _pipeline;
+    std::unique_ptr<IComputePipeline> _instancePipeline;
+    std::vector<ComputeResourceSlot> _instanceBindings;
     std::array<Frame, 2> _frames;
     uint32_t _lastInstances {0};
     uint32_t _lastTriangles {0};
@@ -104,6 +111,7 @@ private:
     uint32_t _lastPrimaryHits {0};
     uint32_t _lastShadowRays {0};
     uint32_t _lastBindlessTextureCount {0};
+    std::array<uint32_t, kGrassCardVariants> _lastVariantOverflows {};
     uint32_t _frameNumber {0};
     bool _inited {false};
 

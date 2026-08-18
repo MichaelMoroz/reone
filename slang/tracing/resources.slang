@@ -35,6 +35,7 @@ public static const uint kPtSurfaceUnlitEmissive = 2;    // sky and prelit: radi
 
 // featureMask bits the tracer consumes. Kept bit-compatible with the raster
 // feature mask below bit 23; the tracer-only bits sit above.
+public static const uint kPtMaskEnvMap = 1u << 1;
 public static const uint kPtMaskSky = 1u << 24;          // selects the sky dial over the emissive one
 // Continuous alpha coverage: shade this surface and transmit the remainder
 // of the ray. Kept separate from punch-through because a smoke ramp is not a
@@ -112,6 +113,9 @@ public static const float kPtAlphaTestEpsilon = 0.01;
  * would blend two of them.
  */
 [[vk::binding(17, 1)]] public Sampler2D blueNoise;
+[[vk::binding(18, 1)]] public StructuredBuffer<float4> grassCardVertices;
+[[vk::binding(19, 1)]] public StructuredBuffer<uint> grassCardIndices;
+[[vk::binding(20, 1)]] public StructuredBuffer<GrassCardInstance> grassCardInstances;
 
 /** The G-buffer's cleared triangle id: nothing was drawn, so this is the sky. */
 public static const uint kPtNoTriangle = 0xffffffffu;

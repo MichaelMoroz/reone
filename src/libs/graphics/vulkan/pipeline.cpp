@@ -27,6 +27,7 @@
 #include "reone/graphics/uniforms.h"
 
 #include <array>
+#include <type_traits>
 
 namespace reone {
 
@@ -564,6 +565,7 @@ void VulkanComputePipeline::init() {
     config.pushConstantSize = _pushConstantSize;
     _pipeline.init(config);
     _resolvedBindings.resize(_bindings.size());
+    _descriptorKeys.resize(_desc.descriptorSetCopies);
 }
 
 std::vector<ComputeResourceSlot> VulkanComputePipeline::resolveBindings(
@@ -595,6 +597,15 @@ void VulkanComputePipeline::dispatch(VkCommandBuffer commandBuffer, uint32_t fra
                                      const void *pushConstants,
                                      uint32_t pushConstantSize) {
     DescriptorWriteBuilder writes(_device.handle());
+    std::vector<uint64_t> descriptorKey;
+    const auto appendHandle = [&descriptorKey](auto handle) {
+        using Handle = decltype(handle);
+        if constexpr (std::is_pointer_v<Handle>) {
+            descriptorKey.push_back(reinterpret_cast<uintptr_t>(handle));
+        } else {
+            descriptorKey.push_back(static_cast<uint64_t>(handle));
+        }
+    };
     std::fill(_resolvedBindings.begin(), _resolvedBindings.end(), nullptr);
     const auto accept = [this](const ComputeBindingSet &source,
                                           bool replace) {
@@ -645,8 +656,12 @@ void VulkanComputePipeline::dispatch(VkCommandBuffer commandBuffer, uint32_t fra
                 if (source->type != ComputeBinding::Type::Image)
                     throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
                                                 binding.name + "' requires images");
-                writes.writeStorageImage(toDescriptorSet(set), target,
-                                         source->imageArray ? source->imageArray[i] : source->image, i);
+                const auto view = toVulkanImageView(
+                    source->imageArray ? source->imageArray[i] : source->image);
+                writes.writeImage(set, target,
+                                  {VK_NULL_HANDLE, view, VK_IMAGE_LAYOUT_GENERAL}, i);
+                appendHandle(view);
+                descriptorKey.push_back(VK_IMAGE_LAYOUT_GENERAL);
             } else if (binding.kind == ShaderResourceKind::CombinedImageSampler) {
                 if (source->type != ComputeBinding::Type::Image)
                     throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
@@ -656,12 +671,13 @@ void VulkanComputePipeline::dispatch(VkCommandBuffer commandBuffer, uint32_t fra
                 // frame rather than transitioned around each read; General is a
                 // legal layout to sample from, and a barrier pair per pass would
                 // buy nothing here.
-                writes.writeImage(set, target,
-                                  {_descriptors.clampSampler(),
-                                   toVulkanImageView(source->imageArray ? source->imageArray[i]
-                                                                        : source->image),
-                                   VK_IMAGE_LAYOUT_GENERAL},
-                                  i);
+                const auto sampler = _descriptors.clampSampler();
+                const auto view = toVulkanImageView(
+                    source->imageArray ? source->imageArray[i] : source->image);
+                writes.writeImage(set, target, {sampler, view, VK_IMAGE_LAYOUT_GENERAL}, i);
+                appendHandle(sampler);
+                appendHandle(view);
+                descriptorKey.push_back(VK_IMAGE_LAYOUT_GENERAL);
             } else if (binding.kind == ShaderResourceKind::StorageBuffer) {
                 if (source->type != ComputeBinding::Type::Buffer)
                     throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
@@ -670,15 +686,23 @@ void VulkanComputePipeline::dispatch(VkCommandBuffer commandBuffer, uint32_t fra
                 if (!view.buffer)
                     throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
                                                 binding.name + "' has no buffer");
-                writes.writeBuffer(set, target, {toVulkanBuffer(*view.buffer).handle(), view.offset,
-                                                  view.size}, i);
+                const auto buffer = toVulkanBuffer(*view.buffer).handle();
+                writes.writeBuffer(set, target, {buffer, view.offset, view.size}, i);
+                appendHandle(buffer);
+                descriptorKey.push_back(view.offset);
+                descriptorKey.push_back(view.size);
             } else {
                 throw std::invalid_argument("Compute shader '" + _desc.shader + "' binding '" +
                                             binding.name + "' has an unsupported resource kind");
             }
         }
     }
-    writes.apply();
+    if (frameIndex >= _descriptorKeys.size())
+        throw std::out_of_range("Vulkan: compute descriptor-set copy is unavailable");
+    if (_descriptorKeys[frameIndex] != descriptorKey) {
+        writes.apply();
+        _descriptorKeys[frameIndex] = std::move(descriptorKey);
+    }
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipeline.handle());
     if (_frameUniformSet) {
         std::array<uint32_t, VulkanDescriptors::kNumUniformBlocks> offsets {};

@@ -59,7 +59,9 @@ enum class BufferUse {
     TransferWrite,
     ComputeRead,
     ComputeWrite,
+    ComputeReadWrite,
     AccelerationStructureBuildRead,
+    HostRead,
     ShaderRead,
     IndexRead,
 };
@@ -140,7 +142,8 @@ public:
                                 bool invertedViewport) = 0;
     virtual void endRendering() = 0;
     virtual void bindIndexBuffer(const IBuffer &buffer, uint64_t offset) = 0;
-    virtual void drawIndexed(uint32_t indexCount, uint32_t firstIndex) = 0;
+    virtual void drawIndexed(uint32_t indexCount, uint32_t firstIndex,
+                             uint32_t instanceCount = 1) = 0;
     virtual void pushFragmentConstants(PipelineLayout layout, const void *data,
                                        uint32_t size) = 0;
     virtual void pushRayTracingConstants(PipelineLayout layout, const void *data,
@@ -155,7 +158,10 @@ public:
     virtual void clearColor(IImage &image, glm::vec4 color) = 0;
     virtual void bufferBarrier(IBuffer &buffer, BufferUse from, BufferUse to) = 0;
     virtual void imageBarrier(IImage &image, ImageUse from, ImageUse to) = 0;
-    /** Build this frame's scene-wide tracing structure over merged geometry. */
+    /** Create or resize tracing structures and prepare their instance references. */
+    virtual void prepareSceneTracingStructure(
+        ITracingStructure &structure, const SceneTracingGeometry &geometry) = 0;
+    /** Build this frame's scene-wide tracing structure after its records are written. */
     virtual void buildSceneTracingStructure(ITracingStructure &structure,
                                             const SceneTracingGeometry &geometry) = 0;
     /** Trace a ray grid against this frame's scene-wide tracing structure. */

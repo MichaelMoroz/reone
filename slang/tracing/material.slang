@@ -29,6 +29,7 @@
 // dispatch on the type; everything downstream is type-blind.
 
 import lib.math;
+import lib.grasscard;
 import lib.scene_schema;
 import lib.material_ops;
 import uniforms;
@@ -50,6 +51,8 @@ public struct HitGeometry {
     public float3 geometricNormal; // world, face-forward to the ray
     public float3 shadowOrigin;    // Hanika terminator shift
     public float2 uv, uv2;
+    public bool card;
+    public float2 uv0, uv1, uv2Vertex;
 };
 
 /** The gathered surface parameters, uniform across surface types. */
@@ -77,6 +80,7 @@ public struct SurfaceShading {
 };
 
 float4 vertexColor(HitGeometry hit) {
+    if (hit.card) return float4(1.0);
     return mergedVertices[hit.indices.x].color * hit.weights.x +
            mergedVertices[hit.indices.y].color * hit.weights.y +
            mergedVertices[hit.indices.z].color * hit.weights.z;
@@ -159,6 +163,24 @@ public HitGeometry ptMakeHitGeometry(TraceHit trace, RayDesc ray, float coneWidt
     hit.hitT = trace.hitT;
     hit.coneWidth = coneWidth;
     hit.position = ray.Origin + rayDirection * trace.hitT;
+    hit.card = trace.cardId != kPtNoCard;
+    if (hit.card) {
+        GrassCardVertex v0, v1, v2;
+        ptCardTriangleVertices(trace.cardId, trace.primitiveIndex, v0, v1, v2);
+        hit.p0 = v0.position;
+        hit.p1 = v1.position;
+        hit.p2 = v2.position;
+        hit.geometricNormal = normalize(v0.normal * weights.x + v1.normal * weights.y + v2.normal * weights.z);
+        if (dot(hit.geometricNormal, rayDirection) > 0.0) hit.geometricNormal = -hit.geometricNormal;
+        hit.uv0 = v0.uv;
+        hit.uv1 = v1.uv;
+        hit.uv2Vertex = v2.uv;
+        hit.uv = ptTransformedUV(trace.materialIndex,
+                                 v0.uv * weights.x + v1.uv * weights.y + v2.uv * weights.z);
+        hit.uv2 = v0.lightmapUV * weights.x + v1.lightmapUV * weights.y + v2.lightmapUV * weights.z;
+        hit.shadowOrigin = hit.position;
+        return hit;
+    }
     hit.p0 = mergedVertices[indices.x].position;
     hit.p1 = mergedVertices[indices.y].position;
     hit.p2 = mergedVertices[indices.z].position;
@@ -166,6 +188,9 @@ public HitGeometry ptMakeHitGeometry(TraceHit trace, RayDesc ray, float coneWidt
     if (dot(hit.geometricNormal, rayDirection) > 0.0) hit.geometricNormal = -hit.geometricNormal;
     hit.uv = ptTransformedUV(trace.materialIndex, mergedVertices[indices.x].uv1 * weights.x + mergedVertices[indices.y].uv1 * weights.y + mergedVertices[indices.z].uv1 * weights.z);
     hit.uv2 = mergedVertices[indices.x].uv2 * weights.x + mergedVertices[indices.y].uv2 * weights.y + mergedVertices[indices.z].uv2 * weights.z;
+    hit.uv0 = mergedVertices[indices.x].uv1;
+    hit.uv1 = mergedVertices[indices.y].uv1;
+    hit.uv2Vertex = mergedVertices[indices.z].uv1;
     hit.shadowOrigin = ptTerminatorShift(hit.position, hit.p0, hit.p1, hit.p2, indices, weights);
     return hit;
 }
@@ -199,9 +224,9 @@ UvGradients anisotropicGradients(HitGeometry hit) {
     if (planeNormal2 < 1e-18 || abs(ndotd) < 1e-6) return gradients;
     float3 axisX = (basis1 - hit.rayDirection * (dot(planeNormal, basis1) / ndotd)) * hit.coneWidth;
     float3 axisY = (basis2 - hit.rayDirection * (dot(planeNormal, basis2) / ndotd)) * hit.coneWidth;
-    float2 uvA = mergedVertices[hit.indices.x].uv1;
-    float2 duv1 = mergedVertices[hit.indices.y].uv1 - uvA;
-    float2 duv2 = mergedVertices[hit.indices.z].uv1 - uvA;
+    float2 uvA = hit.uv0;
+    float2 duv1 = hit.uv1 - uvA;
+    float2 duv2 = hit.uv2Vertex - uvA;
     float invPlane = 1.0 / planeNormal2;
     gradients.x = (dot(cross(axisX, e2), planeNormal) * invPlane) * duv1 +
                   (dot(cross(e1, axisX), planeNormal) * invPlane) * duv2;
@@ -214,20 +239,20 @@ UvGradients anisotropicGradients(HitGeometry hit) {
  * Isotropic ray-cone LOD (RT Gems ch. 20, simplified) for call sites that
  * cannot afford gradients: transparency candidates during traversal.
  */
-public float ptRayConeLod(InstanceMaterial material, uint3 indices, float coneWidth) {
+public float ptRayConeLod(InstanceMaterial material, HitGeometry hit) {
     if (material.mainTex == kPtNoTexture) return 0.0;
-    float3 q0 = mergedVertices[indices.x].position;
-    float3 q1 = mergedVertices[indices.y].position;
-    float3 q2 = mergedVertices[indices.z].position;
-    float2 uv0 = mergedVertices[indices.x].uv1;
-    float2 uv1 = mergedVertices[indices.y].uv1;
-    float2 uv2 = mergedVertices[indices.z].uv1;
+    float3 q0 = hit.p0;
+    float3 q1 = hit.p1;
+    float3 q2 = hit.p2;
+    float2 uv0 = hit.uv0;
+    float2 uv1 = hit.uv1;
+    float2 uv2 = hit.uv2Vertex;
     float ta = abs((uv1.x - uv0.x) * (uv2.y - uv0.y) - (uv2.x - uv0.x) * (uv1.y - uv0.y));
     float pa = length(cross(q1 - q0, q2 - q0));
     uint texWidth, texHeight;
     bindlessTextures[NonUniformResourceIndex(material.mainTex)].GetDimensions(texWidth, texHeight);
     float density = ta * float(texWidth) * float(texHeight) / max(pa, 1e-9);
-    return max(0.0, 0.5 * log2(max(density, 1e-12)) + log2(max(coneWidth, 1e-9)));
+    return max(0.0, 0.5 * log2(max(density, 1e-12)) + log2(max(hit.coneWidth, 1e-9)));
 }
 
 // The curated channel op now lives in lib/material_ops.slang, with the rest of
@@ -392,6 +417,7 @@ public struct PbrSurface : ISurfaceModel {
     }
 
     float3 materialNormal(HitGeometry hit, uint materialIndex) {
+        if (hit.card) return hit.geometricNormal;
         // The two normals have different jobs: the geometric normal owns
         // every geometry decision, the interpolated material normal exists
         // only inside the BRDF. Authored normals are object-space and take
@@ -451,7 +477,7 @@ public struct UnlitTransparentSurface : ISurfaceModel {
         shading.albedo = ptDecodeEmission(material.diffuseColor.rgb);
         shading.alpha = 1.0;
         if (material.mainTex != kPtNoTexture) {
-            float lod = ptRayConeLod(material, hit.indices, hit.coneWidth);
+            float lod = ptRayConeLod(material, hit);
             float4 sample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(hit.uv, lod);
             shading.albedo = ptDecodeEmission(sample.rgb);
             shading.alpha = sample.a;
@@ -495,7 +521,7 @@ public struct UnlitEmissiveSurface : ISurfaceModel {
         shading.albedo = float3(1.0);
         shading.alpha = 1.0;
         if (material.mainTex != kPtNoTexture) {
-            float lod = ptRayConeLod(material, hit.indices, hit.coneWidth);
+            float lod = ptRayConeLod(material, hit);
             // The emission decode: sky and backdrop imagery are radiance, and
             // the albedo dial has no say over how bright a sky is.
             shading.albedo = ptDecodeEmission(

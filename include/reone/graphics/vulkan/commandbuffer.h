@@ -72,7 +72,8 @@ public:
                         bool invertedViewport) override;
     void endRendering() override;
     void bindIndexBuffer(const IBuffer &buffer, uint64_t offset) override;
-    void drawIndexed(uint32_t indexCount, uint32_t firstIndex) override;
+    void drawIndexed(uint32_t indexCount, uint32_t firstIndex,
+                     uint32_t instanceCount) override;
     void pushFragmentConstants(PipelineLayout layout, const void *data,
                                uint32_t size) override;
     void pushRayTracingConstants(PipelineLayout layout, const void *data,
@@ -84,6 +85,8 @@ public:
     void clearColor(IImage &image, glm::vec4 color) override;
     void bufferBarrier(IBuffer &buffer, BufferUse from, BufferUse to) override;
     void imageBarrier(IImage &image, ImageUse from, ImageUse to) override;
+    void prepareSceneTracingStructure(
+        ITracingStructure &structure, const SceneTracingGeometry &geometry) override;
     void buildSceneTracingStructure(ITracingStructure &structure,
                                     const SceneTracingGeometry &geometry) override;
     void traceRays(Pipeline pipeline, ITracingStructure &structure,

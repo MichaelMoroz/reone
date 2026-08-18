@@ -143,6 +143,7 @@ private:
     std::vector<uint32_t> _spirv;
     std::vector<ShaderBindingDescription> _bindings;
     std::vector<const ComputeBinding *> _resolvedBindings;
+    std::vector<std::vector<uint64_t>> _descriptorKeys;
     std::optional<uint32_t> _frameUniformSet;
     uint32_t _pushConstantSize {0};
     VulkanPipeline _pipeline;

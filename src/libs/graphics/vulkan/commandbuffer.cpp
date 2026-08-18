@@ -241,8 +241,9 @@ void VulkanCommandBuffer::bindIndexBuffer(const IBuffer &buffer, uint64_t offset
     vkCmdBindIndexBuffer(_commandBuffer, toVulkanBuffer(buffer).handle(), offset, VK_INDEX_TYPE_UINT32);
 }
 
-void VulkanCommandBuffer::drawIndexed(uint32_t indexCount, uint32_t firstIndex) {
-    vkCmdDrawIndexed(_commandBuffer, indexCount, 1, firstIndex, 0, 0);
+void VulkanCommandBuffer::drawIndexed(uint32_t indexCount, uint32_t firstIndex,
+                                      uint32_t instanceCount) {
+    vkCmdDrawIndexed(_commandBuffer, indexCount, instanceCount, firstIndex, 0, 0);
 }
 
 void VulkanCommandBuffer::pushFragmentConstants(PipelineLayout layout, const void *data,
@@ -291,9 +292,14 @@ ResourceUse toVulkanBufferUse(BufferUse use) {
         return {VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT};
     case BufferUse::ComputeWrite:
         return {VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT};
+    case BufferUse::ComputeReadWrite:
+        return {VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT};
     case BufferUse::AccelerationStructureBuildRead:
         return {VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                 VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR};
+    case BufferUse::HostRead:
+        return {VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT};
     case BufferUse::ShaderRead:
         return {VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
                     VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
@@ -361,6 +367,11 @@ void VulkanCommandBuffer::imageBarrier(IImage &image, ImageUse from, ImageUse to
     dependency.imageMemoryBarrierCount = 1;
     dependency.pImageMemoryBarriers = &barrier;
     vkCmdPipelineBarrier2(_commandBuffer, &dependency);
+}
+
+void VulkanCommandBuffer::prepareSceneTracingStructure(
+    ITracingStructure &structure, const SceneTracingGeometry &geometry) {
+    toVulkanTracingStructure(structure).prepare(geometry);
 }
 
 void VulkanCommandBuffer::buildSceneTracingStructure(

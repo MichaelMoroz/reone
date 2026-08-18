@@ -19,6 +19,8 @@
 
 #include "reone/graphics/vulkan/device.h"
 
+#include <vector>
+
 namespace reone {
 
 namespace graphics {
@@ -44,12 +46,13 @@ void VulkanBuffer::initDeviceStorage(uint64_t size, const void *data) {
 }
 
 void VulkanBuffer::initDeviceLocalStorage(uint64_t size) {
-    initDeviceLocal(static_cast<VkDeviceSize>(size),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                    nullptr);
+    VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                               VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    if (_device.rayQueryAvailable()) {
+        usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                 VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+    }
+    initDeviceLocal(static_cast<VkDeviceSize>(size), usage, nullptr);
 }
 
 void VulkanBuffer::initHostVisibleReadback(uint64_t size) {
@@ -142,6 +145,33 @@ void VulkanBuffer::uploadDeviceLocal(VkDeviceSize offset, VkDeviceSize size, con
         copy.dstOffset = offset;
         copy.size = size;
         vkCmdCopyBuffer(cmd, src, dst, 1, &copy);
+    });
+}
+
+void VulkanBuffer::uploadDeviceLocalStrided(VkDeviceSize offset, VkDeviceSize stride,
+                                            VkDeviceSize elementSize, uint32_t count,
+                                            const void *data) {
+    if (_buffer == VK_NULL_HANDLE || !data || elementSize == 0 || stride < elementSize ||
+        count == 0 || offset > _size || elementSize > _size - offset ||
+        static_cast<VkDeviceSize>(count - 1) >
+            (_size - offset - elementSize) / stride) {
+        throw std::invalid_argument("Vulkan: invalid strided device-local buffer upload");
+    }
+    const VkDeviceSize stagingSize = elementSize * count;
+    VulkanBuffer staging(_device);
+    staging.initHostVisible(stagingSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    std::memcpy(staging.mapped(), data, static_cast<size_t>(stagingSize));
+
+    std::vector<VkBufferCopy> copies(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        copies[i].srcOffset = elementSize * i;
+        copies[i].dstOffset = offset + stride * i;
+        copies[i].size = elementSize;
+    }
+    auto src = staging.handle();
+    auto dst = _buffer;
+    _device.immediateSubmit([src, dst, copies = std::move(copies)](VkCommandBuffer cmd) {
+        vkCmdCopyBuffer(cmd, src, dst, static_cast<uint32_t>(copies.size()), copies.data());
     });
 }
 

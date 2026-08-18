@@ -306,7 +306,7 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
     frame.traceStats->initHostVisibleReadback(sizeof(TraceStats));
     std::memset(frame.traceStats->mapped(), 0, sizeof(TraceStats));
 
-    std::array<TracingBinding, 9> frameBindings {{
+    std::array<TracingBinding, 12> frameBindings {{
         {"outputImage", output},
         {"sceneTLAS", input.structure},
         {"instanceMaterials", {scene.materials.buffer, 0, scene.materials.size}},
@@ -314,6 +314,9 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
         {"mergedVertices", scene.vertices},
         {"mergedIndices", scene.indices},
         {"mergedMaterialIds", scene.materialIds},
+        {"grassCardVertices", scene.grassCardVertices},
+        {"grassCardIndices", scene.grassCardIndices},
+        {"grassCardInstances", scene.grassCardInstances},
         {"skyCube", *sky.cube},
         {"blueNoise", _renderer.resources().get(*_blueNoise)},
     }};

@@ -67,6 +67,11 @@ public:
 
     /** Copy a byte range into an existing device-local buffer and wait for it. */
     void uploadDeviceLocal(VkDeviceSize offset, VkDeviceSize size, const void *data);
+
+    /** Copy one field into each record of an existing device-local buffer. */
+    void uploadDeviceLocalStrided(VkDeviceSize offset, VkDeviceSize stride,
+                                  VkDeviceSize elementSize, uint32_t count,
+                                  const void *data);
     void initHostVisibleStorage(uint64_t size) override;
     void initDeviceStorage(uint64_t size, const void *data) override;
     void initDeviceLocalStorage(uint64_t size) override;

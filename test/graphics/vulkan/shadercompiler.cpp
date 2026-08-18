@@ -23,15 +23,212 @@
 #include <fstream>
 #include <iostream>
 
+#include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/shadercompiler.h"
+#ifdef R_ENABLE_FSR
+#include "shaders/ffx_fsr2_shaders_vk.h"
+#endif
 
 namespace reone::graphics {
+namespace {
+
+constexpr uint32_t kSpirvOpCapability = 17;
+constexpr uint32_t kSpirvCapabilityShader = 1;
+constexpr uint32_t kSpirvCapabilityFloat16 = 9;
+constexpr uint32_t kSpirvCapabilityInt64 = 11;
+constexpr uint32_t kSpirvCapabilityInt16 = 22;
+constexpr uint32_t kSpirvCapabilityStorageImageExtendedFormats = 49;
+constexpr uint32_t kSpirvCapabilityImageQuery = 50;
+constexpr uint32_t kSpirvCapabilityStorageImageReadWithoutFormat = 55;
+constexpr uint32_t kSpirvCapabilityStorageImageWriteWithoutFormat = 56;
+constexpr uint32_t kSpirvCapabilityGroupNonUniform = 61;
+constexpr uint32_t kSpirvCapabilityGroupNonUniformQuad = 68;
+constexpr uint32_t kSpirvCapabilityRayQuery = 4472;
+constexpr uint32_t kSpirvCapabilityRayTracing = 4479;
+constexpr uint32_t kSpirvCapabilityShaderNonUniform = 5301;
+constexpr uint32_t kSpirvCapabilityRuntimeDescriptorArray = 5302;
+
+std::vector<uint32_t> declaredCapabilities(const std::vector<uint32_t> &words) {
+    std::vector<uint32_t> result;
+    if (words.size() < 5) return result;
+    for (size_t offset = 5; offset < words.size();) {
+        const uint32_t wordCount = words[offset] >> 16;
+        const uint32_t opcode = words[offset] & 0xffffu;
+        if (wordCount == 0 || wordCount > words.size() - offset) return {};
+        if (opcode == kSpirvOpCapability && wordCount >= 2)
+            result.push_back(words[offset + 1]);
+        offset += wordCount;
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
+} // namespace
+
+TEST(VulkanDeviceFeatures, fsr_embedded_spirv_matches_the_enabled_width_features) {
+    VkPhysicalDeviceFeatures supportedCore {};
+    supportedCore.shaderInt16 = VK_TRUE;
+    VkPhysicalDeviceVulkan12Features supportedVulkan12 {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    supportedVulkan12.shaderFloat16 = VK_TRUE;
+    const auto features = VulkanDevice::fsrFeatures(supportedCore, supportedVulkan12);
+    EXPECT_TRUE(features.available);
+    EXPECT_EQ(features.core.shaderInt16, VK_TRUE);
+    EXPECT_EQ(features.vulkan12.shaderFloat16, VK_TRUE);
+
+    supportedCore.shaderInt16 = VK_FALSE;
+    const auto splitSupport = VulkanDevice::fsrFeatures(supportedCore, supportedVulkan12);
+    EXPECT_FALSE(splitSupport.available);
+    EXPECT_EQ(splitSupport.core.shaderInt16, VK_FALSE);
+    EXPECT_EQ(splitSupport.vulkan12.shaderFloat16, VK_FALSE);
+
+    supportedVulkan12.shaderFloat16 = VK_FALSE;
+    const auto fp32Fallback = VulkanDevice::fsrFeatures(supportedCore, supportedVulkan12);
+    EXPECT_TRUE(fp32Fallback.available);
+    EXPECT_EQ(fp32Fallback.core.shaderInt16, VK_FALSE);
+    EXPECT_EQ(fp32Fallback.vulkan12.shaderFloat16, VK_FALSE);
+
+#ifdef R_ENABLE_FSR
+    const uint32_t halfFlags = FSR2_SHADER_PERMUTATION_HDR_COLOR_INPUT |
+                               FSR2_SHADER_PERMUTATION_LOW_RES_MOTION_VECTORS |
+                               FSR2_SHADER_PERMUTATION_ALLOW_FP16;
+    const auto capabilitiesFor = [halfFlags](FfxFsr2Pass pass) {
+        const auto blob = fsr2GetPermutationBlobByIndexVK(pass, halfFlags);
+        std::vector<uint32_t> words(blob.size / sizeof(uint32_t));
+        std::memcpy(words.data(), blob.data, words.size() * sizeof(uint32_t));
+        return declaredCapabilities(words);
+    };
+    for (int passValue = 0; passValue < FFX_FSR2_PASS_COUNT; ++passValue) {
+        const auto pass = static_cast<FfxFsr2Pass>(passValue);
+        for (const uint32_t capability : capabilitiesFor(pass)) {
+            switch (capability) {
+            case kSpirvCapabilityShader:
+            case kSpirvCapabilityStorageImageExtendedFormats:
+            case kSpirvCapabilityStorageImageWriteWithoutFormat:
+            case kSpirvCapabilityGroupNonUniform:
+            case kSpirvCapabilityGroupNonUniformQuad:
+                break;
+            case kSpirvCapabilityInt16:
+                EXPECT_EQ(features.core.shaderInt16, VK_TRUE)
+                    << "FSR pass " << passValue << " requires disabled Int16";
+                break;
+            case kSpirvCapabilityFloat16:
+                EXPECT_EQ(features.vulkan12.shaderFloat16, VK_TRUE)
+                    << "FSR pass " << passValue << " requires disabled Float16";
+                break;
+            default:
+                ADD_FAILURE() << "FSR pass " << passValue
+                              << " declares unmapped SPIR-V capability " << capability;
+                break;
+            }
+        }
+    }
+    const auto requires = [&](FfxFsr2Pass pass, uint32_t capability,
+                              VkBool32 enabled, const char *name) {
+        const auto capabilities = capabilitiesFor(pass);
+        EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), capability),
+                  capabilities.end())
+            << "FSR pass " << static_cast<int>(pass) << " no longer declares " << name;
+        EXPECT_EQ(enabled, VK_TRUE)
+            << "FSR pass " << static_cast<int>(pass) << " requires disabled " << name;
+    };
+    requires(FFX_FSR2_PASS_RECONSTRUCT_PREVIOUS_DEPTH, kSpirvCapabilityInt16,
+             features.core.shaderInt16, "Int16");
+    requires(FFX_FSR2_PASS_GENERATE_REACTIVE, kSpirvCapabilityInt16,
+             features.core.shaderInt16, "Int16");
+    requires(FFX_FSR2_PASS_TCR_AUTOGENERATE, kSpirvCapabilityInt16,
+             features.core.shaderInt16, "Int16");
+    requires(FFX_FSR2_PASS_TCR_AUTOGENERATE, kSpirvCapabilityFloat16,
+             features.vulkan12.shaderFloat16, "Float16");
+#endif
+}
 
 TEST(SlangShaderCompiler, compiles_engine_modules_and_validates_schemas) {
     SlangShaderCompiler compiler {REONE_SHADER_SOURCE_DIR};
     compiler.init();
     EXPECT_FALSE(compiler.module("scene_draw").empty());
-    EXPECT_FALSE(compiler.module("path_trace").empty());
+    EXPECT_FALSE(compiler.module("scene_resolve").empty());
+    const std::array<const char *, 2> rayQueryModules {{"path_trace", "tracing_instances"}};
+    for (const auto *module : rayQueryModules)
+        EXPECT_FALSE(compiler.module(module).empty());
+
+    VkPhysicalDeviceFeatures rasterCore {};
+    rasterCore.robustBufferAccess = VK_TRUE;
+    rasterCore.shaderStorageImageWriteWithoutFormat = VK_TRUE;
+    VkPhysicalDeviceVulkan12Features rasterVulkan12 {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    rasterVulkan12.runtimeDescriptorArray = VK_TRUE;
+    const auto features = VulkanDevice::rayQueryFeatures(rasterCore, rasterVulkan12);
+    const auto tracingInstanceCapabilities =
+        declaredCapabilities(compiler.module("tracing_instances"));
+    EXPECT_EQ(std::find(tracingInstanceCapabilities.begin(),
+                        tracingInstanceCapabilities.end(),
+                        kSpirvCapabilityInt64),
+              tracingInstanceCapabilities.end())
+        << "tracing_instances declares the SPIR-V Int64 capability";
+    const auto hasExtension = [&features](const char *name) {
+        return std::find_if(features.extensions.begin(), features.extensions.end(),
+                            [name](const char *extension) {
+                                return std::strcmp(extension, name) == 0;
+                            }) != features.extensions.end();
+    };
+    struct CapabilityRequirement {
+        uint32_t capability;
+        const char *name;
+        bool satisfied;
+    };
+    const std::array requirements {
+        CapabilityRequirement {kSpirvCapabilityShader, "Shader",
+                               features.apiVersion >= VK_API_VERSION_1_0},
+        CapabilityRequirement {kSpirvCapabilityInt64, "Int64",
+                               features.core.shaderInt64 == VK_TRUE},
+        CapabilityRequirement {kSpirvCapabilityImageQuery, "ImageQuery",
+                               features.apiVersion >= VK_API_VERSION_1_0},
+        CapabilityRequirement {kSpirvCapabilityStorageImageReadWithoutFormat,
+                               "StorageImageReadWithoutFormat",
+                               features.apiVersion >= VK_API_VERSION_1_3 ||
+                                   features.core.shaderStorageImageReadWithoutFormat == VK_TRUE},
+        CapabilityRequirement {kSpirvCapabilityStorageImageWriteWithoutFormat,
+                               "StorageImageWriteWithoutFormat",
+                               features.apiVersion >= VK_API_VERSION_1_3 ||
+                                   features.core.shaderStorageImageWriteWithoutFormat == VK_TRUE},
+        CapabilityRequirement {kSpirvCapabilityRayQuery, "RayQueryKHR",
+                               features.rayQuery.rayQuery == VK_TRUE &&
+                                   hasExtension(VK_KHR_RAY_QUERY_EXTENSION_NAME)},
+        CapabilityRequirement {kSpirvCapabilityRayTracing, "RayTracingKHR",
+                               features.rayTracingPipeline.rayTracingPipeline == VK_TRUE &&
+                                   hasExtension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)},
+        CapabilityRequirement {kSpirvCapabilityShaderNonUniform, "ShaderNonUniform",
+                               features.apiVersion >= VK_API_VERSION_1_2},
+        CapabilityRequirement {kSpirvCapabilityRuntimeDescriptorArray,
+                               "RuntimeDescriptorArray",
+                               features.vulkan12.runtimeDescriptorArray == VK_TRUE},
+    };
+    for (const auto *module : rayQueryModules) {
+        for (const uint32_t capability : declaredCapabilities(compiler.module(module))) {
+            const auto requirement = std::find_if(
+                requirements.begin(), requirements.end(),
+                [capability](const auto &candidate) {
+                    return candidate.capability == capability;
+                });
+            ASSERT_NE(requirement, requirements.end())
+                << module << " declares unmapped SPIR-V capability " << capability;
+            EXPECT_TRUE(requirement->satisfied)
+                << module << " requires disabled SPIR-V capability " << requirement->name;
+        }
+    }
+
+    const auto rasterLogicalPhysicalDevice = VulkanDevice::prepareLogicalDevice(
+        vkb::PhysicalDevice {}, rasterCore);
+    EXPECT_EQ(rasterLogicalPhysicalDevice.features.shaderInt64, VK_FALSE);
+    EXPECT_EQ(rasterLogicalPhysicalDevice.features.robustBufferAccess, VK_TRUE);
+
+    vkb::PhysicalDevice selectedPhysicalDevice;
+    const auto logicalPhysicalDevice = VulkanDevice::prepareLogicalDevice(
+        std::move(selectedPhysicalDevice), features.core);
+    EXPECT_EQ(logicalPhysicalDevice.features.shaderInt64, VK_FALSE);
+    EXPECT_EQ(logicalPhysicalDevice.features.robustBufferAccess, VK_TRUE);
     EXPECT_TRUE(compiler.recompileAll());
     EXPECT_NO_THROW(compiler.validateSchemas());
     compiler.deinit();

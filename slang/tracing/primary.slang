@@ -53,12 +53,14 @@
 
 import uniforms;
 import lib.gbuf;
+import lib.grasscard;
 import lib.math;
 import lib.scene_schema;
 import lib.material_ops;
 import tracing.brdf;
 import tracing.resources;
 import tracing.material;
+import tracing.trace;
 
 /**
  * A reconstructed primary, in the shape the rest of the kernel already speaks:
@@ -78,6 +80,29 @@ public struct PrimarySurface {
     /** Distance from the camera plane's ray origin to the surface. */
     public float distance;
 };
+
+bool ptPrimaryCardTriangle(uint triangleId) { return (triangleId & 0x80000000u) != 0; }
+
+void ptPrimaryCardTriangleVertices(uint triangleId, out uint materialIndex, out float3 p0,
+                            out float3 p1, out float3 p2, out float3 prev0,
+                            out float3 prev1, out float3 prev2) {
+    uint indexCount, indexStride;
+    grassCardIndices.GetDimensions(indexCount, indexStride);
+    uint cardTris = indexCount / 12;
+    uint encoded = triangleId & 0x7fffffffu;
+    uint cardId = encoded / cardTris;
+    uint primitive = encoded % cardTris;
+    GrassCardInstance card = grassCardInstances[cardId];
+    GrassCardVertex a, b, c;
+    ptCardTriangleVertices(cardId, primitive, a, b, c);
+    p0 = a.position;
+    p1 = b.position;
+    p2 = c.position;
+    prev0 = a.prevPosition;
+    prev1 = b.prevPosition;
+    prev2 = c.prevPosition;
+    materialIndex = card.materialIndex.x;
+}
 
 
 /**
@@ -102,7 +127,21 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
         // raster resolves hand to the sky. See the caller.
         return primary;
     }
-    uint materialIndex = mergedMaterialIds[triangleId];
+    uint materialIndex;
+    float3 p0, p1, p2, prev0, prev1, prev2;
+    bool cardTriangle = ptPrimaryCardTriangle(triangleId);
+    if (cardTriangle) {
+        ptPrimaryCardTriangleVertices(triangleId, materialIndex, p0, p1, p2, prev0, prev1, prev2);
+    } else {
+        materialIndex = mergedMaterialIds[triangleId];
+        uint3 mergedIndices = ptTriangleIndicesById(triangleId);
+        p0 = mergedVertices[mergedIndices.x].position;
+        p1 = mergedVertices[mergedIndices.y].position;
+        p2 = mergedVertices[mergedIndices.z].position;
+        prev0 = mergedVertices[mergedIndices.x].prevPosition;
+        prev1 = mergedVertices[mergedIndices.y].prevPosition;
+        prev2 = mergedVertices[mergedIndices.z].prevPosition;
+    }
 
     float2 uv = (float2(pixel) + 0.5) / float2(extent);
     // Depth is already the 0..1 clip space uses here, and NDC y is negated
@@ -119,10 +158,7 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     // vertices traversal would have found, so the cross product below is the
     // GEOMETRIC normal itself and not a reconstruction of one. Nothing is
     // derived from depth taps or neighbouring pixels.
-    uint3 indices = ptTriangleIndicesById(triangleId);
-    float3 p0 = mergedVertices[indices.x].position;
-    float3 p1 = mergedVertices[indices.y].position;
-    float3 p2 = mergedVertices[indices.z].position;
+    uint3 indices = cardTriangle ? uint3(0) : ptTriangleIndicesById(triangleId);
     float3 geometricNormal = normalize(cross(p1 - p0, p2 - p0));
     // Face-forward to the camera ray, exactly as ptMakeHitGeometry does: the
     // merged geometry is drawn with culling off, so either winding can face us.
@@ -254,7 +290,8 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     // The same shift every traced hit gets, convex clamp included - see
     // ptTerminatorShift. The G-buffer primary lost it when it lost the
     // triangle; the triangle is back, so this is back.
-    hit.shadowOrigin = ptTerminatorShift(hit.position, p0, p1, p2, indices, weights);
+    hit.shadowOrigin = cardTriangle ? hit.position
+                                    : ptTerminatorShift(hit.position, p0, p1, p2, indices, weights);
     // Recoverable from indices and weights; unread, because the G-buffer
     // already carries the texel these would have fetched.
     hit.uv = float2(0.0);
@@ -273,9 +310,7 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     // that plane read as zero and the denoiser rejected history it should have
     // kept. Measured: per-frame instability over a traced sequence nearly
     // doubled when the primary started inferring this instead of reading it.
-    float3 prevWorld = mergedVertices[indices.x].prevPosition * weights.x +
-                       mergedVertices[indices.y].prevPosition * weights.y +
-                       mergedVertices[indices.z].prevPosition * weights.z;
+    float3 prevWorld = prev0 * weights.x + prev1 * weights.y + prev2 * weights.z;
     primary.motion = shading.terminatesPath ? float3(0.0) : prevWorld - world;
     primary.distance = distance;
     return primary;

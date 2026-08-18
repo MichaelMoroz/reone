@@ -669,6 +669,10 @@ std::unique_ptr<IUpscaler> VulkanRenderer::makeUpscaler(glm::ivec2 renderExtent,
                                                         glm::ivec2 displayExtent,
                                                         bool highDynamicRange) {
 #ifdef R_ENABLE_FSR
+    if (!_device.fsrAvailable()) {
+        throw std::runtime_error(
+            "FSR2 half-precision shaders need both shaderFloat16 and shaderInt16");
+    }
     auto upscaler = std::make_unique<FsrUpscaler>(_device, renderExtent, displayExtent,
                                                   highDynamicRange);
     upscaler->init();

@@ -22,13 +22,39 @@
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 
 #include "reone/graphics/options.h"
+#include "reone/graphics/rhi/computepipeline.h"
 #include "reone/graphics/rhi/renderer.h"
 #include "reone/graphics/rhi/resources.h"
 #include "reone/system/logutil.h"
 
 namespace reone::graphics {
+namespace {
+
+uint32_t cardRegionCapacity(const GraphicsOptions &options, const GpuScene::View &scene) {
+    if (scene.grassCardCount == 0)
+        return 0;
+    uint64_t cardBudget = scene.grassCardCount;
+    if (options.grassTriangleBudget > 0 && scene.grassCardTris != 0) {
+        cardBudget = std::max(
+            cardBudget,
+            static_cast<uint64_t>(options.grassTriangleBudget) / scene.grassCardTris);
+    }
+    const uint64_t capacity = (cardBudget + kGrassCardVariants - 1) / kGrassCardVariants;
+    if (capacity > std::numeric_limits<uint32_t>::max())
+        throw std::runtime_error("Grass card region capacity exceeds uint32 range");
+    return static_cast<uint32_t>(capacity);
+}
+
+void releaseBuffer(std::unique_ptr<IBuffer> &buffer) {
+    if (buffer)
+        buffer->deinit();
+    buffer.reset();
+}
+
+} // namespace
 
 RayQuery::RayQuery(IRenderer &renderer, glm::ivec2 extent,
                    GraphicsOptions &options) :
@@ -43,6 +69,9 @@ void RayQuery::init() {
         return;
     _pipeline = std::make_unique<TracingPipeline>(_renderer, _extent, _options);
     _pipeline->init();
+    _instancePipeline = _renderer.makeComputePipeline({"tracing_instances", "main", 2});
+    _instanceBindings = _instancePipeline->resolveBindings(
+        {"grassCardInstances", "tracingInstances", "variantCounts"});
     _inited = true;
 }
 
@@ -51,6 +80,10 @@ void RayQuery::clearFrame(Frame &frame) {
         frame.tracingStructure->deinit();
         frame.tracingStructure.reset();
     }
+    releaseBuffer(frame.instances);
+    releaseBuffer(frame.variantCounts);
+    frame.cardRegionCapacity = 0;
+    frame.variantCountsValid = false;
 }
 
 void RayQuery::deinit() {
@@ -59,6 +92,9 @@ void RayQuery::deinit() {
     if (_pipeline)
         _pipeline->deinit();
     _pipeline.reset();
+    _instanceBindings.clear();
+    _instancePipeline.reset();
+    _lastVariantOverflows = {};
     _inited = false;
 }
 
@@ -95,17 +131,104 @@ void RayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
     _lastParticles = submission.particles;
     _lastBillboards = submission.billboards;
     _lastTriangles = scene.triangleCount;
-    _lastInstances = scene.vertices.buffer ? 1 : 0;
+    _lastInstances = scene.vertices.buffer ? 1 + scene.grassCardCount : 0;
     if (!frame.tracingStructure)
         frame.tracingStructure = _pipeline->makeTracingStructure();
 
     const auto begin = std::chrono::steady_clock::now();
     if (scene.vertices.buffer) {
         R_PROFILE_ZONE("RayQuery::BLAS/TLAS build record");
-        commandBuffer.buildSceneTracingStructure(
-            *frame.tracingStructure,
-            {scene.vertices, scene.indices, scene.vertexCount,
-             scene.opaqueTriangleCount, scene.triangleCount});
+        if (frame.variantCountsValid) {
+            frame.variantCounts->invalidateMapped();
+            const auto *counts = static_cast<const uint32_t *>(frame.variantCounts->mapped());
+            std::array<uint32_t, kGrassCardVariants> overflows {};
+            uint64_t dropped = 0;
+            for (uint32_t variant = 0; variant < kGrassCardVariants; ++variant) {
+                overflows[variant] = counts[variant] > frame.cardRegionCapacity
+                    ? counts[variant] - frame.cardRegionCapacity
+                    : 0;
+                dropped += overflows[variant];
+            }
+            if (overflows != _lastVariantOverflows) {
+                _lastVariantOverflows = overflows;
+                if (dropped != 0) {
+                    warn("Grass card TLAS regions overflowed: dropped " +
+                             std::to_string(dropped) + " cards; per-variant overflow " +
+                             std::to_string(overflows[0]) + "/" +
+                             std::to_string(overflows[1]) + "/" +
+                             std::to_string(overflows[2]) + "/" +
+                             std::to_string(overflows[3]) + ", capacity " +
+                             std::to_string(frame.cardRegionCapacity) + " each",
+                         LogChannel::Graphics);
+                }
+            }
+        }
+
+        const uint32_t regionCapacity = cardRegionCapacity(_options, scene);
+        const uint64_t instanceCount64 =
+            1 + static_cast<uint64_t>(kGrassCardVariants) * regionCapacity;
+        if (instanceCount64 > std::numeric_limits<uint32_t>::max())
+            throw std::runtime_error("Tracing instance count exceeds uint32 range");
+        const uint32_t instanceCount = static_cast<uint32_t>(instanceCount64);
+        if (!frame.instances || regionCapacity != frame.cardRegionCapacity) {
+            releaseBuffer(frame.instances);
+            frame.instances = _renderer.makeBuffer();
+            frame.instances->initDeviceLocalStorage(
+                static_cast<uint64_t>(instanceCount) * 64);
+            frame.cardRegionCapacity = regionCapacity;
+            ++frame.instanceGeneration;
+        }
+        if (!frame.variantCounts) {
+            frame.variantCounts = _renderer.makeBuffer();
+            frame.variantCounts->initHostVisibleReadback(
+                kGrassCardVariants * sizeof(uint32_t));
+        }
+        _lastInstances = instanceCount;
+        SceneTracingGeometry geometry {scene.vertices, scene.indices, scene.vertexCount,
+                                       scene.opaqueTriangleCount, scene.triangleCount,
+                                       scene.grassCardVertices, scene.grassCardIndices,
+                                       scene.grassCardInstances, scene.grassCardCount,
+                                       scene.grassCardVerts, scene.grassCardTris,
+                                       scene.grassCardGeneration, frame.instances.get(),
+                                       instanceCount, regionCapacity,
+                                       frame.instanceGeneration};
+        commandBuffer.prepareSceneTracingStructure(*frame.tracingStructure, geometry);
+        struct InstancePushConstants {
+            uint32_t cardCount;
+            uint32_t cardRegionCapacity;
+            uint32_t instanceCount;
+            uint32_t clearRecords;
+        } constants {scene.grassCardCount, regionCapacity, instanceCount, 1};
+        static_assert(sizeof(InstancePushConstants) == 16);
+        const BufferView instanceView {frame.instances.get(), 0, frame.instances->size()};
+        const BufferView countView {
+            frame.variantCounts.get(), 0, kGrassCardVariants * sizeof(uint32_t)};
+        const std::array<ComputeBinding, 3> bindings {{
+            {_instanceBindings[0], scene.grassCardInstances},
+            {_instanceBindings[1], instanceView},
+            {_instanceBindings[2], countView},
+        }};
+        commandBuffer.dispatch(*_instancePipeline,
+                               {(std::max(instanceCount, kGrassCardVariants) + 63) / 64, 1, 1},
+                               {bindings.data(), static_cast<uint32_t>(bindings.size())}, nullptr,
+                               &constants, sizeof(constants));
+        if (scene.grassCardCount != 0) {
+            commandBuffer.bufferBarrier(*frame.instances, BufferUse::ComputeWrite,
+                                        BufferUse::ComputeWrite);
+            commandBuffer.bufferBarrier(*frame.variantCounts, BufferUse::ComputeWrite,
+                                        BufferUse::ComputeReadWrite);
+            constants.clearRecords = 0;
+            commandBuffer.dispatch(*_instancePipeline,
+                                   {(scene.grassCardCount + 63) / 64, 1, 1},
+                                   {bindings.data(), static_cast<uint32_t>(bindings.size())},
+                                   nullptr, &constants, sizeof(constants));
+        }
+        commandBuffer.bufferBarrier(*frame.instances, BufferUse::ComputeWrite,
+                                    BufferUse::AccelerationStructureBuildRead);
+        commandBuffer.bufferBarrier(*frame.variantCounts, BufferUse::ComputeWrite,
+                                    BufferUse::HostRead);
+        commandBuffer.buildSceneTracingStructure(*frame.tracingStructure, geometry);
+        frame.variantCountsValid = true;
     } else {
         commandBuffer.clearColor(output, {0.02f, 0.03f, 0.06f, 1.0f});
     }

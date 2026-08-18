@@ -29,6 +29,45 @@ namespace reone {
 
 namespace graphics {
 
+VulkanRayQueryFeatures VulkanDevice::rayQueryFeatures(
+    const VkPhysicalDeviceFeatures &rasterCore,
+    const VkPhysicalDeviceVulkan12Features &rasterVulkan12) {
+    VulkanRayQueryFeatures result;
+    result.core = rasterCore;
+    result.vulkan12 = rasterVulkan12;
+    result.vulkan12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    result.vulkan12.bufferDeviceAddress = VK_TRUE;
+    result.accelerationStructure.accelerationStructure = VK_TRUE;
+    result.rayQuery.rayQuery = VK_TRUE;
+    result.rayTracingPipeline.rayTracingPipeline = VK_TRUE;
+    return result;
+}
+
+VulkanFsrFeatures VulkanDevice::fsrFeatures(
+    const VkPhysicalDeviceFeatures &supportedCore,
+    const VkPhysicalDeviceVulkan12Features &supportedVulkan12) {
+    VulkanFsrFeatures result;
+    const bool halfPrecision = supportedCore.shaderInt16 == VK_TRUE &&
+                               supportedVulkan12.shaderFloat16 == VK_TRUE;
+    result.core.shaderInt16 = halfPrecision ? VK_TRUE : VK_FALSE;
+    result.vulkan12.shaderFloat16 = halfPrecision ? VK_TRUE : VK_FALSE;
+    // FSR2 falls back to its FP32 permutations when Float16 is absent. When
+    // Float16 exists without Int16, however, its Vulkan backend selects blobs
+    // that declare both capabilities, so creating the upscaler would be invalid.
+    result.available = supportedVulkan12.shaderFloat16 != VK_TRUE || halfPrecision;
+    return result;
+}
+
+vkb::PhysicalDevice VulkanDevice::prepareLogicalDevice(
+    vkb::PhysicalDevice physicalDevice,
+    const VkPhysicalDeviceFeatures &coreFeatures) {
+    // DeviceBuilder copies this member into VkPhysicalDeviceFeatures2::features
+    // when it constructs VkDeviceCreateInfo. Selector requirements alone are
+    // not the creation seam; make the payload at that seam explicit.
+    physicalDevice.features = coreFeatures;
+    return physicalDevice;
+}
+
 void VulkanDevice::init(SDL_Window *window, bool validation) {
     if (_inited) {
         return;
@@ -100,19 +139,6 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     features13.subgroupSizeControl = VK_TRUE;
 #endif
 
-    // Ray query needs device addresses for geometry and descriptor indexing for
-    // the bindless material textures it will eventually read. Keep this list
-    // explicit: the rest of Vulkan 1.2 is not part of that contract.
-    VkPhysicalDeviceVulkan12Features features12 {};
-    features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-    features12.bufferDeviceAddress = VK_TRUE;
-    features12.descriptorIndexing = VK_TRUE;
-    features12.runtimeDescriptorArray = VK_TRUE;
-    features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
-    features12.descriptorBindingPartiallyBound = VK_TRUE;
-    features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
-    features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
-
     // The merged raster draw uses descriptor indexing even when ray tracing is
     // unavailable. Keep device addresses in the optional tracing feature set,
     // but require the bindless image features for the baseline raster device.
@@ -124,20 +150,6 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     rasterFeatures12.descriptorBindingPartiallyBound = VK_TRUE;
     rasterFeatures12.descriptorBindingVariableDescriptorCount = VK_TRUE;
     rasterFeatures12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
-
-    VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures {};
-    accelerationStructureFeatures.sType =
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
-    accelerationStructureFeatures.accelerationStructure = VK_TRUE;
-
-    VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures {};
-    rayQueryFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
-    rayQueryFeatures.rayQuery = VK_TRUE;
-
-    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures {};
-    rayTracingPipelineFeatures.sType =
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
-    rayTracingPipelineFeatures.rayTracingPipeline = VK_TRUE;
 
     // The resolve samples the derived environment maps as cube arrays, which is
     // not a baseline capability.
@@ -180,6 +192,29 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     bool rayQueryEnabled = false;
 
 #ifdef R_ENABLE_FSR
+    VkPhysicalDeviceVulkan12Features supportedFsr12 {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    VkPhysicalDeviceFeatures2 supportedFsr {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    supportedFsr.pNext = &supportedFsr12;
+    vkGetPhysicalDeviceFeatures2(physicalDevice.physical_device, &supportedFsr);
+    const auto fsrFeatureSet = fsrFeatures(supportedFsr.features, supportedFsr12);
+    _fsrAvailable = fsrFeatureSet.available;
+    if (fsrFeatureSet.core.shaderInt16 == VK_TRUE) {
+        features.shaderInt16 = VK_TRUE;
+        rasterFeatures12.shaderFloat16 = VK_TRUE;
+        if (!physicalDevice.enable_features_if_present(fsrFeatureSet.core) ||
+            !physicalDevice.enable_extension_features_if_present(fsrFeatureSet.vulkan12)) {
+            throw std::runtime_error("Vulkan: failed to enable supported FSR half-precision features");
+        }
+    }
+#else
+    _fsrAvailable = false;
+#endif
+
+    const auto rayQueryFeatureSet = rayQueryFeatures(features, rasterFeatures12);
+
+#ifdef R_ENABLE_FSR
     uint32_t extensionCount = 0;
     vkEnumerateDeviceExtensionProperties(physicalDevice.physical_device, nullptr, &extensionCount,
                                          nullptr);
@@ -198,18 +233,16 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     // Selection is deliberately a second, optional pass: failure leaves the
     // raster-selected device intact.
     vkb::PhysicalDeviceSelector rayQuerySelector(_instance);
-    VkPhysicalDeviceFeatures rayQueryCoreFeatures = features;
-    configureSelector(rayQuerySelector, rayQueryCoreFeatures);
+    configureSelector(rayQuerySelector, rayQueryFeatureSet.core);
     // Do not let an optional feature change the GPU chosen for rasterization.
     rayQuerySelector.set_name(physicalDevice.name);
-    rayQuerySelector.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
-        .add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
-        .add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
-        .add_required_extension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)
-        .set_required_features_12(features12)
-        .add_required_extension_features(accelerationStructureFeatures)
-        .add_required_extension_features(rayQueryFeatures)
-        .add_required_extension_features(rayTracingPipelineFeatures);
+    for (const auto *extension : rayQueryFeatureSet.extensions)
+        rayQuerySelector.add_required_extension(extension);
+    rayQuerySelector
+        .set_required_features_12(rayQueryFeatureSet.vulkan12)
+        .add_required_extension_features(rayQueryFeatureSet.accelerationStructure)
+        .add_required_extension_features(rayQueryFeatureSet.rayQuery)
+        .add_required_extension_features(rayQueryFeatureSet.rayTracingPipeline);
 #ifdef R_ENABLE_FSR
     // FSR2 requests an explicit subgroup size whenever this extension is
     // advertised. Its pipeline pNext is only legal when the matching feature
@@ -228,7 +261,11 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
              LogChannel::Graphics);
     }
 
-    auto deviceResult = vkb::DeviceBuilder(physicalDevice).build();
+    const auto &logicalDeviceCoreFeatures =
+        rayQueryEnabled ? rayQueryFeatureSet.core : features;
+    auto logicalPhysicalDevice = prepareLogicalDevice(
+        std::move(physicalDevice), logicalDeviceCoreFeatures);
+    auto deviceResult = vkb::DeviceBuilder(logicalPhysicalDevice).build();
     if (!deviceResult) {
         throw std::runtime_error("Vulkan: logical device creation failed: " +
                                  deviceResult.error().message());
@@ -401,6 +438,7 @@ void VulkanDevice::deinit() {
         _surface = VK_NULL_HANDLE;
     }
     vkb::destroy_instance(_instance);
+    _fsrAvailable = false;
     _inited = false;
 }
 

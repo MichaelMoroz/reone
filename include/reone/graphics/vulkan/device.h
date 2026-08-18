@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <array>
+
 #include <volk.h>
 
 #include <VkBootstrap.h>
@@ -27,6 +29,32 @@ struct SDL_Window;
 namespace reone {
 
 namespace graphics {
+
+struct VulkanRayQueryFeatures {
+    uint32_t apiVersion {VK_API_VERSION_1_3};
+    VkPhysicalDeviceFeatures core {};
+    VkPhysicalDeviceVulkan12Features vulkan12 {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructure {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+    VkPhysicalDeviceRayQueryFeaturesKHR rayQuery {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipeline {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
+    std::array<const char *, 4> extensions {{
+        VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+        VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+        VK_KHR_RAY_QUERY_EXTENSION_NAME,
+        VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+    }};
+};
+
+struct VulkanFsrFeatures {
+    VkPhysicalDeviceFeatures core {};
+    VkPhysicalDeviceVulkan12Features vulkan12 {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    bool available {true};
+};
 
 /**
  * The Vulkan instance, the physical device we chose, the logical device and the
@@ -39,6 +67,21 @@ namespace graphics {
 class VulkanDevice : boost::noncopyable {
 public:
     ~VulkanDevice() { deinit(); }
+
+    /** The requirements shared by ray-query selection and logical-device creation. */
+    static VulkanRayQueryFeatures rayQueryFeatures(
+        const VkPhysicalDeviceFeatures &rasterCore,
+        const VkPhysicalDeviceVulkan12Features &rasterVulkan12);
+
+    /** Features needed by the half-precision permutations FSR selects itself. */
+    static VulkanFsrFeatures fsrFeatures(
+        const VkPhysicalDeviceFeatures &supportedCore,
+        const VkPhysicalDeviceVulkan12Features &supportedVulkan12);
+
+    /** Set the core feature payload on the object handed to DeviceBuilder. */
+    static vkb::PhysicalDevice prepareLogicalDevice(
+        vkb::PhysicalDevice physicalDevice,
+        const VkPhysicalDeviceFeatures &coreFeatures);
 
     /**
      * @param window an SDL window created with SDL_WINDOW_VULKAN; its surface is
@@ -99,6 +142,8 @@ public:
      */
     bool rayQueryAvailable() const { return _rayQueryAvailable; }
 
+    bool fsrAvailable() const { return _fsrAvailable; }
+
     /** Limits that every later acceleration-structure build must observe. */
     const VkPhysicalDeviceAccelerationStructurePropertiesKHR &
     accelerationStructureProperties() const {
@@ -129,6 +174,7 @@ private:
 
     bool _debugUtils {false};
     bool _rayQueryAvailable {false};
+    bool _fsrAvailable {false};
     VkPhysicalDeviceAccelerationStructurePropertiesKHR _accelerationStructureProperties {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
     uint32_t _maxBindlessSampledImages {0};
