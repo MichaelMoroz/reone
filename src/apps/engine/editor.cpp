@@ -79,6 +79,10 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         // configuration would not reproduce the frame that was graded. The
         // launcher owns the same key and writes it the same way.
         {"mode", graphics::renderModeName(options.mode)},
+        {"lensflares", std::to_string(options.lensFlares)},
+        {"bloom", std::to_string(options.bloom)},
+        {"bloomthreshold", formatConfigFloat(options.bloomThreshold)},
+        {"bloomintensity", formatConfigFloat(options.bloomIntensity)},
         {"grass", std::to_string(options.grass)},
         {"grassdensity", formatConfigFloat(options.grassDensity)},
         {"grassmode", graphics::grassModeName(options.grassMode)},
@@ -169,6 +173,7 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
                                                                                : "off"},
         {"grade", std::to_string(options.grade)},
         {"sharpen", std::to_string(options.sharpen)},
+        {"sharpenamount", formatConfigFloat(options.sharpenAmount)},
         {"texquality", std::to_string(static_cast<int>(options.textureQuality))},
         {"shadowres", std::to_string(std::max(0, static_cast<int>(glm::log2(options.shadowResolution)) - 10))},
         {"anisofilter", std::to_string(options.anisotropicFiltering)},
@@ -882,14 +887,26 @@ void Editor::graphicsRendererTab() {
 
     renderModeCombo();
 
+    ImGui::SeparatorText("Post-process features");
+    ImGui::Checkbox("Lens flares", &options.lensFlares);
+    settingHint("Authored light halos, drawn through the shared blended tail in every mode.");
+
+    ImGui::Checkbox("Bloom", &options.bloom);
+    settingHint("Blurs emissive highlights before transparency in every mode.");
+    ImGui::BeginDisabled(!options.bloom);
+    ImGui::SliderFloat("Bloom threshold", &options.bloomThreshold, 0.0f, 4.0f, "%.2f");
+    settingHint("Display-space level an emissive texel must pass before it blooms.", true);
+    ImGui::SliderFloat("Bloom intensity", &options.bloomIntensity, 0.0f, 4.0f, "%.2f");
+    settingHint("Scale on the blurred highlights added back to the frame.", true);
+    ImGui::EndDisabled();
+
     // One slot with one occupant, the same in every mode. The choice is staged
     // rather than live: FSR builds a context and device images in the
     // pipeline's init, so it cannot be switched inside a frame.
-    ImGui::SeparatorText("Anti-aliasing");
     // Ordered as the enum is, so the index is the value.
     static const char *kAntiAliasingNames[] = {"Off", "FXAA", "FSR 2 (NativeAA)"};
     int antiAliasing = static_cast<int>(staged.antialiasing);
-    if (ImGui::Combo("Method", &antiAliasing, kAntiAliasingNames,
+    if (ImGui::Combo("Anti-aliasing", &antiAliasing, kAntiAliasingNames,
                      IM_ARRAYSIZE(kAntiAliasingNames))) {
         staged.antialiasing = static_cast<graphics::AntiAliasing>(antiAliasing);
     }
@@ -918,9 +935,19 @@ void Editor::graphicsRendererTab() {
                 true);
     ImGui::EndDisabled();
 
-    // Not path-tracing settings: the post-process pass applies these in every
-    // mode that arrives with linear colour, which today is the traced one.
-    // They are here rather than beside the tracer because the pass is common.
+    static constexpr const char *kSharpenHint =
+        "An unsharp mask, last of all, over display colour. Separate from FSR's RCAS above: "
+        "running both sharpens one image twice.";
+    ImGui::Checkbox("Sharpen", &options.sharpen);
+    settingHint(kSharpenHint);
+    ImGui::BeginDisabled(!options.sharpen);
+    ImGui::SliderFloat("Sharpen amount", &options.sharpenAmount, 0.0f, 2.0f, "%.2f");
+    settingHint(kSharpenHint, true);
+    ImGui::EndDisabled();
+
+    // A creative grade is display policy, not an all-mode feature toggle:
+    // Retro carries a finished reference picture through the linear chain and
+    // must not reinterpret it as radiance.
     ImGui::SeparatorText("Display");
     ImGui::Checkbox("Grade", &options.grade);
     settingHint("Exposure and the tone curve. The display transform itself always runs; off is the "
@@ -935,13 +962,6 @@ void Editor::graphicsRendererTab() {
     settingHint("The raster resolves already write display colour, so the transform passes them "
                 "through untouched.");
 
-    static constexpr const char *kSharpenHint =
-        "An unsharp mask, last of all, over display colour. Separate from FSR's RCAS above: "
-        "running both sharpens one image twice.";
-    ImGui::Checkbox("Sharpen", &options.sharpen);
-    settingHint(kSharpenHint);
-    ImGui::SliderFloat("Sharpen amount", &options.sharpenAmount, 0.0f, 2.0f, "%.2f");
-    settingHint(kSharpenHint);
 }
 
 void Editor::graphicsQualityTab() {

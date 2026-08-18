@@ -1437,6 +1437,8 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
                 antiAliasingPass(cmd, globalsOffset);
             } else if (step == SceneStep::Sharpen) {
                 sharpenPass(cmd, globalsOffset);
+            } else if (step == SceneStep::Bloom) {
+                bloomPass(cmd, globalsOffset);
             } else if (step == SceneStep::PostProcess) {
                 postProcessPass(cmd, globalsOffset);
             } else if (step == SceneStep::DebugView) {

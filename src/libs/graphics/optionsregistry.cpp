@@ -422,6 +422,16 @@ std::vector<GraphicsOptionDesc> buildDescs() {
             to.antialiasing = from.antialiasing;
         }));
 
+    descs.push_back(boolOpt("bloom", OptionApply::Live, "bloom emissive highlights",
+                            &GraphicsOptions::bloom));
+    descs.push_back(floatOpt("bloomthreshold", OptionApply::Live,
+                             "level an emissive texel must pass to bloom",
+                             &GraphicsOptions::bloomThreshold, 0.0f,
+                             std::numeric_limits<float>::max()));
+    descs.push_back(floatOpt("bloomintensity", OptionApply::Live,
+                             "scale on what bloom adds back",
+                             &GraphicsOptions::bloomIntensity, 0.0f,
+                             std::numeric_limits<float>::max()));
     descs.push_back(boolOpt("grade", OptionApply::Live,
                             "apply exposure and the tone curve; the display "
                             "transform itself is never optional",
