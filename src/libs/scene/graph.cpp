@@ -602,10 +602,6 @@ void SceneGraph::prepareTransparentLeafs() {
     if (bucketParent && !bucket.empty()) {
         _transparentLeafs.push_back(std::make_pair(bucketParent, bucket));
     }
-
-    // The reference's menu has one transparent mesh even with particles off.
-    // Keep this audit behind the existing probe and log once per process: the
-    // two requested particle settings then yield directly comparable records.
 }
 
 Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {

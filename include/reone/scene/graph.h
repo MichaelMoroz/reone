@@ -383,7 +383,7 @@ private:
     resource::ResourceServices &_resourceSvc;
 
     std::unique_ptr<IRenderPipeline> _renderPipeline;
-    /** The immutable target size selected when this scene pipeline was created. */
+    /** The incremental scene, and the full rebuild --admissionshadow checks it against. */
     GpuScene _gpuScene;
     GpuScene _shadowGpuScene;
     bool _incrementalSceneReady {false};
