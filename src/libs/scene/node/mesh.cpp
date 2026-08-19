@@ -248,8 +248,25 @@ void MeshSceneNode::updateSaberAnimation(float dt) {
     if (deltaPosMag > 1.0f) {
         _saber.displacement = glm::vec3 {0.0f};
     } else if (deltaPosMag > 0.0f) {
+        // A retracted blade is scaled to nothing, and a singular transform has
+        // no inverse: glm::inverse hands back infinities, the change of basis
+        // below returns NaN, and NaN survives both the accumulation and the
+        // decay for the rest of the object's life. Every lightsaber in the game
+        // reaches this, because every lightsaber is created switched off - and
+        // by the time it ignites the displacement is already poisoned, so the
+        // blade never widens again however hard it is swung. The offset is
+        // added to the source vertex before the object transform, so it is not
+        // only the blur planes that come out NaN; it is the whole blade mesh.
+        //
+        // Zeroed rather than skipped, so the state that leaves here is one the
+        // shader can use: a blade with no history to widen from is a blade at
+        // rest, which is what a blade that does not exist yet should look like.
         glm::vec3 deltaLocal = _absTransformInv * glm::vec4 {deltaPos, 0.0f};
-        _saber.displacement += deltaLocal;
+        if (glm::all(glm::isfinite(deltaLocal))) {
+            _saber.displacement += deltaLocal;
+        } else {
+            _saber.displacement = glm::vec3 {0.0f};
+        }
     }
     _saber.displacement -= _saber.displacement * glm::min(8.0f * dt, 1.0f);
     _saber.prevWorldPos = worldPos;
