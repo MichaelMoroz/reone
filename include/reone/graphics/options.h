@@ -356,12 +356,28 @@ struct GraphicsOptions {
      * multiplies density as intended.
      */
     int grassBladesPerCluster {1};
-    float grassLength {0.8f};
+    /**
+     * Blade height as a multiple of the area's authored quad size.
+     *
+     * One, with the offset below, reproduces the extent the reference builds:
+     * a quad one quad size tall whose centre is raised by nine tenths of its
+     * half height, spanning the surface it stands on from a twentieth below to
+     * nineteen twentieths above.
+     *
+     * The reach matters more than it looks. Grass is scattered over the room
+     * model's AABB node, which is the walkmesh, while the ground drawn is a
+     * separate and finer mesh, so a root lands wherever the two disagree.
+     * Measured on Dantooine's estate the meadow disagrees by 0.03 world units
+     * but its planter beds are drawn as mounds up to 0.78 above the flat
+     * walkmesh face grass is placed on - so a blade that stops short is a
+     * planter with no grass in it, not a blade slightly too short.
+     */
+    float grassLength {1.0f};
     float grassLengthVariance {0.3f};
     /** Blade width as a fraction of its length. */
     float grassWidth {0.1f};
     /** Sinks the root under the ground, as a fraction of length, so it does not float. */
-    float grassYOffset {-0.25f};
+    float grassYOffset {-0.05f};
     /**
      * Ceiling on grass triangles in the scene, at nine per blade.
      *

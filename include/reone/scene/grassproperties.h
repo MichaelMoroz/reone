@@ -21,6 +21,7 @@ namespace reone {
 
 namespace graphics {
 
+class Model;
 class Texture;
 
 }
@@ -39,6 +40,22 @@ struct GrassProperties {
      * texture's own header value to decide.
      */
     float alphaTest {-1.0f};
+    /**
+     * The room's drawn geometry, which is not the geometry grass is scattered
+     * over.
+     *
+     * Placement comes from the model's AABB node - the walkmesh - because that
+     * is what carries the surface materials saying where grass may grow. The
+     * ground the player sees is a separate and much finer mesh, so a root
+     * placed at the walkmesh height lands wherever the two disagree. Measured
+     * on Dantooine's estate that is 0.03 world units over open meadow and up
+     * to 0.78 over a planter bed, whose soil is drawn as a mound above the
+     * flat walkmesh face beneath it.
+     *
+     * Given the model, the height a face record carries is taken from the
+     * drawn surface instead. Null leaves placement on the walkmesh.
+     */
+    const graphics::Model *groundModel {nullptr};
 };
 
 } // namespace scene

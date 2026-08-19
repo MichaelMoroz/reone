@@ -495,6 +495,7 @@ void Area::loadLYT() {
             grassProperties.materials = _services.game.surfaces.getGrassSurfaces();
             grassProperties.texture = _grass.texture.get();
             grassProperties.alphaTest = _grass.alphaTest;
+            grassProperties.groundModel = &modelSceneNode->model();
             grassSceneNode = sceneGraph.newGrass(grassProperties, *aabbNode);
             grassSceneNode->setLocalTransform(glm::translate(position) * aabbNode->absoluteTransform());
             sceneGraph.addRoot(grassSceneNode);
