@@ -620,6 +620,63 @@ void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
         cmd.draw(scene.grassCardTris * 3, scene.grassCardCount);
     }
     cmd.endRendering();
+    skyMotionPass(cmd, globalsOffset);
+}
+
+/**
+ * The motion the sky owes the temporal resolve.
+ *
+ * Part of publishing the G-buffer rather than a step of its own, so that every
+ * mode gets it from the one place primary visibility is rasterized - the raster
+ * resolves and the tracer all read this same target, and none of them writes
+ * it. Attached to the geometry pass instead of the plan for the same reason the
+ * sky composite is not a step any more: the set of pixels involved is decided
+ * by the triangle-id sentinel that pass just wrote, and nothing between here
+ * and the temporal resolve can change it.
+ *
+ * Unconditional, rather than gated on the anti-aliasing dial that supplies its
+ * only consumer today. The motion target is part of what the geometry pass
+ * publishes, and --dumptargets and the debug motion channel both read it; a
+ * target that is correct only when a dial happens to be set is the kind of
+ * diagnostic that lies to whoever reaches for it next. The cost does not argue
+ * otherwise - measured against nineteen extra copies of itself, because one is
+ * far below the run-to-run spread, a single pass is around a tenth of a percent
+ * of a raster frame.
+ */
+void ScenePipeline::skyMotionPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("ScenePipeline::skyMotionPass record");
+    auto &motion = _gbuffer->color(GBufferAttachment::Motion);
+    auto &triangleId = _gbuffer->color(GBufferAttachment::TriangleId);
+    cmd.transitionImage(triangleId, ImageLayout::ShaderRead);
+    cmd.transitionImage(motion, ImageLayout::ColorAttachment);
+
+    PipelineKey key;
+    key.module = "sky";
+    key.vertexEntry = "skyMotionVertex";
+    key.fragmentEntry = "skyMotionFragment";
+    key.colorFormats = {motion.pixelFormat()};
+    PipelineBinding pipeline = _renderer.pipelines().get(key);
+
+    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+    auto textureSet = _renderer.descriptors().acquireTextureDescriptorSet(
+        _renderer.uniformRing().frame(), {{TextureUnits::gBufTriangleId, &triangleId}});
+
+    {
+        // Loaded, not cleared: the covered pixels hold the surface motion the
+        // geometry pass wrote and the fragment discards over them.
+        RenderAttachment color {motion.sampleView(), ImageLayout::ColorAttachment,
+                                AttachmentLoad::Load, AttachmentStore::Store};
+        cmd.beginRendering(_renderSize, {color}, nullptr, 0, false);
+        cmd.bindPipeline(pipeline.pipeline);
+        auto uniformSet = _renderer.descriptors().uniformDescriptorSet(
+            _renderer.uniformRing().frame());
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                              offsets.data(), static_cast<uint32_t>(offsets.size()));
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, textureSet, nullptr, 0);
+        cmd.draw(3, 1);
+        cmd.endRendering();
+    }
 }
 
 void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,

@@ -14,13 +14,30 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-// Path-traced sky-room capture. This is deliberately a complete, tiny shader
-// program rather than another material-pipeline entry point: the sky is unlit and its
-// original mesh buffers provide only the position and primary UV it needs.
+// The sky's own two small programs.
+//
+// The first is the sky-room capture that bakes the cube. It is deliberately a
+// complete, tiny shader program rather than another material-pipeline entry
+// point: the sky is unlit and its original mesh buffers provide only the
+// position and primary UV it needs.
+//
+// The second is the motion the sky owes the temporal resolve, below. It is not
+// the composite pass coming back - it writes no colour and reads no cube - but
+// it lives here because "what the sky does at an uncovered pixel" is one
+// subject, and the direction it reprojects is the same one the resolves shade.
 
 import uniforms;
+import lib.skycube;
 
 [[vk::binding(0, 1)]] Sampler2D sMainTex;
+[[vk::binding(21, 1), vk::image_format("r32ui")]] Sampler2D<uint> sGBufTriangleId;
+
+// Restated rather than imported, as pbr_resolve, retro_resolve, postprocess and
+// debug_view all restate it: lib/gbuf.slang holds the G-buffer packing but not
+// this, and exporting it from there makes the name ambiguous in every module
+// that already carries its own. Mirrors GBuffer::kNoTriangle, which is what
+// scenepipeline.cpp actually clears the target to.
+static const uint kNoTriangle = 0xffffffffu;
 
 struct SkyVertexInput {
     [[vk::location(0)]] float3 position : POSITION;
@@ -56,6 +73,48 @@ float4 skyFragment(SkyVaryings input) : SV_Target {
     // The cube is sampled as radiance by the tracer. Preserve the old bake's
     // explicit gamma conversion exactly.
     return float4(pow(sample.rgb, float3(2.2)), sample.a);
+}
+
+struct SkyMotionVaryings {
+    float4 position : SV_Position;
+    noperspective float2 uv : TEXCOORD0;
+};
+
+[shader("vertex")]
+SkyMotionVaryings skyMotionVertex(uint vertexId : SV_VertexID) {
+    float2 uv = float2((vertexId << 1) & 2, vertexId & 2);
+    SkyMotionVaryings output;
+    output.position = float4(uv * 2.0 - 1.0, 0.0, 1.0);
+    output.uv = uv;
+    return output;
+}
+
+/**
+ * The motion vector at a pixel nothing was drawn over.
+ *
+ * The geometry pass clears the motion target and then writes only where a
+ * fragment landed, so before this pass the sky reported that it had not moved -
+ * and a temporal resolve believes that. Panning the camera therefore dragged
+ * last frame's sky along with the new one and left the whole background
+ * smeared, on exactly the pixels with no other signal to correct it.
+ *
+ * Written as a discard rather than a blend: the covered pixels already hold the
+ * surface motion the geometry pass computed, and this pass has nothing to add
+ * to them. The triangle-id sentinel selects the same set both resolves hand to
+ * the sky, so the pixel that gets sky motion here is the pixel that gets sky
+ * radiance there - one definition of "uncovered", not two.
+ */
+[shader("fragment")]
+float2 skyMotionFragment(SkyMotionVaryings input) : SV_Target0 {
+    uint triangleId = sGBufTriangleId.Load(int3(int2(input.position.xy), 0)).r;
+    if (triangleId != kNoTriangle) {
+        discard;
+    }
+    float3 direction = skyDirection(input.uv, globalUniforms.projectionInv,
+                                    globalUniforms.viewInv,
+                                    globalUniforms.cameraPosition.xyz);
+    return skyMotion(direction, globalUniforms.viewProjection,
+                     globalUniforms.prevViewProjection);
 }
 
 // The composite that used to live here is gone, and with it the pass that ran

@@ -309,6 +309,8 @@ private:
                      const ISceneCallbacks &callbacks);
     void geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                       ISceneCallbacks &callbacks);
+    /** Completes the motion target over the pixels the geometry pass left uncovered. */
+    void skyMotionPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     void retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** G8: the transparent surfaces the G-buffer deliberately leaves out,
         drawn forward onto the resolved image in submission order. */
