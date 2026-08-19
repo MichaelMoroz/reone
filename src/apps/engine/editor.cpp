@@ -318,7 +318,10 @@ ObjectEntryView makeObjectEntryView(const scene::ISceneGraph &graph,
                     tags.push_back("scenery");
                 }
                 bool dangly = std::holds_alternative<scene::RegisteredDangly>(entry.deformation);
-                if (!dangly &&
+                // Doors are stripped by admission for being doors, so tagging
+                // one emissive here would name a class the tracer never gave it.
+                bool door = scene::isDoorMesh(entry);
+                if (!dangly && !door &&
                     glm::any(glm::greaterThan(entry.material.selfIllumColor, glm::vec3(0.0f)))) {
                     tags.push_back("emissive");
                 }

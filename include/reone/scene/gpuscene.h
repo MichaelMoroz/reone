@@ -88,6 +88,22 @@ struct RegisteredMesh {
     RegisteredDeformation deformation;
     ModelSceneNode *cullRoot {nullptr};
 };
+
+/**
+ * A door is not an emitter, wherever it stands.
+ *
+ * Door models carry a self-illumination colour on most of their mesh nodes -
+ * `dor_per01` alone has six - and nothing in the authored data distinguishes
+ * that from the glow of a console or a light fitting, so every door in the game
+ * arrived at the emissive classification in every module. Decided by what the
+ * object IS, which the scene already knows, rather than by a curation table
+ * with one entry per door per game.
+ *
+ * Declared here rather than in the classifier because the panel and the
+ * candidate dump have to ask the same question, and three hand-written copies
+ * of `cullRoot && usage == Door` is how they stop agreeing.
+ */
+bool isDoorMesh(const RegisteredMesh &mesh);
 enum class ProceduralKind {
     Grass,
     Particles,

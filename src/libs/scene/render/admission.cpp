@@ -35,6 +35,11 @@
 using namespace reone::graphics;
 
 namespace reone::scene {
+
+bool isDoorMesh(const RegisteredMesh &mesh) {
+    return mesh.cullRoot && mesh.cullRoot->usage() == ModelUsage::Door;
+}
+
 namespace {
 using InstanceMaterial = GpuScene::InstanceMaterial;
 using AdmissionKind = GpuScene::AdmissionKind;
@@ -236,6 +241,7 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
         ++_submission.deforming;
         return std::nullopt;
     }
+    const bool door = isDoorMesh(mesh);
     if (saber)
         ++_submission.sabers;
     if (dangly)
@@ -270,7 +276,7 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
         material.featureMask |= 1u << 24;
 
     const auto *curated = _gpuScene.traceMaterials().curatedByIndex(mesh.material.curatedIndex);
-    if (dangly && (!curated || curated->klass != TraceClass::Emissive))
+    if ((dangly || door) && (!curated || curated->klass != TraceClass::Emissive))
         material.selfIllumColor = glm::vec4(0.0f);
     if (curated) {
         if (curated->klass == TraceClass::None)
@@ -402,7 +408,7 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
 
     _submission.dynamicTriangles +=
         (skinned || dangly || saber) ? static_cast<uint32_t>(mesh.mesh.get().faces().size()) : 0;
-    if (!dangly && (!curated || curated->klass == TraceClass::Default) &&
+    if (!dangly && !door && (!curated || curated->klass == TraceClass::Default) &&
         glm::any(glm::greaterThan(mesh.material.selfIllumColor, glm::vec3(0.0f)))) {
         ++_submission.emissive;
     }
@@ -616,7 +622,8 @@ void GpuSceneAdmission::rebuildSubmissionCounts(const ModelSceneNode *skyRoom) {
                 ++_submission.additive;
             const auto *curated =
                 _gpuScene.traceMaterials().curatedByIndex(mesh->material.curatedIndex);
-            if (!dangly && (!curated || curated->klass == TraceClass::Default) &&
+            if (!dangly && !isDoorMesh(*mesh) &&
+                (!curated || curated->klass == TraceClass::Default) &&
                 glm::any(glm::greaterThan(mesh->material.selfIllumColor,
                                           glm::vec3(0.0f))))
                 ++_submission.emissive;

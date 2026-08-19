@@ -588,8 +588,9 @@ std::filesystem::path Engine::numberedCapturePath(const CaptureRequest &request)
  * The raw material for the curation pass: every object the tracer still
  * classifies emissive by default, appended as one tab-separated line so a warp
  * loop over the module list accumulates the game-wide candidate set in one
- * file. Danglies are out (stripped by default already), the sky room is out,
- * and anything already curated is out - what remains is exactly the set a
+ * file. Danglies are out (stripped by default already), doors are out (stripped
+ * by admission for being doors - see isDoorMesh), the sky room is out, and
+ * anything already curated is out - what remains is exactly the set a
  * name-based classifier has to rule on.
  */
 void Engine::dumpObjectsIfRequested() {
@@ -607,6 +608,7 @@ void Engine::dumpObjectsIfRequested() {
         if (!mesh ||
             !glm::any(glm::greaterThan(mesh->material.selfIllumColor, glm::vec3(0.0f))) ||
             std::holds_alternative<scene::RegisteredDangly>(mesh->deformation) ||
+            scene::isDoorMesh(*mesh) ||
             (mesh->cullRoot && mesh->cullRoot == scene.skyRoom()) ||
             materials.curatedByIndex(mesh->material.curatedIndex)) {
             continue;
