@@ -47,6 +47,8 @@ public:
 
     void load(const std::string &area, const resource::generated::ARE_Map &map);
 
+    void retireRuntimeSession();
+
     /**
      * @param scale the factor the owning GUI draws its layout at.
      *

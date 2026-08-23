@@ -59,6 +59,10 @@ void reone::game::TestGameModule::setCurrentScreen(Game &game, int screen) {
     game.changeScreen(static_cast<Game::Screen>(screen));
 }
 
+void reone::game::TestGameModule::setConversation(Game &game, Conversation *conversation) {
+    game._conversation = conversation;
+}
+
 void reone::game::TestGameModule::initConsole(Game &game) {
     game.initConsole();
 }
@@ -105,7 +109,9 @@ void reone::game::TestGameModule::deserializePartyTable(
     Game &game,
     resource::Gff &gff) {
 
-    game.deserializePartyTable(gff);
+    auto state = game.parsePartyTable(gff);
+    game.replacePartyTable(std::move(state));
+    game.deserializePazaakPartyTable(gff);
 }
 
 namespace {

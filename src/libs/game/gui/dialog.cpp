@@ -54,11 +54,13 @@ static const char kObjectTagOwner[] = "owner";
 // Odyssey DLG participant animation ordinals occupy two namespaces.
 //
 // Ordinals at or above kDialogAnimationBase index dialoganimations.2da and name
-// a semantic dialogue animation. Lower ordinals name a cutscene clip on the
-// target model directly, and are split into fixed-width bands: the band selects
-// the clip name suffix and whether the clip is held, while the offset within the
-// band selects the clip number. Both namespaces are independent of AnimatedCut
-// and of whether the participant is driven by a stunt model.
+// a semantic dialogue animation. K1 also uses valid positive 2DA rows directly.
+// Recognized lower ordinal bands name a cutscene clip on the target model: the
+// band selects the clip name suffix and whether the clip is held, while the
+// offset within the band selects the clip number. Both namespaces are
+// independent of AnimatedCut and of whether the participant is driven by a
+// stunt model.
+
 // The conversation bands are viewport-relative, not authored plate art:
 // the subtitle sits in the top sixth and the reply list in the bottom sixth
 // of whatever viewport the game is running at.
@@ -484,17 +486,25 @@ std::optional<DialogGUI::CutAnimation> DialogGUI::decodeCutAnimation(int ordinal
 }
 
 AnimationType DialogGUI::getDialogAnimationType(int ordinal) const {
-    if (ordinal < kDialogAnimationBase) {
-        // Cut-band ordinals never reach here. Anything else below the 2DA base
-        // belongs to no namespace reone recognises, so it is left unplayed.
+    int index;
+    if (ordinal >= kDialogAnimationBase) {
+        index = ordinal - kDialogAnimationBase;
+    } else if (ordinal > 0 && !_game.isTSL()) {
+        index = ordinal;
+    } else {
+        // Cut-band ordinals never reach here. K2 lower ordinals and the zero
+        // sentinel belong to no ordinary-animation namespace reone recognises.
         warn("Dialog: unsupported animation ordinal: " + std::to_string(ordinal));
         return AnimationType::Invalid;
     }
     std::shared_ptr<TwoDA> animations(_services.resource.twoDas.get("dialoganimations"));
-    int index = ordinal - kDialogAnimationBase;
 
     if (index >= animations->getRowCount()) {
-        warn("Dialog: animation index out of bounds: " + std::to_string(index));
+        if (ordinal < kDialogAnimationBase) {
+            warn("Dialog: unsupported animation ordinal: " + std::to_string(ordinal));
+        } else {
+            warn("Dialog: animation index out of bounds: " + std::to_string(index));
+        }
         return AnimationType::Invalid;
     }
 

@@ -56,15 +56,16 @@ public:
 class MockResources : public IResources, boost::noncopyable {
 public:
     MOCK_METHOD(void, clear, (), (override));
-    MOCK_METHOD(void, clearLocal, (), (override));
-    MOCK_METHOD(void, clearSave, (), (override));
-    MOCK_METHOD(void, addEXE, (const std::filesystem::path &path), (override));
-    MOCK_METHOD(void, addKEY, (const std::filesystem::path &path), (override));
-    MOCK_METHOD(void, addERF, (const std::filesystem::path &path, ContainerKind kind), (override));
-    MOCK_METHOD(void, addMemERF, (ByteBuffer buffer, ContainerKind kind), (override));
-    MOCK_METHOD(void, addRIM, (const std::filesystem::path &path, ContainerKind kind), (override));
-    MOCK_METHOD(void, addMemRIM, (ByteBuffer buffer, ContainerKind kind), (override));
-    MOCK_METHOD(void, addFolder, (const std::filesystem::path &path, ContainerKind kind), (override));
+    MOCK_METHOD(void, clearOwner, (ResourceOwner owner), (override));
+    MOCK_METHOD(ResourceMountToken, mountToken, (), (const, override));
+    MOCK_METHOD(void, rollbackTo, (ResourceMountToken token), (override));
+    MOCK_METHOD(void, addEXE, (const std::filesystem::path &path, std::optional<ResourceSourceBucket> bucket), (override));
+    MOCK_METHOD(void, addKEY, (const std::filesystem::path &path, std::optional<ResourceSourceBucket> bucket), (override));
+    MOCK_METHOD(void, addERF, (const std::filesystem::path &path, ResourceOwner owner, std::optional<ResourceSourceBucket> bucket), (override));
+    MOCK_METHOD(void, addMemERF, (ByteBuffer buffer, ResourceOwner owner, std::optional<ResourceSourceBucket> bucket), (override));
+    MOCK_METHOD(void, addRIM, (const std::filesystem::path &path, ResourceOwner owner, std::optional<ResourceSourceBucket> bucket), (override));
+    MOCK_METHOD(void, addMemRIM, (ByteBuffer buffer, ResourceOwner owner, std::optional<ResourceSourceBucket> bucket), (override));
+    MOCK_METHOD(void, addFolder, (const std::filesystem::path &path, ResourceOwner owner, std::optional<ResourceSourceBucket> bucket), (override));
 
     MOCK_METHOD(Resource, get, (const ResourceId &id), (override));
     MOCK_METHOD(std::optional<Resource>, find, (const ResourceId &id), (override));
@@ -186,7 +187,15 @@ class MockResourceDirector : public IResourceDirector, boost::noncopyable {
 public:
     MOCK_METHOD(void, init, (), (override));
     MOCK_METHOD(void, onModuleLoad, (const std::string &name), (override));
+    MOCK_METHOD(void, onNewGame, (), (override));
     MOCK_METHOD(void, onGameLoad, (std::string_view name), (override));
+    MOCK_METHOD(std::optional<Resource>, findSaveMetadata, (const ResourceId &id), (override));
+    MOCK_METHOD(std::optional<Resource>, findSaveWorking, (const ResourceId &id), (override));
+    MOCK_METHOD(std::unordered_set<ResourceId>, saveWorkingResourceIds, (), (const, override));
+    MOCK_METHOD(std::shared_ptr<const SaveWorkingState>, committedSaveWorkingState, (), (const, override));
+    MOCK_METHOD(std::optional<SaveSlotDescriptor>, saveSlotDescriptor, (), (const, override));
+    MOCK_METHOD(void, adoptSaveWorkingState, (std::shared_ptr<const SaveWorkingState> state), (override));
+    MOCK_METHOD(void, adoptPublishedSave, (SaveSlotDescriptor descriptor, std::shared_ptr<const SaveWorkingState> state), (override));
     MOCK_METHOD(std::set<std::string>, moduleNames, (), (override));
     MOCK_METHOD(std::set<std::string>, saveNames, (), (override));
 };
