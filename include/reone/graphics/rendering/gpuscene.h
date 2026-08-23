@@ -309,6 +309,8 @@ struct GpuSceneUpload {
     uint32_t opaqueObjectCount {0};
     /** Tail objects drawn without opaque-scene depth testing. */
     uint32_t depthIndependentObjectCount {0};
+    /** Particles and billboards, the tail no ray traverses. Includes the above. */
+    uint32_t spriteObjectCount {0};
     uint32_t materialReferenceCount {0};
 };
 
@@ -354,6 +356,8 @@ public:
         uint32_t vertexCount {0};
         uint32_t opaqueTriangleCount {0};
         uint32_t depthIndependentTriangleCount {0};
+        /** Particles and billboards, at the tail; the BLAS omits them. */
+        uint32_t spriteTriangleCount {0};
         uint32_t triangleCount {0};
         uint32_t grassCardCount {0};
         uint32_t grassCardVerts {0};

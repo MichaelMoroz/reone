@@ -393,10 +393,20 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
     }
     if (upload.depthIndependentObjectCount > upload.objects.size())
         throw std::runtime_error("Depth-independent object range exceeds merged scene");
+    if (upload.spriteObjectCount > upload.objects.size() ||
+        upload.spriteObjectCount < upload.depthIndependentObjectCount)
+        throw std::runtime_error("Sprite object range exceeds merged scene");
     uint64_t depthIndependentTriangleCount = 0;
+    uint64_t spriteTriangleCount = 0;
     for (size_t i = upload.objects.size() - upload.depthIndependentObjectCount;
          i < upload.objects.size(); ++i) {
         depthIndependentTriangleCount += upload.objects[i].data.triangleCount;
+    }
+    // The sprite tail encloses the depth-independent one; both end at the last
+    // object, so one range is a suffix of the other rather than a second span.
+    for (size_t i = upload.objects.size() - upload.spriteObjectCount;
+         i < upload.objects.size(); ++i) {
+        spriteTriangleCount += upload.objects[i].data.triangleCount;
     }
     const uint64_t triangleCount = opaqueTriangleCount + nonOpaqueTriangleCount;
     if (vertexCount == 0 || triangleCount == 0)
@@ -574,6 +584,7 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
     view.opaqueTriangleCount = static_cast<uint32_t>(opaqueTriangleCount);
     view.depthIndependentTriangleCount =
         static_cast<uint32_t>(depthIndependentTriangleCount);
+    view.spriteTriangleCount = static_cast<uint32_t>(spriteTriangleCount);
     view.triangleCount = static_cast<uint32_t>(triangleCount);
     view.grassCardCount = static_cast<uint32_t>(grassCardCount);
     view.grassCardVerts = upload.grass.cardVerts;

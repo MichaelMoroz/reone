@@ -749,9 +749,10 @@ graphics::GpuSceneUpload GpuScene::prepare(
     upload.depthIndependentObjectCount = 0;
     upload.materialReferenceCount = 0;
     std::vector<graphics::GpuSceneObjectInput> opaqueObjects, nonOpaqueObjects,
-        depthIndependentObjects;
+        spriteObjects, depthIndependentObjects;
     opaqueObjects.reserve(_objects.size());
     nonOpaqueObjects.reserve(_objects.size());
+    spriteObjects.reserve(_objects.size());
     depthIndependentObjects.reserve(_objects.size());
     // ROWS, not columns. glm is column-major, so cameraView[i] is column i.
     // Billboards still use the primary-camera approximation; grass does not.
@@ -1019,6 +1020,12 @@ graphics::GpuSceneUpload GpuScene::prepare(
             }
         if (sceneObject.geometryIndex == 0) {
             opaqueObjects.push_back(input);
+        } else if (procedural->kind == ProceduralKind::Particles) {
+            // Particles join the billboards in the non-opaque tail. Not for
+            // the raster, which draws them exactly as before, but so the two
+            // together form one suffix the acceleration structure can decline
+            // to build - see SceneTracingGeometry::spriteTriangleCount.
+            spriteObjects.push_back(input);
         } else if (procedural->kind == ProceduralKind::Billboard) {
             // A flare's walkmesh line-of-sight test has already decided its
             // visibility. Keep it at the non-opaque tail so raster can retain
@@ -1055,10 +1062,13 @@ graphics::GpuSceneUpload GpuScene::prepare(
     upload.opaqueObjectCount = static_cast<uint32_t>(opaqueObjects.size());
     upload.depthIndependentObjectCount =
         static_cast<uint32_t>(depthIndependentObjects.size());
+    upload.spriteObjectCount =
+        static_cast<uint32_t>(spriteObjects.size() + depthIndependentObjects.size());
     upload.objects.reserve(opaqueObjects.size() + nonOpaqueObjects.size() +
-                           depthIndependentObjects.size());
+                           spriteObjects.size() + depthIndependentObjects.size());
     upload.objects.insert(upload.objects.end(), opaqueObjects.begin(), opaqueObjects.end());
     upload.objects.insert(upload.objects.end(), nonOpaqueObjects.begin(), nonOpaqueObjects.end());
+    upload.objects.insert(upload.objects.end(), spriteObjects.begin(), spriteObjects.end());
     upload.objects.insert(upload.objects.end(), depthIndependentObjects.begin(),
                           depthIndependentObjects.end());
     upload.materials.assign(_materials.size(), {});

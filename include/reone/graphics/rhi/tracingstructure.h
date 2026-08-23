@@ -28,6 +28,19 @@ struct SceneTracingGeometry {
     uint32_t vertexCount {0};
     uint32_t opaqueTriangleCount {0};
     uint32_t triangleCount {0};
+    /**
+     * Procedural sprites at the END of the non-opaque range, which the BLAS
+     * does not build.
+     *
+     * Rejecting them inside the candidate loop still paid for descending to
+     * them, intersecting them and loading their material first, which on a
+     * plume of overlapping camera-facing quads is most of the cost. Leaving
+     * them out of the structure is what makes them free. The tail position is
+     * load-bearing: a candidate maps back through geometryBase1 + primitive,
+     * so dropping a suffix shifts nothing, and dropping anything else would
+     * silently repoint every triangle after it.
+     */
+    uint32_t spriteTriangleCount {0};
 
     /**
      * Grass cards, which are instanced rather than merged.

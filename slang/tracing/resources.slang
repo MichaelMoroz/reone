@@ -50,6 +50,15 @@ public static const uint kPtMaskBlendedCoverage = 1u << 25;
 public static const uint kPtMaskPremulAlpha = 1u << 12;
 public static const uint kPtMaskPunchThrough = 1u << 26; // alpha-tested coverage in traversal
 /**
+ * Geometry the CPU synthesised rather than read from a model: grass, particle
+ * plumes, lens-flare billboards. Set for all three by admission.
+ *
+ * On its own it is not a traversal decision - grass is procedural and is traced
+ * as an ordinary cutout. Paired with the ABSENCE of kPtMaskPunchThrough it
+ * names the procedural SPRITES, which is the population no ray sees.
+ */
+public static const uint kPtMaskProcedural = 1u << 16;
+/**
  * Blended coverage that is scene geometry: a window, a force field, a leaf
  * card. Set by admission (kMaskTracedTransmissive in
  * src/libs/scene/render/admission.cpp), and by admission alone - the raster

@@ -186,6 +186,7 @@ void RayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
         _lastInstances = instanceCount;
         SceneTracingGeometry geometry {scene.vertices, scene.indices, scene.vertexCount,
                                        scene.opaqueTriangleCount, scene.triangleCount,
+                                       scene.spriteTriangleCount,
                                        scene.grassCardVertices, scene.grassCardIndices,
                                        scene.grassCardInstances, scene.grassCardCount,
                                        scene.grassCardVerts, scene.grassCardTris,

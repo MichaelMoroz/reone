@@ -189,6 +189,29 @@ bool isTracedTransmissive(uint materialIndex) {
 }
 
 /**
+ * A procedural sprite: a particle plume or a lens-flare billboard.
+ *
+ * No ray sees one - not the nearest-hit query, not the shadow query. They are
+ * camera-facing quads regenerated every frame from a simulation the ray has no
+ * access to, so what a ray would intersect is a picture of a volume seen from
+ * where the CAMERA stands, which is the wrong picture from anywhere else. A
+ * bounce collecting a plume's radiance is sampling a billboard's front face
+ * from behind; a shadow ray dimming through one is casting the silhouette of a
+ * quad that only faces the viewer. Both were happening: additive plumes
+ * committed in the nearest query and blended ones attenuated in the shadow
+ * query. Primary visibility is unaffected - these are rasterized forward over
+ * the traced image, which is the one view the billboard is correct for.
+ *
+ * Grass is procedural too and is deliberately NOT included: it is real
+ * geometry standing in the world, oriented independently of the camera, and it
+ * keeps its cutout traversal. The punch-through bit is what separates them.
+ */
+bool isProceduralSprite(uint materialIndex) {
+    uint features = instanceMaterials[materialIndex].featureMask;
+    return (features & kPtMaskProcedural) != 0 && (features & kPtMaskPunchThrough) == 0;
+}
+
+/**
  * The nearest ray. Opaque geometry commits in hardware. Of the non-opaque
  * candidates, PURELY EMISSIVE surfaces always commit (the path collects their
  * radiance and passes through), CUTOUT coverage commits at its binary
@@ -204,6 +227,9 @@ public TraceHit ptTraceNearest(RayDesc ray) {
         uint instanceIndex = query.CandidateInstanceID();
         uint materialIndex = candidateMaterialIndex(instanceIndex, geometryIndex, primitive);
         if (instanceIndex != 0 && grassCardInstances[instanceIndex - 1].lightmapVariantCulled.w != 0.0) continue;
+        // PROCEDURAL SPRITES, before anything else can commit them: an additive
+        // plume is emissive and would otherwise be collected by the branch below.
+        if (isProceduralSprite(materialIndex)) continue;
         // PURELY EMISSIVE.
         if (instanceMaterials[materialIndex].surfaceType == kPtSurfaceUnlitTransparent) {
             query.CommitNonOpaqueTriangleHit();
@@ -303,6 +329,9 @@ public ShadowRay ptShadowRay(float3 origin, float3 geometricNormal, float3 direc
         // shadow behavior only when the safety fallback keeps them in the TLAS.
         if (pushConstants.skyAvailable == 0 &&
             (instanceMaterials[materialIndex].featureMask & kPtMaskSky) != 0) continue;
+        // PROCEDURAL SPRITES cast nothing, emissive or not - a blended plume
+        // would otherwise attenuate through the branch below.
+        if (isProceduralSprite(materialIndex)) continue;
         // PURELY EMISSIVE surfaces cast nothing.
         if (instanceMaterials[materialIndex].surfaceType == kPtSurfaceUnlitTransparent) continue;
         // Lit blends attenuate rather than block. An opaque texel still blocks

@@ -224,9 +224,13 @@ void VulkanTracingStructure::prepare(const SceneTracingGeometry &geometry) {
     blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     blasBuild.geometryCount = static_cast<uint32_t>(blasGeometries.size());
     blasBuild.pGeometries = blasGeometries.data();
+    // Geometry 1 stops short of the procedural sprites. They are a suffix of
+    // the non-opaque range, so every primitive the structure still holds keeps
+    // the index a candidate resolves through.
     const std::array<uint32_t, 2> blasPrimitiveCounts {{
         geometry.opaqueTriangleCount,
-        geometry.triangleCount - geometry.opaqueTriangleCount,
+        geometry.triangleCount - geometry.opaqueTriangleCount -
+            geometry.spriteTriangleCount,
     }};
     VkAccelerationStructureBuildSizesInfoKHR blasSizes {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
@@ -415,7 +419,9 @@ void VulkanTracingStructure::build(VkCommandBuffer commandBuffer,
     blasGeometries[0].flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
     blasGeometries[1].flags = 0;
     const std::array<uint32_t, 2> blasPrimitiveCounts {{
-        geometry.opaqueTriangleCount, geometry.triangleCount - geometry.opaqueTriangleCount}};
+        geometry.opaqueTriangleCount,
+        geometry.triangleCount - geometry.opaqueTriangleCount -
+            geometry.spriteTriangleCount}};
     VkAccelerationStructureBuildGeometryInfoKHR mergedBuild {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
     mergedBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
