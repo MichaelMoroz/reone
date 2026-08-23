@@ -85,7 +85,6 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"bloomintensity", formatConfigFloat(options.bloomIntensity)},
         {"grass", std::to_string(options.grass)},
         {"grassdensity", formatConfigFloat(options.grassDensity)},
-        {"grassmode", graphics::grassModeName(options.grassMode)},
         {"grasscardshape", graphics::grassCardShapeName(options.grassCardShape)},
         {"grasscardsides", std::to_string(options.grassCardSides)},
         {"grasscardgrid", std::to_string(options.grassCardGrid)},
@@ -93,7 +92,6 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"thintransmission", formatConfigFloat(options.thinTransmission)},
         {"ptrefraction", formatConfigFloat(options.ptRefraction)},
         {"grassradius", formatConfigFloat(options.grassRadius)},
-        {"grasssegments", std::to_string(options.grassSegments)},
         {"grasswindstrength", formatConfigFloat(options.grassWindStrength)},
         {"grasswinddirection", formatConfigFloat(options.grassWindDirection)},
         {"grasswindspeed", formatConfigFloat(options.grassWindSpeed)},
@@ -1021,10 +1019,6 @@ void Editor::graphicsQualityTab() {
     settingHint("Multiplies the area's authored density, so areas keep their relative variation. "
                 "Live: the dial gates the active cluster prefix on the GPU.");
     if (ImGui::TreeNode("Grass shape")) {
-        const char *grassModes[] {"Auto", "Strand", "Card"};
-        int grassMode = static_cast<int>(options.grassMode);
-        if (ImGui::Combo("Primitive", &grassMode, grassModes, IM_ARRAYSIZE(grassModes)))
-            options.grassMode = static_cast<graphics::GrassMode>(grassMode);
         const char *cardShapes[] {"Quad", "AABB", "OBB", "K-gon", "Grid"};
         int cardShape = static_cast<int>(options.grassCardShape);
         if (ImGui::Combo("Card outline", &cardShape, cardShapes, IM_ARRAYSIZE(cardShapes)))
@@ -1032,10 +1026,10 @@ void Editor::graphicsQualityTab() {
         ImGui::SliderInt("Card sides", &options.grassCardSides, 3, 16);
         ImGui::SliderInt("Card grid", &options.grassCardGrid, 2, 32);
         ImGui::SliderFloat("Card aspect", &options.grassCardAspect, 0.1f, 4.0f, "%.2f");
-        settingHint("Auto keeps the old mode choice: cards in Retro and strands elsewhere. "
-                    "Cards use the fitted outline and their own width-over-length aspect.");
+        settingHint("The fitted outline the blade texture is cut to, and the card's own "
+                    "width-over-length aspect.");
         ImGui::ColorEdit3("Colour", &options.grassColor.x);
-        settingHint("Flat across the blade. Strands carry no texture, so this is the whole of it.");
+        settingHint("Multiplies the area's authored blade texture.");
         ImGui::SliderFloat("Draw radius", &options.grassRadius, 0.0f, 256.0f, "%.0f");
         settingHint("Blades past this are dropped outright rather than faded, so it reads as a "
                     "hard edge if you set it inside the ground the camera can see.");
@@ -1046,12 +1040,6 @@ void Editor::graphicsQualityTab() {
         ImGui::SliderFloat("Width", &options.grassWidth, 0.0f, 0.5f, "%.3f");
         settingHint("As a fraction of length. Thin blades are subpixel at distance, which is where "
                     "a temporal resolver starts to shimmer - widening costs less than it looks.");
-        ImGui::SliderInt("Segments", &options.grassSegments, graphics::kMinGrassSegments,
-                         graphics::kMaxGrassSegments);
-        settingHint("Quad segments up a blade, closed by one triangle: 2n+1 triangles each. The "
-                    "trade against blade count - four carries a curve convincingly, two makes it a "
-                    "dogleg but costs half as much, so under a fixed ceiling it buys nearly twice "
-                    "the blades.");
         ImGui::SliderFloat("Wind strength", &options.grassWindStrength, 0.0f, 2.0f, "%.2f rad");
         settingHint("Extra bend at full gust; zero is still air. The wind rotates each blade's arc "
                     "downwind rather than displacing its tip, so a blade keeps the length it was "

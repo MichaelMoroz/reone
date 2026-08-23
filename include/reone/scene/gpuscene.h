@@ -257,28 +257,26 @@ public:
     /**
      * The grass shape, set before prepare rather than after it.
      *
-     * A blade is eleven vertices and a cardboard quad is four, and prepare is
-     * what writes those counts into the object records. Assigning the params to
-     * the finished upload leaves the records built against whatever the
-     * previous frame decided - and the merge kernel, which reads the params
-     * from a push constant, then addresses blades the records never allocated.
+     * prepare is what writes the per-cluster counts into the object records.
+     * Assigning the params to the finished upload leaves the records built
+     * against whatever the previous frame decided - and the merge kernel, which
+     * reads the params from a push constant, then addresses cards the records
+     * never allocated.
      */
+    /** The fitted card's triangle count, as the last atlas cut left it. */
+    uint32_t grassCardTris() const { return _grassParams.cardTris; }
+
     void setGrassParams(const graphics::GrassParams &params) {
         auto resolved = params;
-        if (resolved.cardboard != 0 && _grassParams.cardboard != 0) {
-            resolved.cardVerts = _grassParams.cardVerts;
-            resolved.cardTris = _grassParams.cardTris;
-        }
-        // A blade and a quad are different vertex counts, and the counts live
-        // in object records that are cached across frames. Changing the
-        // primitive without rebuilding them leaves the merge kernel striding
-        // through records sized for the other one, which draws the scene as
-        // giant slabs of stretched texture.
+        resolved.cardVerts = _grassParams.cardVerts;
+        resolved.cardTris = _grassParams.cardTris;
+        // The counts live in object records that are cached across frames.
+        // Changing them without rebuilding those records leaves the merge
+        // kernel striding through records sized for a different card, which
+        // draws the scene as giant slabs of stretched texture.
         _grassPrimitiveChanged = _grassPrimitiveChanged ||
-                               resolved.cardboard != _grassParams.cardboard ||
                                resolved.cardVerts != _grassParams.cardVerts ||
                                resolved.cardTris != _grassParams.cardTris ||
-                               resolved.segments != _grassParams.segments ||
                                resolved.bladesPerCluster != _grassParams.bladesPerCluster;
         _grassParams = resolved;
     }

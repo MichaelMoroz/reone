@@ -73,10 +73,6 @@ constexpr int kMaxDebugView = 19;
  */
 constexpr int kMaxGrassTriangleBudget = 1048576;
 
-/** Bounds on GraphicsOptions::grassSegments. */
-constexpr int kMinGrassSegments = 1;
-constexpr int kMaxGrassSegments = 8;
-
 /**
  * What settles the primary-vertex direct channel.
  *
@@ -259,7 +255,6 @@ struct GraphicsOptions {
     float bloomIntensity {1.0f};
     /** Multiplier on the area's authored Grass_Density, so areas keep their variation. */
     float grassDensity {8.0f};
-    GrassMode grassMode {GrassMode::Auto};
     GrassCardShape grassCardShape {GrassCardShape::Quad};
     /** Sides of a fitted k-gon, 3..16. */
     int grassCardSides {5};
@@ -299,16 +294,6 @@ struct GraphicsOptions {
      * it folds over - which is what makes a field look like it is being
      * crossed rather than shaken.
      */
-    /**
-     * Quad segments up a blade, closed by one triangle at the tip: 2n+1
-     * triangles and 2n+3 vertices.
-     *
-     * The dial that trades silhouette for count. Four segments carry a curved
-     * blade convincingly; two make the arc a dogleg but cost half as much, so
-     * under a fixed triangle ceiling they buy nearly twice the blades. Which
-     * side of that is worth more depends on how close the camera gets.
-     */
-    int grassSegments {4};
     float grassWindStrength {0.35f};
     /** Where it blows from, radians, in the same frame as the blade orientation. */
     float grassWindDirection {0.0f};

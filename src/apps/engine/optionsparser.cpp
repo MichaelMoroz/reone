@@ -171,8 +171,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ptshadowfiltermaxradius", value<float>()->default_value(options->graphics.ptShadowFilterMaxRadius),
          "ceiling on the shadow filter radius, pixels")                                                                       //
         ("grassradius", value<float>()->default_value(options->graphics.grassRadius), "grass draw radius")             //
-        ("grasssegments", value<int>()->default_value(options->graphics.grassSegments), "quad segments up a blade") //
-        ("grassmode", value<std::string>()->default_value(grassModeName(options->graphics.grassMode)), "grass primitive: auto, strand or card") //
         ("grasscardshape", value<std::string>()->default_value(grassCardShapeName(options->graphics.grassCardShape)), "fitted grass card outline") //
         ("grasscardsides", value<int>()->default_value(options->graphics.grassCardSides), "sides of a fitted grass k-gon") //
         ("grasscardgrid", value<int>()->default_value(options->graphics.grassCardGrid), "cells across a fitted grass grid") //
@@ -407,10 +405,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptShadowFilterMaxRadius =
         std::clamp(vars["ptshadowfiltermaxradius"].as<float>(), 1.0f, 64.0f);
     options->graphics.grassRadius = std::max(0.0f, vars["grassradius"].as<float>());
-    options->graphics.grassSegments =
-        std::clamp<int>(vars["grasssegments"].as<int>(), graphics::kMinGrassSegments,
-                        graphics::kMaxGrassSegments);
-    options->graphics.grassMode = parseGrassMode(vars["grassmode"].as<std::string>());
     options->graphics.grassCardShape = parseGrassCardShape(vars["grasscardshape"].as<std::string>());
     options->graphics.grassCardSides = std::clamp(vars["grasscardsides"].as<int>(), 3, 16);
     options->graphics.grassCardGrid = std::clamp(vars["grasscardgrid"].as<int>(), 2, 32);

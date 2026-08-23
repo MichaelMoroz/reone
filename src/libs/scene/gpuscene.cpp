@@ -658,7 +658,7 @@ graphics::GpuSceneUpload GpuScene::prepare(
     // Before anything reads it: the object records below size themselves by it.
     upload.grass = _grassParams;
     upload.grassCardAspect = _grassCardAspect;
-    if (upload.grass.cardboard != 0) {
+    {
         const RegisteredProcedural *firstGrass = nullptr;
         for (const auto &object : _objects) {
             const auto *procedural = std::get_if<RegisteredProcedural>(&object);
@@ -935,10 +935,9 @@ graphics::GpuSceneUpload GpuScene::prepare(
                           std::to_string(_grassParams.bladesPerCluster) + " blades = " +
                           std::to_string(instanceCount *
                                          std::max(1u, _grassParams.bladesPerCluster) *
-                                         graphics::grassTrisPerBlade(_grassParams.segments)) +
+                                         _grassParams.cardTris) +
                           " triangles, ceiling " +
-                          std::to_string(_grassParams.budgetBlades *
-                                         graphics::grassTrisPerBlade(_grassParams.segments)),
+                          std::to_string(_grassParams.budgetBlades * _grassParams.cardTris),
                       LogChannel::Graphics);
             }
             if (instanceCount == 0)
@@ -962,17 +961,10 @@ graphics::GpuSceneUpload GpuScene::prepare(
         sceneObject.srcVertexStride = procedural->kind == ProceduralKind::Grass ? 0 : 1;
         // Both loops address the same per-cluster units. Their counts must
         // agree with the merge kernel or stale record strides stretch cards.
-        const bool strands = procedural->kind == ProceduralKind::Grass &&
-                             upload.grass.cardboard == 0;
         const uint64_t units = instanceCount * std::max(1u, upload.grass.bladesPerCluster);
         if (procedural->kind != ProceduralKind::Grass) {
             sceneObject.vertexCount = static_cast<uint32_t>(instanceCount) * 4;
             sceneObject.triangleCount = static_cast<uint32_t>(instanceCount) * 2;
-        } else if (strands) {
-            sceneObject.vertexCount = static_cast<uint32_t>(units) *
-                                      graphics::grassVertsPerBlade(upload.grass.segments);
-            sceneObject.triangleCount = static_cast<uint32_t>(units) *
-                                        graphics::grassTrisPerBlade(upload.grass.segments);
         } else {
             // Cards have their own indexed instance region. Keeping these out
             // of the merged ranges is what prevents the TLAS from seeing every

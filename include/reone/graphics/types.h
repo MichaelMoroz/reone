@@ -192,13 +192,6 @@ struct TextureUnits {
     static constexpr int coverage = 22;
 };
 
-/** Which primitive grass is drawn as. */
-enum class GrassMode {
-    Auto,
-    Strand,
-    Card,
-};
-
 // MDL
 
 constexpr int kMdlDataOffset = 12;

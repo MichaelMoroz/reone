@@ -248,12 +248,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(floatOpt("grassdensity", OptionApply::Live, "grass density multiplier",
                              &GraphicsOptions::grassDensity, 0.0f, 64.0f));
     descs.push_back(enumOpt(
-        "grassmode", OptionApply::Live, "grass primitive: auto, strand or card",
-        [](const GraphicsOptions &o) { return grassModeName(o.grassMode); },
-        [](GraphicsOptions &o, const std::string &value) { o.grassMode = parseGrassMode(value); },
-        [](const GraphicsOptions &a, const GraphicsOptions &b) { return a.grassMode == b.grassMode; },
-        [](const GraphicsOptions &from, GraphicsOptions &to) { to.grassMode = from.grassMode; }));
-    descs.push_back(enumOpt(
         "grasscardshape", OptionApply::Live, "fitted grass card outline",
         [](const GraphicsOptions &o) { return grassCardShapeName(o.grassCardShape); },
         [](GraphicsOptions &o, const std::string &value) { o.grassCardShape = parseGrassCardShape(value); },
@@ -494,9 +488,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(floatOpt("grassradius", OptionApply::Live,
                              "grass draw radius, world units",
                              &GraphicsOptions::grassRadius, 0.0f, 512.0f));
-    descs.push_back(intOpt("grasssegments", OptionApply::Live,
-                           "quad segments up a blade; 2n+1 triangles each",
-                           &GraphicsOptions::grassSegments, kMinGrassSegments, kMaxGrassSegments));
     descs.push_back(floatOpt("grasswindstrength", OptionApply::Live,
                              "extra bend at full gust, radians; 0 is still air",
                              &GraphicsOptions::grassWindStrength, 0.0f, 2.0f));
@@ -745,29 +736,6 @@ RenderMode parseRenderMode(const std::string &value) {
         return RenderMode::PathTracing;
     throw std::invalid_argument("Unknown render mode '" + value +
                                 "'; expected retro, pbr or path-tracing");
-}
-
-const char *grassModeName(GrassMode mode) {
-    switch (mode) {
-    case GrassMode::Auto:
-        return "auto";
-    case GrassMode::Strand:
-        return "strand";
-    case GrassMode::Card:
-        return "card";
-    }
-    throw std::invalid_argument("Unknown grass mode");
-}
-
-GrassMode parseGrassMode(const std::string &value) {
-    if (value == "auto")
-        return GrassMode::Auto;
-    if (value == "strand")
-        return GrassMode::Strand;
-    if (value == "card")
-        return GrassMode::Card;
-    throw std::invalid_argument("Unknown grass mode '" + value +
-                                "'; expected auto, strand or card");
 }
 
 const char *optionApplyName(OptionApply apply) {

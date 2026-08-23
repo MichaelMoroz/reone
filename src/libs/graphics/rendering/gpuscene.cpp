@@ -385,7 +385,7 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
         object.dstCardBase = static_cast<uint32_t>(grassCardCount);
         vertexCount += object.vertexCount;
         triangleBase += object.triangleCount;
-        if (object.srcVertexStride == 0 && upload.grass.cardboard != 0) {
+        if (object.srcVertexStride == 0) {
             grassCardCount += object.cardCount;
             if (grassCardCount > std::numeric_limits<uint32_t>::max())
                 throw std::runtime_error("Grass card instances exceed shader index range");

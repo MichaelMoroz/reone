@@ -417,14 +417,18 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
 
 namespace {
 
-GrassMode resolvedGrassMode(const GraphicsOptions &options) {
-    if (options.grassMode != GrassMode::Auto)
-        return options.grassMode;
-    return options.mode == RenderMode::Retro ? GrassMode::Card : GrassMode::Strand;
-}
-
 /** The shape dials, as the merge kernel takes them. */
-graphics::GrassParams grassParamsFrom(const graphics::GraphicsOptions &options) {
+/**
+ * @p cardTris is the FITTED card's triangle count, which this function cannot
+ * derive: the atlas is cut in GpuScene::prepare and written back into the
+ * stored params, so a freshly built GrassParams still carries the struct
+ * default here. Dividing the budget by that default silently raised the
+ * ceiling by the ratio between them - measured as 1572864 triangles against a
+ * configured 1048576. Passed in for the same reason grassDensityFraction takes
+ * it.
+ */
+graphics::GrassParams grassParamsFrom(const graphics::GraphicsOptions &options,
+                                      uint32_t cardTris) {
     graphics::GrassParams params;
     params.radius = std::max(0.0f, options.grassRadius);
     params.windStrength = options.grassWindStrength;
@@ -446,13 +450,9 @@ graphics::GrassParams grassParamsFrom(const graphics::GraphicsOptions &options) 
     params.bladesPerCluster = static_cast<uint32_t>(std::clamp(options.grassBladesPerCluster, 1, 32));
     // The ceiling as blades, which is the unit the allocator works in. Zero
     // means no ceiling, and the density dials answer for the triangle count.
-    params.segments = static_cast<uint32_t>(
-        std::clamp<int>(options.grassSegments, graphics::kMinGrassSegments,
-                        graphics::kMaxGrassSegments));
     params.budgetBlades =
         options.grassTriangleBudget > 0
-            ? static_cast<uint32_t>(options.grassTriangleBudget /
-                                    graphics::grassTrisPerBlade(params.segments))
+            ? static_cast<uint32_t>(options.grassTriangleBudget / std::max(1u, cardTris))
             : 0u;
     // Not clamped to 1. One is the density the faces were authored at, and
     // stopping there made the authored budget a second ceiling: raising the
@@ -462,7 +462,6 @@ graphics::GrassParams grassParamsFrom(const graphics::GraphicsOptions &options) 
     // limit.
     params.density = std::max(0.0f, options.grassDensity / kGrassDensityCap);
     params.color = glm::vec4(glm::max(options.grassColor, glm::vec3(0.0f)), 1.0f);
-    params.cardboard = resolvedGrassMode(options) == GrassMode::Card ? 1u : 0u;
     return params;
 }
 
@@ -489,14 +488,8 @@ float grassDensityFraction(const graphics::GraphicsOptions &options, size_t area
     // and blades appeared and vanished across the entire field. The area's
     // total is fixed for as long as the module is loaded, so the same blade
     // survives or does not regardless of where it is seen from.
-    const bool cards = resolvedGrassMode(options) == GrassMode::Card;
-    const float perCluster =
-        cards ? static_cast<float>(cardTris) *
-                    static_cast<float>(std::clamp(options.grassBladesPerCluster, 1, 32))
-              : static_cast<float>(graphics::grassTrisPerBlade(static_cast<uint32_t>(
-                    std::clamp<int>(options.grassSegments, graphics::kMinGrassSegments,
-                                    graphics::kMaxGrassSegments)))) *
-                    static_cast<float>(std::clamp(options.grassBladesPerCluster, 1, 32));
+    const float perCluster = static_cast<float>(cardTris) *
+                             static_cast<float>(std::clamp(options.grassBladesPerCluster, 1, 32));
     const float allowed = static_cast<float>(options.grassTriangleBudget) / perCluster;
     return std::min(byDensity, std::clamp(allowed / static_cast<float>(areaBlades), 0.0f, 1.0f));
 }
@@ -516,17 +509,8 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
         material.uv1 = procedural.material.uv[1];
         material.uv2 = procedural.material.uv[2];
         {
-            // Strands carry no texture and no alpha, so they are ordinary
-            // opaque geometry. That is most of the point: a cutout cannot be
-            // committed by the hardware, so every shadow ray crossing a grass
-            // field ran the any-hit loop, fetched the material and alpha-tested
-            // it, once per blade it touched.
-            //
-            const bool strands = resolvedGrassMode(_options) == GrassMode::Strand;
             uint32_t features = static_cast<uint32_t>(materialFeatureMask(procedural.material));
-            if (!strands) {
-                features |= UniformsFeatureFlags::hashedalphatest;
-            }
+            features |= UniformsFeatureFlags::hashedalphatest;
             // Grass is the archetype of a thin surface, and it receives
             // shadows. Neither is authored: the area records grass as a
             // decoration, so nothing in the source data asks for either, and
@@ -540,7 +524,7 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
                         UniformsFeatureFlags::fog;
             material.featureMask = features | (8u << 27);
             applyCategoryOverride(material, _options, 8);
-            kind = strands ? AdmissionKind::Opaque : AdmissionKind::Cutout;
+            kind = AdmissionKind::Cutout;
         }
         break;
     case ProceduralKind::Particles:
@@ -571,18 +555,6 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyProcedural(
     // diagnostics can separate large particle/billboard quads from meshes.
     material.featureMask |= UniformsFeatureFlags::procedural;
     populateMaterialResources(material, procedural.material, _renderer, _options);
-    if (procedural.kind == ProceduralKind::Grass &&
-        resolvedGrassMode(_options) == GrassMode::Strand) {
-        // A strand has no texture. The area's grass image is a picture of
-        // cardboard blades, and mapping it across a blade puts a vertical slice
-        // of that picture on every one - which modulates the configured colour
-        // by whatever happened to be in that column, and reads as the colour
-        // dial not working. Retro keeps it, because cardboard is what the
-        // texture is for.
-        material.mainTex = UINT32_MAX;
-        material.diffuseColor = glm::vec4(1.0f);
-        material.overrideParams.x = std::clamp(_options.grassRoughness, 0.0f, 1.0f);
-    }
     return {{material, kind, GpuScene::ResidencyClass::Dynamic, nullptr}};
 }
 
@@ -730,7 +702,7 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
         _classifiedSkyRoom = result.skyRoom;
     }
     _gpuScene.setSkyRoom(result.skyRoom);
-    _gpuScene.setGrassParams(grassParamsFrom(_options));
+    _gpuScene.setGrassParams(grassParamsFrom(_options, _gpuScene.grassCardTris()));
     _gpuScene.setGrassCardParams({
         _options.grassCardShape,
         _options.grassCardSides,
@@ -756,7 +728,8 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
                              _submission.upload.grass.cardTris);
     if (_options.admissionShadow && _gpuScene.shadowScene()) {
         auto savedSubmission = _submission;
-        _gpuScene.shadowScene()->setGrassParams(grassParamsFrom(_options));
+        _gpuScene.shadowScene()->setGrassParams(
+            grassParamsFrom(_options, _gpuScene.shadowScene()->grassCardTris()));
         _gpuScene.shadowScene()->setGrassCardParams({
             _options.grassCardShape,
             _options.grassCardSides,

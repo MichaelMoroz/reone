@@ -265,8 +265,6 @@ struct GrassParams {
     float yOffset {-0.05f};
     float roughness {0.8f};
     uint32_t bladesPerCluster {8};
-    /** Retro keeps the cutout cardboard; it never reaches the tracer. */
-    uint32_t cardboard {0};
     // Four scalars to a row and the vector on its own boundary. A bare vec3 in
     // a push-constant block packs one way in C++ and another in SPIR-V, and the
     // disagreement is silent - the fields simply read as the wrong numbers.
@@ -276,26 +274,21 @@ struct GrassParams {
     float density {1.0f};
     float orientation {0.0f};
     float orientationVariance {6.28318531f};
+    uint32_t pad0 {0};
     glm::vec4 color {1.0f};
     float windStrength {0.35f};
     float windDirection {0.0f};
     float windSpeed {1.4f};
     float windWavelength {6.0f};
     float windGust {0.6f};
-    uint32_t segments {4};
     uint32_t cardVerts {4};
     uint32_t cardTris {2};
+    // Explicit, one on each side of the vector, because the alternative is
+    // implicit tail padding that C++ and SPIR-V are free to place differently -
+    // and the disagreement reads as the fields simply holding wrong numbers.
+    uint32_t pad1 {0};
 };
 static_assert(sizeof(GrassParams) == 112);
-
-/** Vertices and triangles a single blade contributes - see scene_resolve.slang. */
-/**
- * Geometry of one blade for a given segment count - see scene_resolve.slang.
- * A strip of n quads sharing n+1 vertex pairs, plus a single tip vertex.
- */
-constexpr uint32_t grassVertsPerBlade(uint32_t segments) { return segments * 2 + 3; }
-constexpr uint32_t grassTrisPerBlade(uint32_t segments) { return segments * 2 + 1; }
-
 
 struct GpuSceneUpload {
     std::vector<InstanceMaterial> materials;

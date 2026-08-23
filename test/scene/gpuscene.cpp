@@ -241,7 +241,6 @@ TEST(GpuScene, grass_uses_face_band_prefix_ranges_without_cpu_quads) {
     // the third, since selection is by distance.
     GrassParams params;
     params.radius = 32.0f;
-    params.segments = 3;
     params.bladesPerCluster = 2;
     scene.setGrassParams(params);
 
@@ -266,12 +265,12 @@ TEST(GpuScene, grass_uses_face_band_prefix_ranges_without_cpu_quads) {
     EXPECT_EQ(1, near.grassRanges[1].faceIndex);
     EXPECT_EQ(3, near.grassRanges[1].clusterOffset);
     EXPECT_EQ(5, near.grassRanges[1].clusterCount);
-    // 8 granted clusters * 2 blades, each a strip of 3 quads closed by a tip:
-    // 2n+3 = 9 vertices and 2n+1 = 7 triangles. Spelled as literals rather than
-    // through grassVertsPerBlade, so an error in that helper cannot satisfy
-    // both the recorder and its test.
-    EXPECT_EQ(144, near.objects[0].data.vertexCount);
-    EXPECT_EQ(112, near.objects[0].data.triangleCount);
+    // 8 granted clusters * 2 blades = 16 cards. Cards live in their own indexed
+    // instance region rather than the merged vertex range, which is what keeps
+    // the TLAS from seeing every blade twice, so the merged counts stay zero.
+    EXPECT_EQ(16, near.objects[0].data.cardCount);
+    EXPECT_EQ(0, near.objects[0].data.vertexCount);
+    EXPECT_EQ(0, near.objects[0].data.triangleCount);
     EXPECT_EQ(2, near.objects[0].data.srcIndexOffset);
     EXPECT_EQ(near.objects[0].data.materialIndex,
               near.grassFaces[0].faceBudgetMaterialVariants.z);
@@ -287,9 +286,10 @@ TEST(GpuScene, grass_uses_face_band_prefix_ranges_without_cpu_quads) {
     EXPECT_EQ(0, far.grassRanges[0].clusterOffset);
     EXPECT_EQ(2, far.grassRanges[0].clusterCount);
     ASSERT_EQ(1, far.objects.size());
-    // Only the far face is in reach now: 2 clusters * 2 blades * 9 and * 7.
-    EXPECT_EQ(36, far.objects[0].data.vertexCount);
-    EXPECT_EQ(28, far.objects[0].data.triangleCount);
+    // Only the far face is in reach now: 2 clusters * 2 blades = 4 cards.
+    EXPECT_EQ(4, far.objects[0].data.cardCount);
+    EXPECT_EQ(0, far.objects[0].data.vertexCount);
+    EXPECT_EQ(0, far.objects[0].data.triangleCount);
 
     faces[0].faceBudgetMaterialVariants.y = 9;
     scene.addGrass(renderCategory(RenderCategory::Opaque), {4, 0}, {}, material,
@@ -312,7 +312,6 @@ TEST(GpuScene, grass_card_shape_state_matches_at_startup_and_after_live_changes)
     material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)] =
         texture.get();
     GrassParams grass;
-    grass.cardboard = 1;
     grass.bladesPerCluster = 1;
     const std::array shapes {
         GrassCardShape::Quad, GrassCardShape::Aabb, GrassCardShape::Obb,
