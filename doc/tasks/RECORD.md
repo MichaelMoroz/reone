@@ -1523,6 +1523,63 @@ The reader used for the 2DA is a scratch script, not a committed tool; it follow
 `TwoDAReader`'s own format handling, which matters because retail ships both tab- and
 NUL-delimited token sections for the same layout.
 
+### 3.14 A shadow that stopped short of the light that cast it, and four instruments that lied
+
+Recorded 2026-08-25, after the multi-caster work. The defect is one line; the way it was found is
+the part worth keeping, because four separate measurements pointed confidently at the wrong thing
+first.
+
+**The defect.** `getPointLightShadow` faded its result out over `smoothstep(radius, 2*radius,
+distance)`, while both resolves admit a point light out to radius SQUARED - the Odyssey cull. For a
+lamp of radius 20 the light arrives at 400 units and the shadow was gone by 40, so across that
+range the light shone through walls unopposed. Removing the fade on `ebo_m12aa` moved PBR toward a
+path-traced reference on every measure: mean absolute 25.045 -> 23.936, median 20.667 -> 19.000,
+signed (PBR too bright) +6.98 -> +2.20, paired advantage +1.108 +/- 0.012.
+
+**Why a fixture found it and four module measurements did not.** The testbed's light is a distant
+point with radius 1000, which this engine promotes to directional, so nothing in the fixture set
+exercised a cube shadow at all. Point shadows could only be judged inside a module full of other
+lights. `warp testbed point` now exists for exactly this, and the measurement it enables is the one
+that had been missing all along: render **with and without the occluder** in both renderers, and
+the ratio is a shadow term in each - two comparable quantities rather than a visibility against an
+irradiance. On that fixture the point path agrees with the tracer as closely as the directional
+path does, 77.1% IoU against 77.9%, which is what moved the search off the mechanism.
+
+**The four instruments, in the order they misled:**
+
+1. **A debug channel that read unbound textures.** A shadow-term channel was added to the debug
+   pass, which does not bind the shadow maps - its own comment says it "wants none of the shadow,
+   irradiance or BRDF tables". It did not fail. It sampled the 1x1 stand-in every unbound unit
+   falls back to and produced a stable, confident, fictional result: 88.09% occluded from point
+   casters where the truth is 12.71%, and 3.80% from directional where the truth is 9.03%. A whole
+   root-cause chain - a half-occluded histogram, insensitivity to bias, a theory about
+   GetDimensions - was built on it. **Check a new instrument against a case whose answer is already
+   known before trusting one number from it.**
+2. **A stale binary, for three rounds.** `engine.exe` was 26 minutes older than the source while
+   three successive measurements reported "unchanged". The build output was being grepped for
+   errors and a success line printed unconditionally, which swallowed the status. AGENTS.md already
+   requires checking the binary's timestamp; it was not checked. Note the corollary learned the
+   same day: a `.slang` file newer than the binary is EXPECTED, since shaders compile at runtime,
+   so the timestamp check must exclude them or it cries wolf.
+3. **A whole-frame mean, on a question it cannot see.** Two candidate ambient treatments were
+   scored by mean absolute error against a converged tracer; they differed by 0.13 levels, under
+   the reference's own 0.25 standard error. Restricting to the pixels the variants disagree on made
+   it separable. But the deeper failure was that the winning variant had removed shadows from scene
+   geometry entirely, and a mean cannot see that a shadow has stopped existing - removing one moves
+   a modest number of pixels a long way and the average barely registers, while the brightening
+   reads as reduced bias. The developer saw it immediately in the image.
+4. **PowerShell argument splatting**, silently dropping `--mode` and `--debugview` so three
+   "different" captures were three identical default renders. Related to the `$args` trap already
+   recorded in the session memory; the fix is explicit argument lists, never `@splat`.
+
+**Also measured, and deliberately not acted on.** `kDefaultShadowOpacity` is 0.5, so shadows run at
+half strength in every mode. Against the tracer on `ebo_m12aa`, 0.75 is marginally better (bias
++2.13 -> -1.31) and 1.0 overshoots; on `danm16` even 1.0 leaves a +34.5 bias, so that scene is
+dominated by something else entirely. There is a principled reason a partial shadow suits PBR - it
+has no bounce light, so a fully occluded surface receives nothing where the tracer still fills it
+with indirect - which makes the dial partly a stand-in for missing GI. Two scenes, one confounded,
+is not enough to retune a look dial.
+
 ## 4. Rejected approaches, and why
 
 ### 4.1 Retained registration, rejected in favour of the snapshot
