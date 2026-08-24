@@ -45,7 +45,27 @@ static const float2 kPoissonDisk[kNumDirectionalPCFSamples] = {
     float2(-0.24188840, 0.99706507), float2(-0.81409955, 0.91437590),
     float2(0.19984126, 0.78641367), float2(0.14383161, -0.14100790)};
 
-static const float kPCFSampleRadius = 0.1;
+/**
+ * Point kernel and bias, both in TEXELS of the cube face rather than in world
+ * units, for the same reason the directional offset is: one face spans ninety
+ * degrees, so a texel covers 2*distance/resolution of world at whatever range
+ * the receiver happens to be. A fixed world offset is enormous next to the
+ * light and sub-texel far from it, and neither end filters or biases.
+ */
+static const float kPCFSampleRadiusTexels = 1.5;
+static const float kPointNormalOffsetTexels = 2.5;
+/**
+ * Depth bias, in texels of world distance at the receiver.
+ *
+ * This is the whole of the point path's bias, and it has to be: the shadow
+ * fragment writes SV_Depth to store radial distance, and a shader-replaced
+ * depth does not receive the pipeline's depth bias - so depthBiasConstantFactor
+ * and depthBiasSlopeFactor, which the directional pass relies on, reach this
+ * one not at all. Without it every lit surface self-shadows on roughly half
+ * its taps, which reads as a uniform half-darkening rather than as acne and
+ * was measured at 48% of a frame sitting near 0.5 visibility.
+ */
+static const float kPointDepthBiasTexels = 3.0;
 static const float kPointShadowFar = 2500.0;
 // Receiver normal offset handles grazing surfaces without moving every caster
 // away from its contact point as a large constant depth bias does.
@@ -58,7 +78,6 @@ static const float kPointShadowFar = 2500.0;
 // Scaling by the cascade's own texel diagonal makes the offset mean the same
 // thing everywhere.
 static const float kDirectionalNormalOffsetTexels = 2.5;
-static const float kPointNormalOffset = 0.005;
 
 // One visibility value, and it means one thing: how much of the DIRECT light
 // from the shadow-casting light reaches this surface. It is never applied to
@@ -192,10 +211,25 @@ static const float3 kPCFOffsets[kNumPCFSamples] = {
     float3(0, 1, 1), float3(0, -1, 1), float3(0, -1, -1), float3(0, 1, -1)};
 
 float getPointLightShadow(GlobalUniformsShadowLight slot, float3 worldPos, float3 normal) {
-    float3 lightVector = normalize(slot.positionOrDirection.xyz - worldPos);
+    float3 toLight = slot.positionOrDirection.xyz - worldPos;
+    float rawDistance = max(1e-4, length(toLight));
+    float3 lightVector = toLight / rawDistance;
     float NdotL = dot(normal, lightVector);
     float sinAngle = sqrt(max(0.0, 1.0 - NdotL * NdotL));
-    float3 offsetWorldPos = worldPos + normal * sinAngle * kPointNormalOffset;
+
+    // World size of one cube texel at this receiver's range. A face is a
+    // 90-degree frustum, so its half-extent equals the distance and one texel
+    // spans 2*distance/resolution.
+    //
+    // The resolution comes from the uniform, not from GetDimensions: that query
+    // does not report the face width for this sampler, and the size it did
+    // report made the bias clamp the depth reference to zero and the kernel
+    // sample at random - which looks like a working shadow right up until you
+    // change the bias and nothing moves.
+    float texelWorld = 2.0 * rawDistance / max(1.0, float(slot.mapResolution));
+
+    float3 offsetWorldPos =
+        worldPos + normal * sinAngle * kPointNormalOffsetTexels * texelWorld;
     float3 fragToLight = offsetWorldPos - slot.positionOrDirection.xyz;
     float currentDepth = length(fragToLight);
 
@@ -209,16 +243,28 @@ float getPointLightShadow(GlobalUniformsShadowLight slot, float3 worldPos, float
     // The cube map holds distance normalised by the far plane, so the reference
     // is divided rather than the stored value multiplied - the comparison
     // happens inside the sampler and cannot scale what it reads.
-    float referenceDepth = currentDepth / kPointShadowFar;
+    float referenceDepth =
+        max(0.0, currentDepth - kPointDepthBiasTexels * texelWorld) / kPointShadowFar;
     float shadow = 0.0;
     for (int i = 0; i < kNumPCFSamples; ++i) {
         shadow += 1.0 - sShadowMapCube.SampleCmpLevelZero(
-                            float4(fragToLight + kPCFSampleRadius * kPCFOffsets[i],
+                            float4(fragToLight +
+                                       kPCFSampleRadiusTexels * texelWorld * kPCFOffsets[i],
                                    float(slot.mapIndex)),
                             referenceDepth);
     }
     shadow /= float(kNumPCFSamples);
-    shadow *= 1.0 - smoothstep(slot.radius, 2.0 * slot.radius, currentDepth);
+    // No fade with range. There used to be one, smoothstep(radius, 2*radius),
+    // and it did not match the reach of the light it belongs to: both resolves
+    // admit a point light out to radius SQUARED - the Odyssey cull, 400 units
+    // for a lamp of radius 20 - while the shadow was gone by 40. Between those
+    // the light arrived with no occlusion at all and shone through walls,
+    // which is what made point shadows look absent in a module while a fixture
+    // whose receiver sits well inside the radius looked correct.
+    //
+    // Nothing is needed in its place. Where the light is too far to matter its
+    // own attenuation is already ~0, so occluding it changes nothing, and the
+    // cube's far plane covers far more than the cull does.
     return shadow;
 }
 

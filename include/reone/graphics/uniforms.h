@@ -107,7 +107,16 @@ struct GlobalUniformsShadowLight {
      * what says which.
      */
     int mapIndex {0};
-    int padding {0};
+    /**
+     * Face resolution of the map this caster writes.
+     *
+     * Carried rather than queried. GetDimensions on the cube-array comparison
+     * sampler does not report the face width here - biasing from it produced a
+     * texel size so large that the depth reference clamped to zero and the
+     * kernel sampled at random, which is indistinguishable from a working
+     * shadow until you vary the bias and nothing moves.
+     */
+    int mapResolution {1};
 };
 
 struct GlobalUniforms {

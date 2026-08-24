@@ -69,7 +69,8 @@ struct GlobalUniformsShadowLight {
     float radius;
     /** First cascade for a directional caster, cube slice for a point one. */
     int mapIndex;
-    int padding;
+    /** Face resolution of this caster's map; carried, not queried. */
+    int mapResolution;
 };
 
 struct GlobalUniforms {
