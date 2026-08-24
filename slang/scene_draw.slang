@@ -293,8 +293,23 @@ void applyShadowGates(float2 rawUv, float vertexAlpha, float2 fragCoord,
     bool cutout = (material.featureMask & kMegaFeaturePunchThrough) != 0;
     bool blended = (material.featureMask & kMegaFeatureBlendedCoverage) != 0;
     uint category = (material.featureMask >> kMegaCategoryShift) & kMegaCategoryMask;
-    if (!cutout && !blended &&
-        (pushConstants.casterCategories & (1u << category)) == 0) discard;
+    // The category filter applies to cutouts and blended surfaces too.
+    //
+    // It used to exempt them, which defeated the filter for exactly the
+    // geometry most likely to be scenery: foliage, fences, grilles and grass
+    // cards are cutouts, so in retro - whose caster set is creatures and
+    // equipment and nothing else - they cast shadows the original never drew.
+    // Measured on danm14ab: 42% of retro's shadowed pixels came from cutout
+    // geometry, 13.3% of the frame.
+    //
+    // This does not stop a creature casting. The test is on the object's
+    // category, not on whether the surface has holes, so a cutout that belongs
+    // to a creature - hair, a cape, a robe hem - still passes the mask. What
+    // it stops is a cutout that belongs to a room or a placeable.
+    //
+    // PBR and the tracer are unaffected: their mask is every category, so the
+    // test can never reject.
+    if ((pushConstants.casterCategories & (1u << category)) == 0) discard;
 
     if (pushConstants.materialGated == kMegaCoverageUngated) return;
     float2 uv = transformedUV(material, rawUv);
@@ -654,6 +669,14 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
             // Forward transparency has no separable direct-light lobe. Apply
             // visibility to its authored diffuse contribution, while leaving
             // the captured environment reflection below untouched.
+            //
+            // The FIRST caster's, not every caster's, and that is a choice
+            // rather than a derivation: with no per-light lobe there is
+            // nothing to attenuate per light, and combining several casters
+            // into one factor would darken a blended surface once per light
+            // that happens to cast. Slot zero is the defensible single answer
+            // because selection orders casters directional-first then by
+            // distance, so it holds the light most likely to dominate.
             color *= getShadow(
                 viewPos, input.worldPos, materialNormal,
                 (material.featureMask & kMegaFeatureThin) != 0);
