@@ -42,8 +42,16 @@ enum class ShaderResourceKind {
 enum class ShaderStage {
     /** The load path may link a module without its entry points; stage is then advisory. */
     Unknown,
+    Vertex,
+    Fragment,
     Compute,
     RayGeneration,
+};
+
+/** One selected Slang entry point and the stage Vulkan will create it for. */
+struct ShaderEntryPoint {
+    std::string name;
+    ShaderStage stage {ShaderStage::Unknown};
 };
 
 struct ShaderBindingDescription {

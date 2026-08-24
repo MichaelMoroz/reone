@@ -652,9 +652,9 @@ std::unique_ptr<IComputePipeline> VulkanRenderer::makeComputePipeline(
 std::unique_ptr<ITracingPipeline> VulkanRenderer::makeTracingPipeline(
     const TracingPipelineDesc &desc) {
     return _pipelines.makeTracingPipeline(shaderModule(desc.shader),
-                                          desc.reflection,
-                                          _device.maxBindlessSampledImages(),
-                                          desc.pushConstantSize, desc.label);
+                                           desc.reflection,
+                                           _device.maxBindlessSampledImages(),
+                                           desc.pushConstantSize, desc.shader, desc.label);
 }
 
 std::unique_ptr<ITracingDenoiser> VulkanRenderer::makeTracingDenoiser(glm::ivec2 extent) {

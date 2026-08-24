@@ -19,6 +19,8 @@
 
 #include <volk.h>
 
+#include <unordered_set>
+
 #include "reone/graphics/rhi/pipelinecache.h"
 #include "reone/graphics/rhi/tracingpipeline.h"
 
@@ -99,7 +101,7 @@ public:
     std::unique_ptr<ITracingPipeline> makeTracingPipeline(
         const std::vector<uint32_t> &spirv, const ShaderReflection &reflection,
         uint32_t bindlessTextureCapacity, uint32_t pushConstantSize,
-        const std::string &label);
+        const std::string &shader, const std::string &label);
     size_t size() const { return _pipelines.size(); }
 
 private:
@@ -112,6 +114,10 @@ private:
     std::unordered_map<Key, std::unique_ptr<VulkanPipeline>, KeyHash> _pipelines;
     /** SPIR-V is kept so a second entry point in the same module is free. */
     std::unordered_map<std::string, std::vector<uint32_t>> _modules;
+    std::unordered_set<std::string> _validatedLayouts;
+
+    void validateLayout(const std::string &shader, const ShaderReflection &reflection,
+                        uint32_t pushConstantSize, bool cachedDescriptors);
 };
 
 } // namespace graphics

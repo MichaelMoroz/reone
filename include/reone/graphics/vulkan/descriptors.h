@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include <volk.h>
 
 #include "reone/graphics/rhi/descriptors.h"
@@ -111,6 +113,8 @@ public:
     VkDescriptorSetLayout textureLayout() const { return _textureLayout; }
     VkDescriptorSetLayout megaDrawLayout() const { return _megaDrawLayout; }
     VkDescriptorSetLayout resolveLayout() const { return _resolveLayout; }
+    /** Descriptor capacity at one binding in the shared cached-pipeline layouts. */
+    std::optional<uint32_t> cachedDescriptorCount(uint32_t set, uint32_t binding) const;
 
     VkDescriptorSet acquireResolveSet(int frame, const VulkanImage *output,
                                       const VulkanImage *skyCube, VkImageView skyView);
@@ -201,6 +205,8 @@ private:
     VkDescriptorSetLayout _textureLayout {VK_NULL_HANDLE};
     VkDescriptorSetLayout _resolveLayout {VK_NULL_HANDLE};
     VkDescriptorSetLayout _megaDrawLayout {VK_NULL_HANDLE};
+    /** Captured from the same binding arrays passed to Vulkan at init. */
+    std::array<std::vector<uint32_t>, 4> _cachedDescriptorCounts;
     struct MegaDrawFrame {
         VkDescriptorPool pool {VK_NULL_HANDLE};
         uint32_t sets {0};

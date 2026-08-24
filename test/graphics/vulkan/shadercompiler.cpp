@@ -257,6 +257,21 @@ TEST(SlangShaderCompiler, preserves_unbounded_descriptor_arrays) {
     compiler.deinit();
 }
 
+TEST(SlangShaderCompiler, reflects_push_constants_used_by_selected_entry_points) {
+    SlangShaderCompiler compiler {REONE_SHADER_SOURCE_DIR};
+    compiler.init();
+    const auto reflectFragment = [&compiler](const char *fragment) {
+        return compiler.reflection(
+            "postprocess",
+            {{"postVertex", ShaderStage::Vertex},
+             {fragment, ShaderStage::Fragment}});
+    };
+    EXPECT_EQ(reflectFragment("postProcessFragment").pushConstantSize, 16u);
+    EXPECT_EQ(reflectFragment("primaryCoverageFragment").pushConstantSize, 4u);
+    EXPECT_EQ(reflectFragment("bloomCompositeFragment").pushConstantSize, 16u);
+    compiler.deinit();
+}
+
 class TemporaryShaderSources {
 public:
     TemporaryShaderSources() {

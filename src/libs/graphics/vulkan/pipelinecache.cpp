@@ -26,6 +26,7 @@
 
 #include "reone/graphics/vulkan/device.h"
 #include "reone/graphics/vulkan/descriptors.h"
+#include "reone/graphics/vulkan/renderer.h"
 #include "reone/system/logutil.h"
 
 namespace reone {
@@ -103,6 +104,52 @@ void VulkanPipelineCache::init(
 void VulkanPipelineCache::deinit() {
     _pipelines.clear();
     _modules.clear();
+    _validatedLayouts.clear();
+}
+
+void VulkanPipelineCache::validateLayout(
+    const std::string &shader, const ShaderReflection &reflection,
+    uint32_t pushConstantSize, bool cachedDescriptors) {
+    if (_validatedLayouts.find(shader) != _validatedLayouts.end())
+        return;
+
+    std::string mismatch;
+    if (reflection.pushConstantSize > pushConstantSize) {
+        mismatch = "Vulkan: shader '" + shader + "' reflects push-constant size " +
+                   std::to_string(reflection.pushConstantSize) +
+                   " bytes, but pipeline layout declares " +
+                   std::to_string(pushConstantSize) + " bytes";
+    }
+    if (cachedDescriptors) {
+        for (const auto &binding : reflection.bindings) {
+            const auto declared = _descriptors.cachedDescriptorCount(binding.set, binding.binding);
+            const bool unbounded = binding.count == 0;
+            if (declared && *declared != 0 && (unbounded || binding.count <= *declared))
+                continue;
+            const auto reflectedCount = unbounded ? std::string {"unbounded"}
+                                                  : std::to_string(binding.count);
+            const auto declaredCount = declared ? std::to_string(*declared) : "0";
+            const auto descriptorMismatch =
+                "Vulkan: shader '" + shader + "' descriptor '" + binding.name +
+                "' at set " + std::to_string(binding.set) + ", binding " +
+                std::to_string(binding.binding) + " reflects count " + reflectedCount +
+                ", but pipeline layout declares " + declaredCount;
+            if (mismatch.empty())
+                mismatch = descriptorMismatch;
+            else
+                mismatch += "; " + descriptorMismatch;
+        }
+    }
+    if (!mismatch.empty()) {
+#ifndef NDEBUG
+        throw std::runtime_error(mismatch);
+#else
+        if (_renderer.validationEnabled())
+            throw std::runtime_error(mismatch);
+        error(mismatch, LogChannel::Graphics);
+#endif
+    }
+    _validatedLayouts.insert(shader);
 }
 
 VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
@@ -117,6 +164,19 @@ VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
     }
 
     const bool compute = !key.computeEntry.empty();
+    const auto label = compute ? key.module + ":" + key.computeEntry
+                               : key.module + ":" + key.vertexEntry + "/" + key.fragmentEntry;
+    if (_validatedLayouts.find(label) == _validatedLayouts.end()) {
+        std::vector<ShaderEntryPoint> entryPoints;
+        if (compute) {
+            entryPoints.push_back({key.computeEntry, ShaderStage::Compute});
+        } else {
+            entryPoints.push_back({key.vertexEntry, ShaderStage::Vertex});
+            entryPoints.push_back({key.fragmentEntry, ShaderStage::Fragment});
+        }
+        validateLayout(label, _renderer.reflection(key.module, entryPoints),
+                       kCachedPipelinePushConstantSize, true);
+    }
     VulkanPipeline::Config config;
     config.type = compute ? VulkanPipeline::Config::Type::Compute
                           : VulkanPipeline::Config::Type::Graphics;
@@ -155,8 +215,6 @@ VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
     pipeline->init(config);
     // Named after the shaders it was built from, so a capture says which
     // program a draw used instead of a bare handle.
-    auto label = compute ? key.module + ":" + key.computeEntry
-                         : key.module + ":" + key.vertexEntry + "/" + key.fragmentEntry;
     _device.setObjectName(VK_OBJECT_TYPE_PIPELINE,
                           reinterpret_cast<uint64_t>(pipeline->handle()), label);
     _device.setObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
@@ -271,11 +329,13 @@ private:
 
 std::unique_ptr<ITracingPipeline> VulkanPipelineCache::makeTracingPipeline(
     const std::vector<uint32_t> &spirv, const ShaderReflection &reflection,
-    uint32_t bindlessTextureCapacity, uint32_t pushConstantSize, const std::string &label) {
+    uint32_t bindlessTextureCapacity, uint32_t pushConstantSize,
+    const std::string &shader, const std::string &label) {
     if (bindlessTextureCapacity == 0)
         throw std::runtime_error("Vulkan: ray-query bindless texture capacity is zero");
     if (reflection.stage != ShaderStage::Unknown && reflection.stage != ShaderStage::RayGeneration)
         throw std::runtime_error("Vulkan: ray-query entry point is not a ray-generation shader");
+    validateLayout(shader, reflection, pushConstantSize, false);
 
     std::unordered_map<std::string, DescriptorBinding> reflectedBindings;
     std::vector<VulkanPipeline::LayoutBinding> bindings;

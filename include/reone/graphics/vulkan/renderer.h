@@ -108,6 +108,10 @@ public:
     ShaderReflection reflection(const std::string &name) const override {
         return _shaderCompiler.reflection(name);
     }
+    ShaderReflection reflection(const std::string &name,
+                                const std::vector<ShaderEntryPoint> &entryPoints) const {
+        return _shaderCompiler.reflection(name, entryPoints);
+    }
     std::unique_ptr<ITracingPipeline> makeTracingPipeline(
         const TracingPipelineDesc &desc) override;
     std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(glm::ivec2 extent) override;
@@ -143,6 +147,7 @@ public:
 
     void waitIdle() override { _device.waitIdle(); }
     bool rayQueryAvailable() const override { return _device.rayQueryAvailable(); }
+    bool validationEnabled() const { return _validation; }
 
     /** The uniform descriptor set for the frame being recorded. */
     VkDescriptorSet uniformSet() const { return _descriptors.uniformSet(_frameIndex); }

@@ -30,6 +30,7 @@
 #include <iterator>
 #include <limits>
 #include <sstream>
+#include <unordered_set>
 
 #include "reone/graphics/rendering/gpuscene.h"
 #include "reone/graphics/uniforms.h"
@@ -196,7 +197,18 @@ struct SlangShaderCompiler::Impl {
         return blob ? std::string(static_cast<const char *>(blob->getBufferPointer()), blob->getBufferSize()) : "";
     }
 
-    Program load(const std::filesystem::path &sourceDir, const std::string &name) const {
+    static SlangStage slangStage(ShaderStage stage) {
+        switch (stage) {
+        case ShaderStage::Vertex: return SLANG_STAGE_VERTEX;
+        case ShaderStage::Fragment: return SLANG_STAGE_FRAGMENT;
+        case ShaderStage::Compute: return SLANG_STAGE_COMPUTE;
+        case ShaderStage::RayGeneration: return SLANG_STAGE_RAY_GENERATION;
+        default: throw std::invalid_argument("Slang: entry point has no execution stage");
+        }
+    }
+
+    Program load(const std::filesystem::path &sourceDir, const std::string &name,
+                 const std::vector<ShaderEntryPoint> &entryPoints = {}) const {
         slang::TargetDesc target {};
         target.format = SLANG_SPIRV;
         target.profile = global->findProfile("spirv_1_5");
@@ -225,9 +237,40 @@ struct SlangShaderCompiler::Impl {
         module = program.session->loadModule(name.c_str(), diagnostic.writeRef());
         if (!module)
             throw std::runtime_error("Slang: cannot load '" + name + "'\n" + diagnostics(diagnostic));
-        diagnostic.setNull();
-        if (SLANG_FAILED(module->link(program.linked.writeRef(), diagnostic.writeRef())))
-            throw std::runtime_error("Slang: cannot link '" + name + "'\n" + diagnostics(diagnostic));
+        if (entryPoints.empty()) {
+            diagnostic.setNull();
+            if (SLANG_FAILED(module->link(program.linked.writeRef(), diagnostic.writeRef())))
+                throw std::runtime_error("Slang: cannot link '" + name + "'\n" + diagnostics(diagnostic));
+        } else {
+            std::vector<Slang::ComPtr<slang::IEntryPoint>> selected;
+            std::vector<slang::IComponentType *> components {module.get()};
+            selected.reserve(entryPoints.size());
+            components.reserve(entryPoints.size() + 1);
+            for (const auto &entry : entryPoints) {
+                Slang::ComPtr<slang::IEntryPoint> selectedEntry;
+                diagnostic.setNull();
+                if (SLANG_FAILED(module->findAndCheckEntryPoint(
+                        entry.name.c_str(), slangStage(entry.stage),
+                        selectedEntry.writeRef(), diagnostic.writeRef()))) {
+                    throw std::runtime_error("Slang: cannot select entry point '" + entry.name +
+                                             "' in '" + name + "'\n" + diagnostics(diagnostic));
+                }
+                components.push_back(selectedEntry.get());
+                selected.push_back(std::move(selectedEntry));
+            }
+            Slang::ComPtr<slang::IComponentType> composite;
+            diagnostic.setNull();
+            if (SLANG_FAILED(program.session->createCompositeComponentType(
+                    components.data(), static_cast<SlangInt>(components.size()),
+                    composite.writeRef(), diagnostic.writeRef()))) {
+                throw std::runtime_error("Slang: cannot compose entry points for '" + name +
+                                         "'\n" + diagnostics(diagnostic));
+            }
+            diagnostic.setNull();
+            if (SLANG_FAILED(composite->link(program.linked.writeRef(), diagnostic.writeRef())))
+                throw std::runtime_error("Slang: cannot link entry points for '" + name +
+                                         "'\n" + diagnostics(diagnostic));
+        }
         return program;
     }
 };
@@ -355,7 +398,68 @@ const std::vector<uint32_t> &SlangShaderCompiler::module(const std::string &name
 }
 
 ShaderReflection SlangShaderCompiler::reflection(const std::string &name) const {
-    const auto program = _impl->load(_sourceDir, name);
+    return reflection(name, {});
+}
+
+std::unordered_set<std::string> spirvPushConstantTypes(
+    slang::IBlob &blob, const std::string &shader) {
+    const auto bytes = blob.getBufferSize();
+    if (bytes < 5 * sizeof(uint32_t) || bytes % sizeof(uint32_t) != 0)
+        throw std::runtime_error("Slang: malformed entry-point SPIR-V for '" + shader + "'");
+    const auto *words = static_cast<const uint32_t *>(blob.getBufferPointer());
+    const auto wordCount = bytes / sizeof(uint32_t);
+    if (words[0] != 0x07230203u)
+        throw std::runtime_error("Slang: malformed entry-point SPIR-V for '" + shader + "'");
+
+    std::unordered_map<uint32_t, std::string> names;
+    std::unordered_map<uint32_t, uint32_t> pushPointers;
+    std::vector<uint32_t> pushVariables;
+    for (size_t offset = 5; offset < wordCount;) {
+        const uint32_t count = words[offset] >> 16;
+        const uint32_t opcode = words[offset] & 0xffffu;
+        if (count == 0 || count > wordCount - offset)
+            throw std::runtime_error("Slang: malformed entry-point SPIR-V for '" + shader + "'");
+        if (opcode == 5u && count > 2) { // OpName
+            std::string name;
+            bool terminated = false;
+            for (size_t word = offset + 2; word < offset + count && !terminated; ++word) {
+                for (int byte = 0; byte < 4; ++byte) {
+                    const char c = static_cast<char>((words[word] >> (8 * byte)) & 0xffu);
+                    if (c == '\0') {
+                        terminated = true;
+                        break;
+                    }
+                    name.push_back(c);
+                }
+            }
+            names.emplace(words[offset + 1], std::move(name));
+        } else if (opcode == 32u && count >= 4 && words[offset + 2] == 9u) { // OpTypePointer PushConstant
+            pushPointers.emplace(words[offset + 1], words[offset + 3]);
+        } else if (opcode == 59u && count >= 4 && words[offset + 3] == 9u) { // OpVariable PushConstant
+            pushVariables.push_back(words[offset + 1]);
+        }
+        offset += count;
+    }
+
+    std::unordered_set<std::string> result;
+    for (const auto pointer : pushVariables) {
+        const auto pointed = pushPointers.find(pointer);
+        if (pointed == pushPointers.end())
+            throw std::runtime_error("Slang: unnamed push-constant type in '" + shader + "'");
+        const auto named = names.find(pointed->second);
+        if (named == names.end())
+            throw std::runtime_error("Slang: unnamed push-constant type in '" + shader + "'");
+        auto name = named->second;
+        if (const auto suffix = name.find("_std430"); suffix != std::string::npos)
+            name.erase(suffix);
+        result.insert(std::move(name));
+    }
+    return result;
+}
+
+ShaderReflection SlangShaderCompiler::reflection(
+    const std::string &name, const std::vector<ShaderEntryPoint> &entryPoints) const {
+    const auto program = _impl->load(_sourceDir, name, entryPoints);
     Slang::ComPtr<slang::IBlob> diagnostic;
     auto *layout = program.linked->getLayout(0, diagnostic.writeRef());
     if (!layout)
@@ -373,16 +477,45 @@ ShaderReflection SlangShaderCompiler::reflection(const std::string &name) const 
     // and each pipeline kind applies its own stage as it always did. More than
     // one entry point is still a real error - which kernel to bind would be
     // ambiguous.
-    if (layout->getEntryPointCount() > 1)
+    if (layout->getEntryPointCount() > 1 && entryPoints.empty())
         throw std::runtime_error("Slang: more than one entry point in '" + name + "'");
     if (layout->getEntryPointCount() == 1) {
         const auto stage = layout->getEntryPointByIndex(0)->getStage();
-        if (stage == SLANG_STAGE_COMPUTE)
+        if (stage == SLANG_STAGE_VERTEX)
+            result.stage = ShaderStage::Vertex;
+        else if (stage == SLANG_STAGE_FRAGMENT)
+            result.stage = ShaderStage::Fragment;
+        else if (stage == SLANG_STAGE_COMPUTE)
             result.stage = ShaderStage::Compute;
         else if (stage == SLANG_STAGE_RAY_GENERATION)
             result.stage = ShaderStage::RayGeneration;
         else
             throw std::runtime_error("Slang: unsupported reflected entry-point stage in '" + name + "'");
+    }
+    std::vector<Slang::ComPtr<slang::IMetadata>> metadata;
+    std::unordered_set<std::string> usedPushConstantTypes;
+    metadata.reserve(entryPoints.size());
+    for (size_t index = 0; index < entryPoints.size(); ++index) {
+        Slang::ComPtr<slang::IBlob> code;
+        diagnostic.setNull();
+        if (SLANG_FAILED(program.linked->getEntryPointCode(
+                static_cast<SlangInt>(index), 0, code.writeRef(), diagnostic.writeRef()))) {
+            throw std::runtime_error("Slang: cannot generate entry-point metadata for '" + name +
+                                     "'\n" + Impl::diagnostics(diagnostic));
+        }
+        if (!code)
+            throw std::runtime_error("Slang: entry point generated no SPIR-V for '" + name + "'");
+        auto pushTypes = spirvPushConstantTypes(*code, name);
+        usedPushConstantTypes.insert(pushTypes.begin(), pushTypes.end());
+        Slang::ComPtr<slang::IMetadata> entryMetadata;
+        diagnostic.setNull();
+        if (SLANG_FAILED(program.linked->getEntryPointMetadata(
+                static_cast<SlangInt>(index), 0, entryMetadata.writeRef(),
+                diagnostic.writeRef()))) {
+            throw std::runtime_error("Slang: cannot reflect entry-point usage for '" + name +
+                                     "'\n" + Impl::diagnostics(diagnostic));
+        }
+        metadata.push_back(std::move(entryMetadata));
     }
     // Walk the program's global parameters through their variable layouts
     // rather than the type layout's binding ranges. The binding-range API
@@ -402,6 +535,29 @@ ShaderReflection SlangShaderCompiler::reflection(const std::string &name) const 
         if (!typeLayout)
             throw std::runtime_error("Slang: parameter without a type layout in '" + name + "'");
 
+        const auto locationUsedBySelectedEntry = [&](slang::ParameterCategory category,
+                                                     SlangUInt space, SlangUInt binding) {
+            if (metadata.empty())
+                return true;
+            for (const auto &entryMetadata : metadata) {
+                bool used = false;
+                if (SLANG_FAILED(entryMetadata->isParameterLocationUsed(
+                        static_cast<SlangParameterCategory>(category),
+                        space, binding, used))) {
+                    throw std::runtime_error("Slang: cannot query parameter usage in '" + name + "'");
+                }
+                if (used)
+                    return true;
+            }
+            return false;
+        };
+        const auto usedBySelectedEntry = [&](slang::ParameterCategory category) {
+            return locationUsedBySelectedEntry(
+                category,
+                static_cast<SlangUInt>(param->getBindingSpace(category)),
+                static_cast<SlangUInt>(param->getOffset(category)));
+        };
+
         bool isPushConstant = false, isDescriptor = false;
         const auto categoryCount = typeLayout->getCategoryCount();
         for (unsigned int c = 0; c < categoryCount; ++c) {
@@ -418,13 +574,21 @@ ShaderReflection SlangShaderCompiler::reflection(const std::string &name) const 
             const auto size = element ? element->getSize() : typeLayout->getSize();
             if (size == 0 || size > std::numeric_limits<uint32_t>::max())
                 throw std::runtime_error("Slang: malformed push constants in '" + name + "'");
-            if (result.pushConstantSize != 0)
+            if (!entryPoints.empty()) {
+                const auto *typeName = element ? element->getName() : nullptr;
+                if (!typeName || usedPushConstantTypes.find(typeName) == usedPushConstantTypes.end())
+                    continue;
+            }
+            if (result.pushConstantSize != 0 && entryPoints.empty())
                 throw std::runtime_error("Slang: multiple push constant ranges in '" + name + "'");
-            result.pushConstantSize = static_cast<uint32_t>(size);
+            result.pushConstantSize = std::max(result.pushConstantSize,
+                                               static_cast<uint32_t>(size));
             continue;
         }
         if (!isDescriptor)
             continue; // varyings, specialization constants, plain uniform data
+        if (!usedBySelectedEntry(slang::DescriptorTableSlot))
+            continue;
 
         const auto set = param->getBindingSpace(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT);
         const auto binding = param->getOffset(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT);

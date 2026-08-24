@@ -86,6 +86,15 @@ VulkanDescriptors::~VulkanDescriptors() {
 }
 
 void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
+    _cachedDescriptorCounts = {};
+    const auto rememberDescriptorCounts = [this](uint32_t set, const auto &bindings) {
+        auto &counts = _cachedDescriptorCounts.at(set);
+        for (const auto &binding : bindings) {
+            if (counts.size() <= binding.binding)
+                counts.resize(binding.binding + 1);
+            counts[binding.binding] = binding.descriptorCount;
+        }
+    };
     std::array<VkDescriptorSetLayoutBinding, kNumUniformBlocks> bindings {};
     for (int i = 0; i < kNumUniformBlocks; ++i) {
         bindings[i].binding = i;
@@ -96,6 +105,7 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
         // declares them all in one module shared by all stages.
         bindings[i].stageFlags = VK_SHADER_STAGE_ALL;
     }
+    rememberDescriptorCounts(kUniformSet, bindings);
 
     VkDescriptorSetLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -116,6 +126,7 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
         textureBindings[i].stageFlags =
             VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     }
+    rememberDescriptorCounts(kTextureSet, textureBindings);
     VkDescriptorSetLayoutCreateInfo textureLayoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     textureLayoutInfo.bindingCount = static_cast<uint32_t>(textureBindings.size());
     textureLayoutInfo.pBindings = textureBindings.data();
@@ -142,6 +153,7 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
     resolveBindings[kResolveSkyCubeBinding].descriptorCount = 1;
     resolveBindings[kResolveSkyCubeBinding].stageFlags =
         VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+    rememberDescriptorCounts(kResolveSet, resolveBindings);
     std::array<VkDescriptorBindingFlags, 2> resolveBindingFlags {
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0};
     VkDescriptorSetLayoutBindingFlagsCreateInfo resolveFlagsInfo {
@@ -188,6 +200,7 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
         megaBindings[i].stageFlags =
             VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     }
+    rememberDescriptorCounts(kMegaDrawSet, megaBindings);
     std::array<VkDescriptorBindingFlags, 9> megaBindingFlags {};
     for (uint32_t i = 3; i < 6; ++i) {
         megaBindingFlags[i] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
@@ -699,6 +712,15 @@ const VulkanImage *VulkanDescriptors::defaultFor(int unit,
     default:
         return twoD;
     }
+}
+
+std::optional<uint32_t> VulkanDescriptors::cachedDescriptorCount(
+    uint32_t set, uint32_t binding) const {
+    if (set >= _cachedDescriptorCounts.size() ||
+        binding >= _cachedDescriptorCounts[set].size() ||
+        _cachedDescriptorCounts[set][binding] == 0)
+        return std::nullopt;
+    return _cachedDescriptorCounts[set][binding];
 }
 
 void VulkanDescriptors::deinit() {

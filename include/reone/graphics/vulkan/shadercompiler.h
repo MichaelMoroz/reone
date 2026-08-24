@@ -50,6 +50,9 @@ public:
     const std::vector<uint32_t> &module(const std::string &name);
     /** Descriptor bindings reflected from one linked Slang module. */
     ShaderReflection reflection(const std::string &name) const;
+    /** Reflection narrowed to the resources used by the selected entry points. */
+    ShaderReflection reflection(const std::string &name,
+                                const std::vector<ShaderEntryPoint> &entryPoints) const;
     /** Compile every engine module now. False means at least one old module was retained. */
     bool recompileAll();
     /** Drops memory state so the next module request rechecks the disk cache. */
