@@ -4691,7 +4691,14 @@ void Game::consoleShowGalleryMode(const ConsoleArgs &args) {
 }
 
 void Game::loadTestbed(const std::string &variant) {
-    if (variant != "grass" && variant != "smoke" && variant != "smoke-control" && variant != "none") {
+    // "point" is "none" with the sun replaced by a lamp: the same white floor
+    // and the same single object, lit by a light close enough to stay a point
+    // rather than be promoted to directional. It exists because nothing else
+    // in the fixture set exercises a cube shadow map, so a point shadow could
+    // only ever be judged against a game module full of other lights.
+    const bool pointLight = variant == "point";
+    if (variant != "grass" && variant != "smoke" && variant != "smoke-control" &&
+        variant != "none" && !pointLight) {
         throw std::runtime_error("Unknown testbed object: " + variant);
     }
 
@@ -4775,13 +4782,21 @@ void Game::loadTestbed(const std::string &variant) {
     // A distant point makes this engine's radius-promoted directional light.
     // It shines from (-X, -Y, +Z), 45 degrees above the floor, leaving its
     // shadow toward (+X, +Y) across otherwise empty white ground.
-    auto lightNode = std::make_shared<ModelNode>(2, "testbed_sun", glm::vec3 {-100.0f, -100.0f, 141.42136f}, glm::quat {1.0f, 0.0f, 0.0f, 0.0f}, false, root.get());
+    //
+    // The "point" variant puts it at (-3, -3, 4) with a radius of 20 instead,
+    // which is under kMinDirectionalLightRadius and so stays a point light with
+    // a cube map. Same direction from the object, so the shadow still falls
+    // toward (+X, +Y) and the two variants are directly comparable - what
+    // differs between their frames is the shadow technique and nothing else.
+    const glm::vec3 lightPos = pointLight ? glm::vec3 {-3.0f, -3.0f, 4.0f}
+                                          : glm::vec3 {-100.0f, -100.0f, 141.42136f};
+    auto lightNode = std::make_shared<ModelNode>(2, "testbed_sun", lightPos, glm::quat {1.0f, 0.0f, 0.0f, 0.0f}, false, root.get());
     auto light = std::make_shared<ModelNode::Light>();
     light->dynamicType = 1;
     light->shadow = true;
     lightNode->setLight(std::move(light));
     lightNode->vectorTracks()[ControllerTypes::color].add(0.0f, glm::vec3 {1.0f});
-    lightNode->floatTracks()[ControllerTypes::radius].add(0.0f, 1000.0f);
+    lightNode->floatTracks()[ControllerTypes::radius].add(0.0f, pointLight ? 20.0f : 1000.0f);
     lightNode->floatTracks()[ControllerTypes::multiplier].add(0.0f, 1.0f);
     root->addChild(lightNode);
 
