@@ -1447,9 +1447,15 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
 
     // Its own set rather than either resolve's: this pass wants the motion
-    // target, which neither resolve binds, and wants none of the shadow,
-    // irradiance or BRDF tables both of them do. Unit numbering is the
-    // resolves' own, which the modules declare once each.
+    // target, which neither resolve binds, and wants none of the irradiance or
+    // BRDF tables both of them do. Unit numbering is the resolves' own, which
+    // the modules declare once each.
+    //
+    // The shadow maps ARE bound, because the shadow-term channel samples them.
+    // Leaving them out does not make that channel fail - it silently samples
+    // the stand-in textures every unbound unit falls back to, and produces a
+    // confident, stable, entirely fictional shadow term. That cost a long
+    // investigation whose every measurement was of a 1x1 default.
     auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
         _renderer.uniformRing().frame(),
         {{1, &_gbuffer->color(GBufferAttachment::Diffuse)},
@@ -1458,7 +1464,9 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
          {4, &_gbuffer->color(GBufferAttachment::SelfIllum)},
          {5, &_gbuffer->depth()},
          {TextureUnits::gBufMotion, &_gbuffer->color(GBufferAttachment::Motion)},
-         {TextureUnits::gBufTriangleId, &_gbuffer->color(GBufferAttachment::TriangleId)}});
+         {TextureUnits::gBufTriangleId, &_gbuffer->color(GBufferAttachment::TriangleId)},
+         {TextureUnits::shadowMapArray, _dirShadows.get()},
+         {TextureUnits::shadowMapCube, _pointShadows.get()}});
 
     auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
     cmd.bindComputePipeline(pipeline.pipeline);

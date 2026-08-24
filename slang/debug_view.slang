@@ -41,6 +41,7 @@ import uniforms;
 import lib.gbuf;
 import lib.math;
 import lib.scene_schema;
+import lib.shadow;
 
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
 [[vk::binding(2, 1)]] Sampler2D sGBufEyeNormal;
@@ -88,6 +89,27 @@ static const uint kDebugPenumbra = 16;         // tracer only
 static const uint kDebugDenoisedDiffuse = 17;  // tracer only
 static const uint kDebugDenoisedSpecular = 18; // tracer only
 static const uint kDebugFilteredDirect = 19;   // tracer only
+/**
+ * The raster shadow term on its own: white is fully lit, black fully occluded.
+ *
+ * Every mode, unlike kDebugDirectShadow, which is the tracer's demodulated
+ * direct channel and exists only where there is a tracer.
+ *
+ * Weighted by how much each caster actually lights the point, which is the
+ * whole difficulty. "Occluded from any caster" is not a shadow: a lamp forty
+ * metres away has most of the level hidden from it and contributes nothing
+ * there, and taking the darkest caster made 43% of one frame read as shadowed
+ * where the render shows no shadow at all. So this is the fraction of the
+ * direct light reaching the surface that survives its own occlusion -
+ * sum(visibility * contribution) / sum(contribution) - which is what a
+ * shadow means in the picture and what makes it comparable to the tracer's
+ * direct channel.
+ *
+ * Diagnostic, so the weight is an approximation of the resolves' own: NdotL
+ * times the Odyssey attenuation, without the material or the BRDF. It decides
+ * how the casters are mixed, not what any of them says.
+ */
+static const uint kDebugShadowTerm = 20;
 
 static const uint kNoTriangle = 0xffffffffu;
 static const uint kNoTexture = 0xffffffffu;
@@ -250,6 +272,41 @@ float3 channelColor(float2 uv, int2 pixel) {
     }
     case kDebugLightmap:
         return hasLightmap ? lightmapSample.rgb : float3(0.9, 0.0, 0.9) * shape * 0.4;
+    case kDebugShadowTerm: {
+        if (!shadowsEnabled || globalUniforms.numShadowLights == 0) {
+            return float3(1.0);
+        }
+        float depth = sGBufDepth.SampleLevel(uv, 0.0).r;
+        float3 viewPos = reconstructViewPos(uv, depth);
+        float3 worldPos = mul(globalUniforms.viewInv, float4(viewPos, 1.0)).xyz;
+        float lit = 0.0;
+        float total = 0.0;
+        for (int i = 0; i < globalUniforms.numLights; ++i) {
+            GlobalUniformsLight light = globalUniforms.lights[i];
+            if (light.shadowSlot < 0 || light.ambientOnly != 0) {
+                continue;
+            }
+            float3 toLight = light.position.w == 0.0 ? -light.position.xyz
+                                                     : light.position.xyz - worldPos;
+            float distance = max(1e-4, length(toLight));
+            float ndotl = max(0.0, dot(normal, toLight / distance));
+            if (ndotl <= 0.0) {
+                continue;
+            }
+            float atten = light.position.w == 0.0
+                              ? 1.0
+                              : (light.radius * light.radius) /
+                                    ((light.radius + distance) * (light.radius + distance));
+            float weight = light.multiplier * atten * ndotl;
+            total += weight;
+            lit += weight * getShadowFrom(light.shadowSlot, viewPos, worldPos,
+                                          normal, thinSurface);
+        }
+        // No caster reaches this surface, so nothing here is in shadow. White
+        // rather than black: black would read as fully occluded, which is the
+        // opposite of what an unreached surface means.
+        return float3(total > 0.0 ? lit / total : 1.0);
+    }
     case kDebugDepth: {
         float depth = sGBufDepth.SampleLevel(uv, 0.0).r;
         // Positive linear view distance on a fixed 100-unit ramp, so the same
