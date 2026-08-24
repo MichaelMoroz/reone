@@ -67,6 +67,15 @@ static constexpr int kMaxSoundCount = 4;
 
 static constexpr float kShadowFadeSpeed = 2.0f;
 
+/**
+ * Retro's caster budget, from the original's own videoquality.2da:
+ * NumShadowCastingLights is 1 at fast, low and good and 3 at best. Retro takes
+ * the best-quality figure because a mode that exists to reproduce the original
+ * should reproduce the setting a player would have chosen, not the one a 2003
+ * machine forced.
+ */
+static constexpr int kRetroShadowCasters = 3;
+
 static constexpr float kLightRadiusBias = 64.0f;
 
 static constexpr float kMaxCollisionDistanceWalk = 8.0f;
@@ -86,8 +95,9 @@ static const std::vector<float> g_shadowCascadeDivisors {
     0.135f};
 
 glm::vec3 SceneGraph::shadowLightDirection() const {
-    auto authored = _shadowLight->direction();
-    if (_shadowLight->hasAuthoredDirection()) {
+    const auto *light = _shadowLights.front().light;
+    auto authored = light->direction();
+    if (light->hasAuthoredDirection()) {
         return authored;
     }
 
@@ -136,9 +146,7 @@ void SceneGraph::clear() {
     // will look for a new one, and then adopts that one dimmed because the
     // no-cross-fade-on-a-fresh-scene path is gated on there having been none.
     // The module gets no sun until something else resets this.
-    _shadowLight = nullptr;
-    _shadowActive = false;
-    _shadowStrength = 0.0f;
+    _shadowLights.clear();
     // The pipeline outlives the scene it drew, and everything temporal it holds
     // describes geometry that no longer exists: NRD's accumulation, the common
     // tail's resolve history, the previous view and projection the reprojection
@@ -388,50 +396,122 @@ void SceneGraph::updateLighting() {
     }
 }
 
+SceneGraph::ShadowBudget SceneGraph::shadowBudget() const {
+    if (_graphicsOpt.mode == RenderMode::Retro) {
+        return {kRetroShadowCasters, kRetroShadowCasters, kRetroShadowCasters};
+    }
+    const int directional = std::max(0, _graphicsOpt.maxDirectionalShadows);
+    const int point = std::max(0, _graphicsOpt.maxPointShadows);
+    return {directional, point, directional + point};
+}
+
 void SceneGraph::updateShadowLight(float dt) {
-    const bool hadShadowLight = _shadowLight != nullptr;
-    auto closestLights = computeClosestLights(1, [this](auto &light, float distance2) {
+    const bool hadShadowLight = !_shadowLights.empty();
+    const auto budget = shadowBudget();
+
+    // Every eligible caster, in the order the renderer wants its slots: the
+    // sort puts directional lights first and then orders by distance, so slot
+    // zero is the light the single-caster renderer used to latch onto and the
+    // per-kind caps below can be applied by a single walk.
+    auto candidates = computeClosestLights(kMaxLights, [](auto &light, float distance2) {
         if (!light.modelNode().light()->shadow) {
             return false;
         }
         float radius = light.radius();
         return distance2 < radius * radius;
     });
-    if (_shadowLight) {
-        if (closestLights.empty() || _shadowLight != closestLights.front()) {
-            _shadowActive = false;
+
+    std::vector<LightSceneNode *> selected;
+    int directionalTaken = 0;
+    int pointTaken = 0;
+    for (auto *light : candidates) {
+        if (static_cast<int>(selected.size()) >= budget.total) {
+            break;
         }
-        if (_shadowActive) {
-            _shadowStrength = glm::min(1.0f, _shadowStrength + kShadowFadeSpeed * dt);
-        } else {
-            _shadowStrength = glm::max(0.0f, _shadowStrength - kShadowFadeSpeed * dt);
-            if (_shadowStrength == 0.0f) {
-                _shadowLight = nullptr;
-            }
+        const bool directional = light->isDirectional();
+        int &taken = directional ? directionalTaken : pointTaken;
+        if (taken >= (directional ? budget.directional : budget.point)) {
+            continue;
         }
+        ++taken;
+        selected.push_back(light);
     }
-    if (!_shadowLight && !closestLights.empty()) {
-        _shadowLight = closestLights.front();
-        _shadowActive = true;
-        // There is no previous shadow to cross-fade on the first light in a
-        // freshly loaded scene. Starting it dim only makes the module visibly
-        // brighten during its opening frames.
-        if (!hadShadowLight) {
-            _shadowStrength = 1.0f;
+
+    // Fade out whatever left the set, and release the slot only when it reaches
+    // zero. A caster that is still fading is still rendering, so it keeps its
+    // slot against the new arrivals rather than cutting to them.
+    for (auto &slot : _shadowLights) {
+        slot.active = std::find(selected.begin(), selected.end(), slot.light) != selected.end();
+        slot.strength = slot.active
+                            ? glm::min(1.0f, slot.strength + kShadowFadeSpeed * dt)
+                            : glm::max(0.0f, slot.strength - kShadowFadeSpeed * dt);
+    }
+    _shadowLights.erase(
+        std::remove_if(_shadowLights.begin(), _shadowLights.end(),
+                       [](const ShadowLight &slot) { return !slot.active && slot.strength == 0.0f; }),
+        _shadowLights.end());
+
+    for (auto *light : selected) {
+        const bool held = std::any_of(_shadowLights.begin(), _shadowLights.end(),
+                                      [light](const ShadowLight &slot) { return slot.light == light; });
+        if (held || static_cast<int>(_shadowLights.size()) >= budget.total) {
+            continue;
         }
-        auto direction = shadowLightDirection();
-        auto position = shadowLightPosition();
-        auto orientation = _shadowLight->modelNode().restOrientation();
+        ShadowLight slot;
+        slot.light = light;
+        slot.active = true;
+        // There is no previous shadow to cross-fade against on the first light
+        // in a freshly loaded scene. Starting it dim only makes the module
+        // visibly brighten during its opening frames.
+        slot.strength = hadShadowLight ? 0.0f : 1.0f;
+        _shadowLights.push_back(slot);
+
+        auto position = light->origin();
+        auto orientation = light->modelNode().restOrientation();
         std::ostringstream ss;
-        ss << "Scene '" << _name << "': shadow light '" << _shadowLight->modelNode().name()
-           << "' aim=" << (_shadowLight->hasAuthoredDirection() ? "authored" : "room-bounds")
+        ss << "Scene '" << _name << "': shadow light '" << light->modelNode().name()
+           << "' kind=" << (light->isDirectional() ? "directional" : "point")
+           << " aim=" << (light->hasAuthoredDirection() ? "authored" : "room-bounds")
            << " position=(" << position.x << ", " << position.y << ", " << position.z
            << ") orientation=(" << orientation.w << ", " << orientation.x << ", "
-           << orientation.y << ", " << orientation.z << ") direction=(" << direction.x
-           << ", " << direction.y << ", " << direction.z << ")";
+           << orientation.y << ", " << orientation.z << ")";
         info(ss.str(), LogChannel::Graphics);
     }
-    if (hadShadowLight != (_shadowLight != nullptr))
+
+    // Slot order has to follow the selection order, not arrival order, or slot
+    // zero stops meaning "the light this mode would have picked if it could
+    // pick only one" and every consumer that reads the front changes behaviour
+    // as lights come and go. Casters that are fading out sort after the live
+    // ones, since they are on their way to releasing the slot anyway.
+    std::stable_sort(_shadowLights.begin(), _shadowLights.end(),
+                     [&selected](const ShadowLight &a, const ShadowLight &b) {
+                         auto rank = [&selected](const ShadowLight &slot) {
+                             auto it = std::find(selected.begin(), selected.end(), slot.light);
+                             return it == selected.end()
+                                        ? selected.size()
+                                        : static_cast<size_t>(it - selected.begin());
+                         };
+                         return rank(a) < rank(b);
+                     });
+
+    // What the frame is actually paying for, logged when it changes rather than
+    // every frame. The budget is a ceiling; what fills it is the authored
+    // shadow flag narrowed by each light's own radius, and those two are what
+    // decide whether a generous point budget costs anything on real content.
+    if (_shadowLights.size() != _loggedShadowCount) {
+        _loggedShadowCount = _shadowLights.size();
+        size_t directional = 0;
+        for (const auto &slot : _shadowLights) {
+            directional += slot.light->isDirectional() ? 1 : 0;
+        }
+        std::ostringstream ss;
+        ss << "Scene '" << _name << "': shadow casters " << _shadowLights.size()
+           << " (directional " << directional << ", point "
+           << (_shadowLights.size() - directional) << ")";
+        info(ss.str(), LogChannel::Graphics);
+    }
+
+    if (hadShadowLight != !_shadowLights.empty())
         _incrementalSceneReady = false;
 }
 
@@ -553,7 +633,7 @@ void SceneGraph::prepareOpaqueLeafs() {
 }
 
 bool SceneGraph::hasShadowLight() const {
-    return _graphicsOpt.shadows && _shadowLight;
+    return _graphicsOpt.shadows && !_shadowLights.empty();
 }
 
 void SceneGraph::prepareTransparentLeafs() {
@@ -665,11 +745,18 @@ Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {
                 light.radius = _activeLights[i]->radius();
                 light.ambientOnly = static_cast<int>(_activeLights[i]->modelNode().light()->ambientOnly);
                 light.dynamicType = _activeLights[i]->modelNode().light()->dynamicType;
-                light.shadowCaster = _activeLights[i] == _shadowLight ? 1 : 0;
+                // Slot zero only, because slot zero is the only map that is
+                // rendered and the only one the resolves sample. The flag says
+                // "a shadow of this light exists to attenuate", and the
+                // resolves let a caster past the static-geometry exclusion on
+                // the strength of it - so claiming it for a slot with no map
+                // behind it would admit the light and none of its shadow.
+                // Becomes `>= 0` in the same change that renders every slot.
+                light.shadowCaster = shadowSlotOf(_activeLights[i]) == 0 ? 1 : 0;
             }
             if (hasShadowLight()) {
                 for (int i = 0; i < kNumShadowLightSpace; ++i) {
-                    globals.shadowLightSpace[i] = _shadowLightSpace[i];
+                    globals.shadowLightSpace[i] = _shadowLights.front().lightSpace[i];
                 }
                 globals.shadowLightPosition = isShadowLightDirectional()
                                                   ? glm::vec4(shadowLightDirection(), 0.0f)
@@ -978,7 +1065,7 @@ void SceneGraph::computeLightSpaceMatrices() {
             if (i > 0) {
                 near = cameraFar * g_shadowCascadeDivisors[i - 1];
             }
-            _shadowLightSpace[i] = computeDirectionalLightSpaceMatrix(
+            _shadowLights.front().lightSpace[i] = computeDirectionalLightSpaceMatrix(
                 fovy, aspect, near, far, lightDir, camera->view(),
                 _graphicsOpt.shadowResolution);
             _shadowCascadeFarPlanes[i] = far;
@@ -987,7 +1074,7 @@ void SceneGraph::computeLightSpaceMatrices() {
         glm::mat4 projection(glm::perspectiveRH_ZO(kPointLightShadowsFOV, 1.0f, kPointLightShadowsNearPlane, kPointLightShadowsFarPlane));
         for (int i = 0; i < kNumCubeFaces; ++i) {
             glm::mat4 lightView(getPointLightView(shadowLightPosition(), static_cast<CubeMapFace>(i)));
-            _shadowLightSpace[i] = projection * lightView;
+            _shadowLights.front().lightSpace[i] = projection * lightView;
         }
     }
 }

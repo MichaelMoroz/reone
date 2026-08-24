@@ -317,12 +317,45 @@ public:
     // not otherwise perturb the scene. Out of line because this header only
     // forward-declares GraphicsOptions.
     bool hasShadowLight() const override;
-    bool isShadowLightDirectional() const override { return _shadowLight->isDirectional(); }
+    bool isShadowLightDirectional() const override { return _shadowLights.front().light->isDirectional(); }
 
-    glm::vec3 shadowLightPosition() const { return _shadowLight->origin(); }
+    glm::vec3 shadowLightPosition() const { return _shadowLights.front().light->origin(); }
     glm::vec3 shadowLightDirection() const;
-    float shadowStrength() const { return _shadowStrength; }
-    float shadowRadius() const { return _shadowLight->radius(); }
+    float shadowStrength() const { return _shadowLights.empty() ? 0.0f : _shadowLights.front().strength; }
+    float shadowRadius() const { return _shadowLights.front().light->radius(); }
+
+    /**
+     * How many casters this mode may hold, by kind.
+     *
+     * Retro's is one number rather than two because that is how the original
+     * expressed it: `videoquality.2da`'s NumShadowCastingLights is 1 at fast,
+     * low and good and 3 at best, with no distinction between a directional
+     * light and a point light - the authored per-light shadow flag decides, and
+     * in the shipped content that flag is on point lights far more often than
+     * on the sun (measured across 19 K1 modules: 0-2 flagged directional
+     * against 41, 61 and 129 flagged point lights in the modules that have
+     * them). The corrected modes take a budget per kind instead, because they
+     * pay for the two kinds differently: a cascaded directional map is four
+     * layers and a point map is a whole cube.
+     */
+    struct ShadowBudget {
+        int directional {0};
+        int point {0};
+        int total {0};
+    };
+    ShadowBudget shadowBudget() const;
+
+    /** Which slot this light casts from this frame, or -1 if it casts nothing. */
+    int shadowSlotOf(const LightSceneNode *light) const {
+        for (size_t i = 0; i < _shadowLights.size(); ++i) {
+            if (_shadowLights[i].light == light) {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    }
+
+    size_t shadowLightCount() const { return _shadowLights.size(); }
 
     void setShadowProperties(ShadowProperties properties) override {
         _shadowProperties = std::move(properties);
@@ -458,13 +491,37 @@ private:
 
     // Shadows
 
-    bool _shadowActive {false};
-    float _shadowStrength {0.0f};
+    /**
+     * One shadow-casting light, and the state that belongs to the light rather
+     * than to the frame.
+     *
+     * `strength` is per light because the fade is: a caster that leaves the
+     * selected set has to finish fading out while whatever replaced it fades
+     * in, and with one shared value the two would drive each other. The light
+     * is a bare pointer into `_lights`, so `clear()` has to drop these with the
+     * lights they name - see the comment there.
+     */
+    struct ShadowLight {
+        LightSceneNode *light {nullptr};
+        float strength {0.0f};
+        /** False while fading out; the slot is released when strength reaches zero. */
+        bool active {false};
+        glm::mat4 lightSpace[graphics::kNumShadowLightSpace] {glm::mat4(1.0f)};
+    };
+
+    /**
+     * The frame's casters, ordered as `computeClosestLights` sorts them:
+     * directional first, then by distance. Slot 0 is therefore the light the
+     * single-caster renderer used to latch onto.
+     */
+    std::vector<ShadowLight> _shadowLights;
+
+    /** Last logged caster count, so the log fires on change and not per frame. */
+    size_t _loggedShadowCount {0};
+
     ShadowProperties _shadowProperties;
 
-    LightSceneNode *_shadowLight {nullptr};
-
-    glm::mat4 _shadowLightSpace[graphics::kNumShadowLightSpace] {glm::mat4(1.0f)};
+    /** Shared across directional slots - they are split from one camera. */
     glm::vec4 _shadowCascadeFarPlanes {glm::vec4(0.0f)};
 
     // END Shadows

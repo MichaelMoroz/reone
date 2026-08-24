@@ -1466,6 +1466,63 @@ notes assumed: SDL3 adopts the panel's native handle, **so there is no second re
 
 ---
 
+### 3.13 The original's shadow budget, from its own data - and what the content authors
+
+Measured 2026-08-24, to settle "how many lights did the original cast shadows from, and of what
+kind" without arguing from a screenshot. Three sources, in the order they were consulted.
+
+**`videoquality.2da`, read straight out of the retail install** (`data/2da.bif`), and **K1 and K2
+carry the identical table**:
+
+| inilabel | fast | low | good | best |
+|---|---|---|---|---|
+| `EnableEnvironmentShadows` | 0 | 0 | 1 | 1 |
+| `CreatureShadowDetail` | 0 | 1 | 1 | 2 |
+| `NumDynamicLights` | 3 | 8 | 8 | 8 |
+| **`NumShadowCastingLights`** | **1** | **1** | **1** | **3** |
+
+Three things follow. The original cast from **more than one light** - three at best quality, one
+below it - so a single latched shadow light was never the original's model, only ours. Creature
+shadows and environment shadows were **separate switches**, which independently corroborates
+retro's creature-only caster set (`4dcbce2e9`, FIDELITY #16) rather than resting on the retired
+OpenGL path alone. And `NumDynamicLights` 8 confirms the figure FIDELITY #23 has been carrying.
+
+**The table does not distinguish directional from point.** KotOR.js - the authority on Odyssey-side
+policy - implements this row as a pool of `THREE.PointLight` selected by the authored per-light
+shadow flag (`LightManager.ts:25,98-101,514`), then disables casting outright for performance
+(`:278`), so it records the intent and not a rendered result. xoreos renders no shadows at all. kvp
+parses the flag (`OdysseyModelNodeLight.cpp:30`) and does not act on it. **No reference renders
+Odyssey shadows**, so the flag and this table are the whole of the evidence.
+
+**What the content does with the flag**, scanned across 19 K1 modules: every module carries one or
+two directional lights, and **15 of 19 flag the directional as a caster**. The other four do not -
+`tar_m02aa`, `kas_m22aa`, `kas_m22ab` flag only point lights (41, 61 and 129 of them), and
+`sta_m45aa` flags nothing at all. Modules that flag the sun usually also flag dozens of point
+lights (`danm16` is 1 + 129, `danm13` is 1 + 61). **So a directional-only caster rule is not the
+original's rule**; it silently drops every shadow in the modules that authored none on the sun.
+
+**What actually fills the budget is the radius test, not the budget.** With selection widened to a
+set, the largest caster set observed anywhere across ten modules at the default camera is **four**,
+against a PBR ceiling of eighteen - because a light is eligible only while the camera is inside its
+own radius, and a module's hundred-odd flagged lamps are nearly all far away:
+
+| module | retro peak (dir/pt) | PBR peak (dir/pt) |
+|---|---|---|
+| `danm14ab`, `danm13` | 1 (1/0) | 1 (1/0) |
+| `danm16`, `tar_m09aa` | 3 (1/2) | 4 (1/3) |
+| `tar_m02aa` | 3 (0/3) | 4 (0/4) |
+| `tar_m05aa`, `manm26ad`, `unk_m44aa` | 3 (1/2) | 3 (1/2) |
+| `kas_m22aa`, `kas_m22ab` | 1 (0/1) | 1 (0/1) |
+
+The consequence for cost: rendering only *occupied* slots keeps a frame at one to four shadow maps
+whatever the ceiling is, so per-light caster culling is an optimisation rather than a precondition
+for raising the ceiling. **Read the four narrowly** - K1 only, one camera per module, one frame. A
+camera parked among lamps can sit higher, and K2 is unmeasured.
+
+The reader used for the 2DA is a scratch script, not a committed tool; it follows
+`TwoDAReader`'s own format handling, which matters because retail ships both tab- and
+NUL-delimited token sections for the same layout.
+
 ## 4. Rejected approaches, and why
 
 ### 4.1 Retained registration, rejected in favour of the snapshot
