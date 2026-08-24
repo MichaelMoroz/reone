@@ -825,8 +825,16 @@ inline glm::ivec2 renderExtentFor(const GraphicsOptions &options, glm::ivec2 dis
  */
 inline ShadowBudget shadowBudgetFor(const GraphicsOptions &opts) {
     if (opts.mode == RenderMode::Retro) {
+        // One combined figure, because the original expressed it as one and
+        // did not distinguish the kinds. `total` binds here and the per-kind
+        // entries only stop one kind monopolising it.
         return {kRetroShadowCasters, kRetroShadowCasters, kRetroShadowCasters};
     }
+    // Independent, and deliberately so: the two kinds write to different
+    // images, so there is no shared resource for a combined cap to protect.
+    // Sharing one made a directional caster competable-for - point lights
+    // holding slots could starve the sun, whose shadow is the one shadow a
+    // scene can least afford to lose. `total` is their sum, so it never binds.
     const int directional = std::max(0, opts.maxDirectionalShadows);
     const int point = std::max(0, opts.maxPointShadows);
     return {directional, point, directional + point};

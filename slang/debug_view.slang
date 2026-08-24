@@ -90,24 +90,22 @@ static const uint kDebugDenoisedDiffuse = 17;  // tracer only
 static const uint kDebugDenoisedSpecular = 18; // tracer only
 static const uint kDebugFilteredDirect = 19;   // tracer only
 /**
- * The raster shadow term on its own: white is fully lit, black fully occluded.
+ * Direct lighting intensity: the shaded direct diffuse, shadows included.
  *
- * Every mode, unlike kDebugDirectShadow, which is the tracer's demodulated
- * direct channel and exists only where there is a tracer.
+ * Deliberately the SAME QUANTITY as kDebugDirectShadow, which is the tracer's
+ * demodulated direct diffuse, so the two can be compared directly. A previous
+ * version of this channel published visibility instead, which is not
+ * comparable to anything the tracer emits: an irradiance and a fraction differ
+ * by the whole of the lighting, and no correlation between them means much.
  *
- * Weighted by how much each caster actually lights the point, which is the
- * whole difficulty. "Occluded from any caster" is not a shadow: a lamp forty
- * metres away has most of the level hidden from it and contributes nothing
- * there, and taking the darkest caster made 43% of one frame read as shadowed
- * where the render shows no shadow at all. So this is the fraction of the
- * direct light reaching the surface that survives its own occlusion -
- * sum(visibility * contribution) / sum(contribution) - which is what a
- * shadow means in the picture and what makes it comparable to the tracer's
- * direct channel.
+ * Demodulated - albedo divided out - for the same reason the tracer
+ * demodulates: what is being inspected is the light arriving, not the texture
+ * it lands on.
  *
- * Diagnostic, so the weight is an approximation of the resolves' own: NdotL
- * times the Odyssey attenuation, without the material or the BRDF. It decides
- * how the casters are mixed, not what any of them says.
+ * Diagnostic, so this reproduces the resolve's direct lobe rather than calling
+ * it: NdotL times the Odyssey attenuation times each caster's own visibility,
+ * without the BRDF or the material. It shows where direct light is and is not,
+ * which is what a shadow is in the finished picture.
  */
 static const uint kDebugShadowTerm = 20;
 
@@ -273,17 +271,13 @@ float3 channelColor(float2 uv, int2 pixel) {
     case kDebugLightmap:
         return hasLightmap ? lightmapSample.rgb : float3(0.9, 0.0, 0.9) * shape * 0.4;
     case kDebugShadowTerm: {
-        if (!shadowsEnabled || globalUniforms.numShadowLights == 0) {
-            return float3(1.0);
-        }
         float depth = sGBufDepth.SampleLevel(uv, 0.0).r;
         float3 viewPos = reconstructViewPos(uv, depth);
         float3 worldPos = mul(globalUniforms.viewInv, float4(viewPos, 1.0)).xyz;
-        float lit = 0.0;
-        float total = 0.0;
+        float3 direct = float3(0.0);
         for (int i = 0; i < globalUniforms.numLights; ++i) {
             GlobalUniformsLight light = globalUniforms.lights[i];
-            if (light.shadowSlot < 0 || light.ambientOnly != 0) {
+            if (light.ambientOnly != 0) {
                 continue;
             }
             float3 toLight = light.position.w == 0.0 ? -light.position.xyz
@@ -297,15 +291,17 @@ float3 channelColor(float2 uv, int2 pixel) {
                               ? 1.0
                               : (light.radius * light.radius) /
                                     ((light.radius + distance) * (light.radius + distance));
-            float weight = light.multiplier * atten * ndotl;
-            total += weight;
-            lit += weight * getShadowFrom(light.shadowSlot, viewPos, worldPos,
-                                          normal, thinSurface);
+            // Every light contributes, shadowed by its own map where it has
+            // one. A light with no caster slot is unshadowed, which is exactly
+            // how the resolve treats it.
+            float visibility = 1.0;
+            if (shadowsEnabled && light.shadowSlot >= 0) {
+                visibility = getShadowFrom(light.shadowSlot, viewPos, worldPos,
+                                           normal, thinSurface);
+            }
+            direct += visibility * ndotl * atten * light.multiplier * light.color.rgb;
         }
-        // No caster reaches this surface, so nothing here is in shadow. White
-        // rather than black: black would read as fully occluded, which is the
-        // opposite of what an unreached surface means.
-        return float3(total > 0.0 ? lit / total : 1.0);
+        return direct;
     }
     case kDebugDepth: {
         float depth = sGBufDepth.SampleLevel(uv, 0.0).r;

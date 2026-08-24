@@ -548,8 +548,21 @@ void SceneGraph::updateShadowLight(float dt) {
         const bool held = std::any_of(_shadowLights.begin(), _shadowLights.end(),
                                       [light](const ShadowLight &slot) { return slot.light == light; });
         const bool directional = light->isDirectional();
-        if (held || static_cast<int>(_shadowLights.size()) >= budget.total ||
-            heldOfKind(directional) >= (directional ? budget.directional : budget.point)) {
+        // A directional caster answers to its own cap and to nothing else. It
+        // is not competing with the lamps for a shared resource - the two kinds
+        // write to different images - and a sun that loses its slot to point
+        // lights loses the one shadow a scene can least afford, over a limit
+        // that protects nothing. The combined total still binds retro, whose
+        // budget genuinely is one number.
+        const int kindHeld = heldOfKind(directional);
+        const int kindCap = directional ? budget.directional : budget.point;
+        // Retro is the exception: its budget genuinely is one number, the
+        // original's NumShadowCastingLights, so the combined cap binds every
+        // kind there. In the corrected modes the two kinds are independent and
+        // the total is their sum, so it can never bind anyway.
+        const bool totalFull = (authoredOnly || !directional) &&
+                               static_cast<int>(_shadowLights.size()) >= budget.total;
+        if (held || totalFull || kindHeld >= kindCap) {
             continue;
         }
         ShadowLight slot;

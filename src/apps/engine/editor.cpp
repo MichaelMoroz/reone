@@ -1546,7 +1546,7 @@ void Editor::graphicsDebugViewSection() {
         "Depth", "Traced: noise-free", "Motion", "Material id", "Feature bits",
         "Traced: direct shadow", "Traced: penumbra",
         "Denoised: diffuse", "Denoised: specular", "Direct: filtered",
-        "Shadow term"};
+        "Direct light"};
     // Unsized, with the count asserted, because the last three were produced by
     // the resolve and routed by isResolveDebugView for as long as they have
     // existed and were still unreachable here: the list simply stopped at 16,
