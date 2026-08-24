@@ -354,21 +354,38 @@ float3 resolveSurface(float2 uv, int2 pixel) {
     unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
                            shadowsEnabled, fogEnabled, thinSurface);
 
-    float shadowFactor = 1.0;
-    if (shadowsEnabled) {
-        shadowFactor = getShadow(eyePos, worldPos, normal, thinSurface);
-    }
-    // ShadowOpacity was authored for the original gamma-space renderer. PBR
-    // applies lighting in linear space, so convert the display visibility to
-    // an energy multiplier before using it on the direct BRDF terms.
+    // Shadowing is per light now, inside the loop, because a frame carries
+    // several casters and each one's map answers for its own light only. A
+    // single visibility over the whole sum could only ever be one caster's
+    // answer applied to every light, which darkens surfaces for lights that
+    // are not occluded at all and leaves the other casters' shadows nowhere
+    // to land.
     //
-    // Direct terms only. It used to scale the ambient/IBL lobes as well, and
-    // since irradiance is the LIGHTMAP on lightmapped geometry and the flat
-    // materialAmbient * worldAmbient product everywhere else, that made a
-    // depth test against one light attenuate baked and ambient light. That is
-    // what darkened lightmapped rooms in this mode while retro - whose
-    // lightmapped branch never took the shadow term - kept the authored tone.
-    float directVisibility = pow(shadowFactor, kGamma);
+    // ShadowOpacity was authored for the original gamma-space renderer. PBR
+    // applies lighting in linear space, so each visibility is converted to an
+    // energy multiplier before it scales that light's radiance.
+    //
+    // The ambient lobe IS shadowed, by the first caster, and that is where a
+    // shadow on scene geometry comes from.
+    //
+    // Irradiance is the LIGHTMAP on lightmapped geometry, and static geometry
+    // takes direct light only from a caster, so on terrain and architecture
+    // the baked share is almost the whole of the light. Leaving it unshadowed
+    // was tried and is wrong in the way that matters: characters kept their
+    // shadows and the scene lost all of it. That it also measured slightly
+    // closer to a converged path tracer on two modules out of three is a
+    // caution about the metric, not a defence of the result - a mean absolute
+    // error cannot see that a shadow has stopped existing, because removing
+    // one moves a small number of pixels a long way and the average barely
+    // notices.
+    //
+    // The first caster only, matching what the term replaced. Each light's own
+    // occlusion is applied to its own radiance in the loop below, so combining
+    // several casters here would darken the baked share once per caster.
+    float ambientVisibility = 1.0;
+    if (shadowsEnabled) {
+        ambientVisibility = pow(getShadow(eyePos, worldPos, normal, thinSurface), kGamma);
+    }
     float fog = fogEnabled ? getFog(worldPos) : 0.0;
 
     float NdotV = max(0.0, dot(normal, V));
@@ -432,12 +449,10 @@ float3 resolveSurface(float2 uv, int2 pixel) {
         // the bake's own share of it, which is bounded by the lightmap's
         // weight and is the honest price of shadows that are not painted onto
         // baked light.
-        // Slot zero, not "any caster": every caster's map is rendered now,
-        // but the resolve still samples one visibility for the whole lit
-        // product, so a light admitted here whose slot is not the one sampled
-        // would arrive with none of its shadow. Widens to `< 0` in the change
-        // that makes this loop shadow per light.
-        if (staticObject && light.dynamicType != 1 && light.shadowSlot != 0) {
+        // Any caster, now that the loop shadows per light: a caster admitted
+        // here arrives with its own shadow, so letting it through no longer
+        // means letting light in without the occlusion that belongs to it.
+        if (staticObject && light.dynamicType != 1 && light.shadowSlot < 0) {
             continue;
         }
 
@@ -452,8 +467,18 @@ float3 resolveSurface(float2 uv, int2 pixel) {
         float attenuation = lightAttenuationQuadratic(light, lightDistance);
         float3 radiance = light.multiplier * attenuation * gammaToLinear(light.color.rgb);
         if (light.ambientOnly != 0) {
+            // An ambient-only light is a fill term with no direction, so no
+            // depth test against it means anything. It is not shadowed, for
+            // the same reason the lobes below it are not.
             irradiance += materialAmbient * radiance;
             continue;
+        }
+        // This light's own shadow, from this light's own map. A light with no
+        // slot casts nothing and is unattenuated.
+        if (shadowsEnabled && light.shadowSlot >= 0) {
+            radiance *= pow(getShadowFrom(light.shadowSlot, eyePos, worldPos,
+                                          normal, thinSurface),
+                            kGamma);
         }
 
         float3 L = normalize(fragToLight);
@@ -501,26 +526,22 @@ float3 resolveSurface(float2 uv, int2 pixel) {
     // Self-illumination is a coefficient on the light reaching the surface, not
     // a colour added on top of it. Adding it instead saturates anything fully
     // self-illuminated - a sky - to white.
-    // Ambient occlusion still weights the ambient lobes; the shadow term does
-    // not. AO is a property of the surface's own neighbourhood and applies to
-    // light arriving from everywhere, which is exactly what these lobes are.
-    // Received exactly as retro receives it: one visibility over the whole lit
-    // product, not a term applied to direct light alone. On content whose
-    // light budget is mostly a baked lightmap, a shadow that may only touch
-    // the dynamic share is a shadow nobody can see - measured at 14/255
-    // against 89 for the same scene in retro. What differs between the modes
-    // is the caster set, not this expression: retro's map holds characters,
-    // this one holds every opaque surface, so terrain shadowing terrain is
-    // present here and is geometry, not error. Self-shadowing acne is the
-    // failure to watch for, and it belongs to the depth bias and the receiver
-    // normal offset in lib/shadow.slang - not to this line.
+    // directD and directS already carry each light's own visibility, applied
+    // where that light's radiance was formed, so nothing is attenuated here.
+    // Ambient occlusion still weights the ambient lobes; no shadow map does.
+    // AO is a property of the surface's own neighbourhood and applies to light
+    // arriving from everywhere, which is exactly what those lobes are.
+    //
+    // Self-shadowing acne is the failure to watch for, and it belongs to the
+    // depth bias and the receiver normal offset in lib/shadow.slang - not to
+    // this line.
     float3 color = min(float3(1.0),
-                       directVisibility * (ao * ambientD +
-                           max(float3(0.0), directD)) + emission) *
+                       ambientVisibility * ao * ambientD +
+                           max(float3(0.0), directD) + emission) *
                    albedo;
     color += ao * ambientS;
     // A self-illuminated surface does not take a specular highlight.
-    color += (1.0 - selfIllumed) * directVisibility * max(float3(0.0), directS);
+    color += (1.0 - selfIllumed) * max(float3(0.0), directS);
 
     // No encode here any more. This pass hands linear scene-referred colour to
     // the tail, exactly as the tracer does, and the shared post-process pass

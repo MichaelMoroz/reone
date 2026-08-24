@@ -178,10 +178,26 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     // albedo multiplies it and the clamp bounds it - it is not a separate
     // additive term. The lightmap adds into the same accumulator, and world
     // ambient is the alternative to a lightmap rather than an addition to it.
+    //
+    // The BAKED share is where a shadow on scene geometry comes from, and this
+    // is the whole of it. Static geometry is excluded from every dynamic light
+    // below, so on terrain and architecture `diffuse` is the lightmap or the
+    // white bake and nothing else - which means a shadow that only attenuated
+    // dynamic lights would be invisible on everything except characters. That
+    // is precisely what happened when shadowing first moved inside the loop:
+    // characters still took shadows and the scene took none.
+    //
+    // The first caster's visibility, matching the reference's single factor.
+    // The map it reads holds creatures and equipment in this mode, so this is
+    // the term that puts a character's shadow on the ground.
+    float bakedVisibility = 1.0;
+    if (shadowsEnabled) {
+        bakedVisibility = getShadow(eyePos, worldPos, normal, thinSurface);
+    }
     float3 ambient = float3(0.0);
-    float3 diffuse = selfIllumSample.rgb;
+    float3 baked = selfIllumSample.rgb;
     if (hasLightmap) {
-        diffuse += lightmapSample.rgb;
+        baked += lightmapSample.rgb;
     } else if (staticObject) {
         // A white bake, which is the one place this expression departs from the
         // reference's, and it departs deliberately.
@@ -201,10 +217,15 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
         // unlightmapped surface looked like in the original. Restored from
         // 92ababccf, which had it before c91c916c7 rewrote this expression to
         // match the reference term for term and dropped it with the rest.
-        diffuse += float3(1.0);
+        baked += float3(1.0);
     } else {
         ambient += materialAmbient * globalUniforms.worldAmbientColor.rgb;
     }
+
+    // One accumulator from here, so the reference's single clamp still bounds
+    // the sum: the baked share carries the first caster's visibility, and each
+    // dynamic light below carries its own.
+    float3 diffuse = bakedVisibility * baked;
 
     for (int i = 0; i < globalUniforms.numLights; ++i) {
         GlobalUniformsLight light = globalUniforms.lights[i];
@@ -222,18 +243,32 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
 
         float attenuation = lightAttenuationQuadratic(light, distance);
         if (light.ambientOnly != 0) {
+            // No direction, so no depth test against it means anything.
             ambient += light.multiplier * attenuation * materialAmbient * light.color.rgb;
         } else {
-            diffuse += light.multiplier *
+            // This light's own shadow, from this light's own map.
+            //
+            // The reference expression this branch is ported from applies one
+            // (1 - shadow) to the whole diffuse sum, and that was faithful
+            // while the renderer held one caster. The original held up to
+            // three - videoquality.2da's NumShadowCastingLights is 3 at best
+            // quality - and there is no reference expression for that case.
+            // One factor over the sum would be one caster's answer applied to
+            // every light, darkening surfaces for lights nothing occludes and
+            // leaving the other casters' shadows with nowhere to land, so the
+            // sum is attenuated per light instead. With a single caster and a
+            // single light the two expressions are the same.
+            float visibility = 1.0;
+            if (shadowsEnabled && light.shadowSlot >= 0) {
+                visibility = getShadowFrom(light.shadowSlot, eyePos, worldPos,
+                                           normal, thinSurface);
+            }
+            diffuse += visibility * light.multiplier *
                        max(0.0, dot(normal, lightVector / max(0.0001, distance))) *
                        attenuation * materialDiffuse * light.color.rgb;
         }
     }
 
-    float shadowFactor = 1.0;
-    if (shadowsEnabled) {
-        shadowFactor = getShadow(eyePos, worldPos, normal, thinSurface);
-    }
     // The reference's expression, term for term:
     //
     //   min(vec3(1.0), (ambient + (1.0 - shadow) * max(vec3(0.0), diffuse)))
@@ -242,12 +277,16 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     // Three things this branch previously did differently, all of them
     // visible: the sum had no upper bound, the shadow term multiplied the
     // ambient share as well as the diffuse one, and self-illum was added
-    // after the albedo multiply instead of before it. `shadowFactor` here is
-    // already the light-through fraction, so it stands where (1.0 - shadow)
-    // does there. The clamp precedes the envmap and fog terms in the
-    // reference too, so what leaves this function is still unbounded.
+    // after the albedo multiply instead of before it. The clamp precedes the
+    // envmap and fog terms in the reference too, so what leaves this function
+    // is still unbounded.
+    //
+    // (1.0 - shadow) no longer stands here: each light carried its own
+    // visibility into `diffuse` above, which is the only way to express what
+    // the original's three shadow-casting lights meant. The ambient share is
+    // unshadowed either way, exactly as the reference has it.
     float3 color = min(float3(1.0),
-                       ambient + shadowFactor * max(float3(0.0), diffuse)) *
+                       ambient + max(float3(0.0), diffuse)) *
                    diffuseSample.rgb;
 
     if (envmapped) {
