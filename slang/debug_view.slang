@@ -108,6 +108,10 @@ static const uint kDebugFilteredDirect = 19;   // tracer only
  * which is what a shadow is in the finished picture.
  */
 static const uint kDebugShadowTerm = 20;
+/** Mirrors kLightBudget in pbr_resolve.slang; the far field is ratio-free. */
+static const float kDebugLightBudget = 0.1137056389;
+/** Mirrors GraphicsOptions::ptPointEmitterRatio's default. */
+static const float kDebugEmitterRatio = 0.2;
 
 static const uint kNoTriangle = 0xffffffffu;
 static const uint kNoTexture = 0xffffffffu;
@@ -280,17 +284,27 @@ float3 channelColor(float2 uv, int2 pixel) {
             if (light.ambientOnly != 0) {
                 continue;
             }
-            float3 toLight = light.position.w == 0.0 ? -light.position.xyz
-                                                     : light.position.xyz - worldPos;
+            // Always a position, never a direction. This engine has no
+            // directional light type - a light is "directional" by having a
+            // radius past kMinDirectionalLightRadius, and its position is
+            // still an origin far away. Reading w == 0 as a direction pointed
+            // the sun at the wrong place entirely, and made this channel
+            // report that directional light was missing when it was not.
+            float3 toLight = light.position.xyz - worldPos;
             float distance = max(1e-4, length(toLight));
             float ndotl = max(0.0, dot(normal, toLight / distance));
             if (ndotl <= 0.0) {
                 continue;
             }
-            float atten = light.position.w == 0.0
-                              ? 1.0
-                              : (light.radius * light.radius) /
-                                    ((light.radius + distance) * (light.radius + distance));
+            // The sphere model the PBR resolve applies, not the Odyssey
+            // falloff it replaced. A diagnostic that models the light
+            // differently from the resolve cannot show a change to the
+            // resolve, which is exactly what happened.
+            float ratio = kDebugEmitterRatio;
+            float sinTheta = saturate(light.radius * ratio / distance);
+            float cosTheta = sqrt(max(0.0, 1.0 - sinTheta * sinTheta));
+            float atten = kDebugLightBudget * 6.28318531 * (1.0 - cosTheta) /
+                          (3.14159265 * ratio * ratio);
             // Every light contributes, shadowed by its own map where it has
             // one. A light with no caster slot is unshadowed, which is exactly
             // how the resolve treats it.

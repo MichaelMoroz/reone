@@ -84,6 +84,16 @@ import lib.skycube;
 [[vk::binding(1, 3)]] SamplerCube sSkyCube;
 
 /** Mirrors ResolvePushConstants in scenepipeline.cpp. */
+static const float kTwoPi = 6.28318530717958647692;
+/**
+ * The scale that puts the sphere model on the same footing as the falloff it
+ * replaces, 3/2 - 2*ln2. A pure number because the problem is scale-free: both
+ * expressions collapse to functions of distance/radius alone, so one constant
+ * serves every light at every authored radius. Mirrors kPtLightBudget in
+ * tracing/lighting.slang, and must move with it.
+ */
+static const float kLightBudget = 0.1137056389;
+
 struct ResolvePushConstants {
     /** Bit 0: sky. Bit 1: SSAO. Bit 2: uncovered pixels keep alpha zero. */
     uint flags;
@@ -99,6 +109,8 @@ struct ResolvePushConstants {
      * irradiance term below.
      */
     float lightmapIntensity;
+    /** Emitter size as a fraction of influence radius; see sphereAttenuation. */
+    float emitterRadiusRatio;
 };
 [[vk::push_constant]] ResolvePushConstants pushConstants;
 
@@ -238,9 +250,30 @@ float screenSpaceOcclusion(float2 uv, int2 pixel, float3 pos, float3 normal) {
                      (1.0 - smoothstep(0.0, kSsaoMaxDistance, abs(pos.z)));
 }
 
-float lightAttenuationQuadratic(GlobalUniformsLight light, float distance) {
-    float d = light.radius + distance;
-    return (light.radius * light.radius) / (d * d);
+/**
+ * A point light is a sphere, not a point - the tracer's model, term for term.
+ *
+ * This replaces Odyssey's radius^2/(radius+d)^2, which is not inverse-square:
+ * writing x = distance/radius it collapses to 1/(1+x)^2, so a lamp keeps a
+ * quarter of its brightness at its own radius and a ninth at twice it. Against
+ * a path-traced reference that reads as point lights far too intense at range,
+ * which is what it was. Retro keeps that falloff - it is the original's, and
+ * preserving it is retro's whole job - so the two resolves now hold different
+ * lighting functions ON PURPOSE. See DESIGN.md G6c: any refactor that shares
+ * lighting code between the modes must keep both, not converge them.
+ *
+ * The far field is budget*radius^2/d^2 whatever the emitter ratio, so the
+ * ratio grades the near field and the penumbra and nothing about range.
+ */
+float sphereAttenuation(GlobalUniformsLight light, float distance) {
+    float ratio = max(pushConstants.emitterRadiusRatio, 1e-3);
+    float sinTheta = saturate(light.radius * ratio / max(distance, 1e-4));
+    float cosTheta = sqrt(max(0.0, 1.0 - sinTheta * sinTheta));
+    // Dividing by the emitter's own projected solid angle turns the authored
+    // colour into an intensity rather than a radiance, which is what makes the
+    // size dial brightness-neutral. The solid angle caps at 2*pi, so there is
+    // no 1/d^2 singularity at the surface to clamp away.
+    return kLightBudget * kTwoPi * (1.0 - cosTheta) / (kPi * ratio * ratio);
 }
 
 float3 sampleAuthoredMirror(InstanceMaterial material, float3 worldReflection) {
@@ -458,13 +491,13 @@ float3 resolveSurface(float2 uv, int2 pixel) {
 
         float3 fragToLight = light.position.xyz - worldPos;
         float lightDistance = length(fragToLight);
-        // Kept exactly as the OpenGL shader has it, radius-squared cutoff and
-        // all, so that any difference between the two is not this.
-        if (lightDistance > light.radius * light.radius) {
-            continue;
-        }
+        // No radius-squared cutoff. It compared a distance against an area -
+        // for a lamp of radius 20 it culled at 400 units, so it culled almost
+        // nothing while the falloff beside it kept the light bright the whole
+        // way. Retro keeps it, deliberately; the corrected model needs no
+        // cutoff because the sphere attenuation actually falls off.
 
-        float attenuation = lightAttenuationQuadratic(light, lightDistance);
+        float attenuation = sphereAttenuation(light, lightDistance);
         float3 radiance = light.multiplier * attenuation * gammaToLinear(light.color.rgb);
         if (light.ambientOnly != 0) {
             // An ambient-only light is a fill term with no direction, so no

@@ -80,6 +80,8 @@ struct ResolvePushConstants {
     float albedoGamma;
     float roughnessFloor;
     float lightmapIntensity;
+    /** Emitter size as a fraction of influence radius; PBR's sphere lights. */
+    float emitterRadiusRatio;
 };
 
 /** Mirrors CoveragePushConstants in postprocess.slang. */
@@ -880,7 +882,11 @@ ResolvePushConstants resolvePush(uint32_t flags, const GraphicsOptions &options)
             std::clamp(options.thinTransmission, 0.0f, 1.0f),
             std::clamp(options.albedoGamma, 0.1f, 4.0f),
             std::clamp(options.ptRoughnessFloor, 0.0f, 1.0f),
-            std::max(0.0f, options.pbrLightmapIntensity)};
+            std::max(0.0f, options.pbrLightmapIntensity),
+            // The tracer's dial, read by PBR too: the two modes are meant to
+            // differ in how light reaches a surface, never in what the light
+            // is, and a lamp of a different size in one of them is the latter.
+            std::clamp(options.ptPointEmitterRatio, 0.01f, 0.5f)};
 }
 
 } // namespace
