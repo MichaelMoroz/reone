@@ -142,7 +142,6 @@ private:
      */
     void graphicsSettings();
     bool _showGraphicsSettings {false};
-    bool _freeCameraUnavailable {false};
 
     /**
      * One tab each, in the order a frame is usually worked on: what shades the

@@ -92,6 +92,14 @@ struct DebugViewPushConstants {
     float roughnessFloor;
 };
 
+static_assert(sizeof(MegaDrawPushConstants) <= kCachedPipelinePushConstantSize);
+static_assert(sizeof(BlendedPushConstants) <= kCachedPipelinePushConstantSize);
+static_assert(sizeof(ShadowPushConstants) <= kCachedPipelinePushConstantSize);
+static_assert(sizeof(PostProcessPushConstants) <= kCachedPipelinePushConstantSize);
+static_assert(sizeof(ResolvePushConstants) == kCachedPipelinePushConstantSize);
+static_assert(sizeof(CoveragePushConstants) <= kCachedPipelinePushConstantSize);
+static_assert(sizeof(DebugViewPushConstants) <= kCachedPipelinePushConstantSize);
+
 /** A sky bake is available this frame; without it the resolves write black. */
 static constexpr uint32_t kResolveFlagSky = 1u;
 /** Screen-space occlusion; read by the PBR resolve alone. */
@@ -273,7 +281,11 @@ void ScenePipeline::init() {
         _renderer.immediateSubmit([this, shadowSize](ICommandBuffer &cmd) {
             auto clear = [&](IImage &image, int layers, bool cube) {
                 cmd.transitionImage(image, ImageLayout::DepthAttachment);
-                RenderAttachment depth {image.attachmentView(0, 0), ImageLayout::DepthAttachment,
+                // attachmentView selects one cube's six faces. Directional
+                // shadows are a four-layer 2D array and already own the exact
+                // all-layer view this multiview pass needs.
+                const auto view = cube ? image.attachmentView(0, 0) : image.sampleView();
+                RenderAttachment depth {view, ImageLayout::DepthAttachment,
                                         AttachmentLoad::Clear, AttachmentStore::Store};
                 depth.clear.depthOnly = true;
                 cmd.beginRendering(shadowSize, {}, &depth, cube ? (1u << layers) - 1u : 0, false);
@@ -444,7 +456,8 @@ void ScenePipeline::shadowPass(ICommandBuffer &cmd,
 
     const auto extent = image.extent();
     {
-        RenderAttachment depth {image.attachmentView(0, 0), ImageLayout::DepthAttachment,
+        const auto view = directional ? image.sampleView() : image.attachmentView(0, 0);
+        RenderAttachment depth {view, ImageLayout::DepthAttachment,
                                 AttachmentLoad::Clear, AttachmentStore::Store};
         depth.clear.depthOnly = true;
         cmd.beginRendering(extent, {}, &depth, viewMask, false);
@@ -1095,6 +1108,7 @@ struct BloomPushConstants {
     float texelStepX;
     float texelStepY;
 };
+static_assert(sizeof(BloomPushConstants) <= kCachedPipelinePushConstantSize);
 
 } // namespace
 

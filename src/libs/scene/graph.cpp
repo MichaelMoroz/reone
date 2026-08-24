@@ -552,6 +552,10 @@ void SceneGraph::prepareOpaqueLeafs() {
     _opaqueLeafs.clear();
 }
 
+bool SceneGraph::hasShadowLight() const {
+    return _graphicsOpt.shadows && _shadowLight;
+}
+
 void SceneGraph::prepareTransparentLeafs() {
     _transparentLeafs.clear();
 

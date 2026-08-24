@@ -126,6 +126,84 @@ function Compare-CapturePixels([string]$firstPng, [string]$secondPng, [int]$widt
     }
 }
 
+if ($VerifyReproducibility) {
+    $baselineDir = Join-Path $runDir "reproducibility-baseline"
+    New-Item -ItemType Directory -Force -Path $baselineDir | Out-Null
+
+    if (-not ("Reone.GuiCaptureProof.PixelComparer" -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+
+namespace Reone.GuiCaptureProof
+{
+    public sealed class PixelDifference
+    {
+        public bool Identical { get; set; }
+        public int MaxChannelDelta { get; set; }
+        public long DifferentChannels { get; set; }
+        public long DifferentPixels { get; set; }
+    }
+
+    public static class PixelComparer
+    {
+        public static PixelDifference Compare(string firstPath, string secondPath, long expectedLength)
+        {
+            byte[] first = File.ReadAllBytes(firstPath);
+            byte[] second = File.ReadAllBytes(secondPath);
+            if (first.LongLength != expectedLength || second.LongLength != expectedLength)
+            {
+                throw new InvalidDataException(String.Format(
+                    "Expected {0} decoded RGBA bytes, got {1} and {2}",
+                    expectedLength, first.LongLength, second.LongLength));
+            }
+
+            var result = new PixelDifference { Identical = true };
+            for (int offset = 0; offset < first.Length; offset += 4)
+            {
+                bool pixelDiffers = false;
+                for (int channel = 0; channel < 4; ++channel)
+                {
+                    int delta = Math.Abs(first[offset + channel] - second[offset + channel]);
+                    if (delta == 0)
+                    {
+                        continue;
+                    }
+                    result.Identical = false;
+                    pixelDiffers = true;
+                    ++result.DifferentChannels;
+                    result.MaxChannelDelta = Math.Max(result.MaxChannelDelta, delta);
+                }
+                if (pixelDiffers)
+                {
+                    ++result.DifferentPixels;
+                }
+            }
+            return result;
+        }
+    }
+}
+'@
+    }
+}
+
+function Compare-CapturePixels([string]$firstPng, [string]$secondPng, [int]$width, [int]$height) {
+    $firstRaw = Join-Path $runDir "reproducibility-first.rgba"
+    $secondRaw = Join-Path $runDir "reproducibility-second.rgba"
+    Remove-Item -LiteralPath $firstRaw, $secondRaw -Force -ErrorAction Ignore
+    try {
+        & $ffmpeg -y -loglevel error -i $firstPng -map 0:v:0 -frames:v 1 -f rawvideo -pix_fmt rgba $firstRaw
+        if ($LASTEXITCODE -ne 0) { throw "ffmpeg failed to decode capture for reproducibility comparison: $firstPng" }
+        & $ffmpeg -y -loglevel error -i $secondPng -map 0:v:0 -frames:v 1 -f rawvideo -pix_fmt rgba $secondRaw
+        if ($LASTEXITCODE -ne 0) { throw "ffmpeg failed to decode capture for reproducibility comparison: $secondPng" }
+
+        $expectedLength = [long]$width * [long]$height * 4L
+        return [Reone.GuiCaptureProof.PixelComparer]::Compare($firstRaw, $secondRaw, $expectedLength)
+    } finally {
+        Remove-Item -LiteralPath $firstRaw, $secondRaw -Force -ErrorAction Ignore
+    }
+}
+
 $resolutions = @(
     @{ W = 1024; H = 768 },
     @{ W = 3440; H = 1440 }
@@ -141,7 +219,7 @@ $startupStates = @(
     @{ Id = "main-menu"; Frame = $readyFrame }
 )
 
-function New-GameStates([string]$module, [string]$swoop, [bool]$party, [string]$dialog, [int]$dialogFrame, [string]$computerModule, [string]$computerDialog) {
+function New-GameStates([string]$module, [string]$swoop, [bool]$party, [string]$dialog, [int]$dialogFrame, [string]$computerModule, [string]$computerDialog, [string]$scrollModule, [string]$scrollDialog) {
     $items = if ($party) {
         @("w_blaste_01", "w_blaste_02 2", "w_blaste_03", "w_blaste_04", "w_blaste_05 2", "w_blaste_06", "w_blaste_07 2", "w_blaste_08")
     } else {
@@ -174,6 +252,9 @@ function New-GameStates([string]$module, [string]$swoop, [bool]$party, [string]$
         @{ Id = "pazaak-board"; Frame = 30; Commands = @("warp $module", "showgallerymode pazaak board") },
         @{ Id = "dialog"; Frame = $dialogFrame; Commands = @("warp $module", "startconversation $dialog") },
         @{ Id = "dialog-options"; Frame = 30; Commands = @("warp $module", "autoskipenable 1", $dialogEntrySkips, "autoskipreplies 0", "startconversation $dialog"); BeforeCaptureCommands = @("selectdialogoption 0"); AfterCommands = @("autoskipenable 0") },
+        # More replies than the bottom band can hold, so the reply list
+        # presents its scroll bar beside the prose in the 4:3 safe area.
+        @{ Id = "dialog-scrollbar"; Frame = 30; Commands = @("warp $scrollModule", "autoskipenable 1", "autoskipentries 1", "autoskipreplies 0", "startconversation $scrollDialog"); BeforeCaptureCommands = @("selectdialogoption 0"); AfterCommands = @("autoskipenable 0") },
         @{ Id = "computer"; Frame = $readyFrame; Commands = @("warp $computerModule", "startconversation $computerDialog") }
     ))
 
@@ -183,6 +264,21 @@ function New-GameStates([string]$module, [string]$swoop, [bool]$party, [string]$
         $needsItems = $tab -eq "inventory" -or $tab -eq "equipment-items"
         $commands = @("warp $module") + $(if ($needsItems) { $fixture } else { @() }) + @("openmenu $tab")
         $states.Add(@{ Id = $tab; Frame = $readyFrame; Commands = $commands })
+    }
+
+    if ($party) {
+        # A mid-game roster: Handmaiden occupies the slot she shares with
+        # Disciple, Mira and Hanharr are both away, and the available-slot
+        # count sits centred in its strip above the portraits.
+        $roster = @(
+            "addavailablenpc 0 p_atton",
+            "addavailablenpc 1 p_baodur",
+            "addavailablenpc 2 p_mand",
+            "addavailablenpc 4 p_handmaiden",
+            "addavailablenpc 6 p_kreia",
+            "addavailablenpc 8 p_t3m4",
+            "addavailablenpc 9 p_visas")
+        $states.Add(@{ Id = "party-roster"; Frame = $readyFrame; Commands = (@("warp $module") + $roster + @("openmenu party")) })
     }
 
     $states.Add(@{ Id = "bark-bubble"; Frame = 30; Commands = @("warp $module",
@@ -196,8 +292,8 @@ function New-GameStates([string]$module, [string]$swoop, [bool]$party, [string]$
 }
 
 $games = @(
-    @{ Id = "kotor1"; Dir = $Kotor1Dir; States = (New-GameStates "danm14aa" "tar_m03mg" $false "dan14_adam" 310 "end_m01ab" "end_securitycomp") },
-    @{ Id = "kotor2"; Dir = $Kotor2Dir; States = (New-GameStates "101per" "371nar" $true "101atton" 900 "101per" "admlog") }
+    @{ Id = "kotor1"; Dir = $Kotor1Dir; States = (New-GameStates "danm14aa" "tar_m03mg" $false "dan14_adam" 310 "end_m01ab" "end_securitycomp" "ebo_m40ad" "ebn12_galaxymap") },
+    @{ Id = "kotor2"; Dir = $Kotor2Dir; States = (New-GameStates "101per" "371nar" $true "101atton" 900 "101per" "admlog" "101per" "3cfd") }
 )
 
 $count = 0
@@ -211,7 +307,6 @@ foreach ($game in $games) {
         $lines = [System.Collections.Generic.List[string]]::new()
         if ($NoWorld) {
             $lines.Add("graphics off")
-            $lines.Add("seed 1337")
         } else {
             $lines.Add("graphics on")
         }

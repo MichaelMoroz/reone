@@ -51,25 +51,34 @@ void Item::loadFromBlueprint(const std::string &resRef) {
 
 void Item::deserialize(const resource::Gff &gff) {
     std::string ref;
-    if (gff.readResRef(ref, "EquippedRes")) {
+    if (!gff.has("ObjectId") && gff.readResRef(ref, "EquippedRes")) {
         if (auto uti = _services.resource.gffs.get(ref, ResType::Uti)) {
             deserializeAll(*uti);
         }
     }
 
-    if (gff.readResRef(ref, "InventoryRes")) {
+    if (!gff.has("ObjectId") && gff.readResRef(ref, "InventoryRes")) {
         if (auto uti = _services.resource.gffs.get(ref, ResType::Uti)) {
             deserializeAll(*uti);
         }
     }
 
-    if (gff.readResRef(ref, "TemplateResRef")) {
+    if (!gff.has("ObjectId") && gff.readResRef(ref, "TemplateResRef")) {
         if (auto uti = _services.resource.gffs.get(ref, ResType::Uti)) {
             deserializeAll(*uti);
         }
     }
 
     deserializeAll(gff);
+}
+
+void Item::captureOwnerLocalSaveRecord(
+    const resource::Gff &gff, SaveRecordOrigin origin) {
+    uint32_t savedId = 0;
+    _originalOwnerLocalObjectId = gff.readDword(savedId, "ObjectId")
+                                      ? std::optional<uint32_t>(savedId)
+                                      : std::nullopt;
+    captureSaveRecord(gff, std::move(origin));
 }
 
 void Item::deserializeAll(const resource::Gff &gff) {
@@ -204,6 +213,66 @@ void Item::loadAmmunitionType() {
     _ammunitionType->shotSound2 = _services.resource.audioClips.get(boost::to_lower_copy(twoDa->getString(ammunitionIdx, "shotsound1")));
     _ammunitionType->impactSound1 = _services.resource.audioClips.get(boost::to_lower_copy(twoDa->getString(ammunitionIdx, "impactsound0")));
     _ammunitionType->impactSound2 = _services.resource.audioClips.get(boost::to_lower_copy(twoDa->getString(ammunitionIdx, "impactsound1")));
+}
+
+void Item::clone(Item &from) {
+    // Object
+    _tag = from._tag;
+    _name = from._name;
+    // END Object
+
+    // Serializable
+    _baseItem = from._baseItem;
+    _localizedName = from._localizedName;
+    _description = from._description;
+    _descIdentified = from._descIdentified;
+    _charges = from._charges;
+    _cost = from._cost;
+    _addCost = from._addCost;
+    _stolen = from._stolen;
+    _stackSize = from._stackSize;
+    _identified = from._identified;
+    _modelVariation = from._modelVariation;
+    _bodyVariation = from._bodyVariation;
+    _textureVariation = from._textureVariation;
+    _dropable = from._dropable;
+    // END Serializable
+
+    _baseBodyVariation = from._baseBodyVariation;
+    _itemClass = from._itemClass;
+
+    _icon = from._icon;
+    _equipableSlots = from._equipableSlots;
+    _attackRange = from._attackRange;
+    _numDice = from._numDice;
+    _dieToRoll = from._dieToRoll;
+    _damageFlags = from._damageFlags;
+    _weaponType = from._weaponType;
+    _weaponWield = from._weaponWield;
+    _weaponSize = from._weaponSize;
+
+    _equipped = from._equipped;
+    _ammunitionType = from._ammunitionType;
+    _poweredItem = from._poweredItem;
+    _isPowered = from._isPowered;
+    _powerUpSound = from._powerUpSound;
+    _powerDownSound = from._powerDownSound;
+    _poweredSound = from._poweredSound;
+    _poweredAudioSource = from._poweredAudioSource;
+
+    _criticalThreat = from._criticalThreat;
+    _criticalHitMultiplier = from._criticalHitMultiplier;
+    _weaponFocusFeat = from._weaponFocusFeat;
+    _weaponSpecializationFeat = from._weaponSpecializationFeat;
+    _baseDefense = from._baseDefense;
+    _maxDexterityBonus = from._maxDexterityBonus;
+    _acBonusType = from._acBonusType;
+
+    _activateSpell = from._activateSpell;
+    _disguiseAppearance = from._disguiseAppearance;
+    _properties = from._properties;
+
+    _audioSource = from._audioSource;
 }
 
 void Item::update(float dt) {

@@ -626,6 +626,19 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
     R_PROFILE_ZONE("SceneAdmission::prepare");
     _submission = {};
 
+    const auto resourceGeneration = _renderer.resourceGeneration();
+    if (_resourceGeneration != resourceGeneration) {
+        // Classification records contain backend texture ids. Resource
+        // invalidation renumbers that namespace, while this scene and its
+        // admission cache can outlive the render pipeline that observed the
+        // previous generation. Re-lower every material before any descriptor
+        // set can expose the new namespace to an old record.
+        _gpuScene.resetAdmissionCache();
+        if (_gpuScene.shadowScene())
+            _gpuScene.shadowScene()->resetAdmissionCache();
+        _resourceGeneration = resourceGeneration;
+    }
+
     uint64_t optionsFingerprint = 14695981039346656037ull;
     hashBytes(optionsFingerprint, _options.categoryOverrides,
               sizeof(_options.categoryOverrides));

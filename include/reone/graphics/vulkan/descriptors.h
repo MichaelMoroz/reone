@@ -77,6 +77,16 @@ public:
     /** Distinct textures one frame may draw with before the pool is exhausted. */
     static constexpr uint32_t kMaxTextureSetsPerFrame = 1024;
 
+    /**
+     * Independent merged scenes one frame may record.
+     *
+     * Character generation alone can show all six class scenes beside its
+     * character scene. Each needs immutable buffer bindings for the lifetime
+     * of the recorded command buffer; sharing one set and rewriting it would
+     * invalidate every earlier scene recorded in that frame.
+     */
+    static constexpr uint32_t kMaxMegaDrawSetsPerFrame = 16;
+
     /** Passes with fixed textures: the resolve, and later the post chain. */
     static constexpr uint32_t kMaxPersistentTextureSets = 32;
 
@@ -191,8 +201,11 @@ private:
     VkDescriptorSetLayout _textureLayout {VK_NULL_HANDLE};
     VkDescriptorSetLayout _resolveLayout {VK_NULL_HANDLE};
     VkDescriptorSetLayout _megaDrawLayout {VK_NULL_HANDLE};
-    VkDescriptorPool _megaDrawPool {VK_NULL_HANDLE};
-    std::vector<VkDescriptorSet> _megaDrawSets;
+    struct MegaDrawFrame {
+        VkDescriptorPool pool {VK_NULL_HANDLE};
+        uint32_t sets {0};
+    };
+    std::vector<MegaDrawFrame> _megaDrawFrames;
     uint32_t _bindlessTextureCapacity {0};
     VkSampler _sampler {VK_NULL_HANDLE};
     VkSampler _clampSampler {VK_NULL_HANDLE};

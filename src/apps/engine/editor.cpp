@@ -2197,34 +2197,7 @@ void Editor::update(float dt) {
 
         if (ImGui::BeginMenu("Debug")) {
             ImGui::MenuItem("ImGui Demo", nullptr, &_showImGuiDemo);
-            // Flying the scene is how anything view-dependent gets checked -
-            // shadow direction, reflections, the sky - so it belongs a click
-            // away rather than behind the console. WASD moves, Q/Z rise and
-            // fall, Shift doubles the speed, and holding the right button
-            // looks - the cursor stays free otherwise, so this menu remains
-            // clickable while the camera is on.
-            auto &game = _engine._game;
-            bool freeCamera = game && game->cameraType() == game::CameraType::Free;
-            if (ImGui::MenuItem("Free camera", "WASD/QZ, RMB look", freeCamera,
-                                game != nullptr)) {
-                if (!game->setFreeCameraEnabled(!freeCamera)) {
-                    // Outside a module there is nothing to fly.
-                    _freeCameraUnavailable = true;
-                }
-            }
             ImGui::EndMenu();
-        }
-        if (_freeCameraUnavailable) {
-            ImGui::OpenPopup("No free camera");
-            _freeCameraUnavailable = false;
-        }
-        if (ImGui::BeginPopupModal("No free camera", nullptr,
-                                   ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::TextUnformatted("Load a module first - there is nothing to fly.");
-            if (ImGui::Button("OK")) {
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
         }
         // After the menus rather than before them. SameLine positions the next
         // item relative to the previous one, and with nothing yet on the bar

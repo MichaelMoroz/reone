@@ -17,7 +17,11 @@
 
 #pragma once
 
+#include "modulediscovery.h"
+#include "odysseyroots.h"
+#include "modulemount.h"
 #include "resources.h"
+#include "saveworkingstate.h"
 #include "types.h"
 
 namespace reone {
@@ -43,6 +47,17 @@ class ILips;
 class IPaths;
 class IResources;
 class IScripts;
+class ITwoDAs;
+
+/**
+ * Whether a game's Odyssey sources are placed in the raw lookup order.
+ *
+ * A source list is homogeneous, so anything mounting into the game's resource
+ * list has to agree with the director about this. K2 is activated; K1 keeps the
+ * shared bucketed stack established by its global startup
+ * precedence is established.
+ */
+bool usesBucketedLookup(GameID game);
 
 class IResourceDirector {
 public:
@@ -50,7 +65,18 @@ public:
 
     virtual void init() = 0;
     virtual void onModuleLoad(const std::string &name) = 0;
+    virtual void onNewGame() = 0;
     virtual void onGameLoad(std::string_view name) = 0;
+    virtual std::optional<Resource> findSaveMetadata(const ResourceId &id) = 0;
+    virtual std::optional<Resource> findSaveWorking(const ResourceId &id) = 0;
+    virtual std::unordered_set<ResourceId> saveWorkingResourceIds() const = 0;
+    virtual std::shared_ptr<const SaveWorkingState> committedSaveWorkingState() const = 0;
+    virtual std::optional<SaveSlotDescriptor> saveSlotDescriptor() const = 0;
+    virtual void adoptSaveWorkingState(
+        std::shared_ptr<const SaveWorkingState> state) = 0;
+    virtual void adoptPublishedSave(
+        SaveSlotDescriptor descriptor,
+        std::shared_ptr<const SaveWorkingState> state) = 0;
 
     virtual std::set<std::string> moduleNames() = 0;
     virtual std::set<std::string> saveNames() = 0;
@@ -68,9 +94,13 @@ public:
                      ILips &lips,
                      IPaths &paths,
                      IResources &resources,
-                     IScripts &scripts) :
+                     IResources &auxResources,
+                     IScripts &scripts,
+                     ITwoDAs &twoDas,
+                     OdysseyResourceRoots odysseyRoots = {}) :
         _gameId(gameId),
         _gamePath(gamePath),
+        _odysseyRoots(std::move(odysseyRoots)),
         _graphicsOpt(graphicsOpt),
         _graphicsSvc(graphicsSvc),
         _scriptSvc(scriptSvc),
@@ -79,12 +109,28 @@ public:
         _lips(lips),
         _paths(paths),
         _resources(resources),
-        _scripts(scripts) {
+        _auxResources(auxResources),
+        _scripts(scripts),
+        _twoDas(twoDas) {
+        if (!_odysseyRoots.nwmFiles) {
+            _odysseyRoots.nwmFiles = defaultOdysseyResourceRoots(_gamePath).nwmFiles;
+        }
     }
 
     void init() override;
     void onModuleLoad(const std::string &name) override;
+    void onNewGame() override;
     void onGameLoad(std::string_view name) override;
+    std::optional<Resource> findSaveMetadata(const ResourceId &id) override;
+    std::optional<Resource> findSaveWorking(const ResourceId &id) override;
+    std::unordered_set<ResourceId> saveWorkingResourceIds() const override;
+    std::shared_ptr<const SaveWorkingState> committedSaveWorkingState() const override;
+    std::optional<SaveSlotDescriptor> saveSlotDescriptor() const override;
+    void adoptSaveWorkingState(
+        std::shared_ptr<const SaveWorkingState> state) override;
+    void adoptPublishedSave(
+        SaveSlotDescriptor descriptor,
+        std::shared_ptr<const SaveWorkingState> state) override;
 
     std::set<std::string> moduleNames() override;
     std::set<std::string> saveNames() override;
@@ -92,6 +138,7 @@ public:
 private:
     GameID _gameId;
     const std::filesystem::path &_gamePath;
+    OdysseyResourceRoots _odysseyRoots;
     const graphics::GraphicsOptions &_graphicsOpt;
     graphics::GraphicsServices &_graphicsSvc;
     script::ScriptServices &_scriptSvc;
@@ -100,17 +147,38 @@ private:
     ILips &_lips;
     IPaths &_paths;
     IResources &_resources;
+    IResources &_auxResources;
     IScripts &_scripts;
+    ITwoDAs &_twoDas;
 
-    // Set when a savegame is loaded.
-    std::optional<std::filesystem::path> _savegamePath;
+    std::unique_ptr<SaveSessionState> _saveSession;
+
+    bool bucketed() const { return usesBucketedLookup(_gameId); }
+
+    /// The given bucket, or nothing when this game is not activated. A list is
+    /// homogeneous, so a game either places every source or places none.
+    std::optional<ResourceSourceBucket> bucketOf(ResourceSourceBucket bucket) const;
 
     void loadGlobalResources();
-    void loadModuleResources(const std::string &name);
-    void loadSaveGameResources(std::string_view name);
+    void loadAuxiliaryResources();
+    void loadStreamResources();
+    void loadK1StreamResources();
+    void loadRimsDirectory();
+    void loadGlobalRimResource();
+    void loadOverrideTexturesResource();
+    void loadTexturePackResources();
+    void loadPlayerSupportResource();
+    void loadK1GlobalResources();
+    void loadLiveResources();
+    std::unique_ptr<SaveSessionState> buildSaveSession(std::string_view name);
 
-    void loadRIM(const std::filesystem::path &path, const std::string &name, ContainerKind kind);
-    void loadERF(const std::filesystem::path &path, const std::string &name, ContainerKind kind);
+    void loadModuleResources(const std::string &name);
+    void loadModuleResourcesFromPolicy(const std::string &name);
+
+    std::vector<ModuleSearchRoot> moduleSearchRoots();
+    void addStagedModuleSources(const std::string &moduleRoot, RuntimeModuleSourceIndex &index);
+    bool includeModuleInSave(const std::string &moduleRoot);
+
 };
 
 } // namespace resource

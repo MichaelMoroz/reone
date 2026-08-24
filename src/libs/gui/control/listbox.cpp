@@ -283,6 +283,14 @@ void ListBox::stretch(float x, float y, int mask) {
     if (_scrollBar) {
         if (x == y) {
             _scrollBar->stretch(x, y, mask);
+            // The bar serves rows drawn at the density unit, so its width
+            // follows that unit too; at the full layout factor it comes out
+            // twice the authored bar-to-row proportion once rows compress.
+            if (mask & kStretchWidth) {
+                auto extent = _scrollBar->extent();
+                extent.width = static_cast<int>(_scrollBar->authoredExtent().width * _layoutScale);
+                _scrollBar->setExtent(std::move(extent));
+            }
         } else {
             _scrollBar->stretch(x, y, mask & ~kStretchWidth);
         }
@@ -374,6 +382,12 @@ void ListBox::setProtoMatchContent(bool match) {
 void ListBox::setRenderItemIconsForButtonProto(bool render) {
     _renderItemIconsForButtonProto = render;
     updateItemsLayout();
+}
+
+void ListBox::setItemOffset(int offset) {
+    if (_items.size()) {
+        _itemOffset = std::min(offset, static_cast<int>(_items.size() - 1));
+    }
 }
 
 void ListBox::scrollToBottom() {

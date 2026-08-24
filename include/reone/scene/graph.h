@@ -314,8 +314,9 @@ public:
     // Off by option means the frame has no shadow light at all, so the pass and
     // the uniforms both fall away together rather than a pass rendering into a
     // term nothing applies. Selection still runs, so turning shadows off does
-    // not otherwise perturb the scene.
-    bool hasShadowLight() const override { return _graphicsOpt.shadows && _shadowLight; }
+    // not otherwise perturb the scene. Out of line because this header only
+    // forward-declares GraphicsOptions.
+    bool hasShadowLight() const override;
     bool isShadowLightDirectional() const override { return _shadowLight->isDirectional(); }
 
     glm::vec3 shadowLightPosition() const { return _shadowLight->origin(); }

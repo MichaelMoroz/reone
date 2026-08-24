@@ -136,16 +136,13 @@ VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
                              {_descriptors.textureLayout()},
                              {_descriptors.megaDrawLayout()},
                              {_descriptors.resolveLayout()}};
-    // Every cached layout exposes the same tiny range, in the one stage that
-    // pipeline has. This keeps layouts shared by sky/resolve valid while
-    // allowing the mega-draw shader to select the global triangle range without
-    // a per-draw buffer. Three words, not two: the sky bake carries the
-    // tracer's intensity, exposure and tonemap dials so one dial family drives
-    // both sky paths. A draw may fill less of the range than it declares, so
-    // mega-draw's two words are unaffected.
+    // Every cached layout exposes the same range, in the one stage that
+    // pipeline has. A draw may update less than the declared range; sharing the
+    // largest caller's size therefore keeps the smaller mega-draw and bloom
+    // blocks valid without multiplying otherwise identical layouts.
     const VkShaderStageFlags pushStage = compute ? VK_SHADER_STAGE_COMPUTE_BIT
                                                  : VK_SHADER_STAGE_FRAGMENT_BIT;
-    config.pushConstants = {{pushStage, 0, 3 * sizeof(uint32_t)}};
+    config.pushConstants = {{pushStage, 0, kCachedPipelinePushConstantSize}};
     config.blend = key.blend;
     config.cull = key.cull;
     config.depthTest = key.depthTest;

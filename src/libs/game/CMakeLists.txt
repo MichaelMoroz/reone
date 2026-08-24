@@ -183,6 +183,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/event.h
     ${GAME_INCLUDE_DIR}/footstepsounds.h
     ${GAME_INCLUDE_DIR}/floatingtext.h
+    ${GAME_INCLUDE_DIR}/galaxymapstate.h
     ${GAME_INCLUDE_DIR}/game.h
     ${GAME_INCLUDE_DIR}/itemdescription.h
     ${GAME_INCLUDE_DIR}/gui.h
@@ -208,6 +209,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/gui/container.h
     ${GAME_INCLUDE_DIR}/gui/conversation.h
     ${GAME_INCLUDE_DIR}/gui/dialog.h
+    ${GAME_INCLUDE_DIR}/gui/galaxymap.h
     ${GAME_INCLUDE_DIR}/gui/generated/areatrans.h
     ${GAME_INCLUDE_DIR}/gui/generated/areatransition.h
     ${GAME_INCLUDE_DIR}/gui/generated/chemical.h
@@ -298,12 +300,14 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/messagebus.h
     ${GAME_INCLUDE_DIR}/messagelog.h
     ${GAME_INCLUDE_DIR}/minigame.h
+    ${GAME_INCLUDE_DIR}/modulesnapshot.h
+    ${GAME_INCLUDE_DIR}/saveslotpublisher.h
+    ${GAME_INCLUDE_DIR}/savewidesnapshot.h
     ${GAME_INCLUDE_DIR}/object.h
     ${GAME_INCLUDE_DIR}/object/area.h
     ${GAME_INCLUDE_DIR}/object/camera.h
     ${GAME_INCLUDE_DIR}/object/camera/animated.h
     ${GAME_INCLUDE_DIR}/object/camera/dialog.h
-    ${GAME_INCLUDE_DIR}/object/camera/free.h
     ${GAME_INCLUDE_DIR}/object/camera/firstperson.h
     ${GAME_INCLUDE_DIR}/object/camera/static.h
     ${GAME_INCLUDE_DIR}/object/camera/thirdperson.h
@@ -329,11 +333,14 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/reputes.h
     ${GAME_INCLUDE_DIR}/room.h
     ${GAME_INCLUDE_DIR}/savedgame.h
+    ${GAME_INCLUDE_DIR}/saveprovenance.h
+    ${GAME_INCLUDE_DIR}/savedruntime.h
     ${GAME_INCLUDE_DIR}/script/routine/argutil.h
     ${GAME_INCLUDE_DIR}/script/routine/context.h
     ${GAME_INCLUDE_DIR}/script/routine/objectutil.h
     ${GAME_INCLUDE_DIR}/script/routines.h
     ${GAME_INCLUDE_DIR}/script/runner.h
+    ${GAME_INCLUDE_DIR}/script/savedsituation.h
     ${GAME_INCLUDE_DIR}/surface.h
     ${GAME_INCLUDE_DIR}/surfaces.h
     ${GAME_INCLUDE_DIR}/swooprace.h
@@ -470,6 +477,7 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/equipmentrules.cpp
     ${GAME_SOURCE_DIR}/footstepsounds.cpp
     ${GAME_SOURCE_DIR}/floatingtext.cpp
+    ${GAME_SOURCE_DIR}/galaxymapstate.cpp
     ${GAME_SOURCE_DIR}/game.cpp
     ${GAME_SOURCE_DIR}/itemdescription.cpp
     ${GAME_SOURCE_DIR}/gui/actionbar.cpp
@@ -494,6 +502,7 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/gui/container.cpp
     ${GAME_SOURCE_DIR}/gui/conversation.cpp
     ${GAME_SOURCE_DIR}/gui/dialog.cpp
+    ${GAME_SOURCE_DIR}/gui/galaxymap.cpp
     ${GAME_SOURCE_DIR}/gui/hud.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/abilities.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/character.cpp
@@ -519,13 +528,17 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/messagebus.cpp
     ${GAME_SOURCE_DIR}/messagelog.cpp
     ${GAME_SOURCE_DIR}/minigame.cpp
+    ${GAME_SOURCE_DIR}/modulesnapshot.cpp
+    ${GAME_SOURCE_DIR}/savegame.cpp
+    ${GAME_SOURCE_DIR}/savedgame.cpp
+    ${GAME_SOURCE_DIR}/saveslotpublisher.cpp
+    ${GAME_SOURCE_DIR}/savewidesnapshot.cpp
     ${GAME_SOURCE_DIR}/object.cpp
     ${GAME_SOURCE_DIR}/object/area.cpp
     ${GAME_SOURCE_DIR}/object/camera.cpp
     ${GAME_SOURCE_DIR}/object/camera/animated.cpp
     ${GAME_SOURCE_DIR}/object/camera/dialog.cpp
     ${GAME_SOURCE_DIR}/object/camera/firstperson.cpp
-    ${GAME_SOURCE_DIR}/object/camera/free.cpp
     ${GAME_SOURCE_DIR}/object/camera/static.cpp
     ${GAME_SOURCE_DIR}/object/camera/thirdperson.cpp
     ${GAME_SOURCE_DIR}/object/creature.cpp
@@ -546,6 +559,8 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/portraits.cpp
     ${GAME_SOURCE_DIR}/projectiles.cpp
     ${GAME_SOURCE_DIR}/reputes.cpp
+    ${GAME_SOURCE_DIR}/saveprovenance.cpp
+    ${GAME_SOURCE_DIR}/savedruntime.cpp
     ${GAME_SOURCE_DIR}/room.cpp
     ${GAME_SOURCE_DIR}/script/routine/argutil.cpp
     ${GAME_SOURCE_DIR}/script/routine/impl/action.cpp
@@ -554,6 +569,7 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/script/routine/impl/minigame.cpp
     ${GAME_SOURCE_DIR}/script/routines.cpp
     ${GAME_SOURCE_DIR}/script/runner.cpp
+    ${GAME_SOURCE_DIR}/script/savedsituation.cpp
     ${GAME_SOURCE_DIR}/surfaces.cpp
     ${GAME_SOURCE_DIR}/swooprace.cpp
     ${GAME_SOURCE_DIR}/transitioncandidate.cpp

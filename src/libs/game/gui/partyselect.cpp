@@ -17,6 +17,8 @@
 
 #include "reone/game/gui/partyselect.h"
 
+#include <utility>
+
 #include "reone/game/di/services.h"
 #include "reone/game/game.h"
 #include "reone/game/party.h"
@@ -49,7 +51,11 @@ static int g_strRefAdd = 38455;
 static int g_strRefRemove = 38456;
 
 static glm::vec3 g_kotorColorOn = {0.984314f, 1.0f, 0};
+// Neither game authors an in-party colour; K1's green is the retail runtime
+// tint. TSL authors white for its buttons' selected state, and the K1 green
+// clashes with its teal-and-sand palette.
 static glm::vec3 g_kotorColorAdded = {0, 0.831373f, 0.090196f};
+static glm::vec3 g_tslColorAdded = {1.0f, 1.0f, 1.0f};
 
 static bool matchesPendingSelection(
     const bool (&added)[kMaxNpcCount],
@@ -80,7 +86,12 @@ void PartySelection::onGUILoaded() {
     bindControls();
 
     if (_game.isTSL()) {
-        fillK2SectionStrip(_controls.LBL_BAR1, _controls.LBL_BAR2);
+        // LBL_BAR1 and LBL_BAR2 are not a section-title strip here: they are
+        // authored twenty pixels apart with the available-slot count centred
+        // between them. Collapsing them the way the in-game menus do strands
+        // the count below the strip, so the bars keep their authored places
+        // and only take the shell tint.
+        tintK2InGameHeader();
         for (auto &control : {
                  _controls.LBL_NA0, _controls.LBL_NA1, _controls.LBL_NA2, _controls.LBL_NA3,
                  _controls.LBL_NA4, _controls.LBL_NA5, _controls.LBL_NA6, _controls.LBL_NA7,
@@ -96,7 +107,7 @@ void PartySelection::onGUILoaded() {
     for (int i = 0; i < npcCount(); ++i) {
         ToggleButton &button = getNpcButton(i);
         button.setOnColor(g_kotorColorOn);
-        button.setBorderColorOverride(g_kotorColorAdded);
+        button.setBorderColorOverride(_game.isTSL() ? g_tslColorAdded : g_kotorColorAdded);
         button.setUseBorderColorOverride(false);
     }
 
@@ -233,12 +244,33 @@ void PartySelection::prepare(const PartySelectionContext &ctx) {
         if (auto member = party.getAvailableMember(i)) {
             auto portrait = member->portrait();
             BTN_NPC.setDisabled(false);
+            BTN_NPC.setVisible(true);
             LBL_CHAR.setBorderFill(std::move(portrait));
             LBL_NA.setVisible(false);
         } else {
             BTN_NPC.setDisabled(true);
+            BTN_NPC.setVisible(true);
             LBL_CHAR.setBorderFill(std::shared_ptr<Texture>(nullptr));
             LBL_NA.setVisible(true);
+        }
+    }
+    if (_game.isTSL()) {
+        // Handmaiden/Disciple and Mira/Hanharr are authored on one shared
+        // slot each. The not-available overlay belongs to the slot, not to
+        // each NPC: with one of the pair available, the other's overlay and
+        // disabled button frame would draw over the occupant's portrait, and
+        // with both away a single overlay is enough.
+        static constexpr std::pair<int, int> kSharedSlots[] {
+            {4, 11}, // Handmaiden, Disciple
+            {7, 10}, // Mira, Hanharr
+        };
+        for (const auto &slot : kSharedSlots) {
+            bool firstAvailable = party.isMemberAvailable(slot.first);
+            bool secondAvailable = party.isMemberAvailable(slot.second);
+            naLabels[slot.first]->setVisible(!firstAvailable && !secondAvailable);
+            naLabels[slot.second]->setVisible(false);
+            getNpcButton(slot.first).setVisible(firstAvailable || !secondAvailable);
+            getNpcButton(slot.second).setVisible(secondAvailable);
         }
     }
     refreshAvailableCount();

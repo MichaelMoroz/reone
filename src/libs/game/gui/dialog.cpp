@@ -17,6 +17,8 @@
 
 #include "reone/game/gui/dialog.h"
 
+#include <cmath>
+
 #include "reone/audio/mixer.h"
 #include "reone/audio/source.h"
 #include "reone/graphics/di/services.h"
@@ -54,11 +56,13 @@ static const char kObjectTagOwner[] = "owner";
 // Odyssey DLG participant animation ordinals occupy two namespaces.
 //
 // Ordinals at or above kDialogAnimationBase index dialoganimations.2da and name
-// a semantic dialogue animation. Lower ordinals name a cutscene clip on the
-// target model directly, and are split into fixed-width bands: the band selects
-// the clip name suffix and whether the clip is held, while the offset within the
-// band selects the clip number. Both namespaces are independent of AnimatedCut
-// and of whether the participant is driven by a stunt model.
+// a semantic dialogue animation. K1 also uses valid positive 2DA rows directly.
+// Recognized lower ordinal bands name a cutscene clip on the target model: the
+// band selects the clip name suffix and whether the clip is held, while the
+// offset within the band selects the clip number. Both namespaces are
+// independent of AnimatedCut and of whether the participant is driven by a
+// stunt model.
+
 // The conversation bands are viewport-relative, not authored plate art:
 // the subtitle sits in the top sixth and the reply list in the bottom sixth
 // of whatever viewport the game is running at.
@@ -143,6 +147,12 @@ Control::Extent DialogGUI::bandExtent(int top) const {
     return {0, top, _game.options().graphics.width, bandHeight()};
 }
 
+Control::Extent DialogGUI::replySafeArea() const {
+    int safeWidth = std::min(_game.options().graphics.width, _game.options().graphics.height * 4 / 3);
+    int safeLeft = (_game.options().graphics.width - safeWidth) / 2;
+    return {safeLeft, _game.options().graphics.height - bandHeight(), safeWidth, bandHeight()};
+}
+
 void DialogGUI::loadFrames() {
     addFrame(kControlTagTopFrame, 0);
     addFrame(kControlTagBottomFrame, _game.options().graphics.height - bandHeight());
@@ -169,6 +179,23 @@ void DialogGUI::configureReplies() {
     // do not receive the safe-area offset twice. The row prototype below is
     // positioned in the 4:3 rectangle itself.
     _controls.LB_REPLIES->setExtent(bandExtent(_game.options().graphics.height - bandHeight()));
+    // The authored list reserves a scroll-bar column against its left edge,
+    // with the row prototype indented past it. Recreate that column at the
+    // safe area's left edge: the list is moved into the band by the extent
+    // override above, and no layout pass carries its scroll bar along, so
+    // without this the bar would render at its raw authored coordinates in
+    // the screen's top-left corner whenever the replies overflow the band.
+    // The bar and the row indent share the dialogue text scale, not the
+    // layout factor: the rows draw their prose at that scale, and the
+    // authored proportion is a bar as wide as a row is tall.
+    if (auto scrollBar = _controls.LB_REPLIES->scrollBarOrNull()) {
+        auto safeArea = replySafeArea();
+        scrollBar->setExtent({
+            safeArea.left,
+            safeArea.top,
+            static_cast<int>(std::lround(scrollBar->authoredExtent().width * _controls.LBL_MESSAGE->scale())),
+            safeArea.height});
+    }
     _controls.LB_REPLIES->setProtoMatchContent(true);
     _controls.LB_REPLIES->protoItem().setTextFont(_controls.LBL_MESSAGE->text().font);
     _controls.LB_REPLIES->protoItem().setScale(_controls.LBL_MESSAGE->scale());
@@ -484,17 +511,25 @@ std::optional<DialogGUI::CutAnimation> DialogGUI::decodeCutAnimation(int ordinal
 }
 
 AnimationType DialogGUI::getDialogAnimationType(int ordinal) const {
-    if (ordinal < kDialogAnimationBase) {
-        // Cut-band ordinals never reach here. Anything else below the 2DA base
-        // belongs to no namespace reone recognises, so it is left unplayed.
+    int index;
+    if (ordinal >= kDialogAnimationBase) {
+        index = ordinal - kDialogAnimationBase;
+    } else if (ordinal > 0 && !_game.isTSL()) {
+        index = ordinal;
+    } else {
+        // Cut-band ordinals never reach here. K2 lower ordinals and the zero
+        // sentinel belong to no ordinary-animation namespace reone recognises.
         warn("Dialog: unsupported animation ordinal: " + std::to_string(ordinal));
         return AnimationType::Invalid;
     }
     std::shared_ptr<TwoDA> animations(_services.resource.twoDas.get("dialoganimations"));
-    int index = ordinal - kDialogAnimationBase;
 
     if (index >= animations->getRowCount()) {
-        warn("Dialog: animation index out of bounds: " + std::to_string(index));
+        if (ordinal < kDialogAnimationBase) {
+            warn("Dialog: unsupported animation ordinal: " + std::to_string(ordinal));
+        } else {
+            warn("Dialog: animation index out of bounds: " + std::to_string(index));
+        }
         return AnimationType::Invalid;
     }
 
@@ -584,13 +619,28 @@ void DialogGUI::setReplyLines(std::vector<std::string> lines) {
         _controls.LB_REPLIES->addItem(std::move(item));
     }
     // Replies start at the top-left of the centred 4:3 safe area within the
-    // bottom band. The list root stays full-width so the offset is applied
-    // exactly once to its row prototype.
+    // bottom band, indented past the scroll-bar column by their authored
+    // offset so an overflowing list shows its bar beside the prose, not
+    // under it. K1 authors the rows flush against the bar, which reads as
+    // touching; hold them clear of it by the gap TSL authors, which leaves
+    // TSL's own indent unchanged. The list root stays full-width so the
+    // offset is applied exactly once to its row prototype.
+    static constexpr int kScrollBarTextGap = 8;
     auto extent = _controls.LB_REPLIES->protoItem().extent();
     const auto &band = _controls.LB_REPLIES->extent();
-    int safeWidth = std::min(_game.options().graphics.width, _game.options().graphics.height * 4 / 3);
-    extent.left = (_game.options().graphics.width - safeWidth) / 2;
-    extent.width = safeWidth;
+    auto safeArea = replySafeArea();
+    float textScale = _controls.LBL_MESSAGE->scale();
+    int indent = static_cast<int>(std::lround(
+        (_controls.LB_REPLIES->protoItem().authoredExtent().left -
+         _controls.LB_REPLIES->authoredExtent().left) *
+        textScale));
+    if (auto scrollBar = _controls.LB_REPLIES->scrollBarOrNull()) {
+        indent = std::max(
+            indent,
+            scrollBar->extent().width + static_cast<int>(std::lround(kScrollBarTextGap * textScale)));
+    }
+    extent.left = safeArea.left + indent;
+    extent.width = safeArea.width - indent;
     extent.top = band.top;
     _controls.LB_REPLIES->protoItem().setExtent(std::move(extent));
 }

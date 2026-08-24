@@ -19,9 +19,12 @@
 
 #include "reone/game/types.h"
 #include "reone/graphics/animation.h"
+#include "reone/graphics/camera/orthographic.h"
+#include "reone/graphics/camera/perspective.h"
 #include "reone/graphics/lipanimation.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/options.h"
+#include "reone/gui/sceneinitializer.h"
 #include "reone/scene/graphs.h"
 #include "reone/scene/node/model.h"
 #include "reone/scene/node/modelnode.h"
@@ -44,6 +47,142 @@ class MockUser : public IUser {
 public:
     ~MockUser() {}
 };
+
+TEST(SceneInitializer, defaults_to_orthographic_projection_and_default_depth) {
+    auto graphicsOpt = GraphicsOptions();
+    auto pipelineFactory = MockRenderPipelineFactory();
+    auto graphicsModule = TestGraphicsModule();
+    graphicsModule.init();
+    auto audioModule = TestAudioModule();
+    audioModule.init();
+    auto resourceModule = TestResourceModule();
+    resourceModule.init();
+    auto scene = std::make_unique<SceneGraph>("test", pipelineFactory, graphicsOpt, graphicsModule.services(), audioModule.services(), resourceModule.services());
+
+    auto rootNode = std::make_shared<ModelNode>(0, "root_node", glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+    auto model = Model("gui_model", 0, rootNode, std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+    model.init();
+
+    gui::SceneInitializer(*scene)
+        .aspect(2.5f)
+        .modelSupplier([&model](ISceneGraph &graph) {
+            return graph.newModel(model, ModelUsage::GUI);
+        })
+        .invoke();
+
+    auto maybeCameraNode = scene->camera();
+    ASSERT_TRUE(maybeCameraNode);
+    auto camera = maybeCameraNode->get().camera();
+    ASSERT_TRUE(camera);
+    EXPECT_EQ(CameraType::Orthographic, camera->type());
+    EXPECT_FLOAT_EQ(kDefaultClipPlaneNear, camera->zNear());
+    EXPECT_FLOAT_EQ(kDefaultClipPlaneFar, camera->zFar());
+}
+
+TEST(SceneInitializer, perspective_uses_requested_fov_aspect_and_depth) {
+    auto graphicsOpt = GraphicsOptions();
+    auto pipelineFactory = MockRenderPipelineFactory();
+    auto graphicsModule = TestGraphicsModule();
+    graphicsModule.init();
+    auto audioModule = TestAudioModule();
+    audioModule.init();
+    auto resourceModule = TestResourceModule();
+    resourceModule.init();
+    auto scene = std::make_unique<SceneGraph>("test", pipelineFactory, graphicsOpt, graphicsModule.services(), audioModule.services(), resourceModule.services());
+
+    auto rootNode = std::make_shared<ModelNode>(0, "root_node", glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+    auto model = Model("gui_model", 0, rootNode, std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+    model.init();
+    constexpr float kVerticalFov = glm::radians(35.0f);
+
+    gui::SceneInitializer(*scene)
+        .aspect(2.5f)
+        .depth(0.1f, 10000.0f)
+        .perspective(kVerticalFov)
+        .modelSupplier([&model](ISceneGraph &graph) {
+            return graph.newModel(model, ModelUsage::GUI);
+        })
+        .invoke();
+
+    auto maybeCameraNode = scene->camera();
+    ASSERT_TRUE(maybeCameraNode);
+    auto camera = std::dynamic_pointer_cast<PerspectiveCamera>(maybeCameraNode->get().camera());
+    ASSERT_TRUE(camera);
+    EXPECT_FLOAT_EQ(kVerticalFov, camera->fovy());
+    EXPECT_FLOAT_EQ(2.5f, camera->aspect());
+    EXPECT_FLOAT_EQ(0.1f, camera->zNear());
+    EXPECT_FLOAT_EQ(10000.0f, camera->zFar());
+}
+
+TEST(SceneInitializer, camera_tracks_authored_model_hook_after_initialization) {
+    auto graphicsOpt = GraphicsOptions();
+    auto pipelineFactory = MockRenderPipelineFactory();
+    auto graphicsModule = TestGraphicsModule();
+    graphicsModule.init();
+    auto audioModule = TestAudioModule();
+    audioModule.init();
+    auto resourceModule = TestResourceModule();
+    resourceModule.init();
+    auto scene = std::make_unique<SceneGraph>("test", pipelineFactory, graphicsOpt, graphicsModule.services(), audioModule.services(), resourceModule.services());
+
+    auto rootNode = std::make_shared<ModelNode>(0, "root_node", glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+    auto cameraHook = std::make_shared<ModelNode>(1, "camerahook", glm::vec3(3.0f, 4.0f, 5.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, rootNode.get());
+    rootNode->addChild(cameraHook);
+    auto model = Model("gui_model", 0, rootNode, std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+    model.init();
+    std::shared_ptr<ModelSceneNode> sceneModel;
+
+    gui::SceneInitializer(*scene)
+        .modelSupplier([&model, &sceneModel](ISceneGraph &graph) {
+            sceneModel = graph.newModel(model, ModelUsage::GUI);
+            return sceneModel;
+        })
+        .cameraFromModelNode("camerahook")
+        .invoke();
+
+    auto maybeCameraNode = scene->camera();
+    ASSERT_TRUE(maybeCameraNode);
+    auto camera = maybeCameraNode->get().camera();
+    ASSERT_TRUE(camera);
+    EXPECT_LT(glm::length(camera->position() - glm::vec3(3.0f, 4.0f, 5.0f)), 1e-5f);
+
+    auto hookNode = sceneModel->getNodeByName("camerahook");
+    ASSERT_TRUE(hookNode);
+    hookNode->setLocalTransform(glm::translate(glm::mat4(1.0f), glm::vec3(6.0f, 7.0f, 8.0f)));
+    EXPECT_LT(glm::length(camera->position() - glm::vec3(6.0f, 7.0f, 8.0f)), 1e-5f);
+}
+
+TEST(SceneInitializer, static_camera_hook_preserves_local_camera_transform) {
+    auto graphicsOpt = GraphicsOptions();
+    auto pipelineFactory = MockRenderPipelineFactory();
+    auto graphicsModule = TestGraphicsModule();
+    graphicsModule.init();
+    auto audioModule = TestAudioModule();
+    audioModule.init();
+    auto resourceModule = TestResourceModule();
+    resourceModule.init();
+    auto scene = std::make_unique<SceneGraph>("test", pipelineFactory, graphicsOpt, graphicsModule.services(), audioModule.services(), resourceModule.services());
+
+    auto rootNode = std::make_shared<ModelNode>(0, "root_node", glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+    auto cameraHook = std::make_shared<ModelNode>(1, "camerahook", glm::vec3(3.0f, 4.0f, 5.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, rootNode.get());
+    rootNode->addChild(cameraHook);
+    auto model = Model("gui_model", 0, rootNode, std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+    model.init();
+
+    gui::SceneInitializer(*scene)
+        .modelSupplier([&model](ISceneGraph &graph) {
+            return graph.newModel(model, ModelUsage::GUI);
+        })
+        .cameraFromModelNode("camerahook")
+        .cameraTransform(glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)))
+        .invoke();
+
+    auto maybeCameraNode = scene->camera();
+    ASSERT_TRUE(maybeCameraNode);
+    auto camera = maybeCameraNode->get().camera();
+    ASSERT_TRUE(camera);
+    EXPECT_LT(glm::length(camera->position() - glm::vec3(4.0f, 6.0f, 8.0f)), 1e-5f);
+}
 
 TEST(ModelSceneNode, should_build_from_model) {
     // given
@@ -285,6 +424,171 @@ TEST(ModelSceneNode, should_play_single_fire_forget_animation) {
     EXPECT_NEAR(1.0f, rootPosition.x, 1e-5);
     EXPECT_NEAR(2.0f, rootPosition.y, 1e-5);
     EXPECT_NEAR(3.0f, rootPosition.z, 1e-5);
+}
+
+
+TEST(ModelSceneNode, should_retarget_external_animation_root_to_live_model_root) {
+    // given: retail stunt animations carry placement on a proxy model root,
+    // while the live participant uses its appearance model's root name.
+    auto graphicsOpt = GraphicsOptions();
+    auto pipelineFactory = MockRenderPipelineFactory();
+
+    auto graphicsModule = TestGraphicsModule();
+    graphicsModule.init();
+
+    auto audioModule = TestAudioModule();
+    audioModule.init();
+
+    auto resourceModule = TestResourceModule();
+    resourceModule.init();
+
+    auto scene = std::make_unique<SceneGraph>("test", pipelineFactory, graphicsOpt, graphicsModule.services(), audioModule.services(), resourceModule.services());
+
+    auto liveRoot = std::make_shared<ModelNode>(
+        0, "pmbbs", glm::vec3(0.0f),
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+    auto proxyRoot = std::make_shared<ModelNode>(
+        0, "m12aa_c01_char01", glm::vec3(0.0f),
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), false, nullptr);
+    proxyRoot->vectorTracks()[ControllerTypes::position].add(0.0f, glm::vec3(0.0f));
+    proxyRoot->vectorTracks()[ControllerTypes::position].add(1.0f, glm::vec3(4.0f, 5.0f, 6.0f));
+
+    auto external = std::make_shared<Animation>(
+        "cut003w", 1.0f, 0.0f, "", proxyRoot,
+        std::vector<Animation::Event>());
+    auto model = Model(
+        "pmbbs", 0, liveRoot,
+        std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+    auto modelSceneNode = std::make_shared<ModelSceneNode>(
+        model,
+        ModelUsage::Creature,
+        *scene,
+        graphicsModule.services(),
+        audioModule.services(),
+        resourceModule.services());
+
+    // when
+    modelSceneNode->init();
+    modelSceneNode->playAnimation(
+        *external, nullptr,
+        AnimationProperties::fromFlags(AnimationFlags::retargetRoot));
+    modelSceneNode->update(1.0f);
+
+    // then
+    auto rootSceneNode = modelSceneNode->getNodeByName("pmbbs");
+    ASSERT_TRUE(static_cast<bool>(rootSceneNode));
+    const auto &rootPosition = rootSceneNode->localTransform()[3];
+    EXPECT_NEAR(4.0f, rootPosition.x, 1e-5);
+    EXPECT_NEAR(5.0f, rootPosition.y, 1e-5);
+    EXPECT_NEAR(6.0f, rootPosition.z, 1e-5);
+}
+
+TEST(ModelSceneNode, should_apply_external_stunt_tracks_to_an_attached_appearance_head) {
+    // given: Game 5's cut003w proxy has no local clip on pmhb05, but carries
+    // matching facial nodes whose tracks close the player's eyes.
+    auto graphicsOpt = GraphicsOptions();
+    auto pipelineFactory = MockRenderPipelineFactory();
+
+    auto graphicsModule = TestGraphicsModule();
+    graphicsModule.init();
+    auto audioModule = TestAudioModule();
+    audioModule.init();
+    auto resourceModule = TestResourceModule();
+    resourceModule.init();
+
+    auto scene = std::make_unique<SceneGraph>(
+        "test", pipelineFactory, graphicsOpt,
+        graphicsModule.services(), audioModule.services(), resourceModule.services());
+
+    auto bodyRoot = std::make_shared<ModelNode>(
+        0, "pmbbs", glm::vec3(0.0f),
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+    auto headHook = std::make_shared<ModelNode>(
+        1, "headhook", glm::vec3(0.0f),
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), false, bodyRoot.get());
+    bodyRoot->addChild(headHook);
+    auto accessoryHook = std::make_shared<ModelNode>(
+        2, "accessoryhook", glm::vec3(0.0f),
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), false, bodyRoot.get());
+    bodyRoot->addChild(accessoryHook);
+
+    auto headRoot = std::make_shared<ModelNode>(
+        0, "pmhb05", glm::vec3(0.0f),
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+    auto eyelid = std::make_shared<ModelNode>(
+        1, "eyeLid", glm::vec3(0.0f),
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, headRoot.get());
+    headRoot->addChild(eyelid);
+
+    auto proxyRoot = std::make_shared<ModelNode>(
+        0, "m12aa_c01_char01", glm::vec3(0.0f),
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), false, nullptr);
+    proxyRoot->vectorTracks()[ControllerTypes::position].add(1.0f, glm::vec3(4.0f, 5.0f, 6.0f));
+    auto proxyEyelid = std::make_shared<ModelNode>(
+        1, "eyeLid", glm::vec3(0.0f),
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), false, proxyRoot.get());
+    proxyEyelid->vectorTracks()[ControllerTypes::position].add(1.0f, glm::vec3(0.0f, 0.0f, -0.25f));
+    proxyRoot->addChild(proxyEyelid);
+
+    auto external = std::make_shared<Animation>(
+        "cut003w", 1.0f, 0.0f, "", proxyRoot,
+        std::vector<Animation::Event>());
+    auto bodyModel = Model(
+        "pmbbs", 0, bodyRoot,
+        std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+    auto headModel = Model(
+        "pmhb05", 0, headRoot,
+        std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+    auto accessoryRoot = std::make_shared<ModelNode>(
+        0, "unrelated_root", glm::vec3(0.0f),
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+    auto accessoryAnimRoot = std::make_shared<ModelNode>(
+        0, "unrelated_root", glm::vec3(0.0f),
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), false, nullptr);
+    auto accessoryOverlay = std::make_shared<Animation>(
+        "local_overlay", 1.0f, 0.0f, "", accessoryAnimRoot,
+        std::vector<Animation::Event>());
+    auto accessoryModel = Model(
+        "unrelated_creature_attachment", 0, accessoryRoot,
+        std::vector<std::shared_ptr<Animation>> {accessoryOverlay}, "", 1.0f);
+    auto body = std::make_shared<ModelSceneNode>(
+        bodyModel, ModelUsage::Creature, *scene,
+        graphicsModule.services(), audioModule.services(), resourceModule.services());
+    auto head = std::make_shared<ModelSceneNode>(
+        headModel, ModelUsage::Creature, *scene,
+        graphicsModule.services(), audioModule.services(), resourceModule.services());
+    auto accessory = std::make_shared<ModelSceneNode>(
+        accessoryModel, ModelUsage::Creature, *scene,
+        graphicsModule.services(), audioModule.services(), resourceModule.services());
+
+    // when
+    body->init();
+    head->init();
+    accessory->init();
+    body->attach("headhook", *head);
+    body->attach("accessoryhook", *accessory);
+    accessory->playAnimation(
+        "local_overlay", nullptr,
+        AnimationProperties::fromFlags(AnimationFlags::loopOverlay));
+    body->playAnimation(
+        *external, nullptr,
+        AnimationProperties::fromFlags(AnimationFlags::propagate | AnimationFlags::retargetRoot));
+    body->update(1.0f);
+
+    // then
+    auto bodyRootNode = body->getNodeByName("pmbbs");
+    auto headRootNode = head->getNodeByName("pmhb05");
+    auto eyelidNode = head->getNodeByName("eyeLid");
+    ASSERT_TRUE(static_cast<bool>(bodyRootNode));
+    ASSERT_TRUE(static_cast<bool>(headRootNode));
+    ASSERT_TRUE(static_cast<bool>(eyelidNode));
+    EXPECT_NEAR(4.0f, bodyRootNode->localTransform()[3].x, 1e-5);
+    EXPECT_NEAR(5.0f, bodyRootNode->localTransform()[3].y, 1e-5);
+    EXPECT_NEAR(6.0f, bodyRootNode->localTransform()[3].z, 1e-5);
+    EXPECT_NEAR(0.0f, headRootNode->localTransform()[3].x, 1e-5);
+    EXPECT_NEAR(-0.25f, eyelidNode->localTransform()[3].z, 1e-5);
+    EXPECT_EQ("local_overlay", accessory->activeAnimationName());
+    EXPECT_EQ(1u, accessory->animationChannels().size());
 }
 
 TEST(ModelSceneNode, should_play_single_looping_animation) {

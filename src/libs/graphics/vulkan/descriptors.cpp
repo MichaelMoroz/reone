@@ -210,29 +210,22 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
                                     &_megaDrawLayout) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: mega-draw descriptor set layout creation failed");
     }
-    std::array<VkDescriptorPoolSize, 2> megaPoolSizes {{
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6u * static_cast<uint32_t>(framesInFlight)},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-         3u * _bindlessTextureCapacity * static_cast<uint32_t>(framesInFlight)},
-    }};
-    VkDescriptorPoolCreateInfo megaPoolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    megaPoolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
-    megaPoolInfo.maxSets = static_cast<uint32_t>(framesInFlight);
-    megaPoolInfo.poolSizeCount = static_cast<uint32_t>(megaPoolSizes.size());
-    megaPoolInfo.pPoolSizes = megaPoolSizes.data();
-    if (vkCreateDescriptorPool(_device.handle(), &megaPoolInfo, nullptr,
-                               &_megaDrawPool) != VK_SUCCESS) {
-        throw std::runtime_error("Vulkan: mega-draw descriptor pool creation failed");
-    }
-    std::vector<VkDescriptorSetLayout> megaLayouts(framesInFlight, _megaDrawLayout);
-    VkDescriptorSetAllocateInfo megaAlloc {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    megaAlloc.descriptorPool = _megaDrawPool;
-    megaAlloc.descriptorSetCount = static_cast<uint32_t>(megaLayouts.size());
-    megaAlloc.pSetLayouts = megaLayouts.data();
-    _megaDrawSets.resize(framesInFlight);
-    if (vkAllocateDescriptorSets(_device.handle(), &megaAlloc,
-                                 _megaDrawSets.data()) != VK_SUCCESS) {
-        throw std::runtime_error("Vulkan: mega-draw descriptor allocation failed");
+    _megaDrawFrames.resize(framesInFlight);
+    for (auto &frame : _megaDrawFrames) {
+        std::array<VkDescriptorPoolSize, 2> megaPoolSizes {{
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6u * kMaxMegaDrawSetsPerFrame},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+             3u * _bindlessTextureCapacity * kMaxMegaDrawSetsPerFrame},
+        }};
+        VkDescriptorPoolCreateInfo megaPoolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        megaPoolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+        megaPoolInfo.maxSets = kMaxMegaDrawSetsPerFrame;
+        megaPoolInfo.poolSizeCount = static_cast<uint32_t>(megaPoolSizes.size());
+        megaPoolInfo.pPoolSizes = megaPoolSizes.data();
+        if (vkCreateDescriptorPool(_device.handle(), &megaPoolInfo, nullptr,
+                                   &frame.pool) != VK_SUCCESS) {
+            throw std::runtime_error("Vulkan: mega-draw descriptor pool creation failed");
+        }
     }
 
     VkDescriptorPoolSize poolSize {};
@@ -388,6 +381,12 @@ void VulkanDescriptors::setTexture(int unit, const VulkanImage &image) {
 }
 
 void VulkanDescriptors::beginFrame(int frame) {
+    auto &mega = _megaDrawFrames[frame];
+    // The frame fence has completed, so every command buffer that referenced
+    // these scene-specific sets is finished before the pool is recycled.
+    vkResetDescriptorPool(_device.handle(), mega.pool, 0);
+    mega.sets = 0;
+
     auto &f = _textureFrames[frame];
     // Safe because the caller has already waited on this frame's fence.
     vkResetDescriptorPool(_device.handle(), f.pool, 0);
@@ -399,7 +398,19 @@ void VulkanDescriptors::beginFrame(int frame) {
 DescriptorSet VulkanDescriptors::updateMegaDrawSet(
     int frame, const GpuScene::View &scene,
     const IResources &resources) {
-    auto set = _megaDrawSets.at(frame);
+    auto &mega = _megaDrawFrames.at(frame);
+    if (mega.sets >= kMaxMegaDrawSetsPerFrame) {
+        throw std::runtime_error("Vulkan: too many merged scenes in one frame");
+    }
+    VkDescriptorSetAllocateInfo info {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    info.descriptorPool = mega.pool;
+    info.descriptorSetCount = 1;
+    info.pSetLayouts = &_megaDrawLayout;
+    VkDescriptorSet set {VK_NULL_HANDLE};
+    if (vkAllocateDescriptorSets(_device.handle(), &info, &set) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: mega-draw descriptor allocation failed");
+    }
+    ++mega.sets;
     std::array<VkDescriptorBufferInfo, 6> buffers {{
         {toVulkanBuffer(*scene.vertices.buffer).handle(), scene.vertices.offset, scene.vertices.size},
         {toVulkanBuffer(*scene.materialIds.buffer).handle(), scene.materialIds.offset, scene.materialIds.size},
@@ -627,11 +638,12 @@ const VulkanImage *VulkanDescriptors::defaultFor(int unit,
 }
 
 void VulkanDescriptors::deinit() {
-    if (_megaDrawPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(_device.handle(), _megaDrawPool, nullptr);
-        _megaDrawPool = VK_NULL_HANDLE;
+    for (auto &frame : _megaDrawFrames) {
+        if (frame.pool != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(_device.handle(), frame.pool, nullptr);
+        }
     }
-    _megaDrawSets.clear();
+    _megaDrawFrames.clear();
     if (_megaDrawLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(_device.handle(), _megaDrawLayout, nullptr);
         _megaDrawLayout = VK_NULL_HANDLE;

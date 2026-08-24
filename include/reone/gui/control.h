@@ -21,6 +21,7 @@
 #include "reone/graphics/types.h"
 
 #include "reone/resource/parser/gff/gui.h"
+#include "controlrender.h"
 #include "types.h"
 
 namespace reone {
@@ -299,7 +300,8 @@ protected:
     void renderBorder(const Border &border,
                       const glm::ivec2 &offset,
                       const glm::ivec2 &size,
-                      graphics::I2DRenderer &renderer2d);
+                      graphics::I2DRenderer &renderer2d,
+                      BorderRenderPart part = BorderRenderPart::All);
 
     void renderText(const std::vector<std::string> &lines,
                     const glm::ivec2 &offset,

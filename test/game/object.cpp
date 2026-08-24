@@ -26,6 +26,7 @@
 #include "reone/game/action/movetopoint.h"
 #include "reone/game/action/opendoor.h"
 #include "reone/game/action/unlockobject.h"
+#include "reone/game/equipmentrules.h"
 #include "reone/game/game.h"
 #include "reone/game/gui/areatransition.h"
 #include "reone/game/gui/actionbar.h"
@@ -49,6 +50,8 @@
 #include "reone/game/object/module.h"
 #include "reone/game/object/placeable.h"
 #include "reone/game/object/trigger.h"
+#include "reone/game/object/waypoint.h"
+#include "reone/game/player.h"
 #include "reone/game/reputes.h"
 #include "reone/game/room.h"
 #include "reone/game/script/routines.h"
@@ -68,8 +71,10 @@
 #include "reone/scene/node/camera.h"
 #include "reone/scene/node/dummy.h"
 #include "reone/scene/node/model.h"
+#include "reone/scene/node/camera.h"
 #include "reone/scene/node/trigger.h"
 #include "reone/scene/node/walkmesh.h"
+#include "reone/system/exception/validation.h"
 #include "reone/script/executioncontext.h"
 #include "reone/script/program.h"
 
@@ -92,6 +97,24 @@ public:
         const StatusSummaryEntry &entry,
         const std::string &authoredText) const {
         return descriptionText(category, entry, authoredText);
+    }
+
+    void captureDescription(
+        StatusSummaryCategory category,
+        std::shared_ptr<gui::Label> description) {
+        auto &row = _rows[static_cast<size_t>(category)];
+        row.description = std::move(description);
+        row.descriptionExtent = row.description->extent();
+        row.authoredText = row.description->text().text;
+    }
+
+    std::string formatCapturedDescription(
+        StatusSummaryCategory category,
+        const StatusSummaryEntry &entry) const {
+        return descriptionText(
+            category,
+            entry,
+            _rows[static_cast<size_t>(category)].authoredText);
     }
 };
 
@@ -163,6 +186,10 @@ public:
         return DialogGUI::decodeCutAnimation(ordinal);
     }
 
+    static AnimationType dialogAnimationType(DialogGUI &gui, int ordinal) {
+        return gui.getDialogAnimationType(ordinal);
+    }
+
     static void setOwner(DialogGUI &gui, std::shared_ptr<Object> owner) {
         gui._owner = std::move(owner);
     }
@@ -230,6 +257,24 @@ std::pair<std::string, std::string> reone::game::TestGameModule::scheduledTransi
 void reone::game::TestGameModule::setActiveModuleArea(Game &game, std::shared_ptr<Area> area) {
     game._module = game.newModule();
     game._module->_area = std::move(area);
+}
+
+std::pair<glm::vec3, float> reone::game::TestGameModule::resolveModuleEntry(
+    Module &module,
+    std::string entry,
+    const glm::vec3 &defaultPosition,
+    float defaultFacing) {
+
+    module._info.entryPosition = defaultPosition;
+    module._info.entryFacing = defaultFacing;
+    glm::vec3 position;
+    float facing = 0.0f;
+    module.getEntryPoint(entry, position, facing);
+    return {position, facing};
+}
+
+void reone::game::TestGameModule::deserializeInventory(Game &game, Gff &gff) {
+    game.deserializeInventory(gff);
 }
 
 namespace {
@@ -314,6 +359,27 @@ std::shared_ptr<TwoDA> makeBaseItemsTable() {
     builder.row({"", "", "", "", "", "", "I_Credits", "", "", "", "", ""});
     builder.row({"", "", "", "", "", "", "I_Datapad", "", "", "", "", ""});
     builder.row({"", "", "", "", "", "2", "I_Disguise", "", "", "", "-1", ""});
+    return std::shared_ptr<TwoDA>(builder.build());
+}
+
+std::shared_ptr<TwoDA> makeLightsaberBaseItemsTable() {
+    TwoDA::Builder builder;
+    builder.columns({"maxattackrange", "crithitmult", "critthreat", "damageflags", "dietoroll",
+                     "equipableslots", "itemclass", "numdice", "weapontype", "weaponwield",
+                     "ammunitiontype", "bodyvar"});
+    for (int i = 0; i <= 12; ++i) {
+        if (i == 1) {
+            builder.row({"1.5", "2", "2", "2", "4", "48", "w_stunbaton", "1", "1", "1", "-1", ""});
+        } else if (i == 3) {
+            builder.row({"1.5", "2", "2", "2", "6", "48", "w_vbroswrd", "1", "1", "2", "-1", ""});
+        } else if (i == 8) {
+            builder.row({"1.5", "2", "2", "2", "8", "48", "w_lghtsbr", "1", "1", "2", "-1", ""});
+        } else if (i == 12) {
+            builder.row({"23", "2", "2", "2", "6", "48", "w_blstrpstl", "1", "4", "4", "-1", ""});
+        } else {
+            builder.row({"", "", "", "", "", "", "", "", "", "", "", ""});
+        }
+    }
     return std::shared_ptr<TwoDA>(builder.build());
 }
 
@@ -411,6 +477,16 @@ scene::MockSceneGraph &testSceneGraph(TestEngine &engine) {
             .WillRepeatedly(ReturnRef(graph));
         ON_CALL(graph, gpuScene())
             .WillByDefault(ReturnRef(gpuScene));
+        ON_CALL(graph, newCamera())
+            .WillByDefault(Invoke([&engine]() {
+                auto node = std::make_shared<scene::CameraSceneNode>(
+                    graph,
+                    engine.services().graphics,
+                    engine.services().audio,
+                    engine.services().resource);
+                createdNodes.push_back(node);
+                return node;
+            }));
         ON_CALL(graph, newTrigger(_))
             .WillByDefault(Invoke([&engine](std::vector<glm::vec3> geometry) {
                 return std::make_shared<scene::TriggerSceneNode>(
@@ -533,6 +609,27 @@ std::shared_ptr<Door> makeTransitionDoor(
     auto door = game.newDoor();
     door->deserialize(*gff);
     return door;
+}
+
+std::shared_ptr<Waypoint> addEntryWaypoint(
+    Game &game,
+    const std::shared_ptr<Area> &area,
+    std::string tag,
+    const glm::vec3 &position,
+    float facing = 0.0f) {
+
+    auto gff = Gff::Builder()
+                   .field(Gff::Field::newCExoString("Tag", std::move(tag)))
+                   .field(Gff::Field::newFloat("XPosition", position.x))
+                   .field(Gff::Field::newFloat("YPosition", position.y))
+                   .field(Gff::Field::newFloat("ZPosition", position.z))
+                   .field(Gff::Field::newFloat("XOrientation", -glm::sin(facing)))
+                   .field(Gff::Field::newFloat("YOrientation", glm::cos(facing)))
+                   .build();
+    auto waypoint = game.newWaypoint();
+    waypoint->deserialize(*gff);
+    area->add(waypoint);
+    return waypoint;
 }
 
 // Door without linked-module metadata, so it blocks and opens without also
@@ -769,6 +866,149 @@ TEST(Conversation, should_finish_active_presentation_before_starting_replacement
     EXPECT_FALSE(secondOwner->isInConversation());
 }
 
+TEST(EquipmentStack, reequips_a_restored_offhand_lightsaber_after_inventory_merge) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems"))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(makeLightsaberBaseItemsTable()));
+
+    auto actor = game.newCreature();
+    auto mainHand = makeItem(game, "g_w_lghtsbr01", 8, 1);
+    auto offHand = makeItem(game, "g_w_lghtsbr01", 8, 1);
+    auto inventorySaber = makeItem(game, "g_w_lghtsbr01", 8, 1);
+    ASSERT_TRUE(mainHand->blueprintResRef().empty());
+    ASSERT_TRUE(offHand->blueprintResRef().empty());
+    ASSERT_TRUE(inventorySaber->blueprintResRef().empty());
+
+    ASSERT_TRUE(actor->equip(InventorySlots::rightWeapon, mainHand));
+    ASSERT_TRUE(actor->equip(InventorySlots::leftWeapon, offHand));
+    actor->addItem(inventorySaber);
+
+    actor->unequip(offHand);
+    actor->addItem(offHand);
+
+    ASSERT_EQ(1u, actor->items().size());
+    ASSERT_EQ(inventorySaber, actor->items().front());
+    ASSERT_EQ(2, inventorySaber->stackSize());
+    ASSERT_EQ(actor->id(), inventorySaber->owner());
+    ASSERT_EQ(mainHand, actor->getEquippedItem(InventorySlots::rightWeapon));
+    ASSERT_FALSE(actor->getEquippedItem(InventorySlots::leftWeapon));
+
+    auto decision = evaluateEquipmentCandidate(
+        *actor, InventorySlots::leftWeapon, inventorySaber.get());
+    ASSERT_TRUE(decision.valid);
+    ASSERT_EQ(EquipmentCandidateAction::Equip, decision.action);
+
+    auto candidate = takeEquipmentCandidate(game, *actor, inventorySaber);
+    ASSERT_TRUE(candidate);
+    EXPECT_NE(inventorySaber, candidate);
+    EXPECT_EQ(1, inventorySaber->stackSize());
+    EXPECT_EQ(8, candidate->baseItemType());
+    EXPECT_EQ(1, candidate->stackSize());
+
+    ASSERT_TRUE(actor->equip(InventorySlots::leftWeapon, candidate));
+    EXPECT_EQ(mainHand, actor->getEquippedItem(InventorySlots::rightWeapon));
+    EXPECT_EQ(candidate, actor->getEquippedItem(InventorySlots::leftWeapon));
+    EXPECT_EQ(actor->id(), candidate->owner());
+    EXPECT_EQ(1u, actor->items().size());
+    EXPECT_EQ(1, actor->items().front()->stackSize());
+}
+
+TEST(EquipmentCompatibility, accepts_lightsaber_and_vibroblade_in_either_hand_order) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems"))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(makeLightsaberBaseItemsTable()));
+
+    auto saberMainActor = game.newCreature();
+    auto mainSaber = makeItem(game, "g_w_lghtsbr01", 8, 1);
+    auto offVibroblade = makeItem(game, "g_w_vbroswrd01", 3, 1);
+    ASSERT_TRUE(saberMainActor->equip(InventorySlots::rightWeapon, mainSaber));
+    auto vibrobladeDecision = evaluateEquipmentCandidate(
+        *saberMainActor, InventorySlots::leftWeapon, offVibroblade.get());
+    ASSERT_TRUE(vibrobladeDecision.valid);
+    ASSERT_EQ(EquipmentCandidateAction::Equip, vibrobladeDecision.action);
+    ASSERT_TRUE(saberMainActor->equip(InventorySlots::leftWeapon, offVibroblade));
+
+    auto vibrobladeMainActor = game.newCreature();
+    auto mainVibroblade = makeItem(game, "g_w_vbroswrd01", 3, 1);
+    auto offSaber = makeItem(game, "g_w_lghtsbr01", 8, 1);
+    ASSERT_TRUE(vibrobladeMainActor->equip(InventorySlots::rightWeapon, mainVibroblade));
+    auto saberDecision = evaluateEquipmentCandidate(
+        *vibrobladeMainActor, InventorySlots::leftWeapon, offSaber.get());
+    ASSERT_TRUE(saberDecision.valid);
+    ASSERT_EQ(EquipmentCandidateAction::Equip, saberDecision.action);
+    ASSERT_TRUE(vibrobladeMainActor->equip(InventorySlots::leftWeapon, offSaber));
+}
+
+TEST(EquipmentCompatibility, rejects_retail_incompatible_melee_and_ranged_weapons) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems"))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(makeLightsaberBaseItemsTable()));
+
+    auto saberMainActor = game.newCreature();
+    auto mainSaber = makeItem(game, "g_w_lghtsbr01", 8, 1);
+    auto offBlaster = makeItem(game, "g_w_blstrpstl001", 12, 1);
+    ASSERT_TRUE(saberMainActor->equip(InventorySlots::rightWeapon, mainSaber));
+    auto blasterDecision = evaluateEquipmentCandidate(
+        *saberMainActor, InventorySlots::leftWeapon, offBlaster.get());
+    ASSERT_FALSE(blasterDecision.valid);
+    ASSERT_EQ(EquipmentCandidateAction::Reject, blasterDecision.action);
+    ASSERT_EQ(EquipmentCandidateReason::IncompatibleWithMainHand, blasterDecision.reason);
+
+    auto blasterMainActor = game.newCreature();
+    auto mainBlaster = makeItem(game, "g_w_blstrpstl001", 12, 1);
+    auto offSaber = makeItem(game, "g_w_lghtsbr01", 8, 1);
+    ASSERT_TRUE(blasterMainActor->equip(InventorySlots::rightWeapon, mainBlaster));
+    auto saberDecision = evaluateEquipmentCandidate(
+        *blasterMainActor, InventorySlots::leftWeapon, offSaber.get());
+    ASSERT_FALSE(saberDecision.valid);
+    ASSERT_EQ(EquipmentCandidateAction::Reject, saberDecision.action);
+    ASSERT_EQ(EquipmentCandidateReason::IncompatibleWithMainHand, saberDecision.reason);
+}
+
+TEST(EquipmentStack, equips_a_restored_stun_baton_stack_on_an_empty_party_member) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems"))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(makeLightsaberBaseItemsTable()));
+
+    auto sharedInventory = game.newCreature();
+    auto bastila = game.newCreature();
+    auto batonStack = makeItem(game, "ptar_shockstick", 1, 3);
+    ASSERT_TRUE(batonStack->blueprintResRef().empty());
+    sharedInventory->addItem(batonStack);
+
+    auto decision = evaluateEquipmentCandidate(
+        *bastila, InventorySlots::rightWeapon, batonStack.get());
+    ASSERT_TRUE(decision.valid);
+    ASSERT_EQ(EquipmentCandidateAction::Equip, decision.action);
+    ASSERT_FALSE(bastila->getEquippedItem(InventorySlots::leftWeapon));
+
+    auto candidate = takeEquipmentCandidate(game, *sharedInventory, batonStack);
+    ASSERT_TRUE(candidate);
+    EXPECT_EQ(1, candidate->baseItemType());
+    EXPECT_EQ(2, batonStack->stackSize());
+    ASSERT_TRUE(bastila->equip(InventorySlots::rightWeapon, candidate));
+    EXPECT_EQ(candidate, bastila->getEquippedItem(InventorySlots::rightWeapon));
+    EXPECT_FALSE(bastila->getEquippedItem(InventorySlots::leftWeapon));
+    EXPECT_EQ(bastila->id(), candidate->owner());
+    EXPECT_EQ(sharedInventory->id(), batonStack->owner());
+}
+
 TEST(Creature, should_activate_and_deactivate_lightsabers_in_both_hands_with_combat) {
     TestEngine &engine = testEngine();
     StubConsole console;
@@ -980,6 +1220,51 @@ TEST(Creature, should_hold_completed_external_animation_until_assignment_is_rele
     EXPECT_EQ(modelNode->activeAnimationName(), "cpause1");
 }
 
+TEST(Creature, should_publish_external_animation_before_pending_state_refresh) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto modelRoot = std::make_shared<graphics::ModelNode>(
+        0,
+        "root_node",
+        glm::vec3(0.0f),
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
+        true,
+        nullptr);
+    auto idle = makeAnimation("cpause1");
+    auto cut = makeAnimation("cut003w");
+    graphics::Model model(
+        "creature", 0, modelRoot,
+        std::vector<std::shared_ptr<graphics::Animation>> {idle}, "", 1.0f);
+    graphics::GraphicsOptions graphicsOptions;
+    scene::SceneGraph graph(
+        "test",
+        engine.sceneModule().renderPipelineFactory(),
+        graphicsOptions,
+        engine.services().graphics,
+        engine.services().audio,
+        engine.services().resource);
+    auto modelNode = graph.newModel(model, scene::ModelUsage::Creature);
+    TestCreature creature(1, "test", game, engine.services());
+    creature.setSceneNode(modelNode);
+
+    // New/reconstructed models still owe their ordinary state refresh here.
+    // The real Game 5 path assigns the external stunt clip before that refresh
+    // receives a creature update on current upstream.
+    scene::AnimationProperties properties;
+    properties.flags = scene::AnimationFlags::propagate;
+    properties.scale = 1.0f;
+    ASSERT_TRUE(creature.playExternalAnimation(cut, properties));
+
+    creature.update(0.0f);
+    modelNode->update(0.25f);
+
+    ASSERT_EQ(modelNode->animationChannels().size(), 1);
+    EXPECT_EQ(modelNode->activeAnimationName(), "cut003w");
+    EXPECT_FLOAT_EQ(modelNode->animationChannels().front().time, 0.25f);
+}
+
 TEST(DialogGUI, should_prepare_the_real_player_from_a_stunt_model_without_creating_a_duplicate) {
     TestEngine &engine = testEngine();
     StubConsole console;
@@ -1185,10 +1470,27 @@ std::shared_ptr<scene::ModelSceneNode> modelNodeOf(const std::shared_ptr<Creatur
 std::shared_ptr<TwoDA> makeDialogAnimationsTable() {
     TwoDA::Builder builder;
     builder.columns({"name"});
-    for (int i = 0; i < 30; ++i) {
-        builder.row({""});
+    for (int i = 0; i < 227; ++i) {
+        std::string name;
+        switch (i) {
+        case 30:
+            name = "Talk_Normal";
+            break;
+        case 35:
+            name = "Bow";
+            break;
+        case 40:
+            name = "Talk_Forceful";
+            break;
+        case 44:
+            name = "Victory";
+            break;
+        case 70:
+            name = "Inject";
+            break;
+        }
+        builder.row({name});
     }
-    builder.row({"Talk_Normal"});
     return builder.build();
 }
 
@@ -1226,6 +1528,72 @@ TEST(DialogGUI, should_decode_participant_animation_ordinals_by_cut_band) {
     for (int ordinal : {0, 35, 40, 70, 999, 1800, 2000, 9999, 10000, 10038, 10511}) {
         EXPECT_FALSE(MixedStuntTestAccess::decodeCut(ordinal).has_value()) << "ordinal " << ordinal;
     }
+}
+
+TEST(DialogGUI, should_decode_direct_k1_dialog_animation_rows) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    DialogGUI gui(game, engine.services());
+    auto animations = makeDialogAnimationsTable();
+
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("dialoganimations"))
+        .Times(4)
+        .WillRepeatedly(Return(animations));
+
+    EXPECT_EQ(AnimationType::FireForgetBow, MixedStuntTestAccess::dialogAnimationType(gui, 35));
+    EXPECT_EQ(AnimationType::LoopingTalkForceful, MixedStuntTestAccess::dialogAnimationType(gui, 40));
+    EXPECT_EQ(AnimationType::FireForgetVictory1, MixedStuntTestAccess::dialogAnimationType(gui, 44));
+    EXPECT_EQ(AnimationType::FireForgetInject, MixedStuntTestAccess::dialogAnimationType(gui, 70));
+}
+
+TEST(DialogGUI, should_preserve_offset_dialog_animation_rows_and_k2_rejection) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game k1Game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    Game k2Game(GameID::TSL, "", engine.options(), engine.services(), console);
+    DialogGUI k1Gui(k1Game, engine.services());
+    DialogGUI k2Gui(k2Game, engine.services());
+    auto animations = makeDialogAnimationsTable();
+
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("dialoganimations"))
+        .Times(2)
+        .WillRepeatedly(Return(animations));
+
+    EXPECT_EQ(AnimationType::FireForgetBow, MixedStuntTestAccess::dialogAnimationType(k1Gui, 10035));
+    EXPECT_EQ(AnimationType::FireForgetBow, MixedStuntTestAccess::dialogAnimationType(k2Gui, 10035));
+    EXPECT_EQ(AnimationType::Invalid, MixedStuntTestAccess::dialogAnimationType(k2Gui, 35));
+}
+
+TEST(DialogGUI, should_reject_invalid_and_unresolved_k1_dialog_animation_rows) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    DialogGUI gui(game, engine.services());
+    auto animations = makeDialogAnimationsTable();
+
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("dialoganimations"))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(animations));
+
+    EXPECT_EQ(AnimationType::Invalid, MixedStuntTestAccess::dialogAnimationType(gui, 0));
+    EXPECT_EQ(AnimationType::Invalid, MixedStuntTestAccess::dialogAnimationType(gui, -1));
+    EXPECT_EQ(AnimationType::Invalid, MixedStuntTestAccess::dialogAnimationType(gui, 227));
+    EXPECT_EQ(AnimationType::Invalid, MixedStuntTestAccess::dialogAnimationType(gui, 10227));
+    EXPECT_EQ(AnimationType::Invalid, MixedStuntTestAccess::dialogAnimationType(gui, 2000));
+}
+
+TEST(DialogGUI, should_preserve_cut_band_precedence_for_k1_direct_rows) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    DialogGUI gui(game, engine.services());
+    Dialog::EntryReply entry;
+    entry.animations.push_back({"owner", 1000});
+
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("dialoganimations")).Times(0);
+
+    MixedStuntTestAccess::updateAnimationsForEntry(gui, entry);
 }
 
 TEST(DialogGUI, should_animate_the_real_player_when_an_animated_cut_authors_no_stunt_participants) {
@@ -2427,6 +2795,59 @@ TEST(LinkedDoorTransition, should_support_authored_cross_module_flag_values) {
     EXPECT_EQ(flag2Trigger->linkedTo(), "flag2_waypoint");
 }
 
+TEST(TransitionEntryResolution, matches_odyssey_entry_tags_case_insensitively) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    testSceneGraph(engine);
+    auto area = game.newArea();
+    TestGameModule::setActiveModuleArea(game, area);
+    auto module = game.module();
+    ASSERT_TRUE(module);
+
+    const glm::vec3 defaultPosition(101.0f, 102.0f, 103.0f);
+    const float defaultFacing = 1.25f;
+    addEntryWaypoint(game, area, "from_106per2", {-20.45f, 62.86f, 11.89f}, 0.25f);
+    addEntryWaypoint(game, area, "from_103per2", {-33.20f, 73.82f, 0.85f}, 0.5f);
+    addEntryWaypoint(game, area, "same_case", {4.0f, 5.0f, 6.0f}, 0.75f);
+    addEntryWaypoint(game, area, "My_Entry", {7.0f, 8.0f, 9.0f}, 1.0f);
+    addEntryWaypoint(game, area, "FROM15", {10.0f, 11.0f, 12.0f}, 1.125f);
+
+    auto into103 = TestGameModule::resolveModuleEntry(
+        *module, "From_106PER2", defaultPosition, defaultFacing);
+    EXPECT_EQ(into103.first, glm::vec3(-20.45f, 62.86f, 11.89f));
+    EXPECT_FLOAT_EQ(into103.second, 0.25f);
+
+    auto into106 = TestGameModule::resolveModuleEntry(
+        *module, "FROM_103PER2", defaultPosition, defaultFacing);
+    EXPECT_EQ(into106.first, glm::vec3(-33.20f, 73.82f, 0.85f));
+    EXPECT_FLOAT_EQ(into106.second, 0.5f);
+
+    auto sameCase = TestGameModule::resolveModuleEntry(
+        *module, "same_case", defaultPosition, defaultFacing);
+    EXPECT_EQ(sameCase.first, glm::vec3(4.0f, 5.0f, 6.0f));
+
+    auto modCase = TestGameModule::resolveModuleEntry(
+        *module, "my_entry", defaultPosition, defaultFacing);
+    EXPECT_EQ(modCase.first, glm::vec3(7.0f, 8.0f, 9.0f));
+
+    auto k1Case = TestGameModule::resolveModuleEntry(
+        *module, "from15", defaultPosition, defaultFacing);
+    EXPECT_EQ(k1Case.first, glm::vec3(10.0f, 11.0f, 12.0f));
+
+    auto absent = TestGameModule::resolveModuleEntry(
+        *module, "genuinely_absent", defaultPosition, defaultFacing);
+    EXPECT_EQ(absent.first, defaultPosition);
+    EXPECT_FLOAT_EQ(absent.second, defaultFacing);
+
+    addEntryWaypoint(game, area, "EntryFoo", {1.0f, 2.0f, 3.0f});
+    addEntryWaypoint(game, area, "entryfoo", {4.0f, 5.0f, 6.0f});
+
+    auto resolved = TestGameModule::resolveModuleEntry(
+        *module, "ENTRYFOO", defaultPosition, defaultFacing);
+    EXPECT_EQ(resolved.first, glm::vec3(1.0f, 2.0f, 3.0f));
+}
+
 TEST(LinkedDoorTransition, should_reject_unlinked_unsupported_or_incomplete_metadata) {
     TestEngine &engine = testEngine();
     StubConsole console;
@@ -3310,6 +3731,42 @@ TEST(XPStatusSummary, should_format_authored_plot_xp_text_without_mutating_globa
             "Experience: <CUSTOM0>"),
         "Experience: 350");
     EXPECT_EQ(game.substituteCustomTokens("<CUSTOM0>"), "existing");
+}
+
+TEST(XPStatusSummary, cached_gui_preserves_text_across_retirement_and_load_publication) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    NiceMock<gui::MockGUI> gui;
+    auto description = std::make_shared<gui::Label>(
+        gui,
+        engine.services().scene.graphs,
+        engine.services().graphics,
+        engine.services().resource);
+    description->setTextMessage("Experience: <CUSTOM0>");
+
+    game.submitStatusSummary(StatusSummaryCategory::PlotXP, 350);
+    TestStatusSummary newGameSummary(game, engine.services(), game.statusSummary());
+    newGameSummary.captureDescription(StatusSummaryCategory::PlotXP, description);
+    EXPECT_EQ(
+        "Experience: 350",
+        newGameSummary.formatCapturedDescription(
+            StatusSummaryCategory::PlotXP,
+            game.statusSummary().pending().entry(StatusSummaryCategory::PlotXP)));
+
+    newGameSummary.reset();
+    EXPECT_EQ("Experience: <CUSTOM0>", description->text().text);
+
+    game.statusSummary().reset();
+    game.submitStatusSummary(StatusSummaryCategory::PlotXP, 350);
+    TestStatusSummary loadedGameSummary(game, engine.services(), game.statusSummary());
+    loadedGameSummary.captureDescription(StatusSummaryCategory::PlotXP, description);
+    EXPECT_EQ(
+        "Experience: 350",
+        loadedGameSummary.formatCapturedDescription(
+            StatusSummaryCategory::PlotXP,
+            game.statusSummary().pending().entry(StatusSummaryCategory::PlotXP)));
 }
 
 TEST(XPStatusSummary, should_leave_authored_journal_text_unchanged) {
@@ -4315,4 +4772,938 @@ TEST(OverlayAnimation, routine_854_plays_the_overlay_on_its_target) {
         {script::Variable::ofObject(placeable->id()), script::Variable::ofInt(123)}, ctx);
     EXPECT_EQ(script::VariableType::Void, result.type);
     EXPECT_EQ("cdiveroll", fixture.node->activeAnimationName());
+}
+
+TEST(SavedRuntimeState, restores_explicit_object_identity_and_allocator_cursors) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto ifo = Gff::Builder()
+                   .field(Gff::Field::newDword("Mod_NextObjId0", 700))
+                   .field(Gff::Field::newDword64("Mod_Effect_NxtId", 900))
+                   .build();
+    game.prepareSavedRuntimeNamespace(*ifo);
+
+    auto saved = Gff::Builder()
+                     .field(Gff::Field::newDword("ObjectId", 650))
+                     .build();
+    auto item = game.newItem(*saved);
+    item->deserializeRuntimeState(*saved);
+
+    EXPECT_EQ(650u, item->id());
+    EXPECT_EQ(item, game.getObjectById(650));
+    EXPECT_EQ(700u, game.newItem()->id());
+    EXPECT_EQ(900u, game.nextEffectId());
+}
+
+TEST(SavedRuntimeState, accepts_retail_zero_object_cursor_but_rejects_reserved_nonzero_cursor) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto unavailableCursor = Gff::Builder()
+                                 .field(Gff::Field::newDword("Mod_NextObjId0", 0))
+                                 .build();
+    EXPECT_NO_THROW(game.prepareSavedRuntimeNamespace(*unavailableCursor));
+    EXPECT_EQ(2u, game.newItem()->id());
+
+    auto reservedCursor = Gff::Builder()
+                              .field(Gff::Field::newDword("Mod_NextObjId0", 1))
+                              .build();
+    EXPECT_THROW(game.prepareSavedRuntimeNamespace(*reservedCursor), ValidationException);
+}
+
+TEST(SavedRuntimeState, accepts_retail_low_ids_but_rejects_invalid_and_duplicate_object_ids) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto reserved = Gff::Builder()
+                        .field(Gff::Field::newDword("ObjectId", 1))
+                        .build();
+    auto invalid = Gff::Builder()
+                       .field(Gff::Field::newDword("ObjectId", std::numeric_limits<uint32_t>::max()))
+                       .build();
+    auto saved = Gff::Builder()
+                     .field(Gff::Field::newDword("ObjectId", 42))
+                     .build();
+
+    EXPECT_NO_THROW(game.newItem(*reserved));
+    EXPECT_THROW(game.newItem(*reserved), ValidationException);
+    EXPECT_THROW(game.newItem(*invalid), ValidationException);
+    EXPECT_NO_THROW(game.newItem(*saved));
+    EXPECT_THROW(game.newItem(*saved), ValidationException);
+}
+
+TEST(SavedRuntimeState, keeps_structural_module_outside_the_saved_object_registry) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto module = game.newSavedModule();
+    auto area = game.newSavedArea(0);
+
+    EXPECT_EQ(0u, module->id());
+    EXPECT_EQ(0u, area->id());
+    EXPECT_EQ(1u, engine.gameModule().objectRegistrySize(game));
+}
+
+TEST(SavedRuntimeState, reserves_the_actual_retail_graph_before_owner_local_allocations) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto area = Gff::Builder()
+                    .field(Gff::Field::newDword("ObjectId", 0))
+                    .build();
+    auto ifo = Gff::Builder()
+                   .field(Gff::Field::newDword("Mod_NextObjId0", 0))
+                   .field(Gff::Field::newList("Mod_Area_list", {area}))
+                   .build();
+    auto trigger = Gff::Builder()
+                       .field(Gff::Field::newDword("ObjectId", 1))
+                       .build();
+    auto placeable = Gff::Builder()
+                         .field(Gff::Field::newDword("ObjectId", 50))
+                         .build();
+    auto git = Gff::Builder()
+                   .field(Gff::Field::newList("Trigger List", {trigger}))
+                   .field(Gff::Field::newList("Placeable List", {placeable}))
+                   .build();
+
+    game.prepareSavedRuntimeNamespace(*ifo);
+    game.reserveSavedObjectIds(*git);
+
+    for (uint32_t expected = 2; expected < 50; ++expected) {
+        EXPECT_EQ(expected, game.newItem()->id());
+    }
+    EXPECT_EQ(51u, game.newItem()->id());
+
+    auto module = game.newSavedModule();
+    auto savedArea = game.newSavedArea(0);
+    auto savedTrigger = game.newTrigger(*trigger);
+    auto savedPlaceable = game.newPlaceable(*placeable);
+
+    EXPECT_EQ(0u, module->id());
+    EXPECT_EQ(0u, savedArea->id());
+    EXPECT_EQ(1u, savedTrigger->id());
+    EXPECT_EQ(50u, savedPlaceable->id());
+    EXPECT_EQ(52u, engine.gameModule().objectRegistrySize(game));
+    EXPECT_THROW(game.newPlaceable(*placeable), ValidationException);
+}
+
+TEST(SavedRuntimeState, restores_swvar_boolean_and_numeric_locals) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto bit0 = Gff::Builder()
+                    .field(Gff::Field::newDword("Variable", 1u << 31))
+                    .build();
+    auto bit1 = Gff::Builder()
+                    .field(Gff::Field::newDword("Variable", 1u << 2))
+                    .build();
+    auto byte0 = Gff::Builder()
+                     .field(Gff::Field::newByte("Variable", 0))
+                     .build();
+    auto byte1 = Gff::Builder()
+                     .field(Gff::Field::newByte("Variable", 173))
+                     .build();
+    auto variables = Gff::Builder()
+                         .field(Gff::Field::newList("BitArray", {bit0, bit1}))
+                         .field(Gff::Field::newList("ByteArray", {byte0, byte1}))
+                         .build();
+    auto saved = Gff::Builder()
+                     .field(Gff::Field::newStruct("SWVarTable", variables))
+                     .build();
+
+    auto item = game.newItem();
+    item->deserializeRuntimeState(*saved);
+
+    EXPECT_TRUE(item->getLocalBoolean(31));
+    EXPECT_TRUE(item->getLocalBoolean(34));
+    EXPECT_FALSE(item->getLocalBoolean(30));
+    EXPECT_EQ(173, item->getLocalNumber(1));
+    EXPECT_EQ(0, item->getLocalNumber(0));
+}
+
+TEST(SavedRuntimeState, resolves_references_only_after_saved_graph_construction) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto sourceGff = Gff::Builder()
+                         .field(Gff::Field::newDword("ObjectId", 80))
+                         .field(Gff::Field::newDword("CreatorId", 81))
+                         .field(Gff::Field::newDword("TargetId", 999))
+                         .build();
+    auto targetGff = Gff::Builder()
+                         .field(Gff::Field::newDword("ObjectId", 81))
+                         .build();
+    auto source = game.newItem(*sourceGff);
+    source->deserializeRuntimeState(*sourceGff);
+    EXPECT_FALSE(source->savedReference("CreatorId"));
+
+    auto target = game.newItem(*targetGff);
+    target->deserializeRuntimeState(*targetGff);
+    game.resolveSavedObjectReferences();
+
+    EXPECT_EQ(target, source->savedReference("CreatorId"));
+    EXPECT_FALSE(source->savedReference("TargetId"));
+}
+
+TEST(SavedRuntimeState, preserves_and_binds_saved_encounter_runtime_state) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto areaObject = Gff::Builder()
+                          .field(Gff::Field::newDword("AreaObject", 90))
+                          .build();
+    auto saved = Gff::Builder()
+                     .field(Gff::Field::newDword("ObjectId", 89))
+                     .field(Gff::Field::newInt("AreaListMaxSize", 8))
+                     .field(Gff::Field::newInt("AreaListSize", 1))
+                     .field(Gff::Field::newList("AreaList", {areaObject}))
+                     .field(Gff::Field::newFloat("AreaPoints", 3.5f))
+                     .field(Gff::Field::newInt("CurrentSpawns", 2))
+                     .field(Gff::Field::newInt("CustomScriptId", 17))
+                     .field(Gff::Field::newByte("Exhausted", 1))
+                     .field(Gff::Field::newDword("HeartbeatDay", 4))
+                     .field(Gff::Field::newDword("HeartbeatTime", 5))
+                     .field(Gff::Field::newDword("LastEntered", 6))
+                     .field(Gff::Field::newDword("LastLeft", 7))
+                     .field(Gff::Field::newDword("LastSpawnDay", 8))
+                     .field(Gff::Field::newDword("LastSpawnTime", 9))
+                     .field(Gff::Field::newInt("NumberSpawned", 10))
+                     .field(Gff::Field::newFloat("SpawnPoolActive", 11.5f))
+                     .field(Gff::Field::newByte("Started", 1))
+                     .build();
+
+    auto encounter = game.newEncounter(*saved);
+    encounter->deserialize(*saved);
+    auto targetGff = Gff::Builder()
+                         .field(Gff::Field::newDword("ObjectId", 90))
+                         .build();
+    auto target = game.newItem(*targetGff);
+    game.resolveSavedObjectReferences();
+
+    const auto &state = encounter->savedRuntimeState();
+    EXPECT_EQ(8, state.areaListMaxSize);
+    EXPECT_EQ(1, state.areaListSize);
+    EXPECT_EQ(std::vector<uint32_t>({90}), state.areaObjectIds);
+    EXPECT_FLOAT_EQ(3.5f, state.areaPoints);
+    EXPECT_EQ(2, state.currentSpawns);
+    EXPECT_EQ(17, state.customScriptId);
+    EXPECT_TRUE(state.exhausted);
+    EXPECT_EQ(4u, state.heartbeatDay);
+    EXPECT_EQ(5u, state.heartbeatTime);
+    EXPECT_EQ(6u, state.lastEntered);
+    EXPECT_EQ(7u, state.lastLeft);
+    EXPECT_EQ(8u, state.lastSpawnDay);
+    EXPECT_EQ(9u, state.lastSpawnTime);
+    EXPECT_EQ(10, state.numberSpawned);
+    EXPECT_FLOAT_EQ(11.5f, state.spawnPoolActive);
+    EXPECT_TRUE(state.started);
+    EXPECT_EQ(target, encounter->savedAreaObject(0));
+}
+
+TEST(SavedRuntimeState, restores_saved_creature_death_from_current_hit_points) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(static_cast<MockPortraits &>(engine.services().game.portraits), getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto saved = Gff::Builder()
+                     .field(Gff::Field::newDword("ObjectId", 82))
+                     .field(Gff::Field::newShort("CurrentHitPoints", 0))
+                     .field(Gff::Field::newDword("Appearance_Type", 0))
+                     .field(Gff::Field::newWord("SoundSetFile", 0xffff))
+                     .field(Gff::Field::newByte("BodyBag", 0xff))
+                     .field(Gff::Field::newByte("PerceptionRange", 0xff))
+                     .build();
+    auto creature = game.newCreature(*saved);
+    creature->deserialize(*saved);
+
+    EXPECT_EQ(0, creature->currentHitPoints());
+    EXPECT_TRUE(creature->isDead());
+}
+
+TEST(SavedRuntimeState, restores_retail_player_death_threshold_without_clamping_saved_hp) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(static_cast<MockPortraits &>(engine.services().game.portraits), getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto makeSavedPlayer = [](int16_t hitPoints, uint32_t objectId) {
+        return Gff::Builder()
+            .field(Gff::Field::newDword("ObjectId", objectId))
+            .field(Gff::Field::newByte("IsPC", 1))
+            .field(Gff::Field::newShort("CurrentHitPoints", hitPoints))
+            .field(Gff::Field::newDword("Appearance_Type", 0))
+            .field(Gff::Field::newWord("SoundSetFile", 0xffff))
+            .field(Gff::Field::newByte("BodyBag", 0xff))
+            .field(Gff::Field::newByte("PerceptionRange", 0xff))
+            .build();
+    };
+
+    auto incapacitatedState = makeSavedPlayer(0, 0x7fffffff);
+    auto incapacitated = game.newCreature(*incapacitatedState);
+    incapacitated->deserialize(*incapacitatedState);
+    EXPECT_EQ(0, incapacitated->currentHitPoints());
+    EXPECT_TRUE(incapacitated->isPC());
+    EXPECT_FALSE(incapacitated->isDead());
+
+    incapacitated->setMaxHitPoints(36);
+    incapacitated->restorePrimaryPlayerHitPoints();
+    EXPECT_EQ(36, incapacitated->currentHitPoints());
+    EXPECT_FALSE(incapacitated->isDead());
+
+    auto deadState = makeSavedPlayer(-10, 0x7ffffffe);
+    auto dead = game.newCreature(*deadState);
+    dead->deserialize(*deadState);
+    EXPECT_EQ(-10, dead->currentHitPoints());
+    EXPECT_TRUE(dead->isDead());
+}
+
+
+TEST(SavedRuntimeState, k1_zero_hp_pc_is_dead_until_primary_player_publication) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(static_cast<MockPortraits &>(engine.services().game.portraits), getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto saved = Gff::Builder()
+                     .field(Gff::Field::newDword("ObjectId", 0x7ffffffe))
+                     .field(Gff::Field::newByte("IsPC", 1))
+                     .field(Gff::Field::newShort("MaxHitPoints", 12))
+                     .field(Gff::Field::newShort("CurrentHitPoints", 0))
+                     .field(Gff::Field::newDword("Appearance_Type", 0))
+                     .field(Gff::Field::newWord("SoundSetFile", 0xffff))
+                     .field(Gff::Field::newByte("BodyBag", 0xff))
+                     .field(Gff::Field::newByte("PerceptionRange", 0xff))
+                     .build();
+    auto player = game.newCreature(*saved);
+    player->deserialize(*saved);
+
+    // K1 does not share K2's -10 incapacitation threshold. The saved creature
+    // remains exact until the coordinator identifies it as the primary player.
+    EXPECT_EQ(0, player->currentHitPoints());
+    EXPECT_TRUE(player->isDead());
+
+    player->restorePrimaryPlayerHitPoints();
+
+    EXPECT_EQ(12, player->currentHitPoints());
+    EXPECT_FALSE(player->isDead());
+}
+TEST(SavedRuntimeState, keeps_min_one_hp_creature_alive_when_saved_at_zero) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(static_cast<MockPortraits &>(engine.services().game.portraits), getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto saved = Gff::Builder()
+                     .field(Gff::Field::newDword("ObjectId", 83))
+                     .field(Gff::Field::newShort("CurrentHitPoints", 0))
+                     .field(Gff::Field::newByte("Min1HP", 1))
+                     .field(Gff::Field::newDword("Appearance_Type", 0))
+                     .field(Gff::Field::newWord("SoundSetFile", 0xffff))
+                     .field(Gff::Field::newByte("BodyBag", 0xff))
+                     .field(Gff::Field::newByte("PerceptionRange", 0xff))
+                     .build();
+    auto creature = game.newCreature(*saved);
+    creature->deserialize(*saved);
+
+    EXPECT_EQ(1, creature->currentHitPoints());
+    EXPECT_FALSE(creature->isDead());
+}
+
+TEST(SavedRuntimeState, detached_creatures_keep_nested_item_ids_owner_scoped) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems"))
+        .WillRepeatedly(Return(makeBaseItemsTable()));
+    EXPECT_CALL(engine.resourceModule().textures(), get(_, _)).Times(AnyNumber());
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(static_cast<MockPortraits &>(engine.services().game.portraits), getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto savedItem = Gff::Builder()
+                         .type(1u << InventorySlots::body)
+                         .field(Gff::Field::newDword("ObjectId", 218))
+                         .field(Gff::Field::newInt("BaseItem", 2))
+                         .field(Gff::Field::newList("PropertiesList", {}))
+                         .build();
+    auto detachedCreature = Gff::Builder()
+                                .field(Gff::Field::newDword("Appearance_Type", 0))
+                                .field(Gff::Field::newWord("SoundSetFile", 0xffff))
+                                .field(Gff::Field::newByte("BodyBag", 0xff))
+                                .field(Gff::Field::newByte("PerceptionRange", 0xff))
+                                .field(Gff::Field::newList("Equip_ItemList", {savedItem}))
+                                .build();
+
+    auto first = game.newCreature();
+    first->deserialize(*detachedCreature);
+    auto second = game.newCreature();
+    EXPECT_NO_THROW(second->deserialize(*detachedCreature));
+
+    auto firstItem = first->getEquippedItem(InventorySlots::body);
+    auto secondItem = second->getEquippedItem(InventorySlots::body);
+    ASSERT_TRUE(firstItem);
+    ASSERT_TRUE(secondItem);
+    EXPECT_NE(218u, firstItem->id());
+    EXPECT_NE(218u, secondItem->id());
+    EXPECT_NE(firstItem->id(), secondItem->id());
+    EXPECT_FALSE(game.getObjectById(218));
+}
+
+
+TEST(SavedRuntimeState, primary_health_publication_does_not_recover_unrelated_pc) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::TSL, "", engine.options(), engine.services(), console);
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(static_cast<MockPortraits &>(engine.services().game.portraits), getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto makePlayer = [](uint32_t id, int16_t maxHitPoints, bool primary) {
+        return Gff::Builder()
+            .field(Gff::Field::newDword("ObjectId", id))
+            .field(Gff::Field::newByte("IsPC", 1))
+            .field(Gff::Field::newByte("Mod_IsPrimaryPlr", primary))
+            .field(Gff::Field::newShort("MaxHitPoints", maxHitPoints))
+            .field(Gff::Field::newShort("CurrentHitPoints", 0))
+            .field(Gff::Field::newDword("Appearance_Type", 0))
+            .field(Gff::Field::newWord("SoundSetFile", 0xffff))
+            .field(Gff::Field::newByte("BodyBag", 0xff))
+            .field(Gff::Field::newByte("PerceptionRange", 0xff))
+            .build();
+    };
+
+    auto modulePlayer = makePlayer(0x7ffffffe, 20, false);
+    auto ifo = Gff::Builder()
+                   .field(Gff::Field::newList("Mod_PlayerList", {modulePlayer}))
+                   .build();
+    auto pc = makePlayer(0x7fffffff, 36, true);
+    auto partyTable = Gff::Builder()
+                          .field(Gff::Field::newInt("PT_CONTROLLED_NP", 0))
+                          .field(Gff::Field::newByte("PT_NUM_MEMBERS", 0))
+                          .field(Gff::Field::newList("PT_MEMBERS", {}))
+                          .build();
+
+    TestGameModule::publishPartyRuntimeState(game, *ifo, partyTable, pc);
+
+    auto moduleRuntime = game.party().player();
+    auto actual = game.party().actualPlayer();
+    ASSERT_TRUE(moduleRuntime);
+    ASSERT_TRUE(actual);
+    EXPECT_NE(moduleRuntime, actual);
+    EXPECT_EQ(0, moduleRuntime->currentHitPoints());
+    EXPECT_EQ(36, actual->currentHitPoints());
+    EXPECT_FALSE(actual->isDead());
+}
+TEST(SavedRuntimeState, keeps_authoritative_owner_items_local_to_their_owner_namespace) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems"))
+        .WillRepeatedly(Return(makeBaseItemsTable()));
+    EXPECT_CALL(engine.resourceModule().textures(), get(_, _)).Times(AnyNumber());
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(static_cast<MockPortraits &>(engine.services().game.portraits), getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto savedLongsword = Gff::Builder()
+                              .type(1u << InventorySlots::body)
+                              .field(Gff::Field::newDword("ObjectId", 15))
+                              .field(Gff::Field::newCExoString("Tag", "g_w_lngswrd01"))
+                              .field(Gff::Field::newInt("BaseItem", 2))
+                              .field(Gff::Field::newWord("StackSize", 2))
+                              .field(Gff::Field::newList("PropertiesList", {}))
+                              .build();
+    auto savedPlayer = Gff::Builder()
+                           .field(Gff::Field::newDword("ObjectId", 2147483646u))
+                           .field(Gff::Field::newDword("Appearance_Type", 0))
+                           .field(Gff::Field::newWord("SoundSetFile", 0xffff))
+                           .field(Gff::Field::newByte("BodyBag", 0xff))
+                           .field(Gff::Field::newByte("PerceptionRange", 0xff))
+                           .field(Gff::Field::newList("Equip_ItemList", {savedLongsword}))
+                           .build();
+    auto ifo = Gff::Builder()
+                   .field(Gff::Field::newList("Mod_PlayerList", {savedPlayer}))
+                   .build();
+
+    TestGameModule::publishPartyRuntimeState(game, *ifo, nullptr, nullptr);
+
+    auto player = game.party().actualPlayer();
+    ASSERT_TRUE(player);
+    auto equipped = player->getEquippedItem(InventorySlots::body);
+    ASSERT_TRUE(equipped);
+    EXPECT_NE(15u, equipped->id());
+    EXPECT_FALSE(game.getObjectById(15));
+
+    auto inventory = Gff::Builder()
+                         .field(Gff::Field::newList("ItemList", {savedLongsword}))
+                         .build();
+    TestGameModule::deserializeInventory(game, *inventory);
+
+    ASSERT_EQ(1, player->items().size());
+    auto carried = player->items().front();
+    EXPECT_NE(15u, carried->id());
+    EXPECT_NE(equipped->id(), carried->id());
+    EXPECT_FALSE(game.getObjectById(15));
+
+    auto savedWorldItem = Gff::Builder()
+                              .field(Gff::Field::newDword("ObjectId", 15))
+                              .build();
+    auto worldItem = game.newItem(*savedWorldItem);
+    EXPECT_EQ(15u, worldItem->id());
+    EXPECT_EQ(worldItem, game.getObjectById(15));
+    EXPECT_THROW(game.newItem(*savedWorldItem), ValidationException);
+}
+
+namespace {
+
+// KotOR II routine numbers, as the shipped scripts encode them.
+constexpr int kRemoveHeartbeatRoutine = 866;
+constexpr int kSetLocalBooleanRoutine = 680;
+
+// An arbitrary local slot the heartbeat script writes to so the test can see
+// how far the script got.
+constexpr int kReachedEndFlag = 7;
+
+std::map<std::string, int> &heartbeatDispatches() {
+    static std::map<std::string, int> counts;
+    return counts;
+}
+
+std::shared_ptr<TwoDA> makePlaceablesTable() {
+    TwoDA::Builder builder;
+    builder.columns({"modelname"});
+    // No model is resolvable for this row, so appearance loading stops before
+    // it needs a scene node.
+    builder.row({"plc_footlker"});
+    return std::shared_ptr<TwoDA>(builder.build());
+}
+
+// A placeable in the shape the game loads one: a UTP names its heartbeat in
+// OnHeartbeat, not in the base object's ScriptHeartbeat field.
+std::shared_ptr<Gff> makeHeartbeatPlaceableGff(
+    std::string tag,
+    std::string onHeartbeat,
+    std::string onUsed = "") {
+
+    auto builder = Gff::Builder();
+    builder.field(Gff::Field::newCExoString("Tag", std::move(tag)));
+    builder.field(Gff::Field::newDword("Appearance", 0));
+    if (!onHeartbeat.empty()) {
+        builder.field(Gff::Field::newResRef("OnHeartbeat", std::move(onHeartbeat)));
+    }
+    if (!onUsed.empty()) {
+        builder.field(Gff::Field::newResRef("OnUsed", std::move(onUsed)));
+    }
+    return builder.build();
+}
+
+// The shape the shipped k_plc_tres* heartbeats use: do the one-off work, then
+// hand OBJECT_SELF to RemoveHeartbeat. Arguments are pushed so that argument 0
+// ends up on top of the stack.
+std::shared_ptr<script::ScriptProgram> makeSelfRemovingHeartbeat(const std::string &resRef) {
+    auto program = std::make_shared<script::ScriptProgram>(resRef);
+    program->add(script::Instruction::newCONSTO(script::kObjectSelf));
+    program->add(script::Instruction::newACTION(kRemoveHeartbeatRoutine, 1));
+    // Executed after the removal, so a heartbeat that removes itself is still
+    // seen through to the end.
+    program->add(script::Instruction::newCONSTI(1));
+    program->add(script::Instruction::newCONSTI(kReachedEndFlag));
+    program->add(script::Instruction::newCONSTO(script::kObjectSelf));
+    program->add(script::Instruction::newACTION(kSetLocalBooleanRoutine, 3));
+    program->add(script::Instruction(script::InstructionType::RETN));
+    return program;
+}
+
+// A heartbeat that does nothing, for the objects a test only needs to keep
+// ticking.
+std::shared_ptr<script::ScriptProgram> makeInertScript(const std::string &resRef) {
+    auto program = std::make_shared<script::ScriptProgram>(resRef);
+    program->add(script::Instruction(script::InstructionType::RETN));
+    return program;
+}
+
+// Serve a program for resRef and count how many times it is dispatched. Area
+// heartbeat dispatch fetches the program once per run, which is what makes the
+// fetch count the dispatch count.
+void serveScript(
+    TestEngine &engine,
+    const std::string &resRef,
+    std::shared_ptr<script::ScriptProgram> program) {
+
+    heartbeatDispatches()[resRef] = 0;
+    EXPECT_CALL(engine.resourceModule().scripts(), get(resRef))
+        .Times(AnyNumber())
+        .WillRepeatedly(Invoke([program](const std::string &key) {
+            ++heartbeatDispatches()[key];
+            return program;
+        }));
+}
+
+int dispatchesOf(const std::string &resRef) {
+    return heartbeatDispatches()[resRef];
+}
+
+struct HeartbeatFixture {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game {GameID::TSL, "", engine.options(), engine.services(), console};
+    std::shared_ptr<Area> area;
+
+    HeartbeatFixture() {
+        testSceneGraph(engine);
+        EXPECT_CALL(engine.resourceModule().twoDas(), get("placeables"))
+            .Times(AnyNumber())
+            .WillRepeatedly(Return(makePlaceablesTable()));
+        // Appearance loading looks the model up and stops when there is none;
+        // these tests never need a scene node.
+        EXPECT_CALL(engine.resourceModule().models(), get("plc_footlker"))
+            .Times(AnyNumber());
+        // Heartbeat dispatch runs scripts through the game's own script runner.
+        game.initLocalServices();
+        area = game.newArea();
+        TestGameModule::setActiveModuleArea(game, area);
+    }
+
+    std::shared_ptr<Placeable> addPlaceable(
+        std::string tag,
+        std::string onHeartbeat,
+        std::string onUsed = "") {
+
+        auto placeable = game.newPlaceable();
+        placeable->deserialize(*makeHeartbeatPlaceableGff(
+            std::move(tag), std::move(onHeartbeat), std::move(onUsed)));
+        area->add(placeable);
+        return placeable;
+    }
+
+    // Advance the area far enough to cross one heartbeat interval.
+    void tickHeartbeat(int times = 1) {
+        for (int i = 0; i < times; ++i) {
+            area->update(kHeartbeatInterval);
+        }
+    }
+};
+
+} // namespace
+
+// A. The shipped pattern: a placeable's heartbeat removes its own heartbeat
+// script. It runs once, and the area's heartbeat cadence never runs it again,
+// however long the object stays around.
+TEST(RemoveHeartbeat, should_stop_further_heartbeats_on_the_object_that_removed_its_own) {
+    HeartbeatFixture fixture;
+    serveScript(fixture.engine, "k_plc_treasure", makeSelfRemovingHeartbeat("k_plc_treasure"));
+    auto placeable = fixture.addPlaceable("treasure", "k_plc_treasure");
+    ASSERT_EQ("k_plc_treasure", placeable->getOnHeartbeat());
+
+    fixture.tickHeartbeat();
+
+    // It ran, and it ran all the way through: the routine after RemoveHeartbeat
+    // still took effect, so removal does not abort the heartbeat in progress.
+    EXPECT_EQ(1, dispatchesOf("k_plc_treasure"));
+    EXPECT_TRUE(placeable->getLocalBoolean(kReachedEndFlag));
+
+    // The slot is empty, which is what takes the object out of dispatch.
+    EXPECT_TRUE(placeable->getOnHeartbeat().empty());
+
+    // Removal holds for the rest of the object's life, not just one interval.
+    fixture.tickHeartbeat(5);
+
+    EXPECT_EQ(1, dispatchesOf("k_plc_treasure"));
+}
+
+// B. Only the heartbeat slot is cleared. The same object's other event scripts
+// are untouched and still dispatch - shipped treasure placeables carry OnUsed,
+// OnOpen and OnMeleeAttacked scripts alongside the heartbeat they remove.
+TEST(RemoveHeartbeat, should_leave_the_other_event_scripts_on_the_object_alone) {
+    HeartbeatFixture fixture;
+    serveScript(fixture.engine, "k_plc_hb", makeSelfRemovingHeartbeat("k_plc_hb"));
+    serveScript(fixture.engine, "k_plc_used", makeInertScript("k_plc_used"));
+    auto placeable = fixture.addPlaceable("treasure", "k_plc_hb", "k_plc_used");
+
+    fixture.tickHeartbeat();
+    ASSERT_TRUE(placeable->getOnHeartbeat().empty());
+
+    placeable->runOnUsed(nullptr);
+
+    EXPECT_EQ(1, dispatchesOf("k_plc_used"));
+}
+
+// C. Removal is per object. A second placeable running the very same heartbeat
+// script keeps being dispatched after the first one removes its own.
+TEST(RemoveHeartbeat, should_not_disturb_the_heartbeat_of_another_object) {
+    HeartbeatFixture fixture;
+    serveScript(fixture.engine, "k_plc_selfrem", makeSelfRemovingHeartbeat("k_plc_selfrem"));
+    serveScript(fixture.engine, "k_plc_keeps", makeInertScript("k_plc_keeps"));
+    auto remover = fixture.addPlaceable("remover", "k_plc_selfrem");
+    auto bystander = fixture.addPlaceable("bystander", "k_plc_keeps");
+
+    fixture.tickHeartbeat(3);
+
+    EXPECT_EQ(1, dispatchesOf("k_plc_selfrem"));
+    EXPECT_TRUE(remover->getOnHeartbeat().empty());
+
+    // The bystander ran on every interval and still has its script.
+    EXPECT_EQ(3, dispatchesOf("k_plc_keeps"));
+    EXPECT_EQ("k_plc_keeps", bystander->getOnHeartbeat());
+}
+
+// D. Routine 866 is registered for KotOR II and tolerates an object that has no
+// heartbeat script to begin with.
+TEST(RemoveHeartbeat, routine_866_is_a_no_op_on_an_object_without_a_heartbeat) {
+    HeartbeatFixture fixture;
+    Routines routines(GameID::TSL, &fixture.game, &fixture.engine.services());
+    routines.init();
+    script::Routine &routine = routines.get(kRemoveHeartbeatRoutine);
+    ASSERT_EQ("RemoveHeartbeat", routine.name());
+
+    auto placeable = fixture.addPlaceable("plain", "");
+    ASSERT_TRUE(placeable->getOnHeartbeat().empty());
+
+    script::ExecutionContext ctx;
+    auto result = routine.invoke({script::Variable::ofObject(placeable->id())}, ctx);
+
+    EXPECT_EQ(script::VariableType::Void, result.type);
+    EXPECT_TRUE(placeable->getOnHeartbeat().empty());
+}
+
+// E. The routine belongs to KotOR II only - it is absent from the KotOR I
+// nwscript, and its table stops short of 866 entirely.
+TEST(RemoveHeartbeat, is_not_registered_for_kotor_one) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    Routines k1(GameID::KotOR, &game, &engine.services());
+    k1.init();
+    EXPECT_THROW(k1.get(kRemoveHeartbeatRoutine), std::out_of_range);
+
+    Routines k2(GameID::TSL, &game, &engine.services());
+    k2.init();
+    EXPECT_EQ("RemoveHeartbeat", k2.get(kRemoveHeartbeatRoutine).name());
+}
+
+
+namespace {
+
+// Door action routine numbers, registered for both games.
+constexpr int kActionOpenDoor = 43;
+constexpr int kActionCloseDoor = 44;
+
+// Invoke a door action routine the way a script does: by number, with the
+// caller the engine would have supplied.
+script::Variable invokeDoorRoutine(
+    Routines &routines,
+    int routine,
+    const std::shared_ptr<Object> &caller,
+    const std::shared_ptr<Object> &target) {
+
+    script::ExecutionContext ctx;
+    ctx.args.emplace_back(script::ArgKind::Caller, script::Variable::ofObject(caller->id()));
+    return routines.get(routine).invoke({script::Variable::ofObject(target->id())}, ctx);
+}
+
+struct DoorTargetFixture {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game {GameID::KotOR, "", engine.options(), engine.services(), console};
+    Routines routines {GameID::KotOR, &game, &engine.services()};
+
+    DoorTargetFixture() {
+        testSceneGraph(engine);
+        routines.init();
+    }
+};
+
+} // namespace
+
+// A non-door target is rejected by argument validation, so nothing is queued on
+// the caller. ActionCloseDoor takes a generic object in nwscript, so a script
+// can name anything at all here.
+TEST(CloseDoorTarget, should_reject_a_non_door_target) {
+    DoorTargetFixture fixture;
+    auto caller = makeMovingCreature(fixture.game, fixture.engine);
+    auto notADoor = fixture.game.newPlaceable();
+
+    auto result = invokeDoorRoutine(fixture.routines, kActionCloseDoor, caller, notADoor);
+
+    EXPECT_EQ(script::VariableType::Void, result.type);
+    EXPECT_TRUE(caller->actions().empty());
+}
+
+// The same rejection for a caller that is not a creature. Without validation
+// this is the path that skipped the approach and went straight to closing the
+// target, so it has to be covered separately from the creature case.
+TEST(CloseDoorTarget, should_reject_a_non_door_target_for_a_non_creature_caller) {
+    DoorTargetFixture fixture;
+    auto caller = fixture.game.newPlaceable();
+    auto notADoor = fixture.game.newPlaceable();
+
+    invokeDoorRoutine(fixture.routines, kActionCloseDoor, caller, notADoor);
+
+    EXPECT_TRUE(caller->actions().empty());
+}
+
+// A real door is queued and closed as before.
+TEST(CloseDoorTarget, should_close_a_door_the_actor_has_reached) {
+    DoorTargetFixture fixture;
+    auto door = makePlainDoor(fixture.game, fixture.engine);
+    auto caller = makeMovingCreature(fixture.game, fixture.engine);
+    door->open();
+    ASSERT_TRUE(door->isOpen());
+
+    invokeDoorRoutine(fixture.routines, kActionCloseDoor, caller, door);
+    ASSERT_EQ(1u, caller->actions().size());
+    auto action = caller->actions().front();
+
+    action->execute(action, *caller, 1.0f);
+
+    EXPECT_TRUE(action->isCompleted());
+    EXPECT_FALSE(door->isOpen());
+    EXPECT_EQ(DoorState::Closed, door->state());
+}
+
+// Out of range the action stays in progress and the door is left alone, which
+// is what separates an honored action from a dropped one.
+TEST(CloseDoorTarget, should_keep_approaching_a_door_that_is_out_of_reach) {
+    DoorTargetFixture fixture;
+    auto door = makePlainDoor(fixture.game, fixture.engine, /*locked=*/false, /*onOpen=*/"",
+                              glm::vec3(50.0f, 0.0f, 0.0f));
+    auto caller = makeMovingCreature(fixture.game, fixture.engine);
+    caller->setMovementRestricted(true);
+    door->open();
+
+    invokeDoorRoutine(fixture.routines, kActionCloseDoor, caller, door);
+    ASSERT_EQ(1u, caller->actions().size());
+    auto action = caller->actions().front();
+
+    action->execute(action, *caller, 1.0f);
+
+    EXPECT_FALSE(action->isCompleted());
+    EXPECT_TRUE(door->isOpen());
+}
+
+// Both door routines apply the same validation to the same bad target.
+TEST(CloseDoorTarget, opens_and_closes_reject_a_non_door_target_alike) {
+    DoorTargetFixture fixture;
+    auto caller = makeMovingCreature(fixture.game, fixture.engine);
+    auto notADoor = fixture.game.newPlaceable();
+
+    invokeDoorRoutine(fixture.routines, kActionOpenDoor, caller, notADoor);
+    EXPECT_TRUE(caller->actions().empty());
+
+    invokeDoorRoutine(fixture.routines, kActionCloseDoor, caller, notADoor);
+    EXPECT_TRUE(caller->actions().empty());
+}
+
+
+void reone::game::TestGameModule::stopMovement(Game &game) {
+    game.stopMovement();
+}
+
+void reone::game::TestGameModule::loadModulePlayer(Module &module) {
+    module.loadPlayer();
+}
+
+namespace {
+
+// A module with the area, cameras and player a loaded one has, which is what
+// the movement stop actually reaches.
+struct StopMovementFixture {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game {GameID::KotOR, "", engine.options(), engine.services(), console};
+
+    StopMovementFixture() {
+        testSceneGraph(engine);
+    }
+
+    std::shared_ptr<Creature> bringUpModule() {
+        auto area = game.newArea();
+        area->initCameras(glm::vec3(0.0f), 0.0f);
+        TestGameModule::setActiveModuleArea(game, area);
+        TestGameModule::loadModulePlayer(*game.module());
+
+        auto leader = makeMovingCreature(game, engine);
+        game.party().addMember(kNpcPlayer, leader);
+        game.party().setPlayer(leader);
+        area->add(leader);
+        return leader;
+    }
+};
+
+} // namespace
+
+// Between resetting the game and the destination module coming up there is no
+// module to stop anything on. Nothing is halted because nothing is moving, and
+// no state is conjured to stand in for the absent module.
+TEST(StopMovement, should_do_nothing_without_a_module) {
+    StopMovementFixture fixture;
+    ASSERT_FALSE(fixture.game.module());
+
+    TestGameModule::stopMovement(fixture.game);
+
+    EXPECT_FALSE(fixture.game.module());
+    EXPECT_TRUE(fixture.game.party().isEmpty());
+}
+
+// With a module the player is still halted, which is the whole point of the
+// call: a player holding a movement key is left standing.
+TEST(StopMovement, should_halt_the_player_with_a_module) {
+    StopMovementFixture fixture;
+    fixture.bringUpModule();
+    Player &player = fixture.game.module()->player();
+
+    ASSERT_TRUE(player.handle(input::Event::newKeyDown(
+        input::KeyEvent(true, input::KeyCode::W, 0, false))));
+    ASSERT_TRUE(player.isMovementRequested());
+
+    TestGameModule::stopMovement(fixture.game);
+
+    EXPECT_FALSE(player.isMovementRequested());
 }

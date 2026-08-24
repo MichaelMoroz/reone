@@ -97,10 +97,10 @@ TEST(ExtractResourcesLookup, should_prefer_last_added_source_for_colliding_id) {
     resources.addMemERF(erfBytes(ErfWriter::FileType::ERF,
                                  {{"shared", ResType::Txt, "first"},
                                   {"first_only", ResType::Txt, "from first"}}),
-                        ContainerKind::Global);
+                        ResourceOwner::Global);
     resources.addMemERF(erfBytes(ErfWriter::FileType::ERF,
                                  {{"shared", ResType::Txt, "second"}}),
-                        ContainerKind::Global);
+                        ResourceOwner::Global);
 
     EXPECT_EQ("second", dataOf(resources.find(ResourceId("shared", ResType::Txt))));
     EXPECT_EQ("from first", dataOf(resources.find(ResourceId("first_only", ResType::Txt))));
@@ -111,24 +111,24 @@ TEST(ExtractResourcesLookup, should_clear_sources_by_kind_only) {
     resources.addMemERF(erfBytes(ErfWriter::FileType::ERF,
                                  {{"shared", ResType::Txt, "global"},
                                   {"global_only", ResType::Txt, "global"}}),
-                        ContainerKind::Global);
+                        ResourceOwner::Global);
     resources.addMemERF(erfBytes(ErfWriter::FileType::ERF,
                                  {{"shared", ResType::Txt, "save"},
                                   {"save_only", ResType::Txt, "save"}}),
-                        ContainerKind::Save);
+                        ResourceOwner::SaveSlot);
     resources.addMemERF(erfBytes(ErfWriter::FileType::ERF,
                                  {{"shared", ResType::Txt, "local"},
                                   {"local_only", ResType::Txt, "local"}}),
-                        ContainerKind::Local);
+                        ResourceOwner::ActiveModule);
 
     EXPECT_EQ("local", dataOf(resources.find(ResourceId("shared", ResType::Txt))));
 
-    resources.clearLocal();
+    resources.clearOwner(ResourceOwner::ActiveModule);
     EXPECT_EQ("save", dataOf(resources.find(ResourceId("shared", ResType::Txt))));
     EXPECT_FALSE(resources.find(ResourceId("local_only", ResType::Txt)));
     EXPECT_TRUE(resources.find(ResourceId("global_only", ResType::Txt)));
 
-    resources.clearSave();
+    resources.clearOwner(ResourceOwner::SaveSlot);
     EXPECT_EQ("global", dataOf(resources.find(ResourceId("shared", ResType::Txt))));
     EXPECT_FALSE(resources.find(ResourceId("save_only", ResType::Txt)));
     EXPECT_TRUE(resources.find(ResourceId("global_only", ResType::Txt)));
@@ -136,7 +136,7 @@ TEST(ExtractResourcesLookup, should_clear_sources_by_kind_only) {
 
 TEST(ExtractResourcesLookup, should_serve_memory_rim_archives) {
     ExtractResources resources;
-    resources.addMemRIM(rimBytes({{"entry", ResType::Txt, "rim payload"}}), ContainerKind::Local);
+    resources.addMemRIM(rimBytes({{"entry", ResType::Txt, "rim payload"}}), ResourceOwner::ActiveModule);
 
     EXPECT_EQ("rim payload", dataOf(resources.find(ResourceId("entry", ResType::Txt))));
     EXPECT_FALSE(resources.find(ResourceId("missing", ResType::Txt)));
@@ -159,9 +159,10 @@ protected:
         _script.init();
     }
 
-    std::unique_ptr<ResourceDirector> makeDirector(const std::filesystem::path &gamePath) {
+    std::unique_ptr<ResourceDirector> makeDirector(const std::filesystem::path &gamePath,
+                                                   GameID gameId = GameID::KotOR) {
         return std::make_unique<ResourceDirector>(
-            GameID::KotOR,
+            gameId,
             gamePath,
             _graphicsOpt,
             _graphics.services(),
@@ -171,7 +172,9 @@ protected:
             _lips,
             _paths,
             _resources,
-            _scripts);
+            _auxResources,
+            _scripts,
+            _twoDas);
     }
 
     std::string find(const std::string &resRef, ResType type = ResType::Txt) {
@@ -187,12 +190,15 @@ protected:
     NiceMock<MockLips> _lips;
     NiceMock<MockPaths> _paths;
     NiceMock<MockScripts> _scripts;
+    NiceMock<MockTwoDAs> _twoDas;
 
     ExtractResources _resources;
+    ExtractResources _auxResources;
 };
 
 TEST_F(ExtractResourcesDirectorLookup, should_mount_global_locations_in_precedence_order) {
     TmpDir game("reone_test_xres_global");
+    // Deliberately present: the Slang backend must ignore the obsolete pack.
     TmpDir cwd("reone_test_xres_global_cwd");
     writeErf(cwd.path / "shaderpack.erf", ErfWriter::FileType::ERF,
              {{"a", ResType::Txt, "shaderpack"}});
@@ -221,11 +227,15 @@ TEST_F(ExtractResourcesDirectorLookup, should_mount_global_locations_in_preceden
         director->init();
     }
 
-    EXPECT_EQ("chitin", find("a")) << "chitin must beat shaderpack";
     EXPECT_EQ("gui pack", find("b")) << "GUI texture pack must beat chitin";
     EXPECT_EQ("texture pack", find("c")) << "quality texture pack must beat GUI pack";
     EXPECT_EQ("patch", find("d")) << "patch.erf must beat texture packs";
     EXPECT_EQ("override", find("e")) << "override must beat patch.erf";
+
+    // The shader pack no longer competes with game data at all: this branch
+    // compiles Slang at runtime and mounts no generated shader resource.
+    EXPECT_EQ("chitin", find("a"));
+    EXPECT_FALSE(_auxResources.find(ResourceId("a", ResType::Txt)));
 }
 
 TEST_F(ExtractResourcesDirectorLookup, should_mount_module_locations_over_global_and_clear_on_transition) {
@@ -258,17 +268,22 @@ TEST_F(ExtractResourcesDirectorLookup, should_mount_module_locations_over_global
 
     director->onModuleLoad("foo");
 
-    EXPECT_EQ("mod", find("m")) << ".mod must beat _s.rim, .rim and all global locations, including override";
-    EXPECT_EQ("main rim", find("rim_only"));
-    EXPECT_EQ("data rim", find("rims_only"));
+    // K1 is activated, so buckets decide. A loose override file outranks every
+    // module archive, and the MOD branch leaves the base image unmounted and
+    // suppresses the static image.
+    EXPECT_EQ("override", find("m")) << "a loose override file outranks every module archive";
+    EXPECT_FALSE(_resources.find(ResourceId("rim_only", ResType::Txt)))
+        << "the MOD branch does not mount the base image";
+    EXPECT_FALSE(_resources.find(ResourceId("rims_only", ResType::Txt)))
+        << "the MOD branch suppresses the static image";
 
     director->onModuleLoad("bar");
 
-    EXPECT_EQ("bar rim", find("m")) << "previous module sources must be dropped on transition";
+    EXPECT_EQ("override", find("m")) << "previous module sources must be dropped on transition";
     EXPECT_FALSE(_resources.find(ResourceId("rim_only", ResType::Txt)));
 }
 
-TEST_F(ExtractResourcesDirectorLookup, should_mount_save_scope_and_modules_nested_in_save_archive) {
+TEST_F(ExtractResourcesDirectorLookup, should_keep_save_session_explicit_and_load_modules_from_working_state) {
     TmpDir game("reone_test_xres_save");
     TmpDir cwd("reone_test_xres_save_cwd");
     writeErf(cwd.path / "shaderpack.erf", ErfWriter::FileType::ERF, {});
@@ -289,10 +304,11 @@ TEST_F(ExtractResourcesDirectorLookup, should_mount_save_scope_and_modules_neste
     writeErf(slot / "savegame.sav", ErfWriter::FileType::ERF,
              {{"loose", ResType::Txt, "save archive"},
               {"first_only", ResType::Txt, "first save"},
-              {"bar", ResType::Mod, std::string(nestedModule.begin(), nestedModule.end())}});
+              {"bar", ResType::Sav, std::string(nestedModule.begin(), nestedModule.end())}});
 
     auto secondSlot = game.path / "saves" / "000002";
     std::filesystem::create_directories(secondSlot);
+    detail::writeFile(secondSlot / "loose.txt", "second folder");
     writeErf(secondSlot / "savegame.sav", ErfWriter::FileType::ERF,
              {{"loose", ResType::Txt, "second save"}});
 
@@ -304,7 +320,8 @@ TEST_F(ExtractResourcesDirectorLookup, should_mount_save_scope_and_modules_neste
 
     director->onGameLoad("000001");
 
-    EXPECT_EQ("save archive", find("loose")) << "savegame.sav must beat loose files in the save folder";
+    // Loose slot metadata and archive working state have distinct explicit routes.
+    EXPECT_EQ("save folder", dataOf(director->findSaveMetadata(ResourceId("loose", ResType::Txt))));
 
     director->onModuleLoad("bar");
 
@@ -312,13 +329,10 @@ TEST_F(ExtractResourcesDirectorLookup, should_mount_save_scope_and_modules_neste
 
     director->onGameLoad("000002");
 
-    EXPECT_EQ("second save", find("loose")) << "the save loaded last must win";
+    EXPECT_EQ("second folder", dataOf(director->findSaveMetadata(ResourceId("loose", ResType::Txt))));
 
-    // Same known defect the legacy characterization pins: the director mounts
-    // save sources with the default Global kind, so clearSave is a no-op and
-    // sources of previously loaded saves leak. The backend must honor caller
-    // kinds, not paper over this; the fix belongs to the director.
-    EXPECT_EQ("first save", find("first_only")) << "previous save sources currently leak";
+    EXPECT_EQ("<not found>", dataOf(director->findSaveWorking(ResourceId("first_only", ResType::Txt))))
+        << "the previous working state must not survive loading another";
 }
 
 TEST_F(ExtractResourcesDirectorLookup, should_throw_when_save_slot_is_missing) {

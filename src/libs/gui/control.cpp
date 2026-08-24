@@ -206,29 +206,45 @@ void Control::render(const glm::ivec2 &screenSize,
         return;
     }
     glm::ivec2 size(_extent.width, _extent.height);
+
+    // The borders this control is currently showing, in the order they stack:
+    // its own border, its HILIGHT border, or - where the hilight is authored to
+    // sit over the border rather than replace it - both.
+    std::array<const Border *, 2> borderStorage;
+    size_t borderCount = 0;
     if (_border && (!_selected || _hilightOverBorder || !_hilight)) {
-        renderBorder(*_border, offset, size, renderer2d);
+        borderStorage[borderCount++] = _border.get();
     }
     if (_selected && _hilight) {
-        renderBorder(*_hilight, offset, size, renderer2d);
+        borderStorage[borderCount++] = _hilight.get();
     }
-    if (!_textLines.empty()) {
-        renderText(_textLines, offset, size, renderer2d);
-    }
-    if (_sceneOutput) {
-        // The reference's RGBA scene target carries zero alpha where nothing
-        // drew and one for opaque model fragments, then the GUI samples it with
-        // normal blending. Keeping those two operations paired preserves plate
-        // art outside the model and replaces it beneath opaque geometry.
-        renderer2d.withBlendMode(BlendMode::Normal, [this, &offset, &renderer2d]() {
-            renderer2d.drawImage(
-                *_sceneOutput,
-                {sceneExtent().left + (_sceneExtent ? 0 : offset.x),
-                 sceneExtent().top + (_sceneExtent ? 0 : offset.y)},
-                {sceneExtent().width, sceneExtent().height});
+
+    renderControlLayers(
+        ArrayRef<const Border *>(borderStorage.data(), borderCount),
+        _sceneOutput != nullptr,
+        [this, &offset, &size, &renderer2d](const Border &border, BorderRenderPart part) {
+            renderBorder(border, offset, size, renderer2d, part);
+        },
+        [this, &offset, &renderer2d]() {
+            // The reference's RGBA scene target carries zero alpha where
+            // nothing drew and one for opaque model fragments, then the GUI
+            // samples it with normal blending. Keeping those two operations
+            // paired preserves plate art outside the model and replaces it
+            // beneath opaque geometry.
+            renderer2d.withBlendMode(BlendMode::Normal, [this, &offset, &renderer2d]() {
+                renderer2d.drawImage(
+                    *_sceneOutput,
+                    {sceneExtent().left + (_sceneExtent ? 0 : offset.x),
+                     sceneExtent().top + (_sceneExtent ? 0 : offset.y)},
+                    {sceneExtent().width, sceneExtent().height});
+            });
+            _sceneOutput = nullptr;
+        },
+        [this, &offset, &size, &renderer2d]() {
+            if (!_textLines.empty()) {
+                renderText(_textLines, offset, size, renderer2d);
+            }
         });
-        _sceneOutput = nullptr;
-    }
 }
 
 void Control::renderOffscreen() {
@@ -244,7 +260,8 @@ void Control::renderOffscreen() {
 void Control::renderBorder(const Border &border,
                            const glm::ivec2 &offset,
                            const glm::ivec2 &size,
-                           I2DRenderer &renderer2d) {
+                           I2DRenderer &renderer2d,
+                           BorderRenderPart part) {
 
     glm::vec3 color(getBorderColor());
     glm::mat4 transform(1.0f);
@@ -259,7 +276,7 @@ void Control::renderBorder(const Border &border,
     int bottomHeight = std::min(border.dimension, std::max(0, size.y - topHeight));
     glm::ivec2 fillSize {size.x - leftWidth - rightWidth, size.y - topHeight - bottomHeight};
 
-    if (border.fill && fillSize.x > 0 && fillSize.y > 0) {
+    if (part != BorderRenderPart::Frame && border.fill && fillSize.x > 0 && fillSize.y > 0) {
         if (border.fillTransform == Border::FillTransform::Rotate180) {
             uv = glm::mat3x4(
                 glm::vec4(-1.0f, 0.0f, 0.0f, 0.0f),
@@ -280,7 +297,7 @@ void Control::renderBorder(const Border &border,
         });
     }
 
-    if (border.edge) {
+    if (part != BorderRenderPart::Fill && border.edge) {
         int width = fillSize.x;
         int height = fillSize.y;
 
@@ -338,7 +355,7 @@ void Control::renderBorder(const Border &border,
         }
     }
 
-    if (border.corner) {
+    if (part != BorderRenderPart::Fill && border.corner) {
         int x = _extent.left + offset.x;
         int y = _extent.top + offset.y;
 

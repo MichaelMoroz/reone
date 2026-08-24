@@ -53,6 +53,7 @@ private:
     graphics::RayQuerySubmission _submission;
     uint32_t _frameNumber {0};
     uint64_t _admissionGeneration {1};
+    uint64_t _resourceGeneration {UINT64_MAX};
     uint64_t _optionsFingerprint {0};
     const ModelSceneNode *_classifiedSkyRoom {nullptr};
     uint64_t _skyCacheGeneration {0};

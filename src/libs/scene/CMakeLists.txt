@@ -41,6 +41,7 @@ set(SCENE_HEADERS
     ${SCENE_INCLUDE_DIR}/node/sound.h
     ${SCENE_INCLUDE_DIR}/node/trigger.h
     ${SCENE_INCLUDE_DIR}/node/walkmesh.h
+    ${SCENE_INCLUDE_DIR}/particleutil.h
     ${SCENE_INCLUDE_DIR}/render/pipeline.h
     ${SCENE_INCLUDE_DIR}/render/admission.h
     ${SCENE_INCLUDE_DIR}/render/pipeline/renderpipeline.h
@@ -68,6 +69,7 @@ set(SCENE_SOURCES
     ${SCENE_SOURCE_DIR}/node/sound.cpp
     ${SCENE_SOURCE_DIR}/node/trigger.cpp
     ${SCENE_SOURCE_DIR}/node/walkmesh.cpp
+    ${SCENE_SOURCE_DIR}/particleutil.cpp
     ${SCENE_SOURCE_DIR}/render/pipeline/tracematerials.cpp
 )
 
