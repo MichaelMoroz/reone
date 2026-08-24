@@ -198,6 +198,34 @@ when every use is refreshed from a stamped upstream prepare and the current
 resource namespace, as the frame material buffers and raster/tracing bindless
 descriptor sets are today.
 
+### 1.9 Per-recording GPU state is immutable
+
+**Per-frame GPU state visible to more than one recording must be allocated per
+recording from a fence-recycled pool or monotonic ring, never rewritten in
+place.** Waiting at the next reuse boundary makes the old storage recyclable;
+it does not make a descriptor, buffer slice, or image view safe to change after
+an earlier command has captured it.
+
+The shared inventory follows that rule. Texture, resolve, and merged-scene
+descriptor sets are allocated from per-frame pools reset only after the frame
+fence (`src/libs/graphics/vulkan/descriptors.cpp:352-455`), while the uniform
+sets are written once and dynamic offsets select monotonic slices from the
+frame ring (`descriptors.cpp:267-276`, `uniformring.cpp:43-67`). Compute and
+tracing descriptors, merged and tracing buffers, acceleration-structure
+scratch, traced images, and FSR history are owned by each scene pipeline; their
+overlapping-frame resources use independent frame slots. Repeated compute
+dispatches retain identical bindings (`gpuscene.cpp:523-543`,
+`rayquery.cpp:207-225`), and the tracing set is fully updated before its first
+bind (`tracingpipeline.cpp:309-390`). NRD goes further and allocates a new set
+and constant slot per dispatch (`nrddenoiser.cpp:503-615`). The globally shared
+PBR targets append stable cube-array layers rather than replacing a recorded
+layer (`src/libs/graphics/rendering/pbrtextures.cpp:116-166`). Upload and
+readback staging buffers use synchronous operation-local submissions, swapchain
+views are persistent per image, and the Vulkan renderer owns no query pools.
+The frame fence, command buffer, uniform ring, and shared descriptor pools are
+the only state reset in `beginFrame`, after that slot's fence has completed
+(`src/libs/graphics/vulkan/renderer.cpp:333-362`).
+
 ---
 
 ## 2. Traps already paid for
