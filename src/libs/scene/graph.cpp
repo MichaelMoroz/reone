@@ -319,16 +319,82 @@ void SceneGraph::update(float dt) {
     }
 }
 
+float SceneGraph::lightScoreAt(const LightSceneNode &light, const glm::vec3 &point) const {
+    const float multiplier = light.multiplier();
+    if (multiplier <= 0.0f) {
+        return 0.0f;
+    }
+    if (light.isDirectional()) {
+        // No falloff worth the name, so what it delivers is its multiplier.
+        return multiplier;
+    }
+    const float distance = glm::distance(point, light.origin());
+    const float radius = std::max(1e-3f, light.radius());
+    // A ranking proxy rather than the shading model: it only has to order
+    // lights the way brightness does, and every falloff this engine applies is
+    // monotonic in distance.
+    return multiplier * (radius * radius) / ((radius + distance) * (radius + distance));
+}
+
+std::vector<LightSceneNode *> SceneGraph::computeBrightestLights(int count) const {
+    const glm::vec3 reference = _activeCamera ? _activeCamera->origin() : glm::vec3 {0.0f};
+    std::vector<std::pair<LightSceneNode *, float>> scored;
+    scored.reserve(_lights.size());
+    for (auto *light : _lights) {
+        if (!light->model().isEnabled()) {
+            continue;
+        }
+        const float score = lightScoreAt(*light, reference);
+        if (score <= 0.0f) {
+            continue;
+        }
+        scored.push_back({light, score});
+    }
+    std::sort(scored.begin(), scored.end(), [](const auto &a, const auto &b) {
+        const bool ad = a.first->isDirectional();
+        const bool bd = b.first->isDirectional();
+        if (ad != bd) {
+            return ad;
+        }
+        if (a.second != b.second) {
+            return a.second > b.second;
+        }
+        return a.first->id().index < b.first->id().index;
+    });
+    if (static_cast<int>(scored.size()) > count) {
+        scored.resize(count);
+    }
+    std::vector<LightSceneNode *> lights;
+    lights.reserve(scored.size());
+    for (const auto &entry : scored) {
+        lights.push_back(entry.first);
+    }
+    return lights;
+}
+
 void SceneGraph::updateLighting() {
     R_PROFILE_ZONE("SceneGraph::updateLighting");
     // Find closest lights and create a lookup. The option, not the array
     // ceiling: the block is sized for the worst case once, and this is how many
     // of its slots a frame is allowed to fill.
     const int lightBudget = std::clamp(_graphicsOpt.maxLights, 1, kMaxLights);
-    auto closestLights = computeClosestLights(lightBudget, [](auto &light, float distance2) {
-        float radius = light.radius() + kLightRadiusBias;
-        return distance2 < radius * radius;
-    });
+    // Retro keeps the original's policy - the nearest lights whose radius very
+    // nearly reaches the camera - because which lights a frame carries is part
+    // of what it is preserving.
+    //
+    // The corrected modes rank every light by what it DELIVERS at the camera
+    // instead, with no radius gate, which is how the tracer behaves: it samples
+    // from the whole light set weighted by contribution and never asks whether
+    // the camera is standing inside anything. Under the radius test a lamp
+    // lighting the room you are looking into is not carried at all if you are
+    // standing a little too far back, which is visible as the raster modes
+    // working from a handful of lights where the tracer works from many.
+    auto closestLights = _graphicsOpt.mode == RenderMode::Retro
+                             ? computeClosestLights(lightBudget, [](auto &light, float distance2) {
+                                   float radius = light.radius() + kLightRadiusBias;
+                                   return distance2 < radius * radius;
+                               })
+                             : computeBrightestLights(lightBudget);
     std::set<LightSceneNode *> lookup;
     for (auto &light : closestLights) {
         lookup.insert(light);
@@ -364,17 +430,76 @@ void SceneGraph::updateShadowLight(float dt) {
     const bool hadShadowLight = !_shadowLights.empty();
     const auto budget = shadowBudgetFor(_graphicsOpt);
 
-    // Every eligible caster, in the order the renderer wants its slots: the
-    // sort puts directional lights first and then orders by distance, so slot
-    // zero is the light the single-caster renderer used to latch onto and the
-    // per-kind caps below can be applied by a single walk.
-    auto candidates = computeClosestLights(kMaxLights, [](auto &light, float distance2) {
-        if (!light.modelNode().light()->shadow) {
-            return false;
+    // Which lights may cast, and which of them are worth a map.
+    //
+    // Two things this deliberately does NOT do, both of which it used to.
+    //
+    // It does not require the camera to sit inside the light's own radius. A
+    // lamp thirty units away lighting the courtyard you are looking straight at
+    // was not even a candidate under that test, which is why a module with
+    // dozens of flagged lights produced three or four casters while the tracer
+    // showed eight lights doing visible work.
+    //
+    // And it does not rank by distance to the camera. It ranks by the light
+    // each one DELIVERS there, so a bright lamp across the room outranks a dim
+    // one at the camera's shoulder. Distance alone answered "what is nearest",
+    // which is not the question - a shadow matters where the light it belongs
+    // to is strong.
+    //
+    // A light behind the camera still scores, and must: it lights everything in
+    // front of it. That is also why no frustum test appears here. The camera
+    // position is the reference point rather than what the camera looks at,
+    // which is the approximation in this scheme - a light illuminating the far
+    // end of the view is scored as though it had to reach the near end.
+    const glm::vec3 reference = _activeCamera ? _activeCamera->origin() : glm::vec3 {0.0f};
+    const bool authoredOnly = _graphicsOpt.mode == RenderMode::Retro;
+
+    std::vector<std::pair<LightSceneNode *, float>> scored;
+    for (auto *light : _lights) {
+        // Retro casts from the lights the artist marked, because that is what
+        // the original did. The corrected modes cast from every light, which is
+        // what the tracer does - it shadow-tests whatever it samples, with no
+        // authored opt-in anywhere.
+        if (authoredOnly && !light->modelNode().light()->shadow) {
+            continue;
         }
-        float radius = light.radius();
-        return distance2 < radius * radius;
+        if (light->modelNode().light()->ambientOnly) {
+            continue;
+        }
+        // The authored multiplier, NOT multiplied by strength(). strength is
+        // the activation fade, and activation is itself decided by a camera
+        // radius test - folding it in here would re-impose the gate this
+        // scoring exists to replace, and a light would have to be near the
+        // camera to be judged bright.
+        const float multiplier = light->multiplier();
+        if (multiplier <= 0.0f) {
+            continue;
+        }
+        // The same score the active set is chosen by, so the two cannot drift
+        // into disagreeing about which lights matter. Directional casters are
+        // ranked ahead of point ones outright in the sort below, not merely
+        // scored higher: one lights the whole scene rather than a room of it.
+        scored.push_back({light, lightScoreAt(*light, reference)});
+    }
+    std::sort(scored.begin(), scored.end(), [](const auto &a, const auto &b) {
+        const bool ad = a.first->isDirectional();
+        const bool bd = b.first->isDirectional();
+        if (ad != bd) {
+            return ad;
+        }
+        if (a.second != b.second) {
+            return a.second > b.second;
+        }
+        // Ties broken by identity so the order cannot depend on how the light
+        // vector happened to be built; a caster set that reshuffles frame to
+        // frame would fade its own slots in and out for no reason.
+        return a.first->id().index < b.first->id().index;
     });
+    std::vector<LightSceneNode *> candidates;
+    candidates.reserve(scored.size());
+    for (const auto &entry : scored) {
+        candidates.push_back(entry.first);
+    }
 
     std::vector<LightSceneNode *> selected;
     int directionalTaken = 0;
@@ -446,6 +571,23 @@ void SceneGraph::updateShadowLight(float dt) {
            << ") orientation=(" << orientation.w << ", " << orientation.x << ", "
            << orientation.y << ", " << orientation.z << ")";
         info(ss.str(), LogChannel::Graphics);
+    }
+
+    // A caster has to be an ACTIVE light as well, or its shadow attenuates
+    // nothing: the resolves find a light's slot through the active list, so a
+    // caster missing from it is a map rendered for a light that never shades.
+    // updateLighting runs first and admits on a more generous test than this
+    // one, so this is a backstop rather than the common path.
+    for (const auto &slot : _shadowLights) {
+        if (std::find(_activeLights.begin(), _activeLights.end(), slot.light) !=
+            _activeLights.end()) {
+            continue;
+        }
+        if (_activeLights.size() >= static_cast<size_t>(kMaxLights)) {
+            break;
+        }
+        slot.light->setActive(true);
+        _activeLights.push_back(slot.light);
     }
 
     // Slot order has to follow the selection order, not arrival order, or slot
@@ -734,6 +876,8 @@ Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {
                                                   : glm::vec4(slot.light->origin(), 1.0f);
                     out.strength = slot.strength * opacity;
                     out.radius = slot.light->radius();
+                    out.mapResolution = directional ? _graphicsOpt.shadowResolution
+                                                    : _graphicsOpt.pointShadowResolution;
                     // The two kinds index different images, so their map
                     // indices are counted separately: a directional slot names
                     // its first cascade in the layered 2D array, a point slot

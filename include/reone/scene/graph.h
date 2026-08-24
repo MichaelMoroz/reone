@@ -529,6 +529,10 @@ private:
     void refreshFromNode(SceneNode &node);
 
     void updateLighting();
+    /** What @p light delivers at @p point - the ranking proxy, not the shading model. */
+    float lightScoreAt(const LightSceneNode &light, const glm::vec3 &point) const;
+    /** Every light ranked by what it delivers at the camera, directional first. */
+    std::vector<LightSceneNode *> computeBrightestLights(int count) const;
     void updateShadowLight(float dt);
     void updateFlareLights();
     void updateSounds();
