@@ -50,6 +50,10 @@ static const uint kMegaFeatureProcedural = 1u << 16;
 static const uint kMegaFeatureBlendedCoverage = 1u << 25;
 static const uint kMegaFeaturePunchThrough = 1u << 26;
 static const float kMegaAlphaTestThreshold = 0.5;
+// Must match the RGBA8 poison created by VulkanDescriptors. Requiring the
+// private alpha byte as well as magenta makes an authored false positive both
+// vanishingly narrow and self-locating.
+static const float4 kBindlessPoisonSample = float4(1.0, 0.0, 1.0, 254.0 / 255.0);
 
 [[vk::binding(0, 2)]] StructuredBuffer<MergedVertex> mergedVertices;
 [[vk::binding(1, 2)]] StructuredBuffer<uint> mergedMaterialIds;
@@ -578,6 +582,16 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
     float4 texel = float4(1.0);
     if (material.mainTex != kNoTexture) {
         texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)].Sample(uv);
+        if (all(texel == kBindlessPoisonSample)) {
+            // The stale surface is transparent and bypasses the G-buffer. Make
+            // the diagnostic opaque and full-bright before authored lighting
+            // can turn it into a plausible dark purple.
+            BlendedOutput poison;
+            poison.color = float4(1.0, 0.0, 1.0, 1.0);
+            poison.motion = float4(computeMotion(input.curClipPos, input.prevClipPos),
+                                   0.0, 1.0);
+            return poison;
+        }
     }
 
     bool blended = (material.featureMask & kMegaFeatureBlendedCoverage) != 0;

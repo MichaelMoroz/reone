@@ -207,6 +207,7 @@ private:
     };
     std::vector<MegaDrawFrame> _megaDrawFrames;
     uint32_t _bindlessTextureCapacity {0};
+    uint32_t _bindlessTextureHighWater {0};
     VkSampler _sampler {VK_NULL_HANDLE};
     VkSampler _clampSampler {VK_NULL_HANDLE};
     /**
@@ -216,6 +217,9 @@ private:
     std::unique_ptr<VulkanImage> _default2D;
     std::unique_ptr<VulkanImage> _defaultArray;
     std::unique_ptr<VulkanImage> _defaultCube;
+    std::unique_ptr<VulkanImage> _poison2D;
+    std::unique_ptr<VulkanImage> _poisonArray;
+    std::unique_ptr<VulkanImage> _poisonCube;
     /**
      * The irradiance and prefiltered environment maps are declared as cube
      * arrays. A 2D-array stand-in there is not merely wrong-looking; the view

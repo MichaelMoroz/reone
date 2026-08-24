@@ -25,6 +25,7 @@
 #include "reone/graphics/vulkan/buffer.h"
 #include "reone/graphics/vulkan/resources.h"
 #include "reone/graphics/vulkan/uniformring.h"
+#include "reone/system/logutil.h"
 
 namespace reone {
 
@@ -288,6 +289,19 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
     _defaultArray->initSampledLayered({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, 1, false, &white);
     _defaultCube = std::make_unique<VulkanImage>(_device);
     _defaultCube->initSampledLayered({1, 1}, VK_FORMAT_R8G8B8A8_UNORM, 6, true, &white);
+    std::array<uint32_t, 16> poisonPixels;
+    // RGB is the visible fault signal. Alpha 254 is its private sentinel,
+    // matched exactly with RGB in scene_draw.slang so ordinary magenta texels
+    // keep their authored lighting.
+    poisonPixels.fill(0xfeff00ffu);
+    _poison2D = std::make_unique<VulkanImage>(_device);
+    _poison2D->initSampled2D({4, 4}, VK_FORMAT_R8G8B8A8_UNORM, poisonPixels.data());
+    _poisonArray = std::make_unique<VulkanImage>(_device);
+    _poisonArray->initSampledLayered(
+        {4, 4}, VK_FORMAT_R8G8B8A8_UNORM, 1, false, poisonPixels.data());
+    _poisonCube = std::make_unique<VulkanImage>(_device);
+    _poisonCube->initSampledLayered(
+        {4, 4}, VK_FORMAT_R8G8B8A8_UNORM, 6, true, poisonPixels.data());
     // Black: this stands in for incoming radiance, and a white one would light
     // every environment-mapped surface from all directions at full strength.
     const uint32_t black = 0xff000000;
@@ -427,21 +441,71 @@ DescriptorSet VulkanDescriptors::updateMegaDrawSet(
         bufferWrites.writeBuffer(set, {i + 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, buffers[i]);
     bufferWrites.apply();
 
-    auto writeImages = [&](uint32_t binding, const std::vector<IResources::IndexedImage> &images) {
-        DescriptorWriteBuilder writes(_device.handle());
+    const auto textures = resources.uploadedTextures();
+    const auto textureArrays = resources.uploadedTextureArrays();
+    const auto textureCubes = resources.uploadedTextureCubes();
+    uint32_t liveTextureCount = 0;
+    const auto accountImages = [&](const std::vector<IResources::IndexedImage> &images) {
         for (const auto &[id, image] : images) {
             if (id >= _bindlessTextureCapacity) {
                 throw std::runtime_error("Vulkan: mega-draw bindless texture array exhausted");
             }
+            liveTextureCount = std::max(liveTextureCount, id + 1);
+        }
+    };
+    accountImages(textures);
+    accountImages(textureArrays);
+    accountImages(textureCubes);
+    _bindlessTextureHighWater = std::max(_bindlessTextureHighWater, liveTextureCount);
+
+#ifndef NDEBUG
+    // The material table is host-visible at this publication boundary. Keep
+    // this diagnostic out of Release entirely: it scans records only to name
+    // the stale field while the poison texture keeps the frame alive.
+    if (const auto *mapped = scene.materials.buffer->mapped()) {
+        const auto *materials = reinterpret_cast<const InstanceMaterial *>(
+            static_cast<const uint8_t *>(mapped) + scene.materials.offset);
+        const auto materialCount = scene.materials.size / sizeof(InstanceMaterial);
+        const auto checkField = [&](uint64_t materialIndex, const char *field, uint32_t id) {
+            if (id != UINT32_MAX && id >= liveTextureCount) {
+                warn("Vulkan: material " + std::to_string(materialIndex) + " field " +
+                         field + " has bindless texture id " + std::to_string(id) +
+                         " at or beyond live count " + std::to_string(liveTextureCount),
+                     LogChannel::Graphics);
+            }
+        };
+        for (uint64_t i = 0; i < materialCount; ++i) {
+            checkField(i, "mainTex", materials[i].mainTex);
+            checkField(i, "normalMap", materials[i].normalMap);
+            checkField(i, "lightmap", materials[i].lightmap);
+            checkField(i, "bumpMapArray", materials[i].bumpMapArray);
+            checkField(i, "envMap", materials[i].envMap);
+            checkField(i, "envMapCube", materials[i].envMapCube);
+        }
+    }
+#endif
+
+    auto writeImages = [&](uint32_t binding,
+                           const std::vector<IResources::IndexedImage> &images,
+                           const VulkanImage &poison) {
+        DescriptorWriteBuilder writes(_device.handle());
+        for (const auto &[id, image] : images) {
             const auto &native = toVulkanImage(*image);
             writes.writeImage(set, {binding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
                               {native.sampler(), native.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, id);
         }
+        // Capacity is a device limit and can be enormous. An old id can only
+        // come from a previously live dense namespace, so poison the used tail
+        // rather than every descriptor the device advertises.
+        for (uint32_t id = liveTextureCount; id < _bindlessTextureHighWater; ++id) {
+            writes.writeImage(set, {binding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                              {_sampler, poison.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, id);
+        }
         writes.apply();
     };
-    writeImages(3, resources.uploadedTextures());
-    writeImages(4, resources.uploadedTextureArrays());
-    writeImages(5, resources.uploadedTextureCubes());
+    writeImages(3, textures, *_poison2D);
+    writeImages(4, textureArrays, *_poisonArray);
+    writeImages(5, textureCubes, *_poisonCube);
     return toDescriptorSet(set);
 }
 
@@ -649,6 +713,7 @@ void VulkanDescriptors::deinit() {
         _megaDrawLayout = VK_NULL_HANDLE;
     }
     _bindlessTextureCapacity = 0;
+    _bindlessTextureHighWater = 0;
     if (_persistentPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(_device.handle(), _persistentPool, nullptr);
         _persistentPool = VK_NULL_HANDLE;
@@ -662,6 +727,9 @@ void VulkanDescriptors::deinit() {
     _default2D.reset();
     _defaultArray.reset();
     _defaultCube.reset();
+    _poison2D.reset();
+    _poisonArray.reset();
+    _poisonCube.reset();
     // Every default has to be released here rather than left to the member
     // destructor: this object outlives VulkanDevice::deinit, so an image still
     // holding a VMA allocation at that point is freed against an allocator that
