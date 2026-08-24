@@ -61,6 +61,8 @@ struct ShadowPushConstants {
     uint32_t triangleBase;
     uint32_t materialGated;
     uint32_t casterCategories;
+    /** Which caster is being rendered; the vertex stage reads it. */
+    uint32_t shadowSlot;
 };
 
 /** Mirrors PostProcessPushConstants in postprocess.slang. */
@@ -254,13 +256,21 @@ void ScenePipeline::init() {
     // tail is rasterized and samples these maps through the same texture set as
     // PBR. Keep both resources valid in every mode that can record that tail.
     {
+        const auto budget = shadowBudgetFor(_options);
+        _dirShadowSlots = std::max(1, budget.directional);
+        _pointShadowSlots = std::max(1, budget.point);
+        // One slot per caster the mode may hold. Sized from the same policy the
+        // scene selects against, so a caster can never exist without a map.
         glm::ivec2 shadowSize {_options.shadowResolution, _options.shadowResolution};
+        glm::ivec2 pointSize {_options.pointShadowResolution, _options.pointShadowResolution};
         _dirShadows = _renderer.resources().makeImage();
-        _dirShadows->initLayeredDepthAttachment(shadowSize, Format::D32Sfloat,
-                                                kNumShadowCascades, false);
+        _dirShadows->initLayeredDepthAttachment(
+            shadowSize, Format::D32Sfloat,
+            std::max(1, budget.directional) * kNumShadowCascades, false);
         _pointShadows = _renderer.resources().makeImage();
-        _pointShadows->initLayeredDepthAttachment(shadowSize, Format::D32Sfloat,
-                                                  kNumCubeFaces, true);
+        _pointShadows->initLayeredDepthAttachment(
+            pointSize, Format::D32Sfloat,
+            std::max(1, budget.point) * kNumCubeFaces, true);
         // A comparison sampler, and linear where the G-buffer's depth sampler is
         // nearest: the filtering unit compares the four texels around the lookup
         // against the receiver's depth and returns the fraction that passed, so
@@ -278,22 +288,27 @@ void ScenePipeline::init() {
 
         // Both resolve sets always bind both sampler shapes. Clear each target to
         // the far plane once so the inactive light kind is a valid no-shadow map.
-        _renderer.immediateSubmit([this, shadowSize](ICommandBuffer &cmd) {
-            auto clear = [&](IImage &image, int layers, bool cube) {
+        // Every slot cleared to the far plane once, not just the first: a slot
+        // that never fills is still bound and still sampled, and an uncleared
+        // one reads as an occluder sitting on top of the scene. The two kinds
+        // are cleared a slot at a time because a view mask cannot span more
+        // views than multiview allows.
+        _renderer.immediateSubmit([this, shadowSize, pointSize, budget](ICommandBuffer &cmd) {
+            auto clearSlots = [&](IImage &image, glm::ivec2 extent, int slots, int layersPerSlot) {
                 cmd.transitionImage(image, ImageLayout::DepthAttachment);
-                // attachmentView selects one cube's six faces. Directional
-                // shadows are a four-layer 2D array and already own the exact
-                // all-layer view this multiview pass needs.
-                const auto view = cube ? image.attachmentView(0, 0) : image.sampleView();
-                RenderAttachment depth {view, ImageLayout::DepthAttachment,
-                                        AttachmentLoad::Clear, AttachmentStore::Store};
-                depth.clear.depthOnly = true;
-                cmd.beginRendering(shadowSize, {}, &depth, cube ? (1u << layers) - 1u : 0, false);
-                cmd.endRendering();
+                for (int slot = 0; slot < std::max(1, slots); ++slot) {
+                    RenderAttachment depth {
+                        image.layerAttachmentView(slot * layersPerSlot, layersPerSlot),
+                        ImageLayout::DepthAttachment,
+                        AttachmentLoad::Clear, AttachmentStore::Store};
+                    depth.clear.depthOnly = true;
+                    cmd.beginRendering(extent, {}, &depth, (1u << layersPerSlot) - 1u, false);
+                    cmd.endRendering();
+                }
                 cmd.transitionImage(image, ImageLayout::DepthRead);
             };
-            clear(*_dirShadows, kNumShadowCascades, false);
-            clear(*_pointShadows, kNumCubeFaces, true);
+            clearSlots(*_dirShadows, shadowSize, budget.directional, kNumShadowCascades);
+            clearSlots(*_pointShadows, pointSize, budget.point, kNumCubeFaces);
         });
 
         IDescriptors &descriptors = _renderer.descriptors();
@@ -443,114 +458,152 @@ void ScenePipeline::shadowPass(ICommandBuffer &cmd,
                                      uint32_t globalsOffset,
                                      ISceneCallbacks &callbacks) {
     R_PROFILE_ZONE("ScenePipeline::shadowPass record");
-    if (_shadow == SceneShadow::None) {
+    if (_shadowCasters.empty()) {
         return;
     }
-    const bool directional = _shadow == SceneShadow::Directional;
-    auto &image = directional ? *_dirShadows : *_pointShadows;
-    const int layers = directional ? kNumShadowCascades : kNumCubeFaces;
-    const uint32_t viewMask = (1u << layers) - 1u;
     const auto &scene = prepareMergedScene(cmd, callbacks);
 
-    cmd.transitionImage(image, ImageLayout::DepthAttachment);
-
-    const auto extent = image.extent();
-    {
-        const auto view = directional ? image.sampleView() : image.attachmentView(0, 0);
-        RenderAttachment depth {view, ImageLayout::DepthAttachment,
-                                AttachmentLoad::Clear, AttachmentStore::Store};
-        depth.clear.depthOnly = true;
-        cmd.beginRendering(extent, {}, &depth, viewMask, false);
-        if (scene.vertices.buffer && scene.triangleCount != 0) {
-        auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.frameIndex());
-        std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
-        offsets[UniformBlockBindingPoints::globals] = globalsOffset;
-        cmd.bindIndexBuffer(*scene.indices.buffer, scene.indices.offset);
-
-        auto drawRange = [&](uint32_t triangleBase, uint32_t triangleCount,
-                             bool gated) {
-            if (triangleCount == 0) {
-                return;
-            }
-            PipelineKey key;
-            key.module = "scene_draw";
-            key.vertexEntry = directional ? "directionalShadowVertex"
-                                          : "pointShadowVertex";
-            key.fragmentEntry = directional
-                                    ? "directionalShadowFragment"
-                                    : "pointShadowFragment";
-            key.depthFormat = Format::D32Sfloat;
-            key.viewMask = viewMask;
-            key.depthTest = true;
-            key.depthWrite = true;
-            key.depthBias = true;
-            // D32_SFLOAT constant bias is expressed in representable depth
-            // increments; the slope term supplies the useful offset on curved
-            // surfaces that approach parallel to the light.
-            //
-            // Both terms carry more than they used to because nothing is
-            // culled any more. Rendering back faces alone put the stored depth
-            // a wall's thickness behind the lit surface, which is a free bias
-            // - but only for geometry that HAS a back face. Odyssey's exterior
-            // shells are single-sided, so from the sun's side they wrote
-            // nothing at all and light poured into the rooms behind them. With
-            // both faces written, a lit surface now finds its own depth in the
-            // map and needs a real offset instead. The receiver-side normal
-            // offset in lib/shadow.slang remains the primary defence; these
-            // are the dials to turn if acne or peter-panning shows up.
-            key.depthBiasConstantFactor = 2.0f;
-            key.depthBiasSlopeFactor = 2.0f;
-            // Never cull. A single-sided wall has to occlude from whichever
-            // side the light is on, and a cutout fence or leaf card likewise.
-            key.cull = FaceCullMode::None;
-            PipelineBinding pipeline = _renderer.pipelines().get(key);
-            cmd.bindPipeline(pipeline.pipeline);
-            cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
-                                  offsets.data(), static_cast<uint32_t>(offsets.size()));
-            cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
-            // Three words here, two everywhere else: only this pass reads the
-            // caster filter. See PushConstants in lib/megadraw_geometry.slang.
-            const ShadowPushConstants push {triangleBase, gated ? 1u : 0u,
-                                            _shadowCasterCategories};
-            cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
-            cmd.drawIndexed(triangleCount * 3, triangleBase * 3);
-        };
-
-        drawRange(0, scene.opaqueTriangleCount, false);
-        const uint32_t gatedTriangles =
-            scene.triangleCount - scene.opaqueTriangleCount;
-        drawRange(scene.opaqueTriangleCount, gatedTriangles, true);
+    // One recording per caster. A view mask broadcasts a draw across the four
+    // cascades or six faces a single caster owns, but it cannot span casters:
+    // their maps sit at different layer bases, the two kinds are different
+    // images, and the vertex stage picks its transforms from a push constant
+    // that is fixed for the recording. Only occupied slots are rendered, which
+    // is what keeps the cost proportional to the lights actually in range
+    // rather than to the budget - see RECORD 3.13.
+    bool dirBound = false;
+    bool pointBound = false;
+    for (const auto &caster : _shadowCasters) {
+        // A caster whose map index is past what was allocated is a selection
+        // bug, and the cheap consequence is the right one: rendering it would
+        // address layers the image does not have, which resets the device with
+        // no image and no identity. Dropping it costs one shadow and names
+        // itself in the log - the same trade the bindless poison makes.
+        const int allocated = caster.directional ? _dirShadowSlots : _pointShadowSlots;
+        if (caster.mapIndex < 0 || caster.mapIndex >= allocated) {
+            warn("Shadow caster " + std::to_string(caster.slot) + " wants " +
+                     (caster.directional ? "directional" : "point") + " map " +
+                     std::to_string(caster.mapIndex) + " of " + std::to_string(allocated) +
+                     " allocated; skipped",
+                 LogChannel::Graphics);
+            continue;
         }
-        if (scene.grassCardCount != 0) {
-            PipelineKey key;
-            key.module = "scene_draw";
-            key.vertexEntry = directional ? "grassCardDirectionalShadowVertex"
-                                          : "grassCardPointShadowVertex";
-            key.fragmentEntry = directional ? "directionalShadowFragment"
-                                             : "pointShadowFragment";
-            key.depthFormat = Format::D32Sfloat;
-            key.viewMask = viewMask;
-            key.depthTest = true;
-            key.depthWrite = true;
-            key.depthBias = true;
-            key.depthBiasConstantFactor = 2.0f;
-            key.depthBiasSlopeFactor = 2.0f;
-            key.cull = FaceCullMode::None;
-            PipelineBinding pipeline = _renderer.pipelines().get(key);
+        auto &image = caster.directional ? *_dirShadows : *_pointShadows;
+        bool &bound = caster.directional ? dirBound : pointBound;
+        const int layers = caster.directional ? kNumShadowCascades : kNumCubeFaces;
+        const uint32_t viewMask = (1u << layers) - 1u;
+        const auto extent = image.extent();
+        // Transitioned once per image, not once per caster: a second
+        // transition of an image already in the attachment layout is a
+        // redundant barrier, and the slots of one image are written by
+        // consecutive passes that need no synchronisation between them.
+        if (!bound) {
+            cmd.transitionImage(image, ImageLayout::DepthAttachment);
+            bound = true;
+        }
+        {
+            const auto view = image.layerAttachmentView(caster.mapIndex * layers, layers);
+            RenderAttachment depth {view, ImageLayout::DepthAttachment,
+                                    AttachmentLoad::Clear, AttachmentStore::Store};
+            depth.clear.depthOnly = true;
+            cmd.beginRendering(extent, {}, &depth, viewMask, false);
+            if (scene.vertices.buffer && scene.triangleCount != 0) {
             auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.frameIndex());
             std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
             offsets[UniformBlockBindingPoints::globals] = globalsOffset;
-            cmd.bindPipeline(pipeline.pipeline);
-            cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
-                                  offsets.data(), static_cast<uint32_t>(offsets.size()));
-            cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
-            const ShadowPushConstants push {0, 1, _shadowCasterCategories};
-            cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
-            cmd.draw(scene.grassCardTris * 3, scene.grassCardCount);
+            cmd.bindIndexBuffer(*scene.indices.buffer, scene.indices.offset);
+
+            auto drawRange = [&](uint32_t triangleBase, uint32_t triangleCount,
+                                 bool gated) {
+                if (triangleCount == 0) {
+                    return;
+                }
+                PipelineKey key;
+                key.module = "scene_draw";
+                key.vertexEntry = caster.directional ? "directionalShadowVertex"
+                                              : "pointShadowVertex";
+                key.fragmentEntry = caster.directional
+                                        ? "directionalShadowFragment"
+                                        : "pointShadowFragment";
+                key.depthFormat = Format::D32Sfloat;
+                key.viewMask = viewMask;
+                key.depthTest = true;
+                key.depthWrite = true;
+                key.depthBias = true;
+                // D32_SFLOAT constant bias is expressed in representable depth
+                // increments; the slope term supplies the useful offset on curved
+                // surfaces that approach parallel to the light.
+                //
+                // Both terms carry more than they used to because nothing is
+                // culled any more. Rendering back faces alone put the stored depth
+                // a wall's thickness behind the lit surface, which is a free bias
+                // - but only for geometry that HAS a back face. Odyssey's exterior
+                // shells are single-sided, so from the sun's side they wrote
+                // nothing at all and light poured into the rooms behind them. With
+                // both faces written, a lit surface now finds its own depth in the
+                // map and needs a real offset instead. The receiver-side normal
+                // offset in lib/shadow.slang remains the primary defence; these
+                // are the dials to turn if acne or peter-panning shows up.
+                key.depthBiasConstantFactor = 2.0f;
+                key.depthBiasSlopeFactor = 2.0f;
+                // Never cull. A single-sided wall has to occlude from whichever
+                // side the light is on, and a cutout fence or leaf card likewise.
+                key.cull = FaceCullMode::None;
+                PipelineBinding pipeline = _renderer.pipelines().get(key);
+                cmd.bindPipeline(pipeline.pipeline);
+                cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                      offsets.data(), static_cast<uint32_t>(offsets.size()));
+                cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
+                // Three words here, two everywhere else: only this pass reads the
+                // caster filter. See PushConstants in lib/megadraw_geometry.slang.
+                const ShadowPushConstants push {triangleBase, gated ? 1u : 0u,
+                                                _shadowCasterCategories,
+                                                static_cast<uint32_t>(caster.slot)};
+                cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
+                cmd.drawIndexed(triangleCount * 3, triangleBase * 3);
+            };
+
+            drawRange(0, scene.opaqueTriangleCount, false);
+            const uint32_t gatedTriangles =
+                scene.triangleCount - scene.opaqueTriangleCount;
+            drawRange(scene.opaqueTriangleCount, gatedTriangles, true);
+            }
+            if (scene.grassCardCount != 0) {
+                PipelineKey key;
+                key.module = "scene_draw";
+                key.vertexEntry = caster.directional ? "grassCardDirectionalShadowVertex"
+                                              : "grassCardPointShadowVertex";
+                key.fragmentEntry = caster.directional ? "directionalShadowFragment"
+                                                 : "pointShadowFragment";
+                key.depthFormat = Format::D32Sfloat;
+                key.viewMask = viewMask;
+                key.depthTest = true;
+                key.depthWrite = true;
+                key.depthBias = true;
+                key.depthBiasConstantFactor = 2.0f;
+                key.depthBiasSlopeFactor = 2.0f;
+                key.cull = FaceCullMode::None;
+                PipelineBinding pipeline = _renderer.pipelines().get(key);
+                auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.frameIndex());
+                std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+                offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+                cmd.bindPipeline(pipeline.pipeline);
+                cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                      offsets.data(), static_cast<uint32_t>(offsets.size()));
+                cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
+                const ShadowPushConstants push {0, 1, _shadowCasterCategories,
+                                                static_cast<uint32_t>(caster.slot)};
+                cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
+                cmd.draw(scene.grassCardTris * 3, scene.grassCardCount);
+            }
+            cmd.endRendering();
         }
-        cmd.endRendering();
     }
-    cmd.transitionImage(image, ImageLayout::DepthRead);
+    if (dirBound) {
+        cmd.transitionImage(*_dirShadows, ImageLayout::DepthRead);
+    }
+    if (pointBound) {
+        cmd.transitionImage(*_pointShadows, ImageLayout::DepthRead);
+    }
 }
 
 void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
@@ -599,14 +652,14 @@ void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
 
         if (scene.opaqueTriangleCount != 0) {
             const MegaDrawPushConstants push {0, 0};
-            cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
+            cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
             cmd.drawIndexed(scene.opaqueTriangleCount * 3, 0);
         }
         const uint32_t nonOpaqueTriangles =
             scene.triangleCount - scene.opaqueTriangleCount;
         if (nonOpaqueTriangles != 0) {
             const MegaDrawPushConstants push {scene.opaqueTriangleCount, 1};
-            cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
+            cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
             cmd.drawIndexed(nonOpaqueTriangles * 3, scene.opaqueTriangleCount * 3);
         }
     }
@@ -629,7 +682,7 @@ void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                               offsets.data(), static_cast<uint32_t>(offsets.size()));
         cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
         const MegaDrawPushConstants push {0, 1};
-        cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
+        cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
         cmd.draw(scene.grassCardTris * 3, scene.grassCardCount);
     }
     cmd.endRendering();
@@ -756,7 +809,7 @@ void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
             cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
             // Submission order, deliberately. See scene_draw.slang.
             const BlendedPushConstants push {scene.opaqueTriangleCount, 2, resolveFlags()};
-            cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
+            cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
             cmd.drawIndexed(depthTestedTriangles * 3,
                             scene.opaqueTriangleCount * 3);
         }
@@ -783,7 +836,7 @@ void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
             const uint32_t triangleBase =
                 scene.triangleCount - scene.depthIndependentTriangleCount;
             const BlendedPushConstants push {triangleBase, 2, resolveFlags()};
-            cmd.pushFragmentConstants(depthIndependentPipeline.layout, &push,
+            cmd.pushGraphicsConstants(depthIndependentPipeline.layout, &push,
                                       sizeof(push));
             cmd.drawIndexed(scene.depthIndependentTriangleCount * 3,
                             triangleBase * 3);
@@ -888,7 +941,7 @@ void ScenePipeline::retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset
             cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kMegaDrawSet,
                                   _resolveMaterialSet, nullptr, 0);
             const ResolvePushConstants push = resolvePush(resolveFlags(), _options);
-            cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
+            cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
             cmd.draw(3, 1);
         }
         cmd.endRendering();
@@ -987,7 +1040,7 @@ void ScenePipeline::primaryCoveragePass(ICommandBuffer &cmd, uint32_t globalsOff
         cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
                               offsets.data(), static_cast<uint32_t>(offsets.size()));
         cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet, nullptr, 0);
-        cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
+        cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
         cmd.draw(3, 1);
         cmd.endRendering();
     }
@@ -1147,7 +1200,7 @@ void ScenePipeline::bloomPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
         cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
                               offsets.data(), static_cast<uint32_t>(offsets.size()));
         cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, textureSet, nullptr, 0);
-        cmd.pushFragmentConstants(pipeline.layout, &push, sizeof(push));
+        cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
         cmd.draw(3, 1);
         cmd.endRendering();
         cmd.transitionImage(target, ImageLayout::ShaderRead);
@@ -1204,7 +1257,7 @@ void ScenePipeline::tailPass(ICommandBuffer &cmd, const char *fragmentEntry,
                               offsets.data(), static_cast<uint32_t>(offsets.size()));
         cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet, nullptr, 0);
         if (pushConstants && pushConstantSize != 0) {
-            cmd.pushFragmentConstants(pipeline.layout, pushConstants, pushConstantSize);
+            cmd.pushGraphicsConstants(pipeline.layout, pushConstants, pushConstantSize);
         }
         cmd.draw(3, 1);
         cmd.endRendering();
@@ -1455,7 +1508,7 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
         std::swap(_tailColor, _displayTail);
         _chainAtDisplaySize = false;
     }
-    _shadow = plan.shadow;
+    _shadowCasters = plan.shadowCasters;
     _transparentOutput = plan.transparentOutput;
     _shadowCasterCategories = plan.shadowCasterCategories;
     _mergedScene = {};

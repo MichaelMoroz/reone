@@ -217,21 +217,15 @@ graphics::SkyBinding RenderPipeline::skyBinding(graphics::ICommandBuffer &comman
 }
 
 graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
-                                                RenderShadowKind shadow,
+                                                const std::vector<RenderShadowCaster> &shadowCasters,
                                                 SceneOutputAlpha alpha) {
     graphics::SceneFramePlan plan;
     plan.transparentOutput = alpha == SceneOutputAlpha::Coverage;
     plan.shadowCasterCategories = shadowCasterCategories();
-    switch (shadow) {
-    case RenderShadowKind::Directional:
-        plan.shadow = graphics::SceneShadow::Directional;
-        break;
-    case RenderShadowKind::Point:
-        plan.shadow = graphics::SceneShadow::Point;
-        break;
-    default:
-        plan.shadow = graphics::SceneShadow::None;
-        break;
+    plan.shadowCasters.reserve(shadowCasters.size());
+    for (const auto &caster : shadowCasters) {
+        plan.shadowCasters.push_back(
+            graphics::SceneShadowCaster {caster.directional, caster.slot, caster.mapIndex});
     }
     auto uploadArena = std::move(_admissionResult.submission.upload);
     _admissionResult = _admission->prepare(

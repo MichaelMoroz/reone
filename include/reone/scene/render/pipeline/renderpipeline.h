@@ -50,7 +50,7 @@ public:
     void init() override;
     void deinit();
     graphics::Texture &render(const CameraSceneNode *camera,
-                              RenderShadowKind shadow,
+                              const std::vector<RenderShadowCaster> &shadowCasters,
                               SceneOutputAlpha alpha) override;
     std::vector<RenderTargetInfo> targets() const override;
     void *renderTargetPreview(const std::string &name, int mode, float scale) override;

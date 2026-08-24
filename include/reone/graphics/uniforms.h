@@ -74,13 +74,40 @@ struct alignas(16) GlobalUniformsLight {
     int ambientOnly {0};
     int dynamicType {0};
     /**
-     * Non-zero on the one light the shadow map was rendered from.
+     * Which shadow slot this light casts from, or -1 if it casts nothing.
      *
-     * A shadow is only visible on the light it attenuates, so the corrected
-     * model has to let this light reach static geometry even where the
-     * original's dynamic-type rule would drop it.
+     * An index rather than a flag because a frame now holds several casters
+     * and a receiver has to know WHICH map to sample, not merely that one
+     * exists. A shadow is only visible on the light it attenuates, so the
+     * corrected model has to let a caster reach static geometry even where the
+     * original's dynamic-type rule would drop it - which is why this is tested
+     * for "is a caster" as well as used as an index.
      */
-    int shadowCaster {0};
+    int shadowSlot {-1};
+};
+
+/**
+ * One shadow-casting light, as the receiver needs it.
+ *
+ * Point lights carry no matrices here: a cube face's view is derivable from
+ * the light position and a fixed 90-degree projection, so the shadow pass
+ * builds its own and the receiver only ever samples by direction. Only the
+ * cascaded directional maps need their transforms transported, and those live
+ * in one flat array indexed by mapIndex.
+ */
+struct GlobalUniformsShadowLight {
+    /** Direction when W is 0, world position when W is 1 - as lights are. */
+    glm::vec4 positionOrDirection {0.0f};
+    /** Fade, already multiplied by the area's authored ShadowOpacity. */
+    float strength {0.0f};
+    float radius {0.0f};
+    /**
+     * First cascade for a directional caster, cube slice for a point one.
+     * The two index different images, so the kind in positionOrDirection.w is
+     * what says which.
+     */
+    int mapIndex {0};
+    int padding {0};
 };
 
 struct GlobalUniforms {
@@ -91,9 +118,12 @@ struct GlobalUniforms {
     glm::vec4 cameraPosition {0.0f};
     glm::vec4 worldAmbientColor {1.0f};
     GlobalUniformsLight lights[kMaxLights];
-    glm::vec4 shadowLightPosition {0.0f}; /**< W = 0 if light is directional */
+    GlobalUniformsShadowLight shadowLights[kMaxShadowLights];
+    /** Shared by every directional caster - they split one camera frustum. */
     glm::vec4 shadowCascadeFarPlanes {0.0f};
-    glm::mat4 shadowLightSpace[kNumShadowLightSpace] {glm::mat4(1.0f)};
+    glm::mat4 shadowCascadeSpace[kMaxShadowCascadeMatrices] {glm::mat4(1.0f)};
+    /** Six consecutive faces per point caster, indexed by mapIndex * 6. */
+    glm::mat4 shadowPointSpace[kMaxShadowPointMatrices] {glm::mat4(1.0f)};
     /**
      * Unjittered view-projection of this frame and the previous one. Kept
      * separate from projection/view, which carry TAA jitter when it is enabled,
@@ -106,8 +136,7 @@ struct GlobalUniforms {
     float clipNear {kDefaultClipPlaneNear};
     float clipFar {kDefaultClipPlaneFar};
     int numLights {0};
-    float shadowStrength {0.0f};
-    float shadowRadius {0.0f};
+    int numShadowLights {0};
     float fogNear {0.0f};
     float fogFar {0.0f};
     /**
@@ -131,15 +160,13 @@ struct GlobalUniforms {
         prevViewProjection = glm::mat4(1.0f);
         cameraPosition = glm::vec4(0.0f);
         worldAmbientColor = glm::vec4(1.0f);
-        shadowLightPosition = glm::vec4(0.0f);
         shadowCascadeFarPlanes = glm::vec4(0.0f);
         fogColor = glm::vec4(0.0f);
         jitter = glm::vec4(0.0f);
         clipNear = kDefaultClipPlaneNear;
         clipFar = kDefaultClipPlaneFar;
         numLights = 0;
-        shadowStrength = 1.0f;
-        shadowRadius = 0.0f;
+        numShadowLights = 0;
         fogNear = 0.0f;
         fogFar = 0.0f;
     }

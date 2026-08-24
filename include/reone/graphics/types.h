@@ -28,6 +28,27 @@ constexpr float kDefaultObjectDrawDistance = 64.0f;
 constexpr int kNumCubeFaces = 6;
 constexpr int kNumShadowCascades = 4;
 constexpr int kNumShadowLightSpace = 6;
+
+/**
+ * Ceilings on the shadow tables the uniform block is sized for, mirrored in
+ * slang/uniforms.slang. They are the option registry's caps, not its defaults -
+ * GraphicsOptions decides how many slots a frame may FILL, and that is what
+ * costs image memory. These only cost uniform bytes.
+ */
+constexpr int kMaxDirectionalShadows = 4;
+constexpr int kMaxPointShadows = 16;
+constexpr int kMaxShadowLights = kMaxDirectionalShadows + kMaxPointShadows;
+/** Cascade matrices the directional half of the table holds. */
+constexpr int kMaxShadowCascadeMatrices = kMaxDirectionalShadows * kNumShadowCascades;
+/**
+ * Cube face transforms the point half of the table holds.
+ *
+ * These exist in the uniform block because the shadow pass's vertex stage
+ * needs them and a push constant cannot carry six matrices. That is also what
+ * bounds kMaxPointShadows at 16: at 32 the block would exceed 16 KB, which is
+ * all Vulkan guarantees for maxUniformBufferRange.
+ */
+constexpr int kMaxShadowPointMatrices = kMaxPointShadows * kNumCubeFaces;
 constexpr int kNumSSAOSamples = 64;
 constexpr int kNumSaberSegments = 20;
 constexpr int kNumSaberSegmentVertices = 4;

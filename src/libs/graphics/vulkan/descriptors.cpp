@@ -707,8 +707,12 @@ const VulkanImage *VulkanDescriptors::defaultFor(int unit,
     case TextureUnits::prefilteredEnvMapArray:
         return cubeArray;
     case TextureUnits::envMapCube:
-    case TextureUnits::shadowMapCube:
         return cube;
+    // A cube ARRAY, because the shadow receiver declares
+    // SamplerCubeArrayShadow whatever the point budget is. A plain cube view
+    // in a cube array's place is a view-type mismatch, not a coercion.
+    case TextureUnits::shadowMapCube:
+        return cubeArray;
     default:
         return twoD;
     }

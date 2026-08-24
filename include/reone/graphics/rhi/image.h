@@ -41,6 +41,15 @@ public:
     virtual void initSampledLayered(glm::ivec2 extent, Format format, int layers,
                                     bool cube, const void *data) = 0;
     virtual ImageView attachmentView(int cube, int mip) = 0;
+    /**
+     * A view of @p count consecutive layers as a 2D array, for a multiview
+     * pass that writes one layer per view.
+     *
+     * Distinct from attachmentView, which is fixed at a cube's six faces. A
+     * shadow slot owns four cascade layers or six cube faces at an arbitrary
+     * base, so the range has to be given rather than derived from an index.
+     */
+    virtual ImageView layerAttachmentView(int baseLayer, int count, int mip = 0) = 0;
     /** One cube face used as a color attachment in a per-face pass. */
     virtual ImageView faceAttachmentView(int cube, int face, int mip = 0) = 0;
     virtual void setSampler(Sampler sampler) = 0;

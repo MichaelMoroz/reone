@@ -177,6 +177,12 @@ public:
         return toImageView(renderView(cube, mip));
     }
 
+    /** A 2D-array view of an arbitrary layer range. See the RHI declaration. */
+    VkImageView layerRangeView(int baseLayer, int count, int mip);
+    ImageView layerAttachmentView(int baseLayer, int count, int mip = 0) override {
+        return toImageView(layerRangeView(baseLayer, count, mip));
+    }
+
     /** A cube view of one cube in a cube-compatible image, for SamplerCube. */
     VkImageView cubeView(int cube);
 
@@ -283,6 +289,7 @@ private:
     std::unordered_map<int, VkImageView> _renderViews;
     std::unordered_map<int, VkImageView> _cubeViews;
     std::unordered_map<int, VkImageView> _faceRenderViews;
+    std::unordered_map<int, VkImageView> _layerRangeViews;
     VmaAllocation _allocation {VK_NULL_HANDLE};
     glm::ivec2 _extent {0};
     VkFormat _format {VK_FORMAT_UNDEFINED};

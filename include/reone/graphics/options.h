@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <algorithm>
+
 #include "types.h"
 #include "grasscard.h"
 
@@ -114,6 +116,28 @@ enum class RenderMode {
     PathTracing,
 };
 
+/**
+ * Retro's caster budget, from the original's own videoquality.2da:
+ * NumShadowCastingLights is 1 at fast, low and good and 3 at best. Retro takes
+ * the best-quality figure, because a mode that exists to reproduce the original
+ * should reproduce the setting a player would have chosen rather than the one a
+ * 2003 machine forced.
+ */
+constexpr int kRetroShadowCasters = 3;
+
+/**
+ * How many shadow casters a mode may hold, by kind.
+ *
+ * One declaration because it has two consumers that must agree: the scene
+ * selects against it, and the pipeline sizes its shadow images from it. Two
+ * copies of this rule would show up as a caster with no map behind it.
+ */
+struct ShadowBudget {
+    int directional {0};
+    int point {0};
+    int total {0};
+};
+
 struct GraphicsOptions {
     int width {1024};
     int height {768};
@@ -200,16 +224,34 @@ struct GraphicsOptions {
      */
     int maxLights {48};
     /**
-     * Shadow-casting light budgets, by kind. Not read yet.
+     * Shadow-casting light budgets, by kind, for the corrected modes.
      *
-     * Recorded here because the numbers are a decision about PBR's shadow
-     * atlas - how many cascaded directional maps and how many cube maps a frame
-     * may hold - and the decision is worth having in one place before the pass
-     * that spends them exists. Nothing reads these; changing them changes
-     * nothing until it does.
+     * Two numbers rather than one because the kinds cost differently: a
+     * directional caster is four cascade layers at shadowResolution, a point
+     * caster is a whole cube at pointShadowResolution. Retro does not use these
+     * - it takes one combined budget, the original's own
+     * NumShadowCastingLights; see SceneGraph::shadowBudget.
+     *
+     * These are ceilings on what a frame MAY hold, and they cost memory
+     * whether or not they fill. What fills them is the authored per-light
+     * shadow flag narrowed by each light's own radius, and that is a much
+     * tighter constraint: the largest set measured across ten K1 modules was
+     * four (RECORD 3.13). Only occupied slots are rendered, so raising these
+     * buys headroom for dense scenes rather than per-frame cost.
      */
     int maxDirectionalShadows {2};
-    int maxPointShadows {8};
+    int maxPointShadows {16};
+    /**
+     * Cube face resolution for point shadow maps.
+     *
+     * Separate from shadowResolution, and much smaller, because the two cover
+     * incomparable areas: a directional cascade spans the visible world, while
+     * a point map covers only the light's own radius - a lamp lighting a few
+     * metres. At 512 a face carries roughly the texel density the 2048
+     * directional map gives the scene, and the whole 16-slot ceiling costs
+     * about 100 MB of D32 against 400 MB at 1024.
+     */
+    int pointShadowResolution {512};
     bool grass {true};
     /**
      * Draw the shadow of the selected shadow light, or none at all.
@@ -771,6 +813,23 @@ inline glm::ivec2 renderExtentFor(const GraphicsOptions &options, glm::ivec2 dis
     }
     const float scale = glm::clamp(options.renderScale, 0.25f, 1.0f);
     return glm::max(glm::ivec2(1), glm::ivec2(glm::round(glm::vec2(displayExtent) * scale)));
+}
+
+/**
+ * Retro's is one number rather than two because that is how the original
+ * expressed it - the authored per-light shadow flag decides the kind, and in
+ * the shipped content that flag sits on point lights far more often than on the
+ * sun. The corrected modes budget per kind instead, because they pay
+ * differently for the two: a directional caster is four cascade layers at
+ * shadowResolution, a point caster is a whole cube at pointShadowResolution.
+ */
+inline ShadowBudget shadowBudgetFor(const GraphicsOptions &opts) {
+    if (opts.mode == RenderMode::Retro) {
+        return {kRetroShadowCasters, kRetroShadowCasters, kRetroShadowCasters};
+    }
+    const int directional = std::max(0, opts.maxDirectionalShadows);
+    const int point = std::max(0, opts.maxPointShadows);
+    return {directional, point, directional + point};
 }
 
 } // namespace graphics

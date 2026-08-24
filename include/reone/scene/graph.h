@@ -319,31 +319,33 @@ public:
     bool hasShadowLight() const override;
     bool isShadowLightDirectional() const override { return _shadowLights.front().light->isDirectional(); }
 
-    glm::vec3 shadowLightPosition() const { return _shadowLights.front().light->origin(); }
-    glm::vec3 shadowLightDirection() const;
-    float shadowStrength() const { return _shadowLights.empty() ? 0.0f : _shadowLights.front().strength; }
-    float shadowRadius() const { return _shadowLights.front().light->radius(); }
+    /**
+     * One shadow-casting light, and the state that belongs to the light rather
+     * than to the frame.
+     *
+     * `strength` is per light because the fade is: a caster that leaves the
+     * selected set has to finish fading out while whatever replaced it fades
+     * in, and with one shared value the two would drive each other. The light
+     * is a bare pointer into `_lights`, so `clear()` has to drop these with the
+     * lights they name - see the comment there.
+     */
+    struct ShadowLight {
+        LightSceneNode *light {nullptr};
+        float strength {0.0f};
+        /** False while fading out; the slot is released when strength reaches zero. */
+        bool active {false};
+        glm::mat4 lightSpace[graphics::kNumShadowLightSpace] {glm::mat4(1.0f)};
+    };
 
     /**
-     * How many casters this mode may hold, by kind.
+     * Where a caster points: its origin if it is a point light, its aim
+     * direction if it is directional.
      *
-     * Retro's is one number rather than two because that is how the original
-     * expressed it: `videoquality.2da`'s NumShadowCastingLights is 1 at fast,
-     * low and good and 3 at best, with no distinction between a directional
-     * light and a point light - the authored per-light shadow flag decides, and
-     * in the shipped content that flag is on point lights far more often than
-     * on the sun (measured across 19 K1 modules: 0-2 flagged directional
-     * against 41, 61 and 129 flagged point lights in the modules that have
-     * them). The corrected modes take a budget per kind instead, because they
-     * pay for the two kinds differently: a cascaded directional map is four
-     * layers and a point map is a whole cube.
+     * Per slot rather than per graph because every caster needs its own, and
+     * the directional fallback - aim an unoriented light at the centre of the
+     * module's rooms - has to run against that light's own position.
      */
-    struct ShadowBudget {
-        int directional {0};
-        int point {0};
-        int total {0};
-    };
-    ShadowBudget shadowBudget() const;
+    glm::vec3 shadowLightAim(const ShadowLight &slot) const;
 
     /** Which slot this light casts from this frame, or -1 if it casts nothing. */
     int shadowSlotOf(const LightSceneNode *light) const {
@@ -491,23 +493,6 @@ private:
 
     // Shadows
 
-    /**
-     * One shadow-casting light, and the state that belongs to the light rather
-     * than to the frame.
-     *
-     * `strength` is per light because the fade is: a caster that leaves the
-     * selected set has to finish fading out while whatever replaced it fades
-     * in, and with one shared value the two would drive each other. The light
-     * is a bare pointer into `_lights`, so `clear()` has to drop these with the
-     * lights they name - see the comment there.
-     */
-    struct ShadowLight {
-        LightSceneNode *light {nullptr};
-        float strength {0.0f};
-        /** False while fading out; the slot is released when strength reaches zero. */
-        bool active {false};
-        glm::mat4 lightSpace[graphics::kNumShadowLightSpace] {glm::mat4(1.0f)};
-    };
 
     /**
      * The frame's casters, ordered as `computeClosestLights` sorts them:

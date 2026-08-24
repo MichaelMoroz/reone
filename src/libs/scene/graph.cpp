@@ -67,15 +67,6 @@ static constexpr int kMaxSoundCount = 4;
 
 static constexpr float kShadowFadeSpeed = 2.0f;
 
-/**
- * Retro's caster budget, from the original's own videoquality.2da:
- * NumShadowCastingLights is 1 at fast, low and good and 3 at best. Retro takes
- * the best-quality figure because a mode that exists to reproduce the original
- * should reproduce the setting a player would have chosen, not the one a 2003
- * machine forced.
- */
-static constexpr int kRetroShadowCasters = 3;
-
 static constexpr float kLightRadiusBias = 64.0f;
 
 static constexpr float kMaxCollisionDistanceWalk = 8.0f;
@@ -93,33 +84,6 @@ static const std::vector<float> g_shadowCascadeDivisors {
     0.015f,
     0.045f,
     0.135f};
-
-glm::vec3 SceneGraph::shadowLightDirection() const {
-    const auto *light = _shadowLights.front().light;
-    auto authored = light->direction();
-    if (light->hasAuthoredDirection()) {
-        return authored;
-    }
-
-    // Identity is the model format's default orientation. Aim such lights at
-    // the centre of the module's room geometry: unlike the camera or world
-    // origin, these bounds are fixed for the lifetime of the loaded area.
-    AABB bounds;
-    for (auto &root : _modelRoots) {
-        if (root->usage() != ModelUsage::Room || root->isBackgroundScenery()) {
-            continue;
-        }
-        bounds.expand(root->aabb() * root->absoluteTransform());
-    }
-    if (!bounds.isDegenerate()) {
-        auto centre = 0.5f * (bounds.min() + bounds.max());
-        auto direction = centre - shadowLightPosition();
-        if (glm::length2(direction) >= glm::epsilon<float>()) {
-            return glm::normalize(direction);
-        }
-    }
-    return authored;
-}
 
 void SceneGraph::clear() {
     _modelRoots.clear();
@@ -396,18 +360,9 @@ void SceneGraph::updateLighting() {
     }
 }
 
-SceneGraph::ShadowBudget SceneGraph::shadowBudget() const {
-    if (_graphicsOpt.mode == RenderMode::Retro) {
-        return {kRetroShadowCasters, kRetroShadowCasters, kRetroShadowCasters};
-    }
-    const int directional = std::max(0, _graphicsOpt.maxDirectionalShadows);
-    const int point = std::max(0, _graphicsOpt.maxPointShadows);
-    return {directional, point, directional + point};
-}
-
 void SceneGraph::updateShadowLight(float dt) {
     const bool hadShadowLight = !_shadowLights.empty();
-    const auto budget = shadowBudget();
+    const auto budget = shadowBudgetFor(_graphicsOpt);
 
     // Every eligible caster, in the order the renderer wants its slots: the
     // sort puts directional lights first and then orders by distance, so slot
@@ -451,10 +406,25 @@ void SceneGraph::updateShadowLight(float dt) {
                        [](const ShadowLight &slot) { return !slot.active && slot.strength == 0.0f; }),
         _shadowLights.end());
 
+    // Admission is capped PER KIND against what is currently held, not only
+    // against the total. A caster on its way out still occupies its slot, so
+    // counting only the total lets a fading point light and a new one both be
+    // held where the budget allows one - and the second is then handed a map
+    // index past the cubes that were allocated, which is a device loss rather
+    // than a missing shadow.
+    auto heldOfKind = [this](bool directional) {
+        int count = 0;
+        for (const auto &slot : _shadowLights) {
+            count += slot.light->isDirectional() == directional ? 1 : 0;
+        }
+        return count;
+    };
     for (auto *light : selected) {
         const bool held = std::any_of(_shadowLights.begin(), _shadowLights.end(),
                                       [light](const ShadowLight &slot) { return slot.light == light; });
-        if (held || static_cast<int>(_shadowLights.size()) >= budget.total) {
+        const bool directional = light->isDirectional();
+        if (held || static_cast<int>(_shadowLights.size()) >= budget.total ||
+            heldOfKind(directional) >= (directional ? budget.directional : budget.point)) {
             continue;
         }
         ShadowLight slot;
@@ -745,28 +715,44 @@ Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {
                 light.radius = _activeLights[i]->radius();
                 light.ambientOnly = static_cast<int>(_activeLights[i]->modelNode().light()->ambientOnly);
                 light.dynamicType = _activeLights[i]->modelNode().light()->dynamicType;
-                // Slot zero only, because slot zero is the only map that is
-                // rendered and the only one the resolves sample. The flag says
-                // "a shadow of this light exists to attenuate", and the
-                // resolves let a caster past the static-geometry exclusion on
-                // the strength of it - so claiming it for a slot with no map
-                // behind it would admit the light and none of its shadow.
-                // Becomes `>= 0` in the same change that renders every slot.
-                light.shadowCaster = shadowSlotOf(_activeLights[i]) == 0 ? 1 : 0;
+                light.shadowSlot = shadowSlotOf(_activeLights[i]);
             }
             if (hasShadowLight()) {
-                for (int i = 0; i < kNumShadowLightSpace; ++i) {
-                    globals.shadowLightSpace[i] = _shadowLights.front().lightSpace[i];
-                }
-                globals.shadowLightPosition = isShadowLightDirectional()
-                                                  ? glm::vec4(shadowLightDirection(), 0.0f)
-                                                  : glm::vec4(shadowLightPosition(), 1.0f);
-                globals.shadowCascadeFarPlanes = _shadowCascadeFarPlanes;
                 const float opacity = _graphicsOpt.shadowOpacity >= 0.0f
                                           ? _graphicsOpt.shadowOpacity
                                           : _shadowProperties.opacity;
-                globals.shadowStrength = shadowStrength() * opacity;
-                globals.shadowRadius = shadowRadius();
+                globals.shadowCascadeFarPlanes = _shadowCascadeFarPlanes;
+                globals.numShadowLights = static_cast<int>(_shadowLights.size());
+                int directionalSlots = 0;
+                int pointSlots = 0;
+                for (size_t i = 0; i < _shadowLights.size(); ++i) {
+                    const auto &slot = _shadowLights[i];
+                    auto &out = globals.shadowLights[i];
+                    const bool directional = slot.light->isDirectional();
+                    out.positionOrDirection = directional
+                                                  ? glm::vec4(shadowLightAim(slot), 0.0f)
+                                                  : glm::vec4(slot.light->origin(), 1.0f);
+                    out.strength = slot.strength * opacity;
+                    out.radius = slot.light->radius();
+                    // The two kinds index different images, so their map
+                    // indices are counted separately: a directional slot names
+                    // its first cascade in the layered 2D array, a point slot
+                    // names its cube in the cube array.
+                    if (directional) {
+                        out.mapIndex = directionalSlots * kNumShadowCascades;
+                        for (int c = 0; c < kNumShadowCascades; ++c) {
+                            globals.shadowCascadeSpace[out.mapIndex + c] = slot.lightSpace[c];
+                        }
+                        ++directionalSlots;
+                    } else {
+                        out.mapIndex = pointSlots;
+                        for (int f = 0; f < kNumCubeFaces; ++f) {
+                            globals.shadowPointSpace[out.mapIndex * kNumCubeFaces + f] =
+                                slot.lightSpace[f];
+                        }
+                        ++pointSlots;
+                    }
+                }
             }
             globals.time = _time;
             globals.prevTime = _prevTime;
@@ -817,12 +803,26 @@ Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {
         }
     }
 
-    auto shadow = !hasShadowLight()
-                      ? RenderShadowKind::None
-                      : (isShadowLightDirectional()
-                             ? RenderShadowKind::Directional
-                             : RenderShadowKind::Point);
-    auto &output = pipeline.render(_activeCamera, shadow, alpha);
+    // The casters the pass will render, in slot order, with their map indices
+    // recomputed the same way the uniform fill assigned them. Empty when the
+    // shadows option is off, so the pass falls away with the term rather than
+    // rendering into something nothing samples.
+    std::vector<RenderShadowCaster> shadowCasters;
+    if (hasShadowLight()) {
+        int directionalSlots = 0;
+        int pointSlots = 0;
+        shadowCasters.reserve(_shadowLights.size());
+        for (size_t i = 0; i < _shadowLights.size(); ++i) {
+            const bool directional = _shadowLights[i].light->isDirectional();
+            RenderShadowCaster caster;
+            caster.directional = directional;
+            caster.slot = static_cast<int>(i);
+            caster.mapIndex = directional ? directionalSlots : pointSlots;
+            (directional ? directionalSlots : pointSlots) += 1;
+            shadowCasters.push_back(caster);
+        }
+    }
+    auto &output = pipeline.render(_activeCamera, shadowCasters, alpha);
     snapshotPreviousFrame();
     return output;
 }
@@ -1048,33 +1048,67 @@ static glm::mat4 getPointLightView(const glm::vec3 &lightPos, CubeMapFace face) 
     }
 }
 
-void SceneGraph::computeLightSpaceMatrices() {
-    if (isShadowLightDirectional()) {
-        auto camera = std::static_pointer_cast<PerspectiveCamera>(this->camera()->get().camera());
-        // Use the light's authored direction, or the fixed module-room bounds
-        // fallback for an identity/default orientation. Neither source follows
-        // the camera, so camera motion cannot rotate the shadow projection.
-        auto lightDir = shadowLightDirection();
-        float fovy = camera->fovy();
-        float aspect = camera->aspect();
-        float cameraNear = camera->zNear();
-        float cameraFar = camera->zFar();
-        for (int i = 0; i < kNumShadowCascades; ++i) {
-            float far = cameraFar * g_shadowCascadeDivisors[i];
-            float near = cameraNear;
-            if (i > 0) {
-                near = cameraFar * g_shadowCascadeDivisors[i - 1];
-            }
-            _shadowLights.front().lightSpace[i] = computeDirectionalLightSpaceMatrix(
-                fovy, aspect, near, far, lightDir, camera->view(),
-                _graphicsOpt.shadowResolution);
-            _shadowCascadeFarPlanes[i] = far;
+glm::vec3 SceneGraph::shadowLightAim(const ShadowLight &slot) const {
+    const auto *light = slot.light;
+    if (!light->isDirectional()) {
+        return light->origin();
+    }
+    if (light->hasAuthoredDirection()) {
+        return light->direction();
+    }
+    // Identity is the model format's default orientation. Aim such lights at
+    // the centre of the module's room geometry: unlike the camera or world
+    // origin, these bounds are fixed for the lifetime of the loaded area.
+    AABB bounds;
+    for (auto &root : _modelRoots) {
+        if (root->usage() != ModelUsage::Room || root->isBackgroundScenery()) {
+            continue;
         }
-    } else {
-        glm::mat4 projection(glm::perspectiveRH_ZO(kPointLightShadowsFOV, 1.0f, kPointLightShadowsNearPlane, kPointLightShadowsFarPlane));
-        for (int i = 0; i < kNumCubeFaces; ++i) {
-            glm::mat4 lightView(getPointLightView(shadowLightPosition(), static_cast<CubeMapFace>(i)));
-            _shadowLights.front().lightSpace[i] = projection * lightView;
+        bounds.expand(root->aabb() * root->absoluteTransform());
+    }
+    if (!bounds.isDegenerate()) {
+        auto centre = 0.5f * (bounds.min() + bounds.max());
+        auto direction = centre - light->origin();
+        if (glm::length2(direction) >= glm::epsilon<float>()) {
+            return glm::normalize(direction);
+        }
+    }
+    return light->direction();
+}
+
+void SceneGraph::computeLightSpaceMatrices() {
+    // Every directional caster splits the same camera frustum, so the cascade
+    // far planes are computed once and shared. Only the light-space transforms
+    // differ between them, which is what makes one flat cascade array indexed
+    // per slot the right shape rather than a per-slot copy of the split.
+    auto camera = std::static_pointer_cast<PerspectiveCamera>(this->camera()->get().camera());
+    const float fovy = camera->fovy();
+    const float aspect = camera->aspect();
+    const float cameraNear = camera->zNear();
+    const float cameraFar = camera->zFar();
+    for (int i = 0; i < kNumShadowCascades; ++i) {
+        _shadowCascadeFarPlanes[i] = cameraFar * g_shadowCascadeDivisors[i];
+    }
+
+    const glm::mat4 pointProjection(glm::perspectiveRH_ZO(
+        kPointLightShadowsFOV, 1.0f, kPointLightShadowsNearPlane, kPointLightShadowsFarPlane));
+
+    for (auto &slot : _shadowLights) {
+        if (slot.light->isDirectional()) {
+            auto lightDir = shadowLightAim(slot);
+            for (int i = 0; i < kNumShadowCascades; ++i) {
+                float far = _shadowCascadeFarPlanes[i];
+                float near = i > 0 ? _shadowCascadeFarPlanes[i - 1] : cameraNear;
+                slot.lightSpace[i] = computeDirectionalLightSpaceMatrix(
+                    fovy, aspect, near, far, lightDir, camera->view(),
+                    _graphicsOpt.shadowResolution);
+            }
+        } else {
+            for (int i = 0; i < kNumCubeFaces; ++i) {
+                slot.lightSpace[i] = pointProjection *
+                                     getPointLightView(slot.light->origin(),
+                                                       static_cast<CubeMapFace>(i));
+            }
         }
     }
 }

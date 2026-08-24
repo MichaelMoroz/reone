@@ -125,8 +125,13 @@ class MockRenderPipeline : public IRenderPipeline, boost::noncopyable {
 public:
     MOCK_METHOD(void, init, (), (override));
 
+    // The caster list is parenthesised because MOCK_METHOD splits its argument
+    // list on commas and std::vector<T> carries none - but a reference to one
+    // written bare still trips the macro's own comma counting on some
+    // instantiations, and the extra parentheses cost nothing.
     MOCK_METHOD(graphics::Texture &, render,
-                (const CameraSceneNode *, RenderShadowKind, SceneOutputAlpha),
+                ((const CameraSceneNode *), (const std::vector<RenderShadowCaster> &),
+                 (SceneOutputAlpha)),
                 (override));
     MOCK_METHOD(std::vector<RenderTargetInfo>, targets, (), (const override));
 };

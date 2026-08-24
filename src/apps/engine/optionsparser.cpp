@@ -145,9 +145,11 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("pbrlightmapintensity", value<float>()->default_value(options->graphics.pbrLightmapIntensity), "PBR baked-irradiance intensity") //
         ("maxlights", value<int>()->default_value(options->graphics.maxLights), "lights a frame may carry")                    //
         ("maxdirectionalshadows", value<int>()->default_value(options->graphics.maxDirectionalShadows),
-         "shadow-casting directional lights (unused)")                                                                        //
+         "shadow-casting directional lights (PBR and path tracing)")                                                          //
         ("maxpointshadows", value<int>()->default_value(options->graphics.maxPointShadows),
-         "shadow-casting point lights (unused)")                                                                              //
+         "shadow-casting point lights (PBR and path tracing)")                                                                //
+        ("pointshadowres", value<int>()->default_value(options->graphics.pointShadowResolution),
+         "point shadow cube face resolution")                                                                                 //
         ("lightmaps", value<bool>()->default_value(options->graphics.lightmaps), "apply lightmaps (diagnostic toggle)")        //
         ("ssao", value<bool>()->default_value(options->graphics.ssao), "enable screen-space ambient occlusion")                 //
         ("ssr", value<bool>()->default_value(options->graphics.ssr), "enable screen-space reflections")                         //
@@ -341,7 +343,9 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.maxLights = std::clamp(vars["maxlights"].as<int>(), 1, graphics::kMaxLights);
     options->graphics.maxDirectionalShadows =
         std::clamp(vars["maxdirectionalshadows"].as<int>(), 0, 4);
-    options->graphics.maxPointShadows = std::clamp(vars["maxpointshadows"].as<int>(), 0, 32);
+    options->graphics.maxPointShadows = std::clamp(vars["maxpointshadows"].as<int>(), 0, kMaxPointShadows);
+    options->graphics.pointShadowResolution =
+        std::clamp(vars["pointshadowres"].as<int>(), 128, 2048);
     options->graphics.lightmaps = vars["lightmaps"].as<bool>();
     options->graphics.ssao = vars["ssao"].as<bool>();
     options->graphics.ssr = vars["ssr"].as<bool>();

@@ -359,13 +359,19 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(intOpt("maxlights", OptionApply::Live,
                            "lights a frame may carry",
                            &GraphicsOptions::maxLights, 1, kMaxLights));
-    // Not read by anything yet - see GraphicsOptions.
-    descs.push_back(intOpt("maxdirectionalshadows", OptionApply::Live,
-                           "shadow-casting directional lights (unused)",
+    // Reapply, not Live: these size the shadow images the pipeline allocates,
+    // so changing one has to rebuild the pipeline rather than take effect on
+    // the next frame against arrays that are the old size. Retro ignores both
+    // and uses the original's combined figure - see SceneGraph::shadowBudget.
+    descs.push_back(intOpt("maxdirectionalshadows", OptionApply::Reapply,
+                           "shadow-casting directional lights (PBR and path tracing)",
                            &GraphicsOptions::maxDirectionalShadows, 0, 4));
-    descs.push_back(intOpt("maxpointshadows", OptionApply::Live,
-                           "shadow-casting point lights (unused)",
-                           &GraphicsOptions::maxPointShadows, 0, 32));
+    descs.push_back(intOpt("maxpointshadows", OptionApply::Reapply,
+                           "shadow-casting point lights (PBR and path tracing)",
+                           &GraphicsOptions::maxPointShadows, 0, kMaxPointShadows));
+    descs.push_back(intOpt("pointshadowres", OptionApply::Reapply,
+                           "point shadow cube face resolution",
+                           &GraphicsOptions::pointShadowResolution, 128, 2048));
     descs.push_back(boolOpt("lightmaps", OptionApply::Live,
                             "apply lightmaps (diagnostic toggle)",
                             &GraphicsOptions::lightmaps));

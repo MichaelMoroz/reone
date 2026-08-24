@@ -144,7 +144,7 @@ public:
     virtual void bindIndexBuffer(const IBuffer &buffer, uint64_t offset) = 0;
     virtual void drawIndexed(uint32_t indexCount, uint32_t firstIndex,
                              uint32_t instanceCount = 1) = 0;
-    virtual void pushFragmentConstants(PipelineLayout layout, const void *data,
+    virtual void pushGraphicsConstants(PipelineLayout layout, const void *data,
                                        uint32_t size) = 0;
     virtual void pushRayTracingConstants(PipelineLayout layout, const void *data,
                                          uint32_t size) = 0;

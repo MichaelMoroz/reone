@@ -67,11 +67,20 @@ class CameraSceneNode;
  */
 using RenderMode = graphics::RenderMode;
 
-/** Shadow light selected by the scene graph for this frame. */
-enum class RenderShadowKind {
-    None,
-    Directional,
-    Point,
+/**
+ * One shadow-casting light the scene graph selected for this frame.
+ *
+ * A list rather than a kind, because a frame holds several casters and they
+ * need not agree on kind - a room lit by the sun and two lamps renders one
+ * cascaded map and two cubes. Each entry names where its map lives, so the
+ * pass needs to know nothing about how selection ordered them.
+ */
+struct RenderShadowCaster {
+    bool directional {false};
+    /** Index into the uniform block's shadow table; the vertex stage reads it. */
+    int slot {0};
+    /** First cascade layer for a directional caster, cube index for a point one. */
+    int mapIndex {0};
 };
 
 /**
@@ -99,7 +108,7 @@ public:
     virtual void init() = 0;
 
     virtual graphics::Texture &render(const CameraSceneNode *camera,
-                                      RenderShadowKind shadow,
+                                      const std::vector<RenderShadowCaster> &shadowCasters,
                                       SceneOutputAlpha alpha) = 0;
 
     /**

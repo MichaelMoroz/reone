@@ -27,6 +27,13 @@
 /** Mirrors kMaxLights in include/reone/graphics/types.h - it sizes the block. */
 static const int kMaxLights = 64;
 static const int kNumShadowLightSpace = 6;
+static const int kNumShadowCascades = 4;
+/** Mirrors the ceilings in include/reone/graphics/types.h - they size the block. */
+static const int kMaxDirectionalShadows = 4;
+static const int kMaxPointShadows = 16;
+static const int kMaxShadowLights = kMaxDirectionalShadows + kMaxPointShadows;
+static const int kMaxShadowCascadeMatrices = kMaxDirectionalShadows * kNumShadowCascades;
+static const int kMaxShadowPointMatrices = kMaxPointShadows * kNumShadowLightSpace;
 static const int kMaxBones = 24;
 static const int kMaxDanglyVertices = 768;
 static const int kMaxParticles = 64;
@@ -42,8 +49,27 @@ struct GlobalUniformsLight {
     float radius;
     int ambientOnly;
     int dynamicType;
-    /** Non-zero on the one light the shadow map was rendered from. */
-    int shadowCaster;
+    /** Which shadow slot this light casts from, or -1 if it casts nothing. */
+    int shadowSlot;
+};
+
+/**
+ * One shadow-casting light, as the receiver needs it.
+ *
+ * A point caster carries no matrices: its cube faces are derived from the
+ * position and a fixed 90-degree projection where they are rendered, and the
+ * receiver samples the cube by direction. Only cascaded directional casters
+ * need their transforms here, in shadowCascadeSpace indexed by mapIndex.
+ */
+struct GlobalUniformsShadowLight {
+    /** Direction when w is 0, world position when w is 1 - as lights are. */
+    float4 positionOrDirection;
+    /** Fade, already multiplied by the area's authored ShadowOpacity. */
+    float strength;
+    float radius;
+    /** First cascade for a directional caster, cube slice for a point one. */
+    int mapIndex;
+    int padding;
 };
 
 struct GlobalUniforms {
@@ -54,9 +80,12 @@ struct GlobalUniforms {
     float4 cameraPosition;
     float4 worldAmbientColor;
     GlobalUniformsLight lights[kMaxLights];
-    float4 shadowLightPosition; // W = 0 if light is directional
+    GlobalUniformsShadowLight shadowLights[kMaxShadowLights];
+    // Shared by every directional caster - they split one camera frustum.
     float4 shadowCascadeFarPlanes;
-    float4x4 shadowLightSpace[kNumShadowLightSpace];
+    float4x4 shadowCascadeSpace[kMaxShadowCascadeMatrices];
+    // Six consecutive faces per point caster, indexed by mapIndex * 6.
+    float4x4 shadowPointSpace[kMaxShadowPointMatrices];
     // Unjittered, so that motion vectors never encode the jitter offset.
     float4x4 viewProjection;
     float4x4 prevViewProjection;
@@ -65,8 +94,7 @@ struct GlobalUniforms {
     float clipNear;
     float clipFar;
     int numLights;
-    float shadowStrength;
-    float shadowRadius;
+    int numShadowLights;
     float fogNear;
     float fogFar;
     /** Seconds since startup, this frame and the previous - see uniforms.h. */

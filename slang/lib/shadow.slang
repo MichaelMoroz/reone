@@ -22,9 +22,9 @@ import uniforms;
 // be declared this way together: a comparison sampler cannot be read with a
 // plain sample, nor a plain sampler with SampleCmp.
 [[vk::binding(15, 1)]] Sampler2DArrayShadow sShadowMap;
-[[vk::binding(19, 1)]] SamplerCubeShadow sShadowMapCube;
+[[vk::binding(19, 1)]] SamplerCubeArrayShadow sShadowMapCube;
 
-static const int kNumShadowCascades = 4;
+// kNumShadowCascades comes from uniforms, which sizes the cascade table with it.
 static const int kNumPCFSamples = 20;
 static const int kNumDirectionalPCFSamples = 16;
 /** Upper bound on the kernel, in texels of whichever cascade is sampled. */
@@ -84,7 +84,7 @@ int cascadeFor(float3 viewPos) {
 }
 
 /** Shadow from one cascade, with a penumbra of constant width in world units. */
-float shadowInCascade(int cascade, float3 worldPos, float3 normal, float3 lightVector) {
+float shadowInCascade(int mapIndex, int cascade, float3 worldPos, float3 normal, float3 lightVector) {
     float NdotL = dot(normal, lightVector);
     float sinAngle = sqrt(max(0.0, 1.0 - NdotL * NdotL));
     // The cascade's world units per texel, read off its own matrix: an
@@ -96,13 +96,12 @@ float shadowInCascade(int cascade, float3 worldPos, float3 normal, float3 lightV
     uint layers;
     sShadowMap.GetDimensions(width, height, layers);
     float2 texelSize = 1.0 / float2(width, height);
-    float3 lightSpaceX = float3(globalUniforms.shadowLightSpace[cascade][0][0],
-                                globalUniforms.shadowLightSpace[cascade][1][0],
-                                globalUniforms.shadowLightSpace[cascade][2][0]);
+    float4x4 cascadeSpace = globalUniforms.shadowCascadeSpace[mapIndex + cascade];
+    float3 lightSpaceX = float3(cascadeSpace[0][0], cascadeSpace[1][0], cascadeSpace[2][0]);
     float texelWorldSize = 2.0 / (max(1e-6, length(lightSpaceX)) * float(width));
     float3 offsetWorldPos =
         worldPos + normal * sinAngle * kDirectionalNormalOffsetTexels * texelWorldSize;
-    float4 lightSpacePos = mul(globalUniforms.shadowLightSpace[cascade], float4(offsetWorldPos, 1.0));
+    float4 lightSpacePos = mul(cascadeSpace, float4(offsetWorldPos, 1.0));
     float3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
     projCoords.xy = 0.5 * projCoords.xy + 0.5;
 
@@ -121,8 +120,7 @@ float shadowInCascade(int cascade, float3 worldPos, float3 normal, float3 lightV
     float3 probeAxis = abs(lightVector.z) < 0.99 ? float3(0.0, 0.0, 1.0)
                                                  : float3(1.0, 0.0, 0.0);
     float3 tangent = normalize(cross(lightVector, probeAxis));
-    float4 probe = mul(globalUniforms.shadowLightSpace[cascade],
-                       float4(offsetWorldPos + tangent, 1.0));
+    float4 probe = mul(cascadeSpace, float4(offsetWorldPos + tangent, 1.0));
     float2 probeUv = 0.5 * (probe.xy / probe.w) + 0.5;
     float uvPerWorld = max(length(probeUv - projCoords.xy), 1e-7);
     // Below one texel the kernel degenerates to a point sample, so the coarse
@@ -156,15 +154,16 @@ float shadowInCascade(int cascade, float3 worldPos, float3 normal, float3 lightV
         // replaces. Level zero explicitly: the kernel diverges across a quad,
         // and a depth target has no mip chain to select anyway.
         shadow += 1.0 - sShadowMap.SampleCmpLevelZero(
-                            float3(projCoords.xy + offset, float(cascade)), currentDepth);
+                            float3(projCoords.xy + offset, float(mapIndex + cascade)), currentDepth);
     }
     return shadow / float(kNumDirectionalPCFSamples);
 }
 
-float getDirectionalLightShadow(float3 viewPos, float3 worldPos, float3 normal) {
-    float3 lightVector = -normalize(globalUniforms.shadowLightPosition.xyz);
+float getDirectionalLightShadow(GlobalUniformsShadowLight slot, float3 viewPos,
+                                float3 worldPos, float3 normal) {
+    float3 lightVector = -normalize(slot.positionOrDirection.xyz);
     int cascade = cascadeFor(viewPos);
-    float shadow = shadowInCascade(cascade, worldPos, normal, lightVector);
+    float shadow = shadowInCascade(slot.mapIndex, cascade, worldPos, normal, lightVector);
 
     // Cross-fade into the next cascade over the tail of this one. Even with the
     // penumbra held constant the two disagree at the split - they carry
@@ -178,7 +177,7 @@ float getDirectionalLightShadow(float3 viewPos, float3 worldPos, float3 normal) 
         float t = saturate((depth - near) / max(far - near, 1e-4));
         float blend = smoothstep(1.0 - kCascadeBlendBand, 1.0, t);
         if (blend > 0.0) {
-            float next = shadowInCascade(cascade + 1, worldPos, normal, lightVector);
+            float next = shadowInCascade(slot.mapIndex, cascade + 1, worldPos, normal, lightVector);
             shadow = lerp(shadow, next, blend);
         }
     }
@@ -192,12 +191,12 @@ static const float3 kPCFOffsets[kNumPCFSamples] = {
     float3(1, 0, 1), float3(-1, 0, 1), float3(1, 0, -1), float3(-1, 0, -1),
     float3(0, 1, 1), float3(0, -1, 1), float3(0, -1, -1), float3(0, 1, -1)};
 
-float getPointLightShadow(float3 worldPos, float3 normal) {
-    float3 lightVector = normalize(globalUniforms.shadowLightPosition.xyz - worldPos);
+float getPointLightShadow(GlobalUniformsShadowLight slot, float3 worldPos, float3 normal) {
+    float3 lightVector = normalize(slot.positionOrDirection.xyz - worldPos);
     float NdotL = dot(normal, lightVector);
     float sinAngle = sqrt(max(0.0, 1.0 - NdotL * NdotL));
     float3 offsetWorldPos = worldPos + normal * sinAngle * kPointNormalOffset;
-    float3 fragToLight = offsetWorldPos - globalUniforms.shadowLightPosition.xyz;
+    float3 fragToLight = offsetWorldPos - slot.positionOrDirection.xyz;
     float currentDepth = length(fragToLight);
 
     // Explicit level, like every other tap here. The PBR resolve is a compute
@@ -214,11 +213,12 @@ float getPointLightShadow(float3 worldPos, float3 normal) {
     float shadow = 0.0;
     for (int i = 0; i < kNumPCFSamples; ++i) {
         shadow += 1.0 - sShadowMapCube.SampleCmpLevelZero(
-                            fragToLight + kPCFSampleRadius * kPCFOffsets[i], referenceDepth);
+                            float4(fragToLight + kPCFSampleRadius * kPCFOffsets[i],
+                                   float(slot.mapIndex)),
+                            referenceDepth);
     }
     shadow /= float(kNumPCFSamples);
-    shadow *= 1.0 - smoothstep(globalUniforms.shadowRadius,
-                               2.0 * globalUniforms.shadowRadius, currentDepth);
+    shadow *= 1.0 - smoothstep(slot.radius, 2.0 * slot.radius, currentDepth);
     return shadow;
 }
 
@@ -245,20 +245,35 @@ public float3 thinFacingNormal(float3 normal, float3 toLight) {
 // Public because thinFacingNormal above is: marking one declaration in a Slang
 // module switches the rest from implicit visibility to internal, so the first
 // export turns every other entry point into a compile error at its caller.
-public float getShadow(float3 viewPos, float3 worldPos, float3 normal, bool thin = false) {
-    float3 lightVector = globalUniforms.shadowLightPosition.w == 0.0
-                             ? -normalize(globalUniforms.shadowLightPosition.xyz)
-                             : normalize(globalUniforms.shadowLightPosition.xyz - worldPos);
+public float getShadowFrom(int slotIndex, float3 viewPos, float3 worldPos, float3 normal,
+                           bool thin = false) {
+    if (slotIndex < 0 || slotIndex >= globalUniforms.numShadowLights) {
+        return 1.0;
+    }
+    GlobalUniformsShadowLight slot = globalUniforms.shadowLights[slotIndex];
+    float3 lightVector = slot.positionOrDirection.w == 0.0
+                             ? -normalize(slot.positionOrDirection.xyz)
+                             : normalize(slot.positionOrDirection.xyz - worldPos);
     // A thin surface is sampled from the side the light is on, which is the
     // whole of "the shadow passes through to the other side": the receiver
     // offset then pushes toward the light instead of away from it, and the
     // fade below stops treating a back-facing leaf as something that cannot be
     // lit. Without this a blade lit from behind is in its own shadow.
     float3 facing = thin ? thinFacingNormal(normal, lightVector) : normal;
-    float shadow = globalUniforms.shadowLightPosition.w == 0.0
-                       ? getDirectionalLightShadow(viewPos, worldPos, facing)
-                       : getPointLightShadow(worldPos, facing);
-    float visibility = 1.0 - shadow * globalUniforms.shadowStrength;
+    float shadow = slot.positionOrDirection.w == 0.0
+                       ? getDirectionalLightShadow(slot, viewPos, worldPos, facing)
+                       : getPointLightShadow(slot, worldPos, facing);
+    float visibility = 1.0 - shadow * slot.strength;
     float normalFade = saturate(dot(facing, lightVector) * 10.0);
     return lerp(1.0, visibility, normalFade);
+}
+
+/**
+ * The frame's first caster, which is the only one a single-shadow consumer can
+ * mean. Kept while the resolves still apply one visibility over the whole lit
+ * product; a consumer that shadows per light calls getShadowFrom with that
+ * light's own slot instead.
+ */
+public float getShadow(float3 viewPos, float3 worldPos, float3 normal, bool thin = false) {
+    return getShadowFrom(0, viewPos, worldPos, normal, thin);
 }

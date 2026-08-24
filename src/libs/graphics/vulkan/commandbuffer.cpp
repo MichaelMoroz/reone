@@ -246,10 +246,20 @@ void VulkanCommandBuffer::drawIndexed(uint32_t indexCount, uint32_t firstIndex,
     vkCmdDrawIndexed(_commandBuffer, indexCount, instanceCount, firstIndex, 0, 0);
 }
 
-void VulkanCommandBuffer::pushFragmentConstants(PipelineLayout layout, const void *data,
+void VulkanCommandBuffer::pushGraphicsConstants(PipelineLayout layout, const void *data,
                                                 uint32_t size) {
+    // Both stages, and they must match the range the layout declares exactly:
+    // for every byte pushed, the stage flags here have to include every stage
+    // in the overlapping range, so pushing to a subset of what the layout says
+    // is a validation error rather than a narrowing.
+    //
+    // The vertex half exists for the shadow pass, whose vertex stage has to
+    // know which caster's transforms to read. Nothing else reads push
+    // constants from a vertex shader, and nothing has to - declaring the range
+    // in both stages costs a pipeline layout nothing.
     vkCmdPushConstants(_commandBuffer, toVulkanPipelineLayout(layout),
-                       VK_SHADER_STAGE_FRAGMENT_BIT, 0, size, data);
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, size, data);
 }
 
 void VulkanCommandBuffer::pushRayTracingConstants(PipelineLayout layout, const void *data,

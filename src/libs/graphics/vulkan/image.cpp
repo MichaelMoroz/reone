@@ -690,7 +690,12 @@ void VulkanImage::initDepthLayered(glm::ivec2 extent, VkFormat format, int layer
 
     VkImageViewCreateInfo viewInfo {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     viewInfo.image = _image;
-    viewInfo.viewType = cube ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    // Always a cube ARRAY when cube-viewed, even at exactly one cube. The view
+    // type has to match how the shader declares the sampler, and the only
+    // consumer declares SamplerCubeArrayShadow whatever the point budget is;
+    // binding a plain cube view there is a mismatch rather than a coercion,
+    // and it shows as a wrong image rather than as a failure.
+    viewInfo.viewType = cube ? VK_IMAGE_VIEW_TYPE_CUBE_ARRAY : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     viewInfo.format = format;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     viewInfo.subresourceRange.levelCount = 1;
@@ -871,6 +876,37 @@ VkImageView VulkanImage::renderView(int cube, int mip) {
         throw std::runtime_error("Vulkan: cube array render view creation failed");
     }
     _renderViews.insert({key, view});
+    return view;
+}
+
+VkImageView VulkanImage::layerRangeView(int baseLayer, int count, int mip) {
+    const int key = (mip * static_cast<int>(_layers) + baseLayer) * 64 + count;
+    auto existing = _layerRangeViews.find(key);
+    if (existing != _layerRangeViews.end()) {
+        return existing->second;
+    }
+    VkImageViewCreateInfo viewInfo {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = _image;
+    // Always a 2D array, whatever the image's sampling view is: a cube view
+    // cannot be an attachment, and a multiview pass writes layers.
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    viewInfo.format = _format;
+    viewInfo.subresourceRange.aspectMask =
+        (_format == VK_FORMAT_D16_UNORM ||
+         _format == VK_FORMAT_D32_SFLOAT ||
+         _format == VK_FORMAT_X8_D24_UNORM_PACK32)
+            ? VK_IMAGE_ASPECT_DEPTH_BIT
+            : VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = static_cast<uint32_t>(mip);
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = static_cast<uint32_t>(baseLayer);
+    viewInfo.subresourceRange.layerCount = static_cast<uint32_t>(count);
+
+    VkImageView view {VK_NULL_HANDLE};
+    if (vkCreateImageView(_device.handle(), &viewInfo, nullptr, &view) != VK_SUCCESS) {
+        throw std::runtime_error("Vulkan: layer range view creation failed");
+    }
+    _layerRangeViews.insert({key, view});
     return view;
 }
 
@@ -1115,6 +1151,10 @@ void VulkanImage::deinit() {
         vkDestroyImageView(_device.handle(), view, nullptr);
     }
     _faceRenderViews.clear();
+    for (auto &[key, view] : _layerRangeViews) {
+        vkDestroyImageView(_device.handle(), view, nullptr);
+    }
+    _layerRangeViews.clear();
     if (_view != VK_NULL_HANDLE) {
         vkDestroyImageView(_device.handle(), _view, nullptr);
         _view = VK_NULL_HANDLE;

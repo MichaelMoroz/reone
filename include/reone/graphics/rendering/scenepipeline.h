@@ -110,17 +110,25 @@ inline bool isTracedOnlyDebugView(int view) {
     return view == 8 || view == 9 || view == 11 || (view >= 15 && view <= 19);
 }
 
-enum class SceneShadow {
-    None,
-    Directional,
-    Point,
+/**
+ * One shadow-casting light to render this frame.
+ *
+ * Mirrors scene::RenderShadowCaster. Kept as a plain list because the pass
+ * renders one slot at a time: a view mask can broadcast a draw across a
+ * caster's own four cascades or six faces, but not across casters, whose maps
+ * live at different layer bases and, for the two kinds, in different images.
+ */
+struct SceneShadowCaster {
+    bool directional {false};
+    int slot {0};
+    int mapIndex {0};
 };
 
 /** Every object category casts; see SceneFramePlan::shadowCasterCategories. */
 constexpr uint32_t kAllShadowCasters = 0xFFFFFFFFu;
 
 struct SceneFramePlan {
-    SceneShadow shadow {SceneShadow::None};
+    std::vector<SceneShadowCaster> shadowCasters;
     /** GUI controls composite this output; alpha then follows primary coverage. */
     bool transparentOutput {false};
     /**
@@ -220,7 +228,10 @@ private:
     bool _inited {false};
     bool _primaryRayMode {false};
     bool _transparentOutput {false};
-    SceneShadow _shadow {SceneShadow::None};
+    std::vector<SceneShadowCaster> _shadowCasters;
+    /** Slots actually allocated, so a caster past them is dropped, not fatal. */
+    int _dirShadowSlots {0};
+    int _pointShadowSlots {0};
     uint32_t _shadowCasterCategories {kAllShadowCasters};
 
     std::unique_ptr<GBuffer> _gbuffer;

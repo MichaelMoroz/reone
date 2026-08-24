@@ -74,7 +74,7 @@ public:
     void bindIndexBuffer(const IBuffer &buffer, uint64_t offset) override;
     void drawIndexed(uint32_t indexCount, uint32_t firstIndex,
                      uint32_t instanceCount) override;
-    void pushFragmentConstants(PipelineLayout layout, const void *data,
+    void pushGraphicsConstants(PipelineLayout layout, const void *data,
                                uint32_t size) override;
     void pushRayTracingConstants(PipelineLayout layout, const void *data,
                                  uint32_t size) override;

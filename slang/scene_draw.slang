@@ -94,14 +94,38 @@ struct PushConstants {
      * the map, from kMegaCategoryShift of the material's feature mask. The
      * blended pass reads it as the kResolveFlag* set, for which it needs
      * exactly one bit. The G-buffer pass pushes two words and reads neither
-     * meaning. Adding a FOURTH word would need the pipeline layout's fragment
-     * range widened past the three every graphics pipeline here declares,
-     * which is why the two passes share this one rather than each taking their
-     * own.
+     * meaning, which is why the two passes share this one rather than each
+     * taking their own.
      */
     uint casterCategories;
+    /**
+     * Which caster the shadow pass is rendering, as an index into
+     * globalUniforms.shadowLights. Read by the VERTEX stage, which is why the
+     * push range covers both graphics stages - see VulkanCommandBuffer.
+     *
+     * SV_ViewID alone cannot carry this. It gives the layer within the pass,
+     * so it selects a cascade or a cube face but not which caster's set of
+     * them, and a mask wide enough to make it absolute would need more views
+     * than multiview allows once point casters are cubes.
+     */
+    uint shadowSlot;
 };
 [[vk::push_constant]] PushConstants pushConstants;
+
+/** The caster this shadow pass is rendering. */
+GlobalUniformsShadowLight shadowSlotLight() {
+    return globalUniforms.shadowLights[pushConstants.shadowSlot];
+}
+
+/** Cascade `view` of the directional caster being rendered. */
+float4x4 directionalCascadeSpace(uint view) {
+    return globalUniforms.shadowCascadeSpace[shadowSlotLight().mapIndex + view];
+}
+
+/** Cube face `view` of the point caster being rendered. */
+float4x4 pointFaceSpace(uint view) {
+    return globalUniforms.shadowPointSpace[shadowSlotLight().mapIndex * kNumShadowLightSpace + view];
+}
 
 float2 transformedUV(InstanceMaterial material, float2 uv) {
     float3 h = float3(uv, 1.0);
@@ -194,7 +218,7 @@ DirectionalShadowVaryings directionalShadowVertex(
     uint vertexId : SV_VertexID, uint viewId : SV_ViewID) {
     MergedVertex vertex = mergedVertices[vertexId];
     DirectionalShadowVaryings output;
-    output.position = mul(globalUniforms.shadowLightSpace[viewId],
+    output.position = mul(directionalCascadeSpace(viewId),
                           float4(vertex.position, 1.0));
     output.uv = vertex.uv1;
     output.vertexAlpha = vertex.color.a;
@@ -209,7 +233,7 @@ DirectionalShadowVaryings grassCardDirectionalShadowVertex(
     uint viewId : SV_ViewID) {
     GrassCardDrawData card = grassCardDrawData(vertexId, instanceId);
     DirectionalShadowVaryings output;
-    output.position = mul(globalUniforms.shadowLightSpace[viewId],
+    output.position = mul(directionalCascadeSpace(viewId),
                           float4(card.vertex.position, 1.0));
     output.uv = card.vertex.uv;
     output.vertexAlpha = 1.0;
@@ -309,8 +333,7 @@ PointShadowVaryings pointShadowVertex(
     MergedVertex vertex = mergedVertices[vertexId];
     PointShadowVaryings output;
     output.worldPos = vertex.position;
-    output.position = mul(globalUniforms.shadowLightSpace[viewId],
-                          float4(vertex.position, 1.0));
+    output.position = mul(pointFaceSpace(viewId), float4(vertex.position, 1.0));
     output.uv = vertex.uv1;
     output.vertexAlpha = vertex.color.a;
     output.materialIndex = kNoTexture;
@@ -325,8 +348,7 @@ PointShadowVaryings grassCardPointShadowVertex(
     GrassCardDrawData card = grassCardDrawData(vertexId, instanceId);
     PointShadowVaryings output;
     output.worldPos = card.vertex.position;
-    output.position = mul(globalUniforms.shadowLightSpace[viewId],
-                          float4(card.vertex.position, 1.0));
+    output.position = mul(pointFaceSpace(viewId), float4(card.vertex.position, 1.0));
     output.uv = card.vertex.uv;
     output.vertexAlpha = 1.0;
     output.materialIndex = card.materialIndex;
@@ -339,8 +361,7 @@ float pointShadowFragment(PointShadowVaryings input,
                                   uint primitiveId : SV_PrimitiveID) : SV_Depth {
     applyShadowGates(input.uv, input.vertexAlpha, input.position.xy, primitiveId,
                      input.materialIndex, input.culled);
-    float lightDistance = length(input.worldPos -
-                                 globalUniforms.shadowLightPosition.xyz);
+    float lightDistance = length(input.worldPos - shadowSlotLight().positionOrDirection.xyz);
     float radialDepth = lightDistance / kPointShadowFar;
     float radialSlope = max(abs(ddx(radialDepth)), abs(ddy(radialDepth)));
     return min(1.0, radialDepth + kPointShadowConstantBias +

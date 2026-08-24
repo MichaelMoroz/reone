@@ -432,7 +432,12 @@ float3 resolveSurface(float2 uv, int2 pixel) {
         // the bake's own share of it, which is bounded by the lightmap's
         // weight and is the honest price of shadows that are not painted onto
         // baked light.
-        if (staticObject && light.dynamicType != 1 && light.shadowCaster == 0) {
+        // Slot zero, not "any caster": every caster's map is rendered now,
+        // but the resolve still samples one visibility for the whole lit
+        // product, so a light admitted here whose slot is not the one sampled
+        // would arrive with none of its shadow. Widens to `< 0` in the change
+        // that makes this loop shadow per light.
+        if (staticObject && light.dynamicType != 1 && light.shadowSlot != 0) {
             continue;
         }
 

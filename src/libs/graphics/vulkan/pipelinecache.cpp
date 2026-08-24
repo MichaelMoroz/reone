@@ -200,8 +200,9 @@ VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
     // pipeline has. A draw may update less than the declared range; sharing the
     // largest caller's size therefore keeps the smaller mega-draw and bloom
     // blocks valid without multiplying otherwise identical layouts.
-    const VkShaderStageFlags pushStage = compute ? VK_SHADER_STAGE_COMPUTE_BIT
-                                                 : VK_SHADER_STAGE_FRAGMENT_BIT;
+    const VkShaderStageFlags pushStage =
+        compute ? VK_SHADER_STAGE_COMPUTE_BIT
+                : (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
     config.pushConstants = {{pushStage, 0, kCachedPipelinePushConstantSize}};
     config.blend = key.blend;
     config.cull = key.cull;
