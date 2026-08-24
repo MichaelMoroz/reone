@@ -182,6 +182,22 @@ renderer tracks explicitly (`_imageAvailableConsumed`,
 `renderer.cpp:509,544,588,596`). Anything else that wants a
 mid-frame readback inherits that interaction.
 
+### 1.8 Raw texture ids carry their resource epoch
+
+A bindless texture id is meaningful only in the renderer resource generation
+that assigned it. **Any container that keeps one across a frame boundary must
+keep the generation beside the container, compare `IRenderer::resourceGeneration()`
+once at the start of its prepare, and discard and re-lower the whole container
+when they differ.** Incremental patch paths are part of the same cache boundary;
+they do not make an old id current by rewriting some other field in its record.
+
+The check is O(1) per container per frame and invalidation does the work. Never
+scan objects to validate ids or repair entries one at a time: render-side CPU is
+O(changes), not O(objects). A downstream container needs no second stamp only
+when every use is refreshed from a stamped upstream prepare and the current
+resource namespace, as the frame material buffers and raster/tracing bindless
+descriptor sets are today.
+
 ---
 
 ## 2. Traps already paid for

@@ -16,9 +16,13 @@
  */
 #include <gtest/gtest.h>
 
+#include "../fixtures/graphics.h"
+
 #include "reone/graphics/grasscard.h"
+#include "reone/graphics/options.h"
 #include "reone/graphics/texture.h"
 #include "reone/scene/gpuscene.h"
+#include "reone/scene/render/admission.h"
 
 #include <cmath>
 #include <cstring>
@@ -27,6 +31,23 @@ using namespace reone::graphics;
 using namespace reone::scene;
 
 namespace {
+
+class MockTextureIdResources : public IResources, boost::noncopyable {
+public:
+    MOCK_METHOD(void, deinit, (), (override));
+    MOCK_METHOD(std::unique_ptr<IImage>, makeImage, (const std::string &), (override));
+    MOCK_METHOD(const IImage &, get, (const Texture &), (override));
+    MOCK_METHOD(std::optional<uint32_t>, textureId, (const Texture &), (override));
+    MOCK_METHOD(Sampler, sampler, (const Texture::Properties &), (override));
+    MOCK_METHOD(std::vector<IndexedImage>, uploadedTextures, (), (const, override));
+    MOCK_METHOD(std::vector<IndexedImage>, uploadedTextureArrays, (), (const, override));
+    MOCK_METHOD(std::vector<IndexedImage>, uploadedTextureCubes, (), (const, override));
+    MOCK_METHOD(void, registerExternal, (const Texture &, const IImage &), (override));
+    MOCK_METHOD(void, unregisterExternal, (const Texture &), (override));
+    MOCK_METHOD(bool, isExternal, (const Texture &), (const, override));
+    MOCK_METHOD(bool, supports, (PixelFormat), (const, override));
+    MOCK_METHOD(void, drawMesh, (ICommandBuffer &, const Mesh &), (override));
+};
 
 std::vector<ProceduralQuad> oneQuad(float x) {
     ProceduralQuad quad;
@@ -123,6 +144,34 @@ void expectGrassCardUpload(const GpuSceneUpload &upload, const Texture &texture,
 }
 
 } // namespace
+
+TEST(GpuSceneAdmission, relowers_cached_materials_after_resource_generation_changes) {
+    testing::NiceMock<MockRenderer> renderer;
+    testing::NiceMock<MockTextureIdResources> resources;
+    GraphicsOptions options;
+    reone::scene::GpuScene scene;
+    Texture texture("generation-test", TextureType::TwoDim, Texture::Properties {});
+    addBillboard(scene, 1, texture);
+
+    EXPECT_CALL(renderer, resourceGeneration())
+        .WillOnce(testing::Return(1))
+        .WillOnce(testing::Return(2));
+    EXPECT_CALL(renderer, resources())
+        .WillRepeatedly(testing::ReturnRef(resources));
+    EXPECT_CALL(resources, textureId(testing::Ref(texture)))
+        .WillOnce(testing::Return(std::optional<uint32_t> {17}))
+        .WillOnce(testing::Return(std::optional<uint32_t> {41}));
+
+    GpuSceneAdmission admission(renderer, options, scene);
+    auto first = admission.prepare(glm::mat4(1.0f));
+    ASSERT_EQ(1, first.submission.upload.materials.size());
+    EXPECT_EQ(17u, first.submission.upload.materials.front().mainTex);
+
+    auto second = admission.prepare(
+        glm::mat4(1.0f), std::move(first.submission.upload));
+    ASSERT_EQ(1, second.submission.upload.materials.size());
+    EXPECT_EQ(41u, second.submission.upload.materials.front().mainTex);
+}
 
 TEST(GpuScene, persists_objects_and_caches_classification_in_canonical_order) {
     reone::scene::GpuScene scene;
