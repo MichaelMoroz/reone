@@ -21,7 +21,8 @@ param(
     [string[]]$States = @(),
     [int[]]$Widths = @(),
     [switch]$NoWorld,
-    [switch]$VerifyReproducibility
+    [switch]$VerifyReproducibility,
+    [switch]$SkipValidationGate
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,6 +40,16 @@ foreach ($gameDir in @($Kotor1Dir, $Kotor2Dir)) {
     }
 }
 $ffmpeg = (Get-Command ffmpeg -ErrorAction Stop).Source
+
+# A validation-dirty build fails here in about a minute, not forty minutes into
+# the matrix - and never quietly poisons a capture comparison. The gate is the
+# short chargen repro under --vkvalidation 1; see doc/tasks/GPU-CONTRACTS.md.
+if (-not $SkipValidationGate) {
+    & (Join-Path $PSScriptRoot "vulkan-validation-gate.ps1") -Kotor1Dir $Kotor1Dir
+    if ($LASTEXITCODE -ne 0) {
+        throw "Vulkan validation gate failed; captures would be taken from a broken build. Rerun with -SkipValidationGate to override."
+    }
+}
 
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
     $OutputDir = Join-Path $repoDir "build\gui-proof"
