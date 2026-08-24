@@ -22,7 +22,10 @@ param(
     [int[]]$Widths = @(),
     [switch]$NoWorld,
     [switch]$VerifyReproducibility,
-    [switch]$SkipValidationGate
+    [switch]$SkipValidationGate,
+    [string[]]$SweepModes = @("retro", "pbr", "path-tracing"),
+    [string[]]$SweepStates = @("gameplay", "combat-action-sequence"),
+    [switch]$SkipRendererSweep
 )
 
 $ErrorActionPreference = "Stop"
@@ -405,6 +408,71 @@ if ($reproducibilityFailures.Count -gt 0) {
     throw ($failureLines -join [Environment]::NewLine)
 }
 
+# --- renderer sweep ---------------------------------------------------------
+# Everything above runs under retro. The world has three renderers, and a
+# change that is inert in retro can fault or regress only in PBR or the path
+# tracer - the post-merge contract hardening was verified retro-only until
+# this section existed. Capture a few in-world frames per renderer so every
+# mode leaves evidence and a mode-local startup fault fails this script.
+#
+# Sweep captures stay outside -VerifyReproducibility on purpose: the path
+# tracer samples stochastically and PBR accumulates temporally, so
+# pixel-exactness is not a promise these modes make.
+$sweepCount = 0
+if (-not $SkipRendererSweep -and -not $NoWorld -and $SweepModes.Count -gt 0) {
+    # @() matters: a single-resolution run unrolls $resolutions to a bare
+    # hashtable, and [0] on a hashtable is a key lookup that returns null.
+    $sweepRes = @($resolutions)[0]
+    foreach ($game in $games) {
+        $sweepSelected = @($game.States | Where-Object { $SweepStates -contains $_.Id })
+        if ($sweepSelected.Count -eq 0) { continue }
+        foreach ($mode in $SweepModes) {
+            $lines = [System.Collections.Generic.List[string]]::new()
+            $lines.Add("graphics on")
+            $frame = 0
+            foreach ($state in $sweepSelected) {
+                if ($frame -lt $readyFrame) {
+                    $lines.Add($(if ($frame -eq 0) { "skipmovie" } else { "pause $($readyFrame - $frame)" }))
+                    $frame = $readyFrame
+                }
+                if ($state.Commands) { $state.Commands | ForEach-Object { $lines.Add($_) } }
+                if ($state.Frame -gt 0) { $lines.Add("pause $($state.Frame)") }
+                if ($state.BeforeCaptureCommands) { $state.BeforeCaptureCommands | ForEach-Object { $lines.Add($_) } }
+                $lines.Add("capture $((Join-Path $runDir "$($state.Id).tga").Replace('\', '/'))")
+                if ($state.AfterCommands) { $state.AfterCommands | ForEach-Object { $lines.Add($_) } }
+            }
+            $lines.Add("quit")
+            $commandPath = Join-Path $runDir "sweep-commands.txt"
+            Set-Content -LiteralPath $commandPath -Value $lines -Encoding utf8
+
+            Write-Host "$($game.Id) $($sweepRes.W)x$($sweepRes.H) renderer sweep: $mode ($($sweepSelected.Count) captures)"
+            Push-Location $runDir
+            try {
+                & $enginePath --game $game.Dir --commands-file $commandPath `
+                    --width $sweepRes.W --height $sweepRes.H --winscale 100 --fullscreen 0 `
+                    --headless 1 --dev 0 --vsync 0 --mode $mode `
+                    --guiscale 1 --guiborderscale 1 --guilistscale 0.5
+                if ($LASTEXITCODE -ne 0) { throw "Engine exited with ${LASTEXITCODE} in renderer sweep: $($game.Id)/$mode" }
+            } finally {
+                Pop-Location
+            }
+
+            foreach ($state in $sweepSelected) {
+                $tga = Join-Path $runDir "$($state.Id).tga"
+                if (-not (Test-Path -LiteralPath $tga -PathType Leaf)) {
+                    throw "Renderer sweep produced no image: $($game.Id)/$($state.Id)/$mode"
+                }
+                $png = Join-Path $OutputDir "$($game.Id)-$($state.Id)-$mode-$($sweepRes.W)x$($sweepRes.H).png"
+                & $ffmpeg -y -loglevel error -i $tga $png
+                if ($LASTEXITCODE -ne 0) { throw "ffmpeg failed for sweep $($state.Id)/$mode" }
+                Remove-Item -LiteralPath $tga -Force
+                $sweepCount++
+            }
+        }
+    }
+}
+
 Remove-Item -LiteralPath $runDir -Recurse -Force -ErrorAction Ignore
 if ($VerifyReproducibility) { Write-Host "Reproducibility verified for $count captures" }
 Write-Host "$count captures written to $OutputDir"
+if ($sweepCount -gt 0) { Write-Host "$sweepCount renderer-sweep captures across $($SweepModes -join ', ')" }

@@ -105,7 +105,7 @@ the arena must not add per-frame allocation cost in the steady state.
 **Now:** the entire merge diagnosis rested on pre-merge emitting exactly zero
 VUIDs. That baseline is an asset and currently defended by nobody.
 
-**Change:** add a `-ValidationGate` step to `scripts/capture-gui-proof.ps1`
+**Change:** add a `-ValidationGate` step to `scripts/capture-game-proof.ps1`
 (or a sibling script): run the short chargen repro with `--vkvalidation 1` at
 1024x768 and 3440x1440, fail on any `VUID-` line, print the offenders. ~30s.
 Wire it ahead of the capture matrix so a dirty build fails fast, before

@@ -4,12 +4,12 @@ GUI layout, scaling, list-spacing, splash-screen and movie presentation changes
 need visual evidence. A build and a green test run are necessary but do not show
 what the screen looks like.
 
-`scripts/capture-gui-proof.ps1` renders the proof matrix headlessly and writes
+`scripts/capture-game-proof.ps1` renders the proof matrix headlessly and writes
 one PNG per state into a folder. It needs a Release build in `build/bin` and
 `ffmpeg` on PATH.
 
 ```powershell
-.\scripts\capture-gui-proof.ps1 `
+.\scripts\capture-game-proof.ps1 `
     -Kotor1Dir "<kotor install>" `
     -Kotor2Dir "<kotor 2 install>"
 ```
@@ -22,7 +22,7 @@ Before trusting a comparison between two builds, first prove that the selected
 matrix reproduces against the same build:
 
 ```powershell
-.\scripts\capture-gui-proof.ps1 `
+.\scripts\capture-game-proof.ps1 `
     -Kotor1Dir "<kotor install>" `
     -Kotor2Dir "<kotor 2 install>" `
     -NoWorld `
