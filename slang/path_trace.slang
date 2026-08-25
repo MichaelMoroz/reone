@@ -105,7 +105,14 @@ struct PtDebug {
         case kDebugDirectShadow:
             // The channel as the resolve receives it: demodulated, so this is
             // the shadow signal itself rather than the lit picture.
-            color = outputs.directDiffuse;
+            //
+            // Exposed with 1 - exp(-x) rather than written raw. This is an
+            // unbounded radiance read out of an 8-bit capture; raw, it clips
+            // over half the frame in a bright scene, and a clipped frame shows
+            // no shadows at all because a shadowed pixel is still above one.
+            // The raster direct-light channel takes the same curve so the two
+            // can be compared.
+            color = float3(1.0) - exp(-outputs.directDiffuse);
             return true;
         case kDebugPenumbra:
             // The expected penumbra half-width, in world units, scaled so a

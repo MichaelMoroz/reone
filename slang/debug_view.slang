@@ -284,6 +284,10 @@ float3 channelColor(float2 uv, int2 pixel) {
             if (light.ambientOnly != 0) {
                 continue;
             }
+            // No static-geometry exclusion, because the PBR resolve has none -
+            // see the comment at its light loop. A diagnostic that admits or
+            // rejects different light from the resolve it diagnoses is worse
+            // than no diagnostic, which this channel has demonstrated twice.
             // Always a position, never a direction. This engine has no
             // directional light type - a light is "directional" by having a
             // radius past kMinDirectionalLightRadius, and its position is
@@ -315,7 +319,16 @@ float3 channelColor(float2 uv, int2 pixel) {
             }
             direct += visibility * ndotl * atten * light.multiplier * light.color.rgb;
         }
-        return direct;
+        // Exposed, not raw. Direct light is unbounded and this channel is read
+        // out of an 8-bit capture, so a raw write clips - measured at 74% of
+        // one frame - and a clipped frame has NO SHADOWS IN IT: a pixel at 3.0
+        // shadowed to 1.5 still writes 255. The channel then looks broken in
+        // exactly the way the thing it is diagnosing would.
+        //
+        // 1 - exp(-x) is monotonic, so it reorders nothing and never
+        // saturates. The tracer's direct channel takes the same curve, which
+        // is what keeps the two comparable.
+        return float3(1.0) - exp(-direct);
     }
     case kDebugDepth: {
         float depth = sGBufDepth.SampleLevel(uv, 0.0).r;

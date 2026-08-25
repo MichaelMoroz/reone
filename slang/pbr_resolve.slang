@@ -482,12 +482,22 @@ float3 resolveSurface(float2 uv, int2 pixel) {
         // the bake's own share of it, which is bounded by the lightmap's
         // weight and is the honest price of shadows that are not painted onto
         // baked light.
-        // Any caster, now that the loop shadows per light: a caster admitted
-        // here arrives with its own shadow, so letting it through no longer
-        // means letting light in without the occlusion that belongs to it.
-        if (staticObject && light.dynamicType != 1 && light.shadowSlot < 0) {
-            continue;
-        }
+        // No static-geometry exclusion in PBR. The original had one because a
+        // lightmap was presumed to hold that light already and the hardware
+        // could not afford it twice; retro keeps it for exactly that reason.
+        //
+        // PBR is judged against the tracer, and the tracer has no such rule -
+        // it lights static geometry directly and takes the lightmap as an
+        // additional term at its own intensity. Applying the exclusion here
+        // put PBR's direct light in visibly different PLACES from the
+        // reference: correlation with the traced direct channel went negative
+        // on four of six modules (-0.65 on danm14ab, -0.73 on korr_m33ab)
+        // where without it every module is positive.
+        //
+        // The honest cost is that the bake and the live lights now overlap,
+        // which is the double-count RECORD 2.8 raises. That is a calibration
+        // question with a dial already built for it - pbrLightmapIntensity -
+        // and not a reason to put the light back in the wrong places.
 
         float3 fragToLight = light.position.xyz - worldPos;
         float lightDistance = length(fragToLight);
