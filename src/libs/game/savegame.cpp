@@ -11,6 +11,7 @@
 
 #include "reone/resource/director.h"
 #include "reone/game/portraits.h"
+#include "reone/game/savedgame.h"
 #include "reone/graphics/format/tgawriter.h"
 #include "reone/system/fileutil.h"
 #include "reone/system/exception/validation.h"
@@ -66,22 +67,23 @@ ByteBuffer encodeSaveScreenshot(
         .toBytes();
 }
 
-/**
- * The save preview, which this backend cannot yet produce.
- *
- * The retained clean scene target is the right source - it is the frame before
- * the save menu was drawn over it - but reading it back was a GL operation:
- * bind the texture, transfer its pixels. Neither the bind nor Texture's CPU
- * mirror survived the move off GL, and the renderer's captureFrame() is not a
- * substitute: it takes the composited swapchain image, which at the moment a
- * save executes is the save menu sitting on top of the scene.
- *
- * A save written without a preview loads correctly; the slot shows no
- * thumbnail. Returning the wrong picture would not be visibly broken, which is
- * the worse failure.
- */
 std::optional<ByteBuffer> Game::captureSaveScreenshot() {
-    return std::nullopt;
+    if (!_lastRenderedSceneOutput) {
+        return std::nullopt;
+    }
+    auto &texture = *_lastRenderedSceneOutput;
+    // Texture readback operates on the currently bound GL texture. The prior
+    // frame's GUI rendering leaves an unrelated texture bound, so explicitly
+    // bind the retained clean scene output before transferring its pixels.
+    _services.graphics.context.bindTexture(texture);
+    texture.flushGPUToCPU();
+    if (texture.layers().empty() || !texture.layers().front().pixels) {
+        return std::nullopt;
+    }
+    return encodeSaveScreenshot(
+        static_cast<uint32_t>(texture.width()),
+        static_cast<uint32_t>(texture.height()),
+        texture.pixelFormat(), *texture.layers().front().pixels);
 }
 
 namespace {
@@ -395,7 +397,7 @@ SaveMetadataInput Game::buildSaveMetadata(const SaveRequest &request) const {
 resource::SaveSlotDescriptor Game::saveTarget(const SaveRequest &request) const {
     std::ostringstream prefix;
     prefix << std::setw(6) << std::setfill('0') << request.slot;
-    auto saves = _path / "saves";
+    auto saves = savedGamesDirectory(_path);
     // Retail keeps the user-entered title in SAVEGAMENAME. Manual directory
     // suffixes use the allocation sequence after reserved quick/autosave slots.
     // Existing exact slot directories are retained below for overwrite identity.
