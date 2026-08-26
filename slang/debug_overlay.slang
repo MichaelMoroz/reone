@@ -71,10 +71,22 @@ OverlayVertex overlayVertex(uint vertexId: SV_VertexID) {
     float3 b = aabbUniforms.corners[kEdges[edge].y].xyz;
     float4 clipA = mul(globalUniforms.projection, mul(globalUniforms.view, float4(a, 1.0)));
     float4 clipB = mul(globalUniforms.projection, mul(globalUniforms.view, float4(b, 1.0)));
-    // An edge reaching behind the near plane is dropped whole rather than
-    // clipped: a debug box with one edge missing reads better than one with a
-    // spurious line sweeping across the screen from an inverted projection.
-    if (clipA.w < 1e-3 || clipB.w < 1e-3) {
+    // Clip the edge to the near plane rather than dropping it whole. Dropping
+    // collapsed every box the camera stands INSIDE to its far face - eight of
+    // the twelve edges have a corner behind the view there - which read as a
+    // flat 2D rectangle instead of a room volume. Vulkan clip space puts the
+    // near plane at z = 0, so the surviving portion is the z >= 0 span.
+    if (clipA.z <= 0.0 && clipB.z <= 0.0) {
+        output.position = float4(0.0, 0.0, -2.0, 1.0);
+        output.depth = 1.0;
+        return output;
+    }
+    if (clipA.z < 0.0) {
+        clipA = lerp(clipA, clipB, clipA.z / (clipA.z - clipB.z));
+    } else if (clipB.z < 0.0) {
+        clipB = lerp(clipB, clipA, clipB.z / (clipB.z - clipA.z));
+    }
+    if (clipA.w < 1e-4 || clipB.w < 1e-4) {
         output.position = float4(0.0, 0.0, -2.0, 1.0);
         output.depth = 1.0;
         return output;
