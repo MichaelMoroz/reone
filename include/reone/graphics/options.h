@@ -728,15 +728,6 @@ struct GraphicsOptions {
     bool ssao {true};
     bool ssr {true};
     /**
-     * Shade PBR into the tracer's channel contract and assemble it with the
-     * shared composite, instead of the single-image resolve.
-     *
-     * A migration switch, off by default, while the provider path is proven
-     * against the resolve it replaces. When it is the only path, this and the
-     * old PBRResolve step both go.
-     */
-    bool pbrChannels {false};
-    /**
      * The occupant of the common anti-aliasing slot.
      *
      * The default is resolved at the command line, where the render mode is

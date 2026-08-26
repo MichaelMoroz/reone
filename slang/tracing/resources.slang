@@ -115,7 +115,7 @@ public static const float kPtAlphaTestEpsilon = 0.01;
 // The rasterized primary. Every mode draws this G-buffer before shading, so in
 // this one the tracer reads its primary surface out of it rather than tracing a
 // camera ray to find the same surface twice. Formats and encodings are
-// VulkanGBuffer's, so these are the identical texels pbr_resolve.slang and
+// VulkanGBuffer's, so these are the identical texels pbr_channels.slang and
 // retro_resolve.slang read - see tracing/primary.slang for the decode.
 [[vk::binding(10, 1)]] public Sampler2D gbufDiffuse;
 [[vk::binding(11, 1)]] public Sampler2D gbufEyeNormal;

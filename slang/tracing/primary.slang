@@ -148,7 +148,7 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     float2 uv = (float2(pixel) + 0.5) / float2(extent);
     // Depth is already the 0..1 clip space uses here, and NDC y is negated
     // because the geometry pass rasterises through a negative-height viewport.
-    // Identical to reconstructViewPos in pbr_resolve.slang, deliberately: the
+    // Identical to reconstructViewPos in pbr_channels.slang, deliberately: the
     // two modes must place the same pixel at the same world point.
     float depth = gbufDepth.SampleLevel(uv, 0.0).r;
     float3 ndc = float3(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y, depth);

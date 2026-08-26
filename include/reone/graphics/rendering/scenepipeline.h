@@ -47,13 +47,11 @@ enum class SceneStep {
     ProcessPBRTextures,
     Shadow,
     Geometry,
-    PBRResolve,
     /**
-     * PBR shading into the tracer's channel contract instead of one assembled
-     * image, followed by the shared composite. The provider split: this mode
-     * contributes channels, the composite assembles them, exactly as it does
-     * for the tracer. Selected by --pbrchannels; the single-image PBRResolve is
-     * the default until the provider path replaces it.
+     * PBR shading into the tracer's channel contract, followed by the shared
+     * composite. The provider split: this mode contributes channels, the
+     * composite assembles them, exactly as it does for the tracer. This IS the
+     * PBR path - the single-image resolve it replaced is gone.
      */
     PBRChannels,
     Composite,
@@ -371,7 +369,6 @@ private:
         drawn forward onto the resolved image in submission order. */
     void blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                      ISceneCallbacks &callbacks);
-    void pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** PBR shading into the shared channels; see SceneStep::PBRChannels. Leaves
         _tracingOutput and _frameChannels set for the composite that follows. */
     void pbrChannelsPass(ICommandBuffer &cmd, uint32_t globalsOffset);

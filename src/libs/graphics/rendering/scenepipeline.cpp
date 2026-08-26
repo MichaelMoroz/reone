@@ -73,7 +73,7 @@ struct PostProcessPushConstants {
     uint32_t tonemap;
 };
 
-/** Mirrors ResolvePushConstants in pbr_resolve.slang and retro_resolve.slang. */
+/** Mirrors ResolvePushConstants in pbr_channels.slang and retro_resolve.slang. */
 struct ResolvePushConstants {
     uint32_t flags;
     float thinTransmission;
@@ -153,7 +153,7 @@ static constexpr uint32_t kResolveFlagTransparentOutput = 4u;
  * all-modes rule allows for.
  */
 static constexpr uint32_t kResolveFlagDisplayReferred = 8u;
-/** Mirrors kResolveFlagParityDirect in pbr_resolve.slang. */
+/** Mirrors kResolveFlagParityDirect in pbr_channels.slang. */
 static constexpr uint32_t kResolveFlagParityDirect = 16u;
 /** Replace GUI-model shading with coverage, cutout threshold, and class in RGB. */
 
@@ -1048,62 +1048,6 @@ void ScenePipeline::retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
 
-void ScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
-    R_PROFILE_ZONE("ScenePipeline::pbrResolvePass record");
-    if (!_resolveMaterialSet) {
-        // No merged geometry: there is nothing to bind and nothing to shade,
-        // so publish the black the clear used to leave and stop.
-        cmd.transitionImage(*_output, ImageLayout::General);
-        cmd.clearColor(*_output, {0.0f, 0.0f, 0.0f, _transparentOutput ? 0.0f : 1.0f});
-        cmd.transitionImage(*_output, ImageLayout::ShaderRead);
-        return;
-    }
-    transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
-    cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
-    // General, not a colour attachment: the dispatch writes this image through
-    // a storage descriptor. Every pixel is written, so there is no clear to
-    // replace - the attachment clear this pass used to declare existed only for
-    // the pixels the shader returns black for, which it still returns.
-    cmd.transitionImage(*_output, ImageLayout::General);
-
-    PipelineKey key;
-    key.module = "pbr_resolve";
-    key.computeEntry = "resolveMain";
-    PipelineBinding pipeline = _renderer.pipelines().get(key);
-
-    // The occlusion kernel and the screen size the kernel projects through.
-    // Pushed per frame rather than held: the block is the frame's, and a resize
-    // must not leave a stale resolution behind.
-    ScreenEffectUniforms screenEffect;
-    screenEffect.screenResolution = glm::vec2(_renderSize);
-    screenEffect.screenResolutionRcp = 1.0f / glm::vec2(_renderSize);
-    screenEffect.clipNear = _uniforms.globals().clipNear;
-    screenEffect.clipFar = _uniforms.globals().clipFar;
-    std::copy(_ssaoKernel.begin(), _ssaoKernel.end(), screenEffect.ssaoSamples);
-    auto screenEffectOffset = _renderer.uniformRing().push(screenEffect);
-
-    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
-    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
-    offsets[UniformBlockBindingPoints::screenEffect] = screenEffectOffset;
-
-    auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
-    cmd.bindComputePipeline(pipeline.pipeline);
-    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
-                                 offsets.data(), static_cast<uint32_t>(offsets.size()));
-    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, _pbrResolveSet,
-                                 nullptr, 0);
-    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kMegaDrawSet,
-                                 _resolveMaterialSet, nullptr, 0);
-    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kResolveSet,
-                                 resolveSet(_output.get()), nullptr, 0);
-    const ResolvePushConstants push = resolvePush(resolveFlags(), _options);
-    cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));
-    cmd.dispatchCompute({(_renderSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
-                         (_renderSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});
-
-    cmd.transitionImage(*_output, ImageLayout::ShaderRead);
-}
-
 void ScenePipeline::pbrChannelsPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::pbrChannelsPass record");
     _tracingOutput = {};
@@ -1343,7 +1287,7 @@ void ScenePipeline::screenSpaceReflectionPass(ICommandBuffer &cmd, uint32_t glob
     cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
 
     PipelineKey key;
-    key.module = "pbr_resolve";
+    key.module = "ssr";
     key.computeEntry = "ssrMain";
     PipelineBinding pipeline = _renderer.pipelines().get(key);
 
@@ -1861,10 +1805,6 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
             break;
         case SceneStep::Geometry:
             geometryPass(cmd, globalsOffset, callbacks);
-            break;
-        case SceneStep::PBRResolve:
-            pbrResolvePass(cmd, globalsOffset);
-            outputResolved = true;
             break;
         case SceneStep::PBRChannels:
             pbrChannelsPass(cmd, globalsOffset);

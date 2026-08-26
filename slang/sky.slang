@@ -32,7 +32,7 @@ import lib.skycube;
 [[vk::binding(0, 1)]] Sampler2D sMainTex;
 [[vk::binding(21, 1), vk::image_format("r32ui")]] Sampler2D<uint> sGBufTriangleId;
 
-// Restated rather than imported, as pbr_resolve, retro_resolve, postprocess and
+// Restated rather than imported, as pbr_channels, retro_resolve, postprocess and
 // debug_view all restate it: lib/gbuf.slang holds the G-buffer packing but not
 // this, and exporting it from there makes the name ambiguous in every module
 // that already carries its own. Mirrors GBuffer::kNoTriangle, which is what

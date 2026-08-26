@@ -37,7 +37,7 @@ import tracing.brdf;
 // full-screen passes. They are wired now, and neither is a post-process:
 // occlusion is a term inside the PBR resolve, where the depth and normals it
 // needs have already been read, and reflections are a compute dispatch over the
-// resolved image. Both live in pbr_resolve.slang, which is where the surfaces
+// resolved image. Both live in pbr_channels.slang, which is where the surfaces
 // they modify are shaded. Nothing here referenced them.
 
 // Sampled with an explicit level throughout. These passes read images that

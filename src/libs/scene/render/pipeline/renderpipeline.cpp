@@ -250,14 +250,12 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         // to the ORIGINAL's lighting model would be a second, unasked-for
         // change of renderer.
         const bool pbr = _options.mode != graphics::RenderMode::Retro;
-        if (pbr && _options.pbrChannels) {
+        if (pbr) {
             // The provider split: PBR shades the tracer's channel contract and
             // the shared composite assembles it, exactly as it does when the
             // tracer fills the same channels.
             plan.steps.push_back(graphics::SceneStep::PBRChannels);
             plan.steps.push_back(graphics::SceneStep::Composite);
-        } else if (pbr) {
-            plan.steps.push_back(graphics::SceneStep::PBRResolve);
         } else {
             plan.steps.push_back(graphics::SceneStep::RetroResolve);
         }

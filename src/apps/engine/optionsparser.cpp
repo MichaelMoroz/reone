@@ -154,7 +154,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("lightmaps", value<bool>()->default_value(options->graphics.lightmaps), "apply lightmaps (diagnostic toggle)")        //
         ("ssao", value<bool>()->default_value(options->graphics.ssao), "enable screen-space ambient occlusion")                 //
         ("ssr", value<bool>()->default_value(options->graphics.ssr), "enable screen-space reflections")                         //
-        ("pbrchannels", value<bool>()->default_value(options->graphics.pbrChannels), "PBR shades the shared channels; the composite assembles them") //
         ("antialiasing", value<std::string>()->default_value(antiAliasingName(options->graphics.antialiasing)),
          "anti-aliasing in the common slot: off, fxaa or fsr; defaults per render mode")                                       //
         ("grade", value<bool>()->default_value(options->graphics.grade),
@@ -353,7 +352,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.lightmaps = vars["lightmaps"].as<bool>();
     options->graphics.ssao = vars["ssao"].as<bool>();
     options->graphics.ssr = vars["ssr"].as<bool>();
-    options->graphics.pbrChannels = vars["pbrchannels"].as<bool>();
     // Resolved here, where the render mode is also known, so that nothing
     // deeper has to ask again: below this point the option says what the slot
     // runs, full stop. A traced frame is noisy and carries the motion a

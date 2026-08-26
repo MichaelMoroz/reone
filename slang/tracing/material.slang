@@ -295,7 +295,7 @@ public struct PbrSurface : ISurfaceModel {
                 radianceTexel *= 1.0 / max(1e-4, shading.alpha);
             }
         }
-        // Keep the tracer's stand-ins exactly aligned with pbr_resolve.slang:
+        // Keep the tracer's stand-ins exactly aligned with pbr_channels.slang:
         // alpha is only a reflectance control on env-mapped materials, never
         // metalness, and roughness still uses alpha for every material.
         shading.metallic = 0.0;

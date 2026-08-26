@@ -46,7 +46,7 @@ import lib.envmap;
 
 /** Mirrors ResolvePushConstants in scenepipeline.cpp. */
 struct ResolvePushConstants {
-    /** Kept in step with pbr_resolve.slang; retro reads only the flags. */
+    /** Kept in step with pbr_channels.slang; retro reads only the flags. */
     /** Bit 0: sky. Bit 1 is PBR's SSAO. Bit 2 preserves uncovered GUI alpha. */
     uint flags;
     float thinTransmission;
@@ -69,7 +69,7 @@ static const uint kNoTexture = 0xffffffffu;
 /**
  * The exponent this pass converts its finished colour back through.
  *
- * Held locally, as pbr_resolve.slang holds its own, because it must be the same
+ * Held locally, as pbr_channels.slang holds its own, because it must be the same
  * number the post-process encode inverts - kPtGamma in tracing/brdf.slang - and
  * a mismatch between the two would show up as a global contrast shift rather
  * than as anything that names itself.
@@ -92,7 +92,7 @@ Varyings retroResolveVertex(uint vertexId : SV_VertexID) {
     return output;
 }
 
-// This is the same Vulkan reconstruction as pbr_resolve.slang: device depth
+// This is the same Vulkan reconstruction as pbr_channels.slang: device depth
 // remains in [0,1], and y undoes the negative-height geometry viewport.
 float3 reconstructViewPos(float2 uv) {
     float depth = sGBufDepth.Sample(uv).r;
