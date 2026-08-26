@@ -236,6 +236,8 @@ private:
     // DearImGui Demo showcasing different widgets.
     void imGuiDemo();
     bool _showImGuiDemo {false};
+    /** The free camera was asked for when the game could not fly; see update(). */
+    bool _freeCameraUnavailable {false};
 
 private:
     Engine &_engine;

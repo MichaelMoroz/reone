@@ -240,6 +240,15 @@ public:
     std::shared_ptr<Module> module() const { return _module; }
     CameraType cameraType() const { return _cameraType; }
     /**
+     * Enter or leave the free camera, which is the first-person one.
+     *
+     * False when the game is in no state to fly - no module, or a screen that
+     * is not the in-game one. The console's `camera free` and the editor's
+     * menu toggle both ask through here rather than each testing the
+     * conditions themselves.
+     */
+    bool setFreeCameraEnabled(bool enabled);
+    /**
      * Enter or leave the free camera, the same way the `camera free` console
      * command does. Exposed so the developer UI can offer it as a toggle:
      * flying the scene is how shadow direction, reflections and anything else

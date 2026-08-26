@@ -2219,6 +2219,20 @@ void Editor::update(float dt) {
     // Submitted before the dockspace so the viewport work area excludes it.
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("Tools")) {
+            // Flying the scene is how anything view-dependent gets checked -
+            // shadow direction, reflections, the sky, the debug overlay - so
+            // it belongs a click away rather than behind the console. WASD
+            // moves, Q/Z rise and fall, Shift doubles the speed, the mouse
+            // looks.
+            auto &game = _engine._game;
+            const bool freeCamera =
+                game && game->cameraType() == game::CameraType::FirstPerson;
+            if (ImGui::MenuItem("Free camera", "WASD/QZ", freeCamera, game != nullptr)) {
+                if (!game->setFreeCameraEnabled(!freeCamera)) {
+                    _freeCameraUnavailable = true;
+                }
+            }
+            ImGui::Separator();
             ImGui::MenuItem("2DA", nullptr, &_showTwoDa);
             ImGui::MenuItem("Objects", nullptr, &_showObjects);
             ImGui::MenuItem("Render targets", nullptr, &_showRenderTargets);
@@ -2252,6 +2266,18 @@ void Editor::update(float dt) {
             }
         }
         ImGui::EndMainMenuBar();
+    }
+    if (_freeCameraUnavailable) {
+        ImGui::OpenPopup("No free camera");
+        _freeCameraUnavailable = false;
+    }
+    if (ImGui::BeginPopupModal("No free camera", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Load a module and be in game first - there is nothing to fly.");
+        if (ImGui::Button("OK")) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 
     dockSpace();

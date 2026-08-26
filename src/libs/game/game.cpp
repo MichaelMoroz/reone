@@ -1897,6 +1897,18 @@ void Game::renderScene() {
     _sceneOutput = nullptr;
 }
 
+bool Game::setFreeCameraEnabled(bool enabled) {
+    if (!_module || _screen != Screen::InGame) {
+        return false;
+    }
+    if ((_cameraType == CameraType::FirstPerson) != enabled) {
+        toggleInGameCameraType();
+    }
+    // Leaving the free camera needs a party leader to hand control back to, so
+    // report what actually happened rather than what was asked.
+    return (_cameraType == CameraType::FirstPerson) == enabled;
+}
+
 void Game::toggleInGameCameraType() {
     switch (_cameraType) {
     case CameraType::FirstPerson:
@@ -5136,11 +5148,8 @@ void Game::consoleCamera(const ConsoleArgs &args) {
     if (args[1].value() != "free") {
         throw std::runtime_error("Unknown camera: " + std::string(args[1].value()));
     }
-    if (_screen != Screen::InGame) {
-        throw std::runtime_error("The free camera needs the in-game screen");
-    }
-    if (_cameraType != CameraType::FirstPerson) {
-        toggleInGameCameraType();
+    if (!setFreeCameraEnabled(true)) {
+        throw std::runtime_error("The free camera needs a module and the in-game screen");
     }
 }
 
