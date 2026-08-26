@@ -77,6 +77,16 @@ public:
     /** Bindings of the resolve set; see acquireResolveDescriptorSet. */
     static constexpr uint32_t kResolveOutputBinding = 0;
     static constexpr uint32_t kResolveSkyCubeBinding = 1;
+    /**
+     * The shared channel outputs, bindings 2..8, written by the raster mode
+     * that shades into the tracer's channel contract instead of assembling one
+     * image. Partially bound like the storage output above: retro and the
+     * single-image PBR resolve declare none of them, and the layout permits it.
+     * The order is the shader's (pbr_channels.slang): noiseFree, diffuse,
+     * specular, directDiffuse, diffFactor, specFactor, viewZ.
+     */
+    static constexpr uint32_t kResolveChannelBaseBinding = 2;
+    static constexpr uint32_t kResolveChannelCount = 7;
 
     /** Distinct textures one frame may draw with before the pool is exhausted. */
     static constexpr uint32_t kMaxTextureSetsPerFrame = 1024;
@@ -119,10 +129,14 @@ public:
     std::optional<uint32_t> cachedDescriptorCount(uint32_t set, uint32_t binding) const;
 
     VkDescriptorSet acquireResolveSet(int frame, const VulkanImage *output,
-                                      const VulkanImage *skyCube, VkImageView skyView);
+                                      const VulkanImage *skyCube, VkImageView skyView,
+                                      const VulkanImage *const *channels = nullptr,
+                                      uint32_t channelCount = 0);
     DescriptorSet acquireResolveDescriptorSet(int frame, const IImage *output,
                                               const IImage *skyCube,
-                                              ImageView skyView) override;
+                                              ImageView skyView,
+                                              const IImage *const *channels = nullptr,
+                                              uint32_t channelCount = 0) override;
 
     /** Publish one frame's merged geometry/material buffers and bindless
         texture tables to graphics set 2. */

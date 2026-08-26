@@ -88,7 +88,9 @@ public:
      */
     virtual DescriptorSet acquireResolveDescriptorSet(int frame, const IImage *output,
                                                       const IImage *skyCube,
-                                                      ImageView skyView) = 0;
+                                                      ImageView skyView,
+                                                      const IImage *const *channels = nullptr,
+                                                      uint32_t channelCount = 0) = 0;
     /** A texture table that remains fixed for the lifetime of a scene target. */
     virtual DescriptorSet createPersistentTextureSet(
         const std::vector<TextureBinding> &bindings) = 0;

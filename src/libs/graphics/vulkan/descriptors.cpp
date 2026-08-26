@@ -142,7 +142,13 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
     // The storage image is partially bound: the retro resolve is a fragment
     // pass, writes an attachment rather than a storage image, and never
     // declares that binding at all.
-    std::array<VkDescriptorSetLayoutBinding, 2> resolveBindings {};
+    // Two fixed bindings plus the shared channel outputs. The channels are
+    // storage images written only by the raster mode that shades into the
+    // tracer's contract; every channel is partially bound, so retro and the
+    // single-image PBR resolve - which declare none of them - remain valid
+    // against this one layout.
+    constexpr uint32_t kResolveBindingCount = 2 + kResolveChannelCount;
+    std::array<VkDescriptorSetLayoutBinding, kResolveBindingCount> resolveBindings {};
     resolveBindings[kResolveOutputBinding].binding = kResolveOutputBinding;
     resolveBindings[kResolveOutputBinding].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     resolveBindings[kResolveOutputBinding].descriptorCount = 1;
@@ -153,9 +159,20 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
     resolveBindings[kResolveSkyCubeBinding].descriptorCount = 1;
     resolveBindings[kResolveSkyCubeBinding].stageFlags =
         VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+    for (uint32_t i = 0; i < kResolveChannelCount; ++i) {
+        auto &b = resolveBindings[kResolveChannelBaseBinding + i];
+        b.binding = kResolveChannelBaseBinding + i;
+        b.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        b.descriptorCount = 1;
+        b.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
     rememberDescriptorCounts(kResolveSet, resolveBindings);
-    std::array<VkDescriptorBindingFlags, 2> resolveBindingFlags {
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0};
+    std::array<VkDescriptorBindingFlags, kResolveBindingCount> resolveBindingFlags {};
+    resolveBindingFlags[kResolveOutputBinding] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+    for (uint32_t i = 0; i < kResolveChannelCount; ++i) {
+        resolveBindingFlags[kResolveChannelBaseBinding + i] =
+            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+    }
     VkDescriptorSetLayoutBindingFlagsCreateInfo resolveFlagsInfo {
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
     resolveFlagsInfo.bindingCount = static_cast<uint32_t>(resolveBindingFlags.size());
@@ -351,11 +368,19 @@ void VulkanDescriptors::init(int framesInFlight, VulkanUniformRing &ring) {
 
 VkDescriptorSet VulkanDescriptors::acquireResolveSet(int frame, const VulkanImage *output,
                                                      const VulkanImage *skyCube,
-                                                     VkImageView skyView) {
+                                                     VkImageView skyView,
+                                                     const VulkanImage *const *channels,
+                                                     uint32_t channelCount) {
     size_t key = std::hash<const void *> {}(output);
     key ^= (std::hash<const void *> {}(skyCube) ^
             std::hash<const void *> {}(reinterpret_cast<const void *>(skyView))) +
            0x9e3779b9u + (key << 6) + (key >> 2);
+    // The channel images are stable per frame, but the same output/sky pair may
+    // be acquired with and without them (the sky-only set for retro, the full
+    // set for the channels pass), so they must part the cache.
+    for (uint32_t i = 0; i < channelCount; ++i) {
+        key ^= std::hash<const void *> {}(channels[i]) + 0x9e3779b9u + (key << 6) + (key >> 2);
+    }
 
     auto &f = _textureFrames[frame];
     auto existing = f.byResolve.find(key);
@@ -389,6 +414,15 @@ VkDescriptorSet VulkanDescriptors::acquireResolveSet(int frame, const VulkanImag
                       {cube->sampler() ? cube->sampler() : _sampler,
                        skyView && skyCube ? skyView : cube->view(),
                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    for (uint32_t i = 0; i < channelCount; ++i) {
+        if (!channels[i]) {
+            continue;
+        }
+        writes.writeStorageImage(
+            toDescriptorSet(set),
+            {kResolveChannelBaseBinding + i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+            channels[i]->sampleView());
+    }
     writes.apply();
     f.byResolve.insert({key, set});
     return set;
@@ -396,11 +430,19 @@ VkDescriptorSet VulkanDescriptors::acquireResolveSet(int frame, const VulkanImag
 
 DescriptorSet VulkanDescriptors::acquireResolveDescriptorSet(int frame, const IImage *output,
                                                              const IImage *skyCube,
-                                                             ImageView skyView) {
+                                                             ImageView skyView,
+                                                             const IImage *const *channels,
+                                                             uint32_t channelCount) {
+    std::array<const VulkanImage *, kResolveChannelCount> nativeChannels {};
+    const uint32_t count = std::min<uint32_t>(channelCount, kResolveChannelCount);
+    for (uint32_t i = 0; i < count; ++i) {
+        nativeChannels[i] = channels[i] ? &toVulkanImage(*channels[i]) : nullptr;
+    }
     return toDescriptorSet(acquireResolveSet(
         frame, output ? &toVulkanImage(*output) : nullptr,
         skyCube ? &toVulkanImage(*skyCube) : nullptr,
-        skyView ? toVulkanImageView(skyView) : VK_NULL_HANDLE));
+        skyView ? toVulkanImageView(skyView) : VK_NULL_HANDLE,
+        count ? nativeChannels.data() : nullptr, count));
 }
 
 void VulkanDescriptors::setTexture(int unit, const VulkanImage &image) {

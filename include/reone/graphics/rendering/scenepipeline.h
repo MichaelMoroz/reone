@@ -48,6 +48,15 @@ enum class SceneStep {
     Shadow,
     Geometry,
     PBRResolve,
+    /**
+     * PBR shading into the tracer's channel contract instead of one assembled
+     * image, followed by the shared composite. The provider split: this mode
+     * contributes channels, the composite assembles them, exactly as it does
+     * for the tracer. Selected by --pbrchannels; the single-image PBRResolve is
+     * the default until the provider path replaces it.
+     */
+    PBRChannels,
+    Composite,
     RetroResolve,
     /**
      * Screen-space reflections, over the image the PBR resolve produced.
@@ -315,19 +324,19 @@ private:
     /** The set the tracer wrote this frame, latched for the composite and dumps. */
     ChannelBinding _frameChannels;
     int _lastChannelFrame {-1};
-    /** What the trace pass handed back for this frame's composite. */
+    /** What the trace pass handed back for this frame's composite, or - when the
+        raster mode shades into the channels - what pbrChannelsPass left. */
     TracingPipelineOutput _tracingOutput;
-#ifdef R_ENABLE_NRD
     /**
-     * The post-denoise assembly, moved here from the tracer: it reads the
-     * channel images this pipeline owns and NRD's denoised pair, and writes the
-     * final linear-HDR image. Idiom A - a standalone compute pipeline with
-     * name-resolved bindings - because it binds images that change identity on
-     * resize, not the cached four-set layout the resolves use.
+     * The shared assembly. It reads the channel images this pipeline owns and a
+     * pair of "denoised" radiance views - NRD's for the tracer, the raw channels
+     * for the raster provider - and writes the final linear-HDR image. Idiom A,
+     * a standalone compute pipeline with name-resolved bindings, because it
+     * binds images that change identity on resize. Not NRD-specific: the raster
+     * mode assembles through the same pass with the denoiser out of the picture.
      */
     std::unique_ptr<IComputePipeline> _compositePipeline;
     std::vector<ComputeResourceSlot> _compositeBindings;
-#endif
 
     struct Preview {
         std::unique_ptr<IImage> image;
@@ -363,6 +372,9 @@ private:
     void blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                      ISceneCallbacks &callbacks);
     void pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    /** PBR shading into the shared channels; see SceneStep::PBRChannels. Leaves
+        _tracingOutput and _frameChannels set for the composite that follows. */
+    void pbrChannelsPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** This frame's channel images, latched into _frameChannels and returned. */
     ChannelBinding acquireChannelBinding();
     /**

@@ -40,7 +40,7 @@ namespace reone::graphics {
 namespace {
 
 constexpr const char *kModules[] = {
-    "scene_draw", "sky", "pbr_ibl", "pbr_resolve", "retro_resolve",
+    "scene_draw", "sky", "pbr_ibl", "pbr_resolve", "pbr_channels", "retro_resolve",
     "path_trace", "composite", "shadow_filter", "scene_resolve", "postprocess", "vk2d",
     "debug_view"};
 

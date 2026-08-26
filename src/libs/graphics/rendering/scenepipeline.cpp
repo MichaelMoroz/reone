@@ -413,13 +413,15 @@ void ScenePipeline::init() {
     _ssaoKernel = buildSSAOKernel();
     _skyBinding = {};
 
-    if (_primaryRayMode) {
-        // The tracer's storage-output channels, owned here so the composite -
-        // and, once the provider split lands, a raster mode - can read and
-        // write them without the tracer running. Formats mirror the trace
-        // kernel's set-2 declarations (tracing/outputs.slang); normal/roughness
-        // rides RGBA16F, the FP form NRD's SNORM encoding accepts. Double
-        // buffered so two frames in flight never write and read the same texels.
+    if (_options.mode != RenderMode::Retro) {
+        // The shared storage-output channels, owned here so any provider can
+        // fill them: the trace kernel writes them through its set 2, and the
+        // PBR channels pass writes the same images through the resolve set.
+        // Retro alone never shades into them and skips the allocation. Formats
+        // mirror the trace kernel's set-2 declarations (tracing/outputs.slang);
+        // normal/roughness rides RGBA16F, the FP form NRD's SNORM encoding
+        // accepts. Double buffered so two frames in flight never write and
+        // read the same texels.
         static constexpr Format kChannelFormats[kNumTracingChannels] {
             Format::R16G16B16A16Sfloat, // diffuse radiance + hit dist
             Format::R16G16B16A16Sfloat, // specular radiance + hit dist
@@ -444,16 +446,17 @@ void ScenePipeline::init() {
                 _channelImages[frame][i] = std::move(image);
             }
         }
-#ifdef R_ENABLE_NRD
-        // The composite, moved here from the tracer. Idiom A: a standalone
-        // compute pipeline whose images change identity on resize, resolved by
-        // name. The order matches the fill in compositePass.
+        // The composite, moved here from the tracer, and no longer behind the
+        // NRD guard: the raster provider assembles through this same pass with
+        // no denoiser in the picture, binding its raw channels where the
+        // tracer binds NRD's outputs. Idiom A: a standalone compute pipeline
+        // whose images change identity on resize, resolved by name. The order
+        // matches the fill in compositePass.
         _compositePipeline = _renderer.makeComputePipeline({"composite", "main", 2});
         _compositeBindings = _compositePipeline->resolveBindings(
             {"outputImage", "inNoiseFree", "inDiffFactor", "inSpecFactor",
              "sDenoisedDiffuse", "sDenoisedSpecular", "inViewZ", "inRawDiffuse",
              "inRawSpecular", "sDirectDiffuse"});
-#endif
     }
 
     _inited = true;
@@ -488,10 +491,8 @@ void ScenePipeline::deinit() {
         for (auto &image : frame)
             image.reset();
     }
-#ifdef R_ENABLE_NRD
     _compositePipeline.reset();
     _compositeBindings.clear();
-#endif
     _gbuffer.reset();
     _outputHandle.reset();
     // Persistent sets are not recycled by any per-frame pool reset, so a
@@ -1103,6 +1104,88 @@ void ScenePipeline::pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) 
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
 
+void ScenePipeline::pbrChannelsPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("ScenePipeline::pbrChannelsPass record");
+    _tracingOutput = {};
+    if (!_resolveMaterialSet) {
+        // No merged geometry: nothing to shade. Publish the black the resolve
+        // publishes and tell the composite to stand aside.
+        cmd.transitionImage(*_output, ImageLayout::General);
+        cmd.clearColor(*_output, {0.0f, 0.0f, 0.0f, _transparentOutput ? 0.0f : 1.0f});
+        cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+        return;
+    }
+    transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
+    cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
+
+    // The channel images this dispatch writes, in the resolve-set order the
+    // shader declares (bindings 2..8): noiseFree, diffuse, specular,
+    // directDiffuse, diffFactor, specFactor, viewZ - mapped onto the shared
+    // channel-image indices the composite reads.
+    const auto channels = acquireChannelBinding();
+    const std::array<IImage *, 7> resolveChannels {{
+        channels.images[5],  // noiseFree
+        channels.images[0],  // diffuse
+        channels.images[1],  // specular
+        channels.images[14], // direct diffuse
+        channels.images[6],  // diffuse factor
+        channels.images[9],  // specular factor
+        channels.images[3],  // viewZ
+    }};
+    for (auto *image : resolveChannels) {
+        cmd.transitionImage(*image, ImageLayout::General);
+    }
+
+    PipelineKey key;
+    key.module = "pbr_channels";
+    key.computeEntry = "channelsMain";
+    PipelineBinding pipeline = _renderer.pipelines().get(key);
+
+    // The occlusion kernel, exactly as the single-image resolve pushes it.
+    ScreenEffectUniforms screenEffect;
+    screenEffect.screenResolution = glm::vec2(_renderSize);
+    screenEffect.screenResolutionRcp = 1.0f / glm::vec2(_renderSize);
+    screenEffect.clipNear = _uniforms.globals().clipNear;
+    screenEffect.clipFar = _uniforms.globals().clipFar;
+    std::copy(_ssaoKernel.begin(), _ssaoKernel.end(), screenEffect.ssaoSamples);
+    auto screenEffectOffset = _renderer.uniformRing().push(screenEffect);
+
+    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+    offsets[UniformBlockBindingPoints::screenEffect] = screenEffectOffset;
+
+    auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
+    auto resolveChannelSet = _renderer.descriptors().acquireResolveDescriptorSet(
+        _renderer.uniformRing().frame(), nullptr, _skyBinding.cube, _skyBinding.view,
+        resolveChannels.data(), static_cast<uint32_t>(resolveChannels.size()));
+    cmd.bindComputePipeline(pipeline.pipeline);
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                 offsets.data(), static_cast<uint32_t>(offsets.size()));
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, _pbrResolveSet,
+                                 nullptr, 0);
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kMegaDrawSet,
+                                 _resolveMaterialSet, nullptr, 0);
+    cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kResolveSet,
+                                 resolveChannelSet, nullptr, 0);
+    const ResolvePushConstants push = resolvePush(resolveFlags(), _options);
+    cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));
+    cmd.dispatchCompute({(_renderSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
+                         (_renderSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1});
+
+    // The writes above feed the composite's reads.
+    for (auto *image : resolveChannels) {
+        cmd.imageBarrier(*image, ImageUse::ComputeStore, ImageUse::ComputeRead);
+    }
+
+    // No denoiser in this mode: the composite reads the raw channels where the
+    // tracer hands it NRD's outputs, at zero jitter, which makes its sampled
+    // reads the raw texel at the pixel centre - the contract line exactly.
+    _tracingOutput.runComposite = true;
+    _tracingOutput.denoisedDiffuse = channels.images[0]->sampleView();
+    _tracingOutput.denoisedSpecular = channels.images[1]->sampleView();
+    _tracingOutput.directDiffuse = channels.images[14]->sampleView();
+}
+
 ChannelBinding ScenePipeline::acquireChannelBinding() {
     const int frame = _renderer.frameIndex();
     ChannelBinding binding;
@@ -1115,7 +1198,6 @@ ChannelBinding ScenePipeline::acquireChannelBinding() {
 }
 
 void ScenePipeline::compositePass(ICommandBuffer &cmd) {
-#ifdef R_ENABLE_NRD
     if (!_compositePipeline) {
         return;
     }
@@ -1160,7 +1242,6 @@ void ScenePipeline::compositePass(ICommandBuffer &cmd) {
                   static_cast<uint32_t>((_renderSize.y + 7) / 8), 1},
                  {compositeBindings.data(), static_cast<uint32_t>(compositeBindings.size())},
                  nullptr, &resolveConstants, sizeof(resolveConstants));
-#endif
 }
 
 void ScenePipeline::primaryCoveragePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
@@ -1785,6 +1866,24 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
             pbrResolvePass(cmd, globalsOffset);
             outputResolved = true;
             break;
+        case SceneStep::PBRChannels:
+            pbrChannelsPass(cmd, globalsOffset);
+            break;
+        case SceneStep::Composite:
+            // The shared assembly over the channels the pass above shaded.
+            // When there was nothing to shade, that pass cleared the output
+            // itself and left runComposite false.
+            if (_tracingOutput.runComposite) {
+                cmd.transitionImage(*_output, ImageLayout::General);
+                compositePass(cmd);
+                cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+                // R14: transparent output takes its alpha from primary
+                // coverage, exactly as the traced branch does; the pass
+                // stands aside when the output is opaque.
+                primaryCoveragePass(cmd, globalsOffset);
+            }
+            outputResolved = true;
+            break;
         case SceneStep::Blended:
             blendedPass(cmd, globalsOffset, callbacks);
             break;
@@ -1924,12 +2023,15 @@ std::vector<ScenePipeline::Target> ScenePipeline::targetEntries(
     if (_primaryRayMode) {
         entries.push_back({"Traced output", "traced_output", TargetKind::Color,
                            _output.get(), ImageLayout::ShaderRead, false});
-        // The channel split behind that image, owned here now. Without these a
-        // traced frame can only be judged as a whole, which cannot separate a
-        // noisy channel from a denoiser that is not clearing it. They live in
-        // GENERAL: the trace and composite passes read and write them as storage
-        // images and nothing transitions them afterwards. Order and names follow
-        // the trace kernel's aux order (tracing/outputs.slang).
+    }
+    if (_channelImages[0][0]) {
+        // The channel split behind the image, owned here now, and no longer the
+        // traced mode's alone - the PBR channels pass fills the same images.
+        // Without these a frame can only be judged as a whole, which cannot
+        // separate a noisy channel from a composite that mis-assembles it. They
+        // live in GENERAL: the providers and the composite read and write them
+        // as storage images and nothing transitions them afterwards. Order and
+        // names follow the trace kernel's aux order (tracing/outputs.slang).
         static const char *kChannelNames[kNumTracingChannels] {
             "Channel diffuse radiance", "Channel specular radiance", "Channel normal/roughness",
             "Channel viewZ", "Channel NRD motion", "Channel noise-free", "Channel diffuse factor",
