@@ -732,6 +732,13 @@ struct GraphicsOptions {
     bool ssao {true};
     bool ssr {true};
     /**
+     * The debug overlay: wireframe bounding boxes and name labels for scene
+     * objects and lights, drawn over the finished image in every render mode.
+     * Lines are depth-tested against the G-buffer per pixel; the occluded part
+     * is drawn dimmed rather than dropped. A diagnostic, off by default.
+     */
+    bool debugOverlay {false};
+    /**
      * The occupant of the common anti-aliasing slot.
      *
      * The default is resolved at the command line, where the render mode is

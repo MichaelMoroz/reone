@@ -385,6 +385,9 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(boolOpt("ssr", OptionApply::Live,
                             "screen-space reflections over the PBR resolve",
                             &GraphicsOptions::ssr));
+    descs.push_back(boolOpt("debugoverlay", OptionApply::Live,
+                            "bounding boxes and names of objects and lights, over the image",
+                            &GraphicsOptions::debugOverlay));
 
     // The temporal occupant of the slot owns device images of its own, built in
     // ScenePipeline::init, so the choice is fixed for the life of the targets.

@@ -61,6 +61,9 @@ public:
     /** Where the next render should write its record tables, or empty. */
     std::filesystem::path _pendingRecordDump;
     void restartTemporalHistory() override;
+    void setDebugOverlayShapes(std::vector<graphics::DebugOverlayShape> shapes) override {
+        _overlayShapes = std::move(shapes);
+    }
 
 private:
     class Callbacks;
@@ -93,6 +96,8 @@ private:
     GpuScene &_gpuScene;
     bool _primaryRayMode {false};
     bool _inited {false};
+    /** Debug-overlay boxes handed in by the scene graph for the next render. */
+    std::vector<graphics::DebugOverlayShape> _overlayShapes;
     std::unique_ptr<graphics::ScenePipeline> _executor;
     std::unique_ptr<graphics::GpuScene> _deviceGpuScene;
     std::unique_ptr<GpuSceneAdmission> _admission;

@@ -19,6 +19,8 @@
 
 #include "reone/graphics/options.h"
 #include "reone/graphics/texture.h"
+// DebugOverlayShape crosses this interface by value.
+#include "reone/graphics/rendering/scenepipeline.h"
 
 #include "../gpuscene.h"
 
@@ -110,6 +112,13 @@ public:
     virtual graphics::Texture &render(const CameraSceneNode *camera,
                                       const std::vector<RenderShadowCaster> &shadowCasters,
                                       SceneOutputAlpha alpha) = 0;
+
+    /**
+     * The debug overlay's wireframe boxes for the next render, world-space
+     * corners and colour per box; empty switches the overlay pass off. The
+     * scene graph decides what a box means; the pipeline only draws them.
+     */
+    virtual void setDebugOverlayShapes(std::vector<graphics::DebugOverlayShape> shapes) {}
 
     /**
      * Intermediate targets, for inspection by development tooling. Empty unless

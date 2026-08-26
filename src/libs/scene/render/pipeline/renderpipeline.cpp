@@ -339,6 +339,13 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
     // colour a viewer sees rather than scene radiance.
     if (_options.sharpen && !diagnosticImage)
         plan.steps.push_back(graphics::SceneStep::Sharpen);
+    // The debug overlay draws over the finished display-referred image, so it
+    // goes after everything that changes the picture. Not on a diagnostic
+    // image: a channel view replaces the picture the boxes would annotate.
+    plan.overlayShapes = std::move(_overlayShapes);
+    _overlayShapes.clear();
+    if (!plan.overlayShapes.empty() && !diagnosticImage)
+        plan.steps.push_back(graphics::SceneStep::DebugOverlay);
     // The debug view, over whatever the mode shaded. Skipped in exactly one
     // case: the traced mode showing one of the tracer's own channels, which the
     // kernel has already written into the output itself. Everywhere else the

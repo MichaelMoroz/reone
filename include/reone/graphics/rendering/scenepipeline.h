@@ -88,6 +88,14 @@ enum class SceneStep {
     Sharpen,
     PostProcess,
     /**
+     * The debug overlay: wireframe bounding boxes drawn over the finished
+     * display-referred image, in any render mode. Last in the plan (with
+     * DebugView, which replaces the image outright and never coexists with a
+     * picture worth overlaying): the overlay is a diagnostic drawn ON the
+     * picture, so anti-aliasing, grade and sharpen must all have finished.
+     */
+    DebugOverlay,
+    /**
      * A debug channel view, over the shaded image, in any render mode.
      *
      * Last and alone: it overwrites every pixel with a diagnostic rather than a
@@ -141,6 +149,17 @@ struct SceneShadowCaster {
 /** Every object category casts; see SceneFramePlan::shadowCasterCategories. */
 constexpr uint32_t kAllShadowCasters = 0xFFFFFFFFu;
 
+/**
+ * One wireframe box of the debug overlay: eight world-space corners in the
+ * AABB class's corner order, and the line colour. The scene side decides what
+ * a box means (an object's bounds, a light's marker); this struct is only what
+ * the draw needs.
+ */
+struct DebugOverlayShape {
+    glm::vec4 corners[8] {};
+    glm::vec4 color {1.0f};
+};
+
 struct SceneFramePlan {
     std::vector<SceneShadowCaster> shadowCasters;
     /** GUI controls composite this output; alpha then follows primary coverage. */
@@ -154,6 +173,8 @@ struct SceneFramePlan {
      * terrain from self-shadowing; PBR admits everything.
      */
     uint32_t shadowCasterCategories {kAllShadowCasters};
+    /** The debug overlay's boxes for this frame; empty when the overlay is off. */
+    std::vector<DebugOverlayShape> overlayShapes;
     std::vector<SceneStep> steps;
 };
 
@@ -247,6 +268,8 @@ private:
     bool _primaryRayMode {false};
     bool _transparentOutput {false};
     std::vector<SceneShadowCaster> _shadowCasters;
+    /** This frame's debug-overlay boxes; empty when the overlay is off. */
+    std::vector<DebugOverlayShape> _overlayShapes;
     /** Slots actually allocated, so a caster past them is dropped, not fatal. */
     int _dirShadowSlots {0};
     int _pointShadowSlots {0};
@@ -406,6 +429,8 @@ private:
     /** The one place a mode's colour becomes display-referred. */
     void postProcessPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     void debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    /** Wireframe boxes over the finished image; see SceneStep::DebugOverlay. */
+    void debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     void sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     void bloomPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** One tail pass: full-screen triangle from _output onto _tailColor, then

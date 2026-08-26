@@ -1690,6 +1690,64 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
 
+void ScenePipeline::debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("ScenePipeline::debugOverlayPass record");
+    if (_overlayShapes.empty()) {
+        return;
+    }
+    // Drawn over the finished display-referred image. Depth is not an
+    // attachment: the fragment stage samples the G-buffer depth itself and
+    // DIMS the occluded part of a line instead of discarding it.
+    cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
+    cmd.transitionImage(*_output, ImageLayout::ColorAttachment);
+
+    PipelineKey key;
+    key.module = "debug_overlay";
+    key.vertexEntry = "overlayVertex";
+    key.fragmentEntry = "overlayFragment";
+    key.colorFormats = {_output->pixelFormat()};
+    key.blend = BlendMode::Normal;
+    PipelineBinding pipeline = _renderer.pipelines().get(key);
+
+    auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
+        _renderer.uniformRing().frame(), {{5, &_gbuffer->depth()}});
+    auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
+
+    // Mirrors DebugOverlayPushConstants in slang/debug_overlay.slang.
+    struct DebugOverlayPushConstants {
+        glm::vec4 color;
+        glm::vec2 resolution;
+        float halfWidth;
+        float occludedScale;
+    };
+    static_assert(sizeof(DebugOverlayPushConstants) <= kCachedPipelinePushConstantSize);
+
+    RenderAttachment color {_output->sampleView(), ImageLayout::ColorAttachment,
+                            AttachmentLoad::Load, AttachmentStore::Store};
+    cmd.beginRendering(chainSize(), {color}, nullptr, 0, true);
+    cmd.bindPipeline(pipeline.pipeline);
+    cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet, nullptr, 0);
+    // One draw per box: the eight corners ride the aabb block through the
+    // uniform ring at a fresh dynamic offset each draw, the same idiom the
+    // per-mesh locals use, so no vertex buffer exists at all.
+    for (const auto &shape : _overlayShapes) {
+        AABBUniforms aabbUniforms;
+        std::copy(std::begin(shape.corners), std::end(shape.corners), aabbUniforms.corners);
+        std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+        offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+        offsets[UniformBlockBindingPoints::aabb] = _renderer.uniformRing().push(aabbUniforms);
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                              offsets.data(), static_cast<uint32_t>(offsets.size()));
+        const DebugOverlayPushConstants push {
+            shape.color, glm::vec2(chainSize()), 1.25f, 0.28f};
+        cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
+        // Twelve edges, one quad each, six vertices per quad.
+        cmd.draw(72, 1);
+    }
+    cmd.endRendering();
+    cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+}
+
 void ScenePipeline::sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::sharpenPass record");
     // Last, after the display transform, because an unsharp mask is a
@@ -1719,6 +1777,7 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
         _chainAtDisplaySize = false;
     }
     _shadowCasters = plan.shadowCasters;
+    _overlayShapes = plan.overlayShapes;
     _transparentOutput = plan.transparentOutput;
     _shadowCasterCategories = plan.shadowCasterCategories;
     _mergedScene = {};
@@ -1787,6 +1846,8 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
                 postProcessPass(cmd, globalsOffset);
             } else if (step == SceneStep::DebugView) {
                 debugViewPass(cmd, globalsOffset);
+            } else if (step == SceneStep::DebugOverlay) {
+                debugOverlayPass(cmd, globalsOffset);
             }
         }
         // The traced image is sampleable by now, so the preview can read it
@@ -1860,6 +1921,9 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
             break;
         case SceneStep::DebugView:
             debugViewPass(cmd, globalsOffset);
+            break;
+        case SceneStep::DebugOverlay:
+            debugOverlayPass(cmd, globalsOffset);
             break;
         }
     }
