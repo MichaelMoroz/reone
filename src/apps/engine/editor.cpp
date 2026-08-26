@@ -181,6 +181,7 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"anisofilter", std::to_string(options.anisotropicFiltering)},
         {"pointshadowres", std::to_string(options.pointShadowResolution)},
         {"fog", std::to_string(options.fog)},
+        {"fogheight", formatConfigFloat(options.fogHeight)},
         {"debugoverlay", std::to_string(options.debugOverlay)},
         {"paritydirect", std::to_string(options.parityDirect)},
         {"drawdist", formatConfigFloat(options.drawDistance)}};
@@ -1024,9 +1025,16 @@ void Editor::graphicsQualityTab() {
     settingHint("Directional lights, in this mode.", true);
     ImGui::EndDisabled();
     ImGui::Checkbox("Fog", &options.fog);
-    settingHint("The area's authored distance fog, in every mode. Per surface beneath this - a "
-                "material without the fog feature is never fogged - and the traced path carries "
-                "its blend to the composite, so the modes turn it off together.");
+    settingHint("The area's authored fog, resolved once for every mode from the depth buffer. "
+                "Exponential in height above the walkmesh rather than a flat ramp in distance, "
+                "so the horizon fogs out while the sky survives.");
+    ImGui::BeginDisabled(!options.fog);
+    ImGui::SliderFloat("Fog gradient", &options.fogHeight, 0.5f, 64.0f, "%.1f m");
+    settingHint("Altitude above the walkmesh at which the fog has thinned to a hundredth of its "
+                "ground density. Lower keeps it as a shallow layer on the floor; higher fills the "
+                "volume. Density itself follows the area's authored far distance.",
+                true);
+    ImGui::EndDisabled();
     ImGui::Checkbox("Grass", &options.grass);
     // Wired straight: density is a GPU gate over budgets baked at the slider
     // maximum (kGrassDensityCap), so dragging costs a push-constant change.

@@ -278,6 +278,19 @@ struct GraphicsOptions {
      * rather than one keeping a haze the other dropped.
      */
     bool fog {true};
+    /**
+     * Height of the fog gradient, in world units: the altitude above the
+     * walkmesh at which density has fallen to a hundredth of its ground value.
+     *
+     * Fog is exponential in height, not a flat ramp in distance. A ramp cannot
+     * be applied to every pixel without swallowing the sky - the sky is at the
+     * far plane, and a ramp calls the far plane fully fogged - and excluding
+     * the sky from it leaves a fogged landscape against a clear backdrop with a
+     * seam between them. With a height gradient a ray toward the horizon fogs
+     * out while one toward the zenith leaves the layer and keeps the sky, and
+     * the density is clamped below the plane rather than growing without bound.
+     */
+    float fogHeight {8.0f};
     /** Admit emitter particles, or leave them out of the frame entirely. */
     bool particles {true};
     /**

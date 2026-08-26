@@ -113,6 +113,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("grassdensity", value<float>()->default_value(options->graphics.grassDensity), "grass density multiplier")           //
         ("shadows", value<bool>()->default_value(options->graphics.shadows), "enable shadows")                                  //
         ("fog", value<bool>()->default_value(options->graphics.fog), "enable distance fog")                                     //
+        ("fogheight", value<float>()->default_value(options->graphics.fogHeight), "fog gradient height in world units") //
         ("particles", value<bool>()->default_value(options->graphics.particles), "enable emitter particles")                    //
         ("lensflares", value<bool>()->default_value(options->graphics.lensFlares), "draw light halo billboards")                //
         ("bloom", value<bool>()->default_value(options->graphics.bloom), "bloom emissive highlights")                           //
@@ -322,6 +323,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.grassDensity = vars["grassdensity"].as<float>();
     options->graphics.shadows = vars["shadows"].as<bool>();
     options->graphics.fog = vars["fog"].as<bool>();
+    options->graphics.fogHeight = std::max(0.05f, vars["fogheight"].as<float>());
     options->graphics.particles = vars["particles"].as<bool>();
     options->graphics.lensFlares = vars["lensflares"].as<bool>();
     options->graphics.bloom = vars["bloom"].as<bool>();

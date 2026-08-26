@@ -223,6 +223,8 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
     plan.transparentOutput = alpha == SceneOutputAlpha::Coverage;
     plan.shadowCasterCategories = shadowCasterCategories();
     plan.shadowCasters = shadowCasters;
+    plan.groundHeight = _gpuScene.groundHeight();
+    plan.fogEnabled = _fogEnabled;
     auto uploadArena = std::move(_admissionResult.submission.upload);
     _admissionResult = _admission->prepare(
         _uniforms.globals().view, std::move(uploadArena));

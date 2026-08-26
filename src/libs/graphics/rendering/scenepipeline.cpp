@@ -181,6 +181,16 @@ PipelineKey shadowPipelineKey(const char *vertexEntry, const char *fragmentEntry
     return key;
 }
 
+/**
+ * ln(100): the optical depth at which transmittance is a hundredth.
+ *
+ * Used twice, for the two ends of the fog's shape - horizontally it sets the
+ * density so a ground-level ray is ~99% fogged at the area's authored far
+ * distance, and vertically it sets the falloff so density is a hundredth of
+ * its ground value at the gradient height.
+ */
+static constexpr float kFogOpticalDepthAtFar = 4.60517f;
+
 /** Half-width of a debug-overlay line, in pixels. */
 static constexpr float kOverlayLineHalfWidth = 1.25f;
 /** Opacity of the part of an overlay line that lies behind geometry. */
@@ -1219,21 +1229,43 @@ void ScenePipeline::compositePass(ICommandBuffer &cmd) {
     const auto &globals = _uniforms.globals();
     const glm::vec3 fogColorLinear = glm::pow(
         glm::max(glm::vec3(globals.fogColor), glm::vec3(0.0f)), glm::vec3(2.2f));
+    // Height fog, resolved here because this is where the depth is. Density is
+    // set from the area's authored far distance - a ground-level ray reaches
+    // ~99% fog at that range, so a module keeps the reach it was authored for -
+    // and the falloff from the gradient height, the altitude at which density
+    // has dropped to a hundredth. The plane is the walkmesh; with no walkmesh
+    // the camera sits in it.
+    const float fogFar = std::max(1.0f, globals.fogFar);
+    const float fogHeight = std::max(0.05f, _options.fogHeight);
+    const float cameraZ = globals.cameraPosition.z;
+    const auto &viewInv = globals.viewInv;
     struct CompositePushConstants {
         float denoisedJitter[2];
         uint32_t debugView;
         uint32_t directDenoised;
         float fogColor[3];
         float fogEnabled;
-        float fogRange[2];
+        float fogDensity;
+        float fogFalloff;
+        float fogPlaneZ;
+        float fogCameraZ;
+        float fogTanX;
+        float fogTanY;
+        float fogInvViewZ[3];
     } resolveConstants {
         {_tracingOutput.denoisedJitter[0], _tracingOutput.denoisedJitter[1]},
         _tracingOutput.debugView,
         _tracingOutput.directDenoised,
         {fogColorLinear.x, fogColorLinear.y, fogColorLinear.z},
-        _options.fog ? 1.0f : 0.0f,
-        {globals.fogNear, globals.fogFar}};
-    static_assert(sizeof(CompositePushConstants) == 40,
+        (_options.fog && _fogEnabled) ? 1.0f : 0.0f,
+        kFogOpticalDepthAtFar / fogFar,
+        kFogOpticalDepthAtFar / fogHeight,
+        _groundHeight.value_or(cameraZ),
+        cameraZ,
+        1.0f / std::max(1e-4f, globals.projection[0][0]),
+        1.0f / std::max(1e-4f, globals.projection[1][1]),
+        {viewInv[0][2], viewInv[1][2], viewInv[2][2]}};
+    static_assert(sizeof(CompositePushConstants) == 68,
                   "push constant block must stay free of padding");
     cmd.dispatch(*_compositePipeline,
                  {(_renderSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
@@ -1879,6 +1911,8 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
         _chainAtDisplaySize = false;
     }
     _shadowCasters = plan.shadowCasters;
+    _groundHeight = plan.groundHeight;
+    _fogEnabled = plan.fogEnabled;
     _overlayShapes = plan.overlayShapes;
     _overlayLabels = plan.overlayLabels;
     _overlayFont = plan.overlayFont;

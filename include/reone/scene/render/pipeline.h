@@ -120,6 +120,9 @@ public:
     virtual void setDebugOverlayShapes(std::vector<graphics::DebugOverlayShape> shapes,
                                        std::vector<graphics::DebugOverlayLabel> labels) {}
 
+    /** Whether the area authored fog at all, as opposed to the player's switch. */
+    virtual void setFogEnabled(bool enabled) {}
+
     /** The font the overlay's labels are laid out and drawn with. */
     virtual void setDebugOverlayFont(graphics::Font *font) {}
 

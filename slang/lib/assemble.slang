@@ -81,19 +81,38 @@ public float3 assembleEmission(float3 selfIllumLinear, float3 radianceTexel,
 
 /** Linear fog fraction over the authored near/far range. */
 /**
- * Fog from the depth channel, which is what the resolve has and what every
- * pixel has - including the sky and any path-terminating surface.
+ * Height fog: the analytic integral of an exponentially decaying density along
+ * a view ray, from the camera to a surface at @p segment world units away.
  *
- * Computed here rather than per surface at shading time. A per-surface amount
- * is gated by that material's fog feature bit, so whether a pixel fogged
- * depended on what KIND of object it was: the sky never fogged, terminators
- * never fogged, and a fogged wall met an unfogged backdrop at a hard seam.
- * Distance is the only thing fog depends on, and the resolve knows it for
- * everything it draws.
+ * Density is @p density at the fog plane and falls off as exp(-falloff * h)
+ * with height above it, CLAMPED below - under the plane it stays at its
+ * maximum rather than growing without bound. @p h0 and @p h1 are the clamped
+ * heights at the two ends.
+ *
+ * A flat distance ramp cannot do this job. Applied to every pixel it swallows
+ * the sky, because the sky is at the far plane and a distance ramp says the
+ * far plane is fully fogged; excluded from the sky it leaves a fogged
+ * landscape against a clear backdrop with a seam between them. Height fog has
+ * neither problem: a ray toward the horizon travels a long way through the
+ * dense layer near the ground and fogs out, while a ray toward the zenith
+ * leaves the layer quickly and keeps the sky - and the integral converges even
+ * at infinite distance, which is what makes the sky survive.
+ *
+ *   tau = density * segment * (exp(-k h0) - exp(-k h1)) / (k (h1 - h0))
+ *
+ * which is density * segment * exp(-k h0) in the limit h1 -> h0 - the flat
+ * case, where the ray stays at one height.
  */
-public float fogFromViewDepth(float viewDepth, float fogNear, float fogFar) {
-    float f = (fogFar - abs(viewDepth)) / max(1e-4, fogFar - fogNear);
-    return 1.0 - saturate(f);
+public float heightFogAmount(float h0, float h1, float segment, float density, float falloff) {
+    const float k = max(1e-4, falloff);
+    const float dh = h1 - h0;
+    float tau;
+    if (abs(dh) < 1e-3) {
+        tau = density * segment * exp(-k * h0);
+    } else {
+        tau = density * segment * (exp(-k * h0) - exp(-k * h1)) / (k * dh);
+    }
+    return 1.0 - exp(-max(0.0, tau));
 }
 
 public float fogAmount(float3 worldPos, float3 cameraPos, float fogNear, float fogFar) {

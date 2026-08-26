@@ -65,10 +65,12 @@ import lib.assemble;
 struct CompositePushConstants {
     /**
      * Where to read the denoised channels from, in pixels, so that they line up
-     * with the guide factors they are multiplied against. Leading the float2
-     * keeps the block free of padding.
+     * with the guide factors they are multiplied against. Two scalars, not a
+     * float2: a float2 aligns the block to eight bytes and rounds its size up,
+     * and the C++ mirror would no longer match it.
      */
-    float2 denoisedJitter;
+    float denoisedJitterX;
+    float denoisedJitterY;
     /**
      * A debug channel this pass owns, or 0. The three below exist only after
      * denoising, so the trace kernel cannot show them: it writes what it fed
@@ -83,22 +85,35 @@ struct CompositePushConstants {
      */
     uint directDenoised;
     /**
-     * The linear fog colour, as three scalars, and the master switch (> 0.5 on).
+     * Height fog. Scalars throughout - a float3 or float4 anywhere in this
+     * block aligns the whole of it to sixteen bytes and pads it, and the C++
+     * mirror would then be a different size from the block it mirrors.
      *
-     * Scalars rather than a float3 or float4: either aligns the whole block to
-     * sixteen bytes and pads it to 48, and the C++ mirror would then be a
-     * different size from the block it mirrors. Every member here is scalar or
-     * float2, so the block is 40 bytes with nothing to guess about.
-     *
-     * The per-pixel amount is not here - the composite computes it from the
-     * depth channel; see fogFromViewDepth.
+     * The per-pixel amount is the composite's own: it reconstructs the view ray
+     * from the depth channel and integrates the density along it. What arrives
+     * here is only what is the same for the whole frame.
      */
     float fogColorR;
     float fogColorG;
     float fogColorB;
     float fogEnabled;
-    /** Fog near and far, in world units, from the area's authored values. */
-    float2 fogRange;
+    /** Density at the fog plane, per world unit. */
+    float fogDensity;
+    /** Density falls off as exp(-falloff * height) above the plane. */
+    float fogFalloff;
+    /** World Z of the fog plane - the area's walkmesh level. */
+    float fogPlaneZ;
+    /** The camera's own world Z, the near end of every ray. */
+    float fogCameraZ;
+    /** tan(fovX/2), tan(fovY/2): the view ray's spread per unit depth. */
+    float fogTanX;
+    float fogTanY;
+    /** Row 2 of the inverse view matrix, which takes a view-space point to its
+        WORLD Z - all the height integral needs, so no full unprojection and no
+        matrix in the push block. */
+    float fogInvViewZX;
+    float fogInvViewZY;
+    float fogInvViewZZ;
 };
 
 static const uint kDebugDenoisedDiffuse = 17;
@@ -122,7 +137,39 @@ float3 unpackRadiance(float3 stored) {
  * displaced by the sub-pixel offset the raster beside it was sampled through.
  */
 float2 denoisedUv(int2 pixel, float2 extent) {
-    return (float2(pixel) + 0.5 + pushConstants.denoisedJitter) / extent;
+    return (float2(pixel) + 0.5 +
+            float2(pushConstants.denoisedJitterX, pushConstants.denoisedJitterY)) /
+           extent;
+}
+
+/**
+ * This pixel's fog, from the depth channel alone.
+ *
+ * The ray is rebuilt in view space - the same ndc convention every other
+ * reconstruction here uses, (2u - 1, 1 - 2v) - and only its WORLD Z is needed,
+ * so row 2 of the inverse view matrix does the job of a full unprojection.
+ * viewZ is depth along the view axis, so the distance actually travelled is
+ * that depth times the ray's length per unit depth.
+ *
+ * Sky and terminators arrive at kAssembleInfDistance and are integrated at that
+ * distance rather than excluded: the height integral converges, so a ray toward
+ * the zenith keeps the sky while one toward the horizon fogs out.
+ */
+float fogAt(float2 uv, float viewDepth) {
+    const float2 tangent = float2((2.0 * uv.x - 1.0) * pushConstants.fogTanX,
+                                  (1.0 - 2.0 * uv.y) * pushConstants.fogTanY);
+    // World Z gained per unit of view depth. The -Z is the view axis itself.
+    const float rayZ = pushConstants.fogInvViewZX * tangent.x +
+                       pushConstants.fogInvViewZY * tangent.y -
+                       pushConstants.fogInvViewZZ;
+    const float rayLength = sqrt(1.0 + dot(tangent, tangent));
+    const float depth = abs(viewDepth);
+
+    const float h0 = max(0.0, pushConstants.fogCameraZ - pushConstants.fogPlaneZ);
+    const float h1 = max(0.0, pushConstants.fogCameraZ + rayZ * depth -
+                                  pushConstants.fogPlaneZ);
+    return heightFogAmount(h0, h1, rayLength * depth, pushConstants.fogDensity,
+                           pushConstants.fogFalloff);
 }
 
 [shader("compute")]
@@ -210,11 +257,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     // terminator alike - from the depth each of them has. Distance is all fog
     // depends on, so nothing here asks what kind of object the pixel came from.
     if (pushConstants.fogEnabled > 0.5) {
-        const float fog = fogFromViewDepth(inViewZ[pixel], pushConstants.fogRange.x,
-                                           pushConstants.fogRange.y);
         color = applyFog(color, float3(pushConstants.fogColorR, pushConstants.fogColorG,
                                        pushConstants.fogColorB),
-                         fog);
+                         fogAt(centreUv, inViewZ[pixel]));
     }
     outputImage[pixel] = float4(color, 1.0);
 }

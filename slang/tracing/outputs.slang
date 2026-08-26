@@ -163,21 +163,19 @@ public struct TraceOutputs {
         }
     }
 
-    /** The assembled image the kernel writes when the denoiser is off. Fog is
-        applied here too, so the diagnostic denoiser-off image and the composited
-        one agree; the blend amount is 0 on any unfogged surface, so this is
-        identity there. */
+    /**
+     * The assembled image the kernel writes when the denoiser is off.
+     *
+     * NO FOG. Fog belongs to the composite now, which resolves it from the
+     * depth channel and the view ray; this path has neither the pixel nor the
+     * ray to rebuild one from, and a second fog rule here is exactly the
+     * divergence moving it to the resolve was meant to end. The consequence is
+     * narrow and deliberate: --ptdenoise 0 draws an unfogged image, because the
+     * composite does not run at all in that configuration.
+     */
     public float3 assemble() {
-        float3 radiance = assembleRadiance(noiseFree, diffuse, directDiffuse, specular,
-                                           transportDiffFactor, transportSpecFactor);
-        // From this pixel's depth, exactly as the composite does it - one
-        // rule, so the denoiser-off image and the composited one agree.
-        if (!ptFogEnabled()) {
-            return radiance;
-        }
-        const float fog = fogFromViewDepth(viewZ, globalUniforms.fogNear,
-                                           globalUniforms.fogFar);
-        return applyFog(radiance, ptGammaToLinear(globalUniforms.fogColor.rgb), fog);
+        return assembleRadiance(noiseFree, diffuse, directDiffuse, specular,
+                                transportDiffFactor, transportSpecFactor);
     }
 
     public void write(uint2 pixel) {

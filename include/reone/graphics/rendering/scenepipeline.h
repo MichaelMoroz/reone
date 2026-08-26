@@ -19,6 +19,7 @@
 #include <array>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -188,6 +189,19 @@ struct SceneFramePlan {
      * terrain from self-shadowing; PBR admits everything.
      */
     uint32_t shadowCasterCategories {kAllShadowCasters};
+    /**
+     * World Z of the area's walkmesh - where the fog layer sits. Absent when
+     * the area has no walkmesh, and the fog then hangs at the camera's own
+     * height, which is what an interior with no floor plane should look like.
+     */
+    std::optional<float> groundHeight;
+    /**
+     * The AREA authored fog at all. Distinct from the graphics option, which is
+     * the player's switch: with this false the fog uniforms are untouched
+     * defaults, and reading a density out of them would fog a module that has
+     * no fog.
+     */
+    bool fogEnabled {false};
     /** The debug overlay's boxes for this frame; empty when the overlay is off. */
     std::vector<DebugOverlayShape> overlayShapes;
     std::vector<DebugOverlayLabel> overlayLabels;
@@ -286,6 +300,10 @@ private:
     bool _primaryRayMode {false};
     bool _transparentOutput {false};
     std::vector<SceneShadowCaster> _shadowCasters;
+    /** Where the fog layer sits this frame; see SceneFramePlan. */
+    std::optional<float> _groundHeight;
+    /** The area authored fog; see SceneFramePlan::fogEnabled. */
+    bool _fogEnabled {false};
     /** This frame's debug-overlay boxes; empty when the overlay is off. */
     std::vector<DebugOverlayShape> _overlayShapes;
     std::vector<DebugOverlayLabel> _overlayLabels;

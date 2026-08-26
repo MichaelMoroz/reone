@@ -269,11 +269,12 @@ TEST(SlangShaderCompiler, reflects_push_constants_used_by_selected_entry_points)
     EXPECT_EQ(reflectFragment("postProcessFragment").pushConstantSize, 16u);
     EXPECT_EQ(reflectFragment("primaryCoverageFragment").pushConstantSize, 4u);
     EXPECT_EQ(reflectFragment("bloomCompositeFragment").pushConstantSize, 16u);
-    // The composite's push block carries the fog colour, switch and range
-    // beside the denoiser values: float2 + uint + uint + float4 + float2 = 40
-    // bytes, no gap. scenepipeline.cpp static_asserts the same size.
+    // The composite's push block carries the height-fog parameters beside the
+    // denoiser values. Every member is scalar or float2, so it packs to 68
+    // bytes with no padding - a float3 or float4 anywhere in it would align the
+    // block to sixteen and the C++ mirror would no longer match its size.
     EXPECT_EQ(compiler.reflection("composite", {{"main", ShaderStage::Compute}}).pushConstantSize,
-              40u);
+              68u);
     compiler.deinit();
 }
 

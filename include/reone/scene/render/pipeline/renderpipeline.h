@@ -69,6 +69,9 @@ public:
 
     void setDebugOverlayFont(graphics::Font *font) override { _overlayFont = font; }
 
+    /** Whether the area authored fog; see SceneFramePlan::fogEnabled. */
+    void setFogEnabled(bool enabled) override { _fogEnabled = enabled; }
+
 private:
     class Callbacks;
 
@@ -104,6 +107,7 @@ private:
     std::vector<graphics::DebugOverlayShape> _overlayShapes;
     std::vector<graphics::DebugOverlayLabel> _overlayLabels;
     graphics::Font *_overlayFont {nullptr};
+    bool _fogEnabled {false};
     std::unique_ptr<graphics::ScenePipeline> _executor;
     std::unique_ptr<graphics::GpuScene> _deviceGpuScene;
     std::unique_ptr<GpuSceneAdmission> _admission;

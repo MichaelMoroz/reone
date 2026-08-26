@@ -1093,6 +1093,7 @@ Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {
             shadowCasters.push_back(caster);
         }
     }
+    pipeline.setFogEnabled(isFogEnabled());
     collectDebugOverlay(pipeline);
     auto &output = pipeline.render(_activeCamera, shadowCasters, alpha);
     snapshotPreviousFrame();

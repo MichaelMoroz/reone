@@ -237,6 +237,9 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                             &GraphicsOptions::shadows));
     descs.push_back(boolOpt("fog", OptionApply::Live, "enable distance fog",
                             &GraphicsOptions::fog));
+    descs.push_back(floatOpt("fogheight", OptionApply::Live,
+                             "fog gradient height in world units",
+                             &GraphicsOptions::fogHeight, 0.05f, 512.0f));
     descs.push_back(boolOpt("particles", OptionApply::Live, "enable emitter particles",
                             &GraphicsOptions::particles));
     descs.push_back(boolOpt("lensflares", OptionApply::Live, "draw light halo billboards",
