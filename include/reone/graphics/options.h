@@ -268,6 +268,16 @@ struct GraphicsOptions {
      * which this does not reach.
      */
     bool shadows {true};
+    /**
+     * The global fog master switch, honoured by every mode.
+     *
+     * Fog stays per-surface beneath it - a material without the fog feature is
+     * never fogged, and the near/far distances are the scene's - but off
+     * suppresses it everywhere: the traced kernel writes a zero blend amount and
+     * the composite skips the blend, so the two modes turn it off together
+     * rather than one keeping a haze the other dropped.
+     */
+    bool fog {true};
     /** Admit emitter particles, or leave them out of the frame entirely. */
     bool particles {true};
     /**

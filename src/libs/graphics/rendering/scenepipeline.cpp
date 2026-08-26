@@ -1135,17 +1135,25 @@ void ScenePipeline::compositePass(ICommandBuffer &cmd) {
         {_compositeBindings[8], channels[1]->sampleView()},
         {_compositeBindings[9], _tracingOutput.directDiffuse},
     }};
-    // Mirrors NrdResolvePushConstants in slang/composite.slang. Unchanged from
-    // the tracer's copy; the values are the ones the trace pass computed.
-    struct NrdResolvePushConstants {
+    // Mirrors CompositePushConstants in slang/composite.slang. The trace pass
+    // computed the denoiser values; the fog colour and the master switch are
+    // the frame's, taken here where the uniforms and the option are in reach.
+    // The per-pixel fog amount rode noiseFree.a and is not in the push.
+    const auto globals = _uniforms.globals();
+    const glm::vec3 fogColorLinear = glm::pow(
+        glm::max(glm::vec3(globals.fogColor), glm::vec3(0.0f)), glm::vec3(2.2f));
+    struct CompositePushConstants {
         float denoisedJitter[2];
         uint32_t debugView;
         uint32_t directDenoised;
+        float fog[4];
     } resolveConstants {
         {_tracingOutput.denoisedJitter[0], _tracingOutput.denoisedJitter[1]},
         _tracingOutput.debugView,
-        _tracingOutput.directDenoised};
-    static_assert(sizeof(NrdResolvePushConstants) == 16,
+        _tracingOutput.directDenoised,
+        {fogColorLinear.x, fogColorLinear.y, fogColorLinear.z,
+         _options.fog ? 1.0f : 0.0f}};
+    static_assert(sizeof(CompositePushConstants) == 32,
                   "push constant block must stay free of padding");
     cmd.dispatch(*_compositePipeline,
                  {static_cast<uint32_t>((_renderSize.x + 7) / 8),

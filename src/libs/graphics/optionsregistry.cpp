@@ -235,6 +235,8 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                             &GraphicsOptions::grass));
     descs.push_back(boolOpt("shadows", OptionApply::Live, "enable shadows",
                             &GraphicsOptions::shadows));
+    descs.push_back(boolOpt("fog", OptionApply::Live, "enable distance fog",
+                            &GraphicsOptions::fog));
     descs.push_back(boolOpt("particles", OptionApply::Live, "enable emitter particles",
                             &GraphicsOptions::particles));
     descs.push_back(boolOpt("lensflares", OptionApply::Live, "draw light halo billboards",

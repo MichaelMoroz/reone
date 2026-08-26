@@ -61,8 +61,8 @@ import lib.assemble;
 // it is added in the same currency as the rest, against the same guide factor.
 [[vk::binding(9, 1)]] Sampler2D sDirectDiffuse;
 
-/** Mirrors NrdResolvePushConstants in scenepipeline.cpp. */
-struct NrdResolvePushConstants {
+/** Mirrors CompositePushConstants in scenepipeline.cpp. */
+struct CompositePushConstants {
     /**
      * Where to read the denoised channels from, in pixels, so that they line up
      * with the guide factors they are multiplied against. Leading the float2
@@ -82,12 +82,20 @@ struct NrdResolvePushConstants {
      * them.
      */
     uint directDenoised;
+    /**
+     * Fog: rgb is the linear fog colour, w the global switch (>0.5 on). The
+     * per-pixel blend amount rides noiseFree.a - the trace kernel computed it
+     * against the surface's own fog feature - so this only carries what is the
+     * same for the whole frame. A float4 rather than float3 + uint so the block
+     * stays 32 bytes with no alignment gap to guess about.
+     */
+    float4 fog;
 };
 
 static const uint kDebugDenoisedDiffuse = 17;
 static const uint kDebugDenoisedSpecular = 18;
 static const uint kDebugFilteredDirect = 19;
-[[vk::push_constant]] NrdResolvePushConstants pushConstants;
+[[vk::push_constant]] CompositePushConstants pushConstants;
 
 
 /**
@@ -185,5 +193,12 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     color = assembleRadiance(color, unpackRadiance(diffuse), max(direct, 0.0),
                              unpackRadiance(specular), inDiffFactor[pixel].rgb,
                              inSpecFactor[pixel].rgb);
+    // Fog last, over the assembled surface radiance. The blend amount is the
+    // trace kernel's, per surface, in noiseFree.a; the colour and the master
+    // switch are the frame's. A terminator carries 0 here, so the sky path
+    // above never reaches this and never needs excluding.
+    if (pushConstants.fog.w > 0.5) {
+        color = applyFog(color, pushConstants.fog.rgb, inNoiseFree[pixel].a);
+    }
     outputImage[pixel] = float4(color, 1.0);
 }

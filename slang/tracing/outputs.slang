@@ -90,6 +90,9 @@ public struct TraceOutputs {
     public float viewZ;
     public float3 motion;
     public float3 noiseFree;    // layers, emission, sky - bypasses the denoiser
+    /** Camera-distance fog blend at the primary vertex, carried in noiseFree.a
+        to the composite; 0 where unfogged. */
+    public float fog;
     public float3 diffFactor;
     public float3 specFactor;
     // The output factor textures describe the guide surface. These internal
@@ -126,6 +129,7 @@ public struct TraceOutputs {
         outputs.viewZ = kPtInfDistance;
         outputs.motion = float3(0.0);
         outputs.noiseFree = float3(0.0);
+        outputs.fog = 0.0;
         outputs.diffFactor = float3(1.0);
         outputs.specFactor = float3(1.0);
         outputs.transportDiffFactor = float3(1.0);
@@ -163,10 +167,14 @@ public struct TraceOutputs {
         }
     }
 
-    /** The assembled image the kernel writes when the denoiser is off. */
+    /** The assembled image the kernel writes when the denoiser is off. Fog is
+        applied here too, so the diagnostic denoiser-off image and the composited
+        one agree; the blend amount is 0 on any unfogged surface, so this is
+        identity there. */
     public float3 assemble() {
-        return assembleRadiance(noiseFree, diffuse, directDiffuse, specular,
-                                transportDiffFactor, transportSpecFactor);
+        float3 radiance = assembleRadiance(noiseFree, diffuse, directDiffuse, specular,
+                                           transportDiffFactor, transportSpecFactor);
+        return applyFog(radiance, ptGammaToLinear(globalUniforms.fogColor.rgb), fog);
     }
 
     public void write(uint2 pixel) {
@@ -181,7 +189,7 @@ public struct TraceOutputs {
         outNormalRoughness[pixel] = float4(normal, roughness);
         outViewZ[pixel] = viewZ;
         outMotion[pixel] = float4(motion, 0.0);
-        outNoiseFree[pixel] = float4(noiseFree, 1.0);
+        outNoiseFree[pixel] = float4(noiseFree, fog);
         outDiffFactor[pixel] = float4(diffFactor, 1.0);
         outDeviceDepth[pixel] = deviceDepth;
         outScreenMotion[pixel] = float4(screenMotion, 0.0, 0.0);

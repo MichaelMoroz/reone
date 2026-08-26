@@ -246,6 +246,10 @@ public static const uint kPtFlagStats = 1u;
 public static const uint kPtFlagDirectChannel = 4u;
 /** Parity mode: the final image is only the shared unoccluded direct sum. */
 public static const uint kPtFlagParityDirect = 1u << 12;
+/** The global fog master switch. Fog is still per-surface beneath it - a
+    surface without the fog feature is never fogged - but off suppresses it
+    everywhere, in this mode and the composite alike. */
+public static const uint kPtFlagFog = 1u << 13;
 // Six bits, not four. Four held fifteen channels and the sixteenth silently
 // wrapped to "off" - a debug view that quietly shows the ordinary picture is
 // worse than one that fails.
@@ -272,6 +276,10 @@ public bool ptParityDirectEnabled() {
 
 public bool ptDirectChannelEnabled() {
     return (pushConstants.traceFlags & kPtFlagDirectChannel) != 0;
+}
+
+public bool ptFogEnabled() {
+    return (pushConstants.traceFlags & kPtFlagFog) != 0;
 }
 
 public uint geometryBase(uint geometryIndex) { return geometryIndex == 0 ? pushConstants.geometryBase0 : pushConstants.geometryBase1; }
