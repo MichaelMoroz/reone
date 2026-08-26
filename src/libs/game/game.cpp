@@ -1930,7 +1930,11 @@ void Game::toggleInGameCameraType() {
         break;
     }
 
-    setRelativeMouseMode(_cameraType == CameraType::FirstPerson);
+    // The free camera does NOT capture the pointer: it looks by left-drag
+    // instead, so the cursor stays available for the editor windows the camera
+    // is usually flown to check something against. Capturing it meant a click
+    // on a slider first needed the camera switched off.
+    setRelativeMouseMode(false);
 
     _module->area()->updateRoomVisibility();
 }

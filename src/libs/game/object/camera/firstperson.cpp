@@ -47,6 +47,9 @@ bool FirstPersonCamera::handle(const input::Event &event) {
     switch (event.type) {
     case input::EventType::MouseMotion:
         return handleMouseMotion(event.motion);
+    case input::EventType::MouseButtonDown:
+    case input::EventType::MouseButtonUp:
+        return handleMouseButton(event.button);
     case input::EventType::KeyDown:
         return handleKeyDown(event.key);
     case input::EventType::KeyUp:
@@ -56,7 +59,21 @@ bool FirstPersonCamera::handle(const input::Event &event) {
     }
 }
 
+bool FirstPersonCamera::handleMouseButton(const input::MouseButtonEvent &event) {
+    if (event.button != input::MouseButton::Left) {
+        return false;
+    }
+    _rotating = event.pressed;
+    return true;
+}
+
 bool FirstPersonCamera::handleMouseMotion(const input::MouseMotionEvent &event) {
+    // Only while dragging. The pointer is not captured, so motion arrives
+    // whenever it crosses the window and an ungated camera would swing as soon
+    // as the mouse moved anywhere.
+    if (!_rotating) {
+        return false;
+    }
     _facing = glm::mod(
         _facing - event.xrel * kMouseMultiplier,
         glm::two_pi<float>());

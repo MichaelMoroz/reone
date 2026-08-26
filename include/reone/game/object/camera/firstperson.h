@@ -75,7 +75,13 @@ private:
     float _multiplier {1.0f};
     MovementDirection _moveDir {MovementDirection::None};
 
+    /** True while the left button is held: the free camera looks by dragging
+        rather than by owning the pointer, so the cursor stays usable for the
+        editor windows the camera exists to check things against. */
+    bool _rotating {false};
+
     bool handleMouseMotion(const input::MouseMotionEvent &event);
+    bool handleMouseButton(const input::MouseButtonEvent &event);
     bool handleKeyDown(const input::KeyEvent &event);
     bool handleKeyUp(const input::KeyEvent &event);
 
