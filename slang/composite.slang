@@ -129,7 +129,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     // pixel centre; only the composite below applies the offset.
     const float2 centreUv = (float2(pixel) + 0.5) / extent;
 
-    float3 color = inNoiseFree[pixel].rgb;
+    const float4 noiseFree = inNoiseFree[pixel];
+    float3 color = noiseFree.rgb;
     const bool hasDenoisedSurface = !isTerminatingSurface(inViewZ[pixel]);
     float3 diffuse = hasDenoisedSurface ? sDenoisedDiffuse.SampleLevel(centreUv, 0.0).rgb
                                         : inRawDiffuse[pixel].rgb;
@@ -198,7 +199,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     // switch are the frame's. A terminator carries 0 here, so the sky path
     // above never reaches this and never needs excluding.
     if (pushConstants.fog.w > 0.5) {
-        color = applyFog(color, pushConstants.fog.rgb, inNoiseFree[pixel].a);
+        color = applyFog(color, pushConstants.fog.rgb, noiseFree.a);
     }
     outputImage[pixel] = float4(color, 1.0);
 }

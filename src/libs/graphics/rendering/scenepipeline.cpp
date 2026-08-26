@@ -138,7 +138,48 @@ static_assert(sizeof(PostProcessPushConstants) <= kCachedPipelinePushConstantSiz
 static_assert(sizeof(ResolvePushConstants) == kCachedPipelinePushConstantSize);
 static_assert(sizeof(CoveragePushConstants) <= kCachedPipelinePushConstantSize);
 static_assert(sizeof(DebugViewPushConstants) <= kCachedPipelinePushConstantSize);
+
+/** Mirrors kViewChannelsAbsent in debug_view.slang: no mode filled the shared
+    channels this frame, so the radiance views must paint the card. */
+static constexpr uint32_t kDebugViewChannelsAbsent = 1u << 8;
 static_assert(sizeof(DebugOverlayPushConstants) <= kCachedPipelinePushConstantSize);
+
+/**
+ * The shadow pass's pipeline key. Only the two entry points and the view mask
+ * vary - between a directional caster and a point one, and between merged
+ * meshes and grass cards - so the rest is described once here rather than
+ * rebuilt per draw inside the caster loop, where its four std::strings and a
+ * vector cost a handful of allocations every frame per caster.
+ *
+ * D32_SFLOAT constant bias is expressed in representable depth increments; the
+ * slope term supplies the useful offset on curved surfaces that approach
+ * parallel to the light. Both carry more than they used to because nothing is
+ * culled any more: rendering back faces alone put the stored depth a wall's
+ * thickness behind the lit surface, a free bias - but only for geometry that
+ * HAS a back face. Odyssey's exterior shells are single-sided, so from the
+ * sun's side they wrote nothing and light poured into the rooms behind them.
+ * With both faces written a lit surface finds its own depth in the map and
+ * needs a real offset. The receiver-side normal offset in lib/shadow.slang
+ * remains the primary defence; these are the dials to turn if acne or
+ * peter-panning shows up. Never cull: a single-sided wall has to occlude from
+ * whichever side the light is on, and a cutout fence or leaf card likewise.
+ */
+PipelineKey shadowPipelineKey(const char *vertexEntry, const char *fragmentEntry,
+                              uint32_t viewMask) {
+    PipelineKey key;
+    key.module = "scene_draw";
+    key.vertexEntry = vertexEntry;
+    key.fragmentEntry = fragmentEntry;
+    key.depthFormat = Format::D32Sfloat;
+    key.viewMask = viewMask;
+    key.depthTest = true;
+    key.depthWrite = true;
+    key.depthBias = true;
+    key.depthBiasConstantFactor = 2.0f;
+    key.depthBiasSlopeFactor = 2.0f;
+    key.cull = FaceCullMode::None;
+    return key;
+}
 
 /** Half-width of a debug-overlay line, in pixels. */
 static constexpr float kOverlayLineHalfWidth = 1.25f;
@@ -625,43 +666,17 @@ void ScenePipeline::shadowPass(ICommandBuffer &cmd,
             offsets[UniformBlockBindingPoints::globals] = globalsOffset;
             cmd.bindIndexBuffer(*scene.indices.buffer, scene.indices.offset);
 
+            const PipelineBinding meshPipeline = _renderer.pipelines().get(shadowPipelineKey(
+                caster.directional ? "directionalShadowVertex" : "pointShadowVertex",
+                caster.directional ? "directionalShadowFragment" : "pointShadowFragment",
+                viewMask));
+
             auto drawRange = [&](uint32_t triangleBase, uint32_t triangleCount,
                                  bool gated) {
                 if (triangleCount == 0) {
                     return;
                 }
-                PipelineKey key;
-                key.module = "scene_draw";
-                key.vertexEntry = caster.directional ? "directionalShadowVertex"
-                                              : "pointShadowVertex";
-                key.fragmentEntry = caster.directional
-                                        ? "directionalShadowFragment"
-                                        : "pointShadowFragment";
-                key.depthFormat = Format::D32Sfloat;
-                key.viewMask = viewMask;
-                key.depthTest = true;
-                key.depthWrite = true;
-                key.depthBias = true;
-                // D32_SFLOAT constant bias is expressed in representable depth
-                // increments; the slope term supplies the useful offset on curved
-                // surfaces that approach parallel to the light.
-                //
-                // Both terms carry more than they used to because nothing is
-                // culled any more. Rendering back faces alone put the stored depth
-                // a wall's thickness behind the lit surface, which is a free bias
-                // - but only for geometry that HAS a back face. Odyssey's exterior
-                // shells are single-sided, so from the sun's side they wrote
-                // nothing at all and light poured into the rooms behind them. With
-                // both faces written, a lit surface now finds its own depth in the
-                // map and needs a real offset instead. The receiver-side normal
-                // offset in lib/shadow.slang remains the primary defence; these
-                // are the dials to turn if acne or peter-panning shows up.
-                key.depthBiasConstantFactor = 2.0f;
-                key.depthBiasSlopeFactor = 2.0f;
-                // Never cull. A single-sided wall has to occlude from whichever
-                // side the light is on, and a cutout fence or leaf card likewise.
-                key.cull = FaceCullMode::None;
-                PipelineBinding pipeline = _renderer.pipelines().get(key);
+                const PipelineBinding &pipeline = meshPipeline;
                 cmd.bindPipeline(pipeline.pipeline);
                 cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
                                       offsets.data(), static_cast<uint32_t>(offsets.size()));
@@ -681,21 +696,11 @@ void ScenePipeline::shadowPass(ICommandBuffer &cmd,
             drawRange(scene.opaqueTriangleCount, gatedTriangles, true);
             }
             if (scene.grassCardCount != 0) {
-                PipelineKey key;
-                key.module = "scene_draw";
-                key.vertexEntry = caster.directional ? "grassCardDirectionalShadowVertex"
-                                              : "grassCardPointShadowVertex";
-                key.fragmentEntry = caster.directional ? "directionalShadowFragment"
-                                                 : "pointShadowFragment";
-                key.depthFormat = Format::D32Sfloat;
-                key.viewMask = viewMask;
-                key.depthTest = true;
-                key.depthWrite = true;
-                key.depthBias = true;
-                key.depthBiasConstantFactor = 2.0f;
-                key.depthBiasSlopeFactor = 2.0f;
-                key.cull = FaceCullMode::None;
-                PipelineBinding pipeline = _renderer.pipelines().get(key);
+                const PipelineBinding pipeline = _renderer.pipelines().get(shadowPipelineKey(
+                    caster.directional ? "grassCardDirectionalShadowVertex"
+                                       : "grassCardPointShadowVertex",
+                    caster.directional ? "directionalShadowFragment" : "pointShadowFragment",
+                    viewMask));
                 auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.frameIndex());
                 std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
                 offsets[UniformBlockBindingPoints::globals] = globalsOffset;
@@ -1115,17 +1120,16 @@ void ScenePipeline::pbrChannelsPass(ICommandBuffer &cmd, uint32_t globalsOffset)
     // channel-image indices the composite reads.
     const auto channels = acquireChannelBinding();
     const std::array<IImage *, 7> resolveChannels {{
-        channels.images[5],  // noiseFree
-        channels.images[0],  // diffuse
-        channels.images[1],  // specular
-        channels.images[14], // direct diffuse
-        channels.images[6],  // diffuse factor
-        channels.images[9],  // specular factor
-        channels.images[3],  // viewZ
+        channels[ChannelSlot::NoiseFree],
+        channels[ChannelSlot::Diffuse],
+        channels[ChannelSlot::Specular],
+        channels[ChannelSlot::DirectDiffuse],
+        channels[ChannelSlot::DiffFactor],
+        channels[ChannelSlot::SpecFactor],
+        channels[ChannelSlot::ViewZ],
     }};
-    for (auto *image : resolveChannels) {
-        cmd.transitionImage(*image, ImageLayout::General);
-    }
+    cmd.transitionImages({resolveChannels.begin(), resolveChannels.end()},
+                         ImageLayout::General);
 
     PipelineKey key;
     key.module = "pbr_channels";
@@ -1172,9 +1176,9 @@ void ScenePipeline::pbrChannelsPass(ICommandBuffer &cmd, uint32_t globalsOffset)
     // tracer hands it NRD's outputs, at zero jitter, which makes its sampled
     // reads the raw texel at the pixel centre - the contract line exactly.
     _tracingOutput.runComposite = true;
-    _tracingOutput.denoisedDiffuse = channels.images[0]->sampleView();
-    _tracingOutput.denoisedSpecular = channels.images[1]->sampleView();
-    _tracingOutput.directDiffuse = channels.images[14]->sampleView();
+    _tracingOutput.denoisedDiffuse = channels[ChannelSlot::Diffuse]->sampleView();
+    _tracingOutput.denoisedSpecular = channels[ChannelSlot::Specular]->sampleView();
+    _tracingOutput.directDiffuse = channels[ChannelSlot::DirectDiffuse]->sampleView();
 }
 
 ChannelBinding ScenePipeline::acquireChannelBinding() {
@@ -1195,24 +1199,24 @@ void ScenePipeline::compositePass(ICommandBuffer &cmd) {
     // The channel images this pipeline owns, plus the denoised pair and direct
     // view the tracer handed back. The binding order is the one resolved in
     // init(); the tracer used to bind exactly this set from its own copies.
-    auto &channels = _frameChannels.images;
+    const auto &channels = _frameChannels;
     const std::array<ComputeBinding, 10> compositeBindings {{
         {_compositeBindings[0], _output->sampleView()},
-        {_compositeBindings[1], channels[5]->sampleView()},
-        {_compositeBindings[2], channels[6]->sampleView()},
-        {_compositeBindings[3], channels[9]->sampleView()},
+        {_compositeBindings[1], channels[ChannelSlot::NoiseFree]->sampleView()},
+        {_compositeBindings[2], channels[ChannelSlot::DiffFactor]->sampleView()},
+        {_compositeBindings[3], channels[ChannelSlot::SpecFactor]->sampleView()},
         {_compositeBindings[4], _tracingOutput.denoisedDiffuse},
         {_compositeBindings[5], _tracingOutput.denoisedSpecular},
-        {_compositeBindings[6], channels[3]->sampleView()},
-        {_compositeBindings[7], channels[0]->sampleView()},
-        {_compositeBindings[8], channels[1]->sampleView()},
+        {_compositeBindings[6], channels[ChannelSlot::ViewZ]->sampleView()},
+        {_compositeBindings[7], channels[ChannelSlot::Diffuse]->sampleView()},
+        {_compositeBindings[8], channels[ChannelSlot::Specular]->sampleView()},
         {_compositeBindings[9], _tracingOutput.directDiffuse},
     }};
     // Mirrors CompositePushConstants in slang/composite.slang. The trace pass
     // computed the denoiser values; the fog colour and the master switch are
     // the frame's, taken here where the uniforms and the option are in reach.
     // The per-pixel fog amount rode noiseFree.a and is not in the push.
-    const auto globals = _uniforms.globals();
+    const auto &globals = _uniforms.globals();
     const glm::vec3 fogColorLinear = glm::pow(
         glm::max(glm::vec3(globals.fogColor), glm::vec3(0.0f)), glm::vec3(2.2f));
     struct CompositePushConstants {
@@ -1229,8 +1233,8 @@ void ScenePipeline::compositePass(ICommandBuffer &cmd) {
     static_assert(sizeof(CompositePushConstants) == 32,
                   "push constant block must stay free of padding");
     cmd.dispatch(*_compositePipeline,
-                 {static_cast<uint32_t>((_renderSize.x + 7) / 8),
-                  static_cast<uint32_t>((_renderSize.y + 7) / 8), 1},
+                 {(_renderSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
+                  (_renderSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1},
                  {compositeBindings.data(), static_cast<uint32_t>(compositeBindings.size())},
                  nullptr, &resolveConstants, sizeof(resolveConstants));
 }
@@ -1698,13 +1702,18 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     if (_channelImages[0][0]) {
         const int chFrame = _lastChannelFrame >= 0 ? _lastChannelFrame : 0;
         const auto &chan = _channelImages[chFrame];
-        for (auto *image : {chan[0].get(), chan[1].get(), chan[5].get(), chan[14].get()}) {
-            cmd.transitionImage(*image, ImageLayout::ShaderRead);
-        }
-        sourceBindings.push_back({TextureUnits::channelDiffuse, chan[0].get()});
-        sourceBindings.push_back({TextureUnits::channelSpecular, chan[1].get()});
-        sourceBindings.push_back({TextureUnits::channelNoiseFree, chan[5].get()});
-        sourceBindings.push_back({TextureUnits::channelDirect, chan[14].get()});
+        const auto channel = [&chan](ChannelSlot c) {
+            return chan[static_cast<int>(c)].get();
+        };
+        cmd.transitionImages({channel(ChannelSlot::Diffuse),
+                              channel(ChannelSlot::Specular),
+                              channel(ChannelSlot::NoiseFree),
+                              channel(ChannelSlot::DirectDiffuse)},
+                             ImageLayout::ShaderRead);
+        sourceBindings.push_back({TextureUnits::channelDiffuse, channel(ChannelSlot::Diffuse)});
+        sourceBindings.push_back({TextureUnits::channelSpecular, channel(ChannelSlot::Specular)});
+        sourceBindings.push_back({TextureUnits::channelNoiseFree, channel(ChannelSlot::NoiseFree)});
+        sourceBindings.push_back({TextureUnits::channelDirect, channel(ChannelSlot::DirectDiffuse)});
     }
     auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
         _renderer.uniformRing().frame(), sourceBindings);
@@ -1725,7 +1734,7 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     const bool channelsAbsent = !_channelImages[0][0];
     const DebugViewPushConstants push {
         static_cast<uint32_t>(std::clamp(_options.debugView, 0, kMaxDebugView)) |
-            (channelsAbsent ? 0x100u : 0u),
+            (channelsAbsent ? kDebugViewChannelsAbsent : 0u),
         std::clamp(_options.ptRoughnessFloor, 0.0f, 1.0f),
         std::max(0.05f, _options.exposure),
         static_cast<uint32_t>(std::clamp(_options.tonemap, 0, 1))};

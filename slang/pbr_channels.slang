@@ -51,8 +51,14 @@ import lib.assemble;
 import lib.surface_model;
 import lib.direct_light;
 import lib.skycube;
+// The microfacet terms and the gamma decode, shared with the tracer rather
+// than copied: the same diff moved the demodulation model into
+// lib/surface_model.slang and the light model into lib/direct_light.slang,
+// and this is the last half of that job. Colour and BRDF maths only; no
+// tracing entry point is referenced, as debug_view.slang already does.
+import tracing.brdf;
 
-// Set 1 is the persistent resolve table, shared with pbr_resolve; only the
+// Set 1 is the persistent resolve table, shared with retro_resolve; only the
 // units this pass reads are declared. The scene-colour unit the SSR pass needs
 // is not among them.
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
@@ -167,23 +173,8 @@ float3 sampleAuthoredMirror(InstanceMaterial material, float3 worldReflection) {
         .SampleLevel(uv, 0.0).rgb;
 }
 
-float distributionGGX(float NdotH2, float a2) {
-    float d = NdotH2 * (a2 - 1.0) + 1.0;
-    return a2 / (kPi * d * d);
-}
-
-float geometrySchlick(float NdotV, float k) {
-    return NdotV / (NdotV * (1.0 - k) + k);
-}
-
-float geometrySmith(float NdotL, float NdotV, float k) {
-    return geometrySchlick(NdotL, k) * geometrySchlick(NdotV, k);
-}
-
-float3 fresnelSchlick(float cosTheta, float3 F0) {
-    return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
-}
-
+/** The one term with no tracer counterpart: the ambient lobe's Fresnel takes
+    a roughness ceiling, which the punctual ptFresnelSchlick does not. */
 float3 fresnelSchlickRoughness(float cosTheta, float3 F0, float roughness) {
     float3 ceiling = max(F0, float3(1.0 - roughness));
     return F0 + (ceiling - F0) * pow(saturate(1.0 - cosTheta), 5.0);
@@ -411,9 +402,9 @@ Channels shadePixel(float2 uv, int2 pixel) {
         float3 H = normalize(V + L);
         float NdotH = max(0.0, dot(normal, H));
         float VdotH = max(0.0, dot(V, H));
-        float D = distributionGGX(NdotH * NdotH, a2);
-        float G = geometrySmith(direct.specularNdotL, NdotV, k);
-        float3 Fs = fresnelSchlick(VdotH, F0);
+        float D = ptDistributionGGX(NdotH * NdotH, a2);
+        float G = ptGeometrySmith(direct.specularNdotL, NdotV, k);
+        float3 Fs = ptFresnelSchlick(VdotH, F0);
         float3 spec = (D * G * Fs) / max(1e-4, 4.0 * direct.specularNdotL * NdotV);
         directDiffuse += direct.diffuse;
         directS += spec * direct.radiance * direct.specularNdotL;

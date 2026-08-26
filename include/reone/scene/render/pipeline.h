@@ -77,13 +77,12 @@ using RenderMode = graphics::RenderMode;
  * cascaded map and two cubes. Each entry names where its map lives, so the
  * pass needs to know nothing about how selection ordered them.
  */
-struct RenderShadowCaster {
-    bool directional {false};
-    /** Index into the uniform block's shadow table; the vertex stage reads it. */
-    int slot {0};
-    /** First cascade layer for a directional caster, cube index for a point one. */
-    int mapIndex {0};
-};
+/**
+ * The graphics struct itself, not a copy of it - the same reasoning as
+ * RenderMode above: a second declaration here would be one more place for the
+ * two to disagree, and every frame paid a loop to translate between them.
+ */
+using RenderShadowCaster = graphics::SceneShadowCaster;
 
 /**
  * How a render target should be interpreted when displayed. Several targets hold

@@ -135,6 +135,8 @@ static const std::vector<float> g_shadowCascadeDivisors {
     1.0f};
 
 void SceneGraph::clear() {
+    _roomBoundsCentreValid = false;
+    _roomBoundsCentre.reset();
     _modelRoots.clear();
     _walkmeshRoots.clear();
     _groundHeightDirty = true;
@@ -967,36 +969,6 @@ Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {
                 light.dynamicType = _activeLights[i]->modelNode().light()->dynamicType;
                 light.shadowSlot = shadowSlotOf(_activeLights[i]);
             }
-            // TEMPORARY DIAGNOSTIC - revert before commit.
-            {
-                static size_t loggedLightHash = 0;
-                size_t h = _activeLights.size() * 1315423911u;
-                for (const auto &l : _activeLights) {
-                    h = h * 1099511628211ull ^ reinterpret_cast<uintptr_t>(l);
-                    h = h * 1099511628211ull ^ static_cast<size_t>(l->multiplier() * l->strength() * 1000.0f);
-                }
-                if (h != loggedLightHash) {
-                    loggedLightHash = h;
-                    std::ostringstream ss;
-                    ss << "LIGHTCENSUS n=" << _activeLights.size();
-                    for (size_t i = 0; i < _activeLights.size(); ++i) {
-                        const auto &l = _activeLights[i];
-                        ss << "  [" << i << "]" << (l->isDirectional() ? "DIR" : "pt")
-                           << " r=" << l->radius()
-                           << " m=" << l->multiplier() * l->strength()
-                           << " amb=" << l->modelNode().light()->ambientOnly
-                           << " slot=" << shadowSlotOf(l);
-                        if (l->isDirectional()) {
-                            const auto aim = directionalLightAim(*l);
-                            const auto o = l->origin();
-                            ss << " aim=" << aim.x << "," << aim.y << "," << aim.z
-                               << " authored=" << l->hasAuthoredDirection()
-                               << " org=" << o.x << "," << o.y << "," << o.z;
-                        }
-                    }
-                    info(ss.str(), LogChannel::Graphics);
-                }
-            }
             if (hasShadowLight()) {
                 const float opacity = _graphicsOpt.shadowOpacity >= 0.0f
                                           ? _graphicsOpt.shadowOpacity
@@ -1458,6 +1430,15 @@ static glm::mat4 getPointLightView(const glm::vec3 &lightPos, CubeMapFace face) 
 }
 
 std::optional<glm::vec3> SceneGraph::roomBoundsCentre() const {
+    // Cached: the bounds are fixed for the lifetime of the loaded area (see
+    // directionalLightAim), but this walked every model root and transformed
+    // eight corners per root, once per directional light in the globals fill,
+    // again per directional caster, and again in computeLightSpaceMatrices -
+    // O(objects) per frame for a value that changes when a module loads.
+    // clear() drops it, which is where the roots change.
+    if (_roomBoundsCentreValid) {
+        return _roomBoundsCentre;
+    }
     AABB bounds;
     for (auto &root : _modelRoots) {
         if (root->usage() != ModelUsage::Room || root->isBackgroundScenery()) {
@@ -1465,10 +1446,11 @@ std::optional<glm::vec3> SceneGraph::roomBoundsCentre() const {
         }
         bounds.expand(root->aabb() * root->absoluteTransform());
     }
-    if (bounds.isDegenerate()) {
-        return std::nullopt;
-    }
-    return 0.5f * (bounds.min() + bounds.max());
+    _roomBoundsCentreValid = true;
+    _roomBoundsCentre = bounds.isDegenerate()
+                            ? std::nullopt
+                            : std::optional<glm::vec3>(0.5f * (bounds.min() + bounds.max()));
+    return _roomBoundsCentre;
 }
 
 glm::vec3 SceneGraph::directionalLightAim(const LightSceneNode &light) const {

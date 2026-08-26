@@ -131,7 +131,6 @@ struct GlobalUniforms {
     /** Shared by every directional caster - they split one camera frustum. */
     glm::vec4 shadowCascadeFarPlanes {0.0f};
     glm::mat4 shadowCascadeSpace[kMaxShadowCascadeMatrices] {glm::mat4(1.0f)};
-    /** Six consecutive faces per point caster, indexed by mapIndex * 6. */
     /**
      * Unjittered view-projection of this frame and the previous one. Kept
      * separate from projection/view, which carry TAA jitter when it is enabled,

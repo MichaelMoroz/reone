@@ -103,21 +103,20 @@ int cascadeFor(float3 viewPos) {
 }
 
 /** Shadow from one cascade, with a penumbra of constant width in world units. */
-float shadowInCascade(int mapIndex, int cascade, float3 worldPos, float3 normal, float3 lightVector) {
+float shadowInCascade(int mapIndex, int mapResolution, int cascade, float3 worldPos,
+                      float3 normal, float3 lightVector) {
     float NdotL = dot(normal, lightVector);
     float sinAngle = sqrt(max(0.0, 1.0 - NdotL * NdotL));
     // The cascade's world units per texel, read off its own matrix: an
     // orthographic light-space transform scales the world extent it covers
     // into [-1,1], so the extent is 2 / the row's length, and a texel is that
     // over the map's resolution.
-    uint width;
-    uint height;
-    uint layers;
-    sShadowMap.GetDimensions(width, height, layers);
-    float2 texelSize = 1.0 / float2(width, height);
+    // From the uniform, not GetDimensions - see the note on the point path.
+    const float width = float(max(1, mapResolution));
+    float2 texelSize = 1.0 / float2(width, width);
     float4x4 cascadeSpace = globalUniforms.shadowCascadeSpace[mapIndex + cascade];
     float3 lightSpaceX = float3(cascadeSpace[0][0], cascadeSpace[1][0], cascadeSpace[2][0]);
-    float texelWorldSize = 2.0 / (max(1e-6, length(lightSpaceX)) * float(width));
+    float texelWorldSize = 2.0 / (max(1e-6, length(lightSpaceX)) * width);
     float3 offsetWorldPos =
         worldPos + normal * sinAngle * kDirectionalNormalOffsetTexels * texelWorldSize;
     float4 lightSpacePos = mul(cascadeSpace, float4(offsetWorldPos, 1.0));
@@ -182,7 +181,8 @@ float getDirectionalLightShadow(GlobalUniformsShadowLight slot, float3 viewPos,
                                 float3 worldPos, float3 normal) {
     float3 lightVector = -normalize(slot.positionOrDirection.xyz);
     int cascade = cascadeFor(viewPos);
-    float shadow = shadowInCascade(slot.mapIndex, cascade, worldPos, normal, lightVector);
+    float shadow = shadowInCascade(slot.mapIndex, slot.mapResolution, cascade, worldPos,
+                                   normal, lightVector);
 
     // Cross-fade into the next cascade over the tail of this one. Even with the
     // penumbra held constant the two disagree at the split - they carry
@@ -196,7 +196,8 @@ float getDirectionalLightShadow(GlobalUniformsShadowLight slot, float3 viewPos,
         float t = saturate((depth - near) / max(far - near, 1e-4));
         float blend = smoothstep(1.0 - kCascadeBlendBand, 1.0, t);
         if (blend > 0.0) {
-            float next = shadowInCascade(slot.mapIndex, cascade + 1, worldPos, normal, lightVector);
+            float next = shadowInCascade(slot.mapIndex, slot.mapResolution, cascade + 1,
+                                         worldPos, normal, lightVector);
             shadow = lerp(shadow, next, blend);
         }
     }
@@ -306,11 +307,18 @@ public float getShadowFrom(int slotIndex, float3 viewPos, float3 worldPos, float
     // fade below stops treating a back-facing leaf as something that cannot be
     // lit. Without this a blade lit from behind is in its own shadow.
     float3 facing = thin ? thinFacingNormal(normal, lightVector) : normal;
+    // Ahead of the lookup, not after it: a surface facing away from the light
+    // fades to fully lit, so its sixteen-to-twenty comparison taps could only
+    // ever be multiplied out again. The resolves shadow per light now, so this
+    // ran once per shadowed light per pixel.
+    float normalFade = saturate(dot(facing, lightVector) * 10.0);
+    if (normalFade <= 0.0) {
+        return 1.0;
+    }
     float shadow = slot.positionOrDirection.w == 0.0
                        ? getDirectionalLightShadow(slot, viewPos, worldPos, facing)
                        : getPointLightShadow(slot, worldPos, facing);
     float visibility = 1.0 - shadow * slot.strength;
-    float normalFade = saturate(dot(facing, lightVector) * 10.0);
     return lerp(1.0, visibility, normalFade);
 }
 

@@ -151,8 +151,10 @@ struct SceneShadowCaster {
 constexpr uint32_t kAllShadowCasters = 0xFFFFFFFFu;
 
 /**
- * One wireframe box of the debug overlay: eight world-space corners in the
- * AABB class's corner order, and the line colour. The scene side decides what
+ * One wireframe box of the debug overlay: eight world-space corners and the
+ * line colour. Corner i selects max over min per axis by bits x=1, y=2, z=4 -
+ * the overlay's own order, shared with debug_overlay.slang's edge table and
+ * NOT the order graphics::AABB::corners() uses, which is x=4, y=2, z=1. The scene side decides what
  * a box means (an object's bounds, a light's marker); this struct is only what
  * the draw needs.
  */

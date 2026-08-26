@@ -84,7 +84,6 @@ struct GlobalUniforms {
     // Shared by every directional caster - they split one camera frustum.
     float4 shadowCascadeFarPlanes;
     float4x4 shadowCascadeSpace[kMaxShadowCascadeMatrices];
-    // Six consecutive faces per point caster, indexed by mapIndex * 6.
     // Unjittered, so that motion vectors never encode the jitter offset.
     float4x4 viewProjection;
     float4x4 prevViewProjection;

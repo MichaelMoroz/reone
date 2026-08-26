@@ -83,8 +83,8 @@ float2 pixelsToClip(float2 pixels) {
 
 // --- Boxes ---
 
-/** The twelve edges of a box, as corner-index pairs. Corner order is the
-    AABB class's: (min,max) selected per axis by bits x=1, y=2, z=4. */
+/** The twelve edges of a box, as corner-index pairs. Corner i selects max
+    over min per axis by bits x=1, y=2, z=4, matching DebugOverlayShape. */
 static const uint2 kEdges[12] = {
     uint2(0, 1), uint2(2, 3), uint2(4, 5), uint2(6, 7), // x-aligned
     uint2(0, 2), uint2(1, 3), uint2(4, 6), uint2(5, 7), // y-aligned

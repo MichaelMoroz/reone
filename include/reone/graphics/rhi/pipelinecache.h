@@ -87,8 +87,40 @@ struct GBufferBinding {
  * order (tracing/outputs.slang); the count is asserted where they are named.
  */
 constexpr int kNumTracingChannels = 15;
+
+/**
+ * What each channel IS, in the order the trace kernel's set 2 declares them
+ * (tracing/outputs.slang) and the format and name tables are written in.
+ *
+ * The indices were bare literals at a dozen sites, each with the name only in
+ * a trailing comment, and the counts were asserted while the meanings were
+ * not: inserting a channel left every assert green and silently rewired every
+ * consumer. Index through this instead, and the compiler carries the meaning.
+ */
+enum class ChannelSlot : int {
+    Diffuse = 0,
+    Specular,
+    NormalRoughness,
+    ViewZ,
+    NrdMotion,
+    NoiseFree,
+    DiffFactor,
+    DeviceDepth,
+    ScreenMotion,
+    SpecFactor,
+    GBufferDiffuse,
+    GBufferEyeNormal,
+    GBufferDepth,
+    GBufferMotion,
+    DirectDiffuse,
+};
+
 struct ChannelBinding {
     std::array<IImage *, kNumTracingChannels> images {};
+
+    IImage *operator[](ChannelSlot channel) const {
+        return images[static_cast<int>(channel)];
+    }
 };
 
 /**

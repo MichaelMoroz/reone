@@ -222,11 +222,7 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
     graphics::SceneFramePlan plan;
     plan.transparentOutput = alpha == SceneOutputAlpha::Coverage;
     plan.shadowCasterCategories = shadowCasterCategories();
-    plan.shadowCasters.reserve(shadowCasters.size());
-    for (const auto &caster : shadowCasters) {
-        plan.shadowCasters.push_back(
-            graphics::SceneShadowCaster {caster.directional, caster.slot, caster.mapIndex});
-    }
+    plan.shadowCasters = shadowCasters;
     auto uploadArena = std::move(_admissionResult.submission.upload);
     _admissionResult = _admission->prepare(
         _uniforms.globals().view, std::move(uploadArena));

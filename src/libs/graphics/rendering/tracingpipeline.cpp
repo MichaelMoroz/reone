@@ -328,9 +328,9 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
         // storage. Only this frame's set is transitioned: ScenePipeline owns
         // both and hands over the one the kernel is about to write, and the
         // tracked transition is a no-op after the slot's first traced frame.
-        for (int i = 0; i < kNumTracingChannels; ++i) {
-            commandBuffer.transitionImage(*input.channels.images[i], ImageLayout::General);
-        }
+        commandBuffer.transitionImages(
+            {input.channels.images.begin(), input.channels.images.end()},
+            ImageLayout::General);
     }
     std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
     offsets[0] = globalsOffset;
@@ -385,11 +385,11 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
     if (_nrdDenoiser) {
         // The trace pass's storage writes feed NRD's sampled reads. The channel
         // images are ScenePipeline's, handed in for this frame.
-        auto &channels = input.channels.images;
+        const auto &channels = input.channels;
         std::array<IImage *, kNumTracingChannels + 1> traceOutputs {};
         traceOutputs[0] = &output;
         for (int i = 0; i < kNumTracingChannels; ++i)
-            traceOutputs[i + 1] = channels[i];
+            traceOutputs[i + 1] = channels.images[i];
         for (auto *image : traceOutputs) {
             commandBuffer.imageBarrier(*image, ImageUse::RayTracingStore, ImageUse::ComputeRead);
         }
@@ -408,19 +408,19 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
             }
         };
         TracingDenoiserInputs inputs;
-        inputs.diffRadianceHitDist = channels[0];
-        inputs.specRadianceHitDist = channels[1];
+        inputs.diffRadianceHitDist = channels[ChannelSlot::Diffuse];
+        inputs.specRadianceHitDist = channels[ChannelSlot::Specular];
         // Only when the direct channel exists as its own signal. With the
         // channel off the tracer sums direct light into the diffuse one, so
         // there is nothing separate to denoise and the second denoiser's
         // batch is not recorded at all.
         if (_options.ptDirectChannel &&
             _options.ptShadowFilter == graphics::ShadowFilter::Denoiser) {
-            inputs.directRadianceHitDist = channels[14];
+            inputs.directRadianceHitDist = channels[ChannelSlot::DirectDiffuse];
         }
-        inputs.normalRoughness = channels[2];
-        inputs.viewZ = channels[3];
-        inputs.motion = channels[4];
+        inputs.normalRoughness = channels[ChannelSlot::NormalRoughness];
+        inputs.viewZ = channels[ChannelSlot::ViewZ];
+        inputs.motion = channels[ChannelSlot::NrdMotion];
         // The projection arrives carrying the TAA jitter (applied as a clip
         // translate); NRD is owed the unjittered matrix and the sub-pixel
         // offset separately, the latter in pixels with UV-down y.
@@ -481,9 +481,9 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                 auto &filtered = *_shadowFiltered[_renderer.frameIndex()];
                 const std::array<ComputeBinding, 4> filterBindings {{
                     {_shadowFilterBindings[0], filtered.sampleView()},
-                    {_shadowFilterBindings[1], channels[14]->sampleView()},
-                    {_shadowFilterBindings[2], channels[3]->sampleView()},
-                    {_shadowFilterBindings[3], channels[2]->sampleView()},
+                    {_shadowFilterBindings[1], channels[ChannelSlot::DirectDiffuse]->sampleView()},
+                    {_shadowFilterBindings[2], channels[ChannelSlot::ViewZ]->sampleView()},
+                    {_shadowFilterBindings[3], channels[ChannelSlot::NormalRoughness]->sampleView()},
                 }};
                 commandBuffer.dispatch(*_shadowFilterPipeline,
                                        {static_cast<uint32_t>((_extent.x + 7) / 8),
@@ -503,7 +503,8 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                 input.composite->runComposite = true;
                 input.composite->denoisedDiffuse = _nrdDenoiser->denoisedDiffuse().sampleView();
                 input.composite->denoisedSpecular = _nrdDenoiser->denoisedSpecular().sampleView();
-                input.composite->directDiffuse = directChannelView(channels[14]);
+                input.composite->directDiffuse =
+                    directChannelView(channels[ChannelSlot::DirectDiffuse]);
                 input.composite->denoisedJitter[0] = -jitterPixels.x;
                 input.composite->denoisedJitter[1] = -jitterPixels.y;
                 input.composite->directDenoised =

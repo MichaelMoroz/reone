@@ -349,7 +349,10 @@ public:
      * the directional fallback has to run against that light's own position.
      */
     /** Centre of the module's non-background room geometry, if it has any. */
+    /** The module's room-geometry centre, computed once per loaded area. */
     std::optional<glm::vec3> roomBoundsCentre() const;
+    mutable std::optional<glm::vec3> _roomBoundsCentre;
+    mutable bool _roomBoundsCentreValid {false};
 
     glm::vec3 directionalLightAim(const LightSceneNode &light) const;
 
@@ -363,7 +366,6 @@ public:
         return -1;
     }
 
-    size_t shadowLightCount() const { return _shadowLights.size(); }
 
     void setShadowProperties(ShadowProperties properties) override {
         _shadowProperties = std::move(properties);

@@ -198,7 +198,6 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
     bool litFromBehind = dot(L, shading.normal) <= 0.0;
     if (litFromBehind && !shading.thin) return result;
     float3 shadeNormal = shading.thin && litFromBehind ? -shading.normal : shading.normal;
-    float transmission = litFromBehind ? pushConstants.thinTransmission : 1.0;
     SphereLight sphere = ptSphereLight(light, lightDistance);
     float3 radiance = sampled.radiance;
     // One angle drives both the falloff and the penumbra, because they are

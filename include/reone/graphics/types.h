@@ -44,14 +44,6 @@ constexpr int kMaxPointShadows = 48;
 constexpr int kMaxShadowLights = kMaxDirectionalShadows + kMaxPointShadows;
 /** Cascade matrices the directional half of the table holds. */
 constexpr int kMaxShadowCascadeMatrices = kMaxDirectionalShadows * kNumShadowCascades;
-/**
- * Cube face transforms the point half of the table holds.
- *
- * These exist in the uniform block because the shadow pass's vertex stage
- * needs them and a push constant cannot carry six matrices. That is also what
- * bounds kMaxPointShadows at 16: at 32 the block would exceed 16 KB, which is
- * all Vulkan guarantees for maxUniformBufferRange.
- */
 constexpr int kNumSSAOSamples = 64;
 constexpr int kNumSaberSegments = 20;
 constexpr int kNumSaberSegmentVertices = 4;
