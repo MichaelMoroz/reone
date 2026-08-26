@@ -35,10 +35,10 @@ namespace graphics {
 
 /**
  * Shared push-constant range exposed by every cached graphics/compute layout.
- * ResolvePushConstants is the largest caller at eight 32-bit words; smaller
+ * ResolvePushConstants is the largest caller at eleven 32-bit words; smaller
  * passes may update only the prefix they use.
  */
-constexpr uint32_t kCachedPipelinePushConstantSize = 10 * sizeof(uint32_t);
+constexpr uint32_t kCachedPipelinePushConstantSize = 11 * sizeof(uint32_t);
 
 class ICommandBuffer;
 class IImage;

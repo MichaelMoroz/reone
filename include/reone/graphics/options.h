@@ -473,9 +473,14 @@ struct GraphicsOptions {
     /** Calibration session of 2026-07-29: sky and emissive at 2.5, the
         lightmap cache retired to zero - two bounces of real transport
         replace it - and the sun at 2.5 where the Dantooine dusk reads as a
-        sun. All still dials; these are the graded defaults. */
+        sun. Those are the TRACED defaults now: sky, emissive and lightmap
+        are one dial set across the modes, and the parser resolves each
+        default per mode (path tracing 2.5/2.5/0.0, raster 1.0/1.0/1.0)
+        exactly as it resolves the anti-aliasing slot - an explicit flag or
+        cfg value always wins. The member defaults here are the traced
+        grade and are only what an unresolved read would see. */
     float skyIntensity {2.5f};
-    float ptEmissiveIntensity {2.5f};
+    float emissiveIntensity {2.5f};
     /**
      * Painted backdrop imagery - Taris' cityscape, Manaan's towers - on its own
      * scale beside the sky's.
@@ -491,19 +496,18 @@ struct GraphicsOptions {
      * 1.0 is what it was before it had a name: the texture, as authored.
      */
     float ptBackdropIntensity {1.0f};
-    float ptLightmapIntensity {0.0f};
     /**
-     * Strength of the baked irradiance in PBR, and deliberately a separate dial
-     * from ptLightmapIntensity.
+     * Strength of the baked lightmap, one dial with per-mode DEFAULTS rather
+     * than two dials.
      *
-     * The two modes are meant to agree on what a surface is and differ only in
-     * how light gets to it, so this is the one number that has to be allowed to
-     * disagree: the bake is the indirect light in PBR, while the tracer
-     * computes that transport for real and scales the bake toward zero so it is
-     * not counted twice. Sharing one dial would mean either PBR interiors go
-     * unlit or the tracer double-counts them.
+     * The two modes agree on what a surface is and differ only in how light
+     * gets to it, and this is the one number whose right value differs with
+     * that answer: the bake is the indirect light in PBR (default 1.0), while
+     * the tracer computes that transport for real and retires the bake toward
+     * zero so it is not counted twice (default 0.0). One dial, resolved per
+     * mode by the parser; an explicit value applies to whichever mode runs.
      */
-    float pbrLightmapIntensity {1.0f};
+    float lightmapIntensity {0.0f};
     float ptDirectIntensity {1.0f};
     float ptSunIntensity {2.5f};
     /** Path depth after the primary hit. */

@@ -91,6 +91,8 @@ struct ResolvePushConstants {
     // overexposed and a Korriban one underexposed, 40% of each frame.
     float skyIntensity;
     float backdropIntensity;
+    /** The shared emissive dial; the tracer's rule, radiance not x albedo. */
+    float emissiveIntensity;
 };
 
 /** Mirrors CoveragePushConstants in postprocess.slang. */
@@ -969,7 +971,7 @@ ResolvePushConstants resolvePush(uint32_t flags, const GraphicsOptions &options)
             std::clamp(options.thinTransmission, 0.0f, 1.0f),
             std::clamp(options.albedoGamma, 0.1f, 4.0f),
             std::clamp(options.ptRoughnessFloor, 0.0f, 1.0f),
-            std::max(0.0f, options.pbrLightmapIntensity),
+            std::max(0.0f, options.lightmapIntensity),
             // The tracer's dial, read by PBR too: the two modes are meant to
             // differ in how light reaches a surface, never in what the light
             // is, and a lamp of a different size in one of them is the latter.
@@ -977,7 +979,8 @@ ResolvePushConstants resolvePush(uint32_t flags, const GraphicsOptions &options)
             std::max(0.0f, options.ptDirectIntensity),
             std::max(0.0f, options.ptSunIntensity),
             std::max(0.0f, options.skyIntensity),
-            std::max(0.0f, options.ptBackdropIntensity)};
+            std::max(0.0f, options.ptBackdropIntensity),
+            std::max(0.0f, options.emissiveIntensity)};
 }
 
 } // namespace

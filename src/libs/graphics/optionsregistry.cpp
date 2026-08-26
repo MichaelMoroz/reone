@@ -303,15 +303,15 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                            &GraphicsOptions::pathTracingSamples, 1, 64));
     descs.push_back(floatOpt("skyintensity", OptionApply::Live, "sky light intensity",
                              &GraphicsOptions::skyIntensity, 0.0f, 1024.0f));
-    descs.push_back(floatOpt("ptemissiveintensity", OptionApply::Live,
-                             "path tracing emissive intensity",
-                             &GraphicsOptions::ptEmissiveIntensity, 0.0f, 1024.0f));
+    descs.push_back(floatOpt("emissiveintensity", OptionApply::Live,
+                             "emissive intensity - lamps, screens, glowing panels",
+                             &GraphicsOptions::emissiveIntensity, 0.0f, 1024.0f));
     descs.push_back(floatOpt("ptbackdropintensity", OptionApply::Live,
                              "path tracing backdrop imagery intensity",
                              &GraphicsOptions::ptBackdropIntensity, 0.0f, 1024.0f));
-    descs.push_back(floatOpt("ptlightmapintensity", OptionApply::Live,
-                             "path tracing lightmap intensity",
-                             &GraphicsOptions::ptLightmapIntensity, 0.0f, 1024.0f));
+    descs.push_back(floatOpt("lightmapintensity", OptionApply::Live,
+                             "baked-lightmap intensity",
+                             &GraphicsOptions::lightmapIntensity, 0.0f, 1024.0f));
     descs.push_back(floatOpt("ptdirectintensity", OptionApply::Live,
                              "path tracing direct-light intensity",
                              &GraphicsOptions::ptDirectIntensity, 0.0f, 1024.0f));
@@ -328,9 +328,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(floatOpt("emissivegamma", OptionApply::Live,
                              "authored radiance decode exponent (emission, sky, backdrop)",
                              &GraphicsOptions::emissiveGamma, 0.1f, 4.0f));
-    descs.push_back(floatOpt("pbrlightmapintensity", OptionApply::Live,
-                             "PBR baked-irradiance intensity",
-                             &GraphicsOptions::pbrLightmapIntensity, 0.0f, 1024.0f));
     descs.push_back(boolOpt("pttracestats", OptionApply::Live,
                             "enable path tracing statistics",
                             &GraphicsOptions::ptTraceStats));

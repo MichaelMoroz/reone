@@ -95,6 +95,7 @@ struct ResolvePushConstants {
     float sunIntensity;
     float skyIntensity;
     float backdropIntensity;
+    float emissiveIntensity;
 };
 [[vk::push_constant]] ResolvePushConstants pushConstants;
 
@@ -439,11 +440,12 @@ Channels shadePixel(float2 uv, int2 pixel) {
 
     Channels c;
     // Emission is radiance into noiseFree on the tracer's rule: not multiplied
-    // by albedo, unclamped. The shared emissiveIntensity dial arrives with the
-    // dial unification; until then this is the emissive texel at unit intensity.
+    // by albedo, unclamped, on the shared emissiveIntensity dial - whose PBR
+    // default (1.0) preserves this mode's authored emissive level while the
+    // traced default keeps the 2.5 grade.
     float3 radianceTexel = pow(max(mainTexSample.rgb, 0.0), float3(kGamma));
     c.noiseFree = assembleEmission(gammaToLinear(selfIllumSample.rgb), radianceTexel,
-                                   material.curatedEmission, 1.0);
+                                   material.curatedEmission, pushConstants.emissiveIntensity);
     c.fog = fogEnabled ? fogAmount(worldPos, globalUniforms.cameraPosition.xyz,
                                    globalUniforms.fogNear, globalUniforms.fogFar)
                        : 0.0;
