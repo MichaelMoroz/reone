@@ -33,6 +33,15 @@
 // It runs after the display transform, so nothing here is graded, anti-aliased
 // or sharpened - the overlay is a diagnostic drawn ON the picture, not part of
 // it.
+//
+// Which is exactly why both stages project through globalUniforms.viewProjection
+// and not globalUniforms.projection: the latter carries the temporal resolve's
+// sub-pixel jitter, and a pass drawn AFTER that resolve must not. The resolved
+// image is the unjittered one, so a jittered overlay would sit a fraction of a
+// pixel off the scene it annotates and shimmer as the offset cycled. Draw this
+// before the anti-aliasing slot instead and the jitter would be correct - but
+// then the boxes would be temporally resolved and tonemapped along with the
+// picture, which is what this pass exists to avoid.
 
 import uniforms;
 
@@ -111,8 +120,8 @@ OverlayVertex overlayVertex(uint vertexId: SV_VertexID) {
 
     float3 a = aabbUniforms.corners[kEdges[edge].x].xyz;
     float3 b = aabbUniforms.corners[kEdges[edge].y].xyz;
-    float4 clipA = mul(globalUniforms.projection, mul(globalUniforms.view, float4(a, 1.0)));
-    float4 clipB = mul(globalUniforms.projection, mul(globalUniforms.view, float4(b, 1.0)));
+    float4 clipA = mul(globalUniforms.viewProjection, float4(a, 1.0));
+    float4 clipB = mul(globalUniforms.viewProjection, float4(b, 1.0));
 
     // Clipped to the near plane, not dropped whole. Dropping any edge with a
     // corner behind the eye collapses every box the camera stands INSIDE to
@@ -173,8 +182,7 @@ struct OverlayGlyph {
 [shader("vertex")]
 OverlayGlyph overlayTextVertex(uint vertexId: SV_VertexID, uint glyph: SV_InstanceID) {
     OverlayGlyph output;
-    float4 clip = mul(globalUniforms.projection,
-                      mul(globalUniforms.view, float4(pushConstants.anchor, 1.0)));
+    float4 clip = mul(globalUniforms.viewProjection, float4(pushConstants.anchor, 1.0));
     if (clip.w < kMinClipW) {
         output.position = kCulledPosition;
         output.uv = float2(0.0);
