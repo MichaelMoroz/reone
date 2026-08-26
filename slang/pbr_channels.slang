@@ -50,7 +50,6 @@ import lib.material_ops;
 import lib.assemble;
 import lib.surface_model;
 import lib.direct_light;
-import lib.pbr_direct;
 import lib.skycube;
 
 // Set 1 is the persistent resolve table, shared with pbr_resolve; only the
@@ -187,6 +186,76 @@ float3 fresnelSchlick(float cosTheta, float3 F0) {
 float3 fresnelSchlickRoughness(float cosTheta, float3 F0, float roughness) {
     float3 ceiling = max(F0, float3(1.0 - roughness));
     return F0 + (ceiling - F0) * pow(saturate(1.0 - cosTheta), 5.0);
+}
+
+/** Everything downstream needs from one PBR direct-light evaluation. Private
+    to this provider now: the debug view reads the channel this pass writes
+    instead of re-deriving the light, so nothing else evaluates it. */
+struct PbrDirectLight {
+    bool direct;
+    float3 direction;
+    /** Linear source radiance after intensity and this mode's visibility. */
+    float3 radiance;
+    /** Demodulated Lambertian diffuse, including 1/pi and thin transmission. */
+    float3 diffuse;
+    /** Cosine against the unflipped normal, for the specular lobe. */
+    float specularNdotL;
+    /** The legacy ambient-only fill, before material ambient is applied. */
+    float3 ambientRadiance;
+};
+
+PbrDirectLight pbrDirectLight(GlobalUniformsLight light,
+                              float3 viewPos, float3 worldPos,
+                              float3 normal, bool thinSurface,
+                              bool shadowsEnabled, float thinTransmission,
+                              float emitterRadiusRatio,
+                              float directIntensity, float sunIntensity) {
+    PbrDirectLight result;
+    result.direct = false;
+    result.direction = float3(0.0, 0.0, 1.0);
+    result.radiance = float3(0.0);
+    result.diffuse = float3(0.0);
+    result.specularNdotL = 0.0;
+    result.ambientRadiance = float3(0.0);
+
+    // What the light IS comes from the shared module, so this renderer and
+    // the tracer cannot disagree on it; only the visibility below is PBR's.
+    DirectLightSample sample = sampleDirectLight(light, worldPos, emitterRadiusRatio,
+                                                 directIntensity, sunIntensity);
+    result.direction = sample.direction;
+    // Non-directional only: the tracer deliberately promotes a DIRECTIONAL
+    // ambient-only record to a sampled sun (lighting.slang keeps only the
+    // local ones out of its table), so routing it to the ambient path here
+    // made the same light a fill in one renderer and a sun in the other.
+    if (!sample.directional && light.ambientOnly != 0) {
+        result.ambientRadiance = directLightColor(light) *
+                                 sphereLightAttenuation(light.radius, sample.distance,
+                                                        emitterRadiusRatio);
+        return result;
+    }
+    // A directional past the caster budget is applied UNSHADOWED, not
+    // deleted. Deleting it changed what light exists, and the two renderers
+    // may differ only in how occlusion is answered - the tracer samples every
+    // light and shadow-rays it; a map-less directional here is the same light
+    // with the weakest possible occlusion answer. The cost is real (an
+    // unmapped sun reaches through walls) and is the caster budget's problem,
+    // not admission's.
+    result.direct = true;
+
+    float visibility = 1.0;
+    if (shadowsEnabled && light.shadowSlot >= 0) {
+        // The map returns a LINEAR occlusion fraction - the mean of comparison
+        // taps - exactly as the tracer's shadow ray returns a linear
+        // transmittance. Raising it to 2.2 as if it were an encoded colour
+        // darkened every penumbra with no counterpart in the reference.
+        visibility = getShadowFrom(light.shadowSlot, viewPos, worldPos,
+                                   normal, thinSurface);
+    }
+    result.radiance = sample.radiance * visibility;
+    result.diffuse = directLightDiffuse(result.radiance, normal, result.direction,
+                                        thinSurface, thinTransmission);
+    result.specularNdotL = max(0.0, dot(normal, result.direction));
+    return result;
 }
 
 /** One surface's contribution to the shared channels. */

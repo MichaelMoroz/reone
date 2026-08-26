@@ -63,7 +63,7 @@ enum class AntiAliasing {
  * slang/debug_view.slang. Channels above 14 are produced by the tracer or its
  * resolve and have no counterpart in the raster modes.
  */
-constexpr int kMaxDebugView = 20;
+constexpr int kMaxDebugView = 19;
 
 /**
  * Upper bound on GraphicsOptions::grassTriangleBudget.

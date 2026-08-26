@@ -111,11 +111,17 @@ enum class SceneStep {
  * Mirrors the kDebug* numbering in slang/debug_view.slang.
  */
 inline bool isTracedOnlyDebugView(int view) {
-    // Must agree with isTracedOnlyDebugView in slang/debug_view.slang: this
-    // decides whether the shared debug pass steps aside, and that one decides
-    // whether it paints the not-available card. Disagreeing means a channel
-    // that exists is covered over by the card that says it does not.
-    return view == 8 || view == 9 || view == 11 || (view >= 15 && view <= 19);
+    // Must agree with tracedOnly in slang/debug_view.slang: this decides
+    // whether the shared debug pass steps aside, and that one decides whether
+    // it paints the not-available card. Disagreeing means a channel that
+    // exists is covered over by the card that says it does not.
+    //
+    // The radiance channels (8, 9, 11, 15) left this set when the channel
+    // images moved to ScenePipeline: any mode that fills them - the tracer,
+    // and PBR through pbr_channels - can show them, so the shared pass answers
+    // them from the images. What remains is the penumbra and the denoiser's
+    // own products, which only exist behind NRD.
+    return view >= 16 && view <= 19;
 }
 
 /**

@@ -24,13 +24,14 @@
 // anywhere. This dispatch answers them, from the G-buffer, in whichever mode is
 // running, and overwrites the shaded image with the result.
 //
-// Three channels are not answerable here and never will be: the tracer's
-// demodulated diffuse and specular radiance and its noise-free channel exist
-// only inside the kernel. In the traced mode the kernel writes those itself and
-// this pass is not recorded at all. In the raster modes this pass paints an
-// unmistakable "not available" card for them - see unavailableCard. It never
-// substitutes a different channel, because a diagnostic that quietly shows you
-// something else is worse than one that shows you nothing.
+// The radiance channels - demodulated diffuse, specular, noise-free and direct
+// diffuse - are read from the shared channel images, which any provider fills:
+// the tracer's kernel, or PBR's channels pass. One channel, one view, whichever
+// mode delivered the light. Retro fills no channels, and for it this pass
+// paints an unmistakable "not available" card - see unavailableCard - as it
+// does for the denoiser-only channels in any raster mode. It never substitutes
+// a different channel, because a diagnostic that quietly shows you something
+// else is worse than one that shows you nothing.
 //
 // The output is display-referred and final. A debug view is not a picture, so
 // the frame plan skips the anti-aliasing, grade and sharpen stages behind it in
@@ -42,8 +43,6 @@ import lib.gbuf;
 import lib.material_ops;
 import lib.math;
 import lib.scene_schema;
-import lib.shadow;
-import lib.pbr_direct;
 // For ptDisplayTransform: the tracer's channel views encode through it
 // (path_trace.slang), and one quantity in two colour spaces is not a
 // comparison. Colour maths only; no tracing entry points are referenced.
@@ -56,6 +55,12 @@ import tracing.brdf;
 [[vk::binding(5, 1)]] Sampler2D sGBufDepth;
 [[vk::binding(20, 1)]] Sampler2D sGBufMotion;
 [[vk::binding(21, 1), vk::image_format("r32ui")]] Sampler2D<uint> sGBufTriangleId;
+// The shared channel images, for the radiance views; unbound (and never
+// sampled, see the channels-absent bit) in retro.
+[[vk::binding(24, 1)]] Sampler2D sChannelDiffuse;
+[[vk::binding(25, 1)]] Sampler2D sChannelSpecular;
+[[vk::binding(26, 1)]] Sampler2D sChannelNoiseFree;
+[[vk::binding(27, 1)]] Sampler2D sChannelDirect;
 // The triangle-to-material table. The material id this view colours is now
 // derived rather than stored, so the channel reports the same number the
 // resolves shade with, by the same lookup.
@@ -65,18 +70,19 @@ import tracing.brdf;
 
 /** Mirrors DebugViewPushConstants in scenepipeline.cpp. */
 struct DebugViewPushConstants {
+    /** The channel in the low byte; bit 8 says the channel images are absent
+        (retro), so the radiance views paint the card instead of sampling a
+        stand-in texture and reporting confident fiction. */
     uint view;
     /** The floor the shading used; the roughness view must show that number. */
     float roughnessFloor;
-    float thinTransmission;
-    float emitterRadiusRatio;
-    float directIntensity;
-    float sunIntensity;
     /** Mirrors the tracer's channel encode; see the write at the entry point. */
     float exposure;
     uint tonemap;
 };
 [[vk::push_constant]] DebugViewPushConstants pushConstants;
+
+static const uint kViewChannelsAbsent = 1u << 8;
 
 // The common channel numbering. Gaps are the traced-only channels, whose
 // numbers stay reserved so a saved --debugview value keeps its meaning.
@@ -88,40 +94,25 @@ static const uint kDebugRoughness = 4;
 static const uint kDebugMetallic = 5;
 static const uint kDebugLightmap = 6;
 static const uint kDebugAlbedo = 7;
-static const uint kDebugTracedDiffuse = 8;   // tracer only
-static const uint kDebugTracedSpecular = 9;  // tracer only
+static const uint kDebugTracedDiffuse = 8;   // channel image 0
+static const uint kDebugTracedSpecular = 9;  // channel image 1
 static const uint kDebugDepth = 10;
-static const uint kDebugTracedNoiseFree = 11; // tracer only
+static const uint kDebugTracedNoiseFree = 11; // channel image 5
 static const uint kDebugMotion = 12;
 static const uint kDebugMaterialId = 13;
 static const uint kDebugFeatures = 14;
-static const uint kDebugDirectShadow = 15;      // tracer only
+static const uint kDebugDirectShadow = 15;     // channel image 14
 static const uint kDebugPenumbra = 16;         // tracer only
 // Produced after denoising rather than before it, so that each component can be
 // judged on what the denoiser did to it rather than on what it was handed.
 static const uint kDebugDenoisedDiffuse = 17;  // tracer only
 static const uint kDebugDenoisedSpecular = 18; // tracer only
 static const uint kDebugFilteredDirect = 19;   // tracer only
-/**
- * Direct lighting intensity: the shaded direct diffuse, shadows included.
- *
- * Deliberately the SAME QUANTITY as kDebugDirectShadow, which is the tracer's
- * demodulated direct diffuse, so the two can be compared directly. A previous
- * version of this channel published visibility instead, which is not
- * comparable to anything the tracer emits: an irradiance and a fraction differ
- * by the whole of the lighting, and no correlation between them means much.
- *
- * Demodulated - albedo divided out - for the same reason the tracer
- * demodulates: what is being inspected is the light arriving, not the texture
- * it lands on.
- *
- * This reports the light DELIVERED by each mode, including that mode's own
- * visibility: PBR's shadow-map visibility here and the tracer's ray visibility
- * in kDebugDirectShadow. It is not an unshadowed source-light view. Transport
- * may therefore differ by design, while all non-visibility PBR terms come from
- * the exact function the resolve calls below.
- */
-static const uint kDebugShadowTerm = 20;
+// Channel 20 is gone: it re-derived PBR's shaded direct diffuse so it could be
+// compared with the tracer's channel 15. PBR writes its direct diffuse into
+// that same channel image now, so 15 IS both modes' answer - one channel, one
+// view, each mode's own visibility - and a second derivation could only drift
+// from what the provider actually delivered.
 
 static const uint kNoTriangle = 0xffffffffu;
 static const uint kNoTexture = 0xffffffffu;
@@ -151,11 +142,16 @@ static const float3 kSkyColor = float3(0.1, 0.8, 0.9);
 
 float3 gammaToLinear(float3 rgb) { return pow(max(rgb, 0.0), float3(kGamma)); }
 
+// Must agree with isTracedOnlyDebugView in scenepipeline.h; see the note there.
 bool tracedOnly(uint view) {
-    return view == kDebugTracedDiffuse || view == kDebugTracedSpecular ||
-           view == kDebugTracedNoiseFree || view == kDebugDirectShadow ||
-           view == kDebugPenumbra || view == kDebugDenoisedDiffuse ||
+    return view == kDebugPenumbra || view == kDebugDenoisedDiffuse ||
            view == kDebugDenoisedSpecular || view == kDebugFilteredDirect;
+}
+
+/** The views answered from the shared channel images. */
+bool channelView(uint view) {
+    return view == kDebugTracedDiffuse || view == kDebugTracedSpecular ||
+           view == kDebugTracedNoiseFree || view == kDebugDirectShadow;
 }
 
 /**
@@ -191,7 +187,25 @@ float3 reconstructViewPos(float2 uv, float depth) {
 }
 
 float3 channelColor(float2 uv, int2 pixel) {
-    uint view = pushConstants.view;
+    uint view = pushConstants.view & 0xffu;
+    // The radiance views, straight off the channel images, ahead of the sky
+    // branch: the channels carry their own value at the sky (zero radiance, or
+    // the sky's noise-free), exactly as the tracer's kernel views showed it.
+    switch (view) {
+    case kDebugTracedDiffuse:
+        return max(sChannelDiffuse.SampleLevel(uv, 0.0).rgb, 0.0);
+    case kDebugTracedSpecular:
+        return max(sChannelSpecular.SampleLevel(uv, 0.0).rgb, 0.0);
+    case kDebugTracedNoiseFree:
+        return max(sChannelNoiseFree.SampleLevel(uv, 0.0).rgb, 0.0);
+    case kDebugDirectShadow:
+        // Exposed with 1 - exp(-x), as the tracer's kernel exposed it: an
+        // unbounded radiance read out of an 8-bit capture clips raw, and a
+        // clipped frame has no shadows in it.
+        return float3(1.0) - exp(-max(sChannelDirect.SampleLevel(uv, 0.0).rgb, 0.0));
+    default:
+        break;
+    }
     uint triangleId = sGBufTriangleId.Load(int3(pixel, 0)).r;
     if (triangleId == kNoTriangle) {
         // Nothing was drawn: the sky. Every categorical view says so with one
@@ -270,34 +284,6 @@ float3 channelColor(float2 uv, int2 pixel) {
     }
     case kDebugLightmap:
         return hasLightmap ? lightmapSample.rgb : float3(0.9, 0.0, 0.9) * shape * 0.4;
-    case kDebugShadowTerm: {
-        float depth = sGBufDepth.SampleLevel(uv, 0.0).r;
-        float3 viewPos = reconstructViewPos(uv, depth);
-        float3 worldPos = mul(globalUniforms.viewInv, float4(viewPos, 1.0)).xyz;
-        float3 direct = float3(0.0);
-        for (int i = 0; i < globalUniforms.numLights; ++i) {
-            GlobalUniformsLight light = globalUniforms.lights[i];
-            // No static-geometry exclusion, because the PBR resolve has none -
-            // see the comment at its light loop. A diagnostic that admits or
-            // rejects different light from the resolve it diagnoses is worse
-            // than no diagnostic, which this channel has demonstrated twice.
-            PbrDirectLight sample = pbrDirectLight(
-                light, viewPos, worldPos, normal, thinSurface, shadowsEnabled,
-                pushConstants.thinTransmission, pushConstants.emitterRadiusRatio,
-                pushConstants.directIntensity, pushConstants.sunIntensity);
-            direct += sample.diffuse;
-        }
-        // Exposed, not raw. Direct light is unbounded and this channel is read
-        // out of an 8-bit capture, so a raw write clips - measured at 74% of
-        // one frame - and a clipped frame has NO SHADOWS IN IT: a pixel at 3.0
-        // shadowed to 1.5 still writes 255. The channel then looks broken in
-        // exactly the way the thing it is diagnosing would.
-        //
-        // 1 - exp(-x) is monotonic, so it reorders nothing and never
-        // saturates. The tracer's direct channel takes the same curve, which
-        // is what keeps the two comparable.
-        return float3(1.0) - exp(-direct);
-    }
     case kDebugDepth: {
         float depth = sGBufDepth.SampleLevel(uv, 0.0).r;
         // Positive linear view distance on a fixed 100-unit ramp, so the same
@@ -342,8 +328,11 @@ void debugViewMain(uint3 dispatchId : SV_DispatchThreadID) {
     }
     int2 pixel = int2(dispatchId.xy);
     float2 uv = (float2(pixel) + 0.5) / float2(width, height);
-    float3 color = tracedOnly(pushConstants.view) ? unavailableCard(pixel)
-                                                  : channelColor(uv, pixel);
+    uint view = pushConstants.view & 0xffu;
+    bool noChannels = (pushConstants.view & kViewChannelsAbsent) != 0;
+    float3 color = tracedOnly(view) || (noChannels && channelView(view))
+                       ? unavailableCard(pixel)
+                       : channelColor(uv, pixel);
     // The tracer's channel views leave finishPixel through ptDisplayTransform
     // (path_trace.slang); this pass runs after post-processing and overwrites
     // its output, so it must encode for itself or its channels land raw while

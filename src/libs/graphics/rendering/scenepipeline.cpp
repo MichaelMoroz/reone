@@ -100,13 +100,11 @@ struct CoveragePushConstants {
 
 /** Mirrors DebugViewPushConstants in debug_view.slang. */
 struct DebugViewPushConstants {
+    /** The channel, plus the channels-absent flag bit (retro has no channel
+        images, so its radiance views show the card); see debug_view.slang. */
     uint32_t view;
     /** The floor the shading used, so the roughness channel shows that number. */
     float roughnessFloor;
-    float thinTransmission;
-    float emitterRadiusRatio;
-    float directIntensity;
-    float sunIntensity;
     // The same display transform the tracer's channel views apply
     // (path_trace.slang finishPixel), so the two renderers' channels land in
     // ONE colour space. The debug pass runs after post-processing would have
@@ -1634,23 +1632,33 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     // BRDF tables both of them do. Unit numbering is the resolves' own, which
     // the modules declare once each.
     //
-    // The shadow maps ARE bound, because the shadow-term channel samples them.
-    // Leaving them out does not make that channel fail - it silently samples
-    // the stand-in textures every unbound unit falls back to, and produces a
-    // confident, stable, entirely fictional shadow term. That cost a long
-    // investigation whose every measurement was of a 1x1 default.
+    // The channel images stand where the shadow maps used to: the radiance
+    // views read what the provider actually delivered instead of re-deriving
+    // it. Bound only when they exist - retro allocates none, and its radiance
+    // views paint the card off the flag bit rather than silently sampling the
+    // stand-in textures every unbound unit falls back to, which once produced
+    // a confident, stable, entirely fictional shadow term.
+    std::vector<TextureBinding> sourceBindings {
+        {1, &_gbuffer->color(GBufferAttachment::Diffuse)},
+        {2, &_gbuffer->color(GBufferAttachment::EyeNormal)},
+        {3, &_gbuffer->color(GBufferAttachment::Lightmap)},
+        {4, &_gbuffer->color(GBufferAttachment::SelfIllum)},
+        {5, &_gbuffer->depth()},
+        {TextureUnits::gBufMotion, &_gbuffer->color(GBufferAttachment::Motion)},
+        {TextureUnits::gBufTriangleId, &_gbuffer->color(GBufferAttachment::TriangleId)}};
+    if (_channelImages[0][0]) {
+        const int chFrame = _lastChannelFrame >= 0 ? _lastChannelFrame : 0;
+        const auto &chan = _channelImages[chFrame];
+        for (auto *image : {chan[0].get(), chan[1].get(), chan[5].get(), chan[14].get()}) {
+            cmd.transitionImage(*image, ImageLayout::ShaderRead);
+        }
+        sourceBindings.push_back({TextureUnits::channelDiffuse, chan[0].get()});
+        sourceBindings.push_back({TextureUnits::channelSpecular, chan[1].get()});
+        sourceBindings.push_back({TextureUnits::channelNoiseFree, chan[5].get()});
+        sourceBindings.push_back({TextureUnits::channelDirect, chan[14].get()});
+    }
     auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
-        _renderer.uniformRing().frame(),
-        {{1, &_gbuffer->color(GBufferAttachment::Diffuse)},
-         {2, &_gbuffer->color(GBufferAttachment::EyeNormal)},
-         {3, &_gbuffer->color(GBufferAttachment::Lightmap)},
-         {4, &_gbuffer->color(GBufferAttachment::SelfIllum)},
-         {5, &_gbuffer->depth()},
-         {TextureUnits::gBufMotion, &_gbuffer->color(GBufferAttachment::Motion)},
-         {TextureUnits::gBufTriangleId, &_gbuffer->color(GBufferAttachment::TriangleId)},
-         {TextureUnits::shadowMapArray, _dirShadows.get()},
-         {TextureUnits::shadowMapCube, _pointShadows.get()},
-         {TextureUnits::pointShadowRaw, _pointShadows.get(), {}, _pointShadowRawSampler}});
+        _renderer.uniformRing().frame(), sourceBindings);
 
     auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
     cmd.bindComputePipeline(pipeline.pipeline);
@@ -1662,13 +1670,14 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
                                  _resolveMaterialSet, nullptr, 0);
     cmd.bindComputeDescriptorSet(pipeline.layout, IDescriptors::kResolveSet,
                                  resolveSet(_output.get()), nullptr, 0);
+    // Bit 8 marks channels-absent: retro allocates no channel images, so its
+    // radiance views (8, 9, 11, 15) must paint the card rather than sample a
+    // stand-in texture and report confident fiction.
+    const bool channelsAbsent = !_channelImages[0][0];
     const DebugViewPushConstants push {
-        static_cast<uint32_t>(std::clamp(_options.debugView, 0, kMaxDebugView)),
+        static_cast<uint32_t>(std::clamp(_options.debugView, 0, kMaxDebugView)) |
+            (channelsAbsent ? 0x100u : 0u),
         std::clamp(_options.ptRoughnessFloor, 0.0f, 1.0f),
-        std::clamp(_options.thinTransmission, 0.0f, 1.0f),
-        std::clamp(_options.ptPointEmitterRatio, 0.01f, 0.5f),
-        std::max(0.0f, _options.ptDirectIntensity),
-        std::max(0.0f, _options.ptSunIntensity),
         std::max(0.05f, _options.exposure),
         static_cast<uint32_t>(std::clamp(_options.tonemap, 0, 1))};
     cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));

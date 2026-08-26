@@ -224,6 +224,15 @@ struct TextureUnits {
      * taps measured 0.59x and 0.39x against the reference and were reverted.
      */
     static constexpr int pointShadowRaw = 23;
+    /**
+     * The shared channel images, for the debug pass's radiance views. Any mode
+     * that fills the channels - the tracer, PBR through pbr_channels - can
+     * show them; retro fills none and paints the not-available card instead.
+     */
+    static constexpr int channelDiffuse = 24;
+    static constexpr int channelSpecular = 25;
+    static constexpr int channelNoiseFree = 26;
+    static constexpr int channelDirect = 27;
 };
 
 // MDL
