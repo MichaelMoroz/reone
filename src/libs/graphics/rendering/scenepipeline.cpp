@@ -118,6 +118,19 @@ struct DebugViewPushConstants {
     uint32_t tonemap;
 };
 
+/** Mirrors DebugOverlayPushConstants in debug_overlay.slang. */
+struct DebugOverlayPushConstants {
+    glm::vec4 color;
+    /** Target extent in pixels: both stages work in pixels and convert back. */
+    glm::vec2 resolution;
+    /** Half a line's width, in pixels; the label entry points ignore it. */
+    float halfWidth;
+    /** Opacity of whatever part of this primitive lies behind geometry. */
+    float occludedScale;
+    /** World point a label hangs from; the box entry points ignore it. */
+    glm::vec3 anchor;
+};
+
 static_assert(sizeof(MegaDrawPushConstants) <= kCachedPipelinePushConstantSize);
 static_assert(sizeof(BlendedPushConstants) <= kCachedPipelinePushConstantSize);
 static_assert(sizeof(ShadowPushConstants) <= kCachedPipelinePushConstantSize);
@@ -125,6 +138,17 @@ static_assert(sizeof(PostProcessPushConstants) <= kCachedPipelinePushConstantSiz
 static_assert(sizeof(ResolvePushConstants) == kCachedPipelinePushConstantSize);
 static_assert(sizeof(CoveragePushConstants) <= kCachedPipelinePushConstantSize);
 static_assert(sizeof(DebugViewPushConstants) <= kCachedPipelinePushConstantSize);
+static_assert(sizeof(DebugOverlayPushConstants) <= kCachedPipelinePushConstantSize);
+
+/** Half-width of a debug-overlay line, in pixels. */
+static constexpr float kOverlayLineHalfWidth = 1.25f;
+/** Opacity of the part of an overlay line that lies behind geometry. */
+static constexpr float kOverlayOccludedLine = 0.28f;
+/**
+ * The same, for a label. Higher than a line's on purpose: a one-pixel stroke
+ * still reads as a line at 28%, while a glyph is mostly edge and does not.
+ */
+static constexpr float kOverlayOccludedLabel = 0.55f;
 
 /** A sky bake is available this frame; without it the resolves write black. */
 static constexpr uint32_t kResolveFlagSky = 1u;
@@ -967,6 +991,27 @@ namespace {
  * that mode while retro passed the authored fraction, so a blade of grass lit
  * from behind was black there and lit here for no reason either mode stated.
  */
+/**
+ * One run of text laid into the shared text block, exactly as Renderer2D lays
+ * one out: a glyph rect in pixels and an atlas rect per character. @p origin
+ * is relative to the label's anchor, which the vertex stage projects.
+ */
+int fillTextRun(Font &font, std::string_view text, glm::vec2 origin, TextUniforms &chars) {
+    const int numChars = std::min(kMaxTextChars, static_cast<int>(text.size()));
+    const auto &glyphs = font.glyphs();
+    glm::vec2 offset = origin;
+    for (int i = 0; i < numChars; ++i) {
+        const auto &glyph = glyphs[static_cast<unsigned char>(text[i])];
+        chars.chars[i].posScale =
+            glm::vec4(offset.x, offset.y, glyph.size.x, glyph.size.y);
+        chars.chars[i].uv = glm::vec4(glyph.ul.x, glyph.lr.y,
+                                      glyph.lr.x - glyph.ul.x,
+                                      glyph.ul.y - glyph.lr.y);
+        offset.x += font.glyphAdvance(glyph, 1.0f);
+    }
+    return numChars;
+}
+
 ResolvePushConstants resolvePush(uint32_t flags, const GraphicsOptions &options) {
     return {flags,
             std::clamp(options.thinTransmission, 0.0f, 1.0f),
@@ -1696,126 +1741,95 @@ void ScenePipeline::debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset
     if (_overlayShapes.empty() && _overlayLabels.empty()) {
         return;
     }
-    // Drawn over the finished display-referred image. Depth is not an
-    // attachment: the fragment stage samples the G-buffer depth itself and
-    // DIMS the occluded part of a line instead of discarding it.
+    // Over the finished display-referred image, and depth is NOT an attachment
+    // here: both stages sample the G-buffer depth themselves and drop the
+    // opacity of whatever lies behind geometry instead of discarding it.
     cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
     cmd.transitionImage(*_output, ImageLayout::ColorAttachment);
 
-    PipelineKey key;
-    key.module = "debug_overlay";
-    key.vertexEntry = "overlayVertex";
-    key.fragmentEntry = "overlayFragment";
-    key.colorFormats = {_output->pixelFormat()};
-    key.blend = BlendMode::Normal;
-    PipelineBinding pipeline = _renderer.pipelines().get(key);
+    PipelineKey boxKey;
+    boxKey.module = "debug_overlay";
+    boxKey.vertexEntry = "overlayVertex";
+    boxKey.fragmentEntry = "overlayFragment";
+    boxKey.colorFormats = {_output->pixelFormat()};
+    boxKey.blend = BlendMode::Normal;
 
-    // The depth every edge and every glyph tests against, plus the font atlas
-    // the labels sample. One set serves both draws.
-    std::vector<TextureBinding> sourceBindings {{5, &_gbuffer->depth()}};
+    // The depth both stages test against, plus the atlas the labels sample.
+    // One set serves both draws.
+    std::vector<TextureBinding> sourceBindings {{TextureUnits::gBufDepth, &_gbuffer->depth()}};
     if (_overlayFont) {
         sourceBindings.push_back(
             {TextureUnits::mainTex, &_renderer.resources().get(_overlayFont->texture())});
     }
-    auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
-        _renderer.uniformRing().frame(), sourceBindings);
-    auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
-
-    // Mirrors DebugOverlayPushConstants in slang/debug_overlay.slang.
-    struct DebugOverlayPushConstants {
-        glm::vec4 color;
-        glm::vec2 resolution;
-        float halfWidth;
-        float occludedScale;
-        glm::vec3 anchor;
-    };
-    static_assert(sizeof(DebugOverlayPushConstants) <= kCachedPipelinePushConstantSize);
-    constexpr float kOccludedScale = 0.28f;
-    // Text needs a higher floor than a line does. A one-pixel stroke at 28%
-    // still reads as a line, but a glyph is mostly edge, and at the same
-    // opacity a whole label came back illegible over pale scenery.
-    constexpr float kOccludedTextScale = 0.55f;
+    const int frame = _renderer.uniformRing().frame();
+    auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(frame, sourceBindings);
+    auto uniformSet = _renderer.descriptors().uniformDescriptorSet(frame);
+    const glm::vec2 resolution {chainSize()};
 
     RenderAttachment color {_output->sampleView(), ImageLayout::ColorAttachment,
                             AttachmentLoad::Load, AttachmentStore::Store};
     cmd.beginRendering(chainSize(), {color}, nullptr, 0, true);
-    cmd.bindPipeline(pipeline.pipeline);
-    cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet, nullptr, 0);
-    // One draw per box: the eight corners ride the aabb block through the
-    // uniform ring at a fresh dynamic offset each draw, the same idiom the
-    // per-mesh locals use, so no vertex buffer exists at all.
-    for (const auto &shape : _overlayShapes) {
-        AABBUniforms aabbUniforms;
-        std::copy(std::begin(shape.corners), std::end(shape.corners), aabbUniforms.corners);
-        std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
-        offsets[UniformBlockBindingPoints::globals] = globalsOffset;
-        offsets[UniformBlockBindingPoints::aabb] = _renderer.uniformRing().push(aabbUniforms);
-        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
-                              offsets.data(), static_cast<uint32_t>(offsets.size()));
-        const DebugOverlayPushConstants push {
-            shape.color, glm::vec2(chainSize()), 1.25f, kOccludedScale, glm::vec3(0.0f)};
-        cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
-        // Twelve edges, one quad each, six vertices per quad.
-        cmd.draw(72, 1);
+
+    if (!_overlayShapes.empty()) {
+        PipelineBinding pipeline = _renderer.pipelines().get(boxKey);
+        cmd.bindPipeline(pipeline.pipeline);
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet, nullptr, 0);
+        // One draw per box: its eight corners ride the aabb block through the
+        // uniform ring at a fresh dynamic offset, the same idiom the per-mesh
+        // locals use, so there is no vertex buffer at all.
+        for (const auto &shape : _overlayShapes) {
+            AABBUniforms aabbUniforms;
+            std::copy(std::begin(shape.corners), std::end(shape.corners), aabbUniforms.corners);
+            std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+            offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+            offsets[UniformBlockBindingPoints::aabb] = _renderer.uniformRing().push(aabbUniforms);
+            cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                  offsets.data(), static_cast<uint32_t>(offsets.size()));
+            const DebugOverlayPushConstants push {shape.color, resolution,
+                                                  kOverlayLineHalfWidth,
+                                                  kOverlayOccludedLine, glm::vec3(0.0f)};
+            cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
+            // Twelve edges, one quad each, six vertices per quad.
+            cmd.draw(72, 1);
+        }
     }
 
-    // The labels, in this same pass and against this same depth image: glyph
-    // quads hung off a world anchor the vertex stage projects, so the text
-    // answers occlusion exactly as the edges do rather than floating over the
-    // scene. The layout is the 2D renderer's - the shared text block, filled
-    // here in pixels relative to the anchor - and the atlas is the font's.
+    // The labels, in this same pass and against this same depth image, so text
+    // and lines answer occlusion identically.
     if (_overlayFont && !_overlayLabels.empty()) {
-        PipelineKey textKey = key;
+        PipelineKey textKey = boxKey;
         textKey.vertexEntry = "overlayTextVertex";
         textKey.fragmentEntry = "overlayTextFragment";
-        PipelineBinding textPipeline = _renderer.pipelines().get(textKey);
-        cmd.bindPipeline(textPipeline.pipeline);
-        cmd.bindDescriptorSet(textPipeline.layout, IDescriptors::kTextureSet, sourceSet,
-                              nullptr, 0);
+        PipelineBinding pipeline = _renderer.pipelines().get(textKey);
+        cmd.bindPipeline(pipeline.pipeline);
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet, nullptr, 0);
 
-        const auto &glyphs = _overlayFont->glyphs();
         for (const auto &label : _overlayLabels) {
-            const int numChars =
-                std::min(kMaxTextChars, static_cast<int>(label.text.size()));
-            if (numChars <= 0) {
+            if (label.text.empty()) {
                 continue;
             }
-            // One draw: the glyph outline is taken from the atlas in the
-            // fragment stage, so there is no second shadow pass to record.
-            // Glyph rects are whole texels at native scale, laid out exactly
-            // as the 2D renderer lays out a run of text.
-            // Laid out exactly as the 2D renderer lays out a run of text,
-            // at native scale, and drawn twice the way renderDeveloperText
-            // draws it: a one-pixel black copy underneath, then the colour.
-            // The shadow is a shifted copy of the glyph, not a dilation, so
-            // it cannot close a counter.
+            const glm::vec2 origin = _overlayFont->textOffset(
+                label.text, TextGravity::CenterBottom, 1.0f);
+            // Drawn the way renderDeveloperText draws it: a one-pixel black
+            // copy under the colour, so a glyph does not vanish over pale
+            // scenery. A shifted copy, never a dilation - dilating closes the
+            // font's one-texel counters and turns a, o and 0 into one block.
             for (int pass = 0; pass < 2; ++pass) {
-                const glm::vec2 shadow = pass == 0 ? glm::vec2(1.0f) : glm::vec2(0.0f);
-                glm::vec2 offset =
-                    _overlayFont->textOffset(label.text, TextGravity::CenterBottom, 1.0f) +
-                    shadow;
+                const bool shadow = pass == 0;
                 TextUniforms chars;
-                for (int i = 0; i < numChars; ++i) {
-                    const auto &glyph = glyphs[static_cast<unsigned char>(label.text[i])];
-                    chars.chars[i].posScale = glm::vec4(offset.x, offset.y,
-                                                        glyph.size.x, glyph.size.y);
-                    chars.chars[i].uv = glm::vec4(glyph.ul.x, glyph.lr.y,
-                                                  glyph.lr.x - glyph.ul.x,
-                                                  glyph.ul.y - glyph.lr.y);
-                    offset.x += _overlayFont->glyphAdvance(glyph, 1.0f);
-                }
+                const int numChars = fillTextRun(
+                    *_overlayFont, label.text,
+                    shadow ? origin + glm::vec2(1.0f) : origin, chars);
                 std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
                 offsets[UniformBlockBindingPoints::globals] = globalsOffset;
                 offsets[UniformBlockBindingPoints::text] = _renderer.uniformRing().push(chars);
-                cmd.bindDescriptorSet(textPipeline.layout, IDescriptors::kUniformSet,
-                                      uniformSet, offsets.data(),
-                                      static_cast<uint32_t>(offsets.size()));
-                const glm::vec4 color =
-                    pass == 0 ? glm::vec4(0.0f, 0.0f, 0.0f, label.color.a) : label.color;
+                cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                      offsets.data(), static_cast<uint32_t>(offsets.size()));
                 const DebugOverlayPushConstants push {
-                    color, glm::vec2(chainSize()), 1.25f, kOccludedTextScale,
+                    shadow ? glm::vec4(0.0f, 0.0f, 0.0f, label.color.a) : label.color,
+                    resolution, kOverlayLineHalfWidth, kOverlayOccludedLabel,
                     label.position};
-                cmd.pushGraphicsConstants(textPipeline.layout, &push, sizeof(push));
+                cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
                 cmd.draw(6, static_cast<uint32_t>(numChars));
             }
         }

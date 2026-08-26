@@ -50,6 +50,37 @@ namespace reone {
 
 namespace scene {
 
+namespace {
+
+/**
+ * The debug overlay's colour per object kind, close enough to the debug
+ * categories view's palette that the two read the same way.
+ */
+glm::vec4 debugOverlayColor(ModelUsage usage) {
+    switch (usage) {
+    case ModelUsage::Room:
+        return {0.35f, 0.55f, 0.95f, 0.9f};
+    case ModelUsage::Creature:
+        return {1.0f, 0.35f, 0.35f, 0.9f};
+    case ModelUsage::Placeable:
+        return {0.35f, 1.0f, 0.45f, 0.9f};
+    case ModelUsage::Door:
+        return {1.0f, 0.3f, 1.0f, 0.9f};
+    case ModelUsage::Equipment:
+        return {1.0f, 0.9f, 0.3f, 0.9f};
+    default:
+        return {0.7f, 0.7f, 0.7f, 0.9f};
+    }
+}
+
+/** Half-extent of a light's marker box, in world units. */
+constexpr float kDebugLightMarkerHalf = 0.35f;
+/** Lights take a colour no object category uses. */
+constexpr glm::vec4 kDebugLightColor {1.0f, 1.0f, 0.25f, 0.95f};
+
+} // namespace
+
+
 uint32_t SceneGraph::internName(std::string_view name) {
     if (name.empty()) {
         return 0;
@@ -1106,27 +1137,12 @@ void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {
     }
     std::vector<graphics::DebugOverlayShape> shapes;
 
-    // The colour names the kind, matching the debug categories view's palette
-    // closely enough to read the same way.
-    const auto usageColor = [](ModelUsage usage) -> glm::vec4 {
-        switch (usage) {
-        case ModelUsage::Room:
-            return {0.35f, 0.55f, 0.95f, 0.9f};
-        case ModelUsage::Creature:
-            return {1.0f, 0.35f, 0.35f, 0.9f};
-        case ModelUsage::Placeable:
-            return {0.35f, 1.0f, 0.45f, 0.9f};
-        case ModelUsage::Door:
-            return {1.0f, 0.3f, 1.0f, 0.9f};
-        case ModelUsage::Equipment:
-            return {1.0f, 0.9f, 0.3f, 0.9f};
-        default:
-            return {0.7f, 0.7f, 0.7f, 0.9f};
-        }
-    };
-    // Corner order is the overlay shader's contract: bit x=1, y=2, z=4 selects
-    // max over min per axis. Local corners individually transformed, so the
-    // box is the object's ORIENTED box rather than a world-axis re-fit.
+    // Corner order is the overlay shader's contract: bits x=1, y=2, z=4 select
+    // max over min per axis. Each local corner is transformed on its own, so
+    // the box is the object's ORIENTED box rather than a world-axis re-fit of
+    // one. Returns where a label for it hangs - the TOP of the box, because a
+    // centred anchor sits inside the object it names and the overlay's depth
+    // test would then call almost every label occluded.
     const auto pushBox = [&shapes](const glm::vec3 &lo, const glm::vec3 &hi,
                                    const glm::mat4 &transform, const glm::vec4 &color) {
         graphics::DebugOverlayShape shape;
@@ -1142,28 +1158,21 @@ void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {
         }
         shape.color = color;
         shapes.push_back(std::move(shape));
-        // Where a label for this box hangs: the top of it, not the middle. A
-        // centred anchor sits INSIDE the object it names, so the depth test the
-        // overlay draws text with called almost every label occluded and faded
-        // it to mush - measured across a corridor where every string came back
-        // between 24% and 57% of its own colour.
         return glm::vec3(0.5f * (worldLo.x + worldHi.x),
                          0.5f * (worldLo.y + worldHi.y),
                          worldHi.z);
     };
 
     for (const auto &root : _modelRoots) {
-        if (!root->isEnabled()) {
-            continue;
-        }
-        if (root->usage() == ModelUsage::GUI || root->usage() == ModelUsage::Camera) {
+        if (!root->isEnabled() || root->usage() == ModelUsage::GUI ||
+            root->usage() == ModelUsage::Camera) {
             continue;
         }
         const auto &aabb = root->aabb();
         if (aabb.isDegenerate()) {
             continue;
         }
-        const glm::vec4 color = usageColor(root->usage());
+        const glm::vec4 color = debugOverlayColor(root->usage());
         const glm::vec3 anchor =
             pushBox(aabb.min(), aabb.max(), root->absoluteTransform(), color);
         std::string_view name = nameText(root->nameIds().model);
@@ -1171,51 +1180,58 @@ void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {
             _debugOverlayLabels.push_back({anchor, std::string(name), color});
         }
     }
-    // Lights are positions, not volumes: a small fixed marker box at the
-    // emitter, in a colour no object category uses.
-    constexpr float kLightMarkerHalf = 0.35f;
-    const glm::vec4 lightColor {1.0f, 1.0f, 0.25f, 0.95f};
+
+    // A light is a position, not a volume: a small marker box at the emitter,
+    // in a colour no object category uses.
     for (const auto *light : _lights) {
         const glm::vec3 origin = light->origin();
-        pushBox(glm::vec3(-kLightMarkerHalf), glm::vec3(kLightMarkerHalf),
-                glm::translate(origin), lightColor);
+        pushBox(glm::vec3(-kDebugLightMarkerHalf), glm::vec3(kDebugLightMarkerHalf),
+                glm::translate(origin), kDebugLightColor);
         std::string_view name = nameText(light->nameIds().node);
         _debugOverlayLabels.push_back(
-            {origin + glm::vec3(0.0f, 0.0f, kLightMarkerHalf),
+            {origin + glm::vec3(0.0f, 0.0f, kDebugLightMarkerHalf),
              name.empty() ? std::string("light") : std::string(name),
-             lightColor});
+             kDebugLightColor});
     }
-    // Labels are legible only in moderation: keep a bounded set, and let the
-    // boxes carry the rest of the story. On-frame labels win over near ones:
-    // capping by distance alone kept the spawn-point cluster - off-screen to a
-    // free camera - and evicted the label of every box actually in view, which
-    // measured as 32 labels drawn and zero on the frame.
-    constexpr size_t kMaxLabels = 32;
-    if (_activeCamera && _debugOverlayLabels.size() > kMaxLabels) {
-        const glm::vec3 eye = _activeCamera->origin();
-        const glm::mat4 projection = _activeCamera->camera()->projection();
-        const glm::mat4 view = _activeCamera->camera()->view();
-        static const glm::vec4 kViewport(0.0f, 0.0f, 1.0f, 1.0f);
-        const auto offFrame = [&](const DebugOverlayLabel &label) {
-            const glm::vec3 s = glm::projectZO(label.position, view, projection, kViewport);
-            return s.z < 0.0f || s.z >= 1.0f ||
-                   s.x < 0.0f || s.x > 1.0f || s.y < 0.0f || s.y > 1.0f;
-        };
-        std::sort(_debugOverlayLabels.begin(), _debugOverlayLabels.end(),
-                  [&](const auto &a, const auto &b) {
-                      const bool offA = offFrame(a);
-                      const bool offB = offFrame(b);
-                      if (offA != offB) {
-                          return !offA;
-                      }
-                      return glm::distance2(a.position, eye) < glm::distance2(b.position, eye);
-                  });
-        _debugOverlayLabels.resize(kMaxLabels);
-    }
+
+    capDebugOverlayLabels();
     // Both go to the pipeline: it draws the labels in the same pass as the
     // boxes, against the same depth buffer, so text and lines answer occlusion
-    // identically. Nothing here projects, raycasts or reads back.
+    // identically.
     pipeline.setDebugOverlayShapes(std::move(shapes), std::move(_debugOverlayLabels));
+}
+
+/**
+ * Keep a bounded set of labels, preferring the ones actually on screen.
+ *
+ * Capping by distance alone kept an off-screen cluster at the party's spawn
+ * point and evicted the label of every box in view - instrumented at 32 labels
+ * kept and none of them on the frame.
+ */
+void SceneGraph::capDebugOverlayLabels() {
+    constexpr size_t kMaxLabels = 32;
+    if (!_activeCamera || _debugOverlayLabels.size() <= kMaxLabels) {
+        return;
+    }
+    const glm::vec3 eye = _activeCamera->origin();
+    const glm::mat4 projection = _activeCamera->camera()->projection();
+    const glm::mat4 view = _activeCamera->camera()->view();
+    static const glm::vec4 kViewport(0.0f, 0.0f, 1.0f, 1.0f);
+    const auto offFrame = [&](const graphics::DebugOverlayLabel &label) {
+        const glm::vec3 s = glm::projectZO(label.position, view, projection, kViewport);
+        return s.z < 0.0f || s.z >= 1.0f ||
+               s.x < 0.0f || s.x > 1.0f || s.y < 0.0f || s.y > 1.0f;
+    };
+    std::sort(_debugOverlayLabels.begin(), _debugOverlayLabels.end(),
+              [&](const auto &a, const auto &b) {
+                  const bool offA = offFrame(a);
+                  const bool offB = offFrame(b);
+                  if (offA != offB) {
+                      return !offA;
+                  }
+                  return glm::distance2(a.position, eye) < glm::distance2(b.position, eye);
+              });
+    _debugOverlayLabels.resize(kMaxLabels);
 }
 
 glm::vec2 SceneGraph::computeJitter() const {

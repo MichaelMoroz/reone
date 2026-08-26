@@ -17,10 +17,6 @@
 
 #pragma once
 
-#include <string>
-
-#include <glm/glm.hpp>
-
 namespace reone {
 
 namespace scene {

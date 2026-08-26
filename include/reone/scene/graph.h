@@ -214,8 +214,10 @@ public:
 
     void collectInto(GpuScene &scene, bool full = true);
 
-    /** Boxes into the pipeline, labels into _debugOverlayLabels; see render(). */
+    /** Boxes and labels for the debug overlay, into the pipeline; see render(). */
     void collectDebugOverlay(IRenderPipeline &pipeline);
+    /** Bound the label set, preferring the ones on screen; see the impl. */
+    void capDebugOverlayLabels();
 
     const GpuScene &gpuScene() const override { return _gpuScene; }
     GpuScene &gpuScene() override { return _gpuScene; }
