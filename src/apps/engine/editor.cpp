@@ -112,9 +112,14 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
                            formatConfigFloat(options.grassColor.g) + " " +
                            formatConfigFloat(options.grassColor.b)},
         {"ptspp", std::to_string(options.pathTracingSamples)},
-        {"skyintensity", formatConfigFloat(options.skyIntensity)},
-        {"emissiveintensity", formatConfigFloat(options.emissiveIntensity)},
-        {"lightmapintensity", formatConfigFloat(options.lightmapIntensity)},
+        {"ptskyintensity", formatConfigFloat(options.ptSkyIntensity)},
+        {"pbrskyintensity", formatConfigFloat(options.pbrSkyIntensity)},
+        {"ptemissiveintensity", formatConfigFloat(options.ptEmissiveIntensity)},
+        {"pbremissiveintensity", formatConfigFloat(options.pbrEmissiveIntensity)},
+        {"ptlightmapintensity", formatConfigFloat(options.ptLightmapIntensity)},
+        {"pbrlightmapintensity", formatConfigFloat(options.pbrLightmapIntensity)},
+        {"pbrdirectintensity", formatConfigFloat(options.pbrDirectIntensity)},
+        {"pbrsunintensity", formatConfigFloat(options.pbrSunIntensity)},
         {"ptdirectintensity", formatConfigFloat(options.ptDirectIntensity)},
         {"ptsunintensity", formatConfigFloat(options.ptSunIntensity)},
         {"ptbounces", std::to_string(options.ptBounces)},
@@ -999,13 +1004,24 @@ void Editor::graphicsQualityTab() {
         ImGui::TreePop();
     }
     ImGui::BeginDisabled(options.mode != graphics::RenderMode::PBR);
-    ImGui::SliderFloat("Lightmap intensity", &options.lightmapIntensity, 0.0f, 4.0f, "%.2f");
+    ImGui::SliderFloat("Lightmap intensity", &options.pbrLightmapIntensity, 0.0f, 4.0f, "%.2f");
     settingHint("Strength of the area's baked irradiance, which is this mode's indirect light, so "
                 "it belongs at full strength. The tracer has its own dial for the same bake - "
                 "Lightmap cache, on the Path tracing tab - kept near zero because it computes that "
                 "transport for real and would otherwise count it twice. That pair is the one "
                 "number the two modes are meant to disagree on.",
                 true);
+    ImGui::SliderFloat("Sky", &options.pbrSkyIntensity, 0.0f, 16.0f, "%.2f");
+    settingHint("This mode's sky light. Path tracing has its own on its tab: the two grades are "
+                "authored against different transport, so one number for both made every "
+                "adjustment a question of which mode was running.",
+                true);
+    ImGui::SliderFloat("Emissive", &options.pbrEmissiveIntensity, 0.0f, 16.0f, "%.2f");
+    settingHint("Lamps, screens and glowing panels, in this mode.", true);
+    ImGui::SliderFloat("Direct light", &options.pbrDirectIntensity, 0.0f, 16.0f, "%.2f");
+    settingHint("Point and spot lights, in this mode.", true);
+    ImGui::SliderFloat("Sun", &options.pbrSunIntensity, 0.0f, 16.0f, "%.2f");
+    settingHint("Directional lights, in this mode.", true);
     ImGui::EndDisabled();
     ImGui::Checkbox("Fog", &options.fog);
     settingHint("The area's authored distance fog, in every mode. Per surface beneath this - a "
@@ -1226,7 +1242,7 @@ void Editor::graphicsPathTracingTab() {
     ImGui::SeparatorText("Lighting");
     static constexpr float kIntensityMax = 32.0f;
     static constexpr ImGuiSliderFlags kIntensityFlags = ImGuiSliderFlags_Logarithmic;
-    ImGui::SliderFloat("Sky", &options.skyIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::SliderFloat("Sky", &options.ptSkyIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
     ImGui::SliderFloat("Emissive gamma", &options.emissiveGamma, 0.1f, 4.0f, "%.2f");
     settingHint("Exponent authored radiance is decoded with: emission, sky and backdrop imagery. "
                 "Separate from Albedo gamma under Materials, and it should stay at 2.2. That one "
@@ -1243,10 +1259,10 @@ void Editor::graphicsPathTracingTab() {
                 "and there is nothing behind it to receive what it might emit. Sharing a dial "
                 "meant choosing between the skyline reading right and the interiors reading "
                 "right. 1.0 is the texture as authored.");
-    ImGui::SliderFloat("Emissive", &options.emissiveIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::SliderFloat("Emissive", &options.ptEmissiveIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
     ImGui::SliderFloat("Direct light", &options.ptDirectIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
     ImGui::SliderFloat("Sun", &options.ptSunIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
-    ImGui::SliderFloat("Lightmap cache", &options.lightmapIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
+    ImGui::SliderFloat("Lightmap cache", &options.ptLightmapIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
     settingHint("Near zero on purpose: the tracer computes that transport for real, so adding the "
                 "bake on top counts it twice. PBR keeps its own strength for the same bake, on the "
                 "PBR tab - that pair is the one number the two modes are meant to disagree on.");
@@ -1521,9 +1537,9 @@ bool Editor::beginSceneCapture() {
         out << "sky_room\t" << (scene.skyRoom() ? "yes" : "no") << "\n";
         // The dials that change what any of the above means.
         out << "albedo_gamma\t" << options.albedoGamma << "\n";
-        out << "sky_intensity\t" << options.skyIntensity << "\n";
+        out << "sky_intensity\t" << options.ptSkyIntensity << "\n";
         out << "backdrop_intensity\t" << options.ptBackdropIntensity << "\n";
-        out << "emissive_intensity\t" << options.emissiveIntensity << "\n";
+        out << "emissive_intensity\t" << options.ptEmissiveIntensity << "\n";
         out << "max_lights\t" << options.maxLights << "\n";
         out << "debug_view_restored\t" << restoreDebugView << "\n";
     });

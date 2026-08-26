@@ -347,9 +347,9 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
     // and a zero would divide the accumulated radiance by zero.
     TracePushConstants constants {frameNumber,
                                   static_cast<uint32_t>(std::max(1, _options.pathTracingSamples)),
-                                  std::max(0.0f, _options.skyIntensity),
-                                  std::max(0.0f, _options.emissiveIntensity),
-                                  std::max(0.0f, _options.lightmapIntensity),
+                                  std::max(0.0f, _options.ptSkyIntensity),
+                                  std::max(0.0f, _options.ptEmissiveIntensity),
+                                  std::max(0.0f, _options.ptLightmapIntensity),
                                   std::max(0.0f, _options.ptDirectIntensity),
                                   std::max(0.0001f, _options.ptRayOffset),
                                   std::max(0.0f, _options.ptSunIntensity),

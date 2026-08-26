@@ -301,22 +301,38 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     // per-dispatch tuning struct, so the next traced frame reads them.
     descs.push_back(intOpt("ptspp", OptionApply::Live, "path tracing samples per pixel",
                            &GraphicsOptions::pathTracingSamples, 1, 64));
-    descs.push_back(floatOpt("skyintensity", OptionApply::Live, "sky light intensity",
-                             &GraphicsOptions::skyIntensity, 0.0f, 1024.0f));
-    descs.push_back(floatOpt("emissiveintensity", OptionApply::Live,
-                             "emissive intensity - lamps, screens, glowing panels",
-                             &GraphicsOptions::emissiveIntensity, 0.0f, 1024.0f));
+    // A dial per mode: the two grades are authored against different transport.
+    descs.push_back(floatOpt("ptskyintensity", OptionApply::Live,
+                             "path tracing: sky light intensity",
+                             &GraphicsOptions::ptSkyIntensity, 0.0f, 1024.0f));
+    descs.push_back(floatOpt("pbrskyintensity", OptionApply::Live,
+                             "PBR: sky light intensity",
+                             &GraphicsOptions::pbrSkyIntensity, 0.0f, 1024.0f));
+    descs.push_back(floatOpt("ptemissiveintensity", OptionApply::Live,
+                             "path tracing: emissive intensity - lamps, screens, panels",
+                             &GraphicsOptions::ptEmissiveIntensity, 0.0f, 1024.0f));
+    descs.push_back(floatOpt("pbremissiveintensity", OptionApply::Live,
+                             "PBR: emissive intensity - lamps, screens, panels",
+                             &GraphicsOptions::pbrEmissiveIntensity, 0.0f, 1024.0f));
     descs.push_back(floatOpt("ptbackdropintensity", OptionApply::Live,
                              "path tracing backdrop imagery intensity",
                              &GraphicsOptions::ptBackdropIntensity, 0.0f, 1024.0f));
-    descs.push_back(floatOpt("lightmapintensity", OptionApply::Live,
-                             "baked-lightmap intensity",
-                             &GraphicsOptions::lightmapIntensity, 0.0f, 1024.0f));
+    descs.push_back(floatOpt("ptlightmapintensity", OptionApply::Live,
+                             "path tracing: baked-lightmap intensity",
+                             &GraphicsOptions::ptLightmapIntensity, 0.0f, 1024.0f));
+    descs.push_back(floatOpt("pbrlightmapintensity", OptionApply::Live,
+                             "PBR: baked-lightmap intensity",
+                             &GraphicsOptions::pbrLightmapIntensity, 0.0f, 1024.0f));
     descs.push_back(floatOpt("ptdirectintensity", OptionApply::Live,
-                             "path tracing direct-light intensity",
+                             "path tracing: direct-light intensity",
                              &GraphicsOptions::ptDirectIntensity, 0.0f, 1024.0f));
-    descs.push_back(floatOpt("ptsunintensity", OptionApply::Live, "path tracing sun intensity",
+    descs.push_back(floatOpt("pbrdirectintensity", OptionApply::Live,
+                             "PBR: direct-light intensity",
+                             &GraphicsOptions::pbrDirectIntensity, 0.0f, 1024.0f));
+    descs.push_back(floatOpt("ptsunintensity", OptionApply::Live, "path tracing: sun intensity",
                              &GraphicsOptions::ptSunIntensity, 0.0f, 1024.0f));
+    descs.push_back(floatOpt("pbrsunintensity", OptionApply::Live, "PBR: sun intensity",
+                             &GraphicsOptions::pbrSunIntensity, 0.0f, 1024.0f));
     descs.push_back(intOpt("ptbounces", OptionApply::Live, "path tracing bounces",
                            &GraphicsOptions::ptBounces, 1, 8));
     descs.push_back(floatOpt("ptrayoffset", OptionApply::Live, "path tracing ray origin offset",

@@ -126,12 +126,18 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("admissionshadow", value<bool>()->default_value(false), "compare incremental and full scene admission every frame") //
         ("admissionforcefull", value<bool>()->default_value(false), "force full scene collection and classification")        //
         ("ptspp", value<int>()->default_value(options->graphics.pathTracingSamples), "path tracing samples per pixel")          //
-        ("skyintensity", value<float>()->default_value(options->graphics.skyIntensity), "sky light intensity (default per mode: 2.5 traced, 1.0 raster)") //
-        ("emissiveintensity", value<float>()->default_value(options->graphics.emissiveIntensity), "emissive intensity - lamps, screens, glowing panels (default per mode: 2.5 traced, 1.0 raster)") //
-        ("ptemissiveintensity", value<float>(), "deprecated alias of emissiveintensity")                                       //
+        ("skyintensity", value<float>(), "deprecated: use ptskyintensity / pbrskyintensity") //
+        ("emissiveintensity", value<float>(), "deprecated: use ptemissiveintensity / pbremissiveintensity") //
+        ("lightmapintensity", value<float>(), "deprecated: use ptlightmapintensity / pbrlightmapintensity") //
+        ("ptskyintensity", value<float>()->default_value(options->graphics.ptSkyIntensity), "path tracing: sky light intensity") //
+        ("pbrskyintensity", value<float>()->default_value(options->graphics.pbrSkyIntensity), "PBR: sky light intensity") //
+        ("ptemissiveintensity", value<float>()->default_value(options->graphics.ptEmissiveIntensity), "path tracing: emissive intensity - lamps, screens, glowing panels") //
+        ("pbremissiveintensity", value<float>()->default_value(options->graphics.pbrEmissiveIntensity), "PBR: emissive intensity - lamps, screens, glowing panels") //
         ("ptbackdropintensity", value<float>()->default_value(options->graphics.ptBackdropIntensity), "path tracing backdrop imagery intensity") //
-        ("lightmapintensity", value<float>()->default_value(options->graphics.lightmapIntensity), "baked-lightmap intensity (default per mode: 0.0 traced, 1.0 raster)") //
-        ("ptlightmapintensity", value<float>(), "deprecated alias of lightmapintensity")                                       //
+        ("ptlightmapintensity", value<float>()->default_value(options->graphics.ptLightmapIntensity), "path tracing: baked-lightmap intensity") //
+        ("pbrlightmapintensity", value<float>()->default_value(options->graphics.pbrLightmapIntensity), "PBR: baked-lightmap intensity") //
+        ("pbrdirectintensity", value<float>()->default_value(options->graphics.pbrDirectIntensity), "PBR: direct light intensity") //
+        ("pbrsunintensity", value<float>()->default_value(options->graphics.pbrSunIntensity), "PBR: sun intensity") //
         ("ptdirectintensity", value<float>()->default_value(options->graphics.ptDirectIntensity), "path tracing direct-light intensity") //
         ("ptsunintensity", value<float>()->default_value(options->graphics.ptSunIntensity), "path tracing sun intensity")       //
         ("ptbounces", value<int>()->default_value(options->graphics.ptBounces), "path tracing bounces")                       //
@@ -146,7 +152,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ptsunangularsize", value<float>()->default_value(options->graphics.ptSunAngularSize), "path tracing sun angular size") //
         ("albedogamma", value<float>()->default_value(options->graphics.albedoGamma), "authored albedo decode exponent, PBR and path tracing alike (2.2 is sRGB-correct, 1.0 matches the reference engines)") //
         ("emissivegamma", value<float>()->default_value(options->graphics.emissiveGamma), "authored radiance decode exponent (emission, sky, backdrop)") //
-        ("pbrlightmapintensity", value<float>(), "deprecated alias of lightmapintensity")                                       //
         ("maxlights", value<int>()->default_value(options->graphics.maxLights), "lights a frame may carry")                    //
         ("maxdirectionalshadows", value<int>()->default_value(options->graphics.maxDirectionalShadows),
          "shadow-casting directional lights (PBR and path tracing)")                                                          //
@@ -328,46 +333,52 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.admissionShadow = vars["admissionshadow"].as<bool>();
     options->graphics.admissionForceFull = vars["admissionforcefull"].as<bool>();
     options->graphics.pathTracingSamples = std::max(1, vars["ptspp"].as<int>());
-    // One dial set, per-mode defaults, resolved the way the anti-aliasing slot
-    // is: an explicit flag or cfg value wins; otherwise the mode picks its
-    // calibrated default. The traced mode keeps the 2026-07-29 grade - sky and
-    // emissive 2.5, the lightmap retired to 0 because two bounces of real
-    // transport replace it - and the raster modes keep authored levels, with
-    // the bake as their indirect light. Old flag spellings are accepted as
-    // aliases so existing cfgs and scripts keep meaning what they meant.
-    const bool tracedDefaults = options->graphics.mode == RenderMode::PathTracing;
-    options->graphics.skyIntensity = vars["skyintensity"].defaulted()
-                                         ? (tracedDefaults ? 2.5f : 1.0f)
-                                         : vars["skyintensity"].as<float>();
-    // The old spellings were MODE-SCOPED dials - ptlightmapintensity graded
-    // the traced frame while pbrlightmapintensity graded the raster one, and a
-    // cfg legitimately carries both with different values. Each alias is
-    // therefore honoured only in the mode it historically governed; honouring
-    // the pt* value in a raster run would replay one mode's grade into the
-    // other, which is precisely what one dial with per-mode DEFAULTS exists to
-    // avoid.
-    if (!vars["emissiveintensity"].defaulted()) {
-        options->graphics.emissiveIntensity = vars["emissiveintensity"].as<float>();
-    } else if (tracedDefaults && vars.count("ptemissiveintensity")) {
-        warn("ptemissiveintensity is deprecated; use emissiveintensity");
-        options->graphics.emissiveIntensity = vars["ptemissiveintensity"].as<float>();
-    } else {
-        options->graphics.emissiveIntensity = tracedDefaults ? 2.5f : 1.0f;
-    }
+    // A dial per mode, read straight through. There is no per-mode default
+    // resolution here any more: the two grades are authored against different
+    // transport, so a shared number made every adjustment a question of which
+    // mode happened to be running.
+    options->graphics.ptSkyIntensity = std::max(0.0f, vars["ptskyintensity"].as<float>());
+    options->graphics.pbrSkyIntensity = std::max(0.0f, vars["pbrskyintensity"].as<float>());
+    options->graphics.ptEmissiveIntensity =
+        std::max(0.0f, vars["ptemissiveintensity"].as<float>());
+    options->graphics.pbrEmissiveIntensity =
+        std::max(0.0f, vars["pbremissiveintensity"].as<float>());
     options->graphics.ptBackdropIntensity = std::max(0.0f, vars["ptbackdropintensity"].as<float>());
-    if (!vars["lightmapintensity"].defaulted()) {
-        options->graphics.lightmapIntensity = std::max(0.0f, vars["lightmapintensity"].as<float>());
-    } else if (tracedDefaults && vars.count("ptlightmapintensity")) {
-        warn("ptlightmapintensity is deprecated; use lightmapintensity");
-        options->graphics.lightmapIntensity = std::max(0.0f, vars["ptlightmapintensity"].as<float>());
-    } else if (!tracedDefaults && vars.count("pbrlightmapintensity")) {
-        warn("pbrlightmapintensity is deprecated; use lightmapintensity");
-        options->graphics.lightmapIntensity = std::max(0.0f, vars["pbrlightmapintensity"].as<float>());
-    } else {
-        options->graphics.lightmapIntensity = tracedDefaults ? 0.0f : 1.0f;
-    }
+    options->graphics.ptLightmapIntensity =
+        std::max(0.0f, vars["ptlightmapintensity"].as<float>());
+    options->graphics.pbrLightmapIntensity =
+        std::max(0.0f, vars["pbrlightmapintensity"].as<float>());
     options->graphics.ptDirectIntensity = vars["ptdirectintensity"].as<float>();
+    options->graphics.pbrDirectIntensity = vars["pbrdirectintensity"].as<float>();
     options->graphics.ptSunIntensity = vars["ptsunintensity"].as<float>();
+    options->graphics.pbrSunIntensity = vars["pbrsunintensity"].as<float>();
+    // The three retired spellings were ONE dial across both modes. A cfg
+    // written against them carries a grade that would otherwise vanish
+    // silently, so each still applies - but only to a mode that was not given
+    // its own value, because an explicit mode-scoped dial is the more specific
+    // statement of intent.
+    const auto retiredDial = [&vars, &options](const char *retired, const char *ptName,
+                                               const char *pbrName,
+                                               float GraphicsOptions::*ptMember,
+                                               float GraphicsOptions::*pbrMember) {
+        if (!vars.count(retired)) {
+            return;
+        }
+        warn(std::string(retired) + " is deprecated; use " + ptName + " and " + pbrName);
+        const float value = std::max(0.0f, vars[retired].as<float>());
+        if (vars[ptName].defaulted()) {
+            options->graphics.*ptMember = value;
+        }
+        if (vars[pbrName].defaulted()) {
+            options->graphics.*pbrMember = value;
+        }
+    };
+    retiredDial("skyintensity", "ptskyintensity", "pbrskyintensity",
+                &GraphicsOptions::ptSkyIntensity, &GraphicsOptions::pbrSkyIntensity);
+    retiredDial("emissiveintensity", "ptemissiveintensity", "pbremissiveintensity",
+                &GraphicsOptions::ptEmissiveIntensity, &GraphicsOptions::pbrEmissiveIntensity);
+    retiredDial("lightmapintensity", "ptlightmapintensity", "pbrlightmapintensity",
+                &GraphicsOptions::ptLightmapIntensity, &GraphicsOptions::pbrLightmapIntensity);
     options->graphics.ptBounceRoughness = std::clamp(vars["ptbounceroughness"].as<float>(), 0.0f, 1.0f);
     options->graphics.ptRoughnessFloor = std::clamp(vars["ptroughnessfloor"].as<float>(), 0.0f, 1.0f);
     options->graphics.ptIndirectClamp = std::max(0.0f, vars["ptindirectclamp"].as<float>());
