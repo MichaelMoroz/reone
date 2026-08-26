@@ -2104,3 +2104,69 @@ lives in the backlog's sky entry.
 narrowly** — it means the *approach* is settled and is not to be re-argued, not
 that the tool is correct. V0 above lists two live defects in it, and the two
 statements have been read against each other wrongly before.
+
+# Part 7 — One rendering path (RAS-036, built 2026-08-26)
+
+## The contract
+
+One assembly, owned by the composite (`slang/composite.slang`), fed by whichever
+provider shades the frame:
+
+    final = noiseFree + (diffuse + directDiffuse) * diffFactor + specular * specFactor
+
+- `noiseFree` — emission at the primary, sky on a miss, sky-class radiance; fog
+  blend in `.a` (zero on terminators, so the sky is never fogged).
+- `directDiffuse` — demodulated primary direct (`radiance*NdotL/pi`, no albedo),
+  with the mode's OWN visibility: shadow maps in PBR, shadow rays traced.
+- `diffuse` — demodulated indirect: `ao*lightmap*lightmapIntensity` plus ambient
+  fill plus IBL irradiance in PBR; traced bounce radiance (denoised) traced.
+- `specular` — demodulated: analytic GGX plus prefiltered IBL plus authored
+  mirror, divided by `specFactor`, in PBR; traced specular in the tracer.
+- `diffFactor`/`specFactor` — the surface model (`lib/surface_model.slang`
+  `materialFactors`), identical across modes by construction: measured at
+  correlation +1.0000, max difference 5e-4, between `pbr_channels` and the
+  trace kernel over the same G-buffer.
+- `viewZ` — the terminator sentinel (`kAssembleInfDistance`); a terminating
+  pixel carries all radiance in `noiseFree` and the composite adds nothing.
+
+## Ownership
+
+`ScenePipeline` owns the fifteen channel images (double-buffered) and the
+composite dispatch. The trace kernel binds them into its set 2 by name each
+frame, exactly as it binds the G-buffer block; `pbr_channels` writes seven of
+them through the resolve set's storage bindings 2..8 (partially bound — retro
+declares none and is untouched by the layout growth). The tracer hands back
+only what it alone can produce: NRD's denoised pair, whichever image settled
+the direct channel, and the composite's push values. PBR hands back the raw
+channels at zero jitter, which makes the composite's sampled reads the raw
+texel at the pixel centre — the contract line exactly. Retro allocates no
+channels and keeps its own resolve untouched; it is the preservation mode and
+shares only `ResolvePushConstants` and the descriptor layouts.
+
+## The rule table, as decided and built
+
+| rule | decision | consequence, measured |
+|---|---|---|
+| PBR `min(1, light)` clamp before albedo | dropped | tat_m18ab +3.1% brighter; a sand glare patch gone |
+| `materialDiffuse` tint on direct | dropped | subsumed by `diffFactor` |
+| per-light `kD`, ambient-lobe Fresnel | dropped | the shared factors are the surface model |
+| self-illum specular gate | dropped | glowing panels may take highlights |
+| emission | tracer's rule: radiance into `noiseFree`, not albedo-multiplied, on `emissiveIntensity` | PBR default 1.0 preserves the authored level |
+| sky | one rule on `skyIntensity` | per-mode default 1.0 raster / 2.5 traced |
+| fog | shared: the kernel computes the per-surface blend into `noiseFree.a`, the composite applies colour and switch | one `--fog`, honoured by both modes |
+| lightmap | one `lightmapIntensity` | per-mode default 1.0 PBR / 0.0 traced — the one documented divergence, now a default |
+| parity | provider writes the tracer's shape | channels parity identical to the old resolve at 0.000% |
+
+## Debug views
+
+The radiance channels (8, 9, 11, 15) read the channel images in any mode that
+fills them; channel 20 (PBR's re-derived direct) is deleted — 15 is both modes'
+answer, each with its own visibility. Retro paints the not-available card off a
+flag bit rather than sampling unbound stand-ins. Tracer-only remain 16–19: the
+penumbra and the denoiser's own products.
+
+## What stays per mode, deliberately
+
+The occlusion answer (map or ray), the tracer's NEE selection and penumbra,
+PBR's SSR tail (RAS-037 owns making it a provider), and each mode's dial
+DEFAULTS — never the dials themselves, never the assembly.

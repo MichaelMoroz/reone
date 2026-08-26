@@ -1580,6 +1580,49 @@ has no bounce light, so a fully occluded surface receives nothing where the trac
 with indirect - which makes the dial partly a stand-in for missing GI. Two scenes, one confounded,
 is not enough to retune a look dial.
 
+### 3.15 RAS-036 build measurements, per step
+
+- **a (shared assembly/surface model):** PBR output byte-identical; the traced
+  change (26.2% pixels / 0.02% mean) sits under the same-build Monte Carlo
+  floor (29.6% / 36.0%). The planned hash-equal proof was the wrong
+  instrument — adding any `.slang` file recompiles the whole cache.
+- **b (one material chain):** `--debugview 4` and `5` byte-identical (max 0)
+  between PBR and the tracer on three modules.
+- **c (channel ownership moves):** traced frame vs pre-move: median ratio
+  1.000/1.002, correlation +0.995/+0.9999 — within cross-recompile MC noise;
+  all fifteen `channel_*` dumps present; retro byte-identical.
+- **d (shared fog):** fog lands on distant geometry only (danm14ab 10.9% of
+  pixels, kas_m22aa 20.7%), near floor and sky bit-identical — the per-surface
+  gate and the terminator exclusion working; `--fog 0` reproduces the no-fog
+  frame at ratio 1.000/1.004; the composite push reflects at 32 bytes.
+- **e (pbr_channels):** deterministic channels vs the tracer: diff/spec factor
+  and viewZ at correlation +1.0000, max 5e-4 — float rounding between two
+  compilations of the same math; bit-equality is not on offer and not needed.
+  Parity through the channels path identical to the old resolve at 0.000%
+  above one count; the 0.085% residual against the tracer predates the change
+  (the old resolve shows it identically). Block-averaged direct diffuse is
+  positive on every module (+0.98 ebo, +0.92 tar, +0.16 tat — one uniform sun
+  over flat sand leaves almost no structure to correlate). Assembled image vs
+  the old resolve: ratio 0.987–1.031, correlation +0.95..+0.9997; blind
+  readers located the differences exactly where the dropped rules predict —
+  emissive backdrop panes, one specular glare patch.
+- **f (delete the resolve):** the default PBR frame is byte-equal to e's
+  `--pbrchannels 1` frame (max one count); SSR through the renamed module
+  still bites (26% of corridor pixels move when switched on).
+- **g (one debug channel):** view 15 correlates +0.75/+0.36 across modes (the
+  traced side is undenoised Monte Carlo, so per-pixel equality is not on
+  offer); retro's radiance views are the card at exactly 50% stripe
+  coverage — the channels-absent flag works.
+- **h (one dial set):** behaviour preserved under a cfg carrying the old keys:
+  PBR byte-identical (tat) / one count (ebo), traced ratio 0.994 corr +0.995,
+  retro byte-identical. The alias flag and the new flag produce the same
+  frame, and the dial visibly bites (7.8% of interior pixels at emissive 5).
+  The first cut honoured `pt*` aliases in raster runs and replayed the traced
+  grade into PBR — the interior lost its bake; aliases are mode-scoped now.
+- **Instrument note:** every cross-commit traced comparison above is bounded by
+  recompile MC noise and never claimed as hash-equality; the hash-equal claims
+  are all raster (deterministic) or same-build.
+
 ## 4. Rejected approaches, and why
 
 ### 4.1 Retained registration, rejected in favour of the snapshot
