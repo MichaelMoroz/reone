@@ -61,7 +61,7 @@ import lib.assemble;
 // it is added in the same currency as the rest, against the same guide factor.
 [[vk::binding(9, 1)]] Sampler2D sDirectDiffuse;
 
-/** Mirrors NrdResolvePushConstants in tracingpipeline.cpp. */
+/** Mirrors NrdResolvePushConstants in scenepipeline.cpp. */
 struct NrdResolvePushConstants {
     /**
      * Where to read the denoised channels from, in pixels, so that they line up

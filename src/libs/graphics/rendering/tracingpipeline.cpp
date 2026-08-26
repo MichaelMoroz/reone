@@ -53,6 +53,17 @@ struct TraceStats {
     uint32_t shadowRays {0};
 };
 
+// The trace kernel's set-2 storage-output slots, in the channel index order.
+// The images themselves are ScenePipeline's; the kernel binds them into these
+// slots by name every frame, the same way it binds the G-buffer block, because
+// a resize hands over new images and binding once at init would keep the old
+// ones. Count is asserted against kNumTracingChannels below.
+constexpr const char *kChannelBindingNames[kNumTracingChannels] {
+    "outDiffuse", "outSpecular", "outNormalRoughness", "outViewZ", "outMotion",
+    "outNoiseFree", "outDiffFactor", "outDeviceDepth", "outScreenMotion", "outSpecFactor",
+    "outGBufferDiffuse", "outGBufferEyeNormal", "outGBufferDepth", "outGBufferMotion",
+    "outDirectDiffuse"};
+
 } // namespace
 
 TracingPipeline::TracingPipeline(IRenderer &renderer,
@@ -123,51 +134,14 @@ void TracingPipeline::init() {
          "rayquery:primaryRay"});
     _bindlessTextureCapacity = _pipeline->bindlessTextureCapacity();
 
-    // The NRD output split: seven storage images in their own set, because
-    // the main set's bindless arrays hold the variable-descriptor-count slot
-    // and the API allows nothing above it. Plain pool, static writes - the
-    // images never change identity within a pipeline lifetime.
-    {
-        // Formats mirror the shader's declarations; normal/roughness rides
-        // RGBA16F, the FP form NRD's RGBA16_SNORM encoding accepts.
-        static constexpr Format kAuxFormats[kNumAuxImages] {
-            Format::R16G16B16A16Sfloat, // diffuse radiance + hit dist
-            Format::R16G16B16A16Sfloat, // specular radiance + hit dist
-            Format::R16G16B16A16Sfloat, // normal + roughness
-            Format::R32Sfloat,          // viewZ
-            Format::R16G16B16A16Sfloat, // motion
-            Format::R16G16B16A16Sfloat, // noise-free
-            Format::R16G16B16A16Sfloat, // diffuse material factor
-            // Diagnostics only since the upscaler moved to the common tail and
-            // took its guides from the G-buffer instead. Kept because they are
-            // the traced counterparts the G-buffer pair is compared against.
-            Format::R32Sfloat,          // device depth
-            Format::R16G16B16A16Sfloat, // screen-space motion
-            Format::R16G16B16A16Sfloat, // specular material factor
-            Format::R8G8B8A8Unorm,      // canonical raster/tracer diffuse
-            Format::R8G8B8A8Unorm,      // canonical packed eye normal
-            Format::R32Sfloat,          // canonical positive linear view depth
-            Format::R16G16Sfloat,       // canonical current-minus-previous UV motion
-            // Direct diffuse at the primary vertex, straight to the resolve.
-            Format::R16G16B16A16Sfloat, // direct diffuse + expected penumbra
-        };
-        static constexpr const char *kAuxBindingNames[kNumAuxImages] {
-            "outDiffuse", "outSpecular", "outNormalRoughness", "outViewZ", "outMotion",
-            "outNoiseFree", "outDiffFactor", "outDeviceDepth", "outScreenMotion", "outSpecFactor",
-            "outGBufferDiffuse", "outGBufferEyeNormal", "outGBufferDepth", "outGBufferMotion",
-            "outDirectDiffuse"};
-        for (int frame = 0; frame < 2; ++frame) {
-            for (int i = 0; i < kNumAuxImages; ++i) {
-                auto image = _renderer.resources().makeImage();
-                image->initColorAttachment(_extent, kAuxFormats[i]);
-                const TracingBinding binding {kAuxBindingNames[i], *image};
-                _pipeline->updateBindings(2, frame, {&binding, 1});
-                _auxImages[frame][i] = std::move(image);
-            }
-            auto filtered = _renderer.resources().makeImage();
-            filtered->initColorAttachment(_extent, Format::R16G16B16A16Sfloat);
-            _shadowFiltered[frame] = std::move(filtered);
-        }
+    // The shadow filter's own double-buffered target. The channel images the
+    // kernel writes are ScenePipeline's now and arrive bound each frame; this
+    // one stays here because no other stage produces or consumes it.
+    static_assert(std::size(kChannelBindingNames) == kNumTracingChannels);
+    for (int frame = 0; frame < 2; ++frame) {
+        auto filtered = _renderer.resources().makeImage();
+        filtered->initColorAttachment(_extent, Format::R16G16B16A16Sfloat);
+        _shadowFiltered[frame] = std::move(filtered);
     }
 
     loadBlueNoise();
@@ -180,11 +154,6 @@ void TracingPipeline::init() {
             _shadowFilterPipeline = _renderer.makeComputePipeline({"shadow_filter", "main", 2});
             _shadowFilterBindings = _shadowFilterPipeline->resolveBindings(
                 {"outFiltered", "inDirectDiffuse", "inViewZ", "inNormalRoughness"});
-            _compositePipeline = _renderer.makeComputePipeline({"nrd_resolve", "main", 2});
-            _compositeBindings = _compositePipeline->resolveBindings(
-                {"outputImage", "inNoiseFree", "inDiffFactor", "inSpecFactor",
-                 "sDenoisedDiffuse", "sDenoisedSpecular", "inViewZ", "inRawDiffuse",
-                 "inRawSpecular", "sDirectDiffuse"});
         }
     }
 #endif
@@ -203,15 +172,9 @@ void TracingPipeline::deinit() {
         clearFrame(frame);
     }
 #ifdef R_ENABLE_NRD
-    _compositePipeline.reset();
-    _compositeBindings.clear();
     _nrdDenoiser.reset();
 #endif
     _pipeline.reset();
-    for (auto &frame : _auxImages) {
-        for (auto &image : frame)
-            image.reset();
-    }
     _bindlessTextureCapacity = 0;
     _lastBindlessTextureCount = 0;
     _lastAuxFrame = -1;
@@ -226,37 +189,13 @@ std::vector<TracingChannel> TracingPipeline::channels() const {
     if (!_inited || _lastAuxFrame < 0) {
         return {};
     }
-    // Order and names follow the aux bindings in tracing/outputs.slang.
-    // Unsized on purpose, with the count asserted below. Written as
-    // kNames[kNumAuxImages] these tables accept too few initialisers without a
-    // word of complaint - C++ value-initialises the rest to nullptr - and the
-    // missing entry only shows up as a null dereference when someone opens the
-    // viewer. Adding an aux image is now a build error until it is named.
-    static constexpr const char *kNames[] {
-        "Traced diffuse radiance", "Traced specular radiance", "Traced normal/roughness",
-        "Traced viewZ", "Traced NRD motion", "Traced noise-free", "Traced diffuse factor",
-        "Traced device depth", "Traced screen motion", "Traced specular factor",
-        "Traced diffuse", "Traced eye normal", "Traced depth", "Traced motion",
-        "Traced direct diffuse"};
-    static constexpr const char *kDumpNames[] {
-        "traced_radiance_diffuse", "traced_radiance_specular", "traced_normal_roughness",
-        "traced_view_z", "traced_nrd_motion", "traced_noise_free", "traced_diff_factor",
-        "traced_device_depth", "traced_screen_motion", "traced_spec_factor",
-        "traced_diffuse", "traced_eye_normal", "traced_depth", "traced_motion",
-        "traced_direct_diffuse"};
-    static_assert(std::size(kNames) == kNumAuxImages);
-    static_assert(std::size(kDumpNames) == kNumAuxImages);
-    const auto &aux = _auxImages[_lastAuxFrame];
+    // Only the images this pipeline still owns. The fifteen channel images are
+    // ScenePipeline's now and it enumerates them itself; what is left here is
+    // the denoiser's own output - the denoised counterparts of the raw radiance
+    // pair, whose whole diagnostic value is comparing the two - and the shadow
+    // filter's target, a later pass's product the kernel never touches.
     std::vector<TracingChannel> result;
-    for (int i = 0; i < kNumAuxImages; ++i) {
-        if (aux[i]) {
-            result.push_back({kNames[i], kDumpNames[i], aux[i].get()});
-        }
-    }
 #ifdef R_ENABLE_NRD
-    // What NRD made of the two radiance channels. Comparing these against the
-    // raw pair above is the difference between "the tracer is noisy" and "the
-    // denoiser is not removing it".
     if (_nrdDenoiser) {
         result.push_back({"Denoised diffuse", "denoised_diffuse", &_nrdDenoiser->denoisedDiffuse()});
         result.push_back({"Denoised specular", "denoised_specular", &_nrdDenoiser->denoisedSpecular()});
@@ -345,6 +284,21 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
             1, _renderer.frameIndex(),
             {gbufferBindings.data(), static_cast<uint32_t>(gbufferBindings.size())});
     }
+    // ScenePipeline's channel images, bound into set 2 by name every frame.
+    // They used to be bound once at init, when the tracer owned them and their
+    // identity was fixed for its lifetime; ScenePipeline owns them now, a resize
+    // replaces them, and the binding has to follow - exactly like the G-buffer
+    // block above, and for the same reason.
+    {
+        std::vector<TracingBinding> channelBindings;
+        channelBindings.reserve(kNumTracingChannels);
+        for (int i = 0; i < kNumTracingChannels; ++i) {
+            channelBindings.emplace_back(kChannelBindingNames[i], *input.channels.images[i]);
+        }
+        _pipeline->updateBindings(2, _renderer.frameIndex(),
+                                  {channelBindings.data(),
+                                   static_cast<uint32_t>(channelBindings.size())});
+    }
     // Texture ids are assigned by the resource cache at upload time. The set is
     // update-after-bind and partially-bound so new assets can take a slot
     // without rebuilding it or populating unrelated descriptors.
@@ -370,12 +324,12 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
     }
     _lastBindlessTextureCount = static_cast<uint32_t>(uploadedTextures.size());
     {
-        // Every aux image lives in GENERAL. The tracked transition is a no-op
-        // after the first traced frame while retaining the one dependency.
-        for (int frameIndex = 0; frameIndex < 2; ++frameIndex) {
-            for (int i = 0; i < kNumAuxImages; ++i) {
-                commandBuffer.transitionImage(*_auxImages[frameIndex][i], ImageLayout::General);
-            }
+        // The channel images must be GENERAL before the kernel writes them as
+        // storage. Only this frame's set is transitioned: ScenePipeline owns
+        // both and hands over the one the kernel is about to write, and the
+        // tracked transition is a no-op after the slot's first traced frame.
+        for (int i = 0; i < kNumTracingChannels; ++i) {
+            commandBuffer.transitionImage(*input.channels.images[i], ImageLayout::General);
         }
     }
     std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
@@ -428,12 +382,13 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
     }
 #ifdef R_ENABLE_NRD
     if (_nrdDenoiser) {
-        // The trace pass's storage writes feed NRD's sampled reads.
-        const auto &aux = _auxImages[_renderer.frameIndex()];
-        std::array<IImage *, kNumAuxImages + 1> traceOutputs {};
+        // The trace pass's storage writes feed NRD's sampled reads. The channel
+        // images are ScenePipeline's, handed in for this frame.
+        auto &channels = input.channels.images;
+        std::array<IImage *, kNumTracingChannels + 1> traceOutputs {};
         traceOutputs[0] = &output;
-        for (int i = 0; i < kNumAuxImages; ++i)
-            traceOutputs[i + 1] = aux[i].get();
+        for (int i = 0; i < kNumTracingChannels; ++i)
+            traceOutputs[i + 1] = channels[i];
         for (auto *image : traceOutputs) {
             commandBuffer.imageBarrier(*image, ImageUse::RayTracingStore, ImageUse::ComputeRead);
         }
@@ -452,19 +407,19 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
             }
         };
         TracingDenoiserInputs inputs;
-        inputs.diffRadianceHitDist = aux[0].get();
-        inputs.specRadianceHitDist = aux[1].get();
+        inputs.diffRadianceHitDist = channels[0];
+        inputs.specRadianceHitDist = channels[1];
         // Only when the direct channel exists as its own signal. With the
         // channel off the tracer sums direct light into the diffuse one, so
         // there is nothing separate to denoise and the second denoiser's
         // batch is not recorded at all.
         if (_options.ptDirectChannel &&
             _options.ptShadowFilter == graphics::ShadowFilter::Denoiser) {
-            inputs.directRadianceHitDist = aux[14].get();
+            inputs.directRadianceHitDist = channels[14];
         }
-        inputs.normalRoughness = aux[2].get();
-        inputs.viewZ = aux[3].get();
-        inputs.motion = aux[4].get();
+        inputs.normalRoughness = channels[2];
+        inputs.viewZ = channels[3];
+        inputs.motion = channels[4];
         // The projection arrives carrying the TAA jitter (applied as a clip
         // translate); NRD is owed the unjittered matrix and the sub-pixel
         // offset separately, the latter in pixels with UV-down y.
@@ -494,40 +449,14 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
         _restartHistoryRequested = false;
         _nrdDenoiser->denoise(commandBuffer, _renderer.frameIndex(), inputs, tuning, view, unjitteredProjection,
                                jitterPixels, frameNumber, restartHistory);
-        // The composite normally stands aside for a debug view, because the
-        // kernel has already written the channel it was asked for. Three of
-        // them are this pass's own output and cannot exist before it runs, so
-        // for those it goes ahead and writes them itself.
+        // The composite is ScenePipeline's pass now. The tracer prepares only
+        // what only it can produce: the denoiser's outputs, the shadow filter's
+        // result, and the two push values the composite pushes. When there is
+        // nothing to denoise, or the debug view asked for is one of the
+        // kernel's own, the trace kernel has already written the final image
+        // itself - runComposite stays false and the composite stands aside.
         if (_options.ptDenoise &&
             (_options.debugView == 0 || isResolveDebugView(_options.debugView))) {
-            // The assembly from denoised channels, overwriting the trace
-            // kernel's own write. Debug views keep the kernel's output.
-            //
-            // It writes the scene output directly and stops at linear HDR. The
-            // temporal resolve and the display transform both live in the
-            // common tail now, so this pass no longer has to know whether
-            // either of them is running.
-            //
-            // Motion is not among the bindings: it existed only for the removed
-            // TAA's reprojection. NRD still consumes it directly.
-            constexpr uint32_t kCompositeBindings = 10;
-            const std::array<ComputeBinding, kCompositeBindings> compositeBindings {{
-                {_compositeBindings[0], output.sampleView()},
-                {_compositeBindings[1], aux[5]->sampleView()},
-                {_compositeBindings[2], aux[6]->sampleView()},
-                {_compositeBindings[3], aux[9]->sampleView()},
-                {_compositeBindings[4], _nrdDenoiser->denoisedDiffuse().sampleView()},
-                {_compositeBindings[5], _nrdDenoiser->denoisedSpecular().sampleView()},
-                {_compositeBindings[6], aux[3]->sampleView()},
-                {_compositeBindings[7], aux[0]->sampleView()},
-                {_compositeBindings[8], aux[1]->sampleView()},
-                // Whichever of the three settled this channel. The denoiser's
-                // output only exists when its batch actually ran, so this falls
-                // back to the raw channel rather than binding an image the
-                // denoiser never wrote.
-                {_compositeBindings[9],
-                 directChannelView(aux[14].get())},
-            }};
             if (_options.ptShadowFilter == graphics::ShadowFilter::Penumbra) {
                 // Mirrors ShadowFilterPushConstants in slang/shadow_filter.slang.
                 struct ShadowFilterPushConstants {
@@ -551,9 +480,9 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                 auto &filtered = *_shadowFiltered[_renderer.frameIndex()];
                 const std::array<ComputeBinding, 4> filterBindings {{
                     {_shadowFilterBindings[0], filtered.sampleView()},
-                    {_shadowFilterBindings[1], aux[14]->sampleView()},
-                    {_shadowFilterBindings[2], aux[3]->sampleView()},
-                    {_shadowFilterBindings[3], aux[2]->sampleView()},
+                    {_shadowFilterBindings[1], channels[14]->sampleView()},
+                    {_shadowFilterBindings[2], channels[3]->sampleView()},
+                    {_shadowFilterBindings[3], channels[2]->sampleView()},
                 }};
                 commandBuffer.dispatch(*_shadowFilterPipeline,
                                        {static_cast<uint32_t>((_extent.x + 7) / 8),
@@ -563,33 +492,26 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                                        nullptr, &filterConstants, sizeof(filterConstants));
                 commandBuffer.imageBarrier(filtered, ImageUse::ComputeStore, ImageUse::ComputeRead);
             }
-            // Mirrors NrdResolvePushConstants in slang/nrd_resolve.slang.
-            struct NrdResolvePushConstants {
-                float denoisedJitter[2];
-                uint32_t debugView;
-                uint32_t directDenoised;
-            };
-            static_assert(sizeof(NrdResolvePushConstants) == 16,
-                          "push constant block must stay free of padding");
-            // The content a jittered projection puts at a pixel sat one jitter
-            // offset earlier without it, so the denoised channels - which NRD
-            // settles on the pixel centre - are read from there to meet it.
-            // The sign is the negation of the offset handed to NRD, and it was
-            // checked by measurement rather than by reading: the wrong one
-            // doubles the mismatch instead of cancelling it, and reads as a
-            // worse grid correlation, not a better one.
-            NrdResolvePushConstants resolveConstants {
-                {-jitterPixels.x, -jitterPixels.y},
-                isResolveDebugView(_options.debugView)
-                    ? static_cast<uint32_t>(_options.debugView)
-                    : 0u,
-                _options.ptShadowFilter == graphics::ShadowFilter::Denoiser ? 1u : 0u};
-            commandBuffer.dispatch(*_compositePipeline,
-                                   {static_cast<uint32_t>((_extent.x + 7) / 8),
-                                    static_cast<uint32_t>((_extent.y + 7) / 8), 1},
-                                   {compositeBindings.data(),
-                                    static_cast<uint32_t>(compositeBindings.size())},
-                                   nullptr, &resolveConstants, sizeof(resolveConstants));
+            // Hand ScenePipeline the pieces its composite cannot get from the
+            // channel images. The jitter sign is the negation of the offset
+            // handed to NRD: the denoised channels settle on the pixel centre,
+            // so they are read from where the jittered projection put that
+            // content one offset earlier. Checked by measurement - the wrong
+            // sign doubles the mismatch instead of cancelling it.
+            if (input.composite) {
+                input.composite->runComposite = true;
+                input.composite->denoisedDiffuse = _nrdDenoiser->denoisedDiffuse().sampleView();
+                input.composite->denoisedSpecular = _nrdDenoiser->denoisedSpecular().sampleView();
+                input.composite->directDiffuse = directChannelView(channels[14]);
+                input.composite->denoisedJitter[0] = -jitterPixels.x;
+                input.composite->denoisedJitter[1] = -jitterPixels.y;
+                input.composite->directDenoised =
+                    _options.ptShadowFilter == graphics::ShadowFilter::Denoiser ? 1u : 0u;
+                input.composite->debugView =
+                    isResolveDebugView(_options.debugView)
+                        ? static_cast<uint32_t>(_options.debugView)
+                        : 0u;
+            }
         }
     }
 #endif

@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <array>
 #include <string>
 #include <memory>
 #include <optional>
@@ -74,6 +75,43 @@ struct GBufferBinding {
     IImage *triangleId {nullptr};
 };
 
+/**
+ * The tracer's storage-output channels, owned by ScenePipeline and written by
+ * the trace kernel's set 2.
+ *
+ * Ownership sits with ScenePipeline because the composite that assembles them
+ * into the final image is a ScenePipeline pass, and a raster mode will one day
+ * shade into the same channels without the tracer running at all. The tracer
+ * receives the images for the frame and binds them by name into its own set 2,
+ * exactly as it binds the G-buffer block. Index order is the trace kernel's aux
+ * order (tracing/outputs.slang); the count is asserted where they are named.
+ */
+constexpr int kNumTracingChannels = 15;
+struct ChannelBinding {
+    std::array<IImage *, kNumTracingChannels> images {};
+};
+
+/**
+ * What the trace pass hands back for ScenePipeline's composite.
+ *
+ * The channel images are ScenePipeline's own; these are the pieces only the
+ * tracer can produce - NRD's denoised radiance pair and whichever image settled
+ * the direct-light channel - plus the two push-constant values the composite
+ * needs. runComposite folds the tracer-only knowledge of whether a denoiser
+ * even exists together with the denoise/debug-view gate: false means the trace
+ * kernel already wrote the final image itself and the composite must stand
+ * aside.
+ */
+struct TracingPipelineOutput {
+    bool runComposite {false};
+    ImageView denoisedDiffuse;
+    ImageView denoisedSpecular;
+    ImageView directDiffuse;
+    float denoisedJitter[2] {0.0f, 0.0f};
+    uint32_t directDenoised {0};
+    uint32_t debugView {0};
+};
+
 /** Everything the tracing implementation needs to turn one merged scene into pixels. */
 struct TracingPipelineInput {
     ICommandBuffer &commandBuffer;
@@ -88,6 +126,10 @@ struct TracingPipelineInput {
     uint32_t frameNumber {0};
     SkyBinding sky;
     GBufferBinding gbuffer;
+    /** ScenePipeline's channel images for this frame; the kernel writes them. */
+    ChannelBinding channels;
+    /** Filled by the trace pass; read by ScenePipeline::compositePass. */
+    TracingPipelineOutput *composite {nullptr};
 };
 
 struct TracingChannel {

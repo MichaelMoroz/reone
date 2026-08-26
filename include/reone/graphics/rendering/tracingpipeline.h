@@ -111,12 +111,13 @@ private:
     std::unique_ptr<IComputePipeline> _shadowFilterPipeline;
     std::vector<ComputeResourceSlot> _shadowFilterBindings;
     std::unique_ptr<ITracingDenoiser> _nrdDenoiser;
-    std::unique_ptr<IComputePipeline> _compositePipeline;
-    std::vector<ComputeResourceSlot> _compositeBindings;
 #endif
 
-    static constexpr int kNumAuxImages = 15;
-    std::array<std::array<std::unique_ptr<IImage>, kNumAuxImages>, 2> _auxImages;
+    /**
+     * The frame slot the last trace wrote, for indexing the shadow-filter
+     * target below. The channel images themselves are ScenePipeline's now; this
+     * only tracks which of the two shadow-filter buffers is current.
+     */
     int _lastAuxFrame {-1};
 
     void clearFrame(Frame &frame);

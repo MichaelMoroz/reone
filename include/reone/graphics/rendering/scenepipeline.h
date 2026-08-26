@@ -32,6 +32,7 @@
 #include "reone/graphics/rendering/sky.h"
 // GBufferBinding: the rasterized primary the tracer is handed.
 #include "reone/graphics/rhi/pipelinecache.h"
+#include "reone/graphics/rhi/computepipeline.h"
 #include "reone/graphics/rhi/renderer.h"
 #include "reone/graphics/rhi/upscaler.h"
 
@@ -154,6 +155,10 @@ struct PrimaryRayContext {
     SkyBinding sky;
     /** The primary the geometry pass just rasterized; the tracer starts here. */
     GBufferBinding gbuffer;
+    /** ScenePipeline's channel images for this frame; the kernel writes them. */
+    ChannelBinding channels;
+    /** The tracer fills this; ScenePipeline's composite reads it. */
+    TracingPipelineOutput *composite {nullptr};
 };
 
 struct ExternalTarget {
@@ -296,6 +301,34 @@ private:
      */
     std::array<glm::vec4, kNumSSAOSamples> _ssaoKernel {};
 
+    /**
+     * The tracer's storage-output channels, owned here.
+     *
+     * Double-buffered like the images the tracer reads them beside, so two
+     * frames in flight never write and read the same texels. The trace kernel
+     * writes them through its set 2; the composite below reads them into the
+     * final image. Allocated only in the traced mode for now - a raster mode
+     * will shade into the same channels once the provider split lands, at which
+     * point every non-retro mode allocates them.
+     */
+    std::array<std::array<std::unique_ptr<IImage>, kNumTracingChannels>, 2> _channelImages;
+    /** The set the tracer wrote this frame, latched for the composite and dumps. */
+    ChannelBinding _frameChannels;
+    int _lastChannelFrame {-1};
+    /** What the trace pass handed back for this frame's composite. */
+    TracingPipelineOutput _tracingOutput;
+#ifdef R_ENABLE_NRD
+    /**
+     * The post-denoise assembly, moved here from the tracer: it reads the
+     * channel images this pipeline owns and NRD's denoised pair, and writes the
+     * final linear-HDR image. Idiom A - a standalone compute pipeline with
+     * name-resolved bindings - because it binds images that change identity on
+     * resize, not the cached four-set layout the resolves use.
+     */
+    std::unique_ptr<IComputePipeline> _compositePipeline;
+    std::vector<ComputeResourceSlot> _compositeBindings;
+#endif
+
     struct Preview {
         std::unique_ptr<IImage> image;
         void *imguiTexture {nullptr};
@@ -330,6 +363,15 @@ private:
     void blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                      ISceneCallbacks &callbacks);
     void pbrResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    /** This frame's channel images, latched into _frameChannels and returned. */
+    ChannelBinding acquireChannelBinding();
+    /**
+     * Assemble the tracer's channels into the final image; see SceneStep and the
+     * composite module. Runs only when the trace pass asked for it (a denoiser
+     * exists and neither the denoiser nor a resolve debug view is disabled);
+     * otherwise the trace kernel already wrote the final image itself.
+     */
+    void compositePass(ICommandBuffer &cmd);
     /** Establishes opaque and sky coverage before the traced transparent draw. */
     void primaryCoveragePass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** Restores the accumulated coverage alpha after FSR2, whose output alpha is always one. */

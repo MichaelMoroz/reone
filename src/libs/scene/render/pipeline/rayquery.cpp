@@ -69,7 +69,7 @@ void RayQueryPipeline::render(const PrimaryRayContext &context,
     _native->render(*context.commandBuffer, context.globalsOffset, *context.output,
                     context.view, context.projection, context.jitter,
                     std::move(admission.submission), context.scene, sky,
-                    context.gbuffer);
+                    context.gbuffer, context.channels, context.composite);
 }
 
 } // namespace reone::scene

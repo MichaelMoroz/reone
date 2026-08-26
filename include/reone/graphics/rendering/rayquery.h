@@ -67,7 +67,8 @@ public:
                  IImage &output, const glm::mat4 &view,
                  const glm::mat4 &projection, const glm::vec4 &jitter,
                  RayQuerySubmission submission, const GpuScene::View &scene,
-                 const SkyBinding &sky, const GBufferBinding &gbuffer);
+                 const SkyBinding &sky, const GBufferBinding &gbuffer,
+                 const ChannelBinding &channels, TracingPipelineOutput *composite);
 
     using Channel = TracingChannel;
     std::vector<Channel> channels() const;
