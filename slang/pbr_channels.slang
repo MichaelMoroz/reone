@@ -253,7 +253,6 @@ PbrDirectLight pbrDirectLight(GlobalUniformsLight light,
 /** One surface's contribution to the shared channels. */
 struct Channels {
     float3 noiseFree;
-    float fog;
     float3 diffuse;       // demodulated indirect
     float3 directDiffuse; // demodulated primary direct
     float3 specular;      // demodulated, divided by specFactor
@@ -267,7 +266,6 @@ struct Channels {
 Channels terminator(float3 noiseFree) {
     Channels c;
     c.noiseFree = noiseFree;
-    c.fog = 0.0;
     c.diffuse = float3(0.0);
     c.directDiffuse = float3(0.0);
     c.specular = float3(0.0);
@@ -437,9 +435,6 @@ Channels shadePixel(float2 uv, int2 pixel) {
     float3 radianceTexel = pow(max(mainTexSample.rgb, 0.0), float3(kGamma));
     c.noiseFree = assembleEmission(gammaToLinear(selfIllumSample.rgb), radianceTexel,
                                    material.curatedEmission, pushConstants.emissiveIntensity);
-    c.fog = fogEnabled ? fogAmount(worldPos, globalUniforms.cameraPosition.xyz,
-                                   globalUniforms.fogNear, globalUniforms.fogFar)
-                       : 0.0;
     c.diffuse = ao * irradiance;
     c.directDiffuse = max(directDiffuse, float3(0.0));
     c.specular = (max(directS, float3(0.0)) + ao * ambientS + mirror) /
@@ -467,7 +462,7 @@ void channelsMain(uint3 dispatchId : SV_DispatchThreadID) {
 
     // Every pixel writes every channel: a storage image keeps stale data
     // otherwise, and the composite reads all of them.
-    outNoiseFree[pixel] = float4(c.noiseFree, c.fog);
+    outNoiseFree[pixel] = float4(c.noiseFree, 1.0);
     outDiffuse[pixel] = float4(c.diffuse, 0.0);
     outSpecular[pixel] = float4(c.specular, 0.0);
     outDirectDiffuse[pixel] = float4(c.directDiffuse, 0.0);

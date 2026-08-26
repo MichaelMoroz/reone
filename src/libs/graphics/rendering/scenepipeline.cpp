@@ -1022,16 +1022,16 @@ ResolvePushConstants resolvePush(uint32_t flags, const GraphicsOptions &options)
             std::clamp(options.thinTransmission, 0.0f, 1.0f),
             std::clamp(options.albedoGamma, 0.1f, 4.0f),
             std::clamp(options.ptRoughnessFloor, 0.0f, 1.0f),
-            std::max(0.0f, options.lightmapIntensity),
+            std::max(0.0f, options.pbrLightmapIntensity),
             // The tracer's dial, read by PBR too: the two modes are meant to
             // differ in how light reaches a surface, never in what the light
             // is, and a lamp of a different size in one of them is the latter.
             std::clamp(options.ptPointEmitterRatio, 0.01f, 0.5f),
-            std::max(0.0f, options.ptDirectIntensity),
-            std::max(0.0f, options.ptSunIntensity),
-            std::max(0.0f, options.skyIntensity),
+            std::max(0.0f, options.pbrDirectIntensity),
+            std::max(0.0f, options.pbrSunIntensity),
+            std::max(0.0f, options.pbrSkyIntensity),
             std::max(0.0f, options.ptBackdropIntensity),
-            std::max(0.0f, options.emissiveIntensity)};
+            std::max(0.0f, options.pbrEmissiveIntensity)};
 }
 
 } // namespace
@@ -1213,9 +1213,9 @@ void ScenePipeline::compositePass(ICommandBuffer &cmd) {
         {_compositeBindings[9], _tracingOutput.directDiffuse},
     }};
     // Mirrors CompositePushConstants in slang/composite.slang. The trace pass
-    // computed the denoiser values; the fog colour and the master switch are
+    // computed the denoiser values; the fog colour, range and master switch are
     // the frame's, taken here where the uniforms and the option are in reach.
-    // The per-pixel fog amount rode noiseFree.a and is not in the push.
+    // The per-pixel amount is the composite's own, from the depth channel.
     const auto &globals = _uniforms.globals();
     const glm::vec3 fogColorLinear = glm::pow(
         glm::max(glm::vec3(globals.fogColor), glm::vec3(0.0f)), glm::vec3(2.2f));
@@ -1223,14 +1223,17 @@ void ScenePipeline::compositePass(ICommandBuffer &cmd) {
         float denoisedJitter[2];
         uint32_t debugView;
         uint32_t directDenoised;
-        float fog[4];
+        float fogColor[3];
+        float fogEnabled;
+        float fogRange[2];
     } resolveConstants {
         {_tracingOutput.denoisedJitter[0], _tracingOutput.denoisedJitter[1]},
         _tracingOutput.debugView,
         _tracingOutput.directDenoised,
-        {fogColorLinear.x, fogColorLinear.y, fogColorLinear.z,
-         _options.fog ? 1.0f : 0.0f}};
-    static_assert(sizeof(CompositePushConstants) == 32,
+        {fogColorLinear.x, fogColorLinear.y, fogColorLinear.z},
+        _options.fog ? 1.0f : 0.0f,
+        {globals.fogNear, globals.fogFar}};
+    static_assert(sizeof(CompositePushConstants) == 40,
                   "push constant block must stay free of padding");
     cmd.dispatch(*_compositePipeline,
                  {(_renderSize.x + kResolveGroupSize - 1) / kResolveGroupSize,

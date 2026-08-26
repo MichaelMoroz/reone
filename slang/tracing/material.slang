@@ -65,9 +65,6 @@ public struct SurfaceShading {
     public float roughness;
     public float metallic;
     public float3 emission;  // radiance added at this vertex, dial-scaled
-    /** Fog blend toward the fog colour for this vertex; 0 where unfogged. Only
-        the primary vertex sets it - a bounce sees no camera-distance fog. */
-    public float fog;
     public float3 lightmap;
     public bool hasLightmap;
     public bool envmapped;

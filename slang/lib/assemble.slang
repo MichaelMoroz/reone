@@ -80,6 +80,22 @@ public float3 assembleEmission(float3 selfIllumLinear, float3 radianceTexel,
 }
 
 /** Linear fog fraction over the authored near/far range. */
+/**
+ * Fog from the depth channel, which is what the resolve has and what every
+ * pixel has - including the sky and any path-terminating surface.
+ *
+ * Computed here rather than per surface at shading time. A per-surface amount
+ * is gated by that material's fog feature bit, so whether a pixel fogged
+ * depended on what KIND of object it was: the sky never fogged, terminators
+ * never fogged, and a fogged wall met an unfogged backdrop at a hard seam.
+ * Distance is the only thing fog depends on, and the resolve knows it for
+ * everything it draws.
+ */
+public float fogFromViewDepth(float viewDepth, float fogNear, float fogFar) {
+    float f = (fogFar - abs(viewDepth)) / max(1e-4, fogFar - fogNear);
+    return 1.0 - saturate(f);
+}
+
 public float fogAmount(float3 worldPos, float3 cameraPos, float fogNear, float fogFar) {
     float distance = length(worldPos - cameraPos);
     float f = (fogFar - distance) / (fogFar - fogNear);

@@ -277,7 +277,6 @@ void main() {
     }
 
     outputs.noiseFree = primaryShading.emission;
-    outputs.fog = primaryShading.fog;
 
     if (primaryShading.terminatesPath) {
         // Parity: a terminating surface - sky shell, prelit backdrop - is
@@ -303,9 +302,6 @@ void main() {
         outputs.diffuse = float3(0.0);
         outputs.specular = float3(0.0);
         outputs.directDiffuse = float3(0.0);
-        // No fog either: parity is the bare shared sum, matched against the
-        // other renderer's bare sum, and fog is not part of it.
-        outputs.fog = 0.0;
         // White factors, so the composite's demodulation does not reshape the
         // sum on its way to the image.
         outputs.diffFactor = float3(1.0);

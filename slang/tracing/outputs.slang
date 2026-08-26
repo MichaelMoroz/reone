@@ -90,9 +90,6 @@ public struct TraceOutputs {
     public float viewZ;
     public float3 motion;
     public float3 noiseFree;    // layers, emission, sky - bypasses the denoiser
-    /** Camera-distance fog blend at the primary vertex, carried in noiseFree.a
-        to the composite; 0 where unfogged. */
-    public float fog;
     public float3 diffFactor;
     public float3 specFactor;
     // The output factor textures describe the guide surface. These internal
@@ -129,7 +126,6 @@ public struct TraceOutputs {
         outputs.viewZ = kPtInfDistance;
         outputs.motion = float3(0.0);
         outputs.noiseFree = float3(0.0);
-        outputs.fog = 0.0;
         outputs.diffFactor = float3(1.0);
         outputs.specFactor = float3(1.0);
         outputs.transportDiffFactor = float3(1.0);
@@ -174,6 +170,13 @@ public struct TraceOutputs {
     public float3 assemble() {
         float3 radiance = assembleRadiance(noiseFree, diffuse, directDiffuse, specular,
                                            transportDiffFactor, transportSpecFactor);
+        // From this pixel's depth, exactly as the composite does it - one
+        // rule, so the denoiser-off image and the composited one agree.
+        if (!ptFogEnabled()) {
+            return radiance;
+        }
+        const float fog = fogFromViewDepth(viewZ, globalUniforms.fogNear,
+                                           globalUniforms.fogFar);
         return applyFog(radiance, ptGammaToLinear(globalUniforms.fogColor.rgb), fog);
     }
 
@@ -189,7 +192,7 @@ public struct TraceOutputs {
         outNormalRoughness[pixel] = float4(normal, roughness);
         outViewZ[pixel] = viewZ;
         outMotion[pixel] = float4(motion, 0.0);
-        outNoiseFree[pixel] = float4(noiseFree, fog);
+        outNoiseFree[pixel] = float4(noiseFree, 1.0);
         outDiffFactor[pixel] = float4(diffFactor, 1.0);
         outDeviceDepth[pixel] = deviceDepth;
         outScreenMotion[pixel] = float4(screenMotion, 0.0, 0.0);

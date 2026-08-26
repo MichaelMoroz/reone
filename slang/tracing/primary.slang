@@ -285,16 +285,6 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     hit.uv = float2(0.0);
     hit.uv2 = float2(0.0);
 
-    // Camera-distance fog for this vertex, gated by the surface's own fog
-    // feature and the global switch, and never on a path-terminating surface -
-    // the sky and the backdrops sit at infinity and carry their radiance whole.
-    // Stored as the blend amount; the composite (or the denoiser-off assembly)
-    // applies the colour. See lib.assemble.
-    shading.fog = (fogEnabled && ptFogEnabled() && !shading.terminatesPath)
-                      ? fogAmount(world, globalUniforms.cameraPosition.xyz,
-                                  globalUniforms.fogNear, globalUniforms.fogFar)
-                      : 0.0;
-
     primary.covered = true;
     primary.hit = hit;
     primary.shading = shading;

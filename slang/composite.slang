@@ -83,13 +83,22 @@ struct CompositePushConstants {
      */
     uint directDenoised;
     /**
-     * Fog: rgb is the linear fog colour, w the global switch (>0.5 on). The
-     * per-pixel blend amount rides noiseFree.a - the trace kernel computed it
-     * against the surface's own fog feature - so this only carries what is the
-     * same for the whole frame. A float4 rather than float3 + uint so the block
-     * stays 32 bytes with no alignment gap to guess about.
+     * The linear fog colour, as three scalars, and the master switch (> 0.5 on).
+     *
+     * Scalars rather than a float3 or float4: either aligns the whole block to
+     * sixteen bytes and pads it to 48, and the C++ mirror would then be a
+     * different size from the block it mirrors. Every member here is scalar or
+     * float2, so the block is 40 bytes with nothing to guess about.
+     *
+     * The per-pixel amount is not here - the composite computes it from the
+     * depth channel; see fogFromViewDepth.
      */
-    float4 fog;
+    float fogColorR;
+    float fogColorG;
+    float fogColorB;
+    float fogEnabled;
+    /** Fog near and far, in world units, from the area's authored values. */
+    float2 fogRange;
 };
 
 static const uint kDebugDenoisedDiffuse = 17;
@@ -162,10 +171,11 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     // sky as soon as a denoiser sat behind the direct channel. The diffuse and
     // specular channels only escaped because the tracer leaves them at zero
     // there, which is luck rather than a guarantee.
-    if (!hasDenoisedSurface) {
-        outputImage[pixel] = float4(color, 1.0);
-        return;
-    }
+    // Sky and any path-terminating surface carry all of their radiance in the
+    // noise-free channel already; nothing denoised is assembled onto them. They
+    // still fog, at the bottom of this function, which is the whole reason the
+    // fog is applied there and not behind this branch.
+    if (hasDenoisedSurface) {
     // NRD's temporal pass suppresses jitter by design - its own documentation
     // calls that essential for upscaling - so the denoised channels settle on
     // the pixel centre while the guide factors here were sampled through the
@@ -194,12 +204,17 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     color = assembleRadiance(color, unpackRadiance(diffuse), max(direct, 0.0),
                              unpackRadiance(specular), inDiffFactor[pixel].rgb,
                              inSpecFactor[pixel].rgb);
-    // Fog last, over the assembled surface radiance. The blend amount is the
-    // trace kernel's, per surface, in noiseFree.a; the colour and the master
-    // switch are the frame's. A terminator carries 0 here, so the sky path
-    // above never reaches this and never needs excluding.
-    if (pushConstants.fog.w > 0.5) {
-        color = applyFog(color, pushConstants.fog.rgb, noiseFree.a);
+    }
+
+    // Fog last, over every pixel this pass writes - assembled surface, sky and
+    // terminator alike - from the depth each of them has. Distance is all fog
+    // depends on, so nothing here asks what kind of object the pixel came from.
+    if (pushConstants.fogEnabled > 0.5) {
+        const float fog = fogFromViewDepth(inViewZ[pixel], pushConstants.fogRange.x,
+                                           pushConstants.fogRange.y);
+        color = applyFog(color, float3(pushConstants.fogColorR, pushConstants.fogColorG,
+                                       pushConstants.fogColorB),
+                         fog);
     }
     outputImage[pixel] = float4(color, 1.0);
 }
