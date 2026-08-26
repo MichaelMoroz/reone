@@ -21,6 +21,7 @@
 
 #include "reone/graphics/dxtutil.h"
 #include "reone/graphics/npyutil.h"
+#include "reone/graphics/font.h"
 #include "reone/graphics/options.h"
 #include "reone/graphics/textureregistry.h"
 #include "reone/graphics/textureutil.h"
@@ -1692,7 +1693,7 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
 
 void ScenePipeline::debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::debugOverlayPass record");
-    if (_overlayShapes.empty()) {
+    if (_overlayShapes.empty() && _overlayLabels.empty()) {
         return;
     }
     // Drawn over the finished display-referred image. Depth is not an
@@ -1709,8 +1710,15 @@ void ScenePipeline::debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset
     key.blend = BlendMode::Normal;
     PipelineBinding pipeline = _renderer.pipelines().get(key);
 
+    // The depth every edge and every glyph tests against, plus the font atlas
+    // the labels sample. One set serves both draws.
+    std::vector<TextureBinding> sourceBindings {{5, &_gbuffer->depth()}};
+    if (_overlayFont) {
+        sourceBindings.push_back(
+            {TextureUnits::mainTex, &_renderer.resources().get(_overlayFont->texture())});
+    }
     auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
-        _renderer.uniformRing().frame(), {{5, &_gbuffer->depth()}});
+        _renderer.uniformRing().frame(), sourceBindings);
     auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
 
     // Mirrors DebugOverlayPushConstants in slang/debug_overlay.slang.
@@ -1719,8 +1727,14 @@ void ScenePipeline::debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset
         glm::vec2 resolution;
         float halfWidth;
         float occludedScale;
+        glm::vec3 anchor;
     };
     static_assert(sizeof(DebugOverlayPushConstants) <= kCachedPipelinePushConstantSize);
+    constexpr float kOccludedScale = 0.28f;
+    // Text needs a higher floor than a line does. A one-pixel stroke at 28%
+    // still reads as a line, but a glyph is mostly edge, and at the same
+    // opacity a whole label came back illegible over pale scenery.
+    constexpr float kOccludedTextScale = 0.55f;
 
     RenderAttachment color {_output->sampleView(), ImageLayout::ColorAttachment,
                             AttachmentLoad::Load, AttachmentStore::Store};
@@ -1739,10 +1753,72 @@ void ScenePipeline::debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset
         cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
                               offsets.data(), static_cast<uint32_t>(offsets.size()));
         const DebugOverlayPushConstants push {
-            shape.color, glm::vec2(chainSize()), 1.25f, 0.28f};
+            shape.color, glm::vec2(chainSize()), 1.25f, kOccludedScale, glm::vec3(0.0f)};
         cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
         // Twelve edges, one quad each, six vertices per quad.
         cmd.draw(72, 1);
+    }
+
+    // The labels, in this same pass and against this same depth image: glyph
+    // quads hung off a world anchor the vertex stage projects, so the text
+    // answers occlusion exactly as the edges do rather than floating over the
+    // scene. The layout is the 2D renderer's - the shared text block, filled
+    // here in pixels relative to the anchor - and the atlas is the font's.
+    if (_overlayFont && !_overlayLabels.empty()) {
+        PipelineKey textKey = key;
+        textKey.vertexEntry = "overlayTextVertex";
+        textKey.fragmentEntry = "overlayTextFragment";
+        PipelineBinding textPipeline = _renderer.pipelines().get(textKey);
+        cmd.bindPipeline(textPipeline.pipeline);
+        cmd.bindDescriptorSet(textPipeline.layout, IDescriptors::kTextureSet, sourceSet,
+                              nullptr, 0);
+
+        const auto &glyphs = _overlayFont->glyphs();
+        for (const auto &label : _overlayLabels) {
+            const int numChars =
+                std::min(kMaxTextChars, static_cast<int>(label.text.size()));
+            if (numChars <= 0) {
+                continue;
+            }
+            // One draw: the glyph outline is taken from the atlas in the
+            // fragment stage, so there is no second shadow pass to record.
+            // Glyph rects are whole texels at native scale, laid out exactly
+            // as the 2D renderer lays out a run of text.
+            // Laid out exactly as the 2D renderer lays out a run of text,
+            // at native scale, and drawn twice the way renderDeveloperText
+            // draws it: a one-pixel black copy underneath, then the colour.
+            // The shadow is a shifted copy of the glyph, not a dilation, so
+            // it cannot close a counter.
+            for (int pass = 0; pass < 2; ++pass) {
+                const glm::vec2 shadow = pass == 0 ? glm::vec2(1.0f) : glm::vec2(0.0f);
+                glm::vec2 offset =
+                    _overlayFont->textOffset(label.text, TextGravity::CenterBottom, 1.0f) +
+                    shadow;
+                TextUniforms chars;
+                for (int i = 0; i < numChars; ++i) {
+                    const auto &glyph = glyphs[static_cast<unsigned char>(label.text[i])];
+                    chars.chars[i].posScale = glm::vec4(offset.x, offset.y,
+                                                        glyph.size.x, glyph.size.y);
+                    chars.chars[i].uv = glm::vec4(glyph.ul.x, glyph.lr.y,
+                                                  glyph.lr.x - glyph.ul.x,
+                                                  glyph.ul.y - glyph.lr.y);
+                    offset.x += _overlayFont->glyphAdvance(glyph, 1.0f);
+                }
+                std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+                offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+                offsets[UniformBlockBindingPoints::text] = _renderer.uniformRing().push(chars);
+                cmd.bindDescriptorSet(textPipeline.layout, IDescriptors::kUniformSet,
+                                      uniformSet, offsets.data(),
+                                      static_cast<uint32_t>(offsets.size()));
+                const glm::vec4 color =
+                    pass == 0 ? glm::vec4(0.0f, 0.0f, 0.0f, label.color.a) : label.color;
+                const DebugOverlayPushConstants push {
+                    color, glm::vec2(chainSize()), 1.25f, kOccludedTextScale,
+                    label.position};
+                cmd.pushGraphicsConstants(textPipeline.layout, &push, sizeof(push));
+                cmd.draw(6, static_cast<uint32_t>(numChars));
+            }
+        }
     }
     cmd.endRendering();
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
@@ -1778,6 +1854,8 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
     }
     _shadowCasters = plan.shadowCasters;
     _overlayShapes = plan.overlayShapes;
+    _overlayLabels = plan.overlayLabels;
+    _overlayFont = plan.overlayFont;
     _transparentOutput = plan.transparentOutput;
     _shadowCasterCategories = plan.shadowCasterCategories;
     _mergedScene = {};

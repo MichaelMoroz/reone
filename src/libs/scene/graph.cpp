@@ -1101,7 +1101,7 @@ void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {
     if (!_graphicsOpt.debugOverlay) {
         // Handed over even when empty, so switching the overlay off clears the
         // boxes the pipeline was holding rather than freezing them on screen.
-        pipeline.setDebugOverlayShapes({});
+        pipeline.setDebugOverlayShapes({}, {});
         return;
     }
     std::vector<graphics::DebugOverlayShape> shapes;
@@ -1130,14 +1130,26 @@ void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {
     const auto pushBox = [&shapes](const glm::vec3 &lo, const glm::vec3 &hi,
                                    const glm::mat4 &transform, const glm::vec4 &color) {
         graphics::DebugOverlayShape shape;
+        glm::vec3 worldLo(std::numeric_limits<float>::max());
+        glm::vec3 worldHi(std::numeric_limits<float>::lowest());
         for (int i = 0; i < 8; ++i) {
             const glm::vec3 local {(i & 1) ? hi.x : lo.x,
                                    (i & 2) ? hi.y : lo.y,
                                    (i & 4) ? hi.z : lo.z};
             shape.corners[i] = transform * glm::vec4(local, 1.0f);
+            worldLo = glm::min(worldLo, glm::vec3(shape.corners[i]));
+            worldHi = glm::max(worldHi, glm::vec3(shape.corners[i]));
         }
         shape.color = color;
         shapes.push_back(std::move(shape));
+        // Where a label for this box hangs: the top of it, not the middle. A
+        // centred anchor sits INSIDE the object it names, so the depth test the
+        // overlay draws text with called almost every label occluded and faded
+        // it to mush - measured across a corridor where every string came back
+        // between 24% and 57% of its own colour.
+        return glm::vec3(0.5f * (worldLo.x + worldHi.x),
+                         0.5f * (worldLo.y + worldHi.y),
+                         worldHi.z);
     };
 
     for (const auto &root : _modelRoots) {
@@ -1152,11 +1164,11 @@ void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {
             continue;
         }
         const glm::vec4 color = usageColor(root->usage());
-        pushBox(aabb.min(), aabb.max(), root->absoluteTransform(), color);
+        const glm::vec3 anchor =
+            pushBox(aabb.min(), aabb.max(), root->absoluteTransform(), color);
         std::string_view name = nameText(root->nameIds().model);
         if (!name.empty()) {
-            _debugOverlayLabels.push_back(
-                {root->getWorldCenterOfAABB(), std::string(name), glm::vec3(color)});
+            _debugOverlayLabels.push_back({anchor, std::string(name), color});
         }
     }
     // Lights are positions, not volumes: a small fixed marker box at the
@@ -1171,7 +1183,7 @@ void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {
         _debugOverlayLabels.push_back(
             {origin + glm::vec3(0.0f, 0.0f, kLightMarkerHalf),
              name.empty() ? std::string("light") : std::string(name),
-             glm::vec3(lightColor)});
+             lightColor});
     }
     // Labels are legible only in moderation: keep a bounded set, and let the
     // boxes carry the rest of the story. On-frame labels win over near ones:
@@ -1200,7 +1212,10 @@ void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {
                   });
         _debugOverlayLabels.resize(kMaxLabels);
     }
-    pipeline.setDebugOverlayShapes(std::move(shapes));
+    // Both go to the pipeline: it draws the labels in the same pass as the
+    // boxes, against the same depth buffer, so text and lines answer occlusion
+    // identically. Nothing here projects, raycasts or reads back.
+    pipeline.setDebugOverlayShapes(std::move(shapes), std::move(_debugOverlayLabels));
 }
 
 glm::vec2 SceneGraph::computeJitter() const {

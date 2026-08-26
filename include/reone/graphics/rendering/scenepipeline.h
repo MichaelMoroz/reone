@@ -39,6 +39,7 @@
 namespace reone::graphics {
 
 class IMeshRegistry;
+class Font;
 class Uniforms;
 class TextureRegistry;
 struct GraphicsOptions;
@@ -160,6 +161,18 @@ struct DebugOverlayShape {
     glm::vec4 color {1.0f};
 };
 
+/**
+ * One name label of the debug overlay: the world point it hangs from, the
+ * string, and its box's colour. Drawn by the overlay pass itself rather than
+ * by the 2D layer, so that it can sample the same depth its box does and go
+ * translucent behind geometry with it.
+ */
+struct DebugOverlayLabel {
+    glm::vec3 position {0.0f};
+    std::string text;
+    glm::vec4 color {1.0f};
+};
+
 struct SceneFramePlan {
     std::vector<SceneShadowCaster> shadowCasters;
     /** GUI controls composite this output; alpha then follows primary coverage. */
@@ -175,6 +188,9 @@ struct SceneFramePlan {
     uint32_t shadowCasterCategories {kAllShadowCasters};
     /** The debug overlay's boxes for this frame; empty when the overlay is off. */
     std::vector<DebugOverlayShape> overlayShapes;
+    std::vector<DebugOverlayLabel> overlayLabels;
+    /** Glyph metrics and atlas for the labels; null draws boxes only. */
+    Font *overlayFont {nullptr};
     std::vector<SceneStep> steps;
 };
 
@@ -270,6 +286,8 @@ private:
     std::vector<SceneShadowCaster> _shadowCasters;
     /** This frame's debug-overlay boxes; empty when the overlay is off. */
     std::vector<DebugOverlayShape> _overlayShapes;
+    std::vector<DebugOverlayLabel> _overlayLabels;
+    Font *_overlayFont {nullptr};
     /** Slots actually allocated, so a caster past them is dropped, not fatal. */
     int _dirShadowSlots {0};
     int _pointShadowSlots {0};

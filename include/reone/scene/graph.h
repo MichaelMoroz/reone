@@ -112,15 +112,6 @@ public:
     virtual const GpuScene &gpuScene() const = 0;
     virtual GpuScene &gpuScene() = 0;
     virtual const std::vector<LightSceneNode *> &lights() const = 0;
-    /**
-     * The debug overlay's text labels, collected beside its boxes during
-     * render when the overlay option is on; empty otherwise. Default empty so
-     * a scene without the overlay - and every test double - owes nothing.
-     */
-    virtual const std::vector<DebugOverlayLabel> &debugOverlayLabels() const {
-        static const std::vector<DebugOverlayLabel> kEmpty;
-        return kEmpty;
-    }
     virtual uint32_t internName(std::string_view name) = 0;
     virtual std::string_view nameText(uint32_t id) const = 0;
 
@@ -229,9 +220,6 @@ public:
     const GpuScene &gpuScene() const override { return _gpuScene; }
     GpuScene &gpuScene() override { return _gpuScene; }
     const std::vector<LightSceneNode *> &lights() const override { return _lights; }
-    const std::vector<DebugOverlayLabel> &debugOverlayLabels() const override {
-        return _debugOverlayLabels;
-    }
     uint32_t internName(std::string_view name) override;
     std::string_view nameText(uint32_t id) const override;
 
@@ -479,7 +467,7 @@ private:
     std::vector<MeshSceneNode *> _meshes;
     std::vector<LightSceneNode *> _lights;
     /** The debug overlay's labels, rebuilt each render the overlay is on. */
-    std::vector<DebugOverlayLabel> _debugOverlayLabels;
+    std::vector<graphics::DebugOverlayLabel> _debugOverlayLabels;
     std::vector<EmitterSceneNode *> _emitters;
 
     std::vector<std::pair<SceneNode *, std::vector<SceneNode *>>> _opaqueLeafs;

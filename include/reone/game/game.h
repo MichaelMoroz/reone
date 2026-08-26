@@ -924,9 +924,6 @@ private:
     void renderDeveloperTriggerOverlay(const glm::mat4 &projection, const glm::mat4 &view);
     void renderDeveloperActorLabels(const glm::mat4 &projection, const glm::mat4 &view);
     void renderDeveloperWatchedValues();
-    /** The debug overlay's name labels; gated on the graphics option, not on
-        developer mode - the overlay is a render feature, not a dev chord. */
-    void renderDebugOverlayLabels();
     void renderDeveloperText(const std::string &text, const glm::vec3 &position, const glm::vec3 &color, graphics::TextGravity gravity = graphics::TextGravity::LeftTop);
     void renderDeveloperPanel(const std::vector<std::string> &lines, glm::vec2 position, glm::vec3 color);
     void renderDeveloperRect(glm::vec2 position, glm::vec2 size, glm::vec4 color);

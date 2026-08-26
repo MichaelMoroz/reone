@@ -343,7 +343,10 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
     // goes after everything that changes the picture. Not on a diagnostic
     // image: a channel view replaces the picture the boxes would annotate.
     plan.overlayShapes = std::move(_overlayShapes);
+    plan.overlayLabels = std::move(_overlayLabels);
+    plan.overlayFont = _overlayFont;
     _overlayShapes.clear();
+    _overlayLabels.clear();
     if (!plan.overlayShapes.empty() && !diagnosticImage)
         plan.steps.push_back(graphics::SceneStep::DebugOverlay);
     // The debug view, over whatever the mode shaded. Skipped in exactly one

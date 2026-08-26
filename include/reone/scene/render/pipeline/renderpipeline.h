@@ -61,9 +61,13 @@ public:
     /** Where the next render should write its record tables, or empty. */
     std::filesystem::path _pendingRecordDump;
     void restartTemporalHistory() override;
-    void setDebugOverlayShapes(std::vector<graphics::DebugOverlayShape> shapes) override {
+    void setDebugOverlayShapes(std::vector<graphics::DebugOverlayShape> shapes,
+                               std::vector<graphics::DebugOverlayLabel> labels) override {
         _overlayShapes = std::move(shapes);
+        _overlayLabels = std::move(labels);
     }
+
+    void setDebugOverlayFont(graphics::Font *font) override { _overlayFont = font; }
 
 private:
     class Callbacks;
@@ -98,6 +102,8 @@ private:
     bool _inited {false};
     /** Debug-overlay boxes handed in by the scene graph for the next render. */
     std::vector<graphics::DebugOverlayShape> _overlayShapes;
+    std::vector<graphics::DebugOverlayLabel> _overlayLabels;
+    graphics::Font *_overlayFont {nullptr};
     std::unique_ptr<graphics::ScenePipeline> _executor;
     std::unique_ptr<graphics::GpuScene> _deviceGpuScene;
     std::unique_ptr<GpuSceneAdmission> _admission;

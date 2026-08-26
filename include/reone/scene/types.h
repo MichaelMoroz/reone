@@ -50,18 +50,6 @@ enum class ModelUsage {
     Camera
 };
 
-/**
- * One text label of the debug overlay: what to write, where in the world it
- * anchors, and the colour of the box it belongs to. The scene graph collects
- * them beside the overlay's boxes; the game layer projects and draws them
- * through its 2D text path, which is the one place text exists.
- */
-struct DebugOverlayLabel {
-    glm::vec3 position {0.0f};
-    std::string text;
-    glm::vec3 color {1.0f};
-};
-
 struct AnimationFlags {
     static constexpr int loop = 1;
     static constexpr int fireForget = 2;

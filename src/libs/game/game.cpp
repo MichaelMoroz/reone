@@ -1859,6 +1859,18 @@ void Game::renderSceneOffscreen() {
     }
     if (_module && _options.graphics.sceneRender) {
         auto &scene = _services.scene.graphs.get(kSceneMain);
+        // The overlay's labels are drawn by the render pipeline, in the same
+        // pass as its boxes and against the same depth buffer. Only the font
+        // has to cross over: glyph metrics and an atlas are resource-layer
+        // things the graphics side cannot look up for itself.
+        if (_options.graphics.debugOverlay) {
+            if (!_developerFont) {
+                _developerFont = _services.resource.fonts.get("fnt_console");
+            }
+            if (auto *pipeline = scene.renderPipeline()) {
+                pipeline->setDebugOverlayFont(_developerFont.get());
+            }
+        }
         _sceneOutput = &scene.render({_options.graphics.width, _options.graphics.height});
     }
     // Retained past the composite so a save executed from a menu still has the
@@ -2204,63 +2216,7 @@ void Game::renderGUI() {
                             graphics.guiScale * kCursorSizeScale;
         _cursor->render(cursorScale);
     }
-    renderDebugOverlayLabels();
     renderDeveloperOverlay();
-}
-
-void Game::renderDebugOverlayLabels() {
-    // No screen gate: the overlay annotates the rendered scene, and the scene
-    // renders during conversations and cutscenes too - a label list that
-    // vanished the moment a module's entry script took the camera measured as
-    // "boxes but no names" on every exterior capture.
-    if (!_options.graphics.debugOverlay || !_module) {
-        return;
-    }
-    auto &scene = _services.scene.graphs.get(kSceneMain);
-    const auto &labels = scene.debugOverlayLabels();
-    if (labels.empty()) {
-        return;
-    }
-    if (!_developerFont) {
-        _developerFont = _services.resource.fonts.get("fnt_console");
-    }
-    if (!_developerFont) {
-        return;
-    }
-    // The SCENE's active camera, not the game's: during a cutscene or an entry
-    // script the two disagree, and projecting through the game object put
-    // every label off-screen - measured as boxes with no names on exactly the
-    // modules whose entry runs a conversation.
-    auto cameraNode = scene.camera();
-    if (!cameraNode) {
-        return;
-    }
-    auto sceneCamera = cameraNode->get().camera();
-    const glm::mat4 projection = sceneCamera->projection();
-    const glm::mat4 view = sceneCamera->view();
-
-    _services.graphics.uniforms.setGlobals([this](auto &globals) {
-        globals.reset();
-        globals.projection = glm::ortho(
-            0.0f,
-            static_cast<float>(_options.graphics.width),
-            static_cast<float>(_options.graphics.height),
-            0.0f, 0.0f, 100.0f);
-        globals.projectionInv = glm::inverse(globals.projection);
-    });
-    static const glm::vec4 kViewport(0.0f, 0.0f, 1.0f, 1.0f);
-    const auto &opts = _options.graphics;
-    _services.graphics.renderer2d.withBlendMode(graphics::BlendMode::Normal, [&]() {
-        for (const auto &label : labels) {
-            glm::vec3 screen = glm::projectZO(label.position, view, projection, kViewport);
-            if (screen.z < 0.0f || screen.z >= 1.0f) {
-                continue;
-            }
-            glm::vec3 position(opts.width * screen.x, opts.height * (1.0f - screen.y), 0.0f);
-            renderDeveloperText(label.text, position, label.color,
-                                graphics::TextGravity::CenterBottom);
-        }
-    });
 }
 
 void Game::renderDeveloperOverlay() {

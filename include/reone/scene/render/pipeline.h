@@ -118,7 +118,11 @@ public:
      * corners and colour per box; empty switches the overlay pass off. The
      * scene graph decides what a box means; the pipeline only draws them.
      */
-    virtual void setDebugOverlayShapes(std::vector<graphics::DebugOverlayShape> shapes) {}
+    virtual void setDebugOverlayShapes(std::vector<graphics::DebugOverlayShape> shapes,
+                                       std::vector<graphics::DebugOverlayLabel> labels) {}
+
+    /** The font the overlay's labels are laid out and drawn with. */
+    virtual void setDebugOverlayFont(graphics::Font *font) {}
 
     /**
      * Intermediate targets, for inspection by development tooling. Empty unless
