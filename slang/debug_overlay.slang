@@ -27,9 +27,10 @@
 // anti-aliased or sharpened.
 //
 // Occlusion is a per-pixel decision, not a depth test: the fragment compares
-// the edge's own depth against the G-buffer depth at the pixel and DIMS the
-// occluded part rather than discarding it - a hidden box still tells you where
-// the object is, and the brightness split tells you what stands in front.
+// the edge's own depth against the G-buffer depth at the pixel and makes the
+// occluded part SEMI-TRANSPARENT rather than discarding it - the hue stays,
+// the scene shows through, so a hidden box still tells you where the object
+// is and the opacity split tells you what stands in front.
 
 import uniforms;
 
@@ -42,7 +43,7 @@ struct DebugOverlayPushConstants {
     float2 resolution;
     /** Half the line width, in pixels. */
     float halfWidth;
-    /** Brightness on the occluded side of the depth comparison. */
+    /** Opacity factor on the occluded side of the depth comparison. */
     float occludedScale;
 };
 [[vk::push_constant]] DebugOverlayPushConstants pushConstants;
@@ -122,6 +123,9 @@ float4 overlayFragment(OverlayVertex input) : SV_Target0 {
     // coplanar with a wall - reading as visible rather than flickering.
     const float bias = 1e-4;
     bool occluded = input.depth > sceneDepth + bias;
-    float3 color = pushConstants.color.rgb * (occluded ? pushConstants.occludedScale : 1.0);
-    return float4(color, pushConstants.color.a);
+    // Occluded segments keep their full hue and lose OPACITY: the pass alpha
+    // blends, so the scene shows through the hidden part of the line instead
+    // of the line going dark over it.
+    float alpha = pushConstants.color.a * (occluded ? pushConstants.occludedScale : 1.0);
+    return float4(pushConstants.color.rgb, alpha);
 }
