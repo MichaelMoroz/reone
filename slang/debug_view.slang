@@ -39,6 +39,7 @@
 
 import uniforms;
 import lib.gbuf;
+import lib.material_ops;
 import lib.math;
 import lib.scene_schema;
 import lib.shadow;
@@ -180,20 +181,6 @@ float3 materialIdColor(uint materialId) {
     h ^= h >> 13;
     return float3(float((h >> 0) & 0xffu), float((h >> 8) & 0xffu),
                   float((h >> 16) & 0xffu)) * (1.0 / 255.0);
-}
-
-/**
- * The curated channel op, byte for byte tracing/material.slang's.
- *
- * Copied rather than imported: that module carries the tracer's own descriptor
- * bindings, and this pass runs in modes where none of them exist. The two must
- * stay in step - the roughness and metallic views are only worth having if they
- * show the number the shading actually used.
- */
-float curatedChannel(float4 A, float4 B, float3 albedo, float current) {
-    if (A.x < 0.5) return current;
-    if (A.x < 1.5) return A.y;
-    return lerp(A.y, smoothstep(A.z, A.w, dot(albedo, B.yzw)), B.x);
 }
 
 /** View-space position, exactly as both raster resolves reconstruct it. */

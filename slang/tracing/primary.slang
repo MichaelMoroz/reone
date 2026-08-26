@@ -201,29 +201,19 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     shading.terminatesPath = false;
     // VulkanGBuffer stores the authored gamma-encoded texel with the vertex
     // colour already multiplied in; tracing shades linear.
-    shading.albedo = ptDecodeAlbedo(diffuseSample.rgb);
+    // The material chain is lib/material_ops.slang's, the same one the raster
+    // resolve runs, over a G-buffer texel instead of a texture fetch. Alpha is
+    // the reflectance stand-in Odyssey has no channel for; the closure
+    // saturates rather than re-clamping to the floor, so an authored roughness
+    // scale is not dead at both ends - see the note there.
+    MaterialSurface surface = resolveMaterial(material, diffuseSample.rgb, diffuseSample.a,
+                                              pushConstants.albedoGamma,
+                                              pushConstants.roughnessFloor);
+    shading.albedo = surface.albedo;
     shading.alpha = diffuseSample.a;
     shading.normal = normal;
-    // Exactly PbrSurface::shade's stand-ins and curation, over a G-buffer texel
-    // instead of a texture fetch. Alpha is only a reflectance control on
-    // env-mapped materials, never metalness; roughness uses alpha everywhere.
-    shading.metallic = 0.0;
-    shading.roughness = clamp(shading.alpha, pushConstants.roughnessFloor, 1.0);
-    shading.albedo *= material.curatedAlbedoMul.rgb;
-    shading.roughness = curatedChannel(material.curatedRoughA, material.curatedRoughB,
-                                       shading.albedo, shading.roughness);
-    shading.metallic = curatedChannel(material.curatedMetalA, material.curatedMetalB,
-                                      shading.albedo, shading.metallic);
-    shading.metallic = saturate(shading.metallic * material.overrideParams.w);
-    // The one ordering the G-buffer changes: the flat paint lands on an albedo
-    // the vertex colour has already scaled, where the hit record applied it
-    // first. Identical wherever overrideColor.w is zero, which is every
-    // material no category override has been pointed at.
-    shading.albedo = lerp(shading.albedo, ptDecodeAlbedo(material.overrideColor.rgb),
-                          material.overrideColor.w);
-    if (material.overrideParams.x >= 0.0) shading.roughness = material.overrideParams.x;
-    shading.roughness = clamp(shading.roughness * material.roughnessScale,
-                              pushConstants.roughnessFloor, 1.0);
+    shading.metallic = surface.metallic;
+    shading.roughness = surface.roughness;
 
     bool envmapped, hasLightmap, staticObject, shadowsEnabled, fogEnabled, thinSurface;
     unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
