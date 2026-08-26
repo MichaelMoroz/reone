@@ -214,6 +214,18 @@ public:
 
     Camera *getActiveCamera() const;
 
+    /**
+     * One line describing what a capture is a capture OF: module, party
+     * leader position, active camera pose, and an FNV hash over all of it.
+     *
+     * Exists because two captures compared against each other silently
+     * disagreed on their game state - a conversation had advanced the camera
+     * in one run and not the other - and nothing in either image said so.
+     * The harness logs this beside every capture and refuses to compare
+     * frames whose digests differ.
+     */
+    std::string captureStateDigest() const;
+
     OptionsView &options() { return _options; }
     const OptionsView &options() const { return _options; }
     Party &party() { return _party; }

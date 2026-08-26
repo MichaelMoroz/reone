@@ -783,7 +783,16 @@ void Game::render() {
         _movie->render();
     } else {
         renderScene();
-        renderGUI();
+        // A debug channel is a measurement of the scene, and the GUI is not
+        // part of the scene. Compositing it over the channel puts the HUD and
+        // any open conversation into the captured image, where it reads as
+        // signal: the two renderers encode their output differently, so the
+        // very same GUI comes out at a different brightness in each, and a
+        // comparison then differs for a reason that has nothing to do with
+        // lighting.
+        if (_options.graphics.debugView == 0) {
+            renderGUI();
+        }
     }
 }
 
@@ -1900,6 +1909,34 @@ void Game::toggleInGameCameraType() {
     setRelativeMouseMode(_cameraType == CameraType::FirstPerson);
 
     _module->area()->updateRoomVisibility();
+}
+
+std::string Game::captureStateDigest() const {
+    std::ostringstream ss;
+    ss << "module=" << (_module ? _module->name() : "none");
+    uint64_t hash = 1469598103934665603ull;
+    const auto mix = [&hash](const void *data, size_t size) {
+        const auto *bytes = static_cast<const unsigned char *>(data);
+        for (size_t i = 0; i < size; ++i) {
+            hash ^= bytes[i];
+            hash *= 1099511628211ull;
+        }
+    };
+    if (const auto leader = _party.getLeader()) {
+        const auto pos = leader->position();
+        mix(&pos, sizeof(pos));
+        ss << " leader=" << pos.x << "," << pos.y << "," << pos.z;
+    }
+    if (const auto *camera = getActiveCamera()) {
+        if (const auto node = camera->cameraSceneNode()) {
+            const auto view = node->camera()->view();
+            mix(&view, sizeof(view));
+            const auto pos = node->origin();
+            ss << " camera=" << pos.x << "," << pos.y << "," << pos.z;
+        }
+    }
+    ss << " hash=" << std::hex << hash;
+    return ss.str();
 }
 
 Camera *Game::getActiveCamera() const {

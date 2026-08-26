@@ -47,6 +47,9 @@ import lib.envmap;
 import lib.shadow;
 import lib.scene_schema;
 import lib.material_ops;
+import lib.assemble;
+import lib.direct_light;
+import lib.pbr_direct;
 import lib.skycube;
 
 /**
@@ -84,16 +87,6 @@ import lib.skycube;
 [[vk::binding(1, 3)]] SamplerCube sSkyCube;
 
 /** Mirrors ResolvePushConstants in scenepipeline.cpp. */
-static const float kTwoPi = 6.28318530717958647692;
-/**
- * The scale that puts the sphere model on the same footing as the falloff it
- * replaces, 3/2 - 2*ln2. A pure number because the problem is scale-free: both
- * expressions collapse to functions of distance/radius alone, so one constant
- * serves every light at every authored radius. Mirrors kPtLightBudget in
- * tracing/lighting.slang, and must move with it.
- */
-static const float kLightBudget = 0.1137056389;
-
 struct ResolvePushConstants {
     /** Bit 0: sky. Bit 1: SSAO. Bit 2: uncovered pixels keep alpha zero. */
     uint flags;
@@ -109,12 +102,23 @@ struct ResolvePushConstants {
      * irradiance term below.
      */
     float lightmapIntensity;
-    /** Emitter size as a fraction of influence radius; see sphereAttenuation. */
+    /** Emitter size as a fraction of influence radius. */
     float emitterRadiusRatio;
+    /** Point-light radiance scale, shared with the tracer. */
+    float directIntensity;
+    /** Promoted-directional radiance scale, shared with the tracer. */
+    float sunIntensity;
+    /** The tracer's unlit-emissive dials; see the sky-class branch. */
+    float skyIntensity;
+    float backdropIntensity;
 };
 [[vk::push_constant]] ResolvePushConstants pushConstants;
 
 static const uint kResolveFlagSky = 1u;
+/** Parity mode: output only the shared unoccluded direct diffuse. */
+static const uint kResolveFlagParityDirect = 16u;
+/** featureMask bit 24: the sky shell, as the tracer's kPtMaskSky. */
+static const uint kResolveMaskSky = 1u << 24;
 static const uint kResolveFlagSSAO = 2u;
 static const uint kResolveFlagTransparentOutput = 4u;
 
@@ -250,32 +254,6 @@ float screenSpaceOcclusion(float2 uv, int2 pixel, float3 pos, float3 normal) {
                      (1.0 - smoothstep(0.0, kSsaoMaxDistance, abs(pos.z)));
 }
 
-/**
- * A point light is a sphere, not a point - the tracer's model, term for term.
- *
- * This replaces Odyssey's radius^2/(radius+d)^2, which is not inverse-square:
- * writing x = distance/radius it collapses to 1/(1+x)^2, so a lamp keeps a
- * quarter of its brightness at its own radius and a ninth at twice it. Against
- * a path-traced reference that reads as point lights far too intense at range,
- * which is what it was. Retro keeps that falloff - it is the original's, and
- * preserving it is retro's whole job - so the two resolves now hold different
- * lighting functions ON PURPOSE. See DESIGN.md G6c: any refactor that shares
- * lighting code between the modes must keep both, not converge them.
- *
- * The far field is budget*radius^2/d^2 whatever the emitter ratio, so the
- * ratio grades the near field and the penumbra and nothing about range.
- */
-float sphereAttenuation(GlobalUniformsLight light, float distance) {
-    float ratio = max(pushConstants.emitterRadiusRatio, 1e-3);
-    float sinTheta = saturate(light.radius * ratio / max(distance, 1e-4));
-    float cosTheta = sqrt(max(0.0, 1.0 - sinTheta * sinTheta));
-    // Dividing by the emitter's own projected solid angle turns the authored
-    // colour into an intensity rather than a radiance, which is what makes the
-    // size dial brightness-neutral. The solid angle caps at 2*pi, so there is
-    // no 1/d^2 singularity at the surface to clamp away.
-    return kLightBudget * kTwoPi * (1.0 - cosTheta) / (kPi * ratio * ratio);
-}
-
 float3 sampleAuthoredMirror(InstanceMaterial material, float3 worldReflection) {
     if (material.envMapCube != kNoTexture) {
         // This fullscreen pass cannot derive a stable cube LOD from its
@@ -315,13 +293,6 @@ float3 fresnelSchlickRoughness(float cosTheta, float3 F0, float roughness) {
     return F0 + (ceiling - F0) * pow(saturate(1.0 - cosTheta), 5.0);
 }
 
-float getFog(float3 worldPos) {
-    float distance = length(worldPos - globalUniforms.cameraPosition.xyz);
-    float f = (globalUniforms.fogFar - distance) /
-              (globalUniforms.fogFar - globalUniforms.fogNear);
-    return 1.0 - saturate(f);
-}
-
 /** One pixel of the resolved image, as linear scene-referred radiance. */
 float3 resolveSurface(float2 uv, int2 pixel) {
     float4 mainTexSample = sGBufDiffuse.SampleLevel(uv, 0.0);
@@ -335,7 +306,9 @@ float3 resolveSurface(float2 uv, int2 pixel) {
     // Lighting it would tint the whole background; without a bake the cube is
     // black by construction, so skipping it writes the same black as before.
     if (triangleId == kNoTriangle) {
-        if ((pushConstants.flags & kResolveFlagSky) == 0) {
+        // Parity blacks the sky on both sides; see the tracer's miss branch.
+        if ((pushConstants.flags & kResolveFlagSky) == 0 ||
+            (pushConstants.flags & kResolveFlagParityDirect) != 0) {
             return float3(0.0);
         }
         float3 direction = skyDirection(uv, globalUniforms.projectionInv,
@@ -387,6 +360,41 @@ float3 resolveSurface(float2 uv, int2 pixel) {
     unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
                            shadowsEnabled, fogEnabled, thinSurface);
 
+    // Parity mode replaces the whole assembly with the shared unoccluded sum;
+    // see lib/direct_light.slang. Everything below - visibility, specular,
+    // ambient, lightmap, emission, environment - is deliberately skipped, so
+    // any difference from the tracer's parity image is in the shared inputs,
+    // not in this resolve.
+    if ((pushConstants.flags & kResolveFlagParityDirect) != 0) {
+        // The tracer terminates on unlit-emissive surfaces (surfaceType 2:
+        // sky shells, prelit backdrops) and its parity image blacks them; the
+        // same class must be black here or every backdrop reads as parity
+        // error - measured as 13-26% of the frame on the three
+        // backdrop-heavy modules.
+        if (material.surfaceType == 2) {
+            return float3(0.0);
+        }
+        return parityDirectColor(albedo, worldPos, normal, thinSurface,
+                                 pushConstants.thinTransmission,
+                                 pushConstants.emitterRadiusRatio,
+                                 pushConstants.directIntensity,
+                                 pushConstants.sunIntensity);
+    }
+
+    // Unlit-emissive surfaces - the sky shell and painted backdrops standing
+    // in for distance never modelled - are radiance, not geometry. The tracer
+    // (tracing/material.slang) terminates on them: texture times the sky or
+    // backdrop dial, no direct light, no bake, no specular. This resolve had
+    // no such branch and lit the dome like terrain: sun on it, a white bake
+    // under it, and its own emission on top at the plain emissive scale -
+    // measured as a Tatooine backdrop overexposed and a Korriban one
+    // underexposed, 40% of each frame.
+    bool skyShell = (material.featureMask & kResolveMaskSky) != 0;
+    if (skyShell || material.surfaceType == 2) {
+        return assembleSkyClass(skyShell, albedo, pushConstants.skyIntensity,
+                                pushConstants.backdropIntensity);
+    }
+
     // Shadowing is per light now, inside the loop, because a frame carries
     // several casters and each one's map answers for its own light only. A
     // single visibility over the whole sum could only ever be one caster's
@@ -398,28 +406,23 @@ float3 resolveSurface(float2 uv, int2 pixel) {
     // applies lighting in linear space, so each visibility is converted to an
     // energy multiplier before it scales that light's radiance.
     //
-    // The ambient lobe IS shadowed, by the first caster, and that is where a
-    // shadow on scene geometry comes from.
+    // The ambient lobe is NOT shadowed. Irradiance is the LIGHTMAP on
+    // lightmapped geometry, and a bake already carries its own shadows;
+    // multiplying a caster's map into it shadowed every lightmapped surface
+    // twice, once by the bake and once by the map, which is what made
+    // interiors read darker under a shadow than the path tracer - whose bake
+    // term no ray ever occludes. That is the sanctioned substitution:
+    // lightmap + SSAO stands in for traced diffuse, and rays occlude only the
+    // analytic direct term.
     //
-    // Irradiance is the LIGHTMAP on lightmapped geometry, and static geometry
-    // takes direct light only from a caster, so on terrain and architecture
-    // the baked share is almost the whole of the light. Leaving it unshadowed
-    // was tried and is wrong in the way that matters: characters kept their
-    // shadows and the scene lost all of it. That it also measured slightly
-    // closer to a converged path tracer on two modules out of three is a
-    // caution about the metric, not a defence of the result - a mean absolute
-    // error cannot see that a shadow has stopped existing, because removing
-    // one moves a small number of pixels a long way and the average barely
-    // notices.
-    //
-    // The first caster only, matching what the term replaced. Each light's own
-    // occlusion is applied to its own radiance in the loop below, so combining
-    // several casters here would darken the baked share once per caster.
+    // This term used to be the scene's only shadow, back when static geometry
+    // was excluded from the direct loop; leaving it unshadowed then lost every
+    // scene shadow. Static geometry is lit by the loop now, each light
+    // occluded by its own map, so the scene keeps its shadows without this.
     float ambientVisibility = 1.0;
-    if (shadowsEnabled) {
-        ambientVisibility = pow(getShadow(eyePos, worldPos, normal, thinSurface), kGamma);
-    }
-    float fog = fogEnabled ? getFog(worldPos) : 0.0;
+    float fog = fogEnabled ? fogAmount(worldPos, globalUniforms.cameraPosition.xyz,
+                                       globalUniforms.fogNear, globalUniforms.fogFar)
+                           : 0.0;
 
     float NdotV = max(0.0, dot(normal, V));
     float3 F0 = lerp(float3(0.04), albedo, metallic);
@@ -499,52 +502,31 @@ float3 resolveSurface(float2 uv, int2 pixel) {
         // question with a dial already built for it - pbrLightmapIntensity -
         // and not a reason to put the light back in the wrong places.
 
-        float3 fragToLight = light.position.xyz - worldPos;
-        float lightDistance = length(fragToLight);
-        // No radius-squared cutoff. It compared a distance against an area -
-        // for a lamp of radius 20 it culled at 400 units, so it culled almost
-        // nothing while the falloff beside it kept the light bright the whole
-        // way. Retro keeps it, deliberately; the corrected model needs no
-        // cutoff because the sphere attenuation actually falls off.
-
-        float attenuation = sphereAttenuation(light, lightDistance);
-        float3 radiance = light.multiplier * attenuation * gammaToLinear(light.color.rgb);
-        if (light.ambientOnly != 0) {
+        PbrDirectLight direct = pbrDirectLight(
+            light, eyePos, worldPos, normal, thinSurface, shadowsEnabled,
+            pushConstants.thinTransmission, pushConstants.emitterRadiusRatio,
+            pushConstants.directIntensity, pushConstants.sunIntensity);
+        if (!direct.direct) {
             // An ambient-only light is a fill term with no direction, so no
             // depth test against it means anything. It is not shadowed, for
             // the same reason the lobes below it are not.
-            irradiance += materialAmbient * radiance;
+            irradiance += materialAmbient * direct.ambientRadiance;
             continue;
         }
-        // This light's own shadow, from this light's own map. A light with no
-        // slot casts nothing and is unattenuated.
-        if (shadowsEnabled && light.shadowSlot >= 0) {
-            radiance *= pow(getShadowFrom(light.shadowSlot, eyePos, worldPos,
-                                          normal, thinSurface),
-                            kGamma);
-        }
-
-        float3 L = normalize(fragToLight);
-        // Lit from whichever side the light is on. The specular lobe keeps the
-        // true normal - a leaf does not transmit a highlight - so only the
-        // diffuse half is two-sided, and it is dimmed by the transmission the
-        // surface is assumed to have rather than being as bright as the front.
-        float3 shadeNormal = thinSurface ? thinFacingNormal(normal, L) : normal;
-        float transmission =
-            thinSurface && dot(normal, L) < 0.0 ? pushConstants.thinTransmission : 1.0;
+        float3 L = direct.direction;
         float3 H = normalize(V + L);
-        float NdotL = max(0.0, dot(shadeNormal, L));
         float NdotH = max(0.0, dot(normal, H));
         float VdotH = max(0.0, dot(V, H));
 
         float D = distributionGGX(NdotH * NdotH, a2);
-        float G = geometrySmith(max(0.0, dot(normal, L)), NdotV, k);
+        float G = geometrySmith(direct.specularNdotL, NdotV, k);
         float3 F = fresnelSchlick(VdotH, F0);
-        float3 spec = (D * G * F) / max(1e-4, 4.0 * max(0.0, dot(normal, L)) * NdotV);
+        float3 spec = (D * G * F) /
+                      max(1e-4, 4.0 * direct.specularNdotL * NdotV);
 
         float3 kD = (1.0 - F) * (1.0 - metallic);
-        directD += materialDiffuse * kD / kPi * radiance * NdotL * transmission;
-        directS += spec * radiance * max(0.0, dot(normal, L));
+        directD += materialDiffuse * kD * direct.diffuse;
+        directS += spec * direct.radiance * direct.specularNdotL;
     }
 
     float3 F = fresnelSchlickRoughness(NdotV, F0, roughness);
@@ -615,7 +597,7 @@ float3 resolveSurface(float2 uv, int2 pixel) {
     // a display-space swatch, so it is linearised before the mix; the mix
     // itself is a light-transport interpolation and belongs in linear space in
     // this mode. Retro keeps the original's gamma-space lerp, in its own pass.
-    color = lerp(color, gammaToLinear(globalUniforms.fogColor.rgb), fog);
+    color = applyFog(color, gammaToLinear(globalUniforms.fogColor.rgb), fog);
 
     return color;
 }

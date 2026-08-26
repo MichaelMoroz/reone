@@ -509,6 +509,14 @@ struct GraphicsOptions {
      */
     bool ptDenoise {true};
     /**
+     * Parity mode: both renderers output ONLY albedo * unoccluded direct
+     * diffuse, summed over every light, through one shared function
+     * (lib/direct_light.slang). Exists to prove the two final images are the
+     * same arithmetic before their sanctioned differences - occlusion method,
+     * specular source, GI source - are layered back on.
+     */
+    bool parityDirect {false};
+    /**
      * Direct light at the primary vertex bypasses the denoiser and is applied
      * at the resolve.
      *

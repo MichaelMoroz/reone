@@ -161,6 +161,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
          "deprecated alias for --grade")                                                                                       //
         ("sharpen", value<bool>()->default_value(options->graphics.sharpen), "sharpen the finished frame (unsharp mask, after the display transform)") //
         ("sharpenamount", value<float>()->default_value(options->graphics.sharpenAmount), "strength of that mask")       //
+        ("paritydirect", value<bool>()->default_value(options->graphics.parityDirect), "both renderers output only shared unoccluded direct diffuse") //
         ("ptdenoise", value<bool>()->default_value(options->graphics.ptDenoise), "enable the path tracing denoiser")           //
         ("ptshadowfilter", value<std::string>()->default_value("off"),
          "what settles the direct channel: off, penumbra or denoiser")                                                        //
@@ -373,6 +374,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
                                                         : vars["grade"].as<bool>();
     options->graphics.sharpen = vars["sharpen"].as<bool>();
     options->graphics.sharpenAmount = std::max(0.0f, vars["sharpenamount"].as<float>());
+    options->graphics.parityDirect = vars["paritydirect"].as<bool>();
     options->graphics.ptDenoise = vars["ptdenoise"].as<bool>();
     // Same shape as --grade / --post above: the dial dropped its pt prefix when
     // the views stopped being tracer-only, and the old spelling keeps working

@@ -42,6 +42,11 @@ import lib.gbuf;
 import lib.math;
 import lib.scene_schema;
 import lib.shadow;
+import lib.pbr_direct;
+// For ptDisplayTransform: the tracer's channel views encode through it
+// (path_trace.slang), and one quantity in two colour spaces is not a
+// comparison. Colour maths only; no tracing entry points are referenced.
+import tracing.brdf;
 
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
 [[vk::binding(2, 1)]] Sampler2D sGBufEyeNormal;
@@ -62,6 +67,13 @@ struct DebugViewPushConstants {
     uint view;
     /** The floor the shading used; the roughness view must show that number. */
     float roughnessFloor;
+    float thinTransmission;
+    float emitterRadiusRatio;
+    float directIntensity;
+    float sunIntensity;
+    /** Mirrors the tracer's channel encode; see the write at the entry point. */
+    float exposure;
+    uint tonemap;
 };
 [[vk::push_constant]] DebugViewPushConstants pushConstants;
 
@@ -102,16 +114,13 @@ static const uint kDebugFilteredDirect = 19;   // tracer only
  * demodulates: what is being inspected is the light arriving, not the texture
  * it lands on.
  *
- * Diagnostic, so this reproduces the resolve's direct lobe rather than calling
- * it: NdotL times the Odyssey attenuation times each caster's own visibility,
- * without the BRDF or the material. It shows where direct light is and is not,
- * which is what a shadow is in the finished picture.
+ * This reports the light DELIVERED by each mode, including that mode's own
+ * visibility: PBR's shadow-map visibility here and the tracer's ray visibility
+ * in kDebugDirectShadow. It is not an unshadowed source-light view. Transport
+ * may therefore differ by design, while all non-visibility PBR terms come from
+ * the exact function the resolve calls below.
  */
 static const uint kDebugShadowTerm = 20;
-/** Mirrors kLightBudget in pbr_resolve.slang; the far field is ratio-free. */
-static const float kDebugLightBudget = 0.1137056389;
-/** Mirrors GraphicsOptions::ptPointEmitterRatio's default. */
-static const float kDebugEmitterRatio = 0.2;
 
 static const uint kNoTriangle = 0xffffffffu;
 static const uint kNoTexture = 0xffffffffu;
@@ -281,43 +290,15 @@ float3 channelColor(float2 uv, int2 pixel) {
         float3 direct = float3(0.0);
         for (int i = 0; i < globalUniforms.numLights; ++i) {
             GlobalUniformsLight light = globalUniforms.lights[i];
-            if (light.ambientOnly != 0) {
-                continue;
-            }
             // No static-geometry exclusion, because the PBR resolve has none -
             // see the comment at its light loop. A diagnostic that admits or
             // rejects different light from the resolve it diagnoses is worse
             // than no diagnostic, which this channel has demonstrated twice.
-            // Always a position, never a direction. This engine has no
-            // directional light type - a light is "directional" by having a
-            // radius past kMinDirectionalLightRadius, and its position is
-            // still an origin far away. Reading w == 0 as a direction pointed
-            // the sun at the wrong place entirely, and made this channel
-            // report that directional light was missing when it was not.
-            float3 toLight = light.position.xyz - worldPos;
-            float distance = max(1e-4, length(toLight));
-            float ndotl = max(0.0, dot(normal, toLight / distance));
-            if (ndotl <= 0.0) {
-                continue;
-            }
-            // The sphere model the PBR resolve applies, not the Odyssey
-            // falloff it replaced. A diagnostic that models the light
-            // differently from the resolve cannot show a change to the
-            // resolve, which is exactly what happened.
-            float ratio = kDebugEmitterRatio;
-            float sinTheta = saturate(light.radius * ratio / distance);
-            float cosTheta = sqrt(max(0.0, 1.0 - sinTheta * sinTheta));
-            float atten = kDebugLightBudget * 6.28318531 * (1.0 - cosTheta) /
-                          (3.14159265 * ratio * ratio);
-            // Every light contributes, shadowed by its own map where it has
-            // one. A light with no caster slot is unshadowed, which is exactly
-            // how the resolve treats it.
-            float visibility = 1.0;
-            if (shadowsEnabled && light.shadowSlot >= 0) {
-                visibility = getShadowFrom(light.shadowSlot, viewPos, worldPos,
-                                           normal, thinSurface);
-            }
-            direct += visibility * ndotl * atten * light.multiplier * light.color.rgb;
+            PbrDirectLight sample = pbrDirectLight(
+                light, viewPos, worldPos, normal, thinSurface, shadowsEnabled,
+                pushConstants.thinTransmission, pushConstants.emitterRadiusRatio,
+                pushConstants.directIntensity, pushConstants.sunIntensity);
+            direct += sample.diffuse;
         }
         // Exposed, not raw. Direct light is unbounded and this channel is read
         // out of an 8-bit capture, so a raw write clips - measured at 74% of
@@ -376,5 +357,12 @@ void debugViewMain(uint3 dispatchId : SV_DispatchThreadID) {
     float2 uv = (float2(pixel) + 0.5) / float2(width, height);
     float3 color = tracedOnly(pushConstants.view) ? unavailableCard(pixel)
                                                   : channelColor(uv, pixel);
-    outImage[pixel] = float4(color, 1.0);
+    // The tracer's channel views leave finishPixel through ptDisplayTransform
+    // (path_trace.slang); this pass runs after post-processing and overwrites
+    // its output, so it must encode for itself or its channels land raw while
+    // the tracer's land display-encoded - one quantity in two colour spaces,
+    // measured as a pi-shaped error before the encoding was checked.
+    outImage[pixel] = float4(
+        ptDisplayTransform(max(color, 0.0), pushConstants.exposure, pushConstants.tonemap),
+        1.0);
 }

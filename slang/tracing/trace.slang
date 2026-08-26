@@ -329,6 +329,19 @@ public ShadowRay ptShadowRay(float3 origin, float3 geometricNormal, float3 direc
         // shadow behavior only when the safety fallback keeps them in the TLAS.
         if (pushConstants.skyAvailable == 0 &&
             (instanceMaterials[materialIndex].featureMask & kPtMaskSky) != 0) continue;
+        // Sky-room scenery casts nothing, whatever the bake did. The shell is
+        // omitted from the scene; the props inside it stay visible and stop
+        // occluding here.
+        //
+        // Reaches only NON-OPAQUE candidates, which is where this matters: the
+        // BLAS splits geometry in two (tracingstructure.cpp:218) and an opaque
+        // triangle commits in hardware without ever entering this loop. Cutout
+        // foliage - the Kashyyyk canopy that closed over the sun - is
+        // punch-through and does enter it. A solid backdrop prop would still
+        // occlude, and cannot be fixed here: the whole merged scene is a single
+        // TLAS instance, so there is no per-mesh cull mask to reach for.
+        if ((instanceMaterials[materialIndex].featureMask & kPtMaskBackdropNoShadow) != 0)
+            continue;
         // PROCEDURAL SPRITES cast nothing, emissive or not - a blended plume
         // would otherwise attenuate through the branch below.
         if (isProceduralSprite(materialIndex)) continue;

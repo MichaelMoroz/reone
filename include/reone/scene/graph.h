@@ -338,14 +338,15 @@ public:
     };
 
     /**
-     * Where a caster points: its origin if it is a point light, its aim
-     * direction if it is directional.
+     * The fixed direction shared by PBR shading and a directional shadow map.
      *
      * Per slot rather than per graph because every caster needs its own, and
-     * the directional fallback - aim an unoriented light at the centre of the
-     * module's rooms - has to run against that light's own position.
+     * the directional fallback has to run against that light's own position.
      */
-    glm::vec3 shadowLightAim(const ShadowLight &slot) const;
+    /** Centre of the module's non-background room geometry, if it has any. */
+    std::optional<glm::vec3> roomBoundsCentre() const;
+
+    glm::vec3 directionalLightAim(const LightSceneNode &light) const;
 
     /** Which slot this light casts from this frame, or -1 if it casts nothing. */
     int shadowSlotOf(const LightSceneNode *light) const {

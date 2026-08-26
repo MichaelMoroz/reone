@@ -908,7 +908,6 @@ void SlangShaderCompiler::validateSchemas() {
                   REONE_UNIFORM_FIELD(GlobalUniforms, shadowLights),
                   REONE_UNIFORM_FIELD(GlobalUniforms, shadowCascadeFarPlanes),
                   REONE_UNIFORM_FIELD(GlobalUniforms, shadowCascadeSpace),
-                  REONE_UNIFORM_FIELD(GlobalUniforms, shadowPointSpace),
                   REONE_UNIFORM_FIELD(GlobalUniforms, viewProjection),
                   REONE_UNIFORM_FIELD(GlobalUniforms, prevViewProjection),
                   REONE_UNIFORM_FIELD(GlobalUniforms, fogColor),

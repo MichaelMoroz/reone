@@ -48,6 +48,8 @@
 // shader only evaluates what the admission baked into the material records.
 
 import uniforms;
+import lib.direct_light;
+import lib.surface_model;
 import tracing.rng;
 import tracing.brdf;
 import tracing.resources;
@@ -210,7 +212,11 @@ void main() {
         // The sentinel material id: nothing was drawn here, so this is the sky.
         // The same cube, through the same shared read, that both raster
         // resolves composite - all three modes therefore keep one sky.
-        if (pushConstants.skyAvailable != 0) {
+        //
+        // Except in parity, where the sky is environment, and environment is
+        // excluded by definition: black on both sides, so the comparison is
+        // over lit geometry only.
+        if (pushConstants.skyAvailable != 0 && !ptParityDirectEnabled()) {
             outputs.noiseFree += ptSkyRadiance(ray.Direction);
         }
         finishPixel(pixel, outputs, debug);
@@ -234,11 +240,10 @@ void main() {
     // terminating surface is radiance with nothing behind it.
     float transportViewZ = primaryShading.terminatesPath ? kPtInfDistance : surfaceViewZ;
     if (pbrPrimary) {
-        float3 Rf0 = lerp(lerp(float3(0.04), primaryShading.albedo, primaryShading.metallic),
-                          float3(1.0), primaryShading.envStrength);
-        ptNrdMaterialFactors(primaryShading.normal, -ray.Direction, primaryShading.albedo,
-                             primaryShading.metallic, Rf0, primaryShading.roughness,
-                             outputs.transportDiffFactor, outputs.transportSpecFactor);
+        materialFactors(primaryShading.normal, -ray.Direction, primaryShading.albedo,
+                        primaryShading.metallic, primaryShading.envStrength,
+                        primaryShading.roughness,
+                        outputs.transportDiffFactor, outputs.transportSpecFactor);
     }
 
     // The guide surface and the transport primary are now the same surface by
@@ -274,6 +279,35 @@ void main() {
     outputs.noiseFree = primaryShading.emission;
 
     if (primaryShading.terminatesPath) {
+        // Parity: a terminating surface - sky shell, prelit backdrop - is
+        // emission, which the parity image excludes by definition. Black on
+        // both sides, so the comparison is over lit geometry only.
+        if (ptParityDirectEnabled()) {
+            outputs.noiseFree = float3(0.0);
+        }
+        finishPixel(pixel, outputs, debug);
+        return;
+    }
+
+    // Parity mode: the final image is the shared unoccluded direct sum and
+    // nothing else - no bounces, no NEE draw, no specular, no emission, no
+    // sky contribution on covered pixels. One deterministic evaluation; the
+    // spp loop below never runs. See lib/direct_light.slang.
+    if (ptParityDirectEnabled()) {
+        outputs.noiseFree = parityDirectColor(
+            primaryShading.albedo, primaryHit.position, primaryShading.normal,
+            primaryShading.thin, pushConstants.thinTransmission,
+            pushConstants.emitterRadiusRatio, pushConstants.directIntensity,
+            pushConstants.sunIntensity);
+        outputs.diffuse = float3(0.0);
+        outputs.specular = float3(0.0);
+        outputs.directDiffuse = float3(0.0);
+        // White factors, so the composite's demodulation does not reshape the
+        // sum on its way to the image.
+        outputs.diffFactor = float3(1.0);
+        outputs.specFactor = float3(1.0);
+        outputs.transportDiffFactor = float3(1.0);
+        outputs.transportSpecFactor = float3(1.0);
         finishPixel(pixel, outputs, debug);
         return;
     }

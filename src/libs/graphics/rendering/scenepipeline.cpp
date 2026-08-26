@@ -82,6 +82,15 @@ struct ResolvePushConstants {
     float lightmapIntensity;
     /** Emitter size as a fraction of influence radius; PBR's sphere lights. */
     float emitterRadiusRatio;
+    float directIntensity;
+    float sunIntensity;
+    // The tracer's dials for unlit-emissive surfaces (surfaceType 2): a sky
+    // shell takes the sky dial, a painted backdrop the backdrop dial. The
+    // resolve had no branch for that class and shaded the dome as sunlit,
+    // white-baked, emissive geometry - measured as a Tatooine backdrop
+    // overexposed and a Korriban one underexposed, 40% of each frame.
+    float skyIntensity;
+    float backdropIntensity;
 };
 
 /** Mirrors CoveragePushConstants in postprocess.slang. */
@@ -94,6 +103,18 @@ struct DebugViewPushConstants {
     uint32_t view;
     /** The floor the shading used, so the roughness channel shows that number. */
     float roughnessFloor;
+    float thinTransmission;
+    float emitterRadiusRatio;
+    float directIntensity;
+    float sunIntensity;
+    // The same display transform the tracer's channel views apply
+    // (path_trace.slang finishPixel), so the two renderers' channels land in
+    // ONE colour space. The debug pass runs after post-processing would have
+    // and overwrites its output, so it has to encode for itself - a raw write
+    // here measured as a factor-of-pi-shaped error against the tracer before
+    // anyone thought to check the encoding.
+    float exposure;
+    uint32_t tonemap;
 };
 
 static_assert(sizeof(MegaDrawPushConstants) <= kCachedPipelinePushConstantSize);
@@ -132,6 +153,8 @@ static constexpr uint32_t kResolveFlagTransparentOutput = 4u;
  * all-modes rule allows for.
  */
 static constexpr uint32_t kResolveFlagDisplayReferred = 8u;
+/** Mirrors kResolveFlagParityDirect in pbr_resolve.slang. */
+static constexpr uint32_t kResolveFlagParityDirect = 16u;
 /** Replace GUI-model shading with coverage, cutout threshold, and class in RGB. */
 
 /** Both resolve dispatches, and their shader, agree on this tile. */
@@ -287,6 +310,16 @@ void ScenePipeline::init() {
         auto shadowSampler = _renderer.resources().sampler(shadowProperties);
         _dirShadows->setSampler(shadowSampler);
         _pointShadows->setSampler(shadowSampler);
+        // The same cube image binds a second time under a PLAIN sampler, for
+        // the penumbra's blocker search: a comparison sampler answers "is the
+        // receiver behind" and cannot return the blocker's actual distance.
+        // Nearest, because averaging two stored depths across an occluder edge
+        // invents a blocker at a distance where nothing stands.
+        auto rawShadowProperties = shadowProperties;
+        rawShadowProperties.compare = false;
+        rawShadowProperties.minFilter = Texture::Filtering::Nearest;
+        rawShadowProperties.magFilter = Texture::Filtering::Nearest;
+        _pointShadowRawSampler = _renderer.resources().sampler(rawShadowProperties);
 
         // Both resolve sets always bind both sampler shapes. Clear each target to
         // the far plane once so the inactive light kind is a valid no-shadow map.
@@ -335,7 +368,8 @@ void ScenePipeline::init() {
              {16, &_renderer.pbrTextures().irradianceArray()},
              {17, &_renderer.pbrTextures().prefilteredArray()},
              {19, _pointShadows.get()},
-             {21, &_gbuffer->color(GBufferAttachment::TriangleId)}});
+             {21, &_gbuffer->color(GBufferAttachment::TriangleId)},
+             {TextureUnits::pointShadowRaw, _pointShadows.get(), {}, _pointShadowRawSampler}});
     }
 
     _outputHandle = std::make_shared<Texture>(
@@ -861,6 +895,9 @@ uint32_t ScenePipeline::resolveFlags() const {
     if (_transparentOutput) {
         flags |= kResolveFlagTransparentOutput;
     }
+    if (_options.parityDirect) {
+        flags |= kResolveFlagParityDirect;
+    }
     if (_options.mode == RenderMode::Retro) {
         flags |= kResolveFlagDisplayReferred;
     }
@@ -886,7 +923,11 @@ ResolvePushConstants resolvePush(uint32_t flags, const GraphicsOptions &options)
             // The tracer's dial, read by PBR too: the two modes are meant to
             // differ in how light reaches a surface, never in what the light
             // is, and a lamp of a different size in one of them is the latter.
-            std::clamp(options.ptPointEmitterRatio, 0.01f, 0.5f)};
+            std::clamp(options.ptPointEmitterRatio, 0.01f, 0.5f),
+            std::max(0.0f, options.ptDirectIntensity),
+            std::max(0.0f, options.ptSunIntensity),
+            std::max(0.0f, options.skyIntensity),
+            std::max(0.0f, options.ptBackdropIntensity)};
 }
 
 } // namespace
@@ -1472,7 +1513,8 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
          {TextureUnits::gBufMotion, &_gbuffer->color(GBufferAttachment::Motion)},
          {TextureUnits::gBufTriangleId, &_gbuffer->color(GBufferAttachment::TriangleId)},
          {TextureUnits::shadowMapArray, _dirShadows.get()},
-         {TextureUnits::shadowMapCube, _pointShadows.get()}});
+         {TextureUnits::shadowMapCube, _pointShadows.get()},
+         {TextureUnits::pointShadowRaw, _pointShadows.get(), {}, _pointShadowRawSampler}});
 
     auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
     cmd.bindComputePipeline(pipeline.pipeline);
@@ -1486,7 +1528,13 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
                                  resolveSet(_output.get()), nullptr, 0);
     const DebugViewPushConstants push {
         static_cast<uint32_t>(std::clamp(_options.debugView, 0, kMaxDebugView)),
-        std::clamp(_options.ptRoughnessFloor, 0.0f, 1.0f)};
+        std::clamp(_options.ptRoughnessFloor, 0.0f, 1.0f),
+        std::clamp(_options.thinTransmission, 0.0f, 1.0f),
+        std::clamp(_options.ptPointEmitterRatio, 0.01f, 0.5f),
+        std::max(0.0f, _options.ptDirectIntensity),
+        std::max(0.0f, _options.ptSunIntensity),
+        std::max(0.05f, _options.exposure),
+        static_cast<uint32_t>(std::clamp(_options.tonemap, 0, 1))};
     cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));
     cmd.dispatchCompute({(chainSize().x + kResolveGroupSize - 1) / kResolveGroupSize,
                          (chainSize().y + kResolveGroupSize - 1) / kResolveGroupSize, 1});

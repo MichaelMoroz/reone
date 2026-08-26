@@ -499,7 +499,17 @@ void Conversation::update(float dt) {
     GameGUI::update(dt);
     if (!_entryEnded) {
         _endEntryTimer.update(dt);
-        if (!_paused && (_endEntryTimer.elapsed() || (_currentVoice && !_currentVoice->isPlaying()))) {
+        // The voice check reads the AUDIO DEVICE's playback state, which is
+        // wall clock. A headless capture runs on a fixed game-time step that
+        // does not track real time - a path-traced frame takes several times
+        // a raster frame's wall clock - so consulting playback there ended
+        // the same entry on different game frames in different render modes,
+        // and the dialog camera diverged between two captures of "the same"
+        // moment. The timer is seeded from the clip's own duration in game
+        // time, so headless keeps every entry exactly that long instead.
+        const bool wallClockAudio = !_game.options().graphics.headless;
+        if (!_paused && (_endEntryTimer.elapsed() ||
+                         (wallClockAudio && _currentVoice && !_currentVoice->isPlaying()))) {
             endCurrentEntry();
         }
     }

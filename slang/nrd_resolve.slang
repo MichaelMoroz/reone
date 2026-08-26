@@ -42,6 +42,8 @@
 // transparency, so it is the common post-process pass's and no dial of it
 // reaches here.
 
+import lib.assemble;
+
 [[vk::binding(0, 1)]] RWTexture2D<float4> outputImage;
 [[vk::binding(1, 1)]] RWTexture2D<float4> inNoiseFree;
 [[vk::binding(2, 1)]] RWTexture2D<float4> inDiffFactor;
@@ -87,8 +89,6 @@ static const uint kDebugDenoisedSpecular = 18;
 static const uint kDebugFilteredDirect = 19;
 [[vk::push_constant]] NrdResolvePushConstants pushConstants;
 
-/** Denoised channels are undefined beyond NRD's denoising range. */
-static const float kDenoisedRange = 1.0e5;
 
 /**
  * RELAX filters linear radiance and hands it back linear, so there is nothing
@@ -122,7 +122,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     const float2 centreUv = (float2(pixel) + 0.5) / extent;
 
     float3 color = inNoiseFree[pixel].rgb;
-    const bool hasDenoisedSurface = abs(inViewZ[pixel]) < kDenoisedRange;
+    const bool hasDenoisedSurface = !isTerminatingSurface(inViewZ[pixel]);
     float3 diffuse = hasDenoisedSurface ? sDenoisedDiffuse.SampleLevel(centreUv, 0.0).rgb
                                         : inRawDiffuse[pixel].rgb;
     float3 specular = hasDenoisedSurface ? sDenoisedSpecular.SampleLevel(centreUv, 0.0).rgb
@@ -182,8 +182,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                               .SampleLevel(pushConstants.directDenoised != 0 ? jitteredUv : centreUv,
                                            0.0)
                               .rgb;
-    color += (unpackRadiance(diffuse) + max(direct, 0.0)) *
-                 inDiffFactor[pixel].rgb +
-             unpackRadiance(specular) * inSpecFactor[pixel].rgb;
+    color = assembleRadiance(color, unpackRadiance(diffuse), max(direct, 0.0),
+                             unpackRadiance(specular), inDiffFactor[pixel].rgb,
+                             inSpecFactor[pixel].rgb);
     outputImage[pixel] = float4(color, 1.0);
 }

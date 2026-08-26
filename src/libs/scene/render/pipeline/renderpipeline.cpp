@@ -311,7 +311,13 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         // blended has touched it yet.
         if (_options.bloom)
             plan.steps.push_back(graphics::SceneStep::Bloom);
-        plan.steps.push_back(graphics::SceneStep::Blended);
+        // Parity mode compares only the shared unoccluded direct sum, and the
+        // blended pass composites VFX - plumes, flares, glass - that neither
+        // side's parity image contains by definition. Leaving it in put
+        // additive sprites over one renderer's parity image wherever the two
+        // passes' inputs differed, which read as parity error on geometry.
+        if (!_options.parityDirect)
+            plan.steps.push_back(graphics::SceneStep::Blended);
     }
     if (temporalResolve)
         plan.steps.push_back(graphics::SceneStep::AntiAliasing);

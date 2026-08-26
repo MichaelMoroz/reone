@@ -44,6 +44,14 @@ struct TextureBinding {
     int unit {0};
     const IImage *image {nullptr};
     ImageView view;
+    /**
+     * Overrides the image's own sampler for this binding alone. The one
+     * client is the raw view of the point-shadow cube: the same image binds
+     * with its comparison sampler at shadowMapCube and with a plain sampler
+     * at pointShadowRaw, and a sampler that lives on the image cannot be two
+     * things at once.
+     */
+    Sampler sampler;
 };
 
 /** Descriptor operations used by the 2D and image-based-lighting clients. */
@@ -83,7 +91,7 @@ public:
                                                       ImageView skyView) = 0;
     /** A texture table that remains fixed for the lifetime of a scene target. */
     virtual DescriptorSet createPersistentTextureSet(
-        const std::vector<std::pair<int, const IImage *>> &bindings) = 0;
+        const std::vector<TextureBinding> &bindings) = 0;
     /**
      * Give a persistent set back.
      *

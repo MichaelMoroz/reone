@@ -572,6 +572,11 @@ void Engine::captureFrame(const std::filesystem::path &path) {
     auto screenshot = _services->graphics.renderer.captureFrame();
     auto stream = FileOutputStream(path);
     TgaWriter(screenshot).save(stream);
+    // What this frame is a frame OF, logged beside it. Two captures may only
+    // be compared when these lines match: a conversation that advanced the
+    // camera in one run and not the other produced images of two different
+    // moments, and nothing in the images said so.
+    info("CAPTURESTATE " + path.filename().string() + " " + _game->captureStateDigest());
     info("Wrote screenshot: " + path.string());
 }
 

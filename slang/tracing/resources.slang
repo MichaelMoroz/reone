@@ -37,6 +37,20 @@ public static const uint kPtSurfaceUnlitEmissive = 2;    // sky and prelit: radi
 // feature mask below bit 23; the tracer-only bits sit above.
 public static const uint kPtMaskEnvMap = 1u << 1;
 public static const uint kPtMaskSky = 1u << 24;          // selects the sky dial over the emissive one
+/**
+ * Sky-room scenery: rendered, but it casts no shadow.
+ *
+ * The sky room is the backdrop. Its shell is omitted from the scene outright,
+ * and what remains inside it - Kashyyyk's trees, 001ebo16's asteroids and its
+ * planet - is scenery standing in for distance. Letting it occlude puts the
+ * backdrop's shadow on the playable area: on Kashyyyk the canopy closed over
+ * the sun and the module lost its directional light entirely.
+ *
+ * Shading is untouched, deliberately. This says nothing about what the surface
+ * looks like, only that shadow rays pass through it, so it cannot be folded
+ * into kPtMaskSky - that bit picks the sky dial and forces unlit emissive.
+ */
+public static const uint kPtMaskBackdropNoShadow = 1u << 31;
 // Continuous alpha coverage: shade this surface and transmit the remainder
 // of the ray. Kept separate from punch-through because a smoke ramp is not a
 // stochastic cutout mask.
@@ -230,6 +244,8 @@ public static const uint kPtFlagStats = 1u;
  * which is what this replaced and what it is compared against.
  */
 public static const uint kPtFlagDirectChannel = 4u;
+/** Parity mode: the final image is only the shared unoccluded direct sum. */
+public static const uint kPtFlagParityDirect = 1u << 12;
 // Six bits, not four. Four held fifteen channels and the sixteenth silently
 // wrapped to "off" - a debug view that quietly shows the ordinary picture is
 // worse than one that fails.
@@ -248,6 +264,10 @@ public uint ptTonemapOperator() {
 
 public bool ptStatsEnabled() {
     return (pushConstants.traceFlags & kPtFlagStats) != 0;
+}
+
+public bool ptParityDirectEnabled() {
+    return (pushConstants.traceFlags & kPtFlagParityDirect) != 0;
 }
 
 public bool ptDirectChannelEnabled() {

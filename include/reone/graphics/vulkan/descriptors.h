@@ -54,13 +54,15 @@ public:
         int unit {0};
         const VulkanImage *image {nullptr};
         VkImageView view {VK_NULL_HANDLE};
+        /** Overrides the image's own sampler when set; see TextureBinding. */
+        VkSampler sampler {VK_NULL_HANDLE};
     };
 
     /** Must match the number of blocks in uniforms.h and uniforms.slang. */
     static constexpr int kNumUniformBlocks = 10;
 
     /** Must cover every unit in TextureUnits. */
-    static constexpr int kNumTextures = 23;
+    static constexpr int kNumTextures = 24;
 
     /**
      * Uniform blocks and textures both start numbering at zero, so they cannot
@@ -182,9 +184,9 @@ public:
      * which is a layout mismatch the validation layers reject.
      */
     VkDescriptorSet createPersistentTextureSet(
-        const std::vector<std::pair<int, const VulkanImage *>> &bindings);
+        const std::vector<NativeTextureBinding> &bindings);
     DescriptorSet createPersistentTextureSet(
-        const std::vector<std::pair<int, const IImage *>> &bindings) override;
+        const std::vector<TextureBinding> &bindings) override;
     void freePersistentTextureSet(DescriptorSet set) override;
 
     /**

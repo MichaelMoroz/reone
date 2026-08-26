@@ -21,6 +21,7 @@
 // every path - the primary hit is not special.
 
 import uniforms;
+import lib.direct_light;
 import tracing.rng;
 import tracing.brdf;
 import tracing.resources;
@@ -38,7 +39,6 @@ import tracing.trace;
 // a function of x and the size ratio alone, so one constant serves every
 // light in the game at every authored radius. It is exact as the emitter
 // shrinks to a point and drifts about 1% at the default ratio.
-static const float kPtLightBudget = 0.1137056389;
 
 // A point light is a sphere, not a point and not a fixed cone. Its emitter
 // radius is a fraction of the authored influence radius - KotOR authored no
@@ -57,17 +57,10 @@ struct SphereLight {
 // selection table evaluates it for every light at every path vertex and has
 // no use for the angle or the shadow distance.
 float ptSphereAttenuation(GlobalUniformsLight light, float lightDistance) {
-    float ratio = max(pushConstants.emitterRadiusRatio, 1e-3);
-    float sinTheta = saturate(light.radius * ratio / max(lightDistance, 1e-4));
-    float cosTheta = sqrt(max(0.0, 1.0 - sinTheta * sinTheta));
-    // Dividing by the emitter's own projected solid angle turns the authored
-    // colour into an intensity rather than a radiance, which is what makes
-    // the size dial brightness-neutral: it moves the penumbra and the
-    // near-field saturation, while the far field stays at budget*radius^2/d^2
-    // however large the emitter is. Saturating rather than diverging at the
-    // surface is the sphere's doing - the solid angle caps at 2*pi - so there
-    // is no 1/d^2 singularity to clamp away.
-    return kPtLightBudget * kPtTwoPi * (1.0 - cosTheta) / (kPtPi * ratio * ratio);
+    // One falloff for every renderer; see lib/direct_light.slang for why the
+    // solid angle is normalised by the emitter's projected area.
+    return sphereLightAttenuation(light.radius, lightDistance,
+                                  pushConstants.emitterRadiusRatio);
 }
 
 SphereLight ptSphereLight(GlobalUniformsLight light, float lightDistance) {
@@ -88,8 +81,12 @@ SphereLight ptSphereLight(GlobalUniformsLight light, float lightDistance) {
 float directLightWeight(GlobalUniformsLight light, float3 position, float3 shadingNormal,
                         bool thin) {
     bool directional = light.position.w == 0.0;
-    float3 fragToLight = light.position.xyz - position;
-    float lightDistance = length(fragToLight);
+    // W = 0 carries the unit direction toward the light, not a position: a
+    // light standing in for one infinitely far away is at no point in the
+    // scene, so there is nothing to subtract a receiver from.
+    float3 fragToLight = directional ? light.position.xyz
+                                     : light.position.xyz - position;
+    float lightDistance = directional ? 1.0 : length(fragToLight);
     if (!directional && light.ambientOnly != 0) return 0.0;
     // No cutoff. A light does not stop existing at a boundary; inverse-square
     // makes a distant one improbable in this table, which is the same saving
@@ -108,8 +105,8 @@ float directLightWeight(GlobalUniformsLight light, float3 position, float3 shadi
     // overstates the contribution just moves the noise rather than the mean.
     float NdotL = thin && cosine < 0.0 ? -cosine * pushConstants.thinTransmission
                                        : max(0.0, cosine);
-    float luma = dot(ptGammaToLinear(light.color.rgb), float3(0.2126, 0.7152, 0.0722));
-    return max(0.0, luma * light.multiplier * attenuation * NdotL);
+    float luma = dot(directLightColor(light), float3(0.2126, 0.7152, 0.0722));
+    return max(0.0, luma * attenuation * NdotL);
 }
 
 public struct DirectLight {
@@ -170,12 +167,24 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
     }
     if (selectedIndex < 0) return result;
     GlobalUniformsLight light = globalUniforms.lights[selectedIndex];
-    bool directional = light.position.w == 0.0;
-    // Directionals are placed as distant points; the position difference is
-    // the light direction for both kinds, exactly as the raster path has it.
-    float3 toLight = light.position.xyz - hit.position;
-    float lightDistance = length(toLight);
-    float3 L = toLight / max(lightDistance, 1e-4);
+    // What the light IS - direction, distance, falloff, dials - comes from the
+    // shared module, so this renderer and the raster cannot disagree on it.
+    // Everything after it here is the tracer's own: the cone-sampled shadow
+    // ray, the penumbra, the estimator weight, the specular lobe.
+    //
+    // A directional's W = 0 IS the direction toward it, the same vector for
+    // every receiver. Treating it as a distant POINT instead - subtracting a
+    // receiver from a finite origin - gave a direction that varied across the
+    // frame and a shadow ray aimed at that origin, which ran through the lamp
+    // and let geometry BEHIND it occlude its own light, while the raster
+    // projected one parallel cascade: the same sun's shadow at two angles.
+    DirectLightSample sampled = sampleDirectLight(light, hit.position,
+                                                  pushConstants.emitterRadiusRatio,
+                                                  pushConstants.directIntensity,
+                                                  pushConstants.sunIntensity);
+    bool directional = sampled.directional;
+    float lightDistance = sampled.distance;
+    float3 L = sampled.direction;
     // Deliberately NOT culled against the geometric normal. That test is
     // binary and the geometric normal is constant across a triangle, so on a
     // smooth-shaded mesh whole facets fail it while their neighbours pass and
@@ -191,9 +200,7 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
     float3 shadeNormal = shading.thin && litFromBehind ? -shading.normal : shading.normal;
     float transmission = litFromBehind ? pushConstants.thinTransmission : 1.0;
     SphereLight sphere = ptSphereLight(light, lightDistance);
-    float3 radiance = ptGammaToLinear(light.color.rgb) * light.multiplier;
-    radiance *= directional ? pushConstants.sunIntensity
-                            : sphere.attenuation * pushConstants.directIntensity;
+    float3 radiance = sampled.radiance;
     // One angle drives both the falloff and the penumbra, because they are
     // the same quantity: how much of the sky this emitter covers from here.
     // The sun keeps its own dial - it is not placed at a physical distance.
@@ -244,7 +251,8 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
     // NRD factor restores the whole lobe after denoising. Raster's dynamic-
     // light specular is meaningful only on the same env-mapped surfaces the
     // tracer gives a specular lobe.
-    result.diffuse = radiance * NdotL * transmission / kPtPi;
+    result.diffuse = directLightDiffuse(radiance, shading.normal, L,
+                                        shading.thin, pushConstants.thinTransmission);
     // Specular keeps the true normal and the true side: a leaf transmits light,
     // not a highlight.
     if (shading.envmapped && !litFromBehind) {

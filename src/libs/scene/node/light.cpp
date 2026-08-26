@@ -36,7 +36,14 @@ namespace reone {
 namespace scene {
 
 static constexpr float kFadeSpeed = 2.0f;
-static constexpr float kMinDirectionalLightRadius = 100.0f;
+// 2000, up from 100. The radius census across the benchmark modules splits
+// cleanly: true suns are authored at 5000-18000, while interior and stray
+// lights sit at 200-1000. At 100 a radius-1000 lamp in tat_m18aa was promoted
+// to a "sun" with an invented near-horizontal direction; as a shadow caster it
+// smeared blob-and-speckle garbage across the module's distant geometry, and
+// without a slot it washed the frame unshadowed. Both renderers share this
+// classifier, so demoting it moves them together.
+static constexpr float kMinDirectionalLightRadius = 2000.0f;
 
 void LightSceneNode::init() {
     _modelNode.vectorValueAtTime(ControllerTypes::color, 0.0f, _color);

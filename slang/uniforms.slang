@@ -30,10 +30,9 @@ static const int kNumShadowLightSpace = 6;
 static const int kNumShadowCascades = 4;
 /** Mirrors the ceilings in include/reone/graphics/types.h - they size the block. */
 static const int kMaxDirectionalShadows = 4;
-static const int kMaxPointShadows = 16;
+static const int kMaxPointShadows = 48; // mirrors graphics/types.h; the schema check enforces it
 static const int kMaxShadowLights = kMaxDirectionalShadows + kMaxPointShadows;
 static const int kMaxShadowCascadeMatrices = kMaxDirectionalShadows * kNumShadowCascades;
-static const int kMaxShadowPointMatrices = kMaxPointShadows * kNumShadowLightSpace;
 static const int kMaxBones = 24;
 static const int kMaxDanglyVertices = 768;
 static const int kMaxParticles = 64;
@@ -86,7 +85,6 @@ struct GlobalUniforms {
     float4 shadowCascadeFarPlanes;
     float4x4 shadowCascadeSpace[kMaxShadowCascadeMatrices];
     // Six consecutive faces per point caster, indexed by mapIndex * 6.
-    float4x4 shadowPointSpace[kMaxShadowPointMatrices];
     // Unjittered, so that motion vectors never encode the jitter offset.
     float4x4 viewProjection;
     float4x4 prevViewProjection;

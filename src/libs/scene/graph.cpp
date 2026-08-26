@@ -78,12 +78,27 @@ static constexpr float kMaxCollisionDistanceLineOfSight2 = kMaxCollisionDistance
 static constexpr float kPointLightShadowsFOV = glm::radians(90.0f);
 static constexpr float kPointLightShadowsNearPlane = 0.25f;
 static constexpr float kPointLightShadowsFarPlane = 2500.0f;
-
+// Matches the directional shadow-ray reach in tracing/lighting.slang. A near
+// cascade still needs to see a distant roof or backdrop between its receiver
+// and the sun; its own small frustum-slice radius is not a caster-distance
+// limit.
+static constexpr float kPbrDirectionalShadowReach = 10000.0f;
+// The last cascade reaches the far plane, deliberately: past the final slice
+// the map has no answer, and the sampler's white border turns "no answer" into
+// "fully lit" - on a large exterior that exempted most of the frame from the
+// sun's shadow while the reference shadow ray occluded it. A coarse distant
+// shadow beats a wrongly absent one; the near slices keep their resolution.
+// The last cascade reaches the far plane. Past the final slice the map has no
+// answer, and the sampler's white border turns "no answer" into "fully lit":
+// measured as the tracer's near-black bin - 40% of a Tatooine frame, the
+// distant terrain in the top third - where PBR averaged 45/255 of sun the
+// reference occludes. A coarse distant shadow beats a wrongly absent one; the
+// near slices keep their resolution.
 static const std::vector<float> g_shadowCascadeDivisors {
     0.005f,
-    0.015f,
-    0.045f,
-    0.135f};
+    0.02f,
+    0.12f,
+    1.0f};
 
 void SceneGraph::clear() {
     _modelRoots.clear();
@@ -463,7 +478,13 @@ void SceneGraph::updateShadowLight(float dt) {
         if (authoredOnly && !light->modelNode().light()->shadow) {
             continue;
         }
-        if (light->modelNode().light()->ambientOnly) {
+        // Ambient-only LOCAL lights are fill and cast nothing - the tracer
+        // drops them from its direct table too. An ambient-only DIRECTIONAL is
+        // different: both renderers promote it to a sun, the tracer
+        // shadow-rays it like any other, and a sun that illuminates but may
+        // not cast reaches through every wall of an enclosed module - measured
+        // as 30% of an interior frame lit that the reference leaves dark.
+        if (light->modelNode().light()->ambientOnly && !light->isDirectional()) {
             continue;
         }
         // The authored multiplier, NOT multiplied by strength(). strength is
@@ -489,6 +510,17 @@ void SceneGraph::updateShadowLight(float dt) {
         }
         if (a.second != b.second) {
             return a.second > b.second;
+        }
+        // Directionals tie constantly - the score is the bare multiplier, and
+        // authored multipliers are overwhelmingly 1 - and an identity-order
+        // tiebreak then hands a cascade slot to whichever record happened to
+        // register first. On tat_m18aa that was a stray radius-1000 lamp with
+        // a near-horizontal invented aim, whose grazing map smeared noise
+        // across the module while the second twin sun (radius 18000) ran with
+        // no shadow at all. Radius is the sun-ness of a directional record:
+        // the cascades belong to the largest ones.
+        if (ad && bd && a.first->radius() != b.first->radius()) {
+            return a.first->radius() > b.first->radius();
         }
         // Ties broken by identity so the order cannot depend on how the light
         // vector happened to be built; a caster set that reshuffles frame to
@@ -864,13 +896,72 @@ Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {
             globals.numLights = static_cast<int>(_activeLights.size());
             for (size_t i = 0; i < _activeLights.size(); ++i) {
                 auto &light = globals.lights[i];
-                light.position = glm::vec4(_activeLights[i]->origin(), _activeLights[i]->isDirectional() ? 0.0f : 1.0f);
+                const bool directional = _activeLights[i]->isDirectional();
+                // W = 0 carries a UNIT DIRECTION TOWARD the light, not a
+                // position. A light this engine calls directional stands in for
+                // one infinitely far away, so it has no position to be at and
+                // no distance to attenuate over: its direction is the same
+                // everywhere in the scene.
+                //
+                // Uploading the origin instead made every consumer derive its
+                // own direction from a finite point, which is a POINT light's
+                // behaviour wearing a directional's flag. The two renderers
+                // then disagreed twice over: the tracer traced toward that
+                // point (so geometry behind the lamp occluded its own light,
+                // and the shadow ran at a different angle from the raster's
+                // parallel cascade), and both carried a distance term that a
+                // sun cannot have.
+                //
+                // Identical for every render mode, deliberately: the modes may
+                // differ in how light reaches a surface, never in what the
+                // light is.
+                light.position = directional
+                                     ? glm::vec4(-directionalLightAim(*_activeLights[i]), 0.0f)
+                                     : glm::vec4(_activeLights[i]->origin(), 1.0f);
                 light.color = glm::vec4(_activeLights[i]->color(), 1.0f);
                 light.multiplier = _activeLights[i]->multiplier() * _activeLights[i]->strength();
+                // No derived magnitude for a directional, deliberately. The
+                // sun dial IS the calibrated intensity, and it is already
+                // distance-free - the directional branch has had attenuation
+                // pinned at 1.0 all along. A factor derived from the light's
+                // authored origin was tried here and re-graded every exterior:
+                // that origin is exactly the datum a directional does not have,
+                // and evaluating a sphere model at it capped out wherever the
+                // origin happened to sit near the room centre.
                 light.radius = _activeLights[i]->radius();
                 light.ambientOnly = static_cast<int>(_activeLights[i]->modelNode().light()->ambientOnly);
                 light.dynamicType = _activeLights[i]->modelNode().light()->dynamicType;
                 light.shadowSlot = shadowSlotOf(_activeLights[i]);
+            }
+            // TEMPORARY DIAGNOSTIC - revert before commit.
+            {
+                static size_t loggedLightHash = 0;
+                size_t h = _activeLights.size() * 1315423911u;
+                for (const auto &l : _activeLights) {
+                    h = h * 1099511628211ull ^ reinterpret_cast<uintptr_t>(l);
+                    h = h * 1099511628211ull ^ static_cast<size_t>(l->multiplier() * l->strength() * 1000.0f);
+                }
+                if (h != loggedLightHash) {
+                    loggedLightHash = h;
+                    std::ostringstream ss;
+                    ss << "LIGHTCENSUS n=" << _activeLights.size();
+                    for (size_t i = 0; i < _activeLights.size(); ++i) {
+                        const auto &l = _activeLights[i];
+                        ss << "  [" << i << "]" << (l->isDirectional() ? "DIR" : "pt")
+                           << " r=" << l->radius()
+                           << " m=" << l->multiplier() * l->strength()
+                           << " amb=" << l->modelNode().light()->ambientOnly
+                           << " slot=" << shadowSlotOf(l);
+                        if (l->isDirectional()) {
+                            const auto aim = directionalLightAim(*l);
+                            const auto o = l->origin();
+                            ss << " aim=" << aim.x << "," << aim.y << "," << aim.z
+                               << " authored=" << l->hasAuthoredDirection()
+                               << " org=" << o.x << "," << o.y << "," << o.z;
+                        }
+                    }
+                    info(ss.str(), LogChannel::Graphics);
+                }
             }
             if (hasShadowLight()) {
                 const float opacity = _graphicsOpt.shadowOpacity >= 0.0f
@@ -885,9 +976,26 @@ Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {
                     auto &out = globals.shadowLights[i];
                     const bool directional = slot.light->isDirectional();
                     out.positionOrDirection = directional
-                                                  ? glm::vec4(shadowLightAim(slot), 0.0f)
+                                                  ? glm::vec4(directionalLightAim(*slot.light), 0.0f)
                                                   : glm::vec4(slot.light->origin(), 1.0f);
-                    out.strength = slot.strength * opacity;
+                    // A partial point shadow is the bounded local fill this
+                    // renderer uses in lieu of bounce light. In PBR the
+                    // authored opacity does not apply AT ALL: occlusion is one
+                    // of the sanctioned raster-for-tracer substitutions (map
+                    // for ray), and the ray removes everything it blocks -
+                    // letting the authored fraction through made every
+                    // interior read a uniform ~1.25x brighter than the
+                    // reference, measured per pixel, and restoring full
+                    // occlusion took danm16 and ebo_m12aa to 1.00-1.01x.
+                    // Retro keeps the authored look, exactly as authored.
+                    // The --shadowopacity override still applies to PBR via
+                    // `opacity` when the user sets it below 1.
+                    out.strength = _graphicsOpt.mode == RenderMode::PBR
+                                       ? slot.strength *
+                                             (_graphicsOpt.shadowOpacity >= 0.0f
+                                                  ? _graphicsOpt.shadowOpacity
+                                                  : 1.0f)
+                                       : slot.strength * opacity;
                     out.radius = slot.light->radius();
                     out.mapResolution = directional ? _graphicsOpt.shadowResolution
                                                     : _graphicsOpt.pointShadowResolution;
@@ -903,10 +1011,10 @@ Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {
                         ++directionalSlots;
                     } else {
                         out.mapIndex = pointSlots;
-                        for (int f = 0; f < kNumCubeFaces; ++f) {
-                            globals.shadowPointSpace[out.mapIndex * kNumCubeFaces + f] =
-                                slot.lightSpace[f];
-                        }
+                        // No face matrices to upload: the render pass computes
+                        // them from the light position (scene_draw.slang), and
+                        // nothing samples them. The 6 KB they occupied was what
+                        // pinned the cube budget at sixteen.
                         ++pointSlots;
                     }
                 }
@@ -1133,7 +1241,8 @@ static glm::mat4 computeDirectionalLightSpaceMatrix(
     float near, float far,
     const glm::vec3 &lightDir,
     const glm::mat4 &cameraView,
-    int shadowResolution) {
+    int shadowResolution,
+    float minimumCasterReach) {
 
     auto projection = glm::perspectiveRH_ZO(fov, aspect, near, far);
 
@@ -1173,16 +1282,17 @@ static glm::mat4 computeDirectionalLightSpaceMatrix(
     const float maxX = lightCenter.x + radius;
     const float minY = lightCenter.y - radius;
     const float maxY = lightCenter.y + radius;
-    // Preserve the old ten-radius caster reach, but make it sphere-based too
-    // so camera rotation cannot make the depth extent breathe. orthoRH_ZO
-    // takes positive near/far distances, hence centre the slice at -10r in
-    // view space and cover the resulting [-20r, 0] interval.
+    // Preserve the old ten-radius caster reach where it is sufficient, but do
+    // not let a near cascade's small receiver slice become a caster-distance
+    // limit. orthoRH_ZO takes positive near/far distances, hence centre the
+    // slice at -reach and cover the resulting [-2*reach, 0] interval.
+    const float casterReach = std::max(10.0f * radius, minimumCasterReach);
     lightView = glm::translate(glm::vec3(
-                    0.0f, 0.0f, -10.0f * radius - lightCenter.z)) *
+                    0.0f, 0.0f, -casterReach - lightCenter.z)) *
                 lightView;
 
     auto lightProjection = glm::orthoRH_ZO(
-        minX, maxX, minY, maxY, 0.0f, 20.0f * radius);
+        minX, maxX, minY, maxY, 0.0f, 2.0f * casterReach);
     return lightProjection * lightView;
 }
 
@@ -1205,17 +1315,7 @@ static glm::mat4 getPointLightView(const glm::vec3 &lightPos, CubeMapFace face) 
     }
 }
 
-glm::vec3 SceneGraph::shadowLightAim(const ShadowLight &slot) const {
-    const auto *light = slot.light;
-    if (!light->isDirectional()) {
-        return light->origin();
-    }
-    if (light->hasAuthoredDirection()) {
-        return light->direction();
-    }
-    // Identity is the model format's default orientation. Aim such lights at
-    // the centre of the module's room geometry: unlike the camera or world
-    // origin, these bounds are fixed for the lifetime of the loaded area.
+std::optional<glm::vec3> SceneGraph::roomBoundsCentre() const {
     AABB bounds;
     for (auto &root : _modelRoots) {
         if (root->usage() != ModelUsage::Room || root->isBackgroundScenery()) {
@@ -1223,14 +1323,28 @@ glm::vec3 SceneGraph::shadowLightAim(const ShadowLight &slot) const {
         }
         bounds.expand(root->aabb() * root->absoluteTransform());
     }
-    if (!bounds.isDegenerate()) {
-        auto centre = 0.5f * (bounds.min() + bounds.max());
-        auto direction = centre - light->origin();
+    if (bounds.isDegenerate()) {
+        return std::nullopt;
+    }
+    return 0.5f * (bounds.min() + bounds.max());
+}
+
+glm::vec3 SceneGraph::directionalLightAim(const LightSceneNode &light) const {
+    if (light.hasAuthoredDirection()) {
+        return light.direction();
+    }
+    // Identity is the model format's default orientation. Aim such lights at
+    // the centre of the module's room geometry: unlike the camera or world
+    // origin, these bounds are fixed for the lifetime of the loaded area. The
+    // same centre references the sun's magnitude, so direction and intensity
+    // agree on where the module is.
+    if (const auto centre = roomBoundsCentre()) {
+        auto direction = *centre - light.origin();
         if (glm::length2(direction) >= glm::epsilon<float>()) {
             return glm::normalize(direction);
         }
     }
-    return light->direction();
+    return light.direction();
 }
 
 void SceneGraph::computeLightSpaceMatrices() {
@@ -1252,13 +1366,16 @@ void SceneGraph::computeLightSpaceMatrices() {
 
     for (auto &slot : _shadowLights) {
         if (slot.light->isDirectional()) {
-            auto lightDir = shadowLightAim(slot);
+            auto lightDir = directionalLightAim(*slot.light);
             for (int i = 0; i < kNumShadowCascades; ++i) {
                 float far = _shadowCascadeFarPlanes[i];
                 float near = i > 0 ? _shadowCascadeFarPlanes[i - 1] : cameraNear;
                 slot.lightSpace[i] = computeDirectionalLightSpaceMatrix(
                     fovy, aspect, near, far, lightDir, camera->view(),
-                    _graphicsOpt.shadowResolution);
+                    _graphicsOpt.shadowResolution,
+                    _graphicsOpt.mode == RenderMode::PBR
+                        ? kPbrDirectionalShadowReach
+                        : 0.0f);
             }
         } else {
             for (int i = 0; i < kNumCubeFaces; ++i) {

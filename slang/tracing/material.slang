@@ -28,6 +28,8 @@
 // one ray sampling function producing the continuation. ptShade/ptSampleRay
 // dispatch on the type; everything downstream is type-blind.
 
+import lib.assemble;
+
 import lib.math;
 import lib.grasscard;
 import lib.scene_schema;
@@ -539,9 +541,9 @@ public struct UnlitEmissiveSurface : ISurfaceModel {
         // was never modelled. Nothing exists behind either, which is why
         // neither is graded by the emissive dial - that one is for lamps and
         // screens, which are objects in the scene that also light it.
-        bool sky = (material.featureMask & kPtMaskSky) != 0;
-        shading.emission = shading.albedo *
-                           (sky ? pushConstants.skyIntensity : pushConstants.backdropIntensity);
+        shading.emission = assembleSkyClass((material.featureMask & kPtMaskSky) != 0,
+                                            shading.albedo, pushConstants.skyIntensity,
+                                            pushConstants.backdropIntensity);
         shading.terminatesPath = true;
         return shading;
     }

@@ -51,6 +51,8 @@
 //   PREVIOUS WORLD POSITION. The raster pass writes a SCREEN displacement, and
 //   one 2D vector does not determine a 3D one. NRD is owed world-space motion,
 
+import lib.assemble;
+
 import uniforms;
 import lib.gbuf;
 import lib.grasscard;
@@ -241,13 +243,9 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     // lamp or a skyline is.
     const float3 radianceTexel = ptDecodeEmission(diffuseSample.rgb);
 
-    float3 emission = ptGammaToLinear(selfIllumSample);
-    if (material.curatedEmission.w > 1.5) {
-        emission = material.curatedEmission.rgb;
-    } else if (material.curatedEmission.w > 0.5) {
-        emission *= material.curatedEmission.rgb;
-    }
-    shading.emission = emission * radianceTexel * pushConstants.emissiveIntensity;
+    shading.emission = assembleEmission(ptGammaToLinear(selfIllumSample), radianceTexel,
+                                        material.curatedEmission,
+                                        pushConstants.emissiveIntensity);
 
     // The two non-PBR surface models, when one of them reaches the G-buffer.
     // Both are radiance rather than reflectance, and both end the path here:
@@ -257,9 +255,9 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
         // Backdrop imagery and, if a bake ever fails, the sky shell. Each on
         // its own dial - see tracing/material.slang, which shades the same two
         // kinds when a ray finds them instead of the camera.
-        bool sky = (material.featureMask & kPtMaskSky) != 0;
-        shading.emission = radianceTexel *
-                           (sky ? pushConstants.skyIntensity : pushConstants.backdropIntensity);
+        shading.emission = assembleSkyClass((material.featureMask & kPtMaskSky) != 0,
+                                            radianceTexel, pushConstants.skyIntensity,
+                                            pushConstants.backdropIntensity);
         shading.terminatesPath = true;
     } else if (material.surfaceType == kPtSurfaceUnlitTransparent) {
         // PURELY EMISSIVE, and in the G-buffer only when it is also cutout.

@@ -27,6 +27,7 @@
 // RELAX reads. Normal/roughness match NRD's RGBA16_SNORM-with-FP encoding.
 // Motion is world-space, previous minus current.
 
+import lib.assemble;
 import uniforms;
 import tracing.brdf;
 import tracing.resources;
@@ -72,8 +73,8 @@ import tracing.resources;
 // nondeterminism floor. TRC-048, closed.
 [[vk::binding(14, 2)]] RWTexture2D<float4> outDirectDiffuse;
 
-/** Environment / miss distance: beyond any scene, inside NRD's defaults. */
-public static const float kPtInfDistance = 1.0e6;
+/** Environment / miss distance; the assembly contract owns the value. */
+public static const float kPtInfDistance = kAssembleInfDistance;
 
 public struct TraceOutputs {
     public float3 diffuse;      // demodulated diffuse radiance
@@ -164,8 +165,8 @@ public struct TraceOutputs {
 
     /** The assembled image the kernel writes when the denoiser is off. */
     public float3 assemble() {
-        return noiseFree + (diffuse + directDiffuse) * transportDiffFactor +
-               specular * transportSpecFactor;
+        return assembleRadiance(noiseFree, diffuse, directDiffuse, specular,
+                                transportDiffFactor, transportSpecFactor);
     }
 
     public void write(uint2 pixel) {

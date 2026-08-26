@@ -53,7 +53,7 @@ static VkImageLayout sampledLayoutFor(const VulkanImage &image) {
 
 // The layout is generated from the binding points rather than written out, so
 // there is one place to change and no chance of the two drifting apart.
-static_assert(TextureUnits::coverage == VulkanDescriptors::kNumTextures - 1,
+static_assert(TextureUnits::pointShadowRaw == VulkanDescriptors::kNumTextures - 1,
               "kNumTextures must cover every unit in TextureUnits");
 
 static_assert(UniformBlockBindingPoints::screenEffect ==
@@ -533,7 +533,7 @@ void VulkanDescriptors::writeTextureSet(VkDescriptorSet set, const VulkanImage *
 }
 
 VkDescriptorSet VulkanDescriptors::createPersistentTextureSet(
-    const std::vector<std::pair<int, const VulkanImage *>> &bindings) {
+    const std::vector<NativeTextureBinding> &bindings) {
     if (_persistentPool == VK_NULL_HANDLE) {
         VkDescriptorPoolSize size {};
         size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -566,24 +566,33 @@ VkDescriptorSet VulkanDescriptors::createPersistentTextureSet(
     for (int i = 0; i < kNumTextures; ++i) {
         auto image = defaultFor(i, _default2D.get(), _defaultArray.get(), _defaultCube.get(),
                                   _defaultCubeArray.get());
-        for (const auto &[unit, override] : bindings) {
-            if (unit == i) {
-                image = override;
+        VkSampler sampler = VK_NULL_HANDLE;
+        for (const auto &binding : bindings) {
+            if (binding.unit == i && binding.image) {
+                image = binding.image;
+                sampler = binding.sampler;
             }
         }
         writes.writeImage(set, {static_cast<uint32_t>(i), VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-                          {image->sampler() ? image->sampler() : _sampler, image->view(), sampledLayoutFor(*image)});
+                          {sampler        ? sampler
+                           : image->sampler() ? image->sampler()
+                                              : _sampler,
+                           image->view(), sampledLayoutFor(*image)});
     }
     writes.apply();
     return set;
 }
 
 DescriptorSet VulkanDescriptors::createPersistentTextureSet(
-    const std::vector<std::pair<int, const IImage *>> &bindings) {
-    std::vector<std::pair<int, const VulkanImage *>> native;
+    const std::vector<TextureBinding> &bindings) {
+    std::vector<NativeTextureBinding> native;
     native.reserve(bindings.size());
-    for (const auto &[unit, image] : bindings) {
-        native.emplace_back(unit, image ? &toVulkanImage(*image) : nullptr);
+    for (const auto &binding : bindings) {
+        native.push_back(
+            {binding.unit,
+             binding.image ? &toVulkanImage(*binding.image) : nullptr,
+             binding.view ? toVulkanImageView(binding.view) : VK_NULL_HANDLE,
+             binding.sampler ? toVulkanSampler(binding.sampler) : VK_NULL_HANDLE});
     }
     return toDescriptorSet(createPersistentTextureSet(native));
 }
@@ -603,14 +612,18 @@ void VulkanDescriptors::writeTextureSet(
     for (int i = 0; i < kNumTextures; ++i) {
         auto image = _standing[i];
         VkImageView view = VK_NULL_HANDLE;
+        VkSampler sampler = VK_NULL_HANDLE;
         for (const auto &binding : bindings) {
             if (binding.unit == i && binding.image) {
                 image = binding.image;
                 view = binding.view;
+                sampler = binding.sampler;
             }
         }
         writes.writeImage(set, {static_cast<uint32_t>(i), VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-                          {image->sampler() ? image->sampler() : _sampler,
+                          {sampler        ? sampler
+                           : image->sampler() ? image->sampler()
+                                              : _sampler,
                            view ? view : image->view(), sampledLayoutFor(*image)});
     }
     writes.apply();
@@ -624,8 +637,12 @@ VkDescriptorSet VulkanDescriptors::acquireTextureSet(
         // The view is part of the identity, not a detail of the image: two
         // bindings of one cube-array image through different cube views are
         // different descriptors and must not share a cached set.
+        // The sampler override joins the identity for the same reason as the
+        // view: the raw and comparison bindings of one shadow image are
+        // different descriptors.
         key ^= (std::hash<const void *> {}(binding.image) ^
                 std::hash<const void *> {}(reinterpret_cast<const void *>(binding.view)) ^
+                std::hash<const void *> {}(reinterpret_cast<const void *>(binding.sampler)) ^
                 static_cast<size_t>(binding.unit) * 0x9e3779b9u) +
                (key << 6) + (key >> 2);
     }
@@ -689,7 +706,8 @@ DescriptorSet VulkanDescriptors::acquireTextureDescriptorSet(
         nativeBindings.push_back(
             {binding.unit,
              binding.image ? &toVulkanImage(*binding.image) : nullptr,
-             binding.view ? toVulkanImageView(binding.view) : VK_NULL_HANDLE});
+             binding.view ? toVulkanImageView(binding.view) : VK_NULL_HANDLE,
+             binding.sampler ? toVulkanSampler(binding.sampler) : VK_NULL_HANDLE});
     }
     return toDescriptorSet(acquireTextureSet(frame, nativeBindings));
 }
@@ -712,6 +730,7 @@ const VulkanImage *VulkanDescriptors::defaultFor(int unit,
     // SamplerCubeArrayShadow whatever the point budget is. A plain cube view
     // in a cube array's place is a view-type mismatch, not a coercion.
     case TextureUnits::shadowMapCube:
+    case TextureUnits::pointShadowRaw:
         return cubeArray;
     default:
         return twoD;

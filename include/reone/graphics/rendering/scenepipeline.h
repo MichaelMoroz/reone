@@ -269,6 +269,8 @@ private:
     bool _temporalHistoryValid {false};
     std::unique_ptr<IImage> _dirShadows;
     std::unique_ptr<IImage> _pointShadows;
+    /** Plain (non-comparison) sampler for the blocker search; see init(). */
+    Sampler _pointShadowRawSampler;
     std::shared_ptr<Texture> _outputHandle;
     DescriptorSet _retroResolveSet;
     DescriptorSet _pbrResolveSet;

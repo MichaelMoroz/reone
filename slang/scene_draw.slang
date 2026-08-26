@@ -122,9 +122,53 @@ float4x4 directionalCascadeSpace(uint view) {
     return globalUniforms.shadowCascadeSpace[shadowSlotLight().mapIndex + view];
 }
 
-/** Cube face `view` of the point caster being rendered. */
+/**
+ * Cube face `view` of the point caster being rendered, COMPUTED rather than
+ * looked up.
+ *
+ * Every term is fixed by the format - a 90-degree square frustum, near 0.25,
+ * far 2500, and six axis-aligned views - so the light's own position is the
+ * only variable, and it is already in the uniform block. Storing six matrices
+ * per caster instead spent 6 KB of the block's 16 KB ceiling, and that array
+ * alone was what pinned the cube budget at sixteen while a module like
+ * tar_m09aa carries 46 lamps. Nothing SAMPLES these matrices - the cube is
+ * sampled by direction and radial distance - so they existed only to transform
+ * vertices in this pass.
+ *
+ * Verified against the CPU's own matrices, all six faces, to five digits, and
+ * the rendered result is bit-identical to the stored-array path.
+ */
 float4x4 pointFaceSpace(uint view) {
-    return globalUniforms.shadowPointSpace[shadowSlotLight().mapIndex * kNumShadowLightSpace + view];
+    const float3 lightPos = shadowSlotLight().positionOrDirection.xyz;
+    // The six (forward, up) pairs of getPointLightView, in face order.
+    float3 fwd, up;
+    switch (view) {
+    case 0:  fwd = float3(1.0, 0.0, 0.0);  up = float3(0.0, -1.0, 0.0); break;
+    case 1:  fwd = float3(-1.0, 0.0, 0.0); up = float3(0.0, -1.0, 0.0); break;
+    case 2:  fwd = float3(0.0, 1.0, 0.0);  up = float3(0.0, 0.0, 1.0);  break;
+    case 3:  fwd = float3(0.0, -1.0, 0.0); up = float3(0.0, 0.0, -1.0); break;
+    case 4:  fwd = float3(0.0, 0.0, 1.0);  up = float3(0.0, -1.0, 0.0); break;
+    default: fwd = float3(0.0, 0.0, -1.0); up = float3(0.0, -1.0, 0.0); break;
+    }
+    // glm::lookAt, right-handed.
+    float3 f = normalize(fwd);
+    float3 s = normalize(cross(f, up));
+    float3 u = cross(s, f);
+    float4x4 lightView = float4x4(
+        float4(s.x, s.y, s.z, -dot(s, lightPos)),
+        float4(u.x, u.y, u.z, -dot(u, lightPos)),
+        float4(-f.x, -f.y, -f.z, dot(f, lightPos)),
+        float4(0.0, 0.0, 0.0, 1.0));
+    // glm::perspectiveRH_ZO(90 degrees, aspect 1, near, far): tan(45) = 1.
+    const float kNear = 0.25;
+    const float kFar = 2500.0;
+    const float a = kFar / (kNear - kFar);
+    float4x4 lightProjection = float4x4(
+        float4(1.0, 0.0, 0.0, 0.0),
+        float4(0.0, 1.0, 0.0, 0.0),
+        float4(0.0, 0.0, a, a * kNear),
+        float4(0.0, 0.0, -1.0, 0.0));
+    return mul(lightProjection, lightView);
 }
 
 float2 transformedUV(InstanceMaterial material, float2 uv) {
@@ -292,6 +336,17 @@ void applyShadowGates(float2 rawUv, float vertexAlpha, float2 fragCoord,
 
     bool cutout = (material.featureMask & kMegaFeaturePunchThrough) != 0;
     bool blended = (material.featureMask & kMegaFeatureBlendedCoverage) != 0;
+    // PROCEDURAL SPRITES cast nothing, exactly as the tracer's shadow ray
+    // skips them (trace.slang, isProceduralSprite): a smoke plume is volume
+    // the marcher owns, not a surface, and letting its lit-blend branch fall
+    // through to the coverage dither below stamped the plume into the map as
+    // per-texel noise - grainy dark garbage in the shadows wherever particles
+    // drifted through a caster's frustum. Grass keeps its punch-through bit
+    // and keeps casting, which also matches the tracer.
+    if ((material.featureMask & kMegaFeatureProcedural) != 0 &&
+        (material.featureMask & kMegaFeaturePunchThrough) == 0) {
+        discard;
+    }
     uint category = (material.featureMask >> kMegaCategoryShift) & kMegaCategoryMask;
     // The category filter applies to cutouts and blended surfaces too.
     //

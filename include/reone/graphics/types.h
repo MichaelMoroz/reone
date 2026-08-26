@@ -36,7 +36,11 @@ constexpr int kNumShadowLightSpace = 6;
  * costs image memory. These only cost uniform bytes.
  */
 constexpr int kMaxDirectionalShadows = 4;
-constexpr int kMaxPointShadows = 16;
+// 48, up from 16: the ceiling was the six face matrices each caster stored in
+// the uniform block, and those are computed in the render pass now. What
+// remains per caster is one 32-byte record and six cube layers; the runtime
+// budget is still the maxPointShadows option, defaulting well below this.
+constexpr int kMaxPointShadows = 48;
 constexpr int kMaxShadowLights = kMaxDirectionalShadows + kMaxPointShadows;
 /** Cascade matrices the directional half of the table holds. */
 constexpr int kMaxShadowCascadeMatrices = kMaxDirectionalShadows * kNumShadowCascades;
@@ -48,7 +52,6 @@ constexpr int kMaxShadowCascadeMatrices = kMaxDirectionalShadows * kNumShadowCas
  * bounds kMaxPointShadows at 16: at 32 the block would exceed 16 KB, which is
  * all Vulkan guarantees for maxUniformBufferRange.
  */
-constexpr int kMaxShadowPointMatrices = kMaxPointShadows * kNumCubeFaces;
 constexpr int kNumSSAOSamples = 64;
 constexpr int kNumSaberSegments = 20;
 constexpr int kNumSaberSegmentVertices = 4;
@@ -211,6 +214,16 @@ struct TextureUnits {
     static constexpr int gBufMotion = 20;
     static constexpr int gBufTriangleId = 21;
     static constexpr int coverage = 22;
+    /**
+     * The point-shadow cube array AGAIN, under a non-comparison sampler.
+     *
+     * The comparison view at shadowMapCube answers "is the receiver behind",
+     * which is all a plain shadow needs; a penumbra that follows the emitter's
+     * physical size needs the blocker's actual distance, and a comparison
+     * sampler cannot return one - two attempts to estimate it from comparison
+     * taps measured 0.59x and 0.39x against the reference and were reverted.
+     */
+    static constexpr int pointShadowRaw = 23;
 };
 
 // MDL
