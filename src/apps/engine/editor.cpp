@@ -174,6 +174,10 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"texquality", std::to_string(static_cast<int>(options.textureQuality))},
         {"shadowres", std::to_string(std::max(0, static_cast<int>(glm::log2(options.shadowResolution)) - 10))},
         {"anisofilter", std::to_string(options.anisotropicFiltering)},
+        {"pointshadowres", std::to_string(options.pointShadowResolution)},
+        {"fog", std::to_string(options.fog)},
+        {"debugoverlay", std::to_string(options.debugOverlay)},
+        {"paritydirect", std::to_string(options.parityDirect)},
         {"drawdist", formatConfigFloat(options.drawDistance)}};
 
     for (int i = 0; i < 9; ++i) {
@@ -1003,6 +1007,10 @@ void Editor::graphicsQualityTab() {
                 "number the two modes are meant to disagree on.",
                 true);
     ImGui::EndDisabled();
+    ImGui::Checkbox("Fog", &options.fog);
+    settingHint("The area's authored distance fog, in every mode. Per surface beneath this - a "
+                "material without the fog feature is never fogged - and the traced path carries "
+                "its blend to the composite, so the modes turn it off together.");
     ImGui::Checkbox("Grass", &options.grass);
     // Wired straight: density is a GPU gate over budgets baked at the slider
     // maximum (kGrassDensityCap), so dragging costs a push-constant change.
@@ -1536,6 +1544,22 @@ void Editor::graphicsDebugViewSection() {
     // you stop opening. Not a tracer tool either - the channels are G-buffer
     // quantities and every mode draws that G-buffer, so one selection answers
     // in all three.
+    ImGui::SeparatorText("Debug overlay");
+    ImGui::Checkbox("Bounding boxes and names", &options.debugOverlay);
+    settingHint("Draws each object's oriented bounding box and its name over the finished frame, "
+                "in every render mode, coloured by kind - rooms blue, creatures red, placeables "
+                "green, doors magenta, equipment yellow - with a marker box at every light. Lines "
+                "and labels are depth-tested per pixel against the G-buffer: what lies behind "
+                "geometry stays visible but goes translucent, so a hidden box still says where "
+                "its object is. Not drawn over a debug channel view, which replaces the picture "
+                "the boxes would annotate.");
+    ImGui::Checkbox("Direct-light parity", &options.parityDirect);
+    settingHint("Strips both renderers to the same thing: the shared unoccluded direct diffuse "
+                "sum, no shadows, no specular, no bounces, no lightmap, no sky. The two modes "
+                "must then produce the same image, so any difference is in their shared inputs "
+                "rather than in either assembly. The comparison the one-rendering-path work is "
+                "held to.");
+
     // Order must match the kDebug* numbering in slang/debug_view.slang.
     ImGui::SeparatorText("Debug view");
     static constexpr const char *kDebugViewNames[] = {
@@ -1731,6 +1755,16 @@ void Editor::graphicsReapplySection() {
     if (ImGui::Combo("Shadow resolution", &shadowExponent, kShadowResolutions,
                      IM_ARRAYSIZE(kShadowResolutions))) {
         staged.shadowResolution = 1 << (10 + shadowExponent);
+    }
+    // The point cubes are six faces each and there are many more of them, so
+    // they carry their own resolution rather than following the cascades'.
+    int pointExponent = 0;
+    while (pointExponent < 3 && (1 << (10 + pointExponent)) < staged.pointShadowResolution) {
+        ++pointExponent;
+    }
+    if (ImGui::Combo("Point shadow resolution", &pointExponent, kShadowResolutions,
+                     IM_ARRAYSIZE(kShadowResolutions))) {
+        staged.pointShadowResolution = 1 << (10 + pointExponent);
     }
     settingHint("These change what the pipeline allocates, so they are edited here and take effect "
                 "on Apply, not as you drag.");

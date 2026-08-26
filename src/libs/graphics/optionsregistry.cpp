@@ -385,6 +385,9 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(boolOpt("ssr", OptionApply::Live,
                             "screen-space reflections over the PBR resolve",
                             &GraphicsOptions::ssr));
+    descs.push_back(boolOpt("paritydirect", OptionApply::Live,
+                            "both renderers output only shared unoccluded direct diffuse",
+                            &GraphicsOptions::parityDirect));
     descs.push_back(boolOpt("debugoverlay", OptionApply::Live,
                             "bounding boxes and names of objects and lights, over the image",
                             &GraphicsOptions::debugOverlay));
