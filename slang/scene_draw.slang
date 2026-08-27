@@ -24,6 +24,7 @@ import lib.envmap;
 import lib.grasscard;
 import lib.scene_schema;
 import lib.shadow;
+import lib.assemble;
 
 // --- Merged-geometry addressing, shared by both variants ---
 // Shared declarations for raster passes over the canonical merged geometry.
@@ -82,6 +83,8 @@ static const uint kMegaCategoryMask = 0xFu;
 static const uint kMegaCastersAll = 0xFFFFFFFFu;
 /** kResolveFlagDisplayReferred, as the blended pass receives it. */
 static const uint kMegaFlagDisplayReferred = 8u;
+/** kResolveFlagFog: the area authored fog and the player's switch is on. */
+static const uint kMegaFlagFog = 32u;
 static const int kMegaLightDynamicTypeAll = 1;
 
 struct PushConstants {
@@ -109,6 +112,17 @@ struct PushConstants {
      * than multiview allows once point casters are cubes.
      */
     uint shadowSlot;
+    /**
+     * Height fog, for the blended pass alone. A blended surface writes no
+     * depth, so the fog tail pass - which reads the depth buffer - cannot
+     * reach it: fogged there, a near tree took the horizon's fog through the
+     * depth BEHIND it. It fogs itself instead, at its own position, with the
+     * same function. Density at the fog plane, its falloff with height, and
+     * the plane's world Z - the walkmesh.
+     */
+    float fogDensity;
+    float fogFalloff;
+    float fogPlaneZ;
 };
 [[vk::push_constant]] PushConstants pushConstants;
 
@@ -789,6 +803,42 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
     } else {
         output.color = float4(pow(max(color * objectAlpha, 0.0), float3(kGamma)),
                               0.0);
+    }
+
+    // Fog, here rather than in the tail pass, because this surface has no
+    // depth for that pass to read. Applied to the OUTPUT, which is what the
+    // blend state sees: a coverage blend lerps toward the fog colour scaled by
+    // its own coverage, so the covered fraction of the pixel fogs and the rest
+    // is left to what lies behind; an additive surface is light and carries no
+    // coverage, so fog can only attenuate it - lerping it toward the fog colour
+    // would ADD fog-coloured energy at every transparent texel of a saber.
+    //
+    // Retro composes display-referred and preserves the original's model, so
+    // its transparents take the same linear ramp its resolve applies, with the
+    // fog colour as authored; the corrected modes take the height fog in
+    // linear space, matching the tail pass over the opaque image.
+    if ((pushConstants.casterCategories & kMegaFlagFog) != 0) {
+        const float3 cameraPos = globalUniforms.cameraPosition.xyz;
+        const bool displayReferred =
+            (pushConstants.casterCategories & kMegaFlagDisplayReferred) != 0;
+        float fog;
+        float3 fogColor;
+        if (displayReferred) {
+            fog = fogAmount(input.worldPos, cameraPos, globalUniforms.fogNear,
+                            globalUniforms.fogFar);
+            fogColor = globalUniforms.fogColor.rgb;
+        } else {
+            const float h0 = max(0.0, cameraPos.z - pushConstants.fogPlaneZ);
+            const float h1 = max(0.0, input.worldPos.z - pushConstants.fogPlaneZ);
+            fog = heightFogAmount(h0, h1, distance(input.worldPos, cameraPos),
+                                  pushConstants.fogDensity, pushConstants.fogFalloff);
+            fogColor = pow(max(globalUniforms.fogColor.rgb, 0.0), float3(kGamma));
+        }
+        if (blended) {
+            output.color.rgb = lerp(output.color.rgb, fogColor * objectAlpha, fog);
+        } else {
+            output.color.rgb *= 1.0 - fog;
+        }
     }
 
     // The motion target uses the same premultiplied blend as colour. A

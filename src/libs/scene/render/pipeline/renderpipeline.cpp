@@ -319,12 +319,16 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         // side's parity image contains by definition. Leaving it in put
         // additive sprites over one renderer's parity image wherever the two
         // passes' inputs differed, which read as parity error on geometry.
+        // Fog BEFORE transparency. The tail pass fogs what the depth buffer
+        // describes - the opaque image and the sky - and a blended surface,
+        // which writes no depth, fogs itself in its own shader at its own
+        // position. Fogging after transparency gave a near tree the horizon's
+        // fog through the depth behind it. Retro's resolve fogs its own
+        // opaque image on the original's model, so it takes no tail pass.
+        if (!diagnosticImage && _options.mode != graphics::RenderMode::Retro)
+            plan.steps.push_back(graphics::SceneStep::Fog);
         if (!_options.parityDirect)
             plan.steps.push_back(graphics::SceneStep::Blended);
-    }
-    // After transparency, so a blended surface is fogged with everything else.
-    if (!diagnosticImage) {
-        plan.steps.push_back(graphics::SceneStep::Fog);
     }
     if (temporalResolve)
         plan.steps.push_back(graphics::SceneStep::AntiAliasing);

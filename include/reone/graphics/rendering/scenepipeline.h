@@ -472,8 +472,10 @@ private:
     /** The one place a mode's colour becomes display-referred. */
     void postProcessPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     void debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset);
-    /** Height fog over the finished scene; see SceneStep::Fog. */
+    /** Height fog over the opaque image; see SceneStep::Fog. */
     void fogPass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    /** The frame's fog density, falloff and plane, for both passes that fog. */
+    struct FogPushConstants fogParameters() const;
     /** Wireframe boxes over the finished image; see SceneStep::DebugOverlay. */
     void debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     void sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset);

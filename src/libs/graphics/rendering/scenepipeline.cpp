@@ -55,6 +55,13 @@ struct BlendedPushConstants {
     uint32_t triangleBase;
     uint32_t materialGated;
     uint32_t flags;
+    /** The shadow pass's word, unread here; keeps the fog fields at the offsets
+        the shared PushConstants block in scene_draw.slang declares them. */
+    uint32_t shadowSlot;
+    /** Mirrors FogPushConstants: the blended pass fogs its own surfaces. */
+    float fogDensity;
+    float fogFalloff;
+    float fogPlaneZ;
 };
 
 /** The shadow pass's third word: which categories may write the map. */
@@ -239,6 +246,9 @@ static constexpr uint32_t kResolveFlagTransparentOutput = 4u;
 static constexpr uint32_t kResolveFlagDisplayReferred = 8u;
 /** Mirrors kResolveFlagParityDirect in pbr_channels.slang. */
 static constexpr uint32_t kResolveFlagParityDirect = 16u;
+/** The area authored fog and the player's switch is on; the blended pass fogs
+    its own surfaces on it. Mirrors kMegaFlagFog in scene_draw.slang. */
+static constexpr uint32_t kResolveFlagFog = 32u;
 /** Replace GUI-model shading with coverage, cutout threshold, and class in RGB. */
 
 /** Both resolve dispatches, and their shader, agree on this tile. */
@@ -944,7 +954,9 @@ void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                                   shadowSet, nullptr, 0);
             cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
             // Submission order, deliberately. See scene_draw.slang.
-            const BlendedPushConstants push {scene.opaqueTriangleCount, 2, resolveFlags()};
+            const FogPushConstants fog = fogParameters();
+            const BlendedPushConstants push {scene.opaqueTriangleCount, 2, resolveFlags(), 0,
+                                             fog.density, fog.falloff, fog.planeZ};
             cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
             cmd.drawIndexed(depthTestedTriangles * 3,
                             scene.opaqueTriangleCount * 3);
@@ -971,7 +983,9 @@ void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                                   _resolveMaterialSet, nullptr, 0);
             const uint32_t triangleBase =
                 scene.triangleCount - scene.depthIndependentTriangleCount;
-            const BlendedPushConstants push {triangleBase, 2, resolveFlags()};
+            const FogPushConstants fog = fogParameters();
+            const BlendedPushConstants push {triangleBase, 2, resolveFlags(), 0,
+                                             fog.density, fog.falloff, fog.planeZ};
             cmd.pushGraphicsConstants(depthIndependentPipeline.layout, &push,
                                       sizeof(push));
             cmd.drawIndexed(scene.depthIndependentTriangleCount * 3,
@@ -1001,7 +1015,23 @@ uint32_t ScenePipeline::resolveFlags() const {
     if (_options.mode == RenderMode::Retro) {
         flags |= kResolveFlagDisplayReferred;
     }
+    if (_options.fog && _fogEnabled) {
+        flags |= kResolveFlagFog;
+    }
     return flags;
+}
+
+FogPushConstants ScenePipeline::fogParameters() const {
+    // Density from the area's authored far distance - a ground-level ray
+    // reaches ~99% fog at that range, so a module keeps the reach it was
+    // authored for - and falloff from the gradient height, the altitude at
+    // which density has dropped to a hundredth. The plane is the walkmesh;
+    // with no walkmesh the camera sits in it. One function, because the tail
+    // pass and the blended pass must integrate the same fog.
+    const auto &globals = _uniforms.globals();
+    return {kFogOpticalDepthAtFar / std::max(1.0f, globals.fogFar),
+            kFogOpticalDepthAtFar / std::max(0.05f, _options.fogHeight),
+            _groundHeight.value_or(globals.cameraPosition.z)};
 }
 
 namespace {
@@ -1875,16 +1905,10 @@ void ScenePipeline::fogPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     if (!_options.fog || !_fogEnabled) {
         return;
     }
-    const auto &globals = _uniforms.globals();
-    // Density from the area's authored far distance - a ground-level ray
-    // reaches ~99% fog at that range, so a module keeps the reach it was
-    // authored for - and falloff from the gradient height, the altitude at
-    // which density has dropped to a hundredth. The plane is the walkmesh;
-    // with no walkmesh the camera sits in it.
-    const FogPushConstants push {
-        kFogOpticalDepthAtFar / std::max(1.0f, globals.fogFar),
-        kFogOpticalDepthAtFar / std::max(0.05f, _options.fogHeight),
-        _groundHeight.value_or(globals.cameraPosition.z)};
+    // Over the opaque image only, BEFORE transparency: this pass reads the
+    // depth buffer, and a blended surface writes none, so it fogs itself in
+    // its own shader at its own position instead - see sceneDrawBlendedFragment.
+    const FogPushConstants push = fogParameters();
     tailPass(cmd, "fogFragment", globalsOffset, 0, &push, sizeof(push), true);
 }
 
