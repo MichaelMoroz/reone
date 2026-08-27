@@ -80,6 +80,11 @@ enum class SceneStep {
      */
     Bloom,
     Blended,
+    /**
+     * Height fog over the finished scene, after transparency so that every
+     * surface in the frame takes the same rule. See fogFragment.
+     */
+    Fog,
     /** The common tail, in this order and in every mode: transparency is
         composited with coverage-weighted motion, the anti-aliasing slot
         resolves the result, then the display transform closes it. Both passes
@@ -467,6 +472,8 @@ private:
     /** The one place a mode's colour becomes display-referred. */
     void postProcessPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     void debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    /** Height fog over the finished scene; see SceneStep::Fog. */
+    void fogPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** Wireframe boxes over the finished image; see SceneStep::DebugOverlay. */
     void debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     void sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset);
@@ -475,7 +482,8 @@ private:
         the swap that makes the result the output. */
     void tailPass(ICommandBuffer &cmd, const char *fragmentEntry,
                   uint32_t globalsOffset, uint32_t screenEffectOffset,
-                  const void *pushConstants, uint32_t pushConstantSize);
+                  const void *pushConstants, uint32_t pushConstantSize,
+                  bool bindDepth = false);
     std::vector<Target> targetEntries(const ISceneCallbacks &callbacks) const;
 };
 

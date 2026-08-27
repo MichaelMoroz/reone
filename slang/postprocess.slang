@@ -44,7 +44,10 @@ import tracing.brdf;
 // have no mip chain, so level zero is what OpenGL's texture() resolves to
 // anyway - and Slang's implicit-LOD Sample() emits the MinLod capability,
 // which needs a device feature that nothing else here wants.
+import lib.assemble;
+
 [[vk::binding(0, 1)]] Sampler2D sMainTex;
+[[vk::binding(5, 1)]] Sampler2D sGBufDepth;
 
 struct Varyings {
     float4 position : SV_Position;
@@ -487,4 +490,53 @@ float4 bloomCompositeFragment(Varyings input) : SV_Target {
     // there. Alpha is carried through untouched, because a GUI-embedded scene
     // composites on it and a glow must not make a transparent pixel opaque.
     return float4(scene.rgb + bloom * bloomPushConstants.intensity, scene.a);
+}
+
+
+/** Mirrors FogPushConstants in scenepipeline.cpp. */
+struct FogPushConstants {
+    /** Density at the fog plane, per world unit. */
+    float density;
+    /** Density falls off as exp(-falloff * height) above the plane. */
+    float falloff;
+    /** World Z of the fog plane - the area's walkmesh level. */
+    float planeZ;
+};
+[[vk::push_constant]] FogPushConstants fogPushConstants;
+
+/**
+ * Height fog over the finished scene, in every mode.
+ *
+ * A tail pass rather than part of either resolve, and placed AFTER
+ * transparency, because fog has to be the same rule for everything in the
+ * frame: shading it per surface made whether a pixel fogged depend on what
+ * KIND of object it was, and applying it in the composite left every blended
+ * surface - sabers, glow planes, particles - drawn afterwards and unfogged.
+ *
+ * The depth buffer is what makes this work. Sky is at the far plane here, a
+ * FINITE distance, so a ray toward the horizon accumulates the long low path
+ * through the dense layer and fogs out while one toward the zenith leaves the
+ * layer and stays clear. Integrating to the tracer's infinity sentinel instead
+ * made the sky's fog depend on angle alone and come out LESS fogged than the
+ * nearer ground in front of it.
+ *
+ * A blended surface writes no depth, so it is fogged by the depth behind it -
+ * approximate, and much closer than leaving it clear.
+ */
+[shader("fragment")]
+float4 fogFragment(Varyings input) : SV_Target {
+    float4 texel = sMainTex.SampleLevel(input.uv, 0.0);
+    const float depth = sGBufDepth.SampleLevel(input.uv, 0.0).r;
+    const float3 ndc = float3(2.0 * input.uv.x - 1.0, 1.0 - 2.0 * input.uv.y, depth);
+    float4 eye = mul(globalUniforms.projectionInv, float4(ndc, 1.0));
+    const float3 eyePos = eye.xyz / eye.w;
+    const float3 worldPos = mul(globalUniforms.viewInv, float4(eyePos, 1.0)).xyz;
+    const float3 cameraPos = globalUniforms.cameraPosition.xyz;
+
+    const float h0 = max(0.0, cameraPos.z - fogPushConstants.planeZ);
+    const float h1 = max(0.0, worldPos.z - fogPushConstants.planeZ);
+    const float fog = heightFogAmount(h0, h1, distance(worldPos, cameraPos),
+                                      fogPushConstants.density, fogPushConstants.falloff);
+    const float3 fogColor = pow(max(globalUniforms.fogColor.rgb, 0.0), float3(2.2));
+    return float4(applyFog(texel.rgb, fogColor, fog), texel.a);
 }

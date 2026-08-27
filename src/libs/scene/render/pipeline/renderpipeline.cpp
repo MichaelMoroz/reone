@@ -322,6 +322,10 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         if (!_options.parityDirect)
             plan.steps.push_back(graphics::SceneStep::Blended);
     }
+    // After transparency, so a blended surface is fogged with everything else.
+    if (!diagnosticImage) {
+        plan.steps.push_back(graphics::SceneStep::Fog);
+    }
     if (temporalResolve)
         plan.steps.push_back(graphics::SceneStep::AntiAliasing);
     // Unconditional. This pass is the encode, not an effect: without it a

@@ -269,12 +269,10 @@ TEST(SlangShaderCompiler, reflects_push_constants_used_by_selected_entry_points)
     EXPECT_EQ(reflectFragment("postProcessFragment").pushConstantSize, 16u);
     EXPECT_EQ(reflectFragment("primaryCoverageFragment").pushConstantSize, 4u);
     EXPECT_EQ(reflectFragment("bloomCompositeFragment").pushConstantSize, 16u);
-    // The composite's push block carries the height-fog parameters beside the
-    // denoiser values. Every member is scalar or float2, so it packs to 68
-    // bytes with no padding - a float3 or float4 anywhere in it would align the
-    // block to sixteen and the C++ mirror would no longer match its size.
+    // The composite's push block is the denoiser values alone: two scalars for
+    // the jitter and two uints. Fog left it when it became a tail pass.
     EXPECT_EQ(compiler.reflection("composite", {{"main", ShaderStage::Compute}}).pushConstantSize,
-              68u);
+              16u);
     compiler.deinit();
 }
 

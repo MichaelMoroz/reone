@@ -286,11 +286,22 @@ struct GraphicsOptions {
      * be applied to every pixel without swallowing the sky - the sky is at the
      * far plane, and a ramp calls the far plane fully fogged - and excluding
      * the sky from it leaves a fogged landscape against a clear backdrop with a
-     * seam between them. With a height gradient a ray toward the horizon fogs
-     * out while one toward the zenith leaves the layer and keeps the sky, and
-     * the density is clamped below the plane rather than growing without bound.
+     * seam between them. With a height gradient a ray toward the zenith leaves
+     * the layer and keeps the sky, and density is clamped below the plane
+     * rather than growing without bound.
+     *
+     * 64 rather than the 8 this started at, and the reason is a property of the
+     * model rather than a preference. A gradient shallow against the view
+     * distance INVERTS the haze: a ray to the horizon climbs out of the layer
+     * within a few dozen units while a ray to the ground stays inside it the
+     * whole way, so distant land ends up hazier than the sky behind it and the
+     * horizon reads as a hard line. Measured on danm14ab, sky against land at
+     * the skyline: 0.31/0.58 at 8, 0.59/0.68 at 24 - both inverted - crossing
+     * over at 64 (0.87/0.73) and holding at 200 (0.96/0.67). Below ~64 the fog
+     * is a ground mist seen from above, which is a real look but not distance
+     * haze.
      */
-    float fogHeight {8.0f};
+    float fogHeight {64.0f};
     /** Admit emitter particles, or leave them out of the frame entirely. */
     bool particles {true};
     /**

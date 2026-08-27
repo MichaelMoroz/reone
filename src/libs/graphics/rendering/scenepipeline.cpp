@@ -118,6 +118,14 @@ struct DebugViewPushConstants {
     uint32_t tonemap;
 };
 
+/** Mirrors FogPushConstants in postprocess.slang. */
+struct FogPushConstants {
+    float density;
+    float falloff;
+    float planeZ;
+};
+static_assert(sizeof(FogPushConstants) <= kCachedPipelinePushConstantSize);
+
 /** Mirrors DebugOverlayPushConstants in debug_overlay.slang. */
 struct DebugOverlayPushConstants {
     glm::vec4 color;
@@ -1222,50 +1230,18 @@ void ScenePipeline::compositePass(ICommandBuffer &cmd) {
         {_compositeBindings[8], channels[ChannelSlot::Specular]->sampleView()},
         {_compositeBindings[9], _tracingOutput.directDiffuse},
     }};
-    // Mirrors CompositePushConstants in slang/composite.slang. The trace pass
-    // computed the denoiser values; the fog colour, range and master switch are
-    // the frame's, taken here where the uniforms and the option are in reach.
-    // The per-pixel amount is the composite's own, from the depth channel.
-    const auto &globals = _uniforms.globals();
-    const glm::vec3 fogColorLinear = glm::pow(
-        glm::max(glm::vec3(globals.fogColor), glm::vec3(0.0f)), glm::vec3(2.2f));
-    // Height fog, resolved here because this is where the depth is. Density is
-    // set from the area's authored far distance - a ground-level ray reaches
-    // ~99% fog at that range, so a module keeps the reach it was authored for -
-    // and the falloff from the gradient height, the altitude at which density
-    // has dropped to a hundredth. The plane is the walkmesh; with no walkmesh
-    // the camera sits in it.
-    const float fogFar = std::max(1.0f, globals.fogFar);
-    const float fogHeight = std::max(0.05f, _options.fogHeight);
-    const float cameraZ = globals.cameraPosition.z;
-    const auto &viewInv = globals.viewInv;
+    // Mirrors CompositePushConstants in slang/composite.slang: the denoiser
+    // values the trace pass computed, and nothing else. Fog left this block
+    // when it became a tail pass.
     struct CompositePushConstants {
         float denoisedJitter[2];
         uint32_t debugView;
         uint32_t directDenoised;
-        float fogColor[3];
-        float fogEnabled;
-        float fogDensity;
-        float fogFalloff;
-        float fogPlaneZ;
-        float fogCameraZ;
-        float fogTanX;
-        float fogTanY;
-        float fogInvViewZ[3];
     } resolveConstants {
         {_tracingOutput.denoisedJitter[0], _tracingOutput.denoisedJitter[1]},
         _tracingOutput.debugView,
-        _tracingOutput.directDenoised,
-        {fogColorLinear.x, fogColorLinear.y, fogColorLinear.z},
-        (_options.fog && _fogEnabled) ? 1.0f : 0.0f,
-        kFogOpticalDepthAtFar / fogFar,
-        kFogOpticalDepthAtFar / fogHeight,
-        _groundHeight.value_or(cameraZ),
-        cameraZ,
-        1.0f / std::max(1e-4f, globals.projection[0][0]),
-        1.0f / std::max(1e-4f, globals.projection[1][1]),
-        {viewInv[0][2], viewInv[1][2], viewInv[2][2]}};
-    static_assert(sizeof(CompositePushConstants) == 68,
+        _tracingOutput.directDenoised};
+    static_assert(sizeof(CompositePushConstants) == 16,
                   "push constant block must stay free of padding");
     cmd.dispatch(*_compositePipeline,
                  {(_renderSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
@@ -1497,8 +1473,12 @@ void ScenePipeline::bloomPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
 
 void ScenePipeline::tailPass(ICommandBuffer &cmd, const char *fragmentEntry,
                              uint32_t globalsOffset, uint32_t screenEffectOffset,
-                             const void *pushConstants, uint32_t pushConstantSize) {
+                             const void *pushConstants, uint32_t pushConstantSize,
+                             bool bindDepth) {
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+    if (bindDepth) {
+        cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
+    }
     cmd.transitionImage(*_tailColor, ImageLayout::ColorAttachment);
 
     PipelineKey key;
@@ -1511,8 +1491,13 @@ void ScenePipeline::tailPass(ICommandBuffer &cmd, const char *fragmentEntry,
     std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
     offsets[UniformBlockBindingPoints::screenEffect] = screenEffectOffset;
-    auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
-        _renderer.uniformRing().frame(), _output.get());
+    auto sourceSet =
+        bindDepth ? _renderer.descriptors().acquireTextureDescriptorSet(
+                        _renderer.uniformRing().frame(),
+                        {{TextureUnits::mainTex, _output.get()},
+                         {TextureUnits::gBufDepth, &_gbuffer->depth()}})
+                  : _renderer.descriptors().acquireTextureDescriptorSet(
+                        _renderer.uniformRing().frame(), _output.get());
 
     {
         // Every pixel is written, so the previous contents of the target are
@@ -1882,6 +1867,27 @@ void ScenePipeline::debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
 
+void ScenePipeline::fogPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("ScenePipeline::fogPass record");
+    // Both switches: the player's, and whether the AREA authored any fog. With
+    // the latter off the fog uniforms are untouched zeros, and reading a
+    // density out of them would fog a module that has none.
+    if (!_options.fog || !_fogEnabled) {
+        return;
+    }
+    const auto &globals = _uniforms.globals();
+    // Density from the area's authored far distance - a ground-level ray
+    // reaches ~99% fog at that range, so a module keeps the reach it was
+    // authored for - and falloff from the gradient height, the altitude at
+    // which density has dropped to a hundredth. The plane is the walkmesh;
+    // with no walkmesh the camera sits in it.
+    const FogPushConstants push {
+        kFogOpticalDepthAtFar / std::max(1.0f, globals.fogFar),
+        kFogOpticalDepthAtFar / std::max(0.05f, _options.fogHeight),
+        _groundHeight.value_or(globals.cameraPosition.z)};
+    tailPass(cmd, "fogFragment", globalsOffset, 0, &push, sizeof(push), true);
+}
+
 void ScenePipeline::sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::sharpenPass record");
     // Last, after the display transform, because an unsharp mask is a
@@ -1984,6 +1990,8 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
                 postProcessPass(cmd, globalsOffset);
             } else if (step == SceneStep::DebugView) {
                 debugViewPass(cmd, globalsOffset);
+            } else if (step == SceneStep::Fog) {
+                fogPass(cmd, globalsOffset);
             } else if (step == SceneStep::DebugOverlay) {
                 debugOverlayPass(cmd, globalsOffset);
             }
@@ -2059,6 +2067,9 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
             break;
         case SceneStep::DebugView:
             debugViewPass(cmd, globalsOffset);
+            break;
+        case SceneStep::Fog:
+            fogPass(cmd, globalsOffset);
             break;
         case SceneStep::DebugOverlay:
             debugOverlayPass(cmd, globalsOffset);

@@ -1029,10 +1029,14 @@ void Editor::graphicsQualityTab() {
                 "Exponential in height above the walkmesh rather than a flat ramp in distance, "
                 "so the horizon fogs out while the sky survives.");
     ImGui::BeginDisabled(!options.fog);
-    ImGui::SliderFloat("Fog gradient", &options.fogHeight, 0.5f, 64.0f, "%.1f m");
+    ImGui::SliderFloat("Fog gradient", &options.fogHeight, 0.5f, 512.0f, "%.0f m",
+                       ImGuiSliderFlags_Logarithmic);
     settingHint("Altitude above the walkmesh at which the fog has thinned to a hundredth of its "
-                "ground density. Lower keeps it as a shallow layer on the floor; higher fills the "
-                "volume. Density itself follows the area's authored far distance.",
+                "ground density. Below about 64 the layer is shallow against the view distance and "
+                "the haze INVERTS - a ray to the horizon climbs out of it while a ray to the ground "
+                "stays inside, so distant land comes out hazier than the sky behind it. Lower is a "
+                "ground mist seen from above; higher is distance haze. Density itself follows the "
+                "area's authored far distance.",
                 true);
     ImGui::EndDisabled();
     ImGui::Checkbox("Grass", &options.grass);
