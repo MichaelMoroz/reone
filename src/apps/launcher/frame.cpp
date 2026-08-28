@@ -107,10 +107,15 @@ LauncherFrame::LauncherFrame() :
     winScales.Add("150%");
     winScales.Add("175%");
     winScales.Add("200%");
-    int winScaleSel = winScales.Index(str(boost::format("%d%%") % _config.winscale));
-    if (winScaleSel == wxNOT_FOUND) {
-        winScaleSel = 0;
+    // The engine takes any percent from 1 to 400, so one set outside this
+    // ladder is legal; offering it keeps this from silently snapping back to
+    // 100% and writing that over the user's choice, the way the resolution list
+    // below already avoids.
+    auto winScaleText = str(boost::format("%d%%") % _config.winscale);
+    if (winScales.Index(winScaleText) == wxNOT_FOUND) {
+        winScales.Add(winScaleText);
     }
+    const int winScaleSel = winScales.Index(winScaleText);
     _choiceWinScale = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, winScales);
     _choiceWinScale->SetSelection(winScaleSel);
 
@@ -159,11 +164,16 @@ LauncherFrame::LauncherFrame() :
         pathTracingSampleChoices.Add(count);
     }
 
+    // The engine takes any count from 1 to 64, so one set in game need not be a
+    // power of two. Offering it alongside the ladder keeps this from snapping to
+    // 8 and writing that back over the user's choice.
+    if (pathTracingSampleChoices.Index(std::to_string(_config.ptspp)) == wxNOT_FOUND) {
+        pathTracingSampleChoices.Add(std::to_string(_config.ptspp));
+    }
+
     _choicePathTracingSamples =
         new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, pathTracingSampleChoices);
-    if (!_choicePathTracingSamples->SetStringSelection(std::to_string(_config.ptspp))) {
-        _choicePathTracingSamples->SetStringSelection("8");
-    }
+    _choicePathTracingSamples->SetStringSelection(std::to_string(_config.ptspp));
 
     auto pathTracingSizer = new wxBoxSizer(wxVERTICAL);
     pathTracingSizer->Add(labelPathTracingSamples, wxSizerFlags(0).Expand());
@@ -191,15 +201,21 @@ LauncherFrame::LauncherFrame() :
 
     // Shadow Map Resolution
 
+    // One entry per step the engine accepts - it reads this as an exponent and
+    // clamps to 0..3. A config at 3 used to select nothing in a three-item
+    // list, and wxChoice's "nothing" is -1, which went back out as
+    // shadowres=-1 and came back as 1024.
     wxArrayString shadowResChoices;
     shadowResChoices.Add("1024");
     shadowResChoices.Add("2048");
     shadowResChoices.Add("4096");
+    shadowResChoices.Add("8192");
 
     auto labelShadowResolution = new wxStaticText(this, wxID_ANY, "Shadow Map Resolution", wxDefaultPosition, wxDefaultSize);
 
     _choiceShadowResolution = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, shadowResChoices);
-    _choiceShadowResolution->SetSelection(_config.shadowres);
+    _choiceShadowResolution->SetSelection(
+        std::clamp(_config.shadowres, 0, static_cast<int>(shadowResChoices.GetCount()) - 1));
 
     auto shadowResSizer = new wxBoxSizer(wxVERTICAL);
     shadowResSizer->Add(labelShadowResolution, wxSizerFlags(0).Expand());
@@ -219,7 +235,8 @@ LauncherFrame::LauncherFrame() :
     auto labelAnisoFilter = new wxStaticText(this, wxID_ANY, "Anisotropic Filtering", wxDefaultPosition, wxDefaultSize);
 
     _choiceAnisoFilter = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, anisoFilterChoices);
-    _choiceAnisoFilter->SetSelection(_config.anisofilter);
+    _choiceAnisoFilter->SetSelection(
+        std::clamp(_config.anisofilter, 0, static_cast<int>(anisoFilterChoices.GetCount()) - 1));
 
     auto anisoFilterSizer = new wxBoxSizer(wxVERTICAL);
     anisoFilterSizer->Add(labelAnisoFilter, wxSizerFlags(0).Expand());
@@ -285,6 +302,37 @@ LauncherFrame::LauncherFrame() :
 
     // END Anti-aliasing
 
+    // DLSS quality mode
+
+    auto labelDlssMode = new wxStaticText(this, wxID_ANY, "DLSS Quality Mode",
+                                          wxDefaultPosition, wxDefaultSize);
+
+    // Named modes rather than a scale slider, because that is the only way DLSS
+    // expresses a render resolution: the engine turns the mode into a ratio
+    // (DLAA 1.00, Quality 0.67, Balanced 0.58, Performance 0.50, Ultra
+    // Performance 0.33) and does not read renderScale at all while DLSS holds
+    // the slot.
+    wxArrayString dlssModeChoices;
+    dlssModeChoices.Add("DLAA (native)");
+    dlssModeChoices.Add("Quality");
+    dlssModeChoices.Add("Balanced");
+    dlssModeChoices.Add("Performance");
+    dlssModeChoices.Add("Ultra Performance");
+
+    _choiceDlssMode = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                   dlssModeChoices);
+    _choiceDlssMode->SetSelection(_config.dlssMode == "ultraperformance" ? 4
+                                  : _config.dlssMode == "performance"   ? 3
+                                  : _config.dlssMode == "balanced"      ? 2
+                                  : _config.dlssMode == "quality"       ? 1
+                                                                        : 0);
+
+    auto dlssModeSizer = new wxBoxSizer(wxVERTICAL);
+    dlssModeSizer->Add(labelDlssMode, wxSizerFlags(0).Expand());
+    dlssModeSizer->Add(_choiceDlssMode, wxSizerFlags(0).Expand());
+
+    // END DLSS quality mode
+
     // FSR render scale
 
     auto labelRenderScale = new wxStaticText(this, wxID_ANY, "FSR Render Scale",
@@ -322,6 +370,7 @@ LauncherFrame::LauncherFrame() :
     graphicsSizer->Add(_checkBoxSSAO, wxSizerFlags(0).Expand());
     graphicsSizer->Add(_checkBoxSSR, wxSizerFlags(0).Expand());
     graphicsSizer->Add(antiAliasingSizer, wxSizerFlags(0).Expand());
+    graphicsSizer->Add(dlssModeSizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(renderScaleSizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(new wxStaticText(this, wxID_ANY, "Sharpness"), wxSizerFlags(0).Expand());
     graphicsSizer->Add(_sliderSharpness, wxSizerFlags(0).Expand());
@@ -438,11 +487,14 @@ void LauncherFrame::UpdateRendererDependentControls() {
     // the sample count means nothing to the two raster renderers.
     _choicePathTracingSamples->Enable(pathTracing);
     // Rendering below display resolution is meaningful only when an upscaler
-    // owns the anti-aliasing slot. Keep the value visible and persistent when
-    // inactive. Under DLSS the engine takes its ratio from dlssmode instead,
-    // which this launcher does not own and therefore leaves alone.
+    // owns the anti-aliasing slot, and each upscaler has its own dial for it:
+    // FSR reads renderScale, DLSS reads dlssmode and ignores renderScale
+    // entirely. So exactly one of the two is live, never both - the slider was
+    // enabled under DLSS, where moving it did nothing. Greyed rather than
+    // hidden, so the inactive one still shows what it will do if selected.
     const int aaSel = _choiceAntiAliasing->GetSelection();
-    _sliderRenderScale->Enable(aaSel == 2 || aaSel == 3);
+    _sliderRenderScale->Enable(aaSel == 2);
+    _choiceDlssMode->Enable(aaSel == 3);
 }
 
 void LauncherFrame::LoadConfiguration() {
@@ -461,12 +513,13 @@ void LauncherFrame::LoadConfiguration() {
         ("ssao", value<bool>()->default_value(_config.ssao))              //
         ("ssr", value<bool>()->default_value(_config.ssr))                //
         ("antialiasing", value<std::string>()->default_value(_config.antialiasing)) //
+        ("dlssmode", value<std::string>()->default_value(_config.dlssMode))  //
         ("renderscale", value<float>()->default_value(_config.renderScale)) //
         ("sharpness", value<float>()->default_value(_config.sharpness))   //
         ("texquality", value<int>()->default_value(_config.texQuality))   //
         ("anisofilter", value<int>()->default_value(_config.anisofilter)) //
         ("shadowres", value<int>()->default_value(_config.shadowres))     //
-        ("drawdist", value<int>()->default_value(_config.drawdist))       //
+        ("drawdist", value<float>()->default_value(_config.drawdist))     //
         ("musicvol", value<int>()->default_value(_config.musicvol))       //
         ("voicevol", value<int>()->default_value(_config.voicevol))       //
         ("soundvol", value<int>()->default_value(_config.soundvol))       //
@@ -495,12 +548,16 @@ void LauncherFrame::LoadConfiguration() {
     _config.ssao = vars["ssao"].as<bool>();
     _config.ssr = vars["ssr"].as<bool>();
     _config.antialiasing = vars["antialiasing"].as<std::string>();
+    _config.dlssMode = vars["dlssmode"].as<std::string>();
     _config.renderScale = std::clamp(vars["renderscale"].as<float>(), 0.25f, 1.0f);
     _config.sharpness = vars["sharpness"].as<float>();
     _config.texQuality = vars["texquality"].as<int>();
     _config.shadowres = vars["shadowres"].as<int>();
     _config.anisofilter = vars["anisofilter"].as<int>();
-    _config.drawdist = vars["drawdist"].as<int>();
+    // Float on the engine's side. The slider is whole numbers, so a fractional
+    // value set from the console rounds here rather than refusing to parse -
+    // which is what value<int>() did, throwing before the window ever opened.
+    _config.drawdist = static_cast<int>(std::lround(vars["drawdist"].as<float>()));
     _config.musicvol = vars["musicvol"].as<int>();
     _config.voicevol = vars["voicevol"].as<int>();
     _config.soundvol = vars["soundvol"].as<int>();
@@ -537,6 +594,7 @@ void LauncherFrame::SaveConfiguration() {
         "ssao=",
         "ssr=",
         "antialiasing=",
+        "dlssmode=",
         "renderscale=",
         "sharpness=",
         "texquality=",
@@ -614,6 +672,13 @@ void LauncherFrame::SaveConfiguration() {
     case 1: _config.antialiasing = "fxaa"; break;
     default: _config.antialiasing = "off"; break;
     }
+    switch (_choiceDlssMode->GetSelection()) {
+    case 4: _config.dlssMode = "ultraperformance"; break;
+    case 3: _config.dlssMode = "performance"; break;
+    case 2: _config.dlssMode = "balanced"; break;
+    case 1: _config.dlssMode = "quality"; break;
+    default: _config.dlssMode = "dlaa"; break;
+    }
     _config.renderScale = _sliderRenderScale->GetValue() / 100.0f;
     _config.sharpness = _sliderSharpness->GetValue() / 100.0f;
     _config.texQuality = _choiceTextureQuality->GetSelection();
@@ -657,6 +722,7 @@ void LauncherFrame::SaveConfiguration() {
     config << "ssao=" << (_config.ssao ? 1 : 0) << std::endl;
     config << "ssr=" << (_config.ssr ? 1 : 0) << std::endl;
     config << "antialiasing=" << _config.antialiasing << std::endl;
+    config << "dlssmode=" << _config.dlssMode << std::endl;
     config << "renderscale=" << _config.renderScale << std::endl;
     config << "sharpness=" << _config.sharpness << std::endl;
     config << "texquality=" << _config.texQuality << std::endl;

@@ -56,8 +56,17 @@ private:
         int ptspp {8};
         bool ssao {true};
         bool ssr {true};
-        /** "off", "fxaa" or "fsr", matching the engine's --antialiasing. */
+        /** "off", "fxaa", "fsr" or "dlssrr", matching the engine's --antialiasing. */
         std::string antialiasing {"fxaa"};
+        /**
+         * "dlaa", "quality", "balanced", "performance" or "ultraperformance".
+         *
+         * Under DLSS this is what sets the render resolution - the engine reads
+         * a ratio out of it and ignores renderScale entirely - so a launcher
+         * that offered only the FSR slider left DLSS users with no way to
+         * render below native and a dial that did nothing.
+         */
+        std::string dlssMode {"dlaa"};
         /** Raster and trace resolution as a fraction of display when FSR runs. */
         float renderScale {1.0f};
         float sharpness {0.0f};
@@ -90,6 +99,7 @@ private:
     wxCheckBox *_checkBoxSSAO;
     wxCheckBox *_checkBoxSSR;
     wxChoice *_choiceAntiAliasing;
+    wxChoice *_choiceDlssMode;
     wxSlider *_sliderSharpness;
     wxSlider *_sliderVolumeMusic;
     wxSlider *_sliderVolumeVoice;
