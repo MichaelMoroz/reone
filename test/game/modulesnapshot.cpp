@@ -765,7 +765,7 @@ struct CameraIdFixture : TestWithParam<GameID> {
 
     /** A camera whose runtime object ID is exactly `runtimeId`. */
     std::shared_ptr<StaticCamera> cameraWithRuntimeId(uint32_t runtimeId, int cameraId) {
-        auto camera = game.newStaticCamera();
+        auto camera = game.newStaticCamera(4.0f / 3.0f);
         TestGameModule::setSnapshotObjectId(*camera, runtimeId);
         TestGameModule::configureSnapshotCamera(
             *camera, cameraId, {1.0f, 2.0f, 3.0f},

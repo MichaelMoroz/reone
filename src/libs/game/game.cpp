@@ -28,6 +28,8 @@
 #include "reone/audio/context.h"
 #include "reone/audio/di/services.h"
 #include "reone/audio/mixer.h"
+#include "reone/game/debug.h"
+
 #include "reone/game/action/castspellatobject.h"
 #include "reone/game/action/cutsceneattack.h"
 #include "reone/game/action/startconversation.h"

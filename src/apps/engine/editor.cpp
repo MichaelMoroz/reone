@@ -2346,7 +2346,17 @@ void Editor::applyPendingTransition() {
         auto target = std::move(_pendingLoadGame);
         _pendingLoadGame.clear();
         if (_engine._game) {
-            _engine._game->loadGame(target);
+            // A slot is identified by a descriptor now, not a directory name -
+            // see 8a27b7608's neighbour bb3b3493f. The panel still lists names
+            // because that is what a person reads, so resolve through the
+            // game's own enumeration rather than rebuilding the descriptor
+            // here; that keeps one definition of what a slot is.
+            for (const auto &save : _engine._game->savedGames()) {
+                if (save.descriptor.directory.filename().string() == target) {
+                    _engine._game->loadGame(save.descriptor);
+                    break;
+                }
+            }
         }
         return;
     }

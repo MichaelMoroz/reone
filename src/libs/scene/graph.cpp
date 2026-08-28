@@ -208,10 +208,12 @@ std::optional<float> SceneGraph::groundHeight() const {
     double area = 0.0;
     for (const auto &root : _walkmeshRoots) {
         const auto transform = root->absoluteTransform();
-        for (const auto &face : root->walkmesh().faces()) {
-            if (face.vertices.size() < 3) {
-                continue;
-            }
+        // faces is a member of the SoA walkmesh now, and getFace assembles the
+        // three positions from the shared vertex array - see 7ed317341. Always
+        // three, so the old degenerate-face guard has nothing left to test.
+        const auto &walkmesh = root->walkmesh();
+        for (size_t faceIdx = 0; faceIdx < walkmesh.faces.size(); ++faceIdx) {
+            const auto face = walkmesh.getFace(static_cast<uint32_t>(faceIdx));
             const auto a = glm::vec3(transform * glm::vec4(face.vertices[0], 1.0f));
             const auto b = glm::vec3(transform * glm::vec4(face.vertices[1], 1.0f));
             const auto c = glm::vec3(transform * glm::vec4(face.vertices[2], 1.0f));

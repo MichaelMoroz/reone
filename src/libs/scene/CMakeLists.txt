@@ -24,6 +24,7 @@ set(SCENE_HEADERS
     ${SCENE_INCLUDE_DIR}/di/services.h
     ${SCENE_INCLUDE_DIR}/fogproperties.h
     ${SCENE_INCLUDE_DIR}/graph.h
+    ${SCENE_INCLUDE_DIR}/drawdebug.h
     ${SCENE_INCLUDE_DIR}/graphs.h
     ${SCENE_INCLUDE_DIR}/skyrooms.h
     ${SCENE_INCLUDE_DIR}/grassproperties.h
