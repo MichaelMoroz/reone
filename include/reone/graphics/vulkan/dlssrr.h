@@ -87,6 +87,19 @@ private:
      */
     uint32_t _frameIndex {0};
 
+    /**
+     * This resolver's Streamline viewport, unique per instance.
+     *
+     * NOT zero, and not shared. A viewport is how Streamline keeps one render
+     * target's DLSS state - its configured extents, its tagged buffers, its
+     * accumulated history - apart from another's, and a resolver is built per
+     * ScenePipeline while a ScenePipeline is built per SceneGraph. Every
+     * resolver naming viewport 0 meant the galaxy map's small scene
+     * reconfiguring the world's DLSS the moment it appeared, and tagging and
+     * evaluating over it every frame after.
+     */
+    uint32_t _viewport {0};
+
     PFun_slDLSSDSetOptions *_setOptions {nullptr};
     PFun_slDLSSDGetOptimalSettings *_getOptimalSettings {nullptr};
 };

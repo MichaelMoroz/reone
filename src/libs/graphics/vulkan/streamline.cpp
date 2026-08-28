@@ -96,6 +96,7 @@ bool StreamlineRuntime::init() {
     setTagForFrame = entryPoint<PFun_slSetTagForFrame>(module, "slSetTagForFrame");
     evaluateFeature = entryPoint<PFun_slEvaluateFeature>(module, "slEvaluateFeature");
     getFeatureFunction = entryPoint<PFun_slGetFeatureFunction>(module, "slGetFeatureFunction");
+    freeResources = entryPoint<PFun_slFreeResources>(module, "slFreeResources");
     if (!_init || !_shutdown || !_isFeatureSupported || !_getFeatureRequirements ||
         !_setVulkanInfo || !getNewFrameToken || !setConstants || !setTagForFrame ||
         !evaluateFeature || !getFeatureFunction) {
@@ -188,6 +189,7 @@ void StreamlineRuntime::shutdown() {
     setTagForFrame = nullptr;
     evaluateFeature = nullptr;
     getFeatureFunction = nullptr;
+    freeResources = nullptr;
     _instanceExtensions.clear();
     _deviceExtensions.clear();
     _features12.clear();

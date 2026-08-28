@@ -116,6 +116,19 @@ sl::DLSSMode dlssModeForRatio(glm::ivec2 render, glm::ivec2 display) {
     return best;
 }
 
+/**
+ * Hand out one Streamline viewport per resolver, never reusing an id.
+ *
+ * Monotonic rather than pooled: Streamline keeps per-viewport history, and
+ * recycling an id would hand a new render target the accumulated state of a
+ * dead one. Scene pipelines are built on mode and resolution changes, so the
+ * count stays in the low tens over a session.
+ */
+uint32_t nextViewportId() {
+    static uint32_t next = 0;
+    return next++;
+}
+
 } // namespace
 
 void DlssRrResolver::init() {
@@ -125,6 +138,7 @@ void DlssRrResolver::init() {
     if (!_device.dlssRrAvailable()) {
         throw std::runtime_error("DLSS: Ray Reconstruction unavailable on this device");
     }
+    _viewport = nextViewportId();
     auto &slRuntime = _device.streamline();
 
     void *fn = nullptr;
@@ -195,7 +209,7 @@ bool DlssRrResolver::pushOptions() {
     // channel the tracer already wrote for NRD, whose RGBA16_SNORM encoding
     // takes both unpacked, and which the PBR provider now writes too.
     options.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
-    const sl::Result result = _setOptions(sl::ViewportHandle {0}, options);
+    const sl::Result result = _setOptions(sl::ViewportHandle {_viewport}, options);
     if (result != sl::Result::eOk) {
         warn(std::string("DLSS: slDLSSDSetOptions failed: ") + sl::getResultAsStr(result),
              LogChannel::Graphics);
@@ -205,6 +219,15 @@ bool DlssRrResolver::pushOptions() {
 }
 
 void DlssRrResolver::deinit() {
+    // Release this viewport's history and internal targets. Without it every
+    // pipeline rebuild - a resolution change, a mode switch - would strand a
+    // viewport's worth of DLSS state for the life of the process.
+    if (_inited && _device.dlssRrAvailable()) {
+        auto &slRuntime = _device.streamline();
+        if (slRuntime.freeResources) {
+            slRuntime.freeResources(sl::kFeatureDLSS_RR, sl::ViewportHandle {_viewport});
+        }
+    }
     _inited = false;
     _setOptions = nullptr;
     _getOptimalSettings = nullptr;
@@ -278,7 +301,7 @@ void DlssRrResolver::dispatch(ICommandBuffer &commandBuffer, const UpscalerInput
     constants.motionVectorsJittered = sl::Boolean::eFalse;
     constants.reset = reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     constants.orthographicProjection = sl::Boolean::eFalse;
-    if (slRuntime.setConstants(constants, *frame, sl::ViewportHandle {0}) != sl::Result::eOk) {
+    if (slRuntime.setConstants(constants, *frame, sl::ViewportHandle {_viewport}) != sl::Result::eOk) {
         warn("DLSS: slSetConstants failed; skipping this frame", LogChannel::Graphics);
         return;
     }
@@ -333,13 +356,13 @@ void DlssRrResolver::dispatch(ICommandBuffer &commandBuffer, const UpscalerInput
                           sl::ResourceLifecycle::eValidUntilEvaluate, &renderExtent);
     }
 
-    if (slRuntime.setTagForFrame(*frame, sl::ViewportHandle {0}, tags.data(),
+    if (slRuntime.setTagForFrame(*frame, sl::ViewportHandle {_viewport}, tags.data(),
                           static_cast<uint32_t>(tags.size()), cmd) != sl::Result::eOk) {
         warn("DLSS: slSetTagForFrame failed; skipping this frame", LogChannel::Graphics);
         return;
     }
 
-    const sl::ViewportHandle viewport {0};
+    const sl::ViewportHandle viewport {_viewport};
     const sl::BaseStructure *evalInputs[] = {&viewport};
     const sl::Result result = slRuntime.evaluateFeature(sl::kFeatureDLSS_RR, *frame, evalInputs, 1,
                                                    cmd);

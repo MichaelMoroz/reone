@@ -119,6 +119,8 @@ public:
     PFun_slSetTagForFrame *setTagForFrame {nullptr};
     PFun_slEvaluateFeature *evaluateFeature {nullptr};
     PFun_slGetFeatureFunction *getFeatureFunction {nullptr};
+    /** Releases one viewport's feature resources; see DlssRrResolver::deinit. */
+    PFun_slFreeResources *freeResources {nullptr};
 
 private:
     void *_module {nullptr};
