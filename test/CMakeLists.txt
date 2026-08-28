@@ -99,6 +99,7 @@ set(TESTS_SOURCES
     ${TESTS_SOURCE_DIR}/graphics/format/tpcreader.cpp
     ${TESTS_SOURCE_DIR}/graphics/format/txireader.cpp
     ${TESTS_SOURCE_DIR}/graphics/keyframetrack.cpp
+    ${TESTS_SOURCE_DIR}/graphics/optionsregistry.cpp
     ${TESTS_SOURCE_DIR}/graphics/vulkan/shadercompiler.cpp
     ${TESTS_SOURCE_DIR}/graphics/walkmesh.cpp
     ${TESTS_SOURCE_DIR}/json/gff.cpp

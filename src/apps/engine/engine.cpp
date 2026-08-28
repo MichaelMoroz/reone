@@ -40,6 +40,7 @@
 #include "reone/system/stream/fileoutput.h"
 
 #include "editor.h"
+#include "graphicsconfig.h"
 
 #include <algorithm>
 #include <fstream>
@@ -829,7 +830,7 @@ void Engine::registerGraphicsCommands() {
     _console->registerCommand(
         "gfx",
         "graphics options: gfx set <option> <value> | gfx apply | gfx revert | "
-        "gfx get <option> | gfx list [substring]",
+        "gfx get <option> | gfx list [substring] | gfx save",
         [this](const game::ConsoleArgs &args) {
             // A commands file is the only way a capture run can be scripted, so
             // every failure here has to reach the log as well as the console -
@@ -849,7 +850,7 @@ void Engine::registerGraphicsCommands() {
             };
             const auto subcommand = token(1);
             if (subcommand.empty()) {
-                fail("expected a subcommand: set, apply, revert, get or list");
+                fail("expected a subcommand: set, apply, revert, get, list or save");
                 return;
             }
             if (subcommand == "set") {
@@ -939,8 +940,26 @@ void Engine::registerGraphicsCommands() {
                 }
                 return;
             }
+            if (subcommand == "save") {
+                // The settings window has the same button, but a save reached
+                // only through the UI cannot be exercised from a commands file,
+                // which is how this path is regression-tested.
+                auto changed = stagedGraphicsChanges();
+                if (!changed.empty()) {
+                    // Writing a staged value without applying it would leave a
+                    // config the running frame does not match.
+                    applyStagedGraphics();
+                }
+                std::string error;
+                if (saveGraphicsOptions(_options.graphics, error)) {
+                    say("saved reone.cfg");
+                } else {
+                    fail(error);
+                }
+                return;
+            }
             fail("unknown subcommand '" + subcommand +
-                 "'; expected set, apply, revert, get or list");
+                 "'; expected set, apply, revert, get, list or save");
         });
 }
 
