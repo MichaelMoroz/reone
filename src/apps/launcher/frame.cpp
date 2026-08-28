@@ -263,10 +263,16 @@ LauncherFrame::LauncherFrame() :
     antiAliasingChoices.Add("Off");
     antiAliasingChoices.Add("FXAA");
     antiAliasingChoices.Add("FSR 2 (NativeAA)");
+    antiAliasingChoices.Add("DLSS Ray Reconstruction");
 
     _choiceAntiAliasing = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                        antiAliasingChoices);
-    _choiceAntiAliasing->SetSelection(_config.antialiasing == "fsr"    ? 2
+    // Every value the engine accepts needs an entry here. A value this list
+    // cannot represent collapses to index 0 and is written back as "off" on
+    // save, silently discarding a setting made in game - which is exactly what
+    // happened to dlssrr while this was a three-item list.
+    _choiceAntiAliasing->SetSelection(_config.antialiasing == "dlssrr" ? 3
+                                      : _config.antialiasing == "fsr"  ? 2
                                       : _config.antialiasing == "fxaa" ? 1
                                                                        : 0);
     _choiceAntiAliasing->Bind(wxEVT_COMMAND_CHOICE_SELECTED, [this](const wxCommandEvent &evt) {
@@ -293,8 +299,11 @@ LauncherFrame::LauncherFrame() :
 
     // END FSR render scale
 
-    _checkBoxSharpen = new wxCheckBox(this, wxID_ANY, "Enable Image Sharpening", wxDefaultPosition, wxDefaultSize);
-    _checkBoxSharpen->SetValue(_config.sharpen);
+    // One dial, as the engine has: RCAS under FSR, an unsharp mask otherwise.
+    // The old checkbox wrote a `sharpen` key the engine stopped parsing.
+    _sliderSharpness = new wxSlider(this, wxID_ANY,
+                                    static_cast<int>(_config.sharpness * 100.0f), 0, 100,
+                                    wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL | wxSL_LABELS);
 
     UpdateRendererDependentControls();
 
@@ -314,7 +323,8 @@ LauncherFrame::LauncherFrame() :
     graphicsSizer->Add(_checkBoxSSR, wxSizerFlags(0).Expand());
     graphicsSizer->Add(antiAliasingSizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(renderScaleSizer, wxSizerFlags(0).Expand());
-    graphicsSizer->Add(_checkBoxSharpen, wxSizerFlags(0).Expand());
+    graphicsSizer->Add(new wxStaticText(this, wxID_ANY, "Sharpness"), wxSizerFlags(0).Expand());
+    graphicsSizer->Add(_sliderSharpness, wxSizerFlags(0).Expand());
 
     // END Graphics
 
@@ -427,9 +437,12 @@ void LauncherFrame::UpdateRendererDependentControls() {
     // Screen-space effects read a G-buffer the traced path never produces, and
     // the sample count means nothing to the two raster renderers.
     _choicePathTracingSamples->Enable(pathTracing);
-    // Rendering below display resolution is meaningful only when FSR owns the
-    // anti-aliasing slot. Keep the value visible and persistent when inactive.
-    _sliderRenderScale->Enable(_choiceAntiAliasing->GetSelection() == 2);
+    // Rendering below display resolution is meaningful only when an upscaler
+    // owns the anti-aliasing slot. Keep the value visible and persistent when
+    // inactive. Under DLSS the engine takes its ratio from dlssmode instead,
+    // which this launcher does not own and therefore leaves alone.
+    const int aaSel = _choiceAntiAliasing->GetSelection();
+    _sliderRenderScale->Enable(aaSel == 2 || aaSel == 3);
 }
 
 void LauncherFrame::LoadConfiguration() {
@@ -449,7 +462,7 @@ void LauncherFrame::LoadConfiguration() {
         ("ssr", value<bool>()->default_value(_config.ssr))                //
         ("antialiasing", value<std::string>()->default_value(_config.antialiasing)) //
         ("renderscale", value<float>()->default_value(_config.renderScale)) //
-        ("sharpen", value<bool>()->default_value(_config.sharpen))        //
+        ("sharpness", value<float>()->default_value(_config.sharpness))   //
         ("texquality", value<int>()->default_value(_config.texQuality))   //
         ("anisofilter", value<int>()->default_value(_config.anisofilter)) //
         ("shadowres", value<int>()->default_value(_config.shadowres))     //
@@ -483,7 +496,7 @@ void LauncherFrame::LoadConfiguration() {
     _config.ssr = vars["ssr"].as<bool>();
     _config.antialiasing = vars["antialiasing"].as<std::string>();
     _config.renderScale = std::clamp(vars["renderscale"].as<float>(), 0.25f, 1.0f);
-    _config.sharpen = vars["sharpen"].as<bool>();
+    _config.sharpness = vars["sharpness"].as<float>();
     _config.texQuality = vars["texquality"].as<int>();
     _config.shadowres = vars["shadowres"].as<int>();
     _config.anisofilter = vars["anisofilter"].as<int>();
@@ -525,7 +538,7 @@ void LauncherFrame::SaveConfiguration() {
         "ssr=",
         "antialiasing=",
         "renderscale=",
-        "sharpen=",
+        "sharpness=",
         "texquality=",
         "anisofilter=",
         "shadowres=",
@@ -596,12 +609,13 @@ void LauncherFrame::SaveConfiguration() {
     _config.ssao = _checkBoxSSAO->IsChecked();
     _config.ssr = _checkBoxSSR->IsChecked();
     switch (_choiceAntiAliasing->GetSelection()) {
+    case 3: _config.antialiasing = "dlssrr"; break;
     case 2: _config.antialiasing = "fsr"; break;
     case 1: _config.antialiasing = "fxaa"; break;
     default: _config.antialiasing = "off"; break;
     }
     _config.renderScale = _sliderRenderScale->GetValue() / 100.0f;
-    _config.sharpen = _checkBoxSharpen->IsChecked();
+    _config.sharpness = _sliderSharpness->GetValue() / 100.0f;
     _config.texQuality = _choiceTextureQuality->GetSelection();
     _config.shadowres = _choiceShadowResolution->GetSelection();
     _config.anisofilter = _choiceAnisoFilter->GetSelection();
@@ -644,7 +658,7 @@ void LauncherFrame::SaveConfiguration() {
     config << "ssr=" << (_config.ssr ? 1 : 0) << std::endl;
     config << "antialiasing=" << _config.antialiasing << std::endl;
     config << "renderscale=" << _config.renderScale << std::endl;
-    config << "sharpen=" << (_config.sharpen ? 1 : 0) << std::endl;
+    config << "sharpness=" << _config.sharpness << std::endl;
     config << "texquality=" << _config.texQuality << std::endl;
     config << "shadowres=" << _config.shadowres << std::endl;
     config << "anisofilter=" << _config.anisofilter << std::endl;

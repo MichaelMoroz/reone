@@ -60,7 +60,7 @@ private:
         std::string antialiasing {"fxaa"};
         /** Raster and trace resolution as a fraction of display when FSR runs. */
         float renderScale {1.0f};
-        bool sharpen {true};
+        float sharpness {0.0f};
         int texQuality {0};
         int shadowres {1};
         int anisofilter {2};
@@ -90,7 +90,7 @@ private:
     wxCheckBox *_checkBoxSSAO;
     wxCheckBox *_checkBoxSSR;
     wxChoice *_choiceAntiAliasing;
-    wxCheckBox *_checkBoxSharpen;
+    wxSlider *_sliderSharpness;
     wxSlider *_sliderVolumeMusic;
     wxSlider *_sliderVolumeVoice;
     wxSlider *_sliderVolumeSound;
