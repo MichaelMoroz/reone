@@ -17,6 +17,8 @@
 
 #include "reone/scene/graph.h"
 
+#include "reone/scene/drawdebug.h"
+
 #include "reone/system/profiler.h"
 
 #include "reone/audio/di/services.h"
@@ -1104,13 +1106,21 @@ Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {
 
 void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {
     _debugOverlayLabels.clear();
+    std::vector<graphics::DebugOverlayShape> shapes;
+    std::vector<graphics::DebugOverlayLine> lines;
+
     if (!_graphicsOpt.debugOverlay) {
-        // Handed over even when empty, so switching the overlay off clears the
-        // boxes the pipeline was holding rather than freezing them on screen.
-        pipeline.setDebugOverlayShapes({}, {});
+        // The object boxes are off, but the debug primitives are on their own
+        // switch - setShowPath and friends - so this is not an early return any
+        // more. Collect them, hand over whatever they produced, and let an
+        // empty set clear what the pipeline was holding rather than freezing it
+        // on screen.
+        collectDrawDebug(_name, shapes, lines, _debugOverlayLabels);
+        capDebugOverlayLabels();
+        pipeline.setDebugOverlayShapes(std::move(shapes), std::move(lines),
+                                       std::move(_debugOverlayLabels));
         return;
     }
-    std::vector<graphics::DebugOverlayShape> shapes;
 
     // Corner order is the overlay shader's contract: bits x=1, y=2, z=4 select
     // max over min per axis. Each local corner is transformed on its own, so
@@ -1169,11 +1179,18 @@ void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {
              kDebugLightColor});
     }
 
+    // The debug primitives join the object boxes here rather than in a pass of
+    // their own, which is the point of routing them through this overlay: a
+    // pathfinder edge and a bounding box are then drawn by the same pipeline
+    // against the same depth image, so they agree about what occludes them.
+    collectDrawDebug(_name, shapes, lines, _debugOverlayLabels);
+
     capDebugOverlayLabels();
-    // Both go to the pipeline: it draws the labels in the same pass as the
-    // boxes, against the same depth buffer, so text and lines answer occlusion
-    // identically.
-    pipeline.setDebugOverlayShapes(std::move(shapes), std::move(_debugOverlayLabels));
+    // All three go to the pipeline: it draws the labels in the same pass as the
+    // boxes and lines, against the same depth buffer, so text and geometry
+    // answer occlusion identically.
+    pipeline.setDebugOverlayShapes(std::move(shapes), std::move(lines),
+                                   std::move(_debugOverlayLabels));
 }
 
 /**

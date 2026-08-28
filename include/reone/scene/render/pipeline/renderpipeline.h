@@ -62,8 +62,10 @@ public:
     std::filesystem::path _pendingRecordDump;
     void restartTemporalHistory() override;
     void setDebugOverlayShapes(std::vector<graphics::DebugOverlayShape> shapes,
+                               std::vector<graphics::DebugOverlayLine> lines,
                                std::vector<graphics::DebugOverlayLabel> labels) override {
         _overlayShapes = std::move(shapes);
+        _overlayLines = std::move(lines);
         _overlayLabels = std::move(labels);
     }
 
@@ -105,6 +107,7 @@ private:
     bool _inited {false};
     /** Debug-overlay boxes handed in by the scene graph for the next render. */
     std::vector<graphics::DebugOverlayShape> _overlayShapes;
+    std::vector<graphics::DebugOverlayLine> _overlayLines;
     std::vector<graphics::DebugOverlayLabel> _overlayLabels;
     graphics::Font *_overlayFont {nullptr};
     bool _fogEnabled {false};

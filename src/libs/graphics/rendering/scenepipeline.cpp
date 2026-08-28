@@ -1902,7 +1902,7 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
 
 void ScenePipeline::debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::debugOverlayPass record");
-    if (_overlayShapes.empty() && _overlayLabels.empty()) {
+    if (_overlayShapes.empty() && _overlayLines.empty() && _overlayLabels.empty()) {
         return;
     }
     // Over the finished display-referred image, and depth is NOT an attachment
@@ -1955,6 +1955,36 @@ void ScenePipeline::debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset
             cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
             // Twelve edges, one quad each, six vertices per quad.
             cmd.draw(72, 1);
+        }
+    }
+
+    // The free lines, between the boxes and the labels. Same pipeline state and
+    // same descriptor set as the boxes - only the vertex entry and the vertex
+    // count differ - so a pathfinder edge and a bounding-box edge are the same
+    // draw with different endpoints.
+    if (!_overlayLines.empty()) {
+        PipelineKey lineKey = boxKey;
+        lineKey.vertexEntry = "overlayLineVertex";
+        PipelineBinding pipeline = _renderer.pipelines().get(lineKey);
+        cmd.bindPipeline(pipeline.pipeline);
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet, nullptr, 0);
+        for (const auto &line : _overlayLines) {
+            AABBUniforms aabbUniforms;
+            // Only the first two slots are read; the rest of the block is along
+            // for the ride so the box path's uniform plumbing serves both.
+            aabbUniforms.corners[0] = line.start;
+            aabbUniforms.corners[1] = line.end;
+            std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+            offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+            offsets[UniformBlockBindingPoints::aabb] = _renderer.uniformRing().push(aabbUniforms);
+            cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                  offsets.data(), static_cast<uint32_t>(offsets.size()));
+            const DebugOverlayPushConstants push {line.color, resolution,
+                                                  std::max(0.5f, line.halfWidth),
+                                                  kOverlayOccludedLine, glm::vec3(0.0f)};
+            cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
+            // One quad, six vertices - against the box path's twelve quads.
+            cmd.draw(6, 1);
         }
     }
 
@@ -2049,6 +2079,7 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
     _groundHeight = plan.groundHeight;
     _fogEnabled = plan.fogEnabled;
     _overlayShapes = plan.overlayShapes;
+    _overlayLines = plan.overlayLines;
     _overlayLabels = plan.overlayLabels;
     _overlayFont = plan.overlayFont;
     _transparentOutput = plan.transparentOutput;

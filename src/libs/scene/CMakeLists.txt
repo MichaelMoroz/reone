@@ -54,6 +54,7 @@ set(SCENE_HEADERS
 
 set(SCENE_SOURCES
     ${SCENE_SOURCE_DIR}/di/module.cpp
+    ${SCENE_SOURCE_DIR}/drawdebugstore.cpp
     ${SCENE_SOURCE_DIR}/graph.cpp
     ${SCENE_SOURCE_DIR}/graphs.cpp
     ${SCENE_SOURCE_DIR}/skyrooms.cpp

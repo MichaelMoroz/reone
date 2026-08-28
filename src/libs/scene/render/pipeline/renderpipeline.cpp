@@ -368,11 +368,18 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
     // goes after everything that changes the picture. Not on a diagnostic
     // image: a channel view replaces the picture the boxes would annotate.
     plan.overlayShapes = std::move(_overlayShapes);
+    plan.overlayLines = std::move(_overlayLines);
     plan.overlayLabels = std::move(_overlayLabels);
     plan.overlayFont = _overlayFont;
     _overlayShapes.clear();
+    _overlayLines.clear();
     _overlayLabels.clear();
-    if (!plan.overlayShapes.empty() && !diagnosticImage)
+    // Any of the three is reason enough to run the pass: the debug primitives
+    // arrive without object boxes whenever the overlay switch is off but a
+    // pathfinder path is being drawn.
+    if ((!plan.overlayShapes.empty() || !plan.overlayLines.empty() ||
+         !plan.overlayLabels.empty()) &&
+        !diagnosticImage)
         plan.steps.push_back(graphics::SceneStep::DebugOverlay);
     // The debug view, over whatever the mode shaded. Skipped in exactly one
     // case: the traced mode showing one of the tracer's own channels, which the

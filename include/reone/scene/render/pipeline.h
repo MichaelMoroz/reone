@@ -113,11 +113,13 @@ public:
                                       SceneOutputAlpha alpha) = 0;
 
     /**
-     * The debug overlay's wireframe boxes for the next render, world-space
-     * corners and colour per box; empty switches the overlay pass off. The
-     * scene graph decides what a box means; the pipeline only draws them.
+     * The debug overlay's primitives for the next render: wireframe boxes,
+     * free lines and name labels, all in world space. All three empty switches
+     * the overlay pass off. The scene graph decides what any of them means -
+     * an object's bounds, a pathfinder edge - and the pipeline only draws them.
      */
     virtual void setDebugOverlayShapes(std::vector<graphics::DebugOverlayShape> shapes,
+                                       std::vector<graphics::DebugOverlayLine> lines,
                                        std::vector<graphics::DebugOverlayLabel> labels) {}
 
     /** Whether the area authored fog at all, as opposed to the player's switch. */

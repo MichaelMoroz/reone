@@ -113,13 +113,15 @@ OverlayVertex culledEdge() {
     return output;
 }
 
-[shader("vertex")]
-OverlayVertex overlayVertex(uint vertexId: SV_VertexID) {
-    const uint edge = vertexId / 6;
-    const uint corner = vertexId % 6;
-
-    float3 a = aabbUniforms.corners[kEdges[edge].x].xyz;
-    float3 b = aabbUniforms.corners[kEdges[edge].y].xyz;
+/**
+ * One world-space segment as a screen-space quad, six vertices.
+ *
+ * Shared by the box entry below - which feeds it an AABB edge - and by the
+ * free-line entry, which feeds it the two points a caller supplied. Keeping
+ * one implementation is what makes a pathfinder line and a bounding-box edge
+ * behave identically at the near plane and at grazing angles.
+ */
+OverlayVertex segmentVertex(float3 a, float3 b, uint corner) {
     float4 clipA = mul(globalUniforms.viewProjection, float4(a, 1.0));
     float4 clipB = mul(globalUniforms.viewProjection, float4(b, 1.0));
 
@@ -161,6 +163,29 @@ OverlayVertex overlayVertex(uint vertexId: SV_VertexID) {
     output.position = float4(pixelsToClip(px), ndc.z, 1.0);
     output.depth = ndc.z;
     return output;
+}
+
+[shader("vertex")]
+OverlayVertex overlayVertex(uint vertexId: SV_VertexID) {
+    const uint edge = vertexId / 6;
+    return segmentVertex(aabbUniforms.corners[kEdges[edge].x].xyz,
+                         aabbUniforms.corners[kEdges[edge].y].xyz,
+                         vertexId % 6);
+}
+
+/**
+ * A free line, drawn from the first two corner slots.
+ *
+ * It rides the same aabb block rather than a block of its own: a segment needs
+ * two points and that block already carries eight, so the whole descriptor and
+ * uniform-ring path is reused unchanged and the draw is six vertices instead
+ * of seventy-two.
+ */
+[shader("vertex")]
+OverlayVertex overlayLineVertex(uint vertexId: SV_VertexID) {
+    return segmentVertex(aabbUniforms.corners[0].xyz,
+                         aabbUniforms.corners[1].xyz,
+                         vertexId);
 }
 
 [shader("fragment")]

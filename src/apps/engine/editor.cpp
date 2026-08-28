@@ -17,6 +17,8 @@
 
 #include "editor.h"
 #include "engine.h"
+
+#include "reone/game/debug.h"
 #include "reone/game/types.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/mesh.h"
@@ -1696,6 +1698,22 @@ void Editor::graphicsDebugViewSection() {
                 "geometry stays visible but goes translucent, so a hidden box still says where "
                 "its object is. Not drawn over a debug channel view, which replaces the picture "
                 "the boxes would annotate.");
+    // Not a GraphicsOptions field: the flag lives behind game/debug.h and is
+    // read by the pathfinder itself, so the checkbox mirrors that rather than
+    // owning it. Only this one of the four debug toggles is offered - the AABB,
+    // walkmesh and trigger flags have no consumer left on this backend, and a
+    // control that does nothing is worse than an absent one.
+    bool showPath = game::isShowPathEnabled();
+    if (ImGui::Checkbox("Pathfinder graph", &showPath)) {
+        game::setShowPath(showPath);
+    }
+    settingHint("Draws the navigation mesh the pathfinder actually walks: each face outlined and "
+                "numbered, adjacency in blue and unconnected borders in purple, plus the funnel "
+                "of any path being solved. It shares the overlay above - same pass, same depth "
+                "image - so a path edge and a bounding box agree about what occludes them.\n\n"
+                "Turn it on BEFORE loading a module. The face graph is recorded once as the area "
+                "loads and is skipped entirely when this is off, so enabling it in a module "
+                "already running shows nothing until something recomputes a path.");
     ImGui::Checkbox("Direct-light parity", &options.parityDirect);
     settingHint("Strips both renderers to the same thing: the shared unoccluded direct diffuse "
                 "sum, no shadows, no specular, no bounces, no lightmap, no sky. The two modes "

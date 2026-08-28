@@ -181,6 +181,23 @@ struct DebugOverlayLabel {
     glm::vec4 color {1.0f};
 };
 
+/**
+ * One free line of the debug overlay: two world endpoints, a colour and a
+ * half-width in pixels.
+ *
+ * A box already draws as twelve of these - the overlay's vertex stage expands
+ * an edge into a screen-space quad so a line keeps its width at any depth or
+ * angle. This exposes that same machinery to a caller who has a pair of points
+ * rather than a volume, which is what the debug primitives in
+ * scene/drawdebug.h are made of.
+ */
+struct DebugOverlayLine {
+    glm::vec4 start {0.0f};
+    glm::vec4 end {0.0f};
+    glm::vec4 color {1.0f};
+    float halfWidth {1.0f};
+};
+
 struct SceneFramePlan {
     std::vector<SceneShadowCaster> shadowCasters;
     /** GUI controls composite this output; alpha then follows primary coverage. */
@@ -209,6 +226,7 @@ struct SceneFramePlan {
     bool fogEnabled {false};
     /** The debug overlay's boxes for this frame; empty when the overlay is off. */
     std::vector<DebugOverlayShape> overlayShapes;
+    std::vector<DebugOverlayLine> overlayLines;
     std::vector<DebugOverlayLabel> overlayLabels;
     /** Glyph metrics and atlas for the labels; null draws boxes only. */
     Font *overlayFont {nullptr};
@@ -311,6 +329,7 @@ private:
     bool _fogEnabled {false};
     /** This frame's debug-overlay boxes; empty when the overlay is off. */
     std::vector<DebugOverlayShape> _overlayShapes;
+    std::vector<DebugOverlayLine> _overlayLines;
     std::vector<DebugOverlayLabel> _overlayLabels;
     Font *_overlayFont {nullptr};
     /** Slots actually allocated, so a caster past them is dropped, not fatal. */
