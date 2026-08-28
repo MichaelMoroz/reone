@@ -16,6 +16,8 @@
  */
 
 #include "editor.h"
+#include <map>
+
 #include "engine.h"
 
 #include "reone/game/debug.h"
@@ -1613,13 +1615,52 @@ bool Editor::beginSceneCapture() {
     stage("objects", [&] {
         // id is the number records.tsv prints as object_id, which is what makes
         // a triangle id sampled out of the G-buffer resolvable to a name.
+        // The game object behind each piece of geometry, where there is one.
+        //
+        // Everything else in this table names geometry - model, node, material
+        // - which answers "what am I looking at" but not "what can I do to it".
+        // The tag and game id answer the second, and they are what the console
+        // takes: selectobjectbytag <tag> then action reaches the same
+        // onObjectClick a mouse click does. Without them a capture could name
+        // the Ebon Hawk's map console and still leave no way to open it
+        // unattended, which is how a renderer defect specific to that screen
+        // stayed unreproducible.
+        //
+        // Keyed on the model scene node each game object owns, which is the
+        // same pointer makeObjectEntryView reports as its cull root.
+        std::map<const scene::SceneNode *, std::pair<uint32_t, std::string>> byNode;
+        if (_engine._game) {
+            if (auto module = _engine._game->module()) {
+                if (auto area = module->area()) {
+                    for (const auto &gameObject : area->objects()) {
+                        if (!gameObject) {
+                            continue;
+                        }
+                        if (auto node = gameObject->sceneNode()) {
+                            byNode[node.get()] = {gameObject->id(), gameObject->tag()};
+                        }
+                    }
+                }
+            }
+        }
+
         std::ofstream out(dir / "objects.tsv");
-        out << "id\tkind\tmodel\tnode\tmaterial\tclassification\tclusters\tparticles\n";
+        out << "id\tkind\tmodel\tnode\tmaterial\tclassification\tclusters\tparticles"
+               "\tgame_id\ttag\n";
         for (const auto &object : scene.objects()) {
             const auto view = makeObjectEntryView(graph, scene, object);
+            const auto game = byNode.find(static_cast<const scene::SceneNode *>(view.root));
             out << view.id << "\t" << view.kind << "\t" << view.modelName << "\t"
                 << view.nodeName << "\t" << view.material << "\t" << view.classification << "\t"
-                << view.clusters << "\t" << view.particles << "\n";
+                << view.clusters << "\t" << view.particles << "\t";
+            if (game != byNode.end()) {
+                out << game->second.first << "\t" << game->second.second << "\n";
+            } else {
+                // Room geometry, grass, an effect - real geometry with no game
+                // object behind it. A dash rather than a blank, so the column
+                // reads as answered rather than missing.
+                out << "-\t-\n";
+            }
         }
     });
 
@@ -1632,7 +1673,7 @@ bool Editor::beginSceneCapture() {
                "  1. g_buffer_triangle_id.npy[y][x] -> triangle id\n"
                "  2. records.tsv: the row whose [first_triangle, first_triangle+triangle_count)\n"
                "     contains it -> object_id and material\n"
-               "  3. objects.tsv: the row with that id -> model/node, kind, classification\n"
+               "  3. objects.tsv: the row with that id -> model/node, kind, classification,\n     and game_id/tag when a game object owns it\n     -> selectobjectbytag <tag>, then action, drives it from the console\n"
                "  4. materials.tsv: that material -> surface type, feature mask, texture ids\n"
                "\n"
                "Feature mask bits in g_buffer_lightmap alpha (value * 255):\n"

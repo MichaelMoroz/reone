@@ -54,6 +54,14 @@ class ModuleSnapshotBuilder;
 
 class Module : public Object {
 public:
+    /**
+     * Act on an object exactly as a click on it does.
+     *
+     * Public because the console's `action` command drives the same entry the
+     * pointer does; a second path would be a copy that drifts.
+     */
+    void onObjectClick(const std::shared_ptr<Object> &object);
+
     Module(
         uint32_t id,
         Game &game,
@@ -147,7 +155,6 @@ private:
 
     void onCreatureClick(const std::shared_ptr<Creature> &creature);
     void onDoorClick(const std::shared_ptr<Door> &door);
-    void onObjectClick(const std::shared_ptr<Object> &object);
     void onPlaceableClick(const std::shared_ptr<Placeable> &placeable);
 
     void getEntryPoint(const std::string &waypoint, glm::vec3 &position, float &facing) const;

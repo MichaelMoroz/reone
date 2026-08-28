@@ -1084,6 +1084,8 @@ private:
     void consoleShowHUD(const ConsoleArgs &tokens);
     void consoleShowTransition(const ConsoleArgs &tokens);
     void consoleOpenContainer(const ConsoleArgs &tokens);
+    void consoleAction(const ConsoleArgs &tokens);
+    void consoleExitMenu(const ConsoleArgs &tokens);
     void consoleSelectDialogOption(const ConsoleArgs &tokens);
     void loadTestbed(const std::string &variant);
     void consoleScene(const ConsoleArgs &tokens);

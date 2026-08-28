@@ -524,6 +524,8 @@ void Game::initConsole() {
     registerConsoleCommand("showhud", "open the third-person gameplay HUD for a scripted capture", &Game::consoleShowHUD);
     registerConsoleCommand("showtransition", "show an area-transition banner for a scripted capture", &Game::consoleShowTransition);
     registerConsoleCommand("opencontainer", "open the container screen on the party leader for a scripted capture", &Game::consoleOpenContainer);
+    registerConsoleCommand("action", "act on the selected object, as clicking it does", &Game::consoleAction);
+    registerConsoleCommand("exitmenu", "leave the open menu and return to the world", &Game::consoleExitMenu);
     registerConsoleCommand("selectdialogoption", "select a dialog option without activating it for a scripted capture", &Game::consoleSelectDialogOption);
     registerConsoleCommand("scene", "create a synthetic scene (empty)", &Game::consoleScene);
     registerConsoleCommand("spawn", "spawn a UTC, UTP, or model at x y z", &Game::consoleSpawn);
@@ -4758,6 +4760,43 @@ void Game::consoleOpenContainer(const ConsoleArgs &args) {
         throw std::runtime_error("Container fixture requires a loaded module");
     }
     openContainer(leader);
+}
+
+/**
+ * Act on the focused world object, exactly as clicking it does.
+ *
+ * The focus is whatever selectobjectbytag/selectobjectbyid last chose, which
+ * is the same selection the select overlay drives, so this reaches a
+ * placeable's OnUsed script, a door, a creature - one command instead of a
+ * bespoke one per panel. That matters for capture runs: the Ebon Hawk's map
+ * console opens the galaxy map through ShowGalaxyMap, and a renderer defect
+ * specific to that screen survived precisely because nothing unattended could
+ * open it.
+ */
+void Game::consoleAction(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    if (!_module) {
+        throw std::runtime_error("Acting on an object requires a loaded module");
+    }
+    auto object = getConsoleArea()->selectedObject();
+    if (!object) {
+        throw std::runtime_error("No object is selected; use selectobjectbytag first");
+    }
+    _module->onObjectClick(object);
+}
+
+/**
+ * Leave whatever menu is open and return to the world.
+ *
+ * The counterpart to acting on an object: a script that opens a panel needs a
+ * way back out of it, and every screen leaves the same way.
+ */
+void Game::consoleExitMenu(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    if (_screen == Screen::InGame || _screen == Screen::None) {
+        return;
+    }
+    changeScreen(Screen::InGame);
 }
 
 void Game::consoleShowHUD(const ConsoleArgs &args) {
