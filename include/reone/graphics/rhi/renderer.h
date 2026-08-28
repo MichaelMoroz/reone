@@ -43,6 +43,16 @@ class IPipelineCache;
 class IResources;
 class IUniformRing;
 
+/** Loaded DLSS Ray Reconstruction versions; see IRenderer::rayReconstructionInfo. */
+struct RayReconstructionInfo {
+    uint32_t streamlineMajor {0};
+    uint32_t streamlineMinor {0};
+    uint32_t streamlineBuild {0};
+    uint32_t ngxMajor {0};
+    uint32_t ngxMinor {0};
+    uint32_t ngxBuild {0};
+};
+
 /**
  * Owns the frame: the target everything is drawn into, and how a finished frame
  * reaches the screen.
@@ -158,6 +168,31 @@ public:
     virtual std::unique_ptr<IUpscaler> makeUpscaler(glm::ivec2 renderExtent,
                                                     glm::ivec2 displayExtent,
                                                     bool highDynamicRange) = 0;
+
+    /**
+     * Whether DLSS Ray Reconstruction can run here: the user supplied
+     * Streamline's DLLs and this adapter is an RTX part. False is ordinary,
+     * and the anti-aliasing slot falls back to FSR rather than failing.
+     */
+    virtual bool rayReconstructionAvailable() const = 0;
+
+    /**
+     * Versions of what is actually loaded, for the settings panel to name.
+     *
+     * Worth surfacing because the user can change the second one: the neural
+     * model is nvngx_dlssd.dll beside the executable, and replacing it changes
+     * the picture without rebuilding anything. Zeroed when RR is unavailable.
+     */
+    virtual RayReconstructionInfo rayReconstructionInfo() const = 0;
+
+    /**
+     * The same slot as makeUpscaler, filled by a resolver that also replaces
+     * the denoiser. Separate from makeUpscaler because it is not
+     * interchangeable at the input: it needs guides FSR never reads, and where
+     * it runs NRD does not run at all.
+     */
+    virtual std::unique_ptr<IUpscaler> makeRayReconstructionUpscaler(
+        glm::ivec2 renderExtent, glm::ivec2 displayExtent) = 0;
 
     /** Create the frame-local structure used by the trace pass. */
     virtual std::unique_ptr<ITracingStructure> makeTracingStructure() = 0;

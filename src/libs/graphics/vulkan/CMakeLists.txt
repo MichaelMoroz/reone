@@ -33,6 +33,8 @@ set(VULKAN_HEADERS
     ${VULKAN_INCLUDE_DIR}/resources.h
     ${VULKAN_INCLUDE_DIR}/samplers.h
     ${VULKAN_INCLUDE_DIR}/shadercompiler.h
+    ${VULKAN_INCLUDE_DIR}/streamline.h
+    ${VULKAN_INCLUDE_DIR}/dlssrr.h
     ${VULKAN_INCLUDE_DIR}/swapchain.h
     ${VULKAN_INCLUDE_DIR}/tracingstructure.h
     ${VULKAN_INCLUDE_DIR}/uniformring.h)
@@ -52,6 +54,8 @@ set(VULKAN_SOURCES
     ${VULKAN_SOURCE_DIR}/resources.cpp
     ${VULKAN_SOURCE_DIR}/samplers.cpp
     ${VULKAN_SOURCE_DIR}/shadercompiler.cpp
+    ${VULKAN_SOURCE_DIR}/streamline.cpp
+    ${VULKAN_SOURCE_DIR}/dlssrr.cpp
     ${VULKAN_SOURCE_DIR}/swapchain.cpp
     ${VULKAN_SOURCE_DIR}/tracingstructure.cpp
     ${VULKAN_SOURCE_DIR}/uniformring.cpp
@@ -96,6 +100,10 @@ endif()
 if(ENABLE_NRD)
     target_link_libraries(graphicsvulkan PUBLIC NRD)
 endif()
+
+# Headers only, and unconditional - see the Streamline block in the root
+# CMakeLists for why this one carries no option().
+target_link_libraries(graphicsvulkan PUBLIC streamline_headers)
 
 target_link_libraries(graphicsvulkan PUBLIC
     graphics

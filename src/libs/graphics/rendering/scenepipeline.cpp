@@ -37,6 +37,10 @@
 #include <cmath>
 #include <string_view>
 
+// glm::translate, for undoing the projection's jitter translate before handing
+// the matrix to a resolver that takes the sub-pixel offset separately.
+#include <glm/gtc/matrix_transform.hpp>
+
 using namespace reone::graphics;
 
 namespace reone {
@@ -205,6 +209,9 @@ PipelineKey shadowPipelineKey(const char *vertexEntry, const char *fragmentEntry
  * its ground value at the gradient height.
  */
 static constexpr float kFogOpticalDepthAtFar = 4.60517f;
+/** ln(2): the optical depth at which transmittance is one half - where the
+    exponential is made to agree with the linear ramp it stands in for. */
+static constexpr float kFogOpticalDepthAtMidpoint = 0.693147f;
 
 /** Half-width of a debug-overlay line, in pixels. */
 static constexpr float kOverlayLineHalfWidth = 1.25f;
@@ -476,7 +483,31 @@ void ScenePipeline::init() {
         cmd.transitionImage(*_tailColor, ImageLayout::ShaderRead);
     });
 
-    if (_options.antialiasing == AntiAliasing::Fsr) {
+    // DLSS-RR occupies the same slot, but is the one occupant that can be
+    // absent for reasons outside the build: the user has to supply Streamline's
+    // DLLs and the adapter has to be an RTX part. Neither is an error, so an
+    // unavailable RR quietly becomes FSR rather than emptying the slot.
+    if (_options.antialiasing == AntiAliasing::DlssRr) {
+        if (_renderer.rayReconstructionAvailable()) {
+            try {
+                _upscaler = _renderer.makeRayReconstructionUpscaler(_renderSize, _targetSize);
+                _dlssRr = _upscaler != nullptr;
+            } catch (const std::exception &e) {
+                warn(std::string("DLSS Ray Reconstruction unavailable: ") + e.what(),
+                     LogChannel::Graphics);
+                _upscaler.reset();
+                _dlssRr = false;
+            }
+        }
+        if (!_upscaler) {
+            info("Anti-aliasing is set to DLSS Ray Reconstruction, which is not available "
+                 "here; falling back to FSR",
+                 LogChannel::Graphics);
+        }
+    }
+
+    if (_options.antialiasing == AntiAliasing::Fsr ||
+        (_options.antialiasing == AntiAliasing::DlssRr && !_upscaler)) {
         try {
             // High dynamic range in every mode. FSR reads the scene image
             // before the display transform, and that image is now linear and
@@ -495,8 +526,8 @@ void ScenePipeline::init() {
             // A build without the upscaler compiled in. Loud rather than
             // silent, because the frame that comes out has no anti-aliasing at
             // all and nothing else in the image says so.
-            warn("Anti-aliasing is set to FSR, which this build does not carry; "
-                 "the slot is empty",
+            warn("Anti-aliasing wants a temporal upscaler, which this build does not "
+                 "carry; the slot is empty",
                  LogChannel::Graphics);
         }
     }
@@ -1029,7 +1060,16 @@ FogPushConstants ScenePipeline::fogParameters() const {
     // with no walkmesh the camera sits in it. One function, because the tail
     // pass and the blended pass must integrate the same fog.
     const auto &globals = _uniforms.globals();
-    return {kFogOpticalDepthAtFar / std::max(1.0f, globals.fogFar),
+    // Density calibrated against the ramp the area was authored for, at its
+    // MIDPOINT: the original is linear from fogNear to fogFar and 50% fogged
+    // halfway between them, so the exponential is set to agree there. It was
+    // set to reach 99% at fogFar, which is the same curve scaled up roughly
+    // threefold - measured as a tree at a fifth of the fog distance already
+    // 60% fogged, where the authored ramp puts it near a tenth. The near and
+    // far values shape the calibration only; the integral itself starts at
+    // the camera, as an exponential must.
+    const float midpoint = 0.5f * (std::max(0.0f, globals.fogNear) + std::max(1.0f, globals.fogFar));
+    return {kFogOpticalDepthAtMidpoint / std::max(1.0f, midpoint),
             kFogOpticalDepthAtFar / std::max(0.05f, _options.fogHeight),
             _groundHeight.value_or(globals.cameraPosition.z)};
 }
@@ -1163,11 +1203,15 @@ void ScenePipeline::pbrChannelsPass(ICommandBuffer &cmd, uint32_t globalsOffset)
     cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
 
     // The channel images this dispatch writes, in the resolve-set order the
-    // shader declares (bindings 2..8): noiseFree, diffuse, specular,
-    // directDiffuse, diffFactor, specFactor, viewZ - mapped onto the shared
-    // channel-image indices the composite reads.
+    // shader declares (bindings 2..9): noiseFree, diffuse, specular,
+    // directDiffuse, diffFactor, specFactor, viewZ, normalRoughness - mapped
+    // onto the shared channel-image indices the composite reads.
+    //
+    // The last is written for DLSS-RR alone; the composite never reads it. It
+    // is the same image the tracer fills, because NRD's encoding takes a plain
+    // world normal and linear roughness, so one guide serves both providers.
     const auto channels = acquireChannelBinding();
-    const std::array<IImage *, 7> resolveChannels {{
+    const std::array<IImage *, 8> resolveChannels {{
         channels[ChannelSlot::NoiseFree],
         channels[ChannelSlot::Diffuse],
         channels[ChannelSlot::Specular],
@@ -1175,6 +1219,7 @@ void ScenePipeline::pbrChannelsPass(ICommandBuffer &cmd, uint32_t globalsOffset)
         channels[ChannelSlot::DiffFactor],
         channels[ChannelSlot::SpecFactor],
         channels[ChannelSlot::ViewZ],
+        channels[ChannelSlot::NormalRoughness],
     }};
     cmd.transitionImages({resolveChannels.begin(), resolveChannels.end()},
                          ImageLayout::General);
@@ -1248,6 +1293,26 @@ void ScenePipeline::compositePass(ICommandBuffer &cmd) {
     // view the tracer handed back. The binding order is the one resolved in
     // init(); the tracer used to bind exactly this set from its own copies.
     const auto &channels = _frameChannels;
+
+    // DLSS-RR denoises as well as resolves, so where it runs it wants the
+    // NOISY assembly - the same raw channels the PBR provider hands over. Take
+    // them back from whatever the tracer settled on, and drop the jitter with
+    // them: at zero offset the composite's sampled reads land on the pixel
+    // centre, which is the raw texel.
+    //
+    // NRD is left running rather than skipped. It can only be here at all in a
+    // developer build that also enabled it, its output is simply unread on
+    // this path, and the alternative - suppressing it from here - would make
+    // an RR that failed to start fall back to FSR with no denoiser behind it,
+    // which is a far worse failure than some wasted milliseconds.
+    if (_dlssRr && _lastChannelFrame >= 0) {
+        _tracingOutput.denoisedDiffuse = channels[ChannelSlot::Diffuse]->sampleView();
+        _tracingOutput.denoisedSpecular = channels[ChannelSlot::Specular]->sampleView();
+        _tracingOutput.directDiffuse = channels[ChannelSlot::DirectDiffuse]->sampleView();
+        _tracingOutput.denoisedJitter[0] = 0.0f;
+        _tracingOutput.denoisedJitter[1] = 0.0f;
+        _tracingOutput.directDenoised = 0;
+    }
     const std::array<ComputeBinding, 10> compositeBindings {{
         {_compositeBindings[0], _output->sampleView()},
         {_compositeBindings[1], channels[ChannelSlot::NoiseFree]->sampleView()},
@@ -1599,6 +1664,41 @@ void ScenePipeline::upscalePass(ICommandBuffer &cmd) {
     inputs.motionScale = {-static_cast<float>(_renderSize.x),
                           static_cast<float>(_renderSize.y)};
 
+    // The guides only DLSS-RR reads. It is denoising here as well as resolving,
+    // so it needs the material factors the colour was modulated by and the
+    // surface it was shaded on - which the channel provider wrote this frame,
+    // whichever provider that was. Retro writes no channels and cannot run RR;
+    // the null check is the honest expression of that rather than a mode test.
+    if (_dlssRr && _lastChannelFrame >= 0) {
+        const auto &channels = _frameChannels;
+        inputs.diffuseAlbedo = channels[ChannelSlot::DiffFactor];
+        inputs.specularAlbedo = channels[ChannelSlot::SpecFactor];
+        inputs.normalRoughness = channels[ChannelSlot::NormalRoughness];
+        if (inputs.diffuseAlbedo) {
+            cmd.transitionImage(*inputs.diffuseAlbedo, ImageLayout::ShaderRead);
+        }
+        if (inputs.specularAlbedo) {
+            cmd.transitionImage(*inputs.specularAlbedo, ImageLayout::ShaderRead);
+        }
+        if (inputs.normalRoughness) {
+            cmd.transitionImage(*inputs.normalRoughness, ImageLayout::ShaderRead);
+        }
+        // Unjittered at both ends: SL takes the sub-pixel offset separately, so
+        // a jittered matrix would count it twice. globals.projection carries
+        // the jitter as a clip translate, which is undone the same way the
+        // tracer undoes it for NRD.
+        const glm::mat4 unjitteredProjection =
+            glm::translate(glm::vec3(-globals.jitter.x, -globals.jitter.y, 0.0f)) *
+            globals.projection;
+        inputs.view = globals.view;
+        inputs.projection = unjitteredProjection;
+        inputs.prevView = _prevView;
+        inputs.prevProjection = _prevProjection;
+        inputs.cameraPosition = glm::vec3(globals.cameraPosition);
+        _prevView = globals.view;
+        _prevProjection = unjitteredProjection;
+    }
+
     // The sub-pixel offset this frame's projection was built with, in pixels
     // with y down. Non-zero exactly when this pass is FSR, which is the rule
     // SceneGraph::computeJitter applies - so the offset the projection carried
@@ -1622,7 +1722,7 @@ void ScenePipeline::upscalePass(ICommandBuffer &cmd) {
 
     _upscaler->dispatch(cmd, inputs, jitterPixels, 1.0f / 60.0f,
                         globals.clipNear, globals.clipFar, verticalFov,
-                        std::clamp(_options.fsrSharpness, 0.0f, 1.0f), reset);
+                        std::clamp(_options.sharpness, 0.0f, 1.0f), reset);
 
     cmd.transitionImage(target, ImageLayout::ShaderRead);
     cmd.transitionImage(depth, ImageLayout::DepthRead);
@@ -1660,6 +1760,11 @@ void ScenePipeline::antiAliasingPass(ICommandBuffer &cmd, uint32_t globalsOffset
     case AntiAliasing::None:
         return;
     case AntiAliasing::Fsr:
+    case AntiAliasing::DlssRr:
+        // One pass for both: the slot holds whichever resolver init() built,
+        // and DLSS-RR falling back to FSR must reach exactly the same code
+        // here. Leaving this case out cost a silent no-upscale path that was
+        // only visible as a 12.2 mean difference against an 0.014 noise floor.
         upscalePass(cmd);
         return;
     case AntiAliasing::Fxaa:
@@ -1917,13 +2022,13 @@ void ScenePipeline::sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     // Last, after the display transform, because an unsharp mask is a
     // judgement about the picture a viewer sees rather than about scene
     // radiance: sharpening linear colour weights a highlight far above what it
-    // looks like once the curve has compressed it. Separate from FSR's own
-    // RCAS, which corrects that upscaler's softness from inside it - running
-    // both stacks two sharpeners on one image, so each dial says so.
+    // looks like once the curve has compressed it. This is the arm of the one
+    // sharpness dial that runs when no upscaler is in the slot to sharpen from
+    // inside itself; RenderPipeline decides which arm that is.
     ScreenEffectUniforms screenEffect;
     screenEffect.screenResolution = glm::vec2(chainSize());
     screenEffect.screenResolutionRcp = 1.0f / glm::vec2(chainSize());
-    screenEffect.sharpenAmount = std::max(0.0f, _options.sharpenAmount);
+    screenEffect.sharpenAmount = std::max(0.0f, _options.sharpness);
     auto screenEffectOffset = _renderer.uniformRing().push(screenEffect);
     tailPass(cmd, "sharpenFragment", globalsOffset, screenEffectOffset, nullptr, 0);
 }

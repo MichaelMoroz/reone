@@ -415,13 +415,15 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     // ScenePipeline::init, so the choice is fixed for the life of the targets.
     descs.push_back(enumOpt(
         "antialiasing", OptionApply::Reapply,
-        "anti-aliasing in the common slot: off, fxaa or fsr",
+        "anti-aliasing in the common slot: off, fxaa, fsr or dlssrr",
         [](const GraphicsOptions &o) -> std::string {
             switch (o.antialiasing) {
             case AntiAliasing::Fxaa:
                 return "fxaa";
             case AntiAliasing::Fsr:
                 return "fsr";
+            case AntiAliasing::DlssRr:
+                return "dlssrr";
             default:
                 return "off";
             }
@@ -433,10 +435,12 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                 o.antialiasing = AntiAliasing::Fxaa;
             } else if (value == "fsr") {
                 o.antialiasing = AntiAliasing::Fsr;
+            } else if (value == "dlssrr") {
+                o.antialiasing = AntiAliasing::DlssRr;
             } else {
                 throw std::invalid_argument(
                     "Graphics option 'antialiasing': unknown mode '" + value +
-                    "'; expected off, fxaa or fsr");
+                    "'; expected off, fxaa, fsr or dlssrr");
             }
         },
         [](const GraphicsOptions &a, const GraphicsOptions &b) {
@@ -460,12 +464,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                             "apply exposure and the tone curve; the display "
                             "transform itself is never optional",
                             &GraphicsOptions::grade));
-    descs.push_back(boolOpt("sharpen", OptionApply::Live,
-                            "sharpen the finished frame, after the display transform",
-                            &GraphicsOptions::sharpen));
-    descs.push_back(floatOpt("sharpenamount", OptionApply::Live,
-                             "strength of the sharpen mask",
-                             &GraphicsOptions::sharpenAmount, 0.0f, 4.0f));
 
     // Common, not traced-only: the channels are G-buffer quantities and every
     // mode draws that G-buffer. Sits here with the other frame-wide dials
@@ -483,10 +481,9 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                             &GraphicsOptions::ptDenoise));
     descs.push_back(enumOpt(
         "ptshadowfilter", OptionApply::Live,
-        "what settles the direct channel: off, penumbra or denoiser",
+        "what settles the direct channel: off or denoiser",
         [](const GraphicsOptions &o) -> std::string {
             switch (o.ptShadowFilter) {
-            case ShadowFilter::Penumbra: return "penumbra";
             case ShadowFilter::Denoiser: return "denoiser";
             default: return "off";
             }
@@ -494,14 +491,12 @@ std::vector<GraphicsOptionDesc> buildDescs() {
         [](GraphicsOptions &o, const std::string &value) {
             if (value == "off" || value == "none" || value == "0") {
                 o.ptShadowFilter = ShadowFilter::Off;
-            } else if (value == "penumbra" || value == "1") {
-                o.ptShadowFilter = ShadowFilter::Penumbra;
-            } else if (value == "denoiser" || value == "nrd") {
+            } else if (value == "denoiser" || value == "nrd" || value == "1") {
                 o.ptShadowFilter = ShadowFilter::Denoiser;
             } else {
                 throw std::invalid_argument(
                     "Graphics option 'ptshadowfilter': unknown mode '" + value +
-                    "'; expected off, penumbra or denoiser");
+                    "'; expected off or denoiser");
             }
         },
         [](const GraphicsOptions &a, const GraphicsOptions &b) {
@@ -510,9 +505,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
         [](const GraphicsOptions &from, GraphicsOptions &to) {
             to.ptShadowFilter = from.ptShadowFilter;
         }));
-    descs.push_back(floatOpt("ptshadowfiltermaxradius", OptionApply::Live,
-                             "ceiling on the shadow filter radius, pixels",
-                             &GraphicsOptions::ptShadowFilterMaxRadius, 1.0f, 64.0f));
     // Grass shape. All live: the merge kernel reads them from a push constant,
     // so a change costs a dispatch rather than a rebuild of the face records.
     descs.push_back(floatOpt("grassradius", OptionApply::Live,
@@ -595,18 +587,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(intOpt("grasstrianglebudget", OptionApply::Live,
                            "ceiling on grass triangles in the scene",
                            &GraphicsOptions::grassTriangleBudget, 0, kMaxGrassTriangleBudget));
-    descs.push_back(floatOpt("ptshadowfilterscale", OptionApply::Live,
-                             "multiplier on the radius the geometry implies",
-                             &GraphicsOptions::ptShadowFilterRadiusScale, 0.0f, 8.0f));
-    descs.push_back(floatOpt("ptshadowfilterminradius", OptionApply::Live,
-                             "floor on the shadow filter radius where light is blocked, pixels",
-                             &GraphicsOptions::ptShadowFilterMinRadius, 0.0f, 32.0f));
-    descs.push_back(floatOpt("ptshadowfilterdepthtolerance", OptionApply::Live,
-                             "relative view-depth difference a filter tap may have",
-                             &GraphicsOptions::ptShadowFilterDepthTolerance, 0.0f, 1.0f));
-    descs.push_back(floatOpt("ptshadowfilternormaltolerance", OptionApply::Live,
-                             "minimum normal agreement a filter tap may have",
-                             &GraphicsOptions::ptShadowFilterNormalTolerance, -1.0f, 1.0f));
     descs.push_back(boolOpt("ptdirectchannel", OptionApply::Live,
                             "apply primary-vertex direct light at the resolve "
                             "instead of through the denoiser",
@@ -666,9 +646,45 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(floatOpt("renderscale", OptionApply::Reapply,
                              "trace and raster at this fraction of display resolution; FSR upscales",
                              &GraphicsOptions::renderScale, 0.25f, 1.0f));
-    descs.push_back(floatOpt("fsrsharpness", OptionApply::Live,
-                             "FSR RCAS sharpening, 0 disables the pass",
-                             &GraphicsOptions::fsrSharpness, 0.0f, 1.0f));
+    descs.push_back(enumOpt(
+        "dlssmode", OptionApply::Reapply,
+        "DLSS quality mode: dlaa, quality, balanced, performance or ultraperformance",
+        [](const GraphicsOptions &o) -> std::string {
+            switch (o.dlssMode) {
+            case DlssMode::Quality: return "quality";
+            case DlssMode::Balanced: return "balanced";
+            case DlssMode::Performance: return "performance";
+            case DlssMode::UltraPerformance: return "ultraperformance";
+            default: return "dlaa";
+            }
+        },
+        [](GraphicsOptions &o, const std::string &value) {
+            if (value == "dlaa" || value == "native") {
+                o.dlssMode = DlssMode::Dlaa;
+            } else if (value == "quality") {
+                o.dlssMode = DlssMode::Quality;
+            } else if (value == "balanced") {
+                o.dlssMode = DlssMode::Balanced;
+            } else if (value == "performance") {
+                o.dlssMode = DlssMode::Performance;
+            } else if (value == "ultraperformance") {
+                o.dlssMode = DlssMode::UltraPerformance;
+            } else {
+                throw std::invalid_argument(
+                    "Graphics option 'dlssmode': unknown mode '" + value +
+                    "'; expected dlaa, quality, balanced, performance or ultraperformance");
+            }
+        },
+        [](const GraphicsOptions &a, const GraphicsOptions &b) {
+            return a.dlssMode == b.dlssMode;
+        },
+        [](const GraphicsOptions &from, GraphicsOptions &to) {
+            to.dlssMode = from.dlssMode;
+        }));
+    descs.push_back(floatOpt("sharpness", OptionApply::Live,
+                             "sharpening, wherever the frame is sharpened: RCAS under FSR, "
+                             "DLSS-RR's own under DLSS, an unsharp mask under neither",
+                             &GraphicsOptions::sharpness, 0.0f, 1.0f));
 
     // Which texture pack the resource director mounts, decided once while the
     // game directory is opened.

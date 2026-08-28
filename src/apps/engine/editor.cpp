@@ -127,18 +127,12 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"pttracestats", std::to_string(options.ptTraceStats)},
         {"ptdenoise", std::to_string(options.ptDenoise)},
         {"ptdirectchannel", std::to_string(options.ptDirectChannel)},
-        {"ptshadowfilter", options.ptShadowFilter == graphics::ShadowFilter::Penumbra ? "penumbra"
-                           : options.ptShadowFilter == graphics::ShadowFilter::Denoiser
+        {"ptshadowfilter", options.ptShadowFilter == graphics::ShadowFilter::Denoiser
                                ? "denoiser"
                                : "off"},
         {"ptnrddirectaccumtime", formatConfigFloat(options.ptNrdDirectAccumulationTime)},
         {"ptnrddirectatrous", std::to_string(options.ptNrdDirectAtrousIterations)},
         {"ptnrddirectphiluminance", formatConfigFloat(options.ptNrdDirectPhiLuminance)},
-        {"ptshadowfiltermaxradius", formatConfigFloat(options.ptShadowFilterMaxRadius)},
-        {"ptshadowfilterscale", formatConfigFloat(options.ptShadowFilterRadiusScale)},
-        {"ptshadowfilterminradius", formatConfigFloat(options.ptShadowFilterMinRadius)},
-        {"ptshadowfilterdepthtolerance", formatConfigFloat(options.ptShadowFilterDepthTolerance)},
-        {"ptshadowfilternormaltolerance", formatConfigFloat(options.ptShadowFilterNormalTolerance)},
         {"debugview", std::to_string(options.debugView)},
         {"tonemap", std::to_string(options.tonemap)},
         {"exposure", formatConfigFloat(options.exposure)},
@@ -165,17 +159,22 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
         {"ptnrddisocclusionthreshold", formatConfigFloat(options.ptNrdDisocclusionThreshold)},
         {"ptnrdantifirefly", std::to_string(options.ptNrdAntiFirefly)},
         {"renderscale", formatConfigFloat(options.renderScale)},
-        {"fsrsharpness", formatConfigFloat(options.fsrSharpness)},
+        {"sharpness", formatConfigFloat(options.sharpness)},
+        {"dlssmode", options.dlssMode == graphics::DlssMode::Quality            ? "quality"
+                     : options.dlssMode == graphics::DlssMode::Balanced         ? "balanced"
+                     : options.dlssMode == graphics::DlssMode::Performance      ? "performance"
+                     : options.dlssMode == graphics::DlssMode::UltraPerformance ? "ultraperformance"
+                                                                                : "dlaa"},
+        {"sharpness", formatConfigFloat(options.sharpness)},
         {"ssao", std::to_string(options.ssao)},
         {"ssr", std::to_string(options.ssr)},
         // Written as the parser spells it; an unwritable value would silently
         // save as "off" and change the image on the next launch.
         {"antialiasing", options.antialiasing == graphics::AntiAliasing::Fxaa  ? "fxaa"
                          : options.antialiasing == graphics::AntiAliasing::Fsr ? "fsr"
+                         : options.antialiasing == graphics::AntiAliasing::DlssRr ? "dlssrr"
                                                                                : "off"},
         {"grade", std::to_string(options.grade)},
-        {"sharpen", std::to_string(options.sharpen)},
-        {"sharpenamount", formatConfigFloat(options.sharpenAmount)},
         {"texquality", std::to_string(static_cast<int>(options.textureQuality))},
         {"shadowres", std::to_string(std::max(0, static_cast<int>(glm::log2(options.shadowResolution)) - 10))},
         {"anisofilter", std::to_string(options.anisotropicFiltering)},
@@ -914,7 +913,13 @@ void Editor::graphicsRendererTab() {
     // rather than live: FSR builds a context and device images in the
     // pipeline's init, so it cannot be switched inside a frame.
     // Ordered as the enum is, so the index is the value.
-    static const char *kAntiAliasingNames[] = {"Off", "FXAA", "FSR 2 (NativeAA)"};
+    static const char *kAntiAliasingNames[] = {"Off", "FXAA", "FSR 2 (NativeAA)",
+                                               "DLSS Ray Reconstruction"};
+    static_assert(IM_ARRAYSIZE(kAntiAliasingNames) ==
+                      static_cast<int>(graphics::AntiAliasing::DlssRr) + 1,
+                  "every AntiAliasing value needs a name: the array is indexed by the enum "
+                  "below, so a missing entry is an out-of-bounds read rather than a gap in "
+                  "the combo");
     int antiAliasing = static_cast<int>(staged.antialiasing);
     if (ImGui::Combo("Anti-aliasing", &antiAliasing, kAntiAliasingNames,
                      IM_ARRAYSIZE(kAntiAliasingNames))) {
@@ -932,28 +937,201 @@ void Editor::graphicsRendererTab() {
         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Running: %s until Apply.",
                            kAntiAliasingNames[static_cast<int>(options.antialiasing)]);
     }
+    // What is actually resolving, and for DLSS what version of it. The slot's
+    // occupant is the one graphics choice whose real behaviour cannot be read
+    // off the combo: DLSS falls back to FSR when the DLLs or the GPU are not
+    // there, and it does so silently by design. Naming the running resolver -
+    // and its version, which the user can change by dropping in a different
+    // nvngx_dlssd.dll without rebuilding - is what makes that legible.
+    const bool dlssSelected = staged.antialiasing == graphics::AntiAliasing::DlssRr ||
+                              options.antialiasing == graphics::AntiAliasing::DlssRr;
+    const bool dlssAvailable = _engine._graphicsModule->renderer().rayReconstructionAvailable();
+    if (dlssSelected) {
+        if (dlssAvailable) {
+            graphics::RayReconstructionInfo info =
+                _engine._graphicsModule->renderer().rayReconstructionInfo();
+            ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.4f, 1.0f),
+                               "DLSS Ray Reconstruction   Streamline %u.%u.%u   NGX %u.%u.%u",
+                               info.streamlineMajor, info.streamlineMinor, info.streamlineBuild,
+                               info.ngxMajor, info.ngxMinor, info.ngxBuild);
+            settingHint("The neural model lives in nvngx_dlssd.dll beside the executable. "
+                        "Replacing that file with a newer one changes the NGX version here "
+                        "and the picture with it; nothing needs rebuilding.",
+                        true);
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
+                               "DLSS Ray Reconstruction: NOT available - FSR runs instead.");
+            settingHint("Needs sl.interposer.dll, sl.common.dll, sl.dlss_d.dll and "
+                        "nvngx_dlssd.dll beside the executable, and a GeForce RTX GPU. "
+                        "None of them ship with reone.",
+                        true);
+        }
+    } else if (options.antialiasing == graphics::AntiAliasing::Fsr) {
+        ImGui::TextColored(ImVec4(0.55f, 0.7f, 0.85f, 1.0f),
+                           "FidelityFX Super Resolution 2.2.1   temporal, vendor-neutral");
+    }
+
+    // DLSS names its render scale rather than taking a number, so under DLSS
+    // the mode IS the scale and the slider below reads it back rather than
+    // setting it. Two controls free to disagree about one ratio would be a bug
+    // waiting to happen.
+    static const char *kDlssModeNames[] = {"DLAA (1.00x)", "Quality (0.67x)", "Balanced (0.58x)",
+                                           "Performance (0.50x)", "Ultra Performance (0.33x)"};
+    static_assert(IM_ARRAYSIZE(kDlssModeNames) ==
+                      static_cast<int>(graphics::DlssMode::UltraPerformance) + 1,
+                  "every DlssMode needs a name: this array is indexed by the enum");
+    if (dlssSelected) {
+        ImGui::BeginDisabled(!dlssAvailable);
+        int dlssMode = static_cast<int>(staged.dlssMode);
+        if (ImGui::Combo("DLSS mode", &dlssMode, kDlssModeNames, IM_ARRAYSIZE(kDlssModeNames))) {
+            staged.dlssMode = static_cast<graphics::DlssMode>(dlssMode);
+        }
+        settingHint("The ratio DLSS renders at before reconstructing to display resolution. "
+                    "DLAA is native - no upscaling, anti-aliasing and denoising only. "
+                    "It changes target sizes, so Apply is required.",
+                    true);
+        ImGui::EndDisabled();
+    }
+
+    // FSR takes a free ratio; DLSS takes it from the mode above. Disabled
+    // rather than hidden under DLSS so the number it resolved to stays visible.
     ImGui::BeginDisabled(staged.antialiasing != graphics::AntiAliasing::Fsr);
-    ImGui::SliderFloat("FSR render scale", &staged.renderScale, 0.25f, 1.0f, "%.3f");
-    settingHint("Raster and trace at this fraction of display resolution; FSR reconstructs the "
-                "display image. It changes target sizes, so Apply is required.", true);
-    ImGui::EndDisabled();
-    ImGui::BeginDisabled(options.antialiasing != graphics::AntiAliasing::Fsr);
-    ImGui::SliderFloat("FSR sharpness", &options.fsrSharpness, 0.0f, 1.0f, "%.2f");
-    // Wanted precisely while it is greyed out, so the hover has to survive that.
-    settingHint("RCAS, inside FSR. Compensates for upscaling softness, of which NativeAA has none - "
-                "keep it low. Never stack the postprocess sharpen on top.",
-                true);
+    float shownScale = staged.antialiasing == graphics::AntiAliasing::DlssRr
+                           ? graphics::dlssModeScale(staged.dlssMode)
+                           : staged.renderScale;
+    if (ImGui::SliderFloat("Render scale", &shownScale, 0.25f, 1.0f, "%.3f")) {
+        staged.renderScale = shownScale;
+    }
+    settingHint("Raster and trace at this fraction of display resolution; the upscaler "
+                "reconstructs the display image. Under DLSS the mode above owns it. "
+                "It changes target sizes, so Apply is required.", true);
     ImGui::EndDisabled();
 
-    static constexpr const char *kSharpenHint =
-        "An unsharp mask, last of all, over display colour. Separate from FSR's RCAS above: "
-        "running both sharpens one image twice.";
-    ImGui::Checkbox("Sharpen", &options.sharpen);
-    settingHint(kSharpenHint);
-    ImGui::BeginDisabled(!options.sharpen);
-    ImGui::SliderFloat("Sharpen amount", &options.sharpenAmount, 0.0f, 2.0f, "%.2f");
-    settingHint(kSharpenHint, true);
+    // One dial, three implementations, because only one of them can run: RCAS
+    // inside FSR, DLSS-RR's own, or the postprocess unsharp mask when neither
+    // upscaler is in the slot. Never disabled - there is always something for
+    // it to drive.
+    ImGui::SliderFloat("Sharpness", &options.sharpness, 0.0f, 1.0f, "%.2f");
+    settingHint("0 skips sharpening entirely.\n\n"
+                "Under FSR this is RCAS, from inside the upscaler. Everywhere else - DLSS "
+                "included - it is an unsharp mask over display colour, the last pass of the "
+                "frame.\n\n"
+                "DLSS is on the mask side despite exposing a sharpness field of its own: "
+                "that field is inert. Measured here, 0.0 against 1.0 moved the mean image "
+                "gradient by 0.004%%. NVIDIA removed sharpening from DLSS in 3.1 and Ray "
+                "Reconstruction kept the field without the deprecation marker.\n\n"
+                "RCAS and an unsharp mask do not agree numerically, so expect apparent "
+                "sharpness to shift when you change the slot. What it cannot do any more is "
+                "sharpen one image twice, which two separate dials made easy.");
+
+    // Denoising, here rather than on the Path tracing tab because it is now a
+    // choice between two things in the same slot: NRD denoises the traced
+    // channels before the resolve, and DLSS-RR does the denoising itself and
+    // leaves nothing for NRD to do. Keeping them a tab apart hid that they are
+    // alternatives.
+#ifdef R_ENABLE_NRD
+    ImGui::SeparatorText("Denoising");
+    const bool tracing = options.mode == graphics::RenderMode::PathTracing;
+    const bool dlssResolving = options.antialiasing == graphics::AntiAliasing::DlssRr &&
+                               _engine._graphicsModule->renderer().rayReconstructionAvailable();
+    if (!tracing) {
+        ImGui::TextDisabled("Path tracing only - the raster modes have no noise to denoise.");
+    } else if (dlssResolving) {
+        ImGui::TextDisabled("DLSS Ray Reconstruction is denoising; NRD does not run.");
+    }
+    ImGui::BeginDisabled(!tracing || dlssResolving);
+    ImGui::Checkbox("NRD denoiser", &options.ptDenoise);
+    settingHint("Diffuse and specular, through RELAX. Off shows the raw traced frame; "
+                "debug views always bypass it. Its tuning is under Advanced.");
+    // Order matches the enum, so the index is the value.
+    static const char *kShadowFilterNames[] = {"Off", "Denoiser"};
+    static_assert(IM_ARRAYSIZE(kShadowFilterNames) ==
+                      static_cast<int>(graphics::ShadowFilter::Denoiser) + 1,
+                  "every ShadowFilter needs a name: this array is indexed by the enum");
+    int shadowFilter = static_cast<int>(options.ptShadowFilter);
+    if (ImGui::Combo("Direct channel", &shadowFilter, kShadowFilterNames,
+                     IM_ARRAYSIZE(kShadowFilterNames))) {
+        options.ptShadowFilter = static_cast<graphics::ShadowFilter>(shadowFilter);
+    }
+    settingHint("What settles primary-vertex direct light. Two architectures, not two "
+                "strengths.\n\n"
+                "Off leaves it to the temporal resolve. Default, and worth knowing why: blue noise "
+                "puts its error at high spatial frequency, which is what a temporal resolve "
+                "averages away and what FSR's clamp rejects. Measured over 32 FSR frames, blurring "
+                "made the picture less stable, not more - which is why the geometry-sized "
+                "penumbra blur that used to sit here was removed rather than defaulted off.\n\n"
+                "Denoiser gives the channel its own NRD instance, which estimates variance per "
+                "pixel and sizes its kernel from that - so a clean region keeps its detail. Not "
+                "the same as turning the direct channel off, which sums this signal into the "
+                "diffuse one: there it gets a kernel chosen for the bounce noise, because the two "
+                "then share a single variance estimate dominated by the wrong term.");
+    if (ImGui::TreeNode("Direct denoiser tuning")) {
+        ImGui::SliderFloat("History", &options.ptNrdDirectAccumulationTime, 0.0f, 2.0f, "%.2f s");
+        settingHint("Deliberately shorter than the bounce channel's. A shadow edge moves with "
+                    "whatever casts it, so history that suits slow indirect light is lag here.");
+        ImGui::SliderInt("A-trous iterations", &options.ptNrdDirectAtrousIterations, 2, 8);
+        settingHint("Each iteration doubles the kernel's reach. Few, because this signal arrives "
+                    "converged outside the penumbra and the extra width is spent on detail.");
+        ImGui::SliderFloat("Luminance phi", &options.ptNrdDirectPhiLuminance, 0.0f, 16.0f, "%.2f");
+        settingHint("The edge-stopping term, divided by the estimated variance. Low keeps edges by "
+                    "rejecting any tap that differs; high lets the filter average across them. "
+                    "This is the dial that decides whether a converged penumbra gradient survives.");
+        ImGui::TreePop();
+    }
+    ImGui::Checkbox("Direct light at resolve", &options.ptDirectChannel);
+    settingHint("Direct light on the pixels you are looking at skips the denoiser and is applied "
+                "at the resolve. A denoiser is built for indirect light - smooth, slow, worth a "
+                "wide kernel - and the same kernel softens the contact edge of a shadow. This "
+                "channel is stratified where it is sampled instead, and the temporal resolve takes "
+                "what noise is left. Off routes it back through the denoiser.");
+    if (ImGui::TreeNode("Denoiser tuning")) {
+        ImGui::SeparatorText("Temporal accumulation");
+        ImGui::SliderFloat("History", &options.ptNrdAccumulationTime, 0.0f, 2.0f, "%.2f s");
+        settingHint("How long light is remembered, in seconds rather than frames. NRD converts it "
+                    "against the measured frame rate, which is what it asks for: a fixed frame "
+                    "count is a shorter and shorter window as the frame rate rises, and the "
+                    "spatial filter widens to cover what the history stops carrying.");
+        ImGui::SliderFloat("Responsive history", &options.ptNrdFastAccumulationTime, 0.0f, 1.0f, "%.2f s");
+        settingHint("The short history the long one is clamped against. Shorter reacts faster to "
+                    "lighting changes and keeps more noise.");
+        ImGui::SliderInt("History fix frames", &options.ptNrdHistoryFixFrames, 0, 8);
+        ImGui::SeparatorText("Spatial filtering (pixels)");
+        ImGui::SliderFloat("Diffuse prepass radius", &options.ptNrdDiffusePrepassBlurRadius, 0.0f, 60.0f, "%.0f");
+        ImGui::SliderFloat("Specular prepass radius", &options.ptNrdSpecularPrepassBlurRadius, 0.0f, 60.0f, "%.0f");
+        settingHint("Spatial reuse before accumulation. Not optional here: the tracer picks one "
+                    "lobe per pixel, so the pixels that went diffuse carry no specular distance at "
+                    "all, and NRD asks for a real prepass whenever the sampling is probabilistic.");
+        ImGui::SeparatorText("History rejection");
+        static constexpr const char *kRejectionHint =
+            "Larger = more tolerant. This is the pair that decides whether a neighbour or a history "
+            "sample belongs to the same surface, so opening them up hides noise by reusing across "
+            "normals and depths that do not match - which is contact shadows and sharp folds gone. "
+            "NRD's own value for both is 0.15.";
+        ImGui::SliderFloat("Lobe angle fraction", &options.ptNrdLobeAngleFraction, 0.01f, 1.0f, "%.2f");
+        settingHint(kRejectionHint);
+        ImGui::SliderFloat("Roughness fraction", &options.ptNrdRoughnessFraction, 0.01f, 1.0f, "%.2f");
+        settingHint(kRejectionHint);
+        ImGui::SliderFloat("Disocclusion threshold", &options.ptNrdDisocclusionThreshold, 0.001f, 0.2f, "%.3f",
+                           ImGuiSliderFlags_Logarithmic);
+        settingHint(kRejectionHint);
+        ImGui::Checkbox("Anti-firefly", &options.ptNrdAntiFirefly);
+
+
+        ImGui::SeparatorText("RELAX");
+        ImGui::SliderInt("A-trous iterations", &options.ptNrdAtrousIterations, 2, 8);
+        settingHint("Wavelet passes. Each doubles the reach of the filter while its edge stoppers "
+                    "keep it off the edges - which is how RELAX covers ground without the flat "
+                    "blur.", true);
+        ImGui::SliderFloat("Diffuse luminance phi", &options.ptNrdDiffusePhiLuminance, 0.0f, 8.0f, "%.2f");
+        ImGui::SliderFloat("Specular luminance phi", &options.ptNrdSpecularPhiLuminance, 0.0f, 8.0f, "%.2f");
+        settingHint("Luminance edge stoppers. Smaller keeps more detail and more noise with it.", true);
+        ImGui::SliderFloat("Depth threshold", &options.ptNrdDepthThreshold, 0.0f, 0.05f, "%.4f",
+                           ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("Specular lobe slack", &options.ptNrdSpecularLobeAngleSlack, 0.0f, 2.0f, "%.2f deg");
+        ImGui::TreePop();
+    }
     ImGui::EndDisabled();
+#endif
 
     // A creative grade is display policy, not an all-mode feature toggle:
     // Retro carries a finished reference picture through the linear chain and
@@ -1004,26 +1182,104 @@ void Editor::graphicsQualityTab() {
         settingHint("Cube maps a frame may hold.");
         ImGui::TreePop();
     }
-    ImGui::BeginDisabled(options.mode != graphics::RenderMode::PBR);
-    ImGui::SliderFloat("Lightmap intensity", &options.pbrLightmapIntensity, 0.0f, 4.0f, "%.2f");
+    // One section for both grades, because the pair is only legible together.
+    // The same sources are graded twice against different transport - the bake
+    // IS the indirect light in PBR while the tracer computes that transport and
+    // retires the bake toward zero - and that disagreement reads as a
+    // disagreement only when the two numbers are in view at once. They lived a
+    // tab apart, which made every comparison a tab switch and left whichever
+    // group was greyed looking like the only one there was.
+    //
+    // Same scale on both sides, logarithmic to 32: a value moved from one
+    // subsection to the other has to mean the same distance on the dial, and
+    // the defaults sit at 1-2.5, so a linear ceiling of 16 spent most of its
+    // travel above anything ever set.
+    ImGui::SeparatorText("Lighting");
+    static constexpr float kLightIntensityMax = 32.0f;
+    static constexpr ImGuiSliderFlags kLightIntensityFlags = ImGuiSliderFlags_Logarithmic;
+    const bool pbrRunning = options.mode == graphics::RenderMode::PBR;
+    const bool tracerRunning = options.mode == graphics::RenderMode::PathTracing;
+
+    ImGui::TextDisabled("PBR%s", pbrRunning ? " (running)" : "");
+    ImGui::Indent();
+    ImGui::PushID("pbr-lighting");
+    ImGui::BeginDisabled(!pbrRunning);
+    ImGui::SliderFloat("Lightmap", &options.pbrLightmapIntensity, 0.0f, kLightIntensityMax, "%.2f",
+                       kLightIntensityFlags);
     settingHint("Strength of the area's baked irradiance, which is this mode's indirect light, so "
                 "it belongs at full strength. The tracer has its own dial for the same bake - "
-                "Lightmap cache, on the Path tracing tab - kept near zero because it computes that "
-                "transport for real and would otherwise count it twice. That pair is the one "
-                "number the two modes are meant to disagree on.",
+                "Lightmap cache, below - kept near zero because it computes that transport for "
+                "real and would otherwise count it twice. That pair is the one number the two "
+                "modes are meant to disagree on.",
                 true);
-    ImGui::SliderFloat("Sky", &options.pbrSkyIntensity, 0.0f, 16.0f, "%.2f");
-    settingHint("This mode's sky light. Path tracing has its own on its tab: the two grades are "
+    ImGui::SliderFloat("Sky", &options.pbrSkyIntensity, 0.0f, kLightIntensityMax, "%.2f",
+                       kLightIntensityFlags);
+    settingHint("This mode's sky light. Path tracing has its own below: the two grades are "
                 "authored against different transport, so one number for both made every "
                 "adjustment a question of which mode was running.",
                 true);
-    ImGui::SliderFloat("Emissive", &options.pbrEmissiveIntensity, 0.0f, 16.0f, "%.2f");
+    ImGui::SliderFloat("Emissive", &options.pbrEmissiveIntensity, 0.0f, kLightIntensityMax, "%.2f",
+                       kLightIntensityFlags);
     settingHint("Lamps, screens and glowing panels, in this mode.", true);
-    ImGui::SliderFloat("Direct light", &options.pbrDirectIntensity, 0.0f, 16.0f, "%.2f");
+    ImGui::SliderFloat("Direct light", &options.pbrDirectIntensity, 0.0f, kLightIntensityMax, "%.2f",
+                       kLightIntensityFlags);
     settingHint("Point and spot lights, in this mode.", true);
-    ImGui::SliderFloat("Sun", &options.pbrSunIntensity, 0.0f, 16.0f, "%.2f");
+    ImGui::SliderFloat("Sun", &options.pbrSunIntensity, 0.0f, kLightIntensityMax, "%.2f",
+                       kLightIntensityFlags);
     settingHint("Directional lights, in this mode.", true);
     ImGui::EndDisabled();
+    ImGui::PopID();
+    ImGui::Unindent();
+
+    // Identical labels on both sides - the sources are the same sources - so
+    // the two groups need their own ID scopes or ImGui gives "Sky" one widget
+    // state shared between them.
+    ImGui::TextDisabled("Path tracing%s", tracerRunning ? " (running)" : "");
+    ImGui::Indent();
+    ImGui::PushID("pt-lighting");
+    ImGui::BeginDisabled(!tracerRunning);
+    ImGui::SliderFloat("Lightmap cache", &options.ptLightmapIntensity, 0.0f, kLightIntensityMax,
+                       "%.2f", kLightIntensityFlags);
+    settingHint("Near zero on purpose: the tracer computes that transport for real, so adding the "
+                "bake on top counts it twice. PBR keeps its own strength for the same bake above - "
+                "that pair is the one number the two modes are meant to disagree on.",
+                true);
+    ImGui::SliderFloat("Sky", &options.ptSkyIntensity, 0.0f, kLightIntensityMax, "%.2f",
+                       kLightIntensityFlags);
+    settingHint("This mode's sky light, graded against transport it computes rather than a bake.",
+                true);
+    ImGui::SliderFloat("Backdrop", &options.ptBackdropIntensity, 0.0f, kLightIntensityMax, "%.2f",
+                       kLightIntensityFlags);
+    settingHint("Painted distance: Taris' cityscape, Manaan's towers. Its own scale beside the "
+                "sky's, and deliberately not the emissive one. Emissive grades lamps, screens and "
+                "panels - objects standing in the scene that also light it. A backdrop is a "
+                "picture of a distance nobody modelled: it ends the path exactly as the sky does, "
+                "and there is nothing behind it to receive what it might emit. Sharing a dial "
+                "meant choosing between the skyline reading right and the interiors reading "
+                "right. 1.0 is the texture as authored.",
+                true);
+    ImGui::SliderFloat("Emissive", &options.ptEmissiveIntensity, 0.0f, kLightIntensityMax, "%.2f",
+                       kLightIntensityFlags);
+    settingHint("Lamps, screens and glowing panels, in this mode.", true);
+    ImGui::SliderFloat("Direct light", &options.ptDirectIntensity, 0.0f, kLightIntensityMax, "%.2f",
+                       kLightIntensityFlags);
+    settingHint("Point and spot lights, in this mode.", true);
+    ImGui::SliderFloat("Sun", &options.ptSunIntensity, 0.0f, kLightIntensityMax, "%.2f",
+                       kLightIntensityFlags);
+    settingHint("Directional lights, in this mode.", true);
+    ImGui::SliderFloat("Emissive gamma", &options.emissiveGamma, 0.1f, 4.0f, "%.2f");
+    settingHint("Exponent authored radiance is decoded with: emission, sky and backdrop imagery. "
+                "Only the tracer reads it, which is why it sits in this group. Separate from "
+                "Albedo gamma under Materials, and it should stay at 2.2. That one is a look "
+                "control - Odyssey art was authored to be multiplied by light unconverted, so any "
+                "decode is a compromise. This one is not a compromise: an authored glow colour is "
+                "the colour emitted, and 2.2 is just the encoding it was stored in. They used to "
+                "be one number, so grading a room's reflectance also changed how bright its lamps "
+                "and its skyline were.",
+                true);
+    ImGui::EndDisabled();
+    ImGui::PopID();
+    ImGui::Unindent();
     ImGui::Checkbox("Fog", &options.fog);
     settingHint("The area's authored fog, resolved once for every mode from the depth buffer. "
                 "Exponential in height above the walkmesh rather than a flat ramp in distance, "
@@ -1032,11 +1288,10 @@ void Editor::graphicsQualityTab() {
     ImGui::SliderFloat("Fog gradient", &options.fogHeight, 0.5f, 512.0f, "%.0f m",
                        ImGuiSliderFlags_Logarithmic);
     settingHint("Altitude above the walkmesh at which the fog has thinned to a hundredth of its "
-                "ground density. Below about 64 the layer is shallow against the view distance and "
-                "the haze INVERTS - a ray to the horizon climbs out of it while a ray to the ground "
-                "stays inside, so distant land comes out hazier than the sky behind it. Lower is a "
-                "ground mist seen from above; higher is distance haze. Density itself follows the "
-                "area's authored far distance.",
+                "ground density - which is to say, what kind of fog this is. A few units is a "
+                "ground layer: distant hills veiled, the sky above the layer clear. Tens of units "
+                "fills the volume and becomes atmospheric haze, where the sky fogs with everything "
+                "else. Density is not a dial; it follows the ramp the area authored.",
                 true);
     ImGui::EndDisabled();
     ImGui::Checkbox("Grass", &options.grass);
@@ -1178,109 +1433,12 @@ void Editor::graphicsPathTracingTab() {
     }
     settingHint("Path depth after the primary hit. Deeper paths carry light around corners; the "
                 "lightmap cache already answers much of it on static geometry.");
-#ifdef R_ENABLE_NRD
-    ImGui::Checkbox("NRD denoiser", &options.ptDenoise);
-    settingHint("Diffuse and specular, through RELAX. Off shows the raw traced frame; "
-                "debug views always bypass it. Its tuning is under Advanced.");
-    // Order matches the enum, so the index is the value.
-    static const char *kShadowFilterNames[] = {"Off", "Penumbra blur", "Denoiser"};
-    int shadowFilter = static_cast<int>(options.ptShadowFilter);
-    if (ImGui::Combo("Direct channel", &shadowFilter, kShadowFilterNames,
-                     IM_ARRAYSIZE(kShadowFilterNames))) {
-        options.ptShadowFilter = static_cast<graphics::ShadowFilter>(shadowFilter);
-    }
-    settingHint("What settles primary-vertex direct light. Three architectures, not three "
-                "strengths.\n\n"
-                "Off leaves it to the temporal resolve. Default, and worth knowing why: blue noise "
-                "puts its error at high spatial frequency, which is what a temporal resolve "
-                "averages away and what FSR's clamp rejects. Measured over 32 FSR frames, blurring "
-                "made the picture less stable, not more.\n\n"
-                "Penumbra blur sizes a kernel from geometry - the tracer records how far each "
-                "blocker was, and a source of known angular size at that distance implies one "
-                "particular width. It never asks whether this pixel needed filtering, so on a "
-                "converged signal it blurs detail that was already right.\n\n"
-                "Denoiser gives the channel its own NRD instance, which estimates variance per "
-                "pixel and sizes its kernel from that - so a clean region keeps its detail. Not "
-                "the same as turning the direct channel off, which sums this signal into the "
-                "diffuse one: there it gets a kernel chosen for the bounce noise, because the two "
-                "then share a single variance estimate dominated by the wrong term.");
-    if (ImGui::TreeNode("Direct denoiser tuning")) {
-        ImGui::SliderFloat("History", &options.ptNrdDirectAccumulationTime, 0.0f, 2.0f, "%.2f s");
-        settingHint("Deliberately shorter than the bounce channel's. A shadow edge moves with "
-                    "whatever casts it, so history that suits slow indirect light is lag here.");
-        ImGui::SliderInt("A-trous iterations", &options.ptNrdDirectAtrousIterations, 2, 8);
-        settingHint("Each iteration doubles the kernel's reach. Few, because this signal arrives "
-                    "converged outside the penumbra and the extra width is spent on detail.");
-        ImGui::SliderFloat("Luminance phi", &options.ptNrdDirectPhiLuminance, 0.0f, 16.0f, "%.2f");
-        settingHint("The edge-stopping term, divided by the estimated variance. Low keeps edges by "
-                    "rejecting any tap that differs; high lets the filter average across them. "
-                    "This is the dial that decides whether a converged penumbra gradient survives.");
-        ImGui::TreePop();
-    }
-    if (ImGui::TreeNode("Penumbra blur tuning")) {
-        ImGui::SliderFloat("Radius scale", &options.ptShadowFilterRadiusScale, 0.0f, 8.0f, "%.2fx");
-        settingHint("Multiplier on the radius the geometry implies. 1 is the physical answer; "
-                    "above it you are trading penumbra fidelity for a quieter shadow, and the "
-                    "trade is yours to make.");
-        ImGui::SliderFloat("Radius floor", &options.ptShadowFilterMinRadius, 0.0f, 32.0f, "%.1f px");
-        settingHint("Unphysical, and here for a reason: measured on Dantooine, a one-degree sun "
-                    "implies a penumbra of about one pixel, so a filter sized strictly by the "
-                    "geometry has almost nothing to do - it touched 1.2%% of the frame. The noise "
-                    "left in this channel is not penumbra-scale. This floor blurs anyway, but only "
-                    "where something actually blocked the light, so a contact edge keeps its edge.");
-        ImGui::SliderFloat("Radius ceiling", &options.ptShadowFilterMaxRadius, 1.0f, 64.0f, "%.0f px");
-        settingHint("However wide the geometry asks for, no wider than this.");
-        ImGui::SliderFloat("Depth tolerance", &options.ptShadowFilterDepthTolerance, 0.0f, 0.2f, "%.3f",
-                           ImGuiSliderFlags_Logarithmic);
-        ImGui::SliderFloat("Normal tolerance", &options.ptShadowFilterNormalTolerance, -1.0f, 1.0f, "%.2f");
-        settingHint("How far a tap may differ before it is rejected: relative view depth, and the "
-                    "cosine between normals. Loosen them and the filter reaches across corners; "
-                    "tighten them and it starves near geometry, which reads as noise that will not "
-                    "settle exactly where surfaces meet.");
-        ImGui::TreePop();
-    }
-    ImGui::Checkbox("Direct light at resolve", &options.ptDirectChannel);
-    settingHint("Direct light on the pixels you are looking at skips the denoiser and is applied "
-                "at the resolve. A denoiser is built for indirect light - smooth, slow, worth a "
-                "wide kernel - and the same kernel softens the contact edge of a shadow. This "
-                "channel is stratified where it is sampled instead, and the temporal resolve takes "
-                "what noise is left. Off routes it back through the denoiser.");
-#endif
 
-    // Scene light, not a renderer's treatment of it - the tracer is only the
-    // consumer these have today. Logarithmic, and to 32 rather than 4: the
-    // defaults sit at 2.5, so the old ceiling gave 1.6x of headroom and no way
-    // to push a source hard enough to see what it actually contributes.
-    ImGui::SeparatorText("Lighting");
-    static constexpr float kIntensityMax = 32.0f;
-    static constexpr ImGuiSliderFlags kIntensityFlags = ImGuiSliderFlags_Logarithmic;
-    ImGui::SliderFloat("Sky", &options.ptSkyIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
-    ImGui::SliderFloat("Emissive gamma", &options.emissiveGamma, 0.1f, 4.0f, "%.2f");
-    settingHint("Exponent authored radiance is decoded with: emission, sky and backdrop imagery. "
-                "Separate from Albedo gamma under Materials, and it should stay at 2.2. That one "
-                "is a look control - Odyssey art was authored to be multiplied by light "
-                "unconverted, so any decode is a compromise. This one is not a compromise: an "
-                "authored glow colour is the colour emitted, and 2.2 is just the encoding it was "
-                "stored in. They used to be one number, so grading a room's reflectance also "
-                "changed how bright its lamps and its skyline were.");
-    ImGui::SliderFloat("Backdrop", &options.ptBackdropIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
-    settingHint("Painted distance: Taris' cityscape, Manaan's towers. Its own scale beside the "
-                "sky's, and deliberately not the emissive one. Emissive grades lamps, screens and "
-                "panels - objects standing in the scene that also light it. A backdrop is a "
-                "picture of a distance nobody modelled: it ends the path exactly as the sky does, "
-                "and there is nothing behind it to receive what it might emit. Sharing a dial "
-                "meant choosing between the skyline reading right and the interiors reading "
-                "right. 1.0 is the texture as authored.");
-    ImGui::SliderFloat("Emissive", &options.ptEmissiveIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
-    ImGui::SliderFloat("Direct light", &options.ptDirectIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
-    ImGui::SliderFloat("Sun", &options.ptSunIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
-    ImGui::SliderFloat("Lightmap cache", &options.ptLightmapIntensity, 0.0f, kIntensityMax, "%.2f", kIntensityFlags);
-    settingHint("Near zero on purpose: the tracer computes that transport for real, so adding the "
-                "bake on top counts it twice. PBR keeps its own strength for the same bake, on the "
-                "PBR tab - that pair is the one number the two modes are meant to disagree on.");
-    ImGui::SliderFloat("Sun angular size", &options.ptSunAngularSize, 0.05f, 10.0f, "%.2f deg");
-    settingHint("Ctrl+click to type a value. The sun is not at a physical distance, so it keeps an "
-                "authored angle.");
+    // The intensity dials are on the Quality tab, in one Lighting section
+    // beside PBR's: the two grades are the same sources graded against
+    // different transport, and a tab between them made every comparison a tab
+    // switch. What stays here is what only the tracer has - the geometry it
+    // samples emitters with, below.
 
     ImGui::SeparatorText("Ray setup");
     ImGui::SliderFloat("Origin offset", &options.ptRayOffset, 0.0001f, 0.1f, "%.4f",
@@ -1291,6 +1449,11 @@ void Editor::graphicsPathTracingTab() {
                 "and penumbra are one quantity: the solid angle the emitter subtends.\n\n"
                 "Brightness-neutral - this grades how soft shadows are and how hot a surface gets "
                 "against a lamp, not the overall level.");
+    ImGui::SliderFloat("Sun angular size", &options.ptSunAngularSize, 0.05f, 10.0f, "%.2f deg");
+    settingHint("Ctrl+click to type a value. The sun is not at a physical distance, so it keeps an "
+                "authored angle. Here rather than with the intensities: it is emitter geometry, "
+                "like Emitter radius above - it decides how soft the sun's shadow is, not how "
+                "bright the sun is.");
 }
 
 void Editor::graphicsAdvancedTab() {
@@ -1332,54 +1495,6 @@ void Editor::graphicsAdvancedTab() {
                 "rather than widening a lobe, so it darkens whatever it fixes. For the cases "
                 "regularisation alone will not settle.");
 
-#ifdef R_ENABLE_NRD
-    if (ImGui::TreeNode("Denoiser tuning")) {
-        ImGui::SeparatorText("Temporal accumulation");
-        ImGui::SliderFloat("History", &options.ptNrdAccumulationTime, 0.0f, 2.0f, "%.2f s");
-        settingHint("How long light is remembered, in seconds rather than frames. NRD converts it "
-                    "against the measured frame rate, which is what it asks for: a fixed frame "
-                    "count is a shorter and shorter window as the frame rate rises, and the "
-                    "spatial filter widens to cover what the history stops carrying.");
-        ImGui::SliderFloat("Responsive history", &options.ptNrdFastAccumulationTime, 0.0f, 1.0f, "%.2f s");
-        settingHint("The short history the long one is clamped against. Shorter reacts faster to "
-                    "lighting changes and keeps more noise.");
-        ImGui::SliderInt("History fix frames", &options.ptNrdHistoryFixFrames, 0, 8);
-        ImGui::SeparatorText("Spatial filtering (pixels)");
-        ImGui::SliderFloat("Diffuse prepass radius", &options.ptNrdDiffusePrepassBlurRadius, 0.0f, 60.0f, "%.0f");
-        ImGui::SliderFloat("Specular prepass radius", &options.ptNrdSpecularPrepassBlurRadius, 0.0f, 60.0f, "%.0f");
-        settingHint("Spatial reuse before accumulation. Not optional here: the tracer picks one "
-                    "lobe per pixel, so the pixels that went diffuse carry no specular distance at "
-                    "all, and NRD asks for a real prepass whenever the sampling is probabilistic.");
-        ImGui::SeparatorText("History rejection");
-        static constexpr const char *kRejectionHint =
-            "Larger = more tolerant. This is the pair that decides whether a neighbour or a history "
-            "sample belongs to the same surface, so opening them up hides noise by reusing across "
-            "normals and depths that do not match - which is contact shadows and sharp folds gone. "
-            "NRD's own value for both is 0.15.";
-        ImGui::SliderFloat("Lobe angle fraction", &options.ptNrdLobeAngleFraction, 0.01f, 1.0f, "%.2f");
-        settingHint(kRejectionHint);
-        ImGui::SliderFloat("Roughness fraction", &options.ptNrdRoughnessFraction, 0.01f, 1.0f, "%.2f");
-        settingHint(kRejectionHint);
-        ImGui::SliderFloat("Disocclusion threshold", &options.ptNrdDisocclusionThreshold, 0.001f, 0.2f, "%.3f",
-                           ImGuiSliderFlags_Logarithmic);
-        settingHint(kRejectionHint);
-        ImGui::Checkbox("Anti-firefly", &options.ptNrdAntiFirefly);
-
-
-        ImGui::SeparatorText("RELAX");
-        ImGui::SliderInt("A-trous iterations", &options.ptNrdAtrousIterations, 2, 8);
-        settingHint("Wavelet passes. Each doubles the reach of the filter while its edge stoppers "
-                    "keep it off the edges - which is how RELAX covers ground without the flat "
-                    "blur.", true);
-        ImGui::SliderFloat("Diffuse luminance phi", &options.ptNrdDiffusePhiLuminance, 0.0f, 8.0f, "%.2f");
-        ImGui::SliderFloat("Specular luminance phi", &options.ptNrdSpecularPhiLuminance, 0.0f, 8.0f, "%.2f");
-        settingHint("Luminance edge stoppers. Smaller keeps more detail and more noise with it.", true);
-        ImGui::SliderFloat("Depth threshold", &options.ptNrdDepthThreshold, 0.0f, 0.05f, "%.4f",
-                           ImGuiSliderFlags_Logarithmic);
-        ImGui::SliderFloat("Specular lobe slack", &options.ptNrdSpecularLobeAngleSlack, 0.0f, 2.0f, "%.2f deg");
-        ImGui::TreePop();
-    }
-#endif
 
     ImGui::SeparatorText("Diagnostics");
     ImGui::Checkbox("Trace stats", &options.ptTraceStats);

@@ -17,7 +17,9 @@
 
 #pragma once
 
+#include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
 
 namespace reone::graphics {
 
@@ -47,6 +49,34 @@ struct UpscalerInputs {
      * this engine differ by a sign per axis; see the dispatch site.
      */
     glm::vec2 motionScale {1.0f};
+
+    /**
+     * The extra guides DLSS Ray Reconstruction reads, and FSR ignores.
+     *
+     * Optional rather than a second interface: RR occupies the same slot, at
+     * the same point in the frame, differing only in how much of the frame it
+     * is told about. Null everywhere but the traced and PBR channel providers,
+     * which is exactly where RR can run.
+     *
+     * The two "albedo" guides are this engine's demodulation factors, not
+     * textbook albedos - which is the self-consistent choice, since the colour
+     * handed over was modulated by these same two.
+     */
+    IImage *diffuseAlbedo {nullptr};
+    IImage *specularAlbedo {nullptr};
+    /** World normal in xyz, linear roughness in w. */
+    IImage *normalRoughness {nullptr};
+
+    /**
+     * Unjittered, and previous-frame counterparts, for the resolver that needs
+     * to build a clip-to-previous-clip transform of its own. FSR derives what
+     * it needs from the scalars beside it and reads none of these.
+     */
+    glm::mat4 view {1.0f};
+    glm::mat4 projection {1.0f};
+    glm::mat4 prevView {1.0f};
+    glm::mat4 prevProjection {1.0f};
+    glm::vec3 cameraPosition {0.0f};
 };
 
 /** A temporal resolve that reprojects the previous frame onto this one. */

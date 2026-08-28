@@ -117,6 +117,13 @@ public:
     std::unique_ptr<ITracingDenoiser> makeTracingDenoiser(glm::ivec2 extent) override;
     std::unique_ptr<IUpscaler> makeUpscaler(glm::ivec2 renderExtent, glm::ivec2 displayExtent,
                                             bool highDynamicRange) override;
+
+    bool rayReconstructionAvailable() const override;
+
+    RayReconstructionInfo rayReconstructionInfo() const override;
+
+    std::unique_ptr<IUpscaler> makeRayReconstructionUpscaler(glm::ivec2 renderExtent,
+                                                             glm::ivec2 displayExtent) override;
     std::unique_ptr<ITracingStructure> makeTracingStructure() override;
     void prepareMesh(const Mesh &mesh) override;
     uint64_t resourceGeneration() const override;

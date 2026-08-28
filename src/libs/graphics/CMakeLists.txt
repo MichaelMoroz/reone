@@ -147,6 +147,10 @@ if(ENABLE_NRD)
     target_link_libraries(graphics PRIVATE NRD)
 endif()
 
+# Headers only, and always present - see the Streamline block in the root
+# CMakeLists for why this one carries no option().
+target_link_libraries(graphics PRIVATE streamline_headers)
+
 if(MSVC)
     target_link_libraries(graphics PRIVATE SDL3::SDL3)
 else()

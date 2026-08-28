@@ -1209,19 +1209,22 @@ void SceneGraph::capDebugOverlayLabels() {
 
 glm::vec2 SceneGraph::computeJitter() const {
     // Jitter exists when, and only when, something resolves it - which is FSR
-    // in the common anti-aliasing slot, in every render mode, because the
-    // traced mode's rays derive from this same projection. There is no dial:
-    // an override could only ever ask for jitter nothing resolves, and that is
-    // shimmer rather than anti-aliasing (measured at 6-12% of pixels changing
-    // per frame on a frozen scene). Turning it off means turning the resolver
-    // off, which the anti-aliasing option already does.
-    if (_graphicsOpt.antialiasing != graphics::AntiAliasing::Fsr) {
+    // or DLSS-RR in the common anti-aliasing slot, in every render mode,
+    // because the traced mode's rays derive from this same projection. There
+    // is no dial: an override could only ever ask for jitter nothing resolves,
+    // and that is shimmer rather than anti-aliasing (measured at 6-12% of
+    // pixels changing per frame on a frozen scene). Turning it off means
+    // turning the resolver off, which the anti-aliasing option already does.
+    if (_graphicsOpt.antialiasing != graphics::AntiAliasing::Fsr &&
+        _graphicsOpt.antialiasing != graphics::AntiAliasing::DlssRr) {
         return glm::vec2(0.0f);
     }
-    // FSR derives its phase count from the actual render and display widths,
-    // not the requested scale. The rounded render extent matters at ratios
-    // such as 0.667: repeating a phase one frame early makes the temporal
-    // sequence disagree with the resolver that consumes it.
+    // The phase count comes from the actual render and display widths, not the
+    // requested scale. The rounded render extent matters at ratios such as
+    // 0.667: repeating a phase one frame early makes the temporal sequence
+    // disagree with the resolver that consumes it. Both resolvers want the
+    // same Halton(2,3) sequence over the same 8*ratio^2 phases, so the one
+    // generator serves them.
     const glm::ivec2 displaySize {_graphicsOpt.width, _graphicsOpt.height};
     const glm::ivec2 renderSize = graphics::renderExtentFor(_graphicsOpt, displaySize);
     const float ratio = static_cast<float>(displaySize.x) / static_cast<float>(renderSize.x);

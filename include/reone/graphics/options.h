@@ -47,7 +47,38 @@ enum class AntiAliasing {
      * rather than on the next frame.
      */
     Fsr,
+    /**
+     * DLSS Ray Reconstruction: one network replacing both the denoiser and the
+     * upscaler. Available only where the user has supplied Streamline's DLLs
+     * and the adapter is an RTX part - the pipeline falls back to Fsr and says
+     * so once when it is not, so selecting it is never an error.
+     */
+    DlssRr,
 };
+
+/**
+ * DLSS-RR's quality modes, in Streamline's own order so the index is the value.
+ *
+ * Each names a render-scale ratio; kDlssModeScale beside it is the mapping
+ * NVIDIA publishes, reproduced rather than invented.
+ */
+enum class DlssMode {
+    Dlaa,
+    Quality,
+    Balanced,
+    Performance,
+    UltraPerformance,
+};
+
+inline float dlssModeScale(DlssMode mode) {
+    switch (mode) {
+    case DlssMode::Quality: return 1.0f / 1.5f;
+    case DlssMode::Balanced: return 1.0f / 1.7f;
+    case DlssMode::Performance: return 1.0f / 2.0f;
+    case DlssMode::UltraPerformance: return 1.0f / 3.0f;
+    default: return 1.0f;
+    }
+}
 
 /**
  * Which NRD denoiser resolves the traced channels.
@@ -78,14 +109,20 @@ constexpr int kMaxGrassTriangleBudget = 1048576;
 /**
  * What settles the primary-vertex direct channel.
  *
- * Three architectures rather than a strength dial, and they are not variations
- * on one idea: nothing, a blur sized from predicted geometry, or a denoiser
- * that measures whether a pixel needs filtering at all.
+ * Two answers, not a strength dial: leave it to the temporal resolve, or give
+ * it a denoiser that measures whether a pixel needs filtering at all.
+ *
+ * A third once sat between them - a blur sized from the penumbra the geometry
+ * implied. It was removed rather than defaulted off: measured over 32 FSR
+ * frames on the region it touched, every filtered variant was LESS temporally
+ * stable than none (0.7584 at the physical radius, 0.7507 forced to 8 pixels,
+ * against 0.7429 unfiltered) and none was quieter. Blue noise puts its error
+ * at high spatial frequency, which is what a temporal resolve averages away;
+ * a spatial blur moves that error down into low frequency, where a clamp
+ * cannot tell it from signal, so it survives and then boils.
  */
 enum class ShadowFilter {
     Off,
-    /** The engine's own blur, sized by the penumbra the geometry implies. */
-    Penumbra,
     /** A second NRD denoiser, fed this channel alone. */
     Denoiser
 };
@@ -290,18 +327,20 @@ struct GraphicsOptions {
      * the layer and keeps the sky, and density is clamped below the plane
      * rather than growing without bound.
      *
-     * 64 rather than the 8 this started at, and the reason is a property of the
-     * model rather than a preference. A gradient shallow against the view
-     * distance INVERTS the haze: a ray to the horizon climbs out of the layer
-     * within a few dozen units while a ray to the ground stays inside it the
-     * whole way, so distant land ends up hazier than the sky behind it and the
-     * horizon reads as a hard line. Measured on danm14ab, sky against land at
-     * the skyline: 0.31/0.58 at 8, 0.59/0.68 at 24 - both inverted - crossing
-     * over at 64 (0.87/0.73) and holding at 200 (0.96/0.67). Below ~64 the fog
-     * is a ground mist seen from above, which is a real look but not distance
-     * haze.
+     * The gradient is what kind of fog this is. Shallow - a few units - is a
+     * ground layer: the near floor and anything standing in the layer haze,
+     * distant hills are veiled, and the sky above the layer stays clear, so
+     * the sky can read LESS fogged than a ridge in front of it. That is not a
+     * defect; it is what a ground mist looks like, and it is why this model
+     * was chosen over a distance ramp that swallowed the sky. Deep - tens of
+     * units - fills the volume and becomes atmospheric haze, where the sky
+     * fogs with everything else. Measured on danm14ab, sky against land at
+     * the skyline: the two cross over near a gradient of 64.
+     *
+     * Density is not a dial: it is calibrated to the ramp the area authored,
+     * agreeing with it at the midpoint between fogNear and fogFar.
      */
-    float fogHeight {64.0f};
+    float fogHeight {8.0f};
     /** Admit emitter particles, or leave them out of the frame entirely. */
     bool particles {true};
     /**
@@ -571,58 +610,17 @@ struct GraphicsOptions {
      */
     bool ptDirectChannel {true};
     /**
-     * Filter the direct channel with a radius derived from the penumbra the
-     * geometry implies, rather than a fixed one.
+     * What settles the primary-vertex direct channel.
      *
-     * The tracer records how far away whatever blocked each shadow ray was; a
-     * source of known angular size at that distance implies a penumbra of a
-     * particular width, and that width in pixels is the only radius that blurs
-     * a soft shadow by as much as it is soft while leaving a contact edge
-     * untouched. It is what a general denoiser cannot know.
-     *
-     * Off by default, because with a temporal resolver in the slot it makes the
-     * picture worse rather than better. Blue noise is built so that its error
-     * sits at high spatial frequency, which is exactly the part a temporal
-     * resolve averages away and the part FSR's neighbourhood clamp is willing
-     * to reject. A spatial blur moves that error down into low frequency, and a
-     * low-frequency blob that changes between frames is indistinguishable from
-     * signal to a clamp - so it survives, and then it boils.
-     *
-     * Measured over 32 FSR frames on the region the filter touches: mean
-     * frame-to-frame luma delta 0.7429 with it off, 0.7584 at the physical
-     * radius, 0.7507 forced to 8 pixels. Every filtered variant is less stable
-     * than none, and none of them is quieter. It stays available for the case
-     * with no temporal resolver, where nothing else is averaging.
-     *
-     * Denoiser is the third answer and a different one: not a wider or
-     * narrower blur but a filter that asks whether this pixel needs one. NRD
-     * estimates variance per pixel and sizes its kernel from it, so a converged
-     * region keeps its detail instead of being blurred by a radius predicted
-     * from geometry. It denoises this channel on its own - see
-     * TracingDenoiserInputs::directRadianceHitDist for why it cannot simply be
-     * summed into the diffuse one and denoised there.
+     * Off leaves it to the temporal resolve, which is the default and is
+     * measured to be the better of the two on a signal carrying blue noise.
+     * Denoiser gives the channel its own NRD instance, which estimates
+     * variance per pixel and sizes its kernel from that, so a converged region
+     * keeps its detail - see TracingDenoiserInputs::directRadianceHitDist for
+     * why it cannot simply be summed into the diffuse channel and denoised
+     * there.
      */
     ShadowFilter ptShadowFilter {ShadowFilter::Off};
-    /** Ceiling on that radius in pixels, whatever the geometry asks for. */
-    float ptShadowFilterMaxRadius {24.0f};
-    /**
-     * Multiplier on the radius the geometry implies. 1 is the physical answer;
-     * above it trades penumbra fidelity for a quieter shadow.
-     */
-    float ptShadowFilterRadiusScale {1.0f};
-    /**
-     * Floor on the radius, in pixels, applied only where something actually
-     * blocked the light. Unphysical by construction: it exists because the
-     * residual noise in this channel is not penumbra-scale, and a filter sized
-     * strictly by the geometry will not touch it. Zero leaves the estimate
-     * alone; a contact edge stays sharp either way, since an unshadowed pixel
-     * has no penumbra for the floor to apply to.
-     */
-    float ptShadowFilterMinRadius {0.0f};
-    /** Relative view-depth difference a tap may have before it is rejected. */
-    float ptShadowFilterDepthTolerance {0.02f};
-    /** Minimum normal agreement a tap may have before it is rejected. */
-    float ptShadowFilterNormalTolerance {0.9f};
     /**
      * Which NRD denoiser runs. REBLUR is the cheaper, blurrier one and was the
      * only choice here; RELAX keeps edges and specular detail at a higher cost,
@@ -774,14 +772,31 @@ struct GraphicsOptions {
      */
     AntiAliasing antialiasing {AntiAliasing::Fxaa};
     /**
-     * FSR's built-in RCAS sharpening, 0 to skip the pass entirely. Inert
-     * unless the slot is running FSR.
+     * DLSS-RR's quality mode, which is how DLSS expresses a render scale.
      *
-     * RCAS exists to claw back the softness of upscaling, and at NativeAA there
-     * is no upscaling to compensate for - hence the conservative default. Do
-     * not stack a separate sharpen pass on top of it.
+     * It OWNS renderScale while DLSS is the occupant: the mode names a ratio
+     * (DLAA 1.00, Quality 0.67, Balanced 0.58, Performance 0.50, Ultra
+     * Performance 0.33) and the two would otherwise be free to disagree about
+     * the same number. Inert under any other occupant.
      */
-    float fsrSharpness {0.0f};
+    DlssMode dlssMode {DlssMode::Dlaa};
+    /**
+     * Sharpening, 0 to skip it, wherever the frame is sharpened at all.
+     *
+     * One dial for three implementations, because only ever one of them runs:
+     * FSR takes it as RCAS from inside the upscaler, DLSS-RR as its own
+     * internal sharpening, and with no upscaler in the slot it drives the
+     * postprocess unsharp mask over display colour. That routing is what makes
+     * double-sharpening unrepresentable - it used to be two independent dials
+     * with a comment asking you not to raise both.
+     *
+     * The three do not agree numerically: RCAS, a neural sharpener and a
+     * five-tap unsharp mask given the same 0.5 do not produce the same picture,
+     * so changing resolver changes apparent sharpness. Conservative default for
+     * the same reason RCAS had one - at native resolution there is no upscaling
+     * softness to correct.
+     */
+    float sharpness {0.0f};
     /**
      * Trace and raster at this fraction of the display resolution, with FSR
      * upscaling the result. 1 is NativeAA - the same resolution either side of
@@ -825,16 +840,6 @@ struct GraphicsOptions {
      * the pass stopped being optional.
      */
     bool grade {true};
-    /**
-     * Unsharp mask over display colour, the last pass of the frame.
-     *
-     * Off by default. It is a separate stage from FSR's own RCAS, which
-     * corrects that upscaler's softness from inside it; running both sharpens
-     * one image twice.
-     */
-    bool sharpen {false};
-    /** Strength of that mask; the neighbour weight of its five-tap cross. */
-    float sharpenAmount {0.25f};
     /** Overrides the ARE's authored ShadowOpacity when >= 0. The retail data
         authors only two values, 50 and 205, so this is the knob for judging
         how that byte should map to a strength. */
@@ -861,13 +866,18 @@ struct GraphicsOptions {
  * aux images the resolve reads at a different extent, which is not a crash.
  */
 inline glm::ivec2 renderExtentFor(const GraphicsOptions &options, glm::ivec2 displayExtent) {
-    // Only FSR changes resolution across the anti-aliasing slot, so only FSR
-    // can honour a scale; anything else renders at display resolution rather
-    // than small and stretched.
-    if (options.antialiasing != AntiAliasing::Fsr) {
+    // Only an upscaling resolve changes resolution across the anti-aliasing
+    // slot, so only those can honour a scale; anything else renders at display
+    // resolution rather than small and stretched.
+    if (options.antialiasing != AntiAliasing::Fsr &&
+        options.antialiasing != AntiAliasing::DlssRr) {
         return displayExtent;
     }
-    const float scale = glm::clamp(options.renderScale, 0.25f, 1.0f);
+    // Under DLSS the mode owns the ratio - see GraphicsOptions::dlssMode.
+    const float scale =
+        options.antialiasing == AntiAliasing::DlssRr
+            ? dlssModeScale(options.dlssMode)
+            : glm::clamp(options.renderScale, 0.25f, 1.0f);
     return glm::max(glm::ivec2(1), glm::ivec2(glm::round(glm::vec2(displayExtent) * scale)));
 }
 

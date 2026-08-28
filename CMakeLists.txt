@@ -165,6 +165,29 @@ if(ENABLE_NRD)
     add_compile_definitions(R_ENABLE_NRD)
 endif()
 
+# Streamline, for DLSS Ray Reconstruction. Unconditional, unlike ENABLE_NRD
+# above, and that difference is the whole point of routing through Streamline
+# rather than NGX: its license.txt and its include/sl*.h are MIT, and those
+# headers reference nothing from the NGX SDK vendored beside them. MIT is
+# GPL-3 compatible, so this compiles into a distributed binary where NRD
+# cannot.
+#
+# Headers only. Nothing links, nothing is redistributed: sl.interposer.dll,
+# sl.dlss_d.dll and nvngx_dlssd.dll are proprietary and stay the user's to
+# supply, which is why the feature is dark until they put them beside the
+# executable. SOURCE_SUBDIR names a directory with no CMakeLists.txt so the
+# fetch populates without building the plugin projects.
+include(FetchContent)
+FetchContent_Declare(Streamline
+    GIT_REPOSITORY https://github.com/NVIDIA-RTX/Streamline.git
+    GIT_TAG v2.12.0
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR docs)
+FetchContent_MakeAvailable(Streamline)
+add_library(streamline_headers INTERFACE)
+target_include_directories(streamline_headers INTERFACE ${streamline_SOURCE_DIR}/include)
+add_compile_definitions(R_ENABLE_DLSS)
+
 if(ENABLE_FSR)
     if(NOT MSVC)
         message(FATAL_ERROR "ENABLE_FSR requires MSVC: FSR2's committed shader compiler is Windows-only")

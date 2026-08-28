@@ -349,7 +349,23 @@ private:
         resolve; it owns device memory of its own, so the choice is fixed for
         the lifetime of these targets rather than per frame. */
     std::unique_ptr<IUpscaler> _upscaler;
+    /**
+     * Whether the slot's occupant is DLSS Ray Reconstruction rather than FSR.
+     *
+     * Not derivable from the option: RR falls back to FSR when the DLLs or the
+     * adapter are absent, so the option says what was asked for and this says
+     * what is actually running. Two things read it - the guides the upscale
+     * pass fills in, and the denoiser the trace pass must then skip.
+     */
+    bool _dlssRr {false};
     glm::vec3 _prevCameraPosition {0.0f};
+    /**
+     * Last frame's unjittered camera matrices, for the resolver that has to
+     * build a clip-to-previous-clip transform. Latched by the upscale pass
+     * itself so nothing upstream has to know the slot's occupant changed.
+     */
+    glm::mat4 _prevView {1.0f};
+    glm::mat4 _prevProjection {1.0f};
     bool _temporalHistoryValid {false};
     std::unique_ptr<IImage> _dirShadows;
     std::unique_ptr<IImage> _pointShadows;

@@ -86,7 +86,7 @@ public:
      * specular, directDiffuse, diffFactor, specFactor, viewZ.
      */
     static constexpr uint32_t kResolveChannelBaseBinding = 2;
-    static constexpr uint32_t kResolveChannelCount = 7;
+    static constexpr uint32_t kResolveChannelCount = 8;
 
     /** Distinct textures one frame may draw with before the pool is exhausted. */
     static constexpr uint32_t kMaxTextureSetsPerFrame = 1024;

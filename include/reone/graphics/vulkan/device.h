@@ -24,6 +24,8 @@
 #include <VkBootstrap.h>
 #include <vk_mem_alloc.h>
 
+#include "reone/graphics/vulkan/streamline.h"
+
 struct SDL_Window;
 
 namespace reone {
@@ -144,6 +146,21 @@ public:
 
     bool fsrAvailable() const { return _fsrAvailable; }
 
+#ifdef R_ENABLE_DLSS
+    /**
+     * Whether DLSS Ray Reconstruction can actually run: Streamline came up,
+     * and this adapter answered slIsFeatureSupported. False is the ordinary
+     * case - no DLLs supplied, or not an RTX part - and the anti-aliasing slot
+     * falls back to FSR rather than treating it as an error.
+     */
+    bool dlssRrAvailable() const { return _dlssRrAvailable; }
+
+    /** The runtime the resolver drives. Valid only while dlssRrAvailable(). */
+    StreamlineRuntime &streamline() { return _streamline; }
+#else
+    bool dlssRrAvailable() const { return false; }
+#endif
+
     /** Limits that every later acceleration-structure build must observe. */
     const VkPhysicalDeviceAccelerationStructurePropertiesKHR &
     accelerationStructureProperties() const {
@@ -175,6 +192,13 @@ private:
     bool _debugUtils {false};
     bool _rayQueryAvailable {false};
     bool _fsrAvailable {false};
+#ifdef R_ENABLE_DLSS
+    // Declared before the members whose destruction it must outlive is not
+    // enough on its own: slShutdown has to run before vkDestroyDevice, which
+    // deinit() sequences explicitly rather than leaving to member order.
+    StreamlineRuntime _streamline;
+    bool _dlssRrAvailable {false};
+#endif
     VkPhysicalDeviceAccelerationStructurePropertiesKHR _accelerationStructureProperties {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
     uint32_t _maxBindlessSampledImages {0};

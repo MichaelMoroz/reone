@@ -23,6 +23,8 @@
 #ifdef R_ENABLE_NRD
 #include "reone/graphics/vulkan/nrddenoiser.h"
 #endif
+#include "reone/graphics/vulkan/dlssrr.h"
+
 #include "reone/graphics/vulkan/tracingstructure.h"
 
 #include "reone/graphics/vulkan/buffer.h"
@@ -677,6 +679,41 @@ std::unique_ptr<IUpscaler> VulkanRenderer::makeUpscaler(glm::ivec2 renderExtent,
                                                   highDynamicRange);
     upscaler->init();
     return upscaler;
+#else
+    return nullptr;
+#endif
+}
+
+bool VulkanRenderer::rayReconstructionAvailable() const {
+    return _device.dlssRrAvailable();
+}
+
+RayReconstructionInfo VulkanRenderer::rayReconstructionInfo() const {
+    RayReconstructionInfo info {};
+#ifdef R_ENABLE_DLSS
+    if (_device.dlssRrAvailable()) {
+        const auto version =
+            const_cast<VulkanDevice &>(_device).streamline().rayReconstructionVersion();
+        info.streamlineMajor = version.versionSL.major;
+        info.streamlineMinor = version.versionSL.minor;
+        info.streamlineBuild = version.versionSL.build;
+        info.ngxMajor = version.versionNGX.major;
+        info.ngxMinor = version.versionNGX.minor;
+        info.ngxBuild = version.versionNGX.build;
+    }
+#endif
+    return info;
+}
+
+std::unique_ptr<IUpscaler> VulkanRenderer::makeRayReconstructionUpscaler(
+    glm::ivec2 renderExtent, glm::ivec2 displayExtent) {
+#ifdef R_ENABLE_DLSS
+    if (!_device.dlssRrAvailable()) {
+        throw std::runtime_error("DLSS Ray Reconstruction unavailable on this device");
+    }
+    auto resolver = std::make_unique<DlssRrResolver>(_device, renderExtent, displayExtent);
+    resolver->init();
+    return resolver;
 #else
     return nullptr;
 #endif

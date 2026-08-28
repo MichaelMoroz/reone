@@ -191,6 +191,7 @@ void VulkanImage::initSampled2DSized(glm::ivec2 extent,
     VmaAllocationCreateInfo allocInfo {};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
+    _usage = imageInfo.usage;
     if (vmaCreateImage(_device.allocator(), &imageInfo, &allocInfo,
                        &_image, &_allocation, nullptr) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: image allocation failed");
@@ -283,6 +284,7 @@ void VulkanImage::initSampledLayered(glm::ivec2 extent,
     VmaAllocationCreateInfo allocInfo {};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
+    _usage = imageInfo.usage;
     if (vmaCreateImage(_device.allocator(), &imageInfo, &allocInfo,
                        &_image, &_allocation, nullptr) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: layered image allocation failed");
@@ -387,6 +389,7 @@ void VulkanImage::initSampledLayers(
     VmaAllocationCreateInfo allocInfo {};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
+    _usage = imageInfo.usage;
     if (vmaCreateImage(_device.allocator(), &imageInfo, &allocInfo,
                        &_image, &_allocation, nullptr) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: layered image allocation failed");
@@ -516,6 +519,7 @@ void VulkanImage::initSampledChain(glm::ivec2 extent,
     VmaAllocationCreateInfo allocInfo {};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
+    _usage = imageInfo.usage;
     if (vmaCreateImage(_device.allocator(), &imageInfo, &allocInfo,
                        &_image, &_allocation, nullptr) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: image allocation failed");
@@ -683,6 +687,7 @@ void VulkanImage::initDepthLayered(glm::ivec2 extent, VkFormat format, int layer
     VmaAllocationCreateInfo allocInfo {};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
+    _usage = imageInfo.usage;
     if (vmaCreateImage(_device.allocator(), &imageInfo, &allocInfo,
                        &_image, &_allocation, nullptr) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: layered depth image allocation failed");
@@ -730,6 +735,7 @@ void VulkanImage::initSampledCubeArray(glm::ivec2 faceExtent, VkFormat format,
     VmaAllocationCreateInfo allocInfo {};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
+    _usage = imageInfo.usage;
     if (vmaCreateImage(_device.allocator(), &imageInfo, &allocInfo,
                        &_image, &_allocation, nullptr) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: cube array image allocation failed");
@@ -831,6 +837,7 @@ void VulkanImage::initCubeArrayAttachment(glm::ivec2 faceExtent, VkFormat format
     VmaAllocationCreateInfo allocInfo {};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
+    _usage = imageInfo.usage;
     if (vmaCreateImage(_device.allocator(), &imageInfo, &allocInfo,
                        &_image, &_allocation, nullptr) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: cube array image allocation failed");
@@ -980,6 +987,7 @@ void VulkanImage::initColorAttachment(glm::ivec2 extent, VkFormat format) {
     VmaAllocationCreateInfo allocInfo {};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
+    _usage = imageInfo.usage;
     if (vmaCreateImage(_device.allocator(), &imageInfo, &allocInfo,
                        &_image, &_allocation, nullptr) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: colour attachment allocation failed");
@@ -1022,6 +1030,7 @@ void VulkanImage::initDepth(glm::ivec2 extent, VkFormat format) {
     VmaAllocationCreateInfo allocInfo {};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
+    _usage = imageInfo.usage;
     if (vmaCreateImage(_device.allocator(), &imageInfo, &allocInfo,
                        &_image, &_allocation, nullptr) != VK_SUCCESS) {
         throw std::runtime_error("Vulkan: depth image allocation failed");

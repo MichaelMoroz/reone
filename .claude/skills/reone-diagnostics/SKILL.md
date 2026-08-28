@@ -443,9 +443,10 @@ frame, named after the aux bindings in `tracing/outputs.slang`:
 `traced_device_depth`, `traced_screen_motion`, `traced_spec_factor`,
 `traced_diffuse`, `traced_eye_normal`, `traced_depth`, `traced_motion` and
 `traced_direct_diffuse`, alongside `traced_output`. A build with
-`-DENABLE_NRD=ON` adds `denoised_diffuse`, `denoised_specular` and, when the
-shadow filter is on, `shadow_filtered`; without it those files simply are not
-written. The four radiance channels (`traced_radiance_*`, `denoised_*`) live in
+`-DENABLE_NRD=ON` adds `denoised_diffuse` and `denoised_specular`; without it
+those files simply are not written. (`shadow_filtered` is gone: the
+geometry-sized penumbra blur that wrote it was removed, so `--ptshadowfilter`
+now takes only `off` or `denoiser` and `penumbra` is rejected.) The four radiance channels (`traced_radiance_*`, `denoised_*`) live in
 YCoCg on the GPU because that is what NRD consumes, but `dumpTargets` converts
 them to RGB on the way out, so every `.npy` is one colour space. If you read
 those images back off the GPU by any other route, convert them yourself.

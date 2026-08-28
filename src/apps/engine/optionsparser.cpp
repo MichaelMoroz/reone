@@ -50,6 +50,8 @@ static const char *antiAliasingName(AntiAliasing value) {
         return "fxaa";
     case AntiAliasing::Fsr:
         return "fsr";
+    case AntiAliasing::DlssRr:
+        return "dlssrr";
     default:
         return "off";
     }
@@ -70,8 +72,11 @@ static AntiAliasing parseAntiAliasing(const std::string &value) {
     if (value == "fsr") {
         return AntiAliasing::Fsr;
     }
+    if (value == "dlssrr") {
+        return AntiAliasing::DlssRr;
+    }
     throw std::invalid_argument("Unknown anti-aliasing mode '" + value +
-                                "'; expected off, fxaa or fsr");
+                                "'; expected off, fxaa, fsr or dlssrr");
 }
 
 std::unique_ptr<Options> OptionsParser::parse() {
@@ -170,8 +175,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
          "apply exposure and the tone curve; the display transform itself always runs")                                        //
         ("post", value<bool>()->default_value(options->graphics.grade),
          "deprecated alias for --grade")                                                                                       //
-        ("sharpen", value<bool>()->default_value(options->graphics.sharpen), "sharpen the finished frame (unsharp mask, after the display transform)") //
-        ("sharpenamount", value<float>()->default_value(options->graphics.sharpenAmount), "strength of that mask")       //
         ("paritydirect", value<bool>()->default_value(options->graphics.parityDirect), "both renderers output only shared unoccluded direct diffuse") //
         ("ptdenoise", value<bool>()->default_value(options->graphics.ptDenoise), "enable the path tracing denoiser")           //
         ("ptshadowfilter", value<std::string>()->default_value("off"),
@@ -182,8 +185,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
          "direct-light denoiser A-trous iterations")                                                                          //
         ("ptnrddirectphiluminance", value<float>()->default_value(options->graphics.ptNrdDirectPhiLuminance),
          "direct-light denoiser luminance edge stopping")                                                                     //
-        ("ptshadowfiltermaxradius", value<float>()->default_value(options->graphics.ptShadowFilterMaxRadius),
-         "ceiling on the shadow filter radius, pixels")                                                                       //
         ("grassradius", value<float>()->default_value(options->graphics.grassRadius), "grass draw radius")             //
         ("grasscardshape", value<std::string>()->default_value(grassCardShapeName(options->graphics.grassCardShape)), "fitted grass card outline") //
         ("grasscardsides", value<int>()->default_value(options->graphics.grassCardSides), "sides of a fitted grass k-gon") //
@@ -209,14 +210,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("grassroughness", value<float>()->default_value(options->graphics.grassRoughness), "blade roughness")            //
         ("grassbladespercluster", value<int>()->default_value(options->graphics.grassBladesPerCluster), "blades grown per authored cluster") //
         ("grasscolor", value<std::string>()->default_value(""), "blade albedo as \"r g b\"")                                 //
-        ("ptshadowfilterscale", value<float>()->default_value(options->graphics.ptShadowFilterRadiusScale),
-         "multiplier on the radius the geometry implies")                                                                     //
-        ("ptshadowfilterminradius", value<float>()->default_value(options->graphics.ptShadowFilterMinRadius),
-         "floor on the shadow filter radius where light is blocked, pixels")                                                  //
-        ("ptshadowfilterdepthtolerance", value<float>()->default_value(options->graphics.ptShadowFilterDepthTolerance),
-         "relative view-depth difference a filter tap may have")                                                              //
-        ("ptshadowfilternormaltolerance", value<float>()->default_value(options->graphics.ptShadowFilterNormalTolerance),
-         "minimum normal agreement a filter tap may have")                                                                    //
         ("ptdirectchannel", value<bool>()->default_value(options->graphics.ptDirectChannel),
          "apply primary-vertex direct light at the resolve instead of through the denoiser")                                  //
         ("debugview", value<int>()->default_value(options->graphics.debugView),
@@ -253,8 +246,12 @@ std::unique_ptr<Options> OptionsParser::parse() {
          "enable denoiser anti-firefly")                                                                                        //
         ("renderscale", value<float>()->default_value(options->graphics.renderScale),
          "trace/raster resolution as a fraction of display; FSR upscales (1 = NativeAA)")             //
-        ("fsrsharpness", value<float>()->default_value(options->graphics.fsrSharpness),
-         "FSR RCAS sharpening, 0 disables the pass")                                                                          //
+        ("dlssmode", value<std::string>()->default_value("dlaa"),
+         "DLSS quality mode, which is how DLSS names a render scale: "
+         "dlaa, quality, balanced, performance or ultraperformance")                                //
+        ("sharpness", value<float>()->default_value(options->graphics.sharpness),
+         "sharpening, 0 disables it: RCAS under FSR, DLSS-RR's own under DLSS, "
+         "an unsharp mask under neither")                                                                          //
         ("texquality", value<int>()->default_value(static_cast<int>(options->graphics.textureQuality)), "texture quality")      //
         ("shadowres", value<int>()->default_value(glm::log2(options->graphics.shadowResolution) - 10), "shadow map resolution") //
         ("shadowopacity", value<float>()->default_value(options->graphics.shadowOpacity), "override the module's authored shadow opacity (0-1; <0 keeps authored)") //
@@ -425,8 +422,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
     // same value, so a run that passes neither is unaffected.
     options->graphics.grade = vars["grade"].defaulted() ? vars["post"].as<bool>()
                                                         : vars["grade"].as<bool>();
-    options->graphics.sharpen = vars["sharpen"].as<bool>();
-    options->graphics.sharpenAmount = std::max(0.0f, vars["sharpenamount"].as<float>());
     options->graphics.parityDirect = vars["paritydirect"].as<bool>();
     options->graphics.ptDenoise = vars["ptdenoise"].as<bool>();
     // Same shape as --grade / --post above: the dial dropped its pt prefix when
@@ -446,13 +441,11 @@ std::unique_ptr<Options> OptionsParser::parse() {
         const auto value = vars["ptshadowfilter"].as<std::string>();
         if (value == "off" || value == "none" || value == "0") {
             options->graphics.ptShadowFilter = graphics::ShadowFilter::Off;
-        } else if (value == "penumbra" || value == "1") {
-            options->graphics.ptShadowFilter = graphics::ShadowFilter::Penumbra;
-        } else if (value == "denoiser" || value == "nrd") {
+        } else if (value == "denoiser" || value == "nrd" || value == "1") {
             options->graphics.ptShadowFilter = graphics::ShadowFilter::Denoiser;
         } else {
             throw std::invalid_argument("Unknown shadow filter '" + value +
-                                        "'; expected off, penumbra or denoiser");
+                                        "'; expected off or denoiser");
         }
     }
     options->graphics.ptNrdDirectAccumulationTime =
@@ -461,8 +454,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
         std::clamp(vars["ptnrddirectatrous"].as<int>(), 2, 8);
     options->graphics.ptNrdDirectPhiLuminance =
         std::clamp(vars["ptnrddirectphiluminance"].as<float>(), 0.0f, 16.0f);
-    options->graphics.ptShadowFilterMaxRadius =
-        std::clamp(vars["ptshadowfiltermaxradius"].as<float>(), 1.0f, 64.0f);
     options->graphics.grassRadius = std::max(0.0f, vars["grassradius"].as<float>());
     options->graphics.grassCardShape = parseGrassCardShape(vars["grasscardshape"].as<std::string>());
     options->graphics.grassCardSides = std::clamp(vars["grasscardsides"].as<int>(), 3, 16);
@@ -498,14 +489,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
             options->graphics.grassColor = glm::max(parsed, glm::vec3(0.0f));
         }
     }
-    options->graphics.ptShadowFilterRadiusScale =
-        std::clamp(vars["ptshadowfilterscale"].as<float>(), 0.0f, 8.0f);
-    options->graphics.ptShadowFilterMinRadius =
-        std::clamp(vars["ptshadowfilterminradius"].as<float>(), 0.0f, 32.0f);
-    options->graphics.ptShadowFilterDepthTolerance =
-        std::clamp(vars["ptshadowfilterdepthtolerance"].as<float>(), 0.0f, 1.0f);
-    options->graphics.ptShadowFilterNormalTolerance =
-        std::clamp(vars["ptshadowfilternormaltolerance"].as<float>(), -1.0f, 1.0f);
     options->graphics.ptNrdAccumulationTime = std::clamp(vars["ptnrdaccumtime"].as<float>(), 0.0f, 2.0f);
     options->graphics.ptNrdFastAccumulationTime = std::clamp(vars["ptnrdfastaccumtime"].as<float>(), 0.0f, 2.0f);
     options->graphics.ptNrdAtrousIterations = std::clamp(vars["ptnrdatrous"].as<int>(), 2, 8);
@@ -521,7 +504,28 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptNrdDisocclusionThreshold = std::max(0.0f, vars["ptnrddisocclusionthreshold"].as<float>());
     options->graphics.ptNrdAntiFirefly = vars["ptnrdantifirefly"].as<bool>();
     options->graphics.renderScale = std::clamp(vars["renderscale"].as<float>(), 0.25f, 1.0f);
-    options->graphics.fsrSharpness = std::clamp(vars["fsrsharpness"].as<float>(), 0.0f, 1.0f);
+    options->graphics.sharpness = std::clamp(vars["sharpness"].as<float>(), 0.0f, 1.0f);
+    {
+        // Rejected rather than defaulted, on the same rule as the slot itself:
+        // a typo that quietly renders at a different resolution than asked for
+        // is indistinguishable from DLSS behaving oddly.
+        const auto value = vars["dlssmode"].as<std::string>();
+        if (value == "dlaa" || value == "native") {
+            options->graphics.dlssMode = graphics::DlssMode::Dlaa;
+        } else if (value == "quality") {
+            options->graphics.dlssMode = graphics::DlssMode::Quality;
+        } else if (value == "balanced") {
+            options->graphics.dlssMode = graphics::DlssMode::Balanced;
+        } else if (value == "performance") {
+            options->graphics.dlssMode = graphics::DlssMode::Performance;
+        } else if (value == "ultraperformance") {
+            options->graphics.dlssMode = graphics::DlssMode::UltraPerformance;
+        } else {
+            throw std::invalid_argument(
+                "Unknown DLSS mode '" + value +
+                "'; expected dlaa, quality, balanced, performance or ultraperformance");
+        }
+    }
     options->graphics.textureQuality = static_cast<TextureQuality>(vars["texquality"].as<int>());
     options->graphics.shadowResolution = 1 << (10 + vars["shadowres"].as<int>());
     options->graphics.shadowOpacity = vars["shadowopacity"].as<float>();

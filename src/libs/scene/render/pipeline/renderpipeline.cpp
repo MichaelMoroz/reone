@@ -294,7 +294,8 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
     // most visible on - fall below its early-out and are never touched. It
     // therefore runs after the transform.
     const bool temporalResolve =
-        antialiased && _options.antialiasing == graphics::AntiAliasing::Fsr;
+        antialiased && (_options.antialiasing == graphics::AntiAliasing::Fsr ||
+                        _options.antialiasing == graphics::AntiAliasing::DlssRr);
     if (!diagnosticImage) {
         // Before the resolve, reversing the order this pass used to hold. The
         // forward pass shares the G-buffer depth attachment, so it has to run
@@ -343,7 +344,25 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         plan.steps.push_back(graphics::SceneStep::AntiAliasing);
     // Last, after both. The mask judges the displayed picture, so it wants the
     // colour a viewer sees rather than scene radiance.
-    if (_options.sharpen && !diagnosticImage)
+    //
+    // It is one arm of a single sharpness dial, not an independent pass: FSR
+    // sharpens from inside itself through RCAS, so this runs for everything
+    // else. That is what makes sharpening the frame twice unrepresentable
+    // rather than merely discouraged.
+    //
+    // DLSS is on THIS side of the line, which is not what its header suggests.
+    // DLSSDOptions::sharpness exists and slDLSSDSetOptions accepts it without
+    // complaint, but it does nothing: measured on an RTX 5090 with
+    // Streamline 2.12.0 / NGX 310.7.0, sharpness 0.0 against 1.0 moved the mean
+    // image gradient from 7.9860 to 7.9857 - a ratio of 1.000, where a
+    // sharpener has to raise it. NVIDIA removed sharpening from DLSS in 3.1;
+    // the super-resolution struct says so in the type system
+    // (SR_DEPRECATED_SHARPENING is [[deprecated("Sharpness is not supported")]])
+    // and Ray Reconstruction simply kept the field without the attribute.
+    // So the dial reaches DLSS frames through the unsharp mask below, which is
+    // what makes it work in every slot rather than silently in all but one.
+    const bool resolverSharpens = _options.antialiasing == graphics::AntiAliasing::Fsr;
+    if (_options.sharpness > 0.0f && !resolverSharpens && !diagnosticImage)
         plan.steps.push_back(graphics::SceneStep::Sharpen);
     // The debug overlay draws over the finished display-referred image, so it
     // goes after everything that changes the picture. Not on a diagnostic

@@ -138,23 +138,12 @@ void TracingPipeline::init() {
     // kernel writes are ScenePipeline's now and arrive bound each frame; this
     // one stays here because no other stage produces or consumes it.
     static_assert(std::size(kChannelBindingNames) == kNumTracingChannels);
-    for (int frame = 0; frame < 2; ++frame) {
-        auto filtered = _renderer.resources().makeImage();
-        filtered->initColorAttachment(_extent, Format::R16G16B16A16Sfloat);
-        _shadowFiltered[frame] = std::move(filtered);
-    }
 
     loadBlueNoise();
 
 #ifdef R_ENABLE_NRD
     {
         _nrdDenoiser = _renderer.makeTracingDenoiser(_extent);
-        if (_nrdDenoiser) {
-
-            _shadowFilterPipeline = _renderer.makeComputePipeline({"shadow_filter", "main", 2});
-            _shadowFilterBindings = _shadowFilterPipeline->resolveBindings(
-                {"outFiltered", "inDirectDiffuse", "inViewZ", "inNormalRoughness"});
-        }
     }
 #endif
     _inited = true;
@@ -199,9 +188,6 @@ std::vector<TracingChannel> TracingPipeline::channels() const {
     if (_nrdDenoiser) {
         result.push_back({"Denoised diffuse", "denoised_diffuse", &_nrdDenoiser->denoisedDiffuse()});
         result.push_back({"Denoised specular", "denoised_specular", &_nrdDenoiser->denoisedSpecular()});
-    }
-    if (auto &filtered = _shadowFiltered[_lastAuxFrame]) {
-        result.push_back({"Shadow filtered direct", "shadow_filtered", filtered.get()});
     }
 #endif
     return result;
@@ -397,8 +383,6 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
         // it. Declared here so the binding list below stays one expression.
         const auto directChannelView = [&](IImage *raw) {
             switch (_options.ptShadowFilter) {
-            case graphics::ShadowFilter::Penumbra:
-                return _shadowFiltered[_renderer.frameIndex()]->sampleView();
             case graphics::ShadowFilter::Denoiser:
                 if (auto *denoised = _nrdDenoiser->denoisedDirect())
                     return denoised->sampleView();
@@ -458,41 +442,6 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
         // itself - runComposite stays false and the composite stands aside.
         if (_options.ptDenoise &&
             (_options.debugView == 0 || isResolveDebugView(_options.debugView))) {
-            if (_options.ptShadowFilter == graphics::ShadowFilter::Penumbra) {
-                // Mirrors ShadowFilterPushConstants in slang/shadow_filter.slang.
-                struct ShadowFilterPushConstants {
-                    float pixelWorldPerDepth;
-                    float maxRadius;
-                    float depthTolerance;
-                    float normalTolerance;
-                    float radiusScale;
-                    float minRadius;
-                } filterConstants {
-                    // 2*tan(fovY/2)/height, read back off the projection rather
-                    // than from a field: projection[1][1] is 1/tan(fovY/2), and
-                    // taking it from here cannot disagree with the matrix the
-                    // frame was actually rendered with.
-                    2.0f / (projection[1][1] * static_cast<float>(_extent.y)),
-                    std::max(1.0f, _options.ptShadowFilterMaxRadius),
-                    std::max(1e-4f, _options.ptShadowFilterDepthTolerance),
-                    _options.ptShadowFilterNormalTolerance,
-                    std::max(0.0f, _options.ptShadowFilterRadiusScale),
-                    std::max(0.0f, _options.ptShadowFilterMinRadius)};
-                auto &filtered = *_shadowFiltered[_renderer.frameIndex()];
-                const std::array<ComputeBinding, 4> filterBindings {{
-                    {_shadowFilterBindings[0], filtered.sampleView()},
-                    {_shadowFilterBindings[1], channels[ChannelSlot::DirectDiffuse]->sampleView()},
-                    {_shadowFilterBindings[2], channels[ChannelSlot::ViewZ]->sampleView()},
-                    {_shadowFilterBindings[3], channels[ChannelSlot::NormalRoughness]->sampleView()},
-                }};
-                commandBuffer.dispatch(*_shadowFilterPipeline,
-                                       {static_cast<uint32_t>((_extent.x + 7) / 8),
-                                        static_cast<uint32_t>((_extent.y + 7) / 8), 1},
-                                       {filterBindings.data(),
-                                        static_cast<uint32_t>(filterBindings.size())},
-                                       nullptr, &filterConstants, sizeof(filterConstants));
-                commandBuffer.imageBarrier(filtered, ImageUse::ComputeStore, ImageUse::ComputeRead);
-            }
             // Hand ScenePipeline the pieces its composite cannot get from the
             // channel images. The jitter sign is the negation of the offset
             // handed to NRD: the denoised channels settle on the pixel centre,

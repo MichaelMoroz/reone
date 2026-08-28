@@ -72,6 +72,17 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     if (_inited) {
         return;
     }
+#ifdef R_ENABLE_DLSS
+    // Ahead of everything, because Streamline requires the VkDevice be created
+    // after slInit, and because its feature requirements have to be answered
+    // before the selectors below run. Failure is silent and ordinary: no DLLs
+    // is the state every user starts in.
+    //
+    // Note this does NOT take over the loader. Manual hooking leaves volk
+    // owning vulkan-1.dll; see StreamlineRuntime.
+    _streamline.init();
+#endif
+
     // volk must load before any Vulkan call: nothing links vulkan-1, so every
     // entry point including vkCreateInstance starts out null.
     if (volkInitialize() != VK_SUCCESS) {
@@ -94,6 +105,14 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     if (debugUtils) {
         instanceBuilder.enable_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
+#ifdef R_ENABLE_DLSS
+    // Requested rather than required: a missing one must cost DLSS, not the
+    // instance. Measured on an RTX 5090 these are three capability extensions
+    // every 1.3 driver advertises, so the fallback is theoretical.
+    for (const auto *extension : _streamline.instanceExtensions()) {
+        instanceBuilder.enable_extension(extension);
+    }
+#endif
     auto instanceResult = instanceBuilder.build();
     if (!instanceResult) {
         throw std::runtime_error("Vulkan: instance creation failed: " +
@@ -261,6 +280,38 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
              LogChannel::Graphics);
     }
 
+#ifdef R_ENABLE_DLSS
+    // After the ray-query selection has settled which physical device this is,
+    // and optional at every step: a missing extension costs DLSS, never the
+    // device. Measured requirements on an RTX 5090 are five device extensions
+    // and three 1.2 features, of which descriptorIndexing and
+    // bufferDeviceAddress are already enabled for the tracer.
+    if (_streamline.available()) {
+        bool ready = true;
+        for (const auto *extension : _streamline.deviceExtensions()) {
+            if (!physicalDevice.enable_extension_if_present(extension)) {
+                info(std::string("Vulkan: DLSS wants device extension ") + extension +
+                         ", which this driver does not advertise; DLSS unavailable",
+                     LogChannel::Graphics);
+                ready = false;
+            }
+        }
+        const auto &names12 = _streamline.features12();
+        if (ready && !names12.empty()) {
+            auto dlssFeatures12 = sl::getVkPhysicalDeviceVulkan12Features(
+                static_cast<uint32_t>(names12.size()),
+                const_cast<const char **>(names12.data()));
+            if (!physicalDevice.enable_extension_features_if_present(dlssFeatures12)) {
+                info("Vulkan: DLSS 1.2 feature requirements unmet; DLSS unavailable",
+                     LogChannel::Graphics);
+                ready = false;
+            }
+        }
+        _dlssRrAvailable =
+            ready && _streamline.supportsRayReconstruction(physicalDevice.physical_device);
+    }
+#endif
+
     const auto &logicalDeviceCoreFeatures =
         rayQueryEnabled ? rayQueryFeatureSet.core : features;
     auto logicalPhysicalDevice = prepareLogicalDevice(
@@ -298,6 +349,32 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     }
     _graphicsQueue = queueResult.value();
     _graphicsQueueFamily = _device.get_queue_index(vkb::QueueType::graphics).value();
+
+#ifdef R_ENABLE_DLSS
+    // The device exists now, so Streamline can be told about it. Index 0 of the
+    // graphics family: DLSS-RR asks for no extra queue, so there is no second
+    // one, and naming a family with no queue in it kills the process inside NGX
+    // rather than returning an error.
+    if (_dlssRrAvailable) {
+        _dlssRrAvailable = _streamline.setVulkanInfo(
+            _instance.instance, _device.physical_device, _device.device, _graphicsQueueFamily, 0);
+    }
+    if (_dlssRrAvailable) {
+        // Both versions, because the second is the user's to change: the model
+        // is nvngx_dlssd.dll beside the executable, and swapping it is how a
+        // newer DLSS reaches an already-built engine. A log line is what makes
+        // that swap verifiable without opening the settings panel.
+        const auto version = _streamline.rayReconstructionVersion();
+        info("Vulkan: DLSS Ray Reconstruction available - Streamline " +
+                 std::to_string(version.versionSL.major) + "." +
+                 std::to_string(version.versionSL.minor) + "." +
+                 std::to_string(version.versionSL.build) + ", NGX " +
+                 std::to_string(version.versionNGX.major) + "." +
+                 std::to_string(version.versionNGX.minor) + "." +
+                 std::to_string(version.versionNGX.build),
+             LogChannel::Graphics);
+    }
+#endif
 
     // VMA resolves its own entry points, but volk owns them here, so they have
     // to be handed over explicitly or it calls through null pointers.
@@ -432,6 +509,12 @@ void VulkanDevice::deinit() {
         vmaDestroyAllocator(_allocator);
         _allocator = VK_NULL_HANDLE;
     }
+#ifdef R_ENABLE_DLSS
+    // Before the device goes, not after: Streamline still holds it, and the
+    // reverse order is an access violation inside SL rather than an error.
+    _streamline.shutdown();
+    _dlssRrAvailable = false;
+#endif
     vkb::destroy_device(_device);
     if (_surface != VK_NULL_HANDLE) {
         vkb::destroy_surface(_instance, _surface);

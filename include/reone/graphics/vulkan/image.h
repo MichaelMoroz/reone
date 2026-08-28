@@ -278,6 +278,14 @@ public:
     Format pixelFormat() const override { return fromVulkanFormat(_format); }
     VkFormat format() const { return _format; }
 
+    /**
+     * The usage flags this image was created with. Recorded only because
+     * Streamline's Vulkan resource tags demand them: unlike D3D it cannot
+     * observe creation, so the host has to restate layout, extent, format and
+     * usage at every tag.
+     */
+    VkImageUsageFlags usage() const { return _usage; }
+
 private:
     VulkanDevice &_device;
 
@@ -293,6 +301,7 @@ private:
     VmaAllocation _allocation {VK_NULL_HANDLE};
     glm::ivec2 _extent {0};
     VkFormat _format {VK_FORMAT_UNDEFINED};
+    VkImageUsageFlags _usage {0};
     uint32_t _layers {1};
     VkImageLayout _layout {VK_IMAGE_LAYOUT_UNDEFINED};
     std::string _name;

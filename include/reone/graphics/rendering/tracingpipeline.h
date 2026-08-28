@@ -96,20 +96,7 @@ private:
     static constexpr uint32_t kBlueNoiseTileSize = 64;
     static constexpr uint32_t kBlueNoiseGrid = 8;
     std::shared_ptr<Texture> _blueNoise;
-    /**
-     * The shadow filter's target. Not an aux image: those are bound into the
-     * trace kernel's own set by name, and the kernel neither writes nor reads
-     * this one - it is produced by a later pass and consumed by a later one
-     * still. Double-buffered like the rest, so two frames in flight cannot be
-     * writing and reading the same texels.
-     *
-     * Allocated alongside the aux images for every traced frame, so the image
-     * itself is not NRD-only even though the pass that fills it is.
-     */
-    std::array<std::unique_ptr<IImage>, 2> _shadowFiltered;
 #ifdef R_ENABLE_NRD
-    std::unique_ptr<IComputePipeline> _shadowFilterPipeline;
-    std::vector<ComputeResourceSlot> _shadowFilterBindings;
     std::unique_ptr<ITracingDenoiser> _nrdDenoiser;
 #endif
 

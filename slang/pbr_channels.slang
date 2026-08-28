@@ -87,6 +87,13 @@ import tracing.brdf;
 [[vk::binding(6, 3)]] RWTexture2D<float4> outDiffFactor;
 [[vk::binding(7, 3)]] RWTexture2D<float4> outSpecFactor;
 [[vk::binding(8, 3)]] RWTexture2D<float> outViewZ;
+// Written for DLSS-RR, which wants a normal and a linear roughness and cannot
+// read the G-buffer's packed eye normal. Deliberately the same channel image
+// the tracer fills: NRD's RGBA16_SNORM encoding takes a plain world normal in
+// xyz and linear roughness in w, so the tracer never packed it either and one
+// guide serves both providers. Unwritten in Retro, which shades into no
+// channel at all.
+[[vk::binding(9, 3)]] RWTexture2D<float4> outNormalRoughness;
 
 /** Mirrors ResolvePushConstants in scenepipeline.cpp; the same block the
     single-image resolve takes, unchanged. */
@@ -259,6 +266,9 @@ struct Channels {
     float3 diffFactor;
     float3 specFactor;
     float viewZ;
+    /** World normal and linear roughness, the guide pair DLSS-RR reads. */
+    float3 normal;
+    float roughness;
 };
 
 /** A terminator - sky miss, sky shell, backdrop, parity black - carries all its
@@ -272,6 +282,10 @@ Channels terminator(float3 noiseFree) {
     c.diffFactor = float3(1.0);
     c.specFactor = float3(1.0);
     c.viewZ = kAssembleInfDistance;
+    // A terminator has no surface. Match the tracer's miss exactly so the
+    // guide reads the same on both providers.
+    c.normal = float3(0.0);
+    c.roughness = 1.0;
     return c;
 }
 
@@ -442,6 +456,8 @@ Channels shadePixel(float2 uv, int2 pixel) {
     c.diffFactor = diffFactor;
     c.specFactor = specFactor;
     c.viewZ = eyePos.z;
+    c.normal = normal;
+    c.roughness = roughness;
     return c;
 }
 
@@ -469,4 +485,5 @@ void channelsMain(uint3 dispatchId : SV_DispatchThreadID) {
     outDiffFactor[pixel] = float4(c.diffFactor, 1.0);
     outSpecFactor[pixel] = float4(c.specFactor, 1.0);
     outViewZ[pixel] = c.viewZ;
+    outNormalRoughness[pixel] = float4(c.normal, c.roughness);
 }
