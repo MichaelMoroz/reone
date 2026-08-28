@@ -158,6 +158,17 @@ public:
     const Text &text() const { return _text; }
     const std::vector<std::string> &textLines() const { return _textLines; }
     const std::string &sceneName() const { return _sceneName; }
+
+    /**
+     * Whether this control would render a scene of its own this frame.
+     *
+     * The same test renderOffscreen makes, exposed so the frame can be decided
+     * BEFORE anything is drawn: a screen that hosts a scene owns the frame, and
+     * the world is not rendered behind it. See Game::renderSceneOffscreen.
+     */
+    bool hostsScene() const {
+        return !_sceneName.empty() && _visible;
+    }
     const Extent &sceneExtent() const { return _sceneExtent ? *_sceneExtent : _extent; }
 
     void setId(int id) { _id = id; }

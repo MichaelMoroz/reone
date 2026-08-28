@@ -34,6 +34,7 @@ public:
     MOCK_METHOD(void, update, (float), (override));
     MOCK_METHOD(void, render, (), (override));
     MOCK_METHOD(void, renderOffscreen, (), (override));
+    MOCK_METHOD(bool, hostsScene, (), (const override));
 
     MOCK_METHOD(void, clearSelection, (), (override));
 

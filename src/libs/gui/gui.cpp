@@ -372,6 +372,28 @@ void GUI::renderOffscreen() {
     }
 }
 
+bool GUI::hostsScene() const {
+    if (!_rootControl) {
+        return false;
+    }
+    // The same walk renderOffscreen makes, asked as a question. Cheap enough to
+    // run every frame - it stops at the first control that answers yes, and a
+    // screen with no 3D content walks a few dozen nodes.
+    std::queue<std::reference_wrapper<Control>> controls;
+    controls.push(*_rootControl);
+    while (!controls.empty()) {
+        auto &control = controls.front().get();
+        if (control.hostsScene()) {
+            return true;
+        }
+        for (auto &child : control.children()) {
+            controls.push(child);
+        }
+        controls.pop();
+    }
+    return false;
+}
+
 void GUI::renderBackground(I2DRenderer &renderer2d) {
     // The outer background is a surround, not part of the control layout. It
     // covers the viewport without changing aspect, while controls use the

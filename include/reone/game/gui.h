@@ -49,6 +49,9 @@ public:
     virtual void render();
     virtual void renderOffscreen();
 
+    /** Whether this screen hosts a scene of its own; see Control::hostsScene. */
+    virtual bool hostsScene() const;
+
     void clearSelection() {
         _gui->clearSelection();
     }

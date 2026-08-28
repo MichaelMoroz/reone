@@ -79,6 +79,9 @@ public:
     /** Render control-owned scenes before the frame's 2D pass opens. */
     virtual void renderOffscreen() = 0;
 
+    /** Whether any visible control on this screen hosts a scene of its own. */
+    virtual bool hostsScene() const = 0;
+
     virtual void clearSelection() = 0;
 
     virtual Control &rootControl() = 0;
@@ -156,6 +159,7 @@ public:
     void update(float dt) override;
     void render() override;
     void renderOffscreen() override;
+    bool hostsScene() const override;
 
     void clearSelection() override;
 

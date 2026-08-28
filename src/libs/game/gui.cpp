@@ -115,6 +115,10 @@ void GameGUI::renderOffscreen() {
     }
 }
 
+bool GameGUI::hostsScene() const {
+    return _gui && _gui->hostsScene();
+}
+
 void GameGUI::loadBackground(BackgroundType type) {
     std::string resRef;
 

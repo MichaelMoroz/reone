@@ -29,6 +29,7 @@
 #include "reone/audio/di/services.h"
 #include "reone/audio/mixer.h"
 #include "reone/game/debug.h"
+#include "reone/scene/drawdebug.h"
 
 #include "reone/game/action/castspellatobject.h"
 #include "reone/game/action/cutsceneattack.h"
@@ -758,6 +759,9 @@ void Game::update(float frameTime) {
     bool updModule = !_movie && _module && (_screen == Screen::InGame || _screen == Screen::Conversation);
     if (updModule && !_paused) {
         _floatingText.update(dt);
+        // Ages the scoped debug primitives so a pushLifetime element expires.
+        // Upstream ticks it from the same place.
+        updateDrawDebug(dt);
         advanceWorldTime(dt);
         advancePlayedTime(dt);
         _module->update(dt);
@@ -1902,7 +1906,25 @@ void Game::renderSceneOffscreen() {
     if (_movie) {
         return;
     }
-    if (_module && _options.graphics.sceneRender) {
+    // ONE scene per frame, at most.
+    //
+    // Every SceneGraph::render builds a pipeline of its own in the current
+    // render mode, so a screen hosting scenes while a module is loaded used to
+    // stand up two or three complete pipelines - G-buffer, tracer, denoiser,
+    // upscaler - and run them all every frame. The galaxy map is the clearest
+    // case: it hosts kSceneGalaxy and kScenePlanet, and with the Ebon Hawk
+    // loaded behind it that was three path-traced frames for one presented
+    // image.
+    //
+    // The screen decides, and it decides by what it contains rather than by a
+    // list of screen names kept in step by hand: a screen with 3D content of
+    // its own owns the frame, and the world is not rendered behind it. A screen
+    // with none - a conversation, a container panel - leaves the world owning
+    // it, which is also what those screens want to show.
+    auto screenGUI = getScreenGUI();
+    const bool guiOwnsFrame = screenGUI && screenGUI->hostsScene();
+
+    if (_module && _options.graphics.sceneRender && !guiOwnsFrame) {
         auto &scene = _services.scene.graphs.get(kSceneMain);
         // The overlay's labels are drawn by the render pipeline, in the same
         // pass as its boxes and against the same depth buffer. Only the font
@@ -1921,11 +1943,13 @@ void Game::renderSceneOffscreen() {
     // Retained past the composite so a save executed from a menu still has the
     // frame the menu was drawn over - see Game::captureSaveScreenshot.
     _lastRenderedSceneOutput = _sceneOutput;
-    // GUI controls host scenes of their own - the model behind the main menu -
-    // and those need producing here too. Deliberately outside the _module
-    // check: the menus that use them run with no module loaded.
-    if (auto gui = getScreenGUI()) {
-        gui->renderOffscreen();
+    // GUI controls host scenes of their own - the model behind the main menu,
+    // the galaxy and planet of the map - and those are produced here. Outside
+    // the _module check on purpose: the menus that use them run with no module
+    // loaded, and when one IS loaded the world above has already stood aside
+    // for them.
+    if (screenGUI) {
+        screenGUI->renderOffscreen();
     }
     if (_confirmPopup && _confirmPopup->isVisible()) {
         _confirmPopup->renderOffscreen();
