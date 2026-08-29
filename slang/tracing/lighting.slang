@@ -23,7 +23,8 @@ import uniforms;
 import lib.direct_light;
 import lib.scene_schema;
 import tracing.rng;
-import tracing.brdf;
+import lib.brdf;
+import lib.math;
 import tracing.resources;
 import tracing.material;
 import tracing.trace;
@@ -64,7 +65,7 @@ float directLightWeight(GlobalUniformsLight light, float3 position, float3 shadi
         : sphereLightAttenuation(light.radius, lightDistance, pushConstants.emitterRadiusRatio);
     float cosine = dot(shadingNormal, fragToLight / max(lightDistance, 1e-4));
     float NdotL = thin && cosine < 0.0 ? -cosine * pushConstants.thinTransmission : max(0.0, cosine);
-    float luma = dot(directLightColor(light), float3(0.2126, 0.7152, 0.0722));
+    float luma = luminance(directLightColor(light));
     return max(0.0, luma * attenuation * NdotL);
 }
 
@@ -185,21 +186,8 @@ DirectLight ptDirectLightDraw(HitGeometry hit, SurfaceShading shading, float3 vi
     // Specular keeps the true normal and the true side: a leaf transmits light,
     // not a highlight. Only env-mapped surfaces carry a specular lobe.
     if (shading.envmapped && !litFromBehind) {
-        float NdotL = max(0.0, dot(shading.normal, L));
-        float NdotV = max(0.0, dot(shading.normal, view));
-        float3 F0 = lerp(lerp(float3(0.04), shading.albedo, shading.metallic), float3(1.0),
-                         shading.envStrength);
-        float3 H = normalize(view + L);
-        float NdotH = max(0.0, dot(shading.normal, H));
-        float VdotH = max(0.0, dot(view, H));
-        float ggxAlpha = shading.roughness * shading.roughness;
-        float geomK = (shading.roughness + 1.0) * (shading.roughness + 1.0) * 0.125;
-        float D = ptDistributionGGX(NdotH * NdotH, ggxAlpha * ggxAlpha);
-        float G = ptGeometrySmith(NdotL, NdotV, geomK);
-        float3 F = ptFresnelSchlick(VdotH, F0);
-        // Evaluated for a given L, so NdotL cancels analytically; forming it
-        // numerically turns the 1e-4 guard into a huge gain at grazing incidence.
-        result.specular = (D * G * F) / max(1e-4, 4.0 * NdotV) * radiance;
+        float3 F0 = materialRf0(shading.albedo, shading.metallic, shading.envStrength);
+        result.specular = specularGGX(shading.normal, view, L, shading.roughness, F0) * radiance;
     }
     return result;
 }

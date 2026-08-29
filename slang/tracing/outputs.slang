@@ -29,7 +29,6 @@
 
 import lib.assemble;
 import uniforms;
-import tracing.brdf;
 import tracing.resources;
 
 [[vk::binding(0, 2)]] RWTexture2D<float4> outDiffuse;

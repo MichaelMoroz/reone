@@ -19,6 +19,7 @@
 // reconstructs the fragment position and applies the original light/fog model.
 
 import uniforms;
+import lib.math;
 import lib.gbuf;
 import lib.shadow;
 import lib.scene_schema;
@@ -58,23 +59,16 @@ static const uint kResolveFlagTransparentOutput = 4u;
 static const uint kResolveFlagDisplayReferred = 8u;
 
 // Mirrors the merged-material contract in scene_draw.slang and admission.cpp.
-static const uint kMegaFeatureProcedural = 1u << 16;
-static const uint kMegaFeatureBumpMap = 1u << 3;
-static const uint kMegaCategoryShift = 27u;
-static const uint kMegaCategoryMask = 0xFu;
 
-static const uint kNoTriangle = 0xffffffffu;
-static const uint kNoTexture = 0xffffffffu;
 
 /**
  * The exponent this pass converts its finished colour back through.
  *
  * Held locally, as pbr_channels.slang holds its own, because it must be the same
- * number the post-process encode inverts - kPtGamma in tracing/brdf.slang - and
+ * number the post-process encode inverts - kGamma in lib/math.slang - and
  * a mismatch between the two would show up as a global contrast shift rather
  * than as anything that names itself.
  */
-static const float kGamma = 2.2;
 
 static const int kLightDynamicTypeAll = 1;
 
@@ -148,7 +142,7 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
         // with it, which is how it was found.
         float3 sky = skyRadiance(sSkyCube, direction, 1.0);
         if ((pushConstants.flags & kResolveFlagDisplayReferred) != 0) {
-            sky = pow(max(sky, 0.0), float3(1.0 / kGamma));
+            sky = linearToGamma(sky);
         }
         return float4(sky, 1.0);
     }
@@ -326,6 +320,6 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     if ((pushConstants.flags & kResolveFlagDisplayReferred) != 0) {
         return float4(max(color, 0.0), 1.0);
     }
-    return float4(pow(max(color, 0.0), float3(kGamma)), 1.0);
+    return float4(gammaToLinear(color), 1.0);
 }
 

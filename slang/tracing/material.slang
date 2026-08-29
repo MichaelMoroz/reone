@@ -36,7 +36,7 @@ import lib.scene_schema;
 import lib.material_ops;
 import uniforms;
 import tracing.rng;
-import tracing.brdf;
+import lib.brdf;
 import tracing.resources;
 import tracing.trace;
 
@@ -242,7 +242,7 @@ UvGradients anisotropicGradients(HitGeometry hit) {
  * cannot afford gradients: transparency candidates during traversal.
  */
 public float ptRayConeLod(InstanceMaterial material, HitGeometry hit) {
-    if (material.mainTex == kPtNoTexture) return 0.0;
+    if (material.mainTex == kNoTexture) return 0.0;
     float3 q0 = hit.p0;
     float3 q1 = hit.p1;
     float3 q2 = hit.p2;
@@ -272,7 +272,7 @@ public struct PbrSurface : ISurfaceModel {
         // two roles: reflectance for the light it bounces, radiance for the
         // light it emits. Only the first follows the albedo dial.
         float3 radianceTexel = float3(1.0);
-        if (material.mainTex != kPtNoTexture) {
+        if (material.mainTex != kNoTexture) {
             UvGradients gradients = anisotropicGradients(hit);
             // Textures are stored gamma-encoded; every term this shader
             // computes is linear, exactly as the raster resolve does it.
@@ -280,7 +280,7 @@ public struct PbrSurface : ISurfaceModel {
             shading.albedo = ptDecodeAlbedo(sample.rgb);
             radianceTexel = ptDecodeEmission(sample.rgb);
             shading.alpha = sample.a;
-            if ((material.featureMask & kPtMaskPremulAlpha) != 0) {
+            if ((material.featureMask & kMaterialPremulAlpha) != 0) {
                 // Colour is already multiplied by coverage and the alpha
                 // channel is unusable, so luma recovers the coverage and
                 // dividing it back out gives the unpremultiplied colour.
@@ -321,10 +321,10 @@ public struct PbrSurface : ISurfaceModel {
         shading.roughness = saturate(shading.roughness * material.roughnessScale);
 
         shading.normal = materialNormal(hit, hit.materialIndex);
-        shading.envmapped = (material.featureMask & uint(kFeatureEnvMap)) != 0;
+        shading.envmapped = (material.featureMask & kMaterialEnvMap) != 0;
         shading.envStrength = (shading.envmapped ? (1.0 - shading.alpha) : 0.0) *
                               material.overrideParams.z;
-        shading.hasLightmap = (material.featureMask & uint(kFeatureLightmap)) != 0;
+        shading.hasLightmap = (material.featureMask & kMaterialLightmap) != 0;
         // White, not black, where a surface declares a bake it has no texture
         // for. Zero is not "no lightmap", it is "a lightmap that absorbs all
         // light", and it reaches more surfaces than it looks: the lightmaps
@@ -334,11 +334,11 @@ public struct PbrSurface : ISurfaceModel {
         // was unaffected. Same rule both resolves state for unlightmapped
         // static geometry.
         shading.lightmap = float3(1.0);
-        if (shading.hasLightmap && material.lightmap != kPtNoTexture) {
-            shading.lightmap = ptGammaToLinear(
+        if (shading.hasLightmap && material.lightmap != kNoTexture) {
+            shading.lightmap = gammaToLinear(
                 bindlessTextures[NonUniformResourceIndex(material.lightmap)].SampleLevel(hit.uv2, 0.0).rgb);
         }
-        float3 emission = ptGammaToLinear(material.selfIllumColor.rgb);
+        float3 emission = gammaToLinear(material.selfIllumColor.rgb);
         if (material.curatedEmission.w > 1.5) {
             emission = material.curatedEmission.rgb;
         } else if (material.curatedEmission.w > 0.5) {
@@ -372,12 +372,11 @@ public struct PbrSurface : ISurfaceModel {
         // specular response: environment-mapped surfaces. Everywhere else the
         // diffuse alpha is coverage or opacity, so the derived roughness is
         // meaningless. Non-envmapped surfaces are pure diffuse.
-        float3 F0 = lerp(lerp(float3(0.04), shading.albedo, shading.metallic), float3(1.0),
-                         shading.envStrength);
+        float3 F0 = materialRf0(shading.albedo, shading.metallic, shading.envStrength);
         float NdotV = max(0.0, dot(shading.normal, view));
-        float3 F = ptFresnelSchlick(NdotV, F0);
+        float3 F = fresnelSchlick(NdotV, F0);
         float specularProbability = shading.envmapped
-                                        ? clamp(luminanceOf(F), 1e-3, 1.0 - 1e-3)
+                                        ? clamp(luminance(F), 1e-3, 1.0 - 1e-3)
                                         : 0.0;
         if (shading.envmapped && ptRandom01(rng) < specularProbability) {
             float3 half = ptGgxVisibleHalfVector(shading.normal, view, shading.roughness,
@@ -388,9 +387,8 @@ public struct PbrSurface : ISurfaceModel {
             // direction alone. Bounded by F, unlike the NDF-sampled weight this
             // replaces, which owed a factor that diverges at grazing angles.
             float NdotL = max(0.0, dot(shading.normal, sample.direction));
-            float geomK = shading.roughness + 1.0;
-            geomK = geomK * geomK * (1.0 / 8.0);
-            sample.weight = F * ptGeometrySchlick(NdotL, geomK) / specularProbability;
+            sample.weight = F * geometrySchlick(NdotL, punctualSmithK(shading.roughness)) /
+                            specularProbability;
             sample.demodulatedWeight = sample.weight;
             sample.specularLobe = true;
         } else {
@@ -441,10 +439,10 @@ public struct PbrSurface : ISurfaceModel {
             if (dot(tangentSpaceNormal, tangentSpaceNormal) >= 1e-10 &&
                 dot(tangent, tangent) >= 1e-10 && dot(bitangent, bitangent) >= 1e-10) {
                 UvGradients gradients = anisotropicGradients(hit);
-                if ((instanceMaterials[materialIndex].featureMask & uint(kFeatureNormalMap)) != 0 && instanceMaterials[materialIndex].normalMap != kPtNoTexture) {
+                if ((instanceMaterials[materialIndex].featureMask & uint(kFeatureNormalMap)) != 0 && instanceMaterials[materialIndex].normalMap != kNoTexture) {
                     float3 n = bindlessTextures[NonUniformResourceIndex(instanceMaterials[materialIndex].normalMap)].SampleGrad(hit.uv, gradients.x, gradients.y).rgb * 2.0 - 1.0;
                     shadingNormal = normalize(tangent * n.x + bitangent * n.y + shadingNormal * n.z);
-                } else if ((instanceMaterials[materialIndex].featureMask & uint(kFeatureBumpMap)) != 0 && instanceMaterials[materialIndex].bumpMapArray != kPtNoTexture) {
+                } else if ((instanceMaterials[materialIndex].featureMask & uint(kFeatureBumpMap)) != 0 && instanceMaterials[materialIndex].bumpMapArray != kNoTexture) {
                     uint bumpWidth, bumpHeight, bumpLayers;
                     bindlessTextureArrays[NonUniformResourceIndex(instanceMaterials[materialIndex].bumpMapArray)].GetDimensions(bumpWidth, bumpHeight, bumpLayers);
                     float2 texel = 1.0 / float2(max(bumpWidth, 1u), max(bumpHeight, 1u));
@@ -478,7 +476,7 @@ public struct UnlitTransparentSurface : ISurfaceModel {
         // takes the emission decode rather than the albedo one.
         shading.albedo = ptDecodeEmission(material.diffuseColor.rgb);
         shading.alpha = 1.0;
-        if (material.mainTex != kPtNoTexture) {
+        if (material.mainTex != kNoTexture) {
             float lod = ptRayConeLod(material, hit);
             float4 sample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(hit.uv, lod);
             shading.albedo = ptDecodeEmission(sample.rgb);
@@ -522,7 +520,7 @@ public struct UnlitEmissiveSurface : ISurfaceModel {
         SurfaceShading shading;
         shading.albedo = float3(1.0);
         shading.alpha = 1.0;
-        if (material.mainTex != kPtNoTexture) {
+        if (material.mainTex != kNoTexture) {
             float lod = ptRayConeLod(material, hit);
             // The emission decode: sky and backdrop imagery are radiance, and
             // the albedo dial has no say over how bright a sky is.
@@ -541,7 +539,7 @@ public struct UnlitEmissiveSurface : ISurfaceModel {
         // was never modelled. Nothing exists behind either, which is why
         // neither is graded by the emissive dial - that one is for lamps and
         // screens, which are objects in the scene that also light it.
-        shading.emission = assembleSkyClass((material.featureMask & kPtMaskSky) != 0,
+        shading.emission = assembleSkyClass((material.featureMask & kMaterialSky) != 0,
                                             shading.albedo, pushConstants.skyIntensity,
                                             pushConstants.backdropIntensity);
         shading.terminatesPath = true;
@@ -560,10 +558,6 @@ public struct UnlitEmissiveSurface : ISurfaceModel {
         return sample;
     }
 };
-
-float luminanceOf(float3 rgb) {
-    return dot(rgb, float3(0.2126, 0.7152, 0.0722));
-}
 
 /**
  * World-space motion, previous minus current. Rigid meshes: the hit point
@@ -641,7 +635,7 @@ public PathSample ptSampleRay(HitGeometry hit, SurfaceShading shading, float3 vi
     // Before the type switch, because this is not a fourth surface type: a
     // window is an ordinary lit surface that also lets light through, and it
     // must keep shading as one. Only the continuation differs.
-    if ((instanceMaterials[hit.materialIndex].featureMask & kPtMaskTransmissive) != 0) {
+    if ((instanceMaterials[hit.materialIndex].featureMask & kMaterialTransmissive) != 0) {
         return transmissiveSample(hit, shading);
     }
     switch (instanceMaterials[hit.materialIndex].surfaceType) {

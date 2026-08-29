@@ -27,6 +27,7 @@
 // subject, and the direction it reprojects is the same one the resolves shade.
 
 import uniforms;
+import lib.math;
 import lib.skycube;
 
 [[vk::binding(0, 1)]] Sampler2D sMainTex;
@@ -72,7 +73,7 @@ float4 skyFragment(SkyVaryings input) : SV_Target {
     if (sample.a == 0.0) discard;
     // The cube is sampled as radiance by the tracer. Preserve the old bake's
     // explicit gamma conversion exactly.
-    return float4(pow(sample.rgb, float3(2.2)), sample.a);
+    return float4(gammaToLinear(sample.rgb), sample.a);
 }
 
 struct SkyMotionVaryings {

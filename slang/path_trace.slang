@@ -51,6 +51,8 @@ import uniforms;
 import lib.direct_light;
 import lib.surface_model;
 import tracing.rng;
+import lib.brdf;
+import lib.math;
 import tracing.brdf;
 import tracing.resources;
 import tracing.material;
@@ -160,11 +162,10 @@ void finishPixel(uint2 pixel, TraceOutputs outputs, PtDebug debug) {
  * view-direction Schlick split matches the continuation sampler.
  */
 float3 diffuseMaterialResponse(SurfaceShading shading, float3 view) {
-    float3 F0 = lerp(lerp(float3(0.04), shading.albedo, shading.metallic), float3(1.0),
-                     shading.envStrength);
+    float3 F0 = materialRf0(shading.albedo, shading.metallic, shading.envStrength);
     float3 response = shading.albedo * (1.0 - shading.metallic);
     if (shading.envmapped) {
-        response *= 1.0 - ptFresnelSchlick(max(0.0, dot(shading.normal, view)), F0);
+        response *= 1.0 - fresnelSchlick(max(0.0, dot(shading.normal, view)), F0);
     }
     return response;
 }
@@ -263,7 +264,7 @@ void main() {
     // The comparison G-buffer follows raster exactly - and, now that the raster
     // G-buffer is where these values came from, tautologically so. They are
     // retained as the traced-side dump targets --dumptargets already names.
-    outputs.gBufferDiffuse = float4(ptLinearToGamma(primaryShading.albedo),
+    outputs.gBufferDiffuse = float4(linearToGamma(primaryShading.albedo),
                                     primaryShading.alpha);
     outputs.gBufferEyeNormal = 0.5 * mul(primaryShading.normal,
                                          (float3x3)globalUniforms.viewInv) + 0.5;

@@ -31,7 +31,7 @@ public struct InstanceMaterial {
     public float4 uv0;
     public float4 uv1;
     public float4 uv2;
-    // Bindless descriptor indices; kPtNoTexture means the slot is unused.
+    // Bindless descriptor indices; kNoTexture means the slot is unused.
     public uint mainTex;
     public uint normalMap;
     public uint lightmap;
@@ -157,6 +157,44 @@ public struct GrassFace {
     public uint4 faceBudgetMaterialVariants;
 };
 
+// InstanceMaterial::featureMask bits, one table for every consumer. Bits below
+// 16 are the per-object feature mask the raster passes always carried; the
+// rest were added by admission for the tracer and the merged draws.
+public static const uint kMaterialLightmap = 1u << 0;
+public static const uint kMaterialEnvMap = 1u << 1;
+public static const uint kMaterialNormalMap = 1u << 2;
+public static const uint kMaterialBumpMap = 1u << 3;
+public static const uint kMaterialShadows = 1u << 7;
+public static const uint kMaterialWater = 1u << 8;
+public static const uint kMaterialFog = 1u << 9;
+/** Colour premultiplied by coverage, no usable alpha: coverage is recovered from luma. */
+public static const uint kMaterialPremulAlpha = 1u << 12;
+public static const uint kMaterialEnvMapCube = 1u << 13;
+public static const uint kMaterialStatic = 1u << 14;
+/** No thickness: lit from both sides and passes light through. */
+public static const uint kMaterialThin = 1u << 15;
+/** CPU-synthesised geometry; without kMaterialPunchThrough it names the sprites no ray sees. */
+public static const uint kMaterialProcedural = 1u << 16;
+/** Blended coverage that is scene geometry (glass, leaf card): a ray sees it, tints, carries on. */
+public static const uint kMaterialTransmissive = 1u << 23;
+/** Selects the sky dial over the emissive one. */
+public static const uint kMaterialSky = 1u << 24;
+/** Continuous alpha coverage, distinct from a punch-through cutout mask. */
+public static const uint kMaterialBlendedCoverage = 1u << 25;
+/** Alpha-tested coverage, in traversal and in the raster gate alike. */
+public static const uint kMaterialPunchThrough = 1u << 26;
+public static const uint kMaterialCategoryShift = 27;
+public static const uint kMaterialCategoryMask = 0xFu;
+/** Sky-room scenery: shaded normally, but shadow rays pass through it. */
+public static const uint kMaterialBackdropNoShadow = 1u << 31;
+
+public static const uint kNoTexture = 0xffffffffu;
+/** The G-buffer's cleared triangle id: nothing was drawn, so this is the sky. */
+public static const uint kNoTriangle = 0xffffffffu;
+
+/** Cutout coverage is binary; a texture may author its own threshold. */
+public static const float kMaterialAlphaTestThreshold = 0.5;
+
 // TLAS instance mask bits, ANDed with a ray's inclusion mask; a culled instance carries 0.
 public static const uint kPtInstanceGeometry = 0x01u;
 public static const uint kPtInstanceGrass = 0x02u;
@@ -168,3 +206,8 @@ public struct GrassRange {
     public uint clusterCount;
     public uint pad;
 };
+
+/** The authored alpha-test threshold, or the shared default. Raster gate and tracer resolve it here. */
+public float alphaTestThreshold(InstanceMaterial material) {
+    return material.alphaTest >= 0.0 ? material.alphaTest : kMaterialAlphaTestThreshold;
+}

@@ -16,6 +16,8 @@
  */
 module surface_model;
 
+import lib.brdf;
+
 /*
  * The surface model: how a shaded surface responds to the light that reaches
  * it. ONE implementation, consumed by every renderer through the channel
@@ -61,7 +63,7 @@ public static const float kNrdRoughnessFactorMinScale = 0.1;
 public void materialFactors(float3 N, float3 V, float3 albedo, float metallic,
                             float envStrength, float roughness,
                             out float3 diffFactor, out float3 specFactor) {
-    float3 Rf0 = lerp(lerp(float3(0.04), albedo, metallic), float3(1.0), envStrength);
+    float3 Rf0 = materialRf0(albedo, metallic, envStrength);
     float3 Fenv = nrdEnvironmentTermRtg(Rf0, abs(dot(N, V)), roughness);
     // Unfloored, unlike NRD's own helper. NRD raises this off zero because it
     // DIVIDES the signal by it; the diffuse channel holds transport and is

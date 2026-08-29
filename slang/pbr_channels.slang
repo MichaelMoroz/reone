@@ -38,8 +38,7 @@ import lib.assemble;
 import lib.surface_model;
 import lib.direct_light;
 import lib.skycube;
-// Colour and BRDF maths only; no tracing entry point is referenced.
-import tracing.brdf;
+import lib.brdf;
 
 // Set 1 is the persistent resolve table shared with retro_resolve; only the
 // units this pass reads are declared.
@@ -92,18 +91,8 @@ struct ResolvePushConstants {
 static const uint kResolveFlagSky = 1u;
 static const uint kResolveFlagSSAO = 2u;
 static const uint kResolveFlagParityDirect = 16u;
-static const uint kResolveMaskSky = 1u << 24;
-static const uint kNoTriangle = 0xffffffffu;
-static const uint kNoTexture = 0xffffffffu;
 static const float kMaxReflectionLOD = 4.0;
 static const float kSsaoMaxDistance = 500.0;
-static const float kGamma = 2.2;
-
-/** Authored, display-referred colour to linear. The one decode this pass runs
-    on material colours and the fog swatch; the encode is the post pass's. */
-float3 gammaToLinear(float3 rgb) {
-    return pow(max(rgb, 0.0), float3(kGamma));
-}
 
 /** View-space position from the depth the geometry pass left; see the note in
     the SSR module, which reconstructs the same way. */
@@ -153,13 +142,6 @@ float3 sampleAuthoredMirror(InstanceMaterial material, float3 worldReflection) {
         .SampleLevel(uv, 0.0).rgb;
 }
 
-/** The one term with no tracer counterpart: the ambient lobe's Fresnel takes
-    a roughness ceiling, which the punctual ptFresnelSchlick does not. */
-float3 fresnelSchlickRoughness(float cosTheta, float3 F0, float roughness) {
-    float3 ceiling = max(F0, float3(1.0 - roughness));
-    return F0 + (ceiling - F0) * pow(saturate(1.0 - cosTheta), 5.0);
-}
-
 /** Everything downstream needs from one PBR direct-light evaluation. Private
     to this provider now: the debug view reads the channel this pass writes
     instead of re-deriving the light, so nothing else evaluates it. */
@@ -170,8 +152,6 @@ struct PbrDirectLight {
     float3 radiance;
     /** Demodulated Lambertian diffuse, including 1/pi and thin transmission. */
     float3 diffuse;
-    /** Cosine against the unflipped normal, for the specular lobe. */
-    float specularNdotL;
     /** The legacy ambient-only fill, before material ambient is applied. */
     float3 ambientRadiance;
 };
@@ -182,7 +162,7 @@ PbrDirectLight pbrDirectLight(GlobalUniformsLight light,
                               bool shadowsEnabled, float thinTransmission,
                               float emitterRadiusRatio,
                               float directIntensity, float sunIntensity) {
-    PbrDirectLight result = { false, float3(0.0, 0.0, 1.0), float3(0.0), float3(0.0), 0.0, float3(0.0) };
+    PbrDirectLight result = { false, float3(0.0, 0.0, 1.0), float3(0.0), float3(0.0), float3(0.0) };
 
     // The shared module owns what the light is; only the visibility is PBR's.
     DirectLightSample sample = sampleDirectLight(light, worldPos, emitterRadiusRatio,
@@ -210,7 +190,6 @@ PbrDirectLight pbrDirectLight(GlobalUniformsLight light,
     result.radiance = sample.radiance * visibility;
     result.diffuse = directLightDiffuse(result.radiance, normal, result.direction,
                                         thinSurface, thinTransmission);
-    result.specularNdotL = max(0.0, dot(normal, result.direction));
     return result;
 }
 
@@ -294,7 +273,7 @@ Channels shadePixel(float2 uv, int2 pixel) {
     // The unlit-emissive class: sky shell and painted backdrops are radiance,
     // terminating, on their own dials - assembleSkyClass, the same call the
     // tracer makes, the same shared dials.
-    bool skyShell = (material.featureMask & kResolveMaskSky) != 0;
+    bool skyShell = (material.featureMask & kMaterialSky) != 0;
     if (skyShell || material.surfaceType == 2) {
         return terminator(assembleSkyClass(skyShell, albedo, pushConstants.skyIntensity,
                                            pushConstants.backdropIntensity));
@@ -333,10 +312,7 @@ Channels shadePixel(float2 uv, int2 pixel) {
     }
 
     float NdotV = max(0.0, dot(normal, V));
-    float3 F0 = lerp(float3(0.04), albedo, metallic);
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float k = (roughness + 1.0) * (roughness + 1.0) * 0.125;
+    float3 F0 = materialRf0(albedo, metallic, envStrength);
 
     // Direct light, each caster occluded by its own map: demodulated Lambert
     // plus the analytic GGX lobe, demodulated by specFactor at the end.
@@ -352,16 +328,8 @@ Channels shadePixel(float2 uv, int2 pixel) {
             irradiance += materialAmbient * direct.ambientRadiance;
             continue;
         }
-        float3 L = direct.direction;
-        float3 H = normalize(V + L);
-        float NdotH = max(0.0, dot(normal, H));
-        float VdotH = max(0.0, dot(V, H));
-        float D = ptDistributionGGX(NdotH * NdotH, a2);
-        float G = ptGeometrySmith(direct.specularNdotL, NdotV, k);
-        float3 Fs = ptFresnelSchlick(VdotH, F0);
-        float3 spec = (D * G * Fs) / max(1e-4, 4.0 * direct.specularNdotL * NdotV);
         directDiffuse += direct.diffuse;
-        directS += spec * direct.radiance * direct.specularNdotL;
+        directS += specularGGX(normal, V, direct.direction, roughness, F0) * direct.radiance;
     }
 
     // Ambient specular (split-sum prefiltered environment) on the alpha share,

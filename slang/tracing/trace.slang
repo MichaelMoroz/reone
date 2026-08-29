@@ -19,9 +19,9 @@
 // ptShadowRay reports visibility to a light and the blocking distance.
 //
 // Two independent axes classify a non-opaque candidate. Coverage decides how
-// much light it removes: CUTOUT (kPtMaskPunchThrough) is a binary alpha test,
+// much light it removes: CUTOUT (kMaterialPunchThrough) is a binary alpha test,
 // PURELY EMISSIVE (kPtSurfaceUnlitTransparent) commits for its radiance and
-// never occludes, TRANSMISSIVE (kPtMaskTransmissive) tints and continues.
+// never occludes, TRANSMISSIVE (kMaterialTransmissive) tints and continues.
 // Instance class - merged scene or grass card - decides which occlusion
 // accumulator it lands in, and the inclusion mask decides whether it is
 // reported at all. Procedural sprites (smoke, plumes) are volume, not surface:
@@ -98,9 +98,9 @@ float3 barycentricWeights(float2 b) {
  */
 float candidateAlpha(inout RayQuery<RAY_FLAG_NONE> query, Candidate c) {
     InstanceMaterial material = instanceMaterials[c.materialIndex];
-    bool blended = (material.featureMask & kPtMaskBlendedCoverage) != 0;
-    bool envmapped = (material.featureMask & kPtMaskEnvMap) != 0;
-    bool textured = material.mainTex != kPtNoTexture;
+    bool blended = (material.featureMask & kMaterialBlendedCoverage) != 0;
+    bool envmapped = (material.featureMask & kMaterialEnvMap) != 0;
+    bool textured = material.mainTex != kNoTexture;
     if (!blended && !textured) return 1.0;
     bool sample = textured && !(blended && envmapped);
     float3 w = barycentricWeights(query.CandidateTriangleBarycentrics());
@@ -122,7 +122,7 @@ float candidateAlpha(inout RayQuery<RAY_FLAG_NONE> query, Candidate c) {
     if (sample) {
         float4 texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)]
                            .SampleLevel(ptTransformedUV(material, uv), 0.0);
-        alpha = (material.featureMask & kPtMaskPremulAlpha) != 0 ? rgbToLuma(texel.rgb) : texel.a;
+        alpha = (material.featureMask & kMaterialPremulAlpha) != 0 ? rgbToLuma(texel.rgb) : texel.a;
     }
     if (blended) alpha *= material.diffuseColor.a;
     return alpha * vertexAlpha;
@@ -147,27 +147,18 @@ TraceHit committedHit(inout RayQuery<RAY_FLAG_NONE> query) {
     return result;
 }
 
-/** Cutout coverage is binary: in or out, nothing between. */
-static const float kAlphaTestThreshold = 0.5;
-
-/** The authored threshold or the shared constant; the raster gate resolves it identically. */
-float ptAlphaTestThreshold(uint materialIndex) {
-    float authored = instanceMaterials[materialIndex].alphaTest;
-    return authored >= 0.0 ? authored : kAlphaTestThreshold;
-}
-
-bool isCutout(uint features) { return (features & kPtMaskPunchThrough) != 0; }
+bool isCutout(uint features) { return (features & kMaterialPunchThrough) != 0; }
 /** Non-emissive translucency; skipped by normal rays unless traced transmissive. */
-bool isBlendedCoverage(uint features) { return (features & kPtMaskBlendedCoverage) != 0; }
+bool isBlendedCoverage(uint features) { return (features & kMaterialBlendedCoverage) != 0; }
 /** Blended coverage that is scene geometry: committed, tinted through. */
-bool isTracedTransmissive(uint features) { return (features & kPtMaskTransmissive) != 0; }
+bool isTracedTransmissive(uint features) { return (features & kMaterialTransmissive) != 0; }
 /**
  * A particle plume or lens-flare billboard: a camera-facing picture of a
  * volume, wrong from anywhere but the camera, so no ray sees one. Grass is
  * procedural too but punch-through, and keeps its cutout traversal.
  */
 bool isProceduralSprite(uint features) {
-    return (features & kPtMaskProcedural) != 0 && (features & kPtMaskPunchThrough) == 0;
+    return (features & kMaterialProcedural) != 0 && (features & kMaterialPunchThrough) == 0;
 }
 
 /**
@@ -204,7 +195,7 @@ public TraceHit ptTraceNearest(RayDesc ray) {
             continue;
         }
         float alpha = candidateAlpha(query, c);
-        if (alpha >= ptAlphaTestThreshold(c.materialIndex) && alpha >= kPtAlphaTestEpsilon) {
+        if (alpha >= alphaTestThreshold(instanceMaterials[c.materialIndex]) && alpha >= kPtAlphaTestEpsilon) {
             query.CommitNonOpaqueTriangleHit();
         }
     }
@@ -252,11 +243,11 @@ public ShadowRay ptShadowRay(float3 origin, float3 geometricNormal, float3 direc
         if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
         Candidate c = readCandidate(query);
         // Baked sky triangles occlude only when the fallback keeps them admitted.
-        if (pushConstants.skyAvailable == 0 && (c.features & kPtMaskSky) != 0) continue;
+        if (pushConstants.skyAvailable == 0 && (c.features & kMaterialSky) != 0) continue;
         // Sky-room scenery casts nothing. Reaches non-opaque candidates only -
         // cutout foliage is what this catches; a solid backdrop prop still
         // commits in hardware, the merged scene being one TLAS instance.
-        if ((c.features & kPtMaskBackdropNoShadow) != 0) continue;
+        if ((c.features & kMaterialBackdropNoShadow) != 0) continue;
         if (isProceduralSprite(c.features)) continue;
         if (instanceMaterials[c.materialIndex].surfaceType == kPtSurfaceUnlitTransparent) continue;
         bool attenuates = isTracedTransmissive(c.features) || isBlendedCoverage(c.features);
@@ -269,7 +260,7 @@ public ShadowRay ptShadowRay(float3 origin, float3 geometricNormal, float3 direc
             passed[k] *= 1.0 - saturate(alpha);
             nearest[k] = min(nearest[k], query.CandidateTriangleRayT());
             if (passed[0] * passed[1] >= kPtAlphaTestEpsilon) continue;
-        } else if (alpha < ptAlphaTestThreshold(c.materialIndex)) {
+        } else if (alpha < alphaTestThreshold(instanceMaterials[c.materialIndex])) {
             continue;
         } else {
             nearest[k] = min(nearest[k], query.CandidateTriangleRayT());

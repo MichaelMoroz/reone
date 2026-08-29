@@ -16,6 +16,8 @@
  */
 module direct_light;
 
+import lib.math;
+
 import uniforms;
 
 /*
@@ -56,7 +58,7 @@ public float sphereLightAttenuation(float radius, float distance, float emitterR
 
 /** Authored light colour is gamma-encoded; radiance arithmetic is linear. */
 public float3 directLightColor(GlobalUniformsLight light) {
-    return pow(max(light.color.rgb, 0.0), float3(2.2)) * light.multiplier;
+    return gammaToLinear(light.color.rgb) * light.multiplier;
 }
 
 /** One light's geometry from one receiver, before any visibility answer. */

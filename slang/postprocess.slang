@@ -28,6 +28,7 @@
 // compared numerically, and a better antialiaser would end that.
 
 import uniforms;
+import lib.math;
 // For ptDisplayTransform. The transform is colour maths taking its dials as
 // arguments, so the shared post-process pass calls the same one the tracer's
 // own passes were written against rather than a second copy of it.
@@ -537,6 +538,6 @@ float4 fogFragment(Varyings input) : SV_Target {
     const float h1 = max(0.0, worldPos.z - fogPushConstants.planeZ);
     const float fog = heightFogAmount(h0, h1, distance(worldPos, cameraPos),
                                       fogPushConstants.density, fogPushConstants.falloff);
-    const float3 fogColor = pow(max(globalUniforms.fogColor.rgb, 0.0), float3(2.2));
+    const float3 fogColor = gammaToLinear(globalUniforms.fogColor.rgb);
     return float4(applyFog(texel.rgb, fogColor, fog), texel.a);
 }

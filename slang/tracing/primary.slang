@@ -31,7 +31,6 @@ import lib.grasscard;
 import lib.math;
 import lib.scene_schema;
 import lib.material_ops;
-import tracing.brdf;
 import tracing.resources;
 import tracing.material;
 import tracing.trace;
@@ -84,7 +83,7 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     primary.distance = 0.0;
 
     uint triangleId = gbufTriangleId.Load(int3(int2(pixel), 0)).r;
-    if (triangleId == kPtNoTriangle) {
+    if (triangleId == kNoTriangle) {
         // Nothing was drawn and nothing wrote depth - the same pixels both
         // raster resolves hand to the sky. See the caller.
         return primary;
@@ -170,19 +169,19 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
                           material.overrideParams.z;
     shading.hasLightmap = hasLightmap;
     // White where there is no bake - see the note in tracing/material.slang.
-    shading.lightmap = hasLightmap ? ptGammaToLinear(lightmapSample.rgb) : float3(1.0);
+    shading.lightmap = hasLightmap ? gammaToLinear(lightmapSample.rgb) : float3(1.0);
 
     // The same texel decoded as radiance: emission does not follow the albedo dial.
     const float3 radianceTexel = ptDecodeEmission(diffuseSample.rgb);
 
-    shading.emission = assembleEmission(ptGammaToLinear(selfIllumSample), radianceTexel,
+    shading.emission = assembleEmission(gammaToLinear(selfIllumSample), radianceTexel,
                                         material.curatedEmission,
                                         pushConstants.emissiveIntensity);
 
     // The two non-PBR surface models are radiance and end the path: nothing
     // behind them was rasterized. Same shading as tracing/material.slang.
     if (material.surfaceType == kPtSurfaceUnlitEmissive) {
-        shading.emission = assembleSkyClass((material.featureMask & kPtMaskSky) != 0,
+        shading.emission = assembleSkyClass((material.featureMask & kMaterialSky) != 0,
                                             radianceTexel, pushConstants.skyIntensity,
                                             pushConstants.backdropIntensity);
         shading.terminatesPath = true;

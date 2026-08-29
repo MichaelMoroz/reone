@@ -29,26 +29,9 @@ import lib.assemble;
 // Raster passes over the canonical merged geometry. The G-buffer and shadow
 // draws share one material gate, so coverage cannot disagree between them.
 
-static const uint kNoTexture = 0xffffffffu;
 /** Authored colour is display-referred; the blended pass converts on the way
     out, because the scene target it draws into is linear. Must match the
     exponent the post-process encode inverts. */
-static const float kGamma = 2.2;
-static const uint kMegaFeatureLightmap = 1u << 0;
-static const uint kMegaFeatureEnvMap = 1u << 1;
-static const uint kMegaFeatureNormalMap = 1u << 2;
-static const uint kMegaFeatureBumpMap = 1u << 3;
-static const uint kMegaFeatureShadows = 1u << 7;
-static const uint kMegaFeatureWater = 1u << 8;
-static const uint kMegaFeatureFog = 1u << 9;
-static const uint kMegaFeaturePremulAlpha = 1u << 12;
-static const uint kMegaFeatureEnvMapCube = 1u << 13;
-static const uint kMegaFeatureStatic = 1u << 14;
-static const uint kMegaFeatureThin = 1u << 15;
-static const uint kMegaFeatureProcedural = 1u << 16;
-static const uint kMegaFeatureBlendedCoverage = 1u << 25;
-static const uint kMegaFeaturePunchThrough = 1u << 26;
-static const float kMegaAlphaTestThreshold = 0.5;
 // Must match the RGBA8 poison created by VulkanDescriptors. Requiring the
 // private alpha byte as well as magenta makes an authored false positive both
 // vanishingly narrow and self-locating.
@@ -70,10 +53,6 @@ static const uint kMegaCoverageUngated = 0u;
 static const uint kMegaCoverageCutout = 1u;
 static const uint kMegaCoverageBlended = 2u;
 
-// The object category the admission path packs into every material record;
-// mirrors scene::ModelUsage and the shift in scene/render/admission.cpp.
-static const uint kMegaCategoryShift = 27;
-static const uint kMegaCategoryMask = 0xFu;
 /** Every category casts. The shadow pass compares against this to skip the
     per-fragment material fetch entirely when nothing is being filtered. */
 static const uint kMegaCastersAll = 0xFFFFFFFFu;
@@ -159,20 +138,19 @@ float2 transformedUV(InstanceMaterial material, float2 uv) {
 bool commitsTracedCoverage(InstanceMaterial material, float2 uv, float vertexAlpha) {
     if (pushConstants.materialGated == kMegaCoverageUngated) return true;
 
-    if ((material.featureMask & kMegaFeaturePunchThrough) == 0) return false;
+    if ((material.featureMask & kMaterialPunchThrough) == 0) return false;
 
     float alpha = 1.0;
     if (material.mainTex != kNoTexture) {
         float4 texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)]
                            .SampleLevel(uv, 0.0);
-        alpha = (material.featureMask & kMegaFeaturePremulAlpha) != 0
+        alpha = (material.featureMask & kMaterialPremulAlpha) != 0
                     ? rgbToLuma(texel.rgb)
                     : texel.a;
         alpha *= vertexAlpha;
     }
     // The authored threshold or the fallback, as ptAlphaTestThreshold resolves it.
-    float threshold = material.alphaTest >= 0.0 ? material.alphaTest
-                                                : kMegaAlphaTestThreshold;
+    float threshold = alphaTestThreshold(material);
     return alpha >= threshold;
 }
 
@@ -267,11 +245,11 @@ float shadowNoise(uint2 texel, uint triangleId, uint materialIndex) {
 float blendedShadowCoverage(InstanceMaterial material, float2 uv,
                             float vertexAlpha) {
     float coverage = 1.0;
-    bool envmapped = (material.featureMask & kMegaFeatureEnvMap) != 0;
+    bool envmapped = (material.featureMask & kMaterialEnvMap) != 0;
     if (!envmapped && material.mainTex != kNoTexture) {
         float4 texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)]
                            .SampleLevel(uv, 0.0);
-        coverage = (material.featureMask & kMegaFeaturePremulAlpha) != 0
+        coverage = (material.featureMask & kMaterialPremulAlpha) != 0
                        ? rgbToLuma(texel.rgb)
                        : texel.a;
     }
@@ -291,15 +269,15 @@ void applyShadowGates(float2 rawUv, float vertexAlpha, float2 fragCoord,
         ? mergedMaterialIds[triangleId] : directMaterialIndex;
     InstanceMaterial material = instanceMaterials[materialIndex];
 
-    bool cutout = (material.featureMask & kMegaFeaturePunchThrough) != 0;
-    bool blended = (material.featureMask & kMegaFeatureBlendedCoverage) != 0;
+    bool cutout = (material.featureMask & kMaterialPunchThrough) != 0;
+    bool blended = (material.featureMask & kMaterialBlendedCoverage) != 0;
     // Procedural sprites cast nothing, as the tracer's shadow ray agrees: a
     // plume is volume, and dithering it into the map is per-texel noise.
-    if ((material.featureMask & kMegaFeatureProcedural) != 0 &&
-        (material.featureMask & kMegaFeaturePunchThrough) == 0) {
+    if ((material.featureMask & kMaterialProcedural) != 0 &&
+        (material.featureMask & kMaterialPunchThrough) == 0) {
         discard;
     }
-    uint category = (material.featureMask >> kMegaCategoryShift) & kMegaCategoryMask;
+    uint category = (material.featureMask >> kMaterialCategoryShift) & kMaterialCategoryMask;
     // The category filter applies to cutouts and blends too: in retro, whose
     // casters are creatures only, scenery foliage must not cast. The test is
     // on the object's category, so a creature's cutout hair still passes.
@@ -467,13 +445,13 @@ float3 megaMaterialNormal(InstanceMaterial material, Varyings input, float2 uv,
     float3 tangent = safeNormal(input.tangent, float3(1.0, 0.0, 0.0));
     float3 bitangent = safeNormal(input.bitangent, float3(0.0, 1.0, 0.0));
     float3 frameNormal = safeNormal(input.tanSpaceNormal, normal);
-    if ((material.featureMask & kMegaFeatureNormalMap) != 0 &&
+    if ((material.featureMask & kMaterialNormalMap) != 0 &&
         material.normalMap != kNoTexture) {
         float3 n = bindlessTextures[NonUniformResourceIndex(material.normalMap)]
                        .Sample(uv).rgb * 2.0 - 1.0;
         normal = safeNormal(tangent * n.x + bitangent * n.y + frameNormal * n.z,
                             normal);
-    } else if ((material.featureMask & kMegaFeatureBumpMap) != 0 &&
+    } else if ((material.featureMask & kMaterialBumpMap) != 0 &&
                material.bumpMapArray != kNoTexture) {
         float layer = float(material.bumpMapFrame);
         float height = bindlessTextureArrays[
@@ -491,7 +469,7 @@ float3 megaMaterialNormal(InstanceMaterial material, Varyings input, float2 uv,
 }
 
 float3 sampleMegaEnvMap(InstanceMaterial material, float3 worldReflection) {
-    if ((material.featureMask & kMegaFeatureEnvMapCube) != 0 &&
+    if ((material.featureMask & kMaterialEnvMapCube) != 0 &&
         material.envMapCube != kNoTexture) {
         return bindlessTextureCubes[NonUniformResourceIndex(material.envMapCube)]
             .Sample(worldReflection).rgb;
@@ -521,18 +499,18 @@ GBufferOutput sceneDrawFragment(Varyings input, uint primitiveId : SV_PrimitiveI
         diffuse = bindlessTextures[NonUniformResourceIndex(material.mainTex)].Sample(uv);
     }
     diffuse *= input.color;
-    if ((material.featureMask & kMegaFeatureWater) != 0) {
+    if ((material.featureMask & kMaterialWater) != 0) {
         diffuse *= material.waterAlpha;
     }
 
-    bool envmapped = (material.featureMask & kMegaFeatureEnvMap) != 0;
+    bool envmapped = (material.featureMask & kMaterialEnvMap) != 0;
 
     // Match the traced G-buffer's committed-side convention on two-sided
     // geometry. Transparent forward shading below deliberately retains the
     // authored normal, as pbr_model.slang does.
     float3 normal = megaMaterialNormal(material, input, uv, true, isFrontFace);
 
-    bool hasLightmap = (material.featureMask & kMegaFeatureLightmap) != 0 &&
+    bool hasLightmap = (material.featureMask & kMaterialLightmap) != 0 &&
                        material.lightmap != kNoTexture;
     float3 lightmap = float3(1.0);
     if (hasLightmap) {
@@ -541,10 +519,10 @@ GBufferOutput sceneDrawFragment(Varyings input, uint primitiveId : SV_PrimitiveI
     float features = packGeometryFeatures(
         envmapped,
         hasLightmap,
-        (material.featureMask & kMegaFeatureStatic) != 0,
-        (material.featureMask & kMegaFeatureShadows) != 0,
-        (material.featureMask & kMegaFeatureFog) != 0,
-        (material.featureMask & kMegaFeatureThin) != 0);
+        (material.featureMask & kMaterialStatic) != 0,
+        (material.featureMask & kMaterialShadows) != 0,
+        (material.featureMask & kMaterialFog) != 0,
+        (material.featureMask & kMaterialThin) != 0);
     float3 eyeNormal = 0.5 * mul(normal, (float3x3)globalUniforms.viewInv) + 0.5;
 
     GBufferOutput output;
@@ -581,7 +559,7 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
     InstanceMaterial material = instanceMaterials[materialIndex];
 
     bool punchThrough =
-        (material.featureMask & kMegaFeaturePunchThrough) != 0;
+        (material.featureMask & kMaterialPunchThrough) != 0;
     // Cutouts share this range but are opaque and already in the G-buffer.
     if (punchThrough) discard;
 
@@ -601,10 +579,10 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
         }
     }
 
-    bool blended = (material.featureMask & kMegaFeatureBlendedCoverage) != 0;
+    bool blended = (material.featureMask & kMaterialBlendedCoverage) != 0;
     float coverage = texel.a;
     float3 texelColor = texel.rgb;
-    if ((material.featureMask & kMegaFeaturePremulAlpha) != 0) {
+    if ((material.featureMask & kMaterialPremulAlpha) != 0) {
         // Match particles.slang and pbr_model.slang completely: recover the
         // missing coverage and undo it before applying the blend once below.
         coverage = rgbToLuma(texel.rgb);
@@ -614,21 +592,21 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
     float objectAlpha = input.color.a * material.diffuseColor.a;
     float3 color = texelColor * input.color.rgb;
     if (blended) {
-        bool envmapped = (material.featureMask & kMegaFeatureEnvMap) != 0;
+        bool envmapped = (material.featureMask & kMaterialEnvMap) != 0;
         if (!envmapped) objectAlpha *= coverage;
 
         float3 lighting = float3(1.0);
-        if ((material.featureMask & kMegaFeatureLightmap) != 0 &&
+        if ((material.featureMask & kMaterialLightmap) != 0 &&
             material.lightmap != kNoTexture) {
             lighting = bindlessTextures[NonUniformResourceIndex(material.lightmap)]
                            .Sample(input.uv2).rgb;
-            if ((material.featureMask & kMegaFeatureWater) != 0) {
+            if ((material.featureMask & kMaterialWater) != 0) {
                 lighting = lerp(float3(1.0), lighting, 0.2);
             }
         }
         color *= lighting;
 
-        bool shadowed = (material.featureMask & kMegaFeatureShadows) != 0;
+        bool shadowed = (material.featureMask & kMaterialShadows) != 0;
         float3 materialNormal = input.normal;
         if (envmapped || shadowed) {
             materialNormal = megaMaterialNormal(material, input, uv, false,
@@ -642,14 +620,14 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
             // directional-first, so slot zero holds the dominant one.
             color *= getShadow(
                 viewPos, input.worldPos, materialNormal,
-                (material.featureMask & kMegaFeatureThin) != 0);
+                (material.featureMask & kMaterialThin) != 0);
         }
         if (envmapped) {
             float3 worldReflection = authoredMirrorReflection(
                 input.worldPos, globalUniforms.cameraPosition.xyz, materialNormal);
             color += sampleMegaEnvMap(material, worldReflection) * (1.0 - coverage);
         }
-        if ((material.featureMask & kMegaFeatureWater) != 0) {
+        if ((material.featureMask & kMaterialWater) != 0) {
             color *= material.waterAlpha;
         }
     } else {
@@ -665,8 +643,8 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
     // already display-referred.
     bool displayReferred = (pushConstants.casterCategories & kMegaFlagDisplayReferred) != 0;
     float3 rgb = displayReferred ? color * objectAlpha
-               : blended        ? pow(max(color, 0.0), float3(kGamma)) * objectAlpha
-                                : pow(max(color * objectAlpha, 0.0), float3(kGamma));
+               : blended        ? gammaToLinear(color) * objectAlpha
+                                : gammaToLinear(color * objectAlpha);
     BlendedOutput output;
     output.color = float4(rgb, blended ? objectAlpha : 0.0);
 
@@ -690,7 +668,7 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
             const float h1 = max(0.0, input.worldPos.z - pushConstants.fogPlaneZ);
             fog = heightFogAmount(h0, h1, distance(input.worldPos, cameraPos),
                                   pushConstants.fogDensity, pushConstants.fogFalloff);
-            fogColor = pow(max(globalUniforms.fogColor.rgb, 0.0), float3(kGamma));
+            fogColor = gammaToLinear(globalUniforms.fogColor.rgb);
         }
         if (blended) {
             output.color.rgb = lerp(output.color.rgb, fogColor * objectAlpha, fog);

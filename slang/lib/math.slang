@@ -18,6 +18,22 @@ module math;
 
 public static const float kPi = 3.14159265358979323846;
 
+/** Display encoding of authored art and of the final image; post-process inverts this exact number. */
+public static const float kGamma = 2.2;
+
+public float3 gammaToLinear(float3 rgb) {
+    return pow(max(rgb, 0.0), float3(kGamma));
+}
+
+public float3 linearToGamma(float3 rgb) {
+    return pow(max(rgb, 0.0), float3(1.0 / kGamma));
+}
+
+/** Rec. 709 luminance of linear light. */
+public float luminance(float3 rgb) {
+    return dot(rgb, float3(0.2126, 0.7152, 0.0722));
+}
+
 /**
  * Perceived brightness, ported from glsl/i_luma.glsl.
  *

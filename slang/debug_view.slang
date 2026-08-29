@@ -114,15 +114,11 @@ static const uint kDebugFilteredDirect = 19;   // tracer only
 // view, each mode's own visibility - and a second derivation could only drift
 // from what the provider actually delivered.
 
-static const uint kNoTriangle = 0xffffffffu;
-static const uint kNoTexture = 0xffffffffu;
-static const float kGamma = 2.2;
 
 // Mirrors the category shift the admission path packs into every material
 // record; see scene/render/admission.cpp.
 static const uint kCategoryShift = 27;
 static const uint kCategoryMask = 0xFu;
-static const uint kMaskSky = 1u << 24;
 static const uint kSurfacePbr = 0;
 
 static const float3 kCategoryPalette[9] = {
@@ -140,7 +136,6 @@ static const float3 kCategoryPalette[9] = {
 /** The sky, in every categorical view: no surface, one colour. */
 static const float3 kSkyColor = float3(0.1, 0.8, 0.9);
 
-float3 gammaToLinear(float3 rgb) { return pow(max(rgb, 0.0), float3(kGamma)); }
 
 // Must agree with isTracedOnlyDebugView in scenepipeline.h; see the note there.
 bool tracedOnly(uint view) {
@@ -246,7 +241,7 @@ float3 channelColor(float2 uv, int2 pixel) {
     case kDebugCategories: {
         uint category = (material.featureMask >> kCategoryShift) & kCategoryMask;
         float3 color = kCategoryPalette[min(category, 8u)] * shape;
-        if ((material.featureMask & kMaskSky) != 0) color = kSkyColor;
+        if ((material.featureMask & kMaterialSky) != 0) color = kSkyColor;
         return color;
     }
     case kDebugEmissive: {

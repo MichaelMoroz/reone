@@ -22,33 +22,10 @@
 import lib.scene_schema;
 import lib.skycube;
 
-public static const uint kPtNoTexture = 0xffffffffu;
-
 /** Surface types, assigned CPU-side. Everything is PBR unless said otherwise. */
 public static const uint kPtSurfacePbr = 0;              // parametrized PBR, optional emission
 public static const uint kPtSurfaceUnlitTransparent = 1; // additive radiance, ray passes through
 public static const uint kPtSurfaceUnlitEmissive = 2;    // sky and prelit: radiance, path ends
-
-// featureMask bits the tracer consumes. Kept bit-compatible with the raster
-// feature mask below bit 23; the tracer-only bits sit above.
-public static const uint kPtMaskEnvMap = 1u << 1;
-public static const uint kPtMaskSky = 1u << 24;          // selects the sky dial over the emissive one
-/** Sky-room scenery: shaded normally, but shadow rays pass through it. */
-public static const uint kPtMaskBackdropNoShadow = 1u << 31;
-/** Continuous alpha coverage, distinct from a punch-through cutout mask. */
-public static const uint kPtMaskBlendedCoverage = 1u << 25;
-/** Colour premultiplied by coverage, no usable alpha: coverage is recovered from luma. */
-public static const uint kPtMaskPremulAlpha = 1u << 12;
-public static const uint kPtMaskPunchThrough = 1u << 26; // alpha-tested coverage in traversal
-/** CPU-synthesised geometry; without kPtMaskPunchThrough it names the sprites no ray sees. */
-public static const uint kPtMaskProcedural = 1u << 16;
-/** Blended coverage that is scene geometry (glass, leaf card): a ray sees it, tints, carries on. */
-public static const uint kPtMaskTransmissive = 1u << 23;
-/** No meaningful thickness: lit from both sides and passes light through. */
-public static const uint kPtMaskThin = 1u << 15;
-
-public static const uint kPtCategoryShift = 27;
-public static const uint kPtCategoryMask = 0xFu;
 
 /** Coverage below this never commits: the texel simply is not there. */
 public static const float kPtAlphaTestEpsilon = 0.01;
@@ -86,8 +63,6 @@ public static const float kPtAlphaTestEpsilon = 0.01;
 [[vk::binding(19, 1)]] public StructuredBuffer<uint> grassCardIndices;
 [[vk::binding(20, 1)]] public StructuredBuffer<GrassCardInstance> grassCardInstances;
 
-/** The G-buffer's cleared triangle id: nothing was drawn, so this is the sky. */
-public static const uint kPtNoTriangle = 0xffffffffu;
 
 public struct PtPushConstants {
     public uint frameIndex;

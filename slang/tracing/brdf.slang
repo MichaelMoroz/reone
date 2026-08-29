@@ -15,39 +15,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-// The microfacet BRDF terms and color transforms shared by the path tracer's
-// modules. Pure functions; the display transform lives here too because it is
-// color math, taking its dials as arguments rather than reading push
-// constants.
+// The path tracer's display transform: colour maths taking its dials as
+// arguments rather than reading push constants.
 
-import tracing.rng;
-
-public static const float kPtGamma = 2.2;
-
-public float3 ptGammaToLinear(float3 rgb) {
-    return pow(rgb, float3(kPtGamma));
-}
-
-public float3 ptLinearToGamma(float3 rgb) {
-    return pow(max(rgb, 0.0), 1.0 / kPtGamma);
-}
-
-public float3 ptFresnelSchlick(float cosTheta, float3 F0) {
-    return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
-}
-
-public float ptDistributionGGX(float NdotH2, float a2) {
-    float d = NdotH2 * (a2 - 1.0) + 1.0;
-    return a2 / (kPtPi * d * d);
-}
-
-public float ptGeometrySchlick(float NdotV, float k) {
-    return NdotV / (NdotV * (1.0 - k) + k);
-}
-
-public float ptGeometrySmith(float NdotL, float NdotV, float k) {
-    return ptGeometrySchlick(NdotL, k) * ptGeometrySchlick(NdotV, k);
-}
+import lib.math;
 
 // Scene-referred in, display-referred out. The calibration rule survives the
 // change of curve: direct light alone should land around 0.3-0.5 of the final
@@ -89,6 +60,6 @@ float3 GTTonemap(float3 c)
 public float3 ptDisplayTransform(float3 linearColor, float exposure, uint tonemap) {
     float3 mapped = linearColor * exposure;
     if (tonemap == 1) mapped = GTTonemap(mapped);
-    return ptLinearToGamma(mapped);
+    return linearToGamma(mapped);
 }
 
