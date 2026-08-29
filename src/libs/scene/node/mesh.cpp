@@ -302,7 +302,12 @@ bool MeshSceneNode::isTransparent() const {
     if (_nodeTextures.envmap || _nodeTextures.bumpmap) {
         return false;
     }
-    if ((1.0f - rgbToLuma(_selfIllumColor)) < 0.01f) {
+    // A fully self-illuminated surface is opaque - a sky shell, a lit panel -
+    // unless its texture authors an alpha test, which is the artist saying the
+    // texel coverage is real. Without that exception a leaf card whose
+    // selfIllum happens to be white renders as a solid quad.
+    if ((1.0f - rgbToLuma(_selfIllumColor)) < 0.01f &&
+        _nodeTextures.diffuse->features().alphaTest < 0.0f) {
         return false;
     }
     return hasAlphaChannel(_nodeTextures.diffuse->pixelFormat());

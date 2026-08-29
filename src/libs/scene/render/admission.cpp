@@ -311,63 +311,19 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
         } else if (diffuse->features().blending == Texture::Blending::PunchThrough) {
             kind = AdmissionKind::Cutout;
         } else if (mesh.material.type == MaterialType::TransparentModel) {
-            // TransparentModel blends. It used to become a cutout here, on the
-            // reasoning that isTransparent falls through to hasAlphaChannel and
-            // so admits most foliage, which the blended pass would take out of
-            // the G-buffer.
-            //
-            // That reasoning described the population correctly and drew the
-            // wrong conclusion from it. The reference classifies with the
-            // IDENTICAL predicate - MeshSceneNode::isTransparent is
-            // byte-for-byte the same function in both trees - and routes every
-            // one of those meshes to its OIT pass. Foliage taken out of the
-            // G-buffer is what the original did: a leaf card is lit by its
-            // lightmap, or by 1.0 where it has none, and is composited rather
-            // than alpha-tested at half coverage. Alpha-testing them at 0.5
-            // instead is what made leaves black and aliased, cloth see-through,
-            // and every window in the game a stencil.
-            //
-            // Punch-through above keeps its own branch and stays a cutout: the
-            // TXI saying so IS the narrower signal this comment used to ask
-            // for, and it is authored rather than inferred.
+            // Blended, not a cutout: the original composites these rather
+            // than alpha-testing at half coverage. Punch-through keeps its
+            // own branch above, where the TXI authored the cutout.
             kind = AdmissionKind::LitBlended;
-            // Raster wants nothing to do with this bit; the tracer does. Its
-            // candidate loop skips blended coverage outright, which is correct
-            // for a particle and wrong for a pane of glass, so mark the ones
-            // that are geometry.
+            // The tracer's candidate loop skips blended coverage, which is
+            // right for a particle and wrong for glass; mark the geometry.
             material.featureMask |= kMaskTracedTransmissive;
         }
     }
-    // Backdrop cutouts are sky, and shaded as sky.
-    //
-    // The painted skyline: background scenery drawn as an alpha cutout rather
-    // than modelled. Measured on Taris upper city, three meshes in the whole
-    // module - m02ab_02l/line1650, line1651, line2045 - each carrying
-    // selfIllum 1,1,1, which made them ordinary lit geometry that also glowed,
-    // graded by the emissive dial. At an emissive intensity of 3.59 they came
-    // out white.
-    //
-    // They take the sky's dial rather than one of their own because that is
-    // what they are: far enough that their parallax does not matter, and drawn
-    // over the sky, so any brightness that is not the sky's reads as a seam.
-    //
-    // This is a shading classification, not a bake. The sky bake gathers by
-    // membership in the sky room, which these are not in - they stay admitted,
-    // rasterized and traced like the geometry they are. The bit only selects
-    // the unlit surface model and the sky intensity.
-    //
-    // Cutout is the discriminator, and it is the whole of it: the other 132
-    // self-illuminated scenery meshes in that module are modelled buildings,
-    // which are lit normally and stay that way.
-    //
-    // It stays Cutout alone, and blended deliberately does not join it. That
-    // widening was tried and measured: `backgroundGeometry` is not authored
-    // here but INFERRED - mesh.cpp reads it as "a background-scenery room mesh
-    // with no lightmap" - and on Dantooine that description fits 372 tree
-    // branches. Extending the sky class to blended meshes shaded every one of
-    // them as unlit sky radiance at the sky dial, which the alpha test used to
-    // hide by discarding them and blending no longer does. Taris's three
-    // painted skyline cards are punch-through and keep the class.
+    // Backdrop cutouts are the painted skyline: shaded as unlit sky radiance
+    // at the sky dial, not baked into the sky room. Cutout alone - blended
+    // background meshes are inferred, not authored, and on Dantooine that
+    // description catches 372 tree branches.
     if (mesh.material.backgroundGeometry && kind == AdmissionKind::Cutout) {
         material.featureMask |= 1u << 24;
     }
