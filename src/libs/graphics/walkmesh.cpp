@@ -17,6 +17,8 @@
 
 #include "reone/graphics/walkmesh.h"
 
+#include <cmath>
+
 namespace reone {
 
 namespace graphics {
@@ -27,6 +29,25 @@ Raycast Walkmesh::raycast(
     const glm::vec3 &dir,
     float maxDistance,
     bool ignoreBackface) const {
+
+    // A ray that is not a ray. Callers derive the direction by normalising a
+    // step, and a step of no length normalises to NaN - which is not merely a
+    // miss, because the AABB test reciprocates the direction and compares
+    // slabs. Every comparison against a NaN is false, so `tmax < tmin` never
+    // rejects and the tree culls nothing: raycastAABB walks all of it and tests
+    // every triangle in the mesh instead of the few the ray crosses. That turns
+    // an 18 us query into 2.2 ms and, since the caller repeats it every frame,
+    // costs milliseconds of frame time for a ray that cannot hit anything.
+    //
+    // Written as a negated `>` so a NaN takes this branch: `dot < 0.0f` would
+    // be false for one and let it through.
+    float dirLength2 = glm::dot(dir, dir);
+    if (!(dirLength2 > 0.0f) || !std::isfinite(origin.x + origin.y + origin.z)) {
+        Raycast result = {0};
+        result.distance = FLT_MAX;
+        result.fail = RAYCAST_NO_INTERSECTION;
+        return result;
+    }
 
     // For area walkmeshes, find intersection via AABB tree
     if (_rootAabb) {
