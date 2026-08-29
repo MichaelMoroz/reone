@@ -59,11 +59,13 @@ public:
     /** Guaranteed present as a depth format on every implementation. */
     static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
-    VulkanRenderer(SDL_Window *window, glm::ivec2 extent, bool vsync, bool validation) :
+    VulkanRenderer(SDL_Window *window, glm::ivec2 extent, bool vsync, bool validation,
+                   bool debugLabels = false) :
         _window(window),
         _extent(extent),
         _vsync(vsync),
         _validation(validation),
+        _debugLabels(debugLabels),
         _swapchain(_device),
         _uniformRing(_device),
         _descriptors(_device),
@@ -202,6 +204,7 @@ private:
     glm::ivec2 _requestedExtent {0};
     bool _vsync;
     bool _validation;
+    bool _debugLabels;
     glm::vec4 _clearColor {0.0f, 0.0f, 0.0f, 1.0f};
 
     VulkanDevice _device;

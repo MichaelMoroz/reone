@@ -701,6 +701,7 @@ void ScenePipeline::shadowPass(ICommandBuffer &cmd,
                                      uint32_t globalsOffset,
                                      ISceneCallbacks &callbacks) {
     R_PROFILE_ZONE("ScenePipeline::shadowPass record");
+    CommandBufferDebugScope debugScope(cmd, "shadowPass");
     if (_shadowCasters.empty()) {
         return;
     }
@@ -797,6 +798,7 @@ void ScenePipeline::shadowPass(ICommandBuffer &cmd,
                 cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
                                       offsets.data(), static_cast<uint32_t>(offsets.size()));
                 cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
+                CommandBufferDebugScope grassScope(cmd, "grass cards");
                 const ShadowPushConstants push {0, 1, _shadowCasterCategories,
                                                 static_cast<uint32_t>(caster.slot)};
                 cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
@@ -816,6 +818,7 @@ void ScenePipeline::shadowPass(ICommandBuffer &cmd,
 void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                                        ISceneCallbacks &callbacks) {
     R_PROFILE_ZONE("ScenePipeline::geometryPass record");
+    CommandBufferDebugScope debugScope(cmd, "geometryPass");
     const auto &scene = prepareMergedScene(cmd, callbacks);
 
     transitionGBuffer(cmd, *_gbuffer, ImageLayout::ColorAttachment);
@@ -888,6 +891,7 @@ void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
         cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
                               offsets.data(), static_cast<uint32_t>(offsets.size()));
         cmd.bindDescriptorSet(pipeline.layout, 2, _resolveMaterialSet, nullptr, 0);
+        CommandBufferDebugScope grassScope(cmd, "grass cards");
         const MegaDrawPushConstants push {0, 1};
         cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
         cmd.draw(scene.grassCardTris * 3, scene.grassCardCount);
@@ -918,6 +922,7 @@ void ScenePipeline::geometryPass(ICommandBuffer &cmd, uint32_t globalsOffset,
  */
 void ScenePipeline::skyMotionPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::skyMotionPass record");
+    CommandBufferDebugScope debugScope(cmd, "skyMotionPass");
     auto &motion = _gbuffer->color(GBufferAttachment::Motion);
     auto &triangleId = _gbuffer->color(GBufferAttachment::TriangleId);
     cmd.transitionImage(triangleId, ImageLayout::ShaderRead);
@@ -955,6 +960,7 @@ void ScenePipeline::skyMotionPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
 void ScenePipeline::blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                                       ISceneCallbacks &callbacks) {
     R_PROFILE_ZONE("ScenePipeline::blendedPass record");
+    CommandBufferDebugScope debugScope(cmd, "blendedPass");
     const auto &scene = prepareMergedScene(cmd, callbacks);
     const uint32_t nonOpaqueTriangles =
         scene.triangleCount > scene.opaqueTriangleCount
@@ -1173,6 +1179,7 @@ DescriptorSet ScenePipeline::resolveSet(IImage *output) {
 
 void ScenePipeline::retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::retroResolvePass record");
+    CommandBufferDebugScope debugScope(cmd, "retroResolvePass");
     transitionGBuffer(cmd, *_gbuffer, ImageLayout::ShaderRead);
     cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
     cmd.transitionImage(*_output, ImageLayout::ColorAttachment);
@@ -1224,6 +1231,7 @@ void ScenePipeline::retroGuidePass(ICommandBuffer &cmd) {
         return;
     }
     R_PROFILE_ZONE("ScenePipeline::retroGuidePass record");
+    CommandBufferDebugScope debugScope(cmd, "retroGuidePass");
     const int frame = _renderer.frameIndex();
     auto &normalRoughness = *_retroGuideImages[frame][0];
     auto &specularAlbedo = *_retroGuideImages[frame][1];
@@ -1260,6 +1268,7 @@ void ScenePipeline::retroGuidePass(ICommandBuffer &cmd) {
 
 void ScenePipeline::pbrChannelsPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::pbrChannelsPass record");
+    CommandBufferDebugScope debugScope(cmd, "pbrChannelsPass");
     _tracingOutput = {};
     if (!_resolveMaterialSet) {
         // No merged geometry: nothing to shade. Publish the black the resolve
@@ -1356,6 +1365,7 @@ ChannelBinding ScenePipeline::acquireChannelBinding() {
 }
 
 void ScenePipeline::compositePass(ICommandBuffer &cmd) {
+    CommandBufferDebugScope debugScope(cmd, "compositePass");
     if (!_compositePipeline) {
         return;
     }
@@ -1416,6 +1426,7 @@ void ScenePipeline::compositePass(ICommandBuffer &cmd) {
 }
 
 void ScenePipeline::primaryCoveragePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    CommandBufferDebugScope debugScope(cmd, "primaryCoveragePass");
     if (!_transparentOutput) {
         return;
     }
@@ -1459,6 +1470,7 @@ void ScenePipeline::primaryCoveragePass(ICommandBuffer &cmd, uint32_t globalsOff
 }
 
 void ScenePipeline::coveragePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    CommandBufferDebugScope debugScope(cmd, "coveragePass");
     if (!_transparentOutput) {
         return;
     }
@@ -1502,6 +1514,7 @@ void ScenePipeline::coveragePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
 
 void ScenePipeline::screenSpaceReflectionPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::screenSpaceReflectionPass record");
+    CommandBufferDebugScope debugScope(cmd, "screenSpaceReflectionPass");
     // Reads the resolved image, writes the tail target, and the two exchange
     // identities - the same ping-pong every tail pass uses, for the same reason:
     // a kernel cannot march over an image it is writing.
@@ -1577,6 +1590,7 @@ static_assert(sizeof(BloomPushConstants) <= kCachedPipelinePushConstantSize);
 
 void ScenePipeline::bloomPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::bloomPass record");
+    CommandBufferDebugScope debugScope(cmd, "bloomPass");
     const glm::ivec2 size = chainSize();
     const glm::vec2 texel = 1.0f / glm::vec2(glm::max(size, glm::ivec2(1)));
 
@@ -1693,6 +1707,7 @@ void ScenePipeline::restartTemporalHistory() {
 
 void ScenePipeline::upscalePass(ICommandBuffer &cmd) {
     R_PROFILE_ZONE("ScenePipeline::upscalePass record");
+    CommandBufferDebugScope debugScope(cmd, "upscalePass");
     if (!_upscaler) {
         return;
     }
@@ -1825,6 +1840,7 @@ void ScenePipeline::upscalePass(ICommandBuffer &cmd) {
 
 void ScenePipeline::antiAliasingPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::antiAliasingPass record");
+    CommandBufferDebugScope debugScope(cmd, "antiAliasingPass");
     // A new resolve in this slot is a new case here; the ping-pong is common.
     // Nothing in this slot applies a display transform, in any mode - that
     // belongs to the post-process pass alone, and a resolve that tonemapped to
@@ -1869,6 +1885,7 @@ void ScenePipeline::antiAliasingPass(ICommandBuffer &cmd, uint32_t globalsOffset
 
 void ScenePipeline::postProcessPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::postProcessPass record");
+    CommandBufferDebugScope debugScope(cmd, "postProcessPass");
     // Unconditional, and the same in every mode: the scene chain stops at
     // linear everywhere now, so this pass is the encode. It used to be an
     // identity over the raster modes, which is why switching it off did nothing
@@ -1900,6 +1917,7 @@ void ScenePipeline::postProcessPass(ICommandBuffer &cmd, uint32_t globalsOffset)
 
 void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::debugViewPass record");
+    CommandBufferDebugScope debugScope(cmd, "debugViewPass");
     if (!_resolveMaterialSet) {
         // No merged geometry, so no material records to index and nothing to
         // report. Leave whatever the degenerate frame already published.
@@ -1986,6 +2004,7 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
 
 void ScenePipeline::debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::debugOverlayPass record");
+    CommandBufferDebugScope debugScope(cmd, "debugOverlayPass");
     if (_overlayShapes.empty() && _overlayLines.empty() && _overlayLabels.empty()) {
         return;
     }
@@ -2118,6 +2137,7 @@ void ScenePipeline::debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset
 
 void ScenePipeline::fogPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::fogPass record");
+    CommandBufferDebugScope debugScope(cmd, "fogPass");
     // Both switches: the player's, and whether the AREA authored any fog. With
     // the latter off the fog uniforms are untouched zeros, and reading a
     // density out of them would fog a module that has none.
@@ -2133,6 +2153,7 @@ void ScenePipeline::fogPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
 
 void ScenePipeline::sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::sharpenPass record");
+    CommandBufferDebugScope debugScope(cmd, "sharpenPass");
     // Last, after the display transform, because an unsharp mask is a
     // judgement about the picture a viewer sees rather than about scene
     // radiance: sharpening linear colour weights a highlight far above what it
@@ -2517,6 +2538,7 @@ void *ScenePipeline::renderTargetPreview(const std::string &name, int mode, floa
 void ScenePipeline::previewPass(ICommandBuffer &cmd, uint32_t globalsOffset,
                                       const ISceneCallbacks &callbacks) {
     R_PROFILE_ZONE("ScenePipeline::previewPass record");
+    CommandBufferDebugScope debugScope(cmd, "previewPass");
     if (!_preview) {
         return;
     }

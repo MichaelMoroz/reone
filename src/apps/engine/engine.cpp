@@ -204,7 +204,8 @@ void Engine::init() {
         _window->sdlWindow(),
         glm::ivec2 {_options.graphics.width, _options.graphics.height},
         _options.graphics.vsync,
-        _options.vulkanValidation);
+        _options.vulkanValidation,
+        _options.vulkanDebugLabels);
     _renderer->init();
     _graphicsModule->setRenderers(*_renderer, _renderer->renderer2d());
     imguiInit(*_renderer);

@@ -256,7 +256,8 @@ public:
 
 /** Create the renderer selected by this Vulkan-only build. */
 std::unique_ptr<IRenderer> makeRenderer(SDL_Window *window, glm::ivec2 extent,
-                                        bool vsync, bool validation);
+                                        bool vsync, bool validation,
+                                        bool debugLabels = false);
 
 } // namespace graphics
 

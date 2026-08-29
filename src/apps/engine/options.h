@@ -73,6 +73,12 @@ struct Options {
 
     /** Vulkan validation layers. Off by default; they cost real time. */
     bool vulkanValidation {false};
+    /**
+     * Vulkan debug labels without the validation layers, for GPU profilers.
+     * Off by default: a screenshot capture splits the frame command buffer
+     * mid-frame, and an open label scope does not survive that.
+     */
+    bool vulkanDebugLabels {false};
     /** Trigger a RenderDoc frame capture alongside the screenshot. */
     bool renderdoc {false};
 

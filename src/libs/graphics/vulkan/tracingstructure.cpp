@@ -537,8 +537,12 @@ void VulkanTracingStructure::build(VkCommandBuffer commandBuffer,
             ++bottomCount;
         }
     }
+    _device.beginLabel(commandBuffer,
+                       rebuildCards ? "BLAS build: merged + cards" : "BLAS build: merged",
+                       {0.9f, 0.5f, 0.2f});
     vkCmdBuildAccelerationStructuresKHR(commandBuffer, bottomCount, bottomBuilds.data(),
                                         bottomRangePointers.data());
+    _device.endLabel(commandBuffer);
 
     // The TLAS build reads the merged BLAS, so keep this build-to-build
     // dependency separate from the later build-to-trace hand-off.
@@ -557,7 +561,9 @@ void VulkanTracingStructure::build(VkCommandBuffer commandBuffer,
     VkAccelerationStructureBuildRangeInfoKHR tlasRange {};
     tlasRange.primitiveCount = tlasInstanceCount;
     const VkAccelerationStructureBuildRangeInfoKHR *tlasRanges[] {&tlasRange};
+    _device.beginLabel(commandBuffer, "TLAS build", {0.9f, 0.7f, 0.2f});
     vkCmdBuildAccelerationStructuresKHR(commandBuffer, 1, &tlasBuild, tlasRanges);
+    _device.endLabel(commandBuffer);
 
     VkMemoryBarrier2 tlasToTrace {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
     tlasToTrace.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;

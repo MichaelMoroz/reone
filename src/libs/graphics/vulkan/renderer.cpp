@@ -49,8 +49,8 @@ namespace reone {
 namespace graphics {
 
 std::unique_ptr<IRenderer> makeRenderer(SDL_Window *window, glm::ivec2 extent,
-                                        bool vsync, bool validation) {
-    return std::make_unique<VulkanRenderer>(window, extent, vsync, validation);
+                                        bool vsync, bool validation, bool debugLabels) {
+    return std::make_unique<VulkanRenderer>(window, extent, vsync, validation, debugLabels);
 }
 
 static void check(VkResult result, const char *what) {
@@ -77,7 +77,7 @@ void VulkanRenderer::init() {
     if (_inited) {
         return;
     }
-    _device.init(_window, _validation);
+    _device.init(_window, _validation, _debugLabels);
     _swapchain.init(_extent, _vsync);
     _requestedExtent = _extent;
     initFrames();

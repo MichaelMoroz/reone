@@ -68,7 +68,7 @@ vkb::PhysicalDevice VulkanDevice::prepareLogicalDevice(
     return physicalDevice;
 }
 
-void VulkanDevice::init(SDL_Window *window, bool validation) {
+void VulkanDevice::init(SDL_Window *window, bool validation, bool debugLabels) {
     if (_inited) {
         return;
     }
@@ -125,8 +125,9 @@ void VulkanDevice::init(SDL_Window *window, bool validation) {
     // Captures split and reset the frame command buffer for synchronous
     // readback. Keep optional debug labels off in normal runs: a scope that
     // outlives that split would otherwise try to close on the reset buffer.
-    // Validation explicitly retains the labels for debugging.
-    _debugUtils = validation && debugUtils && vkSetDebugUtilsObjectNameEXT != nullptr;
+    // Validation and profiling runs explicitly retain the labels.
+    _debugUtils = (validation || debugLabels) && debugUtils &&
+                  vkSetDebugUtilsObjectNameEXT != nullptr;
 
     if (!SDL_Vulkan_CreateSurface(window, _instance.instance, nullptr, &_surface)) {
         throw std::runtime_error("Vulkan: surface creation failed: " +

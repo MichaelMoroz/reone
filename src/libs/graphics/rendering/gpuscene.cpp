@@ -466,6 +466,7 @@ GpuScene::View GpuScene::update(ICommandBuffer &commandBuffer, GpuSceneUpload &u
 
     {
         R_PROFILE_ZONE("GpuScene::command recording");
+        CommandBufferDebugScope debugScope(commandBuffer, "GpuScene::update");
         auto *sourceVertices =
             _sourceVertices ? _sourceVertices.get() : frame.proceduralQuads.get();
         auto *sourceIndices =

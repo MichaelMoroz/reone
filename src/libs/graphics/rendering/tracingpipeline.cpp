@@ -368,12 +368,14 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
     commandBuffer.pushRayTracingConstants(_pipeline->pipelineLayout(), &constants, sizeof(constants));
     {
         R_PROFILE_ZONE("RayQuery::dispatch record");
+        CommandBufferDebugScope traceScope(commandBuffer, "trace rays");
         commandBuffer.traceRays(
             _pipeline->pipeline(), input.structure,
             {static_cast<uint32_t>(_extent.x), static_cast<uint32_t>(_extent.y)});
     }
 #ifdef R_ENABLE_NRD
     if (_nrdDenoiser) {
+        CommandBufferDebugScope denoiseScope(commandBuffer, "NRD denoise");
         // The trace pass's storage writes feed NRD's sampled reads. The channel
         // images are ScenePipeline's, handed in for this frame.
         const auto &channels = input.channels;

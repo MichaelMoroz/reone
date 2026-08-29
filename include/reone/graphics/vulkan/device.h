@@ -90,8 +90,9 @@ public:
      *               what the physical device is selected against, because a
      *               device that cannot present to it is no use to us.
      * @param validation request the validation layers and a debug messenger
+     * @param debugLabels keep command-buffer labels on without validation
      */
-    void init(SDL_Window *window, bool validation);
+    void init(SDL_Window *window, bool validation, bool debugLabels = false);
     void deinit();
 
     VkInstance instance() const { return _instance.instance; }

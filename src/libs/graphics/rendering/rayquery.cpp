@@ -194,7 +194,11 @@ void RayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
                                        scene.grassCardGeneration, frame.instances.get(),
                                        instanceCount, regionCapacity,
                                        frame.instanceGeneration};
-        commandBuffer.prepareSceneTracingStructure(*frame.tracingStructure, geometry);
+        {
+            CommandBufferDebugScope prepareScope(commandBuffer, "AS prepare");
+            commandBuffer.prepareSceneTracingStructure(*frame.tracingStructure, geometry);
+        }
+        CommandBufferDebugScope instanceScope(commandBuffer, "tracing instances");
         struct InstancePushConstants {
             uint32_t cardCount;
             uint32_t cardRegionCapacity;
@@ -229,6 +233,7 @@ void RayQuery::render(ICommandBuffer &commandBuffer, uint32_t globalsOffset,
                                     BufferUse::AccelerationStructureBuildRead);
         commandBuffer.bufferBarrier(*frame.variantCounts, BufferUse::ComputeWrite,
                                     BufferUse::HostRead);
+        CommandBufferDebugScope buildScope(commandBuffer, "AS build");
         commandBuffer.buildSceneTracingStructure(*frame.tracingStructure, geometry);
         frame.variantCountsValid = true;
     } else {

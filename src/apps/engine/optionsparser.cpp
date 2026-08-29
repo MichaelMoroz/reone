@@ -101,6 +101,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("dumpobjects", value<std::string>()->default_value(""), "append the module's traced-emissive candidates to this file") //
         ("randomseed", value<int>()->default_value(-1), "seed the random generator, or -1 to seed from the clock")             //
         ("vkvalidation", value<bool>()->default_value(false), "enable Vulkan validation layers")                              //
+        ("vkdebuglabels", value<bool>()->default_value(false), "label Vulkan passes for GPU profilers; not with capture")      //
         ("renderdoc", value<bool>()->default_value(false), "trigger a RenderDoc frame capture with the screenshot")            //
         ("dev", value<bool>()->default_value(options->game.developer), "enable developer mode")                                 //
         ("width", value<int>()->default_value(options->graphics.width), "render width")                                         //
@@ -304,6 +305,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->dumpObjectsPath = vars["dumpobjects"].as<std::string>();
     options->randomSeed = vars["randomseed"].as<int>();
     options->vulkanValidation = vars["vkvalidation"].as<bool>();
+    options->vulkanDebugLabels = vars["vkdebuglabels"].as<bool>();
     options->renderdoc = vars["renderdoc"].as<bool>();
     options->graphics.headless = vars["headless"].as<bool>();
     options->audio.muted = options->graphics.headless;
