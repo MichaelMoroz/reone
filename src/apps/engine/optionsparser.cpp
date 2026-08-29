@@ -98,7 +98,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("input-script", value<std::string>()->default_value(""), "run frame-indexed SDL mouse input script")                  //
         ("dumptargets", value<std::string>()->default_value(""), "write the scene render targets to this directory as .npy")   //
         ("dumpobjects", value<std::string>()->default_value(""), "append the module's traced-emissive candidates to this file") //
-        ("freezeframe", value<int>()->default_value(0), "stop advancing the simulation from this frame on, or 0 not to")      //
         ("randomseed", value<int>()->default_value(-1), "seed the random generator, or -1 to seed from the clock")             //
         ("vkvalidation", value<bool>()->default_value(false), "enable Vulkan validation layers")                              //
         ("renderdoc", value<bool>()->default_value(false), "trigger a RenderDoc frame capture with the screenshot")            //
@@ -300,7 +299,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
     // it on frames nobody will ever compare.
     options->graphics.hashUploads = !options->dumpTargetsPath.empty();
     options->dumpObjectsPath = vars["dumpobjects"].as<std::string>();
-    options->freezeFrame = vars["freezeframe"].as<int>();
     options->randomSeed = vars["randomseed"].as<int>();
     options->vulkanValidation = vars["vkvalidation"].as<bool>();
     options->renderdoc = vars["renderdoc"].as<bool>();

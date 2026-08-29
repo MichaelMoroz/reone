@@ -475,7 +475,7 @@ Frame 900 is only required when comparing against the existing baselines, which
 were captured there. Keep it for cross-commit checks; do not pay for it while
 tuning a sample count.
 
-## Temporal filters: freeze the world and watch the residual decay
+## Temporal filters: hold the world and watch the residual decay
 
 A denoiser or a TAA cannot be judged from one frame. The measurement that works
 is to stop the simulation, restart the temporal history, and capture a run of
@@ -486,20 +486,33 @@ consecutive frames is exactly the residual the filters have not removed.
 # seq.txt
 warp danm14ab
 pause 349
+gamespeed 0
+restarthistory
 capture <SCRATCH>\seq\f.tga 51
 quit
 ```
 
 ```
 engine.exe --game "<GAME_DIR>" --dev 0 --mode path-tracing \
-    --headless 1 --commands-file "<ABSOLUTE PATH>\seq.txt" \
-    --freezeframe 350 --antialiasing fsr
+    --headless 1 --commands-file "<ABSOLUTE PATH>\seq.txt" --antialiasing fsr
 ```
 
-- `--freezeframe N` holds the simulation from frame N (`frameTime` becomes 0) and
-  restarts every temporal history once. Rendering is untouched: the jitter
-  sequence, the tracer's frame index and NRD's accumulation all keep advancing
-  over a scene that no longer moves.
+- `gamespeed 0` scales the simulation timestep, so the world holds still while
+  rendering continues untouched - the jitter sequence, the tracer's frame index
+  and NRD's accumulation all keep advancing over a scene that no longer moves.
+  Any multiplier in [0, 8] works, so a script sets a known speed rather than
+  nudging whatever it finds.
+- `restarthistory` starts every temporal filter cold, once. This is the part
+  that makes the measurement readable: a blend-factor filter settles at a small
+  non-zero residual rather than reaching zero, so the settled value alone cannot
+  tell a working filter from a dead one - only the approach to it can.
+- Not the same as pausing, and the difference matters here. `Game::update` skips
+  the whole module tick when paused, so a paused capture is not a still world -
+  it is a world whose update code did not run. `gamespeed 0` runs every call
+  with `dt == 0`, which is what `--freezeframe` did before it. That also means
+  it reproduces the degenerate zero-length movement step that a zero timestep
+  drives navigating creatures into; if a capture shows walkmesh queries costing
+  milliseconds, that is the cause, not the thing being measured.
 - `capture <path> K` writes K consecutive frames as `f-0001.tga`,
   `f-0002.tga`… A count of 1 keeps the path exactly as given.
 - **The engine's own composite TAA is gone, and so is `--pttaablend`.** The

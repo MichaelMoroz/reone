@@ -63,17 +63,6 @@ struct Options {
      */
     std::string dumpObjectsPath;
     /**
-     * Stop advancing the simulation from this frame on, or 0 not to.
-     *
-     * Rendering continues untouched - the jitter sequence, the tracer's frame
-     * index, NRD's accumulation and the TAA history all keep advancing - while
-     * the camera, animations and AI hold still. That separates temporal
-     * convergence from scene motion, which is the only way to say whether a
-     * residual is the filter failing or the world moving under it.
-     */
-    int freezeFrame {0};
-
-    /**
      * Seed for the shared random generator, or -1 to seed from the wall clock.
      * A capture run seeds deterministically unless told otherwise, for the same
      * reason it uses a fixed timestep: an unrepeatable run cannot be compared.

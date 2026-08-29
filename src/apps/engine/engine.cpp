@@ -417,26 +417,6 @@ int Engine::run() {
             // captured.
             frameTime = 1.0f / 60.0f;
         }
-        if (_options.freezeFrame > 0 && _frameIndex >= _options.freezeFrame) {
-            // The world stops; the renderer does not. Everything temporal -
-            // the jitter sequence, the tracer's frame index, NRD's history,
-            // the TAA history - keeps advancing on a scene that no longer
-            // moves, so whatever still changes between frames is the filters
-            // failing to converge rather than the camera or an animation.
-            frameTime = 0.0f;
-            if (!_historyRestarted) {
-                // Start the temporal filters cold on the first frozen frame.
-                // A blend-factor filter settles at a small non-zero residual
-                // rather than reaching zero, so the settled value alone proves
-                // nothing; restarting here makes the approach to it visible,
-                // and that geometric decay is the actual evidence.
-                _historyRestarted = true;
-                if (auto *pipeline = _services->scene.graphs.get(kSceneMain).renderPipeline()) {
-                    pipeline->restartTemporalHistory();
-                    info("Temporal history restarted at frame " + std::to_string(_frameIndex));
-                }
-            }
-        }
         _profiler->measure(kMainThreadName, kProfilerInputTimeIndex, [this, &quit]() {
             R_PROFILE_ZONE("input");
             while (!_events.empty()) {

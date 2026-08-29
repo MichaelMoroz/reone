@@ -1,6 +1,6 @@
 """Convergence analysis for a frozen-simulation capture sequence.
 
-With the world frozen from --freezeframe on, the only thing still changing
+Given a run of frames captured with the world held still, the only thing changing
 between consecutive frames is temporal accumulation. So mean |frame N -
 frame N-1| is the residual the denoiser and TAA have not removed yet, and a
 working temporal filter drives it towards zero.

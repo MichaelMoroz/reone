@@ -520,6 +520,8 @@ void Game::initConsole() {
     registerConsoleCommand("showpopup", "show the confirmation popup with an optional icon", &Game::consoleShowPopup);
     registerConsoleCommand("showgallerymode", "open a deterministic gameplay-mode gallery fixture", &Game::consoleShowGalleryMode);
     registerConsoleCommand("graphics", "toggle 3D scene rendering: graphics on|off", &Game::consoleGraphics);
+    registerConsoleCommand("gamespeed", "scale the simulation timestep: gamespeed <multiplier>", &Game::consoleGameSpeed);
+    registerConsoleCommand("restarthistory", "restart every temporal filter's history once", &Game::consoleRestartHistory);
     registerConsoleCommand("seed", "reseed the shared random generator: seed <number>", &Game::consoleSeed);
     registerConsoleCommand("showhud", "open the third-person gameplay HUD for a scripted capture", &Game::consoleShowHUD);
     registerConsoleCommand("showtransition", "show an area-transition banner for a scripted capture", &Game::consoleShowTransition);
@@ -4751,6 +4753,36 @@ void Game::consoleGraphics(const ConsoleArgs &args) {
     } else {
         throw std::runtime_error("Expected on or off");
     }
+}
+
+void Game::consoleGameSpeed(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "multiplier");
+    auto speed = args.get<float>(1);
+    if (!speed || *speed < 0.0f || *speed > 8.0f) {
+        throw std::runtime_error("Expected a multiplier between 0 and 8");
+    }
+    // Zero is the setting this exists for, and it is not the same as pausing.
+    // setPaused skips the module tick entirely; this leaves every call in place
+    // and hands it dt == 0, so the world holds still while still being asked to
+    // update. That is where a step which clamps to zero length - or any other
+    // degenerate-timestep behaviour - becomes observable rather than absent.
+    //
+    // The developer keys stop at 1.0 because they are for playing faster. This
+    // is not clamped up to 1.0 for the same reason it exists.
+    _gameSpeed = *speed;
+}
+
+void Game::consoleRestartHistory(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    // Every temporal filter starts cold on the next frame. A blend-factor
+    // filter settles at a small non-zero residual rather than reaching zero, so
+    // the settled value alone cannot tell a working filter from a dead one -
+    // only the approach to it can, and that needs a restart to be visible.
+    auto *pipeline = _services.scene.graphs.get(kSceneMain).renderPipeline();
+    if (!pipeline) {
+        throw std::runtime_error("The main scene has no render pipeline yet");
+    }
+    pipeline->restartTemporalHistory();
 }
 
 void Game::consoleOpenContainer(const ConsoleArgs &args) {

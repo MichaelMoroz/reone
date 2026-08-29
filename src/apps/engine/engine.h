@@ -111,7 +111,6 @@ private:
     bool _commandsRun {false};
     bool _inFrame {false};
     bool _renderdocTriggered {false};
-    bool _historyRestarted {false};
     bool _graphicsRebuildRequested {false};
     std::deque<std::string> _scriptedCommands;
     int _scriptPauseFrames {0};
