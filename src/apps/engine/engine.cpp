@@ -878,7 +878,7 @@ void Engine::registerGraphicsCommands() {
     _console->registerCommand(
         "gfx",
         "graphics options: gfx set <option> <value> | gfx apply | gfx revert | "
-        "gfx get <option> | gfx list [substring] | gfx save",
+        "gfx get <option> | gfx list [substring]",
         [this](const game::ConsoleArgs &args) {
             // A commands file is the only way a capture run can be scripted, so
             // every failure here has to reach the log as well as the console -

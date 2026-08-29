@@ -1857,14 +1857,12 @@ void Editor::graphicsCommitFooter() {
 }
 
 void Editor::renderModeCombo() {
-    auto &options = _engine._options.graphics;
     auto &staged = _engine.stagedGraphicsOptions();
 
     // Ordered as the enum is, so the index is the value.
     static const char *kModeNames[] = {"Retro", "PBR", "Path tracing"};
-    // The staged value is what the control shows: for a live change the two are
-    // the same by construction, and for a staged one this is the value Apply
-    // would install.
+    // The staged value is what the control shows - the value Apply would
+    // install, which is the only way a mode reaches the running frame.
     int modeIndex = static_cast<int>(staged.mode);
     if (ImGui::Combo("Render mode", &modeIndex, kModeNames, IM_ARRAYSIZE(kModeNames))) {
         // Through the same setter the console reaches, rather than deciding
