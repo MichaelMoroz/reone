@@ -93,11 +93,8 @@ float3 safeNormalize(float3 value, float3 fallback) {
     return lengthSquared > 0.0 ? value * rsqrt(lengthSquared) : fallback;
 }
 
-// The C++ upload packs one object's current palette immediately followed by
-// its previous palette: bones[boneBase + b] is current and
-// bones[boneBase + boneCount + b] is previous.  Keeping that addressing,
-// weight application, and index clamping in one helper makes position and
-// shading-frame skinning impossible to drift apart.
+// bones[boneBase + b] is the current palette, bones[boneBase + boneCount + b]
+// the previous; one helper so position and frame skinning cannot drift.
 float4 skinVertex(
     SceneObject object,
     float4 boneIndices,
@@ -222,16 +219,9 @@ uint grassVariant(GrassFace face, uint faceIndex, uint clusterIndex) {
 }
 
 /**
- * Vertices and triangles per blade.
- *
- * Five pairs up the blade and one vertex at the tip: nine triangles, four quad
- * segments and the closing triangle. Segments buy curvature - a blade bent
- * through an arc on four segments still reads as a curve, on two it reads as a
- * dogleg.
- *
- * The tip is a real triangle between the last pair and a single point, not a
- * collapsed quad. A zero-area triangle would take the geometric normal in the
- * tracer through normalize(cross(...)) of the zero vector.
+ * Vertices and triangles per blade: five pairs up the blade and a tip vertex,
+ * nine triangles. Four segments read as a curve; the tip is a real triangle,
+ * since a zero-area one has no geometric normal.
  */
 /** One blade, positioned and oriented; the vertices are derived from it. */
 struct GrassBlade {
@@ -281,15 +271,8 @@ GrassBlade expandGrassBlade(SceneObject object, uint bladeId, bool card) {
     // scale a face carries; a cell is one of those across.
     float2 jitter = float2(grassRandom01(sourceFace, localCluster, 4),
                            grassRandom01(sourceFace, localCluster, 5)) * 2.0 - 1.0;
-    // Displacement is a horizontal jitter, so on anything but level ground it
-    // walks the root off the face it was placed on - above the surface where
-    // the slope falls away, under it where the slope rises. Following the face
-    // plane down keeps the root on the ground it was scattered over, whichever
-    // way the jitter happened to push it.
-    //
-    // Both primitives, not just the card. A strand's base is a point and a
-    // card's is an edge, so the card shows it first, but a floating blade is
-    // as wrong as a floating tuft.
+    // The jitter is horizontal, so on a slope it walks the root off the face;
+    // following the face plane keeps it on the ground, for strands and cards.
     float2 displacement = jitter * pushConstants.grassDisplacement * quadSize;
     float3 supportNormal = cross(face.vertex1Uv0y.xyz - face.vertex0Uv0x.xyz,
                                  face.vertex2Uv1x.xyz - face.vertex0Uv0x.xyz);
@@ -305,10 +288,7 @@ GrassBlade expandGrassBlade(SceneObject object, uint bladeId, bool card) {
             (grassRandom01(sourceFace, localCluster, 3) - 0.5);
     blade.bendDir = float3(cos(yaw), sin(yaw), 0.0);
     blade.widthDir = float3(-sin(yaw), cos(yaw), 0.0);
-    // The base spans widthDir, so a horizontal widthDir lifts one end of it off
-    // a sloped face and buries the other. Laying it in the face plane sets the
-    // base on the ground along its whole width - an edge for a card, the first
-    // vertex pair for a strand, both of which straddle the root.
+    // widthDir lies in the face plane, or a sloped face lifts one end of the base.
     if (abs(supportNormal.z) > 1e-5) {
         float3 tangentWidth = blade.widthDir;
         tangentWidth.z = -dot(supportNormal.xy, tangentWidth.xy) / supportNormal.z;
@@ -329,10 +309,8 @@ GrassBlade expandGrassBlade(SceneObject object, uint bladeId, bool card) {
     if (card)
         blade.variant = grassVariant(face, sourceFace, localCluster);
 
-    // Grown in rather than switched on. A face is admitted whole, so without
-    // this every cluster on it arrives at once and the field advances in
-    // chunks; taking the blade to nothing over the last part of the radius
-    // means what arrives is a blade of zero length.
+    // Grown in over the last part of the radius: a face is admitted whole, so
+    // switching on would advance the field in chunks.
     float distanceToCamera = distance(position, pushConstants.cameraPosition.xyz);
     float fadeBand = max(1.0, pushConstants.grassRadius * 0.2);
     float fade = saturate((pushConstants.grassRadius - distanceToCamera) / fadeBand);
@@ -342,32 +320,18 @@ GrassBlade expandGrassBlade(SceneObject object, uint bladeId, bool card) {
     position.z += blade.length * pushConstants.grassYOffset;
     blade.root = position;
 
-    // Three ways to lose a blade, all resolved to one flag so the caller has a
-    // single degenerate path. Sparsity is a hash, so which blades are missing
-    // is fixed rather than reshuffled every frame.
-    // Sparsity alone. Which clusters exist at all - the draw radius and the
-    // triangle ceiling both - is decided on the CPU while it is already walking
-    // the faces to build these ranges, so every cluster reaching this point is
-    // one that was chosen. Culling here again would mean allocating geometry
-    // for blades that were never going to be drawn, which is what the fixed
-    // slot-per-cluster layout used to do.
+    // Sparsity is a hash, so which blades are missing is fixed frame to frame.
+    // Which clusters exist at all was decided on the CPU; every one here was chosen.
     bool sparse = grassRandom01(sourceFace, localCluster, 8) < pushConstants.grassSparsity;
     blade.culled = sparse;
     return blade;
 }
 
 /**
- * How hard the wind is pushing at a point, at a time.
- *
- * Two travelling waves along the wind direction: a fast short one for the
- * rustle and a slow long one for the gust, mixed by grassWindGust. Both are
- * functions of position and time only, so the same blade evaluated at two
- * times gives two positions and the difference is a true motion vector - which
- * is the only reason this is written as a field rather than as an animation
- * with state.
- *
- * The per-blade phase keeps neighbours from moving as one sheet without
- * breaking the travelling wave, which is what carries a gust across a field.
+ * Wind at a point and a time: a fast short rustle wave and a slow long gust
+ * wave along the wind direction. A field of position and time only, so two
+ * evaluations give a true motion vector; the per-blade phase keeps neighbours
+ * from moving as one sheet.
  */
 float grassWindBend(float3 position, float phase, float time) {
     float2 windDir = float2(cos(pushConstants.grassWindDirection),

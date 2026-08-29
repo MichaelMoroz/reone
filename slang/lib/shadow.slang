@@ -16,11 +16,7 @@
  */
 import uniforms;
 
-// Comparison samplers. The filtering unit performs the depth test itself and
-// returns the filtered fraction that passed, so each tap below is already a
-// 2x2 percentage-closer filter rather than a single binary answer. Both must
-// be declared this way together: a comparison sampler cannot be read with a
-// plain sample, nor a plain sampler with SampleCmp.
+// Comparison samplers: each tap is already a 2x2 percentage-closer filter.
 [[vk::binding(15, 1)]] Sampler2DArrayShadow sShadowMap;
 [[vk::binding(19, 1)]] SamplerCubeArrayShadow sShadowMapCube;
 
@@ -45,52 +41,19 @@ static const float2 kPoissonDisk[kNumDirectionalPCFSamples] = {
     float2(-0.24188840, 0.99706507), float2(-0.81409955, 0.91437590),
     float2(0.19984126, 0.78641367), float2(0.14383161, -0.14100790)};
 
-/**
- * Point kernel and bias, both in TEXELS of the cube face rather than in world
- * units, for the same reason the directional offset is: one face spans ninety
- * degrees, so a texel covers 2*distance/resolution of world at whatever range
- * the receiver happens to be. A fixed world offset is enormous next to the
- * light and sub-texel far from it, and neither end filters or biases.
- */
+/** Point kernel and bias in texels of the cube face: a texel covers 2*distance/resolution of world. */
 static const float kPCFSampleRadiusTexels = 1.5;
 static const float kPointNormalOffsetTexels = 2.5;
-/**
- * Depth bias, in texels of world distance at the receiver.
- *
- * This is the whole of the point path's bias, and it has to be: the shadow
- * fragment writes SV_Depth to store radial distance, and a shader-replaced
- * depth does not receive the pipeline's depth bias - so depthBiasConstantFactor
- * and depthBiasSlopeFactor, which the directional pass relies on, reach this
- * one not at all. Without it every lit surface self-shadows on roughly half
- * its taps, which reads as a uniform half-darkening rather than as acne and
- * was measured at 48% of a frame sitting near 0.5 visibility.
- */
+/** The whole of the point path's bias: a shader-written radial depth receives no pipeline bias. */
 static const float kPointDepthBiasTexels = 3.0;
 static const float kPointShadowFar = 2500.0;
-// Receiver normal offset handles grazing surfaces without moving every caster
-// away from its contact point as a large constant depth bias does.
-//
-// In texels, not world units. A cascade's texel covers a world area that grows
-// with its far plane - the outermost spans some fifty times what the innermost
-// does - so one world-space offset cannot serve all four: sized for the near
-// cascade it leaves distant receivers inside their own texel and they stipple
-// themselves, and sized for the far one it detaches every near contact shadow.
-// Scaling by the cascade's own texel diagonal makes the offset mean the same
-// thing everywhere.
+// Receiver normal offset for grazing surfaces, in texels: a cascade's texel
+// grows with its far plane, so one world-space offset cannot serve all four.
 static const float kDirectionalNormalOffsetTexels = 2.5;
 
-// One visibility value, and it means one thing: how much of the DIRECT light
-// from the shadow-casting light reaches this surface. It is never applied to
-// lightmap irradiance, to flat world ambient, or to an environment reflection.
-//
-// A shadow map answers "is this point occluded from that one light". Baked
-// irradiance already contains its own occlusion, and flat ambient is a constant
-// standing in for everything the renderer does not simulate; attenuating either
-// by a depth test against a single light darkens surfaces for a reason that has
-// nothing to do with them. That deviation is what made lightmapped geometry go
-// dark under the shadow term, and it is why the second, NdotL-free factor this
-// struct used to carry no longer exists - every consumer of it was a term that
-// should not have been shadowed at all.
+// One visibility value: how much of the casting light's direct light reaches
+// the surface. Never applied to baked irradiance, flat ambient or a reflection
+// - those carry their own occlusion or none.
 
 /** Cascade whose far plane first contains this depth; the last one otherwise. */
 int cascadeFor(float3 viewPos) {
@@ -107,11 +70,8 @@ float shadowInCascade(int mapIndex, int mapResolution, int cascade, float3 world
                       float3 normal, float3 lightVector) {
     float NdotL = dot(normal, lightVector);
     float sinAngle = sqrt(max(0.0, 1.0 - NdotL * NdotL));
-    // The cascade's world units per texel, read off its own matrix: an
-    // orthographic light-space transform scales the world extent it covers
-    // into [-1,1], so the extent is 2 / the row's length, and a texel is that
-    // over the map's resolution.
-    // From the uniform, not GetDimensions - see the note on the point path.
+    // World units per texel off the cascade's own orthographic matrix: extent
+    // is 2 / the row's length. Resolution from the uniform, not GetDimensions.
     const float width = float(max(1, mapResolution));
     float2 texelSize = 1.0 / float2(width, width);
     float4x4 cascadeSpace = globalUniforms.shadowCascadeSpace[mapIndex + cascade];
@@ -128,13 +88,8 @@ float shadowInCascade(int mapIndex, int mapResolution, int cascade, float3 world
         return 0.0;
     }
 
-    // Hold the penumbra to a fixed width in WORLD units rather than in texels.
-    // The cascade divisors step 0.005 / 0.015 / 0.045, so each cascade covers
-    // three times the ground of the one before and its texels are three times
-    // wider. A radius fixed in texels therefore triples in world width at every
-    // split, and that discontinuity is what makes the transition obvious.
-    // Probing the matrix - rather than reconstructing the extent from the
-    // divisors - keeps this correct whatever the split scheme becomes.
+    // Penumbra fixed in world units, not texels: a texel radius would triple
+    // at every cascade split and draw the transition.
     float3 probeAxis = abs(lightVector.z) < 0.99 ? float3(0.0, 0.0, 1.0)
                                                  : float3(1.0, 0.0, 0.0);
     float3 tangent = normalize(cross(lightVector, probeAxis));
@@ -146,15 +101,8 @@ float shadowInCascade(int mapIndex, int mapResolution, int cascade, float3 world
     float radiusTexels = clamp(kDirectionalPenumbraWorld * uvPerWorld / texelSize.x,
                                1.0, kDirectionalPCFRadiusTexels);
 
-    // A rotated Poisson disk instead of a 3x3 box. The box could only ever
-    // produce ten discrete penumbra levels one texel wide, which reads as a
-    // stair-stepped edge; the disk spreads the same idea over a wider radius
-    // and the per-receiver rotation turns the remaining banding into noise.
-    //
-    // The rotation is keyed on world position, not screen position. A
-    // screen-space key re-rolls every pixel as the camera moves, which is
-    // exactly the per-frame edge crawl the jitter fix removed - a stable
-    // world-space key gives each surface point the same kernel every frame.
+    // A Poisson disk rotated per receiver, keyed on world position so the
+    // kernel is stable frame to frame; a box gave ten stair-stepped levels.
     float angle = frac(sin(dot(floor(worldPos * 32.0).xy, float2(12.9898, 78.233))) *
                        43758.5453) * 6.2831853;
     float2 rot = float2(cos(angle), sin(angle));
@@ -165,12 +113,8 @@ float shadowInCascade(int mapIndex, int mapResolution, int cascade, float3 world
         float2 rotated = float2(disk.x * rot.x - disk.y * rot.y,
                                 disk.x * rot.y + disk.y * rot.x);
         float2 offset = rotated * texelSize * radiusTexels;
-        // The comparison is the sampler's, and it returns the fraction of the
-        // 2x2 neighbourhood the receiver is behind rather than a binary answer.
-        // Each disk tap therefore carries four texels of evidence, which is why
-        // the same sample count reads smoother than the hand-rolled test it
-        // replaces. Level zero explicitly: the kernel diverges across a quad,
-        // and a depth target has no mip chain to select anyway.
+        // Level zero explicitly: the kernel diverges across a quad and a depth
+        // target has no mips.
         shadow += 1.0 - sShadowMap.SampleCmpLevelZero(
                             float3(projCoords.xy + offset, float(mapIndex + cascade)), currentDepth);
     }
@@ -184,11 +128,8 @@ float getDirectionalLightShadow(GlobalUniformsShadowLight slot, float3 viewPos,
     float shadow = shadowInCascade(slot.mapIndex, slot.mapResolution, cascade, worldPos,
                                    normal, lightVector);
 
-    // Cross-fade into the next cascade over the tail of this one. Even with the
-    // penumbra held constant the two disagree at the split - they carry
-    // different depth precision, and their texel grids are snapped
-    // independently - so a hard switch draws a line across the ground at a
-    // fixed distance from the camera. The band makes that line a gradient.
+    // Cross-fade into the next cascade: the two disagree at the split, and a
+    // hard switch draws a line across the ground.
     if (cascade + 1 < kNumShadowCascades) {
         float depth = abs(viewPos.z);
         float far = globalUniforms.shadowCascadeFarPlanes[cascade];
@@ -218,15 +159,8 @@ float getPointLightShadow(GlobalUniformsShadowLight slot, float3 worldPos, float
     float NdotL = dot(normal, lightVector);
     float sinAngle = sqrt(max(0.0, 1.0 - NdotL * NdotL));
 
-    // World size of one cube texel at this receiver's range. A face is a
-    // 90-degree frustum, so its half-extent equals the distance and one texel
-    // spans 2*distance/resolution.
-    //
-    // The resolution comes from the uniform, not from GetDimensions: that query
-    // does not report the face width for this sampler, and the size it did
-    // report made the bias clamp the depth reference to zero and the kernel
-    // sample at random - which looks like a working shadow right up until you
-    // change the bias and nothing moves.
+    // One cube texel at this range spans 2*distance/resolution; the resolution
+    // comes from the uniform, since GetDimensions misreports this sampler.
     float texelWorld = 2.0 * rawDistance / max(1.0, float(slot.mapResolution));
 
     float3 offsetWorldPos =
@@ -234,16 +168,8 @@ float getPointLightShadow(GlobalUniformsShadowLight slot, float3 worldPos, float
     float3 fragToLight = offsetWorldPos - slot.positionOrDirection.xyz;
     float currentDepth = length(fragToLight);
 
-    // Explicit level, like every other tap here. The PBR resolve is a compute
-    // dispatch and compute has no implicit derivatives, so an implicit-LOD
-    // sample makes Slang emit SPV_KHR_compute_shader_derivatives - a device
-    // feature this engine does not request, which the validation layers
-    // report and which is undefined behaviour where it is not supported.
-    // The map has no mip chain anyway, so level zero is what the implicit
-    // form resolved to.
-    // The cube map holds distance normalised by the far plane, so the reference
-    // is divided rather than the stored value multiplied - the comparison
-    // happens inside the sampler and cannot scale what it reads.
+    // Explicit level: compute has no implicit derivatives. The cube holds
+    // distance over the far plane, so the reference is divided, not the store.
     float referenceDepth =
         max(0.0, currentDepth - kPointDepthBiasTexels * texelWorld) / kPointShadowFar;
     float shadow = 0.0;
@@ -255,36 +181,12 @@ float getPointLightShadow(GlobalUniformsShadowLight slot, float3 worldPos, float
                             referenceDepth);
     }
     shadow /= float(kNumPCFSamples);
-    // No fade with range. There used to be one, smoothstep(radius, 2*radius),
-    // and it did not match the reach of the light it belongs to: both resolves
-    // admit a point light out to radius SQUARED - the Odyssey cull, 400 units
-    // for a lamp of radius 20 - while the shadow was gone by 40. Between those
-    // the light arrived with no occlusion at all and shone through walls,
-    // which is what made point shadows look absent in a module while a fixture
-    // whose receiver sits well inside the radius looked correct.
-    //
-    // Nothing is needed in its place. Where the light is too far to matter its
-    // own attenuation is already ~0, so occluding it changes nothing, and the
-    // cube's far plane covers far more than the cull does.
+    // No fade with range: the light reaches radius squared, and where it is
+    // too far to matter its own attenuation is already ~0.
     return shadow;
 }
 
-/**
- * Display-space visibility of the shadow-casting light, at the authored
- * ShadowOpacity strength.
- *
- * Back-facing and grazing surfaces fade to one: their own NdotL already
- * rejects that light, so shadowing them again would darken a surface twice
- * for the same geometric fact.
- */
-/**
- * The side of a thin surface that faces the light.
- *
- * A leaf lit from behind is still lit; treating it as a solid sends the whole
- * back face black. Flipping the normal is the two-sided half of that, and the
- * caller pays for it with a transmission factor rather than getting the front
- * face's brightness for free.
- */
+/** The side of a thin surface that faces the light: a leaf lit from behind is still lit. */
 public float3 thinFacingNormal(float3 normal, float3 toLight) {
     return dot(normal, toLight) < 0.0 ? -normal : normal;
 }
@@ -301,16 +203,11 @@ public float getShadowFrom(int slotIndex, float3 viewPos, float3 worldPos, float
     float3 lightVector = slot.positionOrDirection.w == 0.0
                              ? -normalize(slot.positionOrDirection.xyz)
                              : normalize(slot.positionOrDirection.xyz - worldPos);
-    // A thin surface is sampled from the side the light is on, which is the
-    // whole of "the shadow passes through to the other side": the receiver
-    // offset then pushes toward the light instead of away from it, and the
-    // fade below stops treating a back-facing leaf as something that cannot be
-    // lit. Without this a blade lit from behind is in its own shadow.
+    // Sampled from the side the light is on, or a blade lit from behind is in
+    // its own shadow.
     float3 facing = thin ? thinFacingNormal(normal, lightVector) : normal;
-    // Ahead of the lookup, not after it: a surface facing away from the light
-    // fades to fully lit, so its sixteen-to-twenty comparison taps could only
-    // ever be multiplied out again. The resolves shadow per light now, so this
-    // ran once per shadowed light per pixel.
+    // Ahead of the lookup: a surface facing away fades to lit, so its taps
+    // would only be multiplied out again.
     float normalFade = saturate(dot(facing, lightVector) * 10.0);
     if (normalFade <= 0.0) {
         return 1.0;
@@ -322,12 +219,7 @@ public float getShadowFrom(int slotIndex, float3 viewPos, float3 worldPos, float
     return lerp(1.0, visibility, normalFade);
 }
 
-/**
- * The frame's first caster, which is the only one a single-shadow consumer can
- * mean. Kept while the resolves still apply one visibility over the whole lit
- * product; a consumer that shadows per light calls getShadowFrom with that
- * light's own slot instead.
- */
+/** The frame's first caster, for a consumer with one visibility over the whole lit product. */
 public float getShadow(float3 viewPos, float3 worldPos, float3 normal, bool thin = false) {
     return getShadowFrom(0, viewPos, worldPos, normal, thin);
 }

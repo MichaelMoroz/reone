@@ -35,17 +35,8 @@ import lib.gbuf;
 // own passes were written against rather than a second copy of it.
 import tracing.brdf;
 
-// Screen-space occlusion and reflections used to sit here as two unwired
-// full-screen passes. They are wired now, and neither is a post-process:
-// occlusion is a term inside the PBR resolve, where the depth and normals it
-// needs have already been read, and reflections are a compute dispatch over the
-// resolved image. Both live in pbr_channels.slang, which is where the surfaces
-// they modify are shaded. Nothing here referenced them.
-
-// Sampled with an explicit level throughout. These passes read images that
-// have no mip chain, so level zero is what OpenGL's texture() resolves to
-// anyway - and Slang's implicit-LOD Sample() emits the MinLod capability,
-// which needs a device feature that nothing else here wants.
+// Sampled with an explicit level throughout: these images have no mip chain,
+// and an implicit-LOD sample would need a device feature nothing else wants.
 import lib.assemble;
 
 [[vk::binding(0, 1)]] Sampler2D sMainTex;
@@ -56,28 +47,11 @@ struct Varyings {
     noperspective float2 uv : TEXCOORD0;
 };
 
-/**
- * The dials of the one display transform, three words wide because that is
- * what every graphics pipeline layout here declares.
- */
+/** The dials of the one display transform; three words, as every graphics layout declares. */
 struct PostProcessPushConstants {
-    /**
-     * 0 encode only, 1 encode with the creative grade.
-     *
-     * The encode is never optional - the scene arrives linear in every mode and
-     * something has to put it into display space. What this word gates is the
-     * grade: the exposure and the tone curve. Off, the frame is still a correct
-     * picture, simply ungraded, which is what makes it a usable diagnostic.
-     */
+    /** 0 encode only, 1 encode with the grade (exposure and tone curve). The encode is never optional. */
     uint grade;
-    /**
-     * The scene arrived DISPLAY-REFERRED and must not be transformed again.
-     *
-     * Only retro sets it, and only because retro's shading is the original's
-     * gamma-space arithmetic end to end - see retro_resolve.slang for why the
-     * linear round trip that used to bracket this pass was removed rather than
-     * kept as a cancelling pair.
-     */
+    /** The scene arrived display-referred (retro's gamma-space chain) and is not transformed again. */
     uint displayReferred;
     float exposure;
     /** 0 none, 1 the Gran Turismo curve; only read when grade is 1. */
@@ -95,12 +69,7 @@ struct PrimaryCoveragePushConstants {
 [[vk::binding(22, 1)]] Sampler2D sCoverageTex;
 static const uint kNoTriangle = 0xffffffffu;
 
-/**
- * A single triangle covering the target.
- *
- * Larger than the screen and clipped, which beats two triangles: no seam along
- * the diagonal, and one fewer vertex.
- */
+/** A single clipped triangle covering the target: no diagonal seam. */
 [shader("vertex")]
 Varyings postVertex(uint vertexId: SV_VertexID) {
     float2 uv = float2((vertexId << 1) & 2, vertexId & 2);
@@ -111,16 +80,8 @@ Varyings postVertex(uint vertexId: SV_VertexID) {
 }
 
 /**
- * The last pass of every mode, and the only one that decides what display
- * colour is.
- *
- * Every mode's scene chain now stops at linear scene-referred colour, so this
- * pass is the encode rather than a decoration: nothing before it is in display
- * space and nothing after it is not. There is no pass-through branch, because
- * a pass-through would present linear radiance as if it were already encoded -
- * which is exactly the bug that made turning post off look like MORE
- * processing rather than less. One shader with dials rather than one per mode,
- * because two implementations of a transform drift.
+ * The last pass of every mode and the only one that decides display colour:
+ * every chain stops at linear, so this is the encode, with no pass-through.
  */
 [shader("fragment")]
 float4 postProcessFragment(Varyings input) : SV_Target {
@@ -214,23 +175,13 @@ static const float kSubpix = 0.75;
 static const float kEdgeThreshold = 0.166;
 static const float kEdgeThresholdMin = 0.0833;
 
-/**
- * How far the edge search steps on each iteration past the first.
- *
- * The original is a preprocessor ladder of nested ifs, one per step, cut off by
- * FXAA_PS. At the quality level this ships with, FXAA_PS 5, exactly these four
- * lengths are compiled in - so a loop over them is the same search, and one can
- * actually read it.
- */
+/** Edge-search step lengths: the four FXAA_PS 5 compiles in, as a loop. */
 static const float kSearchSteps[4] = {1.5, 2.0, 4.0, 12.0};
 
 /**
- * Runs AFTER the display transform, unlike the temporal resolve that shares its
- * slot. Every threshold below is a luma difference measured against constants
- * (kEdgeThreshold, kEdgeThresholdMin) that were tuned for display-referred
- * colour: on linear input the same scene contrast collapses in the highlights,
- * so bright edges fall under the early-out and are never anti-aliased at all.
- * See ScenePipeline::antiAliasingPass for the rule this follows.
+ * Runs after the display transform: the thresholds are luma differences tuned
+ * for display-referred colour, and on linear input bright edges fall under
+ * the early-out.
  */
 [shader("fragment")]
 float4 fxaaFragment(Varyings input) : SV_Target {
@@ -365,11 +316,8 @@ float4 fxaaFragment(Varyings input) : SV_Target {
         }
     }
 
-    // Along the axis the search actually walked, which offNP already chose: x
-    // for a horizontal span, y for a vertical one. Measuring the other axis
-    // gives a span length of zero, and the pixel offset derived from it is
-    // then meaningless - the edges are still found, but every one of them is
-    // blended by the wrong amount.
+    // Along the axis the search walked, or the span length is zero and every
+    // edge blends by the wrong amount.
     float dstN = horzSpan ? (posM.x - posN.x) : (posM.y - posN.y);
     float dstP = horzSpan ? (posP.x - posM.x) : (posP.y - posM.y);
 
@@ -399,59 +347,31 @@ float4 fxaaFragment(Varyings input) : SV_Target {
 }
 
 /**
- * Bloom, as a stage every mode runs.
- *
- * The reference build extracts its bloom from the opaque pass alone: a second
- * colour attachment holding `step(1e-4, selfIllum) * step(0.95, color) * color`,
- * blurred twice and added back when transparency resolves. There is no such
- * attachment here, so the same quantity is recovered from the finished image
- * and the G-buffer's self-illum channel: the gate is what makes this bloom
- * rather than a general glow, and dropping it would bleed light off every
- * bright surface instead of only the ones authored to emit.
- *
- * It sits after the resolve and before transparency, which is where the
- * reference adds it - a blend or a particle must not feed the blur, or a
- * sprite's own edge blooms.
+ * Bloom: the reference's `step(1e-4, selfIllum) * step(0.95, color) * color`,
+ * recovered from the finished image and the self-illum channel, blurred and
+ * added before transparency so no sprite edge feeds the blur.
  */
 struct BloomPushConstants {
     /** Display-space level a lit texel must pass before it contributes. */
     float threshold;
     /** Scale on what is added back. */
     float intensity;
-    /**
-     * One texel along the axis this pass blurs, zero on the other. The blur is
-     * separable, so the same entry point runs twice with this rotated.
-     */
+    /** One texel along the blurred axis; the separable blur runs twice with this rotated. */
     float2 texelStep;
 };
 [[vk::push_constant]] BloomPushConstants bloomPushConstants;
 
 /** Self-illum, unit 4 - the same slot the resolves read it from. */
 [[vk::binding(4, 1)]] Sampler2D sBloomSelfIllum;
-/**
- * The blurred hilights, for the composite.
- *
- * Unit 9, which TextureUnits has called `hilights` since the OpenGL renderer
- * kept a second attachment for exactly this and nothing has used it since.
- */
+/** The blurred hilights, for the composite. */
 [[vk::binding(9, 1)]] Sampler2D sBloomTex;
 
 [shader("fragment")]
 float4 bloomExtractFragment(Varyings input) : SV_Target {
     float3 color = sMainTex.SampleLevel(input.uv, 0.0).rgb;
     float3 selfIllum = sBloomSelfIllum.SampleLevel(input.uv, 0.0).rgb;
-    // Both gates are the reference's, term for term, and both are PER CHANNEL:
-    //
-    //   step(1e-4, uSelfIllumColor.rgb) * step(0.95, color) * color
-    //
-    // The emit gate used to be scalar - step on the sum - which is a different
-    // rule wherever a surface emits in one channel and not another. A red
-    // warning strip then bloomed its blue and green as readily as its red, and
-    // the halo came out white instead of red.
-    //
-    // The threshold means what options.h says it means now that retro's chain
-    // is display-referred end to end; while the target held linear colour, 0.95
-    // was really 0.977 and quietly bloomed less than it was asked to.
+    // Both gates are the reference's and both are per channel: a red strip
+    // blooms red, not white.
     float3 emits = step(float3(1.0e-4), selfIllum);
     float3 hot = step(float3(bloomPushConstants.threshold), color) * color;
     return float4(emits * hot, 1.0);
@@ -459,15 +379,8 @@ float4 bloomExtractFragment(Varyings input) : SV_Target {
 
 [shader("fragment")]
 float4 bloomBlurFragment(Varyings input) : SV_Target {
-    // The reference's 13-tap kernel, as two separable passes. Weights are the
-    // normalised binomial row; the offsets are whole texels so the pair costs
-    // 26 samples rather than the 169 a square kernel would.
-    //
-    // Verified equal to the reference's own, which spends 7 bilinear taps where
-    // this spends 13 discrete ones: the centre weight is 0.196483 in both, and
-    // its pair at offset 1.4118 weighted 0.29691 is these taps 1 and 2, whose
-    // combined weight is 0.295985 at centroid 1.409. Same for the 3.2941 and
-    // 5.1765 pairs. Two spellings of one gaussian.
+    // The reference's 13-tap binomial kernel as two separable passes; equal to
+    // its 7 bilinear taps, two spellings of one gaussian.
     static const float kWeights[7] = {0.196483, 0.174868, 0.121117, 0.065591,
                                       0.027680, 0.009122, 0.002338};
     float2 step = bloomPushConstants.texelStep;
@@ -503,23 +416,10 @@ struct FogPushConstants {
 [[vk::push_constant]] FogPushConstants fogPushConstants;
 
 /**
- * Height fog over the finished scene, in every mode.
- *
- * A tail pass rather than part of either resolve, and placed AFTER
- * transparency, because fog has to be the same rule for everything in the
- * frame: shading it per surface made whether a pixel fogged depend on what
- * KIND of object it was, and applying it in the composite left every blended
- * surface - sabers, glow planes, particles - drawn afterwards and unfogged.
- *
- * The depth buffer is what makes this work. Sky is at the far plane here, a
- * FINITE distance, so a ray toward the horizon accumulates the long low path
- * through the dense layer and fogs out while one toward the zenith leaves the
- * layer and stays clear. Integrating to the tracer's infinity sentinel instead
- * made the sky's fog depend on angle alone and come out LESS fogged than the
- * nearer ground in front of it.
- *
- * A blended surface writes no depth, so it is fogged by the depth behind it -
- * approximate, and much closer than leaving it clear.
+ * Height fog over the finished scene, after transparency so one rule covers
+ * everything. Sky sits at the finite far plane, so a horizon ray fogs through
+ * the low layer and a zenith ray leaves it; a blended surface, writing no
+ * depth, takes the depth behind it.
  */
 [shader("fragment")]
 float4 fogFragment(Varyings input) : SV_Target {
