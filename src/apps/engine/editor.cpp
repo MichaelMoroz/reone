@@ -1209,6 +1209,18 @@ void Editor::graphicsQualityTab() {
                 true);
     ImGui::EndDisabled();
     ImGui::Checkbox("Grass", &options.grass);
+    ImGui::Checkbox("Particles", &options.particles);
+    settingHint("Admit emitter particles to the scene, or leave them out of it entirely. Off is "
+                "not a draw-time skip: the emitters are never collected, so their instances cost "
+                "nothing in the scene, the acceleration structure or the frame.");
+    ImGui::Checkbox("Transparency", &options.transparency);
+    settingHint("Draw the forward transparency pass, or stop at the opaque image.\n\n"
+                "One pass carries everything non-opaque - blended and additive geometry, sabers, "
+                "particles, the transparent halves of models - so this removes all of it at once. "
+                "That is what makes it a diagnostic rather than a quality dial: an artefact that "
+                "survives with this off is not transparency's, and one that vanishes is.\n\n"
+                "It differs from Particles above, which decides whether emitters reach the scene "
+                "at all; this skips the pass they would have been drawn in.");
     // Wired straight: density is a GPU gate over budgets baked at the slider
     // maximum (kGrassDensityCap), so dragging costs a push-constant change.
     // The old committed-on-release dance existed to avoid re-materialising

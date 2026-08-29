@@ -328,7 +328,12 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         // opaque image on the original's model, so it takes no tail pass.
         if (!diagnosticImage && _options.mode != graphics::RenderMode::Retro)
             plan.steps.push_back(graphics::SceneStep::Fog);
-        if (!_options.parityDirect)
+        // One pass carries everything non-opaque, so the toggle removes all of
+        // it at once: blended and additive geometry, sabers, particles, the
+        // transparent halves of models. Leaving the step out entirely rather
+        // than drawing nothing keeps the cost off the frame as well as the
+        // pixels.
+        if (!_options.parityDirect && _options.transparency)
             plan.steps.push_back(graphics::SceneStep::Blended);
     }
     if (temporalResolve)

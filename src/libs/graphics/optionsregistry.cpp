@@ -242,6 +242,9 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                              &GraphicsOptions::fogHeight, 0.05f, 512.0f));
     descs.push_back(boolOpt("particles", OptionApply::Live, "enable emitter particles",
                             &GraphicsOptions::particles));
+    descs.push_back(boolOpt("transparency", OptionApply::Live,
+                            "draw the forward transparency pass",
+                            &GraphicsOptions::transparency));
     descs.push_back(boolOpt("lensflares", OptionApply::Live, "draw light halo billboards",
                             &GraphicsOptions::lensFlares));
     descs.push_back(floatOpt("thintransmission", OptionApply::Live,

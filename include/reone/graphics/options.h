@@ -344,6 +344,20 @@ struct GraphicsOptions {
     /** Admit emitter particles, or leave them out of the frame entirely. */
     bool particles {true};
     /**
+     * Draw the forward transparency pass, or stop at the opaque image.
+     *
+     * Everything non-opaque goes through one pass - blended and additive
+     * geometry, sabers, emitter particles, the transparent halves of models -
+     * so switching it off leaves exactly the opaque frame the resolve produced.
+     * That is what makes it a diagnostic: an artefact that survives is not
+     * transparency's, and one that vanishes is.
+     *
+     * Distinct from `particles`, which decides whether emitters are admitted to
+     * the scene at all. This draws or skips the pass they would have been drawn
+     * in, along with everything else in it.
+     */
+    bool transparency {true};
+    /**
      * Draw the halo billboards authored on flare-bearing lights.
      *
      * Off by default. The billboard path exists but has never been reachable:
