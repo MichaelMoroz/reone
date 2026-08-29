@@ -582,6 +582,23 @@ void ScenePipeline::init() {
             {"outputImage", "inNoiseFree", "inDiffFactor", "inSpecFactor",
              "sDenoisedDiffuse", "sDenoisedSpecular", "inViewZ", "inRawDiffuse",
              "inRawSpecular", "sDirectDiffuse"});
+    } else if (_dlssRr) {
+        // Retro with RR in the slot: the one combination that needs guides and
+        // has no provider writing them. RGBA16F for the normal because it holds
+        // a signed unit vector and the roughness beside it, matching the
+        // channel the other providers hand over; the specular albedo shares the
+        // format for no better reason than that it is the same tag family and
+        // is constant anyway.
+        for (int frame = 0; frame < 2; ++frame) {
+            for (int i = 0; i < 2; ++i) {
+                auto image = _renderer.resources().makeImage();
+                image->initColorAttachment(_renderSize, Format::R16G16B16A16Sfloat);
+                _retroGuideImages[frame][i] = std::move(image);
+            }
+        }
+        _retroGuidePipeline = _renderer.makeComputePipeline({"retro_guides", "main", 2});
+        _retroGuideBindings = _retroGuidePipeline->resolveBindings(
+            {"outNormalRoughness", "outSpecularAlbedo", "sGBufEyeNormal"});
     }
 
     _inited = true;
@@ -618,6 +635,19 @@ void ScenePipeline::deinit() {
     }
     _compositePipeline.reset();
     _compositeBindings.clear();
+    // Released beside the channels for the same reason and with the same
+    // urgency. A rebuild that changes mode reaches init() again and takes a
+    // different branch, so anything left here is not merely leaked - it is
+    // read: upscalePass selects the retro guide provider on this pipeline being
+    // non-null, and a Retro-to-PBR switch therefore tagged DLSS with images
+    // sized for the previous pipeline. That is an access violation, not a
+    // wrong picture.
+    for (auto &frame : _retroGuideImages) {
+        for (auto &image : frame)
+            image.reset();
+    }
+    _retroGuidePipeline.reset();
+    _retroGuideBindings.clear();
     _gbuffer.reset();
     _outputHandle.reset();
     // Persistent sets are not recycled by any per-frame pool reset, so a
@@ -1186,6 +1216,46 @@ void ScenePipeline::retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset
         cmd.endRendering();
     }
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
+    retroGuidePass(cmd);
+}
+
+void ScenePipeline::retroGuidePass(ICommandBuffer &cmd) {
+    if (!_retroGuidePipeline) {
+        return;
+    }
+    R_PROFILE_ZONE("ScenePipeline::retroGuidePass record");
+    const int frame = _renderer.frameIndex();
+    auto &normalRoughness = *_retroGuideImages[frame][0];
+    auto &specularAlbedo = *_retroGuideImages[frame][1];
+    cmd.transitionImage(normalRoughness, ImageLayout::General);
+    cmd.transitionImage(specularAlbedo, ImageLayout::General);
+    // The G-buffer is already ShaderRead here - the resolve above put it there
+    // and this pass reads the same attachment it did.
+    auto &eyeNormal = _gbuffer->color(GBufferAttachment::EyeNormal);
+
+    const std::array<ComputeBinding, 3> bindings {{
+        {_retroGuideBindings[0], normalRoughness.sampleView()},
+        {_retroGuideBindings[1], specularAlbedo.sampleView()},
+        {_retroGuideBindings[2], eyeNormal.sampleView()},
+    }};
+    struct RetroGuidePushConstants {
+        glm::mat4 viewInv;
+        // See the shader: the matrix aligns what follows to 16 bytes, so this
+        // is a uvec4 on both sides rather than a pair of uints on one and an
+        // 80-byte reflected block on the other.
+        glm::uvec4 extent;
+    } push {_uniforms.globals().viewInv,
+            glm::uvec4(static_cast<uint32_t>(_renderSize.x),
+                       static_cast<uint32_t>(_renderSize.y), 0u, 0u)};
+    static_assert(sizeof(RetroGuidePushConstants) == 80,
+                  "push constant block must stay free of padding");
+    cmd.dispatch(*_retroGuidePipeline,
+                 {(_renderSize.x + kResolveGroupSize - 1) / kResolveGroupSize,
+                  (_renderSize.y + kResolveGroupSize - 1) / kResolveGroupSize, 1},
+                 {bindings.data(), static_cast<uint32_t>(bindings.size())},
+                 nullptr, &push, sizeof(push));
+    cmd.transitionImage(normalRoughness, ImageLayout::ShaderRead);
+    cmd.transitionImage(specularAlbedo, ImageLayout::ShaderRead);
 }
 
 void ScenePipeline::pbrChannelsPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
@@ -1666,14 +1736,28 @@ void ScenePipeline::upscalePass(ICommandBuffer &cmd) {
 
     // The guides only DLSS-RR reads. It is denoising here as well as resolving,
     // so it needs the material factors the colour was modulated by and the
-    // surface it was shaded on - which the channel provider wrote this frame,
-    // whichever provider that was. Retro writes no channels and cannot run RR;
-    // the null check is the honest expression of that rather than a mode test.
-    if (_dlssRr && _lastChannelFrame >= 0) {
+    // surface it was shaded on.
+    //
+    // Two providers, because there are two shapes of frame. Where a channel
+    // provider ran - the tracer, or PBR's channels pass - the guides are the
+    // channels it wrote. Retro fills no channels, and used to reach RR with no
+    // guides at all: slEvaluateFeature then returned eErrorMissingInputParameter
+    // on every frame and the resolve never ran, so the mode was offered and did
+    // not work. retroGuidePass supplies the two it cannot otherwise produce,
+    // and the G-buffer's diffuse attachment is tagged directly as the third -
+    // it already is the albedo retro's resolve multiplies its lighting by.
+    if (_dlssRr && _retroGuidePipeline) {
+        const int chFrame = _renderer.frameIndex();
+        inputs.diffuseAlbedo = &_gbuffer->color(GBufferAttachment::Diffuse);
+        inputs.specularAlbedo = _retroGuideImages[chFrame][1].get();
+        inputs.normalRoughness = _retroGuideImages[chFrame][0].get();
+    } else if (_dlssRr && _lastChannelFrame >= 0) {
         const auto &channels = _frameChannels;
         inputs.diffuseAlbedo = channels[ChannelSlot::DiffFactor];
         inputs.specularAlbedo = channels[ChannelSlot::SpecFactor];
         inputs.normalRoughness = channels[ChannelSlot::NormalRoughness];
+    }
+    if (_dlssRr) {
         if (inputs.diffuseAlbedo) {
             cmd.transitionImage(*inputs.diffuseAlbedo, ImageLayout::ShaderRead);
         }

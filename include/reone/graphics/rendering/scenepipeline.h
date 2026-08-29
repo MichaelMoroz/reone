@@ -442,6 +442,21 @@ private:
      */
     std::unique_ptr<IComputePipeline> _compositePipeline;
     std::vector<ComputeResourceSlot> _compositeBindings;
+    /**
+     * The two surface guides DLSS-RR needs and retro does not otherwise write.
+     *
+     * Allocated only where both halves of that sentence hold - retro, with RR
+     * actually in the slot - because every other mode fills the tracing
+     * channels RR reads instead, and retro without RR has no reader. Double
+     * buffered for the same reason the channels are: two frames in flight must
+     * not write and read the same texels.
+     *
+     * Albedo is absent on purpose. The G-buffer's diffuse attachment already is
+     * the albedo, so the pipeline tags that image rather than copying it.
+     */
+    std::array<std::array<std::unique_ptr<IImage>, 2>, 2> _retroGuideImages;
+    std::unique_ptr<IComputePipeline> _retroGuidePipeline;
+    std::vector<ComputeResourceSlot> _retroGuideBindings;
 
     struct Preview {
         std::unique_ptr<IImage> image;
@@ -472,6 +487,8 @@ private:
     /** Completes the motion target over the pixels the geometry pass left uncovered. */
     void skyMotionPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     void retroResolvePass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    /** Fill this frame's retro RR guides from the G-buffer. No-op without RR. */
+    void retroGuidePass(ICommandBuffer &cmd);
     /** G8: the transparent surfaces the G-buffer deliberately leaves out,
         drawn forward onto the resolved image in submission order. */
     void blendedPass(ICommandBuffer &cmd, uint32_t globalsOffset,
