@@ -22,7 +22,6 @@ set(ENGINE_HEADERS
     ${ENGINE_SOURCE_DIR}/optionsparser.h
     ${ENGINE_SOURCE_DIR}/profiler.h
     ${ENGINE_SOURCE_DIR}/editor.h
-    ${ENGINE_SOURCE_DIR}/graphicsconfig.h
     ${ENGINE_SOURCE_DIR}/objectspanel.h)
 
 set(ENGINE_HEADERS
@@ -33,7 +32,6 @@ set(ENGINE_HEADERS
     ${ENGINE_SOURCE_DIR}/optionsparser.cpp
     ${ENGINE_SOURCE_DIR}/profiler.cpp
     ${ENGINE_SOURCE_DIR}/editor.cpp
-    ${ENGINE_SOURCE_DIR}/graphicsconfig.cpp
     ${ENGINE_SOURCE_DIR}/objectspanel.cpp)
 
 if(WIN32)
