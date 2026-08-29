@@ -140,8 +140,15 @@ public struct DirectLight {
  * bounce vertices pass white noise, which is all their contribution needs
  * before NRD sees it.
  */
-public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3 view,
-                                 float2 lightXi, inout uint rng) {
+/**
+ * One next-event draw: pick a light from the importance table, trace one shadow
+ * ray at it, evaluate the BSDF for that direction.
+ *
+ * This is the estimator itself and is unchanged; ptDirectLight below averages
+ * however many draws were asked for.
+ */
+DirectLight ptDirectLightDraw(HitGeometry hit, SurfaceShading shading, float3 view,
+                              float2 lightXi, inout uint rng) {
     DirectLight result;
     result.diffuse = float3(0.0);
     result.specular = float3(0.0);
@@ -258,4 +265,48 @@ public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3
         result.specular = spec * radiance;
     }
     return result;
+}
+
+/**
+ * Next-event estimation, averaged over neeSamples independent draws.
+ *
+ * Each draw re-picks its light, so the average converges on the same estimate a
+ * single draw does - it is the variance that falls, as 1/sqrt(N), for N times
+ * the shadow rays. One draw is the classic estimator and stays the default;
+ * raising it is the direct-light equivalent of raising samples per pixel, but
+ * cheaper, because it re-uses the primary hit rather than re-tracing it.
+ *
+ * The penumbra is averaged over the draws that were actually occluded, not over
+ * all of them - it is an average blocker distance, and an unoccluded draw has
+ * no blocker to report. Averaging zeros in would pull every partially shadowed
+ * pixel's estimate toward the light.
+ */
+public DirectLight ptDirectLight(HitGeometry hit, SurfaceShading shading, float3 view,
+                                 float2 lightXi, inout uint rng) {
+    uint draws = max(pushConstants.neeSamples, 1u);
+    DirectLight total = ptDirectLightDraw(hit, shading, view, lightXi, rng);
+    if (draws == 1u) {
+        return total;
+    }
+    float penumbraSum = total.penumbra > 0.0 ? total.penumbra : 0.0;
+    float penumbraCount = total.penumbra > 0.0 ? 1.0 : 0.0;
+    for (uint i = 1u; i < draws; ++i) {
+        // A fresh pair per draw. The caller's lightXi may be a stratified
+        // choice reserved for the primary vertex, and reusing it would trace
+        // the same cone direction every time - N shadow rays, one sample's
+        // worth of information.
+        float2 xi = float2(ptRandom01(rng), ptRandom01(rng));
+        DirectLight next = ptDirectLightDraw(hit, shading, view, xi, rng);
+        total.diffuse += next.diffuse;
+        total.specular += next.specular;
+        if (next.penumbra > 0.0) {
+            penumbraSum += next.penumbra;
+            penumbraCount += 1.0;
+        }
+    }
+    float inv = 1.0 / float(draws);
+    total.diffuse *= inv;
+    total.specular *= inv;
+    total.penumbra = penumbraCount > 0.0 ? penumbraSum / penumbraCount : 0.0;
+    return total;
 }

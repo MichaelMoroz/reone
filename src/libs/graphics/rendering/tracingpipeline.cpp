@@ -343,9 +343,11 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                                       (_options.ptDirectChannel ? 4u : 0u) |
                                       (_options.parityDirect ? (1u << 12) : 0u) |
                                       (_options.fog ? (1u << 13) : 0u) |
+                                      (_options.ptNee ? (1u << 14) : 0u) |
                                       (static_cast<uint32_t>(std::clamp(_options.debugView, 0, kMaxDebugView)) << 4) |
                                       (static_cast<uint32_t>(std::clamp(_options.tonemap, 0, 1)) << 10),
-                                  static_cast<uint32_t>(std::clamp(_options.ptBounces, 1, 8)),
+                                  static_cast<uint32_t>(
+                                      std::clamp(_options.ptBounces, kMinPtBounces, kMaxPtBounces)),
                                   std::clamp(_options.ptPointEmitterRatio, 0.01f, 0.5f),
                                   glm::radians(std::clamp(_options.ptSunAngularSize, 0.05f, 10.0f)),
                                   std::clamp(_options.ptBounceRoughness, 0.0f, 1.0f),
@@ -359,7 +361,10 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                                   sky.baked ? 1u : 0u,
                                   std::clamp(_options.albedoGamma, 0.1f, 4.0f),
                                   std::max(0.0f, _options.ptBackdropIntensity),
-                                  std::clamp(_options.emissiveGamma, 0.1f, 4.0f)};
+                                  std::clamp(_options.emissiveGamma, 0.1f, 4.0f),
+                                  static_cast<uint32_t>(std::clamp(_options.ptNeeSamples,
+                                                                   kMinPtNeeSamples,
+                                                                   kMaxPtNeeSamples))};
     commandBuffer.pushRayTracingConstants(_pipeline->pipelineLayout(), &constants, sizeof(constants));
     {
         R_PROFILE_ZONE("RayQuery::dispatch record");

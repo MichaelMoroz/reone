@@ -1354,11 +1354,36 @@ void Editor::graphicsPathTracingTab() {
         options.pathTracingSamples = std::max(1, options.pathTracingSamples);
     }
     settingHint("Cost is near linear; noise falls as sqrt.");
-    if (ImGui::SliderInt("Bounces", &options.ptBounces, 1, 8)) {
-        options.ptBounces = std::clamp(options.ptBounces, 1, 8);
+    if (ImGui::SliderInt("Bounces", &options.ptBounces, graphics::kMinPtBounces,
+                         graphics::kMaxPtBounces)) {
+        options.ptBounces = std::clamp(options.ptBounces, graphics::kMinPtBounces,
+                                       graphics::kMaxPtBounces);
     }
     settingHint("Path depth after the primary hit. Deeper paths carry light around corners; the "
-                "lightmap cache already answers much of it on static geometry.");
+                "lightmap cache already answers much of it on static geometry.\n\n"
+                "Zero is a real setting, not a disabled tracer: the primary vertex still draws "
+                "next-event estimation, so the frame is direct lighting with no indirect at all. "
+                "That is the reference the indirect terms are judged against.");
+
+    ImGui::Checkbox("Next-event estimation", &options.ptNee);
+    settingHint("Draw a light at each shading vertex and trace a shadow ray at it.\n\n"
+                "This is how the tracer finds analytic lights at all - they are not geometry, so "
+                "a BSDF ray cannot hit them. Off, the direct term goes to nothing and what remains "
+                "is emissive surfaces and sky, which is exactly what makes it a diagnostic: it "
+                "separates what NEE contributes from what the path finds on its own. Leave it on "
+                "for any picture you intend to judge.");
+    ImGui::BeginDisabled(!options.ptNee);
+    if (ImGui::SliderInt("NEE light samples", &options.ptNeeSamples, graphics::kMinPtNeeSamples,
+                         graphics::kMaxPtNeeSamples)) {
+        options.ptNeeSamples = std::clamp(options.ptNeeSamples, graphics::kMinPtNeeSamples,
+                                          graphics::kMaxPtNeeSamples);
+    }
+    settingHint("Light samples per shading vertex. Direct-light noise falls as 1/sqrt of this for "
+                "a linear cost in shadow rays.\n\n"
+                "Cheaper than the same factor in samples per pixel, which re-traces the primary "
+                "hit as well - so a frame whose noise is mostly shadow noise is better served "
+                "here, and one that is noisy in the bounces is not.");
+    ImGui::EndDisabled();
 
     // The intensity dials are on the Quality tab, in one Lighting section
     // beside PBR's: the two grades are the same sources graded against

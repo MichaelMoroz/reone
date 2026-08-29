@@ -95,6 +95,19 @@ inline float dlssModeScale(DlssMode mode) {
  * resolve and have no counterpart in the raster modes.
  */
 constexpr int kMaxDebugView = 19;
+/**
+ * The bounce range, defined once.
+ *
+ * The command line, the registry, the settings slider and the tracer's push
+ * constants all bound this value, and four copies of a literal pair is four
+ * places to miss when the range changes - which is how it stayed 1-based after
+ * the shader was ready for zero.
+ */
+constexpr int kMinPtBounces = 0;
+constexpr int kMaxPtBounces = 8;
+/** Light samples per shading vertex, defined once for the same reason. */
+constexpr int kMinPtNeeSamples = 1;
+constexpr int kMaxPtNeeSamples = 8;
 
 /**
  * Upper bound on GraphicsOptions::grassTriangleBudget.
@@ -590,8 +603,35 @@ struct GraphicsOptions {
     float pbrDirectIntensity {1.0f};
     float ptSunIntensity {2.5f};
     float pbrSunIntensity {2.5f};
-    /** Path depth after the primary hit. */
+    /**
+     * Path depth after the primary hit.
+     *
+     * Zero is a real setting, not a floor to be clamped away: the primary
+     * vertex still draws next-event estimation, so the frame is direct lighting
+     * with no indirect at all. That is the reference the indirect terms are
+     * judged against, and it is what the raster modes approximate.
+     */
     int ptBounces {2};
+    /**
+     * Next-event estimation: draw a light at each shading vertex and trace a
+     * shadow ray at it.
+     *
+     * On, always, outside a diagnostic. Off, a path finds light only where its
+     * BSDF ray happens to land, and KotOR's lights are analytic rather than
+     * geometry - so the direct term goes to nothing and what remains is emissive
+     * surfaces and sky. That is what makes it worth having: it separates what
+     * NEE contributes from what the BSDF ray finds on its own.
+     */
+    bool ptNee {true};
+    /**
+     * Light samples per shading vertex.
+     *
+     * The variance in direct light falls as 1/sqrt of this, for a linear cost
+     * in shadow rays. It is cheaper than the equivalent in samples per pixel,
+     * which re-traces the primary hit as well - so a scene whose noise is
+     * mostly shadow noise is better served here.
+     */
+    int ptNeeSamples {1};
     /** Secondary-ray origin offset along the geometric normal, world units. */
     float ptRayOffset {0.01f};
     /** GPU trace-stats counters; off by default, the atomics cost frame time. */

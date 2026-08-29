@@ -217,6 +217,10 @@ public struct PtPushConstants {
      * nothing in common riding one slider.
      */
     public float emissiveGamma;
+    // Light samples per shading vertex for next-event estimation. One is the
+    // classic estimator; more trades shadow rays for less direct-light noise,
+    // and each draw picks its own light from the same importance table.
+    public uint neeSamples;
 };
 [[vk::push_constant]] public PtPushConstants pushConstants;
 
@@ -250,6 +254,11 @@ public static const uint kPtFlagParityDirect = 1u << 12;
     surface without the fog feature is never fogged - but off suppresses it
     everywhere, in this mode and the composite alike. */
 public static const uint kPtFlagFog = 1u << 13;
+// Next-event estimation. Off, a shading vertex draws no light sample and the
+// only light the path finds is what its BSDF ray happens to hit - which for an
+// analytic point light is nothing at all, since those are not geometry. A
+// diagnostic rather than a quality setting.
+public static const uint kPtFlagNee = 1u << 14;
 // Six bits, not four. Four held fifteen channels and the sixteenth silently
 // wrapped to "off" - a debug view that quietly shows the ordinary picture is
 // worse than one that fails.
@@ -280,6 +289,10 @@ public bool ptDirectChannelEnabled() {
 
 public bool ptFogEnabled() {
     return (pushConstants.traceFlags & kPtFlagFog) != 0;
+}
+
+public bool ptNeeEnabled() {
+    return (pushConstants.traceFlags & kPtFlagNee) != 0;
 }
 
 public uint geometryBase(uint geometryIndex) { return geometryIndex == 0 ? pushConstants.geometryBase0 : pushConstants.geometryBase1; }

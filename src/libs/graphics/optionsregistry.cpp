@@ -350,7 +350,13 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(floatOpt("pbrsunintensity", OptionApply::Live, "PBR: sun intensity",
                              &GraphicsOptions::pbrSunIntensity, 0.0f, 1024.0f));
     descs.push_back(intOpt("ptbounces", OptionApply::Live, "path tracing bounces",
-                           &GraphicsOptions::ptBounces, 1, 8));
+                           &GraphicsOptions::ptBounces, kMinPtBounces, kMaxPtBounces));
+    descs.push_back(boolOpt("ptnee", OptionApply::Live,
+                            "next-event estimation: draw a light at each vertex",
+                            &GraphicsOptions::ptNee));
+    descs.push_back(intOpt("ptneesamples", OptionApply::Live,
+                           "light samples per shading vertex",
+                           &GraphicsOptions::ptNeeSamples, kMinPtNeeSamples, kMaxPtNeeSamples));
     descs.push_back(floatOpt("ptrayoffset", OptionApply::Live, "path tracing ray origin offset",
                              &GraphicsOptions::ptRayOffset, 0.0001f, 1.0f));
     descs.push_back(floatOpt("albedogamma", OptionApply::Live,

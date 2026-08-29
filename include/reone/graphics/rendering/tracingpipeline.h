@@ -79,6 +79,8 @@ private:
         float albedoGamma;
         float backdropIntensity;
         float emissiveGamma;
+        /** Light samples per shading vertex; mirrors PtPushConstants.neeSamples. */
+        uint32_t neeSamples;
     };
 
     bool _restartHistoryRequested {false};

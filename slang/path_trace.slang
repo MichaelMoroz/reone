@@ -315,7 +315,11 @@ void main() {
     // ---- The SPP loop ----
     bool statsOn = ptStatsEnabled();
     uint sampleCount = max(pushConstants.samplesPerPixel, 1u);
-    uint scatterBudget = max(pushConstants.bounceCount, 1u);
+    // Taken as given, with no floor under it. Zero is a legal request and a
+    // useful one: the primary vertex still draws next-event estimation, so the
+    // break below lands after direct lighting and before any secondary ray.
+    // Forcing a minimum of one here made the option's lowest setting a lie.
+    uint scatterBudget = pushConstants.bounceCount;
     float3 diffuseChannel = float3(0.0);
     float3 specularChannel = float3(0.0);
     // Direct light at the pixel the viewer is looking at, kept apart from the
@@ -389,7 +393,18 @@ void main() {
                 float2 lightXi = primaryScatter && ptDirectChannelEnabled()
                                      ? primaryLightXi
                                      : float2(ptRandom01(rng), ptRandom01(rng));
-                DirectLight nee = ptDirectLight(hit, shading, view, lightXi, rng);
+                // Off, no light is drawn at all: the estimator returns zero
+                // and the only light this path can still find is what a BSDF
+                // ray hits. Analytic lights are not geometry, so for most
+                // scenes that is the point - it isolates what NEE contributes.
+                DirectLight nee;
+                if (ptNeeEnabled()) {
+                    nee = ptDirectLight(hit, shading, view, lightXi, rng);
+                } else {
+                    nee.diffuse = float3(0.0);
+                    nee.specular = float3(0.0);
+                    nee.penumbra = 0.0;
+                }
                 if (!pathDecided) {
                     pathDecided = true;
                     specularPath = sample.specularLobe;

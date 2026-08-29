@@ -147,6 +147,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ptdirectintensity", value<float>()->default_value(options->graphics.ptDirectIntensity), "path tracing direct-light intensity") //
         ("ptsunintensity", value<float>()->default_value(options->graphics.ptSunIntensity), "path tracing sun intensity")       //
         ("ptbounces", value<int>()->default_value(options->graphics.ptBounces), "path tracing bounces")                       //
+        ("ptnee", value<bool>()->default_value(options->graphics.ptNee), "next-event estimation")                              //
+        ("ptneesamples", value<int>()->default_value(options->graphics.ptNeeSamples), "light samples per shading vertex")      //
         ("ptrayoffset", value<float>()->default_value(options->graphics.ptRayOffset), "path tracing ray origin offset")        //
         ("pttracestats", value<bool>()->default_value(options->graphics.ptTraceStats), "enable path tracing statistics")       //
         ("tonemap", value<int>()->default_value(options->graphics.tonemap), "display transform: 0 off, 1 Gran Turismo curve")               //
@@ -380,7 +382,12 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptBounceRoughness = std::clamp(vars["ptbounceroughness"].as<float>(), 0.0f, 1.0f);
     options->graphics.ptRoughnessFloor = std::clamp(vars["ptroughnessfloor"].as<float>(), 0.0f, 1.0f);
     options->graphics.ptIndirectClamp = std::max(0.0f, vars["ptindirectclamp"].as<float>());
-    options->graphics.ptBounces = std::clamp(vars["ptbounces"].as<int>(), 1, 8);
+    options->graphics.ptBounces = std::clamp(vars["ptbounces"].as<int>(),
+                                             graphics::kMinPtBounces, graphics::kMaxPtBounces);
+    options->graphics.ptNee = vars["ptnee"].as<bool>();
+    options->graphics.ptNeeSamples = std::clamp(vars["ptneesamples"].as<int>(),
+                                                graphics::kMinPtNeeSamples,
+                                                graphics::kMaxPtNeeSamples);
     options->graphics.ptRayOffset = std::max(0.0001f, vars["ptrayoffset"].as<float>());
     options->graphics.ptTraceStats = vars["pttracestats"].as<bool>();
     options->graphics.tonemap = std::clamp(vars["tonemap"].as<int>(), 0, 1);
