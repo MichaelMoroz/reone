@@ -988,6 +988,45 @@ distribution rather than the 1 m assumed here; and whether cells store
 shadow-tested reservoirs, which is the one thing this design shares with the
 BVH's blind spot — a cell has a position and a normal but no visibility.
 
+## Grass in the TLAS: chunked cluster BLASes (TRC-051)
+
+Measured 2026-08-29 (`doc/ray-culling.md`): with the instance mask on, a ray
+crossing 507k grass cards costs nothing extra, so everything grass costs the
+traced frame is paid before a ray is cast - the instance-record pass and the
+TLAS build, both linear in the number of TLAS instances, which today is one per
+card.
+
+**Shape.** The unit becomes a *chunk* of clusters, where a cluster is the group
+the CPU already grants per face (`grassBladesPerCluster`, `GrassRange`), and
+the face selection is already persistent frame to frame.
+
+- A compute pass writes each cluster's blades as world-space triangles into a
+  per-cluster range of one grass vertex/index buffer - the same
+  `expandGrassBlade` math the raster pull uses, run once into memory.
+- One BLAS per chunk of N clusters (start at 64; a few hundred chunks on
+  Dantooine). Built when a cluster in the chunk enters the grass radius or its
+  face set changes; otherwise untouched.
+- The TLAS holds one instance per chunk with mask `kPtInstanceGrass`, so the
+  ray-culling controls carry over unchanged. The card-template BLASes, the
+  per-card instance records and their atomics go away.
+- Per-blade variant, lightmap UV and cull stay per blade: a culled blade is
+  not written, the variant selects the material through the primitive index
+  as the merged scene does.
+
+**Static first.** Wind today is applied when the card rows are generated, which
+is why the TLAS is rebuilt every frame. The traced field is seen only by shadow
+and bounce rays; a swaying blade's shadow changes by less than the tracer's
+noise. So the first version does not refit. If the static field reads wrong -
+shadow edges visibly lagging the raster blades - `MODE_UPDATE` on the chunk
+BLAS is the follow-up, and costs about a refit of the triangles in range.
+
+**Acceptance.** Same harness as `doc/ray-culling.md`: traced frame on danm14ab,
+grass on, in-run capture-interval timing and an Nsight GPU Trace with
+`--vkdebuglabels 1`. The `tracing instances` and `TLAS build` labels should sum
+to well under 1 ms at base clocks (from 4.5), the traced frame with grass
+should approach the grass-off frame plus the raster grass cost, and a
+before/after frame pair must show grass shadows still under the blades.
+
 ## The additive-gathering ladder
 
 The five-rung ladder for gathering additive emission along a segment — and why
