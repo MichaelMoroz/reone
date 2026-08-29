@@ -26,10 +26,8 @@ import lib.scene_schema;
 import lib.shadow;
 import lib.assemble;
 
-// --- Merged-geometry addressing, shared by both variants ---
-// Shared declarations for raster passes over the canonical merged geometry.
-// Both the G-buffer and shadow mega-draws use the same material gate so a
-// punch-through surface cannot disagree about coverage between the two.
+// Raster passes over the canonical merged geometry. The G-buffer and shadow
+// draws share one material gate, so coverage cannot disagree between them.
 
 static const uint kNoTexture = 0xffffffffu;
 /** Authored colour is display-referred; the blended pass converts on the way
@@ -66,10 +64,8 @@ static const float4 kBindlessPoisonSample = float4(1.0, 0.0, 1.0, 254.0 / 255.0)
 [[vk::binding(7, 2)]] StructuredBuffer<uint> grassCardIndices;
 [[vk::binding(8, 2)]] StructuredBuffer<GrassCardInstance> grassCardInstances;
 
-// materialGated selects which coverage a pass publishes over the same range.
-// Ungated is the opaque range. Cutout is the punch-through gate the G-buffer
-// and both shadow passes share. Blended is G8's forward pass, which draws the
-// surfaces the G-buffer deliberately leaves out.
+// Which coverage a pass publishes over the same range: the opaque range, the
+// shared punch-through gate, or the forward blended surfaces.
 static const uint kMegaCoverageUngated = 0u;
 static const uint kMegaCoverageCutout = 1u;
 static const uint kMegaCoverageBlended = 2u;
@@ -90,36 +86,13 @@ static const int kMegaLightDynamicTypeAll = 1;
 struct PushConstants {
     uint triangleBase;
     uint materialGated;
-    /**
-     * The third word, whose meaning is the pass's own.
-     *
-     * The shadow pass reads it as a bit per object category allowed to write
-     * the map, from kMegaCategoryShift of the material's feature mask. The
-     * blended pass reads it as the kResolveFlag* set, for which it needs
-     * exactly one bit. The G-buffer pass pushes two words and reads neither
-     * meaning, which is why the two passes share this one rather than each
-     * taking their own.
-     */
+    /** Per pass: the shadow pass's caster-category bits, the blended pass's kResolveFlag* set. */
     uint casterCategories;
-    /**
-     * Which caster the shadow pass is rendering, as an index into
-     * globalUniforms.shadowLights. Read by the VERTEX stage, which is why the
-     * push range covers both graphics stages - see VulkanCommandBuffer.
-     *
-     * SV_ViewID alone cannot carry this. It gives the layer within the pass,
-     * so it selects a cascade or a cube face but not which caster's set of
-     * them, and a mask wide enough to make it absolute would need more views
-     * than multiview allows once point casters are cubes.
-     */
+    /** The caster the shadow pass renders, into globalUniforms.shadowLights; SV_ViewID
+        only selects the layer within it. Read by the vertex stage. */
     uint shadowSlot;
-    /**
-     * Height fog, for the blended pass alone. A blended surface writes no
-     * depth, so the fog tail pass - which reads the depth buffer - cannot
-     * reach it: fogged there, a near tree took the horizon's fog through the
-     * depth BEHIND it. It fogs itself instead, at its own position, with the
-     * same function. Density at the fog plane, its falloff with height, and
-     * the plane's world Z - the walkmesh.
-     */
+    /** Height fog for the blended pass, which writes no depth for the tail pass to read:
+        density at the plane, falloff with height, and the plane's world Z. */
     float fogDensity;
     float fogFalloff;
     float fogPlaneZ;
@@ -137,20 +110,9 @@ float4x4 directionalCascadeSpace(uint view) {
 }
 
 /**
- * Cube face `view` of the point caster being rendered, COMPUTED rather than
- * looked up.
- *
- * Every term is fixed by the format - a 90-degree square frustum, near 0.25,
- * far 2500, and six axis-aligned views - so the light's own position is the
- * only variable, and it is already in the uniform block. Storing six matrices
- * per caster instead spent 6 KB of the block's 16 KB ceiling, and that array
- * alone was what pinned the cube budget at sixteen while a module like
- * tar_m09aa carries 46 lamps. Nothing SAMPLES these matrices - the cube is
- * sampled by direction and radial distance - so they existed only to transform
- * vertices in this pass.
- *
- * Verified against the CPU's own matrices, all six faces, to five digits, and
- * the rendered result is bit-identical to the stored-array path.
+ * Cube face `view` of the point caster, computed: every term but the light's
+ * position is fixed by the format, and six stored matrices per caster would
+ * spend the uniform block's ceiling.
  */
 float4x4 pointFaceSpace(uint view) {
     const float3 lightPos = shadowSlotLight().positionOrDirection.xyz;
@@ -191,14 +153,9 @@ float2 transformedUV(InstanceMaterial material, float2 uv) {
                   material.uv0.y * h.x + material.uv1.y * h.y + material.uv2.y * h.z);
 }
 
-// Keep the cutout thresholds in lockstep with candidateAlpha and
-// kAlphaTestThreshold in tracing/trace.slang. That agreement is now load
-// bearing rather than a nicety: the tracer reads its primary surface out of
-// this G-buffer, so if the two disagreed about which texels are there, the
-// traced mode would shade a surface no ray could have found.
-//
-// The gated draw publishes CUTOUT COVERAGE ONLY: blended and additive surfaces
-// contribute nothing until G8.
+// In lockstep with candidateAlpha and kAlphaTestThreshold in tracing/trace.slang:
+// the tracer reads its primary out of this G-buffer. Cutout coverage only;
+// blended and additive surfaces wait for the forward pass.
 bool commitsTracedCoverage(InstanceMaterial material, float2 uv, float vertexAlpha) {
     if (pushConstants.materialGated == kMegaCoverageUngated) return true;
 
@@ -213,26 +170,18 @@ bool commitsTracedCoverage(InstanceMaterial material, float2 uv, float vertexAlp
                     : texel.a;
         alpha *= vertexAlpha;
     }
-    // The texture's own threshold when it authored one. kMegaAlphaTestThreshold
-    // is the fallback for textures that do not - a TGA, or a TPC whose header
-    // says 1.0 - not a value the data ever asked for. Must stay in lockstep
-    // with ptAlphaTestThreshold in tracing/trace.slang.
+    // The authored threshold or the fallback, as ptAlphaTestThreshold resolves it.
     float threshold = material.alphaTest >= 0.0 ? material.alphaTest
                                                 : kMegaAlphaTestThreshold;
     return alpha >= threshold;
 }
 
-// --- The depth-only variant: the same merged geometry, written to a
-// shadow map instead of a G-buffer ---
-// Shadow map rendering from canonical merged geometry. Unlike shadow.slang,
-// this stage has no per-mesh vertex input or LocalUniforms model matrix: the
-// merge has already produced world-space positions and one indexed buffer.
+// The depth-only variant: the same merged geometry, already in world space,
+// written to a shadow map.
 
 static const float kPointShadowFar = 2500.0;
-// Point shadows replace raster depth with radial distance. Pipeline depth bias
-// is therefore replaced along with it, so reproduce the same constant+slope
-// model in radial-depth units. Receiver normal offset now handles most grazing
-// cases, leaving only a small write-side slope term here.
+// Point shadows store radial distance, so pipeline depth bias is reproduced in
+// radial-depth units; the receiver normal offset handles most grazing cases.
 static const float kPointShadowConstantBias = 0.0;
 static const float kPointShadowSlopeBias = 1.0;
 
@@ -301,16 +250,10 @@ DirectionalShadowVaryings grassCardDirectionalShadowVertex(
 }
 
 /**
- * Opaque casters pass the mode's category filter. Non-opaque casters instead
- * pass their authored coverage gate: cutouts are binary, while lit blends
- * write a stable fraction of shadow texels for the PCF lookup to integrate.
- *
- * The opaque caster set is a category filter rather than a separate submission
- * because the merge produces one buffer per frame ordered by coverage, not by
- * object kind; splitting it by category would rebuild that ordering on the CPU
- * every frame to save a fragment-shader test that costs nothing when nothing
- * is filtered. Whole-category filtering also means the range stays contiguous,
- * so the draw count does not depend on how many creatures are in the room.
+ * Casters pass the mode's category filter and their authored coverage gate:
+ * cutouts are binary, lit blends write a stable fraction of texels for the
+ * PCF to integrate. A filter rather than a split submission, so the merged
+ * range stays contiguous.
  */
 float shadowNoise(uint2 texel, uint triangleId, uint materialIndex) {
     uint hash = texel.x * 0x8da6b343u ^ texel.y * 0xd8163841u ^
@@ -350,34 +293,16 @@ void applyShadowGates(float2 rawUv, float vertexAlpha, float2 fragCoord,
 
     bool cutout = (material.featureMask & kMegaFeaturePunchThrough) != 0;
     bool blended = (material.featureMask & kMegaFeatureBlendedCoverage) != 0;
-    // PROCEDURAL SPRITES cast nothing, exactly as the tracer's shadow ray
-    // skips them (trace.slang, isProceduralSprite): a smoke plume is volume
-    // the marcher owns, not a surface, and letting its lit-blend branch fall
-    // through to the coverage dither below stamped the plume into the map as
-    // per-texel noise - grainy dark garbage in the shadows wherever particles
-    // drifted through a caster's frustum. Grass keeps its punch-through bit
-    // and keeps casting, which also matches the tracer.
+    // Procedural sprites cast nothing, as the tracer's shadow ray agrees: a
+    // plume is volume, and dithering it into the map is per-texel noise.
     if ((material.featureMask & kMegaFeatureProcedural) != 0 &&
         (material.featureMask & kMegaFeaturePunchThrough) == 0) {
         discard;
     }
     uint category = (material.featureMask >> kMegaCategoryShift) & kMegaCategoryMask;
-    // The category filter applies to cutouts and blended surfaces too.
-    //
-    // It used to exempt them, which defeated the filter for exactly the
-    // geometry most likely to be scenery: foliage, fences, grilles and grass
-    // cards are cutouts, so in retro - whose caster set is creatures and
-    // equipment and nothing else - they cast shadows the original never drew.
-    // Measured on danm14ab: 42% of retro's shadowed pixels came from cutout
-    // geometry, 13.3% of the frame.
-    //
-    // This does not stop a creature casting. The test is on the object's
-    // category, not on whether the surface has holes, so a cutout that belongs
-    // to a creature - hair, a cape, a robe hem - still passes the mask. What
-    // it stops is a cutout that belongs to a room or a placeable.
-    //
-    // PBR and the tracer are unaffected: their mask is every category, so the
-    // test can never reject.
+    // The category filter applies to cutouts and blends too: in retro, whose
+    // casters are creatures only, scenery foliage must not cast. The test is
+    // on the object's category, so a creature's cutout hair still passes.
     if ((pushConstants.casterCategories & (1u << category)) == 0) discard;
 
     if (pushConstants.materialGated == kMegaCoverageUngated) return;
@@ -386,10 +311,8 @@ void applyShadowGates(float2 rawUv, float vertexAlpha, float2 fragCoord,
         if (!commitsTracedCoverage(material, uv, vertexAlpha)) discard;
         return;
     }
-    // Additive-emissive sheets carry radiance, not coverage, and therefore do
-    // not remove light. A lit blend is scalar here because a depth map has no
-    // colour channel; stable texel coverage preserves density without turning
-    // glass into a wall or making its shadow crawl between frames.
+    // Additive sheets are radiance and remove no light; a lit blend writes
+    // stable scalar coverage, a depth map having no colour channel.
     if (!blended) discard;
     float coverage = blendedShadowCoverage(material, uv, vertexAlpha);
     if (coverage <= shadowNoise(uint2(fragCoord), triangleId, materialIndex)) discard;
@@ -479,14 +402,8 @@ Varyings sceneDrawVertex(uint vertexId : SV_VertexID) {
     output.curClipPos = mul(globalUniforms.viewProjection, float4(vertex.position, 1.0));
     output.prevClipPos = mul(globalUniforms.prevViewProjection,
                              float4(vertex.prevPosition, 1.0));
-    // Rasterise on the jittered grid. globalUniforms.projection carries the
-    // sub-pixel offset and the deferred resolves invert it to reconstruct
-    // position from depth, so depth must be written through the same matrix -
-    // writing it unjittered and inverting it jittered wobbles every
-    // reconstructed world position by the Halton offset, which the shadow
-    // lookup turns into a per-frame binary flip along every shadow edge.
-    // curClipPos/prevClipPos stay unjittered, per uniforms.slang, so motion
-    // vectors never encode the offset.
+    // Rasterise on the jittered grid: the resolves invert this same matrix to
+    // reconstruct position from depth. Motion stays unjittered, per uniforms.slang.
     output.position = mul(globalUniforms.projection,
                           mul(globalUniforms.view, float4(vertex.position, 1.0)));
     output.normal = vertex.normal;
@@ -534,15 +451,8 @@ struct GBufferOutput {
     float4 lightmapColor : SV_Target2;
     float4 selfIllumColor : SV_Target3;
     float2 motion : SV_Target4;
-    /**
-     * The merged-geometry triangle, R32Uint, cleared to 0xffffffff.
-     *
-     * This is the whole surface record rather than a decoded field of it: a
-     * consumer expands it back into the three vertices and so recovers the
-     * GEOMETRIC normal - which no interpolated, normal-mapped stored normal can
-     * stand in for - along with the material, through mergedMaterialIds. It
-     * replaced a separate material-id target for exactly that reason.
-     */
+    /** The merged-geometry triangle, R32Uint, cleared to 0xffffffff: a consumer
+        expands it to the three vertices, the geometric normal and the material. */
     uint triangleId : SV_Target5;
 };
 
@@ -648,18 +558,10 @@ GBufferOutput sceneDrawFragment(Varyings input, uint primitiveId : SV_PrimitiveI
     return output;
 }
 
-// G8's forward blended pass, over the same merged geometry and the same
-// non-opaque range the G-buffer already draws for cutout coverage.
-//
-// The two transparent kinds are one draw, not two. Output is premultiplied and
-// the blend state is fixed at ONE, ONE_MINUS_SRC_ALPHA, so an additive surface
-// is simply alpha zero and a lit-blended one carries alpha equal to coverage.
-// The material decides which by the alpha it writes, so there is no second
-// pipeline and no branch in the frame graph.
-//
-// Order is submission order. kvp-main's replay of the retail draw stream
-// reorders only true-opaque depth-writing batches and never touches blended
-// ones, so a distance sort would be a deviation before it was an improvement.
+// The forward blended pass over the merged non-opaque range. One draw for both
+// transparent kinds: output is premultiplied under ONE, ONE_MINUS_SRC_ALPHA, so
+// additive is alpha zero and lit-blended carries coverage. Submission order,
+// as the original: it never sorted blended batches.
 struct BlendedOutput {
     float4 color : SV_Target0;
     float4 motion : SV_Target1;
@@ -735,17 +637,9 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
         if (shadowed) {
             float3 viewPos = mul(globalUniforms.view,
                                  float4(input.worldPos, 1.0)).xyz;
-            // Forward transparency has no separable direct-light lobe. Apply
-            // visibility to its authored diffuse contribution, while leaving
-            // the captured environment reflection below untouched.
-            //
-            // The FIRST caster's, not every caster's, and that is a choice
-            // rather than a derivation: with no per-light lobe there is
-            // nothing to attenuate per light, and combining several casters
-            // into one factor would darken a blended surface once per light
-            // that happens to cast. Slot zero is the defensible single answer
-            // because selection orders casters directional-first then by
-            // distance, so it holds the light most likely to dominate.
+            // Slot zero only: with no per-light lobe there is nothing to
+            // attenuate per light, and selection orders casters
+            // directional-first, so slot zero holds the dominant one.
             color *= getShadow(
                 viewPos, input.worldPos, materialNormal,
                 (material.featureMask & kMegaFeatureThin) != 0);
@@ -763,60 +657,24 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
     }
     if (objectAlpha <= 0.0) discard;
 
-    // Everything above works on authored, display-referred texels - the main
-    // texture, the vertex colour, the lightmap, the environment cube - which is
-    // how the original composed these surfaces and how the material fields are
-    // written. The target is linear now, so the composed colour is converted
-    // once here, at the point it leaves the shader.
-    //
-    // Only the colour. The coverage is a fraction of the pixel, not a light
-    // value, so it is not a quantity gamma applies to: alpha stays exactly what
-    // it was and the fixed ONE / ONE_MINUS_SRC_ALPHA state still means what it
-    // meant. What genuinely changes is that the hardware now interpolates
-    // energy instead of encoded values, which is the physically correct blend
-    // and is visibly different on a bright surface over a dark one.
-    // Blended surfaces occlude in proportion to coverage; additive ones add and
-    // never occlude, which premultiplied output expresses as alpha zero.
-    //
-    // Where the gamma goes differs between them, and it is not a detail. For a
-    // COVERAGE blend the alpha is a fraction of the pixel the surface fills, so
-    // it scales energy and belongs outside: linear(colour) * coverage. For an
-    // ADDITIVE surface the alpha is not coverage at all - it is the
-    // premultiplication this shader just undid, recovered as luma - so
-    // colour * alpha is the authored display texel, and the gamma applies to
-    // that product. Applying it to the colour alone overstates every partially
-    // covered texel by alpha^(1-gamma): sevenfold at alpha 0.2, which is a
-    // saber blade's soft edge, while leaving its saturated core untouched. That
-    // is a glowing outline drawn around every additive sprite.
-    //
-    // None of which applies when the target is already display-referred, which
-    // is retro's chain: there the composed colour goes out as it was composed,
-    // and the blend the hardware then performs is the one the original
-    // performed, in the space the original performed it in.
+    // The composed colour is display-referred; convert once on the way out,
+    // and only the colour - alpha is coverage. Coverage scales energy, so its
+    // gamma applies outside: linear(colour) * coverage. Additive alpha is
+    // recovered premultiplication, so the gamma applies to colour * alpha, or
+    // partial coverage is overstated by alpha^(1-gamma). Retro's target is
+    // already display-referred.
+    bool displayReferred = (pushConstants.casterCategories & kMegaFlagDisplayReferred) != 0;
+    float3 rgb = displayReferred ? color * objectAlpha
+               : blended        ? pow(max(color, 0.0), float3(kGamma)) * objectAlpha
+                                : pow(max(color * objectAlpha, 0.0), float3(kGamma));
     BlendedOutput output;
-    if ((pushConstants.casterCategories & kMegaFlagDisplayReferred) != 0) {
-        output.color = blended ? float4(color * objectAlpha, objectAlpha)
-                               : float4(color * objectAlpha, 0.0);
-    } else if (blended) {
-        output.color = float4(pow(max(color, 0.0), float3(kGamma)) * objectAlpha,
-                              objectAlpha);
-    } else {
-        output.color = float4(pow(max(color * objectAlpha, 0.0), float3(kGamma)),
-                              0.0);
-    }
+    output.color = float4(rgb, blended ? objectAlpha : 0.0);
 
-    // Fog, here rather than in the tail pass, because this surface has no
-    // depth for that pass to read. Applied to the OUTPUT, which is what the
-    // blend state sees: a coverage blend lerps toward the fog colour scaled by
-    // its own coverage, so the covered fraction of the pixel fogs and the rest
-    // is left to what lies behind; an additive surface is light and carries no
-    // coverage, so fog can only attenuate it - lerping it toward the fog colour
-    // would ADD fog-coloured energy at every transparent texel of a saber.
-    //
-    // Retro composes display-referred and preserves the original's model, so
-    // its transparents take the same linear ramp its resolve applies, with the
-    // fog colour as authored; the corrected modes take the height fog in
-    // linear space, matching the tail pass over the opaque image.
+    // Fog here, this surface having no depth for the tail pass. Applied to the
+    // output, which is what the blend state sees: a coverage blend lerps
+    // toward fog scaled by coverage; an additive surface is light, so fog can
+    // only attenuate it. Retro takes its authored ramp, the corrected modes
+    // the linear height fog.
     if ((pushConstants.casterCategories & kMegaFlagFog) != 0) {
         const float3 cameraPos = globalUniforms.cameraPosition.xyz;
         const bool displayReferred =
@@ -841,12 +699,8 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
         }
     }
 
-    // The motion target uses the same premultiplied blend as colour. A
-    // partially covered surface therefore contributes in the same proportion
-    // as the visible layer, while the opaque motion already in the target
-    // remains the remainder. Additive colour still has alpha zero, but its
-    // separate motion output carries the texel intensity as coverage so a
-    // moving glow does not masquerade as stationary background.
+    // Motion blends premultiplied like colour; additive carries texel intensity
+    // as its coverage so a moving glow does not read as stationary background.
     float motionCoverage = saturate(objectAlpha);
     output.motion = float4(
         computeMotion(input.curClipPos, input.prevClipPos) * motionCoverage,

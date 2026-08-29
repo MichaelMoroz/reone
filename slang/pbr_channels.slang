@@ -15,30 +15,17 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-// PBR as a provider, not a renderer.
-//
-// The raster resolve used to assemble one lit image. This shades the same
-// surface into the tracer's channel contract instead - noiseFree, the
-// demodulated diffuse/specular/direct radiance, the surface factors and viewZ -
-// and the shared composite assembles it, exactly as it assembles the tracer's
-// channels. Nothing here decides how the image is put together; it decides only
-// what PBR contributes.
+// PBR as a provider, not a renderer: shades into the tracer's channel contract
+// (noiseFree, demodulated diffuse/specular/direct, surface factors, viewZ) and
+// the shared composite assembles it.
 //
 //   final = noiseFree + (diffuse + directDiffuse) * diffFactor + specular * specFactor
 //
-// The surface factors are the shared model (lib/surface_model.slang), so the
-// demodulated channels carry no albedo, no metalness weighting and no Fresnel -
-// those live in diffFactor/specFactor and are put back by the composite. That
-// is why the per-light kD and the material-diffuse tint the old assembly
-// carried are gone here: they were the modulation, and the modulation is the
-// factor now. The clamp before albedo and the self-illum specular gate are gone
-// for the same reason the tracer never had them - they are not part of the
-// contract.
+// Surface factors come from lib/surface_model.slang, so the demodulated
+// channels carry no albedo, metalness or Fresnel - those live in the factors.
 //
-// What stays PBR's own is the PROVIDER: shadow maps for direct visibility, the
-// lightmap and SSAO for indirect diffuse, and the analytic lobes plus the
-// authored mirror and prefiltered IBL for specular. The tracer answers each of
-// those with a ray instead; the contract they feed is the same.
+// What stays PBR's own is the provider: shadow maps, lightmap and SSAO, and the
+// analytic lobes plus IBL. The tracer answers each with a ray instead.
 
 import uniforms;
 import lib.math;
@@ -51,16 +38,11 @@ import lib.assemble;
 import lib.surface_model;
 import lib.direct_light;
 import lib.skycube;
-// The microfacet terms and the gamma decode, shared with the tracer rather
-// than copied: the same diff moved the demodulation model into
-// lib/surface_model.slang and the light model into lib/direct_light.slang,
-// and this is the last half of that job. Colour and BRDF maths only; no
-// tracing entry point is referenced, as debug_view.slang already does.
+// Colour and BRDF maths only; no tracing entry point is referenced.
 import tracing.brdf;
 
-// Set 1 is the persistent resolve table, shared with retro_resolve; only the
-// units this pass reads are declared. The scene-colour unit the SSR pass needs
-// is not among them.
+// Set 1 is the persistent resolve table shared with retro_resolve; only the
+// units this pass reads are declared.
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
 [[vk::binding(2, 1)]] Sampler2D sGBufEyeNormal;
 [[vk::binding(3, 1)]] Sampler2D sGBufLightmap;
@@ -76,9 +58,8 @@ import tracing.brdf;
 [[vk::binding(3, 2)]] Sampler2D bindlessTextures[];
 [[vk::binding(5, 2)]] SamplerCube bindlessTextureCubes[];
 
-// Set 3: the sky cube both resolves read, and the seven channel outputs. The
-// image the composite writes (binding 0) is not touched here; a later dispatch
-// owns it. The channel order is the layout in descriptors.h.
+// Set 3: the sky cube and the channel outputs, in descriptors.h's order; the
+// composite's image (binding 0) belongs to a later dispatch.
 [[vk::binding(1, 3)]] SamplerCube sSkyCube;
 [[vk::binding(2, 3)]] RWTexture2D<float4> outNoiseFree;
 [[vk::binding(3, 3)]] RWTexture2D<float4> outDiffuse;
@@ -87,12 +68,8 @@ import tracing.brdf;
 [[vk::binding(6, 3)]] RWTexture2D<float4> outDiffFactor;
 [[vk::binding(7, 3)]] RWTexture2D<float4> outSpecFactor;
 [[vk::binding(8, 3)]] RWTexture2D<float> outViewZ;
-// Written for DLSS-RR, which wants a normal and a linear roughness and cannot
-// read the G-buffer's packed eye normal. Deliberately the same channel image
-// the tracer fills: NRD's RGBA16_SNORM encoding takes a plain world normal in
-// xyz and linear roughness in w, so the tracer never packed it either and one
-// guide serves both providers. Unwritten in Retro, which shades into no
-// channel at all.
+// DLSS-RR's guide pair, the same image the tracer fills: a plain world normal
+// and linear roughness serve both providers. Unwritten in Retro.
 [[vk::binding(9, 3)]] RWTexture2D<float4> outNormalRoughness;
 
 /** Mirrors ResolvePushConstants in scenepipeline.cpp; the same block the
@@ -137,11 +114,7 @@ float3 reconstructViewPos(float2 uv) {
     return viewPos.xyz / viewPos.w;
 }
 
-/**
- * Screen-space ambient occlusion, folded into the shade rather than run as its
- * own pass - the same code the single-image resolve ran, moved here with it.
- * It weights the indirect diffuse channel; no shadow map does.
- */
+/** Screen-space ambient occlusion; weights the indirect diffuse channel. */
 float screenSpaceOcclusion(float2 uv, int2 pixel, float3 pos, float3 normal) {
     uint h = uint(pixel.x) * 73856093u ^ uint(pixel.y) * 19349663u;
     h ^= h >> 13;
@@ -209,44 +182,28 @@ PbrDirectLight pbrDirectLight(GlobalUniformsLight light,
                               bool shadowsEnabled, float thinTransmission,
                               float emitterRadiusRatio,
                               float directIntensity, float sunIntensity) {
-    PbrDirectLight result;
-    result.direct = false;
-    result.direction = float3(0.0, 0.0, 1.0);
-    result.radiance = float3(0.0);
-    result.diffuse = float3(0.0);
-    result.specularNdotL = 0.0;
-    result.ambientRadiance = float3(0.0);
+    PbrDirectLight result = { false, float3(0.0, 0.0, 1.0), float3(0.0), float3(0.0), 0.0, float3(0.0) };
 
-    // What the light IS comes from the shared module, so this renderer and
-    // the tracer cannot disagree on it; only the visibility below is PBR's.
+    // The shared module owns what the light is; only the visibility is PBR's.
     DirectLightSample sample = sampleDirectLight(light, worldPos, emitterRadiusRatio,
                                                  directIntensity, sunIntensity);
     result.direction = sample.direction;
-    // Non-directional only: the tracer deliberately promotes a DIRECTIONAL
-    // ambient-only record to a sampled sun (lighting.slang keeps only the
-    // local ones out of its table), so routing it to the ambient path here
-    // made the same light a fill in one renderer and a sun in the other.
+    // Local lights only: the tracer promotes a directional ambient-only record
+    // to a sampled sun, and both renderers must agree on what it is.
     if (!sample.directional && light.ambientOnly != 0) {
         result.ambientRadiance = directLightColor(light) *
                                  sphereLightAttenuation(light.radius, sample.distance,
                                                         emitterRadiusRatio);
         return result;
     }
-    // A directional past the caster budget is applied UNSHADOWED, not
-    // deleted. Deleting it changed what light exists, and the two renderers
-    // may differ only in how occlusion is answered - the tracer samples every
-    // light and shadow-rays it; a map-less directional here is the same light
-    // with the weakest possible occlusion answer. The cost is real (an
-    // unmapped sun reaches through walls) and is the caster budget's problem,
-    // not admission's.
+    // Past the caster budget a directional is applied unshadowed, not deleted:
+    // the two renderers may differ in how occlusion is answered, not in what
+    // light exists.
     result.direct = true;
 
     float visibility = 1.0;
     if (shadowsEnabled && light.shadowSlot >= 0) {
-        // The map returns a LINEAR occlusion fraction - the mean of comparison
-        // taps - exactly as the tracer's shadow ray returns a linear
-        // transmittance. Raising it to 2.2 as if it were an encoded colour
-        // darkened every penumbra with no counterpart in the reference.
+        // A linear occlusion fraction, like the tracer's transmittance; not a colour.
         visibility = getShadowFrom(light.shadowSlot, viewPos, worldPos,
                                    normal, thinSurface);
     }
@@ -274,18 +231,9 @@ struct Channels {
 /** A terminator - sky miss, sky shell, backdrop, parity black - carries all its
     radiance in noiseFree and nothing on the other channels. */
 Channels terminator(float3 noiseFree) {
-    Channels c;
-    c.noiseFree = noiseFree;
-    c.diffuse = float3(0.0);
-    c.directDiffuse = float3(0.0);
-    c.specular = float3(0.0);
-    c.diffFactor = float3(1.0);
-    c.specFactor = float3(1.0);
-    c.viewZ = kAssembleInfDistance;
-    // A terminator has no surface. Match the tracer's miss exactly so the
-    // guide reads the same on both providers.
-    c.normal = float3(0.0);
-    c.roughness = 1.0;
+    // No surface: the normal/roughness guide matches the tracer's miss exactly.
+    Channels c = { noiseFree, float3(0.0), float3(0.0), float3(0.0), float3(1.0), float3(1.0),
+                   kAssembleInfDistance, float3(0.0), 1.0 };
     return c;
 }
 
@@ -365,11 +313,8 @@ Channels shadePixel(float2 uv, int2 pixel) {
                    ? screenSpaceOcclusion(uv, pixel, eyePos, eyeNormal)
                    : 1.0;
 
-    // Indirect diffuse: the bake IS the indirect light in this mode, on its own
-    // intensity (the one dial that deliberately differs from the tracer). A
-    // surface with no bake reads as white-baked static or flat world ambient;
-    // dynamic ambient and ambient-only fill lights add here too. Demodulated -
-    // no kD, no albedo - the composite puts those back through diffFactor.
+    // Indirect diffuse: the bake is the indirect light here, on its own dial;
+    // demodulated, the composite puts albedo back through diffFactor.
     float3 eyeR = reflect(normalize(eyePos), eyeNormal);
     int envLayer = int(round(selfIllumSample.a * 255.0));
     float3 environment = float3(0.0);
@@ -391,13 +336,10 @@ Channels shadePixel(float2 uv, int2 pixel) {
     float3 F0 = lerp(float3(0.04), albedo, metallic);
     float a = roughness * roughness;
     float a2 = a * a;
-    float k = roughness + 1.0;
-    k = k * k * (1.0 / 8.0);
+    float k = (roughness + 1.0) * (roughness + 1.0) * 0.125;
 
-    // Direct light: each caster occluded by its own shadow map. The diffuse half
-    // is the demodulated Lambert only - the tracer's directDiffuse shape - and
-    // the specular half is the analytic GGX lobe, summed raw and demodulated by
-    // specFactor at the end.
+    // Direct light, each caster occluded by its own map: demodulated Lambert
+    // plus the analytic GGX lobe, demodulated by specFactor at the end.
     float3 directDiffuse = float3(0.0);
     float3 directS = float3(0.0);
     for (int i = 0; i < globalUniforms.numLights; ++i) {
@@ -422,18 +364,14 @@ Channels shadePixel(float2 uv, int2 pixel) {
         directS += spec * direct.radiance * direct.specularNdotL;
     }
 
-    // Ambient specular: the prefiltered environment weighted by the split-sum
-    // scale/bias, on the alpha share the authored mirror does not take.
+    // Ambient specular (split-sum prefiltered environment) on the alpha share,
+    // and the authored sharp mirror on the (1 - alpha) share.
     float3 ambientS = float3(0.0);
+    float3 mirror = float3(0.0);
     if (envmapped) {
         float3 Fr = fresnelSchlickRoughness(NdotV, F0, roughness);
         float2 brdf = sBRDFLUT.SampleLevel(float2(NdotV, roughness), 0.0).xy;
         ambientS = mainTexSample.a * environment * (Fr * brdf.x + brdf.y);
-    }
-    // Authored mirror: the original game's sharp world-space reflection, on the
-    // (1 - alpha) share.
-    float3 mirror = float3(0.0);
-    if (envmapped) {
         mirror = gammaToLinear(sampleAuthoredMirror(
                      material,
                      authoredMirrorReflection(worldPos, globalUniforms.cameraPosition.xyz,
@@ -442,11 +380,8 @@ Channels shadePixel(float2 uv, int2 pixel) {
     }
 
     Channels c;
-    // Emission is radiance into noiseFree on the tracer's rule: not multiplied
-    // by albedo, unclamped, on the shared emissiveIntensity dial - whose PBR
-    // default (1.0) preserves this mode's authored emissive level while the
-    // traced default keeps the 2.5 grade.
-    float3 radianceTexel = pow(max(mainTexSample.rgb, 0.0), float3(kGamma));
+    // Emission is unmultiplied radiance into noiseFree, on the tracer's rule.
+    float3 radianceTexel = gammaToLinear(mainTexSample.rgb);
     c.noiseFree = assembleEmission(gammaToLinear(selfIllumSample.rgb), radianceTexel,
                                    material.curatedEmission, pushConstants.emissiveIntensity);
     c.diffuse = ao * irradiance;

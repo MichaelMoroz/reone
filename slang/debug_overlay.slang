@@ -15,33 +15,17 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-// The debug overlay: an object's bounding box and its name, over the finished
-// frame, in every render mode.
+// The debug overlay: object bounding boxes and name labels over the finished
+// frame, in every render mode. Boxes synthesise their edges from SV_VertexID,
+// so there is no vertex buffer and no line topology.
 //
-// Two entry-point pairs, one rule. The boxes synthesise twelve edges from
-// SV_VertexID - six vertices each, a screen-space quad two half-widths wide -
-// so no vertex buffer and no line topology exist; the labels are runs of glyph
-// quads hung off a world anchor, laid out by the same code that lays out any
-// other run of text and sampled from the same font atlas.
+// Occlusion is per-pixel against the G-buffer depth rather than a depth test:
+// what lies behind geometry keeps its colour and loses opacity, so a hidden box
+// still says where its object is.
 //
-// The rule both share is overlayOpacity: occlusion is decided per pixel
-// against the G-buffer depth rather than by a depth test, and whatever lies
-// behind geometry keeps its colour and loses OPACITY. A hidden box still says
-// where its object is, the scene shows through it, and the difference in
-// opacity is what says which one is in front.
-//
-// It runs after the display transform, so nothing here is graded, anti-aliased
-// or sharpened - the overlay is a diagnostic drawn ON the picture, not part of
-// it.
-//
-// Which is exactly why both stages project through globalUniforms.viewProjection
-// and not globalUniforms.projection: the latter carries the temporal resolve's
-// sub-pixel jitter, and a pass drawn AFTER that resolve must not. The resolved
-// image is the unjittered one, so a jittered overlay would sit a fraction of a
-// pixel off the scene it annotates and shimmer as the offset cycled. Draw this
-// before the anti-aliasing slot instead and the jitter would be correct - but
-// then the boxes would be temporally resolved and tonemapped along with the
-// picture, which is what this pass exists to avoid.
+// Projects through viewProjection, not projection: this runs after the temporal
+// resolve, and the resolved image is unjittered, so a jittered overlay would
+// shimmer against the scene it annotates.
 
 import uniforms;
 
@@ -113,23 +97,13 @@ OverlayVertex culledEdge() {
     return output;
 }
 
-/**
- * One world-space segment as a screen-space quad, six vertices.
- *
- * Shared by the box entry below - which feeds it an AABB edge - and by the
- * free-line entry, which feeds it the two points a caller supplied. Keeping
- * one implementation is what makes a pathfinder line and a bounding-box edge
- * behave identically at the near plane and at grazing angles.
- */
+/** One world-space segment as a screen-space quad, six vertices. */
 OverlayVertex segmentVertex(float3 a, float3 b, uint corner) {
     float4 clipA = mul(globalUniforms.viewProjection, float4(a, 1.0));
     float4 clipB = mul(globalUniforms.viewProjection, float4(b, 1.0));
 
-    // Clipped to the near plane, not dropped whole. Dropping any edge with a
-    // corner behind the eye collapses every box the camera stands INSIDE to
-    // its far face - eight of the twelve edges end behind the view there - and
-    // a room then draws as a flat rectangle instead of a volume. Vulkan clip
-    // space puts the near plane at z = 0, so the surviving span is z >= 0.
+    // Clip to the near plane (z = 0 in Vulkan), don't drop: a camera inside a
+    // box has eight of its twelve edges ending behind the eye.
     if (clipA.z <= 0.0 && clipB.z <= 0.0) {
         return culledEdge();
     }
@@ -173,14 +147,7 @@ OverlayVertex overlayVertex(uint vertexId: SV_VertexID) {
                          vertexId % 6);
 }
 
-/**
- * A free line, drawn from the first two corner slots.
- *
- * It rides the same aabb block rather than a block of its own: a segment needs
- * two points and that block already carries eight, so the whole descriptor and
- * uniform-ring path is reused unchanged and the draw is six vertices instead
- * of seventy-two.
- */
+/** A free line from the aabb block's first two corners: it already carries eight. */
 [shader("vertex")]
 OverlayVertex overlayLineVertex(uint vertexId: SV_VertexID) {
     return segmentVertex(aabbUniforms.corners[0].xyz,
@@ -237,11 +204,7 @@ OverlayGlyph overlayTextVertex(uint vertexId: SV_VertexID, uint glyph: SV_Instan
     return output;
 }
 
-/**
- * Coverage reconstruction while magnifying cutout artwork, as vk2d.slang does
- * it: at native size the stored coverage is already the best signal and
- * thresholding it would only throw detail away.
- */
+/** vk2d.slang's coverage sharpening: only while magnifying; at native size the stored coverage is best. */
 float sharpenMagnifiedAlpha(Sampler2D image, float2 uv, float alpha) {
     uint width, height;
     image.GetDimensions(width, height);
@@ -255,13 +218,8 @@ float sharpenMagnifiedAlpha(Sampler2D image, float2 uv, float alpha) {
 }
 
 /**
- * This is vk2d.slang's textFragment - the same atlas, the same half-texel
- * clamp against the neighbouring glyph in the sheet, the same coverage
- * sharpening, the same colour multiply - with the overlay's occlusion rule as
- * the only addition.
- *
- * Do not reshape a glyph here. An outline or a threshold of its own closes
- * this font's one-texel counters, and a, o and 0 become the same solid block.
+ * vk2d.slang's textFragment plus the occlusion rule. Do not reshape a glyph:
+ * an outline or threshold closes this font's one-texel counters.
  */
 [shader("fragment")]
 float4 overlayTextFragment(OverlayGlyph input) : SV_Target0 {
