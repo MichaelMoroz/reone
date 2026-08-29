@@ -21,6 +21,7 @@ set(ENGINE_HEADERS
     ${ENGINE_SOURCE_DIR}/options.h
     ${ENGINE_SOURCE_DIR}/optionsparser.h
     ${ENGINE_SOURCE_DIR}/profiler.h
+    ${ENGINE_SOURCE_DIR}/crashreport.h
     ${ENGINE_SOURCE_DIR}/editor.h
     ${ENGINE_SOURCE_DIR}/objectspanel.h)
 
@@ -31,6 +32,7 @@ set(ENGINE_HEADERS
     ${ENGINE_SOURCE_DIR}/main.cpp
     ${ENGINE_SOURCE_DIR}/optionsparser.cpp
     ${ENGINE_SOURCE_DIR}/profiler.cpp
+    ${ENGINE_SOURCE_DIR}/crashreport.cpp
     ${ENGINE_SOURCE_DIR}/editor.cpp
     ${ENGINE_SOURCE_DIR}/objectspanel.cpp)
 
@@ -45,6 +47,12 @@ target_precompile_headers(engine PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(engine PRIVATE game ${Boost_PROGRAM_OPTIONS_LIBRARY} imgui)
 
 target_link_libraries(engine PRIVATE graphicsvulkan)
+
+if(MSVC)
+    # DbgHelp resolves the crash reporter's frames to names and lines. The
+    # debug info it reads is switched on project-wide in the root CMakeLists.
+    target_link_libraries(engine PRIVATE dbghelp)
+endif()
 
 reone_copy_slang_runtime(engine)
 # Deliberately no build-time copy of slang/ beside the executable. copy_directory

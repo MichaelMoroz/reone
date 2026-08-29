@@ -25,6 +25,7 @@
 #include "reone/system/logutil.h"
 #include "reone/system/threadutil.h"
 
+#include "crashreport.h"
 #include "engine.h"
 #include "optionsparser.h"
 
@@ -50,6 +51,10 @@ int main(int argc, char **argv) {
     }
     try {
         Logger::instance.init(options->logging.severity, options->logging.channels, kLogFilename);
+        // As soon as there is somewhere to write to, and before anything that
+        // can fault. A hardware fault does not unwind, so without this the log
+        // simply stops and what crashed has to be guessed.
+        installCrashReporter();
         info(kEngineStartupMessage);
         Logger::instance.flush();
     } catch (const std::exception &ex) {
