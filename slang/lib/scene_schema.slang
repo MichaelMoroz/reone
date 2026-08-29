@@ -157,6 +157,10 @@ public struct GrassFace {
     public uint4 faceBudgetMaterialVariants;
 };
 
+// TLAS instance mask bits, ANDed with a ray's inclusion mask; a culled instance carries 0.
+public static const uint kPtInstanceGeometry = 0x01u;
+public static const uint kPtInstanceGrass = 0x02u;
+
 /** Per-frame prefix-sum entry selecting a persistent grass face. */
 public struct GrassRange {
     public uint faceIndex;

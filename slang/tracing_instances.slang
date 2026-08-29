@@ -37,7 +37,7 @@ void main(uint id : SV_DispatchThreadID) {
                   float4(0.0, 1.0, 0.0, 0.0),
                   float4(0.0, 0.0, 1.0, 0.0));
         tracingInstances.Store(offset + kCustomIndexMaskOffset,
-                               id == 0 ? 0xff000000u : 0u);
+                               id == 0 ? (kPtInstanceGeometry << 24) : 0u);
         tracingInstances.Store(offset + kSbtOffsetFlagsOffset, 0x01000000u);
         return;
     }
@@ -58,22 +58,20 @@ void main(uint id : SV_DispatchThreadID) {
     float3 normal = cross(width, up);
     float normalLengthSquared = dot(normal, normal);
     bool active = card.lightmapVariantCulled.w == 0.0 && normalLengthSquared > 1.0e-10;
+    float4 row0 = float4(1.0, 0.0, 0.0, 0.0);
+    float4 row1 = float4(0.0, 1.0, 0.0, 0.0);
+    float4 row2 = float4(0.0, 0.0, 1.0, 0.0);
     if (active) {
-        // The template lies at local z=0, but an acceleration-structure
-        // instance still requires an invertible transform. This third basis
-        // leaves every card vertex unchanged while making the transform valid.
+        // The template lies at local z=0; the instance transform still has to
+        // be invertible, and this third basis leaves every vertex unchanged.
         normal *= rsqrt(normalLengthSquared);
-        storeRows(offset,
-                  float4(card.row0.xy, normal.x, card.row0.w),
-                  float4(card.row1.xy, normal.y, card.row1.w),
-                  float4(card.row2.xy, normal.z, card.row2.w));
-    } else {
-        storeRows(offset,
-                  float4(1.0, 0.0, 0.0, 0.0),
-                  float4(0.0, 1.0, 0.0, 0.0),
-                  float4(0.0, 0.0, 1.0, 0.0));
+        row0 = float4(card.row0.xy, normal.x, card.row0.w);
+        row1 = float4(card.row1.xy, normal.y, card.row1.w);
+        row2 = float4(card.row2.xy, normal.z, card.row2.w);
     }
-    uint mask = active ? 0xff000000u : 0u;
+    storeRows(offset, row0, row1, row2);
+    // Grass has its own mask bit so a ray can drop it in hardware; a culled card keeps 0.
+    uint mask = active ? (kPtInstanceGrass << 24) : 0u;
     tracingInstances.Store(offset + kCustomIndexMaskOffset,
                            ((id + 1) & 0x00ffffffu) | mask);
     tracingInstances.Store(offset + kSbtOffsetFlagsOffset, 0x01000000u);

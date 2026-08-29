@@ -150,6 +150,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ptbounces", value<int>()->default_value(options->graphics.ptBounces), "path tracing bounces")                       //
         ("ptnee", value<bool>()->default_value(options->graphics.ptNee), "next-event estimation")                              //
         ("ptneesamples", value<int>()->default_value(options->graphics.ptNeeSamples), "light samples per shading vertex")      //
+        ("ptgrassscatter", value<bool>()->default_value(options->graphics.ptGrassScatter), "scatter rays see grass")           //
+        ("ptgrassshadows", value<bool>()->default_value(options->graphics.ptGrassShadows), "shadow rays see grass")           //
         ("ptrayoffset", value<float>()->default_value(options->graphics.ptRayOffset), "path tracing ray origin offset")        //
         ("pttracestats", value<bool>()->default_value(options->graphics.ptTraceStats), "enable path tracing statistics")       //
         ("tonemap", value<int>()->default_value(options->graphics.tonemap), "display transform: 0 off, 1 Gran Turismo curve")               //
@@ -390,6 +392,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptNeeSamples = std::clamp(vars["ptneesamples"].as<int>(),
                                                 graphics::kMinPtNeeSamples,
                                                 graphics::kMaxPtNeeSamples);
+    options->graphics.ptGrassScatter = vars["ptgrassscatter"].as<bool>();
+    options->graphics.ptGrassShadows = vars["ptgrassshadows"].as<bool>();
     options->graphics.ptRayOffset = std::max(0.0001f, vars["ptrayoffset"].as<float>());
     options->graphics.ptTraceStats = vars["pttracestats"].as<bool>();
     options->graphics.tonemap = std::clamp(vars["tonemap"].as<int>(), 0, 1);

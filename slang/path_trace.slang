@@ -216,7 +216,7 @@ void main() {
         // Except in parity, where the sky is environment, and environment is
         // excluded by definition: black on both sides, so the comparison is
         // over lit geometry only.
-        if (pushConstants.skyAvailable != 0 && !ptParityDirectEnabled()) {
+        if (pushConstants.skyAvailable != 0 && !ptFlag(kPtFlagParityDirect)) {
             outputs.noiseFree += ptSkyRadiance(ray.Direction);
         }
         finishPixel(pixel, outputs, debug);
@@ -282,7 +282,7 @@ void main() {
         // Parity: a terminating surface - sky shell, prelit backdrop - is
         // emission, which the parity image excludes by definition. Black on
         // both sides, so the comparison is over lit geometry only.
-        if (ptParityDirectEnabled()) {
+        if (ptFlag(kPtFlagParityDirect)) {
             outputs.noiseFree = float3(0.0);
         }
         finishPixel(pixel, outputs, debug);
@@ -293,7 +293,7 @@ void main() {
     // nothing else - no bounces, no NEE draw, no specular, no emission, no
     // sky contribution on covered pixels. One deterministic evaluation; the
     // spp loop below never runs. See lib/direct_light.slang.
-    if (ptParityDirectEnabled()) {
+    if (ptFlag(kPtFlagParityDirect)) {
         outputs.noiseFree = parityDirectColor(
             primaryShading.albedo, primaryHit.position, primaryShading.normal,
             primaryShading.thin, pushConstants.thinTransmission,
@@ -313,7 +313,7 @@ void main() {
     }
 
     // ---- The SPP loop ----
-    bool statsOn = ptStatsEnabled();
+    bool statsOn = ptFlag(kPtFlagStats);
     uint sampleCount = max(pushConstants.samplesPerPixel, 1u);
     // Taken as given, with no floor under it. Zero is a legal request and a
     // useful one: the primary vertex still draws next-event estimation, so the
@@ -390,7 +390,7 @@ void main() {
             PathSample sample = ptSampleRay(hit, shading, view, rng);
             if (sample.terminate) break;
             if (!sample.passThrough) {
-                float2 lightXi = primaryScatter && ptDirectChannelEnabled()
+                float2 lightXi = primaryScatter && ptFlag(kPtFlagDirectChannel)
                                      ? primaryLightXi
                                      : float2(ptRandom01(rng), ptRandom01(rng));
                 // Off, no light is drawn at all: the estimator returns zero
@@ -398,7 +398,7 @@ void main() {
                 // ray hits. Analytic lights are not geometry, so for most
                 // scenes that is the point - it isolates what NEE contributes.
                 DirectLight nee;
-                if (ptNeeEnabled()) {
+                if (ptFlag(kPtFlagNee)) {
                     nee = ptDirectLight(hit, shading, view, lightXi, rng);
                 } else {
                     nee.diffuse = float3(0.0);
@@ -429,7 +429,7 @@ void main() {
                     // lands near the mirror direction and D spikes. Multiple
                     // importance sampling is the fix, and until there is one
                     // the denoiser is where this belongs.
-                    if (ptDirectChannelEnabled()) {
+                    if (ptFlag(kPtFlagDirectChannel)) {
                         directDiffuseChannel += nee.diffuse;
                     } else {
                         diffuseChannel += nee.diffuse;

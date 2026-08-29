@@ -1385,6 +1385,19 @@ void Editor::graphicsPathTracingTab() {
                 "here, and one that is noisy in the bounces is not.");
     ImGui::EndDisabled();
 
+    ImGui::SeparatorText("Ray culling");
+    ImGui::Checkbox("Grass in scatter rays", &options.ptGrassScatter);
+    settingHint("Let bounce rays see grass.\n\n"
+                "Off, bounce rays see sky through the canopy and the ground under grass "
+                "brightens. Primary visibility is rasterized either way, so this decides "
+                "whether grass is in the light path, not whether it is drawn.");
+    ImGui::BeginDisabled(!options.ptNee);
+    ImGui::Checkbox("Grass in shadow rays", &options.ptGrassShadows);
+    settingHint("Let shadow rays see grass.\n\n"
+                "Grass occlusion is traced once per light per shading vertex and reused "
+                "across light samples, so raising the sample count adds no grass traversals.");
+    ImGui::EndDisabled();
+
     // The intensity dials are on the Quality tab, in one Lighting section
     // beside PBR's: the two grades are the same sources graded against
     // different transport, and a tab between them made every comparison a tab

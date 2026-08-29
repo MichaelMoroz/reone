@@ -344,6 +344,8 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                                       (_options.parityDirect ? (1u << 12) : 0u) |
                                       (_options.fog ? (1u << 13) : 0u) |
                                       (_options.ptNee ? (1u << 14) : 0u) |
+                                      (_options.ptGrassScatter ? (1u << 15) : 0u) |
+                                      (_options.ptGrassShadows ? (1u << 16) : 0u) |
                                       (static_cast<uint32_t>(std::clamp(_options.debugView, 0, kMaxDebugView)) << 4) |
                                       (static_cast<uint32_t>(std::clamp(_options.tonemap, 0, 1)) << 10),
                                   static_cast<uint32_t>(

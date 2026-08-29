@@ -357,6 +357,12 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(intOpt("ptneesamples", OptionApply::Live,
                            "light samples per shading vertex",
                            &GraphicsOptions::ptNeeSamples, kMinPtNeeSamples, kMaxPtNeeSamples));
+    descs.push_back(boolOpt("ptgrassscatter", OptionApply::Live,
+                            "scatter rays see grass",
+                            &GraphicsOptions::ptGrassScatter));
+    descs.push_back(boolOpt("ptgrassshadows", OptionApply::Live,
+                            "shadow rays see grass",
+                            &GraphicsOptions::ptGrassShadows));
     descs.push_back(floatOpt("ptrayoffset", OptionApply::Live, "path tracing ray origin offset",
                              &GraphicsOptions::ptRayOffset, 0.0001f, 1.0f));
     descs.push_back(floatOpt("albedogamma", OptionApply::Live,

@@ -332,26 +332,13 @@ struct GraphicsOptions {
      * Height of the fog gradient, in world units: the altitude above the
      * walkmesh at which density has fallen to a hundredth of its ground value.
      *
-     * Fog is exponential in height, not a flat ramp in distance. A ramp cannot
-     * be applied to every pixel without swallowing the sky - the sky is at the
-     * far plane, and a ramp calls the far plane fully fogged - and excluding
-     * the sky from it leaves a fogged landscape against a clear backdrop with a
-     * seam between them. With a height gradient a ray toward the zenith leaves
-     * the layer and keeps the sky, and density is clamped below the plane
-     * rather than growing without bound.
+     * Exponential in height rather than a distance ramp, which would call the
+     * far plane fully fogged and swallow the sky. A shallow gradient is a
+     * ground layer and leaves the sky clear - so the sky can read less fogged
+     * than a ridge in front of it - while tens of units becomes atmospheric
+     * haze. On danm14ab the two cross over near 64.
      *
-     * The gradient is what kind of fog this is. Shallow - a few units - is a
-     * ground layer: the near floor and anything standing in the layer haze,
-     * distant hills are veiled, and the sky above the layer stays clear, so
-     * the sky can read LESS fogged than a ridge in front of it. That is not a
-     * defect; it is what a ground mist looks like, and it is why this model
-     * was chosen over a distance ramp that swallowed the sky. Deep - tens of
-     * units - fills the volume and becomes atmospheric haze, where the sky
-     * fogs with everything else. Measured on danm14ab, sky against land at
-     * the skyline: the two cross over near a gradient of 64.
-     *
-     * Density is not a dial: it is calibrated to the ramp the area authored,
-     * agreeing with it at the midpoint between fogNear and fogFar.
+     * Density is calibrated to the area's authored ramp, not dialled.
      */
     float fogHeight {8.0f};
     /** Admit emitter particles, or leave them out of the frame entirely. */
@@ -632,6 +619,20 @@ struct GraphicsOptions {
      * mostly shadow noise is better served here.
      */
     int ptNeeSamples {1};
+    /**
+     * Scatter rays see grass.
+     *
+     * On by default: with the instance mask the traversal costs nothing
+     * measurable, and skipping it lets bounce rays see sky through the canopy,
+     * which brightened the ground under grass by a quarter.
+     */
+    bool ptGrassScatter {true};
+    /**
+     * Shadow rays see grass. Traced once per light per shading vertex and
+     * reused across next-event draws, so more draws cost no more grass
+     * traversals.
+     */
+    bool ptGrassShadows {true};
     /** Secondary-ray origin offset along the geometric normal, world units. */
     float ptRayOffset {0.01f};
     /** GPU trace-stats counters; off by default, the atomics cost frame time. */

@@ -15,34 +15,17 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-// Ray traversal. Exactly two kinds of ray exist:
+// Ray traversal. ptTraceNearest commits the nearest visible surface;
+// ptShadowRay reports visibility to a light and the blocking distance.
 //
-//   ptTraceNearest - the normal ray: commits the nearest surface a ray can
-//                    see at all.
-//   ptShadowRay - the shadow ray: visibility to a light and the distance at
-//     which it was blocked, blocked by
-//                    the same surfaces; the sky never occludes.
-//
-// Only two coverage kinds survive traversal, and they are named at every site:
-//
-//   CUTOUT coverage (kPtMaskPunchThrough) - a binary in-or-out alpha test on
-//   the authored texel. Decided here, once, with no RNG; a committed texel is
-//   solid substance from then on.
-//
-//   PURELY EMISSIVE surfaces (kPtSurfaceUnlitTransparent) - saber blades and
-//   glow planes. They occupy no volume: the ray commits them so the path can
-//   collect their radiance, then continues through unattenuated.
-//
-//   TRANSMISSIVE geometry (kPtMaskTransmissive) - windows, force fields, leaf
-//   cards: blended coverage that is a surface rather than a volume. The ray
-//   commits, the path tints by what the surface passes and continues through,
-//   and a shadow ray attenuates instead of blocking. Coverage is tested only
-//   against the epsilon, so a hole in a leaf card costs nothing.
-//
-// What remains untraced by normal rays is PROCEDURAL blended coverage - smoke,
-// particle plumes. That is volume a ray marcher is to own, and shading it as a
-// surface cost more than it bought. Shadow rays still use its sheet coverage:
-// omitting it altogether makes the visible density remove no light.
+// Two independent axes classify a non-opaque candidate. Coverage decides how
+// much light it removes: CUTOUT (kPtMaskPunchThrough) is a binary alpha test,
+// PURELY EMISSIVE (kPtSurfaceUnlitTransparent) commits for its radiance and
+// never occludes, TRANSMISSIVE (kPtMaskTransmissive) tints and continues.
+// Instance class - merged scene or grass card - decides which occlusion
+// accumulator it lands in, and the inclusion mask decides whether it is
+// reported at all. Procedural sprites (smoke, plumes) are volume, not surface:
+// normal rays skip them; shadow rays still take their sheet coverage.
 
 import lib.math;
 import lib.grasscard;
@@ -76,61 +59,73 @@ public void ptCardTriangleVertices(uint cardId, uint primitive,
     uint cardVerts = vertexCount / 4;
     uint variant = uint(card.lightmapVariantCulled.z);
     uint first = variant * cardTris * 3 + primitive * 3;
-    v0 = resolveGrassCardVertex(card, grassCardVertices[variant * cardVerts + grassCardIndices[first]],
-                                globalUniforms.cameraPosition.xyz);
-    v1 = resolveGrassCardVertex(card, grassCardVertices[variant * cardVerts + grassCardIndices[first + 1]],
-                                globalUniforms.cameraPosition.xyz);
-    v2 = resolveGrassCardVertex(card, grassCardVertices[variant * cardVerts + grassCardIndices[first + 2]],
-                                globalUniforms.cameraPosition.xyz);
+    float3 camera = globalUniforms.cameraPosition.xyz;
+    v0 = resolveGrassCardVertex(card, grassCardVertices[variant * cardVerts + grassCardIndices[first]], camera);
+    v1 = resolveGrassCardVertex(card, grassCardVertices[variant * cardVerts + grassCardIndices[first + 1]], camera);
+    v2 = resolveGrassCardVertex(card, grassCardVertices[variant * cardVerts + grassCardIndices[first + 2]], camera);
 }
 
-uint candidateMaterialIndex(uint instanceIndex, uint geometryIndex, uint primitive) {
-    return instanceIndex == 0 ? materialIndexFor(geometryIndex, primitive)
-                              : grassCardInstances[instanceIndex - 1].materialIndex.x;
+/** What a candidate is, read once per Proceed(). Instance 0 is the merged scene. */
+struct Candidate {
+    uint geometryIndex;
+    uint primitive;
+    uint instanceIndex;
+    uint materialIndex;
+    uint features;
+    bool grass;
+};
+
+Candidate readCandidate(inout RayQuery<RAY_FLAG_NONE> query) {
+    Candidate c;
+    c.geometryIndex = query.CandidateGeometryIndex();
+    c.primitive = query.CandidatePrimitiveIndex();
+    c.instanceIndex = query.CandidateInstanceID();
+    c.grass = c.instanceIndex != 0;
+    c.materialIndex = c.grass ? grassCardInstances[c.instanceIndex - 1].materialIndex.x
+                              : materialIndexFor(c.geometryIndex, c.primitive);
+    c.features = instanceMaterials[c.materialIndex].featureMask;
+    return c;
 }
 
-float candidateAlpha(uint materialIndex, uint3 indices, float3 weights) {
-    InstanceMaterial material = instanceMaterials[materialIndex];
+float3 barycentricWeights(float2 b) {
+    return float3(1.0 - b.x - b.y, b.x, b.y);
+}
+
+/**
+ * Coverage of the candidate texel. Base level, unfiltered: the alpha test is
+ * a yes/no on the authored texel. Premultiplied textures keep coverage in
+ * luma, as particles.slang recovers it.
+ */
+float candidateAlpha(inout RayQuery<RAY_FLAG_NONE> query, Candidate c) {
+    InstanceMaterial material = instanceMaterials[c.materialIndex];
     bool blended = (material.featureMask & kPtMaskBlendedCoverage) != 0;
     bool envmapped = (material.featureMask & kPtMaskEnvMap) != 0;
-    if (!blended && material.mainTex == kPtNoTexture) return 1.0;
-    float alpha = 1.0;
-    if (material.mainTex != kPtNoTexture && !(blended && envmapped)) {
-        float2 uv = ptTransformedUV(materialIndex, mergedVertices[indices.x].uv1 * weights.x + mergedVertices[indices.y].uv1 * weights.y + mergedVertices[indices.z].uv1 * weights.z);
-        // Base level: coverage is a yes/no on the authored texel, and the alpha
-        // test is sharper unfiltered.
-        float4 texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(uv, 0.0);
-        // Premultiplied textures have no usable alpha channel; coverage lives
-        // in the luma, exactly as particles.slang recovers it.
-        alpha = (material.featureMask & kPtMaskPremulAlpha) != 0
-                    ? rgbToLuma(texel.rgb)
-                    : texel.a;
+    bool textured = material.mainTex != kPtNoTexture;
+    if (!blended && !textured) return 1.0;
+    bool sample = textured && !(blended && envmapped);
+    float3 w = barycentricWeights(query.CandidateTriangleBarycentrics());
+    float2 uv = float2(0.0);
+    float vertexAlpha = 1.0;
+    if (c.grass) {
+        if (sample) {
+            GrassCardVertex v0, v1, v2;
+            ptCardTriangleVertices(c.instanceIndex - 1, c.primitive, v0, v1, v2);
+            uv = v0.uv * w.x + v1.uv * w.y + v2.uv * w.z;
+        }
+    } else {
+        uint3 i = ptTriangleIndices(c.geometryIndex, c.primitive);
+        uv = mergedVertices[i.x].uv1 * w.x + mergedVertices[i.y].uv1 * w.y + mergedVertices[i.z].uv1 * w.z;
+        vertexAlpha = mergedVertices[i.x].color.a * w.x + mergedVertices[i.y].color.a * w.y +
+                      mergedVertices[i.z].color.a * w.z;
     }
-    float vertexAlpha = mergedVertices[indices.x].color.a * weights.x +
-                        mergedVertices[indices.y].color.a * weights.y +
-                        mergedVertices[indices.z].color.a * weights.z;
+    float alpha = 1.0;
+    if (sample) {
+        float4 texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)]
+                           .SampleLevel(ptTransformedUV(material, uv), 0.0);
+        alpha = (material.featureMask & kPtMaskPremulAlpha) != 0 ? rgbToLuma(texel.rgb) : texel.a;
+    }
     if (blended) alpha *= material.diffuseColor.a;
     return alpha * vertexAlpha;
-}
-
-float candidateAlpha(uint materialIndex, uint cardId, uint primitive, float3 weights) {
-    GrassCardInstance card = grassCardInstances[cardId];
-    if (card.lightmapVariantCulled.w != 0.0) return 0.0;
-    InstanceMaterial material = instanceMaterials[materialIndex];
-    bool blended = (material.featureMask & kPtMaskBlendedCoverage) != 0;
-    bool envmapped = (material.featureMask & kPtMaskEnvMap) != 0;
-    if (!blended && material.mainTex == kPtNoTexture) return 1.0;
-    float alpha = 1.0;
-    if (material.mainTex != kPtNoTexture && !(blended && envmapped)) {
-        GrassCardVertex v0, v1, v2;
-        ptCardTriangleVertices(cardId, primitive, v0, v1, v2);
-        float2 uv = ptTransformedUV(materialIndex,
-                                    v0.uv * weights.x + v1.uv * weights.y + v2.uv * weights.z);
-        float4 texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(uv, 0.0);
-        alpha = (material.featureMask & kPtMaskPremulAlpha) != 0
-                    ? rgbToLuma(texel.rgb) : texel.a;
-    }
-    return blended ? alpha * material.diffuseColor.a : alpha;
 }
 
 TraceHit committedHit(inout RayQuery<RAY_FLAG_NONE> query) {
@@ -138,14 +133,15 @@ TraceHit committedHit(inout RayQuery<RAY_FLAG_NONE> query) {
     result.hit = query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
     if (result.hit) {
         uint geometryIndex = query.CommittedGeometryIndex();
-        result.primitiveIndex = query.CommittedPrimitiveIndex();
         uint instanceIndex = query.CommittedInstanceID();
+        result.primitiveIndex = query.CommittedPrimitiveIndex();
         result.cardId = instanceIndex == 0 ? kPtNoCard : instanceIndex - 1;
-        result.materialIndex = candidateMaterialIndex(instanceIndex, geometryIndex, result.primitiveIndex);
+        result.materialIndex = instanceIndex == 0
+            ? materialIndexFor(geometryIndex, result.primitiveIndex)
+            : grassCardInstances[instanceIndex - 1].materialIndex.x;
         result.indices = instanceIndex == 0 ? ptTriangleIndices(geometryIndex, result.primitiveIndex)
                                             : uint3(0);
-        float2 barycentrics = query.CommittedTriangleBarycentrics();
-        result.weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
+        result.weights = barycentricWeights(query.CommittedTriangleBarycentrics());
         result.hitT = query.CommittedRayT();
     }
     return result;
@@ -154,119 +150,61 @@ TraceHit committedHit(inout RayQuery<RAY_FLAG_NONE> query) {
 /** Cutout coverage is binary: in or out, nothing between. */
 static const float kAlphaTestThreshold = 0.5;
 
-bool isCutout(uint materialIndex) {
-    return (instanceMaterials[materialIndex].featureMask & kPtMaskPunchThrough) != 0;
-}
-
-/**
- * The threshold this material's texture authored, or the shared constant.
- *
- * The raster gate in scene_draw.slang resolves it the same way, and it has to:
- * the traced primary is read from the G-buffer raster produced, so a cutout
- * admitted by one and rejected by the other would put a hole in the frame that
- * neither pass drew.
- */
+/** The authored threshold or the shared constant; the raster gate resolves it identically. */
 float ptAlphaTestThreshold(uint materialIndex) {
     float authored = instanceMaterials[materialIndex].alphaTest;
     return authored >= 0.0 ? authored : kAlphaTestThreshold;
 }
 
-/** Non-emissive translucency. Not traced: rays skip these candidates. */
-bool isBlendedCoverage(uint materialIndex) {
-    return (instanceMaterials[materialIndex].featureMask & kPtMaskBlendedCoverage) != 0;
-}
-
+bool isCutout(uint features) { return (features & kPtMaskPunchThrough) != 0; }
+/** Non-emissive translucency; skipped by normal rays unless traced transmissive. */
+bool isBlendedCoverage(uint features) { return (features & kPtMaskBlendedCoverage) != 0; }
+/** Blended coverage that is scene geometry: committed, tinted through. */
+bool isTracedTransmissive(uint features) { return (features & kPtMaskTransmissive) != 0; }
 /**
- * Translucency that IS traced: blended coverage belonging to scene geometry.
- *
- * The ray commits, the path tints by what the surface lets through, and the
- * continuation carries on. Procedural blends - smoke, particle plumes - do not
- * carry this bit and keep the skip above, because they are volume the marcher
- * owns rather than a surface.
+ * A particle plume or lens-flare billboard: a camera-facing picture of a
+ * volume, wrong from anywhere but the camera, so no ray sees one. Grass is
+ * procedural too but punch-through, and keeps its cutout traversal.
  */
-bool isTracedTransmissive(uint materialIndex) {
-    return (instanceMaterials[materialIndex].featureMask & kPtMaskTransmissive) != 0;
-}
-
-/**
- * A procedural sprite: a particle plume or a lens-flare billboard.
- *
- * No ray sees one - not the nearest-hit query, not the shadow query. They are
- * camera-facing quads regenerated every frame from a simulation the ray has no
- * access to, so what a ray would intersect is a picture of a volume seen from
- * where the CAMERA stands, which is the wrong picture from anywhere else. A
- * bounce collecting a plume's radiance is sampling a billboard's front face
- * from behind; a shadow ray dimming through one is casting the silhouette of a
- * quad that only faces the viewer. Both were happening: additive plumes
- * committed in the nearest query and blended ones attenuated in the shadow
- * query. Primary visibility is unaffected - these are rasterized forward over
- * the traced image, which is the one view the billboard is correct for.
- *
- * Grass is procedural too and is deliberately NOT included: it is real
- * geometry standing in the world, oriented independently of the camera, and it
- * keeps its cutout traversal. The punch-through bit is what separates them.
- */
-bool isProceduralSprite(uint materialIndex) {
-    uint features = instanceMaterials[materialIndex].featureMask;
+bool isProceduralSprite(uint features) {
     return (features & kPtMaskProcedural) != 0 && (features & kPtMaskPunchThrough) == 0;
 }
 
 /**
- * The nearest ray. Opaque geometry commits in hardware. Of the non-opaque
- * candidates, PURELY EMISSIVE surfaces always commit (the path collects their
- * radiance and passes through), CUTOUT coverage commits at its binary
- * threshold, and non-emissive translucency is skipped - it is not traced.
+ * The nearest ray. Opaque geometry commits in hardware; of the non-opaque
+ * candidates, purely emissive surfaces always commit, cutouts commit at their
+ * threshold, transmissive geometry commits above the epsilon, and other
+ * translucency is skipped.
  */
 public TraceHit ptTraceNearest(RayDesc ray) {
+    // Grass is dropped by the instance mask, not in the loop: a candidate skip
+    // has already paid the descent and the intersection.
+    uint inclusion = kPtInstanceGeometry | (ptFlag(kPtFlagGrassScatter) ? kPtInstanceGrass : 0u);
     RayQuery<RAY_FLAG_NONE> query;
-    query.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, ray);
+    query.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, inclusion, ray);
     while (query.Proceed()) {
         if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
-        uint geometryIndex = query.CandidateGeometryIndex();
-        uint primitive = query.CandidatePrimitiveIndex();
-        uint instanceIndex = query.CandidateInstanceID();
-        uint materialIndex = candidateMaterialIndex(instanceIndex, geometryIndex, primitive);
-        if (instanceIndex != 0 && grassCardInstances[instanceIndex - 1].lightmapVariantCulled.w != 0.0) continue;
-        // PROCEDURAL SPRITES, before anything else can commit them: an additive
-        // plume is emissive and would otherwise be collected by the branch below.
-        if (isProceduralSprite(materialIndex)) continue;
-        // PURELY EMISSIVE.
-        if (instanceMaterials[materialIndex].surfaceType == kPtSurfaceUnlitTransparent) {
+        Candidate c = readCandidate(query);
+        // Before the emissive commit: an additive plume is emissive too.
+        if (isProceduralSprite(c.features)) continue;
+        if (instanceMaterials[c.materialIndex].surfaceType == kPtSurfaceUnlitTransparent) {
             query.CommitNonOpaqueTriangleHit();
             continue;
         }
-        // TRANSMISSIVE geometry. A hit like any other; the difference is what
-        // the path does with it, not whether traversal sees it. Coverage is
-        // still tested, and by the cutout's own epsilon rather than its
-        // threshold: a texel with no alpha at all is not a surface, so the ray
-        // passes through the hole in a leaf card as if nothing were there,
-        // while everything above that commits and lets the bounce loop decide
-        // how much light survives it.
-        if (isTracedTransmissive(materialIndex)) {
-            float2 tBary = query.CandidateTriangleBarycentrics();
-            float3 tWeights = float3(1.0 - tBary.x - tBary.y, tBary.x, tBary.y);
-            float alpha = instanceIndex == 0
-                ? candidateAlpha(materialIndex, ptTriangleIndices(geometryIndex, primitive), tWeights)
-                : candidateAlpha(materialIndex, instanceIndex - 1, primitive, tWeights);
-            if (alpha >= kPtAlphaTestEpsilon) {
-                query.CommitNonOpaqueTriangleHit();
-            }
+        if (isTracedTransmissive(c.features)) {
+            // Tested against the epsilon, not the threshold: a hole in a leaf
+            // card is not a surface; everything above it commits and the bounce
+            // loop decides how much light survives.
+            if (candidateAlpha(query, c) >= kPtAlphaTestEpsilon) query.CommitNonOpaqueTriangleHit();
             continue;
         }
-        // The marcher's seam: what this skip drops is every translucent
-        // surface that tints or attenuates what is behind it.
-        if (isBlendedCoverage(materialIndex)) continue;
-        if (!isCutout(materialIndex)) {
+        if (isBlendedCoverage(c.features)) continue;
+        if (!isCutout(c.features)) {
             query.CommitNonOpaqueTriangleHit();
             continue;
         }
-        // CUTOUT.
-        float2 barycentrics = query.CandidateTriangleBarycentrics();
-        float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
-        float alpha = instanceIndex == 0
-            ? candidateAlpha(materialIndex, ptTriangleIndices(geometryIndex, primitive), weights)
-            : candidateAlpha(materialIndex, instanceIndex - 1, primitive, weights);
-        if (alpha >= ptAlphaTestThreshold(materialIndex) && alpha >= kPtAlphaTestEpsilon) {
+        float alpha = candidateAlpha(query, c);
+        if (alpha >= ptAlphaTestThreshold(c.materialIndex) && alpha >= kPtAlphaTestEpsilon) {
             query.CommitNonOpaqueTriangleHit();
         }
     }
@@ -274,37 +212,28 @@ public TraceHit ptTraceNearest(RayDesc ray) {
 }
 
 /**
- * The shadow ray. Instance mask 0x1: the sky rides mask 0x2, visible to
- * normal rays that shade it as the environment but never an occluder - the
- * promoted sun sits beyond the dome, and with the full mask every sun ray
- * committed on it and the sun lit nothing at all. PURELY EMISSIVE surfaces are
- * emitters, not occluders. CUTOUT coverage above its threshold fully blocks and
- * clear texels do not.
- *
- * Every lit blend multiplies the surviving fraction by its own coverage and
- * the walk continues, so a stack of panes accumulates and an opaque texel still
- * stops the ray. Normal rays may leave procedural density to the marcher, but
- * its visible sheet still has to remove light along a shadow ray.
+ * The shadow ray's answer. Purely emissive surfaces do not occlude; cutouts
+ * block at their threshold; lit blends multiply the surviving fraction and the
+ * walk continues, so a stack of panes accumulates. Grass keeps its own share so
+ * a later draw toward the same light can reuse it without re-traversing the
+ * cards; grassKnown is false when a non-grass blocker ended traversal with
+ * grass beyond it unseen.
  */
 public struct ShadowRay {
-    /** Fraction of the light that reaches the surface along this ray. */
+    /** Fraction of the light reaching the surface along this ray. */
     public float transmittance;
-    /**
-     * Distance from the shaded point to whatever blocked it, or kPtNoOccluder
-     * when nothing did. The penumbra estimate is built from this: a blocker
-     * close to the receiver casts a sharp edge however large the source, and a
-     * distant one casts a soft edge however small.
-     */
+    /** Distance to the nearest blocker, or kPtNoOccluder; the penumbra estimate reads it. */
     public float occluderDistance;
+    public float grassTransmittance;
+    public float grassDistance;
+    public bool grassKnown;
 };
 
 public static const float kPtNoOccluder = 1.0e6;
 
 public ShadowRay ptShadowRay(float3 origin, float3 geometricNormal, float3 direction,
-                             float lightDistance) {
-    ShadowRay result;
-    result.transmittance = 1.0;
-    result.occluderDistance = kPtNoOccluder;
+                             float lightDistance, uint inclusion) {
+    ShadowRay result = { 1.0, kPtNoOccluder, 1.0, kPtNoOccluder, true };
     static const float kShadowEpsilon = 1e-3;
     if (lightDistance <= kShadowEpsilon) return result;
     RayDesc ray;
@@ -315,79 +244,48 @@ public ShadowRay ptShadowRay(float3 origin, float3 geometricNormal, float3 direc
     // A generic query, not ACCEPT_FIRST_HIT: punch-through candidates must
     // stay visible to the loop; opaque geometry still commits in hardware.
     RayQuery<RAY_FLAG_NONE> query;
-    query.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, 0xff, ray);
-    float transmittance = 1.0;
-    float cutoutDistance = kPtNoOccluder;
+    query.TraceRayInline(sceneTLAS, RAY_FLAG_NONE, inclusion, ray);
+    // Index 0 is the merged scene, 1 the grass cards.
+    float passed[2] = { 1.0, 1.0 };
+    float nearest[2] = { kPtNoOccluder, kPtNoOccluder };
     while (query.Proceed()) {
         if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
-        uint geometryIndex = query.CandidateGeometryIndex();
-        uint primitive = query.CandidatePrimitiveIndex();
-        uint instanceIndex = query.CandidateInstanceID();
-        uint materialIndex = candidateMaterialIndex(instanceIndex, geometryIndex, primitive);
-        if (instanceIndex != 0 && grassCardInstances[instanceIndex - 1].lightmapVariantCulled.w != 0.0) continue;
-        // Baked sky triangles are absent. This preserves the old sky-room
-        // shadow behavior only when the safety fallback keeps them in the TLAS.
-        if (pushConstants.skyAvailable == 0 &&
-            (instanceMaterials[materialIndex].featureMask & kPtMaskSky) != 0) continue;
-        // Sky-room scenery casts nothing, whatever the bake did. The shell is
-        // omitted from the scene; the props inside it stay visible and stop
-        // occluding here.
-        //
-        // Reaches only NON-OPAQUE candidates, which is where this matters: the
-        // BLAS splits geometry in two (tracingstructure.cpp:218) and an opaque
-        // triangle commits in hardware without ever entering this loop. Cutout
-        // foliage - the Kashyyyk canopy that closed over the sun - is
-        // punch-through and does enter it. A solid backdrop prop would still
-        // occlude, and cannot be fixed here: the whole merged scene is a single
-        // TLAS instance, so there is no per-mesh cull mask to reach for.
-        if ((instanceMaterials[materialIndex].featureMask & kPtMaskBackdropNoShadow) != 0)
+        Candidate c = readCandidate(query);
+        // Baked sky triangles occlude only when the fallback keeps them admitted.
+        if (pushConstants.skyAvailable == 0 && (c.features & kPtMaskSky) != 0) continue;
+        // Sky-room scenery casts nothing. Reaches non-opaque candidates only -
+        // cutout foliage is what this catches; a solid backdrop prop still
+        // commits in hardware, the merged scene being one TLAS instance.
+        if ((c.features & kPtMaskBackdropNoShadow) != 0) continue;
+        if (isProceduralSprite(c.features)) continue;
+        if (instanceMaterials[c.materialIndex].surfaceType == kPtSurfaceUnlitTransparent) continue;
+        bool attenuates = isTracedTransmissive(c.features) || isBlendedCoverage(c.features);
+        if (!attenuates && !isCutout(c.features)) continue;
+        float alpha = candidateAlpha(query, c);
+        if (alpha < kPtAlphaTestEpsilon) continue;
+        uint k = c.grass ? 1u : 0u;
+        if (attenuates) {
+            // An opaque texel still blocks completely: the alpha decides.
+            passed[k] *= 1.0 - saturate(alpha);
+            nearest[k] = min(nearest[k], query.CandidateTriangleRayT());
+            if (passed[0] * passed[1] >= kPtAlphaTestEpsilon) continue;
+        } else if (alpha < ptAlphaTestThreshold(c.materialIndex)) {
             continue;
-        // PROCEDURAL SPRITES cast nothing, emissive or not - a blended plume
-        // would otherwise attenuate through the branch below.
-        if (isProceduralSprite(materialIndex)) continue;
-        // PURELY EMISSIVE surfaces cast nothing.
-        if (instanceMaterials[materialIndex].surfaceType == kPtSurfaceUnlitTransparent) continue;
-        // Lit blends attenuate rather than block. An opaque texel still blocks
-        // completely: the alpha decides, not whether normal rays shade this as
-        // geometry or leave it to the future volume marcher.
-        if (isTracedTransmissive(materialIndex) ||
-            isBlendedCoverage(materialIndex)) {
-            float2 tBary = query.CandidateTriangleBarycentrics();
-            float3 tWeights = float3(1.0 - tBary.x - tBary.y, tBary.x, tBary.y);
-            float tAlpha = instanceIndex == 0
-                ? candidateAlpha(materialIndex, ptTriangleIndices(geometryIndex, primitive), tWeights)
-                : candidateAlpha(materialIndex, instanceIndex - 1, primitive, tWeights);
-            if (tAlpha < kPtAlphaTestEpsilon) continue;
-            transmittance *= 1.0 - saturate(tAlpha);
-            cutoutDistance = min(cutoutDistance, query.CandidateTriangleRayT());
-            if (transmittance < kPtAlphaTestEpsilon) {
-                transmittance = 0.0;
-                break;
-            }
-            continue;
+        } else {
+            nearest[k] = min(nearest[k], query.CandidateTriangleRayT());
         }
-        if (isCutout(materialIndex)) {
-            float2 barycentrics = query.CandidateTriangleBarycentrics();
-            float3 weights = float3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
-            float alpha = instanceIndex == 0
-                ? candidateAlpha(materialIndex, ptTriangleIndices(geometryIndex, primitive), weights)
-                : candidateAlpha(materialIndex, instanceIndex - 1, primitive, weights);
-            if (alpha < kPtAlphaTestEpsilon) continue;
-            if (alpha >= ptAlphaTestThreshold(materialIndex)) {
-                transmittance = 0.0;
-                cutoutDistance = min(cutoutDistance, query.CandidateTriangleRayT());
-                break;
-            }
-        }
+        passed[k] = 0.0;
+        break;
     }
+    // Hardware commits opaque hits; the loop resolves cutouts; either may be nearer.
     if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
-        result.transmittance = 0.0;
-        // Whichever blocked first: hardware commits opaque hits, the loop above
-        // resolves cutouts, and either may be the nearer.
-        result.occluderDistance = min(query.CommittedRayT(), cutoutDistance);
-    } else {
-        result.transmittance = transmittance;
-        result.occluderDistance = transmittance < 1.0 ? cutoutDistance : kPtNoOccluder;
+        passed[0] = 0.0;
+        nearest[0] = min(nearest[0], query.CommittedRayT());
     }
+    result.transmittance = passed[0] * passed[1];
+    result.occluderDistance = result.transmittance < 1.0 ? min(nearest[0], nearest[1]) : kPtNoOccluder;
+    result.grassTransmittance = passed[1];
+    result.grassDistance = nearest[1];
+    result.grassKnown = passed[0] > 0.0 || passed[1] <= 0.0;
     return result;
 }
