@@ -785,12 +785,12 @@ void ScenePipeline::shadowPass(ICommandBuffer &cmd,
                 scene.triangleCount - scene.opaqueTriangleCount;
             drawRange(scene.opaqueTriangleCount, gatedTriangles, true);
             }
-            if (scene.grassCardCount != 0) {
+            // Grass casts into the directional cascades only. A point light's
+            // cube would rasterize every card in the module, and its grass
+            // shadow is sub-pixel at that map size.
+            if (scene.grassCardCount != 0 && caster.directional) {
                 const PipelineBinding pipeline = _renderer.pipelines().get(shadowPipelineKey(
-                    caster.directional ? "grassCardDirectionalShadowVertex"
-                                       : "grassCardPointShadowVertex",
-                    caster.directional ? "directionalShadowFragment" : "pointShadowFragment",
-                    viewMask));
+                    "grassCardDirectionalShadowVertex", "directionalShadowFragment", viewMask));
                 auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.frameIndex());
                 std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
                 offsets[UniformBlockBindingPoints::globals] = globalsOffset;

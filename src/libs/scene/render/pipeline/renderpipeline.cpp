@@ -234,9 +234,12 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
     _lastMaterialCount =
         static_cast<uint32_t>(_admissionResult.submission.upload.materials.size());
     if (_primaryRayMode) {
-        // The tracer resolves opaque shadows from rays, but the common forward
-        // transparency tail samples the raster map just like the raster modes.
-        plan.steps.push_back(graphics::SceneStep::Shadow);
+        // No shadow maps: the tracer resolves shadows from rays, and the
+        // blended tail goes unshadowed rather than paying for maps it alone
+        // would read. A zero count makes every map lookup return lit.
+        _uniforms.setGlobals([](graphics::GlobalUniforms &globals) {
+            globals.numShadowLights = 0;
+        });
         plan.steps.push_back(graphics::SceneStep::Geometry);
     } else {
         plan.steps.push_back(graphics::SceneStep::ProcessPBRTextures);
