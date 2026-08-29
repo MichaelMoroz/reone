@@ -287,11 +287,21 @@ std::vector<GraphicsOptionDesc> buildDescs() {
         },
         [](const GraphicsOptions &a, const GraphicsOptions &b) { return a.mode == b.mode; },
         [](const GraphicsOptions &from, GraphicsOptions &to) { to.mode = from.mode; }));
-    descs.back().applyFor = [](const GraphicsOptions &a, const GraphicsOptions &b) {
-        return a.mode == RenderMode::PathTracing || b.mode == RenderMode::PathTracing
-                   ? OptionApply::Reapply
-                   : OptionApply::Live;
-    };
+    // No applyFor override: every render mode change rebuilds.
+    //
+    // There used to be one, exempting the two raster modes from a rebuild on
+    // the reasoning that they share a pipeline. They do not. Retro skips the
+    // tracing channel images and the composite entirely - it resolves forward
+    // out of the G-buffer and has no use for either - so a live switch into PBR
+    // ran pbrChannelsPass against channel images that were never allocated and
+    // dereferenced a null image. Measured as a plain access violation, and only
+    // in that direction: PBR to retro needs nothing PBR had not already built,
+    // which is why the exemption looked correct from one side.
+    //
+    // Allocating the channels in retro to make the exemption true is not the
+    // trade: fourteen images, double buffered, is about a gigabyte at 3440x1440
+    // for a mode that reads none of them. A rebuild on a mode switch is what
+    // path tracing already pays and what this now pays too.
 
     descs.push_back(boolOpt("admissionshadow", OptionApply::Live,
                             "compare incremental and full scene admission every frame",
