@@ -17,6 +17,9 @@
 
 #pragma once
 
+#include <chrono>
+#include <optional>
+
 #include "reone/audio/di/module.h"
 #include "reone/game/di/module.h"
 #include "reone/game/game.h"
@@ -99,11 +102,16 @@ private:
     std::queue<input::Event> _events;
 
     struct AutomatedInputEvent {
+        /** Frame this is due on, or -1 when the entry carries a time instead. */
         int frame {0};
+        /** Simulated seconds this is due at; read only when frame is -1. */
+        float time {0.0f};
         SDL_Event event {};
     };
     std::vector<AutomatedInputEvent> _automatedInput;
     size_t _nextAutomatedInput {0};
+    /** Set once a replay has run out of input and asked the loop to stop. */
+    bool _replayFinished {false};
 
     uint64_t _ticks {0};
 
@@ -114,6 +122,19 @@ private:
     bool _graphicsRebuildRequested {false};
     std::deque<std::string> _scriptedCommands;
     int _scriptPauseFrames {0};
+    /**
+     * Wall-clock deadline for `pausesec`, or unset.
+     *
+     * A sibling of the frame counter rather than a replacement, because the two
+     * answer different questions. A frame count is what a deterministic capture
+     * wants: it is the same wait whatever the machine does, so a scripted shot
+     * lands on the same frame every run. Wall clock is what reproducing a
+     * PERSON is for - headless renders as fast as it can, so the frame count
+     * that reads as ten seconds on their screen elapses in a fraction of that
+     * here, and anything paced by real time (streaming, animation, an idle AI
+     * turn) has not happened yet when the next command runs.
+     */
+    std::optional<std::chrono::steady_clock::time_point> _scriptPauseUntil;
     std::optional<CaptureRequest> _captureRequest;
     bool _scriptQuitRequested {false};
 
@@ -138,6 +159,10 @@ private:
 
     void processEvents(bool &quit);
     void loadInputScript();
+    /** Open the recording file and write its header. No-op without the option. */
+    void openInputRecording();
+    /** Append one real input event, stamped with the simulation clock. */
+    void recordInputEvent(const SDL_Event &event);
     void runCommandsFile(const std::string &path);
     /** Records the GUI through the 2D renderer, in its own rendering scope. */
     void renderFrame(bool &quit);

@@ -96,6 +96,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("commands-frame", value<int>()->default_value(0), "run the commands file on this frame instead of at startup")       //
         ("commands-frame-scheduled", value<std::string>()->default_value(""), "execute a second command file on commands-frame") //
         ("input-script", value<std::string>()->default_value(""), "run frame-indexed SDL mouse input script")                  //
+        ("record-input", value<std::string>()->default_value(""), "record this session's input for later replay")             //
         ("dumptargets", value<std::string>()->default_value(""), "write the scene render targets to this directory as .npy")   //
         ("dumpobjects", value<std::string>()->default_value(""), "append the module's traced-emissive candidates to this file") //
         ("randomseed", value<int>()->default_value(-1), "seed the random generator, or -1 to seed from the clock")             //
@@ -592,6 +593,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->commandsFrame = vars["commands-frame"].as<int>();
     options->commandsFrameScheduledFile = vars["commands-frame-scheduled"].as<std::string>();
     options->inputScript = vars["input-script"].as<std::string>();
+    options->recordInput = vars["record-input"].as<std::string>();
 
     return options;
 }

@@ -113,6 +113,18 @@ static bool imguiHandle(SDL_Event &event) {
     }
 }
 
+/**
+ * Where a replay says the mouse is, or unset.
+ *
+ * Written into ImGui after NewFrame rather than into the OS. ImGui's SDL3
+ * backend re-reads the real cursor in NewFrame whenever the window has focus and
+ * would otherwise overwrite the injected position; writing it here wins for the
+ * frame and leaves the developer's pointer alone. Moving the physical cursor to
+ * make a replay work is never the answer - it takes the machine hostage for the
+ * length of the run.
+ */
+static std::optional<ImVec2> g_replayMousePos;
+
 static void imguiBeginFrame() {
     // Loading can request a frame before the main loop, while normal frames
     // begin before update so widgets submitted there belong to the render that
@@ -121,6 +133,14 @@ static void imguiBeginFrame() {
         return;
     }
     g_imguiRenderer->beginImGuiFrame();
+    // Between the backend's NewFrame and ImGui's own, deliberately. The backend
+    // has just overwritten MousePos with the real cursor, and ImGui::NewFrame is
+    // where a click's position is latched - so setting it after NewFrame fixes
+    // hovering but leaves every replayed click aimed at wherever the physical
+    // pointer happened to be.
+    if (g_replayMousePos) {
+        ImGui::GetIO().MousePos = *g_replayMousePos;
+    }
     ImGui::NewFrame();
     g_imguiFrameOpen = true;
     if (!ImGui::GetIO().WantCaptureMouse) {
@@ -283,6 +303,15 @@ void Engine::init() {
         }
         _scriptPauseFrames = *frames;
     });
+    _console->registerCommand("pausesec", "pause command-file execution for a number of seconds", [this](const auto &args) {
+        auto seconds = args.template get<double>(1);
+        if (!seconds || *seconds <= 0.0) {
+            throw std::invalid_argument("usage: pausesec <seconds>, where seconds is positive");
+        }
+        _scriptPauseUntil = std::chrono::steady_clock::now() +
+                            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                std::chrono::duration<double>(*seconds));
+    });
     _console->registerCommand("capture", "capture one or more rendered frames", [this](const auto &args) {
         auto path = args[1];
         auto count = args.template get<int>(2).value_or(1);
@@ -319,9 +348,18 @@ void Engine::init() {
     if (!_options.inputScript.empty()) {
         // UI automation must not inherit a developer's persisted docking
         // layout: its client coordinates describe the fresh default layout.
+        // Not nulled unconditionally any more. A hand-written click script is
+        // written against ImGui's default layout, so it still gets one; a
+        // recording carries the layout its coordinates were aimed at, and
+        // throwing that away is what made a recorded settings change replay as
+        // a session that clicked on nothing.
         ImGui::GetIO().IniFilename = nullptr;
         loadInputScript();
+        if (!_replayImGuiIni.empty()) {
+            ImGui::GetIO().IniFilename = _replayImGuiIni.c_str();
+        }
     }
+    openInputRecording();
 
     if (_options.commandsFrame == 0 || !_options.commandsFrameScheduledFile.empty()) {
         runCommandsFile(_options.commandsFile);
@@ -404,6 +442,9 @@ int Engine::run() {
         }
         auto frameTime = (ticks - _ticks) / 10e5f;
         _ticks = ticks;
+        // Advanced before anything consumes the frame, so an event handled
+        // this frame is stamped with the time the frame represents.
+        _simClock += frameTime;
         if (_options.graphics.headless) {
             // A capture run exists to be compared against another one, which
             // only works if both see the same sequence of frames. Wall-clock
@@ -978,6 +1019,15 @@ void Engine::processScriptedCommands(bool &quit) {
             return;
         }
     }
+    if (_scriptPauseUntil) {
+        // Checked per frame rather than slept through: the loop has to keep
+        // rendering and pumping events for the wait to mean anything, and a
+        // sleep here would stall the window instead of letting the game run.
+        if (std::chrono::steady_clock::now() < *_scriptPauseUntil) {
+            return;
+        }
+        _scriptPauseUntil.reset();
+    }
     while (!_scriptedCommands.empty()) {
         std::string command(std::move(_scriptedCommands.front()));
         _scriptedCommands.pop_front();
@@ -986,7 +1036,7 @@ void Engine::processScriptedCommands(bool &quit) {
             quit = true;
             return;
         }
-        if (_captureRequest || _scriptPauseFrames > 0) {
+        if (_captureRequest || _scriptPauseFrames > 0 || _scriptPauseUntil) {
             return;
         }
     }
@@ -995,6 +1045,23 @@ void Engine::processScriptedCommands(bool &quit) {
 void Engine::processEvents(bool &quit) {
     std::queue<input::Event> unhandled;
     auto processEvent = [this, &quit, &unhandled](SDL_Event &sdlEvent, bool automated) {
+        // First, ahead of every return below. Two of them fire before the game
+        // ever sees an event - one for an event belonging to another window, one
+        // for a window event the window itself consumes - and ImGui's viewport
+        // windows arrive through exactly the first of those. Recording after
+        // them captured the world clicks and silently dropped every click on an
+        // ImGui window, which is most of what there is to record.
+        if (!automated) {
+            recordInputEvent(sdlEvent);
+        } else if (sdlEvent.type == SDL_EVENT_MOUSE_MOTION) {
+            // Remembered, never warped. ImGui's SDL3 backend re-reads the real
+            // cursor in NewFrame whenever the window has focus and would
+            // otherwise overwrite this, but the answer is to write the position
+            // into ImGui after NewFrame - not to move the developer's pointer.
+            // Taking the physical mouse for the length of a replay makes the
+            // machine unusable and is never acceptable.
+            g_replayMousePos = ImVec2 {sdlEvent.motion.x, sdlEvent.motion.y};
+        }
         if (sdlEvent.type == SDL_EVENT_QUIT) {
             quit = true;
             return;
@@ -1011,6 +1078,14 @@ void Engine::processEvents(bool &quit) {
         }
         auto event = eventFromSDLEvent(sdlEvent);
         if (!event) {
+            return;
+        }
+        if (!automated && !_automatedInput.empty() && !_replayFinished) {
+            // A replay owns the input. A stray real mouse move or click while
+            // one is running changes what the session does from that point on,
+            // so the replay stops being a replay - which is exactly what makes
+            // a divergence impossible to tell from a genuine difference in the
+            // thing being measured. Real input resumes once the script is spent.
             return;
         }
         if (_options.graphics.headless && !automated) {
@@ -1042,14 +1117,118 @@ void Engine::processEvents(bool &quit) {
             break;
         }
     }
-    while (!quit && _nextAutomatedInput < _automatedInput.size() &&
-           _automatedInput[_nextAutomatedInput].frame <= _frameIndex + 1) {
+    while (!quit && _nextAutomatedInput < _automatedInput.size()) {
+        const auto &next = _automatedInput[_nextAutomatedInput];
+        // Two clocks, because two kinds of entry. A recorded session is
+        // stamped in simulated seconds and is due when the clock passes it;
+        // a hand-written capture script is frame-indexed and is due on its
+        // frame. Both live in one queue, sorted by whichever they carry.
+        const bool due = next.frame >= 0 ? next.frame <= _frameIndex + 1
+                                         : next.time <= _simClock;
+        if (!due) {
+            break;
+        }
         auto event = _automatedInput[_nextAutomatedInput++].event;
         processEvent(event, true);
+    }
+    // A replay ends when the recording does. Sitting on the last frame waiting
+    // for a pausesec that was guessed at is not an ending - it leaves the window
+    // up after there is nothing left to do, and makes the run's length a number
+    // someone had to pick instead of a property of the recording.
+    if (!_automatedInput.empty() && _nextAutomatedInput >= _automatedInput.size() &&
+        !_replayFinished) {
+        const auto &last = _automatedInput.back();
+        const float endsAt = last.frame >= 0 ? 0.0f : last.time;
+        // A short settle after the final event, so whatever it started - a load,
+        // a mode change - is on screen and in the profile before the run ends.
+        if (last.frame >= 0 ? _frameIndex >= last.frame + 120 : _simClock >= endsAt + 2.0f) {
+            _replayFinished = true;
+            info("Input script finished; closing", LogChannel::Global);
+            quit = true;
+        }
     }
     while (!unhandled.empty()) {
         _events.push(std::move(unhandled.front()));
         unhandled.pop();
+    }
+}
+
+void Engine::openInputRecording() {
+    if (_options.recordInput.empty()) {
+        return;
+    }
+    _inputRecording.open(_options.recordInput, std::ios::out | std::ios::trunc);
+    if (!_inputRecording) {
+        throw std::runtime_error("Failed to open input recording: " + _options.recordInput);
+    }
+    _inputRecording << "# reone-input 1\n";
+    // The ImGui layout goes into the recording, because the coordinates do not
+    // mean anything without it. A click at 1901,712 hits Apply in the layout the
+    // developer had docked; in ImGui's default layout it hits whatever happens
+    // to be there, which is how a recording of a settings change replayed as a
+    // session that never changed a setting.
+    _inputRecording << "@mainwindow " << SDL_GetWindowID(_window->sdlWindow()) << "\n";
+    if (const char *ini = ImGui::GetIO().IniFilename) {
+        std::ifstream layout(ini);
+        for (std::string line; std::getline(layout, line);) {
+            _inputRecording << "@ini " << line << "\n";
+        }
+    }
+    if (!_options.commandsFile.empty()) {
+        _inputRecording << "# started with --commands-file " << _options.commandsFile << "\n";
+    }
+}
+
+void Engine::recordInputEvent(const SDL_Event &event) {
+    if (!_inputRecording) {
+        return;
+    }
+    // Flushed per event at the end of this function. A few hundred events over a
+    // session costs nothing, and a buffered stream loses whatever it still holds
+    // if the process is killed rather than closed - which is exactly the tail of
+    // the recording, where whatever went wrong was happening.
+    struct Flush {
+        std::ofstream &out;
+        ~Flush() { out.flush(); }
+    } flush {_inputRecording};
+    // Only what the replay can reconstruct. An event written but not parseable
+    // would shift the meaning of every entry after it, which is worse than
+    // dropping it.
+    switch (event.type) {
+    case SDL_EVENT_MOUSE_MOTION:
+        _inputRecording << _simClock << " motion " << static_cast<int>(event.motion.x) << " "
+                        << static_cast<int>(event.motion.y) << " " << event.motion.windowID
+                        << "\n";
+        break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        _inputRecording << _simClock << " button "
+                        << (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ? "down" : "up") << " "
+                        << static_cast<int>(event.button.button) << " "
+                        << static_cast<int>(event.button.x) << " "
+                        << static_cast<int>(event.button.y) << " " << event.button.windowID
+                        << "\n";
+        break;
+    case SDL_EVENT_MOUSE_WHEEL:
+        _inputRecording << _simClock << " wheel " << event.wheel.x << " " << event.wheel.y << " "
+                        << event.wheel.windowID << "\n";
+        break;
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+        // Repeats are dropped: the replay regenerates them from the held state,
+        // and writing them makes a file that is mostly repeat.
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.repeat) {
+            break;
+        }
+        _inputRecording << _simClock << " key "
+                        << (event.type == SDL_EVENT_KEY_DOWN ? "down" : "up") << " "
+                        << static_cast<int>(event.key.scancode) << " "
+                        << static_cast<uint32_t>(event.key.key) << " "
+                        << static_cast<uint32_t>(event.key.mod) << " " << event.key.windowID
+                        << "\n";
+        break;
+    default:
+        break;
     }
 }
 
@@ -1066,7 +1245,7 @@ void Engine::loadInputScript() {
         motion.motion.windowID = windowId;
         motion.motion.x = static_cast<float>(x);
         motion.motion.y = static_cast<float>(y);
-        _automatedInput.push_back({frame, motion});
+        _automatedInput.push_back({frame, 0.0f, motion});
 
         SDL_Event down {};
         down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
@@ -1076,28 +1255,172 @@ void Engine::loadInputScript() {
         down.button.clicks = 1;
         down.button.x = static_cast<float>(x);
         down.button.y = static_cast<float>(y);
-        _automatedInput.push_back({frame + 1, down});
+        _automatedInput.push_back({frame + 1, 0.0f, down});
 
         SDL_Event up = down;
         up.type = SDL_EVENT_MOUSE_BUTTON_UP;
         up.button.down = false;
-        _automatedInput.push_back({frame + 2, up});
+        _automatedInput.push_back({frame + 2, 0.0f, up});
     };
 
+    const auto windowId = SDL_GetWindowID(_window->sdlWindow());
+    std::vector<std::string> imguiLayout;
+    // The id the main window had when this was recorded. Every other id in the
+    // file belongs to an ImGui viewport window and is replayed unchanged; the
+    // main one is remapped, because SDL will not hand out the same number twice.
+    uint32_t recordedMainWindow = 0;
+    const auto replayWindow = [&](uint32_t recorded) {
+        return recorded == 0 || recorded == recordedMainWindow ? windowId : recorded;
+    };
+    bool sawFrameEntry = false;
+    bool sawTimeEntry = false;
+
     for (std::string line; std::getline(file, line);) {
-        std::istringstream stream(line);
-        int frame, x, y;
-        std::string action;
-        if (!(stream >> frame >> action) || (!action.empty() && action[0] == '#')) {
+        std::string_view stripped = string_strip(line);
+        if (stripped.empty() || stripped[0] == '#') {
             continue;
         }
-        if (action != "click" || !(stream >> x >> y) || frame < 1) {
+        if (stripped[0] == '@') {
+            // A console command the recording carries - which save to load, what
+            // to seed. Queued rather than run here: nothing exists to run it
+            // against yet, and the commands-file path already knows how to.
+            //
+            // The directive word goes too, not just the '@'. Leaving it made the
+            // console receive "command loadgame 345" and reject it as an unknown
+            // command, silently - the replay then ran the whole recording against
+            // the main menu.
+            // Not stripped on the right: an ImGui layout has blank lines
+            // between its sections, and "@ini" with nothing after it is one of
+            // them. Requiring an argument threw the whole replay away over a
+            // blank line.
+            std::string_view directive = stripped.substr(1);
+            while (!directive.empty() && directive.front() == ' ') {
+                directive.remove_prefix(1);
+            }
+            const auto space = directive.find(' ');
+            const std::string_view name =
+                space == std::string_view::npos ? directive : directive.substr(0, space);
+            const std::string_view payload =
+                space == std::string_view::npos ? std::string_view {} : directive.substr(space + 1);
+            if (name != "command" && name != "ini" && name != "mainwindow") {
+                throw std::runtime_error("Unknown input script directive '" + std::string {name} +
+                                         "': " + line);
+            }
+            if (name != "ini" && payload.empty()) {
+                throw std::runtime_error("Input script directive takes an argument: " + line);
+            }
+            if (name == "mainwindow") {
+                recordedMainWindow = static_cast<uint32_t>(std::stoul(std::string {string_strip(payload)}));
+                continue;
+            }
+            if (name == "ini") {
+                imguiLayout.emplace_back(payload);
+                continue;
+            }
+            _scriptedCommands.emplace_back(string_strip(payload));
+            continue;
+        }
+        std::istringstream stream {std::string {stripped}};
+        std::string stamp, action;
+        if (!(stream >> stamp >> action)) {
             throw std::runtime_error("Invalid input script line: " + line);
         }
-        addClick(frame, x, y);
+        if (action == "click") {
+            // The original grammar, frame-indexed, still parsed: every capture
+            // script in the diagnostics recipes is written in it.
+            const int frame = std::stoi(stamp);
+            int x, y;
+            if (!(stream >> x >> y) || frame < 1) {
+                throw std::runtime_error("Invalid input script line: " + line);
+            }
+            sawFrameEntry = true;
+            addClick(frame, x, y);
+            continue;
+        }
+        sawTimeEntry = true;
+        const float when = std::stof(stamp);
+        SDL_Event event {};
+        if (action == "motion") {
+            int x, y;
+            if (!(stream >> x >> y)) {
+                throw std::runtime_error("Invalid input script line: " + line);
+            }
+            uint32_t recorded = recordedMainWindow;
+            stream >> recorded;
+            event.type = SDL_EVENT_MOUSE_MOTION;
+            event.motion.windowID = replayWindow(recorded);
+            event.motion.x = static_cast<float>(x);
+            event.motion.y = static_cast<float>(y);
+        } else if (action == "button") {
+            std::string dir;
+            int button, x, y;
+            if (!(stream >> dir >> button >> x >> y)) {
+                throw std::runtime_error("Invalid input script line: " + line);
+            }
+            const bool down = dir == "down";
+            event.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+            uint32_t recorded = recordedMainWindow;
+            stream >> recorded;
+            event.button.windowID = replayWindow(recorded);
+            event.button.button = static_cast<uint8_t>(button);
+            event.button.down = down;
+            event.button.clicks = 1;
+            event.button.x = static_cast<float>(x);
+            event.button.y = static_cast<float>(y);
+        } else if (action == "wheel") {
+            float x, y;
+            if (!(stream >> x >> y)) {
+                throw std::runtime_error("Invalid input script line: " + line);
+            }
+            uint32_t recorded = recordedMainWindow;
+            stream >> recorded;
+            event.type = SDL_EVENT_MOUSE_WHEEL;
+            event.wheel.windowID = replayWindow(recorded);
+            event.wheel.x = x;
+            event.wheel.y = y;
+        } else if (action == "key") {
+            std::string dir;
+            uint32_t scancode, key, mod;
+            if (!(stream >> dir >> scancode >> key >> mod)) {
+                throw std::runtime_error("Invalid input script line: " + line);
+            }
+            const bool down = dir == "down";
+            event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+            uint32_t recorded = recordedMainWindow;
+            stream >> recorded;
+            event.key.windowID = replayWindow(recorded);
+            event.key.scancode = static_cast<SDL_Scancode>(scancode);
+            event.key.key = static_cast<SDL_Keycode>(key);
+            event.key.mod = static_cast<SDL_Keymod>(mod);
+            event.key.down = down;
+        } else {
+            throw std::runtime_error("Invalid input script line: " + line);
+        }
+        _automatedInput.push_back({-1, when, event});
+    }
+
+    if (!imguiLayout.empty()) {
+        // Written beside the script so the replay is self-contained and does not
+        // disturb whatever layout the developer has docked in build/bin.
+        _replayImGuiIni = _options.inputScript + ".imgui.ini";
+        std::ofstream ini(_replayImGuiIni, std::ios::out | std::ios::trunc);
+        for (const auto &line : imguiLayout) {
+            ini << line << "\n";
+        }
+    }
+    if (sawFrameEntry && sawTimeEntry) {
+        // Refused rather than guessed at. The two stamps are different clocks -
+        // one counts frames, the other simulated seconds - and interleaving them
+        // needs a conversion that is only correct headless, where a frame is
+        // exactly 1/60s. A file that mixes them is a mistake, not a request.
+        throw std::runtime_error(
+            "Input script mixes frame-indexed 'click' entries with timed ones: " +
+            _options.inputScript);
     }
     std::stable_sort(_automatedInput.begin(), _automatedInput.end(),
-                     [](const auto &lhs, const auto &rhs) { return lhs.frame < rhs.frame; });
+                     [](const auto &lhs, const auto &rhs) {
+                         return lhs.frame >= 0 ? lhs.frame < rhs.frame : lhs.time < rhs.time;
+                     });
 }
 
 void Engine::showCursor(bool show) {

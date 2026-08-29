@@ -52,6 +52,8 @@ struct Options {
     int commandsFrame {0};
     /** Frame-indexed SDL mouse input script for deterministic UI automation. */
     std::string inputScript;
+    /** Where to write a replayable recording of this session's input. */
+    std::string recordInput;
     /** Where to write the scene render targets, or empty not to. */
     std::string dumpTargetsPath;
     /**
