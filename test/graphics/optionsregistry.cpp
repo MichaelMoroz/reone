@@ -98,3 +98,30 @@ TEST(OptionsRegistry, should_round_trip_every_option_away_from_its_default) {
         }
     }
 }
+
+TEST(OptionsRegistry, should_classify_every_render_mode_change_as_a_rebuild) {
+    // Retro allocates neither the tracing channel images nor the composite, so
+    // a mode change that does not rebuild leaves a later pass shading into
+    // images that were never allocated - an access violation, not a wrong
+    // picture. This was classified Live between the two raster modes once, and
+    // the settings window carried a second copy of that same rule, so the crash
+    // outlived the first fix. Neither can drift back without failing here.
+    const auto *mode = findGraphicsOptionDesc("mode");
+    ASSERT_NE(nullptr, mode);
+
+    const RenderMode modes[] {RenderMode::Retro, RenderMode::PBR, RenderMode::PathTracing};
+    for (auto from : modes) {
+        for (auto to : modes) {
+            if (from == to) {
+                continue;
+            }
+            GraphicsOptions a;
+            GraphicsOptions b;
+            a.mode = from;
+            b.mode = to;
+            EXPECT_EQ(OptionApply::Reapply, graphicsOptionApply(*mode, a, b))
+                << "a change from " << renderModeName(from) << " to " << renderModeName(to)
+                << " must rebuild the pipeline";
+        }
+    }
+}

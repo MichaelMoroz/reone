@@ -1683,8 +1683,15 @@ void Editor::graphicsCommitFooter() {
 
     ImGui::Separator();
     if (ImGui::Button("Save settings")) {
-        // Saving a staged value without applying it would write a config the
-        // running frame does not match, so the save commits first.
+        // Applied and written, but not read back out of the live options: a
+        // staged commit now lands at the rebuild point rather than inside this
+        // call, so the live struct is still a frame behind when this line runs.
+        // Saving it would write the values the window was opened with.
+        //
+        // What goes to the file is what Apply will install - the live options
+        // for everything live, overlaid with the staged values for everything
+        // that needs a rebuild - which is the same config either way once the
+        // next frame starts.
         _engine.applyStagedGraphics();
         _settingsSaveSucceeded = saveGraphicsOptions(options, _settingsSaveStatus);
         if (_settingsSaveSucceeded) {
@@ -1692,7 +1699,7 @@ void Editor::graphicsCommitFooter() {
         }
     }
     settingHint("Writes the owned keys of reone.cfg, leaving every foreign line alone. Anything "
-                "staged is applied first, so the file matches the running frame.");
+                "staged is applied too, so the file matches the frame that follows.");
     ImGui::SameLine();
     ImGui::BeginDisabled(changed.empty());
     if (ImGui::Button("Apply")) {
@@ -1732,35 +1739,29 @@ void Editor::renderModeCombo() {
     // would install.
     int modeIndex = static_cast<int>(staged.mode);
     if (ImGui::Combo("Render mode", &modeIndex, kModeNames, IM_ARRAYSIZE(kModeNames))) {
-        const auto chosen = static_cast<graphics::RenderMode>(modeIndex);
-        // What a change costs depends on the values, not on the option. Retro
-        // and PBR pick a resolve step per frame over targets that already
-        // exist, so the frame follows immediately and the live struct is
-        // written; crossing into or out of path tracing decides whether the
-        // tracer exists at all, so it is staged for Apply.
-        const bool live = chosen != graphics::RenderMode::PathTracing &&
-                          options.mode != graphics::RenderMode::PathTracing;
-        staged.mode = chosen;
-        if (live) {
-            options.mode = chosen;
-        }
+        // Through the same setter the console reaches, rather than deciding
+        // anything here. It parses the written form, asks the registry whether
+        // the change is live or needs a rebuild, and writes the struct that
+        // answer names.
+        //
+        // This widget used to carry its own copy of that rule - retro and PBR
+        // switch live, anything touching path tracing stages - and wrote the
+        // live options itself when it judged a change free. It is not free:
+        // retro allocates neither the tracing channel images nor the composite,
+        // so a live switch into PBR shaded into images that were never
+        // allocated and took the process down. Fixing the registry did nothing
+        // for anyone using this window, because the copy here still had the old
+        // answer. One implementation is the fix; the crash was the duplicate.
+        _engine.setGraphicsOption(
+            "mode", graphics::renderModeName(static_cast<graphics::RenderMode>(modeIndex)));
     }
-    // Written from the CURRENT pair rather than fixed, so the hint never
-    // promises a rebuild for a change that is instant, or the reverse.
-    const bool staging = staged.mode == graphics::RenderMode::PathTracing ||
-                         options.mode == graphics::RenderMode::PathTracing;
-    settingHint(staging
-                    ? "Path tracing is staged: it decides whether the tracer exists and what "
-                      "format the scene output carries, both fixed when the pipeline is built. "
-                      "Apply is at the bottom of this window.\n\n"
-                      "Primary visibility is rasterized in every mode; this selects who shades it. "
-                      "The anti-aliasing slot does not follow the mode here - only --mode at "
-                      "startup defaults it - so set it yourself if you are comparing frames."
-                    : "Retro and PBR switch on the next frame - a raster pipeline carries both "
-                      "resolves and picks per frame.\n\n"
-                      "Primary visibility is rasterized in every mode; this selects who shades it. "
-                      "The anti-aliasing slot does not follow the mode here - only --mode at "
-                      "startup defaults it - so set it yourself if you are comparing frames.");
+    settingHint("Staged: a render mode decides what the pipeline allocates - whether the tracer "
+                "exists, whether the tracing channels do, what format the scene output carries - "
+                "and all of it is fixed when the pipeline is built. Apply is at the bottom of "
+                "this window.\n\n"
+                "Primary visibility is rasterized in every mode; this selects who shades it. "
+                "The anti-aliasing slot does not follow the mode here - only --mode at startup "
+                "defaults it - so set it yourself if you are comparing frames.");
 }
 
 void Editor::graphicsReapplySection() {

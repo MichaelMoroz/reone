@@ -120,6 +120,26 @@ private:
     bool _inFrame {false};
     bool _renderdocTriggered {false};
     bool _graphicsRebuildRequested {false};
+    /** A staged commit waiting for the rebuild point to install it. */
+    bool _graphicsCommitPending {false};
+    /**
+     * The simulation clock: the sum of every frameTime the loop hands out.
+     *
+     * Input is recorded and replayed against this rather than against the
+     * frame index, because a frame number is not a moment. Headless pins
+     * frameTime to 1/60s while a windowed session takes the wall clock, so
+     * one frame number is two different instants in the two - while one
+     * value of this clock is the same instant in both. That is what lets a
+     * session recorded at 33 fps replay headless at 250 and still put every
+     * click where the player put it.
+     */
+    float _simClock {0.0f};
+    std::ofstream _inputRecording;
+    /**
+     * Where a replay's ImGui layout is written, kept alive because ImGui
+     * stores the pointer rather than the string.
+     */
+    std::string _replayImGuiIni;
     std::deque<std::string> _scriptedCommands;
     int _scriptPauseFrames {0};
     /**
@@ -198,6 +218,8 @@ private:
     std::vector<std::string> stagedGraphicsChanges() const;
     /** Copy the staged reapply options into the live ones and rebuild. */
     void applyStagedGraphics();
+    /** Install the staged Reapply values. Only applyGraphicsRebuild calls this. */
+    void commitStagedGraphics();
     /** Discard staged edits, restoring the running configuration. */
     void revertStagedGraphics();
     /**

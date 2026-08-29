@@ -751,6 +751,11 @@ void Engine::applyGraphicsRebuild() {
         return;
     }
     _graphicsRebuildRequested = false;
+    // The staged values become the live ones here and nowhere else, so no frame
+    // ever renders with options its pipeline was not built for.
+    if (_graphicsCommitPending) {
+        commitStagedGraphics();
+    }
     // The window and the swapchain first; setVsync flags the swapchain for
     // recreation, which the next beginFrame acts on with the new extent.
     _window->resize(_options.graphics.width, _options.graphics.height);
@@ -774,6 +779,30 @@ std::vector<std::string> Engine::stagedGraphicsChanges() const {
 }
 
 void Engine::applyStagedGraphics() {
+    if (stagedGraphicsChanges().empty()) {
+        return;
+    }
+    // Asked for, not performed. The copy happens in applyGraphicsRebuild,
+    // immediately before the pipelines are thrown away.
+    //
+    // Copying here instead put the two an unbounded distance apart, because the
+    // rebuild is a flag consumed at the TOP of a frame while this is called
+    // from wherever the request came from. From the settings window that is the
+    // middle of one: the live options became PBR, the rest of that frame
+    // rendered on a pipeline still built for retro, and pbrChannelsPass barrier
+    // -ed channel images retro never allocates - a null dereference in
+    // VulkanCommandBuffer::imageBarrier. The console never showed it because
+    // its commands are processed on the line above applyGraphicsRebuild, so its
+    // copy and rebuild are always back to back.
+    //
+    // Deferring costs one frame rendered with the old options, which is exactly
+    // right: those are the options the pipeline in front of it was built for.
+    _graphicsCommitPending = true;
+    requestGraphicsRebuild();
+}
+
+void Engine::commitStagedGraphics() {
+    _graphicsCommitPending = false;
     auto changed = stagedGraphicsChanges();
     if (changed.empty()) {
         return;
@@ -786,7 +815,6 @@ void Engine::applyStagedGraphics() {
                    graphics::findGraphicsOptionDesc(name)->get(_options.graphics) + ";";
     }
     info(message, LogChannel::Graphics);
-    requestGraphicsRebuild();
 }
 
 void Engine::revertStagedGraphics() {
