@@ -40,6 +40,7 @@
 
 import uniforms;
 import lib.gbuf;
+import lib.gbuf_resolve;
 import lib.material_ops;
 import lib.math;
 import lib.scene_schema;
@@ -48,13 +49,7 @@ import lib.scene_schema;
 // comparison. Colour maths only; no tracing entry points are referenced.
 import tracing.brdf;
 
-[[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
-[[vk::binding(2, 1)]] Sampler2D sGBufEyeNormal;
-[[vk::binding(3, 1)]] Sampler2D sGBufLightmap;
-[[vk::binding(4, 1)]] Sampler2D sGBufSelfIllum;
-[[vk::binding(5, 1)]] Sampler2D sGBufDepth;
 [[vk::binding(20, 1)]] Sampler2D sGBufMotion;
-[[vk::binding(21, 1), vk::image_format("r32ui")]] Sampler2D<uint> sGBufTriangleId;
 // The shared channel images, for the radiance views; unbound (and never
 // sampled, see the channels-absent bit) in retro.
 [[vk::binding(24, 1)]] Sampler2D sChannelDiffuse;
@@ -117,8 +112,6 @@ static const uint kDebugFilteredDirect = 19;   // tracer only
 
 // Mirrors the category shift the admission path packs into every material
 // record; see scene/render/admission.cpp.
-static const uint kCategoryShift = 27;
-static const uint kCategoryMask = 0xFu;
 static const uint kSurfacePbr = 0;
 
 static const float3 kCategoryPalette[9] = {
@@ -194,7 +187,7 @@ float3 channelColor(float2 uv, int2 pixel) {
     default:
         break;
     }
-    uint triangleId = sGBufTriangleId.Load(int3(pixel, 0)).r;
+    uint triangleId = gbufTriangleId(pixel);
     if (triangleId == kNoTriangle) {
         // Nothing was drawn: the sky. Every categorical view says so with one
         // colour; the numeric ones report the value they would report.
@@ -216,14 +209,13 @@ float3 channelColor(float2 uv, int2 pixel) {
 
     uint materialId = mergedMaterialIds[triangleId];
     InstanceMaterial material = instanceMaterials[materialId];
-    float4 diffuseSample = sGBufDiffuse.SampleLevel(uv, 0.0);
-    float4 lightmapSample = sGBufLightmap.SampleLevel(uv, 0.0);
-    float3 eyeNormal = normalize(2.0 * sGBufEyeNormal.SampleLevel(uv, 0.0).xyz - 1.0);
-    float3 normal = normalize(mul(globalUniforms.viewInv, float4(eyeNormal, 0.0)).xyz);
-
-    bool envmapped, hasLightmap, staticObject, shadowsEnabled, fogEnabled, thinSurface;
-    unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
-                           shadowsEnabled, fogEnabled, thinSurface);
+    GBufferSurface g = readGBufferSurface(uv);
+    float4 diffuseSample = g.diffuse;
+    float4 lightmapSample = g.lightmap;
+    float3 eyeNormal = g.eyeNormal;
+    float3 normal = g.normal;
+    bool envmapped = g.envmapped, hasLightmap = g.hasLightmap, staticObject = g.staticObject,
+         shadowsEnabled = g.shadowsEnabled, fogEnabled = g.fogEnabled;
 
     // The shape cue: only the categorical views take it. A data channel
     // multiplied by a lighting term is a lit render, and a wrong value in one
@@ -232,13 +224,13 @@ float3 channelColor(float2 uv, int2 pixel) {
 
     switch (view) {
     case kDebugCategories: {
-        uint category = (material.featureMask >> kCategoryShift) & kCategoryMask;
+        uint category = (material.featureMask >> kMaterialCategoryShift) & kMaterialCategoryMask;
         float3 color = kCategoryPalette[min(category, 8u)] * shape;
         if ((material.featureMask & kMaterialSky) != 0) color = kSkyColor;
         return color;
     }
     case kDebugEmissive: {
-        float3 emission = gammaToLinear(sGBufSelfIllum.SampleLevel(uv, 0.0).rgb);
+        float3 emission = gammaToLinear(g.selfIllum.rgb);
         float emissiveLuma = dot(emission, float3(0.2126, 0.7152, 0.0722));
         return emissiveLuma > 0.001
                    ? float3(1.0, 0.25 + 0.75 * saturate(emissiveLuma), 0.0)
@@ -273,10 +265,9 @@ float3 channelColor(float2 uv, int2 pixel) {
     case kDebugLightmap:
         return hasLightmap ? lightmapSample.rgb : float3(0.9, 0.0, 0.9) * shape * 0.4;
     case kDebugDepth: {
-        float depth = sGBufDepth.SampleLevel(uv, 0.0).r;
         // Positive linear view distance on a fixed 100-unit ramp, so the same
         // surface reads the same grey in every mode and between two captures.
-        return float3(saturate(abs(gbufViewPosition(uv, depth, globalUniforms.projectionInv).z) / 100.0));
+        return float3(saturate(abs(g.eyePosition.z) / 100.0));
     }
     case kDebugMotion: {
         // xy around mid-grey, magnitude in blue: statics read flat, movers

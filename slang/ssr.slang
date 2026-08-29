@@ -134,7 +134,7 @@ void ssrMain(uint3 dispatchId : SV_DispatchThreadID) {
     }
 
     float3 position = reconstructViewPos(uv);
-    float3 eyeNormal = normalize(2.0 * sGBufEyeNormal.SampleLevel(uv, 0.0).xyz - 1.0);
+    float3 eyeNormal = gbufDecodeEyeNormal(sGBufEyeNormal.SampleLevel(uv, 0.0).xyz);
     float3 reflection = reflect(normalize(position), eyeNormal);
     // Half a stride on a checkerboard, so that neighbouring rays do not all
     // test the same depths and step the same misses.

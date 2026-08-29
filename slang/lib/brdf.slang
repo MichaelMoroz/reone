@@ -45,6 +45,11 @@ public float geometrySmith(float NdotL, float NdotV, float k) {
     return geometrySchlick(NdotL, k) * geometrySchlick(NdotV, k);
 }
 
+/** Smith k for image-based lighting, alpha / 2. */
+public float iblSmithK(float roughness) {
+    return (roughness * roughness) * 0.5;
+}
+
 /** Smith k for punctual lights, (roughness + 1)^2 / 8. */
 public float punctualSmithK(float roughness) {
     return (roughness + 1.0) * (roughness + 1.0) * 0.125;

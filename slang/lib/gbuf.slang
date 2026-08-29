@@ -16,6 +16,11 @@
  */
 module gbuf;
 
+/** The stored eye-space normal, unpacked from its 0..1 encoding. */
+public float3 gbufDecodeEyeNormal(float3 stored) {
+    return normalize(2.0 * stored - 1.0);
+}
+
 /**
  * View-space position of a G-buffer texel. Device depth stays in [0,1]; NDC y
  * is negated because the geometry pass rasterises through a negative-height

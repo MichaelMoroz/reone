@@ -121,7 +121,7 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     float3 geometricNormal = normalize(cross(p1 - p0, p2 - p0));
     if (dot(geometricNormal, ray.Direction) > 0.0) geometricNormal = -geometricNormal;
 
-    float3 eyeNormal = normalize(2.0 * gbufEyeNormal.SampleLevel(uv, 0.0).xyz - 1.0);
+    float3 eyeNormal = gbufDecodeEyeNormal(gbufEyeNormal.SampleLevel(uv, 0.0).xyz);
     float3 normal = normalize(mul(globalUniforms.viewInv, float4(eyeNormal, 0.0)).xyz);
     // Into the geometric hemisphere, PbrSurface::materialNormal's rule, so the
     // BRDF and the hemisphere tests never contradict at a silhouette.

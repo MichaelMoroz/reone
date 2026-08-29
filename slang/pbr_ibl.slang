@@ -29,6 +29,7 @@
 
 import uniforms;
 import lib.math;
+import lib.brdf;
 
 // Sample counts, gathered here because they are the expensive part and are
 // worth being able to turn down in one place. These match the OpenGL shaders
@@ -155,16 +156,9 @@ float3 importanceSampleGGX(float2 Xi, float3 N, float roughness) {
     return normalize(tangent * H.x + bitangent * H.y + N * H.z);
 }
 
-/** Note the k here differs from the direct-lighting one; this is the IBL form. */
-float geometrySchlickGGX(float NdotV, float roughness) {
-    float k = (roughness * roughness) / 2.0;
-    return NdotV / (NdotV * (1.0 - k) + k);
-}
-
-float geometrySmith(float3 N, float3 V, float3 L, float roughness) {
-    float NdotV = max(dot(N, V), 0.0);
-    float NdotL = max(dot(N, L), 0.0);
-    return geometrySchlickGGX(NdotV, roughness) * geometrySchlickGGX(NdotL, roughness);
+/** Smith over the IBL parameterisation of k. */
+float geometrySmithIbl(float3 N, float3 V, float3 L, float roughness) {
+    return geometrySmith(max(dot(N, L), 0.0), max(dot(N, V), 0.0), iblSmithK(roughness));
 }
 
 /**
@@ -192,7 +186,7 @@ float2 brdfFragment(Varyings input) : SV_Target {
         float NdotH = max(H.z, 0.0);
         float VdotH = max(dot(V, H), 0.0);
         if (NdotL > 0.0) {
-            float G = geometrySmith(N, V, L, roughness);
+            float G = geometrySmithIbl(N, V, L, roughness);
             float GVis = (G * VdotH) / (NdotH * NdotV);
             float Fc = pow(1.0 - VdotH, 5.0);
             A += (1.0 - Fc) * GVis;
@@ -229,12 +223,10 @@ float4 irradianceFragment(Varyings input) : SV_Target {
     return float4(kPi * irradiance / samples, 1.0);
 }
 
-float distributionGGX(float3 N, float3 H, float roughness) {
-    float a = roughness * roughness;
-    float a2 = a * a;
+float distributionGGXFor(float3 N, float3 H, float roughness) {
     float NdotH = max(dot(N, H), 0.0);
-    float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
-    return a2 / (kPi * d * d);
+    float a = roughness * roughness;
+    return distributionGGX(NdotH * NdotH, a * a);
 }
 
 /**
@@ -267,7 +259,7 @@ float4 prefilterFragment(Varyings input) : SV_Target {
         }
         // Sample from a mip chosen by how much of the environment this sample
         // stands for, which is what keeps a rough surface from sparkling.
-        float D = distributionGGX(N, H, roughness);
+        float D = distributionGGXFor(N, H, roughness);
         float NdotH = max(dot(N, H), 0.0);
         float HdotV = max(dot(H, V), 0.0);
         float pdf = D * NdotH / (4.0 * HdotV) + 0.0001;

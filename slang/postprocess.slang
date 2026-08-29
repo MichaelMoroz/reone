@@ -110,10 +110,6 @@ Varyings postVertex(uint vertexId: SV_VertexID) {
     return output;
 }
 
-float rgbToLuma(float3 rgb) {
-    return dot(rgb, float3(0.299, 0.587, 0.114));
-}
-
 /**
  * The last pass of every mode, and the only one that decides what display
  * colour is.

@@ -40,6 +40,12 @@ import uniforms;
 
 static const float kDirectLightPi = 3.14159265;
 
+/** Odyssey's own falloff, radius^2 / (radius + d)^2; retro's fidelity target and what the sphere below is calibrated against. */
+public float odysseyLightAttenuation(float radius, float distance) {
+    float d = radius + distance;
+    return (radius * radius) / (d * d);
+}
+
 /**
  * The solid-angle falloff of a spherical emitter, normalised so the emitter
  * ratio dial is brightness-neutral in the far field: far away it decays as

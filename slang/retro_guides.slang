@@ -28,6 +28,8 @@
 // the albedo retro's resolve multiplies its lighting by, so the pipeline tags
 // that image directly.
 
+import lib.gbuf;
+
 [[vk::binding(0, 1)]] RWTexture2D<float4> outNormalRoughness;
 [[vk::binding(1, 1)]] RWTexture2D<float4> outSpecularAlbedo;
 // Sampled rather than storage: the G-buffer's attachments are created without
@@ -58,7 +60,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     // configured for packed world normals, and an eye-space normal would make
     // every reprojection judgement it makes a function of where the camera was
     // looking. Keep the two in step if either changes.
-    float3 eyeNormal = normalize(2.0 * sGBufEyeNormal.Load(int3(pixel, 0)).xyz - 1.0);
+    float3 eyeNormal = gbufDecodeEyeNormal(sGBufEyeNormal.Load(int3(pixel, 0)).xyz);
     float3 normal = normalize(mul(pushConstants.viewInv, float4(eyeNormal, 0.0)).xyz);
 
     // Fully rough, and specular-black.

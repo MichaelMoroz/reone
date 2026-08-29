@@ -30,6 +30,7 @@
 import uniforms;
 import lib.math;
 import lib.gbuf;
+import lib.gbuf_resolve;
 import lib.envmap;
 import lib.shadow;
 import lib.scene_schema;
@@ -41,17 +42,10 @@ import lib.skycube;
 import lib.brdf;
 import lib.material_bindless;
 
-// Set 1 is the persistent resolve table shared with retro_resolve; only the
-// units this pass reads are declared.
-[[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
-[[vk::binding(2, 1)]] Sampler2D sGBufEyeNormal;
-[[vk::binding(3, 1)]] Sampler2D sGBufLightmap;
-[[vk::binding(4, 1)]] Sampler2D sGBufSelfIllum;
-[[vk::binding(5, 1)]] Sampler2D sGBufDepth;
+// The rest of the persistent resolve table; the G-buffer units are lib/gbuf_resolve's.
 [[vk::binding(13, 1)]] Sampler2D sBRDFLUT;
 [[vk::binding(16, 1)]] SamplerCubeArray sIrradianceMapArray;
 [[vk::binding(17, 1)]] SamplerCubeArray sPrefilteredEnvMapArray;
-[[vk::binding(21, 1), vk::image_format("r32ui")]] Sampler2D<uint> sGBufTriangleId;
 
 [[vk::binding(1, 2)]] StructuredBuffer<uint> mergedMaterialIds;
 
@@ -200,10 +194,7 @@ Channels terminator(float3 noiseFree) {
 }
 
 Channels shadePixel(float2 uv, int2 pixel) {
-    float4 mainTexSample = sGBufDiffuse.SampleLevel(uv, 0.0);
-    float4 lightmapSample = sGBufLightmap.SampleLevel(uv, 0.0);
-    float4 selfIllumSample = sGBufSelfIllum.SampleLevel(uv, 0.0);
-    uint triangleId = sGBufTriangleId.Load(int3(pixel, 0)).r;
+    uint triangleId = gbufTriangleId(pixel);
 
     // Nothing drawn here: the sky's own branch, matching the tracer's miss. The
     // sky dial is shared, so this radiance equals the tracer's on the same
@@ -219,11 +210,14 @@ Channels shadePixel(float2 uv, int2 pixel) {
         return terminator(skyRadiance(sSkyCube, direction, pushConstants.skyIntensity));
     }
     InstanceMaterial material = instanceMaterials[mergedMaterialIds[triangleId]];
-
-    float3 eyePos = reconstructViewPos(uv);
-    float3 eyeNormal = normalize(2.0 * sGBufEyeNormal.SampleLevel(uv, 0.0).xyz - 1.0);
-    float3 worldPos = mul(globalUniforms.viewInv, float4(eyePos, 1.0)).xyz;
-    float3 normal = normalize(mul(globalUniforms.viewInv, float4(eyeNormal, 0.0)).xyz);
+    GBufferSurface g = readGBufferSurface(uv);
+    float4 mainTexSample = g.diffuse;
+    float4 lightmapSample = g.lightmap;
+    float4 selfIllumSample = g.selfIllum;
+    float3 eyePos = g.eyePosition;
+    float3 eyeNormal = g.eyeNormal;
+    float3 worldPos = g.worldPosition;
+    float3 normal = g.normal;
     float3 V = normalize(globalUniforms.cameraPosition.xyz - worldPos);
 
     // The shared material chain: the same decode, curation and category
@@ -236,9 +230,8 @@ Channels shadePixel(float2 uv, int2 pixel) {
     float roughness = surface.roughness;
     float3 materialAmbient = gammaToLinear(material.ambientColor.rgb);
 
-    bool envmapped, hasLightmap, staticObject, shadowsEnabled, fogEnabled, thinSurface;
-    unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
-                           shadowsEnabled, fogEnabled, thinSurface);
+    bool envmapped = g.envmapped, hasLightmap = g.hasLightmap, staticObject = g.staticObject,
+         shadowsEnabled = g.shadowsEnabled, thinSurface = g.thin;
 
     // Parity: the bare shared unoccluded sum, into noiseFree, and the sky class
     // blacked, exactly as the tracer's parity branch. Hash-equal by construction.

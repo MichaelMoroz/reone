@@ -21,19 +21,16 @@
 import uniforms;
 import lib.math;
 import lib.gbuf;
+import lib.gbuf_resolve;
+import lib.assemble;
+import lib.direct_light;
 import lib.shadow;
 import lib.scene_schema;
 import lib.skycube;
 import lib.envmap;
 import lib.material_bindless;
 
-[[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
-[[vk::binding(2, 1)]] Sampler2D sGBufEyeNormal;
-[[vk::binding(3, 1)]] Sampler2D sGBufLightmap;
-[[vk::binding(4, 1)]] Sampler2D sGBufSelfIllum;
-[[vk::binding(5, 1)]] Sampler2D sGBufDepth;
 [[vk::binding(17, 1)]] SamplerCubeArray sPrefilteredEnvMapArray;
-[[vk::binding(21, 1), vk::image_format("r32ui")]] Sampler2D<uint> sGBufTriangleId;
 // The merged triangle-to-material table. The G-buffer stores the triangle
 // because the tracer needs the geometry behind it; the material follows from
 // the triangle, so there is no material-id target for this pass to read.
@@ -84,21 +81,9 @@ Varyings retroResolveVertex(uint vertexId : SV_VertexID) {
     return output;
 }
 
-float3 reconstructViewPos(float2 uv) {
-    return gbufViewPosition(uv, sGBufDepth.Sample(uv).r, globalUniforms.projectionInv);
-}
-
-float lightAttenuationQuadratic(GlobalUniformsLight light, float distance) {
-    float d = light.radius + distance;
-    return (light.radius * light.radius) / (d * d);
-}
-
 [shader("fragment")]
 float4 retroResolveFragment(Varyings input) : SV_Target0 {
-    float4 diffuseSample = sGBufDiffuse.Sample(input.uv);
-    float4 lightmapSample = sGBufLightmap.Sample(input.uv);
-    float4 selfIllumSample = sGBufSelfIllum.Sample(input.uv);
-    uint triangleId = sGBufTriangleId.Load(int3(int2(input.position.xy), 0)).r;
+    uint triangleId = gbufTriangleId(int2(input.position.xy));
 
     // The triangle-id clear and an uncovered alpha-tested pixel both carry this
     // sentinel, and nothing wrote depth there either - the triangle id and the
@@ -128,19 +113,15 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
         return float4(sky, 1.0);
     }
     InstanceMaterial material = instanceMaterials[mergedMaterialIds[triangleId]];
-
-    float3 eyePos = reconstructViewPos(input.uv);
-    float3 eyeNormal = normalize(2.0 * sGBufEyeNormal.Sample(input.uv).xyz - 1.0);
-    float3 worldPos = mul(globalUniforms.viewInv, float4(eyePos, 1.0)).xyz;
-    float3 normal = normalize(mul(globalUniforms.viewInv, float4(eyeNormal, 0.0)).xyz);
-
-    bool envmapped;
-    bool hasLightmap;
-    bool staticObject;
-    bool shadowsEnabled;
-    bool fogEnabled, thinSurface;
-    unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
-                           shadowsEnabled, fogEnabled, thinSurface);
+    GBufferSurface g = readGBufferSurface(input.uv);
+    float4 diffuseSample = g.diffuse;
+    float4 lightmapSample = g.lightmap;
+    float4 selfIllumSample = g.selfIllum;
+    float3 eyePos = g.eyePosition;
+    float3 worldPos = g.worldPosition;
+    float3 normal = g.normal;
+    bool envmapped = g.envmapped, hasLightmap = g.hasLightmap, staticObject = g.staticObject,
+         shadowsEnabled = g.shadowsEnabled, fogEnabled = g.fogEnabled, thinSurface = g.thin;
     // Retro takes the shadow-through, so a cutout is not lit as though it were
     // solid, but not the two-sided diffuse: its lighting model is the
     // reference, and brightening the far side of every leaf would be an
@@ -216,7 +197,7 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
         float distance = length(lightVector);
         if (distance > light.radius * light.radius) continue;
 
-        float attenuation = lightAttenuationQuadratic(light, distance);
+        float attenuation = odysseyLightAttenuation(light.radius, distance);
         if (light.ambientOnly != 0) {
             // No direction, so no depth test against it means anything.
             ambient += light.multiplier * attenuation * materialAmbient * light.color.rgb;
@@ -278,9 +259,8 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     }
 
     if (fogEnabled) {
-        float distance = length(worldPos - globalUniforms.cameraPosition.xyz);
-        float fog = 1.0 - saturate((globalUniforms.fogFar - distance) /
-                                   max(0.0001, globalUniforms.fogFar - globalUniforms.fogNear));
+        float fog = fogAmount(worldPos, globalUniforms.cameraPosition.xyz,
+                              globalUniforms.fogNear, globalUniforms.fogFar);
         color = lerp(color, globalUniforms.fogColor.rgb, fog);
     }
     // Everything above is deliberately the original's gamma-space arithmetic,
