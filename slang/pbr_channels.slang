@@ -39,6 +39,7 @@ import lib.surface_model;
 import lib.direct_light;
 import lib.skycube;
 import lib.brdf;
+import lib.material_bindless;
 
 // Set 1 is the persistent resolve table shared with retro_resolve; only the
 // units this pass reads are declared.
@@ -53,9 +54,6 @@ import lib.brdf;
 [[vk::binding(21, 1), vk::image_format("r32ui")]] Sampler2D<uint> sGBufTriangleId;
 
 [[vk::binding(1, 2)]] StructuredBuffer<uint> mergedMaterialIds;
-[[vk::binding(2, 2)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
-[[vk::binding(3, 2)]] Sampler2D bindlessTextures[];
-[[vk::binding(5, 2)]] SamplerCube bindlessTextureCubes[];
 
 // Set 3: the sky cube and the channel outputs, in descriptors.h's order; the
 // composite's image (binding 0) belongs to a later dispatch.
@@ -94,13 +92,8 @@ static const uint kResolveFlagParityDirect = 16u;
 static const float kMaxReflectionLOD = 4.0;
 static const float kSsaoMaxDistance = 500.0;
 
-/** View-space position from the depth the geometry pass left; see the note in
-    the SSR module, which reconstructs the same way. */
 float3 reconstructViewPos(float2 uv) {
-    float depth = sGBufDepth.SampleLevel(uv, 0.0).r;
-    float3 ndc = float3(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y, depth);
-    float4 viewPos = mul(globalUniforms.projectionInv, float4(ndc, 1.0));
-    return viewPos.xyz / viewPos.w;
+    return gbufViewPosition(uv, sGBufDepth.SampleLevel(uv, 0.0).r, globalUniforms.projectionInv);
 }
 
 /** Screen-space ambient occlusion; weights the indirect diffuse channel. */
@@ -130,16 +123,6 @@ float screenSpaceOcclusion(float2 uv, int2 pixel, float3 pos, float3 normal) {
     }
     return 1.0 - (occlusion / float(kNumSSAOSamples)) *
                      (1.0 - smoothstep(0.0, kSsaoMaxDistance, abs(pos.z)));
-}
-
-float3 sampleAuthoredMirror(InstanceMaterial material, float3 worldReflection) {
-    if (material.envMapCube != kNoTexture) {
-        return bindlessTextureCubes[NonUniformResourceIndex(material.envMapCube)]
-            .SampleLevel(worldReflection, 0.0).rgb;
-    }
-    float2 uv = authoredMirrorUV(worldReflection);
-    return bindlessTextures[NonUniformResourceIndex(material.envMap)]
-        .SampleLevel(uv, 0.0).rgb;
 }
 
 /** Everything downstream needs from one PBR direct-light evaluation. Private
@@ -340,7 +323,7 @@ Channels shadePixel(float2 uv, int2 pixel) {
         float3 Fr = fresnelSchlickRoughness(NdotV, F0, roughness);
         float2 brdf = sBRDFLUT.SampleLevel(float2(NdotV, roughness), 0.0).xy;
         ambientS = mainTexSample.a * environment * (Fr * brdf.x + brdf.y);
-        mirror = gammaToLinear(sampleAuthoredMirror(
+        mirror = gammaToLinear(sampleAuthoredMirrorLevel0(
                      material,
                      authoredMirrorReflection(worldPos, globalUniforms.cameraPosition.xyz,
                                               normal))) *

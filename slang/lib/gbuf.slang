@@ -16,6 +16,18 @@
  */
 module gbuf;
 
+/**
+ * View-space position of a G-buffer texel. Device depth stays in [0,1]; NDC y
+ * is negated because the geometry pass rasterises through a negative-height
+ * viewport. Every consumer of the G-buffer places a pixel through this one
+ * function, so the modes cannot disagree about where a pixel is.
+ */
+public float3 gbufViewPosition(float2 uv, float depth, float4x4 projectionInv) {
+    float3 ndc = float3(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y, depth);
+    float4 viewPos = mul(projectionInv, float4(ndc, 1.0));
+    return viewPos.xyz / viewPos.w;
+}
+
 // Geometry feature bits packed into the alpha of the lightmap target.
 // Ported from glsl/i_gbuf.glsl.
 

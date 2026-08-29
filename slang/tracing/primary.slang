@@ -111,12 +111,8 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     }
 
     float2 uv = (float2(pixel) + 0.5) / float2(extent);
-    // NDC y is negated for the negative-height viewport. Identical to
-    // reconstructViewPos in pbr_channels.slang: same pixel, same world point.
-    float depth = gbufDepth.SampleLevel(uv, 0.0).r;
-    float3 ndc = float3(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y, depth);
-    float4 viewHomogeneous = mul(globalUniforms.projectionInv, float4(ndc, 1.0));
-    float3 viewPosition = viewHomogeneous.xyz / viewHomogeneous.w;
+    float3 viewPosition = gbufViewPosition(uv, gbufDepth.SampleLevel(uv, 0.0).r,
+                                           globalUniforms.projectionInv);
     float3 world = mul(globalUniforms.viewInv, float4(viewPosition, 1.0)).xyz;
 
     // The triangle's own geometric normal, face-forwarded to the camera ray as

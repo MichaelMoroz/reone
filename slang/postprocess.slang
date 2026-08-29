@@ -29,6 +29,7 @@
 
 import uniforms;
 import lib.math;
+import lib.gbuf;
 // For ptDisplayTransform. The transform is colour maths taking its dials as
 // arguments, so the shared post-process pass calls the same one the tracer's
 // own passes were written against rather than a second copy of it.
@@ -527,10 +528,8 @@ struct FogPushConstants {
 [shader("fragment")]
 float4 fogFragment(Varyings input) : SV_Target {
     float4 texel = sMainTex.SampleLevel(input.uv, 0.0);
-    const float depth = sGBufDepth.SampleLevel(input.uv, 0.0).r;
-    const float3 ndc = float3(2.0 * input.uv.x - 1.0, 1.0 - 2.0 * input.uv.y, depth);
-    float4 eye = mul(globalUniforms.projectionInv, float4(ndc, 1.0));
-    const float3 eyePos = eye.xyz / eye.w;
+    const float3 eyePos = gbufViewPosition(input.uv, sGBufDepth.SampleLevel(input.uv, 0.0).r,
+                                           globalUniforms.projectionInv);
     const float3 worldPos = mul(globalUniforms.viewInv, float4(eyePos, 1.0)).xyz;
     const float3 cameraPos = globalUniforms.cameraPosition.xyz;
 

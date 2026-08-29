@@ -32,6 +32,7 @@
 // the tracer's contract carries end-to-end is RAS-037.
 
 import uniforms;
+import lib.gbuf;
 
 [[vk::binding(0, 1)]] Sampler2D sSceneColor;
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
@@ -42,13 +43,8 @@ import uniforms;
 static const float kSsrMaxDistance = 100.0;
 static const float kEdgeFadeStart = 0.8;
 
-/** The same Vulkan view-space reconstruction every consumer of this G-buffer
-    runs; see the note in tracing/primary.slang. */
 float3 reconstructViewPos(float2 uv) {
-    float depth = sGBufDepth.SampleLevel(uv, 0.0).r;
-    float3 ndc = float3(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y, depth);
-    float4 viewPos = mul(globalUniforms.projectionInv, float4(ndc, 1.0));
-    return viewPos.xyz / viewPos.w;
+    return gbufViewPosition(uv, sGBufDepth.SampleLevel(uv, 0.0).r, globalUniforms.projectionInv);
 }
 
 float distanceSquared(float2 a, float2 b) { float2 d = a - b; return dot(d, d); }

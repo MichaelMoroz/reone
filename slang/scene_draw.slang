@@ -21,6 +21,7 @@ import uniforms;
 import lib.gbuf;
 import lib.math;
 import lib.envmap;
+import lib.material_bindless;
 import lib.grasscard;
 import lib.scene_schema;
 import lib.shadow;
@@ -39,10 +40,7 @@ static const float4 kBindlessPoisonSample = float4(1.0, 0.0, 1.0, 254.0 / 255.0)
 
 [[vk::binding(0, 2)]] StructuredBuffer<MergedVertex> mergedVertices;
 [[vk::binding(1, 2)]] StructuredBuffer<uint> mergedMaterialIds;
-[[vk::binding(2, 2)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
-[[vk::binding(3, 2)]] Sampler2D bindlessTextures[];
 [[vk::binding(4, 2)]] Sampler2DArray bindlessTextureArrays[];
-[[vk::binding(5, 2)]] SamplerCube bindlessTextureCubes[];
 [[vk::binding(6, 2)]] StructuredBuffer<float4> grassCardVertices;
 [[vk::binding(7, 2)]] StructuredBuffer<uint> grassCardIndices;
 [[vk::binding(8, 2)]] StructuredBuffer<GrassCardInstance> grassCardInstances;
@@ -468,17 +466,6 @@ float3 megaMaterialNormal(InstanceMaterial material, Varyings input, float2 uv,
     return normal;
 }
 
-float3 sampleMegaEnvMap(InstanceMaterial material, float3 worldReflection) {
-    if ((material.featureMask & kMaterialEnvMapCube) != 0 &&
-        material.envMapCube != kNoTexture) {
-        return bindlessTextureCubes[NonUniformResourceIndex(material.envMapCube)]
-            .Sample(worldReflection).rgb;
-    }
-    if (material.envMap == kNoTexture) return float3(0.0);
-    return bindlessTextures[NonUniformResourceIndex(material.envMap)]
-        .Sample(authoredMirrorUV(worldReflection)).rgb;
-}
-
 [shader("fragment")]
 GBufferOutput sceneDrawFragment(Varyings input, uint primitiveId : SV_PrimitiveID,
                                bool isFrontFace : SV_IsFrontFace) {
@@ -625,7 +612,7 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
         if (envmapped) {
             float3 worldReflection = authoredMirrorReflection(
                 input.worldPos, globalUniforms.cameraPosition.xyz, materialNormal);
-            color += sampleMegaEnvMap(material, worldReflection) * (1.0 - coverage);
+            color += sampleAuthoredMirror(material, worldReflection) * (1.0 - coverage);
         }
         if ((material.featureMask & kMaterialWater) != 0) {
             color *= material.waterAlpha;

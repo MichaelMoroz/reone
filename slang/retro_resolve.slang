@@ -25,6 +25,7 @@ import lib.shadow;
 import lib.scene_schema;
 import lib.skycube;
 import lib.envmap;
+import lib.material_bindless;
 
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
 [[vk::binding(2, 1)]] Sampler2D sGBufEyeNormal;
@@ -37,9 +38,6 @@ import lib.envmap;
 // because the tracer needs the geometry behind it; the material follows from
 // the triangle, so there is no material-id target for this pass to read.
 [[vk::binding(1, 2)]] StructuredBuffer<uint> mergedMaterialIds;
-[[vk::binding(2, 2)]] StructuredBuffer<InstanceMaterial> instanceMaterials;
-[[vk::binding(3, 2)]] Sampler2D bindlessTextures[];
-[[vk::binding(5, 2)]] SamplerCube bindlessTextureCubes[];
 // Set 3 is the resolve set: this frame's storage output, which only the compute
 // PBR resolve writes, and the baked sky cube, which both resolves read. Retro
 // stays a fragment pass and therefore leaves binding 0 alone.
@@ -86,30 +84,13 @@ Varyings retroResolveVertex(uint vertexId : SV_VertexID) {
     return output;
 }
 
-// This is the same Vulkan reconstruction as pbr_channels.slang: device depth
-// remains in [0,1], and y undoes the negative-height geometry viewport.
 float3 reconstructViewPos(float2 uv) {
-    float depth = sGBufDepth.Sample(uv).r;
-    float3 ndc = float3(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y, depth);
-    float4 viewPos = mul(globalUniforms.projectionInv, float4(ndc, 1.0));
-    return viewPos.xyz / viewPos.w;
+    return gbufViewPosition(uv, sGBufDepth.Sample(uv).r, globalUniforms.projectionInv);
 }
 
 float lightAttenuationQuadratic(GlobalUniformsLight light, float distance) {
     float d = light.radius + distance;
     return (light.radius * light.radius) / (d * d);
-}
-
-float3 sampleAuthoredMirror(InstanceMaterial material, float3 worldReflection) {
-    if (material.envMapCube != kNoTexture) {
-        // This fullscreen pass cannot derive a stable cube LOD from its
-        // quantized normal. Minified-surface sharpness is a separate policy;
-        // the authored mirror deliberately uses its base level here.
-        return bindlessTextureCubes[NonUniformResourceIndex(material.envMapCube)]
-            .SampleLevel(worldReflection, 0.0).rgb;
-    }
-    return bindlessTextures[NonUniformResourceIndex(material.envMap)]
-        .Sample(authoredMirrorUV(worldReflection)).rgb;
 }
 
 [shader("fragment")]

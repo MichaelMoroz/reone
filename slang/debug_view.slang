@@ -174,13 +174,6 @@ float3 materialIdColor(uint materialId) {
                   float((h >> 16) & 0xffu)) * (1.0 / 255.0);
 }
 
-/** View-space position, exactly as both raster resolves reconstruct it. */
-float3 reconstructViewPos(float2 uv, float depth) {
-    float3 ndc = float3(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y, depth);
-    float4 viewPos = mul(globalUniforms.projectionInv, float4(ndc, 1.0));
-    return viewPos.xyz / viewPos.w;
-}
-
 float3 channelColor(float2 uv, int2 pixel) {
     uint view = pushConstants.view & 0xffu;
     // The radiance views, straight off the channel images, ahead of the sky
@@ -283,7 +276,7 @@ float3 channelColor(float2 uv, int2 pixel) {
         float depth = sGBufDepth.SampleLevel(uv, 0.0).r;
         // Positive linear view distance on a fixed 100-unit ramp, so the same
         // surface reads the same grey in every mode and between two captures.
-        return float3(saturate(abs(reconstructViewPos(uv, depth).z) / 100.0));
+        return float3(saturate(abs(gbufViewPosition(uv, depth, globalUniforms.projectionInv).z) / 100.0));
     }
     case kDebugMotion: {
         // xy around mid-grey, magnitude in blue: statics read flat, movers
