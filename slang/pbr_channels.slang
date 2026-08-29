@@ -228,7 +228,7 @@ Channels shadePixel(float2 uv, int2 pixel) {
 
     // The shared material chain: the same decode, curation and category
     // override the tracer runs, so albedo/roughness/metallic match its primary.
-    MaterialSurface surface = resolveMaterial(material, mainTexSample.rgb, mainTexSample.a,
+    MaterialSurface surface = resolveMaterial(material, mainTexSample.rgb, mainTexSample.a, 1.0,
                                               pushConstants.albedoGamma,
                                               pushConstants.roughnessFloor);
     float3 albedo = surface.albedo;

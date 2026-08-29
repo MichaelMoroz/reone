@@ -23,47 +23,15 @@
 // text uniform block, which is what the OpenGL path does too.
 
 import uniforms;
+import lib.text2d;
 
 [[vk::binding(0, 1)]] Sampler2D sMainTex;
-
-/** Corner of a unit quad, 0..1, from a six-vertex triangle list. */
-float2 quadCorner(uint vertexId) {
-    // Triangles (0,1,2) and (1,2,3) over corners 0=(0,0) 1=(1,0) 2=(0,1) 3=(1,1).
-    uint corner = (vertexId < 3) ? vertexId : vertexId - 2;
-    return float2(corner & 1, (corner >> 1) & 1);
-}
-
-/**
- * Texture coordinate for a corner.
- *
- * The OpenGL quad mesh pairs position (0,0) with uv (0,1) - v runs upwards
- * while screen y runs down - so the same pairing has to hold here or every
- * sprite, glyph and panel comes out upside down.
- */
-float2 quadUV(float2 corner) {
-    return float2(corner.x, 1.0f - corner.y);
-}
 
 struct Varyings {
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;
     nointerpolation float4 glyphUV : TEXCOORD1;
 };
-
-// Coverage reconstruction is only valid while magnifying cutout artwork.
-// At native size or during minification the stored coverage is already the
-// best available signal, and thresholding it would discard detail.
-float sharpenMagnifiedAlpha(Sampler2D image, float2 uv, float alpha) {
-    uint width, height;
-    image.GetDimensions(width, height);
-    float2 sourceFootprint = fwidth(uv) * float2(width, height);
-    float largestFootprint = max(sourceFootprint.x, sourceFootprint.y);
-    float sharpenAmount = 1.0f - smoothstep(0.75f, 1.0f, largestFootprint);
-
-    float alphaWidth = max(0.5f * fwidth(alpha), 1.0f / 255.0f);
-    float sharpened = smoothstep(0.5f - alphaWidth, 0.5f + alphaWidth, alpha);
-    return lerp(alpha, sharpened, sharpenAmount);
-}
 
 /**
  * A quad placed by localUniforms.model and projected by
@@ -139,14 +107,6 @@ Varyings textVertex(uint vertexId: SV_VertexID, uint glyph: SV_InstanceID) {
 
 [shader("fragment")]
 float4 textFragment(Varyings input) : SV_Target {
-    uint width, height;
-    sMainTex.GetDimensions(width, height);
-    float2 halfTexel = 0.5f / float2(width, height);
-    float2 inset = min(halfTexel, 0.5f * input.glyphUV.zw);
-    float2 uv = clamp(input.uv,
-                      input.glyphUV.xy + inset,
-                      input.glyphUV.xy + input.glyphUV.zw - inset);
-    float4 sample = sMainTex.Sample(uv);
-    float alpha = sharpenMagnifiedAlpha(sMainTex, uv, sample.a);
-    return float4(localUniforms.color.rgb * sample.rgb, localUniforms.color.a * alpha);
+    float4 glyph = glyphTexel(sMainTex, input.uv, input.glyphUV);
+    return float4(localUniforms.color.rgb * glyph.rgb, localUniforms.color.a * glyph.a);
 }

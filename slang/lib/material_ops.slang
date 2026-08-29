@@ -17,6 +17,7 @@
 module material_ops;
 
 import lib.scene_schema;
+import lib.math;
 
 // What an authored Odyssey texel becomes before any light touches it: the
 // decode, the curated per-object operations and the per-category calibration
@@ -57,6 +58,11 @@ public float3 decodeAlbedo(float3 rgb, float gamma) {
     return pow(max(rgb, 0.0), float3(gamma));
 }
 
+/** Coverage of an authored texel: its alpha, or its luma where the colour is premultiplied. */
+public float texelCoverage(InstanceMaterial material, float4 texel) {
+    return (material.featureMask & kMaterialPremulAlpha) != 0 ? rgbToLuma(texel.rgb) : texel.a;
+}
+
 /** The shading parameters an authored texel resolves to. */
 public struct MaterialSurface {
     public float3 albedo;
@@ -69,15 +75,17 @@ public struct MaterialSurface {
  *
  * texelAlpha is the diffuse alpha: Odyssey carries no roughness channel and
  * the alpha stands in for it, floored so an authored mirror is never a perfect
- * one. The ordering matters and is not arbitrary - curation runs against the
- * albedo it derived, then the category override replaces that albedo, then the
- * roughness scale and floor close over whatever survived.
+ * one. albedoScale is applied after the decode and before curation - a
+ * premultiplied texel divides its coverage back out there. The ordering
+ * matters: curation runs against the albedo it derived, then the category
+ * override replaces that albedo, then the roughness scale and floor close
+ * over whatever survived.
  */
 public MaterialSurface resolveMaterial(InstanceMaterial material, float3 texelRgb,
-                                       float texelAlpha, float albedoGamma,
-                                       float roughnessFloor) {
+                                       float texelAlpha, float albedoScale,
+                                       float albedoGamma, float roughnessFloor) {
     MaterialSurface s;
-    s.albedo = decodeAlbedo(texelRgb, albedoGamma);
+    s.albedo = decodeAlbedo(texelRgb, albedoGamma) * albedoScale;
     s.metallic = 0.0;
     s.roughness = clamp(texelAlpha, roughnessFloor, 1.0);
 

@@ -152,6 +152,29 @@ public float3 ptTerminatorShift(float3 position, float3 p0, float3 p1, float3 p2
     return weights.x * (p0 + u0) + weights.y * (p1 + u1) + weights.z * (p2 + u2);
 }
 
+/**
+ * The merged-triangle half of a HitGeometry, given the header (material,
+ * indices, weights, ray direction, position): corners, the geometric normal
+ * face-forwarded to the ray, the UVs and the terminator-shifted shadow origin.
+ * The traced hit and the G-buffer primary both build their surface from this.
+ */
+public void ptFillMergedHitGeometry(inout HitGeometry hit) {
+    uint3 indices = hit.indices;
+    float3 weights = hit.weights;
+    hit.card = false;
+    hit.p0 = mergedVertices[indices.x].position;
+    hit.p1 = mergedVertices[indices.y].position;
+    hit.p2 = mergedVertices[indices.z].position;
+    hit.geometricNormal = normalize(cross(hit.p1 - hit.p0, hit.p2 - hit.p0));
+    if (dot(hit.geometricNormal, hit.rayDirection) > 0.0) hit.geometricNormal = -hit.geometricNormal;
+    hit.uv0 = mergedVertices[indices.x].uv1;
+    hit.uv1 = mergedVertices[indices.y].uv1;
+    hit.uv2Vertex = mergedVertices[indices.z].uv1;
+    hit.uv = ptTransformedUV(hit.materialIndex, hit.uv0 * weights.x + hit.uv1 * weights.y + hit.uv2Vertex * weights.z);
+    hit.uv2 = mergedVertices[indices.x].uv2 * weights.x + mergedVertices[indices.y].uv2 * weights.y + mergedVertices[indices.z].uv2 * weights.z;
+    hit.shadowOrigin = ptTerminatorShift(hit.position, hit.p0, hit.p1, hit.p2, indices, weights);
+}
+
 /** Builds the HitGeometry for a committed hit. */
 public HitGeometry ptMakeHitGeometry(TraceHit trace, RayDesc ray, float coneWidth) {
     uint3 indices = trace.indices;
@@ -183,17 +206,7 @@ public HitGeometry ptMakeHitGeometry(TraceHit trace, RayDesc ray, float coneWidt
         hit.shadowOrigin = hit.position;
         return hit;
     }
-    hit.p0 = mergedVertices[indices.x].position;
-    hit.p1 = mergedVertices[indices.y].position;
-    hit.p2 = mergedVertices[indices.z].position;
-    hit.geometricNormal = normalize(cross(hit.p1 - hit.p0, hit.p2 - hit.p0));
-    if (dot(hit.geometricNormal, rayDirection) > 0.0) hit.geometricNormal = -hit.geometricNormal;
-    hit.uv = ptTransformedUV(trace.materialIndex, mergedVertices[indices.x].uv1 * weights.x + mergedVertices[indices.y].uv1 * weights.y + mergedVertices[indices.z].uv1 * weights.z);
-    hit.uv2 = mergedVertices[indices.x].uv2 * weights.x + mergedVertices[indices.y].uv2 * weights.y + mergedVertices[indices.z].uv2 * weights.z;
-    hit.uv0 = mergedVertices[indices.x].uv1;
-    hit.uv1 = mergedVertices[indices.y].uv1;
-    hit.uv2Vertex = mergedVertices[indices.z].uv1;
-    hit.shadowOrigin = ptTerminatorShift(hit.position, hit.p0, hit.p1, hit.p2, indices, weights);
+    ptFillMergedHitGeometry(hit);
     return hit;
 }
 
@@ -257,97 +270,57 @@ public float ptRayConeLod(InstanceMaterial material, HitGeometry hit) {
     return max(0.0, 0.5 * log2(max(density, 1e-12)) + log2(max(hit.coneWidth, 1e-9)));
 }
 
-// The curated channel op now lives in lib/material_ops.slang, with the rest of
-// the authored-texel chain, because the raster PBR resolve evaluates it too -
-// it is not a tracer detail.
+/** The authored env-map share, scaled by the category override: the mirror fraction that lifts Rf0. */
+public float ptEnvStrength(InstanceMaterial material, bool envmapped, float alpha) {
+    return (envmapped ? (1.0 - alpha) : 0.0) * material.overrideParams.z;
+}
+
+/** Additive radiance of a purely emissive surface: authored as light even without a self-illum controller. */
+public float3 ptUnlitTransparentEmission(InstanceMaterial material, float3 radianceTexel) {
+    return max(material.selfIllumColor.rgb, float3(1.0)) * radianceTexel *
+           pushConstants.emissiveIntensity * material.overrideParams.y;
+}
 
 public struct PbrSurface : ISurfaceModel {
     public SurfaceShading shade(HitGeometry hit) {
         InstanceMaterial material = instanceMaterials[hit.materialIndex];
         SurfaceShading shading;
         shading.terminatesPath = false;
-        shading.albedo = float3(1.0);
-        shading.alpha = 1.0;
-        // The same texel read twice, under the two decodes, because it plays
-        // two roles: reflectance for the light it bounces, radiance for the
-        // light it emits. Only the first follows the albedo dial.
-        float3 radianceTexel = float3(1.0);
+        float4 texel = float4(1.0);
         if (material.mainTex != kNoTexture) {
             UvGradients gradients = anisotropicGradients(hit);
-            // Textures are stored gamma-encoded; every term this shader
-            // computes is linear, exactly as the raster resolve does it.
-            float4 sample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleGrad(hit.uv, gradients.x, gradients.y);
-            shading.albedo = ptDecodeAlbedo(sample.rgb);
-            radianceTexel = ptDecodeEmission(sample.rgb);
-            shading.alpha = sample.a;
-            if ((material.featureMask & kMaterialPremulAlpha) != 0) {
-                // Colour is already multiplied by coverage and the alpha
-                // channel is unusable, so luma recovers the coverage and
-                // dividing it back out gives the unpremultiplied colour.
-                // Reading .a here instead renders KotOR's smoke as its own
-                // negative: opaque wherever the plume is thin. Same recovery
-                // as particles.slang:64-71.
-                shading.alpha = rgbToLuma(sample.rgb);
-                shading.albedo *= 1.0 / max(1e-4, shading.alpha);
-                radianceTexel *= 1.0 / max(1e-4, shading.alpha);
-            }
+            texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleGrad(hit.uv, gradients.x, gradients.y);
         }
-        // Keep the tracer's stand-ins exactly aligned with pbr_channels.slang:
-        // alpha is only a reflectance control on env-mapped materials, never
-        // metalness, and roughness still uses alpha for every material.
-        shading.metallic = 0.0;
-        shading.roughness = clamp(shading.alpha, pushConstants.roughnessFloor, 1.0);
-        // Curated per-object operations, then the per-category calibration
-        // override - both baked into the material record CPU-side; the
-        // shader only evaluates.
-        shading.albedo *= material.curatedAlbedoMul.rgb;
-        shading.roughness = curatedChannel(material.curatedRoughA, material.curatedRoughB,
-                                           shading.albedo, shading.roughness);
-        shading.metallic = curatedChannel(material.curatedMetalA, material.curatedMetalB,
-                                          shading.albedo, shading.metallic);
-        // A scale rather than an override, so curation stays in charge of which
-        // surfaces are metal and this only says how far. Above 0 it tints Rf0
-        // toward albedo, which is the only thing that makes the specular
-        // demodulation factor chromatic - KotOR's own materials are all
-        // dielectric, so without this dial that path cannot be exercised.
-        shading.metallic = saturate(shading.metallic * material.overrideParams.w);
-        shading.albedo = lerp(shading.albedo, ptDecodeAlbedo(material.overrideColor.rgb),
-                              material.overrideColor.w);
+        // The same texel plays two roles - reflectance for the light it bounces,
+        // radiance for the light it emits - and only the first follows the albedo
+        // dial. Premultiplied colour has its coverage divided back out of both.
+        float coverage = texelCoverage(material, texel);
+        float unpremultiply = (material.featureMask & kMaterialPremulAlpha) != 0
+                                  ? 1.0 / max(1e-4, coverage) : 1.0;
+        MaterialSurface surface = resolveMaterial(material, texel.rgb, coverage, unpremultiply,
+                                                  pushConstants.albedoGamma,
+                                                  pushConstants.roughnessFloor);
+        float3 radianceTexel = ptDecodeEmission(texel.rgb) * unpremultiply;
         float4 color = vertexColor(hit);
-        shading.albedo *= color.rgb;
-        shading.alpha *= color.a;
-        if (material.overrideParams.x >= 0.0) shading.roughness = material.overrideParams.x;
-        // Saturate rather than re-applying the floor - see lib/material_ops.slang.
-        shading.roughness = saturate(shading.roughness * material.roughnessScale);
+        shading.albedo = surface.albedo * color.rgb;
+        shading.alpha = coverage * color.a;
+        shading.roughness = surface.roughness;
+        shading.metallic = surface.metallic;
 
         shading.normal = materialNormal(hit, hit.materialIndex);
         shading.envmapped = (material.featureMask & kMaterialEnvMap) != 0;
-        shading.envStrength = (shading.envmapped ? (1.0 - shading.alpha) : 0.0) *
-                              material.overrideParams.z;
+        shading.envStrength = ptEnvStrength(material, shading.envmapped, shading.alpha);
         shading.hasLightmap = (material.featureMask & kMaterialLightmap) != 0;
-        // White, not black, where a surface declares a bake it has no texture
-        // for. Zero is not "no lightmap", it is "a lightmap that absorbs all
-        // light", and it reaches more surfaces than it looks: the lightmaps
-        // diagnostic toggle clears the texture id and leaves the feature bit
-        // set, so turning it off blackened every lightmapped surface in this
-        // mode while raster - which substitutes white in scene_draw.slang -
-        // was unaffected. Same rule both resolves state for unlightmapped
-        // static geometry.
+        // White where a surface declares a bake it has no texture for: zero is
+        // a lightmap that absorbs everything, and the lightmaps toggle clears
+        // the texture while leaving the bit set.
         shading.lightmap = float3(1.0);
         if (shading.hasLightmap && material.lightmap != kNoTexture) {
             shading.lightmap = gammaToLinear(
                 bindlessTextures[NonUniformResourceIndex(material.lightmap)].SampleLevel(hit.uv2, 0.0).rgb);
         }
-        float3 emission = gammaToLinear(material.selfIllumColor.rgb);
-        if (material.curatedEmission.w > 1.5) {
-            emission = material.curatedEmission.rgb;
-        } else if (material.curatedEmission.w > 0.5) {
-            emission *= material.curatedEmission.rgb;
-        }
-        // Emission is additive over shading, like raster self-illumination;
-        // the dial and the category emission scale ride along here. Against the
-        // radiance decode, not the albedo one - see radianceTexel above.
-        shading.emission = emission * radianceTexel * pushConstants.emissiveIntensity;
+        shading.emission = assembleEmission(gammaToLinear(material.selfIllumColor.rgb), radianceTexel,
+                                            material.curatedEmission, pushConstants.emissiveIntensity);
         return shading;
     }
 
@@ -492,10 +465,7 @@ public struct UnlitTransparentSurface : ISurfaceModel {
         shading.lightmap = float3(1.0);
         shading.envmapped = false;
         shading.envStrength = 0.0;
-        // Additive diffuse textures are authored as light even when no
-        // self-illum controller is present.
-        shading.emission = max(material.selfIllumColor.rgb, float3(1.0)) * shading.albedo *
-                           pushConstants.emissiveIntensity * material.overrideParams.y;
+        shading.emission = ptUnlitTransparentEmission(material, shading.albedo);
         return shading;
     }
 

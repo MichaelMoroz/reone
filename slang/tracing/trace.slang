@@ -30,6 +30,7 @@
 import lib.math;
 import lib.grasscard;
 import lib.scene_schema;
+import lib.material_ops;
 import uniforms;
 import tracing.resources;
 import tracing.rng;
@@ -91,11 +92,7 @@ float3 barycentricWeights(float2 b) {
     return float3(1.0 - b.x - b.y, b.x, b.y);
 }
 
-/**
- * Coverage of the candidate texel. Base level, unfiltered: the alpha test is
- * a yes/no on the authored texel. Premultiplied textures keep coverage in
- * luma, as particles.slang recovers it.
- */
+/** Coverage of the candidate texel at the base level, unfiltered: a yes/no on the authored texel. */
 float candidateAlpha(inout RayQuery<RAY_FLAG_NONE> query, Candidate c) {
     InstanceMaterial material = instanceMaterials[c.materialIndex];
     bool blended = (material.featureMask & kMaterialBlendedCoverage) != 0;
@@ -122,7 +119,7 @@ float candidateAlpha(inout RayQuery<RAY_FLAG_NONE> query, Candidate c) {
     if (sample) {
         float4 texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)]
                            .SampleLevel(ptTransformedUV(material, uv), 0.0);
-        alpha = (material.featureMask & kMaterialPremulAlpha) != 0 ? rgbToLuma(texel.rgb) : texel.a;
+        alpha = texelCoverage(material, texel);
     }
     if (blended) alpha *= material.diffuseColor.a;
     return alpha * vertexAlpha;

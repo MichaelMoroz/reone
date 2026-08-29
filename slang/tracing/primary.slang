@@ -115,8 +115,9 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
                                            globalUniforms.projectionInv);
     float3 world = mul(globalUniforms.viewInv, float4(viewPosition, 1.0)).xyz;
 
-    // The triangle's own geometric normal, face-forwarded to the camera ray as
-    // ptMakeHitGeometry does: geometry is drawn with culling off.
+    // The triangle's own geometric normal, face-forwarded to the camera ray:
+    // geometry is drawn with culling off. ptFillMergedHitGeometry repeats this
+    // for a merged triangle; a card has no vertex normals or UVs to fill.
     float3 geometricNormal = normalize(cross(p1 - p0, p2 - p0));
     if (dot(geometricNormal, ray.Direction) > 0.0) geometricNormal = -geometricNormal;
 
@@ -147,7 +148,7 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     shading.terminatesPath = false;
     // lib/material_ops.slang's chain, the raster resolve's, over a G-buffer
     // texel; alpha stands in for the reflectance Odyssey has no channel for.
-    MaterialSurface surface = resolveMaterial(material, diffuseSample.rgb, diffuseSample.a,
+    MaterialSurface surface = resolveMaterial(material, diffuseSample.rgb, diffuseSample.a, 1.0,
                                               pushConstants.albedoGamma,
                                               pushConstants.roughnessFloor);
     shading.albedo = surface.albedo;
@@ -161,8 +162,7 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
                            shadowsEnabled, fogEnabled, thinSurface);
     shading.thin = thinSurface;
     shading.envmapped = envmapped;
-    shading.envStrength = (envmapped ? (1.0 - shading.alpha) : 0.0) *
-                          material.overrideParams.z;
+    shading.envStrength = ptEnvStrength(material, envmapped, shading.alpha);
     shading.hasLightmap = hasLightmap;
     // White where there is no bake - see the note in tracing/material.slang.
     shading.lightmap = hasLightmap ? gammaToLinear(lightmapSample.rgb) : float3(1.0);
@@ -183,8 +183,7 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
         shading.terminatesPath = true;
     } else if (material.surfaceType == kPtSurfaceUnlitTransparent) {
         // PURELY EMISSIVE, and in the G-buffer only when it is also cutout.
-        shading.emission = max(material.selfIllumColor.rgb, float3(1.0)) * radianceTexel *
-                           pushConstants.emissiveIntensity * material.overrideParams.y;
+        shading.emission = ptUnlitTransparentEmission(material, radianceTexel);
         shading.terminatesPath = true;
     }
 
@@ -197,16 +196,21 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     hit.hitT = distance;
     hit.coneWidth = spreadAngle * distance;
     hit.position = world;
-    hit.p0 = p0;
-    hit.p1 = p1;
-    hit.p2 = p2;
-    hit.geometricNormal = geometricNormal;
-    // The same shift every traced hit gets; a card has no vertex normals to shift by.
-    hit.shadowOrigin = cardTriangle ? hit.position
-                                    : ptTerminatorShift(hit.position, p0, p1, p2, indices, weights);
-    // Unread: the G-buffer already carries the texel these would fetch.
-    hit.uv = float2(0.0);
-    hit.uv2 = float2(0.0);
+    if (cardTriangle) {
+        hit.card = true;
+        hit.p0 = p0;
+        hit.p1 = p1;
+        hit.p2 = p2;
+        hit.geometricNormal = geometricNormal;
+        hit.shadowOrigin = hit.position;
+        hit.uv = float2(0.0);
+        hit.uv2 = float2(0.0);
+        hit.uv0 = float2(0.0);
+        hit.uv1 = float2(0.0);
+        hit.uv2Vertex = float2(0.0);
+    } else {
+        ptFillMergedHitGeometry(hit);
+    }
 
     primary.covered = true;
     primary.hit = hit;

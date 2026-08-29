@@ -26,6 +26,7 @@ import lib.grasscard;
 import lib.scene_schema;
 import lib.shadow;
 import lib.assemble;
+import lib.material_ops;
 
 // Raster passes over the canonical merged geometry. The G-buffer and shadow
 // draws share one material gate, so coverage cannot disagree between them.
@@ -142,10 +143,7 @@ bool commitsTracedCoverage(InstanceMaterial material, float2 uv, float vertexAlp
     if (material.mainTex != kNoTexture) {
         float4 texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)]
                            .SampleLevel(uv, 0.0);
-        alpha = (material.featureMask & kMaterialPremulAlpha) != 0
-                    ? rgbToLuma(texel.rgb)
-                    : texel.a;
-        alpha *= vertexAlpha;
+        alpha = texelCoverage(material, texel) * vertexAlpha;
     }
     // The authored threshold or the fallback, as ptAlphaTestThreshold resolves it.
     float threshold = alphaTestThreshold(material);
@@ -247,9 +245,7 @@ float blendedShadowCoverage(InstanceMaterial material, float2 uv,
     if (!envmapped && material.mainTex != kNoTexture) {
         float4 texel = bindlessTextures[NonUniformResourceIndex(material.mainTex)]
                            .SampleLevel(uv, 0.0);
-        coverage = (material.featureMask & kMaterialPremulAlpha) != 0
-                       ? rgbToLuma(texel.rgb)
-                       : texel.a;
+        coverage = texelCoverage(material, texel);
     }
     return saturate(coverage * vertexAlpha * material.diffuseColor.a);
 }
@@ -567,14 +563,10 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
     }
 
     bool blended = (material.featureMask & kMaterialBlendedCoverage) != 0;
-    float coverage = texel.a;
+    float coverage = texelCoverage(material, texel);
     float3 texelColor = texel.rgb;
-    if ((material.featureMask & kMaterialPremulAlpha) != 0) {
-        // Match particles.slang and pbr_model.slang completely: recover the
-        // missing coverage and undo it before applying the blend once below.
-        coverage = rgbToLuma(texel.rgb);
-        texelColor *= 1.0 / max(0.0001, coverage);
-    }
+    // Premultiplied colour has its coverage divided back out before the blend applies it once.
+    if ((material.featureMask & kMaterialPremulAlpha) != 0) texelColor *= 1.0 / max(0.0001, coverage);
 
     float objectAlpha = input.color.a * material.diffuseColor.a;
     float3 color = texelColor * input.color.rgb;

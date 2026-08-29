@@ -28,6 +28,7 @@
 // shimmer against the scene it annotates.
 
 import uniforms;
+import lib.text2d;
 
 [[vk::binding(0, 1)]] Sampler2D sFontAtlas;
 [[vk::binding(5, 1)]] Sampler2D sGBufDepth;
@@ -187,52 +188,23 @@ OverlayGlyph overlayTextVertex(uint vertexId: SV_VertexID, uint glyph: SV_Instan
     // texel grid, or every glyph samples between texels and blurs.
     float2 anchorPx = floor(clipToPixels(ndc) + 0.5);
 
-    // Triangles (0,1,2) and (1,2,3) over corners 0=(0,0) 1=(1,0) 2=(0,1)
-    // 3=(1,1), with the v flip that pairs position (0,0) with uv (0,1) - the
-    // same pairing vk2d.slang uses, or every glyph comes out upside down.
-    uint cornerId = (vertexId < 3) ? vertexId : vertexId - 2;
-    float2 corner = float2(cornerId & 1, (cornerId >> 1) & 1);
+    float2 corner = quadCorner(vertexId);
 
     float4 posScale = textUniforms.chars[glyph].posScale;
     float4 glyphUV = textUniforms.chars[glyph].uv;
 
     output.position = float4(
         pixelsToClip(anchorPx + posScale.xy + corner * posScale.zw), saturate(ndc.z), 1.0);
-    output.uv = glyphUV.xy + float2(corner.x, 1.0 - corner.y) * glyphUV.zw;
+    output.uv = glyphUV.xy + quadUV(corner) * glyphUV.zw;
     output.glyphUV = glyphUV;
     output.depth = ndc.z;
     return output;
 }
 
-/** vk2d.slang's coverage sharpening: only while magnifying; at native size the stored coverage is best. */
-float sharpenMagnifiedAlpha(Sampler2D image, float2 uv, float alpha) {
-    uint width, height;
-    image.GetDimensions(width, height);
-    float2 sourceFootprint = fwidth(uv) * float2(width, height);
-    float largestFootprint = max(sourceFootprint.x, sourceFootprint.y);
-    float sharpenAmount = 1.0 - smoothstep(0.75, 1.0, largestFootprint);
-
-    float alphaWidth = max(0.5 * fwidth(alpha), 1.0 / 255.0);
-    float sharpened = smoothstep(0.5 - alphaWidth, 0.5 + alphaWidth, alpha);
-    return lerp(alpha, sharpened, sharpenAmount);
-}
-
-/**
- * vk2d.slang's textFragment plus the occlusion rule. Do not reshape a glyph:
- * an outline or threshold closes this font's one-texel counters.
- */
+/** vk2d.slang's text fragment plus the overlay's occlusion rule. */
 [shader("fragment")]
 float4 overlayTextFragment(OverlayGlyph input) : SV_Target0 {
-    uint width, height;
-    sFontAtlas.GetDimensions(width, height);
-    float2 halfTexel = 0.5 / float2(width, height);
-    float2 inset = min(halfTexel, 0.5 * input.glyphUV.zw);
-    float2 uv = clamp(input.uv, input.glyphUV.xy + inset,
-                      input.glyphUV.xy + input.glyphUV.zw - inset);
-    float4 atlas = sFontAtlas.Sample(uv);
-    float coverage = sharpenMagnifiedAlpha(sFontAtlas, uv, atlas.a);
-
+    float4 glyph = glyphTexel(sFontAtlas, input.uv, input.glyphUV);
     float opacity = overlayOpacity(input.position.xy, input.depth);
-    return float4(pushConstants.color.rgb * atlas.rgb,
-                  pushConstants.color.a * coverage * opacity);
+    return float4(pushConstants.color.rgb * glyph.rgb, pushConstants.color.a * glyph.a * opacity);
 }
