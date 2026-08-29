@@ -17,6 +17,8 @@
 
 #include "reone/game/object/creature.h"
 
+#include "reone/system/profiler.h"
+
 #include <array>
 
 #include "reone/audio/di/services.h"
@@ -650,10 +652,22 @@ bool Creature::isSelectable() const {
 }
 
 void Creature::update(float dt) {
-    Object::update(dt);
-    updateModelAnimation();
-    updateCombat(dt);
-    updateLightsaberSoundPositions();
+    {
+        R_PROFILE_ZONE("Creature::Object::update");
+        Object::update(dt);
+    }
+    {
+        R_PROFILE_ZONE("Creature::updateModelAnimation");
+        updateModelAnimation();
+    }
+    {
+        R_PROFILE_ZONE("Creature::updateCombat");
+        updateCombat(dt);
+    }
+    {
+        R_PROFILE_ZONE("Creature::updateLightsaberSounds");
+        updateLightsaberSoundPositions();
+    }
 }
 
 void Creature::updateModelAnimation() {
@@ -2250,7 +2264,11 @@ void Creature::takeGold(int amount) {
 
 glm::vec3 Creature::computeSteeringForce(const Uniwalk &uni, const glm::vec3 &next, float dt) {
     glm::vec3 desiredForce = glm::normalize(next - _position);
-    glm::vec3 keepoutForce = computeKeepoutForce(uni, _position);
+    glm::vec3 keepoutForce;
+    {
+        R_PROFILE_ZONE("Creature::computeKeepoutForce");
+        keepoutForce = computeKeepoutForce(uni, _position);
+    }
 
     // If we're not making progress - move in a random direction and
     // hope. If we wander off too far, the path will be recalculated.
@@ -2294,6 +2312,7 @@ glm::vec3 Creature::computeSteeringForce(const Uniwalk &uni, const glm::vec3 &ne
 }
 
 bool Creature::navigateTo(const glm::vec3 &dest, bool run, float distance, float dt) {
+    R_PROFILE_ZONE("Creature::navigateTo");
     if (_movementRestricted)
         return false;
 
@@ -2331,7 +2350,12 @@ bool Creature::navigateTo(const glm::vec3 &dest, bool run, float distance, float
 
     // Advance on path.
     if (_path) {
-        glm::vec3 steeringForce = computeSteeringForce(pf.uni, getNextPathPoint(pf, *_path), dt);
+        R_PROFILE_ZONE("Creature::steer + advance");
+        glm::vec3 steeringForce;
+        {
+            R_PROFILE_ZONE("Creature::computeSteeringForce");
+            steeringForce = computeSteeringForce(pf.uni, getNextPathPoint(pf, *_path), dt);
+        }
         _pathVelocity += steeringForce * dt;
 
         float maxSpeed = 0.3f;
@@ -2339,12 +2363,18 @@ bool Creature::navigateTo(const glm::vec3 &dest, bool run, float distance, float
         _pathVelocity = glm::normalize(_pathVelocity) * speed;
 
         glm::vec3 dir = glm::normalize(_pathVelocity);
-        advanceOnPath(dest, dir, run, distance, dt);
+        {
+            R_PROFILE_ZONE("Creature::advanceOnPath");
+            advanceOnPath(dest, dir, run, distance, dt);
+        }
         return false;
     }
 
     // Find a path and start following it.
-    _path = createPath(pf, position(), dest);
+    {
+        R_PROFILE_ZONE("Creature::createPath");
+        _path = createPath(pf, position(), dest);
+    }
     if (!_path) {
         return false;
     }

@@ -17,6 +17,8 @@
 
 #include "reone/game/object/area.h"
 
+#include "reone/system/profiler.h"
+
 #include <array>
 #include <cmath>
 
@@ -970,9 +972,19 @@ bool Area::handleKeyDown(const input::KeyEvent &event) {
 }
 
 void Area::update(float dt) {
-    doDestroyObjects();
-    updateVisibility();
-    updateObjectSelection();
+    R_PROFILE_ZONE("Area::update");
+    {
+        R_PROFILE_ZONE("Area::doDestroyObjects");
+        doDestroyObjects();
+    }
+    {
+        R_PROFILE_ZONE("Area::updateVisibility");
+        updateVisibility();
+    }
+    {
+        R_PROFILE_ZONE("Area::updateObjectSelection");
+        updateObjectSelection();
+    }
 
     if (_game.isPaused()) {
         return;
@@ -980,17 +992,33 @@ void Area::update(float dt) {
     Object::update(dt);
 
     // Update can create new objects, so iterate with indices.
-    for (size_t i = 0; i < _objects.size(); ++i) {
-        _objects[i]->update(dt);
+    {
+        R_PROFILE_ZONE("Area::object updates");
+        for (size_t i = 0; i < _objects.size(); ++i) {
+            _objects[i]->update(dt);
+        }
     }
-    updateLeaderTriggerOccupancy();
-    updatePerception(dt);
-    updateMessageBus();
-    updateHeartbeat(dt);
+    {
+        R_PROFILE_ZONE("Area::updateLeaderTriggerOccupancy");
+        updateLeaderTriggerOccupancy();
+    }
+    {
+        R_PROFILE_ZONE("Area::updatePerception");
+        updatePerception(dt);
+    }
+    {
+        R_PROFILE_ZONE("Area::updateMessageBus");
+        updateMessageBus();
+    }
+    {
+        R_PROFILE_ZONE("Area::updateHeartbeat");
+        updateHeartbeat(dt);
+    }
 }
 
 bool Area::moveCreature(const std::shared_ptr<Creature> &creature, const glm::vec2 &dir, bool run, float dt,
                         float maxDistance) {
+    R_PROFILE_ZONE("Area::moveCreature");
     static glm::vec3 up {0.0f, 0.0f, 1.0f};
     static glm::vec3 zOffset {0.0f, 0.0f, 0.1f};
 
@@ -1018,7 +1046,11 @@ bool Area::moveCreature(const std::shared_ptr<Creature> &creature, const glm::ve
     dest.x += dir.x * speedDt;
     dest.y += dir.y * speedDt;
 
-    bool obstructed = sceneGraph.testWalk(origin, dest, creature.get(), collision);
+    bool obstructed;
+    {
+        R_PROFILE_ZONE("Area::testWalk");
+        obstructed = sceneGraph.testWalk(origin, dest, creature.get(), collision);
+    }
 
     // Remember a door that obstructs the intended direction of travel, so that
     // navigation can raise the blocked event and GetBlockingDoor can report it.
@@ -1041,13 +1073,19 @@ bool Area::moveCreature(const std::shared_ptr<Creature> &creature, const glm::ve
         dest.x += newDir.x * speedDt;
         dest.y += newDir.y * speedDt;
 
+        R_PROFILE_ZONE("Area::testWalk (slide)");
         if (sceneGraph.testWalk(origin, dest, creature.get(), collision)) {
             return false;
         }
     }
 
     CreatureCollision creatureCollision;
-    if (findCreatureCollision(*creature, origin, dest, creatureCollision)) {
+    bool creatureHit;
+    {
+        R_PROFILE_ZONE("Area::findCreatureCollision");
+        creatureHit = findCreatureCollision(*creature, origin, dest, creatureCollision);
+    }
+    if (creatureHit) {
         glm::vec2 movement(glm::vec2(dest) - glm::vec2(origin));
         glm::vec2 contact(glm::vec2(origin) + movement * creatureCollision.time);
         glm::vec2 remaining(movement * (1.0f - creatureCollision.time));
@@ -1076,8 +1114,11 @@ bool Area::moveCreature(const std::shared_ptr<Creature> &creature, const glm::ve
 
     // Test elevation at destination
 
-    if (!sceneGraph.testElevation(dest, collision)) {
-        return false;
+    {
+        R_PROFILE_ZONE("Area::testElevation");
+        if (!sceneGraph.testElevation(dest, collision)) {
+            return false;
+        }
     }
 
     auto userRoom = dynamic_cast<Room *>(collision.user);
@@ -1091,7 +1132,10 @@ bool Area::moveCreature(const std::shared_ptr<Creature> &creature, const glm::ve
         onPartyLeaderMoved(userRoom != prevRoom);
     }
 
-    checkTriggersIntersection(creature);
+    {
+        R_PROFILE_ZONE("Area::checkTriggersIntersection");
+        checkTriggersIntersection(creature);
+    }
 
     return true;
 }

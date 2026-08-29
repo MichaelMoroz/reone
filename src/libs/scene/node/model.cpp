@@ -17,6 +17,8 @@
 
 #include "reone/scene/node/model.h"
 
+#include "reone/system/profiler.h"
+
 #include "reone/graphics/animation.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/material.h"
@@ -101,13 +103,22 @@ void ModelSceneNode::update(float dt) {
     if (!_enabled) {
         return;
     }
-    SceneNode::update(dt);
-    updateAnimations(dt);
+    {
+        R_PROFILE_ZONE("Model::SceneNode::update");
+        SceneNode::update(dt);
+    }
+    {
+        R_PROFILE_ZONE("Model::updateAnimations");
+        updateAnimations(dt);
+    }
     // Parent/model animation is complete now. Refresh node-owned deformation
     // arenas here so render-time registration only observes stable pointers.
-    for (const auto &[number, node] : _nodeByNumber) {
-        if (node->type() == SceneNodeType::Mesh)
-            static_cast<MeshSceneNode *>(node)->updateGpuStreams();
+    {
+        R_PROFILE_ZONE("Model::updateGpuStreams");
+        for (const auto &[number, node] : _nodeByNumber) {
+            if (node->type() == SceneNodeType::Mesh)
+                static_cast<MeshSceneNode *>(node)->updateGpuStreams();
+        }
     }
 }
 
@@ -401,18 +412,22 @@ void ModelSceneNode::updateAnimations(float dt) {
         return;
     }
 
-    for (auto &channel : _animChannels) {
-        if (!channel.anim) {
-            continue;
-        }
-        if (!channel.freeze) {
-            updateAnimationChannel(channel, dt);
+    {
+        R_PROFILE_ZONE("Model::animChannels");
+        for (auto &channel : _animChannels) {
+            if (!channel.anim) {
+                continue;
+            }
+            if (!channel.freeze) {
+                updateAnimationChannel(channel, dt);
+            }
         }
     }
 
     // Animation work can still be suppressed by non-renderer users of the
     // legacy visibility flag; registry culling never mutates it.
     if (!_culled) {
+        R_PROFILE_ZONE("Model::applyAnimationStates");
         applyAnimationStates(*_model->rootNode());
     }
 }

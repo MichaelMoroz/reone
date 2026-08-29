@@ -305,23 +305,41 @@ void SceneGraph::update(float dt) {
     _prevTime = _time;
     _time += dt;
     if (_updateRoots) {
-        for (auto &root : _modelRoots) {
-            root->update(dt);
+        {
+            R_PROFILE_ZONE("SceneGraph::model roots");
+            for (auto &root : _modelRoots) {
+                root->update(dt);
+            }
         }
-        for (auto &root : _grassRoots) {
-            root->update(dt);
+        {
+            R_PROFILE_ZONE("SceneGraph::grass roots");
+            for (auto &root : _grassRoots) {
+                root->update(dt);
+            }
         }
-        for (auto &root : _soundRoots) {
-            root->update(dt);
+        {
+            R_PROFILE_ZONE("SceneGraph::sound roots");
+            for (auto &root : _soundRoots) {
+                root->update(dt);
+            }
         }
     }
     if (!_activeCamera) {
         return;
     }
-    refresh();
+    {
+        R_PROFILE_ZONE("SceneGraph::refresh");
+        refresh();
+    }
     updateLighting();
-    updateShadowLight(dt);
-    updateFlareLights();
+    {
+        R_PROFILE_ZONE("SceneGraph::updateShadowLight");
+        updateShadowLight(dt);
+    }
+    {
+        R_PROFILE_ZONE("SceneGraph::updateFlareLights");
+        updateFlareLights();
+    }
     {
         R_PROFILE_ZONE("SceneGraph::flare visibility update");
         std::unordered_set<LightSceneNode *> visible;
@@ -1573,6 +1591,7 @@ std::vector<LightSceneNode *> SceneGraph::computeClosestLights(int count, const 
 }
 
 bool SceneGraph::testElevation(const glm::vec3 &position, Collision &outCollision) const {
+    R_PROFILE_ZONE("SceneGraph::testElevation");
     static glm::vec3 down(0.0f, 0.0f, -1.0f);
 
     bool walkable = false;
@@ -1651,6 +1670,7 @@ bool SceneGraph::testLineOfSight(const glm::vec3 &origin, const glm::vec3 &dest,
 }
 
 bool SceneGraph::testWalk(const glm::vec3 &origin, const glm::vec3 &dest, const IUser *excludeUser, Collision &outCollision) const {
+    R_PROFILE_ZONE("SceneGraph::testWalk");
     glm::vec3 originToDest(dest - origin);
     glm::vec3 dir(glm::normalize(originToDest));
     float maxDistance = glm::length(originToDest);

@@ -25,6 +25,8 @@
 
 #include "reone/game/minigame.h"
 
+#include "reone/system/profiler.h"
+
 #include "reone/audio/context.h"
 #include "reone/audio/di/services.h"
 #include "reone/audio/mixer.h"
@@ -691,6 +693,7 @@ bool Game::consumeTimingDiscontinuity() {
 }
 
 void Game::update(float frameTime) {
+    R_PROFILE_ZONE("Game::update");
     float dt = frameTime * _gameSpeed;
     _simulatedTime += dt;
     if (_movie) {
@@ -730,7 +733,10 @@ void Game::update(float frameTime) {
     if (!_nextModule.empty()) {
         loadNextModule();
     }
-    updateCamera(dt);
+    {
+        R_PROFILE_ZONE("Game::updateCamera");
+        updateCamera(dt);
+    }
 
     if (_swoopRace.isActive()) {
         _swoopRace.update(dt);
@@ -768,8 +774,14 @@ void Game::update(float frameTime) {
         updateDrawDebug(dt);
         advanceWorldTime(dt);
         advancePlayedTime(dt);
-        _module->update(dt);
-        _combat.update(dt);
+        {
+            R_PROFILE_ZONE("Module::update");
+            _module->update(dt);
+        }
+        {
+            R_PROFILE_ZONE("Combat::update");
+            _combat.update(dt);
+        }
     }
 
     // Fixture emitters are restarted each simulated frame. This keeps a
@@ -781,12 +793,16 @@ void Game::update(float frameTime) {
 
     auto gui = getScreenGUI();
     if (gui) {
+        R_PROFILE_ZONE("Game::gui update");
         gui->update(dt);
     }
     if (_confirmPopup && _confirmPopup->isVisible()) {
         _confirmPopup->update(dt);
     }
-    updateSceneGraph(dt);
+    {
+        R_PROFILE_ZONE("Game::updateSceneGraph");
+        updateSceneGraph(dt);
+    }
     if (_showImGui) {
         updateImGui(dt);
     }
