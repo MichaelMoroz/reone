@@ -112,6 +112,8 @@ public:
     virtual const GpuScene &gpuScene() const = 0;
     virtual GpuScene &gpuScene() = 0;
     virtual const std::vector<LightSceneNode *> &lights() const = 0;
+    /** The largest authored radius among the registered lights; 0 with none. */
+    virtual float largestLightRadius() const = 0;
     virtual uint32_t internName(std::string_view name) = 0;
     virtual std::string_view nameText(uint32_t id) const = 0;
 
@@ -222,6 +224,7 @@ public:
     const GpuScene &gpuScene() const override { return _gpuScene; }
     GpuScene &gpuScene() override { return _gpuScene; }
     const std::vector<LightSceneNode *> &lights() const override { return _lights; }
+    float largestLightRadius() const override { return _largestLightRadius; }
     uint32_t internName(std::string_view name) override;
     std::string_view nameText(uint32_t id) const override;
 
@@ -470,6 +473,7 @@ private:
 
     std::vector<MeshSceneNode *> _meshes;
     std::vector<LightSceneNode *> _lights;
+    float _largestLightRadius {0.0f};
     /** The debug overlay's labels, rebuilt each render the overlay is on. */
     std::vector<graphics::DebugOverlayLabel> _debugOverlayLabels;
     std::vector<EmitterSceneNode *> _emitters;

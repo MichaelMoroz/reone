@@ -36,13 +36,10 @@ namespace reone {
 namespace scene {
 
 static constexpr float kFadeSpeed = 2.0f;
-// 2000, up from 100. The radius census across the benchmark modules splits
-// cleanly: true suns are authored at 5000-18000, while interior and stray
-// lights sit at 200-1000. At 100 a radius-1000 lamp in tat_m18aa was promoted
-// to a "sun" with an invented near-horizontal direction; as a shadow caster it
-// smeared blob-and-speckle garbage across the module's distant geometry, and
-// without a slot it washed the frame unshadowed. Both renderers share this
-// classifier, so demoting it moves them together.
+// Odyssey has no directional light type; a sun is a point light authored
+// with a radius far beyond its room. The scene's largest light is always the
+// sun, and any other above 2000 (Tatooine's second sun) is one too; a
+// radius-1000 lamp under a 5000+ sun is not.
 static constexpr float kMinDirectionalLightRadius = 2000.0f;
 
 void LightSceneNode::init() {
@@ -117,7 +114,8 @@ void LightSceneNode::collectLensFlare(GpuScene &scene, const ModelNode::LensFlar
 }
 
 bool LightSceneNode::isDirectional() const {
-    return _radius >= kMinDirectionalLightRadius;
+    return _radius >= kMinDirectionalLightRadius ||
+           (_radius > 0.0f && _radius >= _sceneGraph.largestLightRadius());
 }
 
 bool LightSceneNode::hasAuthoredDirection() const {

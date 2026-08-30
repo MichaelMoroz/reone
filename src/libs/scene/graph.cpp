@@ -147,6 +147,7 @@ void SceneGraph::clear() {
     _grassRoots.clear();
     _meshes.clear();
     _lights.clear();
+    _largestLightRadius = 0.0f;
     _emitters.clear();
     _opaqueLeafs.clear();
     _transparentLeafs.clear();
@@ -803,6 +804,7 @@ void SceneGraph::updateSounds() {
 void SceneGraph::refresh() {
     _meshes.clear();
     _lights.clear();
+    _largestLightRadius = 0.0f;
     _emitters.clear();
 
     for (auto &root : _modelRoots) {
@@ -828,9 +830,12 @@ void SceneGraph::refreshFromNode(SceneNode &node) {
         }
         break;
     }
-    case SceneNodeType::Light:
-        _lights.push_back(static_cast<LightSceneNode *>(&node));
+    case SceneNodeType::Light: {
+        auto *light = static_cast<LightSceneNode *>(&node);
+        _lights.push_back(light);
+        _largestLightRadius = std::max(_largestLightRadius, light->radius());
         break;
+    }
     case SceneNodeType::Emitter:
         _emitters.push_back(static_cast<EmitterSceneNode *>(&node));
         break;

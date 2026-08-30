@@ -109,6 +109,7 @@ public:
     MOCK_METHOD(const GpuScene &, gpuScene, (), (const override));
     MOCK_METHOD(GpuScene &, gpuScene, (), (override));
     MOCK_METHOD(const std::vector<LightSceneNode *> &, lights, (), (const override));
+    MOCK_METHOD(float, largestLightRadius, (), (const override));
 };
 
 class MockSceneGraphs : public ISceneGraphs, boost::noncopyable {
