@@ -295,6 +295,20 @@ std::unique_ptr<Options> OptionsParser::parse() {
         addEmission(key + "emission", override.emission);
     }
     addEmission("skyroomemission", options->graphics.skyRoomEmission);
+    // The retired single-class category keys, read so an older reone.cfg
+    // carries its grade onto both classes; env has no successor.
+    for (int i = 0; i < 9; ++i) {
+        const auto key = "cat" + std::to_string(i);
+        descCommon.add_options()                                                                       //
+            ((key + "color0").c_str(), value<float>()->default_value(-1.0f), "retired")             //
+            ((key + "color1").c_str(), value<float>()->default_value(-1.0f), "retired")             //
+            ((key + "color2").c_str(), value<float>()->default_value(-1.0f), "retired")             //
+            ((key + "colorweight").c_str(), value<float>()->default_value(-1.0f), "retired")        //
+            ((key + "roughness").c_str(), value<float>()->default_value(-2.0f), "retired")          //
+            ((key + "roughnessscale").c_str(), value<float>()->default_value(-1.0f), "retired")     //
+            ((key + "metallic").c_str(), value<float>()->default_value(-1.0f), "retired")           //
+            ((key + "emission").c_str(), value<float>()->default_value(-1.0f), "retired");
+    }
 
     options_description descCmdLine {"Usage"};
     descCmdLine.add(descCommon);
@@ -444,6 +458,31 @@ std::unique_ptr<Options> OptionsParser::parse() {
             migrate(g.categoryOverrides[i].emission, "cat" + std::to_string(i) + "emission", emissive);
         }
         migrate(g.skyRoomEmission, "skyroomemission", backdrop);
+        for (int i = 0; i < 9; ++i) {
+            const auto key = "cat" + std::to_string(i);
+            auto &category = g.categoryOverrides[i];
+            const auto both = [&](auto apply) { apply(category.rough, "rough"); apply(category.reflective, "refl"); };
+            const auto fresh = [&](const std::string &cls, const char *field) {
+                return vars[key + cls + field].defaulted();
+            };
+            for (int c = 0; c < 3; ++c) {
+                const float v = vars[key + "color" + std::to_string(c)].as<float>();
+                if (v >= 0.0f) both([&](auto &cl, const std::string &cls) { if (fresh(cls, ("color" + std::to_string(c)).c_str())) cl.color[c] = v; });
+            }
+            const float weight = vars[key + "colorweight"].as<float>();
+            if (weight >= 0.0f) both([&](auto &cl, const std::string &cls) { if (fresh(cls, "colorweight")) cl.colorWeight = std::clamp(weight, 0.0f, 1.0f); });
+            const float roughness = vars[key + "roughness"].as<float>();
+            if (roughness >= 0.0f) both([&](auto &cl, const std::string &cls) { if (fresh(cls, "roughness")) cl.roughness = std::min(roughness, 1.0f); });
+            const float roughnessScale = vars[key + "roughnessscale"].as<float>();
+            if (roughnessScale >= 0.0f) both([&](auto &cl, const std::string &cls) { if (fresh(cls, "roughnessscale")) cl.roughnessScale = roughnessScale; });
+            const float metallicScale = vars[key + "metallic"].as<float>();
+            if (metallicScale >= 0.0f) both([&](auto &cl, const std::string &cls) { if (fresh(cls, "metallicscale")) cl.metallicScale = metallicScale; });
+            const float emissionScale = vars[key + "emission"].as<float>();
+            if (emissionScale >= 0.0f && vars[key + "emissionon"].defaulted() && vars[key + "emissionintensity"].defaulted()) {
+                category.emission.enabled = true;
+                category.emission.intensity = (emissive >= 0.0f ? emissive : 1.0f) * emissionScale;
+            }
+        }
     }
     options->graphics.ptRayOffset = std::max(0.0001f, vars["ptrayoffset"].as<float>());
     options->graphics.ptTraceStats = vars["pttracestats"].as<bool>();
