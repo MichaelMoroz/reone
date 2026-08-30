@@ -18,6 +18,7 @@
 #include "reone/graphics/optionsregistry.h"
 
 #include <algorithm>
+#include <functional>
 #include <cmath>
 #include <iomanip>
 #include <limits>
@@ -31,7 +32,6 @@ namespace graphics {
 
 namespace {
 
-using CategoryOverride = GraphicsOptions::CategoryOverride;
 
 std::string formatFloat(float value) {
     std::ostringstream stream;
@@ -134,47 +134,75 @@ GraphicsOptionDesc floatOpt(const char *name, OptionApply apply, const char *hel
     return desc;
 }
 
-GraphicsOptionDesc catFloatOpt(const std::string &name, int index,
-                               float CategoryOverride::*member, float low, float high) {
+using SurfaceClassOverride = GraphicsOptions::SurfaceClassOverride;
+using EmissionOverride = GraphicsOptions::EmissionOverride;
+
+/** A float reached through an accessor rather than a member pointer: the nested material overrides. */
+GraphicsOptionDesc floatRefOpt(const std::string &name, const std::string &help,
+                               std::function<float &(GraphicsOptions &)> ref, float low, float high) {
     GraphicsOptionDesc desc;
     desc.name = name;
     desc.apply = OptionApply::Live;
-    desc.help = "material category " + std::to_string(index) + " override";
-    desc.get = [index, member](const GraphicsOptions &o) {
-        return formatFloat(o.categoryOverrides[index].*member);
+    desc.help = help;
+    desc.get = [ref](const GraphicsOptions &o) { return formatFloat(ref(const_cast<GraphicsOptions &>(o))); };
+    desc.set = [ref, name, low, high](GraphicsOptions &o, const std::string &value) {
+        ref(o) = std::clamp(parseFloat(name, value), low, high);
     };
-    desc.set = [index, member, name, low, high](GraphicsOptions &o, const std::string &value) {
-        o.categoryOverrides[index].*member = std::clamp(parseFloat(name, value), low, high);
+    desc.equal = [ref](const GraphicsOptions &a, const GraphicsOptions &b) {
+        return ref(const_cast<GraphicsOptions &>(a)) == ref(const_cast<GraphicsOptions &>(b));
     };
-    desc.equal = [index, member](const GraphicsOptions &a, const GraphicsOptions &b) {
-        return a.categoryOverrides[index].*member == b.categoryOverrides[index].*member;
-    };
-    desc.copy = [index, member](const GraphicsOptions &from, GraphicsOptions &to) {
-        to.categoryOverrides[index].*member = from.categoryOverrides[index].*member;
+    desc.copy = [ref](const GraphicsOptions &from, GraphicsOptions &to) {
+        ref(to) = ref(const_cast<GraphicsOptions &>(from));
     };
     return desc;
 }
 
-GraphicsOptionDesc catColorOpt(const std::string &name, int index, int component) {
+GraphicsOptionDesc boolRefOpt(const std::string &name, const std::string &help,
+                              std::function<bool &(GraphicsOptions &)> ref) {
     GraphicsOptionDesc desc;
     desc.name = name;
     desc.apply = OptionApply::Live;
-    desc.help = "material category " + std::to_string(index) + " override colour";
-    desc.get = [index, component](const GraphicsOptions &o) {
-        return formatFloat(o.categoryOverrides[index].color[component]);
+    desc.help = help;
+    desc.get = [ref](const GraphicsOptions &o) { return ref(const_cast<GraphicsOptions &>(o)) ? std::string("1") : std::string("0"); };
+    desc.set = [ref, name](GraphicsOptions &o, const std::string &value) { ref(o) = parseBool(name, value); };
+    desc.equal = [ref](const GraphicsOptions &a, const GraphicsOptions &b) {
+        return ref(const_cast<GraphicsOptions &>(a)) == ref(const_cast<GraphicsOptions &>(b));
     };
-    desc.set = [index, component, name](GraphicsOptions &o, const std::string &value) {
-        o.categoryOverrides[index].color[component] = parseFloat(name, value);
-    };
-    desc.equal = [index, component](const GraphicsOptions &a, const GraphicsOptions &b) {
-        return a.categoryOverrides[index].color[component] ==
-               b.categoryOverrides[index].color[component];
-    };
-    desc.copy = [index, component](const GraphicsOptions &from, GraphicsOptions &to) {
-        to.categoryOverrides[index].color[component] =
-            from.categoryOverrides[index].color[component];
+    desc.copy = [ref](const GraphicsOptions &from, GraphicsOptions &to) {
+        ref(to) = ref(const_cast<GraphicsOptions &>(from));
     };
     return desc;
+}
+
+void addSurfaceClassOpts(std::vector<GraphicsOptionDesc> &descs, const std::string &key,
+                         const std::string &help, std::function<SurfaceClassOverride &(GraphicsOptions &)> cls) {
+    for (int c = 0; c < 3; ++c) {
+        descs.push_back(floatRefOpt(key + "color" + std::to_string(c), help + " colour",
+                                    [cls, c](GraphicsOptions &o) -> float & { return cls(o).color[c]; }, 0.0f, 8.0f));
+    }
+    descs.push_back(floatRefOpt(key + "colorweight", help + " colour weight",
+                                [cls](GraphicsOptions &o) -> float & { return cls(o).colorWeight; }, 0.0f, 1.0f));
+    // Negative means "no override", so the floors are below zero.
+    descs.push_back(floatRefOpt(key + "roughness", help + " roughness (negative: texel)",
+                                [cls](GraphicsOptions &o) -> float & { return cls(o).roughness; }, -1.0f, 1.0f));
+    descs.push_back(floatRefOpt(key + "metallic", help + " metalness (negative: curated)",
+                                [cls](GraphicsOptions &o) -> float & { return cls(o).metallic; }, -1.0f, 1.0f));
+    descs.push_back(floatRefOpt(key + "f0", help + " reflectance at normal incidence",
+                                [cls](GraphicsOptions &o) -> float & { return cls(o).f0; }, 0.0f, 1.0f));
+    descs.push_back(floatRefOpt(key + "roughnessscale", help + " roughness scale",
+                                [cls](GraphicsOptions &o) -> float & { return cls(o).roughnessScale; }, 0.0f, 64.0f));
+    descs.push_back(floatRefOpt(key + "metallicscale", help + " metalness scale",
+                                [cls](GraphicsOptions &o) -> float & { return cls(o).metallicScale; }, 0.0f, 64.0f));
+}
+
+void addEmissionOpts(std::vector<GraphicsOptionDesc> &descs, const std::string &key,
+                     const std::string &help, std::function<EmissionOverride &(GraphicsOptions &)> em) {
+    descs.push_back(boolRefOpt(key + "on", help + " emission grade on",
+                               [em](GraphicsOptions &o) -> bool & { return em(o).enabled; }));
+    descs.push_back(floatRefOpt(key + "intensity", help + " emission intensity",
+                                [em](GraphicsOptions &o) -> float & { return em(o).intensity; }, 0.0f, 1024.0f));
+    descs.push_back(floatRefOpt(key + "gamma", help + " emission decode exponent",
+                                [em](GraphicsOptions &o) -> float & { return em(o).gamma; }, 0.1f, 4.0f));
 }
 
 /** A named-value option, with the spellings optionsparser.cpp accepts. */
@@ -318,21 +346,10 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(intOpt("ptspp", OptionApply::Live, "path tracing samples per pixel",
                            &GraphicsOptions::pathTracingSamples, 1, 64));
     // A dial per mode: the two grades are authored against different transport.
-    descs.push_back(floatOpt("ptskyintensity", OptionApply::Live,
-                             "path tracing: sky light intensity",
-                             &GraphicsOptions::ptSkyIntensity, 0.0f, 1024.0f));
-    descs.push_back(floatOpt("pbrskyintensity", OptionApply::Live,
-                             "PBR: sky light intensity",
-                             &GraphicsOptions::pbrSkyIntensity, 0.0f, 1024.0f));
-    descs.push_back(floatOpt("ptemissiveintensity", OptionApply::Live,
-                             "path tracing: emissive intensity - lamps, screens, panels",
-                             &GraphicsOptions::ptEmissiveIntensity, 0.0f, 1024.0f));
-    descs.push_back(floatOpt("pbremissiveintensity", OptionApply::Live,
-                             "PBR: emissive intensity - lamps, screens, panels",
-                             &GraphicsOptions::pbrEmissiveIntensity, 0.0f, 1024.0f));
-    descs.push_back(floatOpt("ptbackdropintensity", OptionApply::Live,
-                             "path tracing backdrop imagery intensity",
-                             &GraphicsOptions::ptBackdropIntensity, 0.0f, 1024.0f));
+    descs.push_back(floatOpt("skyboxintensity", OptionApply::Live, "baked sky cube intensity",
+                             &GraphicsOptions::skyboxIntensity, 0.0f, 1024.0f));
+    descs.push_back(floatOpt("skyboxgamma", OptionApply::Live, "baked sky cube decode exponent",
+                             &GraphicsOptions::skyboxGamma, 0.1f, 4.0f));
     descs.push_back(floatOpt("ptlightmapintensity", OptionApply::Live,
                              "path tracing: baked-lightmap intensity",
                              &GraphicsOptions::ptLightmapIntensity, 0.0f, 1024.0f));
@@ -369,9 +386,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                              "authored albedo decode exponent, PBR and path tracing alike "
                              "(2.2 is sRGB-correct, 1.0 matches the reference engines)",
                              &GraphicsOptions::albedoGamma, 0.1f, 4.0f));
-    descs.push_back(floatOpt("emissivegamma", OptionApply::Live,
-                             "authored radiance decode exponent (emission, sky, backdrop)",
-                             &GraphicsOptions::emissiveGamma, 0.1f, 4.0f));
     descs.push_back(boolOpt("pttracestats", OptionApply::Live,
                             "enable path tracing statistics",
                             &GraphicsOptions::ptTraceStats));
@@ -770,17 +784,16 @@ std::vector<GraphicsOptionDesc> buildDescs() {
 
     for (int i = 0; i < 9; ++i) {
         const auto key = "cat" + std::to_string(i);
-        descs.push_back(catColorOpt(key + "color0", i, 0));
-        descs.push_back(catColorOpt(key + "color1", i, 1));
-        descs.push_back(catColorOpt(key + "color2", i, 2));
-        descs.push_back(catFloatOpt(key + "colorweight", i, &CategoryOverride::colorWeight, 0.0f, 1.0f));
-        // Negative means "no override", so the floor is below zero.
-        descs.push_back(catFloatOpt(key + "roughness", i, &CategoryOverride::roughness, -1.0f, 1.0f));
-        descs.push_back(catFloatOpt(key + "roughnessscale", i, &CategoryOverride::roughnessScale, 0.0f, 64.0f));
-        descs.push_back(catFloatOpt(key + "emission", i, &CategoryOverride::emissionScale, 0.0f, 64.0f));
-        descs.push_back(catFloatOpt(key + "env", i, &CategoryOverride::envScale, 0.0f, 64.0f));
-        descs.push_back(catFloatOpt(key + "metallic", i, &CategoryOverride::metallicScale, 0.0f, 64.0f));
+        const auto help = "material category " + std::to_string(i);
+        addSurfaceClassOpts(descs, key + "rough", help + " rough",
+                            [i](GraphicsOptions &o) -> SurfaceClassOverride & { return o.categoryOverrides[i].rough; });
+        addSurfaceClassOpts(descs, key + "refl", help + " reflective",
+                            [i](GraphicsOptions &o) -> SurfaceClassOverride & { return o.categoryOverrides[i].reflective; });
+        addEmissionOpts(descs, key + "emission", help,
+                        [i](GraphicsOptions &o) -> EmissionOverride & { return o.categoryOverrides[i].emission; });
     }
+    addEmissionOpts(descs, "skyroomemission", "sky room",
+                    [](GraphicsOptions &o) -> EmissionOverride & { return o.skyRoomEmission; });
 
     return descs;
 }

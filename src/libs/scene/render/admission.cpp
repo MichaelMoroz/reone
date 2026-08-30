@@ -153,17 +153,31 @@ std::string describeUploadDifference(const GpuSceneUpload &left,
     return detail;
 }
 
+glm::vec4 emissionGrade(const GraphicsOptions::EmissionOverride &grade) {
+    return grade.enabled ? glm::vec4(std::max(0.0f, grade.intensity), std::clamp(grade.gamma, 0.1f, 4.0f), 0.0f, 0.0f)
+                         : glm::vec4(1.0f, 2.2f, 0.0f, 0.0f);
+}
+
+/**
+ * The category's PBR properties for this surface's class - reflective where
+ * it carries an environment map, rough otherwise - and its emission grade;
+ * the unlit-emissive sky class takes the sky-room grade instead.
+ */
 void applyCategoryOverride(InstanceMaterial &material,
                            const GraphicsOptions &options,
                            uint32_t categoryIndex) {
-    const auto &src = options.categoryOverrides[std::min<uint32_t>(categoryIndex, 8u)];
+    const auto &category = options.categoryOverrides[std::min<uint32_t>(categoryIndex, 8u)];
+    const bool reflective = (material.featureMask & UniformsFeatureFlags::envmap) != 0;
+    const auto &src = reflective ? category.reflective : category.rough;
     material.overrideColor = glm::vec4(src.color[0], src.color[1], src.color[2],
                                        std::clamp(src.colorWeight, 0.0f, 1.0f));
-    material.overrideParams = glm::vec4(src.roughness,
-                                        std::max(0.0f, src.emissionScale),
-                                        std::max(0.0f, src.envScale),
+    material.overrideParams = glm::vec4(std::clamp(src.roughness, -1.0f, 1.0f),
+                                        std::clamp(src.metallic, -1.0f, 1.0f),
+                                        std::clamp(src.f0, 0.0f, 1.0f),
                                         std::max(0.0f, src.metallicScale));
     material.roughnessScale = std::max(0.0f, src.roughnessScale);
+    const bool skyClass = (material.featureMask & (1u << 24)) != 0;
+    material.emission = emissionGrade(skyClass ? options.skyRoomEmission : category.emission);
 }
 
 void populateMaterialResources(InstanceMaterial &dst,
@@ -333,30 +347,6 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
     }
 
     applyCategoryOverride(material, _options, categoryIndex);
-    // The per-category emission dial is a PBR and path-tracing grading control,
-    // and it stops at their door.
-    //
-    // It reached retro by accident rather than by decision: one material record
-    // serves every mode, and retro's G-buffer writes its self-illum channel
-    // straight from selfIllumColor, so turning the dial regraded a mode whose
-    // whole purpose is to be the original's arithmetic untouched. Retro has no
-    // creative grade anywhere else - no exposure, no tone curve, no SSAO, no
-    // screen-space reflections - and this was the one that slipped through.
-    //
-    // At the shipped default of 1.0 it multiplies by one and nothing moves;
-    // the point is that it can no longer move.
-    const float emissionScale = _options.mode == graphics::RenderMode::Retro
-                                    ? 1.0f
-                                    : std::max(0.0f, material.overrideParams.y);
-    // Additive emission reads overrideParams.y directly. Curated prelit still
-    // takes the old baked scaling path because it terminates instead.
-    if (kind != AdmissionKind::AdditiveEmissive || material.surfaceType == 2)
-        material.selfIllumColor *= emissionScale;
-    if (curated && curated->emissionMode != 0) {
-        material.curatedEmission =
-            glm::vec4(glm::vec3(material.curatedEmission) * emissionScale,
-                      material.curatedEmission.w);
-    }
 
     // Keep the menu's self-illum trail at the actual material boundary: the
     // first value is what the node registered and the second is what the

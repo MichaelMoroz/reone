@@ -124,12 +124,9 @@ void finishPixel(uint2 pixel, TraceOutputs outputs, PtDebug debug) {
  * view-direction Schlick split matches the continuation sampler.
  */
 float3 diffuseMaterialResponse(SurfaceShading shading, float3 view) {
-    float3 F0 = materialRf0(shading.albedo, shading.metallic, shading.envStrength);
+    float3 F0 = materialRf0(shading.albedo, shading.metallic, shading.envStrength, shading.f0);
     float3 response = shading.albedo * (1.0 - shading.metallic);
-    if (shading.envmapped) {
-        response *= 1.0 - fresnelSchlick(max(0.0, dot(shading.normal, view)), F0);
-    }
-    return response;
+    return response * (1.0 - fresnelSchlick(max(0.0, dot(shading.normal, view)), F0));
 }
 
 /**
@@ -173,7 +170,7 @@ void publishPrimary(inout TraceOutputs outputs, PrimarySurface primary, RayDesc 
     if (pbrPrimary) {
         materialFactors(primary.shading.normal, -ray.Direction, primary.shading.albedo,
                         primary.shading.metallic, primary.shading.envStrength,
-                        primary.shading.roughness,
+                        primary.shading.roughness, primary.shading.f0,
                         outputs.transportDiffFactor, outputs.transportSpecFactor);
     }
     outputs.normal = primary.shading.normal;

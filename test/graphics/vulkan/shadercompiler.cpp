@@ -376,13 +376,13 @@ TEST(SlangShaderCompiler, recompiles_a_changed_module_at_runtime) {
     const auto shaderPath = sources.path() / "scene_draw.slang";
     std::ifstream input(shaderPath);
     std::string shader {std::istreambuf_iterator<char> {input}, {}};
-    const auto needle = "static const uint kMegaFeatureLightmap = 1u << 0;";
+    const auto needle = "static const uint kMegaCoverageUngated = 0u;";
     const auto position = shader.find(needle);
     ASSERT_NE(position, std::string::npos);
     // This only exists in the test source copy. It is a valid shader edit that
     // changes emitted code and represents the edit-reload loop in the engine.
     shader.replace(position, std::strlen(needle),
-                   "static const uint kMegaFeatureLightmap = 1u << 30;");
+                   "static const uint kMegaCoverageUngated = 7u;");
     std::ofstream {shaderPath, std::ios::trunc} << shader;
 
     EXPECT_TRUE(compiler.recompileAll());

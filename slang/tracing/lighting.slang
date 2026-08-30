@@ -184,9 +184,9 @@ DirectLight ptDirectLightDraw(HitGeometry hit, SurfaceShading shading, float3 vi
     result.diffuse = directLightDiffuse(radiance, shading.normal, L,
                                         shading.thin, pushConstants.thinTransmission);
     // Specular keeps the true normal and the true side: a leaf transmits light,
-    // not a highlight. Only env-mapped surfaces carry a specular lobe.
-    if (shading.envmapped && !litFromBehind) {
-        float3 F0 = materialRf0(shading.albedo, shading.metallic, shading.envStrength);
+    // not a highlight.
+    if (!litFromBehind) {
+        float3 F0 = materialRf0(shading.albedo, shading.metallic, shading.envStrength, shading.f0);
         result.specular = specularGGX(shading.normal, view, L, shading.roughness, F0) * radiance;
     }
     return result;

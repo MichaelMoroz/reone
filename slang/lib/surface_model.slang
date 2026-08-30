@@ -61,9 +61,9 @@ public static const float kNrdRoughnessFactorMinScale = 0.1;
  * mirror; that fold used to sit at the one call site and is part of the model.
  */
 public void materialFactors(float3 N, float3 V, float3 albedo, float metallic,
-                            float envStrength, float roughness,
+                            float envStrength, float roughness, float f0,
                             out float3 diffFactor, out float3 specFactor) {
-    float3 Rf0 = materialRf0(albedo, metallic, envStrength);
+    float3 Rf0 = materialRf0(albedo, metallic, envStrength, f0);
     float3 Fenv = nrdEnvironmentTermRtg(Rf0, abs(dot(N, V)), roughness);
     // Unfloored, unlike NRD's own helper. NRD raises this off zero because it
     // DIVIDES the signal by it; the diffuse channel holds transport and is

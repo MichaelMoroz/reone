@@ -96,15 +96,11 @@ struct ResolvePushConstants {
     float emitterRadiusRatio;
     float directIntensity;
     float sunIntensity;
-    // The tracer's dials for unlit-emissive surfaces (surfaceType 2): a sky
-    // shell takes the sky dial, a painted backdrop the backdrop dial. The
-    // resolve had no branch for that class and shaded the dome as sunlit,
-    // white-baked, emissive geometry - measured as a Tatooine backdrop
-    // overexposed and a Korriban one underexposed, 40% of each frame.
+    /** The baked sky cube's grade, shared with the tracer. */
     float skyIntensity;
-    float backdropIntensity;
-    /** The shared emissive dial; the tracer's rule, radiance not x albedo. */
-    float emissiveIntensity;
+    float skyGamma;
+    /** Keeps the block at the cached push size. */
+    float pad;
 };
 
 /** Mirrors CoveragePushConstants in postprocess.slang. */
@@ -1153,9 +1149,9 @@ ResolvePushConstants resolvePush(uint32_t flags, const GraphicsOptions &options)
             std::clamp(options.ptPointEmitterRatio, 0.01f, 0.5f),
             std::max(0.0f, options.pbrDirectIntensity),
             std::max(0.0f, options.pbrSunIntensity),
-            std::max(0.0f, options.pbrSkyIntensity),
-            std::max(0.0f, options.ptBackdropIntensity),
-            std::max(0.0f, options.pbrEmissiveIntensity)};
+            std::max(0.0f, options.skyboxIntensity),
+            std::clamp(options.skyboxGamma, 0.1f, 4.0f),
+            0.0f};
 }
 
 } // namespace

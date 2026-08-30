@@ -69,6 +69,8 @@ public struct SurfaceShading {
     public bool hasLightmap;
     public bool envmapped;
     public float envStrength;
+    /** Dielectric reflectance at normal incidence, the category's. */
+    public float f0;
     public bool terminatesPath;
     /**
      * A surface with no thickness - a leaf, cloth, a blade of grass.
@@ -270,15 +272,14 @@ public float ptRayConeLod(InstanceMaterial material, HitGeometry hit) {
     return max(0.0, 0.5 * log2(max(density, 1e-12)) + log2(max(hit.coneWidth, 1e-9)));
 }
 
-/** The authored env-map share, scaled by the category override: the mirror fraction that lifts Rf0. */
-public float ptEnvStrength(InstanceMaterial material, bool envmapped, float alpha) {
-    return (envmapped ? (1.0 - alpha) : 0.0) * material.overrideParams.z;
+/** The authored env-map share: the mirror fraction that lifts Rf0 on a reflective surface. */
+public float ptEnvStrength(bool envmapped, float alpha) {
+    return envmapped ? (1.0 - alpha) : 0.0;
 }
 
 /** Additive radiance of a purely emissive surface: authored as light even without a self-illum controller. */
 public float3 ptUnlitTransparentEmission(InstanceMaterial material, float3 radianceTexel) {
-    return max(material.selfIllumColor.rgb, float3(1.0)) * radianceTexel *
-           pushConstants.emissiveIntensity * material.overrideParams.y;
+    return max(material.selfIllumColor.rgb, float3(1.0)) * radianceTexel * material.emission.x;
 }
 
 public struct PbrSurface : ISurfaceModel {
@@ -300,7 +301,7 @@ public struct PbrSurface : ISurfaceModel {
         MaterialSurface surface = resolveMaterial(material, texel.rgb, coverage, unpremultiply,
                                                   pushConstants.albedoGamma,
                                                   pushConstants.roughnessFloor);
-        float3 radianceTexel = ptDecodeEmission(texel.rgb) * unpremultiply;
+        float3 radianceTexel = ptDecodeEmission(texel.rgb, material) * unpremultiply;
         float4 color = vertexColor(hit);
         shading.albedo = surface.albedo * color.rgb;
         shading.alpha = coverage * color.a;
@@ -309,7 +310,8 @@ public struct PbrSurface : ISurfaceModel {
 
         shading.normal = materialNormal(hit, hit.materialIndex);
         shading.envmapped = (material.featureMask & kMaterialEnvMap) != 0;
-        shading.envStrength = ptEnvStrength(material, shading.envmapped, shading.alpha);
+        shading.envStrength = ptEnvStrength(shading.envmapped, shading.alpha);
+        shading.f0 = material.overrideParams.z;
         shading.hasLightmap = (material.featureMask & kMaterialLightmap) != 0;
         // White where a surface declares a bake it has no texture for: zero is
         // a lightmap that absorbs everything, and the lightmaps toggle clears
@@ -320,7 +322,7 @@ public struct PbrSurface : ISurfaceModel {
                 bindlessTextures[NonUniformResourceIndex(material.lightmap)].SampleLevel(hit.uv2, 0.0).rgb);
         }
         shading.emission = assembleEmission(gammaToLinear(material.selfIllumColor.rgb), radianceTexel,
-                                            material.curatedEmission, pushConstants.emissiveIntensity);
+                                            material.curatedEmission, material.emission.x);
         return shading;
     }
 
@@ -345,13 +347,11 @@ public struct PbrSurface : ISurfaceModel {
         // specular response: environment-mapped surfaces. Everywhere else the
         // diffuse alpha is coverage or opacity, so the derived roughness is
         // meaningless. Non-envmapped surfaces are pure diffuse.
-        float3 F0 = materialRf0(shading.albedo, shading.metallic, shading.envStrength);
+        float3 F0 = materialRf0(shading.albedo, shading.metallic, shading.envStrength, shading.f0);
         float NdotV = max(0.0, dot(shading.normal, view));
         float3 F = fresnelSchlick(NdotV, F0);
-        float specularProbability = shading.envmapped
-                                        ? clamp(luminance(F), 1e-3, 1.0 - 1e-3)
-                                        : 0.0;
-        if (shading.envmapped && ptRandom01(rng) < specularProbability) {
+        float specularProbability = clamp(luminance(F), 1e-3, 1.0 - 1e-3);
+        if (ptRandom01(rng) < specularProbability) {
             float3 half = ptGgxVisibleHalfVector(shading.normal, view, shading.roughness,
                                                  float2(ptRandom01(rng), ptRandom01(rng)));
             sample.direction = normalize(reflect(-view, half));
@@ -374,10 +374,8 @@ public struct PbrSurface : ISurfaceModel {
             // The albedo and metallic split cancel against the material
             // response exactly; only the lobe-selection probability survives.
             sample.demodulatedWeight = float3(1.0);
-            if (shading.envmapped) {
                 sample.weight *= (1.0 - F) / (1.0 - specularProbability);
                 sample.demodulatedWeight = float3(1.0 / (1.0 - specularProbability));
-            }
         }
         // A smooth normal can sample below the geometric surface at a
         // silhouette. Reflect that lobe into the geometric hemisphere rather
@@ -447,12 +445,12 @@ public struct UnlitTransparentSurface : ISurfaceModel {
         shading.terminatesPath = false;
         // Radiance, not reflectance: this model is additive light, so the texel
         // takes the emission decode rather than the albedo one.
-        shading.albedo = ptDecodeEmission(material.diffuseColor.rgb);
+        shading.albedo = ptDecodeEmission(material.diffuseColor.rgb, material);
         shading.alpha = 1.0;
         if (material.mainTex != kNoTexture) {
             float lod = ptRayConeLod(material, hit);
             float4 sample = bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(hit.uv, lod);
-            shading.albedo = ptDecodeEmission(sample.rgb);
+            shading.albedo = ptDecodeEmission(sample.rgb, material);
             shading.alpha = sample.a;
         }
         float4 color = vertexColor(hit);
@@ -465,6 +463,7 @@ public struct UnlitTransparentSurface : ISurfaceModel {
         shading.lightmap = float3(1.0);
         shading.envmapped = false;
         shading.envStrength = 0.0;
+        shading.f0 = 0.04;
         shading.emission = ptUnlitTransparentEmission(material, shading.albedo);
         return shading;
     }
@@ -495,7 +494,7 @@ public struct UnlitEmissiveSurface : ISurfaceModel {
             // The emission decode: sky and backdrop imagery are radiance, and
             // the albedo dial has no say over how bright a sky is.
             shading.albedo = ptDecodeEmission(
-                bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(hit.uv, lod).rgb);
+                bindlessTextures[NonUniformResourceIndex(material.mainTex)].SampleLevel(hit.uv, lod).rgb, material);
         }
         shading.normal = hit.geometricNormal;
         shading.roughness = 1.0;
@@ -504,14 +503,13 @@ public struct UnlitEmissiveSurface : ISurfaceModel {
         shading.lightmap = float3(1.0);
         shading.envmapped = false;
         shading.envStrength = 0.0;
+        shading.f0 = 0.04;
         // The texture is the radiance, and each kind takes its own dial: the
         // sky shell, and the painted backdrop standing in for a distance that
         // was never modelled. Nothing exists behind either, which is why
         // neither is graded by the emissive dial - that one is for lamps and
         // screens, which are objects in the scene that also light it.
-        shading.emission = assembleSkyClass((material.featureMask & kMaterialSky) != 0,
-                                            shading.albedo, pushConstants.skyIntensity,
-                                            pushConstants.backdropIntensity);
+        shading.emission = assembleSkyClass(shading.albedo, material.emission.x);
         shading.terminatesPath = true;
         return shading;
     }

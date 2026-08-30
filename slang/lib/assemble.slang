@@ -57,9 +57,8 @@ public float3 assembleRadiance(float3 noiseFree, float3 diffuse, float3 directDi
  * the painting. Neither is graded by the emissive dial, which is for lamps
  * and screens - objects in the scene that also light it.
  */
-public float3 assembleSkyClass(bool skyShell, float3 radianceTexel,
-                               float skyIntensity, float backdropIntensity) {
-    return radianceTexel * (skyShell ? skyIntensity : backdropIntensity);
+public float3 assembleSkyClass(float3 radianceTexel, float intensity) {
+    return radianceTexel * intensity;
 }
 
 /**

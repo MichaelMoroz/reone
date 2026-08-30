@@ -56,11 +56,11 @@ public float punctualSmithK(float roughness) {
 }
 
 /**
- * Reflectance at normal incidence: dielectric 0.04 tinted toward albedo by
- * metalness, lifted toward a mirror by the authored env-map share.
+ * Reflectance at normal incidence: the dielectric base f0 tinted toward
+ * albedo by metalness, lifted toward a mirror by the authored env-map share.
  */
-public float3 materialRf0(float3 albedo, float metallic, float envStrength) {
-    return lerp(lerp(float3(0.04), albedo, metallic), float3(1.0), envStrength);
+public float3 materialRf0(float3 albedo, float metallic, float envStrength, float f0) {
+    return lerp(lerp(float3(f0), albedo, metallic), float3(1.0), envStrength);
 }
 
 /**

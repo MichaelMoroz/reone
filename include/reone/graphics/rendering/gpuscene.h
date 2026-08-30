@@ -66,7 +66,10 @@ struct alignas(16) InstanceMaterial {
     uint32_t envMapCube {UINT32_MAX};
     float waterAlpha {1.0f};
     glm::vec4 overrideColor {1.0f, 1.0f, 1.0f, 0.0f};
-    glm::vec4 overrideParams {-1.0f, 1.0f, 1.0f, 1.0f};
+    /** Roughness (negative: texel), metalness (negative: curated), F0, metalness scale. */
+    glm::vec4 overrideParams {-1.0f, -1.0f, 0.04f, 1.0f};
+    /** Emission grade: intensity and decode exponent. */
+    glm::vec4 emission {1.0f, 2.2f, 0.0f, 0.0f};
     glm::vec4 ambientColor {1.0f};
     int32_t envMapDerivedLayer {0};
     /**
@@ -88,10 +91,11 @@ static_assert(offsetof(InstanceMaterial, envMapCube) == 216);
 static_assert(offsetof(InstanceMaterial, waterAlpha) == 220);
 static_assert(offsetof(InstanceMaterial, overrideColor) == 224);
 static_assert(offsetof(InstanceMaterial, overrideParams) == 240);
-static_assert(offsetof(InstanceMaterial, ambientColor) == 256);
-static_assert(offsetof(InstanceMaterial, envMapDerivedLayer) == 272);
-static_assert(offsetof(InstanceMaterial, alphaTest) == 276);
-static_assert(sizeof(InstanceMaterial) == 288);
+static_assert(offsetof(InstanceMaterial, emission) == 256);
+static_assert(offsetof(InstanceMaterial, ambientColor) == 272);
+static_assert(offsetof(InstanceMaterial, envMapDerivedLayer) == 288);
+static_assert(offsetof(InstanceMaterial, alphaTest) == 292);
+static_assert(sizeof(InstanceMaterial) == 304);
 
 /** Three row vectors encode a float3x4 exactly as scene_resolve.slang reads it. */
 struct alignas(16) Matrix3x4 {

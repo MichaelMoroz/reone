@@ -58,7 +58,7 @@ private:
         uint32_t frameIndex;
         uint32_t samplesPerPixel;
         float skyIntensity;
-        float emissiveIntensity;
+        float skyGamma;
         float lightmapIntensity;
         float directIntensity;
         float rayOriginOffset;
@@ -77,8 +77,6 @@ private:
         uint32_t geometryBase1;
         uint32_t skyAvailable;
         float albedoGamma;
-        float backdropIntensity;
-        float emissiveGamma;
         /** Light samples per shading vertex; mirrors PtPushConstants.neeSamples. */
         uint32_t neeSamples;
     };

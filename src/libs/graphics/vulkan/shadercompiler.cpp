@@ -800,6 +800,7 @@ void SlangShaderCompiler::validateSchemas() {
            REONE_SCHEMA_FIELD(InstanceMaterial, waterAlpha),
            REONE_SCHEMA_FIELD(InstanceMaterial, overrideColor),
            REONE_SCHEMA_FIELD(InstanceMaterial, overrideParams),
+           REONE_SCHEMA_FIELD(InstanceMaterial, emission),
            REONE_SCHEMA_FIELD(InstanceMaterial, ambientColor),
            REONE_SCHEMA_FIELD(InstanceMaterial, envMapDerivedLayer),
            REONE_SCHEMA_FIELD(InstanceMaterial, alphaTest)});

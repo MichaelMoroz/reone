@@ -136,11 +136,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("skyintensity", value<float>(), "deprecated: use ptskyintensity / pbrskyintensity") //
         ("emissiveintensity", value<float>(), "deprecated: use ptemissiveintensity / pbremissiveintensity") //
         ("lightmapintensity", value<float>(), "deprecated: use ptlightmapintensity / pbrlightmapintensity") //
-        ("ptskyintensity", value<float>()->default_value(options->graphics.ptSkyIntensity), "path tracing: sky light intensity") //
-        ("pbrskyintensity", value<float>()->default_value(options->graphics.pbrSkyIntensity), "PBR: sky light intensity") //
-        ("ptemissiveintensity", value<float>()->default_value(options->graphics.ptEmissiveIntensity), "path tracing: emissive intensity - lamps, screens, glowing panels") //
-        ("pbremissiveintensity", value<float>()->default_value(options->graphics.pbrEmissiveIntensity), "PBR: emissive intensity - lamps, screens, glowing panels") //
-        ("ptbackdropintensity", value<float>()->default_value(options->graphics.ptBackdropIntensity), "path tracing backdrop imagery intensity") //
+        ("skyboxintensity", value<float>()->default_value(options->graphics.skyboxIntensity), "baked sky cube intensity")      //
+        ("skyboxgamma", value<float>()->default_value(options->graphics.skyboxGamma), "baked sky cube decode exponent")     //
         ("ptlightmapintensity", value<float>()->default_value(options->graphics.ptLightmapIntensity), "path tracing: baked-lightmap intensity") //
         ("pbrlightmapintensity", value<float>()->default_value(options->graphics.pbrLightmapIntensity), "PBR: baked-lightmap intensity") //
         ("pbrdirectintensity", value<float>()->default_value(options->graphics.pbrDirectIntensity), "PBR: direct light intensity") //
@@ -162,7 +159,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ptindirectclamp", value<float>()->default_value(options->graphics.ptIndirectClamp), "ceiling on one indirect sample, 0 to disable") //
         ("ptsunangularsize", value<float>()->default_value(options->graphics.ptSunAngularSize), "path tracing sun angular size") //
         ("albedogamma", value<float>()->default_value(options->graphics.albedoGamma), "authored albedo decode exponent, PBR and path tracing alike (2.2 is sRGB-correct, 1.0 matches the reference engines)") //
-        ("emissivegamma", value<float>()->default_value(options->graphics.emissiveGamma), "authored radiance decode exponent (emission, sky, backdrop)") //
         ("maxlights", value<int>()->default_value(options->graphics.maxLights), "lights a frame may carry")                    //
         ("maxdirectionalshadows", value<int>()->default_value(options->graphics.maxDirectionalShadows),
          "shadow-casting directional lights (PBR and path tracing)")                                                          //
@@ -269,20 +265,32 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("logsev", value<int>()->default_value(static_cast<int>(options->logging.severity)), "minimum log severity")            //
         ("logch", value<int>()->default_value(defaultLogChannels), "log channel mask");
 
+    const auto addSurfaceClass = [&](const std::string &key, const graphics::GraphicsOptions::SurfaceClassOverride &c) {
+        descCommon.add_options()                                                                                        //
+            ((key + "color0").c_str(), value<float>()->default_value(c.color[0]), "material override colour red")       //
+            ((key + "color1").c_str(), value<float>()->default_value(c.color[1]), "material override colour green")     //
+            ((key + "color2").c_str(), value<float>()->default_value(c.color[2]), "material override colour blue")      //
+            ((key + "colorweight").c_str(), value<float>()->default_value(c.colorWeight), "material override colour weight") //
+            ((key + "roughness").c_str(), value<float>()->default_value(c.roughness), "material override roughness")   //
+            ((key + "metallic").c_str(), value<float>()->default_value(c.metallic), "material override metalness")     //
+            ((key + "f0").c_str(), value<float>()->default_value(c.f0), "material override reflectance at normal incidence") //
+            ((key + "roughnessscale").c_str(), value<float>()->default_value(c.roughnessScale), "material override roughness scale") //
+            ((key + "metallicscale").c_str(), value<float>()->default_value(c.metallicScale), "material override metalness scale");
+    };
+    const auto addEmission = [&](const std::string &key, const graphics::GraphicsOptions::EmissionOverride &e) {
+        descCommon.add_options()                                                                                  //
+            ((key + "on").c_str(), value<bool>()->default_value(e.enabled), "emission grade on")                  //
+            ((key + "intensity").c_str(), value<float>()->default_value(e.intensity), "emission intensity")       //
+            ((key + "gamma").c_str(), value<float>()->default_value(e.gamma), "emission decode exponent");
+    };
     for (int i = 0; i < 9; ++i) {
-        auto &override = options->graphics.categoryOverrides[i];
-        auto key = "cat" + std::to_string(i);
-        descCommon.add_options()                                                                                               //
-            ((key + "color0").c_str(), value<float>()->default_value(override.color[0]), "material category color red")   //
-            ((key + "color1").c_str(), value<float>()->default_value(override.color[1]), "material category color green") //
-            ((key + "color2").c_str(), value<float>()->default_value(override.color[2]), "material category color blue")  //
-            ((key + "colorweight").c_str(), value<float>()->default_value(override.colorWeight), "material category color weight") //
-            ((key + "roughness").c_str(), value<float>()->default_value(override.roughness), "material category roughness") //
-            ((key + "roughnessscale").c_str(), value<float>()->default_value(override.roughnessScale), "material category roughness scale") //
-            ((key + "emission").c_str(), value<float>()->default_value(override.emissionScale), "material category emission scale") //
-            ((key + "env").c_str(), value<float>()->default_value(override.envScale), "material category environment scale") //
-            ((key + "metallic").c_str(), value<float>()->default_value(override.metallicScale), "material category metallic scale");
+        const auto &override = options->graphics.categoryOverrides[i];
+        const auto key = "cat" + std::to_string(i);
+        addSurfaceClass(key + "rough", override.rough);
+        addSurfaceClass(key + "refl", override.reflective);
+        addEmission(key + "emission", override.emission);
     }
+    addEmission("skyroomemission", options->graphics.skyRoomEmission);
 
     options_description descCmdLine {"Usage"};
     descCmdLine.add(descCommon);
@@ -341,13 +349,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
     // resolution here any more: the two grades are authored against different
     // transport, so a shared number made every adjustment a question of which
     // mode happened to be running.
-    options->graphics.ptSkyIntensity = std::max(0.0f, vars["ptskyintensity"].as<float>());
-    options->graphics.pbrSkyIntensity = std::max(0.0f, vars["pbrskyintensity"].as<float>());
-    options->graphics.ptEmissiveIntensity =
-        std::max(0.0f, vars["ptemissiveintensity"].as<float>());
-    options->graphics.pbrEmissiveIntensity =
-        std::max(0.0f, vars["pbremissiveintensity"].as<float>());
-    options->graphics.ptBackdropIntensity = std::max(0.0f, vars["ptbackdropintensity"].as<float>());
+    options->graphics.skyboxIntensity = std::max(0.0f, vars["skyboxintensity"].as<float>());
+    options->graphics.skyboxGamma = std::clamp(vars["skyboxgamma"].as<float>(), 0.1f, 4.0f);
     options->graphics.ptLightmapIntensity =
         std::max(0.0f, vars["ptlightmapintensity"].as<float>());
     options->graphics.pbrLightmapIntensity =
@@ -377,10 +380,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
             options->graphics.*pbrMember = value;
         }
     };
-    retiredDial("skyintensity", "ptskyintensity", "pbrskyintensity",
-                &GraphicsOptions::ptSkyIntensity, &GraphicsOptions::pbrSkyIntensity);
-    retiredDial("emissiveintensity", "ptemissiveintensity", "pbremissiveintensity",
-                &GraphicsOptions::ptEmissiveIntensity, &GraphicsOptions::pbrEmissiveIntensity);
     retiredDial("lightmapintensity", "ptlightmapintensity", "pbrlightmapintensity",
                 &GraphicsOptions::ptLightmapIntensity, &GraphicsOptions::pbrLightmapIntensity);
     options->graphics.ptBounceRoughness = std::clamp(vars["ptbounceroughness"].as<float>(), 0.0f, 1.0f);
@@ -394,6 +393,28 @@ std::unique_ptr<Options> OptionsParser::parse() {
                                                 graphics::kMaxPtNeeSamples);
     options->graphics.ptGrassScatter = vars["ptgrassscatter"].as<bool>();
     options->graphics.ptGrassShadows = vars["ptgrassshadows"].as<bool>();
+    const auto readSurfaceClass = [&](const std::string &key, graphics::GraphicsOptions::SurfaceClassOverride &c) {
+        for (int k = 0; k < 3; ++k) c.color[k] = vars[key + "color" + std::to_string(k)].as<float>();
+        c.colorWeight = std::clamp(vars[key + "colorweight"].as<float>(), 0.0f, 1.0f);
+        c.roughness = std::clamp(vars[key + "roughness"].as<float>(), -1.0f, 1.0f);
+        c.metallic = std::clamp(vars[key + "metallic"].as<float>(), -1.0f, 1.0f);
+        c.f0 = std::clamp(vars[key + "f0"].as<float>(), 0.0f, 1.0f);
+        c.roughnessScale = std::max(0.0f, vars[key + "roughnessscale"].as<float>());
+        c.metallicScale = std::max(0.0f, vars[key + "metallicscale"].as<float>());
+    };
+    const auto readEmission = [&](const std::string &key, graphics::GraphicsOptions::EmissionOverride &e) {
+        e.enabled = vars[key + "on"].as<bool>();
+        e.intensity = std::max(0.0f, vars[key + "intensity"].as<float>());
+        e.gamma = std::clamp(vars[key + "gamma"].as<float>(), 0.1f, 4.0f);
+    };
+    for (int i = 0; i < 9; ++i) {
+        auto &override = options->graphics.categoryOverrides[i];
+        const auto key = "cat" + std::to_string(i);
+        readSurfaceClass(key + "rough", override.rough);
+        readSurfaceClass(key + "refl", override.reflective);
+        readEmission(key + "emission", override.emission);
+    }
+    readEmission("skyroomemission", options->graphics.skyRoomEmission);
     options->graphics.ptRayOffset = std::max(0.0001f, vars["ptrayoffset"].as<float>());
     options->graphics.ptTraceStats = vars["pttracestats"].as<bool>();
     options->graphics.tonemap = std::clamp(vars["tonemap"].as<int>(), 0, 1);
@@ -401,7 +422,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ptPointEmitterRatio = std::clamp(vars["ptpointemitterratio"].as<float>(), 0.01f, 0.5f);
     options->graphics.ptSunAngularSize = std::max(0.05f, vars["ptsunangularsize"].as<float>());
     options->graphics.albedoGamma = std::clamp(vars["albedogamma"].as<float>(), 0.1f, 4.0f);
-    options->graphics.emissiveGamma = std::clamp(vars["emissivegamma"].as<float>(), 0.1f, 4.0f);
     options->graphics.maxLights = std::clamp(vars["maxlights"].as<int>(), 1, graphics::kMaxLights);
     options->graphics.maxDirectionalShadows =
         std::clamp(vars["maxdirectionalshadows"].as<int>(), 0, 4);
@@ -543,19 +563,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.shadowOpacity = vars["shadowopacity"].as<float>();
     options->graphics.anisotropicFiltering = vars["anisofilter"].as<int>();
     options->graphics.drawDistance = vars["drawdist"].as<float>();
-    for (int i = 0; i < 9; ++i) {
-        auto &override = options->graphics.categoryOverrides[i];
-        auto key = "cat" + std::to_string(i);
-        override.color[0] = vars[key + "color0"].as<float>();
-        override.color[1] = vars[key + "color1"].as<float>();
-        override.color[2] = vars[key + "color2"].as<float>();
-        override.colorWeight = vars[key + "colorweight"].as<float>();
-        override.roughness = vars[key + "roughness"].as<float>();
-        override.roughnessScale = std::max(0.0f, vars[key + "roughnessscale"].as<float>());
-        override.emissionScale = vars[key + "emission"].as<float>();
-        override.envScale = vars[key + "env"].as<float>();
-        override.metallicScale = vars[key + "metallic"].as<float>();
-    }
     options->audio.musicVolume = vars["musicvol"].as<int>();
     options->audio.voiceVolume = vars["voicevol"].as<int>();
     options->audio.soundVolume = vars["soundvol"].as<int>();

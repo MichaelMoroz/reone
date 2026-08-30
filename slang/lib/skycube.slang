@@ -44,6 +44,12 @@ public float3 skyRadiance(SamplerCube cube, float3 direction, float intensity) {
     return cube.SampleLevel(normalize(direction), 0.0).rgb * intensity;
 }
 
+/** The cube holds the texel decoded at 2.2; a grade exponent re-encodes it exactly as texel^gamma. */
+public float3 skyRadiance(SamplerCube cube, float3 direction, float intensity, float gamma) {
+    float3 baked = cube.SampleLevel(normalize(direction), 0.0).rgb;
+    return pow(max(baked, 0.0), float3(gamma / 2.2)) * intensity;
+}
+
 /**
  * The world-space ray through a pixel, for a resolve that has no ray of its own.
  *

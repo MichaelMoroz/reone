@@ -54,12 +54,13 @@ public struct InstanceMaterial {
     public float roughnessScale;
     public uint envMapCube;
     public float waterAlpha;
-    // The per-category calibration overrides, baked at admission so the
-    // shader never touches a category table: rgb + lerp weight flat-paints
-    // the albedo; params are roughness override (negative disables),
-    // emission scale, env-map strength scale.
+    // The category's PBR properties for this surface's class, baked at
+    // admission: rgb + lerp weight flat-paints the albedo; params are
+    // roughness (negative: texel), metalness (negative: curated), F0,
+    // metalness scale. emission is the grade: intensity, decode exponent.
     public float4 overrideColor;
     public float4 overrideParams;
+    public float4 emission;
     public float4 ambientColor;
     public int envMapDerivedLayer;
     /** Authored cutout threshold, or negative where the texture carries none. */

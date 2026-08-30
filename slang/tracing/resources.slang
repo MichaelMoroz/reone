@@ -67,9 +67,9 @@ public static const float kPtAlphaTestEpsilon = 0.01;
 public struct PtPushConstants {
     public uint frameIndex;
     public uint samplesPerPixel;
-    // Source intensities, one dial each, tuned live against raster.
+    // The baked sky cube's grade, and the source intensities.
     public float skyIntensity;
-    public float emissiveIntensity;
+    public float skyGamma;
     public float lightmapIntensity;
     public float directIntensity;
     // Secondary-ray origin offset along the geometric normal.
@@ -98,10 +98,6 @@ public struct PtPushConstants {
     public uint skyAvailable;
     /** Exponent authored surface colour is decoded with; see GraphicsOptions. */
     public float albedoGamma;
-    /** Painted distance (a skyline) is radiance that ends the path, on its own dial. */
-    public float backdropIntensity;
-    /** Decode exponent for radiance texels; albedoGamma is a look control, this is not. */
-    public float emissiveGamma;
     /** Next-event draws per shading vertex; one is the classic estimator. */
     public uint neeSamples;
 };
@@ -112,9 +108,9 @@ public float3 ptDecodeAlbedo(float3 rgb) {
     return pow(max(rgb, 0.0), float3(pushConstants.albedoGamma));
 }
 
-/** Authored radiance to linear - emission, sky and backdrop imagery. */
-public float3 ptDecodeEmission(float3 rgb) {
-    return pow(max(rgb, 0.0), float3(pushConstants.emissiveGamma));
+/** Authored radiance to linear, at the material's emission grade exponent. */
+public float3 ptDecodeEmission(float3 rgb, InstanceMaterial material) {
+    return pow(max(rgb, 0.0), float3(material.emission.y));
 }
 
 public static const uint kPtFlagStats = 1u;
@@ -159,7 +155,7 @@ public float2 ptTransformedUV(InstanceMaterial material, float2 uv) {
 
 /** This mode's binding and dial in front of lib/skycube.slang's shared read. */
 public float3 ptSkyRadiance(float3 direction) {
-    return skyRadiance(skyCube, direction, pushConstants.skyIntensity);
+    return skyRadiance(skyCube, direction, pushConstants.skyIntensity, pushConstants.skyGamma);
 }
 
 public float2 ptTransformedUV(uint materialIndex, float2 uv) {

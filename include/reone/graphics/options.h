@@ -249,21 +249,6 @@ struct GraphicsOptions {
      */
     float albedoGamma {2.2f};
     /**
-     * Exponent authored radiance is decoded with: emission, sky and backdrop
-     * imagery.
-     *
-     * Separate from albedoGamma, and for a reason that is not symmetry. Albedo
-     * gamma is a look control - Odyssey art was authored to be multiplied by
-     * light unconverted, so any decode is a compromise and moving it is how an
-     * area is made to read right. Emission has no such argument: an authored
-     * glow colour is the colour emitted, and 2.2 is simply the encoding it was
-     * stored in, so this wants to stay there.
-     *
-     * They used to be one number, which meant grading a room's reflectance also
-     * changed how bright its lamps and its skyline were.
-     */
-    float emissiveGamma {2.2f};
-    /**
      * Lights a frame may carry, out of the kMaxLights the uniform block is
      * sized for.
      *
@@ -556,25 +541,6 @@ struct GraphicsOptions {
         question of which mode happened to be running. The traced defaults are
         the 2026-07-29 grade (2.5/2.5/0.0); the raster ones keep authored
         levels with the bake as their indirect light (1.0/1.0/1.0). */
-    float ptSkyIntensity {2.5f};
-    float pbrSkyIntensity {1.0f};
-    float ptEmissiveIntensity {2.5f};
-    float pbrEmissiveIntensity {1.0f};
-    /**
-     * Painted backdrop imagery - Taris' cityscape, Manaan's towers - on its own
-     * scale beside the sky's.
-     *
-     * These are not emissive in the sense the emissive dial means. That one
-     * grades lamps, screens and glowing panels: objects standing in the scene
-     * that also light it. A backdrop is a picture of a distance that was never
-     * modelled; it terminates the path exactly as the sky does, and nothing is
-     * behind it to receive what it might emit. Sharing a dial with the lamps
-     * meant grading the two against each other, which is a choice between the
-     * skyline reading right and the interiors reading right.
-     *
-     * 1.0 is what it was before it had a name: the texture, as authored.
-     */
-    float ptBackdropIntensity {1.0f};
     /**
      * Strength of the baked lightmap, per mode.
      *
@@ -784,31 +750,43 @@ struct GraphicsOptions {
     /** The sun is not at a physical distance, so it keeps an angle. Degrees. */
     float ptSunAngularSize {1.0f};
     /**
-     * Live per-category material overrides - the calibration programme's
-     * primary instrument, ImGui-driven. Indexed by scene::ModelUsage (0-7)
-     * plus 8 for meshes without a model root. A colorWeight of 1 flat-paints
-     * the category, which makes lighting-interaction bugs self-identifying.
-     *
-     * Not traced-only: they are applied while the shared material records are
-     * built, which the PBR raster resolve reads from as well.
+     * PBR properties of one surface class within an object category, applied
+     * as the shared material records are built (both shading modes read them).
+     * A negative roughness or metalness leaves the texel-derived value alone;
+     * F0 is the dielectric reflectance at normal incidence.
      */
-    struct CategoryOverride {
+    struct SurfaceClassOverride {
         float color[3] {1.0f, 1.0f, 1.0f};
         float colorWeight {0.0f};
-        float roughness {-1.0f}; /**< negative: no override */
+        float roughness {-1.0f};
+        float metallic {-1.0f};
+        float f0 {0.04f};
         float roughnessScale {1.0f};
-        float emissionScale {1.0f};
-        float envScale {1.0f};
-        /**
-         * Scales curated metalness rather than overriding it, so curation
-         * still decides which surfaces are metal. The reason it exists: Rf0
-         * only becomes chromatic where metalness is non-zero, and every KotOR
-         * material is dielectric, so the specular demodulation factor is grey
-         * everywhere and that path is untestable without a way to force it.
-         */
         float metallicScale {1.0f};
     };
+    /** Emission grade: off leaves the authored radiance at its encoding. */
+    struct EmissionOverride {
+        bool enabled {false};
+        float intensity {1.0f};
+        float gamma {2.2f};
+    };
+    /**
+     * One object category's grade. Rough is a surface with no environment map
+     * - Odyssey's cue for "not shiny" - and defaults to a matte dielectric;
+     * reflective keeps the texel's alpha as its roughness stand-in and the
+     * authored mirror share as its reflectance lift.
+     */
+    struct CategoryOverride {
+        SurfaceClassOverride rough {{1.0f, 1.0f, 1.0f}, 0.0f, 1.0f, 0.0f, 0.05f, 1.0f, 1.0f};
+        SurfaceClassOverride reflective;
+        EmissionOverride emission;
+    };
     CategoryOverride categoryOverrides[9] {};
+    /** The unlit-emissive class: the sky shell and painted backdrops. */
+    EmissionOverride skyRoomEmission;
+    /** The baked sky cube: intensity, and a re-encode exponent over its 2.2 bake. */
+    float skyboxIntensity {1.0f};
+    float skyboxGamma {2.2f};
     bool ssao {true};
     bool ssr {true};
     /**

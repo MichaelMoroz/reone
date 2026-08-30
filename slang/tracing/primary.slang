@@ -162,24 +162,22 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
                            shadowsEnabled, fogEnabled, thinSurface);
     shading.thin = thinSurface;
     shading.envmapped = envmapped;
-    shading.envStrength = ptEnvStrength(material, envmapped, shading.alpha);
+    shading.envStrength = ptEnvStrength(envmapped, shading.alpha);
+    shading.f0 = material.overrideParams.z;
     shading.hasLightmap = hasLightmap;
     // White where there is no bake - see the note in tracing/material.slang.
     shading.lightmap = hasLightmap ? gammaToLinear(lightmapSample.rgb) : float3(1.0);
 
     // The same texel decoded as radiance: emission does not follow the albedo dial.
-    const float3 radianceTexel = ptDecodeEmission(diffuseSample.rgb);
+    const float3 radianceTexel = ptDecodeEmission(diffuseSample.rgb, material);
 
     shading.emission = assembleEmission(gammaToLinear(selfIllumSample), radianceTexel,
-                                        material.curatedEmission,
-                                        pushConstants.emissiveIntensity);
+                                        material.curatedEmission, material.emission.x);
 
     // The two non-PBR surface models are radiance and end the path: nothing
     // behind them was rasterized. Same shading as tracing/material.slang.
     if (material.surfaceType == kPtSurfaceUnlitEmissive) {
-        shading.emission = assembleSkyClass((material.featureMask & kMaterialSky) != 0,
-                                            radianceTexel, pushConstants.skyIntensity,
-                                            pushConstants.backdropIntensity);
+        shading.emission = assembleSkyClass(radianceTexel, material.emission.x);
         shading.terminatesPath = true;
     } else if (material.surfaceType == kPtSurfaceUnlitTransparent) {
         // PURELY EMISSIVE, and in the G-buffer only when it is also cutout.

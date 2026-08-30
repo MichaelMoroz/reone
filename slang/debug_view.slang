@@ -240,28 +240,13 @@ float3 channelColor(float2 uv, int2 pixel) {
     case kDebugNormals:
         return normal * 0.5 + 0.5;
     // Raw, deliberately: these are numbers to be read off the screen.
-    case kDebugRoughness: {
-        // The same stand-in and the same curation the shading applies: Odyssey
-        // assets carry no roughness channel, so diffuse alpha is it.
-        float3 albedo = gammaToLinear(diffuseSample.rgb) * material.curatedAlbedoMul.rgb;
-        // The live floor, not a hardcoded 0.2. This channel exists to show the
-        // number the shading used, and it was showing a different one.
-        float roughness = curatedChannel(material.curatedRoughA, material.curatedRoughB,
-                                         albedo,
-                                         clamp(diffuseSample.a, pushConstants.roughnessFloor, 1.0));
-        if (material.overrideParams.x >= 0.0) roughness = material.overrideParams.x;
-        // Saturate, matching lib/material_ops.slang - this view has to show the
-        // number the shading used, and the floor is not applied here.
-        return float3(saturate(roughness * material.roughnessScale));
-    }
-    case kDebugMetallic: {
-        // Odyssey materials are all dielectric, so anything non-zero here is
-        // curation plus the per-category dial - which is the point of looking.
-        float3 albedo = gammaToLinear(diffuseSample.rgb) * material.curatedAlbedoMul.rgb;
-        float metallic = curatedChannel(material.curatedMetalA, material.curatedMetalB,
-                                        albedo, 0.0);
-        return float3(saturate(metallic * material.overrideParams.w));
-    }
+    // The numbers the shading used, through the same chain it ran.
+    case kDebugRoughness:
+        return float3(resolveMaterial(material, diffuseSample.rgb, diffuseSample.a, 1.0, kGamma,
+                                      pushConstants.roughnessFloor).roughness);
+    case kDebugMetallic:
+        return float3(resolveMaterial(material, diffuseSample.rgb, diffuseSample.a, 1.0, kGamma,
+                                      pushConstants.roughnessFloor).metallic);
     case kDebugLightmap:
         return hasLightmap ? lightmapSample.rgb : float3(0.9, 0.0, 0.9) * shape * 0.4;
     case kDebugDepth: {

@@ -68,12 +68,6 @@ namespace {
 
 constexpr char kConfigFilename[] = "reone.cfg";
 
-std::string formatConfigFloat(float value) {
-    std::ostringstream stream;
-    stream << std::setprecision(std::numeric_limits<float>::max_digits10) << value;
-    return stream.str();
-}
-
 bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &error) {
     // Every option the registry knows, asked for its own written form.
     //
@@ -97,20 +91,6 @@ bool saveGraphicsOptions(const graphics::GraphicsOptions &options, std::string &
             continue;
         }
         values.emplace_back(desc.name, desc.get(options));
-    }
-
-    for (int i = 0; i < 9; ++i) {
-        const auto &override = options.categoryOverrides[i];
-        auto key = "cat" + std::to_string(i);
-        values.emplace_back(key + "color0", formatConfigFloat(override.color[0]));
-        values.emplace_back(key + "color1", formatConfigFloat(override.color[1]));
-        values.emplace_back(key + "color2", formatConfigFloat(override.color[2]));
-        values.emplace_back(key + "colorweight", formatConfigFloat(override.colorWeight));
-        values.emplace_back(key + "roughness", formatConfigFloat(override.roughness));
-        values.emplace_back(key + "roughnessscale", formatConfigFloat(override.roughnessScale));
-        values.emplace_back(key + "emission", formatConfigFloat(override.emissionScale));
-        values.emplace_back(key + "env", formatConfigFloat(override.envScale));
-        values.emplace_back(key + "metallic", formatConfigFloat(override.metallicScale));
     }
 
     std::ifstream input(kConfigFilename);
@@ -1126,15 +1106,6 @@ void Editor::graphicsQualityTab() {
                 "real and would otherwise count it twice. That pair is the one number the two "
                 "modes are meant to disagree on.",
                 true);
-    ImGui::SliderFloat("Sky", &options.pbrSkyIntensity, 0.0f, kLightIntensityMax, "%.2f",
-                       kLightIntensityFlags);
-    settingHint("This mode's sky light. Path tracing has its own below: the two grades are "
-                "authored against different transport, so one number for both made every "
-                "adjustment a question of which mode was running.",
-                true);
-    ImGui::SliderFloat("Emissive", &options.pbrEmissiveIntensity, 0.0f, kLightIntensityMax, "%.2f",
-                       kLightIntensityFlags);
-    settingHint("Lamps, screens and glowing panels, in this mode.", true);
     ImGui::SliderFloat("Direct light", &options.pbrDirectIntensity, 0.0f, kLightIntensityMax, "%.2f",
                        kLightIntensityFlags);
     settingHint("Point and spot lights, in this mode.", true);
@@ -1158,39 +1129,12 @@ void Editor::graphicsQualityTab() {
                 "bake on top counts it twice. PBR keeps its own strength for the same bake above - "
                 "that pair is the one number the two modes are meant to disagree on.",
                 true);
-    ImGui::SliderFloat("Sky", &options.ptSkyIntensity, 0.0f, kLightIntensityMax, "%.2f",
-                       kLightIntensityFlags);
-    settingHint("This mode's sky light, graded against transport it computes rather than a bake.",
-                true);
-    ImGui::SliderFloat("Backdrop", &options.ptBackdropIntensity, 0.0f, kLightIntensityMax, "%.2f",
-                       kLightIntensityFlags);
-    settingHint("Painted distance: Taris' cityscape, Manaan's towers. Its own scale beside the "
-                "sky's, and deliberately not the emissive one. Emissive grades lamps, screens and "
-                "panels - objects standing in the scene that also light it. A backdrop is a "
-                "picture of a distance nobody modelled: it ends the path exactly as the sky does, "
-                "and there is nothing behind it to receive what it might emit. Sharing a dial "
-                "meant choosing between the skyline reading right and the interiors reading "
-                "right. 1.0 is the texture as authored.",
-                true);
-    ImGui::SliderFloat("Emissive", &options.ptEmissiveIntensity, 0.0f, kLightIntensityMax, "%.2f",
-                       kLightIntensityFlags);
-    settingHint("Lamps, screens and glowing panels, in this mode.", true);
     ImGui::SliderFloat("Direct light", &options.ptDirectIntensity, 0.0f, kLightIntensityMax, "%.2f",
                        kLightIntensityFlags);
     settingHint("Point and spot lights, in this mode.", true);
     ImGui::SliderFloat("Sun", &options.ptSunIntensity, 0.0f, kLightIntensityMax, "%.2f",
                        kLightIntensityFlags);
     settingHint("Directional lights, in this mode.", true);
-    ImGui::SliderFloat("Emissive gamma", &options.emissiveGamma, 0.1f, 4.0f, "%.2f");
-    settingHint("Exponent authored radiance is decoded with: emission, sky and backdrop imagery. "
-                "Only the tracer reads it, which is why it sits in this group. Separate from "
-                "Albedo gamma under Materials, and it should stay at 2.2. That one is a look "
-                "control - Odyssey art was authored to be multiplied by light unconverted, so any "
-                "decode is a compromise. This one is not a compromise: an authored glow colour is "
-                "the colour emitted, and 2.2 is just the encoding it was stored in. They used to "
-                "be one number, so grading a room's reflectance also changed how bright its lamps "
-                "and its skyline were.",
-                true);
     ImGui::EndDisabled();
     ImGui::PopID();
     ImGui::Unindent();
@@ -1667,9 +1611,8 @@ bool Editor::beginSceneCapture() {
         out << "sky_room\t" << (scene.skyRoom() ? "yes" : "no") << "\n";
         // The dials that change what any of the above means.
         out << "albedo_gamma\t" << options.albedoGamma << "\n";
-        out << "sky_intensity\t" << options.ptSkyIntensity << "\n";
-        out << "backdrop_intensity\t" << options.ptBackdropIntensity << "\n";
-        out << "emissive_intensity\t" << options.ptEmissiveIntensity << "\n";
+        out << "skybox_intensity\t" << options.skyboxIntensity << "\n";
+        out << "skybox_gamma\t" << options.skyboxGamma << "\n";
         out << "max_lights\t" << options.maxLights << "\n";
         out << "debug_view_restored\t" << restoreDebugView << "\n";
     });
@@ -1780,38 +1723,76 @@ void Editor::graphicsMaterialsTab() {
     static constexpr const char *kCategoryNames[] = {
         "GUI", "Rooms", "Creatures", "Placeables", "Doors",
         "Equipment", "Projectiles", "Cameras", "Uncategorized"};
-    static constexpr const char *kCategoryHint =
-        "Applied to every surface of the category as its material record is built. Color weight 1 "
-        "flat-paints for bug isolation.";
+    const auto surfaceClass = [](const char *label, graphics::GraphicsOptions::SurfaceClassOverride &c,
+                                 const char *hint) {
+        if (!ImGui::TreeNode(label)) {
+            settingHint(hint);
+            return;
+        }
+        settingHint(hint);
+        ImGui::ColorEdit3("Color", c.color);
+        ImGui::SliderFloat("Color weight", &c.colorWeight, 0.0f, 1.0f, "%.2f");
+        settingHint("1 flat-paints the class, for bug isolation.");
+        bool overrideRoughness = c.roughness >= 0.0f;
+        if (ImGui::Checkbox("Override roughness", &overrideRoughness)) c.roughness = overrideRoughness ? 1.0f : -1.0f;
+        if (overrideRoughness) ImGui::SliderFloat("Roughness", &c.roughness, 0.0f, 1.0f, "%.2f");
+        settingHint("Absolute. Off, the texel's alpha stands in for roughness, as Odyssey has no channel for it.");
+        bool overrideMetallic = c.metallic >= 0.0f;
+        if (ImGui::Checkbox("Override metalness", &overrideMetallic)) c.metallic = overrideMetallic ? 0.0f : -1.0f;
+        if (overrideMetallic) ImGui::SliderFloat("Metalness", &c.metallic, 0.0f, 1.0f, "%.2f");
+        settingHint("Absolute. Off, curation decides and Metalness scale grades it.");
+        ImGui::SliderFloat("F0", &c.f0, 0.0f, 0.2f, "%.3f");
+        settingHint("Reflectance at normal incidence for the dielectric base; 0.04 is glass and most "
+                    "non-metals. Metalness tints it toward the albedo, and a reflective surface's "
+                    "authored mirror share lifts it toward 1.");
+        ImGui::SliderFloat("Roughness scale", &c.roughnessScale, 0.0f, 8.0f, "%.2f");
+        ImGui::SliderFloat("Metalness scale", &c.metallicScale, 0.0f, 8.0f, "%.2f");
+        ImGui::TreePop();
+    };
+    const auto emissionGrade = [](graphics::GraphicsOptions::EmissionOverride &e, const char *hint) {
+        ImGui::Checkbox("Grade emission", &e.enabled);
+        settingHint(hint);
+        ImGui::BeginDisabled(!e.enabled);
+        ImGui::SliderFloat("Emission intensity", &e.intensity, 0.0f, 32.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("Emission gamma", &e.gamma, 0.1f, 4.0f, "%.2f");
+        settingHint("Exponent the authored radiance texel is decoded with. 2.2 is the encoding it was stored in.");
+        ImGui::EndDisabled();
+    };
     for (int i = 0; i < 9; ++i) {
         // GUI, projectile and camera models never reach the TLAS.
-        if (i == 0 || i == 6 || i == 7) {
-            continue;
-        }
+        if (i == 0 || i == 6 || i == 7) continue;
         auto &override = options.categoryOverrides[i];
-        // Opened separately from the hint so the hint hangs off the header,
-        // which is the row that is there whether the node is open or shut.
+        ImGui::PushID(i);
         const bool open = ImGui::TreeNode(kCategoryNames[i]);
-        settingHint(kCategoryHint);
+        settingHint("Applied to every surface of the category as its material record is built, in "
+                    "PBR and path tracing alike. A surface is reflective when it carries an "
+                    "environment map - Odyssey's cue for shiny - and rough otherwise.");
         if (open) {
-            ImGui::ColorEdit3("Color", override.color);
-            ImGui::SliderFloat("Color weight", &override.colorWeight, 0.0f, 1.0f, "%.2f");
-            bool overrideRoughness = override.roughness >= 0.0f;
-            if (ImGui::Checkbox("Override roughness", &overrideRoughness)) {
-                override.roughness = overrideRoughness ? 0.5f : -1.0f;
-            }
-            if (overrideRoughness) {
-                ImGui::SliderFloat("Roughness", &override.roughness, 0.0f, 1.0f, "%.2f");
-            }
-            ImGui::SliderFloat("Roughness scale", &override.roughnessScale, 0.0f, 8.0f, "%.2f");
-            ImGui::SliderFloat("Emission scale", &override.emissionScale, 0.0f, 8.0f, "%.2f");
-            ImGui::SliderFloat("Env strength scale", &override.envScale, 0.0f, 4.0f, "%.2f");
-            ImGui::SliderFloat("Metalness scale", &override.metallicScale, 0.0f, 8.0f, "%.2f");
-            settingHint("Scales curated metalness, not an override. Above zero it tints Rf0 toward "
-                        "albedo, which is what makes the specular factor chromatic - every stock "
-                        "material here is dielectric.");
+            surfaceClass("Rough", override.rough,
+                         "Surfaces with no environment map. Default: a matte dielectric - roughness 1, "
+                         "metalness 0, F0 0.05.");
+            surfaceClass("Reflective", override.reflective,
+                         "Surfaces with an environment map. Default: the texel's alpha as roughness, "
+                         "curated metalness, F0 0.04, plus the authored mirror share.");
+            emissionGrade(override.emission,
+                          "Lamps, screens and glowing panels of this category. Off, the authored "
+                          "radiance is used at its 2.2 encoding.");
             ImGui::TreePop();
         }
+        ImGui::PopID();
+    }
+    if (ImGui::TreeNode("Sky room")) {
+        emissionGrade(options.skyRoomEmission,
+                      "The unlit-emissive class: the sky shell and painted backdrops - a distance "
+                      "nobody modelled, which ends the path like the sky does.");
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Skybox")) {
+        ImGui::SliderFloat("Intensity", &options.skyboxIntensity, 0.0f, 32.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+        settingHint("The baked sky cube, in PBR and path tracing; 1 is the texture as authored.");
+        ImGui::SliderFloat("Gamma", &options.skyboxGamma, 0.1f, 4.0f, "%.2f");
+        settingHint("Re-encode exponent over the cube's 2.2 bake, applied as it is read.");
+        ImGui::TreePop();
     }
 }
 

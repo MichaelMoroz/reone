@@ -94,9 +94,10 @@ public MaterialSurface resolveMaterial(InstanceMaterial material, float3 texelRg
                                  s.albedo, s.roughness);
     s.metallic = curatedChannel(material.curatedMetalA, material.curatedMetalB,
                                 s.albedo, s.metallic);
-    // A scale, not an override: curation stays in charge of which surfaces are
-    // metal and this only says how far.
-    s.metallic = saturate(s.metallic * material.overrideParams.w);
+    // The category's absolute metalness when set; otherwise curation decides
+    // and the scale grades it.
+    s.metallic = material.overrideParams.y >= 0.0 ? material.overrideParams.y
+                                                  : saturate(s.metallic * material.overrideParams.w);
     s.albedo = lerp(s.albedo, decodeAlbedo(material.overrideColor.rgb, albedoGamma),
                     material.overrideColor.w);
     if (material.overrideParams.x >= 0.0) s.roughness = material.overrideParams.x;

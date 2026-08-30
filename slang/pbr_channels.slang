@@ -75,8 +75,8 @@ struct ResolvePushConstants {
     float directIntensity;
     float sunIntensity;
     float skyIntensity;
-    float backdropIntensity;
-    float emissiveIntensity;
+    float skyGamma;
+    float pad;
 };
 [[vk::push_constant]] ResolvePushConstants pushConstants;
 
@@ -207,7 +207,7 @@ Channels shadePixel(float2 uv, int2 pixel) {
         float3 direction = skyDirection(uv, globalUniforms.projectionInv,
                                         globalUniforms.viewInv,
                                         globalUniforms.cameraPosition.xyz);
-        return terminator(skyRadiance(sSkyCube, direction, pushConstants.skyIntensity));
+        return terminator(skyRadiance(sSkyCube, direction, pushConstants.skyIntensity, pushConstants.skyGamma));
     }
     InstanceMaterial material = instanceMaterials[mergedMaterialIds[triangleId]];
     GBufferSurface g = readGBufferSurface(uv);
@@ -249,19 +249,18 @@ Channels shadePixel(float2 uv, int2 pixel) {
     // The unlit-emissive class: sky shell and painted backdrops are radiance,
     // terminating, on their own dials - assembleSkyClass, the same call the
     // tracer makes, the same shared dials.
-    bool skyShell = (material.featureMask & kMaterialSky) != 0;
-    if (skyShell || material.surfaceType == 2) {
-        return terminator(assembleSkyClass(skyShell, albedo, pushConstants.skyIntensity,
-                                           pushConstants.backdropIntensity));
+    if ((material.featureMask & kMaterialSky) != 0 || material.surfaceType == 2) {
+        return terminator(assembleSkyClass(pow(max(mainTexSample.rgb, 0.0), float3(material.emission.y)),
+                                           material.emission.x));
     }
 
     // The shared surface model. envStrength is the tracer's: the authored mirror
     // fraction (1 - alpha) scaled by the category override, folded into the
     // demodulation factors so the composite reconstructs the same surface.
-    float envStrength = (envmapped ? (1.0 - mainTexSample.a) : 0.0) *
-                        material.overrideParams.z;
+    float envStrength = envmapped ? (1.0 - mainTexSample.a) : 0.0;
+    float f0 = material.overrideParams.z;
     float3 diffFactor, specFactor;
-    materialFactors(normal, V, albedo, metallic, envStrength, roughness,
+    materialFactors(normal, V, albedo, metallic, envStrength, roughness, f0,
                     diffFactor, specFactor);
 
     float ao = (pushConstants.flags & kResolveFlagSSAO) != 0
@@ -288,7 +287,7 @@ Channels shadePixel(float2 uv, int2 pixel) {
     }
 
     float NdotV = max(0.0, dot(normal, V));
-    float3 F0 = materialRf0(albedo, metallic, envStrength);
+    float3 F0 = materialRf0(albedo, metallic, envStrength, f0);
 
     // Direct light, each caster occluded by its own map: demodulated Lambert
     // plus the analytic GGX lobe, demodulated by specFactor at the end.
@@ -325,9 +324,9 @@ Channels shadePixel(float2 uv, int2 pixel) {
 
     Channels c;
     // Emission is unmultiplied radiance into noiseFree, on the tracer's rule.
-    float3 radianceTexel = gammaToLinear(mainTexSample.rgb);
+    float3 radianceTexel = pow(max(mainTexSample.rgb, 0.0), float3(material.emission.y));
     c.noiseFree = assembleEmission(gammaToLinear(selfIllumSample.rgb), radianceTexel,
-                                   material.curatedEmission, pushConstants.emissiveIntensity);
+                                   material.curatedEmission, material.emission.x);
     c.diffuse = ao * irradiance;
     c.directDiffuse = max(directDiffuse, float3(0.0));
     c.specular = (max(directS, float3(0.0)) + ao * ambientS + mirror) /
