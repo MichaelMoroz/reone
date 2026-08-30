@@ -179,7 +179,7 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
         shading.terminatesPath = true;
     } else if (material.surfaceType == kPtSurfaceUnlitTransparent) {
         // PURELY EMISSIVE, and in the G-buffer only when it is also cutout.
-        shading.emission = ptUnlitTransparentEmission(material, radianceTexel);
+        shading.emission = ptUnlitTransparentEmission(material, radianceTexel, diffuseSample.a);
         shading.terminatesPath = true;
     }
 

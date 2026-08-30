@@ -315,6 +315,9 @@ std::unique_ptr<Options> OptionsParser::parse() {
         addRough(key + "rough", override.rough);
         addReflective(key + "refl", override.reflective);
         addEmission(key + "emission", override.emission);
+        descCommon.add_options()((key + "transparencyemission").c_str(),
+                                 value<float>()->default_value(override.transparencyEmission),
+                                 "additive-transparency emission intensity for the category");
     }
     addEmission("skyroomemission", options->graphics.skyRoomEmission);
     // The retired single-class category keys, read so an older reone.cfg
@@ -468,6 +471,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
         readRough(key + "rough", override.rough);
         readReflective(key + "refl", override.reflective);
         readEmission(key + "emission", override.emission);
+        override.transparencyEmission =
+            std::max(0.0f, vars[key + "transparencyemission"].as<float>());
     }
     readEmission("skyroomemission", options->graphics.skyRoomEmission);
     // The retired global dials of the traced grade, carried onto the material

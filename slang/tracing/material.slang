@@ -273,9 +273,15 @@ public float ptRayConeLod(InstanceMaterial material, HitGeometry hit) {
     return max(0.0, 0.5 * log2(max(density, 1e-12)) + log2(max(hit.coneWidth, 1e-9)));
 }
 
-/** Additive radiance of a purely emissive surface: authored as light even without a self-illum controller. */
-public float3 ptUnlitTransparentEmission(InstanceMaterial material, float3 radianceTexel) {
-    return max(material.selfIllumColor.rgb, float3(1.0)) * radianceTexel * material.emission.x;
+/**
+ * Additive radiance of a purely emissive surface: authored as light even
+ * without a self-illum controller. Alpha is the raster composite's energy
+ * share - texel coverage, vertex alpha and the model-node fade - and the
+ * category's transparency-emission dial grades what remains.
+ */
+public float3 ptUnlitTransparentEmission(InstanceMaterial material, float3 radianceTexel, float alpha) {
+    return max(material.selfIllumColor.rgb, float3(1.0)) * radianceTexel * material.emission.x *
+           material.emission.z * saturate(alpha) * saturate(material.diffuseColor.a);
 }
 
 public struct PbrSurface : ISurfaceModel {
@@ -453,7 +459,7 @@ public struct UnlitTransparentSurface : ISurfaceModel {
         shading.lightmap = float3(1.0);
         shading.specular = 0.0;
         shading.f0 = 0.0;
-        shading.emission = ptUnlitTransparentEmission(material, shading.albedo);
+        shading.emission = ptUnlitTransparentEmission(material, shading.albedo, shading.alpha);
         return shading;
     }
 

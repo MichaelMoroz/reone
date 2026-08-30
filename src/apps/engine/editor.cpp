@@ -1857,6 +1857,11 @@ void Editor::graphicsMaterialsTab() {
             emissionGrade(override.emission,
                           "Lamps, screens and glowing panels of this category. Off, the authored "
                           "radiance is used at its 2.2 encoding.");
+            ImGui::SliderFloat("Transparency emission", &override.transparencyEmission, 0.0f, 4.0f,
+                               "%.2f", ImGuiSliderFlags_Logarithmic);
+            settingHint("The additive-transparency class - sun shafts, glows, blades - in the "
+                        "tracer. Scales the radiance a crossing ray picks up, after the surface's "
+                        "own alpha has attenuated it; raster is untouched.");
             ImGui::TreePop();
         }
         ImGui::PopID();

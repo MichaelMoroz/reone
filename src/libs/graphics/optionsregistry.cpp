@@ -826,6 +826,10 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                           [i](GraphicsOptions &o) -> ReflectiveOverride & { return o.categoryOverrides[i].reflective; });
         addEmissionOpts(descs, key + "emission", help,
                         [i](GraphicsOptions &o) -> EmissionOverride & { return o.categoryOverrides[i].emission; });
+        descs.push_back(floatRefOpt(
+            key + "transparencyemission", help + " additive-transparency emission intensity",
+            [i](GraphicsOptions &o) -> float & { return o.categoryOverrides[i].transparencyEmission; },
+            0.0f, 32.0f));
     }
     addEmissionOpts(descs, "skyroomemission", "sky room",
                     [](GraphicsOptions &o) -> EmissionOverride & { return o.skyRoomEmission; });

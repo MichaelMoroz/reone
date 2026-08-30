@@ -793,6 +793,8 @@ struct GraphicsOptions {
         RoughOverride rough;
         ReflectiveOverride reflective;
         EmissionOverride emission;
+        /** Scale on the additive-transparency class's traced radiance. */
+        float transparencyEmission {1.0f};
     };
     CategoryOverride categoryOverrides[9] {};
     /** The unlit-emissive class: the sky shell and painted backdrops. */

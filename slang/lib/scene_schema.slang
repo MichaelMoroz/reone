@@ -57,7 +57,7 @@ public struct InstanceMaterial {
     // admission: rgb + lerp weight flat-paints the albedo; the texel's alpha
     // lerps roughness and specular weight (r0, r1, s0, s1) and f0 (f0_0, f0_1)
     // between their alpha-0 and alpha-1 values. emission is the grade:
-    // intensity, decode exponent.
+    // intensity, decode exponent, additive-transparency intensity.
     public float4 overrideColor;
     public float4 overrideParams;
     public float4 overrideF0;

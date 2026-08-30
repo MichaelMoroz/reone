@@ -191,6 +191,9 @@ void applyCategoryOverride(InstanceMaterial &material,
     }
     const bool skyClass = (material.featureMask & (1u << 24)) != 0;
     material.emission = emissionGrade(skyClass ? options.skyRoomEmission : category.emission);
+    // The additive-transparency class's own intensity, in z; the sky class has
+    // no additive share to grade.
+    material.emission.z = skyClass ? 1.0f : std::max(0.0f, category.transparencyEmission);
 }
 
 void populateMaterialResources(InstanceMaterial &dst,

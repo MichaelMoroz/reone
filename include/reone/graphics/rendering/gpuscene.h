@@ -71,8 +71,8 @@ struct alignas(16) InstanceMaterial {
     glm::vec4 overrideParams {1.0f, 1.0f, 1.0f, 1.0f};
     /** Dielectric f0 at texel alpha 0 and 1. */
     glm::vec4 overrideF0 {0.04f, 0.04f, 0.0f, 0.0f};
-    /** Emission grade: intensity and decode exponent. */
-    glm::vec4 emission {1.0f, 2.2f, 0.0f, 0.0f};
+    /** Emission grade: intensity, decode exponent, additive-transparency intensity. */
+    glm::vec4 emission {1.0f, 2.2f, 1.0f, 0.0f};
     glm::vec4 ambientColor {1.0f};
     int32_t envMapDerivedLayer {0};
     /**
