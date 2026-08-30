@@ -347,15 +347,7 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
             material.featureMask |= kMaskTracedTransmissive;
         }
     }
-    // Backdrop cutouts are the painted skyline: shaded as unlit sky radiance
-    // at the sky dial, not baked into the sky room. Cutout alone - blended
-    // background meshes are inferred, not authored, and on Dantooine that
-    // description catches 372 tree branches.
-    if (mesh.material.backgroundGeometry && kind == AdmissionKind::Cutout) {
-        material.featureMask |= 1u << 24;
-    }
-    if ((material.featureMask & (1u << 24)) != 0 ||
-        (curated && curated->klass == TraceClass::Prelit)) {
+    if ((material.featureMask & (1u << 24)) != 0) {
         material.surfaceType = 2;
     }
 
@@ -601,6 +593,7 @@ GpuSceneAdmissionResult GpuSceneAdmission::prepare(
     uint64_t optionsFingerprint = 14695981039346656037ull;
     hashBytes(optionsFingerprint, _options.categoryOverrides,
               sizeof(_options.categoryOverrides));
+    hashBytes(optionsFingerprint, &_options.skyRoomEmission, sizeof(_options.skyRoomEmission));
     // Every option that reaches a material record has to be in here, or the
     // classification cache answers from before the change and the dial sits
     // inert. The lightmaps toggle strips the map at the record (see
