@@ -772,12 +772,13 @@ struct GraphicsOptions {
     };
     /**
      * One object category's grade. Rough is a surface with no environment map
-     * - Odyssey's cue for "not shiny" - and defaults to a matte dielectric;
-     * reflective keeps the texel's alpha as its roughness stand-in and the
-     * authored mirror share as its reflectance lift.
+     * - Odyssey's cue for "not shiny" - and defaults to a matte dielectric
+     * whose metalness curation still decides; reflective keeps the texel's
+     * alpha as its roughness stand-in and the authored mirror share as its
+     * reflectance lift.
      */
     struct CategoryOverride {
-        SurfaceClassOverride rough {{1.0f, 1.0f, 1.0f}, 0.0f, 1.0f, 0.0f, 0.05f, 1.0f, 1.0f};
+        SurfaceClassOverride rough {{1.0f, 1.0f, 1.0f}, 0.0f, 1.0f, -1.0f, 0.05f, 1.0f, 1.0f};
         SurfaceClassOverride reflective;
         EmissionOverride emission;
     };

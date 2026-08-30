@@ -1769,8 +1769,8 @@ void Editor::graphicsMaterialsTab() {
                     "environment map - Odyssey's cue for shiny - and rough otherwise.");
         if (open) {
             surfaceClass("Rough", override.rough,
-                         "Surfaces with no environment map. Default: a matte dielectric - roughness 1, "
-                         "metalness 0, F0 0.05.");
+                         "Surfaces with no environment map. Default: roughness 1, curated metalness, "
+                         "F0 0.05.");
             surfaceClass("Reflective", override.reflective,
                          "Surfaces with an environment map. Default: the texel's alpha as roughness, "
                          "curated metalness, F0 0.04, plus the authored mirror share.");
