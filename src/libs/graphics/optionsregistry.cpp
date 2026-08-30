@@ -469,6 +469,18 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(boolOpt("debugoverlay", OptionApply::Live,
                             "bounding boxes and names of objects and lights, over the image",
                             &GraphicsOptions::debugOverlay));
+    descs.push_back(intOpt("debugoverlaycategories", OptionApply::Live,
+                           "overlay category bitmask: a bit per model usage, bit 8 lights",
+                           &GraphicsOptions::debugOverlayCategories, 0, 0xFFFF));
+    descs.push_back(boolOpt("debugoverlaymeshes", OptionApply::Live,
+                            "with the overlay: a box per mesh a model holds",
+                            &GraphicsOptions::debugOverlayMeshes));
+    descs.push_back(boolOpt("debugoverlayinfo", OptionApply::Live,
+                            "with the overlay: classification, material, type and emissive under labels",
+                            &GraphicsOptions::debugOverlayInfo));
+    descs.push_back(boolOpt("debugoverlaylightradius", OptionApply::Live,
+                            "with the overlay: circles at every point light's authored radius",
+                            &GraphicsOptions::debugOverlayLightRadius));
 
     // The temporal occupant of the slot owns device images of its own, built in
     // ScenePipeline::init, so the choice is fixed for the life of the targets.

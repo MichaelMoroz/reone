@@ -1646,6 +1646,45 @@ void Editor::graphicsDebugViewSection() {
     // owning it. Only this one of the four debug toggles is offered - the AABB,
     // walkmesh and trigger flags have no consumer left on this backend, and a
     // control that does nothing is worse than an absent one.
+    ImGui::BeginDisabled(!options.debugOverlay);
+    {
+        static const struct {
+            const char *name;
+            int bit;
+        } kOverlayCategories[] = {
+            {"Rooms", 1 << 1},      {"Creatures", 1 << 2},  {"Placeables", 1 << 3},
+            {"Doors", 1 << 4},      {"Equipment", 1 << 5},  {"Projectiles", 1 << 6},
+            {"Lights", 1 << 8},
+        };
+        ImGui::TextDisabled("Categories");
+        int column = 0;
+        for (const auto &category : kOverlayCategories) {
+            if (column++ % 3 != 0) {
+                ImGui::SameLine(140.0f * ((column - 1) % 3));
+            }
+            bool enabled = (options.debugOverlayCategories & category.bit) != 0;
+            if (ImGui::Checkbox(category.name, &enabled)) {
+                if (enabled) {
+                    options.debugOverlayCategories |= category.bit;
+                } else {
+                    options.debugOverlayCategories &= ~category.bit;
+                }
+            }
+        }
+        settingHint("Which categories draw boxes and labels; lights cover their markers and "
+                    "radius circles too.");
+    }
+    ImGui::Checkbox("Mesh boxes", &options.debugOverlayMeshes);
+    settingHint("A box for every mesh node a model holds, labelled by node name, in the model's "
+                "category colour. What admission actually received, one level under the object "
+                "boxes above.");
+    ImGui::Checkbox("Object info", &options.debugOverlayInfo);
+    settingHint("Under each label: the render classification and material, the object type, and "
+                "whether the mesh is emissive.");
+    ImGui::Checkbox("Light radii", &options.debugOverlayLightRadius);
+    settingHint("Three circles at every point light's authored influence radius, around its "
+                "marker box. Directional suns have no radius to draw.");
+    ImGui::EndDisabled();
     bool showPath = game::isShowPathEnabled();
     if (ImGui::Checkbox("Pathfinder graph", &showPath)) {
         game::setShowPath(showPath);

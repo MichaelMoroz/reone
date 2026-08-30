@@ -2095,33 +2095,97 @@ void ScenePipeline::debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset
         cmd.bindPipeline(pipeline.pipeline);
         cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet, nullptr, 0);
 
+        PipelineKey backgroundKey = textKey;
+        backgroundKey.vertexEntry = "overlayTextBackgroundVertex";
+        backgroundKey.fragmentEntry = "overlayFragment";
+        PipelineBinding backgroundPipeline = _renderer.pipelines().get(backgroundKey);
+
         for (const auto &label : _overlayLabels) {
             if (label.text.empty()) {
                 continue;
             }
-            const glm::vec2 origin = _overlayFont->textOffset(
-                label.text, TextGravity::CenterBottom, 1.0f);
-            // Drawn the way renderDeveloperText draws it: a one-pixel black
-            // copy under the colour, so a glyph does not vanish over pale
-            // scenery. A shifted copy, never a dilation - dilating closes the
-            // font's one-texel counters and turns a, o and 0 into one block.
-            for (int pass = 0; pass < 2; ++pass) {
-                const bool shadow = pass == 0;
-                TextUniforms chars;
-                const int numChars = fillTextRun(
-                    *_overlayFont, label.text,
-                    shadow ? origin + glm::vec2(1.0f) : origin, chars);
+            // A label is one anchor and one or more lines: every line lays out
+            // in SCREEN space under the first, so a multi-line label stays a
+            // block however the camera moves, instead of separately projected
+            // lines drifting through each other.
+            const float lineHeight = _overlayFont->height() + 2.0f;
+
+            // A dim backing behind the whole block first, so text reads over
+            // wireframe as well as over scenery. Sized from the widest line;
+            // the rect rides to the shader in the text block's first slot.
+            {
+                float maxWidth = 0.0f;
+                int numLines = 0;
+                std::string_view measuring = label.text;
+                while (!measuring.empty()) {
+                    const size_t split = measuring.find('\n');
+                    const std::string_view line = measuring.substr(0, split);
+                    measuring = split == std::string_view::npos ? std::string_view()
+                                                                : measuring.substr(split + 1);
+                    maxWidth = std::max(
+                        maxWidth,
+                        -2.0f * _overlayFont->textOffset(line, TextGravity::CenterBottom, 1.0f).x);
+                    ++numLines;
+                }
+                constexpr float kPad = 3.0f;
+                TextUniforms rect;
+                rect.chars[0].posScale =
+                    glm::vec4(-0.5f * maxWidth - kPad, -kPad, maxWidth + 2.0f * kPad,
+                              numLines * lineHeight + 2.0f * kPad);
+                cmd.bindPipeline(backgroundPipeline.pipeline);
                 std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
                 offsets[UniformBlockBindingPoints::globals] = globalsOffset;
-                offsets[UniformBlockBindingPoints::text] = _renderer.uniformRing().push(chars);
-                cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
-                                      offsets.data(), static_cast<uint32_t>(offsets.size()));
+                offsets[UniformBlockBindingPoints::text] = _renderer.uniformRing().push(rect);
+                cmd.bindDescriptorSet(backgroundPipeline.layout, IDescriptors::kUniformSet,
+                                      uniformSet, offsets.data(),
+                                      static_cast<uint32_t>(offsets.size()));
                 const DebugOverlayPushConstants push {
-                    shadow ? glm::vec4(0.0f, 0.0f, 0.0f, label.color.a) : label.color,
+                    glm::vec4(0.0f, 0.0f, 0.0f, 0.45f * label.color.a),
                     resolution, kOverlayLineHalfWidth, kOverlayOccludedLabel,
                     label.position};
-                cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
-                cmd.draw(6, static_cast<uint32_t>(numChars));
+                cmd.pushGraphicsConstants(backgroundPipeline.layout, &push, sizeof(push));
+                cmd.draw(6, 1);
+                cmd.bindPipeline(pipeline.pipeline);
+            }
+
+            std::string_view remaining = label.text;
+            int lineIndex = 0;
+            while (!remaining.empty()) {
+                const size_t split = remaining.find('\n');
+                const std::string_view line = remaining.substr(0, split);
+                remaining = split == std::string_view::npos ? std::string_view()
+                                                            : remaining.substr(split + 1);
+                if (line.empty()) {
+                    ++lineIndex;
+                    continue;
+                }
+                const glm::vec2 origin =
+                    _overlayFont->textOffset(line, TextGravity::CenterBottom, 1.0f) +
+                    glm::vec2(0.0f, lineIndex * lineHeight);
+                // Drawn the way renderDeveloperText draws it: a one-pixel black
+                // copy under the colour, so a glyph does not vanish over pale
+                // scenery. A shifted copy, never a dilation - dilating closes
+                // the font's one-texel counters and turns a, o and 0 into one
+                // block.
+                for (int pass = 0; pass < 2; ++pass) {
+                    const bool shadow = pass == 0;
+                    TextUniforms chars;
+                    const int numChars = fillTextRun(
+                        *_overlayFont, line,
+                        shadow ? origin + glm::vec2(1.0f) : origin, chars);
+                    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+                    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+                    offsets[UniformBlockBindingPoints::text] = _renderer.uniformRing().push(chars);
+                    cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                                          offsets.data(), static_cast<uint32_t>(offsets.size()));
+                    const DebugOverlayPushConstants push {
+                        shadow ? glm::vec4(0.0f, 0.0f, 0.0f, label.color.a) : label.color,
+                        resolution, kOverlayLineHalfWidth, kOverlayOccludedLabel,
+                        label.position};
+                    cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
+                    cmd.draw(6, static_cast<uint32_t>(numChars));
+                }
+                ++lineIndex;
             }
         }
     }

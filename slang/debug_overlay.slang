@@ -164,6 +164,28 @@ float4 overlayFragment(OverlayVertex input) : SV_Target0 {
 
 // --- Labels ---
 
+/**
+ * The translucent backing of one label block. The rect arrives in pixels
+ * relative to the anchor through the text block's first glyph slot - the
+ * block is otherwise unused by this entry point.
+ */
+[shader("vertex")]
+OverlayVertex overlayTextBackgroundVertex(uint vertexId: SV_VertexID) {
+    float4 clip = mul(globalUniforms.viewProjection, float4(pushConstants.anchor, 1.0));
+    if (clip.w < kMinClipW) {
+        return culledEdge();
+    }
+    float3 ndc = clip.xyz / clip.w;
+    float2 anchorPx = floor(clipToPixels(ndc) + 0.5);
+    float4 rect = textUniforms.chars[0].posScale;
+    float2 corner = quadCorner(vertexId);
+    OverlayVertex output;
+    output.position =
+        float4(pixelsToClip(anchorPx + rect.xy + corner * rect.zw), saturate(ndc.z), 1.0);
+    output.depth = ndc.z;
+    return output;
+}
+
 struct OverlayGlyph {
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;

@@ -805,6 +805,17 @@ struct GraphicsOptions {
      */
     bool debugOverlay {false};
     /**
+     * With the overlay: which categories draw. A bit per ModelUsage value,
+     * plus bit 8 for lights; all on by default.
+     */
+    int debugOverlayCategories {0xFFFF};
+    /** With the overlay: a box per mesh a model holds, labelled by node. */
+    bool debugOverlayMeshes {false};
+    /** With the overlay: classification, material, type and emissive under each label. */
+    bool debugOverlayInfo {false};
+    /** With the overlay: three circles at every point light's authored radius. */
+    bool debugOverlayLightRadius {false};
+    /**
      * The occupant of the common anti-aliasing slot.
      *
      * The default is resolved at the command line, where the render mode is

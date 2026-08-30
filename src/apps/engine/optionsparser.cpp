@@ -174,6 +174,10 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("ssao", value<bool>()->default_value(options->graphics.ssao), "enable screen-space ambient occlusion")                 //
         ("ssr", value<bool>()->default_value(options->graphics.ssr), "enable screen-space reflections")                         //
         ("debugoverlay", value<bool>()->default_value(options->graphics.debugOverlay), "bounding boxes and names of objects and lights, over the image") //
+        ("debugoverlaycategories", value<int>()->default_value(options->graphics.debugOverlayCategories), "with the overlay: category bitmask, a bit per model usage plus bit 8 for lights") //
+        ("debugoverlaymeshes", value<bool>()->default_value(options->graphics.debugOverlayMeshes), "with the overlay: a box per mesh a model holds") //
+        ("debugoverlayinfo", value<bool>()->default_value(options->graphics.debugOverlayInfo), "with the overlay: classification, material, type and emissive under labels") //
+        ("debugoverlaylightradius", value<bool>()->default_value(options->graphics.debugOverlayLightRadius), "with the overlay: circles at every point light's authored radius") //
         ("antialiasing", value<std::string>()->default_value(antiAliasingName(options->graphics.antialiasing)),
          "anti-aliasing in the common slot: off, fxaa or fsr; defaults per render mode")                                       //
         ("grade", value<bool>()->default_value(options->graphics.grade),
@@ -531,6 +535,11 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.ssao = vars["ssao"].as<bool>();
     options->graphics.ssr = vars["ssr"].as<bool>();
     options->graphics.debugOverlay = vars["debugoverlay"].as<bool>();
+    options->graphics.debugOverlayCategories =
+        std::max(0, vars["debugoverlaycategories"].as<int>());
+    options->graphics.debugOverlayMeshes = vars["debugoverlaymeshes"].as<bool>();
+    options->graphics.debugOverlayInfo = vars["debugoverlayinfo"].as<bool>();
+    options->graphics.debugOverlayLightRadius = vars["debugoverlaylightradius"].as<bool>();
     // Resolved here, where the render mode is also known, so that nothing
     // deeper has to ask again: below this point the option says what the slot
     // runs, full stop. A traced frame is noisy and carries the motion a

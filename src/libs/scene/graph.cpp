@@ -25,6 +25,7 @@
 #include "reone/graphics/camera/perspective.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/mesh.h"
+#include "reone/graphics/texture.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/options.h"
 #include "reone/graphics/uniforms.h"
@@ -79,6 +80,127 @@ glm::vec4 debugOverlayColor(ModelUsage usage) {
 constexpr float kDebugLightMarkerHalf = 0.35f;
 /** Lights take a colour no object category uses. */
 constexpr glm::vec4 kDebugLightColor {1.0f, 1.0f, 0.25f, 0.95f};
+/** The lights' cell of the overlay category mask, past the ModelUsage bits. */
+constexpr int kDebugLightsCategoryBit = 8;
+
+bool debugCategoryEnabled(int mask, ModelUsage usage) {
+    return (mask & (1 << static_cast<int>(usage))) != 0;
+}
+const char *debugUsageName(ModelUsage usage) {
+    switch (usage) {
+    case ModelUsage::Room:
+        return "room";
+    case ModelUsage::Creature:
+        return "creature";
+    case ModelUsage::Placeable:
+        return "placeable";
+    case ModelUsage::Door:
+        return "door";
+    case ModelUsage::Equipment:
+        return "equipment";
+    case ModelUsage::Projectile:
+        return "projectile";
+    case ModelUsage::Camera:
+        return "camera";
+    case ModelUsage::GUI:
+        return "gui";
+    default:
+        return "-";
+    }
+}
+
+const char *debugMaterialName(graphics::MaterialType type) {
+    switch (type) {
+    case graphics::MaterialType::OpaqueModel:
+        return "opaque";
+    case graphics::MaterialType::TransparentModel:
+        return "transparent";
+    case graphics::MaterialType::Walkmesh:
+        return "walkmesh";
+    case graphics::MaterialType::Grass:
+        return "grass";
+    case graphics::MaterialType::Particle:
+        return "particle";
+    default:
+        return "-";
+    }
+}
+
+/** The info block under a label, one item per line; emissive only when it is. */
+std::string debugInfoLine(const char *type, const std::string &classification,
+                          const char *material, bool emissive) {
+    std::string block = type;
+    block += "\n";
+    if (classification != "-") {
+        block += classification;
+        block += " ";
+    }
+    block += material;
+    // The classification tags emissive meshes itself; a second line saying
+    // the same thing is noise, so this one only speaks when that one does not.
+    if (emissive && classification.find("emissive") == std::string::npos) {
+        block += "\nemissive";
+    }
+    return block;
+}
+
+bool debugMeshEmissive(const RegisteredMesh &entry) {
+    const bool dangly = std::holds_alternative<RegisteredDangly>(entry.deformation);
+    return !dangly && !isDoorMesh(entry) &&
+           glm::any(glm::greaterThan(entry.material.selfIllumColor, glm::vec3(0.0f)));
+}
+
+/** The same tags the Objects window derives, compacted to one line. */
+std::string debugMeshClassification(const GpuScene &scene, const RegisteredMesh &entry) {
+    std::vector<const char *> tags;
+    if (entry.cullRoot && entry.cullRoot == scene.skyRoom()) {
+        tags.push_back("sky");
+    } else if (entry.material.backgroundGeometry ||
+               (entry.cullRoot && entry.cullRoot->isBackgroundScenery())) {
+        tags.push_back("scenery");
+    }
+    if (debugMeshEmissive(entry)) {
+        tags.push_back("emissive");
+    }
+    const auto *diffuse =
+        entry.material.textures[static_cast<size_t>(graphics::MaterialTextureSlot::MainTex)];
+    if (diffuse && diffuse->features().blending == graphics::Texture::Blending::Additive) {
+        tags.push_back("additive");
+    } else if (diffuse &&
+               diffuse->features().blending == graphics::Texture::Blending::PunchThrough) {
+        tags.push_back("punch-through");
+    } else if (entry.material.type == graphics::MaterialType::TransparentModel) {
+        tags.push_back("alpha-blended");
+    }
+    std::string result;
+    for (const auto *tag : tags) {
+        if (!result.empty()) {
+            result += "+";
+        }
+        result += tag;
+    }
+    if (result.empty()) {
+        result = "-";
+    }
+    if (const auto *curated =
+            scene.traceMaterials().curatedByIndex(entry.material.curatedIndex)) {
+        switch (curated->klass) {
+        case TraceClass::Prelit:
+            result = "prelit*";
+            break;
+        case TraceClass::Emissive:
+            result = "emissive*";
+            break;
+        case TraceClass::None:
+            result = "none*";
+            break;
+        default:
+            result += "*";
+            break;
+        }
+    }
+    return result;
+}
 
 } // namespace
 
@@ -1173,7 +1295,8 @@ void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {
 
     for (const auto &root : _modelRoots) {
         if (!root->isEnabled() || root->usage() == ModelUsage::GUI ||
-            root->usage() == ModelUsage::Camera) {
+            root->usage() == ModelUsage::Camera ||
+            !debugCategoryEnabled(_graphicsOpt.debugOverlayCategories, root->usage())) {
             continue;
         }
         const auto &aabb = root->aabb();
@@ -1185,13 +1308,65 @@ void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {
             pushBox(aabb.min(), aabb.max(), root->absoluteTransform(), color);
         std::string_view name = nameText(root->nameIds().model);
         if (!name.empty()) {
-            _debugOverlayLabels.push_back({anchor, std::string(name), color});
+            std::string text(name);
+            if (_graphicsOpt.debugOverlayInfo) {
+                text += "\n";
+                text += debugUsageName(root->usage());
+            }
+            _debugOverlayLabels.push_back({anchor, std::move(text), color});
+        }
+    }
+
+    // One box per mesh a model holds, in the model's colour dimmed: what
+    // admission actually received, one level under the object boxes above.
+    if (_graphicsOpt.debugOverlayMeshes) {
+        for (const auto &object : _gpuScene.objects()) {
+            const auto *entry = std::get_if<RegisteredMesh>(&object);
+            if (!entry || !_gpuScene.isObjectActive(entry->id) ||
+                !_gpuScene.isObjectEnabled(entry->id.index)) {
+                continue;
+            }
+            if (entry->cullRoot && (entry->cullRoot->usage() == ModelUsage::GUI ||
+                                    entry->cullRoot->usage() == ModelUsage::Camera)) {
+                continue;
+            }
+            if (!debugCategoryEnabled(_graphicsOpt.debugOverlayCategories,
+                                      entry->cullRoot ? entry->cullRoot->usage()
+                                                      : ModelUsage::Projectile)) {
+                continue;
+            }
+            const auto &aabb = entry->mesh.get().aabb();
+            if (aabb.isDegenerate()) {
+                continue;
+            }
+            const glm::vec4 color =
+                debugOverlayColor(entry->cullRoot ? entry->cullRoot->usage()
+                                                  : ModelUsage::Projectile) *
+                glm::vec4(1.0f, 1.0f, 1.0f, 0.6f);
+            glm::vec3 anchor = pushBox(aabb.min(), aabb.max(), entry->transform, color);
+            std::string_view name = nameText(entry->nameIds.node);
+            std::string text = name.empty() ? std::string("mesh") : std::string(name);
+            if (_graphicsOpt.debugOverlayInfo) {
+                text += "\n";
+                text += debugInfoLine(debugUsageName(entry->cullRoot
+                                                         ? entry->cullRoot->usage()
+                                                         : ModelUsage::Projectile),
+                                      debugMeshClassification(_gpuScene, *entry),
+                                      debugMaterialName(entry->material.type),
+                                      debugMeshEmissive(*entry));
+            }
+            _debugOverlayLabels.push_back({anchor, std::move(text), color});
         }
     }
 
     // A light is a position, not a volume: a small marker box at the emitter,
     // in a colour no object category uses.
+    const bool lightsEnabled =
+        (_graphicsOpt.debugOverlayCategories & (1 << kDebugLightsCategoryBit)) != 0;
     for (const auto *light : _lights) {
+        if (!lightsEnabled) {
+            break;
+        }
         const glm::vec3 origin = light->origin();
         pushBox(glm::vec3(-kDebugLightMarkerHalf), glm::vec3(kDebugLightMarkerHalf),
                 glm::translate(origin), kDebugLightColor);
@@ -1200,6 +1375,38 @@ void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {
             {origin + glm::vec3(0.0f, 0.0f, kDebugLightMarkerHalf),
              name.empty() ? std::string("light") : std::string(name),
              kDebugLightColor});
+    }
+
+    // The authored extent of every point light, as three orthogonal circles:
+    // the sphere the falloff and the retro cull are computed against. A
+    // directional sun has no radius worth drawing.
+    if (_graphicsOpt.debugOverlayLightRadius && lightsEnabled) {
+        constexpr int kSegments = 48;
+        constexpr float kTau = 6.28318530718f;
+        const glm::vec4 circleColor = kDebugLightColor * glm::vec4(1.0f, 1.0f, 1.0f, 0.8f);
+        for (const auto *light : _lights) {
+            if (light->isDirectional() || light->radius() <= 0.0f) {
+                continue;
+            }
+            const glm::vec3 origin = light->origin();
+            const float radius = light->radius();
+            for (int plane = 0; plane < 3; ++plane) {
+                glm::vec3 previous(0.0f);
+                for (int i = 0; i <= kSegments; ++i) {
+                    const float angle = kTau * static_cast<float>(i) / kSegments;
+                    const float c = std::cos(angle) * radius;
+                    const float sn = std::sin(angle) * radius;
+                    const glm::vec3 point = plane == 0   ? origin + glm::vec3(c, sn, 0.0f)
+                                            : plane == 1 ? origin + glm::vec3(c, 0.0f, sn)
+                                                         : origin + glm::vec3(0.0f, c, sn);
+                    if (i > 0) {
+                        lines.push_back({glm::vec4(previous, 1.0f), glm::vec4(point, 1.0f),
+                                         circleColor, 1.0f});
+                    }
+                    previous = point;
+                }
+            }
+        }
     }
 
     // The debug primitives join the object boxes here rather than in a pass of
@@ -1224,8 +1431,8 @@ void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {
  * kept and none of them on the frame.
  */
 void SceneGraph::capDebugOverlayLabels() {
-    constexpr size_t kMaxLabels = 32;
-    if (!_activeCamera || _debugOverlayLabels.size() <= kMaxLabels) {
+    const size_t kMaxLabels = _graphicsOpt.debugOverlayMeshes ? 96 : 32;
+    if (!_activeCamera || _debugOverlayLabels.size() <= 1) {
         return;
     }
     const glm::vec3 eye = _activeCamera->origin();
@@ -1246,7 +1453,36 @@ void SceneGraph::capDebugOverlayLabels() {
                   }
                   return glm::distance2(a.position, eye) < glm::distance2(b.position, eye);
               });
-    _debugOverlayLabels.resize(kMaxLabels);
+    // Text overlapping text reads as neither label, so nearer labels claim
+    // their screen space and later ones inside it are dropped, not drawn.
+    constexpr float kMinLabelSeparationX = 0.06f;
+    constexpr float kMinLabelSeparationY = 0.04f;
+    std::vector<glm::vec2> taken;
+    taken.reserve(std::min(_debugOverlayLabels.size(), kMaxLabels));
+    std::vector<graphics::DebugOverlayLabel> kept;
+    kept.reserve(std::min(_debugOverlayLabels.size(), kMaxLabels));
+    for (auto &label : _debugOverlayLabels) {
+        if (kept.size() >= kMaxLabels) {
+            break;
+        }
+        const glm::vec3 s = glm::projectZO(label.position, view, projection, kViewport);
+        if (s.z >= 0.0f && s.z < 1.0f) {
+            bool overlapped = false;
+            for (const auto &other : taken) {
+                if (std::abs(s.x - other.x) < kMinLabelSeparationX &&
+                    std::abs(s.y - other.y) < kMinLabelSeparationY) {
+                    overlapped = true;
+                    break;
+                }
+            }
+            if (overlapped) {
+                continue;
+            }
+            taken.push_back(glm::vec2(s.x, s.y));
+        }
+        kept.push_back(std::move(label));
+    }
+    _debugOverlayLabels = std::move(kept);
 }
 
 glm::vec2 SceneGraph::computeJitter() const {
