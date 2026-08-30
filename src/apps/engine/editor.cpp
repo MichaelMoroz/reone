@@ -1393,11 +1393,6 @@ void Editor::graphicsAdvancedTab() {
                 "scatter. A tight lobe reached through a bounce is a caustic, and a caustic at one "
                 "sample per pixel is a firefly. Raise for less speckle and duller indirect "
                 "reflections; 0 disables it.");
-    ImGui::SliderFloat("Roughness floor", &options.ptRoughnessFloor, 0.0f, 1.0f, "%.2f");
-    settingHint("The lowest roughness any surface may take. Odyssey has no roughness channel - "
-                "diffuse alpha stands in - so this is what keeps an authored mirror from being a "
-                "perfect one, and why a roughness scale of zero does not give you a mirror. The "
-                "PBR resolve clamps against this too.");
     ImGui::SliderFloat("Indirect clamp", &options.ptIndirectClamp, 0.0f, 16.0f, "%.2f");
     settingHint("Ceiling on a single indirect sample; 0 is off. The blunt one: it truncates energy "
                 "rather than widening a lobe, so it darkens whatever it fixes. For the cases "
@@ -1733,27 +1728,35 @@ void Editor::graphicsMaterialsTab() {
         ImGui::SliderFloat("Color weight", &c.colorWeight, 0.0f, 1.0f, "%.2f");
         ImGui::SliderFloat("Roughness", &c.roughness, 0.0f, 1.0f, "%.2f");
         ImGui::SliderFloat("Metalness", &c.metallic, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Specular", &c.specular, 0.0f, 1.0f, "%.2f");
+        settingHint("Weight on the whole Fresnel curve; 0 removes the specular lobe at every angle.");
         ImGui::SliderFloat("F0", &c.f0, 0.0f, 0.2f, "%.3f");
-        settingHint("Reflectance at normal incidence; 0 removes the specular lobe.");
+        settingHint("Dielectric reflectance at normal incidence; 0.04 is IOR 1.5.");
         ImGui::TreePop();
     };
     const auto reflectiveClass = [](graphics::GraphicsOptions::ReflectiveOverride &c) {
+        const char *hint = "Surfaces with an environment map. The texel's alpha is Odyssey's env-map mask: "
+                           "0 is the full painted mirror, 1 none. Each row sets what one end of the mask means.";
         if (!ImGui::TreeNode("Reflective")) {
-            settingHint("Surfaces with an environment map: the texel's alpha is the roughness stand-in and the "
-                        "authored mirror share lifts the reflectance.");
+            settingHint(hint);
             return;
         }
-        settingHint("Surfaces with an environment map: the texel's alpha is the roughness stand-in and the "
-                    "authored mirror share lifts the reflectance.");
+        settingHint(hint);
         ImGui::ColorEdit3("Color", c.color);
         ImGui::SliderFloat("Color weight", &c.colorWeight, 0.0f, 1.0f, "%.2f");
-        bool overrideRoughness = c.roughness >= 0.0f;
-        if (ImGui::Checkbox("Override roughness", &overrideRoughness)) c.roughness = overrideRoughness ? 0.5f : -1.0f;
-        if (overrideRoughness) ImGui::SliderFloat("Roughness", &c.roughness, 0.0f, 1.0f, "%.2f");
-        ImGui::SliderFloat("Roughness scale", &c.roughnessScale, 0.0f, 8.0f, "%.2f");
-        ImGui::SliderFloat("Metalness scale", &c.metallicScale, 0.0f, 8.0f, "%.2f");
-        ImGui::SliderFloat("F0", &c.f0, 0.0f, 0.2f, "%.3f");
-        settingHint("Dielectric reflectance at normal incidence, before the mirror share lifts it.");
+        for (int e = 0; e < 2; ++e) {
+            ImGui::PushID(e);
+            ImGui::SeparatorText(e == 0 ? "Mask full (alpha 0)" : "Mask empty (alpha 1)");
+            ImGui::SliderFloat("Roughness", &c.roughness[e], 0.0f, 1.0f, "%.2f");
+            ImGui::SliderFloat("Specular", &c.specular[e], 0.0f, 1.0f, "%.2f");
+            settingHint("Weight on the whole dielectric Fresnel curve; metals ignore it.");
+            ImGui::SliderFloat("F0", &c.f0[e], 0.0f, 1.0f, "%.3f");
+            settingHint("Dielectric reflectance at normal incidence; 0.04 is IOR 1.5, 1 a mirror.");
+            ImGui::PopID();
+        }
+        bool overrideMetallic = c.metallic >= 0.0f;
+        if (ImGui::Checkbox("Override metalness", &overrideMetallic)) c.metallic = overrideMetallic ? 0.0f : -1.0f;
+        if (overrideMetallic) ImGui::SliderFloat("Metalness", &c.metallic, 0.0f, 1.0f, "%.2f");
         ImGui::TreePop();
     };
     const auto emissionGrade = [](graphics::GraphicsOptions::EmissionOverride &e, const char *hint) {

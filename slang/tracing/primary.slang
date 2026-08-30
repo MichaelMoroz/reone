@@ -149,8 +149,7 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     // lib/material_ops.slang's chain, the raster resolve's, over a G-buffer
     // texel; alpha stands in for the reflectance Odyssey has no channel for.
     MaterialSurface surface = resolveMaterial(material, diffuseSample.rgb, diffuseSample.a, 1.0,
-                                              pushConstants.albedoGamma,
-                                              pushConstants.roughnessFloor);
+                                              pushConstants.albedoGamma);
     shading.albedo = surface.albedo;
     shading.alpha = diffuseSample.a;
     shading.normal = normal;
@@ -161,9 +160,8 @@ public PrimarySurface ptReadPrimary(uint2 pixel, uint2 extent, RayDesc ray,
     unpackGeometryFeatures(lightmapSample.a, envmapped, hasLightmap, staticObject,
                            shadowsEnabled, fogEnabled, thinSurface);
     shading.thin = thinSurface;
-    shading.envmapped = envmapped;
-    shading.envStrength = ptEnvStrength(envmapped, shading.alpha);
-    shading.f0 = material.overrideParams.z;
+    shading.specular = surface.specular;
+    shading.f0 = surface.f0;
     shading.hasLightmap = hasLightmap;
     // White where there is no bake - see the note in tracing/material.slang.
     shading.lightmap = hasLightmap ? gammaToLinear(lightmapSample.rgb) : float3(1.0);

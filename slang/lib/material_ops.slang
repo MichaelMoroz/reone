@@ -68,51 +68,36 @@ public struct MaterialSurface {
     public float3 albedo;
     public float roughness;
     public float metallic;
+    public float specular;
+    public float f0;
 };
 
 /**
  * The authored texel and its material record, resolved to shading parameters.
  *
- * texelAlpha is the diffuse alpha: Odyssey carries no roughness channel and
- * the alpha stands in for it, floored so an authored mirror is never a perfect
- * one. albedoScale is applied after the decode and before curation - a
- * premultiplied texel divides its coverage back out there. The ordering
- * matters: curation runs against the albedo it derived, then the category
- * override replaces that albedo, then the roughness scale and floor close
- * over whatever survived.
+ * texelAlpha is the diffuse alpha, Odyssey's env-map mask: the category says
+ * what roughness, specular weight and f0 it lerps between. albedoScale is
+ * applied after the decode and before curation - a premultiplied texel divides
+ * its coverage back out there. Curation runs against the albedo it derived,
+ * then the category override replaces that albedo.
  */
 public MaterialSurface resolveMaterial(InstanceMaterial material, float3 texelRgb,
                                        float texelAlpha, float albedoScale,
-                                       float albedoGamma, float roughnessFloor) {
+                                       float albedoGamma) {
     MaterialSurface s;
     s.albedo = decodeAlbedo(texelRgb, albedoGamma) * albedoScale;
+    s.roughness = lerp(material.overrideParams.x, material.overrideParams.y, texelAlpha);
+    s.specular = lerp(material.overrideParams.z, material.overrideParams.w, texelAlpha);
+    s.f0 = lerp(material.overrideF0.x, material.overrideF0.y, texelAlpha);
     s.metallic = 0.0;
-    s.roughness = clamp(texelAlpha, roughnessFloor, 1.0);
 
     s.albedo *= material.curatedAlbedoMul.rgb;
     s.roughness = curatedChannel(material.curatedRoughA, material.curatedRoughB,
                                  s.albedo, s.roughness);
     s.metallic = curatedChannel(material.curatedMetalA, material.curatedMetalB,
                                 s.albedo, s.metallic);
-    // The category's absolute metalness when set; otherwise curation decides
-    // and the scale grades it.
-    s.metallic = material.overrideParams.y >= 0.0 ? material.overrideParams.y
-                                                  : saturate(s.metallic * material.overrideParams.w);
+    if (material.overrideMetallic >= 0.0) s.metallic = material.overrideMetallic;
     s.albedo = lerp(s.albedo, decodeAlbedo(material.overrideColor.rgb, albedoGamma),
                     material.overrideColor.w);
-    if (material.overrideParams.x >= 0.0) s.roughness = material.overrideParams.x;
-    // Saturate, not the floor again. The floor guards the STAND-IN above:
-    // Odyssey has no roughness channel, diffuse alpha is standing in for one,
-    // and a floor keeps an authored mirror from becoming a perfect one by
-    // accident. An override and a scale are not accidents - they are somebody
-    // calibrating this category on purpose, and a guard against bad data has no
-    // business overruling that.
-    //
-    // Applied here it made the dial dead at both ends. Measured on Taris:
-    // scales 0, 0.05, 0.1 and 0.2 produced byte-identical frames, because every
-    // one of them landed on the 0.2 floor; scales 2, 4 and 8 likewise, because
-    // the stand-in is 1.0 on any opaque material and 1.0 is the ceiling. Two
-    // thirds of the slider did nothing.
-    s.roughness = saturate(s.roughness * material.roughnessScale);
     return s;
 }

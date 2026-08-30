@@ -103,6 +103,8 @@ constexpr int kMaxDebugView = 19;
  * places to miss when the range changes - which is how it stayed 1-based after
  * the shader was ready for zero.
  */
+/** Normal-incidence reflectance of an IOR 1.5 dielectric; the shader constant of the same name. */
+constexpr float kDielectricF0 = 0.04f;
 constexpr int kMinPtBounces = 0;
 constexpr int kMaxPtBounces = 8;
 /** Light samples per shading vertex, defined once for the same reason. */
@@ -733,15 +735,6 @@ struct GraphicsOptions {
      */
     float ptBounceRoughness {0.8f};
     /**
-     * The lowest roughness any surface may take, before regularisation.
-     *
-     * Odyssey has no roughness channel - diffuse alpha stands in - so this is
-     * what stops an authored mirror from becoming a perfect one. It is also
-     * why a roughness scale of zero does not produce a mirror; lower this to
-     * allow one, and expect the speckle above to come with it.
-     */
-    float ptRoughnessFloor {0.2f};
-    /**
      * Ceiling on a single indirect sample's contribution, or 0 to leave it
      * alone. The blunt instrument beside the two dials above: it truncates
      * energy rather than widening a lobe, so it darkens what it fixes.
@@ -752,27 +745,32 @@ struct GraphicsOptions {
     /**
      * A rough surface - no environment map, Odyssey's cue for "not shiny" -
      * takes its PBR properties from the category outright: absolute roughness,
-     * metalness and F0. Per-object curation still applies on top.
+     * metalness and specular weight. Per-object curation still applies on top.
      */
     struct RoughOverride {
         float color[3] {1.0f, 1.0f, 1.0f};
         float colorWeight {0.0f};
         float roughness {1.0f};
         float metallic {0.0f};
-        float f0 {0.05f};
+        /** Weight on the dielectric Fresnel curve; 0 removes the lobe at every angle. */
+        float specular {0.3f};
+        /** Dielectric reflectance at normal incidence. */
+        float f0 {kDielectricF0};
     };
     /**
-     * A reflective surface keeps the texel's alpha as its roughness stand-in
-     * and the authored mirror share as its reflectance lift; the category
-     * grades those (a negative roughness leaves the texel alone) and sets F0.
+     * A reflective surface's texel alpha is Odyssey's env-map mask: 0 is the
+     * full mirror, 1 none. The category says what roughness, specular weight
+     * and f0 the two ends of that mask mean, and sets metalness (negative:
+     * curated).
      */
     struct ReflectiveOverride {
         float color[3] {1.0f, 1.0f, 1.0f};
         float colorWeight {0.0f};
-        float roughness {-1.0f};
-        float roughnessScale {1.0f};
-        float metallicScale {1.0f};
-        float f0 {0.04f};
+        /** At alpha 0 (the painted mirror) and at alpha 1. */
+        float roughness[2] {0.2f, 1.0f};
+        float specular[2] {1.0f, 0.3f};
+        float f0[2] {1.0f, kDielectricF0};
+        float metallic {-1.0f};
     };
     /** Emission grade: off leaves the authored radiance at its encoding. */
     struct EmissionOverride {

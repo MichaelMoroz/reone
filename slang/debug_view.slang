@@ -69,8 +69,6 @@ struct DebugViewPushConstants {
         (retro), so the radiance views paint the card instead of sampling a
         stand-in texture and reporting confident fiction. */
     uint view;
-    /** The floor the shading used; the roughness view must show that number. */
-    float roughnessFloor;
     /** Mirrors the tracer's channel encode; see the write at the entry point. */
     float exposure;
     uint tonemap;
@@ -242,11 +240,9 @@ float3 channelColor(float2 uv, int2 pixel) {
     // Raw, deliberately: these are numbers to be read off the screen.
     // The numbers the shading used, through the same chain it ran.
     case kDebugRoughness:
-        return float3(resolveMaterial(material, diffuseSample.rgb, diffuseSample.a, 1.0, kGamma,
-                                      pushConstants.roughnessFloor).roughness);
+        return float3(resolveMaterial(material, diffuseSample.rgb, diffuseSample.a, 1.0, kGamma).roughness);
     case kDebugMetallic:
-        return float3(resolveMaterial(material, diffuseSample.rgb, diffuseSample.a, 1.0, kGamma,
-                                      pushConstants.roughnessFloor).metallic);
+        return float3(resolveMaterial(material, diffuseSample.rgb, diffuseSample.a, 1.0, kGamma).metallic);
     case kDebugLightmap:
         return hasLightmap ? lightmapSample.rgb : float3(0.9, 0.0, 0.9) * shape * 0.4;
     case kDebugDepth: {

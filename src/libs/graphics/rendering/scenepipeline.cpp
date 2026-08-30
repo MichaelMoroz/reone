@@ -90,7 +90,8 @@ struct ResolvePushConstants {
     uint32_t flags;
     float thinTransmission;
     float albedoGamma;
-    float roughnessFloor;
+    /** Keeps the block at the cached push size. */
+    float pad0;
     float lightmapIntensity;
     /** Emitter size as a fraction of influence radius; PBR's sphere lights. */
     float emitterRadiusRatio;
@@ -113,8 +114,6 @@ struct DebugViewPushConstants {
     /** The channel, plus the channels-absent flag bit (retro has no channel
         images, so its radiance views show the card); see debug_view.slang. */
     uint32_t view;
-    /** The floor the shading used, so the roughness channel shows that number. */
-    float roughnessFloor;
     // The same display transform the tracer's channel views apply
     // (path_trace.slang finishPixel), so the two renderers' channels land in
     // ONE colour space. The debug pass runs after post-processing would have
@@ -1141,7 +1140,7 @@ ResolvePushConstants resolvePush(uint32_t flags, const GraphicsOptions &options)
     return {flags,
             std::clamp(options.thinTransmission, 0.0f, 1.0f),
             std::clamp(options.albedoGamma, 0.1f, 4.0f),
-            std::clamp(options.ptRoughnessFloor, 0.0f, 1.0f),
+            0.0f,
             std::max(0.0f, options.pbrLightmapIntensity),
             // The tracer's dial, read by PBR too: the two modes are meant to
             // differ in how light reaches a surface, never in what the light
@@ -1988,7 +1987,6 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     const DebugViewPushConstants push {
         static_cast<uint32_t>(std::clamp(_options.debugView, 0, kMaxDebugView)) |
             (channelsAbsent ? kDebugViewChannelsAbsent : 0u),
-        std::clamp(_options.ptRoughnessFloor, 0.0f, 1.0f),
         std::max(0.05f, _options.exposure),
         static_cast<uint32_t>(std::clamp(_options.tonemap, 0, 1))};
     cmd.pushComputeConstants(pipeline.layout, &push, sizeof(push));

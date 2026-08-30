@@ -62,12 +62,15 @@ struct alignas(16) InstanceMaterial {
     glm::vec4 curatedMetalB {0.0f};
     glm::vec4 curatedEmission {0.0f};
     uint32_t surfaceType {0};
-    float roughnessScale {1.0f};
+    /** The category's metalness, or negative for curated. */
+    float overrideMetallic {-1.0f};
     uint32_t envMapCube {UINT32_MAX};
     float waterAlpha {1.0f};
     glm::vec4 overrideColor {1.0f, 1.0f, 1.0f, 0.0f};
-    /** Roughness (negative: texel), metalness (negative: curated), F0, metalness scale. */
-    glm::vec4 overrideParams {-1.0f, -1.0f, 0.04f, 1.0f};
+    /** Roughness and specular weight at texel alpha 0 and 1: (r0, r1, s0, s1). */
+    glm::vec4 overrideParams {1.0f, 1.0f, 1.0f, 1.0f};
+    /** Dielectric f0 at texel alpha 0 and 1. */
+    glm::vec4 overrideF0 {0.04f, 0.04f, 0.0f, 0.0f};
     /** Emission grade: intensity and decode exponent. */
     glm::vec4 emission {1.0f, 2.2f, 0.0f, 0.0f};
     glm::vec4 ambientColor {1.0f};
@@ -86,16 +89,17 @@ static_assert(offsetof(InstanceMaterial, envMap) == 108);
 static_assert(offsetof(InstanceMaterial, curatedAlbedoMul) == 112);
 static_assert(offsetof(InstanceMaterial, curatedEmission) == 192);
 static_assert(offsetof(InstanceMaterial, surfaceType) == 208);
-static_assert(offsetof(InstanceMaterial, roughnessScale) == 212);
+static_assert(offsetof(InstanceMaterial, overrideMetallic) == 212);
 static_assert(offsetof(InstanceMaterial, envMapCube) == 216);
 static_assert(offsetof(InstanceMaterial, waterAlpha) == 220);
 static_assert(offsetof(InstanceMaterial, overrideColor) == 224);
 static_assert(offsetof(InstanceMaterial, overrideParams) == 240);
-static_assert(offsetof(InstanceMaterial, emission) == 256);
-static_assert(offsetof(InstanceMaterial, ambientColor) == 272);
-static_assert(offsetof(InstanceMaterial, envMapDerivedLayer) == 288);
-static_assert(offsetof(InstanceMaterial, alphaTest) == 292);
-static_assert(sizeof(InstanceMaterial) == 304);
+static_assert(offsetof(InstanceMaterial, overrideF0) == 256);
+static_assert(offsetof(InstanceMaterial, emission) == 272);
+static_assert(offsetof(InstanceMaterial, ambientColor) == 288);
+static_assert(offsetof(InstanceMaterial, envMapDerivedLayer) == 304);
+static_assert(offsetof(InstanceMaterial, alphaTest) == 308);
+static_assert(sizeof(InstanceMaterial) == 320);
 
 /** Three row vectors encode a float3x4 exactly as scene_resolve.slang reads it. */
 struct alignas(16) Matrix3x4 {

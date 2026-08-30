@@ -49,17 +49,18 @@ public struct InstanceMaterial {
     public float4 curatedEmission;
     /** kPtSurface*, decided at admission. */
     public uint surfaceType;
-    // This occupies the scalar slot before the override vectors so category
-    // tuning does not change the storage-buffer array stride.
-    public float roughnessScale;
+    /** The category's metalness, or negative for curated. */
+    public float overrideMetallic;
     public uint envMapCube;
     public float waterAlpha;
     // The category's PBR properties for this surface's class, baked at
-    // admission: rgb + lerp weight flat-paints the albedo; params are
-    // roughness (negative: texel), metalness (negative: curated), F0,
-    // metalness scale. emission is the grade: intensity, decode exponent.
+    // admission: rgb + lerp weight flat-paints the albedo; the texel's alpha
+    // lerps roughness and specular weight (r0, r1, s0, s1) and f0 (f0_0, f0_1)
+    // between their alpha-0 and alpha-1 values. emission is the grade:
+    // intensity, decode exponent.
     public float4 overrideColor;
     public float4 overrideParams;
+    public float4 overrideF0;
     public float4 emission;
     public float4 ambientColor;
     public int envMapDerivedLayer;

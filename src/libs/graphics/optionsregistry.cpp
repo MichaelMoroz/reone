@@ -187,6 +187,8 @@ void addRoughOpts(std::vector<GraphicsOptionDesc> &descs, const std::string &key
                                 [cls](GraphicsOptions &o) -> float & { return cls(o).roughness; }, 0.0f, 1.0f));
     descs.push_back(floatRefOpt(key + "metallic", help + " metalness",
                                 [cls](GraphicsOptions &o) -> float & { return cls(o).metallic; }, 0.0f, 1.0f));
+    descs.push_back(floatRefOpt(key + "specular", help + " specular weight",
+                                [cls](GraphicsOptions &o) -> float & { return cls(o).specular; }, 0.0f, 1.0f));
     descs.push_back(floatRefOpt(key + "f0", help + " reflectance at normal incidence",
                                 [cls](GraphicsOptions &o) -> float & { return cls(o).f0; }, 0.0f, 1.0f));
 }
@@ -199,15 +201,18 @@ void addReflectiveOpts(std::vector<GraphicsOptionDesc> &descs, const std::string
     }
     descs.push_back(floatRefOpt(key + "colorweight", help + " colour weight",
                                 [cls](GraphicsOptions &o) -> float & { return cls(o).colorWeight; }, 0.0f, 1.0f));
-    // Negative means "the texel's alpha", so the floor is below zero.
-    descs.push_back(floatRefOpt(key + "roughness", help + " roughness (negative: texel)",
-                                [cls](GraphicsOptions &o) -> float & { return cls(o).roughness; }, -1.0f, 1.0f));
-    descs.push_back(floatRefOpt(key + "roughnessscale", help + " roughness scale",
-                                [cls](GraphicsOptions &o) -> float & { return cls(o).roughnessScale; }, 0.0f, 64.0f));
-    descs.push_back(floatRefOpt(key + "metallicscale", help + " metalness scale",
-                                [cls](GraphicsOptions &o) -> float & { return cls(o).metallicScale; }, 0.0f, 64.0f));
-    descs.push_back(floatRefOpt(key + "f0", help + " reflectance at normal incidence",
-                                [cls](GraphicsOptions &o) -> float & { return cls(o).f0; }, 0.0f, 1.0f));
+    for (int e = 0; e < 2; ++e) {
+        const auto end = std::to_string(e);
+        const std::string at = e == 0 ? " at alpha 0" : " at alpha 1";
+        descs.push_back(floatRefOpt(key + "roughness" + end, help + " roughness" + at,
+                                    [cls, e](GraphicsOptions &o) -> float & { return cls(o).roughness[e]; }, 0.0f, 1.0f));
+        descs.push_back(floatRefOpt(key + "specular" + end, help + " specular weight" + at,
+                                    [cls, e](GraphicsOptions &o) -> float & { return cls(o).specular[e]; }, 0.0f, 1.0f));
+        descs.push_back(floatRefOpt(key + "f0" + end, help + " reflectance at normal incidence" + at,
+                                    [cls, e](GraphicsOptions &o) -> float & { return cls(o).f0[e]; }, 0.0f, 1.0f));
+    }
+    descs.push_back(floatRefOpt(key + "metallic", help + " metalness (negative: curated)",
+                                [cls](GraphicsOptions &o) -> float & { return cls(o).metallic; }, -1.0f, 1.0f));
 }
 
 void addEmissionOpts(std::vector<GraphicsOptionDesc> &descs, const std::string &key,
@@ -415,9 +420,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(floatOpt("ptbounceroughness", OptionApply::Live,
                              "roughness floor after the first scatter",
                              &GraphicsOptions::ptBounceRoughness, 0.0f, 1.0f));
-    descs.push_back(floatOpt("ptroughnessfloor", OptionApply::Live,
-                             "lowest roughness any surface may take",
-                             &GraphicsOptions::ptRoughnessFloor, 0.0f, 1.0f));
     descs.push_back(floatOpt("ptindirectclamp", OptionApply::Live,
                              "ceiling on one indirect sample, 0 disables",
                              &GraphicsOptions::ptIndirectClamp, 0.0f, 64.0f));

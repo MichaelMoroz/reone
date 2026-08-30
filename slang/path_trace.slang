@@ -118,15 +118,11 @@ void finishPixel(uint2 pixel, TraceOutputs outputs, PtDebug debug) {
     outputImage[pixel] = float4(outputs.assemble(), 1.0);
 }
 
-/**
- * Deeper vertices are part of the transport seen through the primary lobe,
- * where an environment integral is neither available nor appropriate. This
- * view-direction Schlick split matches the continuation sampler.
- */
+/** Deeper vertices take the same diffuse split the continuation sampler uses. */
 float3 diffuseMaterialResponse(SurfaceShading shading, float3 view) {
-    float3 F0 = materialRf0(shading.albedo, shading.metallic, shading.envStrength, shading.f0);
-    float3 response = shading.albedo * (1.0 - shading.metallic);
-    return response * (1.0 - fresnelSchlick(max(0.0, dot(shading.normal, view)), F0));
+    SpecularLayer layer = materialSpecular(shading.albedo, shading.metallic, shading.specular, shading.f0);
+    SpecularEnergy energy = specularEnergy(layer, max(0.0, dot(shading.normal, view)), shading.roughness);
+    return diffuseResponse(shading.albedo, shading.metallic, energy);
 }
 
 /**
@@ -169,8 +165,8 @@ void publishPrimary(inout TraceOutputs outputs, PrimarySurface primary, RayDesc 
     float surfaceViewZ = mul(globalUniforms.view, float4(primary.worldPosition, 1.0)).z;
     if (pbrPrimary) {
         materialFactors(primary.shading.normal, -ray.Direction, primary.shading.albedo,
-                        primary.shading.metallic, primary.shading.envStrength,
-                        primary.shading.roughness, primary.shading.f0,
+                        primary.shading.metallic, primary.shading.specular,
+                        primary.shading.f0, primary.shading.roughness,
                         outputs.transportDiffFactor, outputs.transportSpecFactor);
     }
     outputs.normal = primary.shading.normal;

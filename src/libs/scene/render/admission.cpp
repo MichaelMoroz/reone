@@ -171,18 +171,23 @@ void applyCategoryOverride(InstanceMaterial &material,
         const auto &src = category.reflective;
         material.overrideColor = glm::vec4(src.color[0], src.color[1], src.color[2],
                                            std::clamp(src.colorWeight, 0.0f, 1.0f));
-        material.overrideParams = glm::vec4(std::clamp(src.roughness, -1.0f, 1.0f), -1.0f,
-                                            std::clamp(src.f0, 0.0f, 1.0f),
-                                            std::max(0.0f, src.metallicScale));
-        material.roughnessScale = std::max(0.0f, src.roughnessScale);
+        material.overrideParams = glm::vec4(std::clamp(src.roughness[0], 0.0f, 1.0f),
+                                            std::clamp(src.roughness[1], 0.0f, 1.0f),
+                                            std::clamp(src.specular[0], 0.0f, 1.0f),
+                                            std::clamp(src.specular[1], 0.0f, 1.0f));
+        material.overrideF0 = glm::vec4(std::clamp(src.f0[0], 0.0f, 1.0f),
+                                        std::clamp(src.f0[1], 0.0f, 1.0f), 0.0f, 0.0f);
+        material.overrideMetallic = std::clamp(src.metallic, -1.0f, 1.0f);
     } else {
         const auto &src = category.rough;
         material.overrideColor = glm::vec4(src.color[0], src.color[1], src.color[2],
                                            std::clamp(src.colorWeight, 0.0f, 1.0f));
-        material.overrideParams = glm::vec4(std::clamp(src.roughness, 0.0f, 1.0f),
-                                            std::clamp(src.metallic, 0.0f, 1.0f),
-                                            std::clamp(src.f0, 0.0f, 1.0f), 1.0f);
-        material.roughnessScale = 1.0f;
+        const float roughness = std::clamp(src.roughness, 0.0f, 1.0f);
+        const float specular = std::clamp(src.specular, 0.0f, 1.0f);
+        const float f0 = std::clamp(src.f0, 0.0f, 1.0f);
+        material.overrideParams = glm::vec4(roughness, roughness, specular, specular);
+        material.overrideF0 = glm::vec4(f0, f0, 0.0f, 0.0f);
+        material.overrideMetallic = std::clamp(src.metallic, 0.0f, 1.0f);
     }
     const bool skyClass = (material.featureMask & (1u << 24)) != 0;
     material.emission = emissionGrade(skyClass ? options.skyRoomEmission : category.emission);

@@ -353,7 +353,6 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                                   std::clamp(_options.ptPointEmitterRatio, 0.01f, 0.5f),
                                   glm::radians(std::clamp(_options.ptSunAngularSize, 0.05f, 10.0f)),
                                   std::clamp(_options.ptBounceRoughness, 0.0f, 1.0f),
-                                  std::clamp(_options.ptRoughnessFloor, 0.0f, 1.0f),
                                   std::max(0.0f, _options.ptIndirectClamp),
                                   std::clamp(_options.thinTransmission, 0.0f, 1.0f),
                                   std::clamp(_options.ptRefraction, 0.0f, 1.0f),

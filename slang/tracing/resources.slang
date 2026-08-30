@@ -81,9 +81,8 @@ public struct PtPushConstants {
     public float emitterRadiusRatio;
     // Authored, since the sun sits at no physical distance.
     public float sunAngularRadius;
-    // Path regularisation and its floor; see GraphicsOptions.
+    // Path regularisation; see GraphicsOptions.
     public float bounceRoughness;
-    public float roughnessFloor;
     // Zero leaves indirect samples untouched.
     public float indirectClamp;
     /** Fraction of light a thin surface passes to its far side. */

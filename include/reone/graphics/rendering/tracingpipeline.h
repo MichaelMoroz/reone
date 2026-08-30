@@ -68,7 +68,6 @@ private:
         float emitterRadiusRatio;
         float sunAngularRadius;
         float bounceRoughness;
-        float roughnessFloor;
         float indirectClamp;
         float thinTransmission;
         float refraction;

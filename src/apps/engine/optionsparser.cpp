@@ -159,7 +159,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("exposure", value<float>()->default_value(options->graphics.exposure), "scene-referred exposure ahead of the tonemap") //
         ("ptpointemitterratio", value<float>()->default_value(options->graphics.ptPointEmitterRatio), "path tracing point-light emitter radius, as a fraction of influence radius") //
         ("ptbounceroughness", value<float>()->default_value(options->graphics.ptBounceRoughness), "roughness floor after the first scatter (path regularisation)") //
-        ("ptroughnessfloor", value<float>()->default_value(options->graphics.ptRoughnessFloor), "lowest roughness any surface may take") //
         ("ptindirectclamp", value<float>()->default_value(options->graphics.ptIndirectClamp), "ceiling on one indirect sample, 0 to disable") //
         ("ptsunangularsize", value<float>()->default_value(options->graphics.ptSunAngularSize), "path tracing sun angular size") //
         ("albedogamma", value<float>()->default_value(options->graphics.albedoGamma), "authored albedo decode exponent, PBR and path tracing alike (2.2 is sRGB-correct, 1.0 matches the reference engines)") //
@@ -277,7 +276,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
             ((key + "colorweight").c_str(), value<float>()->default_value(c.colorWeight), "rough surfaces: colour weight") //
             ((key + "roughness").c_str(), value<float>()->default_value(c.roughness), "rough surfaces: roughness")     //
             ((key + "metallic").c_str(), value<float>()->default_value(c.metallic), "rough surfaces: metalness")       //
-            ((key + "f0").c_str(), value<float>()->default_value(c.f0), "rough surfaces: reflectance at normal incidence");
+            ((key + "specular").c_str(), value<float>()->default_value(c.specular), "rough surfaces: specular weight (0 removes the lobe)") //
+            ((key + "f0").c_str(), value<float>()->default_value(c.f0), "rough surfaces: dielectric reflectance at normal incidence");
     };
     const auto addReflective = [&](const std::string &key, const graphics::GraphicsOptions::ReflectiveOverride &c) {
         descCommon.add_options()                                                                                            //
@@ -285,10 +285,17 @@ std::unique_ptr<Options> OptionsParser::parse() {
             ((key + "color1").c_str(), value<float>()->default_value(c.color[1]), "reflective surfaces: colour green")      //
             ((key + "color2").c_str(), value<float>()->default_value(c.color[2]), "reflective surfaces: colour blue")       //
             ((key + "colorweight").c_str(), value<float>()->default_value(c.colorWeight), "reflective surfaces: colour weight") //
-            ((key + "roughness").c_str(), value<float>()->default_value(c.roughness), "reflective surfaces: roughness (negative: texel)") //
-            ((key + "roughnessscale").c_str(), value<float>()->default_value(c.roughnessScale), "reflective surfaces: roughness scale") //
-            ((key + "metallicscale").c_str(), value<float>()->default_value(c.metallicScale), "reflective surfaces: metalness scale") //
-            ((key + "f0").c_str(), value<float>()->default_value(c.f0), "reflective surfaces: reflectance at normal incidence");
+            ((key + "roughness0").c_str(), value<float>()->default_value(c.roughness[0]), "reflective surfaces: roughness where the mask is full (alpha 0)") //
+            ((key + "roughness1").c_str(), value<float>()->default_value(c.roughness[1]), "reflective surfaces: roughness where the mask is empty (alpha 1)") //
+            ((key + "specular0").c_str(), value<float>()->default_value(c.specular[0]), "reflective surfaces: specular weight at alpha 0")   //
+            ((key + "specular1").c_str(), value<float>()->default_value(c.specular[1]), "reflective surfaces: specular weight at alpha 1")   //
+            ((key + "f00").c_str(), value<float>()->default_value(c.f0[0]), "reflective surfaces: dielectric f0 at alpha 0")               //
+            ((key + "f01").c_str(), value<float>()->default_value(c.f0[1]), "reflective surfaces: dielectric f0 at alpha 1")               //
+            ((key + "metallic").c_str(), value<float>()->default_value(c.metallic), "reflective surfaces: metalness (negative: curated)")   //
+            ((key + "roughness").c_str(), value<float>()->default_value(-2.0f), "retired: maps to both roughness ends")                   //
+            ((key + "roughnessscale").c_str(), value<float>()->default_value(-1.0f), "retired")                                            //
+            ((key + "metallicscale").c_str(), value<float>()->default_value(-1.0f), "retired")                                             //
+            ((key + "f0").c_str(), value<float>()->default_value(-1.0f), "retired");
     };
     const auto addEmission = [&](const std::string &key, const graphics::GraphicsOptions::EmissionOverride &e) {
         descCommon.add_options()                                                                                  //
@@ -410,7 +417,6 @@ std::unique_ptr<Options> OptionsParser::parse() {
     retiredDial("lightmapintensity", "ptlightmapintensity", "pbrlightmapintensity",
                 &GraphicsOptions::ptLightmapIntensity, &GraphicsOptions::pbrLightmapIntensity);
     options->graphics.ptBounceRoughness = std::clamp(vars["ptbounceroughness"].as<float>(), 0.0f, 1.0f);
-    options->graphics.ptRoughnessFloor = std::clamp(vars["ptroughnessfloor"].as<float>(), 0.0f, 1.0f);
     options->graphics.ptIndirectClamp = std::max(0.0f, vars["ptindirectclamp"].as<float>());
     options->graphics.ptBounces = std::clamp(vars["ptbounces"].as<int>(),
                                              graphics::kMinPtBounces, graphics::kMaxPtBounces);
@@ -425,15 +431,24 @@ std::unique_ptr<Options> OptionsParser::parse() {
         c.colorWeight = std::clamp(vars[key + "colorweight"].as<float>(), 0.0f, 1.0f);
         c.roughness = std::clamp(vars[key + "roughness"].as<float>(), 0.0f, 1.0f);
         c.metallic = std::clamp(vars[key + "metallic"].as<float>(), 0.0f, 1.0f);
+        c.specular = std::clamp(vars[key + "specular"].as<float>(), 0.0f, 1.0f);
         c.f0 = std::clamp(vars[key + "f0"].as<float>(), 0.0f, 1.0f);
     };
     const auto readReflective = [&](const std::string &key, graphics::GraphicsOptions::ReflectiveOverride &c) {
         for (int k = 0; k < 3; ++k) c.color[k] = vars[key + "color" + std::to_string(k)].as<float>();
         c.colorWeight = std::clamp(vars[key + "colorweight"].as<float>(), 0.0f, 1.0f);
-        c.roughness = std::clamp(vars[key + "roughness"].as<float>(), -1.0f, 1.0f);
-        c.roughnessScale = std::max(0.0f, vars[key + "roughnessscale"].as<float>());
-        c.metallicScale = std::max(0.0f, vars[key + "metallicscale"].as<float>());
-        c.f0 = std::clamp(vars[key + "f0"].as<float>(), 0.0f, 1.0f);
+        for (int e = 0; e < 2; ++e) {
+            const auto end = std::to_string(e);
+            c.roughness[e] = std::clamp(vars[key + "roughness" + end].as<float>(), 0.0f, 1.0f);
+            c.specular[e] = std::clamp(vars[key + "specular" + end].as<float>(), 0.0f, 1.0f);
+            c.f0[e] = std::clamp(vars[key + "f0" + end].as<float>(), 0.0f, 1.0f);
+        }
+        c.metallic = std::clamp(vars[key + "metallic"].as<float>(), -1.0f, 1.0f);
+        // A retired absolute roughness pinned both ends of the mask.
+        const float retiredRoughness = vars[key + "roughness"].as<float>();
+        if (retiredRoughness >= 0.0f && vars[key + "roughness0"].defaulted() && vars[key + "roughness1"].defaulted()) {
+            c.roughness[0] = c.roughness[1] = std::min(retiredRoughness, 1.0f);
+        }
     };
     const auto readEmission = [&](const std::string &key, graphics::GraphicsOptions::EmissionOverride &e) {
         e.enabled = vars[key + "on"].as<bool>();
@@ -487,11 +502,9 @@ std::unique_ptr<Options> OptionsParser::parse() {
             const float weight = vars[key + "colorweight"].as<float>();
             if (weight >= 0.0f && fresh("colorweight")) refl.colorWeight = std::clamp(weight, 0.0f, 1.0f);
             const float roughness = vars[key + "roughness"].as<float>();
-            if (roughness >= 0.0f && fresh("roughness")) refl.roughness = std::min(roughness, 1.0f);
-            const float roughnessScale = vars[key + "roughnessscale"].as<float>();
-            if (roughnessScale >= 0.0f && fresh("roughnessscale")) refl.roughnessScale = roughnessScale;
-            const float metallicScale = vars[key + "metallic"].as<float>();
-            if (metallicScale >= 0.0f && fresh("metallicscale")) refl.metallicScale = metallicScale;
+            if (roughness >= 0.0f && fresh("roughness0") && fresh("roughness1")) {
+                refl.roughness[0] = refl.roughness[1] = std::min(roughness, 1.0f);
+            }
             const float emissionScale = vars[key + "emission"].as<float>();
             if (emissionScale >= 0.0f && vars[key + "emissionon"].defaulted() && vars[key + "emissionintensity"].defaulted()) {
                 category.emission.enabled = true;

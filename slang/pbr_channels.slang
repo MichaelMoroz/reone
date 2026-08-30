@@ -69,7 +69,7 @@ struct ResolvePushConstants {
     uint flags;
     float thinTransmission;
     float albedoGamma;
-    float roughnessFloor;
+    float pad0;
     float lightmapIntensity;
     float emitterRadiusRatio;
     float directIntensity;
@@ -223,8 +223,7 @@ Channels shadePixel(float2 uv, int2 pixel) {
     // The shared material chain: the same decode, curation and category
     // override the tracer runs, so albedo/roughness/metallic match its primary.
     MaterialSurface surface = resolveMaterial(material, mainTexSample.rgb, mainTexSample.a, 1.0,
-                                              pushConstants.albedoGamma,
-                                              pushConstants.roughnessFloor);
+                                              pushConstants.albedoGamma);
     float3 albedo = surface.albedo;
     float metallic = surface.metallic;
     float roughness = surface.roughness;
@@ -254,14 +253,12 @@ Channels shadePixel(float2 uv, int2 pixel) {
                                            material.emission.x));
     }
 
-    // The shared surface model. envStrength is the tracer's: the authored mirror
-    // fraction (1 - alpha) scaled by the category override, folded into the
-    // demodulation factors so the composite reconstructs the same surface.
-    float envStrength = envmapped ? (1.0 - mainTexSample.a) : 0.0;
-    float f0 = material.overrideParams.z;
+    // The shared surface model, folded into the demodulation factors so the
+    // composite reconstructs the same surface.
+    float specular = surface.specular;
+    float f0 = surface.f0;
     float3 diffFactor, specFactor;
-    materialFactors(normal, V, albedo, metallic, envStrength, roughness, f0,
-                    diffFactor, specFactor);
+    materialFactors(normal, V, albedo, metallic, specular, f0, roughness, diffFactor, specFactor);
 
     float ao = (pushConstants.flags & kResolveFlagSSAO) != 0
                    ? screenSpaceOcclusion(uv, pixel, eyePos, eyeNormal)
@@ -287,7 +284,8 @@ Channels shadePixel(float2 uv, int2 pixel) {
     }
 
     float NdotV = max(0.0, dot(normal, V));
-    float3 F0 = materialRf0(albedo, metallic, envStrength, f0);
+    SpecularLayer layer = materialSpecular(albedo, metallic, specular, f0);
+    SpecularEnergy energy = specularEnergy(layer, NdotV, roughness);
 
     // Direct light, each caster occluded by its own map: demodulated Lambert
     // plus the analytic GGX lobe, demodulated by specFactor at the end.
@@ -304,7 +302,8 @@ Channels shadePixel(float2 uv, int2 pixel) {
             continue;
         }
         directDiffuse += direct.diffuse;
-        directS += specularGGX(normal, V, direct.direction, roughness, F0) * direct.radiance;
+        directS += specularGGX(normal, V, direct.direction, roughness, layer) *
+                   energy.compensation * direct.radiance;
     }
 
     // Ambient specular (split-sum prefiltered environment) on the alpha share,
@@ -312,9 +311,10 @@ Channels shadePixel(float2 uv, int2 pixel) {
     float3 ambientS = float3(0.0);
     float3 mirror = float3(0.0);
     if (envmapped) {
-        float3 Fr = fresnelSchlickRoughness(NdotV, F0, roughness);
+        float3 Fr = fresnelSchlickRoughness(NdotV, layer.f0, roughness);
         float2 brdf = sBRDFLUT.SampleLevel(float2(NdotV, roughness), 0.0).xy;
-        ambientS = mainTexSample.a * environment * (Fr * brdf.x + brdf.y);
+        ambientS = mainTexSample.a * environment * layer.weight * (Fr * brdf.x + brdf.y) *
+                   energy.compensation;
         mirror = gammaToLinear(sampleAuthoredMirrorLevel0(
                      material,
                      authoredMirrorReflection(worldPos, globalUniforms.cameraPosition.xyz,

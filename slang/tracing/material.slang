@@ -37,6 +37,7 @@ import lib.material_ops;
 import uniforms;
 import tracing.rng;
 import lib.brdf;
+import lib.surface_model;
 import tracing.resources;
 import tracing.trace;
 
@@ -67,9 +68,9 @@ public struct SurfaceShading {
     public float3 emission;  // radiance added at this vertex, dial-scaled
     public float3 lightmap;
     public bool hasLightmap;
-    public bool envmapped;
-    public float envStrength;
-    /** Dielectric reflectance at normal incidence, the category's. */
+    /** The category's specular weight on the dielectric Fresnel curve; 0 is no lobe. */
+    public float specular;
+    /** The category's dielectric reflectance at normal incidence. */
     public float f0;
     public bool terminatesPath;
     /**
@@ -272,11 +273,6 @@ public float ptRayConeLod(InstanceMaterial material, HitGeometry hit) {
     return max(0.0, 0.5 * log2(max(density, 1e-12)) + log2(max(hit.coneWidth, 1e-9)));
 }
 
-/** The authored env-map share: the mirror fraction that lifts Rf0 on a reflective surface. */
-public float ptEnvStrength(bool envmapped, float alpha) {
-    return envmapped ? (1.0 - alpha) : 0.0;
-}
-
 /** Additive radiance of a purely emissive surface: authored as light even without a self-illum controller. */
 public float3 ptUnlitTransparentEmission(InstanceMaterial material, float3 radianceTexel) {
     return max(material.selfIllumColor.rgb, float3(1.0)) * radianceTexel * material.emission.x;
@@ -299,8 +295,7 @@ public struct PbrSurface : ISurfaceModel {
         float unpremultiply = (material.featureMask & kMaterialPremulAlpha) != 0
                                   ? 1.0 / max(1e-4, coverage) : 1.0;
         MaterialSurface surface = resolveMaterial(material, texel.rgb, coverage, unpremultiply,
-                                                  pushConstants.albedoGamma,
-                                                  pushConstants.roughnessFloor);
+                                                  pushConstants.albedoGamma);
         float3 radianceTexel = ptDecodeEmission(texel.rgb, material) * unpremultiply;
         float4 color = vertexColor(hit);
         shading.albedo = surface.albedo * color.rgb;
@@ -309,9 +304,8 @@ public struct PbrSurface : ISurfaceModel {
         shading.metallic = surface.metallic;
 
         shading.normal = materialNormal(hit, hit.materialIndex);
-        shading.envmapped = (material.featureMask & kMaterialEnvMap) != 0;
-        shading.envStrength = ptEnvStrength(shading.envmapped, shading.alpha);
-        shading.f0 = material.overrideParams.z;
+        shading.specular = surface.specular;
+        shading.f0 = surface.f0;
         shading.hasLightmap = (material.featureMask & kMaterialLightmap) != 0;
         // White where a surface declares a bake it has no texture for: zero is
         // a lightmap that absorbs everything, and the lightmaps toggle clears
@@ -343,14 +337,12 @@ public struct PbrSurface : ISurfaceModel {
         sample.specularLobe = false;
         // Cutout coverage was resolved deterministically in traversal: a
         // committed texel is solid substance. No re-roll, no re-trace.
-        // The GGX lobe exists only where raster shows this heuristic a
-        // specular response: environment-mapped surfaces. Everywhere else the
-        // diffuse alpha is coverage or opacity, so the derived roughness is
-        // meaningless. Non-envmapped surfaces are pure diffuse.
-        float3 F0 = materialRf0(shading.albedo, shading.metallic, shading.envStrength, shading.f0);
+        // Lobe choice follows the energy each layer actually carries at this
+        // view angle, so a weightless lobe is never traced.
+        SpecularLayer layer = materialSpecular(shading.albedo, shading.metallic, shading.specular, shading.f0);
         float NdotV = max(0.0, dot(shading.normal, view));
-        float3 F = fresnelSchlick(NdotV, F0);
-        float specularProbability = clamp(luminance(F), 1e-3, 1.0 - 1e-3);
+        SpecularEnergy energy = specularEnergy(layer, NdotV, shading.roughness);
+        float specularProbability = clamp(luminance(energy.albedo), 1e-3, 1.0 - 1e-3);
         if (ptRandom01(rng) < specularProbability) {
             float3 half = ptGgxVisibleHalfVector(shading.normal, view, shading.roughness,
                                                  float2(ptRandom01(rng), ptRandom01(rng)));
@@ -360,22 +352,20 @@ public struct PbrSurface : ISurfaceModel {
             // direction alone. Bounded by F, unlike the NDF-sampled weight this
             // replaces, which owed a factor that diverges at grazing angles.
             float NdotL = max(0.0, dot(shading.normal, sample.direction));
-            sample.weight = F * geometrySchlick(NdotL, punctualSmithK(shading.roughness)) /
+            float VdotH = max(0.0, dot(view, half));
+            sample.weight = specularFresnel(layer, VdotH) * energy.compensation *
+                            geometrySchlick(NdotL, punctualSmithK(shading.roughness)) /
                             specularProbability;
             sample.demodulatedWeight = sample.weight;
             sample.specularLobe = true;
         } else {
             sample.direction = ptCosineHemisphere(shading.normal,
                                                    float2(ptRandom01(rng), ptRandom01(rng)));
-            sample.weight = shading.albedo;
-            // Keep the diffuse lobe sampleable for blended metals while using
-            // the same metallic energy split as next-event estimation.
-            sample.weight *= 1.0 - shading.metallic;
-            // The albedo and metallic split cancel against the material
-            // response exactly; only the lobe-selection probability survives.
-            sample.demodulatedWeight = float3(1.0);
-                sample.weight *= (1.0 - F) / (1.0 - specularProbability);
-                sample.demodulatedWeight = float3(1.0 / (1.0 - specularProbability));
+            // The response is the primary's diffFactor exactly; only the
+            // lobe-selection probability survives demodulation.
+            sample.weight = diffuseResponse(shading.albedo, shading.metallic, energy) /
+                            (1.0 - specularProbability);
+            sample.demodulatedWeight = float3(1.0 / (1.0 - specularProbability));
         }
         // A smooth normal can sample below the geometric surface at a
         // silhouette. Reflect that lobe into the geometric hemisphere rather
@@ -461,9 +451,8 @@ public struct UnlitTransparentSurface : ISurfaceModel {
         shading.metallic = 0.0;
         shading.hasLightmap = false;
         shading.lightmap = float3(1.0);
-        shading.envmapped = false;
-        shading.envStrength = 0.0;
-        shading.f0 = 0.04;
+        shading.specular = 0.0;
+        shading.f0 = 0.0;
         shading.emission = ptUnlitTransparentEmission(material, shading.albedo);
         return shading;
     }
@@ -501,9 +490,8 @@ public struct UnlitEmissiveSurface : ISurfaceModel {
         shading.metallic = 0.0;
         shading.hasLightmap = false;
         shading.lightmap = float3(1.0);
-        shading.envmapped = false;
-        shading.envStrength = 0.0;
-        shading.f0 = 0.04;
+        shading.specular = 0.0;
+        shading.f0 = 0.0;
         // The texture is the radiance, and each kind takes its own dial: the
         // sky shell, and the painted backdrop standing in for a distance that
         // was never modelled. Nothing exists behind either, which is why

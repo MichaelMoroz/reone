@@ -52,25 +52,46 @@ public float3 nrdEnvironmentTermRtg(float3 Rf0, float NoV, float roughness) {
 public static const float kDemodulationFloor = 0.02;
 public static const float kNrdRoughnessFactorMinScale = 0.1;
 
+/** The specular layer's hemispherical response at one view angle. */
+public struct SpecularEnergy {
+    /** Directional albedo, with the multiply-scattered energy put back. */
+    public float3 albedo;
+    /** Turquin's scale on the single-scatter lobe: 1 + F0 (1 - Ess) / Ess. */
+    public float3 compensation;
+};
+
+/**
+ * The split-sum fit above is linear in F0, so its F0 = 1 value is the
+ * single-scatter directional albedo Ess that the compensation needs.
+ */
+public SpecularEnergy specularEnergy(SpecularLayer layer, float NoV, float roughness) {
+    float Ess = nrdEnvironmentTermRtg(float3(1.0), NoV, roughness).x;
+    SpecularEnergy energy;
+    energy.compensation = 1.0 + layer.weight * layer.f0 * (1.0 - Ess) / max(Ess, 1e-3);
+    energy.albedo = layer.weight * nrdEnvironmentTermRtg(layer.f0, NoV, roughness) * energy.compensation;
+    return energy;
+}
+
+/** The diffuse layer gets the energy the specular layer did not take. */
+public float3 diffuseResponse(float3 albedo, float metallic, SpecularEnergy energy) {
+    return (1.0 - energy.albedo) * (1.0 - metallic) * albedo;
+}
+
 /**
  * The demodulation factors of one surface: what a unit of diffuse and of
  * specular transport becomes once the material is put back.
- *
- * envStrength is the authored env-map share (1 - diffuse alpha, scaled by the
- * curated override) and lifts the reflectance at normal incidence toward a
- * mirror; that fold used to sit at the one call site and is part of the model.
  */
 public void materialFactors(float3 N, float3 V, float3 albedo, float metallic,
-                            float envStrength, float roughness, float f0,
+                            float specular, float f0, float roughness,
                             out float3 diffFactor, out float3 specFactor) {
-    float3 Rf0 = materialRf0(albedo, metallic, envStrength, f0);
-    float3 Fenv = nrdEnvironmentTermRtg(Rf0, abs(dot(N, V)), roughness);
+    SpecularLayer layer = materialSpecular(albedo, metallic, specular, f0);
+    SpecularEnergy energy = specularEnergy(layer, abs(dot(N, V)), roughness);
     // Unfloored, unlike NRD's own helper. NRD raises this off zero because it
     // DIVIDES the signal by it; the diffuse channel holds transport and is
     // never divided, so the floor stops being protection and becomes bias -
     // the composite would multiply back 0.02 + 0.98x where the correct
     // multiplier is x, brightening dark materials by construction.
-    diffFactor = (1.0 - Fenv) * (1.0 - metallic) * albedo;
-    specFactor = Fenv * lerp(kNrdRoughnessFactorMinScale, 1.0, roughness);
+    diffFactor = diffuseResponse(albedo, metallic, energy);
+    specFactor = energy.albedo * lerp(kNrdRoughnessFactorMinScale, 1.0, roughness);
     specFactor = lerp(float3(kDemodulationFloor), float3(1.0), specFactor);
 }

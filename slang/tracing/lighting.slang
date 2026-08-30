@@ -24,6 +24,7 @@ import lib.direct_light;
 import lib.scene_schema;
 import tracing.rng;
 import lib.brdf;
+import lib.surface_model;
 import lib.math;
 import tracing.resources;
 import tracing.material;
@@ -186,8 +187,10 @@ DirectLight ptDirectLightDraw(HitGeometry hit, SurfaceShading shading, float3 vi
     // Specular keeps the true normal and the true side: a leaf transmits light,
     // not a highlight.
     if (!litFromBehind) {
-        float3 F0 = materialRf0(shading.albedo, shading.metallic, shading.envStrength, shading.f0);
-        result.specular = specularGGX(shading.normal, view, L, shading.roughness, F0) * radiance;
+        SpecularLayer layer = materialSpecular(shading.albedo, shading.metallic, shading.specular, shading.f0);
+        SpecularEnergy energy = specularEnergy(layer, max(0.0, dot(shading.normal, view)), shading.roughness);
+        result.specular = specularGGX(shading.normal, view, L, shading.roughness, layer) *
+                          energy.compensation * radiance;
     }
     return result;
 }

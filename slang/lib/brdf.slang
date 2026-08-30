@@ -55,21 +55,36 @@ public float punctualSmithK(float roughness) {
     return (roughness + 1.0) * (roughness + 1.0) * 0.125;
 }
 
-/**
- * Reflectance at normal incidence: the dielectric base f0 tinted toward
- * albedo by metalness, lifted toward a mirror by the authored env-map share.
- */
-public float3 materialRf0(float3 albedo, float metallic, float envStrength, float f0) {
-    return lerp(lerp(float3(f0), albedo, metallic), float3(1.0), envStrength);
+/** Reflectance at normal incidence of an IOR 1.5 dielectric. */
+public static const float kDielectricF0 = 0.04;
+
+/** The specular layer: Schlick's base reflectance and the weight on its whole curve. */
+public struct SpecularLayer {
+    public float3 f0;
+    public float weight;
+};
+
+/** Dielectrics take the specular weight on their f0; conductors reflect their own colour. */
+public SpecularLayer materialSpecular(float3 baseColor, float metallic, float specular, float f0) {
+    SpecularLayer layer;
+    layer.f0 = lerp(float3(f0), baseColor, metallic);
+    layer.weight = lerp(specular, 1.0, metallic);
+    return layer;
+}
+
+/** Weighted Schlick: zero weight is no lobe at any angle, grazing included. */
+public float3 specularFresnel(SpecularLayer layer, float cosTheta) {
+    return layer.weight * fresnelSchlick(cosTheta, layer.f0);
 }
 
 /**
- * The GGX lobe for a known light direction, with the cosine factor cancelled
- * analytically: D * G * F / (4 * NdotV). Forming NdotL numerically and
- * dividing it back out turns the guard into a large gain at grazing incidence.
- * Multiply by the light's radiance.
+ * The single-scatter GGX lobe for a known light direction, with the cosine
+ * factor cancelled analytically: D * G * F / (4 * NdotV). Forming NdotL
+ * numerically and dividing it back out turns the guard into a large gain at
+ * grazing incidence. Multiply by the light's radiance and the multiple-
+ * scattering compensation.
  */
-public float3 specularGGX(float3 N, float3 V, float3 L, float roughness, float3 F0) {
+public float3 specularGGX(float3 N, float3 V, float3 L, float roughness, SpecularLayer layer) {
     float NdotL = max(0.0, dot(N, L));
     float NdotV = max(0.0, dot(N, V));
     float3 H = normalize(V + L);
@@ -78,6 +93,6 @@ public float3 specularGGX(float3 N, float3 V, float3 L, float roughness, float3 
     float alpha = roughness * roughness;
     float D = distributionGGX(NdotH * NdotH, alpha * alpha);
     float G = geometrySmith(NdotL, NdotV, punctualSmithK(roughness));
-    float3 F = fresnelSchlick(VdotH, F0);
+    float3 F = specularFresnel(layer, VdotH);
     return (D * G * F) / max(1e-4, 4.0 * NdotV);
 }
