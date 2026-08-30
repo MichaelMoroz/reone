@@ -102,6 +102,9 @@ void box(glm::vec3 min, glm::vec3 max, uint32_t colorRgba);
 /** Age every element and drop what has outlived its pushLifetime. */
 void updateDrawDebug(float dt);
 
+/** Drop every element in every scope, whatever its lifetime. */
+void clearDrawDebug();
+
 /**
  * Append this scene's live elements to the overlay buffers.
  *

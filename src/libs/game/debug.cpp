@@ -17,6 +17,8 @@
 
 #include "reone/game/debug.h"
 
+#include "reone/scene/drawdebug.h"
+
 namespace reone {
 
 namespace game {
@@ -56,6 +58,12 @@ void setShowTriggers(bool show) {
 
 void setShowPath(bool show) {
     g_showPath = show;
+    // Recorded elements outlive the flag - the face graph is drawn once at
+    // load with an unbounded lifetime - so turning the toggle off has to
+    // discard them, or the picture stays. The pathfinder is the only recorder.
+    if (!show) {
+        clearDrawDebug();
+    }
 }
 
 } // namespace game

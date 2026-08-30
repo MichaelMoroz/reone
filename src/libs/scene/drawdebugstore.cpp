@@ -217,6 +217,10 @@ void box(glm::vec3 min, glm::vec3 max, uint32_t colorRgba) {
 
 } // namespace drawdebug
 
+void clearDrawDebug() {
+    state().buckets.clear();
+}
+
 void updateDrawDebug(float dt) {
     auto &s = state();
     for (auto &[id, elements] : s.buckets) {
