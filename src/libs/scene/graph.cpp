@@ -428,9 +428,13 @@ void SceneGraph::update(float dt) {
     // Advanced here rather than read from a wall clock, so it stops when the
     // scene stops: the freeze-frame diagnostic holds dt at zero to prove the
     // filters converge on a scene that is not moving, and a clock that kept
-    // running would keep the grass moving under it.
+    // running would keep the grass moving under it. Gated with the roots for
+    // the same reason: paused is stopped, and the shader timers follow game
+    // time, not the frame clock - mesh UV animations already did.
     _prevTime = _time;
-    _time += dt;
+    if (_updateRoots) {
+        _time += dt;
+    }
     if (_updateRoots) {
         {
             R_PROFILE_ZONE("SceneGraph::model roots");

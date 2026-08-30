@@ -56,6 +56,13 @@ public:
         _gui->clearSelection();
     }
 
+    /** Re-fit the authored layout to the current render extent. */
+    void refreshLayout() {
+        if (_gui) {
+            _gui->refreshLayout();
+        }
+    }
+
     std::shared_ptr<gui::Control> k2InGameTitleControl() const { return _k2InGameTitleControl; }
 
 protected:

@@ -266,6 +266,8 @@ public:
 
     void setCursorType(resource::CursorType type);
     void setPaused(bool paused);
+    /** Re-fit every loaded GUI to the current render extent, after it changed. */
+    void refreshGUILayouts();
     void setRelativeMouseMode(bool relative);
 
     void openMainMenu();

@@ -2924,6 +2924,19 @@ void Game::setGlobalLocation(const std::string &name, const std::shared_ptr<Loca
     _globalLocations[name] = location;
 }
 
+void Game::refreshGUILayouts() {
+    GameGUI *guis[] = {_mainMenu.get(), _charGen.get(), _hud.get(), _inGame.get(),
+                       _dialog.get(), _computer.get(), _confirmPopup.get(), _container.get(),
+                       _partySelect.get(), _saveLoad.get(), _galaxyMap.get(),
+                       _pazaakWager.get(), _pazaakSetup.get(), _pazaakBoard.get(),
+                       _loadScreen.get()};
+    for (auto *gui : guis) {
+        if (gui) {
+            gui->refreshLayout();
+        }
+    }
+}
+
 void Game::setPaused(bool paused) {
     _paused = paused;
 }

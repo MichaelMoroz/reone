@@ -771,6 +771,12 @@ void Engine::applyGraphicsRebuild() {
     // admission layer. The next SceneGraph::render rebuilds all of it, reading
     // the render mode afresh, so this is also what makes a mode switch happen.
     _sceneModule->graphs().invalidateRenderPipelines();
+    // The GUIs fit their authored layouts to the render extent once, at load;
+    // a rebuild that changed it has to re-fit them or the interface keeps the
+    // old screen's size.
+    if (_game) {
+        _game->refreshGUILayouts();
+    }
 }
 
 std::vector<std::string> Engine::stagedGraphicsChanges() const {
