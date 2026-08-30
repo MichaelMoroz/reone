@@ -137,6 +137,10 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("emissiveintensity", value<float>(), "deprecated: use ptemissiveintensity / pbremissiveintensity") //
         ("lightmapintensity", value<float>(), "deprecated: use ptlightmapintensity / pbrlightmapintensity") //
         ("skyboxintensity", value<float>()->default_value(options->graphics.skyboxIntensity), "baked sky cube intensity")      //
+        ("ptskyintensity", value<float>()->default_value(-1.0f), "retired: maps to skyboxintensity")                        //
+        ("ptemissiveintensity", value<float>()->default_value(-1.0f), "retired: maps to every category's emission grade")  //
+        ("ptbackdropintensity", value<float>()->default_value(-1.0f), "retired: maps to the sky room's emission grade")     //
+        ("emissivegamma", value<float>()->default_value(-1.0f), "retired: maps to every emission grade's gamma")            //
         ("skyboxgamma", value<float>()->default_value(options->graphics.skyboxGamma), "baked sky cube decode exponent")     //
         ("ptlightmapintensity", value<float>()->default_value(options->graphics.ptLightmapIntensity), "path tracing: baked-lightmap intensity") //
         ("pbrlightmapintensity", value<float>()->default_value(options->graphics.pbrLightmapIntensity), "PBR: baked-lightmap intensity") //
@@ -415,6 +419,32 @@ std::unique_ptr<Options> OptionsParser::parse() {
         readEmission(key + "emission", override.emission);
     }
     readEmission("skyroomemission", options->graphics.skyRoomEmission);
+    // The retired global dials of the traced grade, carried onto the material
+    // dials they became, so a reone.cfg written before them keeps its look.
+    // Command-line values for the new keys win over a migrated one.
+    {
+        auto &g = options->graphics;
+        const float sky = vars["ptskyintensity"].as<float>();
+        if (sky >= 0.0f && vars["skyboxintensity"].defaulted()) {
+            g.skyboxIntensity = sky;
+        }
+        const float emissive = vars["ptemissiveintensity"].as<float>();
+        const float gamma = vars["emissivegamma"].as<float>();
+        const float backdrop = vars["ptbackdropintensity"].as<float>();
+        const auto migrate = [&](graphics::GraphicsOptions::EmissionOverride &e, const std::string &key, float intensity) {
+            if (intensity >= 0.0f && vars[key + "on"].defaulted() && vars[key + "intensity"].defaulted()) {
+                e.enabled = true;
+                e.intensity = intensity;
+            }
+            if (gamma >= 0.0f && vars[key + "gamma"].defaulted() && e.enabled) {
+                e.gamma = std::clamp(gamma, 0.1f, 4.0f);
+            }
+        };
+        for (int i = 0; i < 9; ++i) {
+            migrate(g.categoryOverrides[i].emission, "cat" + std::to_string(i) + "emission", emissive);
+        }
+        migrate(g.skyRoomEmission, "skyroomemission", backdrop);
+    }
     options->graphics.ptRayOffset = std::max(0.0001f, vars["ptrayoffset"].as<float>());
     options->graphics.ptTraceStats = vars["pttracestats"].as<bool>();
     options->graphics.tonemap = std::clamp(vars["tonemap"].as<int>(), 0, 1);
