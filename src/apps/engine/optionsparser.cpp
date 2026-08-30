@@ -269,17 +269,26 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("logsev", value<int>()->default_value(static_cast<int>(options->logging.severity)), "minimum log severity")            //
         ("logch", value<int>()->default_value(defaultLogChannels), "log channel mask");
 
-    const auto addSurfaceClass = [&](const std::string &key, const graphics::GraphicsOptions::SurfaceClassOverride &c) {
+    const auto addRough = [&](const std::string &key, const graphics::GraphicsOptions::RoughOverride &c) {
         descCommon.add_options()                                                                                        //
-            ((key + "color0").c_str(), value<float>()->default_value(c.color[0]), "material override colour red")       //
-            ((key + "color1").c_str(), value<float>()->default_value(c.color[1]), "material override colour green")     //
-            ((key + "color2").c_str(), value<float>()->default_value(c.color[2]), "material override colour blue")      //
-            ((key + "colorweight").c_str(), value<float>()->default_value(c.colorWeight), "material override colour weight") //
-            ((key + "roughness").c_str(), value<float>()->default_value(c.roughness), "material override roughness")   //
-            ((key + "metallic").c_str(), value<float>()->default_value(c.metallic), "material override metalness")     //
-            ((key + "f0").c_str(), value<float>()->default_value(c.f0), "material override reflectance at normal incidence") //
-            ((key + "roughnessscale").c_str(), value<float>()->default_value(c.roughnessScale), "material override roughness scale") //
-            ((key + "metallicscale").c_str(), value<float>()->default_value(c.metallicScale), "material override metalness scale");
+            ((key + "color0").c_str(), value<float>()->default_value(c.color[0]), "rough surfaces: colour red")         //
+            ((key + "color1").c_str(), value<float>()->default_value(c.color[1]), "rough surfaces: colour green")       //
+            ((key + "color2").c_str(), value<float>()->default_value(c.color[2]), "rough surfaces: colour blue")        //
+            ((key + "colorweight").c_str(), value<float>()->default_value(c.colorWeight), "rough surfaces: colour weight") //
+            ((key + "roughness").c_str(), value<float>()->default_value(c.roughness), "rough surfaces: roughness")     //
+            ((key + "metallic").c_str(), value<float>()->default_value(c.metallic), "rough surfaces: metalness")       //
+            ((key + "f0").c_str(), value<float>()->default_value(c.f0), "rough surfaces: reflectance at normal incidence");
+    };
+    const auto addReflective = [&](const std::string &key, const graphics::GraphicsOptions::ReflectiveOverride &c) {
+        descCommon.add_options()                                                                                            //
+            ((key + "color0").c_str(), value<float>()->default_value(c.color[0]), "reflective surfaces: colour red")        //
+            ((key + "color1").c_str(), value<float>()->default_value(c.color[1]), "reflective surfaces: colour green")      //
+            ((key + "color2").c_str(), value<float>()->default_value(c.color[2]), "reflective surfaces: colour blue")       //
+            ((key + "colorweight").c_str(), value<float>()->default_value(c.colorWeight), "reflective surfaces: colour weight") //
+            ((key + "roughness").c_str(), value<float>()->default_value(c.roughness), "reflective surfaces: roughness (negative: texel)") //
+            ((key + "roughnessscale").c_str(), value<float>()->default_value(c.roughnessScale), "reflective surfaces: roughness scale") //
+            ((key + "metallicscale").c_str(), value<float>()->default_value(c.metallicScale), "reflective surfaces: metalness scale") //
+            ((key + "f0").c_str(), value<float>()->default_value(c.f0), "reflective surfaces: reflectance at normal incidence");
     };
     const auto addEmission = [&](const std::string &key, const graphics::GraphicsOptions::EmissionOverride &e) {
         descCommon.add_options()                                                                                  //
@@ -290,8 +299,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
     for (int i = 0; i < 9; ++i) {
         const auto &override = options->graphics.categoryOverrides[i];
         const auto key = "cat" + std::to_string(i);
-        addSurfaceClass(key + "rough", override.rough);
-        addSurfaceClass(key + "refl", override.reflective);
+        addRough(key + "rough", override.rough);
+        addReflective(key + "refl", override.reflective);
         addEmission(key + "emission", override.emission);
     }
     addEmission("skyroomemission", options->graphics.skyRoomEmission);
@@ -411,14 +420,20 @@ std::unique_ptr<Options> OptionsParser::parse() {
                                                 graphics::kMaxPtNeeSamples);
     options->graphics.ptGrassScatter = vars["ptgrassscatter"].as<bool>();
     options->graphics.ptGrassShadows = vars["ptgrassshadows"].as<bool>();
-    const auto readSurfaceClass = [&](const std::string &key, graphics::GraphicsOptions::SurfaceClassOverride &c) {
+    const auto readRough = [&](const std::string &key, graphics::GraphicsOptions::RoughOverride &c) {
+        for (int k = 0; k < 3; ++k) c.color[k] = vars[key + "color" + std::to_string(k)].as<float>();
+        c.colorWeight = std::clamp(vars[key + "colorweight"].as<float>(), 0.0f, 1.0f);
+        c.roughness = std::clamp(vars[key + "roughness"].as<float>(), 0.0f, 1.0f);
+        c.metallic = std::clamp(vars[key + "metallic"].as<float>(), 0.0f, 1.0f);
+        c.f0 = std::clamp(vars[key + "f0"].as<float>(), 0.0f, 1.0f);
+    };
+    const auto readReflective = [&](const std::string &key, graphics::GraphicsOptions::ReflectiveOverride &c) {
         for (int k = 0; k < 3; ++k) c.color[k] = vars[key + "color" + std::to_string(k)].as<float>();
         c.colorWeight = std::clamp(vars[key + "colorweight"].as<float>(), 0.0f, 1.0f);
         c.roughness = std::clamp(vars[key + "roughness"].as<float>(), -1.0f, 1.0f);
-        c.metallic = std::clamp(vars[key + "metallic"].as<float>(), -1.0f, 1.0f);
-        c.f0 = std::clamp(vars[key + "f0"].as<float>(), 0.0f, 1.0f);
         c.roughnessScale = std::max(0.0f, vars[key + "roughnessscale"].as<float>());
         c.metallicScale = std::max(0.0f, vars[key + "metallicscale"].as<float>());
+        c.f0 = std::clamp(vars[key + "f0"].as<float>(), 0.0f, 1.0f);
     };
     const auto readEmission = [&](const std::string &key, graphics::GraphicsOptions::EmissionOverride &e) {
         e.enabled = vars[key + "on"].as<bool>();
@@ -428,8 +443,8 @@ std::unique_ptr<Options> OptionsParser::parse() {
     for (int i = 0; i < 9; ++i) {
         auto &override = options->graphics.categoryOverrides[i];
         const auto key = "cat" + std::to_string(i);
-        readSurfaceClass(key + "rough", override.rough);
-        readSurfaceClass(key + "refl", override.reflective);
+        readRough(key + "rough", override.rough);
+        readReflective(key + "refl", override.reflective);
         readEmission(key + "emission", override.emission);
     }
     readEmission("skyroomemission", options->graphics.skyRoomEmission);
@@ -458,25 +473,25 @@ std::unique_ptr<Options> OptionsParser::parse() {
             migrate(g.categoryOverrides[i].emission, "cat" + std::to_string(i) + "emission", emissive);
         }
         migrate(g.skyRoomEmission, "skyroomemission", backdrop);
+        // The retired single-class keys belong to the reflective class: rough
+        // surfaces had no lobe, so nothing they scaled ever reached one.
         for (int i = 0; i < 9; ++i) {
             const auto key = "cat" + std::to_string(i);
             auto &category = g.categoryOverrides[i];
-            const auto both = [&](auto apply) { apply(category.rough, "rough"); apply(category.reflective, "refl"); };
-            const auto fresh = [&](const std::string &cls, const char *field) {
-                return vars[key + cls + field].defaulted();
-            };
+            auto &refl = category.reflective;
+            const auto fresh = [&](const char *field) { return vars[key + "refl" + field].defaulted(); };
             for (int c = 0; c < 3; ++c) {
                 const float v = vars[key + "color" + std::to_string(c)].as<float>();
-                if (v >= 0.0f) both([&](auto &cl, const std::string &cls) { if (fresh(cls, ("color" + std::to_string(c)).c_str())) cl.color[c] = v; });
+                if (v >= 0.0f && fresh(("color" + std::to_string(c)).c_str())) refl.color[c] = v;
             }
             const float weight = vars[key + "colorweight"].as<float>();
-            if (weight >= 0.0f) both([&](auto &cl, const std::string &cls) { if (fresh(cls, "colorweight")) cl.colorWeight = std::clamp(weight, 0.0f, 1.0f); });
+            if (weight >= 0.0f && fresh("colorweight")) refl.colorWeight = std::clamp(weight, 0.0f, 1.0f);
             const float roughness = vars[key + "roughness"].as<float>();
-            if (roughness >= 0.0f) both([&](auto &cl, const std::string &cls) { if (fresh(cls, "roughness")) cl.roughness = std::min(roughness, 1.0f); });
+            if (roughness >= 0.0f && fresh("roughness")) refl.roughness = std::min(roughness, 1.0f);
             const float roughnessScale = vars[key + "roughnessscale"].as<float>();
-            if (roughnessScale >= 0.0f) both([&](auto &cl, const std::string &cls) { if (fresh(cls, "roughnessscale")) cl.roughnessScale = roughnessScale; });
+            if (roughnessScale >= 0.0f && fresh("roughnessscale")) refl.roughnessScale = roughnessScale;
             const float metallicScale = vars[key + "metallic"].as<float>();
-            if (metallicScale >= 0.0f) both([&](auto &cl, const std::string &cls) { if (fresh(cls, "metallicscale")) cl.metallicScale = metallicScale; });
+            if (metallicScale >= 0.0f && fresh("metallicscale")) refl.metallicScale = metallicScale;
             const float emissionScale = vars[key + "emission"].as<float>();
             if (emissionScale >= 0.0f && vars[key + "emissionon"].defaulted() && vars[key + "emissionintensity"].defaulted()) {
                 category.emission.enabled = true;

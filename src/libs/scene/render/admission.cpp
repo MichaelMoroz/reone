@@ -167,15 +167,23 @@ void applyCategoryOverride(InstanceMaterial &material,
                            const GraphicsOptions &options,
                            uint32_t categoryIndex) {
     const auto &category = options.categoryOverrides[std::min<uint32_t>(categoryIndex, 8u)];
-    const bool reflective = (material.featureMask & UniformsFeatureFlags::envmap) != 0;
-    const auto &src = reflective ? category.reflective : category.rough;
-    material.overrideColor = glm::vec4(src.color[0], src.color[1], src.color[2],
-                                       std::clamp(src.colorWeight, 0.0f, 1.0f));
-    material.overrideParams = glm::vec4(std::clamp(src.roughness, -1.0f, 1.0f),
-                                        std::clamp(src.metallic, -1.0f, 1.0f),
-                                        std::clamp(src.f0, 0.0f, 1.0f),
-                                        std::max(0.0f, src.metallicScale));
-    material.roughnessScale = std::max(0.0f, src.roughnessScale);
+    if ((material.featureMask & UniformsFeatureFlags::envmap) != 0) {
+        const auto &src = category.reflective;
+        material.overrideColor = glm::vec4(src.color[0], src.color[1], src.color[2],
+                                           std::clamp(src.colorWeight, 0.0f, 1.0f));
+        material.overrideParams = glm::vec4(std::clamp(src.roughness, -1.0f, 1.0f), -1.0f,
+                                            std::clamp(src.f0, 0.0f, 1.0f),
+                                            std::max(0.0f, src.metallicScale));
+        material.roughnessScale = std::max(0.0f, src.roughnessScale);
+    } else {
+        const auto &src = category.rough;
+        material.overrideColor = glm::vec4(src.color[0], src.color[1], src.color[2],
+                                           std::clamp(src.colorWeight, 0.0f, 1.0f));
+        material.overrideParams = glm::vec4(std::clamp(src.roughness, 0.0f, 1.0f),
+                                            std::clamp(src.metallic, 0.0f, 1.0f),
+                                            std::clamp(src.f0, 0.0f, 1.0f), 1.0f);
+        material.roughnessScale = 1.0f;
+    }
     const bool skyClass = (material.featureMask & (1u << 24)) != 0;
     material.emission = emissionGrade(skyClass ? options.skyRoomEmission : category.emission);
 }

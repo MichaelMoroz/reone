@@ -134,7 +134,8 @@ GraphicsOptionDesc floatOpt(const char *name, OptionApply apply, const char *hel
     return desc;
 }
 
-using SurfaceClassOverride = GraphicsOptions::SurfaceClassOverride;
+using RoughOverride = GraphicsOptions::RoughOverride;
+using ReflectiveOverride = GraphicsOptions::ReflectiveOverride;
 using EmissionOverride = GraphicsOptions::EmissionOverride;
 
 /** A float reached through an accessor rather than a member pointer: the nested material overrides. */
@@ -174,25 +175,39 @@ GraphicsOptionDesc boolRefOpt(const std::string &name, const std::string &help,
     return desc;
 }
 
-void addSurfaceClassOpts(std::vector<GraphicsOptionDesc> &descs, const std::string &key,
-                         const std::string &help, std::function<SurfaceClassOverride &(GraphicsOptions &)> cls) {
+void addRoughOpts(std::vector<GraphicsOptionDesc> &descs, const std::string &key,
+                  const std::string &help, std::function<RoughOverride &(GraphicsOptions &)> cls) {
     for (int c = 0; c < 3; ++c) {
         descs.push_back(floatRefOpt(key + "color" + std::to_string(c), help + " colour",
                                     [cls, c](GraphicsOptions &o) -> float & { return cls(o).color[c]; }, 0.0f, 8.0f));
     }
     descs.push_back(floatRefOpt(key + "colorweight", help + " colour weight",
                                 [cls](GraphicsOptions &o) -> float & { return cls(o).colorWeight; }, 0.0f, 1.0f));
-    // Negative means "no override", so the floors are below zero.
-    descs.push_back(floatRefOpt(key + "roughness", help + " roughness (negative: texel)",
-                                [cls](GraphicsOptions &o) -> float & { return cls(o).roughness; }, -1.0f, 1.0f));
-    descs.push_back(floatRefOpt(key + "metallic", help + " metalness (negative: curated)",
-                                [cls](GraphicsOptions &o) -> float & { return cls(o).metallic; }, -1.0f, 1.0f));
+    descs.push_back(floatRefOpt(key + "roughness", help + " roughness",
+                                [cls](GraphicsOptions &o) -> float & { return cls(o).roughness; }, 0.0f, 1.0f));
+    descs.push_back(floatRefOpt(key + "metallic", help + " metalness",
+                                [cls](GraphicsOptions &o) -> float & { return cls(o).metallic; }, 0.0f, 1.0f));
     descs.push_back(floatRefOpt(key + "f0", help + " reflectance at normal incidence",
                                 [cls](GraphicsOptions &o) -> float & { return cls(o).f0; }, 0.0f, 1.0f));
+}
+
+void addReflectiveOpts(std::vector<GraphicsOptionDesc> &descs, const std::string &key,
+                       const std::string &help, std::function<ReflectiveOverride &(GraphicsOptions &)> cls) {
+    for (int c = 0; c < 3; ++c) {
+        descs.push_back(floatRefOpt(key + "color" + std::to_string(c), help + " colour",
+                                    [cls, c](GraphicsOptions &o) -> float & { return cls(o).color[c]; }, 0.0f, 8.0f));
+    }
+    descs.push_back(floatRefOpt(key + "colorweight", help + " colour weight",
+                                [cls](GraphicsOptions &o) -> float & { return cls(o).colorWeight; }, 0.0f, 1.0f));
+    // Negative means "the texel's alpha", so the floor is below zero.
+    descs.push_back(floatRefOpt(key + "roughness", help + " roughness (negative: texel)",
+                                [cls](GraphicsOptions &o) -> float & { return cls(o).roughness; }, -1.0f, 1.0f));
     descs.push_back(floatRefOpt(key + "roughnessscale", help + " roughness scale",
                                 [cls](GraphicsOptions &o) -> float & { return cls(o).roughnessScale; }, 0.0f, 64.0f));
     descs.push_back(floatRefOpt(key + "metallicscale", help + " metalness scale",
                                 [cls](GraphicsOptions &o) -> float & { return cls(o).metallicScale; }, 0.0f, 64.0f));
+    descs.push_back(floatRefOpt(key + "f0", help + " reflectance at normal incidence",
+                                [cls](GraphicsOptions &o) -> float & { return cls(o).f0; }, 0.0f, 1.0f));
 }
 
 void addEmissionOpts(std::vector<GraphicsOptionDesc> &descs, const std::string &key,
@@ -785,10 +800,10 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     for (int i = 0; i < 9; ++i) {
         const auto key = "cat" + std::to_string(i);
         const auto help = "material category " + std::to_string(i);
-        addSurfaceClassOpts(descs, key + "rough", help + " rough",
-                            [i](GraphicsOptions &o) -> SurfaceClassOverride & { return o.categoryOverrides[i].rough; });
-        addSurfaceClassOpts(descs, key + "refl", help + " reflective",
-                            [i](GraphicsOptions &o) -> SurfaceClassOverride & { return o.categoryOverrides[i].reflective; });
+        addRoughOpts(descs, key + "rough", help + " rough",
+                     [i](GraphicsOptions &o) -> RoughOverride & { return o.categoryOverrides[i].rough; });
+        addReflectiveOpts(descs, key + "refl", help + " reflective",
+                          [i](GraphicsOptions &o) -> ReflectiveOverride & { return o.categoryOverrides[i].reflective; });
         addEmissionOpts(descs, key + "emission", help,
                         [i](GraphicsOptions &o) -> EmissionOverride & { return o.categoryOverrides[i].emission; });
     }

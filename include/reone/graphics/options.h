@@ -750,19 +750,29 @@ struct GraphicsOptions {
     /** The sun is not at a physical distance, so it keeps an angle. Degrees. */
     float ptSunAngularSize {1.0f};
     /**
-     * PBR properties of one surface class within an object category, applied
-     * as the shared material records are built (both shading modes read them).
-     * A negative roughness or metalness leaves the texel-derived value alone;
-     * F0 is the dielectric reflectance at normal incidence.
+     * A rough surface - no environment map, Odyssey's cue for "not shiny" -
+     * takes its PBR properties from the category outright: absolute roughness,
+     * metalness and F0. Per-object curation still applies on top.
      */
-    struct SurfaceClassOverride {
+    struct RoughOverride {
+        float color[3] {1.0f, 1.0f, 1.0f};
+        float colorWeight {0.0f};
+        float roughness {1.0f};
+        float metallic {0.0f};
+        float f0 {0.05f};
+    };
+    /**
+     * A reflective surface keeps the texel's alpha as its roughness stand-in
+     * and the authored mirror share as its reflectance lift; the category
+     * grades those (a negative roughness leaves the texel alone) and sets F0.
+     */
+    struct ReflectiveOverride {
         float color[3] {1.0f, 1.0f, 1.0f};
         float colorWeight {0.0f};
         float roughness {-1.0f};
-        float metallic {-1.0f};
-        float f0 {0.04f};
         float roughnessScale {1.0f};
         float metallicScale {1.0f};
+        float f0 {0.04f};
     };
     /** Emission grade: off leaves the authored radiance at its encoding. */
     struct EmissionOverride {
@@ -770,16 +780,9 @@ struct GraphicsOptions {
         float intensity {1.0f};
         float gamma {2.2f};
     };
-    /**
-     * One object category's grade. Rough is a surface with no environment map
-     * - Odyssey's cue for "not shiny" - and defaults to a matte dielectric
-     * whose metalness curation still decides; reflective keeps the texel's
-     * alpha as its roughness stand-in and the authored mirror share as its
-     * reflectance lift.
-     */
     struct CategoryOverride {
-        SurfaceClassOverride rough {{1.0f, 1.0f, 1.0f}, 0.0f, 1.0f, -1.0f, 0.05f, 1.0f, 1.0f};
-        SurfaceClassOverride reflective;
+        RoughOverride rough;
+        ReflectiveOverride reflective;
         EmissionOverride emission;
     };
     CategoryOverride categoryOverrides[9] {};

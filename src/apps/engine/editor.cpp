@@ -1723,30 +1723,37 @@ void Editor::graphicsMaterialsTab() {
     static constexpr const char *kCategoryNames[] = {
         "GUI", "Rooms", "Creatures", "Placeables", "Doors",
         "Equipment", "Projectiles", "Cameras", "Uncategorized"};
-    const auto surfaceClass = [](const char *label, graphics::GraphicsOptions::SurfaceClassOverride &c,
-                                 const char *hint) {
-        if (!ImGui::TreeNode(label)) {
-            settingHint(hint);
+    const auto roughClass = [](graphics::GraphicsOptions::RoughOverride &c) {
+        if (!ImGui::TreeNode("Rough")) {
+            settingHint("Surfaces with no environment map. Absolute PBR properties.");
             return;
         }
-        settingHint(hint);
+        settingHint("Surfaces with no environment map. Absolute PBR properties.");
         ImGui::ColorEdit3("Color", c.color);
         ImGui::SliderFloat("Color weight", &c.colorWeight, 0.0f, 1.0f, "%.2f");
-        settingHint("1 flat-paints the class, for bug isolation.");
-        bool overrideRoughness = c.roughness >= 0.0f;
-        if (ImGui::Checkbox("Override roughness", &overrideRoughness)) c.roughness = overrideRoughness ? 1.0f : -1.0f;
-        if (overrideRoughness) ImGui::SliderFloat("Roughness", &c.roughness, 0.0f, 1.0f, "%.2f");
-        settingHint("Absolute. Off, the texel's alpha stands in for roughness, as Odyssey has no channel for it.");
-        bool overrideMetallic = c.metallic >= 0.0f;
-        if (ImGui::Checkbox("Override metalness", &overrideMetallic)) c.metallic = overrideMetallic ? 0.0f : -1.0f;
-        if (overrideMetallic) ImGui::SliderFloat("Metalness", &c.metallic, 0.0f, 1.0f, "%.2f");
-        settingHint("Absolute. Off, curation decides and Metalness scale grades it.");
+        ImGui::SliderFloat("Roughness", &c.roughness, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Metalness", &c.metallic, 0.0f, 1.0f, "%.2f");
         ImGui::SliderFloat("F0", &c.f0, 0.0f, 0.2f, "%.3f");
-        settingHint("Reflectance at normal incidence for the dielectric base; 0.04 is glass and most "
-                    "non-metals. Metalness tints it toward the albedo, and a reflective surface's "
-                    "authored mirror share lifts it toward 1.");
+        settingHint("Reflectance at normal incidence; 0 removes the specular lobe.");
+        ImGui::TreePop();
+    };
+    const auto reflectiveClass = [](graphics::GraphicsOptions::ReflectiveOverride &c) {
+        if (!ImGui::TreeNode("Reflective")) {
+            settingHint("Surfaces with an environment map: the texel's alpha is the roughness stand-in and the "
+                        "authored mirror share lifts the reflectance.");
+            return;
+        }
+        settingHint("Surfaces with an environment map: the texel's alpha is the roughness stand-in and the "
+                    "authored mirror share lifts the reflectance.");
+        ImGui::ColorEdit3("Color", c.color);
+        ImGui::SliderFloat("Color weight", &c.colorWeight, 0.0f, 1.0f, "%.2f");
+        bool overrideRoughness = c.roughness >= 0.0f;
+        if (ImGui::Checkbox("Override roughness", &overrideRoughness)) c.roughness = overrideRoughness ? 0.5f : -1.0f;
+        if (overrideRoughness) ImGui::SliderFloat("Roughness", &c.roughness, 0.0f, 1.0f, "%.2f");
         ImGui::SliderFloat("Roughness scale", &c.roughnessScale, 0.0f, 8.0f, "%.2f");
         ImGui::SliderFloat("Metalness scale", &c.metallicScale, 0.0f, 8.0f, "%.2f");
+        ImGui::SliderFloat("F0", &c.f0, 0.0f, 0.2f, "%.3f");
+        settingHint("Dielectric reflectance at normal incidence, before the mirror share lifts it.");
         ImGui::TreePop();
     };
     const auto emissionGrade = [](graphics::GraphicsOptions::EmissionOverride &e, const char *hint) {
@@ -1768,12 +1775,8 @@ void Editor::graphicsMaterialsTab() {
                     "PBR and path tracing alike. A surface is reflective when it carries an "
                     "environment map - Odyssey's cue for shiny - and rough otherwise.");
         if (open) {
-            surfaceClass("Rough", override.rough,
-                         "Surfaces with no environment map. Default: roughness 1, curated metalness, "
-                         "F0 0.05.");
-            surfaceClass("Reflective", override.reflective,
-                         "Surfaces with an environment map. Default: the texel's alpha as roughness, "
-                         "curated metalness, F0 0.04, plus the authored mirror share.");
+            roughClass(override.rough);
+            reflectiveClass(override.reflective);
             emissionGrade(override.emission,
                           "Lamps, screens and glowing panels of this category. Off, the authored "
                           "radiance is used at its 2.2 encoding.");
