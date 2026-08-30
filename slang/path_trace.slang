@@ -361,8 +361,8 @@ void main() {
         outputs.noiseFree = parityDirectColor(
             primary.shading.albedo, primary.hit.position, primary.shading.normal,
             primary.shading.thin, pushConstants.thinTransmission,
-            pushConstants.emitterRadiusRatio, pushConstants.directIntensity,
-            pushConstants.sunIntensity);
+            pushConstants.emitterRadiusRatio, pushConstants.lightDistanceClamp,
+            pushConstants.directIntensity, pushConstants.sunIntensity);
         outputs.diffuse = float3(0.0);
         outputs.specular = float3(0.0);
         outputs.directDiffuse = float3(0.0);

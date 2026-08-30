@@ -78,6 +78,7 @@ private:
         float albedoGamma;
         /** Light samples per shading vertex; mirrors PtPushConstants.neeSamples. */
         uint32_t neeSamples;
+        float lightDistanceClamp;
     };
 
     bool _restartHistoryRequested {false};

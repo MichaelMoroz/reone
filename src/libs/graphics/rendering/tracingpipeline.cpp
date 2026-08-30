@@ -363,7 +363,8 @@ TracingStats TracingPipeline::render(const TracingPipelineInput &input) {
                                   std::clamp(_options.albedoGamma, 0.1f, 4.0f),
                                   static_cast<uint32_t>(std::clamp(_options.ptNeeSamples,
                                                                    kMinPtNeeSamples,
-                                                                   kMaxPtNeeSamples))};
+                                                                   kMaxPtNeeSamples)),
+                                  std::clamp(_options.lightDistanceClamp, 0.0f, 1.0f)};
     commandBuffer.pushRayTracingConstants(_pipeline->pipelineLayout(), &constants, sizeof(constants));
     {
         R_PROFILE_ZONE("RayQuery::dispatch record");

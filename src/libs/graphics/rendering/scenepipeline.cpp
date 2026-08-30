@@ -90,8 +90,8 @@ struct ResolvePushConstants {
     uint32_t flags;
     float thinTransmission;
     float albedoGamma;
-    /** Keeps the block at the cached push size. */
-    float pad0;
+    /** Point-light falloff is evaluated no closer than this share of the authored radius. */
+    float lightDistanceClamp;
     float lightmapIntensity;
     /** Emitter size as a fraction of influence radius; PBR's sphere lights. */
     float emitterRadiusRatio;
@@ -1140,7 +1140,7 @@ ResolvePushConstants resolvePush(uint32_t flags, const GraphicsOptions &options)
     return {flags,
             std::clamp(options.thinTransmission, 0.0f, 1.0f),
             std::clamp(options.albedoGamma, 0.1f, 4.0f),
-            0.0f,
+            std::clamp(options.lightDistanceClamp, 0.0f, 1.0f),
             std::max(0.0f, options.pbrLightmapIntensity),
             // The tracer's dial, read by PBR too: the two modes are meant to
             // differ in how light reaches a surface, never in what the light

@@ -63,7 +63,9 @@ float directLightWeight(GlobalUniformsLight light, float3 position, float3 shadi
     float lightDistance = directional ? 1.0 : length(fragToLight);
     float attenuation = directional
         ? 1.0
-        : sphereLightAttenuation(light.radius, lightDistance, pushConstants.emitterRadiusRatio);
+        : sphereLightAttenuation(light.radius,
+                                 max(lightDistance, pushConstants.lightDistanceClamp * light.radius),
+                                 pushConstants.emitterRadiusRatio);
     float cosine = dot(shadingNormal, fragToLight / max(lightDistance, 1e-4));
     float NdotL = thin && cosine < 0.0 ? -cosine * pushConstants.thinTransmission : max(0.0, cosine);
     float luma = luminance(directLightColor(light));
@@ -129,6 +131,7 @@ DirectLight ptDirectLightDraw(HitGeometry hit, SurfaceShading shading, float3 vi
     // direction toward it, the same vector for every receiver.
     DirectLightSample sampled = sampleDirectLight(light, hit.position,
                                                   pushConstants.emitterRadiusRatio,
+                                                  pushConstants.lightDistanceClamp,
                                                   pushConstants.directIntensity,
                                                   pushConstants.sunIntensity);
     bool directional = sampled.directional;

@@ -158,6 +158,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("tonemap", value<int>()->default_value(options->graphics.tonemap), "display transform: 0 off, 1 Gran Turismo curve")               //
         ("exposure", value<float>()->default_value(options->graphics.exposure), "scene-referred exposure ahead of the tonemap") //
         ("ptpointemitterratio", value<float>()->default_value(options->graphics.ptPointEmitterRatio), "path tracing point-light emitter radius, as a fraction of influence radius") //
+        ("lightdistanceclamp", value<float>()->default_value(options->graphics.lightDistanceClamp), "PBR and path tracing: point-light falloff distance floor, as a fraction of the authored radius") //
         ("ptbounceroughness", value<float>()->default_value(options->graphics.ptBounceRoughness), "roughness floor after the first scatter (path regularisation)") //
         ("ptindirectclamp", value<float>()->default_value(options->graphics.ptIndirectClamp), "ceiling on one indirect sample, 0 to disable") //
         ("ptsunangularsize", value<float>()->default_value(options->graphics.ptSunAngularSize), "path tracing sun angular size") //
@@ -517,6 +518,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.tonemap = std::clamp(vars["tonemap"].as<int>(), 0, 1);
     options->graphics.exposure = std::max(0.05f, vars["exposure"].as<float>());
     options->graphics.ptPointEmitterRatio = std::clamp(vars["ptpointemitterratio"].as<float>(), 0.01f, 0.5f);
+    options->graphics.lightDistanceClamp = std::clamp(vars["lightdistanceclamp"].as<float>(), 0.0f, 1.0f);
     options->graphics.ptSunAngularSize = std::max(0.05f, vars["ptsunangularsize"].as<float>());
     options->graphics.albedoGamma = std::clamp(vars["albedogamma"].as<float>(), 0.1f, 4.0f);
     options->graphics.maxLights = std::clamp(vars["maxlights"].as<int>(), 1, graphics::kMaxLights);

@@ -146,9 +146,26 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
     // The first caster's visibility, matching the reference's single factor.
     // The map it reads holds creatures and equipment in this mode, so this is
     // the term that puts a character's shadow on the ground.
+    //
+    // A point caster's shadow reaches only as far as the light does: the
+    // occlusion is scaled by the same falloff and radius-squared cull its
+    // diffuse takes below, so its map does not darken ground the light never
+    // lit. A directional caster reaches everywhere.
     float bakedVisibility = 1.0;
     if (shadowsEnabled) {
-        bakedVisibility = getShadow(eyePos, worldPos, normal, thinSurface);
+        float casterReach = 1.0;
+        for (int i = 0; i < globalUniforms.numLights; ++i) {
+            GlobalUniformsLight caster = globalUniforms.lights[i];
+            if (caster.shadowSlot != 0) continue;
+            if (caster.position.w != 0.0) {
+                float casterDistance = length(caster.position.xyz - worldPos);
+                casterReach = casterDistance > caster.radius * caster.radius
+                                  ? 0.0
+                                  : odysseyLightAttenuation(caster.radius, casterDistance);
+            }
+            break;
+        }
+        bakedVisibility = 1.0 - (1.0 - getShadow(eyePos, worldPos, normal, thinSurface)) * casterReach;
     }
     float3 ambient = float3(0.0);
     float3 baked = selfIllumSample.rgb;

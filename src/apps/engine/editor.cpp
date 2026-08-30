@@ -1138,6 +1138,10 @@ void Editor::graphicsQualityTab() {
     ImGui::EndDisabled();
     ImGui::PopID();
     ImGui::Unindent();
+
+    ImGui::SliderFloat("Light distance clamp", &options.lightDistanceClamp, 0.0f, 1.0f, "%.2f x radius");
+    settingHint("PBR and path tracing: a point light's falloff is evaluated no closer than this share of "
+                "its authored radius, so a surface at the fixture does not climb toward infinity.", true);
     ImGui::Checkbox("Fog", &options.fog);
     settingHint("The area's authored fog, resolved once for every mode from the depth buffer. "
                 "Exponential in height above the walkmesh rather than a flat ramp in distance, "

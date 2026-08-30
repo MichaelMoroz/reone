@@ -417,6 +417,9 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(floatOpt("ptpointemitterratio", OptionApply::Live,
                              "point-light emitter radius, as a fraction of influence radius",
                              &GraphicsOptions::ptPointEmitterRatio, 0.01f, 0.5f));
+    descs.push_back(floatOpt("lightdistanceclamp", OptionApply::Live,
+                             "point-light falloff distance floor, as a fraction of the authored radius",
+                             &GraphicsOptions::lightDistanceClamp, 0.0f, 1.0f));
     descs.push_back(floatOpt("ptbounceroughness", OptionApply::Live,
                              "roughness floor after the first scatter",
                              &GraphicsOptions::ptBounceRoughness, 0.0f, 1.0f));

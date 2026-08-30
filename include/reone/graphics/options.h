@@ -719,6 +719,12 @@ struct GraphicsOptions {
      */
     float ptPointEmitterRatio {0.2f};
     /**
+     * Point-light falloff is evaluated no closer than this share of the
+     * authored radius, in PBR and the tracer: a receiver at the fixture takes
+     * the light at 0.1 radius rather than climbing toward infinity.
+     */
+    float lightDistanceClamp {0.1f};
+    /**
      * Roughness a surface is treated as having after the path has scattered -
      * path regularisation, and a deliberate bias.
      *

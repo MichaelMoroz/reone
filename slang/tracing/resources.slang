@@ -99,6 +99,8 @@ public struct PtPushConstants {
     public float albedoGamma;
     /** Next-event draws per shading vertex; one is the classic estimator. */
     public uint neeSamples;
+    /** Point-light falloff is evaluated no closer than this share of the authored radius. */
+    public float lightDistanceClamp;
 };
 [[vk::push_constant]] public PtPushConstants pushConstants;
 

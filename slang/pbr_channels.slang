@@ -69,7 +69,7 @@ struct ResolvePushConstants {
     uint flags;
     float thinTransmission;
     float albedoGamma;
-    float pad0;
+    float lightDistanceClamp;
     float lightmapIntensity;
     float emitterRadiusRatio;
     float directIntensity;
@@ -136,13 +136,13 @@ struct PbrDirectLight {
 PbrDirectLight pbrDirectLight(GlobalUniformsLight light,
                               float3 viewPos, float3 worldPos,
                               float3 normal, bool thinSurface, float thinTransmission,
-                              float emitterRadiusRatio,
+                              float emitterRadiusRatio, float distanceClamp,
                               float directIntensity, float sunIntensity) {
     PbrDirectLight result = { false, float3(0.0, 0.0, 1.0), float3(0.0), float3(0.0), float3(0.0) };
 
     // The shared module owns what the light is; only the visibility is PBR's.
     DirectLightSample sample = sampleDirectLight(light, worldPos, emitterRadiusRatio,
-                                                 directIntensity, sunIntensity);
+                                                 distanceClamp, directIntensity, sunIntensity);
     result.direction = sample.direction;
     // Local lights only: the tracer promotes a directional ambient-only record
     // to a sampled sun, and both renderers must agree on what it is.
@@ -240,6 +240,7 @@ Channels shadePixel(float2 uv, int2 pixel) {
         return terminator(parityDirectColor(albedo, worldPos, normal, thinSurface,
                                             pushConstants.thinTransmission,
                                             pushConstants.emitterRadiusRatio,
+                                            pushConstants.lightDistanceClamp,
                                             pushConstants.directIntensity,
                                             pushConstants.sunIntensity));
     }
@@ -293,7 +294,8 @@ Channels shadePixel(float2 uv, int2 pixel) {
     for (int i = 0; i < globalUniforms.numLights; ++i) {
         GlobalUniformsLight light = globalUniforms.lights[i];
         PbrDirectLight direct = pbrDirectLight(
-            light, eyePos, worldPos, normal, thinSurface, pushConstants.thinTransmission, pushConstants.emitterRadiusRatio,
+            light, eyePos, worldPos, normal, thinSurface, pushConstants.thinTransmission,
+            pushConstants.emitterRadiusRatio, pushConstants.lightDistanceClamp,
             pushConstants.directIntensity, pushConstants.sunIntensity);
         if (!direct.direct) {
             irradiance += materialAmbient * direct.ambientRadiance;

@@ -87,7 +87,7 @@ public struct DirectLightSample {
  * distance-free intensity - and its direction is the same everywhere.
  */
 public DirectLightSample sampleDirectLight(GlobalUniformsLight light, float3 worldPos,
-                                           float emitterRadiusRatio,
+                                           float emitterRadiusRatio, float distanceClamp,
                                            float directIntensity, float sunIntensity) {
     DirectLightSample result;
     result.directional = light.position.w == 0.0;
@@ -96,9 +96,12 @@ public DirectLightSample sampleDirectLight(GlobalUniformsLight light, float3 wor
     result.distance = result.directional ? 1.0 : length(toLight);
     result.direction = result.directional ? normalize(toLight)
                                           : toLight / max(result.distance, 1e-4);
+    // Falloff is evaluated no closer than the clamp's share of the authored
+    // radius, so a receiver at the fixture is not driven toward infinity.
     float attenuation = result.directional
                             ? 1.0
-                            : sphereLightAttenuation(light.radius, result.distance,
+                            : sphereLightAttenuation(light.radius,
+                                                     max(result.distance, distanceClamp * light.radius),
                                                      emitterRadiusRatio);
     float intensity = result.directional ? sunIntensity : directIntensity;
     result.radiance = directLightColor(light) * attenuation * intensity;
@@ -134,7 +137,7 @@ public float3 directLightDiffuse(float3 radiance, float3 normal, float3 directio
  */
 public float3 parityDirectColor(float3 albedo, float3 worldPos, float3 normal,
                                 bool thinSurface, float thinTransmission,
-                                float emitterRadiusRatio,
+                                float emitterRadiusRatio, float distanceClamp,
                                 float directIntensity, float sunIntensity) {
     float3 total = float3(0.0);
     for (int i = 0; i < globalUniforms.numLights; ++i) {
@@ -145,7 +148,7 @@ public float3 parityDirectColor(float3 albedo, float3 worldPos, float3 normal,
             continue;
         }
         DirectLightSample sample = sampleDirectLight(light, worldPos, emitterRadiusRatio,
-                                                     directIntensity, sunIntensity);
+                                                     distanceClamp, directIntensity, sunIntensity);
         total += directLightDiffuse(sample.radiance, normal, sample.direction,
                                     thinSurface, thinTransmission);
     }
