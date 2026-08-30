@@ -195,6 +195,11 @@ struct GraphicsOptions {
     int height {768};
     int winScale {100};
     bool fullscreen {false};
+    /**
+     * A borderless window covering the whole display at the display's own
+     * resolution; width, height and the window scale are ignored while set.
+     */
+    bool fullscreenWindow {false};
     /** Hide the presentation window while retaining a renderable surface. */
     bool headless {false};
     /** Draw 3D scene content: the world and scene-backed GUI panels. */

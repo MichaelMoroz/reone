@@ -108,6 +108,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
         ("height", value<int>()->default_value(options->graphics.height), "render height")                                      //
         ("winscale", value<int>()->default_value(options->graphics.winScale), "window scale")                                   //
         ("fullscreen", value<bool>()->default_value(options->graphics.fullscreen), "enable fullscreen")                         //
+        ("fullscreenwindow", value<bool>()->default_value(options->graphics.fullscreenWindow), "borderless window covering the whole display") //
         ("headless", value<bool>()->default_value(false), "never show the window; for scripted batch runs")                     //
         ("vsync", value<bool>()->default_value(options->graphics.vsync), "enable v-sync")                                       //
         ("guiscale", value<float>()->default_value(options->graphics.guiScale), "GUI layout scale")                            //
@@ -362,6 +363,7 @@ std::unique_ptr<Options> OptionsParser::parse() {
     options->graphics.height = vars["height"].as<int>();
     options->graphics.winScale = vars["winscale"].as<int>();
     options->graphics.fullscreen = vars["fullscreen"].as<bool>();
+    options->graphics.fullscreenWindow = vars["fullscreenwindow"].as<bool>();
     options->graphics.vsync = vars["vsync"].as<bool>();
     options->graphics.guiScale = positiveFiniteScale(vars, "guiscale");
     options->graphics.guiTextScale = positiveFiniteScale(vars, "guitextscale");

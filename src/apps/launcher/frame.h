@@ -45,6 +45,8 @@ private:
         int height {768};
         int winscale {100};
         bool fullscreen {false};
+        /** Borderless window covering the whole display; the resolution choice "Fullscreen". */
+        bool fullscreenWindow {false};
         bool vsync {false};
         bool grass {true};
         /**

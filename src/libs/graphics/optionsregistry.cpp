@@ -257,6 +257,9 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                            &GraphicsOptions::winScale, 1, 400));
     descs.push_back(boolOpt("fullscreen", OptionApply::Restart, "enable fullscreen",
                             &GraphicsOptions::fullscreen));
+    descs.push_back(boolOpt("fullscreenwindow", OptionApply::Reapply,
+                            "borderless window covering the whole display",
+                            &GraphicsOptions::fullscreenWindow));
     descs.push_back(boolOpt("headless", OptionApply::Restart,
                             "never show the window; for scripted batch runs",
                             &GraphicsOptions::headless));

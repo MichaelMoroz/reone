@@ -790,6 +790,32 @@ void Editor::graphicsRendererTab() {
 
     renderModeCombo();
 
+    ImGui::SeparatorText("Window");
+    static const int kResolutions[][2] = {
+        {1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440}, {3440, 1440}, {3840, 2160}};
+    const std::string current =
+        staged.fullscreenWindow
+            ? std::string("Fullscreen")
+            : std::to_string(staged.width) + "x" + std::to_string(staged.height);
+    if (ImGui::BeginCombo("Resolution", current.c_str())) {
+        if (ImGui::Selectable("Fullscreen", staged.fullscreenWindow)) {
+            staged.fullscreenWindow = true;
+        }
+        for (const auto &res : kResolutions) {
+            const std::string label = std::to_string(res[0]) + "x" + std::to_string(res[1]);
+            const bool selected = !staged.fullscreenWindow && staged.width == res[0] &&
+                                  staged.height == res[1];
+            if (ImGui::Selectable(label.c_str(), selected)) {
+                staged.fullscreenWindow = false;
+                staged.width = res[0];
+                staged.height = res[1];
+            }
+        }
+        ImGui::EndCombo();
+    }
+    settingHint("Fullscreen is a borderless window covering the whole display at the display's own "
+                "resolution - still a window, no mode switch. Takes effect on Apply.");
+
     ImGui::SeparatorText("Post-process features");
     ImGui::Checkbox("Lens flares", &options.lensFlares);
     settingHint("Authored light halos, drawn through the shared blended tail in every mode.");

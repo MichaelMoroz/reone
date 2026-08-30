@@ -61,6 +61,7 @@ LauncherFrame::LauncherFrame() :
     // Render Resolution
 
     wxArrayString resChoices;
+    resChoices.Add("Fullscreen");
     resChoices.Add("800x600");
     resChoices.Add("1024x768");
     resChoices.Add("1280x720");
@@ -80,10 +81,15 @@ LauncherFrame::LauncherFrame() :
     }
 
     std::string configResolution(str(boost::format("%dx%d") % _config.width % _config.height));
-    int resSelection = resChoices.Index(configResolution);
-    if (resSelection == wxNOT_FOUND) {
-        resChoices.Add(configResolution);
-        resSelection = resChoices.GetCount() - 1;
+    int resSelection;
+    if (_config.fullscreenWindow) {
+        resSelection = resChoices.Index("Fullscreen");
+    } else {
+        resSelection = resChoices.Index(configResolution);
+        if (resSelection == wxNOT_FOUND) {
+            resChoices.Add(configResolution);
+            resSelection = resChoices.GetCount() - 1;
+        }
     }
 
     auto labelResolution = new wxStaticText(this, wxID_ANY, "Render Resolution", wxDefaultPosition, wxDefaultSize);
@@ -506,6 +512,7 @@ void LauncherFrame::LoadConfiguration() {
         ("height", value<int>()->default_value(_config.height))           //
         ("winscale", value<int>()->default_value(_config.winscale))       //
         ("fullscreen", value<bool>()->default_value(_config.fullscreen))  //
+        ("fullscreenwindow", value<bool>()->default_value(_config.fullscreenWindow)) //
         ("vsync", value<bool>()->default_value(_config.vsync))            //
         ("grass", value<bool>()->default_value(_config.grass))            //
         ("mode", value<std::string>()->default_value(_config.mode))        //
@@ -541,6 +548,7 @@ void LauncherFrame::LoadConfiguration() {
     _config.height = vars["height"].as<int>();
     _config.winscale = vars["winscale"].as<int>();
     _config.fullscreen = vars["fullscreen"].as<bool>();
+    _config.fullscreenWindow = vars["fullscreenwindow"].as<bool>();
     _config.vsync = vars["vsync"].as<bool>();
     _config.grass = vars["grass"].as<bool>();
     _config.mode = vars["mode"].as<std::string>();
@@ -587,6 +595,7 @@ void LauncherFrame::SaveConfiguration() {
         "height=",
         "winscale=",
         "fullscreen=",
+        "fullscreenwindow=",
         "vsync=",
         "grass=",
         "mode=",
@@ -653,8 +662,13 @@ void LauncherFrame::SaveConfiguration() {
 
     _config.gameDir = _textCtrlGameDir->GetValue();
     _config.devMode = _checkBoxDev->IsChecked();
-    _config.width = stoi(tokens[0]);
-    _config.height = stoi(tokens[1]);
+    // "Fullscreen" carries no numbers: the flag is set and the last numeric
+    // resolution stays in the config for when the user switches back.
+    _config.fullscreenWindow = tokens.size() < 2;
+    if (!_config.fullscreenWindow) {
+        _config.width = stoi(tokens[0]);
+        _config.height = stoi(tokens[1]);
+    }
     _config.winscale = winScale;
     _config.fullscreen = _checkBoxFullscreen->IsChecked();
     _config.vsync = _checkBoxVSync->IsChecked();
@@ -715,6 +729,7 @@ void LauncherFrame::SaveConfiguration() {
     config << "height=" << _config.height << std::endl;
     config << "winscale=" << _config.winscale << std::endl;
     config << "fullscreen=" << (_config.fullscreen ? 1 : 0) << std::endl;
+    config << "fullscreenwindow=" << (_config.fullscreenWindow ? 1 : 0) << std::endl;
     config << "vsync=" << (_config.vsync ? 1 : 0) << std::endl;
     config << "grass=" << (_config.grass ? 1 : 0) << std::endl;
     config << "mode=" << _config.mode << std::endl;
