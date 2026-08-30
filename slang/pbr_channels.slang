@@ -135,8 +135,7 @@ struct PbrDirectLight {
 
 PbrDirectLight pbrDirectLight(GlobalUniformsLight light,
                               float3 viewPos, float3 worldPos,
-                              float3 normal, bool thinSurface,
-                              bool shadowsEnabled, float thinTransmission,
+                              float3 normal, bool thinSurface, float thinTransmission,
                               float emitterRadiusRatio,
                               float directIntensity, float sunIntensity) {
     PbrDirectLight result = { false, float3(0.0, 0.0, 1.0), float3(0.0), float3(0.0), float3(0.0) };
@@ -159,7 +158,7 @@ PbrDirectLight pbrDirectLight(GlobalUniformsLight light,
     result.direct = true;
 
     float visibility = 1.0;
-    if (shadowsEnabled && light.shadowSlot >= 0) {
+    if (light.shadowSlot >= 0) {
         // A linear occlusion fraction, like the tracer's transmittance; not a colour.
         visibility = getShadowFrom(light.shadowSlot, viewPos, worldPos,
                                    normal, thinSurface);
@@ -230,7 +229,7 @@ Channels shadePixel(float2 uv, int2 pixel) {
     float3 materialAmbient = gammaToLinear(material.ambientColor.rgb);
 
     bool envmapped = g.envmapped, hasLightmap = g.hasLightmap, staticObject = g.staticObject,
-         shadowsEnabled = g.shadowsEnabled, thinSurface = g.thin;
+         thinSurface = g.thin;
 
     // Parity: the bare shared unoccluded sum, into noiseFree, and the sky class
     // blacked, exactly as the tracer's parity branch. Hash-equal by construction.
@@ -294,8 +293,7 @@ Channels shadePixel(float2 uv, int2 pixel) {
     for (int i = 0; i < globalUniforms.numLights; ++i) {
         GlobalUniformsLight light = globalUniforms.lights[i];
         PbrDirectLight direct = pbrDirectLight(
-            light, eyePos, worldPos, normal, thinSurface, shadowsEnabled,
-            pushConstants.thinTransmission, pushConstants.emitterRadiusRatio,
+            light, eyePos, worldPos, normal, thinSurface, pushConstants.thinTransmission, pushConstants.emitterRadiusRatio,
             pushConstants.directIntensity, pushConstants.sunIntensity);
         if (!direct.direct) {
             irradiance += materialAmbient * direct.ambientRadiance;
