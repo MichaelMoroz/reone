@@ -146,7 +146,11 @@ std::string debugInfoLine(const char *type, const std::string &classification,
 
 bool debugMeshEmissive(const RegisteredMesh &entry) {
     const bool dangly = std::holds_alternative<RegisteredDangly>(entry.deformation);
-    return !dangly && !isDoorMesh(entry) &&
+    const auto *diffuse =
+        entry.material.textures[static_cast<size_t>(graphics::MaterialTextureSlot::MainTex)];
+    const bool punchThrough =
+        diffuse && diffuse->features().blending == graphics::Texture::Blending::PunchThrough;
+    return !dangly && !isDoorMesh(entry) && !punchThrough &&
            glm::any(glm::greaterThan(entry.material.selfIllumColor, glm::vec3(0.0f)));
 }
 

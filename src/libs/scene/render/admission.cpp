@@ -303,7 +303,16 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
         material.featureMask |= 1u << 24;
 
     const auto *curated = _gpuScene.traceMaterials().curatedByIndex(mesh.material.curatedIndex);
-    if ((dangly || door) && (!curated || curated->klass != TraceClass::Emissive))
+    // A punch-through cutout is foliage and grillework, and Odyssey's
+    // self-illum on those is a lighting fudge, not a light: Kashyyyk's canopy
+    // carried it on every leaf card. Cutouts are not emissive unless somebody
+    // curated one to be, the same rule dangly meshes and doors already take.
+    const auto *cutoutDiffuse =
+        mesh.material.textures[static_cast<size_t>(graphics::MaterialTextureSlot::MainTex)];
+    const bool punchThrough =
+        cutoutDiffuse &&
+        cutoutDiffuse->features().blending == graphics::Texture::Blending::PunchThrough;
+    if ((dangly || door || punchThrough) && (!curated || curated->klass != TraceClass::Emissive))
         material.selfIllumColor = glm::vec4(0.0f);
     if (curated) {
         if (curated->klass == TraceClass::None)
@@ -359,7 +368,8 @@ std::optional<GpuScene::Classification> GpuSceneAdmission::classifyMesh(
 
     _submission.dynamicTriangles +=
         (skinned || dangly || saber) ? static_cast<uint32_t>(mesh.mesh.get().faces().size()) : 0;
-    if (!dangly && !door && (!curated || curated->klass == TraceClass::Default) &&
+    if (!dangly && !door && !punchThrough &&
+        (!curated || curated->klass == TraceClass::Default) &&
         glm::any(glm::greaterThan(mesh.material.selfIllumColor, glm::vec3(0.0f)))) {
         ++_submission.emissive;
     }
@@ -545,7 +555,12 @@ void GpuSceneAdmission::rebuildSubmissionCounts(const ModelSceneNode *skyRoom) {
                 ++_submission.additive;
             const auto *curated =
                 _gpuScene.traceMaterials().curatedByIndex(mesh->material.curatedIndex);
-            if (!dangly && !isDoorMesh(*mesh) &&
+            const auto *countDiffuse = mesh->material.textures[static_cast<size_t>(
+                graphics::MaterialTextureSlot::MainTex)];
+            const bool countPunchThrough =
+                countDiffuse && countDiffuse->features().blending ==
+                                    graphics::Texture::Blending::PunchThrough;
+            if (!dangly && !isDoorMesh(*mesh) && !countPunchThrough &&
                 (!curated || curated->klass == TraceClass::Default) &&
                 glm::any(glm::greaterThan(mesh->material.selfIllumColor,
                                           glm::vec3(0.0f))))

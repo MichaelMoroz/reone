@@ -220,13 +220,18 @@ ObjectEntryView makeObjectEntryView(const scene::ISceneGraph &graph,
                 bool dangly = std::holds_alternative<scene::RegisteredDangly>(entry.deformation);
                 // Doors are stripped by admission for being doors, so tagging
                 // one emissive here would name a class the tracer never gave it.
+                // Punch-through cutouts are stripped the same way.
                 bool door = scene::isDoorMesh(entry);
-                if (!dangly && !door &&
+                const auto *diffuseTexture = entry.material.textures[static_cast<size_t>(
+                    graphics::MaterialTextureSlot::MainTex)];
+                bool punchThrough =
+                    diffuseTexture && diffuseTexture->features().blending ==
+                                          graphics::Texture::Blending::PunchThrough;
+                if (!dangly && !door && !punchThrough &&
                     glm::any(glm::greaterThan(entry.material.selfIllumColor, glm::vec3(0.0f)))) {
                     tags.push_back("emissive");
                 }
-                if (const auto *diffuse = entry.material.textures[static_cast<size_t>(
-                        graphics::MaterialTextureSlot::MainTex)]) {
+                if (const auto *diffuse = diffuseTexture; diffuse) {
                     if (diffuse->features().blending == graphics::Texture::Blending::Additive) {
                         tags.push_back("additive");
                     } else if (diffuse->features().blending == graphics::Texture::Blending::PunchThrough) {
