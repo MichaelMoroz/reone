@@ -40,7 +40,7 @@ void ModelResourcePanel::InitControls() {
     m_renderSplitter = new wxSplitterWindow(this);
     m_renderSplitter->SetMinimumPaneSize(100);
 
-    m_glCanvas = new wxGLCanvas(m_renderSplitter, wxID_ANY, nullptr, wxDefaultPosition, wxDefaultSize, wxFULL_REPAINT_ON_RESIZE);
+    m_renderCanvas = new wxPanel(m_renderSplitter, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxFULL_REPAINT_ON_RESIZE);
 
     m_animationPanel = new wxPanel(m_renderSplitter);
 
@@ -77,7 +77,7 @@ void ModelResourcePanel::InitControls() {
     animationVSizer->Add(animationHSizer, wxSizerFlags(1).Expand().Border(wxALL, 3));
     m_animationPanel->SetSizer(animationVSizer);
 
-    m_renderSplitter->SplitHorizontally(m_glCanvas, m_animationPanel, -200);
+    m_renderSplitter->SplitHorizontally(m_renderCanvas, m_animationPanel, -200);
 
     auto sizer = new wxBoxSizer(wxHORIZONTAL);
     sizer->Add(m_renderSplitter, wxSizerFlags(1).Expand());
@@ -85,9 +85,10 @@ void ModelResourcePanel::InitControls() {
 }
 
 void ModelResourcePanel::BindEvents() {
-    m_glCanvas->Bind(wxEVT_PAINT, &ModelResourcePanel::OnGLCanvasPaint, this);
-    m_glCanvas->Bind(wxEVT_MOTION, &ModelResourcePanel::OnGLCanvasMouseMotion, this);
-    m_glCanvas->Bind(wxEVT_MOUSEWHEEL, &ModelResourcePanel::OnGLCanvasMouseWheel, this);
+    m_renderCanvas->Bind(wxEVT_PAINT, &ModelResourcePanel::OnCanvasPaint, this);
+    m_renderCanvas->Bind(wxEVT_SIZE, &ModelResourcePanel::OnCanvasSize, this);
+    m_renderCanvas->Bind(wxEVT_MOTION, &ModelResourcePanel::OnCanvasMouseMotion, this);
+    m_renderCanvas->Bind(wxEVT_MOUSEWHEEL, &ModelResourcePanel::OnCanvasMouseWheel, this);
     m_animPauseResumeBtn->Bind(wxEVT_BUTTON, &ModelResourcePanel::OnAnimPauseResumeCommand, this);
     m_animTimeSlider->Bind(wxEVT_SLIDER, &ModelResourcePanel::OnAnimTimeSliderCommand, this);
     m_animationsListBox->Bind(wxEVT_LISTBOX_DCLICK, &ModelResourcePanel::OnAnimationsListBoxDoubleClick, this);
@@ -103,7 +104,7 @@ void ModelResourcePanel::BindViewModel() {
                 m_animationsListBox->Append(animation);
             }
             m_animationsListBox->Thaw();
-            m_renderSplitter->SplitHorizontally(m_glCanvas, m_animationPanel, -200);
+            m_renderSplitter->SplitHorizontally(m_renderCanvas, m_animationPanel, -200);
         } else {
             m_renderSplitter->Unsplit();
         }
@@ -117,40 +118,27 @@ void ModelResourcePanel::BindViewModel() {
     });
 }
 
-void ModelResourcePanel::InitGL() {
-    if (_glInited) {
-        return;
+void ModelResourcePanel::OnCanvasPaint(wxPaintEvent &event) {
+    wxPaintDC dc(m_renderCanvas);
+
+    auto clientSize = m_renderCanvas->GetClientSize();
+    if (clientSize.x > 0 && clientSize.y > 0) {
+        m_viewModel.render3D(clientSize.x, clientSize.y);
     }
-#if wxCHECK_VERSION(3, 1, 0)
-    wxGLContextAttrs glCtxAttrs;
-    glCtxAttrs.CoreProfile().OGLVersion(4, 0).PlatformDefaults().EndList();
-    auto glContext = new wxGLContext(m_glCanvas, nullptr, &glCtxAttrs);
-#else
-    auto glContext = new wxGLContext(m_glCanvas);
-#endif
-    glContext->SetCurrent(*m_glCanvas);
-    _glInited = true;
 }
 
-void ModelResourcePanel::OnGLCanvasPaint(wxPaintEvent &event) {
-    if (!_glInited) {
-        return;
-    }
-    wxPaintDC dc(m_glCanvas);
-
-    auto clientSize = m_glCanvas->GetClientSize();
-    m_viewModel.render3D(clientSize.x, clientSize.y);
-
-    m_glCanvas->SwapBuffers();
+void ModelResourcePanel::OnCanvasSize(wxSizeEvent &event) {
+    m_renderCanvas->Refresh();
+    event.Skip();
 }
 
-void ModelResourcePanel::OnGLCanvasMouseWheel(wxMouseEvent &event) {
+void ModelResourcePanel::OnCanvasMouseWheel(wxMouseEvent &event) {
     auto delta = event.GetWheelDelta() * event.GetWheelRotation();
     m_viewModel.onGLCanvasMouseWheel(delta);
 }
 
-void ModelResourcePanel::OnGLCanvasMouseMotion(wxMouseEvent &event) {
-    wxClientDC dc(m_glCanvas);
+void ModelResourcePanel::OnCanvasMouseMotion(wxMouseEvent &event) {
+    wxClientDC dc(m_renderCanvas);
     auto position = event.GetLogicalPosition(dc);
     m_viewModel.onGLCanvasMouseMotion(position.x, position.y, event.LeftIsDown(), event.RightIsDown());
 }

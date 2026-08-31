@@ -19,7 +19,6 @@
 
 #include "reone/system/types.h"
 
-#include "attachment.h"
 #include "types.h"
 
 namespace reone {
@@ -33,7 +32,7 @@ enum class TextureType {
     CubeMapArray
 };
 
-class Texture : public IAttachment, boost::noncopyable {
+class Texture : boost::noncopyable {
 public:
     enum class Filtering {
         Nearest,
@@ -70,10 +69,32 @@ public:
         Wrapping wrap {Wrapping::Repeat};
         glm::vec4 borderColor {0.0f};
         float anisotropy {1.0f};
+        /**
+         * A depth-comparison sampler: the filtering unit compares each texel
+         * against a reference the shader supplies and returns the filtered
+         * fraction that passed, rather than the depth itself. One tap becomes a
+         * 2x2 percentage-closer filter for free.
+         *
+         * Not a mode a texture can be sampled either way through. A comparison
+         * sampler is only usable with SampleCmp, and a plain one is only usable
+         * without it, so this is decided where the image is bound.
+         */
+        bool compare {false};
     };
 
     struct Features {
         Blending blending {Blending::None};
+        /**
+         * The cutout threshold this texture was authored with, or -1 where the
+         * format carries none.
+         *
+         * A float in the TPC header, not a TXI key, and the only per-texture
+         * alpha threshold the data supplies. It was skipped by this reader
+         * until now, so every cutout used one constant instead - which is what
+         * the actively-maintained reimplementation of this engine reads, and
+         * what it feeds its alpha test.
+         */
+        float alphaTest {-1.0f};
         float waterAlpha {-1.0f};
         bool cube {false};
         bool decal {false};
@@ -92,6 +113,7 @@ public:
 
         int numChars {0};
         float fontHeight {0.0f};
+        float spacingR {0.0f};
         std::vector<glm::vec3> upperLeftCoords;
         std::vector<glm::vec3> lowerRightCoords;
 
@@ -109,6 +131,20 @@ public:
 
     struct Layer {
         std::shared_ptr<ByteBuffer> pixels;
+
+        /**
+         * Levels 1 and beyond, when the file shipped them; empty otherwise.
+         *
+         * Kept beside the base level rather than folded into a single list of
+         * levels, because almost everything that touches a Layer wants level
+         * zero and nothing else - a screenshot, a movie frame, a decompressed
+         * grid. Those keep working untouched, and a backend that can use the
+         * chain asks for it.
+         *
+         * No dimensions are stored: level i is max(1, width >> i) by
+         * max(1, height >> i), which both backends can work out.
+         */
+        std::vector<std::shared_ptr<ByteBuffer>> mips;
     };
 
     Texture(std::string name,
@@ -119,15 +155,7 @@ public:
         _properties(std::move(properties)) {
     }
 
-    ~Texture() { deinit(); }
-
     void init();
-    void deinit();
-
-    void bind();
-    void unbind();
-
-    void flushGPUToCPU();
 
     bool is2D() const { return _type == TextureType::TwoDim; }
     bool is2DArray() const { return _type == TextureType::TwoDimArray; }
@@ -136,9 +164,6 @@ public:
 
     bool isGrayscale() const { return _pixelFormat == PixelFormat::R8; }
 
-    bool isTexture() const override { return true; }
-    bool isRenderbuffer() const override { return false; }
-
     const std::string &name() const { return _name; }
     TextureType type() const { return _type; }
     int width() const { return _width; }
@@ -146,6 +171,13 @@ public:
     std::vector<Layer> &layers() { return _layers; }
     const std::vector<Layer> &layers() const { return _layers; }
     const Features &features() const { return _features; }
+    /**
+     * Filtering and wrapping, chosen from the texture's usage.
+     *
+     * OpenGL applies these to the texture object itself. Vulkan keeps them in
+     * a sampler, so its backend has to read them here to build a matching one.
+     */
+    const Properties &properties() const { return _properties; }
     PixelFormat pixelFormat() const { return _pixelFormat; }
 
     void setType(TextureType type) { _type = type; }
@@ -155,25 +187,17 @@ public:
 
     // Pixels
 
-    void clear(int w, int h, PixelFormat format, int numLayers = 1, bool refresh = false);
+    void clear(int w, int h, PixelFormat format, int numLayers = 1);
 
-    void setPixels(int w, int h, PixelFormat format, Layer layer, bool refresh = false);
-    void setPixels(int w, int h, PixelFormat format, std::vector<Layer> layers, bool refresh = false);
+    void setPixels(int w, int h, PixelFormat format, Layer layer);
+    void setPixels(int w, int h, PixelFormat format, std::vector<Layer> layers);
 
     // END Pixels
-
-    // OpenGL
-
-    uint32_t nameGL() const { return _nameGL; }
-
-    // END OpenGL
 
 private:
     std::string _name;
     TextureType _type;
     Properties _properties;
-
-    bool _inited {false};
 
     int _width {0};
     int _height {0};
@@ -181,24 +205,6 @@ private:
     std::vector<Layer> _layers; /**< either one for 2D textures, or six for cube maps */
     Features _features;
 
-    // OpenGL
-
-    uint32_t _nameGL {0};
-
-    // END OpenGL
-
-    void configure();
-    void refresh();
-
-    void configure2D();
-    void configureCubeMap();
-
-    void refresh2D();
-    void refresh2DArray();
-    void refreshCubeMap();
-    void refreshCubeMapArray();
-
-    uint32_t getTargetGL() const;
 };
 
 } // namespace graphics

@@ -58,9 +58,14 @@ MainMenu::MainMenu(Game &game, ServicesView &services) :
 void MainMenu::preload(IGUI &gui) {
     GameGUI::preload(gui);
     gui.setResolution(800, 600);
+    // The reference renders this scene at the label's extent. A full-window
+    // target also exposes model coverage outside the control when composited.
 }
 
 void MainMenu::onGUILoaded() {
+    // The main menu's backdrop is the plate drawn as artwork, not as the
+    // surround behind an inset layout: its buttons carry their own frame and
+    // never sit in the plate's window, so nothing here can misalign with it.
     if (!_game.isTSL()) {
         loadBackground(BackgroundType::Menu);
     }
@@ -129,7 +134,7 @@ void MainMenu::setup3DView() {
     }
 
     auto &sceneGraph = _services.scene.graphs.get(kSceneMainMenu);
-    const Control::Extent &extent = _controls.LBL_3DVIEW->extent();
+    const Control::Extent &extent = _controls.LBL_3DVIEW->sceneExtent();
     float aspect = extent.width / static_cast<float>(extent.height);
 
     SceneInitializer(sceneGraph)

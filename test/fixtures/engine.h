@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "reone/graphics/options.h"
 #include "reone/system/logger.h"
 
 #include "audio.h"

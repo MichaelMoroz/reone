@@ -17,6 +17,8 @@
 
 #include "reone/scene/graphs.h"
 
+#include <filesystem>
+
 namespace reone {
 
 namespace scene {
@@ -32,6 +34,8 @@ void SceneGraphs::reserve(std::string name) {
         _graphicsSvc,
         _audioSvc,
         _resourceSvc);
+    scene->gpuScene().traceMaterials().loadTraceClasses(
+        _overrideRoot / "materials.ini");
 
     _scenes.insert(std::make_pair(name, std::move(scene)));
 }
@@ -42,6 +46,23 @@ ISceneGraph &SceneGraphs::get(const std::string &name) {
         throw std::logic_error(str(boost::format("Scene not found by name '%s'") % name));
     }
     return *maybeScene->second;
+}
+
+void SceneGraphs::invalidateRenderPipelines() {
+    for (auto &[name, scene] : _scenes) {
+        scene->invalidateRenderPipeline();
+    }
+}
+
+bool SceneGraphs::consumeRenderPipelineRebuild() {
+    // Every scene is asked, not just until one answers: the request is a
+    // one-shot flag and leaving it set on the others would rebuild again next
+    // frame, and the frame after that.
+    bool requested = false;
+    for (auto &[name, scene] : _scenes) {
+        requested |= scene->consumeRenderPipelineRebuild();
+    }
+    return requested;
 }
 
 } // namespace scene

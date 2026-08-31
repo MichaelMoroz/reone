@@ -17,7 +17,12 @@
 
 #pragma once
 
+#include <array>
+#include <type_traits>
+
+#include "texture.h"
 #include "types.h"
+#include "uniforms.h"
 
 namespace reone {
 
@@ -28,18 +33,47 @@ class Texture;
 enum class MaterialType {
     OpaqueModel,
     TransparentModel,
-    DirLightShadow,
-    PointLightShadow,
-    Walkmesh
+    Walkmesh,
+    Grass,
+    Particle
 };
 
-struct Material : boost::noncopyable {
+enum class MaterialTextureSlot : size_t {
+    MainTex,
+    Lightmap,
+    EnvMap,
+    NormalMap,
+    BumpMapArray,
+    EnvMapCube,
+    Count
+};
+
+constexpr int materialTextureUnit(MaterialTextureSlot slot) {
+    switch (slot) {
+    case MaterialTextureSlot::MainTex:
+        return TextureUnits::mainTex;
+    case MaterialTextureSlot::Lightmap:
+        return TextureUnits::lightmap;
+    case MaterialTextureSlot::EnvMap:
+        return TextureUnits::envMap;
+    case MaterialTextureSlot::NormalMap:
+        return TextureUnits::normalMap;
+    case MaterialTextureSlot::BumpMapArray:
+        return TextureUnits::bumpMapArray;
+    case MaterialTextureSlot::EnvMapCube:
+        return TextureUnits::envMapCube;
+    case MaterialTextureSlot::Count:
+        break;
+    }
+    return 0;
+}
+
+struct Material {
 public:
-    using TextureUnit = int;
-    using TextureUnitToTexture = std::unordered_map<TextureUnit, std::reference_wrapper<Texture>>;
+    static constexpr size_t kNumTextureSlots = static_cast<size_t>(MaterialTextureSlot::Count);
 
     MaterialType type;
-    TextureUnitToTexture textures;
+    std::array<Texture *, kNumTextureSlots> textures {};
     glm::mat3x4 uv {1.0f};
     glm::vec4 color {1.0f};
     int bumpMapFrame {0};
@@ -49,13 +83,91 @@ public:
     glm::vec3 selfIllumColor {0.0f};
 
     bool staticObject {false};
+    /** The authored MDL background-geometry flag: sky domes and backdrops.
+        Tracing keys its sky classification on this identity rather than on
+        emission luma, which misclassified interior lit panels as sky. */
+    bool backgroundGeometry {false};
+    /** Index into the registry's curated-material table, resolved by name
+        at registration; -1 when the object has no curated record. Carries
+        class and material operations both. */
+    int curatedIndex {-1};
     bool affectedByShadows {false};
     bool affectedByFog {false};
 
     std::optional<BlendMode> blending;
+    /**
+     * A cutout threshold the caller wants used in place of the diffuse
+     * texture's own, or -1 to take the texture's.
+     *
+     * Grass is the case that needs it: the threshold is authored on the area,
+     * not on the blade texture, so the area has to be able to say so.
+     */
+    float alphaTest {-1.0f};
     std::optional<FaceCullMode> faceCulling;
     std::optional<PolygonMode> polygonMode;
 };
+
+static_assert(std::is_trivially_copyable_v<Material>);
+
+/**
+ * Features that describe a material rather than a particular draw path.
+ * Keeping this beside Material prevents backend-specific copies from quietly
+ * changing which fragment path an otherwise identical material takes.
+ */
+inline int materialFeatureMask(const Material &material) {
+    int mask = 0;
+    const auto &textures = material.textures;
+    if (const auto *mainTex = textures[static_cast<size_t>(MaterialTextureSlot::MainTex)]) {
+        switch (mainTex->features().blending) {
+        case Texture::Blending::PunchThrough:
+            mask |= UniformsFeatureFlags::hashedalphatest;
+            break;
+        case Texture::Blending::Additive:
+            // Not premultiplied: the original blends these SRC_ALPHA/ONE, so
+            // the texture's alpha is the weight. Taking it from luma instead
+            // flattens masks whose colour is uniform - a light shaft's dapple
+            // lives entirely in its alpha channel.
+            break;
+        default:
+            break;
+        }
+        if (mainTex->features().waterAlpha != -1.0f) {
+            mask |= UniformsFeatureFlags::water;
+        }
+    }
+    if (textures[static_cast<size_t>(MaterialTextureSlot::Lightmap)]) {
+        mask |= UniformsFeatureFlags::lightmap;
+    }
+    if (textures[static_cast<size_t>(MaterialTextureSlot::EnvMap)]) {
+        mask |= UniformsFeatureFlags::envmap;
+    }
+    if (textures[static_cast<size_t>(MaterialTextureSlot::EnvMapCube)]) {
+        mask |= UniformsFeatureFlags::envmap | UniformsFeatureFlags::envmapcube;
+    }
+    if (textures[static_cast<size_t>(MaterialTextureSlot::NormalMap)]) {
+        mask |= UniformsFeatureFlags::normalmap;
+    }
+    if (textures[static_cast<size_t>(MaterialTextureSlot::BumpMapArray)]) {
+        mask |= UniformsFeatureFlags::bumpmap;
+    }
+    if (material.staticObject) {
+        mask |= UniformsFeatureFlags::staticobj;
+    }
+    if (material.affectedByShadows) {
+        mask |= UniformsFeatureFlags::shadows;
+    }
+    // A punch-through texture is the format's way of writing "this is a leaf,
+    // a frond, a piece of cloth". Those have no thickness, so they are lit from
+    // both sides - and they receive shadows whatever the model says, because a
+    // cutout that cannot be shadowed reads as a hole cut in the lighting.
+    if (mask & UniformsFeatureFlags::hashedalphatest) {
+        mask |= UniformsFeatureFlags::thin | UniformsFeatureFlags::shadows;
+    }
+    if (material.affectedByFog) {
+        mask |= UniformsFeatureFlags::fog;
+    }
+    return mask;
+}
 
 } // namespace graphics
 

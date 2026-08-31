@@ -19,6 +19,9 @@
 
 #include "reone/graphics/types.h"
 
+#include <algorithm>
+#include <cmath>
+
 using namespace boost::program_options;
 
 using namespace reone::graphics;
@@ -58,6 +61,7 @@ LauncherFrame::LauncherFrame() :
     // Render Resolution
 
     wxArrayString resChoices;
+    resChoices.Add("Fullscreen");
     resChoices.Add("800x600");
     resChoices.Add("1024x768");
     resChoices.Add("1280x720");
@@ -77,10 +81,15 @@ LauncherFrame::LauncherFrame() :
     }
 
     std::string configResolution(str(boost::format("%dx%d") % _config.width % _config.height));
-    int resSelection = resChoices.Index(configResolution);
-    if (resSelection == wxNOT_FOUND) {
-        resChoices.Add(configResolution);
-        resSelection = resChoices.GetCount() - 1;
+    int resSelection;
+    if (_config.fullscreenWindow) {
+        resSelection = resChoices.Index("Fullscreen");
+    } else {
+        resSelection = resChoices.Index(configResolution);
+        if (resSelection == wxNOT_FOUND) {
+            resChoices.Add(configResolution);
+            resSelection = resChoices.GetCount() - 1;
+        }
     }
 
     auto labelResolution = new wxStaticText(this, wxID_ANY, "Render Resolution", wxDefaultPosition, wxDefaultSize);
@@ -104,10 +113,15 @@ LauncherFrame::LauncherFrame() :
     winScales.Add("150%");
     winScales.Add("175%");
     winScales.Add("200%");
-    int winScaleSel = winScales.Index(str(boost::format("%d%%") % _config.winscale));
-    if (winScaleSel == wxNOT_FOUND) {
-        winScaleSel = 0;
+    // The engine takes any percent from 1 to 400, so one set outside this
+    // ladder is legal; offering it keeps this from silently snapping back to
+    // 100% and writing that over the user's choice, the way the resolution list
+    // below already avoids.
+    auto winScaleText = str(boost::format("%d%%") % _config.winscale);
+    if (winScales.Index(winScaleText) == wxNOT_FOUND) {
+        winScales.Add(winScaleText);
     }
+    const int winScaleSel = winScales.Index(winScaleText);
     _choiceWinScale = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, winScales);
     _choiceWinScale->SetSelection(winScaleSel);
 
@@ -124,20 +138,17 @@ LauncherFrame::LauncherFrame() :
     wxArrayString rendererChoices;
     rendererChoices.Add("Retro");
     rendererChoices.Add("PBR");
+    rendererChoices.Add("Path tracing");
 
     _choiceRenderer = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, rendererChoices);
-    _choiceRenderer->SetSelection(_config.pbr ? 1 : 0);
+    // One three-way option, in the same order the engine's enum declares it.
+    // "raster" is the old spelling of retro and still arrives from an existing
+    // config; the engine reads it the same way.
+    _choiceRenderer->SetSelection(_config.mode == "path-tracing" ? 2
+                                  : _config.mode == "pbr"       ? 1
+                                                                : 0);
     _choiceRenderer->Bind(wxEVT_COMMAND_CHOICE_SELECTED, [this](const wxCommandEvent &evt) {
-        auto selection = evt.GetSelection();
-        if (selection == 1) {
-            // PBR
-            _checkBoxSSAO->Enable();
-            _checkBoxSSR->Enable();
-        } else {
-            // Retro
-            _checkBoxSSAO->Disable();
-            _checkBoxSSR->Disable();
-        }
+        UpdateRendererDependentControls();
     });
 
     auto rendererSizer = new wxBoxSizer(wxVERTICAL);
@@ -145,6 +156,36 @@ LauncherFrame::LauncherFrame() :
     rendererSizer->Add(_choiceRenderer, wxSizerFlags(0).Expand());
 
     // END Renderer
+
+    // Path tracing samples
+
+    auto labelPathTracingSamples =
+        new wxStaticText(this, wxID_ANY, "Samples Per Pixel", wxDefaultPosition, wxDefaultSize);
+
+    // Powers of two rather than a free integer: cost is near linear in this
+    // count and noise falls as its square root, so the useful settings are
+    // spread across a doubling scale rather than adjacent values.
+    wxArrayString pathTracingSampleChoices;
+    for (const auto *count : {"1", "2", "4", "8", "16", "32", "64"}) {
+        pathTracingSampleChoices.Add(count);
+    }
+
+    // The engine takes any count from 1 to 64, so one set in game need not be a
+    // power of two. Offering it alongside the ladder keeps this from snapping to
+    // 8 and writing that back over the user's choice.
+    if (pathTracingSampleChoices.Index(std::to_string(_config.ptspp)) == wxNOT_FOUND) {
+        pathTracingSampleChoices.Add(std::to_string(_config.ptspp));
+    }
+
+    _choicePathTracingSamples =
+        new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, pathTracingSampleChoices);
+    _choicePathTracingSamples->SetStringSelection(std::to_string(_config.ptspp));
+
+    auto pathTracingSizer = new wxBoxSizer(wxVERTICAL);
+    pathTracingSizer->Add(labelPathTracingSamples, wxSizerFlags(0).Expand());
+    pathTracingSizer->Add(_choicePathTracingSamples, wxSizerFlags(0).Expand());
+
+    // END Path tracing samples
 
     // Texture Quality
 
@@ -166,15 +207,21 @@ LauncherFrame::LauncherFrame() :
 
     // Shadow Map Resolution
 
+    // One entry per step the engine accepts - it reads this as an exponent and
+    // clamps to 0..3. A config at 3 used to select nothing in a three-item
+    // list, and wxChoice's "nothing" is -1, which went back out as
+    // shadowres=-1 and came back as 1024.
     wxArrayString shadowResChoices;
     shadowResChoices.Add("1024");
     shadowResChoices.Add("2048");
     shadowResChoices.Add("4096");
+    shadowResChoices.Add("8192");
 
     auto labelShadowResolution = new wxStaticText(this, wxID_ANY, "Shadow Map Resolution", wxDefaultPosition, wxDefaultSize);
 
     _choiceShadowResolution = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, shadowResChoices);
-    _choiceShadowResolution->SetSelection(_config.shadowres);
+    _choiceShadowResolution->SetSelection(
+        std::clamp(_config.shadowres, 0, static_cast<int>(shadowResChoices.GetCount()) - 1));
 
     auto shadowResSizer = new wxBoxSizer(wxVERTICAL);
     shadowResSizer->Add(labelShadowResolution, wxSizerFlags(0).Expand());
@@ -194,7 +241,8 @@ LauncherFrame::LauncherFrame() :
     auto labelAnisoFilter = new wxStaticText(this, wxID_ANY, "Anisotropic Filtering", wxDefaultPosition, wxDefaultSize);
 
     _choiceAnisoFilter = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, anisoFilterChoices);
-    _choiceAnisoFilter->SetSelection(_config.anisofilter);
+    _choiceAnisoFilter->SetSelection(
+        std::clamp(_config.anisofilter, 0, static_cast<int>(anisoFilterChoices.GetCount()) - 1));
 
     auto anisoFilterSizer = new wxBoxSizer(wxVERTICAL);
     anisoFilterSizer->Add(labelAnisoFilter, wxSizerFlags(0).Expand());
@@ -228,21 +276,96 @@ LauncherFrame::LauncherFrame() :
     _checkBoxSSR = new wxCheckBox(this, wxID_ANY, "Enable SSR", wxDefaultPosition, wxDefaultSize);
     _checkBoxSSR->SetValue(_config.ssr);
 
-    if (!_config.pbr) {
-        _checkBoxSSAO->Disable();
-        _checkBoxSSR->Disable();
-    }
 
-    _checkBoxFXAA = new wxCheckBox(this, wxID_ANY, "Enable FXAA", wxDefaultPosition, wxDefaultSize);
-    _checkBoxFXAA->SetValue(_config.fxaa);
+    // Anti-aliasing
 
-    _checkBoxSharpen = new wxCheckBox(this, wxID_ANY, "Enable Image Sharpening", wxDefaultPosition, wxDefaultSize);
-    _checkBoxSharpen->SetValue(_config.sharpen);
+    auto labelAntiAliasing = new wxStaticText(this, wxID_ANY, "Anti-aliasing",
+                                              wxDefaultPosition, wxDefaultSize);
+
+    wxArrayString antiAliasingChoices;
+    antiAliasingChoices.Add("Off");
+    antiAliasingChoices.Add("FXAA");
+    antiAliasingChoices.Add("FSR 2 (NativeAA)");
+    antiAliasingChoices.Add("DLSS Ray Reconstruction");
+
+    _choiceAntiAliasing = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                       antiAliasingChoices);
+    // Every value the engine accepts needs an entry here. A value this list
+    // cannot represent collapses to index 0 and is written back as "off" on
+    // save, silently discarding a setting made in game - which is exactly what
+    // happened to dlssrr while this was a three-item list.
+    _choiceAntiAliasing->SetSelection(_config.antialiasing == "dlssrr" ? 3
+                                      : _config.antialiasing == "fsr"  ? 2
+                                      : _config.antialiasing == "fxaa" ? 1
+                                                                       : 0);
+    _choiceAntiAliasing->Bind(wxEVT_COMMAND_CHOICE_SELECTED, [this](const wxCommandEvent &evt) {
+        UpdateRendererDependentControls();
+    });
+
+    auto antiAliasingSizer = new wxBoxSizer(wxVERTICAL);
+    antiAliasingSizer->Add(labelAntiAliasing, wxSizerFlags(0).Expand());
+    antiAliasingSizer->Add(_choiceAntiAliasing, wxSizerFlags(0).Expand());
+
+    // END Anti-aliasing
+
+    // DLSS quality mode
+
+    auto labelDlssMode = new wxStaticText(this, wxID_ANY, "DLSS Quality Mode",
+                                          wxDefaultPosition, wxDefaultSize);
+
+    // Named modes rather than a scale slider, because that is the only way DLSS
+    // expresses a render resolution: the engine turns the mode into a ratio
+    // (DLAA 1.00, Quality 0.67, Balanced 0.58, Performance 0.50, Ultra
+    // Performance 0.33) and does not read renderScale at all while DLSS holds
+    // the slot.
+    wxArrayString dlssModeChoices;
+    dlssModeChoices.Add("DLAA (native)");
+    dlssModeChoices.Add("Quality");
+    dlssModeChoices.Add("Balanced");
+    dlssModeChoices.Add("Performance");
+    dlssModeChoices.Add("Ultra Performance");
+
+    _choiceDlssMode = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                   dlssModeChoices);
+    _choiceDlssMode->SetSelection(_config.dlssMode == "ultraperformance" ? 4
+                                  : _config.dlssMode == "performance"   ? 3
+                                  : _config.dlssMode == "balanced"      ? 2
+                                  : _config.dlssMode == "quality"       ? 1
+                                                                        : 0);
+
+    auto dlssModeSizer = new wxBoxSizer(wxVERTICAL);
+    dlssModeSizer->Add(labelDlssMode, wxSizerFlags(0).Expand());
+    dlssModeSizer->Add(_choiceDlssMode, wxSizerFlags(0).Expand());
+
+    // END DLSS quality mode
+
+    // FSR render scale
+
+    auto labelRenderScale = new wxStaticText(this, wxID_ANY, "FSR Render Scale",
+                                             wxDefaultPosition, wxDefaultSize);
+    _sliderRenderScale = new wxSlider(
+        this, wxID_ANY, static_cast<int>(std::round(_config.renderScale * 100.0f)), 25, 100,
+        wxDefaultPosition, wxDefaultSize);
+
+    auto renderScaleSizer = new wxBoxSizer(wxVERTICAL);
+    renderScaleSizer->Add(labelRenderScale, wxSizerFlags(0).Expand());
+    renderScaleSizer->Add(_sliderRenderScale, wxSizerFlags(0).Expand());
+
+    // END FSR render scale
+
+    // One dial, as the engine has: RCAS under FSR, an unsharp mask otherwise.
+    // The old checkbox wrote a `sharpen` key the engine stopped parsing.
+    _sliderSharpness = new wxSlider(this, wxID_ANY,
+                                    static_cast<int>(_config.sharpness * 100.0f), 0, 100,
+                                    wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL | wxSL_LABELS);
+
+    UpdateRendererDependentControls();
 
     auto graphicsSizer = new wxStaticBoxSizer(wxVERTICAL, this, "Graphics");
     graphicsSizer->Add(resSizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(winScaleSizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(rendererSizer, wxSizerFlags(0).Expand());
+    graphicsSizer->Add(pathTracingSizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(textureQualitySizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(shadowResSizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(anisoFilterSizer, wxSizerFlags(0).Expand());
@@ -252,8 +375,11 @@ LauncherFrame::LauncherFrame() :
     graphicsSizer->Add(_checkBoxGrass, wxSizerFlags(0).Expand());
     graphicsSizer->Add(_checkBoxSSAO, wxSizerFlags(0).Expand());
     graphicsSizer->Add(_checkBoxSSR, wxSizerFlags(0).Expand());
-    graphicsSizer->Add(_checkBoxFXAA, wxSizerFlags(0).Expand());
-    graphicsSizer->Add(_checkBoxSharpen, wxSizerFlags(0).Expand());
+    graphicsSizer->Add(antiAliasingSizer, wxSizerFlags(0).Expand());
+    graphicsSizer->Add(dlssModeSizer, wxSizerFlags(0).Expand());
+    graphicsSizer->Add(renderScaleSizer, wxSizerFlags(0).Expand());
+    graphicsSizer->Add(new wxStaticText(this, wxID_ANY, "Sharpness"), wxSizerFlags(0).Expand());
+    graphicsSizer->Add(_sliderSharpness, wxSizerFlags(0).Expand());
 
     // END Graphics
 
@@ -351,6 +477,32 @@ LauncherFrame::LauncherFrame() :
     Bind(wxEVT_BUTTON, &LauncherFrame::OnSaveConfig, this, WindowID::saveConfig);
 }
 
+void LauncherFrame::UpdateRendererDependentControls() {
+    // Both backends now carry the whole chain - filters, retro forward shading,
+    // and the screen-space effects - so nothing here depends on the backend any
+    // more. Only SSAO and SSR remain conditional, and on the renderer rather
+    // than the backend: they read the G-buffer, which the retro path does not
+    // produce. Greyed out instead of hidden, so their saved values are still
+    // visible and still written back.
+    auto renderer = _choiceRenderer->GetStringSelection();
+    bool pbr = renderer == "PBR";
+    bool pathTracing = renderer == "Path tracing";
+    _checkBoxSSAO->Enable(pbr);
+    _checkBoxSSR->Enable(pbr);
+    // Screen-space effects read a G-buffer the traced path never produces, and
+    // the sample count means nothing to the two raster renderers.
+    _choicePathTracingSamples->Enable(pathTracing);
+    // Rendering below display resolution is meaningful only when an upscaler
+    // owns the anti-aliasing slot, and each upscaler has its own dial for it:
+    // FSR reads renderScale, DLSS reads dlssmode and ignores renderScale
+    // entirely. So exactly one of the two is live, never both - the slider was
+    // enabled under DLSS, where moving it did nothing. Greyed rather than
+    // hidden, so the inactive one still shows what it will do if selected.
+    const int aaSel = _choiceAntiAliasing->GetSelection();
+    _sliderRenderScale->Enable(aaSel == 2);
+    _choiceDlssMode->Enable(aaSel == 3);
+}
+
 void LauncherFrame::LoadConfiguration() {
     options_description options;
     options.add_options()                                                 //
@@ -360,17 +512,21 @@ void LauncherFrame::LoadConfiguration() {
         ("height", value<int>()->default_value(_config.height))           //
         ("winscale", value<int>()->default_value(_config.winscale))       //
         ("fullscreen", value<bool>()->default_value(_config.fullscreen))  //
+        ("fullscreenwindow", value<bool>()->default_value(_config.fullscreenWindow)) //
         ("vsync", value<bool>()->default_value(_config.vsync))            //
         ("grass", value<bool>()->default_value(_config.grass))            //
-        ("pbr", value<bool>()->default_value(_config.pbr))                //
+        ("mode", value<std::string>()->default_value(_config.mode))        //
+        ("ptspp", value<int>()->default_value(_config.ptspp))              //
         ("ssao", value<bool>()->default_value(_config.ssao))              //
         ("ssr", value<bool>()->default_value(_config.ssr))                //
-        ("fxaa", value<bool>()->default_value(_config.fxaa))              //
-        ("sharpen", value<bool>()->default_value(_config.sharpen))        //
+        ("antialiasing", value<std::string>()->default_value(_config.antialiasing)) //
+        ("dlssmode", value<std::string>()->default_value(_config.dlssMode))  //
+        ("renderscale", value<float>()->default_value(_config.renderScale)) //
+        ("sharpness", value<float>()->default_value(_config.sharpness))   //
         ("texquality", value<int>()->default_value(_config.texQuality))   //
         ("anisofilter", value<int>()->default_value(_config.anisofilter)) //
         ("shadowres", value<int>()->default_value(_config.shadowres))     //
-        ("drawdist", value<int>()->default_value(_config.drawdist))       //
+        ("drawdist", value<float>()->default_value(_config.drawdist))     //
         ("musicvol", value<int>()->default_value(_config.musicvol))       //
         ("voicevol", value<int>()->default_value(_config.voicevol))       //
         ("soundvol", value<int>()->default_value(_config.soundvol))       //
@@ -392,17 +548,24 @@ void LauncherFrame::LoadConfiguration() {
     _config.height = vars["height"].as<int>();
     _config.winscale = vars["winscale"].as<int>();
     _config.fullscreen = vars["fullscreen"].as<bool>();
+    _config.fullscreenWindow = vars["fullscreenwindow"].as<bool>();
     _config.vsync = vars["vsync"].as<bool>();
     _config.grass = vars["grass"].as<bool>();
-    _config.pbr = vars["pbr"].as<bool>();
+    _config.mode = vars["mode"].as<std::string>();
+    _config.ptspp = std::max(1, vars["ptspp"].as<int>());
     _config.ssao = vars["ssao"].as<bool>();
     _config.ssr = vars["ssr"].as<bool>();
-    _config.fxaa = vars["fxaa"].as<bool>();
-    _config.sharpen = vars["sharpen"].as<bool>();
+    _config.antialiasing = vars["antialiasing"].as<std::string>();
+    _config.dlssMode = vars["dlssmode"].as<std::string>();
+    _config.renderScale = std::clamp(vars["renderscale"].as<float>(), 0.25f, 1.0f);
+    _config.sharpness = vars["sharpness"].as<float>();
     _config.texQuality = vars["texquality"].as<int>();
     _config.shadowres = vars["shadowres"].as<int>();
     _config.anisofilter = vars["anisofilter"].as<int>();
-    _config.drawdist = vars["drawdist"].as<int>();
+    // Float on the engine's side. The slider is whole numbers, so a fractional
+    // value set from the console rounds here rather than refusing to parse -
+    // which is what value<int>() did, throwing before the window ever opened.
+    _config.drawdist = static_cast<int>(std::lround(vars["drawdist"].as<float>()));
     _config.musicvol = vars["musicvol"].as<int>();
     _config.voicevol = vars["voicevol"].as<int>();
     _config.soundvol = vars["soundvol"].as<int>();
@@ -432,13 +595,17 @@ void LauncherFrame::SaveConfiguration() {
         "height=",
         "winscale=",
         "fullscreen=",
+        "fullscreenwindow=",
         "vsync=",
         "grass=",
-        "pbr=",
+        "mode=",
+        "ptspp=",
         "ssao=",
         "ssr=",
-        "fxaa=",
-        "sharpen=",
+        "antialiasing=",
+        "dlssmode=",
+        "renderscale=",
+        "sharpness=",
         "texquality=",
         "anisofilter=",
         "shadowres=",
@@ -495,17 +662,39 @@ void LauncherFrame::SaveConfiguration() {
 
     _config.gameDir = _textCtrlGameDir->GetValue();
     _config.devMode = _checkBoxDev->IsChecked();
-    _config.width = stoi(tokens[0]);
-    _config.height = stoi(tokens[1]);
+    // "Fullscreen" carries no numbers: the flag is set and the last numeric
+    // resolution stays in the config for when the user switches back.
+    _config.fullscreenWindow = tokens.size() < 2;
+    if (!_config.fullscreenWindow) {
+        _config.width = stoi(tokens[0]);
+        _config.height = stoi(tokens[1]);
+    }
     _config.winscale = winScale;
     _config.fullscreen = _checkBoxFullscreen->IsChecked();
     _config.vsync = _checkBoxVSync->IsChecked();
     _config.grass = _checkBoxGrass->IsChecked();
-    _config.pbr = _choiceRenderer->GetStringSelection() == "PBR";
+    auto rendererSel = _choiceRenderer->GetStringSelection();
+    _config.mode = rendererSel == "Path tracing" ? "path-tracing"
+                   : rendererSel == "PBR"        ? "pbr"
+                                                 : "retro";
+    _config.ptspp = wxAtoi(_choicePathTracingSamples->GetStringSelection());
     _config.ssao = _checkBoxSSAO->IsChecked();
     _config.ssr = _checkBoxSSR->IsChecked();
-    _config.fxaa = _checkBoxFXAA->IsChecked();
-    _config.sharpen = _checkBoxSharpen->IsChecked();
+    switch (_choiceAntiAliasing->GetSelection()) {
+    case 3: _config.antialiasing = "dlssrr"; break;
+    case 2: _config.antialiasing = "fsr"; break;
+    case 1: _config.antialiasing = "fxaa"; break;
+    default: _config.antialiasing = "off"; break;
+    }
+    switch (_choiceDlssMode->GetSelection()) {
+    case 4: _config.dlssMode = "ultraperformance"; break;
+    case 3: _config.dlssMode = "performance"; break;
+    case 2: _config.dlssMode = "balanced"; break;
+    case 1: _config.dlssMode = "quality"; break;
+    default: _config.dlssMode = "dlaa"; break;
+    }
+    _config.renderScale = _sliderRenderScale->GetValue() / 100.0f;
+    _config.sharpness = _sliderSharpness->GetValue() / 100.0f;
     _config.texQuality = _choiceTextureQuality->GetSelection();
     _config.shadowres = _choiceShadowResolution->GetSelection();
     _config.anisofilter = _choiceAnisoFilter->GetSelection();
@@ -540,13 +729,17 @@ void LauncherFrame::SaveConfiguration() {
     config << "height=" << _config.height << std::endl;
     config << "winscale=" << _config.winscale << std::endl;
     config << "fullscreen=" << (_config.fullscreen ? 1 : 0) << std::endl;
+    config << "fullscreenwindow=" << (_config.fullscreenWindow ? 1 : 0) << std::endl;
     config << "vsync=" << (_config.vsync ? 1 : 0) << std::endl;
     config << "grass=" << (_config.grass ? 1 : 0) << std::endl;
-    config << "pbr=" << (_config.pbr ? 1 : 0) << std::endl;
+    config << "mode=" << _config.mode << std::endl;
+    config << "ptspp=" << _config.ptspp << std::endl;
     config << "ssao=" << (_config.ssao ? 1 : 0) << std::endl;
     config << "ssr=" << (_config.ssr ? 1 : 0) << std::endl;
-    config << "fxaa=" << (_config.fxaa ? 1 : 0) << std::endl;
-    config << "sharpen=" << (_config.sharpen ? 1 : 0) << std::endl;
+    config << "antialiasing=" << _config.antialiasing << std::endl;
+    config << "dlssmode=" << _config.dlssMode << std::endl;
+    config << "renderscale=" << _config.renderScale << std::endl;
+    config << "sharpness=" << _config.sharpness << std::endl;
     config << "texquality=" << _config.texQuality << std::endl;
     config << "shadowres=" << _config.shadowres << std::endl;
     config << "anisofilter=" << _config.anisofilter << std::endl;

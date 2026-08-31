@@ -17,11 +17,10 @@
 
 #include "reone/scene/node/emitter.h"
 
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
+#include "reone/graphics/material.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
-#include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/resource/di/services.h"
@@ -29,7 +28,8 @@
 #include "reone/scene/graph.h"
 #include "reone/scene/node/camera.h"
 #include "reone/scene/node/particle.h"
-#include "reone/scene/render/pass.h"
+#include "reone/scene/gpuscene.h"
+#include "reone/scene/particleutil.h"
 #include "reone/system/randomutil.h"
 
 using namespace reone::graphics;
@@ -37,9 +37,6 @@ using namespace reone::graphics;
 namespace reone {
 
 namespace scene {
-
-static constexpr float kMotionBlurStrength = 0.25f;
-static constexpr float kProjectileSpeed = 16.0f;
 
 void EmitterSceneNode::init() {
     _modelNode.floatValueAtTime(ControllerTypes::birthrate, 0.0f, _birthrate);
@@ -59,6 +56,7 @@ void EmitterSceneNode::init() {
     _modelNode.floatValueAtTime(ControllerTypes::spread, 0.0f, _spread);
     _modelNode.floatValueAtTime(ControllerTypes::velocity, 0.0f, _velocity);
     _modelNode.floatValueAtTime(ControllerTypes::randVel, 0.0f, _randomVelocity);
+    _modelNode.floatValueAtTime(ControllerTypes::blurLength, 0.0f, _blurLength);
     _modelNode.floatValueAtTime(ControllerTypes::mass, 0.0f, _mass);
     _modelNode.floatValueAtTime(ControllerTypes::grav, 0.0f, _grav);
     _modelNode.floatValueAtTime(ControllerTypes::lightingDelay, 0.0f, _lightningDelay);
@@ -156,10 +154,10 @@ void EmitterSceneNode::spawnParticles(float dt) {
     }
 }
 
-void EmitterSceneNode::doSpawnParticle() {
+ParticleSceneNode *EmitterSceneNode::doSpawnParticle() {
     // Take particle from the pool, if available
     if (_particlePool.empty()) {
-        return;
+        return nullptr;
     }
     auto particle = static_cast<ParticleSceneNode *>(_particlePool.front());
     particle->setLifetime(0.0f);
@@ -184,6 +182,41 @@ void EmitterSceneNode::doSpawnParticle() {
     // Remove particle from pool and append it to emitter
     _particlePool.pop_front();
     addChild(*particle);
+
+    return particle;
+}
+
+void EmitterSceneNode::prewarmContinuousParticles() {
+    auto emitter = _modelNode.emitter();
+    if (!emitter || emitter->updateMode != ModelNode::Emitter::UpdateMode::Fountain) {
+        return;
+    }
+    if (_birthrate <= 0.0f || _lifeExpectancy <= 0.0f) {
+        return;
+    }
+
+    // Take the phase where a particle is born exactly as the scene opens. The
+    // ones still alive behind it are then those emitted one, two, three birth
+    // intervals ago, up to the last whose age is still short of the life
+    // expectancy: ceil(birthrate * lifeExpectancy) of them. The pool init()
+    // allocated bounds that, in which case the youngest are the ones seeded.
+    int count = glm::min(kMaxParticles, static_cast<int>(glm::ceil(_birthrate * _lifeExpectancy)));
+    for (int i = 0; i < count; ++i) {
+        auto particle = doSpawnParticle();
+        if (!particle) {
+            break;
+        }
+        // Age by whole birth intervals, not by an even share of the lifetime:
+        // the two agree only when birthrate times life expectancy happens to be
+        // a whole number, and elsewhere an even share invents ages the authored
+        // cadence could never have produced. The oldest lands strictly short of
+        // the life expectancy, so nothing is seeded already expired.
+        particle->update(i * _birthInterval);
+    }
+
+    // The next birth is a full interval away, so the field this leaves behind
+    // is not immediately followed by an extra particle.
+    _birthTimer.reset(_birthInterval);
 }
 
 void EmitterSceneNode::spawnLightningParticles() {
@@ -217,15 +250,13 @@ void EmitterSceneNode::spawnLightningParticles() {
     segments[_lightningSubDiv].second = emitterSpaceRefPos;
 
     // Return all particles to pool
-    for (auto it = _children.begin(); it != _children.end();) {
-        auto child = *it;
-        if ((*it)->type() == SceneNodeType::Particle) {
-            _particlePool.push_back(static_cast<ParticleSceneNode *>(child));
-            it = _children.erase(it);
-        } else {
-            ++it;
-        }
+    auto firstParticle = std::stable_partition(
+        _children.begin(), _children.end(),
+        [](auto *child) { return child->type() != SceneNodeType::Particle; });
+    for (auto it = firstParticle; it != _children.end(); ++it) {
+        _particlePool.push_back(static_cast<ParticleSceneNode *>(*it));
     }
+    _children.erase(firstParticle, _children.end());
 
     for (auto &segment : segments) {
         // Take particle from the pool, if available
@@ -250,8 +281,16 @@ void EmitterSceneNode::detonate() {
     doSpawnParticle();
 }
 
-void EmitterSceneNode::renderLeafs(IRenderPass &pass, const std::vector<SceneNode *> &leafs) {
+void EmitterSceneNode::rearmSingle() {
+    auto emitter = _modelNode.emitter();
+    if (emitter && emitter->updateMode == ModelNode::Emitter::UpdateMode::Single) {
+        _spawned = false;
+    }
+}
+
+void EmitterSceneNode::collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) {
     if (leafs.empty()) {
+        scene.unregisterObject(id());
         return;
     }
     auto emitter = _modelNode.emitter();
@@ -263,54 +302,91 @@ void EmitterSceneNode::renderLeafs(IRenderPass &pass, const std::vector<SceneNod
     auto emitterUp = glm::vec3(_absTransform[1]);
     auto emitterForward = glm::vec3(_absTransform[2]);
 
-    auto view = _sceneGraph.camera()->get().camera()->view();
+    auto &cameraNode = _sceneGraph.camera()->get();
+    auto view = cameraNode.camera()->view();
     auto cameraRight = glm::vec3(view[0][0], view[1][0], view[2][0]);
     auto cameraUp = glm::vec3(view[0][1], view[1][1], view[2][1]);
     auto cameraForward = glm::vec3(view[0][2], view[1][2], view[2][2]);
 
-    auto particles = std::vector<ParticleInstance>(leafs.size());
+    auto quads = std::vector<ProceduralQuad>(leafs.size());
+    const glm::ivec2 grid = glm::max(emitter->gridSize, glm::ivec2(1));
     for (size_t i = 0; i < leafs.size(); ++i) {
         const auto particle = static_cast<ParticleSceneNode *>(leafs[i]);
-        particles[i].frame = particle->frame();
-        particles[i].position = particle->origin();
-        particles[i].size = glm::vec2(particle->size());
-        particles[i].color = glm::vec4(particle->color(), particle->alpha());
+        ProceduralInstance instance;
+        instance.variant = std::max(0, particle->frame());
+        instance.position = particle->origin();
+        instance.size = glm::vec2(particle->size());
+        instance.color = glm::vec4(particle->color(), particle->alpha());
         switch (emitter->renderMode) {
         case ModelNode::Emitter::RenderMode::BillboardToLocalZ:
-        case ModelNode::Emitter::RenderMode::MotionBlur:
-            if (emitter->renderMode == ModelNode::Emitter::RenderMode::MotionBlur) {
-                particles[i].size = glm::vec2(particle->size().x, (1.0f + kMotionBlurStrength * kProjectileSpeed) * particle->size().y);
-            }
-            particles[i].right = glm::vec4(emitterUp, 0.0f);
-            particles[i].up = glm::vec4(emitterRight, 0.0f);
+            instance.right = glm::vec4(emitterUp, 0.0f);
+            instance.up = glm::vec4(emitterRight, 0.0f);
             break;
+        case ModelNode::Emitter::RenderMode::MotionBlur: {
+            auto basis = particleutil::buildMotionBlurBasis(
+                _absTransform,
+                particle->velocity(),
+                cameraNode.origin() - particle->origin(),
+                cameraRight,
+                cameraUp,
+                instance.size.y,
+                _blurLength);
+            instance.size.y *= basis.lengthScale;
+            instance.right = glm::vec4(basis.right, 0.0f);
+            instance.up = glm::vec4(basis.up, 0.0f);
+            break;
+        }
         case ModelNode::Emitter::RenderMode::BillboardToWorldZ:
-            particles[i].right = glm::vec4(0.0f, 1.0f, 0.0, 0.0f);
-            particles[i].up = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+            instance.right = glm::vec4(0.0f, 1.0f, 0.0, 0.0f);
+            instance.up = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
             break;
         case ModelNode::Emitter::RenderMode::AlignedToParticleDir:
-            particles[i].right = glm::vec4(emitterRight, 0.0f);
-            particles[i].up = glm::vec4(emitterForward, 0.0f);
+            instance.right = glm::vec4(emitterRight, 0.0f);
+            instance.up = glm::vec4(emitterForward, 0.0f);
             break;
         case ModelNode::Emitter::RenderMode::Linked: {
             auto particleUp = particle->dir();
             auto particleForward = glm::cross(particleUp, cameraRight);
             auto particleRight = glm::cross(particleForward, particleUp);
-            particles[i].right = glm::vec4(particleRight, 0.0f);
-            particles[i].up = glm::vec4(particleUp, 0.0f);
+            instance.right = glm::vec4(particleRight, 0.0f);
+            instance.up = glm::vec4(particleUp, 0.0f);
             break;
         }
         case ModelNode::Emitter::RenderMode::Normal:
         default:
-            particles[i].right = glm::vec4(cameraRight, 0.0f);
-            particles[i].up = glm::vec4(cameraUp, 0.0f);
+            instance.right = glm::vec4(cameraRight, 0.0f);
+            instance.up = glm::vec4(cameraUp, 0.0f);
             break;
         }
+        auto &quad = quads[i];
+        quad.positionVariant = glm::vec4(instance.position,
+                                         static_cast<float>(instance.variant));
+        quad.color = instance.color;
+        quad.right = glm::vec4(instance.right * instance.size.x, 0.0f);
+        quad.up = glm::vec4(instance.up * instance.size.y, 0.0f);
+        const glm::vec2 uvScale {1.0f / grid.x, 1.0f / grid.y};
+        const glm::vec2 uvOffset {(instance.variant % grid.x) * uvScale.x,
+                                  (instance.variant / grid.x) * uvScale.y};
+        quad.uvOffsetScale = glm::vec4(uvOffset, uvScale);
     }
     bool twosided = _modelNode.emitter()->twosided || _modelNode.emitter()->renderMode == ModelNode::Emitter::RenderMode::MotionBlur;
-    auto faceCulling = twosided ? FaceCullMode::None : FaceCullMode::Back;
-    bool premultipliedAlpha = emitter->blendMode == ModelNode::Emitter::BlendMode::Lighten;
-    pass.drawParticles(*texture, faceCulling, premultipliedAlpha, emitter->gridSize, particles);
+    Material material;
+    material.type = MaterialType::Particle;
+    material.textures[static_cast<size_t>(MaterialTextureSlot::MainTex)] = texture.get();
+    material.faceCulling = twosided ? FaceCullMode::None : FaceCullMode::Back;
+    if (emitter->blendMode == ModelNode::Emitter::BlendMode::Lighten) {
+        material.blending = graphics::BlendMode::Lighten;
+    }
+    SceneNode *root = this;
+    while (root->parent()) {
+        root = root->parent();
+    }
+    auto cullRoot = root->type() == SceneNodeType::Model
+                        ? static_cast<ModelSceneNode *>(root)
+                        : nullptr;
+    scene.addParticles(
+        renderCategory(RenderCategory::Transparent), id(), nameIds(), material, emitter->gridSize,
+        std::move(quads), cullRoot);
 }
 
 } // namespace scene

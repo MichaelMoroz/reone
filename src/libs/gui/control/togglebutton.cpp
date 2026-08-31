@@ -17,7 +17,6 @@
 
 #include "reone/gui/control/togglebutton.h"
 
-#include "reone/graphics/renderbuffer.h"
 
 namespace reone {
 

@@ -17,6 +17,8 @@
 
 #include "reone/game/gui/dialog.h"
 
+#include <cmath>
+
 #include "reone/audio/mixer.h"
 #include "reone/audio/source.h"
 #include "reone/graphics/di/services.h"
@@ -50,6 +52,34 @@ namespace game {
 static const char kControlTagTopFrame[] = "TOP";
 static const char kControlTagBottomFrame[] = "BOTTOM";
 static const char kObjectTagOwner[] = "owner";
+
+// Odyssey DLG participant animation ordinals occupy two namespaces.
+//
+// Ordinals at or above kDialogAnimationBase index dialoganimations.2da and name
+// a semantic dialogue animation. K1 also uses valid positive 2DA rows directly.
+// Recognized lower ordinal bands name a cutscene clip on the target model: the
+// band selects the clip name suffix and whether the clip is held, while the
+// offset within the band selects the clip number. Both namespaces are
+// independent of AnimatedCut and of whether the participant is driven by a
+// stunt model.
+
+// The conversation bands are viewport-relative, not authored plate art:
+// the subtitle sits in the top sixth and the reply list in the bottom sixth
+// of whatever viewport the game is running at.
+static constexpr int kBandDivisor = 6;
+
+static constexpr int kDialogAnimationBase = 10000;
+static constexpr int kCutAnimationBandSize = 200;
+
+static const struct CutAnimationBand {
+    int base;
+    const char *suffix;
+    bool looping;
+} g_cutAnimationBands[] {
+    {1000, "", false},
+    {1200, "w", false},
+    {1400, "l", true},
+    {1600, "wl", true}};
 
 static const std::unordered_map<std::string, AnimationType> g_animTypeByName {
     {"dead", AnimationType::LoopingDead},
@@ -85,7 +115,12 @@ static const std::unordered_map<std::string, AnimationType> g_animTypeByName {
     {"kneel_talk_sad", AnimationType::LoopingKneelTalkSad}};
 
 void DialogGUI::preload(IGUI &gui) {
-    gui.setScaling(GUI::ScalingMode::Stretch);
+    GameGUI::preload(gui);
+    // Conversation bands and reply boxes are viewport-relative rather than
+    // authored plate art. Their dialog-specific font scale follows the
+    // uniform limiting axis without inheriting the global text multiplier.
+    gui.setScaling(GUI::ScalingMode::PositionRelativeToCenter);
+    gui.setTextScale(_game.options().graphics.guiDialogTextScale);
 }
 
 void DialogGUI::onGUILoaded() {
@@ -100,42 +135,78 @@ void DialogGUI::onGUILoaded() {
     });
 }
 
-void DialogGUI::loadFrames() {
-    int rootTop = _gui->rootControl().extent().top;
-    int messageHeight = _controls.LBL_MESSAGE->extent().height;
-
-    addFrame(kControlTagTopFrame, -rootTop, messageHeight);
-    addFrame(kControlTagBottomFrame, 0, _game.options().graphics.height - rootTop);
+void DialogGUI::selectReplyForCapture(int index) {
+    _controls.LB_REPLIES->setSelectedItemIndex(index);
 }
 
-void DialogGUI::addFrame(std::string tag, int top, int height) {
+int DialogGUI::bandHeight() const {
+    return _game.options().graphics.height / kBandDivisor;
+}
+
+Control::Extent DialogGUI::bandExtent(int top) const {
+    return {0, top, _game.options().graphics.width, bandHeight()};
+}
+
+Control::Extent DialogGUI::replySafeArea() const {
+    int safeWidth = std::min(_game.options().graphics.width, _game.options().graphics.height * 4 / 3);
+    int safeLeft = (_game.options().graphics.width - safeWidth) / 2;
+    return {safeLeft, _game.options().graphics.height - bandHeight(), safeWidth, bandHeight()};
+}
+
+void DialogGUI::loadFrames() {
+    addFrame(kControlTagTopFrame, 0);
+    addFrame(kControlTagBottomFrame, _game.options().graphics.height - bandHeight());
+}
+
+void DialogGUI::addFrame(std::string tag, int top) {
     auto frame = _gui->newControl(ControlType::Panel, tag);
-
-    Control::Extent extent;
-    extent.left = -_gui->rootControl().extent().left;
-    extent.top = top;
-    extent.width = _game.options().graphics.width;
-    extent.height = height;
-
-    frame->setExtent(std::move(extent));
+    frame->setExtent(bandExtent(top));
     frame->setBorderFill("blackfill");
 
-    _gui->addControlToFront(std::move(frame));
+    _gui->addControlToFront(std::move(frame), IGUI::ControlCoordinates::Screen);
 }
 
 void DialogGUI::configureMessage() {
-    _controls.LBL_MESSAGE->setExtentTop(-_gui->rootControl().extent().top);
+    _controls.LBL_MESSAGE->setExtent(bandExtent(0));
     _controls.LBL_MESSAGE->setTextColor(_baseColor);
 }
 
 void DialogGUI::configureReplies() {
+    // Reply prose is authored for a 4:3 dialogue safe area. Keep that area
+    // centred on wider displays, but preserve the original left alignment
+    // inside it so choices scan as a conventional vertical list.
+    // The list's root remains full-width so its authored child coordinates
+    // do not receive the safe-area offset twice. The row prototype below is
+    // positioned in the 4:3 rectangle itself.
+    _controls.LB_REPLIES->setExtent(bandExtent(_game.options().graphics.height - bandHeight()));
+    // The authored list reserves a scroll-bar column against its left edge,
+    // with the row prototype indented past it. Recreate that column at the
+    // safe area's left edge: the list is moved into the band by the extent
+    // override above, and no layout pass carries its scroll bar along, so
+    // without this the bar would render at its raw authored coordinates in
+    // the screen's top-left corner whenever the replies overflow the band.
+    // The bar and the row indent share the dialogue text scale, not the
+    // layout factor: the rows draw their prose at that scale, and the
+    // authored proportion is a bar as wide as a row is tall.
+    if (auto scrollBar = _controls.LB_REPLIES->scrollBarOrNull()) {
+        auto safeArea = replySafeArea();
+        scrollBar->setExtent({
+            safeArea.left,
+            safeArea.top,
+            static_cast<int>(std::lround(scrollBar->authoredExtent().width * _controls.LBL_MESSAGE->scale())),
+            safeArea.height});
+    }
     _controls.LB_REPLIES->setProtoMatchContent(true);
+    _controls.LB_REPLIES->protoItem().setTextFont(_controls.LBL_MESSAGE->text().font);
+    _controls.LB_REPLIES->protoItem().setScale(_controls.LBL_MESSAGE->scale());
+    _controls.LB_REPLIES->protoItem().setTextAlignment(Control::TextAlign::LeftCenter);
     _controls.LB_REPLIES->protoItem().setHilightColor(_hilightColor);
     _controls.LB_REPLIES->protoItem().setTextColor(_baseColor);
 }
 
 void DialogGUI::onStart() {
     _currentSpeaker = _owner;
+    _heldCutParticipants.clear();
     loadStuntParticipants();
 
     auto camera = _game.module()->area()->getCamera<AnimatedCamera>(CameraType::Animated);
@@ -150,14 +221,7 @@ void DialogGUI::loadStuntParticipants() {
     _participantByTag.clear();
 
     for (auto &stunt : _dialog->stunts) {
-        std::shared_ptr<Creature> creature;
-        if (stunt.participant == kObjectTagOwner) {
-            creature = std::dynamic_pointer_cast<Creature>(_owner);
-        } else if (boost::iequals(stunt.participant, kObjectTagPlayer)) {
-            creature = _game.party().player();
-        } else {
-            creature = std::dynamic_pointer_cast<Creature>(_game.module()->area()->getObjectByTag(stunt.participant));
-        }
+        std::shared_ptr<Creature> creature(resolveParticipantCreature(stunt.participant));
         if (!creature) {
             warn("Dialog: participant creature not found by tag: " + stunt.participant);
             continue;
@@ -185,12 +249,26 @@ bool DialogGUI::hasStuntPresentation() const {
     return _dialog->isAnimatedCutscene() || !_dialog->stunts.empty();
 }
 
+std::shared_ptr<Creature> DialogGUI::resolveParticipantCreature(const std::string &participant) const {
+    if (participant == kObjectTagOwner) {
+        return std::dynamic_pointer_cast<Creature>(_owner);
+    }
+    if (boost::iequals(participant, kObjectTagPlayer)) {
+        return _game.party().player();
+    }
+    return std::dynamic_pointer_cast<Creature>(_game.module()->area()->getObjectByTag(participant));
+}
+
 std::shared_ptr<Animation> DialogGUI::getStuntParticipantAnimation(
     const std::string &participant,
     int ordinal) const {
+    auto cut = decodeCutAnimation(ordinal);
+    if (!cut) {
+        return nullptr;
+    }
     auto maybeParticipant = _participantByTag.find(participant);
     return maybeParticipant != _participantByTag.end()
-               ? maybeParticipant->second.model->getAnimation(getStuntAnimationName(ordinal))
+               ? maybeParticipant->second.model->getAnimation(cut->name)
                : nullptr;
 }
 
@@ -225,14 +303,14 @@ void DialogGUI::restoreInactiveStuntParticipants() {
     }
 }
 
-bool DialogGUI::enterMixedStunt(Participant &participant, const std::shared_ptr<Animation> &animation) {
+bool DialogGUI::enterMixedStunt(Participant &participant, const std::shared_ptr<Animation> &animation, bool looping) {
     if (!participant.mixedStuntActive && participant.creature->isStuntMode()) {
         warn("Dialog: participant is already in stunt mode: " + participant.creature->tag());
         return false;
     }
 
     AnimationProperties properties;
-    properties.flags = AnimationFlags::propagate;
+    properties.flags = AnimationFlags::propagate | (looping ? AnimationFlags::loop : 0);
     properties.scale = 1.0f;
     if (!participant.creature->playExternalAnimation(animation, std::move(properties))) {
         return false;
@@ -342,54 +420,116 @@ DialogCamera::Variant DialogGUI::getRandomCameraVariant() const {
 }
 
 void DialogGUI::updateParticipantAnimations() {
+    // Each authored animation is resolved on its own. The ordinal decides which
+    // animation is meant, the participant decides which model plays it, and a
+    // single entry may drive stunt-bound participants and ordinary area
+    // creatures side by side.
     for (auto &anim : _currentEntry->animations) {
-        if (_dialog->isAnimatedCutscene()) {
-            auto maybeParticipant = _participantByTag.find(anim.participant);
-            if (maybeParticipant == _participantByTag.end()) {
-                warn("Dialog: participant not found by tag: " + anim.participant);
-                continue;
-            }
-            const Participant &participant = maybeParticipant->second;
-            std::string animName(getStuntAnimationName(anim.animation));
-            std::shared_ptr<Animation> animation(participant.model->getAnimation(animName));
-            if (animation) {
-                AnimationProperties properties;
-                properties.flags = AnimationFlags::propagate;
-                properties.scale = 1.0f;
-                participant.creature->playExternalAnimation(animation, std::move(properties));
-            }
-        } else if (auto animation = getStuntParticipantAnimation(anim.participant, anim.animation)) {
-            Participant &participant = _participantByTag.at(anim.participant);
-            enterMixedStunt(participant, animation);
+        if (auto cut = decodeCutAnimation(anim.animation)) {
+            applyCutAnimation(anim.participant, *cut);
         } else {
-            std::shared_ptr<Creature> participant;
-            if (anim.participant == "owner") {
-                participant = std::dynamic_pointer_cast<Creature>(_owner);
-            } else {
-                participant = std::dynamic_pointer_cast<Creature>(_game.module()->area()->getObjectByTag(anim.participant));
-            }
-            if (!participant) {
-                warn("Dialog: participant creature not found by tag: " + anim.participant);
-                continue;
-            }
-            AnimationType animType = getStuntAnimationType(anim.animation);
-            if (animType != AnimationType::Invalid) {
-                participant->playAnimation(animType);
-            }
+            applyDialogAnimation(anim.participant, anim.animation);
         }
     }
 }
 
-std::string DialogGUI::getStuntAnimationName(int ordinal) const {
-    return str(boost::format("cut%03dw") % (ordinal - 1200 + 1));
+void DialogGUI::applyCutAnimation(const std::string &participant, const CutAnimation &cut) {
+    auto maybeParticipant = _participantByTag.find(participant);
+    if (maybeParticipant != _participantByTag.end()) {
+        Participant &stunt = maybeParticipant->second;
+        if (auto animation = stunt.model->getAnimation(cut.name)) {
+            if (_dialog->isAnimatedCutscene()) {
+                AnimationProperties properties;
+                properties.flags = AnimationFlags::propagate | (cut.looping ? AnimationFlags::loop : 0);
+                properties.scale = 1.0f;
+                stunt.creature->playExternalAnimation(animation, std::move(properties));
+            } else {
+                enterMixedStunt(stunt, animation, cut.looping);
+            }
+            return;
+        }
+        // The stunt model is the authored source for this participant, so a
+        // missing clip is a data problem rather than a reason to silently
+        // animate from somewhere else. Staged participants also sit at the
+        // stunt origin, where an in-place clip would play in the wrong place.
+        warn("Dialog: stunt model has no animation: " + cut.name);
+        return;
+    }
+
+    auto creature = resolveParticipantCreature(participant);
+    if (!creature) {
+        warn("Dialog: participant creature not found by tag: " + participant);
+        return;
+    }
+    auto node = creature->sceneNode();
+    if (!node || node->type() != SceneNodeType::Model) {
+        return;
+    }
+    // Cut clips authored without the world-space suffix live on the creature's
+    // own model, so they play in place rather than through stunt staging.
+    auto animation = std::static_pointer_cast<ModelSceneNode>(node)->model().getAnimation(cut.name);
+    if (!animation) {
+        return;
+    }
+    AnimationProperties properties;
+    if (cut.looping) {
+        properties.flags |= AnimationFlags::loop;
+    }
+    // Authored cutscene clips stay under dialogue ownership: a one-shot clip
+    // holds its final frame instead of falling back to the state-driven idle,
+    // because the authored sequence may leave entries without an AnimList
+    // before the next clip takes over.
+    if (creature->playExternalAnimation(animation, std::move(properties))) {
+        holdCutParticipant(creature);
+    }
 }
 
-AnimationType DialogGUI::getStuntAnimationType(int ordinal) const {
-    std::shared_ptr<TwoDA> animations(_services.resource.twoDas.get("dialoganimations"));
-    int index = ordinal - 10000;
+void DialogGUI::applyDialogAnimation(const std::string &participant, int ordinal) {
+    auto creature = resolveParticipantCreature(participant);
+    if (!creature) {
+        warn("Dialog: participant creature not found by tag: " + participant);
+        return;
+    }
+    AnimationType animType = getDialogAnimationType(ordinal);
+    if (animType != AnimationType::Invalid) {
+        creature->playAnimation(animType);
+    }
+}
 
-    if (index < 0 || index >= animations->getRowCount()) {
-        warn("Dialog: animation index out of bounds: " + std::to_string(index));
+std::optional<DialogGUI::CutAnimation> DialogGUI::decodeCutAnimation(int ordinal) {
+    for (auto &band : g_cutAnimationBands) {
+        int offset = ordinal - band.base;
+        if (offset < 0 || offset >= kCutAnimationBandSize) {
+            continue;
+        }
+        CutAnimation cut;
+        cut.name = str(boost::format("cut%03d%s") % (offset + 1) % band.suffix);
+        cut.looping = band.looping;
+        return cut;
+    }
+    return std::nullopt;
+}
+
+AnimationType DialogGUI::getDialogAnimationType(int ordinal) const {
+    int index;
+    if (ordinal >= kDialogAnimationBase) {
+        index = ordinal - kDialogAnimationBase;
+    } else if (ordinal > 0 && !_game.isTSL()) {
+        index = ordinal;
+    } else {
+        // Cut-band ordinals never reach here. K2 lower ordinals and the zero
+        // sentinel belong to no ordinary-animation namespace reone recognises.
+        warn("Dialog: unsupported animation ordinal: " + std::to_string(ordinal));
+        return AnimationType::Invalid;
+    }
+    std::shared_ptr<TwoDA> animations(_services.resource.twoDas.get("dialoganimations"));
+
+    if (index >= animations->getRowCount()) {
+        if (ordinal < kDialogAnimationBase) {
+            warn("Dialog: unsupported animation ordinal: " + std::to_string(ordinal));
+        } else {
+            warn("Dialog: animation index out of bounds: " + std::to_string(index));
+        }
         return AnimationType::Invalid;
     }
 
@@ -405,7 +545,7 @@ void DialogGUI::repositionMessage() {
 
     if (_entryEnded) {
         text.align = Control::TextAlign::CenterBottom;
-        top = -_gui->rootControl().extent().top;
+        top = 0;
     } else {
         text.align = Control::TextAlign::CenterTop;
         top = _controls.LB_REPLIES->extent().top;
@@ -419,12 +559,27 @@ void DialogGUI::onFinish() {
     if (hasStuntPresentation()) {
         releaseStuntParticipants();
     }
+    releaseHeldCutParticipants();
 
     // Make current speaker stop talking, if any
     auto speakerCreature = std::dynamic_pointer_cast<Creature>(_currentSpeaker);
     if (speakerCreature) {
         speakerCreature->stopTalking();
     }
+}
+
+void DialogGUI::holdCutParticipant(const std::shared_ptr<Creature> &creature) {
+    auto maybeHeld = std::find(_heldCutParticipants.begin(), _heldCutParticipants.end(), creature);
+    if (maybeHeld == _heldCutParticipants.end()) {
+        _heldCutParticipants.push_back(creature);
+    }
+}
+
+void DialogGUI::releaseHeldCutParticipants() {
+    for (auto &creature : _heldCutParticipants) {
+        creature->resumeStateDrivenAnimation();
+    }
+    _heldCutParticipants.clear();
 }
 
 void DialogGUI::releaseStuntParticipants() {
@@ -463,6 +618,31 @@ void DialogGUI::setReplyLines(std::vector<std::string> lines) {
         item.text = lines[i];
         _controls.LB_REPLIES->addItem(std::move(item));
     }
+    // Replies start at the top-left of the centred 4:3 safe area within the
+    // bottom band, indented past the scroll-bar column by their authored
+    // offset so an overflowing list shows its bar beside the prose, not
+    // under it. K1 authors the rows flush against the bar, which reads as
+    // touching; hold them clear of it by the gap TSL authors, which leaves
+    // TSL's own indent unchanged. The list root stays full-width so the
+    // offset is applied exactly once to its row prototype.
+    static constexpr int kScrollBarTextGap = 8;
+    auto extent = _controls.LB_REPLIES->protoItem().extent();
+    const auto &band = _controls.LB_REPLIES->extent();
+    auto safeArea = replySafeArea();
+    float textScale = _controls.LBL_MESSAGE->scale();
+    int indent = static_cast<int>(std::lround(
+        (_controls.LB_REPLIES->protoItem().authoredExtent().left -
+         _controls.LB_REPLIES->authoredExtent().left) *
+        textScale));
+    if (auto scrollBar = _controls.LB_REPLIES->scrollBarOrNull()) {
+        indent = std::max(
+            indent,
+            scrollBar->extent().width + static_cast<int>(std::lround(kScrollBarTextGap * textScale)));
+    }
+    extent.left = safeArea.left + indent;
+    extent.width = safeArea.width - indent;
+    extent.top = band.top;
+    _controls.LB_REPLIES->protoItem().setExtent(std::move(extent));
 }
 
 void DialogGUI::update(float dt) {

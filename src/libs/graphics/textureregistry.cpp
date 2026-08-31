@@ -65,7 +65,7 @@ void TextureRegistry::init() {
     noisePixels->resize(4 * 4 * 2 * sizeof(float));
     for (int i = 0; i < 4 * 4 * 2; ++i) {
         float *pixel = reinterpret_cast<float *>(&(*noisePixels)[4 * i]);
-        *pixel = randomFloat(-1.0f, 1.0f);
+        *pixel = renderRandomFloat(-1.0f, 1.0f);
     }
     auto noiseLayer = Texture::Layer {std::move(noisePixels)};
     auto noiseRG = std::make_shared<Texture>(

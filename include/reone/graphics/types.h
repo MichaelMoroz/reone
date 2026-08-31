@@ -28,6 +28,22 @@ constexpr float kDefaultObjectDrawDistance = 64.0f;
 constexpr int kNumCubeFaces = 6;
 constexpr int kNumShadowCascades = 4;
 constexpr int kNumShadowLightSpace = 6;
+
+/**
+ * Ceilings on the shadow tables the uniform block is sized for, mirrored in
+ * slang/uniforms.slang. They are the option registry's caps, not its defaults -
+ * GraphicsOptions decides how many slots a frame may FILL, and that is what
+ * costs image memory. These only cost uniform bytes.
+ */
+constexpr int kMaxDirectionalShadows = 4;
+// 48, up from 16: the ceiling was the six face matrices each caster stored in
+// the uniform block, and those are computed in the render pass now. What
+// remains per caster is one 32-byte record and six cube layers; the runtime
+// budget is still the maxPointShadows option, defaulting well below this.
+constexpr int kMaxPointShadows = 48;
+constexpr int kMaxShadowLights = kMaxDirectionalShadows + kMaxPointShadows;
+/** Cascade matrices the directional half of the table holds. */
+constexpr int kMaxShadowCascadeMatrices = kMaxDirectionalShadows * kNumShadowCascades;
 constexpr int kNumSSAOSamples = 64;
 constexpr int kNumSaberSegments = 20;
 constexpr int kNumSaberSegmentVertices = 4;
@@ -35,7 +51,15 @@ constexpr int kNumLipShapes = 16;
 
 constexpr int kMaxBones = 24;
 constexpr int kMaxDanglyVertices = 768;
-constexpr int kMaxLights = 32;
+/**
+ * Ceiling on the light array, not the number in use.
+ *
+ * It sizes the uniform block, so it is fixed at compile time and mirrored in
+ * slang/uniforms.slang. How many of those slots a frame actually fills is
+ * GraphicsOptions::maxLights, which is live - raising the ceiling costs uniform
+ * bytes whether or not the lights exist, while the option costs the light loop.
+ */
+constexpr int kMaxLights = 64;
 constexpr int kMaxParticles = 64;
 constexpr int kMaxTextChars = 128;
 constexpr int kMaxGrassClusters = 256;
@@ -113,7 +137,11 @@ enum class BlendMode {
     Normal,
     Additive,
     Lighten,
-    OIT_Transparent
+    OIT_Transparent,
+    /** Source colour already multiplied by coverage: ONE, ONE_MINUS_SRC_ALPHA.
+        Lets additive and alpha-blended share one pipeline, additive being the
+        alpha-zero case. */
+    Premultiplied
 };
 
 enum class PolygonMode {
@@ -172,6 +200,31 @@ struct TextureUnits {
 
     static constexpr int envMapCube = 18;
     static constexpr int shadowMapCube = 19;
+
+    // 2D, continued
+
+    static constexpr int gBufMotion = 20;
+    static constexpr int gBufTriangleId = 21;
+    static constexpr int coverage = 22;
+    /**
+     * The point-shadow cube array AGAIN, under a non-comparison sampler.
+     *
+     * The comparison view at shadowMapCube answers "is the receiver behind",
+     * which is all a plain shadow needs; a penumbra that follows the emitter's
+     * physical size needs the blocker's actual distance, and a comparison
+     * sampler cannot return one - two attempts to estimate it from comparison
+     * taps measured 0.59x and 0.39x against the reference and were reverted.
+     */
+    static constexpr int pointShadowRaw = 23;
+    /**
+     * The shared channel images, for the debug pass's radiance views. Any mode
+     * that fills the channels - the tracer, PBR through pbr_channels - can
+     * show them; retro fills none and paints the not-available card instead.
+     */
+    static constexpr int channelDiffuse = 24;
+    static constexpr int channelSpecular = 25;
+    static constexpr int channelNoiseFree = 26;
+    static constexpr int channelDirect = 27;
 };
 
 // MDL

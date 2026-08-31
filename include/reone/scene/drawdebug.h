@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026 The reone project contributors
+ * Copyright (c) 2020-2026 The reone project contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,29 +17,34 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
+#include <string_view>
+#include <vector>
+
+#include <glm/vec3.hpp>
+
+#include "reone/graphics/rendering/scenepipeline.h"
 
 namespace reone {
 
-namespace graphics {
-class GraphicsServices;
-}
-
-namespace scene {
-class IRenderPass;
-}
-
-namespace resource {
-class ResourceServices;
-}
-
-void updateDrawDebug(float dt);
-
-void renderDrawDebug(scene::IRenderPass &pass,
-                     graphics::GraphicsServices &services,
-                     resource::ResourceServices &resources,
-                     std::string_view sceneName);
-
+/**
+ * Scoped immediate-mode debug primitives, drawn through the debug overlay.
+ *
+ * The namespace below is UPSTREAM'S, declaration for declaration, so callers
+ * that use it - the pathfinder narrates its funnels and face graph this way -
+ * compile here byte-identical and merge without conflict. Keep it that way:
+ * the point of this file is that the interesting divergence lives elsewhere.
+ *
+ * What differs is only where the elements go. Upstream renders them from an
+ * immediate-mode pass that built vertices per call; that pass was deleted in
+ * d6148ee66 and is not coming back. Here they are collected into the same
+ * DebugOverlay the object boxes and name labels already use, which buys one
+ * draw path, one depth image, and identical occlusion between a pathfinder
+ * line and an object's bounding box. collectDrawDebug replaces upstream's
+ * renderDrawDebug for that reason, and is the one declaration in this file
+ * that can ever conflict.
+ */
 namespace drawdebug {
 /**
  * DrawDebug ID opens a new scope for elements to go to.
@@ -93,5 +98,24 @@ void point(glm::vec3 position, uint32_t colorRgba, float scale = 1.0);
 void box(glm::vec3 min, glm::vec3 max, uint32_t colorRgba);
 
 } // namespace drawdebug
+
+/** Age every element and drop what has outlived its pushLifetime. */
+void updateDrawDebug(float dt);
+
+/** Drop every element in every scope, whatever its lifetime. */
+void clearDrawDebug();
+
+/**
+ * Append this scene's live elements to the overlay buffers.
+ *
+ * Lines, triangles and points become overlay lines; boxes become overlay
+ * shapes; text becomes overlay labels. Appending rather than assigning is what
+ * lets object boxes and debug primitives share one pass - see
+ * SceneGraph::collectDebugOverlay, the only caller.
+ */
+void collectDrawDebug(std::string_view sceneName,
+                      std::vector<graphics::DebugOverlayShape> &shapes,
+                      std::vector<graphics::DebugOverlayLine> &lines,
+                      std::vector<graphics::DebugOverlayLabel> &labels);
 
 } // namespace reone

@@ -113,9 +113,10 @@ private:
     ResourceId _resId;
 };
 
-ResourceExplorerFrame::ResourceExplorerFrame(ResourceExplorerViewModel &viewModel) :
+ResourceExplorerFrame::ResourceExplorerFrame(ResourceExplorerViewModel &viewModel, bool captureRun) :
     wxFrame(nullptr, wxID_ANY, "reone toolkit", wxDefaultPosition, wxDefaultSize, wxDEFAULT_FRAME_STYLE),
-    m_viewModel(viewModel) {
+    m_viewModel(viewModel),
+    m_captureRun(captureRun) {
 
 #ifdef _WIN32
     SetIcon(wxIcon(kIconName));
@@ -163,6 +164,7 @@ void ResourceExplorerFrame::InitControls() {
 
     m_imagePanel = new ImageResourcePanel(m_viewModel.imageResViewModel(), m_notebook);
     m_modelPanel = new ModelResourcePanel(m_viewModel.modelResViewModel(), m_notebook);
+    m_viewModel.setRenderPanel(m_modelPanel->renderCanvas());
     m_audioPanel = new AudioResourcePanel(m_viewModel.audioResViewModel(), m_notebook);
 
     m_splitter->SplitVertically(resourcesPanel, m_notebook, 1);
@@ -243,11 +245,6 @@ void ResourceExplorerFrame::BindViewModel() {
                     }
                     page->dirty = true;
                 });
-            }
-            if (page->type == PageType::Model || page->type == PageType::Audio) {
-                m_modelPanel->Show();
-                m_modelPanel->InitGL();
-                m_modelPanel->Hide();
             }
             window->SetClientData(new PageClientData {page->resourceId});
             window->Show();
@@ -360,17 +357,26 @@ void ResourceExplorerFrame::OnClose(wxCloseEvent &event) {
 
 void ResourceExplorerFrame::OnIdle(wxIdleEvent &event) {
     bool renderEnabled = *m_viewModel.renderEnabled();
-    if (renderEnabled) {
+    if (renderEnabled && !m_captureRun) {
         m_viewModel.modelResViewModel().update3D();
-        m_modelPanel->RefreshGL();
+        m_modelPanel->RefreshCanvas();
     }
     bool hasAudio = m_audioPanel->HasAudioSource();
     if (hasAudio) {
         m_audioPanel->UpdateAudioSource();
     }
-    if (renderEnabled || hasAudio) {
+    if ((!m_captureRun && renderEnabled) || hasAudio) {
         event.RequestMore();
     }
+}
+
+void ResourceExplorerFrame::renderPreviewFrame(float delta, const std::filesystem::path *capturePath) {
+    auto clientSize = m_modelPanel->renderCanvas().GetClientSize();
+    if (clientSize.x <= 0 || clientSize.y <= 0) {
+        throw std::runtime_error("Model preview panel has no drawable size");
+    }
+    m_viewModel.modelResViewModel().update3D(delta);
+    m_viewModel.modelResViewModel().render3D(clientSize.x, clientSize.y, capturePath);
 }
 
 void ResourceExplorerFrame::OnOpenDirectoryCommand(wxCommandEvent &event) {

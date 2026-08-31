@@ -37,6 +37,8 @@
 
 #include "reone/game/di/services.h"
 #include "reone/game/game.h"
+#include "reone/game/object/creature.h"
+#include "reone/game/reputes.h"
 
 using namespace reone::graphics;
 using namespace reone::resource;
@@ -49,17 +51,19 @@ namespace game {
 
 void Door::deserialize(const resource::Gff &gff) {
     std::string templateRes;
-    if (gff.readResRef(templateRes, "TemplateResRef")) {
+    if (!gff.has("ObjectId") && gff.readResRef(templateRes, "TemplateResRef")) {
         if (auto utd = _services.resource.gffs.get(templateRes, ResType::Utd)) {
             deserializeAll(*utd);
         }
     }
     deserializeAll(gff);
     loadAppearance();
+    applyRestingState();
     updateTransform();
 }
 
 void Door::deserializeAll(const resource::Gff &gff) {
+    deserializeRuntimeState(gff);
     if (gff.readString(_tag, "Tag")) {
         boost::to_lower(_tag);
     }
@@ -69,7 +73,29 @@ void Door::deserializeAll(const resource::Gff &gff) {
 
     gff.readDword(_appearance, "Appearance");
     gff.readByte(_genericType, "GenericType");
-    gff.readBool(_isOpen, "OpenState");
+    {
+        // OpenState names the resting state the door was authored in. Every K1
+        // and K2 blueprint that sets it sets AnimationState to the same value,
+        // so OpenState on its own is authoritative.
+        uint8_t openState;
+        if (gff.readByte(openState, "OpenState")) {
+            switch (openState) {
+            case 0:
+                _state = DoorState::Closed;
+                break;
+            case 1:
+                _state = DoorState::Opened1;
+                break;
+            case 2:
+                _state = DoorState::Opened2;
+                break;
+            default:
+                warn(str(boost::format("Door: unsupported OpenState %d, treating as closed") % static_cast<int>(openState)));
+                _state = DoorState::Closed;
+                break;
+            }
+        }
+    }
     gff.readBool(_autoRemoveKey, "AutoRemoveKey");
     {
         float bearing;
@@ -88,6 +114,9 @@ void Door::deserializeAll(const resource::Gff &gff) {
         _maxHitPoints = _hitPoints;
     }
     gff.readShort(_currentHitPoints, "CurrentHP");
+    if (gff.has("ObjectId") && gff.has("CurrentHP")) {
+        _dead = _currentHitPoints <= 0;
+    }
     gff.readBool(_plot, "Plot");
     gff.readBool(_minOneHP, "Min1HP");
     if (gff.readString(_keyName, "KeyName")) {
@@ -175,13 +204,59 @@ void Door::loadAppearance() {
         _walkmeshOpen2->setUser(*this);
         _walkmeshOpen2->setEnabled(false);
     }
+
+    // A door authored open must load directly into its opened pose, with the
+    // matching walkmesh, rather than resting shut and playing an opening
+    // transition it already finished before the module was entered.
+    applyRestingState();
+}
+
+void Door::applyRestingState() {
+    _transition = DoorTransition::None;
+    _open = _state != DoorState::Closed;
+    enableStateWalkmeshes();
+    applyRestingPose();
+}
+
+void Door::enableStateWalkmeshes() {
+    if (_walkmeshClosed) {
+        _walkmeshClosed->setEnabled(_state == DoorState::Closed);
+    }
+    if (_walkmeshOpen1) {
+        _walkmeshOpen1->setEnabled(_state == DoorState::Opened1);
+    }
+    if (_walkmeshOpen2) {
+        _walkmeshOpen2->setEnabled(_state == DoorState::Opened2);
+    }
+}
+
+void Door::applyRestingPose() {
+    auto model = std::static_pointer_cast<ModelSceneNode>(_sceneNode);
+    if (!model) {
+        return;
+    }
+    // Every K1 and K2 door model carries these as zero-length pose animations.
+    // They finish on the update they are played, and a finished non-fire-forget
+    // channel is retained, so the pose holds.
+    switch (_state) {
+    case DoorState::Opened1:
+        model->playAnimation("opened1");
+        break;
+    case DoorState::Opened2:
+        model->playAnimation("opened2");
+        break;
+    case DoorState::Closed:
+    default:
+        model->playAnimation("closed");
+        break;
+    }
 }
 
 void Door::loadLinkedTransitionGeometry(const Walkmesh &walkmesh) {
     AABB bounds;
-    for (const auto &face : walkmesh.faces()) {
-        for (const auto &vertex : face.vertices) {
-            bounds.expand(vertex);
+    for (const auto &face : walkmesh.faces) {
+        for (const auto &vertex : face.indices) {
+            bounds.expand(walkmesh.vertices[vertex]);
         }
     }
     if (bounds.isDegenerate() || bounds.min().x == bounds.max().x || bounds.min().y == bounds.max().y) {
@@ -197,7 +272,9 @@ void Door::loadLinkedTransitionGeometry(const Walkmesh &walkmesh) {
 }
 
 bool Door::isSelectable() const {
-    return !_static && !_open;
+    // A door already swinging open is on its way out of reach even though it is
+    // not open yet, and offering it again would only re-run OnOpen.
+    return !_static && !_open && !isOpening();
 }
 
 void Door::damage(int amount, uint32_t damager) {
@@ -212,7 +289,8 @@ void Door::damage(int amount, uint32_t damager) {
     if (amount == std::numeric_limits<int>::max()) {
         _currentHitPoints = isMinOneHP() ? 1 : 0;
     } else {
-        _currentHitPoints = std::max(isMinOneHP() ? 1 : 0, currentHitPoints - amount);
+        int adjustedAmount = applyDamageToHitPoints(amount, currentHitPoints);
+        _game.floatingText().addDamage(*this, amount, adjustedAmount, damager);
     }
 
     damager = damager ? damager : script::kObjectInvalid;
@@ -230,39 +308,90 @@ void Door::damage(int amount, uint32_t damager) {
 }
 
 void Door::open() {
-    auto model = std::static_pointer_cast<ModelSceneNode>(_sceneNode);
-    if (model) {
-        // model->setDefaultAnimation("opened1", AnimationProperties::fromFlags(AnimationFlags::loop));
-        model->playAnimation("opening1");
+    if (isOpening()) {
+        // Already swinging open. Restarting would rewind the leaf and re-run
+        // whatever the caller does around the transition.
+        return;
     }
-    if (_walkmeshOpen1) {
-        _walkmeshOpen1->setEnabled(true);
+    if (_state != DoorState::Closed && _transition == DoorTransition::None) {
+        return;
     }
-    if (_walkmeshOpen2) {
-        _walkmeshOpen2->setEnabled(false);
-    }
-    if (_walkmeshClosed) {
-        _walkmeshClosed->setEnabled(false);
-    }
-    _open = true;
+
+    // A door that is swinging aside is still in the doorway. Retail K2 will not
+    // let the player through one until the opening animation has finished, so
+    // the closed walkmesh stays enabled for the whole transition and only comes
+    // off when the door has physically arrived at its opened pose.
+    beginTransition(DoorTransition::Opening);
 }
 
 void Door::close() {
+    if (isClosing()) {
+        return;
+    }
+    if (_state == DoorState::Closed && _transition == DoorTransition::None) {
+        // Already shut and blocking. Closing again must not replay the
+        // transition, which would briefly reopen the doorway to collision.
+        return;
+    }
+
+    // The mirror image: a door that is swinging shut has not sealed the doorway
+    // yet. Scripts routinely close a door behind somebody who is still walking
+    // through it - K2 103PER closes TO102PER on the same beat that sends the
+    // player through it, and DOR_PER03 takes 2.667 seconds to shut - so the
+    // doorway stays passable until the door reaches its closed pose.
+    beginTransition(DoorTransition::Closing);
+}
+
+void Door::beginTransition(DoorTransition transition) {
+    // _state is left alone. It names where the door still physically stands,
+    // and everything that can obstruct or admit a creature is read off it, so
+    // the door keeps the collision of the state it is leaving until it arrives.
+    _transition = transition;
+
     auto model = std::static_pointer_cast<ModelSceneNode>(_sceneNode);
     if (model) {
-        // model->setDefaultAnimation("closed", AnimationProperties::fromFlags(AnimationFlags::loop));
-        model->playAnimation("closing1");
+        model->playAnimation(transitionAnimation(transition));
     }
-    if (_walkmeshOpen1) {
-        _walkmeshOpen1->setEnabled(false);
+    if (isTransitionComplete()) {
+        // No model, or no such animation on it: there is nothing to wait for,
+        // so the door arrives immediately rather than being stranded in a
+        // transition that can never complete.
+        finishTransition();
     }
-    if (_walkmeshOpen2) {
-        _walkmeshOpen2->setEnabled(false);
+}
+
+void Door::finishTransition() {
+    _state = transitionTarget(_transition);
+    applyRestingState();
+}
+
+void Door::update(float dt) {
+    Object::update(dt);
+
+    if (_transition != DoorTransition::None && isTransitionComplete()) {
+        finishTransition();
     }
-    if (_walkmeshClosed) {
-        _walkmeshClosed->setEnabled(true);
+}
+
+bool Door::isTransitionComplete() const {
+    auto model = std::static_pointer_cast<ModelSceneNode>(_sceneNode);
+    if (!model) {
+        return true;
     }
-    _open = false;
+    // Something other than this transition owns the model - a reversal, or an
+    // animation the door never had - so there is nothing left to wait for.
+    if (model->activeAnimationName() != transitionAnimation(_transition)) {
+        return true;
+    }
+    return model->isAnimationFinished();
+}
+
+const char *Door::transitionAnimation(DoorTransition transition) {
+    return transition == DoorTransition::Opening ? "opening1" : "closing1";
+}
+
+DoorState Door::transitionTarget(DoorTransition transition) {
+    return transition == DoorTransition::Opening ? DoorState::Opened1 : DoorState::Closed;
 }
 
 void Door::onOpen(uint32_t triggererId) {
@@ -312,6 +441,16 @@ void Door::runDeathScript(uint32_t damagerId) {
 
 void Door::setLocked(bool locked) {
     _locked = locked;
+}
+
+bool canBashDoor(const Door &door, const Creature &actor, const IReputes &reputes) {
+    return door.isLocked() &&
+           door.isSelectable() &&
+           !door.isDead() &&
+           !door.plotFlag() &&
+           !door.isNotBlastable() &&
+           reputes.getIsEnemy(actor.faction(), door.faction()) &&
+           (door.hitPoints() > 0 || door.currentHitPoints() > 0);
 }
 
 void Door::updateTransform() {

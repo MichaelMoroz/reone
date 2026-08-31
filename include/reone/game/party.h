@@ -17,7 +17,10 @@
 
 #pragma once
 
+#include "reone/game/galaxymapstate.h"
 #include "reone/input/event.h"
+
+#include <array>
 
 namespace reone {
 
@@ -36,6 +39,66 @@ enum class XPSource {
 
 class Party {
 public:
+    // PARTYTABLE.res stores one ownership count per card type plus one spare
+    // entry: KotOR I ships eighteen card types, KotOR II twenty-three.
+    static constexpr size_t kK1PazaakCardCount = 19;
+    static constexpr size_t kK2PazaakCardCount = 24;
+    static constexpr size_t kMaxPazaakCardCount = kK2PazaakCardCount;
+    static constexpr size_t kK1PazaakSideDeckSize = 10;
+    using PazaakCardCounts = std::array<int, kMaxPazaakCardCount>;
+    using PazaakSideDeck = std::array<int, kK1PazaakSideDeckSize>;
+    static constexpr size_t kK1NpcCount = 9;
+    static constexpr size_t kK2NpcCount = 12;
+    static constexpr size_t kMaxNpcCount = kK2NpcCount;
+    static constexpr size_t kMaxPuppetCount = 3;
+    static constexpr size_t kGalaxyPlanetCount = 16;
+
+    struct SavedDialogMessage {
+        std::string speaker;
+        std::string text;
+    };
+
+    struct SavedLogMessage {
+        uint8_t color {0};
+        uint32_t type {0};
+        std::string text;
+    };
+
+    struct PersistedState {
+        std::string pcName;
+        uint32_t itemComponent {0};
+        uint32_t itemChemical {0};
+        std::array<uint32_t, 3> swoopUpgrades {};
+        uint32_t playedSeconds {0};
+        int controlledNpc {-1};
+        bool soloMode {false};
+        std::vector<int> memberIds;
+        int leader {-1};
+        std::vector<int> puppetIds;
+        std::array<bool, kMaxNpcCount> npcAvailable {};
+        std::array<bool, kMaxNpcCount> npcSelectable {};
+        std::array<int, kMaxNpcCount> influence {};
+        std::array<bool, kMaxPuppetCount> puppetAvailable {};
+        std::array<bool, kMaxPuppetCount> puppetSelectable {};
+        int aiState {0};
+        int followState {0};
+        uint32_t galaxyPointCount {0};
+        std::array<bool, kGalaxyPlanetCount> planetAvailable {};
+        std::array<bool, kGalaxyPlanetCount> planetSelectable {};
+        int selectedPlanet {-1};
+        bool mapDisabled {false};
+        bool regenerationDisabled {false};
+        std::vector<SavedDialogMessage> dialogMessages;
+        std::vector<SavedLogMessage> feedbackMessages;
+        std::vector<SavedLogMessage> combatMessages;
+
+        PersistedState() {
+            npcSelectable.fill(true);
+            influence.fill(-1);
+            puppetSelectable.fill(true);
+        }
+    };
+
     struct Member {
         int npc {0};
         std::shared_ptr<Creature> creature;
@@ -51,6 +114,11 @@ public:
     // to their default values.
     void reset();
 
+    // Retire instantiated creature bindings while preserving save-wide logical
+    // state. A later runtime reconstruction phase can materialize those
+    // bindings again from the committed working state.
+    void retireRuntimeSession();
+
     void clear();
     void switchLeader();
 
@@ -61,11 +129,30 @@ public:
     std::shared_ptr<Creature> getLeader() const;
 
     std::shared_ptr<Creature> player() const { return _player; }
+    std::shared_ptr<Creature> actualPlayer() const { return _actualPlayer ? _actualPlayer : _player; }
     const std::vector<Member> &members() const { return _members; }
+
+    const PersistedState &persistedState() const { return _persistedState; }
+
+    /** Roster index of the actor standing in for the PC, or kNpcPlayer. */
+    int controlledNpc() const { return _persistedState.controlledNpc; }
+
+    /**
+     * Hand control to a creature, leaving the rest of the party alone.
+     *
+     * Retail models temporary control as a roster NPC taking the player's
+     * place: the outgoing actor is parked rather than demoted to a companion,
+     * and the companions travelling with it are untouched. The incoming
+     * creature occupies the leading slot exactly once, however it was
+     * represented before.
+     */
+    void setControlledMember(int npc, const std::shared_ptr<Creature> &creature);
+    void setPersistedState(PersistedState state);
 
     void setPartyLeader(int npc);
     void setPartyLeaderByIndex(int index);
     void setPlayer(const std::shared_ptr<Creature> &player);
+    void setActualPlayer(const std::shared_ptr<Creature> &player) { _actualPlayer = player; }
     void setSoloMode(bool value) { _solo = value; }
 
     // Members
@@ -93,10 +180,16 @@ public:
     bool removeAvailableMember(int npc);
 
     bool isMemberAvailable(int npc) const;
-
     std::shared_ptr<Creature> getAvailableMember(int npc) const;
 
     // END Available members
+
+    // Available puppets
+
+    bool addAvailablePuppet(int puppet, std::shared_ptr<Creature> creature);
+    std::shared_ptr<Creature> getAvailablePuppet(int puppet) const;
+
+    // END Available puppets
 
     // Default party
 
@@ -116,6 +209,21 @@ public:
 
     // END Credits
 
+    // Pazaak state stored in PARTYTABLE.res. The final ownership slot is retained
+    // verbatim even though side decks only use the card-type IDs before it.
+    bool hasValidPazaakData() const { return _pazaakDataValid; }
+    const PazaakCardCounts &pazaakCardCounts() const { return _pazaakCardCounts; }
+    /// Number of ownership entries the loaded table actually carries.
+    size_t pazaakCardCount() const { return _pazaakCardCount; }
+    const PazaakSideDeck &pazaakSideDeck() const { return _pazaakSideDeck; }
+    void setPazaakData(
+        PazaakCardCounts counts,
+        PazaakSideDeck sideDeck,
+        size_t cardCount = kK1PazaakCardCount);
+    void setPazaakSideDeck(PazaakSideDeck sideDeck);
+    /// Authored starting collection: two copies each of +1 through +5.
+    void setDefaultPazaakData(size_t cardCount = kK1PazaakCardCount);
+
     // Experience
     //
     // KOTOR stores experience as a single party-shared pool. XP awarded to a
@@ -129,6 +237,16 @@ public:
     void setXP(int xp);
 
     // END Experience
+
+    // Galaxy map
+    //
+    // Planet availability, selectability and the current travel destination
+    // are party-wide runtime state, carried in PARTYTABLE.
+
+    GalaxyMapState &galaxyMap() { return _galaxyMap; }
+    const GalaxyMapState &galaxyMap() const { return _galaxyMap; }
+
+    // END Galaxy map
 
     // Inventory
     //
@@ -147,11 +265,19 @@ private:
     Game &_game;
 
     std::shared_ptr<Creature> _player;
+    std::shared_ptr<Creature> _actualPlayer;
     std::map<int, std::shared_ptr<Creature>> _availableMembers;
     std::vector<Member> _members;
     bool _solo {false};
     int _gold {0};
     int _xp {0};
+    GalaxyMapState _galaxyMap;
+    bool _pazaakDataValid {false};
+    size_t _pazaakCardCount {kK1PazaakCardCount};
+    PazaakCardCounts _pazaakCardCounts {};
+    PazaakSideDeck _pazaakSideDeck {};
+    PersistedState _persistedState;
+    std::map<int, std::shared_ptr<Creature>> _availablePuppets;
 
     bool handleKeyDown(const input::KeyEvent &event);
 

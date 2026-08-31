@@ -17,9 +17,14 @@
 
 #pragma once
 
+#include <limits>
+#include <string_view>
+#include <unordered_map>
+
 #include "reone/scene/render/pipeline.h"
 
 #include "fogproperties.h"
+#include "shadowproperties.h"
 #include "node/camera.h"
 #include "node/dummy.h"
 #include "node/emitter.h"
@@ -62,7 +67,6 @@ static constexpr float kElevationTestZ = 1024.0f;
 struct Collision;
 
 class IAnimationEventListener;
-class IRenderPass;
 class IRenderPipelineFactory;
 
 class ISceneGraph {
@@ -70,7 +74,8 @@ public:
     virtual ~ISceneGraph() = default;
 
     virtual void update(float dt) = 0;
-    virtual graphics::Texture &render(const glm::ivec2 &dim) = 0;
+    virtual graphics::Texture &render(const glm::ivec2 &dim,
+                                      SceneOutputAlpha alpha = SceneOutputAlpha::Opaque) = 0;
 
     virtual void clear() = 0;
 
@@ -82,14 +87,53 @@ public:
     virtual std::optional<std::reference_wrapper<ModelSceneNode>> pickModelRay(const glm::vec3 &origin, const glm::vec3 &dir) const = 0;
 
     virtual const std::string &name() const = 0;
+
+    /**
+     * Render pipeline backing this scene, for inspection by development tooling.
+     * Null until the scene has been rendered at least once, since the pipeline is
+     * created lazily on the first render.
+     */
+    virtual IRenderPipeline *renderPipeline() = 0;
+    /** Discard target-sized state before the next render recreates it. */
+    virtual void invalidateRenderPipeline() = 0;
+    /**
+     * True once if the scene has asked for its pipeline to be rebuilt.
+     *
+     * Asked for rather than done, because the caller that knows a rebuild is
+     * needed - clear(), during a module load - is inside a frame that is still
+     * rendering the loading screen, and the pipeline owns images those frames
+     * are reading. The engine performs it at the same point a graphics Apply
+     * does: outside a frame, after waiting for the device.
+     */
+    virtual bool consumeRenderPipelineRebuild() = 0;
     virtual std::optional<std::reference_wrapper<CameraSceneNode>> camera() = 0;
 
+    /** The completed frame snapshot. Editor update intentionally sees frame N-1. */
+    virtual const GpuScene &gpuScene() const = 0;
+    virtual GpuScene &gpuScene() = 0;
+    virtual const std::vector<LightSceneNode *> &lights() const = 0;
+    /** The largest authored radius among the registered lights; 0 with none. */
+    virtual float largestLightRadius() const = 0;
+    virtual uint32_t internName(std::string_view name) = 0;
+    virtual std::string_view nameText(uint32_t id) const = 0;
+
     virtual void setAmbientLightColor(glm::vec3 color) = 0;
+    virtual void setShadowProperties(ShadowProperties properties) = 0;
     virtual bool hasShadowLight() const = 0;
     virtual bool isShadowLightDirectional() const = 0;
 
     virtual bool isFogEnabled() const = 0;
     virtual void setFog(FogProperties fog) = 0;
+
+    /**
+     * Grass toggle and density multiplier, pushed per frame from graphics
+     * options. Density scales the area's authored value rather than replacing
+     * it; a change re-materialises clusters, so it applies live.
+     */
+    virtual void setGrass(bool enabled, float densityScale) = 0;
+    virtual bool grassEnabled() const = 0;
+    virtual float grassDensityScale() const = 0;
+    virtual uint64_t grassGeneration() const = 0;
 
     virtual void setWalkableSurfaces(std::set<uint32_t> surfaces) = 0;
     virtual void setWalkcheckSurfaces(std::set<uint32_t> surfaces) = 0;
@@ -97,10 +141,6 @@ public:
 
     virtual void setActiveCamera(CameraSceneNode *camera) = 0;
     virtual void setUpdateRoots(bool update) = 0;
-
-    virtual void setRenderAABB(bool render) = 0;
-    virtual void setRenderWalkmeshes(bool render) = 0;
-    virtual void setRenderTriggers(bool render) = 0;
 
     // Roots
 
@@ -131,7 +171,6 @@ public:
     virtual std::shared_ptr<EmitterSceneNode> newEmitter(graphics::ModelNode &modelNode) = 0;
     virtual std::shared_ptr<ParticleSceneNode> newParticle(EmitterSceneNode &emitter) = 0;
     virtual std::shared_ptr<GrassSceneNode> newGrass(GrassProperties properties, graphics::ModelNode &aabbNode) = 0;
-    virtual std::shared_ptr<GrassClusterSceneNode> newGrassCluster(GrassSceneNode &grass) = 0;
 
     // END Factory methods
 };
@@ -151,18 +190,50 @@ public:
         _graphicsSvc(graphicsSvc),
         _audioSvc(audioSvc),
         _resourceSvc(resourceSvc) {
+        _gpuScene.setShadowScene(&_shadowGpuScene);
     }
 
     void update(float dt) override;
-    graphics::Texture &render(const glm::ivec2 &dim) override;
 
-    void renderShadows(IRenderPass &pass);
-    void renderOpaque(IRenderPass &pass);
-    void renderTransparent(IRenderPass &pass);
-    void renderLensFlares(IRenderPass &pass);
+private:
+    /** Scene time and the previous frame's, in seconds. See update(). */
+    float _time {0.0f};
+    float _prevTime {0.0f};
+    bool _renderPipelineRebuildRequested {false};
+
+public:
+    graphics::Texture &render(const glm::ivec2 &dim,
+                              SceneOutputAlpha alpha = SceneOutputAlpha::Opaque) override;
+    void invalidateRenderPipeline() override {
+        _renderPipeline.reset();
+    }
+
+    bool consumeRenderPipelineRebuild() override {
+        const bool requested = _renderPipelineRebuildRequested;
+        _renderPipelineRebuildRequested = false;
+        return requested;
+    }
+
+    void collectInto(GpuScene &scene, bool full = true);
+
+    /** Boxes and labels for the debug overlay, into the pipeline; see render(). */
+    void collectDebugOverlay(IRenderPipeline &pipeline);
+    /** Bound the label set, preferring the ones on screen; see the impl. */
+    void capDebugOverlayLabels();
+
+    const GpuScene &gpuScene() const override { return _gpuScene; }
+    GpuScene &gpuScene() override { return _gpuScene; }
+    const std::vector<LightSceneNode *> &lights() const override { return _lights; }
+    float largestLightRadius() const override { return _largestLightRadius; }
+    uint32_t internName(std::string_view name) override;
+    std::string_view nameText(uint32_t id) const override;
 
     const std::string &name() const override {
         return _name;
+    }
+
+    IRenderPipeline *renderPipeline() override {
+        return _renderPipeline.get();
     }
 
     std::optional<std::reference_wrapper<CameraSceneNode>> camera() override {
@@ -174,10 +245,24 @@ public:
 
     void setActiveCamera(CameraSceneNode *camera) override { _activeCamera = camera; }
     void setUpdateRoots(bool update) override { _updateRoots = update; }
-
-    void setRenderAABB(bool render) override { _renderAABB = render; }
-    void setRenderWalkmeshes(bool render) override { _renderWalkmeshes = render; }
-    void setRenderTriggers(bool render) override { _renderTriggers = render; }
+    void setGrass(bool enabled, float densityScale) override {
+        if (enabled == _grassEnabled && densityScale == _grassDensityScale) {
+            return;
+        }
+        const bool enabledChanged = enabled != _grassEnabled;
+        _grassEnabled = enabled;
+        _grassDensityScale = densityScale;
+        // Density is live on the GPU side - budgets bake at the cap and the
+        // kernel gates by density/cap - so only the enable toggle still needs
+        // a generation bump and reconciliation.
+        if (enabledChanged) {
+            ++_grassGeneration;
+            _incrementalSceneReady = false;
+        }
+    }
+    bool grassEnabled() const override { return _grassEnabled; }
+    float grassDensityScale() const override { return _grassDensityScale; }
+    uint64_t grassGeneration() const override { return _grassGeneration; }
 
     // Roots
 
@@ -224,19 +309,71 @@ public:
     }
 
     void setFog(FogProperties fog) override {
+        const bool admissionChanged = _fog.enabled != fog.enabled;
         _fog = std::move(fog);
+        if (admissionChanged)
+            _incrementalSceneReady = false;
     }
 
     // END Fog
 
     // Shadows
 
-    bool hasShadowLight() const override { return _shadowLight; }
-    bool isShadowLightDirectional() const override { return _shadowLight->isDirectional(); }
+    // Off by option means the frame has no shadow light at all, so the pass and
+    // the uniforms both fall away together rather than a pass rendering into a
+    // term nothing applies. Selection still runs, so turning shadows off does
+    // not otherwise perturb the scene. Out of line because this header only
+    // forward-declares GraphicsOptions.
+    bool hasShadowLight() const override;
+    bool isShadowLightDirectional() const override { return _shadowLights.front().light->isDirectional(); }
 
-    glm::vec3 shadowLightPosition() const { return _shadowLight->origin(); }
-    float shadowStrength() const { return _shadowStrength; }
-    float shadowRadius() const { return _shadowLight->radius(); }
+    /**
+     * One shadow-casting light, and the state that belongs to the light rather
+     * than to the frame.
+     *
+     * `strength` is per light because the fade is: a caster that leaves the
+     * selected set has to finish fading out while whatever replaced it fades
+     * in, and with one shared value the two would drive each other. The light
+     * is a bare pointer into `_lights`, so `clear()` has to drop these with the
+     * lights they name - see the comment there.
+     */
+    struct ShadowLight {
+        LightSceneNode *light {nullptr};
+        float strength {0.0f};
+        /** False while fading out; the slot is released when strength reaches zero. */
+        bool active {false};
+        glm::mat4 lightSpace[graphics::kNumShadowLightSpace] {glm::mat4(1.0f)};
+    };
+
+    /**
+     * The fixed direction shared by PBR shading and a directional shadow map.
+     *
+     * Per slot rather than per graph because every caster needs its own, and
+     * the directional fallback has to run against that light's own position.
+     */
+    /** Centre of the module's non-background room geometry, if it has any. */
+    /** The module's room-geometry centre, computed once per loaded area. */
+    std::optional<glm::vec3> roomBoundsCentre() const;
+    mutable std::optional<glm::vec3> _roomBoundsCentre;
+    mutable bool _roomBoundsCentreValid {false};
+
+    glm::vec3 directionalLightAim(const LightSceneNode &light) const;
+
+    /** Which slot this light casts from this frame, or -1 if it casts nothing. */
+    int shadowSlotOf(const LightSceneNode *light) const {
+        for (size_t i = 0; i < _shadowLights.size(); ++i) {
+            if (_shadowLights[i].light == light) {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    }
+
+
+    void setShadowProperties(ShadowProperties properties) override {
+        _shadowProperties = std::move(properties);
+    }
+    const ShadowProperties &shadowProperties() const { return _shadowProperties; }
 
     // END Shadows
 
@@ -260,6 +397,16 @@ public:
     std::shared_ptr<CameraSceneNode> newCamera() override;
     std::shared_ptr<ModelSceneNode> newModel(graphics::Model &model, ModelUsage usage) override;
     std::shared_ptr<WalkmeshSceneNode> newWalkmesh(graphics::Walkmesh &walkmesh) override;
+
+    /**
+     * The height this area is walked at, or nothing when it has no walkmesh.
+     *
+     * The area-weighted mean of every walkmesh face's centroid. Weighting by
+     * area is what makes it the FLOOR rather than the average of the room: a
+     * walkmesh carries its walls too, and a placeable's carries a footlocker,
+     * but floors are the overwhelming majority of the surface in both cases.
+     */
+    std::optional<float> groundHeight() const;
     std::shared_ptr<TriggerSceneNode> newTrigger(std::vector<glm::vec3> geometry) override;
     std::shared_ptr<SoundSceneNode> newSound() override;
 
@@ -271,7 +418,6 @@ public:
     std::shared_ptr<ParticleSceneNode> newParticle(EmitterSceneNode &emitter) override;
 
     std::shared_ptr<GrassSceneNode> newGrass(GrassProperties properties, graphics::ModelNode &aabbNode) override;
-    std::shared_ptr<GrassClusterSceneNode> newGrassCluster(GrassSceneNode &grass) override;
 
     // END Factory methods
 
@@ -284,22 +430,39 @@ private:
     resource::ResourceServices &_resourceSvc;
 
     std::unique_ptr<IRenderPipeline> _renderPipeline;
+    /** The incremental scene, and the full rebuild --admissionshadow checks it against. */
+    GpuScene _gpuScene;
+    GpuScene _shadowGpuScene;
+    bool _incrementalSceneReady {false};
 
     bool _updateRoots {true};
 
-    bool _renderAABB {false};
-    bool _renderWalkmeshes {false};
-    bool _renderTriggers {false};
-
     std::set<std::shared_ptr<SceneNode>> _nodes;
+
+    // Name 0 is the explicit "not applicable" label. Snapshot entries retain
+    // only these compact ids, never an owning string.
+    std::unordered_map<std::string, uint32_t> _nameIds;
+    std::vector<std::string> _names {""};
+
+    // Nodes are retained for the graph lifetime, so indexes are never reused
+    // and generation remains zero until scene-node destruction exists.
+    uint32_t _nextNodeIndex {0};
 
     CameraSceneNode *_activeCamera {nullptr};
     std::vector<LightSceneNode *> _flareLights;
+    /** Last reported count of flare-authoring lights, so the log fires on change only. */
+    size_t _loggedFlareLights {std::numeric_limits<size_t>::max()};
+    /** Last reported count of flares that survived the line-of-sight test. */
+    size_t _loggedFlareVisible {std::numeric_limits<size_t>::max()};
+    std::unordered_set<LightSceneNode *> _registeredFlareLights;
 
     // Roots
 
     std::list<std::shared_ptr<ModelSceneNode>> _modelRoots;
     std::list<std::shared_ptr<WalkmeshSceneNode>> _walkmeshRoots;
+    /** Area-weighted mean height of every walkmesh face; see groundHeight(). */
+    mutable std::optional<float> _groundHeight;
+    mutable bool _groundHeightDirty {true};
     std::list<std::shared_ptr<TriggerSceneNode>> _triggerRoots;
     std::list<std::shared_ptr<GrassSceneNode>> _grassRoots;
     std::list<std::shared_ptr<SoundSceneNode>> _soundRoots;
@@ -308,10 +471,11 @@ private:
 
     // Leafs
 
-    std::vector<MeshSceneNode *> _opaqueMeshes;
-    std::vector<MeshSceneNode *> _transparentMeshes;
-    std::vector<MeshSceneNode *> _shadowMeshes;
+    std::vector<MeshSceneNode *> _meshes;
     std::vector<LightSceneNode *> _lights;
+    float _largestLightRadius {0.0f};
+    /** The debug overlay's labels, rebuilt each render the overlay is on. */
+    std::vector<graphics::DebugOverlayLabel> _debugOverlayLabels;
     std::vector<EmitterSceneNode *> _emitters;
 
     std::vector<std::pair<SceneNode *, std::vector<SceneNode *>>> _opaqueLeafs;
@@ -319,9 +483,23 @@ private:
 
     // END Leafs
 
+    // Motion vectors
+
+    uint64_t _frameIndex {0};
+    glm::mat4 _prevViewProjection {1.0f};
+    glm::vec2 _prevJitter {0.0f};
+
+    glm::vec2 computeJitter() const;
+    void snapshotPreviousFrame();
+
+    // END Motion vectors
+
     // Lighting
 
     glm::vec3 _ambientLightColor {0.5f};
+    bool _grassEnabled {true};
+    float _grassDensityScale {1.0f};
+    uint64_t _grassGeneration {0};
 
     std::vector<LightSceneNode *> _activeLights;
 
@@ -329,12 +507,20 @@ private:
 
     // Shadows
 
-    bool _shadowActive {false};
-    float _shadowStrength {0.0f};
 
-    LightSceneNode *_shadowLight {nullptr};
+    /**
+     * The frame's casters, ordered as `computeClosestLights` sorts them:
+     * directional first, then by distance. Slot 0 is therefore the light the
+     * single-caster renderer used to latch onto.
+     */
+    std::vector<ShadowLight> _shadowLights;
 
-    glm::mat4 _shadowLightSpace[graphics::kNumShadowLightSpace] {glm::mat4(1.0f)};
+    /** Last logged caster count, so the log fires on change and not per frame. */
+    size_t _loggedShadowCount {0};
+
+    ShadowProperties _shadowProperties;
+
+    /** Shared across directional slots - they are split from one camera. */
     glm::vec4 _shadowCascadeFarPlanes {glm::vec4(0.0f)};
 
     // END Shadows
@@ -353,12 +539,14 @@ private:
 
     // END Surfaces
 
-    void cullRoots();
-
     void refresh();
     void refreshFromNode(SceneNode &node);
 
     void updateLighting();
+    /** What @p light delivers at @p point - the ranking proxy, not the shading model. */
+    float lightScoreAt(const LightSceneNode &light, const glm::vec3 &point) const;
+    /** Every light ranked by what it delivers at the camera, directional first. */
+    std::vector<LightSceneNode *> computeBrightestLights(int count) const;
     void updateShadowLight(float dt);
     void updateFlareLights();
     void updateSounds();
@@ -373,6 +561,7 @@ private:
     template <class T, class... Params>
     std::shared_ptr<T> newSceneNode(Params... params) {
         auto node = std::make_shared<T>(params..., *this, _graphicsSvc, _audioSvc, _resourceSvc);
+        node->setId({_nextNodeIndex++, 0});
         _nodes.insert(node);
         return node;
     }

@@ -21,12 +21,15 @@
 #include "reone/scene/graph.h"
 #include "reone/scene/node.h"
 #include "reone/scene/user.h"
+#include "reone/script/types.h"
 #include "reone/system/cast.h"
 #include "reone/system/timer.h"
 
 #include "action.h"
 #include "action/playanimation.h"
 #include "effect.h"
+#include "saveprovenance.h"
+#include "savedruntime.h"
 #include "types.h"
 
 namespace reone {
@@ -42,6 +45,7 @@ struct ServicesView;
 class Action;
 class Game;
 class Item;
+class ModuleSnapshotBuilder;
 class Room;
 
 class Object : public scene::IUser, boost::noncopyable {
@@ -97,6 +101,8 @@ public:
     std::shared_ptr<scene::SceneNode> sceneNode() const { return _sceneNode; }
 
     void setTag(std::string tag) { _tag = std::move(tag); }
+    void setConversation(std::string conversation) { _conversation = std::move(conversation); }
+    void setName(std::string name) { _name = std::move(name); }
     void setPlotFlag(bool plot) { _plot = plot; }
     void setCommandable(bool commandable) { _commandable = commandable; }
     void setIsInConversation(bool isInConversation) { _isInConversation = isInConversation; }
@@ -120,6 +126,7 @@ public:
     std::shared_ptr<Item> addItem(const std::string &resRef, int stackSize = 1, bool dropable = true);
     void addItem(const std::shared_ptr<Item> &item);
     bool removeItem(const std::shared_ptr<Item> &item, bool &last);
+    bool removeItemStack(const std::shared_ptr<Item> &item);
     void moveDropableItemsTo(Object &other);
 
     std::shared_ptr<Item> getFirstItem();
@@ -132,16 +139,17 @@ public:
 
     // Effects
 
+    using AppliedEffect = EffectInstance;
+
     void clearAllEffects();
+    void removeEffect(const std::shared_ptr<Effect> &effect);
     void applyEffect(const std::shared_ptr<Effect> &effect, DurationType durationType, float duration = 0.0f);
+    bool restoreEffect(EffectInstance effect);
+    size_t removeEffectsById(EffectId id);
 
-    struct AppliedEffect {
-        std::shared_ptr<Effect> effect;
-        DurationType durationType {DurationType::Instant};
-        float duration {0.0f};
-    };
-
-    const std::deque<AppliedEffect> &effects() const { return _effects; }
+    const std::deque<EffectInstance> &effects() const { return _effects; }
+    std::vector<EffectInstance> saveEffectSnapshot() const;
+    bool hasEffect(EffectType type) const;
     std::shared_ptr<Effect> getFirstEffect();
     std::shared_ptr<Effect> getNextEffect();
 
@@ -188,13 +196,22 @@ public:
     void addActionOnTop(std::shared_ptr<Action> action);
     void delayAction(std::shared_ptr<Action> action, float seconds);
 
-    bool hasUserActionsPending() const;
+    bool hasUserActionsPending(const Action *excluded = nullptr) const;
 
     std::shared_ptr<Action> getCurrentAction() const;
 
     const std::deque<std::shared_ptr<Action>> &actions() const { return _actions; }
+    std::vector<SavedActionRecord> saveActionSnapshot() const;
 
     // END Actions
+
+    // Combat
+
+    uint32_t getLastHostileActor() const { return _lastHostileActor; }
+
+    void setLastHostileActor(uint32_t actor) { _lastHostileActor = actor; }
+
+    // END Combat
 
     // Local variables
 
@@ -203,6 +220,26 @@ public:
 
     const std::map<int, bool> &localBooleans() const { return _localBooleans; }
     const std::map<int, int> &localNumbers() const { return _localNumbers; }
+    void deserializeRuntimeState(const resource::Gff &gff);
+    void bindSavedRuntimeState();
+    void publishSavedRuntimeState();
+    const std::vector<EffectInstance> &savedEffects() const { return _savedEffects; }
+    const SavedActionQueue &savedActionQueue() const { return _savedActionQueue; }
+    bool hasPublishedSavedRuntimeState() const { return _savedRuntimePublished; }
+
+    void captureSaveRecord(
+        const resource::Gff &gff,
+        SaveRecordOrigin origin = {});
+    const std::optional<SaveRecordProvenance> &saveRecordProvenance() const {
+        return _saveRecordProvenance;
+    }
+
+
+    void resolveSavedReferences(
+        const std::function<std::shared_ptr<Object>(uint32_t)> &resolver);
+    std::shared_ptr<Object> savedReference(std::string_view field) const;
+
+
 
     void setLocalBoolean(int index, bool value);
     void setLocalNumber(int index, int value);
@@ -214,9 +251,19 @@ public:
     const std::string &getOnHeartbeat() const { return _onHeartbeat; }
     const std::string &getOnUserDefined() const { return _onUserDefined; }
 
+    /**
+     * Drop this object's OnHeartbeat script, leaving its other event scripts
+     * alone. Area heartbeat dispatch skips objects without one, so the object
+     * stops receiving heartbeats. Used by the KotOR II RemoveHeartbeat routine
+     * once a heartbeat script has done its one-off work.
+     */
+    void clearOnHeartbeat() { _onHeartbeat.clear(); }
+
     // END Scripts
 
 protected:
+    friend class ModuleSnapshotBuilder;
+    friend class TestGameModule;
     struct DelayedAction {
         std::shared_ptr<Action> action;
         std::unique_ptr<Timer> timer;
@@ -252,7 +299,7 @@ protected:
     glm::mat4 _transform {1.0f};
     bool _visible {true};
     Room *_room {nullptr};
-    std::deque<AppliedEffect> _effects;
+    std::deque<EffectInstance> _effects;
     bool _open {false};
     bool _stunt {false};
     std::string _activeAnimName;
@@ -268,9 +315,26 @@ protected:
     std::vector<DelayedAction> _delayed;
     std::weak_ptr<Action> _executingAction;
 
+    struct LoadedSaveActionSlot {
+        SavedActionRecord original;
+        std::weak_ptr<Action> runtimeAction;
+        bool unsupportedPending {false};
+    };
+    std::vector<LoadedSaveActionSlot> _loadedSaveActionSlots;
+
     // END Actions
 
+    uint32_t _lastHostileActor {script::kObjectInvalid};
+
     // Local variables
+    std::map<std::string, uint32_t> _savedReferenceIds;
+    std::map<std::string, std::weak_ptr<Object>> _savedReferences;
+    std::vector<EffectInstance> _savedEffects;
+    SavedActionQueue _savedActionQueue;
+    bool _savedRuntimeParsed {false};
+    bool _savedRuntimePublished {false};
+    std::optional<SaveRecordProvenance> _saveRecordProvenance;
+
 
     std::map<int, bool> _localBooleans;
     std::map<int, int> _localNumbers;
@@ -291,6 +355,7 @@ protected:
     }
 
     virtual void updateTransform();
+    virtual bool canExecuteActions() const { return true; }
 
     // Actions
 
@@ -305,7 +370,9 @@ protected:
     // Effects
 
     void updateEffects(float dt);
-    void applyInstantEffect(Effect &effect);
+    virtual void onEffectsCleared() {}
+
+    int applyDamageToHitPoints(int amount, int currentHitPoints);
 
     // END Effects
 };

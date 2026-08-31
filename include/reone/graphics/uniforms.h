@@ -18,7 +18,6 @@
 #pragma once
 
 #include "types.h"
-#include "uniformbuffer.h"
 
 namespace reone {
 
@@ -29,7 +28,7 @@ struct UniformBlockBindingPoints {
     static constexpr int locals = 1;
     static constexpr int bones = 2;
     static constexpr int dangly = 3;
-    static constexpr int saber = 4;
+    static constexpr int aabb = 4;
     static constexpr int particles = 5;
     static constexpr int grass = 6;
     static constexpr int walkmesh = 7;
@@ -53,6 +52,18 @@ struct UniformsFeatureFlags {
     static constexpr int premulalpha = 1 << 12;
     static constexpr int envmapcube = 1 << 13;
     static constexpr int staticobj = 1 << 14;
+    /**
+     * A surface with no meaningful thickness: leaves, cloth, grass - whatever
+     * an alpha cutout was standing in for.
+     *
+     * It is lit from both sides and it lets light through. Treating one as a
+     * solid means the half of it facing away from the sun goes black, which is
+     * wrong for a leaf and very visible on a curved blade of grass, where the
+     * normal sweeps through the light and back out again.
+     */
+    static constexpr int thin = 1 << 15;
+    /** Procedural quad/strand geometry rather than a model mesh. */
+    static constexpr int procedural = 1 << 16;
 };
 
 struct alignas(16) GlobalUniformsLight {
@@ -62,6 +73,50 @@ struct alignas(16) GlobalUniformsLight {
     float radius {1.0f};
     int ambientOnly {0};
     int dynamicType {0};
+    /**
+     * Which shadow slot this light casts from, or -1 if it casts nothing.
+     *
+     * An index rather than a flag because a frame now holds several casters
+     * and a receiver has to know WHICH map to sample, not merely that one
+     * exists. A shadow is only visible on the light it attenuates, so the
+     * corrected model has to let a caster reach static geometry even where the
+     * original's dynamic-type rule would drop it - which is why this is tested
+     * for "is a caster" as well as used as an index.
+     */
+    int shadowSlot {-1};
+};
+
+/**
+ * One shadow-casting light, as the receiver needs it.
+ *
+ * Point lights carry no matrices here: a cube face's view is derivable from
+ * the light position and a fixed 90-degree projection, so the shadow pass
+ * builds its own and the receiver only ever samples by direction. Only the
+ * cascaded directional maps need their transforms transported, and those live
+ * in one flat array indexed by mapIndex.
+ */
+struct GlobalUniformsShadowLight {
+    /** Direction when W is 0, world position when W is 1 - as lights are. */
+    glm::vec4 positionOrDirection {0.0f};
+    /** Fade, already multiplied by the area's authored ShadowOpacity. */
+    float strength {0.0f};
+    float radius {0.0f};
+    /**
+     * First cascade for a directional caster, cube slice for a point one.
+     * The two index different images, so the kind in positionOrDirection.w is
+     * what says which.
+     */
+    int mapIndex {0};
+    /**
+     * Face resolution of the map this caster writes.
+     *
+     * Carried rather than queried. GetDimensions on the cube-array comparison
+     * sampler does not report the face width here - biasing from it produced a
+     * texel size so large that the depth reference clamped to zero and the
+     * kernel sampled at random, which is indistinguishable from a working
+     * shadow until you vary the bias and nothing moves.
+     */
+    int mapResolution {1};
 };
 
 struct GlobalUniforms {
@@ -72,51 +127,87 @@ struct GlobalUniforms {
     glm::vec4 cameraPosition {0.0f};
     glm::vec4 worldAmbientColor {1.0f};
     GlobalUniformsLight lights[kMaxLights];
-    glm::vec4 shadowLightPosition {0.0f}; /**< W = 0 if light is directional */
+    GlobalUniformsShadowLight shadowLights[kMaxShadowLights];
+    /** Shared by every directional caster - they split one camera frustum. */
     glm::vec4 shadowCascadeFarPlanes {0.0f};
-    glm::mat4 shadowLightSpace[kNumShadowLightSpace] {glm::mat4(1.0f)};
+    glm::mat4 shadowCascadeSpace[kMaxShadowCascadeMatrices] {glm::mat4(1.0f)};
+    /**
+     * Unjittered view-projection of this frame and the previous one. Kept
+     * separate from projection/view, which carry TAA jitter when it is enabled,
+     * so that motion vectors never encode the jitter offset.
+     */
+    glm::mat4 viewProjection {1.0f};
+    glm::mat4 prevViewProjection {1.0f};
     glm::vec4 fogColor {0.0f};
+    glm::vec4 jitter {0.0f}; /**< XY = this frame's NDC jitter, ZW = previous frame's */
     float clipNear {kDefaultClipPlaneNear};
     float clipFar {kDefaultClipPlaneFar};
     int numLights {0};
-    float shadowStrength {0.0f};
-    float shadowRadius {0.0f};
+    int numShadowLights {0};
     float fogNear {0.0f};
     float fogFar {0.0f};
+    /**
+     * Seconds since startup, this frame and the previous one.
+     *
+     * Two of them rather than one because anything that moves with time has to
+     * be evaluable at both: a vertex animated to time() and reported as having
+     * been in the same place last frame hands the temporal resolve a motion
+     * vector of zero and it smears. Whatever reads time to place a vertex reads
+     * prevTime to place where that vertex was.
+     */
+    float time {0.0f};
+    float prevTime {0.0f};
 
     void reset() {
         projection = glm::mat4(1.0f);
         projectionInv = glm::mat4(1.0f);
         view = glm::mat4(1.0f);
         viewInv = glm::mat4(1.0f);
+        viewProjection = glm::mat4(1.0f);
+        prevViewProjection = glm::mat4(1.0f);
         cameraPosition = glm::vec4(0.0f);
         worldAmbientColor = glm::vec4(1.0f);
-        shadowLightPosition = glm::vec4(0.0f);
         shadowCascadeFarPlanes = glm::vec4(0.0f);
         fogColor = glm::vec4(0.0f);
+        jitter = glm::vec4(0.0f);
         clipNear = kDefaultClipPlaneNear;
         clipFar = kDefaultClipPlaneFar;
         numLights = 0;
-        shadowStrength = 1.0f;
-        shadowRadius = 0.0f;
+        numShadowLights = 0;
         fogNear = 0.0f;
         fogFar = 0.0f;
     }
 };
 
-struct LocalUniforms {
+/**
+ * alignas(16) so that sizeof matches the std140 block size. glm's types are not
+ * 16-byte aligned by default, and without this the struct ends at 324 bytes
+ * against a 336-byte block - leaving the uniform buffer smaller than the block
+ * the shader declares. The other blocks get the same alignment implicitly, from
+ * an alignas(16) member.
+ */
+struct alignas(16) LocalUniforms {
     glm::mat4 model;
     glm::mat4 modelInv;
+    glm::mat4 prevModel; /**< model transform as of the previous rendered frame */
     glm::mat3x4 uv;
     glm::vec4 color;
     glm::vec4 ambientColor;
     glm::vec4 diffuseColor;
     glm::vec4 selfIllumColor;
+    /**
+     * Formerly loose uniforms set by name per draw. Vulkan has no equivalent, so
+     * they live in the block; see doc/tasks/CONVENTIONS.md.
+     */
+    glm::vec4 saberDisplacement;
     int featureMask;
     int bumpMapFrame;
     float bumpMapScale;
     float waterAlpha;
     float billboardSize;
+    int envMapDerivedLayer;
+    /** Roughness the prefiltered environment mip being generated stands for. */
+    float iblRoughness;
 
     LocalUniforms() {
         reset();
@@ -125,21 +216,26 @@ struct LocalUniforms {
     void reset() {
         model = glm::mat4(1.0f);
         modelInv = glm::mat4(1.0f);
+        prevModel = glm::mat4(1.0f);
         uv = glm::mat3x4(1.0f);
         color = glm::vec4(1.0f);
         ambientColor = glm::vec4(1.0f);
         diffuseColor = glm::vec4(1.0f);
         selfIllumColor = glm::vec4(0.0f);
+        saberDisplacement = glm::vec4(0.0f);
         featureMask = 0;
         bumpMapFrame = 0;
         bumpMapScale = 1.0f;
         waterAlpha = 0.0f;
         billboardSize = 1.0f;
+        envMapDerivedLayer = 0;
+        iblRoughness = 0.0f;
     }
 };
 
 struct BoneUniforms {
     glm::mat4 bones[kMaxBones] {glm::mat4(1.0f)};
+    glm::mat4 prevBones[kMaxBones] {glm::mat4(1.0f)}; /**< bones as of the previous rendered frame */
 };
 
 struct DanglyUniforms {
@@ -162,6 +258,7 @@ struct ParticleUniforms {
 struct alignas(16) GrassUniformsCluster {
     glm::vec4 positionVariant {0.0f}; /**< fourth component is a variant (0-3) */
     glm::vec2 lightmapUV {0.0f};
+    float yaw {0.0f};
 };
 
 struct GrassUniforms {
@@ -179,11 +276,16 @@ struct TextUniforms {
     TextUniformsCharacter chars[kMaxTextChars];
 };
 
+struct AABBUniforms {
+    glm::vec4 corners[8] {glm::vec4(0.0f)};
+};
+
 struct WalkmeshUniforms {
     glm::vec4 materials[kMaxWalkmeshMaterials] {glm::vec4(1.0f)};
 };
 
-struct ScreenEffectUniforms {
+/** alignas(16) for the same reason as LocalUniforms. */
+struct alignas(16) ScreenEffectUniforms {
     glm::mat4 projection {1.0f};
     glm::mat4 projectionInv {1.0f};
     glm::mat4 screenProjection {1.0f};
@@ -201,78 +303,16 @@ struct ScreenEffectUniforms {
     float sharpenAmount {0.25f};
 };
 
-class Context;
-
-class IUniforms {
+class Uniforms {
 public:
-    virtual ~IUniforms() = default;
+    void setGlobals(const std::function<void(GlobalUniforms &)> &block);
+    void setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block);
 
-    virtual void setGlobals(const std::function<void(GlobalUniforms &)> &block) = 0;
-    virtual void setLocals(const std::function<void(LocalUniforms &)> &block) = 0;
-    virtual void setBones(const std::function<void(BoneUniforms &)> &block) = 0;
-    virtual void setDangly(const std::function<void(DanglyUniforms &)> &block) = 0;
-    virtual void setParticles(const std::function<void(ParticleUniforms &)> &block) = 0;
-    virtual void setGrass(const std::function<void(GrassUniforms &)> &block) = 0;
-    virtual void setWalkmesh(const std::function<void(WalkmeshUniforms &)> &block) = 0;
-    virtual void setText(const std::function<void(TextUniforms &)> &block) = 0;
-    virtual void setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block) = 0;
-};
-
-class Uniforms : public IUniforms, boost::noncopyable {
-public:
-    Uniforms(Context &context) :
-        _context(context) {
-    }
-
-    ~Uniforms() { deinit(); }
-
-    void init();
-    void deinit();
-
-    void setGlobals(const std::function<void(GlobalUniforms &)> &block) override;
-    void setLocals(const std::function<void(LocalUniforms &)> &block) override;
-    void setBones(const std::function<void(BoneUniforms &)> &block) override;
-    void setDangly(const std::function<void(DanglyUniforms &)> &block) override;
-    void setParticles(const std::function<void(ParticleUniforms &)> &block) override;
-    void setGrass(const std::function<void(GrassUniforms &)> &block) override;
-    void setWalkmesh(const std::function<void(WalkmeshUniforms &)> &block) override;
-    void setText(const std::function<void(TextUniforms &)> &block) override;
-    void setScreenEffect(const std::function<void(ScreenEffectUniforms &)> &block) override;
+    const GlobalUniforms &globals() const { return _globals; }
 
 private:
-    bool _inited {false};
-
-    Context &_context;
-
-    // Uniforms
-
     GlobalUniforms _globals;
-    LocalUniforms _locals;
-    BoneUniforms _bones;
-    DanglyUniforms _dangly;
-    ParticleUniforms _particles;
-    GrassUniforms _grass;
-    WalkmeshUniforms _walkmesh;
-    TextUniforms _text;
     ScreenEffectUniforms _screenEffect;
-
-    // END Uniforms
-
-    // Uniform Buffers
-
-    std::shared_ptr<UniformBuffer> _ubGlobals;
-    std::shared_ptr<UniformBuffer> _ubLocals;
-    std::shared_ptr<UniformBuffer> _ubBones;
-    std::shared_ptr<UniformBuffer> _ubDangly;
-    std::shared_ptr<UniformBuffer> _ubParticles;
-    std::shared_ptr<UniformBuffer> _ubGrass;
-    std::shared_ptr<UniformBuffer> _ubWalkmesh;
-    std::shared_ptr<UniformBuffer> _ubText;
-    std::shared_ptr<UniformBuffer> _ubScreenEffect;
-
-    // END Uniform Buffers
-
-    std::unique_ptr<UniformBuffer> initBuffer(const void *data, ptrdiff_t size);
 };
 
 } // namespace graphics

@@ -56,7 +56,7 @@ void Placeable::loadFromBlueprint(const std::string &resRef) {
 
 void Placeable::deserialize(const resource::Gff &gff) {
     std::string templateRes;
-    if (gff.readResRef(templateRes, "TemplateResRef")) {
+    if (!gff.has("ObjectId") && gff.readResRef(templateRes, "TemplateResRef")) {
         if (auto utp = _services.resource.gffs.get(templateRes, ResType::Utp)) {
             deserializeAll(*utp);
         }
@@ -67,6 +67,7 @@ void Placeable::deserialize(const resource::Gff &gff) {
 }
 
 void Placeable::deserializeAll(const resource::Gff &gff) {
+    deserializeRuntimeState(gff);
     if (gff.readString(_tag, "Tag")) {
         boost::to_lower(_tag);
     }
@@ -96,6 +97,9 @@ void Placeable::deserializeAll(const resource::Gff &gff) {
     }
     gff.readShort(_currentHitPoints, "CurrentHP");
     gff.readByte(_hardness, "Hardness");
+    if (gff.has("ObjectId") && gff.has("CurrentHP")) {
+        _dead = _currentHitPoints <= 0;
+    }
     gff.readByte(_fort, "Fort");
     gff.readByte(_will, "Will");
     gff.readByte(_ref, "Ref");
@@ -143,9 +147,17 @@ void Placeable::deserializeAll(const resource::Gff &gff) {
     gff.readBool(_isCorpse, "IsCorpse");
     gff.readBool(_commandable, "Commandable");
 
+    if (gff.has("ObjectId")) {
+        _items.clear();
+    }
     for (const auto &itemGff : gff.getList("ItemList")) {
-        std::shared_ptr<Item> item = _game.newItem();
+        std::shared_ptr<Item> item = _game.newOwnedItem();
         item->deserialize(*itemGff);
+        if (gff.has("ObjectId")) {
+            item->captureOwnerLocalSaveRecord(
+                *itemGff,
+                {SaveRecordOriginKind::PlaceableItem, std::to_string(_id)});
+        }
         item->setDropable(true);
         addItem(item);
     }
@@ -186,7 +198,8 @@ void Placeable::damage(int amount, uint32_t damager) {
     if (amount == std::numeric_limits<int>::max()) {
         _currentHitPoints = isMinOneHP() ? 1 : 0;
     } else {
-        _currentHitPoints = std::max(isMinOneHP() ? 1 : 0, currentHitPoints - amount);
+        int adjustedAmount = applyDamageToHitPoints(amount, currentHitPoints);
+        _game.floatingText().addDamage(*this, amount, adjustedAmount, damager);
     }
 
     damager = damager ? damager : script::kObjectInvalid;
@@ -229,18 +242,23 @@ void Placeable::runOnUsed(std::shared_ptr<Object> usedBy) {
     _game.scriptRunner().run(_onUsed, args);
 }
 
-void Placeable::runOnInvDisturbed(std::shared_ptr<Object> triggerrer) {
+void Placeable::runOnInvDisturbed(uint32_t triggerrer, InventoryDisturbType type, uint32_t item) {
     if (_onInvDisturbed.empty()) {
         return;
     }
 
     std::vector<script::Argument> args;
-    args.emplace_back(script::ArgKind::Caller, Variable::ofObject(_id));
+    args.emplace_back();
 
     // FIXME: implement LastDisturbed
     // triggerrer ? triggerrer->id() : kObjectInvalid
 
-    _game.scriptRunner().run(_onInvDisturbed, args);
+    _game.scriptRunner().run(
+        _onInvDisturbed,
+        {{script::ArgKind::Caller, Variable::ofObject(_id)},
+         {script::ArgKind::LastDisturbed, Variable::ofObject(triggerrer)},
+         {script::ArgKind::InventoryDisturbItem, Variable::ofObject(item)},
+         {script::ArgKind::InventoryDisturbType, Variable::ofInt(static_cast<int>(type))}});
 }
 
 void Placeable::runDamagedScript(uint32_t damagerId) {

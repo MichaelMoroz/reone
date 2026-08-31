@@ -17,6 +17,8 @@
 
 #include "reone/game/party.h"
 
+#include <algorithm>
+
 #include "reone/game/game.h"
 #include "reone/game/object/creature.h"
 #include "reone/system/logutil.h"
@@ -30,6 +32,34 @@ static constexpr char kBlueprintResRefCarth[] = "p_carth";
 static constexpr char kBlueprintResRefBastila[] = "p_bastilla";
 static constexpr char kBlueprintResRefAtton[] = "p_atton";
 static constexpr char kBlueprintResRefKreia[] = "p_kreia";
+
+void Party::setPersistedState(PersistedState state) {
+    _solo = state.soloMode;
+    _persistedState = std::move(state);
+}
+
+void Party::setPazaakData(
+    PazaakCardCounts counts,
+    PazaakSideDeck sideDeck,
+    size_t cardCount) {
+
+    _pazaakCardCounts = std::move(counts);
+    _pazaakSideDeck = std::move(sideDeck);
+    _pazaakCardCount = std::min(cardCount, kMaxPazaakCardCount);
+    _pazaakDataValid = true;
+}
+
+void Party::setPazaakSideDeck(PazaakSideDeck sideDeck) {
+    _pazaakSideDeck = std::move(sideDeck);
+}
+
+void Party::setDefaultPazaakData(size_t cardCount) {
+    PazaakCardCounts counts {};
+    counts[0] = counts[1] = counts[2] = counts[3] = counts[4] = 2;
+    PazaakSideDeck sideDeck;
+    sideDeck.fill(-1);
+    setPazaakData(std::move(counts), std::move(sideDeck), cardCount);
+}
 
 bool Party::handle(const input::Event &event) {
     if (event.type == input::EventType::KeyDown) {
@@ -86,6 +116,20 @@ bool Party::removeAvailableMember(int npc) {
     return false;
 }
 
+bool Party::addAvailablePuppet(int puppet, std::shared_ptr<Creature> creature) {
+    if (_availablePuppets.count(puppet)) {
+        warn(str(boost::format("Party: puppet %d already exists") % puppet));
+        return false;
+    }
+    _availablePuppets.emplace(puppet, std::move(creature));
+    return true;
+}
+
+std::shared_ptr<Creature> Party::getAvailablePuppet(int puppet) const {
+    auto found = _availablePuppets.find(puppet);
+    return found == _availablePuppets.end() ? nullptr : found->second;
+}
+
 bool Party::addMember(int npc, std::shared_ptr<Creature> creature) {
     // A creature joining the party derives its XP from the shared party pool.
     if (creature) {
@@ -101,12 +145,23 @@ bool Party::addMember(int npc, std::shared_ptr<Creature> creature) {
 }
 
 void Party::reset() {
-    _player.reset();
-    _availableMembers.clear();
-    _members.clear();
+    retireRuntimeSession();
     _solo = false;
     _gold = 0;
     _xp = 0;
+    _galaxyMap.clear();
+    _pazaakDataValid = false;
+    _pazaakCardCounts.fill(0);
+    _pazaakSideDeck.fill(-1);
+    _persistedState = PersistedState();
+}
+
+void Party::retireRuntimeSession() {
+    _player.reset();
+    _actualPlayer.reset();
+    _availableMembers.clear();
+    _members.clear();
+    _availablePuppets.clear();
 }
 
 void Party::clear() {
@@ -239,10 +294,11 @@ bool Party::isMember(const Object &object) const {
 }
 
 std::shared_ptr<Object> Party::sharedInventoryReceiver(const std::shared_ptr<Object> &receiver) const {
+    auto inventoryOwner = actualPlayer();
     // A party member's non-equipped items belong to the shared party inventory
-    // (the player creature). Non-party receivers keep their own inventory.
-    if (receiver && _player && isMember(*receiver)) {
-        return _player;
+    // (the actual player creature). Non-party receivers keep their own inventory.
+    if (receiver && inventoryOwner && isMember(*receiver)) {
+        return inventoryOwner;
     }
     return receiver;
 }
@@ -282,6 +338,33 @@ void Party::setPartyLeaderByIndex(int index) {
 
 void Party::setPlayer(const std::shared_ptr<Creature> &player) {
     _player = player;
+}
+
+void Party::setControlledMember(int npc, const std::shared_ptr<Creature> &creature) {
+    // However the incoming creature was represented before, it ends up in the
+    // leading slot once and only once.
+    _members.erase(
+        std::remove_if(
+            _members.begin(), _members.end(),
+            [&npc, &creature](const Member &member) {
+                return member.npc == npc || member.creature == creature;
+            }),
+        _members.end());
+
+    // The actor being relieved stops being a party member rather than becoming
+    // a companion: the canonical PC waits in _actualPlayer and a relieved NPC
+    // waits in the available roster, which is where each is looked up again.
+    if (!_members.empty() && _player && _members.front().creature == _player) {
+        _members.erase(_members.begin());
+    }
+
+    Member member;
+    member.npc = npc;
+    member.creature = creature;
+    _members.insert(_members.begin(), std::move(member));
+
+    _player = creature;
+    _persistedState.controlledNpc = npc;
 }
 
 bool Party::removeMember(int npc) {

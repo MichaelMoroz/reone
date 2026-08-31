@@ -17,12 +17,10 @@
 
 #include "reone/scene/node/light.h"
 
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/material.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
-#include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/resource/di/services.h"
@@ -38,7 +36,11 @@ namespace reone {
 namespace scene {
 
 static constexpr float kFadeSpeed = 2.0f;
-static constexpr float kMinDirectionalLightRadius = 100.0f;
+// Odyssey has no directional light type; a sun is a point light authored
+// with a radius far beyond its room. The scene's largest light is always the
+// sun, and any other above 2000 (Tatooine's second sun) is one too; a
+// radius-1000 lamp under a 5000+ sun is not.
+static constexpr float kMinDirectionalLightRadius = 2000.0f;
 
 void LightSceneNode::init() {
     _modelNode.vectorValueAtTime(ControllerTypes::color, 0.0f, _color);
@@ -66,7 +68,7 @@ void LightSceneNode::update(float dt) {
     }
 }
 
-void LightSceneNode::renderLensFlare(IRenderPass &pass, const ModelNode::LensFlare &flare) {
+void LightSceneNode::collectLensFlare(GpuScene &scene, const ModelNode::LensFlare &flare) {
     std::shared_ptr<Camera> camera(_sceneGraph.camera()->get().camera());
     if (!camera) {
         return;
@@ -75,13 +77,65 @@ void LightSceneNode::renderLensFlare(IRenderPass &pass, const ModelNode::LensFla
     if (!texture) {
         return;
     }
+    // The reference flare pass submits the light controller colour. The
+    // similarly named colorShift is not a multiplier there: on danm14ab it is
+    // black for three fx_flare08 lights and underweights the dominant sun flare,
+    // while all four lights carry nonzero controller colours.
     auto color = glm::vec4(_color, 0.5f);
     auto transform = glm::translate(origin());
-    pass.drawBillboard(*texture, color, transform, glm::inverse(transform), 0.2f * flare.size);
+    // The authored flare size is a SCREEN size, not a world one.
+    //
+    // The reference draws a flare by projecting its origin to clip space,
+    // dividing through, and offsetting the quad's corners in NDC - so
+    // 0.2 * flare.size is a fraction of the viewport and the halo stays the
+    // same size however far away the light is. Handing that number to a
+    // world-space quad instead gives a card 0.2 units across, which at any real
+    // distance is a few pixels: four flares registered on Dantooine and moved
+    // 32 pixels between them.
+    //
+    // The merged quad is built from world-space right/up vectors and cannot be
+    // told to work in NDC without a per-kind branch in the merge, so the world
+    // size that yields the intended NDC size is computed here instead. A world
+    // offset h at distance d projects to an NDC offset h * P[i][i] / d, so
+    // inverting that gives the size below - and because it scales with
+    // distance, the halo holds its screen size exactly as the reference's does.
+    const float ndcSize = 0.2f * flare.size;
+    const glm::mat4 &projection = camera->projection();
+    const float distance = std::max(0.01f, glm::length(origin() - camera->position()));
+    const glm::vec2 size {
+        ndcSize * distance / std::max(1e-4f, std::abs(projection[0][0])),
+        ndcSize * distance / std::max(1e-4f, std::abs(projection[1][1]))};
+    // Transparent, not LensFlare: every admission filter admits Opaque and
+    // Transparent only, so a billboard registered under LensFlare is dropped
+    // before it can be classified. A flare is an additive transparent
+    // billboard, which is what classifyProcedural makes of it from here.
+    scene.addBillboard(renderCategory(RenderCategory::Transparent),
+                         id(), nameIds(), *texture, color, transform, glm::inverse(transform), size, &_model);
 }
 
 bool LightSceneNode::isDirectional() const {
-    return _radius >= kMinDirectionalLightRadius;
+    return _radius >= kMinDirectionalLightRadius ||
+           (_radius > 0.0f && _radius >= _sceneGraph.largestLightRadius());
+}
+
+bool LightSceneNode::hasAuthoredDirection() const {
+    // The binary model format always supplies a quaternion, including the
+    // identity default used when no direction was authored. Treat a transform
+    // that leaves the conventional light forward axis unchanged as absent so
+    // the scene-centre fallback can provide an azimuth.
+    constexpr auto defaultDirection = glm::vec3(0.0f, 0.0f, -1.0f);
+    return glm::dot(direction(), defaultDirection) < 0.9999f;
+}
+
+glm::vec3 LightSceneNode::direction() const {
+    // KotOR cameras and lights face along local -Z. The complete scene-node
+    // transform retains the light node's authored orientation and every parent
+    // transform, while w=0 deliberately excludes translation.
+    auto direction = glm::vec3(absoluteTransform() * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
+    if (glm::length2(direction) < glm::epsilon<float>()) {
+        return glm::vec3(0.0f, 0.0f, -1.0f);
+    }
+    return glm::normalize(direction);
 }
 
 } // namespace scene

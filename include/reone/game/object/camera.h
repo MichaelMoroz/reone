@@ -30,6 +30,7 @@ class Camera : public Object {
 public:
     Camera(
         uint32_t id,
+        float aspect,
         std::string sceneName,
         Game &game,
         ServicesView &services) :
@@ -39,6 +40,7 @@ public:
             std::move(sceneName),
             game,
             services) {
+        (void) aspect;
     }
 
     static bool classof(const Object *from) {
@@ -49,7 +51,7 @@ public:
         return false;
     }
 
-    void update(float dt) override {}
+    void update(float dt) override;
 
     virtual void stopMovement() {
     }
@@ -70,6 +72,12 @@ protected:
 
     float _facing {0.0f};
     bool _mouseLookMode {false};
+
+    int _projectionWidth {-1};
+    int _projectionHeight {-1};
+
+    void rebuildProjection();
+    virtual float projectionFovy() const = 0;
 };
 
 } // namespace game

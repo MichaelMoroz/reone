@@ -17,6 +17,7 @@ set(RESOURCE_INCLUDE_DIR ${REONE_INCLUDE_DIR}/reone/resource)
 set(RESOURCE_SOURCE_DIR ${CMAKE_SOURCE_DIR}/src/libs/resource)
 
 set(RESOURCE_HEADERS
+    ${RESOURCE_INCLUDE_DIR}/odysseyroots.h
     ${RESOURCE_INCLUDE_DIR}/2da.h
     ${RESOURCE_INCLUDE_DIR}/container.h
     ${RESOURCE_INCLUDE_DIR}/container/erf.h
@@ -37,6 +38,9 @@ set(RESOURCE_HEADERS
     ${RESOURCE_INCLUDE_DIR}/dialog.h
     ${RESOURCE_INCLUDE_DIR}/director.h
     ${RESOURCE_INCLUDE_DIR}/exception/notfound.h
+    ${RESOURCE_INCLUDE_DIR}/extractresources.h
+    ${RESOURCE_INCLUDE_DIR}/replacementresources.h
+    ${RESOURCE_INCLUDE_DIR}/replacements.h
     ${RESOURCE_INCLUDE_DIR}/format/2dareader.h
     ${RESOURCE_INCLUDE_DIR}/format/2dawriter.h
     ${RESOURCE_INCLUDE_DIR}/format/bifreader.h
@@ -60,6 +64,10 @@ set(RESOURCE_HEADERS
     ${RESOURCE_INCLUDE_DIR}/id.h
     ${RESOURCE_INCLUDE_DIR}/layout.h
     ${RESOURCE_INCLUDE_DIR}/ltr.h
+    ${RESOURCE_INCLUDE_DIR}/modulediscovery.h
+    ${RESOURCE_INCLUDE_DIR}/modulemount.h
+    ${RESOURCE_INCLUDE_DIR}/modulepolicy.h
+    ${RESOURCE_INCLUDE_DIR}/mounttransaction.h
     ${RESOURCE_INCLUDE_DIR}/parser/2da/appearance.h
     ${RESOURCE_INCLUDE_DIR}/parser/2da/genericdoors.h
     ${RESOURCE_INCLUDE_DIR}/parser/2da/heads.h
@@ -88,7 +96,6 @@ set(RESOURCE_HEADERS
     ${RESOURCE_INCLUDE_DIR}/provider/movies.h
     ${RESOURCE_INCLUDE_DIR}/provider/paths.h
     ${RESOURCE_INCLUDE_DIR}/provider/scripts.h
-    ${RESOURCE_INCLUDE_DIR}/provider/shaders.h
     ${RESOURCE_INCLUDE_DIR}/provider/soundsets.h
     ${RESOURCE_INCLUDE_DIR}/provider/textures.h
     ${RESOURCE_INCLUDE_DIR}/provider/visibilities.h
@@ -96,18 +103,24 @@ set(RESOURCE_HEADERS
     ${RESOURCE_INCLUDE_DIR}/resource.h
     ${RESOURCE_INCLUDE_DIR}/resources.h
     ${RESOURCE_INCLUDE_DIR}/resref.h
+    ${RESOURCE_INCLUDE_DIR}/saveworkingstate.h
+    ${RESOURCE_INCLUDE_DIR}/sourcelist.h
     ${RESOURCE_INCLUDE_DIR}/strings.h
     ${RESOURCE_INCLUDE_DIR}/talktable.h
     ${RESOURCE_INCLUDE_DIR}/types.h
     ${RESOURCE_INCLUDE_DIR}/typeutil.h)
 
 set(RESOURCE_SOURCES
+    ${RESOURCE_SOURCE_DIR}/odysseyroots.cpp
     ${RESOURCE_SOURCE_DIR}/2da.cpp
     ${RESOURCE_SOURCE_DIR}/extract/capsule.cpp
     ${RESOURCE_SOURCE_DIR}/extract/chitin.cpp
     ${RESOURCE_SOURCE_DIR}/extract/fileresource.cpp
     ${RESOURCE_SOURCE_DIR}/extract/finder.cpp
     ${RESOURCE_SOURCE_DIR}/extract/installation.cpp
+    ${RESOURCE_SOURCE_DIR}/extractresources.cpp
+    ${RESOURCE_SOURCE_DIR}/replacementresources.cpp
+    ${RESOURCE_SOURCE_DIR}/replacements.cpp
     ${RESOURCE_SOURCE_DIR}/container/erf.cpp
     ${RESOURCE_SOURCE_DIR}/container/exe.cpp
     ${RESOURCE_SOURCE_DIR}/container/folder.cpp
@@ -136,6 +149,9 @@ set(RESOURCE_SOURCES
     ${RESOURCE_SOURCE_DIR}/gameprobe.cpp
     ${RESOURCE_SOURCE_DIR}/gff.cpp
     ${RESOURCE_SOURCE_DIR}/ltr.cpp
+    ${RESOURCE_SOURCE_DIR}/modulediscovery.cpp
+    ${RESOURCE_SOURCE_DIR}/modulemount.cpp
+    ${RESOURCE_SOURCE_DIR}/modulepolicy.cpp
     ${RESOURCE_SOURCE_DIR}/parser/2da/appearance.cpp
     ${RESOURCE_SOURCE_DIR}/parser/2da/genericdoors.cpp
     ${RESOURCE_SOURCE_DIR}/parser/2da/heads.cpp
@@ -161,18 +177,18 @@ set(RESOURCE_SOURCES
     ${RESOURCE_SOURCE_DIR}/provider/movies.cpp
     ${RESOURCE_SOURCE_DIR}/provider/paths.cpp
     ${RESOURCE_SOURCE_DIR}/provider/scripts.cpp
-    ${RESOURCE_SOURCE_DIR}/provider/shaders.cpp
     ${RESOURCE_SOURCE_DIR}/provider/soundsets.cpp
     ${RESOURCE_SOURCE_DIR}/provider/textures.cpp
     ${RESOURCE_SOURCE_DIR}/provider/visibilities.cpp
     ${RESOURCE_SOURCE_DIR}/provider/walkmeshes.cpp
     ${RESOURCE_SOURCE_DIR}/resources.cpp
+    ${RESOURCE_SOURCE_DIR}/saveworkingstate.cpp
     ${RESOURCE_SOURCE_DIR}/strings.cpp
     ${RESOURCE_SOURCE_DIR}/talktable.cpp
     ${RESOURCE_SOURCE_DIR}/typeutil.cpp)
 
 add_library(resource STATIC ${RESOURCE_HEADERS} ${RESOURCE_SOURCES} ${CLANG_FORMAT_PATH})
-set_target_properties(resource PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/lib)
+set_target_properties(resource PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${REONE_LIB_DIR})
 set_target_properties(resource PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(resource PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(resource PRIVATE movie graphics)

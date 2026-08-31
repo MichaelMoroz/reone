@@ -65,7 +65,7 @@ void Trigger::loadFromBlueprint(const std::string &resRef) {
 
 void Trigger::deserialize(const resource::Gff &gff) {
     std::string templateRes;
-    if (gff.readResRef(templateRes, "TemplateResRef")) {
+    if (!gff.has("ObjectId") && gff.readResRef(templateRes, "TemplateResRef")) {
         if (auto utt = _services.resource.gffs.get(templateRes, ResType::Utt)) {
             deserializeAll(*utt);
         }
@@ -92,6 +92,7 @@ void Trigger::configureLinkedDoorTransition(const std::shared_ptr<Door> &door) {
 }
 
 void Trigger::deserializeAll(const resource::Gff &gff) {
+    deserializeRuntimeState(gff);
     gff.readResRef(_onHeartbeat, "ScriptHeartbeat");
     gff.readResRef(_onEnter, "ScriptOnEnter");
     gff.readResRef(_onExit, "ScriptOnExit");
@@ -253,10 +254,15 @@ bool Trigger::acceptsTransitionActivator(const std::shared_ptr<Object> &activato
     if (_linkedToModule.empty() || !isActive()) {
         return false;
     }
-    if (_linkedDoorTransition && (!activator || activator != _game.party().getLeader())) {
+    if (!activator) {
         return false;
     }
-    return true;
+    // Only the player character or the current party leader moves the party
+    // between modules; a following companion crossing a transition is ignored.
+    // Taking control of a companion makes it the leader, so it keeps the
+    // ability to transition and stays controlled in the destination.
+    const Party &party = _game.party();
+    return activator == party.actualPlayer() || activator == party.getLeader();
 }
 
 bool Trigger::detachLinkedDoorTransition(const Door &door) {
@@ -307,7 +313,6 @@ void Trigger::syncDebugVisual() {
     if (!_sceneNode) {
         return;
     }
-    static_cast<TriggerSceneNode *>(_sceneNode.get())->setDebugColor(debugColor());
 }
 
 } // namespace game

@@ -185,6 +185,13 @@ void CharacterGeneration::update(float dt) {
     getSubGUI()->update(dt);
 }
 
+void CharacterGeneration::renderOffscreen() {
+    GameGUI::renderOffscreen();
+    if (auto sub = getSubGUI()) {
+        sub->renderOffscreen();
+    }
+}
+
 void CharacterGeneration::render() {
     GameGUI::render();
     getSubGUI()->render();
@@ -252,6 +259,7 @@ void CharacterGeneration::startLevelUp() {
     std::shared_ptr<Creature> partyLeader(_game.party().getLeader());
 
     Character character;
+    character.name = partyLeader->name();
     character.appearance = partyLeader->appearance();
     character.gender = partyLeader->gender();
     character.attributes = partyLeader->attributes();
@@ -346,8 +354,13 @@ void CharacterGeneration::finish() {
         partyLeader->attributes() = _character.attributes;
         _game.openInGame();
     } else {
+        // Character preview objects belong to the pre-playable character-
+        // generation runtime. Retire them before publishing the new game.
+        _game.retireRuntimeSession();
+
         std::shared_ptr<Creature> player = _game.newCreature();
         player->setTag(kObjectTagPlayer);
+        player->setName(_character.name);
         player->setGender(_character.gender);
         player->setAppearance(_character.appearance);
         player->loadAppearance();
@@ -368,6 +381,9 @@ void CharacterGeneration::finish() {
         party.reset();
         party.addMember(kNpcPlayer, player);
         party.setPlayer(player);
+        // The canonical PC has to exist before any script hands control to a
+        // stand-in, or there is nothing to hand control back to.
+        party.setActualPlayer(player);
 
         std::string moduleName(!_game.isTSL() ? "end_m01aa" : "001ebo");
         _game.loadModule(moduleName);
@@ -378,6 +394,7 @@ void CharacterGeneration::setCharacter(Character character) {
     bool appearanceChanged = character.appearance != _character.appearance;
 
     _character = std::move(character);
+    _controls.LBL_NAME->setTextMessage(_character.name);
 
     if (appearanceChanged) {
         reloadCharacterModel();
@@ -386,6 +403,11 @@ void CharacterGeneration::setCharacter(Character character) {
     }
 
     updateAttributes();
+}
+
+void CharacterGeneration::setCharacterName(std::string name) {
+    _character.name = std::move(name);
+    _controls.LBL_NAME->setTextMessage(_character.name);
 }
 
 void CharacterGeneration::reloadCharacterModel() {

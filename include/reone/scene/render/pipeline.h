@@ -17,11 +17,12 @@
 
 #pragma once
 
-#include "reone/graphics/framebuffer.h"
-#include "reone/graphics/renderbuffer.h"
+#include "reone/graphics/options.h"
 #include "reone/graphics/texture.h"
+// DebugOverlayShape crosses this interface by value.
+#include "reone/graphics/rendering/scenepipeline.h"
 
-#include "pass.h"
+#include "../gpuscene.h"
 
 template <>
 struct std::hash<glm::ivec2> {
@@ -41,10 +42,9 @@ class IStatistic;
 
 class Context;
 class MeshRegistry;
-class PBRTextures;
-class ShaderRegistry;
 class TextureRegistry;
 class Uniforms;
+class IRenderer;
 
 struct GraphicsOptions;
 
@@ -52,9 +52,54 @@ struct GraphicsOptions;
 
 namespace scene {
 
-enum class RendererType {
-    Retro,
-    PBR
+/** Whether the finished scene target will be composited by a GUI control. */
+enum class SceneOutputAlpha {
+    Opaque,
+    Coverage,
+};
+
+class CameraSceneNode;
+
+/**
+ * Which renderer to run.
+ *
+ * The graphics option itself, not a copy of it: the render mode is a graphics
+ * choice, the option maps 1:1 onto these values, and a second enum here would
+ * be one more place for the two to disagree.
+ */
+using RenderMode = graphics::RenderMode;
+
+/**
+ * One shadow-casting light the scene graph selected for this frame.
+ *
+ * A list rather than a kind, because a frame holds several casters and they
+ * need not agree on kind - a room lit by the sun and two lamps renders one
+ * cascaded map and two cubes. Each entry names where its map lives, so the
+ * pass needs to know nothing about how selection ordered them.
+ */
+/**
+ * The graphics struct itself, not a copy of it - the same reasoning as
+ * RenderMode above: a second declaration here would be one more place for the
+ * two to disagree, and every frame paid a loop to translate between them.
+ */
+using RenderShadowCaster = graphics::SceneShadowCaster;
+
+/**
+ * How a render target should be interpreted when displayed. Several targets hold
+ * values that are not directly viewable - depth is non-linear, normals are
+ * biased into unit range, motion vectors are small and signed.
+ */
+enum class RenderTargetKind {
+    Color,
+    Depth,
+    EyeNormal,
+    Motion
+};
+
+struct RenderTargetInfo {
+    std::string name;
+    RenderTargetKind kind {RenderTargetKind::Color};
+    graphics::Texture *texture {nullptr};
 };
 
 class IRenderPipeline {
@@ -63,110 +108,119 @@ public:
 
     virtual void init() = 0;
 
-    virtual void reset() = 0;
-    virtual void inRenderPass(RenderPassName name, std::function<void(IRenderPass &)> block) = 0;
+    virtual graphics::Texture &render(const CameraSceneNode *camera,
+                                      const std::vector<RenderShadowCaster> &shadowCasters,
+                                      SceneOutputAlpha alpha) = 0;
 
-    virtual graphics::Texture &render() = 0;
+    /**
+     * The debug overlay's primitives for the next render: wireframe boxes,
+     * free lines and name labels, all in world space. All three empty switches
+     * the overlay pass off. The scene graph decides what any of them means -
+     * an object's bounds, a pathfinder edge - and the pipeline only draws them.
+     */
+    virtual void setDebugOverlayShapes(std::vector<graphics::DebugOverlayShape> shapes,
+                                       std::vector<graphics::DebugOverlayLine> lines,
+                                       std::vector<graphics::DebugOverlayLabel> labels) {}
+
+    /** Whether the area authored fog at all, as opposed to the player's switch. */
+    virtual void setFogEnabled(bool enabled) {}
+
+    /** The font the overlay's labels are laid out and drawn with. */
+    virtual void setDebugOverlayFont(graphics::Font *font) {}
+
+    /**
+     * Intermediate targets, for inspection by development tooling. Empty unless
+     * the pipeline chooses to expose any.
+     */
+    virtual std::vector<RenderTargetInfo> targets() const = 0;
+
+    virtual void *renderTargetPreview(const std::string &name, int mode, float scale) {
+        return nullptr;
+    }
+
+    /**
+     * Write every exposed target into @p dir, one .npy per target.
+     *
+     * For comparing one backend against another: what a screenshot shows is the
+     * end of a long chain, and when two backends disagree it says nothing about
+     * where. Dumping the G-buffer separates "the geometry pass wrote different
+     * values" from "the resolve read them differently".
+     *
+     * Read back exactly as stored, so a 32-bit depth target arrives as 32-bit
+     * floats rather than being flattened into something displayable. The GPU
+     * has to be idle before this is called; the caller owns that.
+     */
+    virtual void dumpTargets(const std::filesystem::path &dir) = 0;
+
+    /**
+     * The tables that turn a pixel back into an object.
+     *
+     * dumpTargets writes the triangle-id image; on its own that is a number
+     * with nothing to look it up in. This writes the two tables that close the
+     * loop: every device-side object record with the triangle range it owns and
+     * the material it uses, and every material record with its flags, surface
+     * model and texture ids. A triangle id read out of the image falls in
+     * exactly one record's range, and that record names a material.
+     *
+     * Lives here because the pipeline already holds the admitted upload; the
+     * scene graph does not keep one, and making it keep one would be per-frame
+     * cost for a debugging tool.
+     */
+    virtual void dumpSceneRecords(const std::filesystem::path &dir) {}
+
+    /**
+     * Throw away every temporal history the pipeline holds, so the next frame
+     * accumulates from nothing.
+     *
+     * A temporal filter with a blend factor never reaches zero residual - it
+     * settles at a small steady state - so a measurement that only sees the
+     * settled value cannot tell a working filter from a broken one. Restarting
+     * the history at a known frame makes the approach itself observable: the
+     * residual must fall geometrically from its cold value to that steady
+     * state, and a filter that is not accumulating shows no decay at all.
+     */
+    virtual void restartTemporalHistory() {}
 };
 
 class IRenderPipelineFactory {
 public:
     virtual ~IRenderPipelineFactory() = default;
 
-    virtual std::unique_ptr<IRenderPipeline> create(RendererType type, glm::ivec2 targetSize) = 0;
-};
+    virtual std::unique_ptr<IRenderPipeline> create(RenderMode mode, glm::ivec2 targetSize,
+                                                    GpuScene &scene) = 0;
 
-class RenderPipelineBase : public IRenderPipeline, boost::noncopyable {
-public:
-    using RenderPassCallback = std::function<void(IRenderPass &)>;
-
-    void reset() override {
-        _passCallbacks.clear();
-    }
-
-    void inRenderPass(RenderPassName name, RenderPassCallback callback) override {
-        _passCallbacks[name] = std::move(callback);
-    }
-
-protected:
-    struct GaussianBlurParams {
-        bool vertical {false};
-        bool strong {false};
-    };
-
-    glm::ivec2 _targetSize;
-    graphics::GraphicsOptions &_options;
-    graphics::Context &_context;
-    graphics::MeshRegistry &_meshRegistry;
-    graphics::ShaderRegistry &_shaderRegistry;
-    graphics::IStatistic &_statistic;
-    graphics::TextureRegistry &_textureRegistry;
-    graphics::Uniforms &_uniforms;
-
-    bool _inited {false};
-
-    glm::mat4 _shadowLightSpace[graphics::kNumShadowLightSpace] {glm::mat4(1.0f)};
-    glm::vec4 _shadowCascadeFarPlanes {glm::vec4(0.0f)};
-
-    RenderPassName _passName {RenderPassName::None};
-    std::map<RenderPassName, RenderPassCallback> _passCallbacks;
-
-    RenderPipelineBase(glm::ivec2 targetSize,
-                       graphics::GraphicsOptions &options,
-                       graphics::Context &context,
-                       graphics::MeshRegistry &meshRegistry,
-                       graphics::ShaderRegistry &shaderRegistry,
-                       graphics::IStatistic &statistic,
-                       graphics::TextureRegistry &textureRegistry,
-                       graphics::Uniforms &uniforms) :
-        _targetSize(std::move(targetSize)),
-        _options(options),
-        _context(context),
-        _meshRegistry(meshRegistry),
-        _shaderRegistry(shaderRegistry),
-        _statistic(statistic),
-        _textureRegistry(textureRegistry),
-        _uniforms(uniforms) {
-    }
-
-    void applyBoxBlur(graphics::Texture &tex, graphics::Framebuffer &dst, const glm::ivec2 &size);
-    void applyGaussianBlur(graphics::Texture &tex, graphics::Framebuffer &dst, const glm::ivec2 &size, const GaussianBlurParams &params);
-    void applyMedianFilter(graphics::Texture &tex, graphics::Framebuffer &dst, const glm::ivec2 &size, bool strong = false);
-    void applyFXAA(graphics::Texture &tex, graphics::Framebuffer &dst, const glm::ivec2 &size);
-    void applySharpen(graphics::Texture &tex, graphics::Framebuffer &dst, const glm::ivec2 &size, float amount);
+    /**
+     * Hand the factory the renderer, so it can build the scene pipeline.
+     * The scene library cannot reach it otherwise: the engine owns it.
+     */
+    virtual void setRenderer(graphics::IRenderer &renderer) = 0;
 };
 
 class RenderPipelineFactory : public IRenderPipelineFactory, boost::noncopyable {
 public:
     RenderPipelineFactory(graphics::GraphicsOptions &options,
-                          graphics::Context &context,
                           graphics::MeshRegistry &meshRegistry,
-                          graphics::PBRTextures &pbrTextures,
-                          graphics::ShaderRegistry &shaderRegistry,
-                          graphics::IStatistic &statistic,
                           graphics::TextureRegistry &textureRegistry,
                           graphics::Uniforms &uniforms) :
         _options(options),
-        _context(context),
         _meshRegistry(meshRegistry),
-        _pbrTextures(pbrTextures),
-        _shaderRegistry(shaderRegistry),
-        _statistic(statistic),
         _textureRegistry(textureRegistry),
         _uniforms(uniforms) {
     }
 
-    std::unique_ptr<IRenderPipeline> create(RendererType type, glm::ivec2 targetSize) override;
+    std::unique_ptr<IRenderPipeline> create(RenderMode mode, glm::ivec2 targetSize,
+                                            GpuScene &scene) override;
+
+    void setRenderer(graphics::IRenderer &renderer) override {
+        _renderer = &renderer;
+    }
 
 private:
     graphics::GraphicsOptions &_options;
-    graphics::Context &_context;
     graphics::MeshRegistry &_meshRegistry;
-    graphics::PBRTextures &_pbrTextures;
-    graphics::ShaderRegistry &_shaderRegistry;
-    graphics::IStatistic &_statistic;
     graphics::TextureRegistry &_textureRegistry;
     graphics::Uniforms &_uniforms;
+    graphics::IRenderer *_renderer {nullptr};
 };
 
 } // namespace scene

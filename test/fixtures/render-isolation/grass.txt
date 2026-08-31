@@ -1,0 +1,6 @@
+warp danm14ab
+scene empty
+grass m14ab_09a lda_grass2 0 0 0
+camera free
+campos 0 -12 4
+camlook 0 0 0.5

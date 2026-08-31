@@ -21,6 +21,7 @@
 #include "reone/graphics/types.h"
 
 #include "reone/resource/parser/gff/gui.h"
+#include "controlrender.h"
 #include "types.h"
 
 namespace reone {
@@ -38,13 +39,13 @@ namespace graphics {
 struct GraphicsServices;
 
 class Font;
+class I2DRenderer;
 class Texture;
 
 } // namespace graphics
 
 namespace scene {
 
-class IRenderPass;
 class ISceneGraphs;
 
 } // namespace scene
@@ -114,7 +115,8 @@ public:
 
     virtual void load(const resource::generated::GUI_BASECONTROL &gui, bool protoItem = false);
     virtual void update(float dt);
-    virtual void render(const glm::ivec2 &screenSize, const glm::ivec2 &offset, scene::IRenderPass &pass);
+    virtual void render(const glm::ivec2 &screenSize, const glm::ivec2 &offset, graphics::I2DRenderer &renderer2d);
+    virtual void renderOffscreen();
 
     void updateTransform();
     void updateTextLines();
@@ -130,16 +132,44 @@ public:
     bool isSelectable() const { return _selectable; }
     bool isSelected() const { return _selected; }
     bool isDisabled() const { return _disabled; }
+    bool isHilightOverBorder() const { return _hilightOverBorder; }
 
     int id() const { return _id; }
     int padding() const { return _padding; }
     Border &border() const { return *_border; }
+    const Extent &authoredExtent() const { return _authoredExtent; }
+    void setAuthoredExtent(Extent extent) { _authoredExtent = std::move(extent); }
+
+    /** The combined layout and text factor used to render this control's text. */
+    float scale() const { return _scale; }
+    void setScale(float scale) {
+        _scale = scale;
+        updateTextLines();
+    }
+    /** Applies text and frame scale without changing the control's rectangle. */
+    void setPresentationScale(float layoutScale);
+    /** Applies independent frame and text layout scales without changing the control's rectangle. */
+    void setPresentationScale(float frameLayoutScale, float textLayoutScale);
     const Extent &extent() const { return _extent; }
     const Border &hilight() const { return *_hilight; }
+    const std::string &borderFillResRef() const { return _borderFillResRef; }
+    const std::string &hilightFillResRef() const { return _hilightFillResRef; }
     const std::string &tag() const { return _tag; }
     const Text &text() const { return _text; }
     const std::vector<std::string> &textLines() const { return _textLines; }
     const std::string &sceneName() const { return _sceneName; }
+
+    /**
+     * Whether this control would render a scene of its own this frame.
+     *
+     * The same test renderOffscreen makes, exposed so the frame can be decided
+     * BEFORE anything is drawn: a screen that hosts a scene owns the frame, and
+     * the world is not rendered behind it. See Game::renderSceneOffscreen.
+     */
+    bool hostsScene() const {
+        return !_sceneName.empty() && _visible;
+    }
+    const Extent &sceneExtent() const { return _sceneExtent ? *_sceneExtent : _extent; }
 
     void setId(int id) { _id = id; }
     void setTag(std::string tag) { _tag = std::move(tag); }
@@ -161,13 +191,19 @@ public:
     void setHilightFill(std::string resRef);
     void setHilightFill(std::shared_ptr<graphics::Texture> texture);
     void setHilightFillTransform(Border::FillTransform transform);
+    void setHilightOverBorder(bool enabled) { _hilightOverBorder = enabled; }
     void setPadding(int padding);
     void setSceneName(std::string name);
+    void setSceneExtent(std::optional<Extent> extent) { _sceneExtent = std::move(extent); }
     void setText(Text text);
+    void setTextAlignment(TextAlign align);
     void setTextColor(glm::vec3 color);
     void setTextMessage(std::string text);
     void setTextFont(std::shared_ptr<graphics::Font> font);
+    void setTextPaddingLeft(int padding) { _textPaddingLeft = padding; }
+    int textPaddingLeft() const;
     void setTintBorderFill(bool tint) { _tintBorderFill = tint; }
+    void setSharpenBorderFillAlpha(bool sharpen) { _sharpenBorderFillAlpha = sharpen; }
     void setUseBorderColorOverride(bool use);
     void setVisible(bool visible);
 
@@ -213,18 +249,30 @@ protected:
 
     int _id {-1};
     std::string _tag;
+    std::string _borderFillResRef;
+    std::string _hilightFillResRef;
+    Extent _authoredExtent;
+    int _authoredBorderDimension {0};
+    int _authoredHilightDimension {0};
+    float _scale {1.0f};
     Extent _extent;
     std::shared_ptr<Border> _border;
     std::shared_ptr<Border> _hilight;
     Text _text;
     std::string _sceneName;
+    std::optional<Extent> _sceneExtent;
+    /** Produced by renderOffscreen, composited and cleared by render. */
+    graphics::Texture *_sceneOutput {nullptr};
     int _padding {0};
+    int _textPaddingLeft {0};
     glm::mat4 _transform {1.0f};
     bool _visible {true};
     bool _disabled {false};
     bool _selected {false};
+    bool _hilightOverBorder {false};
     bool _selectable {false};
     bool _tintBorderFill {false};
+    bool _sharpenBorderFillAlpha {false};
     glm::vec3 _borderColorOverride {1.0f};
     bool _useBorderColorOverride {false};
     std::vector<std::string> _textLines;
@@ -263,12 +311,13 @@ protected:
     void renderBorder(const Border &border,
                       const glm::ivec2 &offset,
                       const glm::ivec2 &size,
-                      scene::IRenderPass &pass);
+                      graphics::I2DRenderer &renderer2d,
+                      BorderRenderPart part = BorderRenderPart::All);
 
     void renderText(const std::vector<std::string> &lines,
                     const glm::ivec2 &offset,
                     const glm::ivec2 &size,
-                    scene::IRenderPass &pass);
+                    graphics::I2DRenderer &renderer2d);
 
     virtual const glm::vec3 &getBorderColor() const;
 

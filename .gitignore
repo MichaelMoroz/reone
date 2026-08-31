@@ -2,3 +2,11 @@
 .vs/
 .vscode/
 build/
+/.scratch
+# Written beside whatever binary is run, including the repo root.
+engine.log
+# ImGui panel layout, per developer and per monitor. Committing one resizes
+# everybody else's docks the next time they pull.
+imgui.ini
+
+/override/mod_stuff

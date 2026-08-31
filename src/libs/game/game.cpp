@@ -16,21 +16,29 @@
  */
 
 #include "reone/game/game.h"
+#include "reone/game/savedruntime.h"
 
 #include <cctype>
+#include <cmath>
 #include <exception>
+#include <numeric>
 
 #include "reone/game/minigame.h"
+
+#include "reone/system/profiler.h"
 
 #include "reone/audio/context.h"
 #include "reone/audio/di/services.h"
 #include "reone/audio/mixer.h"
+#include "reone/game/debug.h"
+#include "reone/scene/drawdebug.h"
+
 #include "reone/game/action/castspellatobject.h"
 #include "reone/game/action/cutsceneattack.h"
 #include "reone/game/action/startconversation.h"
 #include "reone/game/combat.h"
 #include "reone/game/d20/spells.h"
-#include "reone/game/debug.h"
+#include "reone/game/d20/classes.h"
 #include "reone/game/di/services.h"
 #include "reone/game/gui/hud.h"
 #include "reone/game/gui/sounds.h"
@@ -38,17 +46,18 @@
 #include "reone/game/party.h"
 #include "reone/game/reputes.h"
 #include "reone/game/room.h"
+#include "reone/game/savewidesnapshot.h"
 #include "reone/game/script/routines.h"
 #include "reone/game/surfaces.h"
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/font.h"
 #include "reone/graphics/format/tgawriter.h"
+#include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
 #include "reone/graphics/model.h"
 #include "reone/graphics/modelnode.h"
-#include "reone/graphics/renderbuffer.h"
-#include "reone/graphics/shaderregistry.h"
+#include "reone/graphics/rhi/renderer.h"
+#include "reone/graphics/rendering/renderer2d.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/gui/gui.h"
 #include "reone/movie/format/bikreader.h"
@@ -58,6 +67,7 @@
 #include "reone/resource/exception/notfound.h"
 #include "reone/resource/format/erfreader.h"
 #include "reone/resource/format/erfwriter.h"
+#include "reone/resource/format/gffreader.h"
 #include "reone/resource/format/gffwriter.h"
 #include "reone/resource/parser/gff/gvt.h"
 #include "reone/resource/parser/gff/nfo.h"
@@ -76,8 +86,8 @@
 #include "reone/resource/provider/textures.h"
 #include "reone/resource/provider/walkmeshes.h"
 #include "reone/resource/resources.h"
+#include "reone/resource/saveworkingstate.h"
 #include "reone/scene/di/services.h"
-#include "reone/scene/drawdebug.h"
 #include "reone/scene/graphs.h"
 #include "reone/scene/render/pipeline.h"
 #include "reone/script/di/services.h"
@@ -87,8 +97,12 @@
 #include "reone/system/exception/validation.h"
 #include "reone/system/fileutil.h"
 #include "reone/system/logutil.h"
+#include "reone/system/randomutil.h"
 #include "reone/system/smallset.h"
+#include "reone/system/stream/memoryinput.h"
 #include "reone/system/threadutil.h"
+
+#include <imgui.h>
 
 using namespace reone::audio;
 using namespace reone::graphics;
@@ -102,12 +116,70 @@ namespace reone {
 
 namespace game {
 
+ModuleLoadContext resolveModuleLoadContext(
+    bool initialSaveRestore,
+    bool savedModuleSnapshot) {
+
+    if (initialSaveRestore) {
+        return ModuleLoadContext::InitialSaveRestore;
+    }
+    return savedModuleSnapshot
+               ? ModuleLoadContext::SavedModuleTransition
+               : ModuleLoadContext::FreshModule;
+}
+
+bool restoresSavedWorld(ModuleLoadContext context) {
+    return context != ModuleLoadContext::FreshModule;
+}
+
+bool restoresSavedSession(ModuleLoadContext context) {
+    return context == ModuleLoadContext::InitialSaveRestore;
+}
+
+bool Game::bindEffectCreator(EffectInstance &effect) const {
+    auto it = _objectById.find(effect.creatorId);
+    return effect.bindCreator(it == _objectById.end() ? nullptr : it->second);
+}
+
+bool Game::bindSavedObjectReference(SavedObjectReference &reference) const {
+    if (reference._runtimeSession && *reference._runtimeSession != _runtimeSessionGeneration) {
+        reference._object.reset();
+        return false;
+    }
+    if (reference.isInvalid()) {
+        reference._object.reset();
+        return false;
+    }
+    if (!reference._runtimeSession) {
+        reference._runtimeSession = _runtimeSessionGeneration;
+    }
+
+    auto it = _objectById.find(reference.id);
+    if (it == _objectById.end()) {
+        reference._object.reset();
+        return false;
+    }
+    reference._object = it->second;
+    return true;
+}
+
 static constexpr char kDeveloperOverlayToggleHelp[] = "Ctrl+Shift+D";
 static constexpr char kDeveloperTriggerToggleHelp[] = "Ctrl+Shift+T";
 static constexpr char kDeveloperActorToggleHelp[] = "Ctrl+Shift+A";
 static constexpr char kDeveloperActorLongToggleHelp[] = "Ctrl+Shift+L";
 static constexpr char kDeveloperWatchToggleHelp[] = "Ctrl+Shift+W";
 static constexpr float kDeveloperActorLabelDistance = 32.0f;
+static constexpr float kCursorSizeScale = 0.5f;
+
+static std::shared_ptr<Gff> decodeSaveGff(std::optional<Resource> resource) {
+    if (!resource) {
+        return {};
+    }
+    MemoryInputStream stream(resource->data);
+    GffReader reader(stream);
+    reader.load();
+    return reader.root();
+}
 
 static const char *screenName(Game::Screen screen) {
     switch (screen) {
@@ -131,9 +203,184 @@ static const char *screenName(Game::Screen screen) {
         return "PartySelection";
     case Game::Screen::SaveLoad:
         return "SaveLoad";
+    case Game::Screen::GalaxyMap:
+        return "GalaxyMap";
+    case Game::Screen::SwoopRace:
+        return "SwoopRace";
+    case Game::Screen::PazaakWager:
+        return "PazaakWager";
+    case Game::Screen::PazaakSetup:
+        return "PazaakSetup";
+    case Game::Screen::PazaakBoard:
+        return "PazaakBoard";
     default:
         return "Unknown";
     }
+}
+
+static pazaak::HandSelection randomPazaakHandSelection(const pazaak::SideDeck &) {
+    std::array<size_t, pazaak::kSideDeckSize> indices;
+    std::iota(indices.begin(), indices.end(), 0);
+    for (size_t i = indices.size() - 1; i > 0; --i) {
+        size_t swapIndex = static_cast<size_t>(randomInt(0, static_cast<int>(i)));
+        std::swap(indices[i], indices[swapIndex]);
+    }
+    return {indices[0], indices[1], indices[2], indices[3]};
+}
+
+// Developer-only KotOR II showcase hand selection. The showcase side deck is
+// built in a fixed order, so rotating the four-card window across sets exposes
+// every supported card family during a single match while still obeying the
+// ordinary ten-card side deck and four-card hand rules.
+static PazaakSession::HandSelector showcasePazaakHandSelector() {
+    auto set = std::make_shared<size_t>(0);
+    return [set](const pazaak::SideDeck &) {
+        static const std::array<pazaak::HandSelection, 3> windows {
+            pazaak::HandSelection {0, 1, 2, 3},
+            pazaak::HandSelection {4, 5, 6, 7},
+            pazaak::HandSelection {8, 9, 0, 1},
+        };
+        pazaak::HandSelection selection = windows[*set % windows.size()];
+        ++*set;
+        return selection;
+    };
+}
+
+static pazaak::MainDeck randomPazaakMainDeck() {
+    std::vector<int> cards(pazaak::MainDeck::standardOrdered().cards());
+    for (size_t i = cards.size() - 1; i > 0; --i) {
+        size_t swapIndex = static_cast<size_t>(randomInt(0, static_cast<int>(i)));
+        std::swap(cards[i], cards[swapIndex]);
+    }
+    return pazaak::MainDeck(std::move(cards));
+}
+
+static std::optional<pazaak::CardDefinition> k1PazaakCardDefinition(int cardId) {
+    if (cardId < 0 || cardId >= 18) {
+        return std::nullopt;
+    }
+    int magnitude = cardId % 6 + 1;
+    if (cardId < 6) {
+        return pazaak::CardDefinition::fixedPositive(magnitude);
+    }
+    if (cardId < 12) {
+        return pazaak::CardDefinition::fixedNegative(magnitude);
+    }
+    return pazaak::CardDefinition::signSelectable(magnitude);
+}
+
+// KotOR II owns five extra card types after the numbered ones. Their order
+// follows the authored side-deck screen: Tiebreaker, Double, Flip 2&4, Flip 3&6
+// and Value Change.
+static std::optional<pazaak::CardDefinition> k2PazaakCardDefinition(int cardId) {
+    if (cardId < 0 || cardId >= 23) {
+        return std::nullopt;
+    }
+    if (cardId < 18) {
+        return k1PazaakCardDefinition(cardId);
+    }
+    switch (cardId) {
+    case 18:
+        return pazaak::CardDefinition::tiebreaker();
+    case 19:
+        return pazaak::CardDefinition::doubleCard();
+    case 20:
+        return pazaak::CardDefinition::flipTwoFour();
+    case 21:
+        return pazaak::CardDefinition::flipThreeSix();
+    default:
+        return pazaak::CardDefinition::valueChange();
+    }
+}
+
+static std::optional<pazaak::CardDefinition> parseK1PazaakDeckCard(
+    const std::string &token) {
+
+    if (token.size() != 2 ||
+        (token[0] != '+' && token[0] != '-' && token[0] != '*') ||
+        token[1] < '1' || token[1] > '6') {
+        return std::nullopt;
+    }
+    int magnitude = token[1] - '0';
+    switch (token[0]) {
+    case '+':
+        return pazaak::CardDefinition::fixedPositive(magnitude);
+    case '-':
+        return pazaak::CardDefinition::fixedNegative(magnitude);
+    case '*':
+        return pazaak::CardDefinition::signSelectable(magnitude);
+    default:
+        return std::nullopt;
+    }
+}
+
+static std::optional<pazaak::SideDeck> loadK1PazaakOpponentDeck(
+    const resource::TwoDA &decks,
+    int row) {
+
+    if (row < 0 || row >= decks.getRowCount()) {
+        return std::nullopt;
+    }
+    std::vector<pazaak::CardDefinition> cards;
+    cards.reserve(pazaak::kSideDeckSize);
+    for (size_t i = 0; i < pazaak::kSideDeckSize; ++i) {
+        auto card = parseK1PazaakDeckCard(
+            decks.getString(row, "card" + std::to_string(i)));
+        if (!card) {
+            return std::nullopt;
+        }
+        cards.push_back(*card);
+    }
+    return pazaak::SideDeck {
+        cards[0], cards[1], cards[2], cards[3], cards[4],
+        cards[5], cards[6], cards[7], cards[8], cards[9],
+    };
+}
+
+static std::optional<pazaak::CardDefinition> parseK2PazaakDeckCard(
+    const std::string &token) {
+
+    // KotOR II special-card tokens, verified from shipped card descriptions.
+    if (token == "$$") {
+        return pazaak::CardDefinition::doubleCard();
+    }
+    if (token == "F1") {
+        return pazaak::CardDefinition::flipTwoFour();
+    }
+    if (token == "F2") {
+        return pazaak::CardDefinition::flipThreeSix();
+    }
+    if (token == "TT") {
+        return pazaak::CardDefinition::tiebreaker();
+    }
+    if (token == "VV") {
+        return pazaak::CardDefinition::valueChange();
+    }
+    // Otherwise the KotOR I grammar (+N / -N / *N) applies unchanged.
+    return parseK1PazaakDeckCard(token);
+}
+
+static std::optional<pazaak::SideDeck> loadK2PazaakOpponentDeck(
+    const resource::TwoDA &decks,
+    int row) {
+
+    if (row < 0 || row >= decks.getRowCount()) {
+        return std::nullopt;
+    }
+    std::vector<pazaak::CardDefinition> cards;
+    cards.reserve(pazaak::kSideDeckSize);
+    for (size_t i = 0; i < pazaak::kSideDeckSize; ++i) {
+        auto card = parseK2PazaakDeckCard(
+            decks.getString(row, "card" + std::to_string(i)));
+        if (!card) {
+            return std::nullopt;
+        }
+        cards.push_back(*card);
+    }
+    return pazaak::SideDeck {
+        cards[0], cards[1], cards[2], cards[3], cards[4],
+        cards[5], cards[6], cards[7], cards[8], cards[9],
+    };
 }
 
 static const char *cameraTypeName(CameraType type) {
@@ -223,6 +470,7 @@ static int getDebugFaction(const std::shared_ptr<Object> &object) {
 
 void Game::init() {
     initConsole();
+    resetGalaxyMap();
     initLocalServices();
     setSceneSurfaces();
     setCursorType(CursorType::Default);
@@ -242,7 +490,21 @@ void Game::initJournalNotifications() {
 }
 
 void Game::registerConsoleCommand(std::string name, std::string description, ConsoleCommandHandler handler) {
-    _console.registerCommand(name, description, std::bind(handler, this, std::placeholders::_1));
+    static const std::set<std::string> cheatCommands {
+        "playanim", "warp", "kill", "additem", "givexp", "givegold",
+        "spawncreature", "spawncompanion", "setfaction", "setposition",
+        "professionaltools", "killroom", "setability", "setskill",
+        "addfeat", "removefeat", "addspell", "removespell",
+        "castspellatobject", "opendoor", "closedoor"};
+    bool marksCheatUsed = cheatCommands.count(name) != 0;
+    _console.registerCommand(
+        name, description,
+        [this, handler, marksCheatUsed](const ConsoleArgs &args) {
+            (this->*handler)(args);
+            if (marksCheatUsed) {
+                _cheatUsed = true;
+            }
+        });
 }
 
 void Game::initConsole() {
@@ -253,15 +515,40 @@ void Game::initConsole() {
     registerConsoleCommand("listanim", "list animations of selected object", &Game::consoleListAnim);
     registerConsoleCommand("playanim", "play animation on selected object", &Game::consolePlayAnim);
     registerConsoleCommand("warp", "warp to a module", &Game::consoleWarp);
+    registerConsoleCommand("openmenu", "open an in-game menu tab", &Game::consoleOpenMenu);
+    registerConsoleCommand("openchargen", "open a character-generation screen", &Game::consoleOpenCharacterGeneration);
+    registerConsoleCommand("skipmovie", "skip the active movie", &Game::consoleSkipMovie);
+    registerConsoleCommand("showbark", "show a timed HUD bark message", &Game::consoleShowBark);
+    registerConsoleCommand("showpopup", "show the confirmation popup with an optional icon", &Game::consoleShowPopup);
+    registerConsoleCommand("showgallerymode", "open a deterministic gameplay-mode gallery fixture", &Game::consoleShowGalleryMode);
+    registerConsoleCommand("graphics", "toggle 3D scene rendering: graphics on|off", &Game::consoleGraphics);
+    registerConsoleCommand("gamespeed", "scale the simulation timestep: gamespeed <multiplier>", &Game::consoleGameSpeed);
+    registerConsoleCommand("restarthistory", "restart every temporal filter's history once", &Game::consoleRestartHistory);
+    registerConsoleCommand("seed", "reseed the shared random generator: seed <number>", &Game::consoleSeed);
+    registerConsoleCommand("showhud", "open the third-person gameplay HUD for a scripted capture", &Game::consoleShowHUD);
+    registerConsoleCommand("showtransition", "show an area-transition banner for a scripted capture", &Game::consoleShowTransition);
+    registerConsoleCommand("opencontainer", "open the container screen on the party leader for a scripted capture", &Game::consoleOpenContainer);
+    registerConsoleCommand("action", "act on the selected object, as clicking it does", &Game::consoleAction);
+    registerConsoleCommand("exitmenu", "leave the open menu and return to the world", &Game::consoleExitMenu);
+    registerConsoleCommand("selectdialogoption", "select a dialog option without activating it for a scripted capture", &Game::consoleSelectDialogOption);
+    registerConsoleCommand("scene", "create a synthetic scene (empty)", &Game::consoleScene);
+    registerConsoleCommand("spawn", "spawn a UTC, UTP, or model at x y z", &Game::consoleSpawn);
+    registerConsoleCommand("grass", "spawn grass on a room model: model texture x y z", &Game::consoleGrass);
+    registerConsoleCommand("grassdensity", "set the grass density multiplier", &Game::consoleGrassDensity);
+    registerConsoleCommand("emit", "detonate emitters in the last spawned model", &Game::consoleEmit);
+    registerConsoleCommand("ignite", "play powerup on the last spawned model", &Game::consoleIgnite);
+    registerConsoleCommand("camera", "select camera (free)", &Game::consoleCamera);
+    registerConsoleCommand("campos", "set free camera position", &Game::consoleCamPos);
+    registerConsoleCommand("camlook", "aim free camera at a point", &Game::consoleCamLook);
+    registerConsoleCommand("camstatus", "print free camera viewpoint commands", &Game::consoleCamStatus);
+    registerConsoleCommand("camfov", "set free camera vertical field of view, in degrees", &Game::consoleCamFov);
     registerConsoleCommand("kill", "kill selected object", &Game::consoleKill);
     registerConsoleCommand("additem", "add item to selected object", &Game::consoleAddItem);
     registerConsoleCommand("givexp", "give experience to selected creature", &Game::consoleGiveXP);
     registerConsoleCommand("givegold", "give credits to the party", &Game::consoleGiveGold);
-    registerConsoleCommand("showaabb", "toggle rendering AABB", &Game::consoleShowAABB);
-    registerConsoleCommand("showwalkmesh", "toggle rendering walkmesh", &Game::consoleShowWalkmesh);
-    registerConsoleCommand("showtriggers", "toggle rendering triggers", &Game::consoleShowTriggers);
     registerConsoleCommand("spawncreature", "spawn a creature", &Game::consoleSpawnCreature);
     registerConsoleCommand("spawncompanion", "spawn a companion", &Game::consoleSpawnCompanion);
+    registerConsoleCommand("addavailablenpc", "add an NPC to the party selection roster", &Game::consoleAddAvailableNpc);
     registerConsoleCommand("selectobjectbyid", "select an object by id", &Game::consoleSelectObjectById);
     registerConsoleCommand("selectobjectbytag", "select an object by tag", &Game::consoleSelectObjectByTag);
     registerConsoleCommand("selectleader", "select the party leader", &Game::consoleSelectLeader);
@@ -285,6 +572,10 @@ void Game::initConsole() {
     registerConsoleCommand("closedoor", "close a selected door object", &Game::consoleOpenCloseDoor);
     registerConsoleCommand("listgames", "list savegames", &Game::consoleListGames);
     registerConsoleCommand("loadgame", "load a savegame", &Game::consoleLoadGame);
+    registerConsoleCommand("savegame", "save to a semantic slot", &Game::consoleSaveGame);
+    registerConsoleCommand("startpazaak", "start a development Pazaak match", &Game::consoleStartPazaak);
+    registerConsoleCommand("showpath", "show debug overlay for pathfinding", &Game::consoleShowPath);
+
     if (_options.game.developer) {
         registerConsoleCommand("minigameinfo", "print minigame metadata for current area", &Game::consoleMiniGameInfo);
         registerConsoleCommand("startswoop", "enter the developer swoop race mode for the current area", &Game::consoleStartSwoop);
@@ -292,6 +583,11 @@ void Game::initConsole() {
         registerConsoleCommand("swoopstate", "print the current swoop race progress/lateral state", &Game::consoleSwoopState);
         registerConsoleCommand("startswooprace", "enter a swoop module from the current one and auto-start the race", &Game::consoleStartSwoopRace);
         registerConsoleCommand("finishswoop", "finish the lifecycle swoop race (forced success) and return to origin", &Game::consoleFinishSwoop);
+        registerConsoleCommand("startturret", "enter the turret minigame for the current area", &Game::consoleStartTurret);
+        registerConsoleCommand("startturretgame", "enter a turret module from the current one and auto-start the minigame", &Game::consoleStartTurretGame);
+        registerConsoleCommand("stopturret", "exit the turret minigame", &Game::consoleStopTurret);
+        registerConsoleCommand("turretstate", "print the current turret aim/health/enemy state", &Game::consoleTurretState);
+        registerConsoleCommand("showimgui", "open imgui demo", &Game::consoleShowImGui);
     }
 }
 
@@ -301,6 +597,12 @@ void Game::initLocalServices() {
     _routines = std::move(routines);
 
     _scriptRunner = std::make_unique<ScriptRunner>(*_routines, _services.resource.scripts);
+
+    if (!_saveSeams.captureScreenshot) {
+        _saveSeams.captureScreenshot = [this]() {
+            return captureSaveScreenshot();
+        };
+    }
 
     _map = std::make_unique<Map>(*this, _services);
 }
@@ -318,6 +620,11 @@ void Game::setSceneSurfaces() {
 }
 
 bool Game::handle(const input::Event &event) {
+    if (_confirmPopup && _confirmPopup->isVisible()) {
+        _confirmPopup->handle(event);
+        return true;
+    }
+
     switch (event.type) {
     case input::EventType::KeyDown:
         if (handleKeyDown(event.key)) {
@@ -367,6 +674,11 @@ bool Game::handle(const input::Event &event) {
                 return true;
             }
             break;
+        case Screen::Turret:
+            if (_turret.handle(event)) {
+                return true;
+            }
+            break;
         default:
             break;
         }
@@ -375,18 +687,57 @@ bool Game::handle(const input::Event &event) {
     return false;
 }
 
+bool Game::consumeTimingDiscontinuity() {
+    bool discontinuity = _timingDiscontinuity;
+    _timingDiscontinuity = false;
+    return discontinuity;
+}
+
 void Game::update(float frameTime) {
+    R_PROFILE_ZONE("Game::update");
     float dt = frameTime * _gameSpeed;
+    _simulatedTime += dt;
     if (_movie) {
         updateMovie(dt);
         return;
     }
     updateMusic();
 
+    // Requests made by scripts, console handlers or UI code in the previous
+    // update execute only after those call stacks have unwound. This precedes
+    // deferred module transition handling, so save+transition in one script
+    // deterministically captures the source module first.
+    processPendingSave();
+
+    if (_screen == Screen::PazaakBoard && _pazaakSession) {
+        static constexpr float kPazaakOpponentEventDelay = 0.45f;
+        if (_pazaakSession->advanceResultPresentation(dt)) {
+            if (_pazaakBoard) {
+                _pazaakBoard->refresh();
+            }
+            completePazaakIfReady();
+        } else if (_pazaakSession && !_pazaakSession->presentationPending()) {
+            _pazaakOpponentEventElapsed += dt;
+            if (_pazaakOpponentEventElapsed >= kPazaakOpponentEventDelay) {
+                _pazaakOpponentEventElapsed = 0.0f;
+                PazaakOpponentEvent event = _pazaakSession->advanceOpponentEvent();
+                if (event != PazaakOpponentEvent::None) {
+                    if (_pazaakBoard) {
+                        _pazaakBoard->refresh();
+                    }
+                    completePazaakIfReady();
+                }
+            }
+        }
+    }
+
     if (!_nextModule.empty()) {
         loadNextModule();
     }
-    updateCamera(dt);
+    {
+        R_PROFILE_ZONE("Game::updateCamera");
+        updateCamera(dt);
+    }
 
     if (_swoopRace.isActive()) {
         _swoopRace.update(dt);
@@ -395,27 +746,66 @@ void Game::update(float frameTime) {
         // threshold, force success and return to the origin module. Plain dev
         // races (no lifecycle) keep riding so the dev stays in control.
         if (_swoopLifecycle.active && _swoopRace.finishReached()) {
-            debug(str(boost::format("swoop: auto-finish progress=%.1f finish=%.1f forcedSuccess=yes returning=%s")
-                      % _swoopRace.progress()
-                      % _swoopRace.finishProgress()
-                      % _swoopLifecycle.originModule));
+            debug(str(boost::format("swoop: auto-finish progress=%.1f finish=%.1f forcedSuccess=yes returning=%s") % _swoopRace.progress() % _swoopRace.finishProgress() % _swoopLifecycle.originModule));
             finishSwoopLifecycle(/*success=*/true);
+        }
+    }
+
+    if (_turret.isActive()) {
+        _turret.update(dt);
+
+        // Non-blocking auto-finish: a lifecycle session ends as soon as the
+        // turret reaches a win or a loss and returns to the origin module. Plain
+        // dev sessions (no lifecycle) keep running so the dev stays in control.
+        if (_turretLifecycle.active && _turret.finished()) {
+            debug(str(boost::format("turret: auto-finish outcome=%s hp=%d/%d returning=%s")
+                      % turretOutcomeName(_turret.outcome())
+                      % _turret.hitPoints()
+                      % _turret.maxHitPoints()
+                      % _turretLifecycle.originModule));
+            finishTurretLifecycle(_turret.outcome());
         }
     }
 
     bool updModule = !_movie && _module && (_screen == Screen::InGame || _screen == Screen::Conversation);
     if (updModule && !_paused) {
-        _module->update(dt);
-        _combat.update(dt);
+        _floatingText.update(dt);
+        // Ages the scoped debug primitives so a pushLifetime element expires.
+        // Upstream ticks it from the same place.
+        updateDrawDebug(dt);
+        advanceWorldTime(dt);
+        advancePlayedTime(dt);
+        {
+            R_PROFILE_ZONE("Module::update");
+            _module->update(dt);
+        }
+        {
+            R_PROFILE_ZONE("Combat::update");
+            _combat.update(dt);
+        }
+    }
+
+    // Fixture emitters are restarted each simulated frame. This keeps a
+    // single transparent particle live at an arbitrary capture frame without
+    // adding wall-clock timing or a general effects editor.
+    if (_consoleEmittersEnabled && _consoleSpawnedModel) {
+        _consoleSpawnedModel->signalEvent("detonate");
     }
 
     auto gui = getScreenGUI();
     if (gui) {
+        R_PROFILE_ZONE("Game::gui update");
         gui->update(dt);
     }
-    updateSceneGraph(dt);
-    if (!_paused) {
-        updateDrawDebug(dt);
+    if (_confirmPopup && _confirmPopup->isVisible()) {
+        _confirmPopup->update(dt);
+    }
+    {
+        R_PROFILE_ZONE("Game::updateSceneGraph");
+        updateSceneGraph(dt);
+    }
+    if (_showImGui) {
+        updateImGui(dt);
     }
 }
 
@@ -424,7 +814,16 @@ void Game::render() {
         _movie->render();
     } else {
         renderScene();
-        renderGUI();
+        // A debug channel is a measurement of the scene, and the GUI is not
+        // part of the scene. Compositing it over the channel puts the HUD and
+        // any open conversation into the captured image, where it reads as
+        // signal: the two renderers encode their output differently, so the
+        // very same GUI comes out at a different brightness in each, and a
+        // comparison then differs for a reason that has nothing to do with
+        // lighting.
+        if (_options.graphics.debugView == 0) {
+            renderGUI();
+        }
     }
 }
 
@@ -437,6 +836,13 @@ bool Game::handleKeyDown(const input::KeyEvent &event) {
     }
 
     switch (event.code) {
+    case input::KeyCode::F4:
+        if (_screen == Screen::InGame) {
+            requestQuickSave();
+            return true;
+        }
+        break;
+
     case input::KeyCode::Minus:
         if (_options.game.developer && _gameSpeed > 1.0f) {
             _gameSpeed = glm::max(1.0f, _gameSpeed - 1.0f);
@@ -543,8 +949,26 @@ bool Game::handleMouseButtonUp(const input::MouseButtonEvent &event) {
     return false;
 }
 
-void Game::loadModule(const std::string &name, std::string entry, bool fromSave) {
+bool Game::loadModule(const std::string &name, std::string entry, bool initialSaveRestore) {
     info("Loading module '" + name + "'");
+    _transitionInProgress = true;
+    struct TransitionGuard {
+        bool &value;
+        ~TransitionGuard() { value = false; }
+    } transitionGuard {_transitionInProgress};
+
+    // Restoring a save is the only load an authored script may see as such,
+    // and only while it runs: the flag falls away on completion, on failure
+    // and on the way out of any exception.
+    _loadingFromSaveGame = initialSaveRestore;
+    struct LoadFromSaveGuard {
+        bool &value;
+        ~LoadFromSaveGuard() { value = false; }
+    } loadFromSaveGuard {_loadingFromSaveGame};
+
+    // A module transition is a technical Pazaak abort. It must not manufacture
+    // a result or invoke the pending continuation.
+    abortPazaak();
 
     // Tear down an active race before the current area (and its camera/scene)
     // is unloaded, so no dangling references survive the transition.
@@ -552,29 +976,63 @@ void Game::loadModule(const std::string &name, std::string entry, bool fromSave)
         _swoopRace.stop();
         _cameraType = _savedCameraType;
     }
-    // A direct module load (e.g. warp) while a lifecycle race is pending means
-    // the player navigated away; abandon the pending return. (Lifecycle-managed
-    // loads clear the session beforehand, so this only fires on external loads.)
+    if (_turret.isActive()) {
+        _turret.stop();
+        _cameraType = _savedCameraType;
+    }
+    // A direct module load (e.g. warp) while a lifecycle session is pending
+    // means the player navigated away; abandon the pending return.
+    // (Lifecycle-managed loads clear the session beforehand, so this only fires
+    // on external loads.)
     if (_swoopLifecycle.active) {
-        _swoopLifecycle = SwoopLifecycle();
+        _swoopLifecycle = MinigameLifecycle();
+    }
+    if (_turretLifecycle.active) {
+        _turretLifecycle = MinigameLifecycle();
+    }
+    // Likewise a scheduled turret session is only good for the module it named:
+    // any other load means the transition was superseded, and keeping the
+    // request would block startturretgame until the game was reset.
+    if (_pendingTurret.active && !boost::iequals(_pendingTurret.targetModule, name)) {
+        debug(str(boost::format("turret: scheduled session for '%s' dropped, loading '%s' instead")
+                  % _pendingTurret.targetModule % name));
+        _pendingTurret = PendingTurretRequest();
     }
 
     if (_screen == Screen::Conversation && _conversation) {
         _conversation->cleanupForModuleTransition();
     }
 
-    withLoadingScreen("load_" + name, [this, &name, &entry, fromSave]() {
+    // Exit scripts are part of the source module's last observable state.
+    // Freeze that state before party/object teardown or destination mounting.
+    // A capture failure aborts with the source runtime graph still alive.
+    if (_module) {
+        try {
+            _module->area()->runOnExitScript();
+        } catch (const std::exception &e) {
+            error("Source module exit script failed: " + std::string(e.what()));
+            return false;
+        }
+        if (!storeCurrentModuleForTransition()) {
+            return false;
+        }
+    }
+
+    bool loaded = false;
+
+    withLoadingScreen("load_" + name, [this, &name, &entry, initialSaveRestore, &loaded]() {
         loadInGameMenus();
 
         try {
             if (_module) {
-                _module->area()->runOnExitScript();
                 _module->area()->unloadParty();
+                retireActiveModuleRuntime();
             }
 
             // Do not carry a displayed or pending batch, indicator, or GUI
             // controls across module teardown. OnLoad events below start a new
             // batch for the destination module.
+            _floatingText.reset();
             _statusSummary.reset();
             if (_hud) {
                 _hud->resetStatusSummaryPresentation();
@@ -585,60 +1043,168 @@ void Game::loadModule(const std::string &name, std::string entry, bool fromSave)
             if (_loadScreen) {
                 _loadScreen->setProgress(50);
             }
-            render();
+            presentFrame();
 
+            // Everything the old module owned is about to be freed, and a
+            // backend caching by address cannot see that an address has been
+            // reused. Tell it before the new module allocates over them.
+            _services.graphics.renderer.invalidateResources();
             _services.scene.graphs.get(kSceneMain).clear();
 
-            auto maybeModule = _loadedModules.find(name);
-            if (maybeModule != _loadedModules.end()) {
-                _module = maybeModule->second;
-                _module->activate();
-            } else {
-                _module = newModule();
-                _objectById.insert(std::make_pair(_module->id(), _module));
-
-                std::shared_ptr<Gff> ifo(_services.resource.gffs.get("module", ResType::Ifo));
-                if (!ifo) {
-                    throw ResourceNotFoundException("Module IFO not found");
-                }
-
-                _module->load(name, *ifo, fromSave);
-                _loadedModules.insert(std::make_pair(name, _module));
+            std::shared_ptr<Gff> ifo(_services.resource.gffs.get("module", ResType::Ifo));
+            if (!ifo) {
+                throw ResourceNotFoundException("Module IFO not found");
             }
+            ModuleLoadContext context = resolveModuleLoadContext(
+                initialSaveRestore,
+                ifo->getBool("Mod_IsSaveGame"));
+            bool restoringSavedWorld = restoresSavedWorld(context);
+            bool restoringSavedSession = restoresSavedSession(context);
+
+            // The module itself needs a transient runtime identity even though
+            // it is not serialized. Keep that allocation clear of identities
+            // explicitly owned by the saved IFO graph (notably the Area).
+            if (restoringSavedWorld) {
+                reserveSavedObjectIds(*ifo);
+            }
+            _module = restoringSavedWorld ? newSavedModule() : newModule();
+            _module->load(name, *ifo, restoringSavedWorld);
+            _loadedModules.insert(std::make_pair(name, _module));
 
             if (_party.isEmpty()) {
                 loadDefaultParty();
             }
 
-            if (!fromSave) {
-                _module->runOnLoadScript();
-            }
+            // Whether the world came from persisted state decides what gets
+            // restored, not whether the module's authored entry hook runs.
+            // Content relies on that hook every time it is entered, including
+            // when revisiting a module whose world state is restored.
+            _module->runOnLoadScript();
 
-            _module->loadParty(entry, fromSave);
+            _module->loadParty(entry, restoringSavedSession);
+
+            if (restoringSavedWorld) {
+                bindSavedRuntimeState();
+                publishSavedRuntimeState();
+            }
 
             info("Module '" + name + "' loaded successfully");
 
             if (_loadScreen) {
                 _loadScreen->setProgress(100);
             }
-            render();
+            presentFrame();
 
             std::string musicName(_module->area()->music());
             playMusic(musicName);
 
-            //_ticks = _services.system.clock.ticks();
             openInGame();
+            loaded = true;
         } catch (const std::exception &e) {
             error("Failed loading module '" + name + "': " + std::string(e.what()));
+            if (initialSaveRestore) {
+                retireRuntimeSession();
+            } else {
+                retireActiveModuleRuntime();
+                _screen = Screen::None;
+            }
         }
     });
+
+    // However long that took, none of it was time the game world lived
+    // through. Whoever drives the frame clock has to start a new epoch before
+    // the next update, or the whole load lands on the world as one enormous
+    // step.
+    _timingDiscontinuity = true;
+    return loaded;
 }
 
-void Game::resetGame() {
+void Game::retireActiveModuleRuntime() {
+    _lastRenderedSceneOutput = nullptr;
+    _runtimeSessionPlayable = false;
+
+    std::set<uint32_t> sessionObjectIds;
+    std::function<void(const std::shared_ptr<Object> &)> preserve;
+    preserve = [&](const std::shared_ptr<Object> &object) {
+        if (!object || !sessionObjectIds.insert(object->id()).second) {
+            return;
+        }
+        for (const auto &item : object->items()) {
+            preserve(item);
+        }
+        if (object->type() != ObjectType::Creature) {
+            return;
+        }
+        auto creature = std::static_pointer_cast<Creature>(object);
+        for (const auto &[_, item] : creature->equipment()) {
+            preserve(item);
+        }
+    };
+
+    preserve(_party.player());
+    preserve(_party.actualPlayer());
+    for (const auto &member : _party.members()) {
+        preserve(member.creature);
+    }
+    for (size_t npc = 0; npc < Party::kMaxNpcCount; ++npc) {
+        preserve(_party.getAvailableMember(static_cast<int>(npc)));
+    }
+    for (size_t puppet = 0; puppet < Party::kMaxPuppetCount; ++puppet) {
+        preserve(_party.getAvailablePuppet(static_cast<int>(puppet)));
+    }
+
+    _combat.reset();
+    _module.reset();
+    _loadedModules.clear();
+    for (auto it = _objectById.begin(); it != _objectById.end();) {
+        if (sessionObjectIds.count(it->first) != 0) {
+            ++it;
+        } else {
+            it = _objectById.erase(it);
+        }
+    }
+}
+
+void Game::retireRuntimeSession() {
+    // Stable-frame save execution is synchronous and cannot ordinarily overlap
+    // retirement. A re-entrant retirement from an injected/service callback is
+    // an invariant violation; the local request owner in processPendingSave()
+    // still remains responsible for terminalization.
+    if (_saveInProgress) {
+        error("Runtime session retirement re-entered synchronous save execution");
+    }
+    if (_pendingSave) {
+        auto request = std::move(*_pendingSave);
+        _pendingSave.reset();
+        SaveResult cancelled;
+        cancelled.status = SaveStatus::Cancelled;
+        cancelled.message = "Runtime session retired before save execution";
+        finalizeSaveRequest(request, std::move(cancelled));
+    }
+    ++_runtimeSessionGeneration;
+    _runtimeSessionPlayable = false;
+    _screen = Screen::None;
+    _lastRenderedSceneOutput = nullptr;
+
+    abortPazaak();
+    _lastPazaakResult.reset();
+    _pazaakContinuationCaller.reset();
+    _pazaakDevelopmentSelectedObjectOverride.reset();
     if (_swoopRace.isActive()) {
         _swoopRace.stop();
     }
-    _screen = Screen::None;
+    if (_turret.isActive()) {
+        _turret.stop();
+    }
+    _pendingTurret = PendingTurretRequest();
+    _swoopLifecycle = MinigameLifecycle();
+    _turretLifecycle = MinigameLifecycle();
+
+    if (_conversation) {
+        _conversation->cleanupForModuleTransition();
+        _conversation = nullptr;
+    }
+
     _services.audio.mixer.stopAll();
     _music.reset();
     _movie.reset();
@@ -650,51 +1216,112 @@ void Game::resetGame() {
     _cameraType = CameraType::ThirdPerson;
     _savedCameraType = CameraType::ThirdPerson;
     _paused = false;
-    _quitRequested = false;
     _relativeMouseMode = false;
-    if (_conversation) {
-        _conversation->cleanupForModuleTransition();
-        _conversation = nullptr;
+
+    _statusSummary.reset();
+    if (_hud) {
+        _hud->resetStatusSummaryPresentation();
     }
+
+    // Drop GUI-owned object selections, conversation participants and
+    // container/party bindings before releasing the runtime graph.
+    _hud.reset();
+    _inGame.reset();
+    _dialog.reset();
+    _computer.reset();
+    _container.reset();
+    _partySelect.reset();
+
+    if (_map) {
+        _map->retireRuntimeSession();
+    }
+
+    _combat.reset();
+    _party.retireRuntimeSession();
+
+    _services.scene.graphs.get(kSceneMain).clear();
+    _module.reset();
+    _loadedModules.clear();
+
+    _objectById.clear();
+    _reservedSavedObjectIds.clear();
+    _nextObjectId = kFirstRuntimeObjectId;
+    _effectIds.reset();
+    _worldTimeMilliseconds = 0;
+    _minutesPerHour = 5;
+    _worldTimeFraction = 0.0;
+
+    _nextModule.clear();
+    _nextEntry.clear();
+    _atStableSavePoint = false;
+}
+
+void Game::resetGame() {
+    retireRuntimeSession();
+
+    _quitRequested = false;
     _globalStrings.clear();
     _globalBooleans.clear();
     _globalNumbers.clear();
     _globalLocations.clear();
     _customTokens.clear();
+    _saveResourceShadows.clear();
 
     _party.reset();
-    _combat.reset();
     _journal.reset();
-    _statusSummary.reset();
-    if (_hud) {
-        _hud->resetStatusSummaryPresentation();
-    }
-    _module.reset();
-    _loadedModules.clear();
+    _messageLog.reset();
+    _floatingText.reset();
+    _cheatUsed = false;
+    _playedTimeFraction = 0.0;
+    _services.resource.director.onNewGame();
 }
 
-void Game::loadGame(std::string_view name) {
-    info(str(boost::format("Loading savegame '%s'") % name));
+void Game::loadGame(const resource::SaveSlotDescriptor &slot) {
+    info(str(boost::format("Loading savegame '%s'") % slot.directory.filename().string()));
 
     // Reset game state before loading a new game.
     resetGame();
 
     // Add savegame files to resource resolution.
-    _services.resource.director.onGameLoad(name);
+    _services.resource.director.onGameLoad(slot);
 
-    std::shared_ptr<Gff> saveInfo(_services.resource.gffs.get("savenfo", ResType::Res));
+    auto saveInfo = decodeSaveGff(
+        _services.resource.director.findSaveMetadata(ResourceId("savenfo", ResType::Res)));
     if (!saveInfo) {
         throw ResourceNotFoundException("saveinfo.res not found");
     }
     NFO nfo = resource::parseNFO(*saveInfo);
+    _cheatUsed = nfo.cheatUsed;
+    captureSaveResourceShadow({SaveResourceKind::Nfo, {}}, *saveInfo);
 
     // Add module files to resource resolution. Since all savegame files are
     // already in scope, this is going to resolve to the last module from the
     // save game.
     _services.resource.director.onModuleLoad(nfo.lastModule);
 
+    // Restore the save-wide faction table before any module objects can query
+    // disposition. A missing or malformed optional FAC starts from fresh base
+    // data; it must never preserve relationships from the previous save.
+    std::optional<IReputes::State> reputesState;
+    try {
+        if (auto reputesGff = decodeSaveGff(
+                _services.resource.director.findSaveWorking(
+                    ResourceId("repute", ResType::Fac)))) {
+            captureSaveResourceShadow(
+                {SaveResourceKind::FactionTable, {}}, *reputesGff);
+            reputesState = _services.game.reputes.parse(*reputesGff);
+        }
+    } catch (const std::exception &e) {
+        warn("Game: invalid repute.fac: " + std::string(e.what()));
+    }
+    if (!reputesState) {
+        reputesState = _services.game.reputes.baseState();
+    }
+    _services.game.reputes.replace(std::move(*reputesState));
+
     // Deserialize global variables
-    std::shared_ptr<Gff> globalVars(_services.resource.gffs.get("globalvars", ResType::Res));
+    auto globalVars = decodeSaveGff(
+        _services.resource.director.findSaveMetadata(ResourceId("globalvars", ResType::Res)));
     if (!globalVars) {
         throw ResourceNotFoundException("globalvars.res not found");
     }
@@ -705,10 +1332,40 @@ void Game::loadGame(std::string_view name) {
     if (!ifo) {
         throw ResourceNotFoundException("Module IFO not found");
     }
+    captureSaveResourceShadow({SaveResourceKind::ModuleIfo, nfo.lastModule}, *ifo);
+    replaceCustomTokens(parseCustomTokens(*ifo));
+    prepareSavedRuntimeNamespace(*ifo);
+
+    // Reserve serialized identities before party/inventory reconstruction can
+    // allocate owner-local support objects. The active GIT is mounted as
+    // module state rather than as a top-level working-state resource.
+    for (const auto &id : _services.resource.director.saveWorkingResourceIds()) {
+        if (!resource::isGFFCompatibleResType(id.type)) {
+            continue;
+        }
+        try {
+            if (auto gff = decodeSaveGff(
+                    _services.resource.director.findSaveWorking(id))) {
+                reserveSavedObjectIds(*gff);
+            }
+        } catch (const std::exception &) {
+            // A generic .res is not necessarily GFF. Required structured
+            // resources retain their normal validation path below.
+        }
+    }
+    const std::string entryArea = ifo->getString("Mod_Entry_Area");
+    if (!entryArea.empty()) {
+        if (auto git = _services.resource.gffs.get(entryArea, ResType::Git)) {
+            reserveSavedObjectIds(*git);
+        }
+    }
     deserializeParty(*ifo);
 
     // Once the player is loaded, deserialize player's inventory.
-    if (auto inventoryGff = _services.resource.gffs.get("inventory", ResType::Res)) {
+    if (auto inventoryGff = decodeSaveGff(
+            _services.resource.director.findSaveWorking(ResourceId("inventory", ResType::Res)))) {
+        captureSaveResourceShadow(
+            {SaveResourceKind::Inventory, {}}, *inventoryGff);
         deserializeInventory(*inventoryGff);
     }
 
@@ -716,13 +1373,32 @@ void Game::loadGame(std::string_view name) {
     loadModule(nfo.lastModule, /*entry=*/"", /*fromSave=*/true);
 }
 
+std::map<int, std::string> Game::parseCustomTokens(
+    const resource::Gff &ifoGff) const {
+
+    std::map<int, std::string> result;
+    for (const auto &entry : ifoGff.getList("Mod_Tokens")) {
+        uint32_t token = 0;
+        if (!entry->readDword(token, "Mod_TokensNumber") ||
+            token > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+            continue;
+        }
+        result[static_cast<int>(token)] = entry->getString("Mod_TokensValue");
+    }
+    return result;
+}
+
+void Game::replaceCustomTokens(std::map<int, std::string> tokens) {
+    _customTokens = std::move(tokens);
+}
+
 void Game::deserializeGlobalVariables(resource::Gff &gvtGff) {
+    captureSaveResourceShadow({SaveResourceKind::GlobalVars, {}}, gvtGff);
     GVT gvt = resource::parseGVT(gvtGff);
     _globalStrings.clear();
     _globalBooleans.clear();
     _globalNumbers.clear();
     _globalLocations.clear();
-    _customTokens.clear();
 
     for (auto &[name, value] : gvt.strings) {
         setGlobalString(name, value);
@@ -738,74 +1414,359 @@ void Game::deserializeGlobalVariables(resource::Gff &gvtGff) {
 
     for (auto &[name, value] : gvt.locations) {
         auto &[pos, rot] = value;
-        float facing = glm::half_pi<float>() - glm::atan(rot.x, rot.y);
-        setGlobalLocation(name, std::make_shared<Location>(pos, facing));
+        setGlobalLocation(name, std::make_shared<Location>(pos, rot));
     }
 }
 
 void Game::deserializeParty(resource::Gff &ifoGff) {
+    resetGalaxyMap();
+    auto ptGff = decodeSaveGff(
+        _services.resource.director.findSaveMetadata(ResourceId("partytable", ResType::Res)));
+
+    std::shared_ptr<Gff> pcGff;
+    const auto &players = ifoGff.getList("Mod_PlayerList");
+    if (!players.empty()) {
+        const int controlledNpc =
+            ptGff ? parsePartyTable(*ptGff).controlledNpc : -1;
+        // Retail K2 may mark the controlled module creature primary even while
+        // pc.utc holds a distinct canonical player. PARTYTABLE is authoritative.
+        if (controlledNpc != -1) {
+            try {
+                pcGff = decodeSaveGff(
+                    _services.resource.director.findSaveWorking(ResourceId("pc", ResType::Utc)));
+            } catch (const std::exception &e) {
+                warn("Game: invalid pc.utc: " + std::string(e.what()));
+            }
+        }
+    }
+
+    publishPartyRuntimeState(ifoGff, ptGff, pcGff);
+}
+
+void Game::publishPartyRuntimeState(
+    resource::Gff &ifoGff,
+    const std::shared_ptr<resource::Gff> &ptGff,
+    const std::shared_ptr<resource::Gff> &pcGff) {
+    if (ptGff) {
+        captureSaveResourceShadow({SaveResourceKind::PartyTable, {}}, *ptGff);
+        deserializeGalaxyMap(*ptGff);
+        uint32_t gold = 0;
+        if (ptGff->readDword(gold, "PT_GOLD")) {
+            _party.takeGold(_party.gold());
+            _party.giveGold(gold);
+        }
+
+        uint32_t xp = 0;
+        if (ptGff->readDword(xp, "PT_XP_POOL")) {
+            // Populate the shared party XP pool. Members added below are synced to it.
+            _party.setXP(xp);
+        }
+
+        Party::PersistedState partyState = parsePartyTable(*ptGff);
+        replacePartyTable(std::move(partyState));
+        deserializePazaakPartyTable(*ptGff);
+        // Retail constructs the available/limbo creature records before
+        // completing the primary player. Keeping that boundary also ensures
+        // every party object exists before saved references are bound.
+        deserializeAvailableNpcs();
+    }
+
     const auto &players = ifoGff.getList("Mod_PlayerList");
     if (players.empty()) {
         return;
     }
 
-    std::shared_ptr<Creature> player = newCreature();
-    _objectById.insert(std::make_pair(player->id(), player));
-    player->deserialize(*players.front());
-    player->setTag(kObjectTagPlayer);
-    _party.addMember(kNpcPlayer, player);
-    _party.setPlayer(player);
+    auto modulePlayer = newCreature(*players.front());
+    modulePlayer->deserialize(*players.front());
+    modulePlayer->captureSaveRecord(
+        *players.front(), {SaveRecordOriginKind::ModulePlayer, {}});
+    modulePlayer->setTag(kObjectTagPlayer);
 
-    std::shared_ptr<Gff> ptGff(_services.resource.gffs.get("partytable", ResType::Res));
-    if (!ptGff) {
+    auto actualPlayer = modulePlayer;
+    const auto &partyState = _party.persistedState();
+    // PT_CONTROLLED_NP, not Mod_IsPrimaryPlr, defines whether pc.utc is the
+    // canonical player distinct from the currently controlled module creature.
+    if (partyState.controlledNpc != -1 && pcGff) {
+        actualPlayer = pcGff->has("ObjectId")
+                           ? newCreature(*pcGff)
+                           : newCreature();
+        actualPlayer->deserialize(*pcGff);
+        actualPlayer->captureSaveRecord(
+            *pcGff, {SaveRecordOriginKind::PrimaryPlayerUtc, {}});
+    }
+
+    // Retail K1 and K2 complete primary-player BIC publication by assigning
+    // the derived maximum HP after creature load. Keep this explicit and
+    // separate from generic creature deserialization: corpses, party NPCs and
+    // unrelated serialized PCs must retain their archived health state.
+    actualPlayer->restorePrimaryPlayerHitPoints();
+
+    _party.setPlayer(modulePlayer);
+    _party.setActualPlayer(actualPlayer);
+
+    if (ptGff) {
+        deserializePartyMembers(*ptGff);
+        deserializeJournal(*ptGff);
+    } else {
+        _party.addMember(kNpcPlayer, actualPlayer);
+    }
+}
+
+Party::PersistedState Game::parsePartyTable(const resource::Gff &ptGff) const {
+    Party::PersistedState state;
+    state.pcName = ptGff.getString("PT_PCNAME");
+    // GFF labels are capped at sixteen bytes. Retail KotOR II stores the
+    // component count under this exact truncated label.
+    state.itemComponent = ptGff.getUint("PT_ITEM_COMPONEN");
+    if (!ptGff.has("PT_ITEM_COMPONEN")) {
+        state.itemComponent = ptGff.getUint("PT_ITEM_COMPONENT");
+    }
+    state.itemChemical = ptGff.getUint("PT_ITEM_CHEMICAL");
+    state.swoopUpgrades[0] = ptGff.getUint("PT_SWOOP1");
+    state.swoopUpgrades[1] = ptGff.getUint("PT_SWOOP2");
+    state.swoopUpgrades[2] = ptGff.getUint("PT_SWOOP3");
+    state.playedSeconds = ptGff.getUint("PT_PLAYEDSECONDS");
+    uint32_t playedMinutes = ptGff.getUint("PT_PLAYEDMINUTES");
+    if (playedMinutes != 0) {
+        state.playedSeconds = playedMinutes * 60;
+    }
+    state.controlledNpc = ptGff.getInt("PT_CONTROLLED_NP", -1);
+    state.soloMode = ptGff.getBool("PT_SOLOMODE");
+
+    const auto memberList = ptGff.getList("PT_MEMBERS");
+    size_t memberCount = std::min<size_t>(
+        std::min<size_t>(ptGff.getUint("PT_NUM_MEMBERS"), memberList.size()), 2);
+    for (size_t index = 0; index < memberCount; ++index) {
+        int npc = memberList[index]->getInt("PT_MEMBER_ID", -1);
+        state.memberIds.push_back(npc);
+        if (memberList[index]->getBool("PT_IS_LEADER")) {
+            state.leader = npc;
+        }
+    }
+
+    const auto puppetList = ptGff.getList("PT_PUPPETS");
+    size_t puppetCount = std::min<size_t>(
+        std::min<size_t>(ptGff.getUint("PT_NUM_PUPPETS"), puppetList.size()),
+        Party::kMaxPuppetCount);
+    for (size_t index = 0; index < puppetCount; ++index) {
+        state.puppetIds.push_back(puppetList[index]->getInt("PT_PUPPET_ID", -1));
+    }
+
+    const auto availableNpcs = ptGff.getList("PT_AVAIL_NPCS");
+    size_t npcCount = std::min(
+        availableNpcs.size(), isTSL() ? Party::kK2NpcCount : Party::kK1NpcCount);
+    for (size_t npc = 0; npc < npcCount; ++npc) {
+        state.npcAvailable[npc] = availableNpcs[npc]->getBool("PT_NPC_AVAIL");
+        state.npcSelectable[npc] = availableNpcs[npc]->getBool("PT_NPC_SELECT", true);
+    }
+
+    const auto influences = ptGff.getList("PT_INFLUENCE");
+    for (size_t npc = 0; npc < std::min(influences.size(), Party::kMaxNpcCount); ++npc) {
+        state.influence[npc] = influences[npc]->getInt("PT_NPC_INFLUENCE", -1);
+    }
+
+    const auto availablePuppets = ptGff.getList("PT_AVAIL_PUPS");
+    for (size_t puppet = 0;
+         puppet < std::min(availablePuppets.size(), Party::kMaxPuppetCount);
+         ++puppet) {
+        state.puppetAvailable[puppet] =
+            availablePuppets[puppet]->getBool("PT_PUP_AVAIL");
+        state.puppetSelectable[puppet] =
+            availablePuppets[puppet]->getBool("PT_PUP_SELECT", true);
+    }
+
+    state.aiState = ptGff.getInt("PT_AISTATE");
+    state.followState = ptGff.getInt("PT_FOLLOWSTATE");
+    if (auto galaxy = ptGff.findStruct("GlxyMap")) {
+        state.galaxyPointCount = galaxy->getUint("GlxyMapNumPnts");
+        uint32_t mask = galaxy->getUint("GlxyMapPlntMsk");
+        for (size_t planet = 0; planet < Party::kGalaxyPlanetCount; ++planet) {
+            state.planetAvailable[planet] = (mask & (1u << planet)) != 0;
+            state.planetSelectable[planet] = (mask & (1u << (planet + 16))) != 0;
+        }
+        state.selectedPlanet = galaxy->getInt("GlxyMapSelPnt", -1);
+    }
+    state.mapDisabled = ptGff.getBool("PT_DISABLEMAP");
+    state.regenerationDisabled = ptGff.getBool("PT_DISABLEREGEN");
+
+    for (const auto &entry : ptGff.getList("PT_DLG_MSG_LIST")) {
+        Party::SavedDialogMessage message;
+        message.speaker = entry->getString("PT_DLG_MSG_SPKR");
+        message.text = entry->getString("PT_DLG_MSG_MSG");
+        state.dialogMessages.push_back(std::move(message));
+    }
+    for (const auto &entry : ptGff.getList("PT_FB_MSG_LIST")) {
+        Party::SavedLogMessage message;
+        entry->readByte(message.color, "PT_FB_MSG_COLOR");
+        entry->readDword(message.type, "PT_FB_MSG_TYPE");
+        message.text = entry->getString("PT_FB_MSG_MSG");
+        state.feedbackMessages.push_back(std::move(message));
+    }
+    for (const auto &entry : ptGff.getList("PT_COM_MSG_LIST")) {
+        Party::SavedLogMessage message;
+        entry->readByte(message.color, "PT_COM_MSG_COOR");
+        entry->readDword(message.type, "PT_COM_MSG_TYPE");
+        message.text = entry->getString("PT_COM_MSG_MSG");
+        state.combatMessages.push_back(std::move(message));
+    }
+    return state;
+}
+
+void Game::replacePartyTable(Party::PersistedState state) {
+    _party.setPersistedState(std::move(state));
+}
+
+void Game::resetGalaxyMap() {
+    // K1 takes its planet count from content; K2 ignores the table and always
+    // carries sixteen rows.
+    auto planetary = _services.resource.twoDas.get("planetary");
+    _party.galaxyMap().reset(_gameId, planetary ? planetary->getRowCount() : 0);
+}
+
+void Game::deserializeGalaxyMap(resource::Gff &ptGff) {
+    _party.galaxyMap().loadFromPartyTable(ptGff);
+}
+
+void Game::deserializePazaakPartyTable(resource::Gff &ptGff) {
+    const auto &pazaakCards = ptGff.getList("PT_PAZAAKCARDS");
+    const auto &pazaakSide = ptGff.getList("PT_PAZSIDELIST");
+    // Each title stores its own number of ownership entries, so the saved table
+    // is accepted at either authored length and the card-type ID range follows
+    // from it.
+    size_t expectedCards = isTSL() ? Party::kK2PazaakCardCount : Party::kK1PazaakCardCount;
+    size_t cardTypes = expectedCards - 1;
+    if (pazaakCards.size() == expectedCards &&
+        pazaakSide.size() == Party::kK1PazaakSideDeckSize) {
+        Party::PazaakCardCounts counts {};
+        Party::PazaakSideDeck sideDeck;
+        bool valid = true;
+        for (size_t i = 0; i < expectedCards; ++i) {
+            counts[i] = pazaakCards[i]->getInt("PT_PAZAAKCOUNT", -1);
+            valid = valid && counts[i] >= 0 && counts[i] <= 255;
+        }
+        bool allEmpty = true;
+        bool allSelected = true;
+        Party::PazaakCardCounts selectedCounts {};
+        for (size_t i = 0; i < sideDeck.size(); ++i) {
+            sideDeck[i] = pazaakSide[i]->getInt("PT_PAZSIDECARD", -2);
+            allEmpty = allEmpty && sideDeck[i] == -1;
+            bool owned = sideDeck[i] >= 0 && static_cast<size_t>(sideDeck[i]) < cardTypes;
+            allSelected = allSelected && owned;
+            if (owned) {
+                ++selectedCounts[sideDeck[i]];
+            }
+        }
+        valid = valid && (allEmpty || allSelected);
+        if (allSelected) {
+            for (size_t i = 0; i < cardTypes; ++i) {
+                valid = valid && selectedCounts[i] <= counts[i];
+            }
+        }
+        if (valid) {
+            _party.setPazaakData(std::move(counts), std::move(sideDeck), expectedCards);
+        } else {
+            warn("Game: invalid Pazaak state in PARTYTABLE.res");
+        }
+    } else if (!pazaakCards.empty() || !pazaakSide.empty()) {
+        warn("Game: invalid Pazaak list sizes in PARTYTABLE.res");
+    }
+
+}
+
+void Game::saveNpcState(int npc) {
+    // Retail bounds the roster flat, then treats an empty slot as nothing to
+    // save rather than an error.
+    if (npc < 0 || npc >= static_cast<int>(Party::kMaxNpcCount)) {
+        return;
+    }
+    auto creature = _party.getAvailableMember(npc);
+    if (!creature) {
         return;
     }
 
-    uint32_t gold = 0;
-    if (ptGff->readDword(gold, "PT_GOLD")) {
-        _party.takeGold(_party.gold());
-        _party.giveGold(gold);
-    }
-
-    uint32_t xp = 0;
-    if (ptGff->readDword(xp, "PT_XP_POOL")) {
-        // Populate the shared party XP pool. Members added below are synced to it.
-        _party.setXP(xp);
-    }
-
-    deserializePartyTable(*ptGff);
-    deserializePartyMembers(*ptGff);
-    deserializeJournal(*ptGff);
+    // The same record a save writes for this roster slot, produced by the same
+    // serializer, so a companion persisted here reads back exactly as one
+    // persisted by saving would.
+    auto candidate = resource::SaveWorkingStateCandidate::fromCommitted(
+        _services.resource.director.committedSaveWorkingState());
+    candidate.put(
+        ResourceId("availnpc" + std::to_string(npc), ResType::Utc),
+        SaveWideSnapshotBuilder::availableNpcRecord(*this, *creature));
+    _services.resource.director.adoptSaveWorkingState(candidate.freeze());
 }
 
-void Game::deserializePartyTable(resource::Gff &ptGff) {
-    int nextNpc = 0;
-    for (const auto &npcState : ptGff.getList("PT_AVAIL_NPCS")) {
-        int npc = nextNpc++;
-        if (!npcState->getBool("PT_NPC_AVAIL")) {
+void Game::deserializeAvailableNpcs() {
+    const auto &persisted = _party.persistedState();
+    size_t npcCount = isTSL() ? Party::kK2NpcCount : Party::kK1NpcCount;
+    for (size_t npc = 0; npc < npcCount; ++npc) {
+        if (!persisted.npcAvailable[npc]) {
             continue;
         }
-        // TODO: handle selectability of NPCs.
-        bool select = npcState->getBool("PT_NPC_SELECT");
-
         std::string utc = str(boost::format("availnpc%d") % npc);
 
-        std::shared_ptr<Gff> utcGff(_services.resource.gffs.get(utc, ResType::Utc));
+        std::shared_ptr<Gff> utcGff;
+        try {
+            utcGff = decodeSaveGff(
+                _services.resource.director.findSaveWorking(ResourceId(utc, ResType::Utc)));
+        } catch (const std::exception &e) {
+            warn("Game: invalid " + utc + ".utc: " + std::string(e.what()));
+            continue;
+        }
         if (!utcGff) {
-            return;
+            warn("Game: missing " + utc + ".utc");
+            continue;
         }
 
-        std::shared_ptr<Creature> creature = newCreature();
-        _objectById.insert(std::make_pair(creature->id(), creature));
+        std::shared_ptr<Creature> creature = utcGff->has("ObjectId")
+                                                 ? newCreature(*utcGff)
+                                                 : newCreature();
         creature->deserialize(*utcGff);
+        creature->captureSaveRecord(
+            *utcGff,
+            {SaveRecordOriginKind::AvailableNpc, std::to_string(npc)});
 
-        _party.addAvailableMember(npc, creature);
+        _party.addAvailableMember(static_cast<int>(npc), creature);
+    }
+
+    if (!isTSL()) {
+        return;
+    }
+    for (size_t puppet = 0; puppet < Party::kMaxPuppetCount; ++puppet) {
+        if (!persisted.puppetAvailable[puppet]) {
+            continue;
+        }
+        std::string utc = str(boost::format("availpup%d") % puppet);
+
+        std::shared_ptr<Gff> utcGff;
+        try {
+            utcGff = decodeSaveGff(
+                _services.resource.director.findSaveWorking(ResourceId(utc, ResType::Utc)));
+        } catch (const std::exception &e) {
+            warn("Game: invalid " + utc + ".utc: " + std::string(e.what()));
+            continue;
+        }
+        if (!utcGff) {
+            warn("Game: missing " + utc + ".utc");
+            continue;
+        }
+
+        auto creature = utcGff->has("ObjectId")
+                            ? newCreature(*utcGff)
+                            : newCreature();
+        creature->deserialize(*utcGff);
+        creature->captureSaveRecord(
+            *utcGff,
+            {SaveRecordOriginKind::AvailablePuppet, std::to_string(puppet)});
+        _party.addAvailablePuppet(static_cast<int>(puppet), std::move(creature));
     }
 }
 
 void Game::deserializePartyMembers(resource::Gff &ptGff) {
-    auto members = ptGff.getList("PT_MEMBERS");
-    auto leader = std::find_if(members.begin(), members.end(), [](auto &member) {
+    auto savedMembers = ptGff.getList("PT_MEMBERS");
+    size_t memberCount = std::min<size_t>(
+        std::min<size_t>(ptGff.getUint("PT_NUM_MEMBERS"), savedMembers.size()), 2);
+    savedMembers.resize(memberCount);
+    auto leader = std::find_if(savedMembers.begin(), savedMembers.end(), [](auto &member) {
         return member->getBool("PT_IS_LEADER");
     });
 
@@ -815,24 +1776,48 @@ void Game::deserializePartyMembers(resource::Gff &ptGff) {
             warn("Game: missing PT_MEMBER_ID");
             return;
         }
+        if (_party.isMember(npc)) {
+            return;
+        }
 
-        auto member = _party.getAvailableMember(npc);
+        auto member =
+            npc == _party.persistedState().controlledNpc &&
+                    _party.player() != _party.actualPlayer()
+                ? _party.player()
+                : _party.getAvailableMember(npc);
         if (!member) {
             warn("Game: NPC is not available: " + std::to_string(npc));
+            return;
         }
 
         _party.addMember(npc, member);
     };
 
-    // Party leader is the first party member. Populate the party starting from
-    // the leader.
-    for (auto it = leader, end = members.end(); it != end; ++it) {
-        addMember(**it);
+    // Party leader is the first runtime member. A controlled companion is the
+    // module player while pc.utc remains the actual player in limbo.
+    if (leader != savedMembers.end()) {
+        addMember(**leader);
     }
 
-    // Then add other members.
-    for (auto it = members.begin(), end = leader; it != end; ++it) {
-        addMember(**it);
+    auto actualPlayer = _party.actualPlayer();
+    // A zero-member controlled-NPC PARTYTABLE is used by retail K2 prologue
+    // saves for an NPC operating alone while the canonical PC remains in
+    // limbo. Non-empty lists retain the usual implicit canonical PC member.
+    const bool canonicalPlayerIsActive =
+        _party.persistedState().controlledNpc == -1 || !savedMembers.empty();
+    if (canonicalPlayerIsActive && actualPlayer && !_party.isMember(*actualPlayer)) {
+        _party.addMember(kNpcPlayer, actualPlayer);
+    }
+
+    if (_party.player() != actualPlayer &&
+        !_party.isMember(_party.persistedState().controlledNpc)) {
+        _party.addMember(_party.persistedState().controlledNpc, _party.player());
+    }
+
+    for (auto &savedMember : savedMembers) {
+        if (leader == savedMembers.end() || savedMember != *leader) {
+            addMember(*savedMember);
+        }
     }
 }
 
@@ -851,14 +1836,17 @@ void Game::deserializeJournal(const resource::Gff &ptGff) {
 }
 
 void Game::deserializeInventory(resource::Gff &inventoryGff) {
-    std::shared_ptr<Creature> player = _party.player();
+    std::shared_ptr<Creature> player = _party.actualPlayer();
     if (!player) {
         return;
     }
 
     for (const auto &itemGff : inventoryGff.getList("ItemList")) {
-        std::shared_ptr<Item> item = newItem();
+        std::shared_ptr<Item> item = newOwnedItem();
         item->deserialize(*itemGff);
+        item->captureOwnerLocalSaveRecord(
+            *itemGff,
+            {SaveRecordOriginKind::PartyInventoryItem, "inventory"});
         player->addItem(item);
     }
 }
@@ -873,6 +1861,9 @@ bool Game::loadParty() {
 }
 
 void Game::loadDefaultParty() {
+    // A new game starts with the authored basic collection for the running title.
+    _party.setDefaultPazaakData(
+        isTSL() ? Party::kK2PazaakCardCount : Party::kK1PazaakCardCount);
     std::string member1, member2, member3;
     _party.defaultMembers(member1, member2, member3);
 
@@ -884,6 +1875,7 @@ void Game::loadDefaultParty() {
         player->setImmortal(true);
         _party.addMember(kNpcPlayer, player);
         _party.setPlayer(player);
+        _party.setActualPlayer(player);
     }
     if (!member2.empty()) {
         std::shared_ptr<Creature> companion = newCreature();
@@ -930,16 +1922,81 @@ void Game::playMusic(const std::string &resRef) {
     _musicResRef = resRef;
 }
 
-void Game::renderScene() {
-    if (!_module) {
+void Game::renderSceneOffscreen() {
+    _sceneOutput = nullptr;
+    if (_movie) {
         return;
     }
-    auto &scene = _services.scene.graphs.get(kSceneMain);
-    auto &output = scene.render({_options.graphics.width, _options.graphics.height});
-    _services.graphics.uniforms.setLocals(std::bind(&LocalUniforms::reset, std::placeholders::_1));
-    _services.graphics.context.useProgram(_services.graphics.shaderRegistry.get(ShaderProgramId::ndcTexture));
-    _services.graphics.context.bindTexture(output);
-    _services.graphics.meshRegistry.get(MeshName::quadNDC).draw(_services.graphics.statistic);
+    // ONE scene per frame, at most.
+    //
+    // Every SceneGraph::render builds a pipeline of its own in the current
+    // render mode, so a screen hosting scenes while a module is loaded used to
+    // stand up two or three complete pipelines - G-buffer, tracer, denoiser,
+    // upscaler - and run them all every frame. The galaxy map is the clearest
+    // case: it hosts kSceneGalaxy and kScenePlanet, and with the Ebon Hawk
+    // loaded behind it that was three path-traced frames for one presented
+    // image.
+    //
+    // The screen decides, and it decides by what it contains rather than by a
+    // list of screen names kept in step by hand: a screen with 3D content of
+    // its own owns the frame, and the world is not rendered behind it. A screen
+    // with none - a conversation, a container panel - leaves the world owning
+    // it, which is also what those screens want to show.
+    auto screenGUI = getScreenGUI();
+    const bool guiOwnsFrame = screenGUI && screenGUI->hostsScene();
+
+    if (_module && _options.graphics.sceneRender && !guiOwnsFrame) {
+        auto &scene = _services.scene.graphs.get(kSceneMain);
+        // The overlay's labels are drawn by the render pipeline, in the same
+        // pass as its boxes and against the same depth buffer. Only the font
+        // has to cross over: glyph metrics and an atlas are resource-layer
+        // things the graphics side cannot look up for itself.
+        if (_options.graphics.debugOverlay) {
+            if (!_developerFont) {
+                _developerFont = _services.resource.fonts.get("fnt_console");
+            }
+            if (auto *pipeline = scene.renderPipeline()) {
+                pipeline->setDebugOverlayFont(_developerFont.get());
+            }
+        }
+        _sceneOutput = &scene.render({_options.graphics.width, _options.graphics.height});
+    }
+    // Retained past the composite so a save executed from a menu still has the
+    // frame the menu was drawn over - see Game::captureSaveScreenshot.
+    _lastRenderedSceneOutput = _sceneOutput;
+    // GUI controls host scenes of their own - the model behind the main menu,
+    // the galaxy and planet of the map - and those are produced here. Outside
+    // the _module check on purpose: the menus that use them run with no module
+    // loaded, and when one IS loaded the world above has already stood aside
+    // for them.
+    if (screenGUI) {
+        screenGUI->renderOffscreen();
+    }
+    if (_confirmPopup && _confirmPopup->isVisible()) {
+        _confirmPopup->renderOffscreen();
+    }
+}
+
+void Game::renderScene() {
+    if (!_sceneOutput) {
+        return;
+    }
+    _services.graphics.renderer.drawSceneOutput(*_sceneOutput);
+    // Cleared after compositing so the next frame renders the scene again
+    // rather than compositing this frame's target a second time.
+    _sceneOutput = nullptr;
+}
+
+bool Game::setFreeCameraEnabled(bool enabled) {
+    if (!_module || _screen != Screen::InGame) {
+        return false;
+    }
+    if ((_cameraType == CameraType::FirstPerson) != enabled) {
+        toggleInGameCameraType();
+    }
+    // Leaving the free camera needs a party leader to hand control back to, so
+    // report what actually happened rather than what was asked.
+    return (_cameraType == CameraType::FirstPerson) == enabled;
 }
 
 void Game::toggleInGameCameraType() {
@@ -963,9 +2020,41 @@ void Game::toggleInGameCameraType() {
         break;
     }
 
-    setRelativeMouseMode(_cameraType == CameraType::FirstPerson);
+    // The free camera does NOT capture the pointer: it looks by left-drag
+    // instead, so the cursor stays available for the editor windows the camera
+    // is usually flown to check something against. Capturing it meant a click
+    // on a slider first needed the camera switched off.
+    setRelativeMouseMode(false);
 
     _module->area()->updateRoomVisibility();
+}
+
+std::string Game::captureStateDigest() const {
+    std::ostringstream ss;
+    ss << "module=" << (_module ? _module->name() : "none");
+    uint64_t hash = 1469598103934665603ull;
+    const auto mix = [&hash](const void *data, size_t size) {
+        const auto *bytes = static_cast<const unsigned char *>(data);
+        for (size_t i = 0; i < size; ++i) {
+            hash ^= bytes[i];
+            hash *= 1099511628211ull;
+        }
+    };
+    if (const auto leader = _party.getLeader()) {
+        const auto pos = leader->position();
+        mix(&pos, sizeof(pos));
+        ss << " leader=" << pos.x << "," << pos.y << "," << pos.z;
+    }
+    if (const auto *camera = getActiveCamera()) {
+        if (const auto node = camera->cameraSceneNode()) {
+            const auto view = node->camera()->view();
+            mix(&view, sizeof(view));
+            const auto pos = node->origin();
+            ss << " camera=" << pos.x << "," << pos.y << "," << pos.z;
+        }
+    }
+    ss << " hash=" << std::hex << hash;
+    return ss.str();
 }
 
 Camera *Game::getActiveCamera() const {
@@ -990,6 +2079,217 @@ std::shared_ptr<Object> Game::getObjectById(uint32_t id) const {
         return it != _objectById.end() ? it->second : nullptr;
     }
     }
+}
+
+uint32_t Game::savedObjectId(const resource::Gff &gff) const {
+    uint32_t id = 0;
+    if (!gff.readDword(id, "ObjectId")) {
+        throw ValidationException("Saved runtime object is missing ObjectId");
+    }
+    return id;
+}
+
+void Game::registerObject(
+    const std::shared_ptr<Object> &object,
+    bool allowReserved) {
+    uint32_t id = object->id();
+    if (id == std::numeric_limits<uint32_t>::max()) {
+        throw ValidationException("Invalid saved ObjectId");
+    }
+    if (!allowReserved && id < kFirstRuntimeObjectId) {
+        throw ValidationException("Reserved saved ObjectId: " + std::to_string(id));
+    }
+    if (!_objectById.emplace(id, object).second) {
+        throw ValidationException("Duplicate saved ObjectId: " + std::to_string(id));
+    }
+    _reservedSavedObjectIds.erase(id);
+}
+
+std::shared_ptr<Item> Game::newItem(const resource::Gff &gff) {
+    return gff.has("ObjectId")
+               ? newObjectFromGff<Item>(gff, *this, _services)
+               : newItem();
+}
+
+std::shared_ptr<Creature> Game::newCreature(
+    const resource::Gff &gff,
+    std::string sceneName) {
+    return newObjectFromGff<Creature>(
+        gff, std::move(sceneName), *this, _services);
+}
+
+std::shared_ptr<Placeable> Game::newPlaceable(
+    const resource::Gff &gff,
+    std::string sceneName) {
+    return newObjectFromGff<Placeable>(
+        gff, std::move(sceneName), *this, _services);
+}
+
+std::shared_ptr<Door> Game::newDoor(
+    const resource::Gff &gff,
+    std::string sceneName) {
+    return newObjectFromGff<Door>(
+        gff, std::move(sceneName), *this, _services);
+}
+
+std::shared_ptr<Waypoint> Game::newWaypoint(
+    const resource::Gff &gff,
+    std::string sceneName) {
+    return newObjectFromGff<Waypoint>(
+        gff, std::move(sceneName), *this, _services);
+}
+
+std::shared_ptr<Trigger> Game::newTrigger(
+    const resource::Gff &gff,
+    std::string sceneName) {
+    return newObjectFromGff<Trigger>(
+        gff, std::move(sceneName), *this, _services);
+}
+
+std::shared_ptr<Sound> Game::newSound(
+    const resource::Gff &gff,
+    std::string sceneName) {
+    return newObjectFromGff<Sound>(
+        gff, std::move(sceneName), *this, _services);
+}
+
+std::shared_ptr<Encounter> Game::newEncounter(
+    const resource::Gff &gff,
+    std::string sceneName) {
+    return newObjectFromGff<Encounter>(
+        gff, std::move(sceneName), *this, _services);
+}
+
+std::shared_ptr<Store> Game::newStore(
+    const resource::Gff &gff,
+    std::string sceneName) {
+    return newObjectFromGff<Store>(
+        gff, std::move(sceneName), *this, _services);
+}
+
+void Game::prepareSavedRuntimeNamespace(const resource::Gff &ifo) {
+    reserveSavedObjectIds(ifo);
+
+    uint32_t nextObjectId = kFirstRuntimeObjectId;
+    if (ifo.readDword(nextObjectId, "Mod_NextObjId0") &&
+        nextObjectId != 0 &&
+        nextObjectId < kFirstRuntimeObjectId) {
+        throw ValidationException("Invalid Mod_NextObjId0");
+    }
+    _nextObjectId = std::max(nextObjectId, kFirstRuntimeObjectId);
+
+    uint64_t nextEffectId = 0;
+    if (ifo.readDword64(nextEffectId, "Mod_Effect_NxtId")) {
+        if (!setNextEffectId(nextEffectId)) {
+            throw ValidationException("Invalid Mod_Effect_NxtId");
+        }
+    }
+    // Mod_MinPerHour first: it defines the day length that Mod_TimeOfDay is
+    // measured against.
+    uint32_t minutesPerHour = ifo.getUint("Mod_MinPerHour");
+    if (minutesPerHour > std::numeric_limits<uint8_t>::max()) {
+        throw ValidationException("Invalid Mod_MinPerHour");
+    }
+    _minutesPerHour = minutesPerHour == 0
+                          ? 5
+                          : static_cast<uint8_t>(minutesPerHour);
+
+    // Compose the canonical clock from the retail day/time pair. An oversized
+    // time of day carries into later days rather than being rejected, as
+    // CWorldTimer::GetWorldTime does: saves written before the day length
+    // became Mod_MinPerHour-derived hold a time of day on the old fixed
+    // 24-hour scale, and must still load. Both fields are Dwords, so the
+    // composition cannot overflow the 64-bit clock.
+    uint64_t day = ifo.getUint("Mod_CalendarDay");
+    uint64_t timeOfDay = ifo.getUint("Mod_TimeOfDay");
+    _worldTimeMilliseconds = day * millisecondsPerWorldDay() + timeOfDay;
+    _worldTimeFraction = 0.0;
+}
+
+void Game::reserveSavedObjectIds(const resource::Gff &gff) {
+    for (const auto &field : gff.fields()) {
+        if (field.label == "ObjectId" &&
+            field.type == resource::Gff::FieldType::Dword) {
+            _reservedSavedObjectIds.insert(field.uintValue);
+        }
+        for (const auto &child : field.children) {
+            reserveSavedObjectIds(*child);
+        }
+    }
+}
+
+void Game::resolveSavedObjectReferences() {
+    for (const auto &[_, object] : _objectById) {
+        object->resolveSavedReferences(
+            [this](uint32_t id) {
+                auto found = _objectById.find(id);
+                return found == _objectById.end() ? nullptr : found->second;
+            });
+    }
+}
+
+void Game::bindSavedRuntimeState() {
+    if (!_module) {
+        return;
+    }
+    resolveSavedObjectReferences();
+    for (const auto &[_, object] : _objectById) {
+        object->bindSavedRuntimeState();
+    }
+    _module->bindSavedEventQueue();
+}
+
+void Game::publishSavedRuntimeState() {
+    if (!_module) {
+        return;
+    }
+    for (const auto &[_, object] : _objectById) {
+        object->publishSavedRuntimeState();
+    }
+    _module->publishSavedEventQueue();
+}
+
+void Game::advanceWorldTime(float dt) {
+    if (dt <= 0.0f) {
+        return;
+    }
+    // One second of simulation is one thousand world milliseconds.
+    // Mod_MinPerHour shortens the day, it does not accelerate the clock:
+    // CWorldTimer accumulates elapsed time into m_nSnapshotTime and only
+    // derives the day boundary from m_nMillisecondsInDay. Scaling the rate
+    // here instead made every duration measured in world time short by
+    // 60 / Mod_MinPerHour.
+    double gameMilliseconds =
+        _worldTimeFraction + static_cast<double>(dt) * 1000.0;
+    uint64_t wholeMilliseconds =
+        static_cast<uint64_t>(std::floor(gameMilliseconds));
+    _worldTimeFraction =
+        gameMilliseconds - static_cast<double>(wholeMilliseconds);
+
+    _worldTimeMilliseconds += wholeMilliseconds;
+}
+
+std::optional<float> Game::remainingEffectDuration(
+    const EffectInstance &effect) const {
+    if (effect.durationType() != DurationType::Temporary) {
+        return std::nullopt;
+    }
+    if (effect.expiryDay == 0 && effect.expiryTime == 0) {
+        return std::max(0.0f, effect.duration);
+    }
+
+    // Save-facing expiry provenance, converted once here at the restoration
+    // boundary. Live effects then count down in world seconds and never
+    // reconstruct a calendar day again.
+    uint64_t expiry =
+        static_cast<uint64_t>(effect.expiryDay) * millisecondsPerWorldDay() +
+        effect.expiryTime;
+    if (expiry <= _worldTimeMilliseconds) {
+        return 0.0f;
+    }
+    double remainingSeconds =
+        static_cast<double>(expiry - _worldTimeMilliseconds) / 1000.0;
+    return static_cast<float>(remainingSeconds);
 }
 
 void Game::renderGUI() {
@@ -1017,8 +2317,14 @@ void Game::renderGUI() {
         break;
     }
     }
+    if (_confirmPopup && _confirmPopup->isVisible()) {
+        _confirmPopup->render();
+    }
     if (_cursor && !_relativeMouseMode) {
-        _cursor->render();
+        const auto &graphics = _options.graphics;
+        float cursorScale = std::min(graphics.width / 800.0f, graphics.height / 600.0f) *
+                            graphics.guiScale * kCursorSizeScale;
+        _cursor->render(cursorScale);
     }
     renderDeveloperOverlay();
 }
@@ -1052,10 +2358,10 @@ void Game::renderDeveloperOverlay() {
             0.0f, 0.0f, 100.0f);
         globals.projectionInv = glm::inverse(globals.projection);
     });
-    _services.graphics.context.withBlendMode(BlendMode::Normal, [this]() {
+    _services.graphics.renderer2d.withBlendMode(BlendMode::Normal, [this]() {
         renderDeveloperBanner();
     });
-    _services.graphics.context.withBlendMode(BlendMode::Normal, [this, hasCamera, &projection, &view]() {
+    _services.graphics.renderer2d.withBlendMode(BlendMode::Normal, [this, hasCamera, &projection, &view]() {
         if (_developerOverlay.triggers && hasCamera) {
             renderDeveloperTriggerOverlay(projection, view);
         }
@@ -1119,7 +2425,7 @@ void Game::renderDeveloperTriggerOverlay(const glm::mat4 &projection, const glm:
         auto state = trigger->debugState();
         glm::vec4 color = trigger->debugColor();
         centroid /= static_cast<float>(geometry.size());
-        glm::vec3 labelScreen = glm::project(centroid, view, projection, viewport);
+        glm::vec3 labelScreen = glm::projectZO(centroid, view, projection, viewport);
         if (labelScreen.z >= 0.0f && labelScreen.z < 1.0f) {
             std::string label = str(boost::format("#%u %s") %
                                     trigger->id() %
@@ -1295,17 +2601,7 @@ void Game::renderDeveloperPanel(const std::vector<std::string> &lines, glm::vec2
 }
 
 void Game::renderDeveloperRect(glm::vec2 position, glm::vec2 size, glm::vec4 color) {
-    glm::mat4 transform(1.0f);
-    transform = glm::translate(transform, glm::vec3(position.x, position.y, 0.0f));
-    transform = glm::scale(transform, glm::vec3(size.x, size.y, 1.0f));
-
-    _services.graphics.uniforms.setLocals([transform, color](auto &locals) {
-        locals.reset();
-        locals.model = transform;
-        locals.color = color;
-    });
-    _services.graphics.context.useProgram(_services.graphics.shaderRegistry.get(ShaderProgramId::mvpColor));
-    _services.graphics.meshRegistry.get(MeshName::quad).draw(_services.graphics.statistic);
+    _services.graphics.renderer2d.drawRect(position, size, color);
 }
 
 void Game::updateMusic() {
@@ -1336,46 +2632,99 @@ void Game::loadNextModule() {
             haveOrigin = true;
         }
     }
-    bool wasLifecycleActive = _swoopLifecycle.active;
+    bool wasLifecycleActive = _swoopLifecycle.active || _turretLifecycle.active;
 
-    loadModule(_nextModule, _nextEntry);
+    bool loaded = loadModule(_nextModule, _nextEntry);
 
     _nextModule.clear();
     _nextEntry.clear();
+    if (!loaded) {
+        return;
+    }
 
-    // Vanilla K1 swoop entry: a dialogue node fires a script that calls
+    // Vanilla K1 minigame entry: a dialogue node or cutscene script calls
     // StartNewModule("<*mg>"); the engine auto-enters the minigame on load (no
     // dedicated start routine). Route that generic transition through the
-    // forced-success lifecycle harness when the loaded area is a swoop minigame.
-    if (wasLifecycleActive || _swoopLifecycle.active) {
+    // forced-success lifecycle harness when the loaded area declares one.
+    // A session scheduled by startturretgame carries its own origin, captured
+    // before the transition was queued.
+    bool pendingTurret = _pendingTurret.active && boost::iequals(_pendingTurret.targetModule, target);
+    if (pendingTurret) {
+        originModule = _pendingTurret.originModule;
+        originPosition = _pendingTurret.originPosition;
+        originFacing = _pendingTurret.originFacing;
+        haveOrigin = _pendingTurret.haveOrigin;
+    }
+
+    if (wasLifecycleActive || _swoopLifecycle.active || _turretLifecycle.active) {
         return;
     }
     if (originModule.empty() || boost::iequals(originModule, target)) {
+        if (pendingTurret) {
+            abandonPendingTurret("no origin module");
+        }
         return;
     }
     auto mod = _module;
-    if (!mod || !mod->area() || !mod->area()->hasMinigame()) {
+    auto area = mod ? mod->area() : nullptr;
+    bool hasMinigame = area && area->hasMinigame();
+    MinigameType minigameType = hasMinigame ? area->miniGame().type : MinigameType::None;
+
+    auto resolution = resolveTurretRequest(pendingTurret, hasMinigame, minigameType);
+    if (resolution == TurretRequestResolution::AbortNoMinigame ||
+        resolution == TurretRequestResolution::AbortWrongType) {
+        abandonPendingTurret(turretRequestResolutionMessage(resolution));
         return;
     }
-    if (mod->area()->miniGame().type != MinigameType::SwoopRace) {
+
+    if (!hasMinigame) {
+        return;
+    }
+    if (minigameType == MinigameType::Turret) {
+        openTurret();
+        if (_turret.isActive()) {
+            _turretLifecycle = MinigameLifecycle();
+            _turretLifecycle.active = true;
+            _turretLifecycle.haveOrigin = haveOrigin;
+            _turretLifecycle.originModule = originModule;
+            _turretLifecycle.originPosition = originPosition;
+            _turretLifecycle.originFacing = originFacing;
+            _turretLifecycle.forcedSuccess = true;
+            _pendingTurret = PendingTurretRequest();
+            debug(str(boost::format("turret: lifecycle start origin=%s target=%s hook=%s")
+                      % originModule % target
+                      % (pendingTurret ? "startturretgame" : "StartNewModule")));
+        } else if (pendingTurret) {
+            abandonPendingTurret("turret failed to start");
+        }
+        return;
+    }
+    if (minigameType != MinigameType::SwoopRace) {
         return;
     }
 
     openSwoopRace();
     if (_swoopRace.isActive()) {
-        _swoopLifecycle = SwoopLifecycle();
+        _swoopLifecycle = MinigameLifecycle();
         _swoopLifecycle.active = true;
         _swoopLifecycle.haveOrigin = haveOrigin;
         _swoopLifecycle.originModule = originModule;
         _swoopLifecycle.originPosition = originPosition;
         _swoopLifecycle.originFacing = originFacing;
         _swoopLifecycle.forcedSuccess = true;
-        debug(str(boost::format("swoop: script lifecycle start origin=%s target=%s forcedSuccess=yes hook=StartNewModule")
-                  % originModule % target));
+        debug(str(boost::format("swoop: script lifecycle start origin=%s target=%s forcedSuccess=yes hook=StartNewModule") % originModule % target));
     }
 }
 
 void Game::stopMovement() {
+    // Reached with no module while one is being swapped in: loadGame resets the
+    // game before the destination module is up, and the menus that call this
+    // outlive that reset. There is no player to halt and no in-game camera for
+    // getActiveCamera to find, so there is nothing to stop.
+    if (!_module) {
+        return;
+    }
+
     auto camera = getActiveCamera();
     if (camera) {
         camera->stopMovement();
@@ -1447,7 +2796,8 @@ void Game::updateCamera(float dt) {
         break;
     }
     case Screen::InGame:
-        if (_cameraType != CameraType::FirstPerson && _cameraType != CameraType::ThirdPerson) {
+        if (_cameraType != CameraType::FirstPerson &&
+            _cameraType != CameraType::ThirdPerson) {
             _cameraType = CameraType::ThirdPerson;
         }
         break;
@@ -1479,13 +2829,7 @@ void Game::updateSceneGraph(float dt) {
     auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
     sceneGraph.setActiveCamera(camera->cameraSceneNode().get());
     sceneGraph.setUpdateRoots(!_paused);
-    sceneGraph.setRenderAABB(isShowAABBEnabled());
-    sceneGraph.setRenderWalkmeshes(isShowWalkmeshEnabled());
-    bool renderDeveloperTriggers = _options.game.developer &&
-                                   _screen == Screen::InGame &&
-                                   _developerOverlay.visible &&
-                                   _developerOverlay.triggers;
-    sceneGraph.setRenderTriggers(isShowTriggersEnabled() || renderDeveloperTriggers);
+    sceneGraph.setGrass(_options.graphics.grass, _options.graphics.grassDensity);
     sceneGraph.update(dt);
 }
 
@@ -1561,7 +2905,16 @@ void Game::setGlobalBoolean(const std::string &name, bool value) {
 }
 
 void Game::setGlobalNumber(const std::string &name, int value) {
-    _globalNumbers[name] = value;
+    // Retail SetGlobalNumber stores the low byte in its signed-char table.
+    // Express that conversion portably instead of relying on plain-char
+    // signedness or an implementation-defined narrowing conversion.
+    uint8_t raw = static_cast<uint8_t>(value);
+    _globalNumbers[name] = raw <= 0x7f ? static_cast<int>(raw)
+                                       : static_cast<int>(raw) - 0x100;
+}
+
+std::vector<SavedGame> Game::savedGames() const {
+    return discoverSavedGames(_path);
 }
 
 void Game::setGlobalString(const std::string &name, const std::string &value) {
@@ -1572,12 +2925,34 @@ void Game::setGlobalLocation(const std::string &name, const std::shared_ptr<Loca
     _globalLocations[name] = location;
 }
 
+void Game::refreshGUILayouts() {
+    GameGUI *guis[] = {_mainMenu.get(), _charGen.get(), _hud.get(), _inGame.get(),
+                       _dialog.get(), _computer.get(), _confirmPopup.get(), _container.get(),
+                       _partySelect.get(), _saveLoad.get(), _galaxyMap.get(),
+                       _pazaakWager.get(), _pazaakSetup.get(), _pazaakBoard.get(),
+                       _loadScreen.get()};
+    for (auto *gui : guis) {
+        if (gui) {
+            gui->refreshLayout();
+        }
+    }
+}
+
 void Game::setPaused(bool paused) {
     _paused = paused;
 }
 
 void Game::setRelativeMouseMode(bool relative) {
     _relativeMouseMode = relative;
+}
+
+void Game::presentFrame() {
+    if (!_presentFrame) {
+        // No host callback - the toolkit drives rendering itself. Nothing to
+        // do; the caller only wanted the screen refreshed.
+        return;
+    }
+    _presentFrame();
 }
 
 void Game::withLoadingScreen(const std::string &imageResRef, const std::function<void()> &block) {
@@ -1589,11 +2964,12 @@ void Game::withLoadingScreen(const std::string &imageResRef, const std::function
         _loadScreen->setProgress(0);
     }
     changeScreen(Screen::Loading);
-    render();
+    presentFrame();
     block();
 }
 
 void Game::openMainMenu() {
+    resetGame();
     if (!_mainMenu) {
         _mainMenu = tryLoadGUI<MainMenu>();
     }
@@ -1608,6 +2984,7 @@ void Game::openMainMenu() {
 }
 
 void Game::openInGame() {
+    _runtimeSessionPlayable = static_cast<bool>(_module);
     changeScreen(Screen::InGame);
 }
 
@@ -1662,8 +3039,7 @@ SwoopTrackFrame deriveSwoopTrackFrame(const std::shared_ptr<graphics::Model> &tr
     auto hook = trackModel->getNodeByNameRecursive("modelhook");
     if (!hook) {
         frame.reason = "no-modelhook";
-        frame.info = str(boost::format("modelhook=no placement=%s anims=%zu")
-                         % (lytTrackPos ? "yes" : "no") % animCount);
+        frame.info = str(boost::format("modelhook=no placement=%s anims=%zu") % (lytTrackPos ? "yes" : "no") % animCount);
         return frame;
     }
 
@@ -1682,17 +3058,12 @@ SwoopTrackFrame deriveSwoopTrackFrame(const std::shared_ptr<graphics::Model> &tr
         frame.position = start;
         frame.facing = facing;
         frame.mode = "lyt-track";
-        frame.info = str(boost::format("modelhook=yes placement=yes anims=%zu lyt=[%.1f,%.1f,%.1f] hook=[%.1f,%.1f,%.1f] start=[%.1f,%.1f,%.1f]")
-                         % animCount
-                         % lytTrackPos->x % lytTrackPos->y % lytTrackPos->z
-                         % hookLocal.x % hookLocal.y % hookLocal.z
-                         % start.x % start.y % start.z);
+        frame.info = str(boost::format("modelhook=yes placement=yes anims=%zu lyt=[%.1f,%.1f,%.1f] hook=[%.1f,%.1f,%.1f] start=[%.1f,%.1f,%.1f]") % animCount % lytTrackPos->x % lytTrackPos->y % lytTrackPos->z % hookLocal.x % hookLocal.y % hookLocal.z % start.x % start.y % start.z);
         return frame;
     }
 
     float dist = glm::distance(glm::vec2(hookLocal), glm::vec2(leaderPos));
-    frame.info = str(boost::format("modelhook=yes placement=no anims=%zu hook=[%.1f,%.1f,%.1f] dist=%.1f")
-                     % animCount % hookLocal.x % hookLocal.y % hookLocal.z % dist);
+    frame.info = str(boost::format("modelhook=yes placement=no anims=%zu hook=[%.1f,%.1f,%.1f] dist=%.1f") % animCount % hookLocal.x % hookLocal.y % hookLocal.z % dist);
 
     if (dist > kTrackFrameMaxDistance) {
         // No LYT placement and the hook is not in the party's world frame.
@@ -1743,7 +3114,8 @@ void Game::openSwoopRace() {
     std::vector<std::shared_ptr<ModelSceneNode>> bikeChildNodes;
     std::vector<std::string> modelDiag;
     bool anyMissing = false;
-    for (const auto &resRef : mg.player.modelResRefs) {
+    for (const auto &modelSpec : mg.player.models) {
+        const auto &resRef = modelSpec.resRef;
         if (resRef.empty()) {
             continue;
         }
@@ -1842,7 +3214,7 @@ void Game::openSwoopRace() {
     debug(str(boost::format("swoop: started type=%s track=%s models=%zu loaded=%zu camera=chase movePerSec=%.0f lataccel=%.0f camfov=%.0f")
               % minigameTypeName(mg.type)
               % mg.player.trackResRef
-              % mg.player.modelResRefs.size()
+              % mg.player.models.size()
               % loadedCount
               % mg.movementPerSec
               % mg.lateralAccel
@@ -1852,31 +3224,16 @@ void Game::openSwoopRace() {
     // was chosen (see deriveSwoopTrackFrame).
     std::string trackLabel(mg.player.trackResRef.empty() ? std::string("<none>") : mg.player.trackResRef);
     if (trackFrame.mode == "fallback") {
-        debug(str(boost::format("swoop: track=%s mode=fallback reason=%s%s")
-                  % trackLabel
-                  % trackFrame.reason
-                  % (trackFrame.info.empty() ? std::string() : (" " + trackFrame.info))));
+        debug(str(boost::format("swoop: track=%s mode=fallback reason=%s%s") % trackLabel % trackFrame.reason % (trackFrame.info.empty() ? std::string() : (" " + trackFrame.info))));
     } else {
-        debug(str(boost::format("swoop: track=%s mode=%s %s startFacing=%.2f")
-                  % trackLabel
-                  % trackFrame.mode
-                  % trackFrame.info
-                  % trackFrame.facing));
+        debug(str(boost::format("swoop: track=%s mode=%s %s startFacing=%.2f") % trackLabel % trackFrame.mode % trackFrame.info % trackFrame.facing));
     }
 
     // Movement model: track-relative progress + lateral strafe (no turning).
-    debug(str(boost::format("swoop: movement=track-progress strafeOnly=yes progressAxis=trackForward lateralAxis=trackRight anim=deferred start=[%.1f,%.1f,%.1f] facing=%.2f finish=%.1f")
-              % trackFrame.position.x % trackFrame.position.y % trackFrame.position.z
-              % trackFrame.facing
-              % finishProgress));
+    debug(str(boost::format("swoop: movement=track-progress strafeOnly=yes progressAxis=trackForward lateralAxis=trackRight anim=deferred start=[%.1f,%.1f,%.1f] facing=%.2f finish=%.1f") % trackFrame.position.x % trackFrame.position.y % trackFrame.position.z % trackFrame.facing % finishProgress));
 
     // Lateral bounds chosen for the strafe (see SwoopRace::computeLateralBounds).
-    debug(str(boost::format("swoop: bounds lateral=[-%.1f,+%.1f] source=%s tunnelX=[%.1f,%.1f]")
-              % _swoopRace.lateralLeftBound()
-              % _swoopRace.lateralRightBound()
-              % _swoopRace.lateralBoundSource()
-              % mg.player.tunnelXNeg
-              % mg.player.tunnelXPos));
+    debug(str(boost::format("swoop: bounds lateral=[-%.1f,+%.1f] source=%s tunnelX=[%.1f,%.1f]") % _swoopRace.lateralLeftBound() % _swoopRace.lateralRightBound() % _swoopRace.lateralBoundSource() % mg.player.tunnelXNeg % mg.player.tunnelXPos));
 
     // Map authored LYT obstacle placements into the current track frame
     // (progress = down-course distance, lateral = strafe offset). Diagnostic
@@ -1891,18 +3248,14 @@ void Game::openSwoopRace() {
                 ++areMatched;
             }
         }
-        debug(str(boost::format("swoop: lyt obstacles=%zu areObstacles=%zu matched=%zu")
-                  % layout->obstacles.size() % mg.obstacles.size() % areMatched));
+        debug(str(boost::format("swoop: lyt obstacles=%zu areObstacles=%zu matched=%zu") % layout->obstacles.size() % mg.obstacles.size() % areMatched));
         constexpr size_t kMaxObstacleDiag = 6;
         for (size_t i = 0; i < layout->obstacles.size() && i < kMaxObstacleDiag; ++i) {
             const auto &obs = layout->obstacles[i];
             glm::vec3 d = obs.position - trackFrame.position;
             float progress = glm::dot(d, fwd);
             float lateral = glm::dot(d, right);
-            debug(str(boost::format("  swoopobj[%zu] name=%s pos=[%.1f,%.1f,%.1f] progress=%.1f lateral=%.1f type=obstacle")
-                      % i % obs.name
-                      % obs.position.x % obs.position.y % obs.position.z
-                      % progress % lateral));
+            debug(str(boost::format("  swoopobj[%zu] name=%s pos=[%.1f,%.1f,%.1f] progress=%.1f lateral=%.1f type=obstacle") % i % obs.name % obs.position.x % obs.position.y % obs.position.z % progress % lateral));
         }
     }
 
@@ -1958,8 +3311,8 @@ void Game::finishSwoopLifecycle(bool success) {
     // Capture and clear the session first so the upcoming module load does not
     // re-enter this path. The current module (before returning) is the race
     // module, which selects the planet-specific result contract.
-    SwoopLifecycle session = _swoopLifecycle;
-    _swoopLifecycle = SwoopLifecycle();
+    MinigameLifecycle session = _swoopLifecycle;
+    _swoopLifecycle = MinigameLifecycle();
     std::string raceModule = _module ? _module->name() : "";
 
     // Stop the race (removes bike models, restores camera/FOV/input, screen).
@@ -1993,9 +3346,7 @@ void Game::finishSwoopLifecycle(bool success) {
         applySwoopForcedSuccessResult(raceModule);
     }
 
-    debug(str(boost::format("swoop: finished forcedSuccess=%s returning=%s")
-              % (success ? "yes" : "no")
-              % session.originModule));
+    debug(str(boost::format("swoop: finished forcedSuccess=%s returning=%s") % (success ? "yes" : "no") % session.originModule));
 }
 
 std::string Game::swoopReturnWaypoint(const std::string &raceModule) const {
@@ -2020,8 +3371,8 @@ void Game::applyTarisForcedWinningTime() {
     // new_beat = playerTime - 25cs) stays strictly positive. Setting
     // player=0:00.00 underflows to MIN_BEAT=-1 (total=-4025), making every
     // subsequent heat unwinnable.
-    int beatMin  = getGlobalNumber("TAR_SWOOP_MIN_BEAT");
-    int beatSec  = getGlobalNumber("TAR_SWOOP_SEC_BEAT");
+    int beatMin = getGlobalNumber("TAR_SWOOP_MIN_BEAT");
+    int beatSec = getGlobalNumber("TAR_SWOOP_SEC_BEAT");
     int beatMsec = getGlobalNumber("TAR_SWOOP_MSEC_BEAT");
     int beatTotal = beatMin * 10000 + beatSec * 100 + beatMsec;
 
@@ -2034,10 +3385,10 @@ void Game::applyTarisForcedWinningTime() {
     //   - Degenerate beat (<= 25): use the asset-confirmed heat-1 reference
     //     (3793 = 3843 - 50); this path should not occur in normal Taris flow.
     static constexpr int kMargin = 50;
-    static constexpr int kMinSafe = 26;                     // next beat = playerTotal - 25 > 0
-    static constexpr int kMinSafePlayerTime = 100;          // floor for the comfortable-margin branch
+    static constexpr int kMinSafe = 26;                                   // next beat = playerTotal - 25 > 0
+    static constexpr int kMinSafePlayerTime = 100;                        // floor for the comfortable-margin branch
     static constexpr int kNormalThreshold = kMinSafePlayerTime + kMargin; // 150
-    static constexpr int kFallback = 3793;                  // k_ptar_racefirst heat-1 beat (3843) - 50
+    static constexpr int kFallback = 3793;                                // k_ptar_racefirst heat-1 beat (3843) - 50
 
     int playerTotal;
     if (beatTotal > kNormalThreshold) {
@@ -2048,19 +3399,19 @@ void Game::applyTarisForcedWinningTime() {
         playerTotal = kFallback;
     }
 
-    int playerMin  = playerTotal / 10000;
-    int playerSec  = (playerTotal % 10000) / 100;
+    int playerMin = playerTotal / 10000;
+    int playerSec = (playerTotal % 10000) / 100;
     int playerMsec = playerTotal % 100;
-    setGlobalNumber("TAR_SWOOP_MIN",  playerMin);
-    setGlobalNumber("TAR_SWOOP_SEC",  playerSec);
+    setGlobalNumber("TAR_SWOOP_MIN", playerMin);
+    setGlobalNumber("TAR_SWOOP_SEC", playerSec);
     setGlobalNumber("TAR_SWOOP_MSEC", playerMsec);
 
     _console.printLine(str(boost::format(
-        "swoop: result forcedSuccess=yes planet=taris TAR_SWOOP_RUN=1"
-        " beat=%d:%d.%d time=%d:%d.%d margin=%d") %
-        beatMin % beatSec % beatMsec %
-        playerMin % playerSec % playerMsec %
-        (beatTotal - playerTotal)));
+                               "swoop: result forcedSuccess=yes planet=taris TAR_SWOOP_RUN=1"
+                               " beat=%d:%d.%d time=%d:%d.%d margin=%d") %
+                           beatMin % beatSec % beatMsec %
+                           playerMin % playerSec % playerMsec %
+                           (beatTotal - playerTotal)));
 }
 
 void Game::applySwoopForcedSuccessResult(const std::string &raceModule) {
@@ -2089,6 +3440,237 @@ void Game::applySwoopForcedSuccessResult(const std::string &raceModule) {
     }
     setGlobalBoolean("TAR_SWOOP_RUN", true);
     applyTarisForcedWinningTime();
+}
+
+void Game::openTurret() {
+    if (_turret.isActive()) {
+        _console.printLine("turret: already running");
+        return;
+    }
+    if (!_module || !_module->area()) {
+        _console.printLine("turret: no module loaded");
+        return;
+    }
+    auto area = _module->area();
+    if (!area->hasMinigame() || area->miniGame().type != MinigameType::Turret) {
+        _console.printLine("turret: current area has no turret minigame");
+        return;
+    }
+
+    const auto &mg = area->miniGame();
+    auto camera = area->getCamera<FirstPersonCamera>(CameraType::FirstPerson);
+    if (camera) {
+        camera->stopMovement();
+    }
+
+    _savedCameraType = _cameraType;
+    if (!_turret.start(mg, camera, area->name())) {
+        _console.printLine("turret: failed to start (see log)");
+        return;
+    }
+
+    _cameraType = CameraType::FirstPerson;
+    setRelativeMouseMode(true);
+    changeScreen(Screen::Turret);
+
+    // Every started session is a lifecycle session, so a win or a loss is
+    // consumed the same way however the turret was entered. A session started
+    // in place - the startturret developer command, or any entry that did not
+    // come from a module transition - captures no origin; finishing one falls
+    // through to the authored return module when the turret area names one and
+    // otherwise leaves the player where they are. A transition-driven entry
+    // overwrites this in onModuleLoaded with the origin it captured.
+    _turretLifecycle = MinigameLifecycle();
+    _turretLifecycle.active = true;
+
+    // The minigame owns the party now; drop any actions queued before entry so
+    // they do not survive the module transitions (mirrors the swoop entry).
+    for (auto &member : _party.members()) {
+        if (member.creature) {
+            member.creature->clearAllActions(/*force=*/true);
+        }
+    }
+
+    // Vanilla does not add the party to the scene in a minigame module; the
+    // turret actor represents the player. Restored on exit.
+    setPartyVisible(false);
+
+    if (!mg.music.empty()) {
+        playMusic(mg.music);
+    }
+
+    debug(str(boost::format("turret: started track=%s anchor=%s models=%zu banks=%zu enemies=%zu hp=%d camfov=%.0f clip=[%.2f,%.0f]")
+              % mg.player.trackResRef
+              % _turret.anchorSource()
+              % mg.player.models.size()
+              % _turret.gunBankCount()
+              % _turret.enemyCount()
+              % _turret.hitPoints()
+              % mg.cameraViewAngle
+              % mg.nearClip
+              % mg.farClip));
+    debug(str(boost::format("turret: hud gauge=%s radar=%s healthState=%d(%s) heading=%d contacts=%zu radarChannels=%zu alarm=%d")
+              % (_turret.haveHealthHud() ? "mgf_hud02" : "<missing>")
+              % (_turret.haveRadarHud() ? "mgf_hud01" : "<missing>")
+              % _turret.healthState()
+              % turretHealthAnimation(_turret.healthState())
+              % _turret.headingState()
+              % _turret.contactsLive()
+              % _turret.radarChannelCount()
+              % static_cast<int>(_turret.alarmActive())));
+    debug(str(boost::format("turret: camera mount=%s hook=%s eyeOffset=[%.3f,%.3f,%.3f] targetOffset=[%.1f,%.1f,%.1f] rotate=%d")
+              % (mg.player.cameraResRef.empty() ? "<none>" : mg.player.cameraResRef)
+              % (_turret.haveCameraHook() ? "camerahook" : "<missing>")
+              % _turret.cameraHookOffset().x
+              % _turret.cameraHookOffset().y
+              % _turret.cameraHookOffset().z
+              % mg.player.targetOffset.x
+              % mg.player.targetOffset.y
+              % mg.player.targetOffset.z
+              % static_cast<int>(mg.player.cameraRotate)));
+    debug(str(boost::format("turret: aim pitch=[%.1f,%.1f]%s yaw=[%.1f,%.1f]%s authoredStart=[%.1f,%.1f,%.1f] startPitch=%.1f startYaw=%.1f")
+              % glm::degrees(_turret.aim().minPitch())
+              % glm::degrees(_turret.aim().maxPitch())
+              % (_turret.aim().pitchBounded() ? "" : " (infinite)")
+              % glm::degrees(_turret.aim().minYaw())
+              % glm::degrees(_turret.aim().maxYaw())
+              % (_turret.aim().yawBounded() ? "" : " (infinite)")
+              % mg.player.startOffset.x
+              % mg.player.startOffset.y
+              % mg.player.startOffset.z
+              % glm::degrees(_turret.aim().startPitch())
+              % glm::degrees(_turret.aim().startYaw())));
+}
+
+void Game::closeTurret() {
+    if (!_turret.isActive()) {
+        debug("turret: closeTurret called but turret not active");
+        return;
+    }
+    _turret.stop();
+    setPartyVisible(true);
+    _cameraType = _savedCameraType;
+    setRelativeMouseMode(_cameraType == CameraType::FirstPerson);
+    openInGame();
+    debug("turret: stopped (party restored, camera reset)");
+}
+
+void Game::exitTurret() {
+    // Escape / stopturret entry point. If a lifecycle session is in progress,
+    // return to the origin module; otherwise just stop the dev session in place.
+    if (_turretLifecycle.active) {
+        // A session abandoned mid-run is still InProgress; it returns to the
+        // origin but is neither a win nor a loss.
+        finishTurretLifecycle(_turret.outcome());
+    } else if (_pendingTurret.active) {
+        // Scheduled but never started: drop the request rather than leaving it
+        // to fire on a later transition into the same module.
+        abandonPendingTurret("cancelled");
+    } else {
+        closeTurret();
+    }
+}
+
+void Game::returnToLifecycleOrigin(const std::string &module,
+                                   bool haveOrigin,
+                                   const glm::vec3 &position,
+                                   float facing) {
+    if (module.empty()) {
+        return;
+    }
+    loadModule(module);
+    if (!haveOrigin) {
+        return;
+    }
+    auto mod = _module;
+    if (!mod || !mod->area()) {
+        return;
+    }
+    auto leader = _party.getLeader();
+    if (!leader) {
+        return;
+    }
+    leader->setPosition(position);
+    leader->setFacing(facing);
+    mod->area()->determineObjectRoom(*leader);
+    mod->area()->onPartyLeaderMoved(/*roomChanged=*/true);
+}
+
+void Game::abandonPendingTurret(const std::string &reason) {
+    if (!_pendingTurret.active) {
+        return;
+    }
+    PendingTurretRequest request = _pendingTurret;
+    _pendingTurret = PendingTurretRequest();
+    _console.printLine(str(boost::format("turret: lifecycle aborted (%s), returning to origin=%s")
+                           % reason % request.originModule));
+    returnToLifecycleOrigin(request.originModule,
+                            request.haveOrigin,
+                            request.originPosition,
+                            request.originFacing);
+}
+
+void Game::finishTurretLifecycle(Turret::Outcome outcome) {
+    // Repeated calls are no-ops: the session is cleared below before anything
+    // else runs, so neither the return nor the completion state can be emitted
+    // twice for one session.
+    if (!_turretLifecycle.active) {
+        return;
+    }
+    // Capture and clear the session first so the upcoming module load does not
+    // re-enter this path. The current module (before returning) is the turret
+    // module, which selects the return contract.
+    MinigameLifecycle session = _turretLifecycle;
+    _turretLifecycle = MinigameLifecycle();
+    std::string turretModule = _module ? _module->name() : "";
+
+    closeTurret();
+
+    // Prefer the vanilla return module (the StartNewModule target the turret's
+    // end scripts use); fall back to the module the player came from.
+    std::string returnModule = game::turretReturnModule(turretModule, session.originModule);
+    if (returnModule.empty()) {
+        // Nothing authored and nothing captured: stay put rather than schedule
+        // a transition to an empty module name.
+        debug("turret: no return module, staying put");
+        applyTurretResult(turretModule, outcome);
+        return;
+    }
+    bool returningToOrigin = boost::iequals(returnModule, session.originModule);
+    returnToLifecycleOrigin(returnModule,
+                            returningToOrigin && session.haveOrigin,
+                            session.originPosition,
+                            session.originFacing);
+
+    applyTurretResult(turretModule, outcome);
+
+    debug(str(boost::format("turret: finished outcome=%s returning=%s")
+              % turretOutcomeName(outcome)
+              % returnModule));
+}
+
+void Game::applyTurretResult(const std::string &turretModule, Turret::Outcome outcome) {
+    // K1 M12ab result contract, confirmed from local assets: k_pebo_mgload seeds
+    // the globals ebo_num_fighters (Number) and ebo_turret_done (Boolean); each
+    // enemy death script decrements ebo_num_fighters and, on the last kill, sets
+    // ebo_turret_done before returning to ebo_m12aa. reone substitutes the
+    // minigame and never runs those scripts, so reproduce their outputs here.
+    //
+    // Only the last kill writes them in vanilla, so only a victory writes them
+    // here: a defeat or an abandoned session leaves the turret outstanding.
+    if (!boost::iequals(turretModule, "m12ab")) {
+        return;
+    }
+    if (!turretSessionSucceeded(outcome)) {
+        _console.printLine(str(boost::format(
+            "turret: result module=m12ab outcome=%s (no completion state written)")
+            % turretOutcomeName(outcome)));
+        return;
+    }
+    setGlobalNumber("ebo_num_fighters", 0);
+    setGlobalBoolean("ebo_turret_done", true);
+    _console.printLine(
+        "turret: result module=m12ab outcome=won ebo_turret_done=1 ebo_num_fighters=0");
 }
 
 void Game::openInGameMenu(InGameMenuTab tab) {
@@ -2151,6 +3733,465 @@ void Game::openSaveLoad(SaveLoadMode mode) {
     changeScreen(Screen::SaveLoad);
 }
 
+bool Game::canOpenGalaxyMapFrom(Screen screen) {
+    switch (screen) {
+    case Screen::None:
+    case Screen::InGame:
+    case Screen::InGameMenu:
+    case Screen::Conversation:
+        return true;
+    default:
+        // Every other screen owns the whole display and has somewhere of its
+        // own to return to. Taking it over would strand it.
+        return false;
+    }
+}
+
+void Game::openGalaxyMap(int initialPlanet) {
+    if (!canOpenGalaxyMapFrom(_screen)) {
+        return;
+    }
+    if (_galaxyMap && _galaxyMap->isRunningTravelScript()) {
+        // The travel script this panel dispatched must not reopen it.
+        return;
+    }
+    if (!_galaxyMap) {
+        _galaxyMap = tryLoadGUI<GalaxyMap>();
+    }
+    if (!_galaxyMap) {
+        // A panel that will not load must not take the screen away from
+        // whatever is on it.
+        return;
+    }
+    stopMovement();
+    setRelativeMouseMode(false);
+    setCursorType(CursorType::Default);
+    // The panel decides what the routine's planet means: K2 has to record
+    // where the party already is before anything can move the selection.
+    _galaxyMap->prepare(initialPlanet);
+    changeScreen(Screen::GalaxyMap);
+}
+
+void Game::serializePazaakPartyTable(resource::Gff &ptGff) const {
+    auto replaceField = [&ptGff](resource::Gff::Field replacement) {
+        auto &fields = ptGff.fields();
+        auto found = std::find_if(fields.begin(), fields.end(), [&replacement](const auto &field) {
+            return field.label == replacement.label;
+        });
+        if (found == fields.end()) {
+            fields.push_back(std::move(replacement));
+        } else {
+            *found = std::move(replacement);
+        }
+    };
+
+    replaceField(resource::Gff::Field::newDword(
+        "PT_GOLD",
+        static_cast<uint32_t>(std::max(0, _party.gold()))));
+    if (!_party.hasValidPazaakData()) {
+        return;
+    }
+
+    // Only the entries the running title actually stores are written back.
+    std::vector<std::shared_ptr<resource::Gff>> cardEntries;
+    const auto &savedCounts = _party.pazaakCardCounts();
+    for (size_t i = 0; i < _party.pazaakCardCount(); ++i) {
+        int count = savedCounts[i];
+        cardEntries.push_back(
+            resource::Gff::Builder()
+                .field(resource::Gff::Field::newByte(
+                    "PT_PAZAAKCOUNT",
+                    static_cast<uint32_t>(count)))
+                .build());
+    }
+    replaceField(resource::Gff::Field::newList(
+        "PT_PAZAAKCARDS",
+        std::move(cardEntries)));
+
+    std::vector<std::shared_ptr<resource::Gff>> sideEntries;
+    for (int cardId : _party.pazaakSideDeck()) {
+        sideEntries.push_back(
+            resource::Gff::Builder()
+                .field(resource::Gff::Field::newInt(
+                    "PT_PAZSIDECARD",
+                    cardId))
+                .build());
+    }
+    replaceField(resource::Gff::Field::newList(
+        "PT_PAZSIDELIST",
+        std::move(sideEntries)));
+}
+
+bool Game::playPazaak(
+    int opponentDeck,
+    std::string continuationScript,
+    int maximumWager,
+    bool tutorialRequested,
+    const std::shared_ptr<Object> &opponent) {
+
+    if (!opponent) {
+        return false;
+    }
+
+    PazaakSessionParams params;
+    params.opponentDeck = opponentDeck;
+    params.continuationScript = std::move(continuationScript);
+    params.maximumWager = maximumWager;
+    params.tutorialRequested = tutorialRequested;
+    params.opponentId = opponent->id();
+    params.opponentName = opponent->name().empty() ? opponent->tag() : opponent->name();
+
+    // A native match always plays with the cards the player actually owns, read
+    // from PARTYTABLE.res. Only the developer command uses temporary cards.
+    if (!_party.hasValidPazaakData()) {
+        error("Unable to start Pazaak: PARTYTABLE.res has no valid Pazaak data");
+        return false;
+    }
+    int cardTypes = static_cast<int>(
+        (isTSL() ? Party::kK2PazaakCardCount : Party::kK1PazaakCardCount) - 1);
+    std::array<std::optional<size_t>, Party::kMaxPazaakCardCount> collectionIndex;
+    const auto &counts = _party.pazaakCardCounts();
+    size_t ownedCards = 0;
+    for (int cardId = 0; cardId < cardTypes; ++cardId) {
+        if (counts[cardId] == 0) {
+            continue;
+        }
+        auto definition = isTSL() ? k2PazaakCardDefinition(cardId)
+                                  : k1PazaakCardDefinition(cardId);
+        if (!definition) {
+            error("Unable to start Pazaak: invalid player collection card ID");
+            return false;
+        }
+        collectionIndex[cardId] = params.collection.size();
+        params.collection.push_back(
+            {*definition, static_cast<size_t>(counts[cardId]), cardId});
+        ownedCards += static_cast<size_t>(counts[cardId]);
+    }
+    if (ownedCards < pazaak::kSideDeckSize) {
+        error("Unable to start Pazaak: player owns fewer than ten side-deck cards");
+        return false;
+    }
+
+    const auto &savedSideDeck = _party.pazaakSideDeck();
+    if (std::all_of(savedSideDeck.begin(), savedSideDeck.end(), [](int id) {
+            return id >= 0;
+        })) {
+        for (int cardId : savedSideDeck) {
+            if (cardId >= cardTypes || !collectionIndex[cardId]) {
+                error("Unable to start Pazaak: saved side deck is not owned");
+                return false;
+            }
+            params.initialChosenCards.push_back(*collectionIndex[cardId]);
+        }
+    }
+
+    if (_pazaakOpponentDeckOverride) {
+        params.opponentSideDeck = _pazaakOpponentDeckOverride;
+    } else {
+        try {
+            auto decks = _services.resource.twoDas.get("pazaakdecks");
+            if (!decks) {
+                error("Unable to start Pazaak: pazaakdecks.2da is missing");
+                return false;
+            }
+            params.opponentSideDeck = isTSL()
+                                          ? loadK2PazaakOpponentDeck(*decks, opponentDeck)
+                                          : loadK1PazaakOpponentDeck(*decks, opponentDeck);
+        } catch (const std::exception &e) {
+            error("Unable to read pazaakdecks.2da: " + std::string(e.what()));
+            return false;
+        }
+        if (!params.opponentSideDeck) {
+            error("Unable to start Pazaak: invalid opponent deck row in pazaakdecks.2da");
+            return false;
+        }
+    }
+    return startPazaakFlow(std::move(params), opponent, false);
+}
+
+bool Game::startDevelopmentPazaak(std::string opponentName, int maximumWager) {
+    PazaakSessionParams params;
+    params.opponentDeck = 0;
+    params.maximumWager = maximumWager;
+    params.opponentName = opponentName.empty() ? "Pazaak Opponent" : std::move(opponentName);
+    // The developer route never touches save-owned cards or credits: it uses a
+    // temporary, title-appropriate collection and opponent deck only.
+    if (isTSL()) {
+        params.collection = PazaakSession::k2DefaultCollection();
+        params.opponentSideDeck = PazaakSession::temporaryK2OpponentSideDeck();
+        // Deterministic showcase deck covering every KotOR II family. The first
+        // four entries become the opening hand: a Value Change card, a
+        // sign-selectable card, a fixed card and a non-switchable special.
+        params.initialChosenCards = PazaakSession::k2ShowcaseChosenCards();
+        _pazaakShowcaseHands = true;
+    } else {
+        params.collection = PazaakSession::temporaryK1TestCollection();
+        params.opponentSideDeck = PazaakSession::temporaryK1OpponentSideDeck();
+    }
+    return startPazaakFlow(std::move(params), nullptr, true);
+}
+
+bool Game::startPazaakFlow(
+    PazaakSessionParams params,
+    const std::shared_ptr<Object> &continuationCaller,
+    bool developmentLaunch) {
+
+    if (_pazaakSession) {
+        return false;
+    }
+
+    _pazaakOriginScreen = _screen;
+    _pazaakContinuationCaller = continuationCaller;
+    _pazaakDevelopmentLaunch = developmentLaunch;
+    _pazaakSelectionPersisted = false;
+    _pazaakSettlementApplied = false;
+    _pazaakOpponentEventElapsed = 0.0f;
+    params.availableCredits = _party.gold();
+    params.paceAutomaticDraws = _pazaakPaceAutomaticDraws;
+    if (auto player = _party.player()) {
+        params.playerName = player->name();
+    }
+
+    auto playerSelector = _pazaakPlayerHandSelector
+                              ? _pazaakPlayerHandSelector
+                              : (_pazaakShowcaseHands
+                                     ? showcasePazaakHandSelector()
+                                     : PazaakSession::HandSelector(randomPazaakHandSelection));
+    auto opponentSelector = _pazaakOpponentHandSelector
+                                ? _pazaakOpponentHandSelector
+                                : PazaakSession::HandSelector(randomPazaakHandSelection);
+    auto mainDeckFactory = _pazaakMainDeckFactory
+                               ? _pazaakMainDeckFactory
+                               : PazaakSession::MainDeckFactory(randomPazaakMainDeck);
+    pazaak::Participant firstParticipant =
+        randomInt(0, 1) == 0 ? pazaak::Participant::One : pazaak::Participant::Two;
+    auto firstParticipantSelector = _pazaakFirstParticipantSelector
+                                        ? _pazaakFirstParticipantSelector
+                                        : PazaakSession::FirstParticipantSelector(
+                                              [firstParticipant](size_t setIndex) {
+                                                  bool useInitial = setIndex % 2 == 0;
+                                                  if (useInitial) {
+                                                      return firstParticipant;
+                                                  }
+                                                  return firstParticipant == pazaak::Participant::One
+                                                             ? pazaak::Participant::Two
+                                                             : pazaak::Participant::One;
+                                              });
+
+    try {
+        _pazaakSession = std::make_unique<PazaakSession>(
+            std::move(params),
+            std::move(playerSelector),
+            std::move(opponentSelector),
+            std::move(mainDeckFactory),
+            std::move(firstParticipantSelector));
+    } catch (const std::exception &e) {
+        error("Unable to create Pazaak session: " + std::string(e.what()));
+        releasePazaakFlow(true);
+        return false;
+    }
+
+    if (!loadPazaakGUIs()) {
+        releasePazaakFlow(true);
+        return false;
+    }
+
+    if (_module && _module->area()) {
+        stopMovement();
+    }
+    setRelativeMouseMode(false);
+    setCursorType(CursorType::Default);
+    if (_pazaakSession->screen() == PazaakFlowScreen::Wager) {
+        if (_pazaakWager) {
+            _pazaakWager->refresh();
+        }
+        changeScreen(Screen::PazaakWager);
+    } else {
+        showPazaakSetup();
+    }
+    return true;
+}
+
+bool Game::loadPazaakGUIs() {
+    if (_pazaakGuiLoadOverride) {
+        _pazaakGUIsReady = _pazaakGuiLoadOverride();
+        return _pazaakGUIsReady;
+    }
+
+    _pazaakWager = tryLoadGUI<PazaakWagerGUI>();
+    _pazaakSetup = tryLoadGUI<PazaakSetupGUI>();
+    _pazaakBoard = tryLoadGUI<PazaakBoardGUI>();
+    _pazaakGUIsReady = _pazaakWager && _pazaakSetup && _pazaakBoard;
+    if (!_pazaakGUIsReady) {
+        _pazaakWager.reset();
+        _pazaakSetup.reset();
+        _pazaakBoard.reset();
+    }
+    return _pazaakGUIsReady;
+}
+
+void Game::showPazaakSetup() {
+    if (!_pazaakSession ||
+        !_pazaakGUIsReady ||
+        _pazaakSession->screen() != PazaakFlowScreen::Setup) {
+        return;
+    }
+    if (_pazaakSetup) {
+        _pazaakSetup->refresh();
+    }
+    changeScreen(Screen::PazaakSetup);
+}
+
+void Game::showPazaakBoard() {
+    if (!_pazaakSession ||
+        !_pazaakGUIsReady ||
+        _pazaakSession->screen() != PazaakFlowScreen::Board ||
+        !_pazaakSession->match()) {
+        return;
+    }
+    if (!_pazaakDevelopmentLaunch && !_pazaakSelectionPersisted) {
+        Party::PazaakSideDeck selected;
+        const auto &collection = _pazaakSession->collection();
+        const auto &chosen = _pazaakSession->chosenCards();
+        if (chosen.size() != selected.size()) {
+            error("Unable to persist Pazaak side deck: selection is incomplete");
+            return;
+        }
+        for (size_t i = 0; i < chosen.size(); ++i) {
+            if (chosen[i] >= collection.size() ||
+                collection[chosen[i]].persistentId < 0) {
+                error("Unable to persist Pazaak side deck: invalid collection mapping");
+                return;
+            }
+            selected[i] = collection[chosen[i]].persistentId;
+        }
+        _party.setPazaakSideDeck(std::move(selected));
+        _pazaakSelectionPersisted = true;
+    }
+    if (_pazaakBoard) {
+        _pazaakBoard->refresh();
+    }
+    changeScreen(Screen::PazaakBoard);
+    completePazaakIfReady();
+}
+
+void Game::cancelPazaak() {
+    if (!_pazaakSession || _pazaakSession->screen() == PazaakFlowScreen::Board) {
+        return;
+    }
+    bool developmentLaunch = _pazaakDevelopmentLaunch;
+    releasePazaakFlow(true);
+    if (developmentLaunch) {
+        _console.printLine("pazaak: development match cancelled");
+    }
+}
+
+void Game::abortPazaak() {
+    if (!_pazaakSession) {
+        return;
+    }
+    releasePazaakFlow(true);
+}
+
+void Game::completePazaakIfReady() {
+    if (!_pazaakSession ||
+        !_pazaakSession->completedResult() ||
+        _pazaakSession->presentationPending()) {
+        return;
+    }
+    finishPazaak(*_pazaakSession->completedResult());
+}
+
+void Game::finishPazaak(PazaakCompletedResult result) {
+    if (!_pazaakSession) {
+        return;
+    }
+
+    std::string continuation(_pazaakSession->continuationScript());
+    uint32_t opponentId = _pazaakSession->opponentId();
+    std::shared_ptr<Object> continuationCaller(_pazaakContinuationCaller.lock());
+    bool developmentLaunch = _pazaakDevelopmentLaunch;
+    int wager = _pazaakSession->wager();
+    bool callerValid = continuationCaller &&
+                       continuationCaller->id() == opponentId &&
+                       getObjectById(opponentId) == continuationCaller;
+    _lastPazaakResult = result;
+
+    if (!developmentLaunch && !_pazaakSettlementApplied) {
+        if (result == PazaakCompletedResult::PlayerWon) {
+            _party.giveGold(wager);
+        } else {
+            _party.takeGold(wager);
+        }
+        _pazaakSettlementApplied = true;
+    }
+
+    // Release ownership before external script execution so re-entrant or
+    // repeated completion cannot invoke the continuation twice.
+    releasePazaakFlow(true);
+
+    if (developmentLaunch) {
+        switch (result) {
+        case PazaakCompletedResult::PlayerWon:
+            _console.printLine("pazaak: development match completed - player won");
+            break;
+        case PazaakCompletedResult::OpponentWon:
+            _console.printLine("pazaak: development match completed - opponent won");
+            break;
+        case PazaakCompletedResult::PlayerForfeited:
+            _console.printLine("pazaak: development match completed - player forfeited");
+            break;
+        }
+    }
+
+    if (continuation.empty()) {
+        return;
+    }
+    if (!callerValid) {
+        error("Pazaak continuation skipped because its caller is no longer valid");
+        return;
+    }
+    if (_pazaakContinuationOverride) {
+        _pazaakContinuationOverride(continuation, opponentId);
+    } else if (_scriptRunner) {
+        _scriptRunner->run(continuation, opponentId);
+    }
+}
+
+Game::Screen Game::safePazaakOriginScreen() const {
+    switch (_pazaakOriginScreen) {
+    case Screen::PazaakWager:
+    case Screen::PazaakSetup:
+    case Screen::PazaakBoard:
+        return _module ? Screen::InGame : Screen::None;
+    case Screen::Conversation:
+        // The dialogue may finish after its action script opens Pazaak.
+        // Returning to the world cannot strand an ended conversation GUI.
+        return _module ? Screen::InGame : Screen::None;
+    default:
+        return _pazaakOriginScreen;
+    }
+}
+
+void Game::releasePazaakFlow(bool restoreOrigin) {
+    Screen restore = safePazaakOriginScreen();
+    _pazaakSession.reset();
+    _pazaakWager.reset();
+    _pazaakSetup.reset();
+    _pazaakBoard.reset();
+    _pazaakGUIsReady = false;
+    _pazaakContinuationCaller.reset();
+    _pazaakDevelopmentLaunch = false;
+    _pazaakSelectionPersisted = false;
+    _pazaakSettlementApplied = false;
+    _pazaakShowcaseHands = false;
+    _pazaakOpponentEventElapsed = 0.0f;
+    if (restoreOrigin) {
+        changeScreen(restore);
+    }
+    _pazaakOriginScreen = Screen::None;
+}
+
 void Game::openLevelUp() {
     if (!_charGen) {
         _charGen = tryLoadGUI<CharacterGeneration>();
@@ -2173,6 +4214,7 @@ void Game::notifyLevelUpPending(const Creature &creature) {
 }
 
 void Game::startCharacterGeneration() {
+    resetGame();
     if (!_charGen) {
         _charGen = tryLoadGUI<CharacterGeneration>();
     }
@@ -2181,13 +4223,16 @@ void Game::startCharacterGeneration() {
     }
     withLoadingScreen(_charGen->loadScreenResRef(), [this]() {
         _loadScreen->setProgress(100);
-        render();
+        presentFrame();
         playMusic(_charGen->musicResRef());
         changeScreen(Screen::CharacterGeneration);
     });
 }
 
 void Game::startDialog(const std::shared_ptr<Object> &owner, const std::string &resRef) {
+    if (_captureHUDPresentation) {
+        return;
+    }
     std::shared_ptr<Gff> dlg(_services.resource.gffs.get(resRef, ResType::Dlg));
     if (!dlg) {
         warn("Game: conversation not found: " + resRef);
@@ -2207,10 +4252,16 @@ void Game::startDialog(const std::shared_ptr<Object> &owner, const std::string &
 }
 
 void Game::resumeConversation() {
+    if (!_conversation || !isConversationActive()) {
+        return;
+    }
     _conversation->resume();
 }
 
 void Game::pauseConversation() {
+    if (!_conversation || !isConversationActive()) {
+        return;
+    }
     _conversation->pause();
 }
 
@@ -2240,6 +4291,9 @@ void Game::changeScreen(Screen screen) {
     if (gui) {
         gui->clearSelection();
     }
+    if (_confirmPopup) {
+        _confirmPopup->hide();
+    }
     _screen = screen;
 }
 
@@ -2263,8 +4317,18 @@ GameGUI *Game::getScreenGUI() const {
         return _partySelect.get();
     case Screen::SaveLoad:
         return _saveLoad.get();
+    case Screen::GalaxyMap:
+        return _galaxyMap.get();
     case Screen::SwoopRace:
         return nullptr; // race skeleton has no HUD yet
+    case Screen::PazaakWager:
+        return _pazaakWager.get();
+    case Screen::PazaakSetup:
+        return _pazaakSetup.get();
+    case Screen::PazaakBoard:
+        return _pazaakBoard.get();
+    case Screen::Turret:
+        return nullptr; // the turret HUD is part of the player model set
     default:
         return nullptr;
     }
@@ -2342,6 +4406,10 @@ void Game::renderHUD() {
 
 CameraType Game::getConversationCamera(int &cameraId) const {
     return _conversation->getCamera(cameraId);
+}
+
+void Game::updateImGui(float dt) {
+    ImGui::ShowDemoWindow(&_showImGui);
 }
 
 std::shared_ptr<Object> Game::getConsoleTargetObject() {
@@ -2492,7 +4560,7 @@ void Game::consoleKill(const ConsoleArgs &args) {
         100000,
         DamageType::Universal,
         DamagePower::Normal,
-        /*damager=*/ 0);
+        /*damager=*/0);
     object->applyEffect(std::move(effect), DurationType::Instant);
 }
 
@@ -2521,9 +4589,797 @@ void Game::consoleGiveGold(const ConsoleArgs &args) {
     _console.printLine(str(boost::format("party gold: %d") % _party.gold()));
 }
 
+// The free camera is the first-person camera flown off the player: WASD/QZ
+// move it, the mouse aims it. These commands exist so a viewpoint found by
+// hand can be replayed exactly from a commands file - camstatus prints the
+// line to paste - and the same commands drive other builds of the engine,
+// which keeps captures comparable between them.
 void Game::consoleWarp(const ConsoleArgs &args) {
-    consoleCheckUsage(args, 1, 1, "module");
+    consoleCheckUsage(args, 1, 2, "module [grass|smoke|none]");
+    _captureHUDPresentation = false;
+    if (_hud) {
+        _hud->clearCapturePresentation();
+    }
+    if (args[1].value() == "testbed") {
+        loadTestbed(args.size() == 3 ? std::string(args[2].value()) : "grass");
+        return;
+    }
     loadModule(std::string(args[1].value()));
+}
+
+void Game::consoleOpenMenu(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "equipment|equipment-items|inventory|character|abilities|party|messages|journal|map|options");
+
+    std::string_view name(args[1].value());
+    if (boost::iequals(name, "equipment-items")) {
+        setCursorType(CursorType::Default);
+        _inGame->openEquipmentItems();
+        changeScreen(Screen::InGameMenu);
+        return;
+    }
+
+    static const std::array<std::pair<std::string_view, InGameMenuTab>, 9> kTabs {{
+        {"equipment", InGameMenuTab::Equipment},
+        {"inventory", InGameMenuTab::Inventory},
+        {"character", InGameMenuTab::Character},
+        {"abilities", InGameMenuTab::Abilities},
+        {"party", InGameMenuTab::Party},
+        {"messages", InGameMenuTab::Messages},
+        {"journal", InGameMenuTab::Journal},
+        {"map", InGameMenuTab::Map},
+        {"options", InGameMenuTab::Options},
+    }};
+    for (const auto &[tabName, tab] : kTabs) {
+        if (boost::iequals(name, tabName)) {
+            openInGameMenu(tab);
+            return;
+        }
+    }
+    throw std::runtime_error("Unknown in-game menu tab: " + std::string(name));
+}
+
+static std::string joinConsoleArgs(const ConsoleArgs &args, size_t first) {
+    std::string result;
+    for (size_t i = first; i < args.size(); ++i) {
+        if (!result.empty()) {
+            result += ' ';
+        }
+        result += args[i].value();
+    }
+    return result;
+}
+
+void Game::consoleOpenCharacterGeneration(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 2, "class|quick-or-custom|quick|portrait|name|custom|abilities|skills|feats|powers|level-up [select]");
+
+    std::string_view screen(args[1].value());
+    bool selectFirst = args.size() > 2 && boost::iequals(std::string(args[2].value()), "select");
+    if (boost::iequals(screen, "class")) {
+        startCharacterGeneration();
+        if (_charGen) {
+            _charGen->openClassSelection();
+        }
+        return;
+    }
+
+    if (!_module || !_party.getLeader()) {
+        throw std::runtime_error("Character-generation capture screens require a loaded party");
+    }
+    openLevelUp();
+    if (!_charGen) {
+        throw std::runtime_error("Character generation GUI is unavailable");
+    }
+    if (boost::iequals(screen, "level-up")) {
+        _charGen->openLevelUp();
+        return;
+    }
+
+    Character character(_charGen->character());
+    ClassType captureClass = boost::iequals(screen, "powers")
+                                 ? ClassType::JediConsular
+                                 : (isTSL() ? ClassType::JediGuardian : ClassType::Soldier);
+    std::shared_ptr<CreatureClass> clazz(_services.game.classes.get(captureClass));
+    if (!clazz) {
+        throw std::runtime_error("Starting class is unavailable");
+    }
+    character.attributes = clazz->defaultAttributes();
+    _charGen->setCharacter(std::move(character));
+
+    if (boost::iequals(screen, "quick")) {
+        _charGen->startQuick();
+        return;
+    }
+    _charGen->startCustom();
+    if (boost::iequals(screen, "quick-or-custom")) {
+        _charGen->openQuickOrCustom();
+        return;
+    }
+    if (boost::iequals(screen, "portrait")) {
+        _charGen->openPortraitSelection();
+        return;
+    }
+    if (boost::iequals(screen, "name")) {
+        _charGen->openNameEntry();
+        return;
+    }
+    if (boost::iequals(screen, "custom")) {
+        _charGen->openCustom();
+        return;
+    }
+    if (boost::iequals(screen, "abilities")) {
+        _charGen->openAbilities();
+        return;
+    }
+    if (boost::iequals(screen, "skills")) {
+        _charGen->openSkills();
+        if (selectFirst) {
+            _charGen->skills().selectFirstEntryForCapture();
+        }
+        return;
+    }
+    if (boost::iequals(screen, "feats")) {
+        _charGen->openFeats();
+        if (selectFirst) {
+            _charGen->feats().selectFirstEntryForCapture();
+        }
+        return;
+    }
+    if (boost::iequals(screen, "powers")) {
+        _charGen->openPowers();
+        if (selectFirst) {
+            _charGen->powers().selectFirstEntryForCapture();
+        }
+        return;
+    }
+    throw std::runtime_error("Unknown character-generation screen: " + std::string(screen));
+}
+
+void Game::consoleShowBark(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 2, 1024, "seconds message ...");
+    auto duration = args.get<float>(1);
+    if (!duration || *duration <= 0.0f) {
+        throw std::invalid_argument("showbark duration must be positive");
+    }
+    if (!_hud) {
+        throw std::runtime_error("HUD is unavailable; load a module first");
+    }
+    setBarkBubbleText(joinConsoleArgs(args, 2), *duration);
+}
+
+void Game::consoleSkipMovie(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    _movie.reset();
+}
+
+void Game::consoleShowPopup(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 2, 1024, "icon|none message ...");
+    if (!_confirmPopup) {
+        _confirmPopup = tryLoadGUI<ConfirmPopup>();
+    }
+    if (!_confirmPopup) {
+        throw std::runtime_error("Confirmation popup GUI is unavailable");
+    }
+
+    std::shared_ptr<Texture> icon;
+    std::string_view iconResRef(args[1].value());
+    if (!boost::iequals(iconResRef, "none")) {
+        icon = _services.resource.textures.get(std::string(iconResRef), TextureUsage::GUI);
+    }
+    _confirmPopup->show(joinConsoleArgs(args, 2), std::move(icon));
+}
+
+void Game::consoleSeed(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "number");
+    setRandomSeed(static_cast<uint32_t>(args.get<int>(1).value()));
+}
+
+void Game::consoleGraphics(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "on|off");
+    auto mode = std::string(args[1].value());
+    if (boost::iequals(mode, "on")) {
+        _options.graphics.sceneRender = true;
+    } else if (boost::iequals(mode, "off")) {
+        _options.graphics.sceneRender = false;
+    } else {
+        throw std::runtime_error("Expected on or off");
+    }
+}
+
+void Game::consoleGameSpeed(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "multiplier");
+    auto speed = args.get<float>(1);
+    if (!speed || *speed < 0.0f || *speed > 8.0f) {
+        throw std::runtime_error("Expected a multiplier between 0 and 8");
+    }
+    // Zero is the setting this exists for, and it is not the same as pausing.
+    // setPaused skips the module tick entirely; this leaves every call in place
+    // and hands it dt == 0, so the world holds still while still being asked to
+    // update. That is where a step which clamps to zero length - or any other
+    // degenerate-timestep behaviour - becomes observable rather than absent.
+    //
+    // The developer keys stop at 1.0 because they are for playing faster. This
+    // is not clamped up to 1.0 for the same reason it exists.
+    _gameSpeed = *speed;
+}
+
+void Game::consoleRestartHistory(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    // Every temporal filter starts cold on the next frame. A blend-factor
+    // filter settles at a small non-zero residual rather than reaching zero, so
+    // the settled value alone cannot tell a working filter from a dead one -
+    // only the approach to it can, and that needs a restart to be visible.
+    auto *pipeline = _services.scene.graphs.get(kSceneMain).renderPipeline();
+    if (!pipeline) {
+        throw std::runtime_error("The main scene has no render pipeline yet");
+    }
+    pipeline->restartTemporalHistory();
+}
+
+void Game::consoleOpenContainer(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    auto leader = getConsoleLeader();
+    if (!leader || !_container) {
+        throw std::runtime_error("Container fixture requires a loaded module");
+    }
+    openContainer(leader);
+}
+
+/**
+ * Act on the focused world object, exactly as clicking it does.
+ *
+ * The focus is whatever selectobjectbytag/selectobjectbyid last chose, which
+ * is the same selection the select overlay drives, so this reaches a
+ * placeable's OnUsed script, a door, a creature - one command instead of a
+ * bespoke one per panel. That matters for capture runs: the Ebon Hawk's map
+ * console opens the galaxy map through ShowGalaxyMap, and a renderer defect
+ * specific to that screen survived precisely because nothing unattended could
+ * open it.
+ */
+void Game::consoleAction(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    if (!_module) {
+        throw std::runtime_error("Acting on an object requires a loaded module");
+    }
+    auto object = getConsoleArea()->selectedObject();
+    if (!object) {
+        throw std::runtime_error("No object is selected; use selectobjectbytag first");
+    }
+    _module->onObjectClick(object);
+}
+
+/**
+ * Leave whatever menu is open and return to the world.
+ *
+ * The counterpart to acting on an object: a script that opens a panel needs a
+ * way back out of it, and every screen leaves the same way.
+ */
+void Game::consoleExitMenu(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    if (_screen == Screen::InGame || _screen == Screen::None) {
+        return;
+    }
+    changeScreen(Screen::InGame);
+}
+
+void Game::consoleShowHUD(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 1, "[combat]");
+    if (!_module || !_hud) {
+        throw std::runtime_error("HUD capture fixture requires a loaded module");
+    }
+    bool combat = args.size() > 1 && boost::iequals(std::string(args[1].value()), "combat");
+    if (args.size() > 1 && !combat) {
+        throw std::runtime_error("Unknown HUD capture presentation: " + std::string(args[1].value()));
+    }
+    _captureHUDPresentation = true;
+    _cameraType = CameraType::ThirdPerson;
+    openInGame();
+    _hud->showCapturePresentation(combat);
+}
+
+void Game::consoleShowTransition(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1024, "destination ...");
+    if (!_module || !_hud) {
+        throw std::runtime_error("Area-transition capture fixture requires a loaded module");
+    }
+    _captureHUDPresentation = true;
+    _cameraType = CameraType::ThirdPerson;
+    openInGame();
+    _hud->showCapturePresentation(false);
+    _hud->showTransitionCapturePresentation(joinConsoleArgs(args, 1));
+}
+
+void Game::consoleSelectDialogOption(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "index");
+    if (_screen != Screen::Conversation || _conversation != _dialog.get()) {
+        throw std::runtime_error("Dialog selection fixture requires an active character conversation");
+    }
+    _dialog->selectReplyForCapture(args.get<int>(1).value());
+}
+
+void Game::consoleShowGalleryMode(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 2, "swoop|pazaak wager|setup|board");
+
+    std::string_view mode(args[1].value());
+    if (boost::iequals(mode, "swoop")) {
+        if (!_swoopRace.isActive()) {
+            openSwoopRace();
+        }
+        if (!_swoopRace.isActive()) {
+            throw std::runtime_error("Swoop gallery fixture requires a loaded swoop minigame module");
+        }
+        return;
+    }
+
+    if (!boost::iequals(mode, "pazaak") || args.size() != 3) {
+        throw std::runtime_error("Unknown gallery mode; expected swoop or pazaak wager|setup|board");
+    }
+    if (!_module) {
+        throw std::runtime_error("Pazaak gallery fixture requires a loaded module");
+    }
+
+    std::string_view screen(args[2].value());
+    bool showWager = boost::iequals(screen, "wager");
+    bool showSetup = boost::iequals(screen, "setup");
+    bool showBoard = boost::iequals(screen, "board");
+    if (!showWager && !showSetup && !showBoard) {
+        throw std::runtime_error("Unknown Pazaak gallery screen: " + std::string(screen));
+    }
+
+    abortPazaak();
+    if (!startDevelopmentPazaak("Gallery Opponent", showWager ? 100 : 0)) {
+        throw std::runtime_error("Unable to start Pazaak gallery fixture");
+    }
+    if (showWager || showSetup) {
+        return;
+    }
+
+    for (size_t collectionIndex = 0;
+         collectionIndex < _pazaakSession->collection().size() &&
+         _pazaakSession->chosenCards().size() < pazaak::kSideDeckSize;
+         ++collectionIndex) {
+        while (_pazaakSession->remainingCopies(collectionIndex) > 0 &&
+               _pazaakSession->chosenCards().size() < pazaak::kSideDeckSize) {
+            _pazaakSession->selectCard(collectionIndex);
+        }
+    }
+    if (!_pazaakSession->confirmSetup()) {
+        throw std::runtime_error("Unable to prepare Pazaak board gallery fixture");
+    }
+    showPazaakBoard();
+}
+
+void Game::loadTestbed(const std::string &variant) {
+    // "point" is "none" with the sun replaced by a lamp: the same white floor
+    // and the same single object, lit by a light close enough to stay a point
+    // rather than be promoted to directional. It exists because nothing else
+    // in the fixture set exercises a cube shadow map, so a point shadow could
+    // only ever be judged against a game module full of other lights.
+    const bool pointLight = variant == "point";
+    if (variant != "grass" && variant != "smoke" && variant != "smoke-control" &&
+        variant != "none" && !pointLight) {
+        throw std::runtime_error("Unknown testbed object: " + variant);
+    }
+
+    // This is deliberately code-built instead of an IFO/ARE/GIT module: the
+    // fixture has no authored game content, and keeping it here makes its
+    // floor, light and camera independent of resource load timing.
+    if (_module && _module->area()) {
+        _module->area()->unloadParty();
+    }
+    _party.reset();
+    _module.reset();
+    _loadedModules.clear();
+    _services.graphics.renderer.invalidateResources();
+    auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
+    sceneGraph.clear();
+    sceneGraph.setAmbientLightColor(glm::vec3 {0.0f});
+    sceneGraph.setFog({});
+    _consoleSpawnedModel.reset();
+    _consoleEmittersEnabled = false;
+
+    _module = newModule();
+    _module->initEmpty();
+
+    constexpr float floorHalfExtent = 10.0f;
+    constexpr float floorStep = 0.5f;
+    constexpr int floorSegments = static_cast<int>(2.0f * floorHalfExtent / floorStep);
+    std::vector<Mesh::Vertex> vertices;
+    std::vector<Mesh::Face> faces;
+    vertices.reserve((floorSegments + 1) * (floorSegments + 1));
+    faces.reserve(2 * floorSegments * floorSegments);
+    for (int y = 0; y <= floorSegments; ++y) {
+        for (int x = 0; x <= floorSegments; ++x) {
+            float px = -floorHalfExtent + x * floorStep;
+            float py = -floorHalfExtent + y * floorStep;
+            vertices.push_back(Mesh::VertexBuilder()
+                                   .position({px, py, 0.0f})
+                                   .normal({0.0f, 0.0f, 1.0f})
+                                   .uv1({static_cast<float>(x) / floorSegments,
+                                         static_cast<float>(y) / floorSegments})
+                                   .build());
+        }
+    }
+    auto vertexIndex = [floorSegments](int x, int y) {
+        return static_cast<uint16_t>(y * (floorSegments + 1) + x);
+    };
+    for (int y = 0; y < floorSegments; ++y) {
+        for (int x = 0; x < floorSegments; ++x) {
+            uint32_t material = (x >= 18 && x < 22 && y >= 18 && y < 22) ? 1 : 0;
+            auto first = Mesh::Face(std::array<uint16_t, 3> {vertexIndex(x, y), vertexIndex(x + 1, y), vertexIndex(x + 1, y + 1)});
+            first.material = material;
+            faces.push_back(std::move(first));
+            auto second = Mesh::Face(std::array<uint16_t, 3> {vertexIndex(x, y), vertexIndex(x + 1, y + 1), vertexIndex(x, y + 1)});
+            second.material = material;
+            faces.push_back(std::move(second));
+        }
+    }
+    auto floorMesh = std::make_shared<Mesh>(
+        std::move(vertices),
+        Mesh::VertexLayoutBuilder()
+            .stride(8 * sizeof(float))
+            .offPosition(0)
+            .offNormals(3 * sizeof(float))
+            .offUV1(6 * sizeof(float))
+            .build(),
+        std::move(faces));
+    auto floorTriangleMesh = std::make_shared<ModelNode::TriangleMesh>();
+    floorTriangleMesh->mesh = std::move(floorMesh);
+    floorTriangleMesh->render = true;
+    floorTriangleMesh->shadow = true;
+    // MeshSceneNode uses the authored map name as its renderability flag;
+    // the actual texture is the one-pixel procedural white texture below.
+    floorTriangleMesh->diffuseMap = "testbed_white";
+    floorTriangleMesh->diffuse = glm::vec3 {1.0f};
+    floorTriangleMesh->ambient = glm::vec3 {0.0f};
+
+    auto root = std::make_shared<ModelNode>(0, "testbed_root", glm::vec3 {0.0f}, glm::quat {1.0f, 0.0f, 0.0f, 0.0f}, false);
+    auto floorNode = std::make_shared<ModelNode>(1, "testbed_floor", glm::vec3 {0.0f}, glm::quat {1.0f, 0.0f, 0.0f, 0.0f}, false, root.get());
+    floorNode->setMesh(std::move(floorTriangleMesh));
+    root->addChild(floorNode);
+
+    // A distant point makes this engine's radius-promoted directional light.
+    // It shines from (-X, -Y, +Z), 45 degrees above the floor, leaving its
+    // shadow toward (+X, +Y) across otherwise empty white ground.
+    //
+    // The "point" variant puts it at (-3, -3, 4) with a radius of 20 instead,
+    // which is under kMinDirectionalLightRadius and so stays a point light with
+    // a cube map. Same direction from the object, so the shadow still falls
+    // toward (+X, +Y) and the two variants are directly comparable - what
+    // differs between their frames is the shadow technique and nothing else.
+    const glm::vec3 lightPos = pointLight ? glm::vec3 {-3.0f, -3.0f, 4.0f}
+                                          : glm::vec3 {-100.0f, -100.0f, 141.42136f};
+    auto lightNode = std::make_shared<ModelNode>(2, "testbed_sun", lightPos, glm::quat {1.0f, 0.0f, 0.0f, 0.0f}, false, root.get());
+    auto light = std::make_shared<ModelNode::Light>();
+    light->dynamicType = 1;
+    light->shadow = true;
+    lightNode->setLight(std::move(light));
+    lightNode->vectorTracks()[ControllerTypes::color].add(0.0f, glm::vec3 {1.0f});
+    lightNode->floatTracks()[ControllerTypes::radius].add(0.0f, pointLight ? 20.0f : 1000.0f);
+    lightNode->floatTracks()[ControllerTypes::multiplier].add(0.0f, 1.0f);
+    root->addChild(lightNode);
+
+    _consoleTestbedFloor = std::make_shared<Model>(
+        "testbed_floor", MdlClassification::other, root,
+        std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+    _consoleTestbedFloor->init();
+
+    auto whitePixels = std::make_shared<ByteBuffer>();
+    whitePixels->resize(3, 0xff);
+    _consoleTestbedWhite = std::make_shared<Texture>("testbed_white", TextureType::TwoDim, Texture::Properties {});
+    _consoleTestbedWhite->setPixels(1, 1, PixelFormat::RGB8, Texture::Layer {std::move(whitePixels)});
+    _consoleTestbedWhite->init();
+
+    // The floor's white texel is generated because nothing in the game is a
+    // plain white 1x1. Particles are not: an emitter resolves its texture by
+    // name through the registry (`node/emitter.cpp:255`), so a runtime-built
+    // texture returns null and the emitter registers nothing at all - which
+    // reads as "the tracer cannot see particles" rather than as a missing
+    // asset. The testbed therefore uses `fx_smoke01`, which is also the exact
+    // texture the menu and the Dantooine vents render, so the fixture
+    // exercises the asset under investigation rather than an idealised ramp.
+
+    auto floorModel = sceneGraph.newModel(*_consoleTestbedFloor, ModelUsage::Room);
+    floorModel->setMainTexture(_consoleTestbedWhite.get());
+    floorModel->setPickable(true);
+    sceneGraph.addRoot(floorModel);
+
+    if (variant == "grass") {
+        auto grassTexture = _services.resource.textures.get("lda_grass2", TextureUsage::MainTex);
+        if (!grassTexture) {
+            throw ResourceNotFoundException("Grass texture not found: lda_grass2");
+        }
+        GrassProperties grass;
+        grass.density = 64.0f;
+        grass.quadSize = 0.5f;
+        grass.probabilities = {1.0f, 0.0f, 0.0f, 0.0f};
+        grass.materials.insert(1);
+        grass.texture = grassTexture.get();
+        sceneGraph.addRoot(sceneGraph.newGrass(std::move(grass), *floorNode));
+    } else if (variant == "smoke") {
+        // A marker at the emitter origin, deliberately tiny. It exists only so
+        // the emitter's position is legible when a backend renders the
+        // particle coverage as fully transparent - the particles are the
+        // subject, and a core large enough to read at a distance would hide
+        // them. It is part of the same model as the emitter, not a second
+        // scene object.
+        std::vector<Mesh::Vertex> smokeVertices;
+        for (const auto &position : std::array<glm::vec3, 6> {
+                 glm::vec3 {0.0f, 0.0f, 0.75f}, glm::vec3 {0.05f, 0.0f, 0.7f},
+                 glm::vec3 {0.0f, 0.05f, 0.7f}, glm::vec3 {-0.05f, 0.0f, 0.7f},
+                 glm::vec3 {0.0f, -0.05f, 0.7f}, glm::vec3 {0.0f, 0.0f, 0.65f}}) {
+            smokeVertices.push_back(Mesh::VertexBuilder()
+                                        .position(position)
+                                        .normal(glm::normalize(position + glm::vec3 {0.0f, 0.0f, 0.1f}))
+                                        .uv1({0.5f, 0.5f})
+                                        .build());
+        }
+        std::vector<Mesh::Face> smokeFaces;
+        for (const auto &indices : std::array<std::array<uint16_t, 3>, 8> {
+                 std::array<uint16_t, 3> {0, 1, 2}, std::array<uint16_t, 3> {0, 2, 3},
+                 std::array<uint16_t, 3> {0, 3, 4}, std::array<uint16_t, 3> {0, 4, 1},
+                 std::array<uint16_t, 3> {5, 2, 1}, std::array<uint16_t, 3> {5, 3, 2},
+                 std::array<uint16_t, 3> {5, 4, 3}, std::array<uint16_t, 3> {5, 1, 4}}) {
+            smokeFaces.emplace_back(indices);
+        }
+        auto smokeMesh = std::make_shared<ModelNode::TriangleMesh>();
+        smokeMesh->mesh = std::make_shared<Mesh>(
+            std::move(smokeVertices),
+            Mesh::VertexLayoutBuilder().stride(8 * sizeof(float)).offPosition(0).offNormals(3 * sizeof(float)).offUV1(6 * sizeof(float)).build(),
+            std::move(smokeFaces));
+        smokeMesh->render = true;
+        smokeMesh->shadow = true;
+        smokeMesh->diffuseMap = "testbed_white";
+        smokeMesh->diffuse = glm::vec3 {0.35f};
+        auto smokeRoot = std::make_shared<ModelNode>(0, "testbed_smoke_root", glm::vec3 {0.0f}, glm::quat {1.0f, 0.0f, 0.0f, 0.0f}, false);
+        auto smokeCore = std::make_shared<ModelNode>(1, "testbed_smoke_core", glm::vec3 {0.0f}, glm::quat {1.0f, 0.0f, 0.0f, 0.0f}, false, smokeRoot.get());
+        smokeCore->setMesh(std::move(smokeMesh));
+        smokeRoot->addChild(smokeCore);
+        auto emitterNode = std::make_shared<ModelNode>(2, "testbed_smoke_emitter", glm::vec3 {0.0f, 0.0f, 0.7f}, glm::quat {1.0f, 0.0f, 0.0f, 0.0f}, false, smokeRoot.get());
+        auto emitter = std::make_shared<ModelNode::Emitter>();
+        emitter->updateMode = ModelNode::Emitter::UpdateMode::Fountain;
+        emitter->renderMode = ModelNode::Emitter::RenderMode::Normal;
+        emitter->blendMode = ModelNode::Emitter::BlendMode::Normal;
+        emitter->textureName = "fx_smoke01";
+        emitter->gridSize = {1, 1};
+        emitter->twosided = true;
+        emitterNode->setEmitter(std::move(emitter));
+        emitterNode->floatTracks()[ControllerTypes::birthrate].add(0.0f, 6.0f);
+        emitterNode->floatTracks()[ControllerTypes::lifeExp].add(0.0f, 1.5f);
+        emitterNode->floatTracks()[ControllerTypes::xSize].add(0.0f, 50.0f);
+        emitterNode->floatTracks()[ControllerTypes::ySize].add(0.0f, 50.0f);
+        emitterNode->floatTracks()[ControllerTypes::sizeStart].add(0.0f, 0.5f);
+        emitterNode->floatTracks()[ControllerTypes::sizeMid].add(0.0f, 1.0f);
+        emitterNode->floatTracks()[ControllerTypes::sizeEnd].add(0.0f, 1.5f);
+        emitterNode->floatTracks()[ControllerTypes::alphaStart].add(0.0f, 0.45f);
+        emitterNode->floatTracks()[ControllerTypes::alphaMid].add(0.0f, 0.25f);
+        emitterNode->floatTracks()[ControllerTypes::alphaEnd].add(0.0f, 0.0f);
+        emitterNode->floatTracks()[ControllerTypes::velocity].add(0.0f, 0.8f);
+        emitterNode->vectorTracks()[ControllerTypes::colorStart].add(0.0f, glm::vec3 {0.45f});
+        emitterNode->vectorTracks()[ControllerTypes::colorMid].add(0.0f, glm::vec3 {0.55f});
+        emitterNode->vectorTracks()[ControllerTypes::colorEnd].add(0.0f, glm::vec3 {0.65f});
+        smokeRoot->addChild(emitterNode);
+        _consoleTestbedSmoke = std::make_shared<Model>(
+            "testbed_smoke", MdlClassification::effect, smokeRoot,
+            std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+        _consoleTestbedSmoke->init();
+        _consoleSpawnedModel = sceneGraph.newModel(*_consoleTestbedSmoke, ModelUsage::Placeable);
+        _consoleSpawnedModel->setMainTexture(_consoleTestbedWhite.get());
+        _consoleSpawnedModel->setPickable(true);
+        sceneGraph.addRoot(_consoleSpawnedModel);
+        _consoleEmittersEnabled = true;
+    }
+
+    _cameraType = CameraType::FirstPerson;
+    auto camera = getConsoleArea()->getCamera<FirstPersonCamera>(CameraType::FirstPerson);
+    camera->setPosition({0.0f, -8.0f, 5.0f});
+    camera->setLookAt({1.5f, 2.0f, 0.0f});
+    setRelativeMouseMode(true);
+    openInGame();
+    info("Testbed loaded: floor=matte white, ambient=off, sky=off, light=(-100,-100,141.421), object=" + variant);
+}
+
+void Game::consoleScene(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "empty");
+    if (args[1].value() != "empty") {
+        throw std::runtime_error("Unknown scene: " + std::string(args[1].value()));
+    }
+
+    // This is intentionally a command rather than a resource-backed module.
+    // An isolation fixture should need no synthetic IFO/ARE/GIT files, and
+    // must not inherit a room, party, sky, scripts, or the previous graph.
+    if (_module && _module->area()) {
+        _module->area()->unloadParty();
+    }
+    _party.reset();
+    _module.reset();
+    _loadedModules.clear();
+    _services.graphics.renderer.invalidateResources();
+    auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
+    sceneGraph.clear();
+    sceneGraph.setAmbientLightColor(glm::vec3 {0.0f});
+    sceneGraph.setFog({});
+    _consoleSpawnedModel.reset();
+    _consoleEmittersEnabled = false;
+
+    _module = newModule();
+    _module->initEmpty();
+    _cameraType = CameraType::FirstPerson;
+    setRelativeMouseMode(true);
+    openInGame();
+}
+
+void Game::consoleSpawn(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 4, 4, "resref x y z");
+
+    std::string resRef(args[1].value());
+    glm::vec3 position {args.get<float>(2).value(), args.get<float>(3).value(), args.get<float>(4).value()};
+    auto area = getConsoleArea();
+    _consoleEmittersEnabled = false;
+
+    // Blueprints are preferred so a caller can use a creature or placeable
+    // exactly as the game does.  A bare MDL is also useful for renderer-only
+    // classes (dangly, saber, emitters and billboards), so it is the fallback.
+    if (_services.resource.gffs.get(resRef, ResType::Utc)) {
+        auto creature = newCreature();
+        creature->loadFromBlueprint(resRef);
+        creature->setPosition(position);
+        area->add(creature);
+        _consoleSpawnedModel.reset();
+        return;
+    }
+    if (_services.resource.gffs.get(resRef, ResType::Utp)) {
+        auto placeable = newPlaceable();
+        placeable->loadFromBlueprint(resRef);
+        placeable->setPosition(position);
+        area->add(placeable);
+        _consoleSpawnedModel.reset();
+        return;
+    }
+
+    auto model = _services.resource.models.get(resRef);
+    if (!model) {
+        throw ResourceNotFoundException("UTC, UTP, or model not found: " + resRef);
+    }
+    auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
+    _consoleSpawnedModel = sceneGraph.newModel(*model, ModelUsage::Placeable);
+    _consoleSpawnedModel->setLocalTransform(glm::translate(position));
+    sceneGraph.addRoot(_consoleSpawnedModel);
+}
+
+void Game::consoleGrassDensity(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "multiplier");
+    _options.graphics.grassDensity = std::max(0.0f, args.get<float>(1).value());
+    _console.printLine("grass density " + std::to_string(_options.graphics.grassDensity));
+}
+
+void Game::consoleGrass(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 5, 5, "surface_model grass_texture x y z");
+
+    std::string surfaceResRef(args[1].value());
+    std::string textureResRef(args[2].value());
+    auto model = _services.resource.models.get(surfaceResRef);
+    if (!model) {
+        throw ResourceNotFoundException("Grass surface model not found: " + surfaceResRef);
+    }
+    auto texture = _services.resource.textures.get(textureResRef, TextureUsage::MainTex);
+    if (!texture) {
+        throw ResourceNotFoundException("Grass texture not found: " + textureResRef);
+    }
+
+    graphics::ModelNode *surface = nullptr;
+    graphics::ModelNode *firstMesh = nullptr;
+    std::function<void(graphics::ModelNode &)> findSurface = [&](graphics::ModelNode &node) {
+        if (!firstMesh && node.isMesh()) {
+            firstMesh = &node;
+        }
+        if (!surface && node.isAABBMesh()) {
+            surface = &node;
+        }
+        for (auto &child : node.children()) {
+            findSurface(*child);
+        }
+    };
+    if (model->rootNode()) {
+        findSurface(*model->rootNode());
+    }
+    if (!surface) {
+        surface = firstMesh;
+    }
+    if (!surface) {
+        throw std::runtime_error("Grass surface model has no mesh");
+    }
+
+    auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
+    auto surfaceModel = sceneGraph.newModel(*model, ModelUsage::Room);
+    surfaceModel->setLocalTransform(glm::translate(glm::vec3 {
+        args.get<float>(3).value(), args.get<float>(4).value(), args.get<float>(5).value()}));
+
+    GrassProperties properties;
+    // Room collision meshes are often highly tessellated. Use a deliberately
+    // dense test patch so each small face yields coverage instead of rounding
+    // every per-face cluster count down to zero.
+    properties.density = 64.0f;
+    properties.quadSize = 0.5f;
+    properties.probabilities = {1.0f, 0.0f, 0.0f, 0.0f};
+    // The command turns this whole supplied surface into grass.  Real areas
+    // filter by 2DA surface type; test fixtures need the deterministic surface
+    // they named, without an otherwise invisible material-ID prerequisite.
+    for (const auto &face : surface->mesh()->mesh->faces()) {
+        properties.materials.insert(face.material);
+    }
+    auto sourceAABB = surface->mesh()->mesh->aabb() * surface->absoluteTransform();
+    info(str(boost::format("grass fixture source: %d faces, %d materials, AABB (%.1f %.1f %.1f)-(%.1f %.1f %.1f)") %
+             surface->mesh()->mesh->faces().size() % properties.materials.size() %
+             sourceAABB.min().x % sourceAABB.min().y % sourceAABB.min().z %
+             sourceAABB.max().x % sourceAABB.max().y % sourceAABB.max().z));
+    properties.texture = texture.get();
+    auto grass = sceneGraph.newGrass(properties, *surface);
+    grass->setLocalTransform(glm::translate(glm::vec3 {
+                                 args.get<float>(3).value(), args.get<float>(4).value(), args.get<float>(5).value()}) *
+                             surface->absoluteTransform());
+    sceneGraph.addRoot(grass);
+    // Keep the source model alive for GrassSceneNode, but do not add it as a
+    // root: this command's frame is grass-only, not grass plus its terrain.
+    _consoleSpawnedModel = std::move(surfaceModel);
+    _consoleEmittersEnabled = false;
+}
+
+void Game::consoleEmit(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    if (!_consoleSpawnedModel) {
+        throw std::runtime_error("Spawn a model with emitters first");
+    }
+    _consoleEmittersEnabled = true;
+}
+
+void Game::consoleIgnite(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    if (!_consoleSpawnedModel) {
+        throw std::runtime_error("Spawn a saber model first");
+    }
+    _consoleSpawnedModel->playAnimation("powerup");
+}
+
+void Game::consoleCamera(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "free");
+    if (args[1].value() != "free") {
+        throw std::runtime_error("Unknown camera: " + std::string(args[1].value()));
+    }
+    if (!setFreeCameraEnabled(true)) {
+        throw std::runtime_error("The free camera needs a module and the in-game screen");
+    }
+}
+
+void Game::consoleCamPos(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 3, 3, "x y z");
+    auto camera = getConsoleArea()->getCamera<FirstPersonCamera>(CameraType::FirstPerson);
+    camera->setPosition({args.get<float>(1).value(), args.get<float>(2).value(), args.get<float>(3).value()});
+}
+
+void Game::consoleCamLook(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 3, 3, "x y z");
+    auto camera = getConsoleArea()->getCamera<FirstPersonCamera>(CameraType::FirstPerson);
+    camera->setLookAt({args.get<float>(1).value(), args.get<float>(2).value(), args.get<float>(3).value()});
+}
+
+void Game::consoleCamFov(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "degrees");
+    auto camera = getConsoleArea()->getCamera<FirstPersonCamera>(CameraType::FirstPerson);
+    camera->setFovy(glm::radians(std::clamp(args.get<float>(1).value(), 1.0f, 179.0f)));
+}
+
+void Game::consoleCamStatus(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    auto camera = getConsoleArea()->getCamera<FirstPersonCamera>(CameraType::FirstPerson);
+    glm::vec3 pos = camera->position();
+    glm::vec3 forward(-glm::sin(camera->facing()) * glm::cos(camera->pitch()),
+                      glm::cos(camera->facing()) * glm::cos(camera->pitch()),
+                      glm::sin(camera->pitch()));
+    glm::vec3 target = pos + forward;
+    std::string result = str(boost::format("camera free; campos %.6f %.6f %.6f; camlook %.6f %.6f %.6f") %
+                             pos.x % pos.y % pos.z % target.x % target.y % target.z);
+    _console.printLine(result);
+    info(result);
 }
 
 void Game::consoleRunScript(const ConsoleArgs &args) {
@@ -2537,24 +5393,6 @@ void Game::consoleRunScript(const ConsoleArgs &args) {
 
     int result = scriptRunner().run(resRef, vars);
     _console.printLine(str(boost::format("%s -> %d") % resRef % result));
-}
-
-void Game::consoleShowAABB(const ConsoleArgs &args) {
-    consoleCheckUsage(args, 1, 1, "1|0");
-    bool show = args.get<int>(1).value();
-    setShowAABB(show);
-}
-
-void Game::consoleShowWalkmesh(const ConsoleArgs &args) {
-    consoleCheckUsage(args, 1, 1, "1|0");
-    bool show = args.get<int>(1).value();
-    setShowWalkmesh(show);
-}
-
-void Game::consoleShowTriggers(const ConsoleArgs &args) {
-    consoleCheckUsage(args, 1, 1, "1|0");
-    bool show = args.get<int>(1).value();
-    setShowTriggers(show);
 }
 
 void Game::consoleSpawnCreature(const ConsoleArgs &args) {
@@ -2619,6 +5457,17 @@ void Game::consoleSpawnCompanion(const ConsoleArgs &args) {
     _party.addMember(npc, companion);
 }
 
+void Game::consoleAddAvailableNpc(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 2, 2, "npcindex blueprint");
+
+    int npc = args.get<int>(1).value();
+    std::string blueprint(args[2].value());
+
+    if (!_party.addAvailableMember(npc, blueprint)) {
+        throw std::runtime_error("NPC is already available: " + std::to_string(npc));
+    }
+}
+
 void Game::consoleSelectObjectById(const ConsoleArgs &args) {
     consoleCheckUsage(args, 1, 1, "id");
     int id = args.get<int>(1).value();
@@ -2635,9 +5484,10 @@ void Game::consoleSelectObjectByTag(const ConsoleArgs &args) {
     consoleCheckUsage(args, 1, 1, "tag");
     std::string_view tag = args[1].value();
 
-    for (auto [id, object] : _objectById) {
+    auto area = getConsoleArea();
+    for (auto &object : area->objects()) {
         if (object->tag() == tag) {
-            getConsoleArea()->selectObject(object, /*force=*/true);
+            area->selectObject(object, /*force=*/true);
             return;
         }
     }
@@ -2815,9 +5665,16 @@ void Game::consoleAutoSkipReplies(const ConsoleArgs &args) {
 }
 
 void Game::consoleStartConversation(const ConsoleArgs &args) {
-    consoleCheckUsage(args, 0, 0, "");
+    consoleCheckUsage(args, 0, 1, "[dlg_resref]");
 
     auto leader = getConsoleLeader();
+    _captureHUDPresentation = false;
+    auto resRef = args[1];
+    if (resRef) {
+        startDialog(leader, std::string(resRef.value()));
+        return;
+    }
+
     auto target = getConsoleTargetObject();
 
     auto action = newAction<StartConversationAction>(target, "");
@@ -2973,11 +5830,13 @@ void Game::consoleOpenCloseDoor(const ConsoleArgs &args) {
 void Game::consoleListGames(const ConsoleArgs &args) {
     consoleCheckUsage(args, 0, 0, "");
 
+    // Indices must address the same list consoleLoadGame indexes.
     std::stringstream ss;
     unsigned index = 0;
     const char *newline = "";
-    for (const std::string &name : _saveNames) {
-        ss << newline << "[" << index++ << "] " << name;
+    for (const auto &save : savedGames()) {
+        ss << newline << "[" << index++ << "] "
+           << save.descriptor.directory.filename().string();
         newline = "\n";
     }
     _console.printLine(ss.str());
@@ -2986,13 +5845,67 @@ void Game::consoleListGames(const ConsoleArgs &args) {
 void Game::consoleLoadGame(const ConsoleArgs &args) {
     consoleCheckUsage(args, 1, 1, "save_id");
     size_t id = *args.get<size_t>(1);
-    const auto &_saveNames = _services.resource.director.saveNames();
-    if (id >= _saveNames.size()) {
+    auto saves = savedGames();
+    if (id >= saves.size()) {
         throw std::runtime_error("Invalid savegame id");
     }
-    auto name = _saveNames.begin();
-    std::advance(name, id);
-    loadGame(*name);
+    loadGame(saves[id].descriptor);
+}
+
+void Game::consoleSaveGame(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, std::numeric_limits<size_t>::max(), "slot [name]");
+    auto slot = args.get<uint32_t>(1);
+    if (!slot) {
+        throw std::runtime_error("Invalid save slot");
+    }
+    std::string name;
+    for (size_t i = 2; i < args.size(); ++i) {
+        if (!name.empty()) {
+            name += " ";
+        }
+        name += std::string(*args[i]);
+    }
+    auto result = requestSave(
+        {SaveKind::Developer, *slot, std::move(name), true});
+    _console.printLine(result.message);
+}
+
+void Game::consoleStartPazaak(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 0, 0, "");
+    if (!_options.game.developer) {
+        _console.printLine("pazaak: developer mode required");
+        return;
+    }
+    if (_pazaakSession) {
+        _console.printLine("pazaak: already active");
+        return;
+    }
+    if (!_module || _screen != Screen::InGame) {
+        _console.printLine("pazaak: no active in-game module");
+        return;
+    }
+
+    std::shared_ptr<Object> selected(_pazaakDevelopmentSelectedObjectOverride.lock());
+    if (!selected) {
+        if (auto area = _module->area()) {
+            selected = area->selectedObject();
+        }
+    }
+
+    std::string opponentName("Pazaak Opponent");
+    if (selected && selected->type() == ObjectType::Creature) {
+        if (!selected->name().empty()) {
+            opponentName = selected->name();
+        } else if (!selected->tag().empty()) {
+            opponentName = selected->tag();
+        }
+    }
+
+    if (!startDevelopmentPazaak(opponentName)) {
+        _console.printLine("pazaak: development launch failed");
+        return;
+    }
+    _console.printLine("pazaak: development match started against " + opponentName);
 }
 
 void Game::consoleMiniGameInfo(const ConsoleArgs &args) {
@@ -3017,22 +5930,22 @@ void Game::consoleMiniGameInfo(const ConsoleArgs &args) {
                            % mg.player.maximumSpeed
                            % mg.player.accelSecs
                            % mg.player.hitPoints
-                           % mg.player.modelResRefs.size()));
+                           % mg.player.models.size()));
     _console.printLine(str(boost::format("  tunnel (deg): X=[%.1f,%.1f] Y=[%.1f,%.1f] Z=[%.1f,%.1f]")
                            % mg.player.tunnelXNeg % mg.player.tunnelXPos
                            % mg.player.tunnelYNeg % mg.player.tunnelYPos
                            % mg.player.tunnelZNeg % mg.player.tunnelZPos));
     _console.printLine(str(boost::format("  tracks=%zu enemies=%zu obstacles=%zu")
-                           % mg.trackResRefs.size()
-                           % mg.enemies.size()
-                           % mg.obstacles.size()));
+                            % mg.trackResRefs.size()
+                            % mg.enemies.size()
+                            % mg.obstacles.size()));
     for (size_t i = 0; i < mg.trackResRefs.size(); ++i) {
         _console.printLine(str(boost::format("    track[%zu] %s") % i % mg.trackResRefs[i]));
     }
     for (size_t i = 0; i < mg.enemies.size(); ++i) {
         const auto &e = mg.enemies[i];
         _console.printLine(str(boost::format("    enemy[%zu] track=%s hp=%u models=%zu")
-                               % i % e.trackResRef % e.hitPoints % e.modelResRefs.size()));
+                               % i % e.trackResRef % e.hitPoints % e.models.size()));
     }
     for (size_t i = 0; i < mg.obstacles.size(); ++i) {
         _console.printLine(str(boost::format("    obstacle[%zu] name=%s") % i % mg.obstacles[i].name));
@@ -3041,11 +5954,9 @@ void Game::consoleMiniGameInfo(const ConsoleArgs &args) {
         auto placement = layout->findTrackByName(mg.player.trackResRef);
         if (placement) {
             const auto &p = placement->get().position;
-            _console.printLine(str(boost::format("  lyt tracks=%zu playerTrack=%s pos=[%.1f,%.1f,%.1f]")
-                                   % layout->tracks.size() % mg.player.trackResRef % p.x % p.y % p.z));
+            _console.printLine(str(boost::format("  lyt tracks=%zu playerTrack=%s pos=[%.1f,%.1f,%.1f]") % layout->tracks.size() % mg.player.trackResRef % p.x % p.y % p.z));
         } else {
-            _console.printLine(str(boost::format("  lyt tracks=%zu playerTrack=%s pos=<not found>")
-                                   % layout->tracks.size() % mg.player.trackResRef));
+            _console.printLine(str(boost::format("  lyt tracks=%zu playerTrack=%s pos=<not found>") % layout->tracks.size() % mg.player.trackResRef));
         }
         size_t obstaclesMatched = 0;
         for (const auto &obs : mg.obstacles) {
@@ -3053,13 +5964,11 @@ void Game::consoleMiniGameInfo(const ConsoleArgs &args) {
                 ++obstaclesMatched;
             }
         }
-        _console.printLine(str(boost::format("  lyt obstacles=%zu (matched %zu of %zu .are obstacles)")
-                               % layout->obstacles.size() % obstaclesMatched % mg.obstacles.size()));
+        _console.printLine(str(boost::format("  lyt obstacles=%zu (matched %zu of %zu .are obstacles)") % layout->obstacles.size() % obstaclesMatched % mg.obstacles.size()));
     }
     const auto &sc = mg.player.scripts;
     if (!sc.onCreate.empty() || !sc.onDeath.empty() || !sc.onTrackLoop.empty()) {
-        _console.printLine(str(boost::format("  scripts: create=%s death=%s loop=%s damage=%s")
-                               % sc.onCreate % sc.onDeath % sc.onTrackLoop % sc.onDamage));
+        _console.printLine(str(boost::format("  scripts: create=%s death=%s loop=%s damage=%s") % sc.onCreate % sc.onDeath % sc.onTrackLoop % sc.onDamage));
     }
 }
 
@@ -3090,7 +5999,7 @@ void Game::consoleStartSwoopRace(const ConsoleArgs &args) {
     }
 
     // Capture origin module/state before transitioning.
-    SwoopLifecycle session;
+    MinigameLifecycle session;
     session.originModule = _module->name();
     session.forcedSuccess = true;
     if (auto leader = _party.getLeader()) {
@@ -3125,8 +6034,7 @@ void Game::consoleStartSwoopRace(const ConsoleArgs &args) {
 
     _swoopLifecycle = session;
     _swoopLifecycle.active = true;
-    _console.printLine(str(boost::format("swoop: lifecycle start origin=%s target=%s forcedSuccess=yes")
-                           % session.originModule % target));
+    _console.printLine(str(boost::format("swoop: lifecycle start origin=%s target=%s forcedSuccess=yes") % session.originModule % target));
 }
 
 void Game::consoleFinishSwoop(const ConsoleArgs &args) {
@@ -3143,15 +6051,105 @@ void Game::consoleSwoopState(const ConsoleArgs &args) {
         return;
     }
     glm::vec3 pos = _swoopRace.position();
-    _console.printLine(str(boost::format("swoop: progress=%.1f finish=%.1f lateral=%.2f speed=%.1f elapsed=%.1f pos=[%.1f,%.1f,%.1f] bounds=[-%.1f,+%.1f] mode=track-progress")
-                           % _swoopRace.progress()
-                           % _swoopRace.finishProgress()
-                           % _swoopRace.lateralOffset()
-                           % _swoopRace.speed()
-                           % _swoopRace.elapsed()
+    _console.printLine(str(boost::format("swoop: progress=%.1f finish=%.1f lateral=%.2f speed=%.1f elapsed=%.1f pos=[%.1f,%.1f,%.1f] bounds=[-%.1f,+%.1f] mode=track-progress") % _swoopRace.progress() % _swoopRace.finishProgress() % _swoopRace.lateralOffset() % _swoopRace.speed() % _swoopRace.elapsed() % pos.x % pos.y % pos.z % _swoopRace.lateralLeftBound() % _swoopRace.lateralRightBound()));
+}
+
+void Game::consoleStartTurret(const ConsoleArgs &args) {
+    openTurret();
+}
+
+void Game::consoleStartTurretGame(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "module");
+
+    std::string target(boost::to_lower_copy(std::string(args[1].value())));
+    std::string originModule(_module ? _module->name() : "");
+    bool alreadyActive = _turretLifecycle.active || _pendingTurret.active || _turret.isActive();
+
+    auto error = validateTurretRequest(target,
+                                       originModule,
+                                       _moduleNames.count(target) > 0,
+                                       alreadyActive);
+    if (error != TurretRequestError::None) {
+        _console.printLine(str(boost::format("turret: %s") % turretRequestErrorMessage(error)));
+        return;
+    }
+
+    // Capture the origin now: the transition is deferred, and by the time it
+    // runs the current module is already gone.
+    _pendingTurret = PendingTurretRequest();
+    _pendingTurret.active = true;
+    _pendingTurret.targetModule = target;
+    _pendingTurret.originModule = originModule;
+    if (auto leader = _party.getLeader()) {
+        _pendingTurret.originPosition = leader->position();
+        _pendingTurret.originFacing = leader->getFacing();
+        _pendingTurret.haveOrigin = true;
+    }
+
+    // Go through the normal deferred transition so the Type 2 detection in
+    // loadNextModule starts the minigame, exactly as a script entry would.
+    scheduleModuleTransition(target, "");
+
+    _console.printLine(str(boost::format("turret: lifecycle scheduled origin=%s target=%s")
+                           % originModule % target));
+}
+
+void Game::consoleStopTurret(const ConsoleArgs &args) {
+    // If a lifecycle session is active, return to origin safely; otherwise stop
+    // in place.
+    exitTurret();
+}
+
+void Game::consoleTurretState(const ConsoleArgs &args) {
+    if (!_turret.isActive()) {
+        _console.printLine("turret: not active");
+        return;
+    }
+    glm::vec3 pos = _turret.position();
+    const char *outcome = "in-progress";
+    switch (_turret.outcome()) {
+    case Turret::Outcome::Won:
+        outcome = "won";
+        break;
+    case Turret::Outcome::Lost:
+        outcome = "lost";
+        break;
+    default:
+        break;
+    }
+    _console.printLine(str(boost::format("turret: pitch=%.1f yaw=%.1f hp=%d/%d enemies=%zu/%zu bullets=%zu elapsed=%.1f pos=[%.1f,%.1f,%.1f] outcome=%s")
+                           % glm::degrees(_turret.aim().pitch())
+                           % glm::degrees(_turret.aim().yaw())
+                           % _turret.hitPoints()
+                           % _turret.maxHitPoints()
+                           % _turret.enemiesAlive()
+                           % _turret.enemyCount()
+                           % _turret.bulletCount()
+                           % _turret.elapsed()
                            % pos.x % pos.y % pos.z
-                           % _swoopRace.lateralLeftBound()
-                           % _swoopRace.lateralRightBound()));
+                           % outcome));
+    _console.printLine(str(boost::format("  hud: health=%d(%s) heading=%d alarm=%d contacts=%zu/%zu gauge=%d radar=%d radarChannels=%zu")
+                           % _turret.healthState()
+                           % turretHealthAnimation(_turret.healthState())
+                           % _turret.headingState()
+                           % static_cast<int>(_turret.alarmActive())
+                           % _turret.contactsLive()
+                           % kTurretContactCount
+                           % static_cast<int>(_turret.haveHealthHud())
+                           % static_cast<int>(_turret.haveRadarHud())
+                           % _turret.radarChannelCount()));
+}
+
+void Game::consoleShowImGui(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "1|0");
+    bool show = args.get<int>(1).value();
+    _showImGui = show;
+}
+
+void Game::consoleShowPath(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "1|0");
+    bool show = args.get<int>(1).value();
+    setShowPath(show);
 }
 
 } // namespace game

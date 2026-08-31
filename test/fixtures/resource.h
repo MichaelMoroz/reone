@@ -34,11 +34,11 @@
 #include "reone/resource/provider/movies.h"
 #include "reone/resource/provider/paths.h"
 #include "reone/resource/provider/scripts.h"
-#include "reone/resource/provider/shaders.h"
 #include "reone/resource/provider/soundsets.h"
 #include "reone/resource/provider/textures.h"
 #include "reone/resource/provider/visibilities.h"
 #include "reone/resource/provider/walkmeshes.h"
+#include "reone/resource/replacements.h"
 #include "reone/resource/resources.h"
 #include "reone/resource/strings.h"
 
@@ -55,18 +55,28 @@ public:
 class MockResources : public IResources, boost::noncopyable {
 public:
     MOCK_METHOD(void, clear, (), (override));
-    MOCK_METHOD(void, clearLocal, (), (override));
-    MOCK_METHOD(void, clearSave, (), (override));
-    MOCK_METHOD(void, addEXE, (const std::filesystem::path &path), (override));
-    MOCK_METHOD(void, addKEY, (const std::filesystem::path &path), (override));
-    MOCK_METHOD(void, addERF, (const std::filesystem::path &path, ContainerKind kind), (override));
-    MOCK_METHOD(void, addMemERF, (ByteBuffer buffer, ContainerKind kind), (override));
-    MOCK_METHOD(void, addRIM, (const std::filesystem::path &path, ContainerKind kind), (override));
-    MOCK_METHOD(void, addMemRIM, (ByteBuffer buffer, ContainerKind kind), (override));
-    MOCK_METHOD(void, addFolder, (const std::filesystem::path &path, ContainerKind kind), (override));
+    MOCK_METHOD(void, clearOwner, (ResourceOwner owner), (override));
+    MOCK_METHOD(ResourceMountToken, mountToken, (), (const, override));
+    MOCK_METHOD(void, rollbackTo, (ResourceMountToken token), (override));
+    MOCK_METHOD(void, addEXE, (const std::filesystem::path &path, std::optional<ResourceSourceBucket> bucket), (override));
+    MOCK_METHOD(void, addKEY, (const std::filesystem::path &path, std::optional<ResourceSourceBucket> bucket), (override));
+    MOCK_METHOD(void, addERF, (const std::filesystem::path &path, ResourceOwner owner, std::optional<ResourceSourceBucket> bucket), (override));
+    MOCK_METHOD(void, addMemERF, (ByteBuffer buffer, ResourceOwner owner, std::optional<ResourceSourceBucket> bucket), (override));
+    MOCK_METHOD(void, addRIM, (const std::filesystem::path &path, ResourceOwner owner, std::optional<ResourceSourceBucket> bucket), (override));
+    MOCK_METHOD(void, addMemRIM, (ByteBuffer buffer, ResourceOwner owner, std::optional<ResourceSourceBucket> bucket), (override));
+    MOCK_METHOD(void, addFolder, (const std::filesystem::path &path, ResourceOwner owner, std::optional<ResourceSourceBucket> bucket), (override));
 
     MOCK_METHOD(Resource, get, (const ResourceId &id), (override));
     MOCK_METHOD(std::optional<Resource>, find, (const ResourceId &id), (override));
+};
+
+class MockResourceReplacements : public IResourceReplacements, boost::noncopyable {
+public:
+    MOCK_METHOD(void, replaceResource, (ResourceId id, ByteBuffer data), (override));
+    MOCK_METHOD(void, removeResourceReplacement, (const ResourceId &id), (override));
+    MOCK_METHOD(void, clearResourceReplacements, (), (override));
+    MOCK_METHOD(std::optional<Resource>, findResourceReplacement, (const ResourceId &id), (const override));
+    MOCK_METHOD(uint64_t, revision, (const ResourceId &id), (const override));
 };
 
 class MockStrings : public IStrings, boost::noncopyable {
@@ -169,14 +179,20 @@ public:
     MOCK_METHOD(std::shared_ptr<Ltr>, get, (const ResRef &resRef), (override));
 };
 
-class MockShaders : public IShaders, boost::noncopyable {
-};
-
 class MockResourceDirector : public IResourceDirector, boost::noncopyable {
 public:
     MOCK_METHOD(void, init, (), (override));
     MOCK_METHOD(void, onModuleLoad, (const std::string &name), (override));
+    MOCK_METHOD(void, onNewGame, (), (override));
     MOCK_METHOD(void, onGameLoad, (std::string_view name), (override));
+    MOCK_METHOD(void, onGameLoad, (const SaveSlotDescriptor &slot), (override));
+    MOCK_METHOD(std::optional<Resource>, findSaveMetadata, (const ResourceId &id), (override));
+    MOCK_METHOD(std::optional<Resource>, findSaveWorking, (const ResourceId &id), (override));
+    MOCK_METHOD(std::unordered_set<ResourceId>, saveWorkingResourceIds, (), (const, override));
+    MOCK_METHOD(std::shared_ptr<const SaveWorkingState>, committedSaveWorkingState, (), (const, override));
+    MOCK_METHOD(std::optional<SaveSlotDescriptor>, saveSlotDescriptor, (), (const, override));
+    MOCK_METHOD(void, adoptSaveWorkingState, (std::shared_ptr<const SaveWorkingState> state), (override));
+    MOCK_METHOD(void, adoptPublishedSave, (SaveSlotDescriptor descriptor, std::shared_ptr<const SaveWorkingState> state), (override));
     MOCK_METHOD(std::set<std::string>, moduleNames, (), (override));
     MOCK_METHOD(std::set<std::string>, saveNames, (), (override));
 };
@@ -186,6 +202,7 @@ public:
     void init() {
         _gffs = std::make_unique<MockGffs>();
         _resources = std::make_unique<MockResources>();
+        _replacements = std::make_unique<MockResourceReplacements>();
         _strings = std::make_unique<MockStrings>();
         _twoDas = std::make_unique<MockTwoDAs>();
         _scripts = std::make_unique<MockScripts>();
@@ -203,12 +220,12 @@ public:
         _soundSets = std::make_unique<MockSoundSets>();
         _visibilities = std::make_unique<MockVisiblities>();
         _ltrs = std::make_unique<MockLtrs>();
-        _shaders = std::make_unique<MockShaders>();
         _director = std::make_unique<MockResourceDirector>();
 
         _services = std::make_unique<ResourceServices>(
             *_gffs,
             *_resources,
+            *_replacements,
             *_strings,
             *_twoDas,
             *_scripts,
@@ -226,7 +243,6 @@ public:
             *_soundSets,
             *_visibilities,
             *_ltrs,
-            *_shaders,
             *_director);
     }
 
@@ -281,6 +297,7 @@ public:
 private:
     std::unique_ptr<MockGffs> _gffs;
     std::unique_ptr<MockResources> _resources;
+    std::unique_ptr<MockResourceReplacements> _replacements;
     std::unique_ptr<MockStrings> _strings;
     std::unique_ptr<MockTwoDAs> _twoDas;
     std::unique_ptr<MockScripts> _scripts;
@@ -298,7 +315,6 @@ private:
     std::unique_ptr<MockSoundSets> _soundSets;
     std::unique_ptr<MockVisiblities> _visibilities;
     std::unique_ptr<MockLtrs> _ltrs;
-    std::unique_ptr<MockShaders> _shaders;
     std::unique_ptr<MockResourceDirector> _director;
 
     std::unique_ptr<ResourceServices> _services;

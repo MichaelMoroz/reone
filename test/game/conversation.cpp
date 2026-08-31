@@ -23,6 +23,8 @@
 #include "reone/audio/clip.h"
 #include "reone/audio/mixer.h"
 #include "reone/audio/source.h"
+#include "reone/game/action/pauseconversation.h"
+#include "reone/game/action/resumeconversation.h"
 #include "reone/game/console.h"
 #include "reone/game/game.h"
 #include "reone/game/gui/conversation.h"
@@ -72,9 +74,26 @@ public:
         _pauseOnFirstEntryLoad = true;
     }
 
+    const std::string &barkText() const {
+        return _barkText;
+    }
+
+    int barkCount() const {
+        return _barkCount;
+    }
+
+    int finishCount() const {
+        return _finishCount;
+    }
+
 protected:
     void setReplyLines(std::vector<std::string> lines) override {}
     void setMessage(std::string message) override {}
+
+    void setBarkText(std::string text, float duration) override {
+        _barkText = std::move(text);
+        ++_barkCount;
+    }
 
     void onLoadEntry() override {
         ++_entryLoadCount;
@@ -87,10 +106,17 @@ protected:
         ++_entryEndCount;
     }
 
+    void onFinish() override {
+        ++_finishCount;
+    }
+
 private:
     int _entryLoadCount {0};
     int _entryEndCount {0};
     bool _pauseOnFirstEntryLoad {false};
+    std::string _barkText;
+    int _barkCount {0};
+    int _finishCount {0};
 };
 
 std::shared_ptr<Dialog> makeDialog(int firstEntryDelay = 1, bool voiced = false) {
@@ -128,6 +154,30 @@ std::shared_ptr<Dialog> makeDialog(int firstEntryDelay = 1, bool voiced = false)
     return dialog;
 }
 
+// A one-liner: a single start entry whose only eligible reply is empty and
+// terminal. Both nodes carry an authored action.
+std::shared_ptr<Dialog> makeOneLinerDialog(std::string entryScript, std::string replyScript) {
+    auto dialog = std::make_shared<Dialog>();
+    dialog->resRef = "one_liner_test";
+    Dialog::EntryReplyLink startLink;
+    startLink.index = 0;
+    dialog->startEntries.push_back(startLink);
+    dialog->entries.resize(1);
+    dialog->replies.resize(1);
+
+    auto &entry = dialog->entries[0];
+    entry.text = "bark";
+    entry.delay = 1;
+    entry.script = std::move(entryScript);
+    Dialog::EntryReplyLink terminalReplyLink;
+    terminalReplyLink.index = 0;
+    entry.replies.push_back(terminalReplyLink);
+
+    // Empty text and no child entries -- this is what makes it a one-liner.
+    dialog->replies[0].script = std::move(replyScript);
+    return dialog;
+}
+
 std::shared_ptr<AudioClip> makeOneSecondClip() {
     auto clip = std::make_shared<AudioClip>();
     AudioClip::Frame frame;
@@ -142,6 +192,9 @@ protected:
     void SetUp() override {
         _engine.init();
         _game = std::make_unique<Game>(GameID::KotOR, std::filesystem::path {}, _engine.options(), _engine.services(), _console);
+        // Gives the game a real script runner over MockScripts, so dialogue
+        // actions can be observed as requests for their script.
+        _game->initLocalServices();
         _conversation = std::make_unique<TestConversation>(*_game, _engine.services());
     }
 
@@ -163,11 +216,78 @@ protected:
         _conversation->start(makeDialog(-1, true), nullptr);
     }
 
+    void attachConversation(Game::Screen screen) {
+        TestGameModule::setConversation(*_game, _conversation.get());
+        TestGameModule::setCurrentScreen(*_game, static_cast<int>(screen));
+    }
+
     TestEngine _engine;
     StubConsole _console;
     std::unique_ptr<Game> _game;
     std::unique_ptr<TestConversation> _conversation;
 };
+
+TEST_F(ConversationTest, game_pause_is_harmless_without_a_conversation) {
+    EXPECT_FALSE(_game->isConversationActive());
+
+    _game->pauseConversation();
+}
+
+TEST_F(ConversationTest, game_resume_is_harmless_without_a_conversation) {
+    EXPECT_FALSE(_game->isConversationActive());
+
+    _game->resumeConversation();
+}
+
+TEST_F(ConversationTest, pause_and_resume_actions_complete_without_a_conversation) {
+    auto actor = _game->newCreature();
+    auto pause = _game->newAction<PauseConversationAction>();
+    auto resume = _game->newAction<ResumeConversationAction>();
+
+    pause->execute(pause, *actor, 0.0f);
+    resume->execute(resume, *actor, 0.0f);
+
+    EXPECT_TRUE(pause->isCompleted());
+    EXPECT_TRUE(resume->isCompleted());
+}
+
+TEST_F(ConversationTest, queued_pause_and_resume_actions_are_consumed_without_a_conversation) {
+    auto actor = _game->newCreature();
+    actor->addAction(_game->newAction<PauseConversationAction>());
+    actor->addAction(_game->newAction<ResumeConversationAction>());
+
+    actor->update(0.0f);
+    actor->update(0.0f);
+    actor->update(0.0f);
+
+    EXPECT_TRUE(actor->actions().empty());
+}
+
+TEST_F(ConversationTest, game_pause_and_resume_ignore_a_retained_inactive_conversation) {
+    startSilent();
+    attachConversation(Game::Screen::InGame);
+
+    ASSERT_FALSE(_conversation->isPaused());
+    _game->pauseConversation();
+    EXPECT_FALSE(_conversation->isPaused());
+
+    _conversation->pause();
+    ASSERT_TRUE(_conversation->isPaused());
+    _game->resumeConversation();
+    EXPECT_TRUE(_conversation->isPaused());
+}
+
+TEST_F(ConversationTest, game_pause_and_resume_control_an_active_conversation) {
+    startSilent();
+    attachConversation(Game::Screen::Conversation);
+
+    ASSERT_FALSE(_conversation->isPaused());
+    _game->pauseConversation();
+    EXPECT_TRUE(_conversation->isPaused());
+
+    _game->resumeConversation();
+    EXPECT_FALSE(_conversation->isPaused());
+}
 
 TEST_F(ConversationTest, silent_entry_timer_expiry_does_not_advance_while_paused) {
     startSilent();
@@ -383,6 +503,95 @@ TEST_F(ConversationTest, module_transition_cleanup_clears_pause_before_the_next_
     EXPECT_EQ("second", _conversation->currentText());
     EXPECT_EQ(3, _conversation->entryLoadCount());
     EXPECT_EQ(1, _conversation->entryEndCount());
+}
+
+TEST_F(ConversationTest, one_liner_runs_entry_then_terminal_reply_actions_exactly_once) {
+    auto &scripts = _engine.resourceModule().scripts();
+    InSequence seq;
+    EXPECT_CALL(scripts, get("one_entry")).WillOnce(Return(nullptr));
+    EXPECT_CALL(scripts, get("one_reply")).WillOnce(Return(nullptr));
+
+    _conversation->start(makeOneLinerDialog("one_entry", "one_reply"), nullptr);
+}
+
+TEST_F(ConversationTest, one_liner_with_no_entry_action_still_runs_the_terminal_reply_action) {
+    // The authored action commonly sits only on the terminal reply, so running
+    // the entry action alone would still drop it.
+    auto &scripts = _engine.resourceModule().scripts();
+    EXPECT_CALL(scripts, get("one_reply")).WillOnce(Return(nullptr));
+
+    _conversation->start(makeOneLinerDialog("", "one_reply"), nullptr);
+}
+
+TEST_F(ConversationTest, one_liner_presents_its_entry_and_completes_without_opening_the_gui) {
+    auto &scripts = _engine.resourceModule().scripts();
+    EXPECT_CALL(scripts, get(_)).WillRepeatedly(Return(nullptr));
+
+    _conversation->start(makeOneLinerDialog("one_entry", "one_reply"), nullptr);
+
+    // Barked, not presented through the conversation GUI, and already over.
+    EXPECT_EQ("bark", _conversation->barkText());
+    EXPECT_EQ(1, _conversation->barkCount());
+    EXPECT_EQ("bark", _conversation->currentText());
+    EXPECT_EQ(Game::Screen::None, _game->currentScreen());
+    EXPECT_EQ(1, _conversation->entryLoadCount());
+}
+
+TEST_F(ConversationTest, completed_one_liner_does_not_run_its_actions_a_second_time) {
+    auto &scripts = _engine.resourceModule().scripts();
+    EXPECT_CALL(scripts, get("one_entry")).WillOnce(Return(nullptr));
+    EXPECT_CALL(scripts, get("one_reply")).WillOnce(Return(nullptr));
+
+    _conversation->start(makeOneLinerDialog("one_entry", "one_reply"), nullptr);
+
+    // The one-liner is already resolved; further ticks must not re-pick it.
+    for (int i = 0; i < 5; ++i) {
+        _conversation->update(1.0f);
+    }
+    EXPECT_EQ(1, _conversation->barkCount());
+}
+
+TEST_F(ConversationTest, one_liner_entry_action_starting_a_conversation_keeps_the_new_session) {
+    auto &scripts = _engine.resourceModule().scripts();
+    auto replacement = makeDialog();
+
+    // Stand in for an action script that starts another conversation: the
+    // replacement happens at exactly the point the real script would run.
+    EXPECT_CALL(scripts, get("one_entry")).WillOnce(Invoke([&](const std::string &) {
+        _conversation->start(replacement, nullptr);
+        return nullptr;
+    }));
+    // The old reply belongs to a conversation that no longer exists.
+    EXPECT_CALL(scripts, get("one_reply")).Times(0);
+
+    _conversation->start(makeOneLinerDialog("one_entry", "one_reply"), nullptr);
+
+    // The new conversation is live and presented once by itself: the old one
+    // must not have gone on to bark, reload or otherwise drive it.
+    EXPECT_EQ("first", _conversation->currentText());
+    EXPECT_EQ(1, _conversation->entryLoadCount());
+    EXPECT_EQ(0, _conversation->barkCount());
+    _conversation->update(1.0f);
+    EXPECT_EQ("second", _conversation->currentText());
+}
+
+TEST_F(ConversationTest, one_liner_reply_action_starting_a_conversation_keeps_the_new_session) {
+    auto &scripts = _engine.resourceModule().scripts();
+    auto replacement = makeDialog();
+
+    EXPECT_CALL(scripts, get("one_reply")).WillOnce(Invoke([&](const std::string &) {
+        _conversation->start(replacement, nullptr);
+        return nullptr;
+    }));
+
+    _conversation->start(makeOneLinerDialog("", "one_reply"), nullptr);
+
+    // Only the replacement itself ended the one-liner. Had the old conversation
+    // carried on to finish, it would have ended the new session instead.
+    EXPECT_EQ(1, _conversation->finishCount());
+    EXPECT_EQ("first", _conversation->currentText());
+    _conversation->update(1.0f);
+    EXPECT_EQ("second", _conversation->currentText());
 }
 
 } // namespace

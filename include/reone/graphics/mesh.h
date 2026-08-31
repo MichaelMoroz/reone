@@ -23,8 +23,6 @@ namespace reone {
 
 namespace graphics {
 
-class IStatistic;
-
 class Mesh : boost::noncopyable {
 public:
     struct Vertex {
@@ -242,13 +240,7 @@ public:
         computeAABB();
     }
 
-    ~Mesh() { deinit(); }
-
     void init();
-    void deinit();
-
-    void draw(IStatistic &statistic);
-    void drawInstanced(int count, IStatistic &statistic);
 
     std::vector<glm::vec3> vertexCoords() const;
     std::vector<glm::vec3> faceVertexCoords(const Face &face) const;
@@ -257,25 +249,19 @@ public:
 
     int vertexCount() const { return _vertices.size(); }
     const std::vector<Face> &faces() const { return _faces; }
+
+    /** Interleaved vertex data, laid out as vertexLayout() describes. */
+    const std::vector<float> &vertexData() const { return _vertexData; }
+    const VertexLayout &vertexLayout() const { return _vertexLayout; }
     const AABB &aabb() const { return _aabb; }
 
 private:
     VertexLayout _vertexLayout;
     std::vector<Face> _faces;
 
-    bool _inited {false};
-
     std::vector<Vertex> _vertices;
     std::vector<float> _vertexData;
     AABB _aabb;
-
-    // OpenGL
-
-    uint32_t _vboId {0};
-    uint32_t _iboId {0};
-    uint32_t _vaoId {0};
-
-    // END OpenGL
 
     void computeVertexDataFromVertices();
     void computeVerticesFromVertexData();

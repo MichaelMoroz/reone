@@ -18,6 +18,7 @@
 #pragma once
 
 #include "graph.h"
+#include "skyrooms.h"
 
 namespace reone {
 
@@ -51,8 +52,17 @@ public:
     virtual void reserve(std::string name) = 0;
 
     virtual ISceneGraph &get(const std::string &name) = 0;
+    virtual void invalidateRenderPipelines() = 0;
+    /** True if any scene has asked for a rebuild; clears the request. */
+    virtual bool consumeRenderPipelineRebuild() = 0;
 
     virtual std::set<std::string> sceneNames() const = 0;
+
+    /**
+     * Whether this room model is a curated sky. Area asks this instead of
+     * guessing from a missing walkmesh.
+     */
+    virtual bool isSkyRoom(const std::string &roomName) const = 0;
 };
 
 class SceneGraphs : public ISceneGraphs, boost::noncopyable {
@@ -62,17 +72,26 @@ public:
         graphics::GraphicsOptions &graphicsOpt,
         graphics::GraphicsServices &graphicsSvc,
         audio::AudioServices &audioSvc,
-        resource::ResourceServices &resourceSvc) :
+        resource::ResourceServices &resourceSvc,
+        std::filesystem::path overrideRoot) :
         _renderPipelineFactory(renderPipelineFactory),
         _graphicsOpt(graphicsOpt),
         _graphicsSvc(graphicsSvc),
         _audioSvc(audioSvc),
-        _resourceSvc(resourceSvc) {
+        _resourceSvc(resourceSvc),
+        _overrideRoot(std::move(overrideRoot)) {
+        _skyRooms.load(_overrideRoot / "modules.ini");
     }
 
     void reserve(std::string name) override;
 
     ISceneGraph &get(const std::string &name) override;
+    void invalidateRenderPipelines() override;
+    bool consumeRenderPipelineRebuild() override;
+
+    bool isSkyRoom(const std::string &roomName) const override {
+        return _skyRooms.isSkyRoom(roomName);
+    }
 
     std::set<std::string> sceneNames() const override {
         auto names = std::set<std::string>();
@@ -88,6 +107,8 @@ private:
     graphics::GraphicsServices &_graphicsSvc;
     audio::AudioServices &_audioSvc;
     resource::ResourceServices &_resourceSvc;
+    std::filesystem::path _overrideRoot;
+    SkyRooms _skyRooms;
 
     std::unordered_map<std::string, std::shared_ptr<ISceneGraph>> _scenes;
 };

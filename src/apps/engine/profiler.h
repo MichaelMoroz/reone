@@ -18,8 +18,6 @@
 #pragma once
 
 #include "reone/game/profiler.h"
-#include "reone/graphics/font.h"
-#include "reone/graphics/uniformbuffer.h"
 #include "reone/input/event.h"
 #include "reone/system/timer.h"
 
@@ -63,7 +61,6 @@ public:
 
     bool handle(const input::Event &event);
     void update(float dt);
-    void render();
 
     void reserveThread(std::string name,
                        std::vector<glm::vec3> colors = {}) override;
@@ -72,12 +69,21 @@ public:
                  int timeIndex,
                  const std::function<void()> &block) override;
 
+    std::array<std::vector<float>, 4> frameTimes(const std::string &threadName) const;
+
+    /** Running per-slot sums since the last reset, for harness runs that need
+        averages over more frames than the display deque keeps. */
+    void resetAccumulation(const std::string &threadName);
+    std::array<std::pair<double, uint64_t>, 4> accumulation(const std::string &threadName) const;
+
 private:
     struct TimedThread {
         std::string name;
         std::vector<glm::vec3> colors;
         std::array<std::deque<float>, 4> times;
-        std::mutex mutex;
+        std::array<double, 4> sums {};
+        std::array<uint64_t, 4> counts {};
+        mutable std::mutex mutex;
     };
 
     graphics::GraphicsOptions &_graphicsOpt;
@@ -93,11 +99,6 @@ private:
     int _numTimedThreads {0};
     std::map<std::string, std::reference_wrapper<TimedThread>> _nameToTimedThread;
 
-    std::shared_ptr<graphics::Font> _font;
-
-    void renderBackground();
-    void renderFrameTimes(const TimedThread &thread, int xOffset);
-    void renderStatistic(int xOffset);
 };
 
 } // namespace reone

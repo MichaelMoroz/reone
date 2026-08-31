@@ -120,6 +120,10 @@ void Conversation::loadCameraModel() {
     _cameraModel = modelResRef.empty() ? nullptr : _services.resource.models.get(modelResRef);
 }
 
+void Conversation::setBarkText(std::string text, float duration) {
+    _game.setBarkBubbleText(std::move(text), duration);
+}
+
 void Conversation::onStart() {
 }
 
@@ -242,6 +246,16 @@ void Conversation::loadEntry(int index, bool start) {
     loadReplies();
     loadVoiceOver();
 
+    // Run entry scripts. An entry action can start another conversation, which
+    // replaces this one outright. Holding the dialogue keeps this entry and its
+    // replies alive for the script to act on, and tells us to stop rather than
+    // carry on driving the new session with the old one's state.
+    auto dialog = _dialog;
+    runScripts(*_currentEntry);
+    if (_dialog != dialog) {
+        return;
+    }
+
     // Conversation is a one-liner if there is exactly one empty reply that has no entries
     bool oneLiner = false;
     if (start && _replies.size() == 1ll) {
@@ -249,7 +263,6 @@ void Conversation::loadEntry(int index, bool start) {
         oneLiner = reply.text.empty() && reply.entries.empty();
     }
     if (!oneLiner && isNonPresentationalEntry()) {
-        runScripts(*_currentEntry);
         pickReply(0);
         return;
     }
@@ -258,14 +271,20 @@ void Conversation::loadEntry(int index, bool start) {
     onLoadEntry();
 
     if (oneLiner) {
-        _game.setBarkBubbleText(std::move(entryText), _entryDuration);
+        setBarkText(std::move(entryText), _entryDuration);
         debug("Dialog: finish (one-liner)");
-        finish();
+
+        // Barking the entry instead of opening the conversation GUI is a
+        // presentation choice, not a reason to drop the sole terminal reply's
+        // action. Resolving that reply through pickReply keeps the usual
+        // ordering and lets it terminate the conversation, so nothing here
+        // finishes it a second time. Ending the entry first stops the update
+        // timer from auto-picking the same reply again afterwards, and leaves
+        // a replacement conversation's own entry state untouched.
+        _entryEnded = true;
+        pickReply(0);
         return;
     }
-
-    // Run entry scripts
-    runScripts(*_currentEntry);
 
     if (_autoSkip) {
         if (std::optional<bool> skip = _autoSkip->trySkipEntry()) {
@@ -368,7 +387,14 @@ void Conversation::pickReply(int index) {
     applyStatusSummaryEntries(reply);
 
     // Run reply scripts
+    auto dialog = _dialog;
     runScripts(reply);
+
+    // A reply action can start another conversation, replacing this one. Going
+    // on would advance or finish the new session in place of the old one.
+    if (_dialog != dialog) {
+        return;
+    }
 
     int entryIdx = indexOfFirstActive(reply.entries);
     if (entryIdx == -1) {
@@ -473,7 +499,17 @@ void Conversation::update(float dt) {
     GameGUI::update(dt);
     if (!_entryEnded) {
         _endEntryTimer.update(dt);
-        if (!_paused && (_endEntryTimer.elapsed() || (_currentVoice && !_currentVoice->isPlaying()))) {
+        // The voice check reads the AUDIO DEVICE's playback state, which is
+        // wall clock. A headless capture runs on a fixed game-time step that
+        // does not track real time - a path-traced frame takes several times
+        // a raster frame's wall clock - so consulting playback there ended
+        // the same entry on different game frames in different render modes,
+        // and the dialog camera diverged between two captures of "the same"
+        // moment. The timer is seeded from the clip's own duration in game
+        // time, so headless keeps every entry exactly that long instead.
+        const bool wallClockAudio = !_game.options().graphics.headless;
+        if (!_paused && (_endEntryTimer.elapsed() ||
+                         (wallClockAudio && _currentVoice && !_currentVoice->isPlaying()))) {
             endCurrentEntry();
         }
     }

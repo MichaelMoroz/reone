@@ -21,35 +21,31 @@ namespace reone {
 
 namespace graphics {
 
-class IContext;
 class IMeshRegistry;
-class IPBRTextures;
-class IShaderRegistry;
+class IRenderer;
+class I2DRenderer;
 class IStatistic;
 class ITextureRegistry;
-class IUniforms;
+class Uniforms;
 
 struct GraphicsServices {
-    IContext &context;
     IMeshRegistry &meshRegistry;
-    IPBRTextures &pbrTextures;
-    IShaderRegistry &shaderRegistry;
+    IRenderer &renderer;
+    I2DRenderer &renderer2d;
     IStatistic &statistic;
     ITextureRegistry &textureRegistry;
-    IUniforms &uniforms;
+    Uniforms &uniforms;
 
     GraphicsServices(
-        IContext &context,
         IMeshRegistry &meshRegistry,
-        IPBRTextures &pbrTextures,
-        IShaderRegistry &shaderRegistry,
+        IRenderer &renderer,
+        I2DRenderer &renderer2d,
         IStatistic &statistic,
         ITextureRegistry &textureRegistry,
-        IUniforms &uniforms) :
-        context(context),
+        Uniforms &uniforms) :
         meshRegistry(meshRegistry),
-        pbrTextures(pbrTextures),
-        shaderRegistry(shaderRegistry),
+        renderer(renderer),
+        renderer2d(renderer2d),
         statistic(statistic),
         textureRegistry(textureRegistry),
         uniforms(uniforms) {

@@ -127,7 +127,7 @@ MdlMdxReader::ArrayDefinition MdlMdxReader::readArrayDefinition() {
 
 void MdlMdxReader::readNodeNames(const std::vector<uint32_t> &offsets) {
     for (uint32_t offset : offsets) {
-        std::string name(boost::to_lower_copy(_mdl.readCStringAt(kMdlDataOffset + offset, 32)));
+        std::string name(boost::to_lower_copy(_mdl.readCStringAt(kMdlDataOffset + offset, 64)));
         _nodeNames.push_back(std::move(name));
     }
 }
@@ -628,10 +628,10 @@ std::shared_ptr<ModelNode::Emitter> MdlMdxReader::readEmitter() {
     std::string chunkName(boost::to_lower_copy(_mdl.readString(16)));
     uint32_t twosided = _mdl.readUint32();
     uint32_t loop = _mdl.readUint32();
-    uint32_t renderOrder = _mdl.readUint32();
-    uint32_t frameBlending = _mdl.readUint32();
+    uint16_t renderOrder = _mdl.readUint16();
+    uint8_t frameBlending = _mdl.readByte();
     std::string depthTexture(boost::to_lower_copy(_mdl.readString(32)));
-    _mdl.skipBytes(1); // padding
+    _mdl.skipBytes(1); // unknown
     uint32_t flags = _mdl.readUint32();
 
     auto emitter = std::make_shared<ModelNode::Emitter>();
@@ -641,10 +641,24 @@ std::shared_ptr<ModelNode::Emitter> MdlMdxReader::readEmitter() {
     emitter->textureName = std::move(texture);
     emitter->gridSize = glm::ivec2(glm::max(xGrid, 1u), glm::max(yGrid, 1u));
     emitter->renderOrder = renderOrder;
+    emitter->flags = flags;
     emitter->twosided = static_cast<bool>(twosided);
     emitter->loop = static_cast<bool>(loop);
+    emitter->frameBlending = static_cast<bool>(frameBlending);
     emitter->p2p = flags & EmitterFlags::p2p;
     emitter->p2pBezier = flags & EmitterFlags::p2pBezier;
+    emitter->affectedByWind = flags & EmitterFlags::affectedByWind;
+    emitter->tinted = flags & EmitterFlags::tinted;
+    emitter->bounce = flags & EmitterFlags::bounce;
+    emitter->random = flags & EmitterFlags::random;
+    emitter->inherit = flags & EmitterFlags::inherit;
+    emitter->inheritVelocity = flags & EmitterFlags::inheritVelocity;
+    emitter->inheritLocal = flags & EmitterFlags::inheritLocal;
+    emitter->splat = flags & EmitterFlags::splat;
+    emitter->inheritParticle = flags & EmitterFlags::inheritParticle;
+    emitter->depthTexture = flags & EmitterFlags::depthTexture;
+    emitter->flag13 = flags & EmitterFlags::flag13;
+    emitter->depthTextureName = std::move(depthTexture);
 
     return emitter;
 }

@@ -37,6 +37,8 @@ namespace reone {
 namespace game {
 
 class HUD : public GameGUI {
+    friend class TestGameModule;
+
 public:
     HUD(Game &game, ServicesView &services) :
         GameGUI(game, services),
@@ -49,13 +51,23 @@ public:
     bool handle(const input::Event &event) override;
     void update(float dt) override;
     void render() override;
+    void renderOffscreen() override;
 
     BarkBubble &barkBubble() const { return *_barkBubble; }
 
     void activateStatusSummaryIndicator(StatusSummaryCategory category);
     void resetStatusSummaryPresentation();
 
+    /** Exposes representative HUD state for the scripted gallery fixture. */
+    void showCapturePresentation(bool combat);
+    /** Exposes the area-transition banner for the scripted gallery fixture. */
+    void showTransitionCapturePresentation(const std::string &destination);
+    /** Clears capture-only HUD and bark state before the next gallery scene. */
+    void clearCapturePresentation();
+
 private:
+    friend class HUDTestAccess;
+
     struct Controls {
         std::shared_ptr<gui::Button> BTN_ABI;
         std::shared_ptr<gui::Button> BTN_CHAR;
@@ -159,6 +171,9 @@ private:
     std::unique_ptr<AreaTransition> _areaTransition;
     StatusSummaryIndicator _journalIndicator;
     StatusSummaryIndicator _plotXPIndicator;
+    bool _capturePresentation {false};
+    bool _captureCombatPresentation {false};
+    bool _captureTransitionPresentation {false};
 
     void preload(gui::IGUI &gui) override;
     void onGUILoaded() override;
@@ -262,7 +277,6 @@ private:
     void updateTransitionPresentation();
     std::optional<TransitionPortal> currentTransitionCandidate() const;
 
-    void renderHealth(int memberIndex);
     void renderMinimap();
 };
 

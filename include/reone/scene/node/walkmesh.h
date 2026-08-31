@@ -19,7 +19,6 @@
 
 #include "../node.h"
 
-#include "reone/graphics/mesh.h"
 #include "reone/graphics/walkmesh.h"
 
 namespace reone {
@@ -51,15 +50,10 @@ public:
         _point = false;
     }
 
-    void init();
-    void render(IRenderPass &pass);
-
     const graphics::Walkmesh &walkmesh() const { return _walkmesh; }
 
 private:
     graphics::Walkmesh &_walkmesh;
-
-    std::shared_ptr<graphics::Mesh> _mesh;
 };
 
 } // namespace scene

@@ -31,20 +31,25 @@
 #include "di/services.h"
 #include "effect.h"
 #include "event.h"
+#include "floatingtext.h"
 #include "gui/chargen.h"
 #include "gui/computer.h"
+#include "gui/confirmpopup.h"
 #include "gui/container.h"
 #include "gui/conversation.h"
 #include "gui/dialog.h"
+#include "gui/galaxymap.h"
 #include "gui/hud.h"
 #include "gui/ingame.h"
 #include "gui/loadscreen.h"
 #include "gui/mainmenu.h"
 #include "gui/map.h"
 #include "gui/partyselect.h"
+#include "gui/pazaak.h"
 #include "gui/saveload.h"
 #include "journal.h"
 #include "location.h"
+#include "messagelog.h"
 #include "object/area.h"
 #include "object/camera/animated.h"
 #include "object/camera/dialog.h"
@@ -62,10 +67,14 @@
 #include "object/waypoint.h"
 #include "options.h"
 #include "party.h"
+#include "pazaaksession.h"
+#include "saveprovenance.h"
+#include "savegame.h"
 #include "script/runner.h"
-#include "swooprace.h"
 #include "statussummary.h"
+#include "swooprace.h"
 #include "talent.h"
+#include "turret.h"
 
 #include <queue>
 #include <vector>
@@ -81,10 +90,30 @@ class GUI;
 namespace graphics {
 
 class Font;
+class Model;
+class Texture;
 
-}
+} // namespace graphics
 
 namespace game {
+
+enum class ModuleLoadContext {
+    FreshModule,
+    InitialSaveRestore,
+    SavedModuleTransition,
+};
+
+ModuleLoadContext resolveModuleLoadContext(
+    bool initialSaveRestore,
+    bool savedModuleSnapshot);
+
+bool restoresSavedWorld(ModuleLoadContext context);
+bool restoresSavedSession(ModuleLoadContext context);
+
+struct SavedObjectReference;
+struct SerializedScriptSituation;
+class SavedScriptContinuation;
+class ModuleSnapshotBuilder;
 
 class Game : boost::noncopyable {
 public:
@@ -99,7 +128,12 @@ public:
         Container,
         PartySelection,
         SaveLoad,
-        SwoopRace
+        GalaxyMap,
+        SwoopRace,
+        PazaakWager,
+        PazaakSetup,
+        PazaakBoard,
+        Turret
     };
 
     Game(
@@ -116,7 +150,9 @@ public:
         _party(*this),
         _combat(*this, services),
         _swoopRace(*this),
-        _journal(services.resource.gffs, services.resource.strings) {
+        _turret(*this, services),
+        _journal(services.resource.gffs, services.resource.strings),
+        _floatingText(*this, services) {
         initJournalNotifications();
     }
 
@@ -124,26 +160,104 @@ public:
 
     bool handle(const input::Event &event);
     void update(float frameTime);
+
+    /**
+     * Milliseconds of simulated time since the game started.
+     *
+     * Advances by the frame delta rather than by the wall clock, so anything
+     * measured against it behaves the same at any frame rate and repeats
+     * exactly on a capture run. Creature path caching is measured against it;
+     * on the wall clock, how often a path was recomputed depended on how fast
+     * the machine happened to be running.
+     */
+    uint32_t simulatedMillis() const { return static_cast<uint32_t>(_simulatedTime * 1000.0f); }
     void render();
+
+    /**
+     * Run the scene pipeline and keep its output, without compositing it.
+     *
+     * Split from render() because Vulkan cannot begin a render pass inside
+     * another: the scene's passes must be recorded before the frame's 2D scope
+     * opens, and only the composite belongs inside it. Harmless to call on the
+     * OpenGL path, where render() would have done both.
+     */
+    void renderSceneOffscreen();
+
+    /**
+     * How the game asks its host to present a complete frame.
+     *
+     * A long synchronous load draws a loading screen partway through, and on a
+     * backend with explicit frames that cannot be a bare render() call: there is
+     * no frame open, so every draw is illegal. The host owns frame boundaries,
+     * so it supplies this and the game asks rather than assumes.
+     */
+    void setPresentFrame(std::function<void()> presentFrame) {
+        _presentFrame = std::move(presentFrame);
+    }
+
+    /**
+     * Report, and clear, whether a break in gameplay time has occurred since
+     * the last call.
+     *
+     * Loading a module blocks for as long as reading it takes, and that wall
+     * time is not time the game world experienced. The caller owns the frame
+     * clock, so it is the caller that has to open a new epoch; this only says
+     * that one is due.
+     */
+    bool consumeTimingDiscontinuity();
 
     void playVideo(const std::string &name);
 
     bool isPaused() const { return _paused; }
     bool isTSL() const { return _gameId == resource::GameID::TSL; }
+    resource::GameID gameId() const { return _gameId; }
 
     Camera *getActiveCamera() const;
+
+    /**
+     * One line describing what a capture is a capture OF: module, party
+     * leader position, active camera pose, and an FNV hash over all of it.
+     *
+     * Exists because two captures compared against each other silently
+     * disagreed on their game state - a conversation had advanced the camera
+     * in one run and not the other - and nothing in either image said so.
+     * The harness logs this beside every capture and refuses to compare
+     * frames whose digests differ.
+     */
+    std::string captureStateDigest() const;
 
     OptionsView &options() { return _options; }
     const OptionsView &options() const { return _options; }
     Party &party() { return _party; }
     Combat &combat() { return _combat; }
     Journal &journal() { return _journal; }
+    MessageLog &messageLog() { return _messageLog; }
+    FloatingText &floatingText() { return _floatingText; }
     ScriptRunner &scriptRunner() { return *_scriptRunner; }
     Map &map() { return *_map; }
     script::IRoutines &routines() { return *_routines; }
 
     std::shared_ptr<Module> module() const { return _module; }
     CameraType cameraType() const { return _cameraType; }
+    /**
+     * Enter or leave the free camera, which is the first-person one.
+     *
+     * False when the game is in no state to fly - no module, or a screen that
+     * is not the in-game one. The console's `camera free` and the editor's
+     * menu toggle both ask through here rather than each testing the
+     * conditions themselves.
+     */
+    bool setFreeCameraEnabled(bool enabled);
+    /**
+     * Enter or leave the free camera, the same way the `camera free` console
+     * command does. Exposed so the developer UI can offer it as a toggle:
+     * flying the scene is how shadow direction, reflections and anything else
+     * view-dependent get checked, and reaching for the console every time is
+     * friction that discourages looking.
+     *
+     * Returns false when the free camera is unavailable - outside a module,
+     * there is nothing to fly.
+     */
     const std::set<std::string> &moduleNames() const { return _moduleNames; }
     const std::set<std::string> &saveNames() const { return _saveNames; }
 
@@ -152,10 +266,14 @@ public:
 
     void setCursorType(resource::CursorType type);
     void setPaused(bool paused);
+    /** Re-fit every loaded GUI to the current render extent, after it changed. */
+    void refreshGUILayouts();
     void setRelativeMouseMode(bool relative);
 
     void openMainMenu();
     void openInGame();
+
+    bool hasPlayableRuntimeSession() const { return _runtimeSessionPlayable; }
 
     // Swoop race (developer skeleton)
 
@@ -167,12 +285,48 @@ public:
     void exitSwoopRace();
 
     // END Swoop race
+
+    // Turret minigame
+
+    void openTurret();
+    void closeTurret();
+
+    // Exit the active turret: returns to the lifecycle origin if a lifecycle
+    // session is in progress, otherwise just stops the dev session in place.
+    void exitTurret();
+
+    // END Turret minigame
+
     void openInGameMenu(InGameMenuTab tab);
     void openLevelUp();
     void notifyLevelUpPending(const Creature &creature);
     void openContainer(const std::shared_ptr<Object> &container);
     void openPartySelection(const PartySelectionContext &ctx);
     void openSaveLoad(SaveLoadMode mode);
+    void openGalaxyMap(int initialPlanet);
+    /** Whether the galaxy map may take the screen over from the given one. */
+    static bool canOpenGalaxyMapFrom(Screen screen);
+
+    // KotOR I Pazaak lifecycle
+
+    bool playPazaak(
+        int opponentDeck,
+        std::string continuationScript,
+        int maximumWager,
+        bool tutorialRequested,
+        const std::shared_ptr<Object> &opponent);
+
+    PazaakSession *pazaakSession() { return _pazaakSession.get(); }
+    const PazaakSession *pazaakSession() const { return _pazaakSession.get(); }
+    const std::optional<PazaakCompletedResult> &lastPazaakResult() const { return _lastPazaakResult; }
+
+    void showPazaakSetup();
+    void showPazaakBoard();
+    void cancelPazaak();
+    void abortPazaak();
+    void completePazaakIfReady();
+
+    // END KotOR I Pazaak lifecycle
 
     void startCharacterGeneration();
     void startDialog(const std::shared_ptr<Object> &owner, const std::string &resRef);
@@ -196,6 +350,11 @@ public:
 
     Screen currentScreen() const {
         return _screen;
+    }
+
+    /** True while a conversation owns the screen, i.e. a dialogue is running. */
+    bool isConversationActive() const {
+        return _screen == Screen::Conversation;
     }
 
     std::shared_ptr<movie::IMovie> movie() const {
@@ -223,17 +382,43 @@ public:
     /**
      * @param entry waypoint tag to spawn at, or empty string to spawn at default location
      */
-    void loadModule(const std::string &name, std::string entry = "", bool fromSave = false);
+    bool loadModule(
+        const std::string &name,
+        std::string entry = "",
+        bool initialSaveRestore = false);
 
     void scheduleModuleTransition(const std::string &moduleName, const std::string &entry);
     void scheduleModuleTransitionWithMovies(const std::string &moduleName, const std::string &entry, std::vector<std::string> movies);
 
-    // Load a savegame. Name must be one of savegame directores returned by
-    // ResourceDirector::saveNames().
-    void loadGame(std::string_view name);
+    // Load a savegame. The slot is the durable identity discovered by
+    // discoverSavedGames(); it is mounted verbatim rather than re-resolved, so
+    // the slot the player picked is the slot that gets loaded.
+    void loadGame(const resource::SaveSlotDescriptor &slot);
+
+    std::vector<SavedGame> savedGames() const;
+    const std::filesystem::path &gamePath() const { return _path; }
+
+    SaveResult requestSave(SaveRequest request);
+    SaveResult requestManualSave(uint32_t slot, std::string displayName);
+    SaveResult requestQuickSave();
+    SaveResult requestAutoSave();
+    const std::optional<SaveResult> &lastSaveResult() const {
+        return _lastSaveResult;
+    }
+    SaveEligibilityReason saveEligibility(bool requireStablePoint = false) const;
 
     // Clear state of the current game before loading a new game.
     void resetGame();
+
+    // Retire only active-module runtime objects. Party/session objects and
+    // committed save-wide state survive so an ordinary transition can build
+    // and publish its destination without becoming a full-session load.
+    void retireActiveModuleRuntime();
+
+    // Retire instantiated gameplay state without changing committed resource or
+    // save-wide logical state. Runtime reconstruction must explicitly publish a
+    // new playable session afterwards.
+    void retireRuntimeSession();
 
     // END Module loading
 
@@ -244,37 +429,60 @@ public:
     inline std::shared_ptr<Module> newModule() {
         return newObject<Module>(*this, _services);
     }
+    inline std::shared_ptr<Module> newSavedModule() {
+        // The module is not part of the serialized object graph, but it still
+        // needs a live identity: authored OnLoad scripts run with the module
+        // as OBJECT_SELF and may schedule commands back onto it.
+        return newObject<Module>(*this, _services);
+    }
     inline std::shared_ptr<Item> newItem() {
         return newObject<Item>(*this, _services);
     }
+    // Items serialized inside an owning inventory/equipment record use an
+    // owner-local identity scope. Their saved ObjectId can legitimately match
+    // another owned item or an independently registered world object, so the
+    // runtime registry must assign them a fresh unambiguous identity.
+    inline std::shared_ptr<Item> newOwnedItem() {
+        return newItem();
+    }
+    std::shared_ptr<Item> newItem(const resource::Gff &gff);
 
     inline std::shared_ptr<Area> newArea(std::string sceneName = kSceneMain) {
         return newObject<Area>(std::move(sceneName), *this, _services);
+    }
+    inline std::shared_ptr<Area> newSavedArea(uint32_t id, std::string sceneName = kSceneMain) {
+        return newObjectAtId<Area>(id, true, std::move(sceneName), *this, _services);
     }
 
     inline std::shared_ptr<Creature> newCreature(std::string sceneName = kSceneMain) {
         return newObject<Creature>(std::move(sceneName), *this, _services);
     }
+    std::shared_ptr<Creature> newCreature(const resource::Gff &gff, std::string sceneName = kSceneMain);
 
     inline std::shared_ptr<Placeable> newPlaceable(std::string sceneName = kSceneMain) {
         return newObject<Placeable>(std::move(sceneName), *this, _services);
     }
+    std::shared_ptr<Placeable> newPlaceable(const resource::Gff &gff, std::string sceneName = kSceneMain);
 
     inline std::shared_ptr<Door> newDoor(std::string sceneName = kSceneMain) {
         return newObject<Door>(std::move(sceneName), *this, _services);
     }
+    std::shared_ptr<Door> newDoor(const resource::Gff &gff, std::string sceneName = kSceneMain);
 
     inline std::shared_ptr<Waypoint> newWaypoint(std::string sceneName = kSceneMain) {
         return newObject<Waypoint>(std::move(sceneName), *this, _services);
     }
+    std::shared_ptr<Waypoint> newWaypoint(const resource::Gff &gff, std::string sceneName = kSceneMain);
 
     inline std::shared_ptr<Trigger> newTrigger(std::string sceneName = kSceneMain) {
         return newObject<Trigger>(std::move(sceneName), *this, _services);
     }
+    std::shared_ptr<Trigger> newTrigger(const resource::Gff &gff, std::string sceneName = kSceneMain);
 
     inline std::shared_ptr<Sound> newSound(std::string sceneName = kSceneMain) {
         return newObject<Sound>(std::move(sceneName), *this, _services);
     }
+    std::shared_ptr<Sound> newSound(const resource::Gff &gff, std::string sceneName = kSceneMain);
 
     inline std::shared_ptr<AnimatedCamera> newAnimatedCamera(float aspect, std::string sceneName = kSceneMain) {
         return newObject<AnimatedCamera>(aspect, std::move(sceneName), *this, _services);
@@ -299,10 +507,84 @@ public:
     inline std::shared_ptr<Encounter> newEncounter(std::string sceneName = kSceneMain) {
         return newObject<Encounter>(std::move(sceneName), *this, _services);
     }
+    std::shared_ptr<Encounter> newEncounter(const resource::Gff &gff, std::string sceneName = kSceneMain);
 
     inline std::shared_ptr<Store> newStore(std::string sceneName = kSceneMain) {
         return newObject<Store>(std::move(sceneName), *this, _services);
     }
+    std::shared_ptr<Store> newStore(const resource::Gff &gff, std::string sceneName = kSceneMain);
+
+    void prepareSavedRuntimeNamespace(const resource::Gff &ifo);
+    void reserveSavedObjectIds(const resource::Gff &gff);
+    void resolveSavedObjectReferences();
+    void bindSavedRuntimeState();
+    void publishSavedRuntimeState();
+
+    /**
+     * World time as absolute elapsed world/simulation milliseconds.
+     *
+     * This is the canonical runtime clock. It advances with simulation dt and
+     * is never rescaled; Mod_MinPerHour only changes how the calendar divides
+     * it. Retail saves store a day and a time of day instead, so that split
+     * happens at the save and load boundaries and nowhere else.
+     */
+    uint64_t worldTimeMilliseconds() const { return _worldTimeMilliseconds; }
+
+    uint8_t minutesPerHour() const { return _minutesPerHour; }
+
+    /**
+     * Whether the world currently being built came from loading a save from
+     * disk, as opposed to a new game or an ordinary module transition.
+     *
+     * Authored scripts read this to skip entry work - spawns, cutscenes,
+     * destruction - whose results the save already holds. It is true only
+     * while the initial module of a save load is being restored, so an
+     * ordinary transition or a revisit to a module the save already knows
+     * reports false.
+     */
+    bool isLoadingFromSaveGame() const { return _loadingFromSaveGame; }
+
+    /**
+     * Persist the current state of one roster NPC over its availnpc record.
+     *
+     * Scripts call this when a companion's state has to survive independently
+     * of the party it is or is not currently in - the roster record is what a
+     * later spawn reads back. Purely a write: membership, availability,
+     * control and placement are all left alone, and a slot holding no creature
+     * is silently nothing to save.
+     */
+    void saveNpcState(int npc);
+
+    /**
+     * Length of a game day in world-time milliseconds.
+     *
+     * Mod_MinPerHour shortens the day - an in-game hour lasts that many
+     * minutes of world time - it does not change the rate at which the clock
+     * advances. Matches CWorldTimer, where m_nMillisecondsInDay =
+     * MinutesPerHour * 60 * 1000 * HOURS_IN_DAY and the raw timer accumulates
+     * elapsed time.
+     */
+    uint32_t millisecondsPerWorldDay() const {
+        return static_cast<uint32_t>(_minutesPerHour == 0 ? 5 : _minutesPerHour) *
+               60u * 1000u * 24u;
+    }
+
+    /**
+     * Calendar day, derived from the canonical clock. Calendar time is a real
+     * engine concept - day/night cycles, NPC schedules, waiting - and not just
+     * a detail of the save format.
+     */
+    uint32_t worldTimeDay() const {
+        return static_cast<uint32_t>(
+            _worldTimeMilliseconds / millisecondsPerWorldDay());
+    }
+
+    /** World milliseconds elapsed within the current calendar day. */
+    uint32_t worldTimeOfDay() const {
+        return static_cast<uint32_t>(
+            _worldTimeMilliseconds % millisecondsPerWorldDay());
+    }
+    std::optional<float> remainingEffectDuration(const EffectInstance &effect) const;
 
     template <class T>
     inline std::shared_ptr<T> getObjectById(uint32_t id) const {
@@ -311,9 +593,11 @@ public:
 
     template <class T, class... Args>
     inline std::shared_ptr<T> newObject(Args &&...args) {
-        auto object = std::make_shared<T>(_nextObjectId++, std::forward<Args>(args)...);
-        auto [inserted, _] = _objectById.insert(std::make_pair(object->id(), std::move(object)));
-        return std::static_pointer_cast<T>(inserted->second);
+        while (_objectById.count(_nextObjectId) ||
+               _reservedSavedObjectIds.count(_nextObjectId)) {
+            ++_nextObjectId;
+        }
+        return newObjectAtId<T>(_nextObjectId++, false, std::forward<Args>(args)...);
     }
 
     template <class T, class... Args>
@@ -324,6 +608,24 @@ public:
     template <class T, class... Args>
     inline std::shared_ptr<T> newEffect(Args &&...args) {
         return std::make_shared<T>(std::forward<Args>(args)...);
+    }
+
+    EffectId allocateEffectId() { return _effectIds.allocate(); }
+    EffectIdImportResult importEffectId(EffectId id) { return _effectIds.importId(id); }
+    bool setNextEffectId(EffectId id) { return _effectIds.setNextId(id); }
+    EffectId nextEffectId() const { return _effectIds.nextId(); }
+    bool hasEffectId(EffectId id) const { return _effectIds.contains(id); }
+    size_t effectIdCount() const { return _effectIds.size(); }
+    bool bindEffectCreator(EffectInstance &effect) const;
+    bool bindSavedObjectReference(SavedObjectReference &reference) const;
+
+    const SaveResourceShadows &saveResourceShadows() const {
+        return _saveResourceShadows;
+    }
+    void captureSaveResourceShadow(
+        SaveResourceKey key,
+        const resource::Gff &source) {
+        _saveResourceShadows.capture(std::move(key), source);
     }
 
     template <class... Args>
@@ -372,15 +674,32 @@ public:
 
     // END Global variables
 
+    std::map<int, std::string> parseCustomTokens(
+        const resource::Gff &ifoGff) const;
+    void replaceCustomTokens(std::map<int, std::string> tokens);
     void deserializeGlobalVariables(resource::Gff &gvtGff);
     void deserializeParty(resource::Gff &ifoGff);
-    void deserializePartyTable(resource::Gff &ptGff);
+    void publishPartyRuntimeState(
+        resource::Gff &ifoGff,
+        const std::shared_ptr<resource::Gff> &ptGff,
+        const std::shared_ptr<resource::Gff> &pcGff);
+    Party::PersistedState parsePartyTable(const resource::Gff &ptGff) const;
+    void replacePartyTable(Party::PersistedState state);
+    void deserializePazaakPartyTable(resource::Gff &ptGff);
+    void deserializeAvailableNpcs();
+    void deserializeGalaxyMap(resource::Gff &ptGff);
+    void resetGalaxyMap();
+    void serializePazaakPartyTable(resource::Gff &ptGff) const;
     void deserializePartyMembers(resource::Gff &ptGff);
     void deserializeJournal(const resource::Gff &ptGff);
     void deserializeInventory(resource::Gff &inventoryGff);
 
 private:
     friend class TestGameModule;
+    friend class ModuleSnapshotBuilder;
+    friend class SaveWideSnapshotBuilder;
+    friend struct SerializedScriptSituation;
+    friend class SavedScriptContinuation;
 
     resource::GameID _gameId;
     std::filesystem::path _path;
@@ -401,19 +720,35 @@ private:
     DeveloperOverlay _developerOverlay;
     std::shared_ptr<graphics::Font> _developerFont;
 
-    // Non-blocking swoop lifecycle session: origin module/state -> swoop module
-    // -> auto-start race -> forced-success finish -> return to origin. Passive
+    // Non-blocking minigame lifecycle session: origin module/state -> minigame
+    // module -> auto-start -> forced-success finish -> return to origin. Passive
     // bookkeeping only; it does not touch party membership, inventory, or story.
-    struct SwoopLifecycle {
-        bool active {false};        // a lifecycle race is in progress (return pending)
+    struct MinigameLifecycle {
+        bool active {false};        // a lifecycle session is in progress (return pending)
         bool haveOrigin {false};    // origin position/facing captured
         std::string originModule;   // module resref to return to
         glm::vec3 originPosition {0.0f};
         float originFacing {0.0f};
-        bool forcedSuccess {true};  // PR1: finish is always non-blocking success
+        bool forcedSuccess {true}; // PR1: finish is always non-blocking success
     };
 
-    SwoopLifecycle _swoopLifecycle;
+    MinigameLifecycle _swoopLifecycle;
+    MinigameLifecycle _turretLifecycle;
+
+    // A turret session scheduled by the startturretgame console command. The
+    // transition goes through the normal deferred module load, so whether the
+    // target really is a turret area is only known once it has loaded; this
+    // carries the return origin across that gap.
+    struct PendingTurretRequest {
+        bool active {false};
+        std::string targetModule;
+        std::string originModule;
+        glm::vec3 originPosition {0.0f};
+        float originFacing {0.0f};
+        bool haveOrigin {false};
+    };
+
+    PendingTurretRequest _pendingTurret;
 
     std::shared_ptr<movie::IMovie> _movie;
     std::queue<std::string> _moduleTransitionMovies;
@@ -423,20 +758,45 @@ private:
     CameraType _cameraType {CameraType::ThirdPerson};
     CameraType _savedCameraType {CameraType::ThirdPerson};
     bool _paused {false};
+    bool _timingDiscontinuity {false};
     std::set<std::string> _moduleNames;
     std::set<std::string> _saveNames;
     bool _quitRequested {false};
     bool _relativeMouseMode {false};
+    bool _showImGui {false};
 
-    uint32_t _nextObjectId {2}; // ids 0 and 1 are reserved
+    static constexpr uint32_t kFirstRuntimeObjectId = 2; // ids 0 and 1 are reserved
+    uint32_t _nextObjectId {kFirstRuntimeObjectId};
     std::map<uint32_t, std::shared_ptr<Object>> _objectById;
+    std::set<uint32_t> _reservedSavedObjectIds;
+    EffectIdNamespace _effectIds;
+    bool _runtimeSessionPlayable {false};
+    bool _cheatUsed {false};
+    uint64_t _runtimeSessionGeneration {1};
+    bool _loadingFromSaveGame {false};
+    uint64_t _worldTimeMilliseconds {0};
+    uint8_t _minutesPerHour {5};
+    double _worldTimeFraction {0.0};
+    double _playedTimeFraction {0.0};
+
+    std::optional<SaveRequest> _pendingSave;
+    std::optional<SaveResult> _lastSaveResult;
+    uint64_t _nextSaveRequestId {1};
+    bool _saveInProgress {false};
+    bool _transitionInProgress {false};
+    bool _atStableSavePoint {false};
+    SaveOrchestrationSeams _saveSeams;
+    graphics::Texture *_lastRenderedSceneOutput {nullptr};
 
     // Services
 
     Party _party;
     Combat _combat;
     SwoopRace _swoopRace;
+    Turret _turret;
     Journal _journal;
+    MessageLog _messageLog;
+    FloatingText _floatingText;
     StatusSummaryAccumulator _statusSummary;
 
     std::unique_ptr<script::IRoutines> _routines;
@@ -449,12 +809,40 @@ private:
     std::unique_ptr<MainMenu> _mainMenu;
     std::unique_ptr<CharacterGeneration> _charGen;
     std::unique_ptr<HUD> _hud;
+    bool _captureHUDPresentation {false};
     std::unique_ptr<InGameMenu> _inGame;
     std::unique_ptr<DialogGUI> _dialog;
     std::unique_ptr<ComputerGUI> _computer;
+    std::unique_ptr<ConfirmPopup> _confirmPopup;
     std::unique_ptr<ContainerGUI> _container;
     std::unique_ptr<PartySelection> _partySelect;
     std::unique_ptr<SaveLoad> _saveLoad;
+    std::unique_ptr<GalaxyMap> _galaxyMap;
+    std::unique_ptr<PazaakWagerGUI> _pazaakWager;
+    std::unique_ptr<PazaakSetupGUI> _pazaakSetup;
+    std::unique_ptr<PazaakBoardGUI> _pazaakBoard;
+
+    std::unique_ptr<PazaakSession> _pazaakSession;
+    std::optional<PazaakCompletedResult> _lastPazaakResult;
+    std::weak_ptr<Object> _pazaakContinuationCaller;
+    Screen _pazaakOriginScreen {Screen::None};
+    bool _pazaakGUIsReady {false};
+    bool _pazaakDevelopmentLaunch {false};
+    bool _pazaakSelectionPersisted {false};
+    bool _pazaakSettlementApplied {false};
+    bool _pazaakShowcaseHands {false};
+    float _pazaakOpponentEventElapsed {0.0f};
+
+    // Narrow injectable seams used by focused lifecycle tests.
+    PazaakSession::HandSelector _pazaakPlayerHandSelector;
+    PazaakSession::HandSelector _pazaakOpponentHandSelector;
+    PazaakSession::MainDeckFactory _pazaakMainDeckFactory;
+    PazaakSession::FirstParticipantSelector _pazaakFirstParticipantSelector;
+    bool _pazaakPaceAutomaticDraws {true};
+    std::function<bool()> _pazaakGuiLoadOverride;
+    std::function<void(const std::string &, uint32_t)> _pazaakContinuationOverride;
+    std::weak_ptr<Object> _pazaakDevelopmentSelectedObjectOverride;
+    std::optional<pazaak::SideDeck> _pazaakOpponentDeckOverride;
 
     std::unique_ptr<Map> _map;
     std::unique_ptr<LoadingScreen> _loadScreen;
@@ -487,11 +875,47 @@ private:
     std::map<std::string, int, GVCompare> _globalNumbers;
     std::map<std::string, std::shared_ptr<Location>, GVCompare> _globalLocations;
     std::map<int, std::string> _customTokens;
+    SaveResourceShadows _saveResourceShadows;
 
     // END Global variables
 
     void stopMovement();
 
+    void advanceWorldTime(float dt);
+    void advancePlayedTime(float dt);
+    bool storeCurrentModuleForTransition();
+    void processPendingSave();
+    void finalizeSaveRequest(const SaveRequest &request, SaveResult result);
+    SaveResult executeSave(SaveRequest request);
+    SaveMetadataInput buildSaveMetadata(const SaveRequest &request) const;
+    resource::SaveSlotDescriptor saveTarget(const SaveRequest &request) const;
+    std::map<std::string, ByteBuffer> currentLooseSavePassthrough() const;
+    std::optional<ByteBuffer> captureSaveScreenshot();
+
+    uint32_t savedObjectId(const resource::Gff &gff) const;
+    void registerObject(
+        const std::shared_ptr<Object> &object,
+        bool allowReserved);
+
+    template <class T, class... Args>
+    inline std::shared_ptr<T> newObjectAtId(
+        uint32_t id,
+        bool allowReserved,
+        Args &&...args) {
+        auto object = std::make_shared<T>(id, std::forward<Args>(args)...);
+        registerObject(object, allowReserved);
+        return object;
+    }
+
+    template <class T, class... Args>
+    inline std::shared_ptr<T> newObjectFromGff(
+        const resource::Gff &gff,
+        Args &&...args) {
+        return newObjectAtId<T>(
+            savedObjectId(gff),
+            true,
+            std::forward<Args>(args)...);
+    }
     void loadDefaultParty();
     bool loadParty();
     void loadNextModule();
@@ -501,6 +925,25 @@ private:
     // Stop the active lifecycle race and return to the stored origin module
     // (restoring the leader's position/facing). Safe no-op if no lifecycle race.
     void finishSwoopLifecycle(bool success);
+
+    // Same, for the turret minigame. The outcome is carried through rather than
+    // reduced to a success flag: a win, a loss and an abandoned session all
+    // return to the origin, but only a win emits the completion state.
+    void finishTurretLifecycle(Turret::Outcome outcome);
+
+    // Apply the vanilla post-turret globals for the given turret module
+    // (K1 M12ab confirmed; others no-op). Only a victory writes them.
+    void applyTurretResult(const std::string &turretModule, Turret::Outcome outcome);
+
+    // Give up on a scheduled turret session and go back where it started.
+    void abandonPendingTurret(const std::string &reason);
+
+    // Send the party back to a lifecycle session's origin, restoring the
+    // leader's recorded position and facing.
+    void returnToLifecycleOrigin(const std::string &module,
+                                 bool haveOrigin,
+                                 const glm::vec3 &position,
+                                 float facing);
 
     // Show/hide the active party creatures. Used to suppress the normal party
     // while a minigame is running: vanilla does not add the party to the scene
@@ -537,13 +980,20 @@ private:
     void updateMusic();
     void updateCamera(float dt);
     void updateSceneGraph(float dt);
+    void updateImGui(float dt);
 
     // END Updates
 
     // Rendering
 
     void renderScene();
+    void presentFrame();
     void renderGUI();
+
+    graphics::Texture *_sceneOutput {nullptr};
+    /** Accumulated frame deltas; see simulatedMillis. */
+    float _simulatedTime {0.0f};
+    std::function<void()> _presentFrame;
     void renderDeveloperOverlay();
     void renderDeveloperBanner();
     void renderDeveloperTriggerOverlay(const glm::mat4 &projection, const glm::mat4 &view);
@@ -558,6 +1008,15 @@ private:
     // GUI
 
     void loadInGameMenus();
+    bool loadPazaakGUIs();
+    bool startPazaakFlow(
+        PazaakSessionParams params,
+        const std::shared_ptr<Object> &continuationCaller,
+        bool developmentLaunch);
+    bool startDevelopmentPazaak(std::string opponentName, int maximumWager = 0);
+    void finishPazaak(PazaakCompletedResult result);
+    void releasePazaakFlow(bool restoreOrigin);
+    Screen safePazaakOriginScreen() const;
 
     void changeScreen(Screen screen);
 
@@ -616,12 +1075,38 @@ private:
     void consoleGiveXP(const ConsoleArgs &tokens);
     void consoleGiveGold(const ConsoleArgs &tokens);
     void consoleWarp(const ConsoleArgs &tokens);
+    void consoleOpenMenu(const ConsoleArgs &tokens);
+    void consoleOpenCharacterGeneration(const ConsoleArgs &tokens);
+    void consoleSkipMovie(const ConsoleArgs &tokens);
+    void consoleShowBark(const ConsoleArgs &tokens);
+    void consoleShowPopup(const ConsoleArgs &tokens);
+    void consoleShowGalleryMode(const ConsoleArgs &tokens);
+    void consoleSeed(const ConsoleArgs &tokens);
+    void consoleGraphics(const ConsoleArgs &tokens);
+    void consoleGameSpeed(const ConsoleArgs &tokens);
+    void consoleRestartHistory(const ConsoleArgs &tokens);
+    void consoleShowHUD(const ConsoleArgs &tokens);
+    void consoleShowTransition(const ConsoleArgs &tokens);
+    void consoleOpenContainer(const ConsoleArgs &tokens);
+    void consoleAction(const ConsoleArgs &tokens);
+    void consoleExitMenu(const ConsoleArgs &tokens);
+    void consoleSelectDialogOption(const ConsoleArgs &tokens);
+    void loadTestbed(const std::string &variant);
+    void consoleScene(const ConsoleArgs &tokens);
+    void consoleSpawn(const ConsoleArgs &tokens);
+    void consoleGrass(const ConsoleArgs &tokens);
+    void consoleGrassDensity(const ConsoleArgs &tokens);
+    void consoleEmit(const ConsoleArgs &tokens);
+    void consoleIgnite(const ConsoleArgs &tokens);
+    void consoleCamera(const ConsoleArgs &tokens);
+    void consoleCamPos(const ConsoleArgs &tokens);
+    void consoleCamLook(const ConsoleArgs &tokens);
+    void consoleCamStatus(const ConsoleArgs &tokens);
+    void consoleCamFov(const ConsoleArgs &tokens);
     void consoleRunScript(const ConsoleArgs &tokens);
-    void consoleShowAABB(const ConsoleArgs &tokens);
-    void consoleShowWalkmesh(const ConsoleArgs &tokens);
-    void consoleShowTriggers(const ConsoleArgs &tokens);
     void consoleSpawnCreature(const ConsoleArgs &tokens);
     void consoleSpawnCompanion(const ConsoleArgs &tokens);
+    void consoleAddAvailableNpc(const ConsoleArgs &tokens);
     void consoleSelectObjectById(const ConsoleArgs &tokens);
     void consoleSelectObjectByTag(const ConsoleArgs &tokens);
     void consoleSelectLeader(const ConsoleArgs &tokens);
@@ -642,12 +1127,29 @@ private:
     void consoleOpenCloseDoor(const ConsoleArgs &tokens);
     void consoleListGames(const ConsoleArgs &tokens);
     void consoleLoadGame(const ConsoleArgs &tokens);
+    void consoleSaveGame(const ConsoleArgs &tokens);
+    void consoleStartPazaak(const ConsoleArgs &tokens);
     void consoleMiniGameInfo(const ConsoleArgs &tokens);
     void consoleStartSwoop(const ConsoleArgs &tokens);
     void consoleStopSwoop(const ConsoleArgs &tokens);
     void consoleSwoopState(const ConsoleArgs &tokens);
     void consoleStartSwoopRace(const ConsoleArgs &tokens);
     void consoleFinishSwoop(const ConsoleArgs &tokens);
+    void consoleStartTurret(const ConsoleArgs &tokens);
+    void consoleStopTurret(const ConsoleArgs &tokens);
+    void consoleTurretState(const ConsoleArgs &tokens);
+    void consoleStartTurretGame(const ConsoleArgs &tokens);
+    void consoleShowImGui(const ConsoleArgs &tokens);
+    void consoleShowPath(const ConsoleArgs &tokens);
+
+    // The raw model most recently admitted by `spawn`.  Emitter and saber
+    // fixtures use this deliberately narrow handle rather than an editor-wide
+    // object selection model.
+    std::shared_ptr<scene::ModelSceneNode> _consoleSpawnedModel;
+    bool _consoleEmittersEnabled {false};
+    std::shared_ptr<graphics::Model> _consoleTestbedFloor;
+    std::shared_ptr<graphics::Model> _consoleTestbedSmoke;
+    std::shared_ptr<graphics::Texture> _consoleTestbedWhite;
 
     // END Console commands
 };

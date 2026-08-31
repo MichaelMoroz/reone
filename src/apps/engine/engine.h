@@ -17,11 +17,15 @@
 
 #pragma once
 
+#include <chrono>
+#include <optional>
+
 #include "reone/audio/di/module.h"
 #include "reone/game/di/module.h"
 #include "reone/game/game.h"
 #include "reone/graphics/di/module.h"
 #include "reone/graphics/window.h"
+#include "reone/graphics/rhi/renderer.h"
 #include "reone/gui/di/module.h"
 #include "reone/input/event.h"
 #include "reone/movie/di/module.h"
@@ -34,17 +38,21 @@
 #include "options.h"
 #include "profiler.h"
 
+#include <filesystem>
+#include <deque>
+#include <vector>
+
 namespace reone {
+
+class Editor;
 
 class Engine : boost::noncopyable {
 public:
-    Engine(Options &options) :
-        _options(options) {
-    }
+    // Defined out of line because Editor is an incomplete type here.
+    Engine(Options &options);
+    ~Engine();
 
-    ~Engine() {
-        deinit();
-    }
+    friend class Editor;
 
     void init();
     void deinit();
@@ -55,6 +63,12 @@ public:
     int run();
 
 private:
+    struct CaptureRequest {
+        std::filesystem::path path;
+        int count {1};
+        int index {0};
+    };
+
     struct FrameStates {
         static constexpr int rendered = 0;
         static constexpr int updating = 1;
@@ -66,6 +80,7 @@ private:
 
     std::unique_ptr<game::OptionsView> _optionsView;
     std::unique_ptr<graphics::Window> _window;
+    std::unique_ptr<graphics::IRenderer> _renderer;
 
     std::unique_ptr<Clock> _clock;
     std::unique_ptr<SystemModule> _systemModule;
@@ -82,18 +97,141 @@ private:
     std::unique_ptr<game::Game> _game;
     std::unique_ptr<Profiler> _profiler;
     std::unique_ptr<Console> _console;
+    std::unique_ptr<Editor> _editor;
 
     std::queue<input::Event> _events;
 
+    struct AutomatedInputEvent {
+        /** Frame this is due on, or -1 when the entry carries a time instead. */
+        int frame {0};
+        /** Simulated seconds this is due at; read only when frame is -1. */
+        float time {0.0f};
+        SDL_Event event {};
+    };
+    std::vector<AutomatedInputEvent> _automatedInput;
+    size_t _nextAutomatedInput {0};
+    /** Set once a replay has run out of input and asked the loop to stop. */
+    bool _replayFinished {false};
+
     uint64_t _ticks {0};
+
+    int _frameIndex {0};
+    bool _commandsRun {false};
+    bool _inFrame {false};
+    bool _renderdocTriggered {false};
+    bool _graphicsRebuildRequested {false};
+    /** A staged commit waiting for the rebuild point to install it. */
+    bool _graphicsCommitPending {false};
+    /**
+     * The simulation clock: the sum of every frameTime the loop hands out.
+     *
+     * Input is recorded and replayed against this rather than against the
+     * frame index, because a frame number is not a moment. Headless pins
+     * frameTime to 1/60s while a windowed session takes the wall clock, so
+     * one frame number is two different instants in the two - while one
+     * value of this clock is the same instant in both. That is what lets a
+     * session recorded at 33 fps replay headless at 250 and still put every
+     * click where the player put it.
+     */
+    float _simClock {0.0f};
+    std::ofstream _inputRecording;
+    /**
+     * Where a replay's ImGui layout is written, kept alive because ImGui
+     * stores the pointer rather than the string.
+     */
+    std::string _replayImGuiIni;
+    std::deque<std::string> _scriptedCommands;
+    int _scriptPauseFrames {0};
+    /**
+     * Wall-clock deadline for `pausesec`, or unset.
+     *
+     * A sibling of the frame counter rather than a replacement, because the two
+     * answer different questions. A frame count is what a deterministic capture
+     * wants: it is the same wait whatever the machine does, so a scripted shot
+     * lands on the same frame every run. Wall clock is what reproducing a
+     * PERSON is for - headless renders as fast as it can, so the frame count
+     * that reads as ten seconds on their screen elapses in a fraction of that
+     * here, and anything paced by real time (streaming, animation, an idle AI
+     * turn) has not happened yet when the next command runs.
+     */
+    std::optional<std::chrono::steady_clock::time_point> _scriptPauseUntil;
+    std::optional<CaptureRequest> _captureRequest;
+    bool _scriptQuitRequested {false};
 
     bool _showCursor {true};
     bool _relativeMouseMode {false};
 
+    /**
+     * The edit buffer for options that cannot take effect inside a frame.
+     *
+     * Options classified OptionApply::Reapply change what the pipeline
+     * allocates, so a control that wrote them straight through would leave the
+     * running frame describing a pipeline that does not exist. They are edited
+     * here instead and copied across by applyStagedGraphics, which is also what
+     * schedules the rebuild. Live options are not staged: they are written to
+     * _options.graphics directly and only the Reapply fields of this copy are
+     * ever read, so the two never disagree about anything else.
+     *
+     * One buffer, shared by the editor's Apply button and the console's
+     * "gfx apply", so there is a single path rather than two.
+     */
+    graphics::GraphicsOptions _stagedGraphics;
+
     void processEvents(bool &quit);
+    void loadInputScript();
+    /** Open the recording file and write its header. No-op without the option. */
+    void openInputRecording();
+    /** Append one real input event, stamped with the simulation clock. */
+    void recordInputEvent(const SDL_Event &event);
+    void runCommandsFile(const std::string &path);
+    /** Records the GUI through the 2D renderer, in its own rendering scope. */
+    void renderFrame(bool &quit);
+    void renderVulkanFrame(bool &quit);
+    void processScriptedCommands(bool &quit);
+    void captureIfRequested(bool &quit);
+    void captureFrame(const std::filesystem::path &path);
+    std::filesystem::path numberedCapturePath(const CaptureRequest &request) const;
+    void dumpTargetsIfRequested();
+    void dumpObjectsIfRequested();
 
     void showCursor(bool show);
     void setRelativeMouseMode(bool relative);
+    void requestGraphicsRebuild() { _graphicsRebuildRequested = true; }
+    /**
+     * Take a requested rebuild, between frames.
+     *
+     * Deliberately not inside the frame: the editor submits ImGui image handles
+     * owned by the scene pipeline while the update slot's ImGui frame is open,
+     * so a rebuild taken after that point would free a descriptor the recorded
+     * draw data still names. It waits the device idle itself rather than
+     * relying on a swapchain recreate to have done so, because a change that
+     * leaves the extent alone - the render mode, the anti-aliasing slot - never
+     * triggers one.
+     */
+    void applyGraphicsRebuild();
+
+    // Runtime graphics options. The editor reaches these as a friend; the
+    // console reaches them through the commands registered in init.
+
+    graphics::GraphicsOptions &stagedGraphicsOptions() { return _stagedGraphics; }
+    /** Names of the staged reapply options that differ from the live ones. */
+    std::vector<std::string> stagedGraphicsChanges() const;
+    /** Copy the staged reapply options into the live ones and rebuild. */
+    void applyStagedGraphics();
+    /** Install the staged Reapply values. Only applyGraphicsRebuild calls this. */
+    void commitStagedGraphics();
+    /** Discard staged edits, restoring the running configuration. */
+    void revertStagedGraphics();
+    /**
+     * Set one option by its command-line name, into the live options or the
+     * staged copy according to its class.
+     *
+     * @return a line describing what happened, for the console to print.
+     * @throws std::invalid_argument naming the option, on an unknown name or
+     *         an unreadable value.
+     */
+    std::string setGraphicsOption(const std::string &name, const std::string &value);
+    void registerGraphicsCommands();
 
     std::optional<input::Event> eventFromSDLEvent(const SDL_Event &sdlEvent) const;
 };

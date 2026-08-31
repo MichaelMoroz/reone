@@ -31,7 +31,8 @@ namespace scene {
 class MockSceneGraph : public ISceneGraph, boost::noncopyable {
 public:
     MOCK_METHOD(void, update, (float dt), (override));
-    MOCK_METHOD(graphics::Texture &, render, (const glm::ivec2 &dim), (override));
+    MOCK_METHOD(graphics::Texture &, render,
+                (const glm::ivec2 &dim, SceneOutputAlpha alpha), (override));
 
     MOCK_METHOD(void, clear, (), (override));
 
@@ -55,9 +56,11 @@ public:
     MOCK_METHOD(std::optional<std::reference_wrapper<ModelSceneNode>>, pickModelRay, (const glm::vec3 &, const glm::vec3 &), (const override));
 
     MOCK_METHOD(const std::string &, name, (), (const override));
+    MOCK_METHOD(IRenderPipeline *, renderPipeline, (), (override));
     MOCK_METHOD(std::optional<std::reference_wrapper<CameraSceneNode>>, camera, (), (override));
 
     MOCK_METHOD(void, setAmbientLightColor, (glm::vec3), (override));
+    MOCK_METHOD(void, setShadowProperties, (ShadowProperties properties), (override));
     MOCK_METHOD(void, setFog, (FogProperties fog), (override));
 
     MOCK_METHOD(void, setWalkableSurfaces, (std::set<uint32_t>), (override));
@@ -66,10 +69,10 @@ public:
 
     MOCK_METHOD(void, setActiveCamera, (CameraSceneNode *), (override));
     MOCK_METHOD(void, setUpdateRoots, (bool), (override));
-
-    MOCK_METHOD(void, setRenderAABB, (bool), (override));
-    MOCK_METHOD(void, setRenderWalkmeshes, (bool), (override));
-    MOCK_METHOD(void, setRenderTriggers, (bool), (override));
+    MOCK_METHOD(void, setGrass, (bool, float), (override));
+    MOCK_METHOD(bool, grassEnabled, (), (const override));
+    MOCK_METHOD(float, grassDensityScale, (), (const override));
+    MOCK_METHOD(uint64_t, grassGeneration, (), (const override));
 
     MOCK_METHOD(std::shared_ptr<CameraSceneNode>, newCamera, (), (override));
     MOCK_METHOD(std::shared_ptr<ModelSceneNode>, newModel, (graphics::Model &, ModelUsage), (override));
@@ -82,7 +85,6 @@ public:
     MOCK_METHOD(std::shared_ptr<EmitterSceneNode>, newEmitter, (graphics::ModelNode & modelNode), (override));
     MOCK_METHOD(std::shared_ptr<ParticleSceneNode>, newParticle, (EmitterSceneNode & emitter), (override));
     MOCK_METHOD(std::shared_ptr<GrassSceneNode>, newGrass, (GrassProperties properties, graphics::ModelNode &aabbNode), (override));
-    MOCK_METHOD(std::shared_ptr<GrassClusterSceneNode>, newGrassCluster, (GrassSceneNode & grass), (override));
 
     MOCK_METHOD(std::shared_ptr<graphics::Camera>, camera, (), (const override));
     MOCK_METHOD(const glm::vec3 &, ambientLightColor, (), (const override));
@@ -99,6 +101,15 @@ public:
     MOCK_METHOD(glm::vec3, shadowLightPosition, (), (const override));
     MOCK_METHOD(float, shadowStrength, (), (const override));
     MOCK_METHOD(float, shadowRadius, (), (const override));
+    MOCK_METHOD(void, invalidateRenderPipeline, (), (override));
+    MOCK_METHOD(bool, consumeRenderPipelineRebuild, (), (override));
+
+    MOCK_METHOD(uint32_t, internName, (std::string_view), (override));
+    MOCK_METHOD(std::string_view, nameText, (uint32_t), (const override));
+    MOCK_METHOD(const GpuScene &, gpuScene, (), (const override));
+    MOCK_METHOD(GpuScene &, gpuScene, (), (override));
+    MOCK_METHOD(const std::vector<LightSceneNode *> &, lights, (), (const override));
+    MOCK_METHOD(float, largestLightRadius, (), (const override));
 };
 
 class MockSceneGraphs : public ISceneGraphs, boost::noncopyable {
@@ -106,21 +117,31 @@ public:
     MOCK_METHOD(void, reserve, (std::string name), (override));
     MOCK_METHOD(ISceneGraph &, get, (const std::string &name), (override));
     MOCK_METHOD(std::set<std::string>, sceneNames, (), (const override));
+    MOCK_METHOD(void, invalidateRenderPipelines, (), (override));
+    MOCK_METHOD(bool, consumeRenderPipelineRebuild, (), (override));
+    MOCK_METHOD(bool, isSkyRoom, (const std::string &roomName), (const override));
 };
 
 class MockRenderPipeline : public IRenderPipeline, boost::noncopyable {
 public:
     MOCK_METHOD(void, init, (), (override));
 
-    MOCK_METHOD(void, reset, (), (override));
-    MOCK_METHOD(void, inRenderPass, (RenderPassName, std::function<void(IRenderPass &)>), (override));
-
-    MOCK_METHOD(graphics::Texture &, render, (), (override));
+    // The caster list is parenthesised because MOCK_METHOD splits its argument
+    // list on commas and std::vector<T> carries none - but a reference to one
+    // written bare still trips the macro's own comma counting on some
+    // instantiations, and the extra parentheses cost nothing.
+    MOCK_METHOD(graphics::Texture &, render,
+                ((const CameraSceneNode *), (const std::vector<RenderShadowCaster> &),
+                 (SceneOutputAlpha)),
+                (override));
+    MOCK_METHOD(std::vector<RenderTargetInfo>, targets, (), (const override));
 };
 
 class MockRenderPipelineFactory : public IRenderPipelineFactory, boost::noncopyable {
 public:
-    MOCK_METHOD(std::unique_ptr<IRenderPipeline>, create, (RendererType, glm::ivec2), (override));
+    MOCK_METHOD(std::unique_ptr<IRenderPipeline>, create,
+                (RenderMode, glm::ivec2, GpuScene &), (override));
+    MOCK_METHOD(void, setRenderer, (graphics::IRenderer &), (override));
 };
 
 class TestSceneModule : boost::noncopyable {

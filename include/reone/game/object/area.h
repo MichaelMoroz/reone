@@ -27,6 +27,7 @@
 #include "reone/resource/parser/gff/are.h"
 #include "reone/resource/parser/gff/git.h"
 #include "reone/resource/types.h"
+#include "reone/scene/shadowproperties.h"
 #include "reone/system/timer.h"
 
 #include "../object.h"
@@ -49,6 +50,7 @@ class Location;
 class Object;
 class Room;
 class Trigger;
+class ModuleSnapshotBuilder;
 
 using RoomMap = std::unordered_map<std::string, std::shared_ptr<Room>>;
 using ObjectList = std::vector<std::shared_ptr<Object>>;
@@ -62,6 +64,8 @@ public:
         int ambient {0};
         int diffuse {0};
         glm::vec4 probabilities {0.0f};
+        /** The area's authored grass cutout threshold; -1 where it authored none. */
+        float alphaTest {-1.0f};
     };
 
     using SearchCriteriaList = std::vector<std::pair<CreatureType, int>>;
@@ -94,8 +98,8 @@ public:
     bool landObject(Object &object);
     void add(const std::shared_ptr<Object> &object);
 
-    bool moveCreature(const std::shared_ptr<Creature> &creature, const glm::vec2 &dir, bool run, float dt);
-    bool moveCreatureTowards(const std::shared_ptr<Creature> &creature, const glm::vec2 &dest, bool run, float dt);
+    bool moveCreature(const std::shared_ptr<Creature> &creature, const glm::vec2 &dir, bool run, float dt,
+                      float maxDistance = FLT_MAX);
     void determineObjectRoom(Object &object);
 
     bool isUnescapable() const { return _unescapable; }
@@ -113,11 +117,12 @@ public:
     const CameraStyle &camStyleDefault() const { return _camStyleDefault; }
     const std::string &music() const { return _music; }
     const ObjectList &objects() const { return _objects; }
-    const Pathfinder &pathfinder() const { return _pathfinder; }
     const std::string &localizedName() const { return _localizedName; }
     const RoomMap &rooms() const { return _rooms; }
     const Grass &grass() const { return _grass; }
     const glm::vec3 &ambientColor() const { return _ambientColor; }
+
+    Pathfinder &pathfinder() { return _pathfinder; }
 
     void setUnescapable(bool value);
 
@@ -172,7 +177,10 @@ public:
     // Party
 
     void unloadPartyMember(const std::shared_ptr<Creature> &member);
-    void loadParty(const glm::vec3 &position, float facing, bool fromSave = false);
+    void loadParty(
+        const glm::vec3 &position,
+        float facing,
+        bool preserveSavedPlacement = false);
     void unloadParty();
     void reloadParty();
 
@@ -240,10 +248,13 @@ public:
     // END Scene
 
 private:
+    friend class ModuleSnapshotBuilder;
+    friend class TestGameModule;
     std::string _sceneName;
 
     Pathfinder _pathfinder;
     std::string _localizedName;
+    resource::generated::ARE_Map _map;
     RoomMap _rooms;
     resource::Visibility _visibility;
     CameraStyle _camStyleDefault;
@@ -254,6 +265,7 @@ private:
     Grass _grass;
     std::optional<MinigameSpec> _miniGameSpec;
     glm::vec3 _ambientColor {0.0f};
+    scene::ShadowProperties _shadows;
     Timer _perceptionTimer;
     std::shared_ptr<Object> _hilightedObject;
     std::shared_ptr<Object> _selectedObject;
@@ -269,7 +281,6 @@ private:
 
     // Cameras
 
-    float _cameraAspect {0.0f};
     std::shared_ptr<FirstPersonCamera> _firstPersonCamera;
     std::shared_ptr<ThirdPersonCamera> _thirdPersonCamera;
     std::shared_ptr<DialogCamera> _dialogCamera;
@@ -313,7 +324,6 @@ private:
 
     void loadLYT();
     void loadVIS();
-    void loadPTH();
     void applySceneProperties();
     void attachRoomToSceneGraph(Room &room);
     void attachObjectToSceneGraph(const std::shared_ptr<Object> &object);
@@ -323,8 +333,24 @@ private:
     void updateVisibility();
     void updateHeartbeat(float dt);
 
-    void loadPartyMember(const std::shared_ptr<Creature> &member, int index, bool fromSave);
+    void loadPartyMember(
+        const std::shared_ptr<Creature> &member,
+        int index,
+        bool preserveSavedPlacement);
     glm::vec3 findPartyPosition(const Creature &member, const glm::vec3 &position) const;
+
+    struct CreatureCollision {
+        const Creature *creature {nullptr};
+        float time {0.0f};
+        glm::vec2 normal {0.0f};
+    };
+
+    bool findCreatureCollision(
+        const Creature &creature,
+        const glm::vec3 &origin,
+        const glm::vec3 &destination,
+        CreatureCollision &outCollision,
+        const Creature *ignoredCreature = nullptr) const;
 
     void doUpdatePerception();
     void updateObjectSelection();
@@ -352,6 +378,7 @@ private:
 
     void loadCameraStyle(const resource::generated::ARE &are);
     void loadAmbientColor(const resource::generated::ARE &are);
+    void loadShadows(const resource::generated::ARE &are);
     void loadScripts(const resource::generated::ARE &are);
     void loadMap(const resource::generated::ARE &are);
     void loadStealthXP(const resource::generated::ARE &are);
@@ -363,18 +390,19 @@ private:
 
     // Loading GIT
 
-    void loadGIT(const resource::generated::GIT &git, const resource::Gff &gff);
+    void loadGIT(const resource::generated::GIT &git, const resource::Gff &gff, bool fromSave);
 
     void loadProperties(const resource::generated::GIT &git);
-    void loadCreatures(const resource::Gff &gff);
-    void loadDoors(const resource::Gff &gff);
-    void loadPlaceables(const resource::Gff &gff);
-    void loadWaypoints(const resource::Gff &gff);
-    void loadTriggers(const resource::Gff &gff);
-    void loadSounds(const resource::Gff &gff);
-    void loadCameras(const resource::Gff &gff);
-    void loadEncounters(const resource::Gff &gff);
-    void loadStores(const resource::Gff &gff);
+    void loadCreatures(const resource::Gff &gff, bool fromSave);
+    void loadDoors(const resource::Gff &gff, bool fromSave);
+    void loadPlaceables(const resource::Gff &gff, bool fromSave);
+    void loadWaypoints(const resource::Gff &gff, bool fromSave);
+    void loadTriggers(const resource::Gff &gff, bool fromSave);
+    void loadSounds(const resource::Gff &gff, bool fromSave);
+    void loadCameras(const resource::Gff &gff, bool fromSave);
+    void loadEncounters(const resource::Gff &gff, bool fromSave);
+    void loadStores(const resource::Gff &gff, bool fromSave);
+    void loadItems(const resource::Gff &gff, bool fromSave);
 
     // END Loading GIT
 

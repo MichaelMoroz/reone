@@ -25,7 +25,6 @@
 
 #include <wx/aui/auibook.h>
 #include <wx/dataview.h>
-#include <wx/glcanvas.h>
 #include <wx/progdlg.h>
 #include <wx/splitter.h>
 #include <wx/stc/stc.h>
@@ -48,10 +47,14 @@ class AudioResourcePanel;
 
 class ResourceExplorerFrame : public wxFrame {
 public:
-    ResourceExplorerFrame(ResourceExplorerViewModel &viewModel);
+    ResourceExplorerFrame(ResourceExplorerViewModel &viewModel, bool captureRun = false);
+
+    /** Render one deterministic preview frame without routing through wx idle. */
+    void renderPreviewFrame(float delta, const std::filesystem::path *capturePath = nullptr);
 
 private:
     ResourceExplorerViewModel &m_viewModel;
+    bool m_captureRun {false};
     int _resListBoxSelection {0};
 
     // Menus

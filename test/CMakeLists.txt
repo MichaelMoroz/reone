@@ -37,32 +37,82 @@ set(TESTS_HEADERS
     ${TESTS_SOURCE_DIR}/fixtures/system.h)
 
 set(TESTS_SOURCES
+    ${TESTS_SOURCE_DIR}/audio/mixer.cpp
     ${TESTS_SOURCE_DIR}/audio/format/wavreader.cpp
     ${TESTS_SOURCE_DIR}/extract/capsule.cpp
     ${TESTS_SOURCE_DIR}/extract/chitin.cpp
     ${TESTS_SOURCE_DIR}/extract/fileresource.cpp
     ${TESTS_SOURCE_DIR}/extract/finder.cpp
     ${TESTS_SOURCE_DIR}/extract/installation.cpp
+    ${TESTS_SOURCE_DIR}/extract/modulealignment.cpp
     ${TESTS_SOURCE_DIR}/fixtures/engine.cpp
     ${TESTS_SOURCE_DIR}/game/action.cpp
+    ${TESTS_SOURCE_DIR}/game/actionactor.cpp
+    ${TESTS_SOURCE_DIR}/game/area.cpp
+    ${TESTS_SOURCE_DIR}/game/assigncommand.cpp
     ${TESTS_SOURCE_DIR}/game/d20/class.cpp
     ${TESTS_SOURCE_DIR}/game/d20/spells.cpp
     ${TESTS_SOURCE_DIR}/game/conversation.cpp
+    ${TESTS_SOURCE_DIR}/game/globalnumber.cpp
+    ${TESTS_SOURCE_DIR}/game/interaction.cpp
+    ${TESTS_SOURCE_DIR}/game/effect.cpp
+    ${TESTS_SOURCE_DIR}/game/entrylifecycle.cpp
+    ${TESTS_SOURCE_DIR}/game/galaxymap.cpp
+    ${TESTS_SOURCE_DIR}/game/galaxymaproutines.cpp
+    ${TESTS_SOURCE_DIR}/game/partycontrol.cpp
+    ${TESTS_SOURCE_DIR}/game/galaxymapstate.cpp
+    ${TESTS_SOURCE_DIR}/game/worldtime.cpp
+    ${TESTS_SOURCE_DIR}/game/savedruntime.cpp
+    ${TESTS_SOURCE_DIR}/game/saveprovenance.cpp
+    ${TESTS_SOURCE_DIR}/game/savedsituation.cpp
     ${TESTS_SOURCE_DIR}/game/journal.cpp
     ${TESTS_SOURCE_DIR}/game/messagebus.cpp
+    ${TESTS_SOURCE_DIR}/game/minigame.cpp
+    ${TESTS_SOURCE_DIR}/game/modulename.cpp
+    ${TESTS_SOURCE_DIR}/game/modulesnapshot.cpp
+    ${TESTS_SOURCE_DIR}/game/loadfromsavegame.cpp
+    ${TESTS_SOURCE_DIR}/game/savenpcstate.cpp
+    ${TESTS_SOURCE_DIR}/game/savegame.cpp
+    ${TESTS_SOURCE_DIR}/game/savedgame.cpp
+    ${TESTS_SOURCE_DIR}/game/saveload.cpp
+    ${TESTS_SOURCE_DIR}/game/saveslotpublisher.cpp
+    ${TESTS_SOURCE_DIR}/game/savewidesnapshot.cpp
     ${TESTS_SOURCE_DIR}/game/object.cpp
+    ${TESTS_SOURCE_DIR}/game/runtimesession.cpp
+    ${TESTS_SOURCE_DIR}/game/pazaak.cpp
+    ${TESTS_SOURCE_DIR}/game/pazaakintegration.cpp
+    ${TESTS_SOURCE_DIR}/game/pazaaksession.cpp
+    ${TESTS_SOURCE_DIR}/game/partyroutines.cpp
     ${TESTS_SOURCE_DIR}/game/pathfinder.cpp
+    ${TESTS_SOURCE_DIR}/game/reputes.cpp
     ${TESTS_SOURCE_DIR}/game/statussummary.cpp
+    ${TESTS_SOURCE_DIR}/game/stringroutines.cpp
+    ${TESTS_SOURCE_DIR}/game/timingepoch.cpp
     ${TESTS_SOURCE_DIR}/game/transitioncandidate.cpp
+    ${TESTS_SOURCE_DIR}/game/turret.cpp
     ${TESTS_SOURCE_DIR}/graphics/aabb.cpp
     ${TESTS_SOURCE_DIR}/graphics/format/bwmreader.cpp
     ${TESTS_SOURCE_DIR}/graphics/format/mdlmdxreader.cpp
+    ${TESTS_SOURCE_DIR}/graphics/bluenoise.cpp
+    ${TESTS_SOURCE_DIR}/graphics/grasscard.cpp
     ${TESTS_SOURCE_DIR}/graphics/format/tgareader.cpp
     ${TESTS_SOURCE_DIR}/graphics/format/tpcreader.cpp
     ${TESTS_SOURCE_DIR}/graphics/format/txireader.cpp
     ${TESTS_SOURCE_DIR}/graphics/keyframetrack.cpp
+    ${TESTS_SOURCE_DIR}/graphics/optionsregistry.cpp
+    ${TESTS_SOURCE_DIR}/graphics/vulkan/shadercompiler.cpp
     ${TESTS_SOURCE_DIR}/graphics/walkmesh.cpp
     ${TESTS_SOURCE_DIR}/json/gff.cpp
+    ${TESTS_SOURCE_DIR}/graphics/format/tgawriter.cpp
+    ${TESTS_SOURCE_DIR}/gui/control/progressbar.cpp
+    ${TESTS_SOURCE_DIR}/gui/controlrender.cpp
+    ${TESTS_SOURCE_DIR}/resource/archivevalidation.cpp
+    ${TESTS_SOURCE_DIR}/resource/extractresources.cpp
+    ${TESTS_SOURCE_DIR}/resource/modulediscovery.cpp
+    ${TESTS_SOURCE_DIR}/resource/moduleloading.cpp
+    ${TESTS_SOURCE_DIR}/resource/modulemount.cpp
+    ${TESTS_SOURCE_DIR}/resource/modulepolicy.cpp
+    ${TESTS_SOURCE_DIR}/resource/replacements.cpp
     ${TESTS_SOURCE_DIR}/resource/format/2dareader.cpp
     ${TESTS_SOURCE_DIR}/resource/format/2dawriter.cpp
     ${TESTS_SOURCE_DIR}/resource/format/bifreader.cpp
@@ -75,15 +125,29 @@ set(TESTS_SOURCES
     ${TESTS_SOURCE_DIR}/resource/format/rimwriter.cpp
     ${TESTS_SOURCE_DIR}/resource/format/tlkreader.cpp
     ${TESTS_SOURCE_DIR}/resource/format/tlkwriter.cpp
+    ${TESTS_SOURCE_DIR}/resource/parser/gvt.cpp
     ${TESTS_SOURCE_DIR}/resource/parser/jrl.cpp
+    ${TESTS_SOURCE_DIR}/resource/k1startup.cpp
     ${TESTS_SOURCE_DIR}/resource/lookup.cpp
     ${TESTS_SOURCE_DIR}/resource/provider/2das.cpp
     ${TESTS_SOURCE_DIR}/resource/provider/dialogs.cpp
     ${TESTS_SOURCE_DIR}/resource/provider/gffs.cpp
+    ${TESTS_SOURCE_DIR}/resource/provider/scripts.cpp
+    ${TESTS_SOURCE_DIR}/resource/provider/textures.cpp
     ${TESTS_SOURCE_DIR}/resource/resources.cpp
     ${TESTS_SOURCE_DIR}/resource/resref.cpp
     ${TESTS_SOURCE_DIR}/resource/strings.cpp
+    ${TESTS_SOURCE_DIR}/scene/emitter.cpp
     ${TESTS_SOURCE_DIR}/scene/model.cpp
+    ${TESTS_SOURCE_DIR}/scene/gpuscene.cpp
+    ${TESTS_SOURCE_DIR}/scene/tracematerials.cpp
+    ${TESTS_SOURCE_DIR}/resource/provider/audioclips.cpp
+    ${TESTS_SOURCE_DIR}/resource/2da.cpp
+    ${TESTS_SOURCE_DIR}/resource/saveworkingstate.cpp
+    ${TESTS_SOURCE_DIR}/resource/sourcebuckets.cpp
+    ${TESTS_SOURCE_DIR}/resource/sourcelifetimes.cpp
+    ${TESTS_SOURCE_DIR}/scene/mesh.cpp
+    ${TESTS_SOURCE_DIR}/scene/particleutil.cpp
     ${TESTS_SOURCE_DIR}/script/format/ncsreader.cpp
     ${TESTS_SOURCE_DIR}/script/format/ncswriter.cpp
     ${TESTS_SOURCE_DIR}/script/virtualmachine.cpp
@@ -114,11 +178,15 @@ set(TESTS_SOURCES
     ${TESTS_SOURCE_DIR}/tools/script/exprtreeoptimizer.cpp)
 
 add_executable(tests ${TESTS_HEADERS} ${TESTS_SOURCES} ${CLANG_FORMAT_PATH})
-set_target_properties(tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin)
+set_target_properties(tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${REONE_BIN_DIR})
 target_include_directories(tests PRIVATE ${GTEST_INCLUDE_DIRS})
 
 target_precompile_headers(tests PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
-target_link_libraries(tests PRIVATE tools json GTest::gmock_main)
+target_link_libraries(tests PRIVATE tools json graphicsvulkan GTest::gmock_main)
+target_compile_definitions(tests PRIVATE
+    REONE_ASSET_SOURCE_DIR="${CMAKE_SOURCE_DIR}/assets")
+
+reone_copy_slang_runtime(tests)
 
 if(MSVC)
     target_compile_options(tests PRIVATE /bigobj)

@@ -34,6 +34,8 @@ class Game;
 class Object;
 
 class SelectionOverlay {
+    friend class TestGameModule;
+
 public:
     SelectionOverlay(
         Game &game,
@@ -93,6 +95,7 @@ private:
     void renderActionIcon(int index);
 
     bool getActionScreenCoords(int index, float &x, float &y) const;
+    float layoutScale() const;
     glm::vec3 getColorFromSelectedObject() const;
 };
 

@@ -33,6 +33,7 @@
 #include "../d20/attributes.h"
 #include "../d20/itemattributes.h"
 #include "../object.h"
+#include "../pathfinder.h"
 
 #include "item.h"
 
@@ -46,6 +47,10 @@ namespace game {
 
 constexpr float kDefaultAttackRange = 2.0f;
 
+class DamagePacket;
+class ModuleSnapshotBuilder;
+struct AttackBonusBreakdown;
+
 class Creature : public Object, public scene::IAnimationEventListener {
 public:
     enum class ModelType {
@@ -58,15 +63,6 @@ public:
         None,
         Walk,
         Run
-    };
-
-    struct Path {
-        glm::vec3 destination {0.0f};
-        std::vector<glm::vec3> points;
-        uint32_t timeFound {0};
-        int pointIdx {0};
-
-        void selectNextPoint();
     };
 
     struct BodyBag {
@@ -87,6 +83,9 @@ public:
         bool shouldDeactivate {false};
         bool debilitated {false};
         std::shared_ptr<Object> attackTarget;
+        uint32_t attemptedAttackTarget {script::kObjectInvalid};
+        ActionType attackAction {ActionType::QueueEmpty};
+        FeatType combatFeat {FeatType::Invalid};
         Timer deactivationTimer;
     };
 
@@ -119,7 +118,7 @@ public:
     void stopTalking();
 
     bool isSelectable() const override;
-    bool isMovementRestricted() const { return _movementRestricted; }
+    bool isMovementRestricted() const { return _movementRestricted || !canExecuteActions(); }
     bool isLevelUpPending() const;
 
     glm::vec3 getSelectablePosition() const override;
@@ -129,15 +128,19 @@ public:
     Gender gender() const { return _gender; }
     ModelType modelType() const { return _modelType; }
     int appearance() const { return _appearance; }
+    uint16_t portraitId() const { return _portraitId; }
     std::shared_ptr<graphics::Texture> portrait() const { return _portrait; }
     float walkSpeed() const { return _walkSpeed; }
     float runSpeed() const { return _runSpeed; }
+    float creaturePersonalSpace() const { return _creaturePersonalSpace; }
+    CreatureSize size() const { return _size; }
     CreatureAttributes &attributes() { return _attributes; }
     const CreatureAttributes &attributes() const { return _attributes; }
     ItemAttributes &itemAttributes() { return _itemAttributes; }
     const ItemAttributes &itemAttributes() const { return _itemAttributes; }
     Faction faction() const { return _faction; }
     int xp() const { return _xp; }
+    Alignment alignment() const;
     RacialType racialType() const { return _race; }
     Subrace subrace() const { return _subrace; }
     NPCAIStyle aiStyle() const { return _aiStyle; }
@@ -148,6 +151,13 @@ public:
     void setAppearance(int appearance) { _appearance = appearance; }
     void setMovementType(MovementType type);
     void setFaction(Faction faction) { _faction = faction; }
+    /**
+     * Complete retail primary-player publication after saved creature data has
+     * been read. Both Odyssey titles refill the authoritative primary player
+     * to the derived maximum here; ordinary creatures and detached PCs never
+     * pass through this operation.
+     */
+    void restorePrimaryPlayerHitPoints();
     void setMovementRestricted(bool restricted) { _movementRestricted = restricted; }
     void setImmortal(bool immortal) { _immortal = immortal; }
     void setAIStyle(NPCAIStyle style) { _aiStyle = style; }
@@ -163,6 +173,15 @@ public:
     // Holds an externally sourced animation until resumeStateDrivenAnimation is called.
     bool playExternalAnimation(const std::shared_ptr<graphics::Animation> &anim, scene::AnimationProperties properties = scene::AnimationProperties());
     void resumeStateDrivenAnimation();
+
+    /**
+     * Play an animation as a layer over whatever the creature is already doing,
+     * including while it is walking or running. Unlike the other playAnimation
+     * overloads this neither waits for the creature to stand still nor takes
+     * over its state-driven animation, so locomotion carries on underneath and
+     * the layer disappears on its own once it has run.
+     */
+    void playOverlayAnimation(AnimationType type);
 
     void updateModelAnimation();
 
@@ -184,17 +203,38 @@ public:
     // END Equipment
 
     // Pathfinding
-
     bool navigateTo(const glm::vec3 &dest, bool run, float distance, float dt);
-    void advanceOnPath(bool run, float dt);
-    void updatePath(const glm::vec3 &dest);
-
     void clearPath();
-    void setPath(const glm::vec3 &dest, std::vector<glm::vec3> &&points, uint32_t timeFound);
-
-    std::shared_ptr<Path> &path() { return _path; }
-
+    void advanceOnPath(const glm::vec3 &dest, const glm::vec3 &dir, bool run, float distance, float dt);
+    glm::vec3 computeSteeringForce(const Uniwalk &uni, const glm::vec3 &next, float dt);
     // END Pathfinding
+
+    // Blocking doors
+
+    /**
+     * Remember the door that obstructed the last attempted step. Written by the
+     * collision layer for every mover, including the directly controlled player.
+     *
+     * This lives only to carry the obstruction from the collision test to the
+     * blocked event raised after the step. It is not what scripts read:
+     * GetBlockingDoor answers from the argument captured when the event was
+     * raised, so it stays fixed for that run while this keeps changing.
+     */
+    void setBlockingDoor(uint32_t doorId) { _blockingDoorId = doorId; }
+
+    void clearBlockingDoor() { _blockingDoorId = script::kObjectInvalid; }
+
+    uint32_t blockingDoorId() const { return _blockingDoorId; }
+
+    /**
+     * Edge-trigger ScriptOnBlocked for the door currently obstructing this
+     * creature. Called by navigation after each attempted step, so it only
+     * applies to AI, script and action driven movement. A continuous
+     * obstruction by the same door reports once; an unobstructed step re-arms.
+     */
+    void dispatchBlockedEvent();
+
+    // END Blocking doors
 
     // Perception
 
@@ -217,19 +257,57 @@ public:
     void deactivateCombat(float delay);
 
     bool isInCombat() const { return _combatState.active; }
-    bool isDebilitated() const { return _combatState.debilitated; }
+    bool isDebilitated() const;
+    bool isTemporarilyDead() const;
     bool isTwoWeaponFighting() const;
+    std::shared_ptr<Item> getOffhandAttackWeapon() const;
 
-    std::shared_ptr<Object> getAttemptedAttackTarget() const;
+    int forcePoints() const { return _forcePoints; }
+    int currentForce() const { return _currentForce; }
+
+    uint32_t getAttemptedAttackTarget() const { return _combatState.attemptedAttackTarget; }
     std::shared_ptr<Object> getAttackTarget() const { return _combatState.attackTarget; }
+    uint32_t getLastHostileTarget() const { return _lastHostileTarget; }
+    ActionType getLastAttackAction() const { return _lastAttackAction; }
+    FeatType getLastCombatFeat() const { return _lastCombatFeat; }
+    AttackResultType getLastAttackResult() const { return _lastAttackResult; }
+    int modifiedAttacks() const { return _modifiedAttacks; }
+    bool hasAssuredHit() const { return _assuredHit; }
+    AttackBonusBreakdown getAttackBonusBreakdown(
+        const Creature *target,
+        const Item *weapon,
+        bool offHand) const;
     int getAttackBonus(bool offHand = false) const;
+    int getDefense(const Creature *attacker, int damageFlags) const;
     int getDefense() const;
+    int getFortitudeSave(SavingThrowType savingThrowType = SavingThrowType::All) const;
+    bool rollFortitudeSave(
+        int difficultyClass,
+        SavingThrowType savingThrowType = SavingThrowType::All) const;
+    int getPhysicalDamageBonus(const Item *weapon, bool offHand) const;
+    int getMassiveCriticalDamage(const Item *weapon, bool criticalHit) const;
+    int getItemDamageImmunity(DamageType type) const;
+    int getItemDamageResistance(DamageType type) const;
+    void getItemDamageReduction(int &amount, DamagePower &power) const;
+    int getDamageResistanceFeatBonus() const;
+    void addPhysicalDamageModifiers(
+        DamagePacket &damage,
+        const Creature *target,
+        const Item *weapon,
+        bool offHand,
+        int criticalMultiplier) const;
     void getMainHandDamage(int &min, int &max) const;
     void getOffhandDamage(int &min, int &max) const;
 
-    void setAttackTarget(std::shared_ptr<Object> target) {
-        _combatState.attackTarget = std::move(target);
+    void setAttemptedAttackTarget(uint32_t target) {
+        _combatState.attemptedAttackTarget = target;
     }
+    void beginCombatAttack(std::shared_ptr<Object> target, FeatType feat);
+    void finishCombatRound();
+    void setLastAttackResult(AttackResultType result) { _lastAttackResult = result; }
+    void adjustModifiedAttacks(int amount);
+    bool applyAssuredHit();
+    void removeAssuredHit() { _assuredHit = false; }
 
     // END Combat
 
@@ -245,9 +323,12 @@ public:
     // Scripts
 
     void runSpawnScript();
+    void runBlockedScript(uint32_t blockingDoorId);
     void runEndRoundScript();
     void runDialogueScript(uint32_t speakerId, int32_t listenNumber);
     void runAttackedScript(uint32_t attackerId);
+
+    bool spawnScriptFired() const { return _spawnScriptFired; }
 
     void setOnHeartbeat(std::string onHeartbeat) { _onHeartbeat = onHeartbeat; }
     void setOnSpawn(std::string onSpawn) { _onSpawn = onSpawn; }
@@ -277,7 +358,12 @@ public:
 
     // END Listeners
 
+protected:
+    bool canExecuteActions() const override;
+
 private:
+    friend class ModuleSnapshotBuilder;
+    friend class TestGameModule;
     // Serializable
     RacialType _race {RacialType::Unknown};
     Subrace _subrace {Subrace::None};
@@ -317,6 +403,17 @@ private:
     std::string _onDeath;
     std::string _onBlocked;
 
+    // Retail CreatnScrptFird. The creation script belongs to the creature, not
+    // to any one area attachment: it fires at most once per creature and the
+    // flag travels with the creature through saves.
+    bool _spawnScriptFired {false};
+
+    // Door currently obstructing this creature, and the door the blocked event
+    // was last reported for. Object ids rather than pointers, so a door that is
+    // destroyed while remembered simply resolves to no object.
+    uint32_t _blockingDoorId {script::kObjectInvalid};
+    uint32_t _blockedEventDoorId {script::kObjectInvalid};
+
     resource::LocString _firstName;
     resource::LocString _lastName;
 
@@ -331,9 +428,20 @@ private:
     ModelType _modelType {ModelType::Creature};
     std::shared_ptr<graphics::Texture> _portrait;
 
-    std::shared_ptr<Path> _path;
+    // Current path that the creature is following, its velocity and position at
+    // the previous frame.
+    std::optional<Path> _path;
+    glm::vec3 _pathVelocity;
+    glm::vec3 _previousPosition;
+    // When there is no progress on the path, apply _stuckForce to steer the
+    // creature in a random direction until the timer runs out.
+    Timer _stuckTimer;
+    glm::vec3 _stuckForce;
+
     float _walkSpeed {0.0f};
     float _runSpeed {0.0f};
+    float _creaturePersonalSpace {0.6f};
+    CreatureSize _size {CreatureSize::Invalid};
     MovementType _movementType {MovementType::None};
     bool _talking {false};
 
@@ -341,6 +449,12 @@ private:
 
     bool _movementRestricted {false};
     CombatState _combatState;
+    uint32_t _lastHostileTarget {script::kObjectInvalid};
+    ActionType _lastAttackAction {ActionType::QueueEmpty};
+    FeatType _lastCombatFeat {FeatType::Invalid};
+    AttackResultType _lastAttackResult {AttackResultType::Invalid};
+    int _modifiedAttacks {0};
+    bool _assuredHit {false};
     bool _immortal {false};
     std::shared_ptr<resource::SoundSet> _soundSet;
     BodyBag _bodyBag;
@@ -355,6 +469,8 @@ private:
 
     std::shared_ptr<audio::AudioSource> _audioSourceVoice;
     std::shared_ptr<audio::AudioSource> _audioSourceFootstep;
+    bool _lightsaberIdlePowerDownPending {false};
+    Timer _lightsaberIdlePowerDownTimer;
 
     // Animation
 
@@ -370,9 +486,10 @@ private:
 
     void loadTransformFromGIT(const resource::generated::GIT_Creature_List &git);
 
+    void onEffectsCleared() override;
     void updateModel();
 
-    // Refresh appearance-derived state (model type, speeds, footstep, envmap,
+    // Refresh appearance-derived state (model type, size, speeds, footstep, envmap,
     // portrait) for the current _appearance, without building a scene node.
     void loadAppearanceProperties();
 
@@ -381,6 +498,8 @@ private:
     // appearance when none remains. Updates _appearance only; callers rebuild the model.
     void updateDisguise();
     void updateCombat(float dt);
+    void setLightsabersPowered(bool powered, bool animate);
+    void updateLightsaberSoundPositions();
 
     void runDeathScript(uint32_t damagerId);
     void runDamagedScript(uint32_t damagerId);
@@ -423,7 +542,13 @@ private:
 
     bool getWeaponInfo(WeaponType &type, WeaponWield &wield) const;
     int getWeaponWieldNumber(WeaponWield wield) const;
-    void getWeaponDamage(int slot, int &min, int &max) const;
+    int getRelativeWeaponSize(const Item &weapon) const;
+    int getTwoWeaponAttackPenalty(
+        const Item *weapon,
+        bool offHand,
+        int *smallOffhandBonus = nullptr) const;
+    int getDuelingBonus() const;
+    void getWeaponDamage(const Item *weapon, int &min, int &max) const;
 
     // END Animation
 

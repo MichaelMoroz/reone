@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <algorithm>
+
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/options.h"
 #include "reone/input/event.h"
@@ -52,7 +54,19 @@ public:
         Center,
         CenterHorizontal,
         PositionRelativeToCenter,
-        Stretch
+        /** Uniformly scales a control around the authored and screen centres. */
+        ScaledRelativeToCenter,
+        /** Scene-only: fills a scene-backed control independently of its GUI rectangle. */
+        Stretch,
+        /** Uniformly fits the authored layout, centred horizontally and anchored to the top. */
+        ScaledTopCenter,
+        /** Uniformly fits the authored layout in the screen. The game-GUI default. */
+        Scaled
+    };
+
+    enum class ControlCoordinates {
+        Authored,
+        Screen
     };
 
     virtual ~IGUI() = default;
@@ -62,6 +76,11 @@ public:
     virtual bool handle(const input::Event &event) = 0;
     virtual void update(float dt) = 0;
     virtual void render() = 0;
+    /** Render control-owned scenes before the frame's 2D pass opens. */
+    virtual void renderOffscreen() = 0;
+
+    /** Whether any visible control on this screen hosts a scene of its own. */
+    virtual bool hostsScene() const = 0;
 
     virtual void clearSelection() = 0;
 
@@ -70,16 +89,47 @@ public:
     virtual const glm::ivec2 &rootOffset() const = 0;
     virtual const glm::ivec2 &controlOffset() const = 0;
 
+    /**
+     * The uniform factor the authored layout is drawn at, or 1 for a mode
+     * that does not scale.
+     *
+     * Anything drawn into a control's rect from outside the control tree -
+     * the map inside its minimap frame, its markers - is in the same pixel
+     * space as the layout and has to follow it.
+     */
+    virtual float scale() const = 0;
+
+    /** Independent presentation dials owned by the live graphics options. */
+    virtual float textScale() const = 0;
+    virtual float textLayoutScale(float horizontalScale, float verticalScale) const {
+        // Glyphs always follow the limiting resolution axis. Text may move
+        // with viewport-relative controls, but it must never inherit their
+        // non-uniform geometry or fall back to its authored pixel size.
+        return std::min(horizontalScale, verticalScale);
+    }
+    virtual float borderScale() const = 0;
+    virtual float listScale() const { return 1.0f; }
+    virtual bool tintBorderFills() const = 0;
+
+    /** Whether scene-backed controls may render their 3D content. */
+    virtual bool sceneRenderEnabled() const { return true; }
+
     virtual void setEventListener(IGUIEventListener &listener) = 0;
     virtual void setResolution(int x, int y) = 0;
     virtual void setScaling(ScalingMode scaling) = 0;
+    virtual void setTextScale(float scale) = 0;
+    virtual void setTintBorderFills(bool tint) = 0;
     virtual void setControlScaling(const std::string &tag, ScalingMode scaling) = 0;
+    virtual void setControlSceneScaling(const std::string &tag, ScalingMode scaling) = 0;
     virtual void setDefaultHilightColor(glm::vec3 color) = 0;
     virtual void setBackground(std::shared_ptr<graphics::Texture> texture) = 0;
 
+    /** Reapplies the layout after authored geometry or the resolution changed. */
+    virtual void refreshLayout() {}
+
     virtual std::unique_ptr<Control> newControl(ControlType type, std::string tag) = 0;
-    virtual void addControlToFront(std::shared_ptr<Control> control) = 0;
-    virtual void addControlToBack(std::shared_ptr<Control> control) = 0;
+    virtual void addControlToFront(std::shared_ptr<Control> control, ControlCoordinates coordinates) = 0;
+    virtual void addControlToBack(std::shared_ptr<Control> control, ControlCoordinates coordinates) = 0;
 
     virtual std::shared_ptr<Control> findControl(const std::string &tag) const = 0;
 };
@@ -96,9 +146,11 @@ public:
         _graphicsSvc(graphicsSvc),
         _resourceSvc(resourceSvc) {
 
-        _aspect = options.width / static_cast<float>(options.height);
-        _screenCenter.x = options.width / 2;
-        _screenCenter.y = options.height / 2;
+    }
+
+    /** Derived from the current resolution, which can change at runtime. */
+    glm::ivec2 screenCenter() const {
+        return {_options.width / 2, _options.height / 2};
     }
 
     void load(const resource::Gff &gui) override;
@@ -106,6 +158,8 @@ public:
     bool handle(const input::Event &event) override;
     void update(float dt) override;
     void render() override;
+    void renderOffscreen() override;
+    bool hostsScene() const override;
 
     void clearSelection() override;
 
@@ -121,6 +175,18 @@ public:
         return _controlOffset;
     }
 
+    float scale() const override {
+        switch (_scaling) {
+        case ScalingMode::Scaled:
+        case ScalingMode::ScaledTopCenter:
+        case ScalingMode::PositionRelativeToCenter:
+        case ScalingMode::ScaledRelativeToCenter:
+            return scaledFactor();
+        default:
+            return 1.0f;
+        }
+    }
+
     void setEventListener(IGUIEventListener &listener) override {
         _eventListener = &listener;
     }
@@ -134,8 +200,44 @@ public:
         _scaling = scaling;
     }
 
+    void setTextScale(float scale) override {
+        _textScale = scale;
+    }
+
+    void setTintBorderFills(bool tint) override {
+        _tintBorderFills = tint;
+    }
+
+    float textScale() const override {
+        return _textScale.value_or(_options.guiTextScale);
+    }
+
+    float textLayoutScale(float horizontalScale, float verticalScale) const override {
+        return IGUI::textLayoutScale(horizontalScale, verticalScale);
+    }
+
+    float borderScale() const override {
+        return _options.guiBorderScale;
+    }
+
+    float listScale() const override {
+        return _options.guiListScale;
+    }
+
+    bool tintBorderFills() const override {
+        return _tintBorderFills;
+    }
+
+    bool sceneRenderEnabled() const override {
+        return _options.sceneRender;
+    }
+
     void setControlScaling(const std::string &tag, ScalingMode scaling) override {
         _scalingByControlTag[tag] = scaling;
+    }
+
+    void setControlSceneScaling(const std::string &tag, ScalingMode scaling) override {
+        _sceneScalingByControlTag[tag] = scaling;
     }
 
     void setDefaultHilightColor(glm::vec3 color) override {
@@ -143,14 +245,16 @@ public:
         _defaultHilightColor = color;
     }
 
-    void setBackground(std::shared_ptr<graphics::Texture> texture) override {
-        _background = texture;
+    void setBackground(std::shared_ptr<graphics::Texture> texture) override;
+
+    void refreshLayout() override {
+        applyLayout();
     }
 
     std::unique_ptr<Control> newControl(ControlType type, std::string tag) override;
 
-    void addControlToFront(std::shared_ptr<Control> control) override;
-    void addControlToBack(std::shared_ptr<Control> control) override;
+    void addControlToFront(std::shared_ptr<Control> control, ControlCoordinates coordinates) override;
+    void addControlToBack(std::shared_ptr<Control> control, ControlCoordinates coordinates) override;
 
     std::shared_ptr<Control> findControl(const std::string &tag) const override;
 
@@ -162,12 +266,13 @@ private:
     int _resolutionX {kDefaultResolutionX};
     int _resolutionY {kDefaultResolutionY};
     ScalingMode _scaling {ScalingMode::Center};
-    float _aspect {0.0f};
-    glm::ivec2 _screenCenter {0};
+    std::optional<float> _textScale;
+    bool _tintBorderFills {false};
     glm::ivec2 _rootOffset {0};
     glm::ivec2 _controlOffset {0};
     std::shared_ptr<graphics::Texture> _background;
     std::unordered_map<std::string, ScalingMode> _scalingByControlTag;
+    std::unordered_map<std::string, ScalingMode> _sceneScalingByControlTag;
     bool _leftMouseDown {false};
 
     // Controls
@@ -211,10 +316,16 @@ private:
     }
 
     void positionRelativeToCenter(Control &control);
-    void stretchControl(Control &control);
-    void updateSelection(int x, int y);
+    void scaleRelativeToCenter(Control &control);
+    void applyControlLayout(Control &control);
+    void applyLayout();
+    ScalingMode controlScaling(const Control &control) const;
+    glm::ivec2 renderOffset(const Control &control) const;
+    glm::ivec2 controlCoordinates(const Control &control, int screenX, int screenY) const;
+    float scaledFactor() const;
+    void updateSelection(int screenX, int screenY);
 
-    void renderBackground(scene::IRenderPass &pass);
+    void renderBackground(graphics::I2DRenderer &renderer2d);
 
     std::optional<std::reference_wrapper<Control>> findControlAt(int x, int y,
                                                                  const std::function<bool(const Control &)> &test) const;
