@@ -123,10 +123,10 @@ inline int materialFeatureMask(const Material &material) {
             mask |= UniformsFeatureFlags::hashedalphatest;
             break;
         case Texture::Blending::Additive:
-            if (!textures[static_cast<size_t>(MaterialTextureSlot::EnvMap)] &&
-                !textures[static_cast<size_t>(MaterialTextureSlot::EnvMapCube)]) {
-                mask |= UniformsFeatureFlags::premulalpha;
-            }
+            // Not premultiplied: the original blends these SRC_ALPHA/ONE, so
+            // the texture's alpha is the weight. Taking it from luma instead
+            // flattens masks whose colour is uniform - a light shaft's dapple
+            // lives entirely in its alpha channel.
             break;
         default:
             break;
