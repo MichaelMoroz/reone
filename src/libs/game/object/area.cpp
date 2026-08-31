@@ -75,7 +75,9 @@ namespace reone {
 
 namespace game {
 
-static constexpr float kDefaultFieldOfView = 75.0f;
+// The original's, read off its projection matrix; at 75 this saw noticeably
+// more of the room than the game it reproduces.
+static constexpr float kDefaultFieldOfView = 55.0f;
 static constexpr float kUpdatePerceptionInterval = 1.0f; // seconds
 static constexpr float kLineOfSightHeight = 1.7f;        // TODO: make it appearance-based
 
