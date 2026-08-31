@@ -43,6 +43,11 @@ float FirstPersonCamera::projectionFovy() const {
     return _fovy;
 }
 
+void FirstPersonCamera::setFovy(float fovy) {
+    _fovy = fovy;
+    rebuildProjection();
+}
+
 bool FirstPersonCamera::handle(const input::Event &event) {
     switch (event.type) {
     case input::EventType::MouseMotion:

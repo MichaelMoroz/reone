@@ -541,6 +541,7 @@ void Game::initConsole() {
     registerConsoleCommand("campos", "set free camera position", &Game::consoleCamPos);
     registerConsoleCommand("camlook", "aim free camera at a point", &Game::consoleCamLook);
     registerConsoleCommand("camstatus", "print free camera viewpoint commands", &Game::consoleCamStatus);
+    registerConsoleCommand("camfov", "set free camera vertical field of view, in degrees", &Game::consoleCamFov);
     registerConsoleCommand("kill", "kill selected object", &Game::consoleKill);
     registerConsoleCommand("additem", "add item to selected object", &Game::consoleAddItem);
     registerConsoleCommand("givexp", "give experience to selected creature", &Game::consoleGiveXP);
@@ -5359,6 +5360,12 @@ void Game::consoleCamLook(const ConsoleArgs &args) {
     consoleCheckUsage(args, 3, 3, "x y z");
     auto camera = getConsoleArea()->getCamera<FirstPersonCamera>(CameraType::FirstPerson);
     camera->setLookAt({args.get<float>(1).value(), args.get<float>(2).value(), args.get<float>(3).value()});
+}
+
+void Game::consoleCamFov(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "degrees");
+    auto camera = getConsoleArea()->getCamera<FirstPersonCamera>(CameraType::FirstPerson);
+    camera->setFovy(glm::radians(std::clamp(args.get<float>(1).value(), 1.0f, 179.0f)));
 }
 
 void Game::consoleCamStatus(const ConsoleArgs &args) {

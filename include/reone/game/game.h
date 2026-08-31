@@ -1102,6 +1102,7 @@ private:
     void consoleCamPos(const ConsoleArgs &tokens);
     void consoleCamLook(const ConsoleArgs &tokens);
     void consoleCamStatus(const ConsoleArgs &tokens);
+    void consoleCamFov(const ConsoleArgs &tokens);
     void consoleRunScript(const ConsoleArgs &tokens);
     void consoleSpawnCreature(const ConsoleArgs &tokens);
     void consoleSpawnCompanion(const ConsoleArgs &tokens);

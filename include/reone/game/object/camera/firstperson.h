@@ -53,6 +53,8 @@ public:
     void setFacing(float facing);
     void setPitch(float pitch);
     void setLookAt(const glm::vec3 &target);
+    /** Vertical field of view, in radians. */
+    void setFovy(float fovy);
 
     const glm::vec3 &position() const { return _position; }
     float pitch() const { return _pitch; }
