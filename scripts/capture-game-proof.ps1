@@ -1,4 +1,4 @@
-# Copyright (c) 2026 The reone project contributors
+﻿# Copyright (c) 2026 The reone project contributors
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -61,84 +61,6 @@ $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 $runDir = Join-Path $OutputDir ".runtime"
 Remove-Item -LiteralPath $runDir -Recurse -Force -ErrorAction Ignore
 New-Item -ItemType Directory -Force -Path $OutputDir, $runDir | Out-Null
-
-if ($VerifyReproducibility) {
-    $baselineDir = Join-Path $runDir "reproducibility-baseline"
-    New-Item -ItemType Directory -Force -Path $baselineDir | Out-Null
-
-    if (-not ("Reone.GuiCaptureProof.PixelComparer" -as [type])) {
-        Add-Type -TypeDefinition @'
-using System;
-using System.IO;
-
-namespace Reone.GuiCaptureProof
-{
-    public sealed class PixelDifference
-    {
-        public bool Identical { get; set; }
-        public int MaxChannelDelta { get; set; }
-        public long DifferentChannels { get; set; }
-        public long DifferentPixels { get; set; }
-    }
-
-    public static class PixelComparer
-    {
-        public static PixelDifference Compare(string firstPath, string secondPath, long expectedLength)
-        {
-            byte[] first = File.ReadAllBytes(firstPath);
-            byte[] second = File.ReadAllBytes(secondPath);
-            if (first.LongLength != expectedLength || second.LongLength != expectedLength)
-            {
-                throw new InvalidDataException(String.Format(
-                    "Expected {0} decoded RGBA bytes, got {1} and {2}",
-                    expectedLength, first.LongLength, second.LongLength));
-            }
-
-            var result = new PixelDifference { Identical = true };
-            for (int offset = 0; offset < first.Length; offset += 4)
-            {
-                bool pixelDiffers = false;
-                for (int channel = 0; channel < 4; ++channel)
-                {
-                    int delta = Math.Abs(first[offset + channel] - second[offset + channel]);
-                    if (delta == 0)
-                    {
-                        continue;
-                    }
-                    result.Identical = false;
-                    pixelDiffers = true;
-                    ++result.DifferentChannels;
-                    result.MaxChannelDelta = Math.Max(result.MaxChannelDelta, delta);
-                }
-                if (pixelDiffers)
-                {
-                    ++result.DifferentPixels;
-                }
-            }
-            return result;
-        }
-    }
-}
-'@
-    }
-}
-
-function Compare-CapturePixels([string]$firstPng, [string]$secondPng, [int]$width, [int]$height) {
-    $firstRaw = Join-Path $runDir "reproducibility-first.rgba"
-    $secondRaw = Join-Path $runDir "reproducibility-second.rgba"
-    Remove-Item -LiteralPath $firstRaw, $secondRaw -Force -ErrorAction Ignore
-    try {
-        & $ffmpeg -y -loglevel error -i $firstPng -map 0:v:0 -frames:v 1 -f rawvideo -pix_fmt rgba $firstRaw
-        if ($LASTEXITCODE -ne 0) { throw "ffmpeg failed to decode capture for reproducibility comparison: $firstPng" }
-        & $ffmpeg -y -loglevel error -i $secondPng -map 0:v:0 -frames:v 1 -f rawvideo -pix_fmt rgba $secondRaw
-        if ($LASTEXITCODE -ne 0) { throw "ffmpeg failed to decode capture for reproducibility comparison: $secondPng" }
-
-        $expectedLength = [long]$width * [long]$height * 4L
-        return [Reone.GuiCaptureProof.PixelComparer]::Compare($firstRaw, $secondRaw, $expectedLength)
-    } finally {
-        Remove-Item -LiteralPath $firstRaw, $secondRaw -Force -ErrorAction Ignore
-    }
-}
 
 if ($VerifyReproducibility) {
     $baselineDir = Join-Path $runDir "reproducibility-baseline"
