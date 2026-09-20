@@ -2500,12 +2500,11 @@ TEST(CameraProjection, should_follow_a_resolution_change_after_all_camera_types_
                 engine.services().resource);
         }));
 
-    float authoredAspect = 4.0f / 3.0f;
-    auto firstPerson = game.newFirstPersonCamera(glm::radians(75.0f), authoredAspect);
-    auto thirdPerson = game.newThirdPersonCamera({"", 3.2f, 83.0f, 0.45f, 55.0f}, authoredAspect);
-    auto dialog = game.newDialogCamera({"", 3.2f, 83.0f, 0.45f, 55.0f}, authoredAspect);
-    auto animated = game.newAnimatedCamera(authoredAspect);
-    auto stationary = game.newStaticCamera(authoredAspect);
+    auto firstPerson = game.newFirstPersonCamera(glm::radians(75.0f));
+    auto thirdPerson = game.newThirdPersonCamera({"", 3.2f, 83.0f, 0.45f, 55.0f});
+    auto dialog = game.newDialogCamera({"", 3.2f, 83.0f, 0.45f, 55.0f});
+    auto animated = game.newAnimatedCamera();
+    auto stationary = game.newStaticCamera();
 
     firstPerson->load();
     thirdPerson->load();

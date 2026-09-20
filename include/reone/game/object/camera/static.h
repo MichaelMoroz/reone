@@ -29,13 +29,11 @@ class StaticCamera : public Camera {
 public:
     StaticCamera(
         uint32_t id,
-        float aspect,
         std::string sceneName,
         Game &game,
         ServicesView &services) :
         Camera(
             id,
-            aspect,
             std::move(sceneName),
             game,
             services) {

@@ -30,7 +30,6 @@ class Camera : public Object {
 public:
     Camera(
         uint32_t id,
-        float aspect,
         std::string sceneName,
         Game &game,
         ServicesView &services) :
@@ -40,7 +39,6 @@ public:
             std::move(sceneName),
             game,
             services) {
-        (void) aspect;
     }
 
     static bool classof(const Object *from) {

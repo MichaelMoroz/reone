@@ -38,13 +38,11 @@ public:
     DialogCamera(
         uint32_t id,
         CameraStyle style,
-        float aspect,
         std::string sceneName,
         Game &game,
         ServicesView &services) :
         Camera(
             id,
-            aspect,
             std::move(sceneName),
             game,
             services),

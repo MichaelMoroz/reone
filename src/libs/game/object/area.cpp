@@ -417,10 +417,8 @@ void Area::loadSounds(const resource::Gff &gff, bool fromSave) {
 }
 
 void Area::loadCameras(const resource::Gff &gff, bool fromSave) {
-    const auto &graphics = _game.options().graphics;
-    float aspect = graphics.width / static_cast<float>(graphics.height);
     for (auto &cameraGff : gff.getList("CameraList")) {
-        std::shared_ptr<StaticCamera> camera = _game.newStaticCamera(aspect, _sceneName);
+        std::shared_ptr<StaticCamera> camera = _game.newStaticCamera(_sceneName);
         camera->deserialize(*cameraGff);
         if (fromSave) camera->captureSaveRecord(*cameraGff, {SaveRecordOriginKind::ActiveGitObject, _name});
         add(camera);
@@ -575,23 +573,21 @@ void Area::initCameras(const glm::vec3 &entryPosition, float entryFacing) {
     position.z += 1.7f;
 
     auto &sceneGraph = _services.scene.graphs.get(_sceneName);
-    const auto &graphics = _game.options().graphics;
-    float aspect = graphics.width / static_cast<float>(graphics.height);
 
-    _firstPersonCamera = _game.newFirstPersonCamera(glm::radians(kDefaultFieldOfView), aspect, _sceneName);
+    _firstPersonCamera = _game.newFirstPersonCamera(glm::radians(kDefaultFieldOfView), _sceneName);
     _firstPersonCamera->load();
     _firstPersonCamera->setPosition(position);
     _firstPersonCamera->setFacing(entryFacing);
 
-    _thirdPersonCamera = _game.newThirdPersonCamera(_camStyleDefault, aspect, _sceneName);
+    _thirdPersonCamera = _game.newThirdPersonCamera(_camStyleDefault, _sceneName);
     _thirdPersonCamera->load();
     _thirdPersonCamera->setTargetPosition(position);
     _thirdPersonCamera->setFacing(entryFacing);
 
-    _dialogCamera = _game.newDialogCamera(_camStyleDefault, aspect, _sceneName);
+    _dialogCamera = _game.newDialogCamera(_camStyleDefault, _sceneName);
     _dialogCamera->load();
 
-    _animatedCamera = _game.newAnimatedCamera(aspect, _sceneName);
+    _animatedCamera = _game.newAnimatedCamera(_sceneName);
     _animatedCamera->load();
 }
 
