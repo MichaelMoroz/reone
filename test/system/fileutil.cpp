@@ -173,6 +173,22 @@ TEST(FileUtilities, resolves_an_exact_match_ahead_of_other_casings) {
     EXPECT_EQ("saves", resolved->filename().string());
 }
 
+TEST(FileUtilities, resolves_a_mixed_case_request_to_its_own_casing) {
+    // given both casings on disk
+    TmpCaseClash tree({"saves", "Saves"});
+    if (std::distance(std::filesystem::directory_iterator(tree.root),
+                      std::filesystem::directory_iterator {}) < 2) {
+        GTEST_SKIP() << "Filesystem folds case, so the clash cannot be created";
+    }
+
+    // when the request names one of them exactly but is not lowercase
+    auto resolved = findFileIgnoreCase(tree.root, "Saves");
+
+    // then it wins, rather than being folded into the lowercase entry
+    ASSERT_TRUE(resolved);
+    EXPECT_EQ("Saves", resolved->filename().string());
+}
+
 TEST(FileUtilities, resolves_case_clashing_entries_deterministically) {
     // given only folded matches, so there is nothing exact to prefer.
     // Directory iteration order is unspecified, so without a tie-break two

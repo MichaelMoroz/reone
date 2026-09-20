@@ -46,9 +46,9 @@ static bool splitRelativePath(std::string_view relPath, std::vector<std::string>
  *    The requested name designates more than one filesystem entity and nothing
  *    at this layer can know which was meant.
  *
- * Only the on-disk entry is folded here; the requested name is expected to
- * already be lowercase. findFileIgnoreCase folds it on the way in, so a
- * mixed-case request still resolves.
+ * The request is compared as given for the exact match and folded only for the
+ * fallback, so a mixed-case request still resolves without a same-cased entry
+ * losing to a lowercase one.
  *
  * The ambiguous case still resolves rather than failing, because mod installs
  * and archive extraction do produce collisions ("Override" beside "override")
@@ -61,13 +61,14 @@ static bool splitRelativePath(std::string_view relPath, std::vector<std::string>
 static std::optional<std::filesystem::path> resolveComponentIgnoreCase(
     const std::filesystem::path &dir,
     const std::string &name) {
+    const auto lowered = boost::to_lower_copy(name);
     std::vector<std::filesystem::path> folded;
     for (auto &entry : std::filesystem::directory_iterator(dir)) {
         auto filename = entry.path().filename().string();
         if (filename == name) {
             return entry.path();
         }
-        if (boost::to_lower_copy(filename) == name) {
+        if (boost::to_lower_copy(filename) == lowered) {
             folded.push_back(entry.path());
         }
     }
@@ -104,11 +105,9 @@ std::optional<std::filesystem::path> findFileIgnoreCase(const std::filesystem::p
         return std::nullopt;
     }
 
-    // Folded here rather than left to the caller: a requested path may be
-    // mixed-case too, which is what reaches this function for a save
-    // directory the player's filesystem named. Without it those saves stop
-    // resolving - see 56792e581.
-    auto resolved = resolveComponentIgnoreCase(dir, boost::to_lower_copy(tokens[0]));
+    // Passed as written: a requested path may be mixed-case too, and the
+    // resolver folds it for the fallback but not for the exact match.
+    auto resolved = resolveComponentIgnoreCase(dir, tokens[0]);
     if (!resolved) {
         return std::nullopt;
     }
