@@ -180,6 +180,12 @@ void Engine::init() {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         throw std::runtime_error("SDL_Init failed: " + std::string(SDL_GetError()));
     }
+    // A capture reads the swapchain, so the window has to be full-size for the
+    // capture to be. Headless renders at the configured resolution whatever
+    // window scale a developer plays at.
+    if (_options.graphics.headless) {
+        _options.graphics.winScale = 100;
+    }
     _window = std::make_unique<Window>(_options.graphics);
     _window->init();
 
@@ -458,6 +464,20 @@ int Engine::run() {
             // captured.
             frameTime = 1.0f / 60.0f;
         }
+        ++_frameIndex;
+        if (_options.commandsFrame > 0 && _frameIndex >= _options.commandsFrame &&
+            !_commandsRun) {
+            _commandsRun = true;
+            runCommandsFile(_options.commandsFrameScheduledFile.empty()
+                                ? _options.commandsFile
+                                : _options.commandsFrameScheduledFile);
+        }
+        // Ahead of the input drain: a scripted run must see the same order on
+        // every build, and real input is what varies between them.
+        processScriptedCommands(quit);
+        if (quit) {
+            break;
+        }
         _profiler->measure(kMainThreadName, kProfilerInputTimeIndex, [this, &quit]() {
             R_PROFILE_ZONE("input");
             while (!_events.empty()) {
@@ -478,18 +498,6 @@ int Engine::run() {
                 }
             }
         });
-        if (quit) {
-            break;
-        }
-        ++_frameIndex;
-        if (_options.commandsFrame > 0 && _frameIndex >= _options.commandsFrame &&
-            !_commandsRun) {
-            _commandsRun = true;
-            runCommandsFile(_options.commandsFrameScheduledFile.empty()
-                                ? _options.commandsFile
-                                : _options.commandsFrameScheduledFile);
-        }
-        processScriptedCommands(quit);
         if (quit) {
             break;
         }
