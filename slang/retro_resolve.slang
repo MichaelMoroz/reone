@@ -65,7 +65,6 @@ static const uint kResolveFlagDisplayReferred = 8u;
  * than as anything that names itself.
  */
 
-static const int kLightDynamicTypeAll = 1;
 
 struct Varyings {
     float4 position : SV_Position;

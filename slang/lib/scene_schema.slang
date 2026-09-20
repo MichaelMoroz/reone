@@ -162,6 +162,9 @@ public struct GrassFace {
 // InstanceMaterial::featureMask bits, one table for every consumer. Bits below
 // 16 are the per-object feature mask the raster passes always carried; the
 // rest were added by admission for the tracer and the merged draws.
+/** Odyssey's dynamic-type 1: the light reaches static geometry too. */
+public static const int kLightDynamicTypeAll = 1;
+
 public static const uint kMaterialLightmap = 1u << 0;
 public static const uint kMaterialEnvMap = 1u << 1;
 public static const uint kMaterialNormalMap = 1u << 2;

@@ -27,6 +27,7 @@ import lib.scene_schema;
 import lib.shadow;
 import lib.assemble;
 import lib.material_ops;
+import lib.direct_light;
 
 // Raster passes over the canonical merged geometry. The G-buffer and shadow
 // draws share one material gate, so coverage cannot disagree between them.
@@ -578,15 +579,51 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
         bool envmapped = (material.featureMask & kMaterialEnvMap) != 0;
         if (!envmapped) objectAlpha *= coverage;
 
-        float3 lighting = float3(1.0);
+        // Transparent surfaces take the same lighting opaque ones do. They
+        // were flat white here, so an unlit room lit its own glass.
+        //
+        // Two accumulators, as the retro resolve keeps them: ambient is the
+        // alternative to a lightmap rather than an addition to it, and the
+        // single clamp at the end bounds their sum.
+        bool staticObject = (material.featureMask & kMaterialStatic) != 0;
+        float3 ambient = float3(0.0);
+        float3 diffuse = material.selfIllumColor.rgb;
         if ((material.featureMask & kMaterialLightmap) != 0 &&
             material.lightmap != kNoTexture) {
-            lighting = bindlessTextures[NonUniformResourceIndex(material.lightmap)]
+            diffuse += bindlessTextures[NonUniformResourceIndex(material.lightmap)]
                            .Sample(input.uv2).rgb;
             if ((material.featureMask & kMaterialWater) != 0) {
-                lighting = lerp(float3(1.0), lighting, 0.2);
+                diffuse = lerp(float3(1.0), diffuse, 0.2);
+            }
+        } else if (!staticObject) {
+            ambient += material.ambientColor.rgb * globalUniforms.worldAmbientColor.rgb;
+        }
+
+        for (int i = 0; i < globalUniforms.numLights; ++i) {
+            GlobalUniformsLight light = globalUniforms.lights[i];
+            // A lightmap already holds the static lights, so they are kept out
+            // of lightmapped geometry to avoid counting them twice.
+            if (staticObject && light.dynamicType != kLightDynamicTypeAll) continue;
+
+            float3 lightVector = light.position.xyz - input.worldPos;
+            float distance = length(lightVector);
+            // Odyssey compares against the SQUARE of the radius here. Kept,
+            // because it is what decides which lights reach a surface.
+            if (distance > light.radius * light.radius) continue;
+
+            float attenuation = odysseyLightAttenuation(light.radius, distance);
+            if (light.ambientOnly != 0) {
+                // No direction, so the surface normal says nothing about it.
+                ambient += light.multiplier * attenuation *
+                           material.ambientColor.rgb * light.color.rgb;
+            } else {
+                float3 lightDir = lightVector / max(1e-4, distance);
+                float lambert = max(0.0, dot(input.normal, lightDir));
+                diffuse += light.multiplier * lambert * attenuation *
+                           material.diffuseColor.rgb * light.color.rgb;
             }
         }
+        float3 lighting = min(float3(1.0), ambient + max(float3(0.0), diffuse));
         color *= lighting;
 
         bool shadowed = (material.featureMask & kMaterialShadows) != 0;
