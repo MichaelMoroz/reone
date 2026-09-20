@@ -485,6 +485,10 @@ GBufferOutput sceneDrawFragment(Varyings input, uint primitiveId : SV_PrimitiveI
     if ((material.featureMask & kMaterialWater) != 0) {
         diffuse *= material.waterAlpha;
     }
+    // A grass texel's alpha is cutout coverage, already resolved to committed
+    // or discarded above. It is never the authored mirror share that the PBR
+    // resolve and SSR carry in this channel.
+    if (input.materialIndex != kNoTexture) diffuse.a = 1.0;
 
     bool envmapped = (material.featureMask & kMaterialEnvMap) != 0;
 
