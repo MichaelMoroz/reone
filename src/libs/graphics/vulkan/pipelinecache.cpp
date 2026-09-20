@@ -42,6 +42,7 @@ bool VulkanPipelineCache::Key::operator==(const Key &other) const {
         viewMask != other.viewMask ||
         blend != other.blend ||
         cull != other.cull ||
+        polygonMode != other.polygonMode ||
         depthTest != other.depthTest ||
         depthWrite != other.depthWrite ||
         depthBias != other.depthBias ||
@@ -89,6 +90,7 @@ size_t VulkanPipelineCache::KeyHash::operator()(const Key &key) const {
     }
     mix(static_cast<size_t>(key.blend));
     mix(static_cast<size_t>(key.cull));
+    mix(static_cast<size_t>(key.polygonMode));
     mix(static_cast<size_t>(key.depthTest) | (static_cast<size_t>(key.depthWrite) << 1));
     mix(static_cast<size_t>(key.depthBias));
     mix(std::hash<float> {}(key.depthBiasConstantFactor));
@@ -206,6 +208,7 @@ VulkanPipeline &VulkanPipelineCache::get(const Key &key) {
     config.pushConstants = {{pushStage, 0, kCachedPipelinePushConstantSize}};
     config.blend = key.blend;
     config.cull = key.cull;
+    config.polygonMode = key.polygonMode;
     config.depthTest = key.depthTest;
     config.depthWrite = key.depthWrite;
     config.depthBias = key.depthBias;
@@ -234,6 +237,7 @@ PipelineBinding VulkanPipelineCache::get(const PipelineKey &key) {
     nativeKey.computeEntry = key.computeEntry;
     nativeKey.viewMask = key.viewMask;
     nativeKey.blend = key.blend;
+    nativeKey.polygonMode = key.polygonMode;
     nativeKey.depthTest = key.depthTest;
     nativeKey.depthWrite = key.depthWrite;
     nativeKey.depthFormat = toVulkanFormat(key.depthFormat);

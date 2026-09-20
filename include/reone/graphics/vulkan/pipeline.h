@@ -70,6 +70,7 @@ public:
         uint32_t viewMask {0};
         BlendMode blend {BlendMode::None};
         FaceCullMode cull {FaceCullMode::None};
+        PolygonMode polygonMode {PolygonMode::Fill};
         bool depthTest {false};
         bool depthWrite {false};
         bool depthBias {false};

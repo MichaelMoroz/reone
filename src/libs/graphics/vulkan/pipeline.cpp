@@ -328,7 +328,9 @@ void VulkanPipeline::init(const Config &config) {
 
     VkPipelineRasterizationStateCreateInfo raster {
         VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.polygonMode = config.polygonMode == PolygonMode::Line
+                             ? VK_POLYGON_MODE_LINE
+                             : VK_POLYGON_MODE_FILL;
     switch (config.cull) {
     case FaceCullMode::Front:
         raster.cullMode = VK_CULL_MODE_FRONT_BIT;

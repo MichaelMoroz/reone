@@ -200,6 +200,7 @@ struct PipelineKey {
     float depthBiasConstantFactor {0.0f};
     float depthBiasSlopeFactor {0.0f};
     FaceCullMode cull {FaceCullMode::None};
+    PolygonMode polygonMode {PolygonMode::Fill};
     /** Empty when the vertex shader synthesises geometry from SV_VertexID. */
     std::optional<Mesh::VertexLayout> vertexLayout;
 };
