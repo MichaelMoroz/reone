@@ -575,6 +575,9 @@ void Game::initConsole() {
     registerConsoleCommand("savegame", "save to a semantic slot", &Game::consoleSaveGame);
     registerConsoleCommand("startpazaak", "start a development Pazaak match", &Game::consoleStartPazaak);
     registerConsoleCommand("showpath", "show debug overlay for pathfinding", &Game::consoleShowPath);
+    registerConsoleCommand("showaabb", "toggle rendering AABB", &Game::consoleShowAABB);
+    registerConsoleCommand("showwalkmesh", "toggle rendering walkmesh", &Game::consoleShowWalkmesh);
+    registerConsoleCommand("showtriggers", "toggle rendering triggers", &Game::consoleShowTriggers);
 
     if (_options.game.developer) {
         registerConsoleCommand("minigameinfo", "print minigame metadata for current area", &Game::consoleMiniGameInfo);
@@ -2421,7 +2424,8 @@ void Game::renderDeveloperTriggerOverlay(const glm::mat4 &projection, const glm:
             centroid += trigger->position() + localPoint;
         }
 
-        // Trigger geometry now renders through the main scene pipeline; the overlay only adds labels.
+        // The volume itself is scene geometry drawn by the walkmesh pass;
+        // this pass adds the screen-space label.
         auto state = trigger->debugState();
         glm::vec4 color = trigger->debugColor();
         centroid /= static_cast<float>(geometry.size());
@@ -2829,6 +2833,14 @@ void Game::updateSceneGraph(float dt) {
     auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
     sceneGraph.setActiveCamera(camera->cameraSceneNode().get());
     sceneGraph.setUpdateRoots(!_paused);
+    // The debug sheets are scene geometry, so the graph draws them; the
+    // developer overlay's own switch turns the trigger volumes on too.
+    const bool developerTriggers = _options.game.developer &&
+                                   _screen == Screen::InGame &&
+                                   _developerOverlay.visible &&
+                                   _developerOverlay.triggers;
+    sceneGraph.setRenderWalkmeshes(isShowWalkmeshEnabled());
+    sceneGraph.setRenderTriggers(isShowTriggersEnabled() || developerTriggers);
     sceneGraph.setGrass(_options.graphics.grass, _options.graphics.grassDensity);
     sceneGraph.update(dt);
 }
@@ -6150,6 +6162,25 @@ void Game::consoleShowPath(const ConsoleArgs &args) {
     consoleCheckUsage(args, 1, 1, "1|0");
     bool show = args.get<int>(1).value();
     setShowPath(show);
+}
+
+void Game::consoleShowAABB(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "1|0");
+    bool show = args.get<int>(1).value();
+    setShowAABB(show);
+    // This branch draws object boxes from the debug overlay rather than from a
+    // pass of its own, so the command drives that switch.
+    _options.graphics.debugOverlay = show;
+}
+
+void Game::consoleShowWalkmesh(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "1|0");
+    setShowWalkmesh(args.get<int>(1).value());
+}
+
+void Game::consoleShowTriggers(const ConsoleArgs &args) {
+    consoleCheckUsage(args, 1, 1, "1|0");
+    setShowTriggers(args.get<int>(1).value());
 }
 
 } // namespace game

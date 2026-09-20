@@ -1141,6 +1141,9 @@ private:
     void consoleStartTurretGame(const ConsoleArgs &tokens);
     void consoleShowImGui(const ConsoleArgs &tokens);
     void consoleShowPath(const ConsoleArgs &tokens);
+    void consoleShowAABB(const ConsoleArgs &tokens);
+    void consoleShowWalkmesh(const ConsoleArgs &tokens);
+    void consoleShowTriggers(const ConsoleArgs &tokens);
 
     // The raw model most recently admitted by `spawn`.  Emitter and saber
     // fixtures use this deliberately narrow handle rather than an editor-wide

@@ -1251,10 +1251,53 @@ Texture &SceneGraph::render(const glm::ivec2 &dim, SceneOutputAlpha alpha) {
         }
     }
     pipeline.setFogEnabled(isFogEnabled());
+    collectWalkmeshDraws(pipeline);
     collectDebugOverlay(pipeline);
     auto &output = pipeline.render(_activeCamera, shadowCasters, alpha);
     snapshotPreviousFrame();
     return output;
+}
+
+void SceneGraph::collectWalkmeshDraws(IRenderPipeline &pipeline) {
+    if (!_renderWalkmeshes && !_renderTriggers) {
+        pipeline.setWalkmeshDraws({}, {});
+        return;
+    }
+    // The original's table: green where a surface is walkable, red where it is
+    // not, and the last slot - which trigger geometry carries - blue.
+    std::array<glm::vec4, graphics::kMaxWalkmeshMaterials> materials {};
+    for (int i = 0; i < graphics::kMaxWalkmeshMaterials - 1; ++i) {
+        materials[i] = _walkableSurfaces.count(i) > 0
+                           ? glm::vec4(0.0f, 1.0f, 0.0f, 1.0f)
+                           : glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+    }
+    materials[graphics::kMaxWalkmeshMaterials - 1] = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+
+    std::vector<graphics::WalkmeshDraw> draws;
+    if (_renderWalkmeshes) {
+        for (const auto &root : _walkmeshRoots) {
+            if (!root->isEnabled()) {
+                continue;
+            }
+            if (const auto *mesh = root->debugMesh()) {
+                draws.push_back({mesh, root->absoluteTransform()});
+            }
+        }
+    }
+    if (_renderTriggers) {
+        for (const auto &root : _triggerRoots) {
+            if (!root->isEnabled()) {
+                continue;
+            }
+            if (const auto *mesh = root->mesh()) {
+                // Wireframe, and in this trigger's own state colour, which
+                // replaces the shared last slot for its draw alone.
+                draws.push_back({mesh, root->absoluteTransform(), true,
+                                 root->debugColor()});
+            }
+        }
+    }
+    pipeline.setWalkmeshDraws(std::move(draws), materials);
 }
 
 void SceneGraph::collectDebugOverlay(IRenderPipeline &pipeline) {

@@ -19,6 +19,7 @@
 
 #include "../node.h"
 
+#include "reone/graphics/mesh.h"
 #include "reone/graphics/walkmesh.h"
 
 namespace reone {
@@ -52,8 +53,14 @@ public:
 
     const graphics::Walkmesh &walkmesh() const { return _walkmesh; }
 
+    /** Build the drawable copy the walkmesh debug view rasterizes. Lazy: most
+        runs never switch that view on, and an area holds one per room. */
+    const graphics::Mesh *debugMesh();
+
 private:
     graphics::Walkmesh &_walkmesh;
+    std::unique_ptr<graphics::Mesh> _debugMesh;
+    bool _debugMeshBuilt {false};
 };
 
 } // namespace scene

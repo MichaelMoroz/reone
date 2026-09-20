@@ -80,6 +80,7 @@ public:
 
     void markDebugTested(bool inside);
     void markDebugEntered();
+    void syncDebugVisual();
 
     const std::string &getOnEnter() const { return _onEnter; }
     const std::string &getOnExit() const { return _onExit; }
@@ -127,7 +128,6 @@ private:
     void deserializeAll(const resource::Gff &gff);
     void loadAppearance();
 
-    void syncDebugVisual();
 };
 
 } // namespace game

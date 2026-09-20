@@ -2007,6 +2007,70 @@ void ScenePipeline::debugViewPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
 }
 
+void ScenePipeline::walkmeshPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
+    R_PROFILE_ZONE("ScenePipeline::walkmeshPass record");
+    CommandBufferDebugScope debugScope(cmd, "walkmeshPass");
+    if (_walkmeshDraws.empty()) {
+        return;
+    }
+    WalkmeshUniforms walkmeshUniforms;
+    std::copy(_walkmeshMaterials.begin(), _walkmeshMaterials.end(),
+              std::begin(walkmeshUniforms.materials));
+
+    cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
+    cmd.transitionImage(*_output, ImageLayout::ColorAttachment);
+
+    PipelineKey key;
+    key.module = "walkmesh";
+    key.vertexEntry = "walkmeshVertex";
+    key.fragmentEntry = "walkmeshFragment";
+    key.colorFormats = {_output->pixelFormat()};
+    key.depthFormat = _gbuffer->depthFormat();
+    key.depthTest = true;
+    // Read-only: these sheets are a diagnostic laid over the scene, and writing
+    // their depth would let one room's floor occlude the next one's.
+    key.depthWrite = false;
+    key.vertexLayout = _walkmeshDraws.front().mesh->vertexLayout();
+
+    auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.frameIndex());
+    auto &ring = _renderer.uniformRing();
+
+    RenderAttachment color {_output->sampleView(), ImageLayout::ColorAttachment,
+                            AttachmentLoad::Load, AttachmentStore::Store};
+    RenderAttachment depth {_gbuffer->depth().sampleView(), ImageLayout::DepthRead,
+                            AttachmentLoad::Load, AttachmentStore::DontCare};
+    cmd.beginRendering(_renderSize, {color}, &depth, 0, true);
+    for (const auto &draw : _walkmeshDraws) {
+        if (!draw.mesh) {
+            continue;
+        }
+        // A trigger is an unfilled volume seen from either side; a walkmesh
+        // sheet is a solid floor. Two pipeline variants off one key.
+        PipelineKey drawKey = key;
+        drawKey.polygonMode = draw.wireframe ? PolygonMode::Line : PolygonMode::Fill;
+        drawKey.cull = draw.wireframe ? FaceCullMode::None : FaceCullMode::Back;
+        PipelineBinding pipeline = _renderer.pipelines().get(drawKey);
+        cmd.bindPipeline(pipeline.pipeline);
+
+        WalkmeshUniforms drawUniforms = walkmeshUniforms;
+        if (draw.colorOverride) {
+            drawUniforms.materials[kMaxWalkmeshMaterials - 1] = *draw.colorOverride;
+        }
+        LocalUniforms locals;
+        locals.reset();
+        locals.model = draw.transform;
+        locals.modelInv = glm::inverse(draw.transform);
+        std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
+        offsets[UniformBlockBindingPoints::globals] = globalsOffset;
+        offsets[UniformBlockBindingPoints::locals] = ring.push(locals);
+        offsets[UniformBlockBindingPoints::walkmesh] = ring.push(drawUniforms);
+        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
+                              offsets.data(), static_cast<uint32_t>(offsets.size()));
+        _renderer.resources().drawMesh(cmd, *draw.mesh);
+    }
+    cmd.endRendering();
+}
+
 void ScenePipeline::debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     R_PROFILE_ZONE("ScenePipeline::debugOverlayPass record");
     CommandBufferDebugScope debugScope(cmd, "debugOverlayPass");
@@ -2252,6 +2316,8 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
     _shadowCasters = plan.shadowCasters;
     _groundHeight = plan.groundHeight;
     _fogEnabled = plan.fogEnabled;
+    _walkmeshDraws = plan.walkmeshDraws;
+    _walkmeshMaterials = plan.walkmeshMaterials;
     _overlayShapes = plan.overlayShapes;
     _overlayLines = plan.overlayLines;
     _overlayLabels = plan.overlayLabels;
@@ -2326,6 +2392,8 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
                 debugViewPass(cmd, globalsOffset);
             } else if (step == SceneStep::Fog) {
                 fogPass(cmd, globalsOffset);
+            } else if (step == SceneStep::Walkmesh) {
+                walkmeshPass(cmd, globalsOffset);
             } else if (step == SceneStep::DebugOverlay) {
                 debugOverlayPass(cmd, globalsOffset);
             }
@@ -2404,6 +2472,9 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
             break;
         case SceneStep::Fog:
             fogPass(cmd, globalsOffset);
+            break;
+        case SceneStep::Walkmesh:
+            walkmeshPass(cmd, globalsOffset);
             break;
         case SceneStep::DebugOverlay:
             debugOverlayPass(cmd, globalsOffset);

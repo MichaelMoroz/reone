@@ -346,6 +346,13 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
     // colour. What used to switch it off is now GraphicsOptions::grade, which
     // the pass reads itself - it gates the exposure and the tone curve, and an
     // ungraded frame is still a correctly encoded one.
+    // Ahead of the encode, so these sheets are graded with the room they lie on
+    // rather than being pasted over a finished picture.
+    plan.walkmeshDraws = std::move(_walkmeshDraws);
+    plan.walkmeshMaterials = _walkmeshMaterials;
+    _walkmeshDraws.clear();
+    if (!plan.walkmeshDraws.empty() && !diagnosticImage)
+        plan.steps.push_back(graphics::SceneStep::Walkmesh);
     if (!diagnosticImage)
         plan.steps.push_back(graphics::SceneStep::PostProcess);
     if (antialiased && !temporalResolve)

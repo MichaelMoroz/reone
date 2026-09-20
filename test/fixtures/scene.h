@@ -64,6 +64,8 @@ public:
     MOCK_METHOD(void, setFog, (FogProperties fog), (override));
 
     MOCK_METHOD(void, setWalkableSurfaces, (std::set<uint32_t>), (override));
+    MOCK_METHOD(void, setRenderWalkmeshes, (bool), (override));
+    MOCK_METHOD(void, setRenderTriggers, (bool), (override));
     MOCK_METHOD(void, setWalkcheckSurfaces, (std::set<uint32_t>), (override));
     MOCK_METHOD(void, setLineOfSightSurfaces, (std::set<uint32_t>), (override));
 

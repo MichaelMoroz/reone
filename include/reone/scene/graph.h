@@ -136,6 +136,10 @@ public:
     virtual uint64_t grassGeneration() const = 0;
 
     virtual void setWalkableSurfaces(std::set<uint32_t> surfaces) = 0;
+    /** Draw room walkmeshes as filled sheets, coloured by walkability. */
+    virtual void setRenderWalkmeshes(bool render) = 0;
+    /** Draw trigger volumes as filled sheets. */
+    virtual void setRenderTriggers(bool render) = 0;
     virtual void setWalkcheckSurfaces(std::set<uint32_t> surfaces) = 0;
     virtual void setLineOfSightSurfaces(std::set<uint32_t> surfaces) = 0;
 
@@ -218,6 +222,8 @@ public:
 
     /** Boxes and labels for the debug overlay, into the pipeline; see render(). */
     void collectDebugOverlay(IRenderPipeline &pipeline);
+    /** Hand the pipeline the walkmesh and trigger sheets the debug views draw. */
+    void collectWalkmeshDraws(IRenderPipeline &pipeline);
     /** Bound the label set, preferring the ones on screen; see the impl. */
     void capDebugOverlayLabels();
 
@@ -387,6 +393,8 @@ public:
     std::optional<std::reference_wrapper<ModelSceneNode>> pickModelRay(const glm::vec3 &origin, const glm::vec3 &dir) const override;
 
     void setWalkableSurfaces(std::set<uint32_t> surfaces) override { _walkableSurfaces = std::move(surfaces); }
+    void setRenderWalkmeshes(bool render) override { _renderWalkmeshes = render; }
+    void setRenderTriggers(bool render) override { _renderTriggers = render; }
     void setWalkcheckSurfaces(std::set<uint32_t> surfaces) override { _walkcheckSurfaces = std::move(surfaces); }
     void setLineOfSightSurfaces(std::set<uint32_t> surfaces) override { _lineOfSightSurfaces = std::move(surfaces); }
 
@@ -534,6 +542,8 @@ private:
     // Surfaces
 
     std::set<uint32_t> _walkableSurfaces;
+    bool _renderWalkmeshes {false};
+    bool _renderTriggers {false};
     std::set<uint32_t> _walkcheckSurfaces;
     std::set<uint32_t> _lineOfSightSurfaces;
 

@@ -91,6 +91,14 @@ enum class SceneStep {
         ping-pong onto the tail target, so a step that does not run costs
         nothing rather than a copy. */
     AntiAliasing,
+    /**
+     * The walkmesh and trigger debug sheets, filled and depth-tested.
+     *
+     * Before the post steps rather than with the overlay: the original drew
+     * these into the scene, so they take the same grade the room does and a
+     * wall in front of a walkable face hides it outright.
+     */
+    Walkmesh,
     /** After the display transform: an unsharp mask over display colour. */
     Sharpen,
     PostProcess,
@@ -155,6 +163,16 @@ struct SceneShadowCaster {
 
 /** Every object category casts; see SceneFramePlan::shadowCasterCategories. */
 constexpr uint32_t kAllShadowCasters = 0xFFFFFFFFu;
+
+/** One room's walkmesh, or one trigger volume, as drawable geometry. */
+struct WalkmeshDraw {
+    const Mesh *mesh {nullptr};
+    glm::mat4 transform {1.0f};
+    /** Triggers draw as wireframe volumes; walkmesh sheets draw filled. */
+    bool wireframe {false};
+    /** Set for a trigger: its state colour, which replaces the last slot. */
+    std::optional<glm::vec4> colorOverride;
+};
 
 /**
  * One wireframe box of the debug overlay: eight world-space corners and the
@@ -224,6 +242,14 @@ struct SceneFramePlan {
      * no fog.
      */
     bool fogEnabled {false};
+    /**
+     * Filled walkmesh and trigger sheets for the debug views, empty when both
+     * are off. Drawn into the shaded image ahead of post, as the original did,
+     * so the surface colours take the same tonemap the scene does.
+     */
+    std::vector<WalkmeshDraw> walkmeshDraws;
+    /** Colour per surface id, indexed by the material the geometry carries. */
+    std::array<glm::vec4, kMaxWalkmeshMaterials> walkmeshMaterials {};
     /** The debug overlay's boxes for this frame; empty when the overlay is off. */
     std::vector<DebugOverlayShape> overlayShapes;
     std::vector<DebugOverlayLine> overlayLines;
@@ -328,6 +354,8 @@ private:
     /** The area authored fog; see SceneFramePlan::fogEnabled. */
     bool _fogEnabled {false};
     /** This frame's debug-overlay boxes; empty when the overlay is off. */
+    std::vector<WalkmeshDraw> _walkmeshDraws;
+    std::array<glm::vec4, kMaxWalkmeshMaterials> _walkmeshMaterials {};
     std::vector<DebugOverlayShape> _overlayShapes;
     std::vector<DebugOverlayLine> _overlayLines;
     std::vector<DebugOverlayLabel> _overlayLabels;
@@ -530,6 +558,7 @@ private:
     struct FogPushConstants fogParameters() const;
     /** Wireframe boxes over the finished image; see SceneStep::DebugOverlay. */
     void debugOverlayPass(ICommandBuffer &cmd, uint32_t globalsOffset);
+    void walkmeshPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     void sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     void bloomPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** One tail pass: full-screen triangle from _output onto _tailColor, then

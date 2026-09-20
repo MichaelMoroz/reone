@@ -122,6 +122,14 @@ public:
                                        std::vector<graphics::DebugOverlayLine> lines,
                                        std::vector<graphics::DebugOverlayLabel> labels) {}
 
+    /**
+     * Filled walkmesh and trigger geometry for the debug views, with the colour
+     * each surface id draws in. Empty turns the pass off.
+     */
+    virtual void setWalkmeshDraws(
+        std::vector<graphics::WalkmeshDraw> draws,
+        const std::array<glm::vec4, graphics::kMaxWalkmeshMaterials> &materials) {}
+
     /** Whether the area authored fog at all, as opposed to the player's switch. */
     virtual void setFogEnabled(bool enabled) {}
 

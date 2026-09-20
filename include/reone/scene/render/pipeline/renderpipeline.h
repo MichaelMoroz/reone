@@ -69,6 +69,13 @@ public:
         _overlayLabels = std::move(labels);
     }
 
+    void setWalkmeshDraws(
+        std::vector<graphics::WalkmeshDraw> draws,
+        const std::array<glm::vec4, graphics::kMaxWalkmeshMaterials> &materials) override {
+        _walkmeshDraws = std::move(draws);
+        _walkmeshMaterials = materials;
+    }
+
     void setDebugOverlayFont(graphics::Font *font) override { _overlayFont = font; }
 
     /** Whether the area authored fog; see SceneFramePlan::fogEnabled. */
@@ -106,6 +113,8 @@ private:
     bool _primaryRayMode {false};
     bool _inited {false};
     /** Debug-overlay boxes handed in by the scene graph for the next render. */
+    std::vector<graphics::WalkmeshDraw> _walkmeshDraws;
+    std::array<glm::vec4, graphics::kMaxWalkmeshMaterials> _walkmeshMaterials {};
     std::vector<graphics::DebugOverlayShape> _overlayShapes;
     std::vector<graphics::DebugOverlayLine> _overlayLines;
     std::vector<graphics::DebugOverlayLabel> _overlayLabels;

@@ -166,7 +166,6 @@ void Trigger::loadAppearance() {
         return;
     }
     _sceneNode->setLocalTransform(glm::translate(_position));
-    syncDebugVisual();
 }
 
 void Trigger::update(float dt) {
@@ -178,7 +177,6 @@ void Trigger::update(float dt) {
 
     if (!isActive()) {
         _tenants.clear();
-        syncDebugVisual();
         return;
     }
 
@@ -204,12 +202,10 @@ void Trigger::update(float dt) {
              {script::ArgKind::ExitingObject, script::Variable::ofObject(tenant->id())}});
     }
 
-    syncDebugVisual();
 }
 
 void Trigger::addTenant(const std::shared_ptr<Object> &object) {
     _tenants.insert(object);
-    syncDebugVisual();
     if (_onEnter.empty()) {
         return;
     }
@@ -225,7 +221,6 @@ void Trigger::removeTenant(const Object *object) {
     for (auto it = _tenants.begin(); it != _tenants.end();) {
         if (it->get() == object) {
             it = _tenants.erase(it);
-            syncDebugVisual();
         } else {
             ++it;
         }
@@ -275,7 +270,6 @@ bool Trigger::detachLinkedDoorTransition(const Door &door) {
     _linkedToModule.clear();
     _linkedTo.clear();
     _tenants.clear();
-    syncDebugVisual();
     return true;
 }
 
@@ -296,6 +290,13 @@ glm::vec4 Trigger::debugColor() const {
     return debugColorForState(debugState());
 }
 
+void Trigger::syncDebugVisual() {
+    if (!_sceneNode) {
+        return;
+    }
+    static_cast<scene::TriggerSceneNode *>(_sceneNode.get())->setDebugColor(debugColor());
+}
+
 void Trigger::markDebugTested(bool inside) {
     _debugTestAge = kDebugTestDuration;
     if (inside) {
@@ -307,12 +308,6 @@ void Trigger::markDebugTested(bool inside) {
 void Trigger::markDebugEntered() {
     _debugEnterAge = kDebugEnterDuration;
     syncDebugVisual();
-}
-
-void Trigger::syncDebugVisual() {
-    if (!_sceneNode) {
-        return;
-    }
 }
 
 } // namespace game
