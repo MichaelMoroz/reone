@@ -67,6 +67,32 @@ static bool canBashPlaceable(const Placeable &placeable, const Creature &actor, 
 }
 
 void Module::load(std::string name, const Gff &ifo, bool restoreSavedWorld) {
+    auto parsed = resource::generated::parseIFO(ifo);
+    if (parsed.Mod_Entry_Area.empty()) {
+        throw ValidationException("Mod_Entry_Area must not be empty");
+    }
+    auto are = _services.resource.gffs.get(parsed.Mod_Entry_Area, ResType::Are);
+    if (!are) {
+        throw ResourceNotFoundException(
+            "Area ARE not found: " + parsed.Mod_Entry_Area);
+    }
+    auto git = _services.resource.gffs.get(parsed.Mod_Entry_Area, ResType::Git);
+    if (!git) {
+        throw ResourceNotFoundException(
+            "Area GIT not found: " + parsed.Mod_Entry_Area);
+    }
+    load(std::move(name), ifo, *are, *git, restoreSavedWorld);
+    if (!restoreSavedWorld) {
+        runSpawnScripts();
+    }
+}
+
+void Module::load(
+    std::string name,
+    const Gff &ifo,
+    const Gff &are,
+    const Gff &git,
+    bool restoreSavedWorld) {
     _name = std::move(name);
     if (restoreSavedWorld) {
         _game.captureSaveResourceShadow(
@@ -78,23 +104,22 @@ void Module::load(std::string name, const Gff &ifo, bool restoreSavedWorld) {
     auto ifoParsed = resource::generated::parseIFO(ifo);
     _isSaveGame = restoreSavedWorld && ifoParsed.Mod_IsSaveGame != 0;
     if (restoreSavedWorld) {
-        deserializeRuntimeState(ifo);
-        deserializeSavedEventQueue(ifo);
+        const auto identityContext =
+            SerializedIdentityContext::moduleGraph(_name);
+        deserializeRuntimeState(ifo, identityContext);
+        deserializeSavedEventQueue(ifo, identityContext);
         loadLimboCreatures(ifo);
     } else {
         _savedEventQueue = SavedEventQueue {};
         _savedEventLive.clear();
     }
     loadInfo(ifoParsed);
-    loadArea(ifoParsed, restoreSavedWorld);
+    loadArea(ifoParsed, are, git, restoreSavedWorld);
 
     _area->initCameras(_info.entryPosition, _info.entryFacing);
 
     loadPlayer();
 
-    if (!restoreSavedWorld) {
-        _area->runSpawnScripts();
-    }
 }
 
 void Module::initEmpty() {
@@ -137,40 +162,55 @@ void Module::loadInfo(const resource::generated::IFO &ifo) {
     _info.onModStart = boost::to_lower_copy(ifo.Mod_OnModStart);
 }
 
-void Module::loadArea(const resource::generated::IFO &ifo, bool restoreSavedWorld) {
+void Module::loadArea(
+    const resource::generated::IFO &ifo,
+    const Gff &are,
+    const Gff &git,
+    bool restoreSavedWorld) {
     reone::info("Load area '" + _info.entryArea + "'");
 
-    if (restoreSavedWorld) {
-        auto area = std::find_if(
-            ifo.Mod_Area_list.begin(),
-            ifo.Mod_Area_list.end(),
-            [this](const auto &entry) { return entry.Area_Name == _info.entryArea; });
-        uint32_t areaId = area == ifo.Mod_Area_list.end() ? 1 : area->ObjectId;
-        _area = _game.newSavedArea(areaId);
-    } else {
-        _area = _game.newArea();
-    }
+    const auto identityContext = restoreSavedWorld
+                                     ? SerializedIdentityContext::moduleGraph(_name)
+                                     : SerializedIdentityContext::templateResource(_name);
+    std::shared_ptr<Area> candidateArea;
+    std::vector<std::shared_ptr<Object>> noObsolete;
+    _game.replaceRuntimeObjectGraph(
+        noObsolete,
+        [&]() {
+            if (restoreSavedWorld) {
+                auto area = std::find_if(
+                    ifo.Mod_Area_list.begin(),
+                    ifo.Mod_Area_list.end(),
+                    [this](const auto &entry) {
+                        return entry.Area_Name == _info.entryArea;
+                    });
+                uint32_t areaId = area == ifo.Mod_Area_list.end()
+                                      ? 1
+                                      : area->ObjectId;
+                candidateArea = _game.newSavedArea(areaId, identityContext);
+            } else {
+                candidateArea = _game.newArea();
+            }
+            candidateArea->load(
+                _info.entryArea, are, git, identityContext);
+        },
+        [&]() noexcept {
+            _area = std::move(candidateArea);
+        });
 
-    std::shared_ptr<Gff> are(_services.resource.gffs.get(_info.entryArea, ResType::Are));
-    if (!are) {
-        throw ResourceNotFoundException("Area ARE not found: " + _info.entryArea);
-    }
+}
 
-    std::shared_ptr<Gff> git(_services.resource.gffs.get(_info.entryArea, ResType::Git));
-    if (!git) {
-        throw ResourceNotFoundException("Area GIT not found: " + _info.entryArea);
-    }
-
-    _area->load(_info.entryArea, *are, *git, restoreSavedWorld);
-
+void Module::runSpawnScripts() {
+    _area->runSpawnScripts();
 }
 void Module::loadLimboCreatures(const resource::Gff &ifo) {
     _limboCreatures.clear();
+    const auto identityContext = SerializedIdentityContext::moduleGraph(_name);
     for (const auto &creatureGff : ifo.getList("Creature List")) {
-        auto creature = _game.newCreature(*creatureGff);
-        creature->deserialize(*creatureGff);
+        auto creature = _game.newCreature(*creatureGff, identityContext);
         creature->captureSaveRecord(
             *creatureGff,
+            identityContext,
             {SaveRecordOriginKind::ModuleLimboCreature, _name});
         _limboCreatures.push_back(std::move(creature));
     }
@@ -262,25 +302,9 @@ bool Module::handleMouseMotion(const input::MouseMotionEvent &event) {
         auto objectPtr = _game.getObjectById(object->id());
         _area->hilightObject(objectPtr);
 
-        switch (object->type()) {
-        case ObjectType::Creature: {
-            if (object->isDead()) {
-                cursor = CursorType::Pickup;
-            } else {
-                auto creature = static_cast<Creature *>(object);
-                cursor = isHostileToPartyLeader(*creature) ? CursorType::Attack : CursorType::Talk;
-            }
-            break;
-        }
-        case ObjectType::Door:
-            cursor = CursorType::Door;
-            break;
-        case ObjectType::Placeable:
-            cursor = CursorType::Pickup;
-            break;
-        default:
-            break;
-        }
+        bool hostile = object->type() == ObjectType::Creature && !object->isDead()
+            ? isHostileToPartyLeader(*static_cast<Creature *>(object)) : false;
+        cursor = contextualCursor(object->type(), object->isDead(), hostile);
     } else {
         _area->hilightObject(nullptr);
     }
@@ -359,7 +383,7 @@ void Module::onDoorClick(const std::shared_ptr<Door> &door) {
     if (!door->linkedToModule().empty() && door->getOnOpen().empty()) {
         std::shared_ptr<Creature> partyLeader(_game.party().getLeader());
         if (door->isLocked()) {
-            tryUnlockDoorWithKey(*door, *partyLeader, _game.party());
+            tryUnlockDoorWithKey(_game, *door, *partyLeader, _game.party());
         }
         if (door->isLocked()) {
             door->onFailToOpen(*partyLeader);
@@ -396,9 +420,12 @@ size_t Module::pendingSavedEventCount() const {
         _savedEventLive.begin(), _savedEventLive.end(), true));
 }
 
-void Module::deserializeSavedEventQueue(const resource::Gff &ifo) {
-    _savedEventQueue = SavedEventQueue::fromGff(ifo);
+void Module::deserializeSavedEventQueue(
+    const resource::Gff &ifo,
+    const SerializedIdentityContext &identityContext) {
+    _savedEventQueue = SavedEventQueue::fromGff(ifo, identityContext);
     _savedEventLive.clear();
+    _savedEventReferencesBound.clear();
     _savedEventLive.reserve(_savedEventQueue.events.size());
     for (const auto &event : _savedEventQueue.events) {
         _savedEventLive.push_back(event.shouldRestore());
@@ -421,9 +448,22 @@ std::vector<SavedEventRecord> Module::saveEventSnapshot() const {
 size_t Module::enqueueSaveEvent(SavedEventRecord event) {
     // New events bind through the current B registry before becoming visible to
     // a save snapshot; raw IDs never gain cross-session authority.
-    event.bindObjectReferences(_game);
+    const bool referencesBound = event.bindObjectReferences(_game);
     _savedEventQueue.events.push_back(std::move(event));
     _savedEventLive.push_back(true);
+    _savedEventReferencesBound.push_back(referencesBound);
+    return _savedEventQueue.events.size() - 1;
+}
+
+size_t Module::enqueueBoundSaveEvent(
+    SavedEventRecord event, bool referencesBound) {
+    // Ordinary travel captures Party timers while the source registry still
+    // owns their reference domain. The record already carries C4 exact-
+    // incarnation handles; looking its numeric carriers up again after the
+    // destination publishes could alias an unrelated object.
+    _savedEventQueue.events.push_back(std::move(event));
+    _savedEventLive.push_back(true);
+    _savedEventReferencesBound.push_back(referencesBound);
     return _savedEventQueue.events.size() - 1;
 }
 
@@ -441,10 +481,11 @@ bool Module::cancelSaveEvent(size_t index) {
 }
 
 void Module::bindSavedEventQueue() {
+    _savedEventReferencesBound.clear();
+    _savedEventReferencesBound.reserve(_savedEventQueue.events.size());
     for (auto &event : _savedEventQueue.events) {
-        if (event.shouldRestore()) {
-            event.bindObjectReferences(_game);
-        }
+        _savedEventReferencesBound.push_back(
+            !event.shouldRestore() || event.bindObjectReferences(_game));
     }
 }
 
@@ -459,6 +500,8 @@ void Module::publishSavedEventQueue() {
     for (size_t index = 0; index < _savedEventQueue.events.size(); ++index) {
         const auto &savedEvent = _savedEventQueue.events[index];
         if (!savedEvent.shouldRestore() ||
+            index >= _savedEventReferencesBound.size() ||
+            !_savedEventReferencesBound[index] ||
             savedEvent.executionSupport() != SavedExecutionSupport::Executable) {
             continue;
         }
@@ -576,47 +619,47 @@ std::vector<ContextAction> Module::getContextActions(const std::shared_ptr<Objec
             actions.push_back(ContextAction(ActionType::AttackObject));
             auto weapon = leader->getEquippedItem(InventorySlots::rightWeapon);
             if (weapon && weapon->isRanged()) {
-                if (leader->attributes().hasFeat(FeatType::MasterPowerBlast)) {
+                if (leader->hasEffectiveFeat(FeatType::MasterPowerBlast)) {
                     actions.push_back(ContextAction(FeatType::MasterPowerBlast));
-                } else if (leader->attributes().hasFeat(FeatType::ImprovedPowerBlast)) {
+                } else if (leader->hasEffectiveFeat(FeatType::ImprovedPowerBlast)) {
                     actions.push_back(ContextAction(FeatType::ImprovedPowerBlast));
-                } else if (leader->attributes().hasFeat(FeatType::PowerBlast)) {
+                } else if (leader->hasEffectiveFeat(FeatType::PowerBlast)) {
                     actions.push_back(ContextAction(FeatType::PowerBlast));
                 }
-                if (leader->attributes().hasFeat(FeatType::MasterSniperShot)) {
+                if (leader->hasEffectiveFeat(FeatType::MasterSniperShot)) {
                     actions.push_back(ContextAction(FeatType::MasterSniperShot));
-                } else if (leader->attributes().hasFeat(FeatType::ImprovedSniperShot)) {
+                } else if (leader->hasEffectiveFeat(FeatType::ImprovedSniperShot)) {
                     actions.push_back(ContextAction(FeatType::ImprovedSniperShot));
-                } else if (leader->attributes().hasFeat(FeatType::SniperShot)) {
+                } else if (leader->hasEffectiveFeat(FeatType::SniperShot)) {
                     actions.push_back(ContextAction(FeatType::SniperShot));
                 }
-                if (leader->attributes().hasFeat(FeatType::MultiShot)) {
+                if (leader->hasEffectiveFeat(FeatType::MultiShot)) {
                     actions.push_back(ContextAction(FeatType::MultiShot));
-                } else if (leader->attributes().hasFeat(FeatType::ImprovedRapidShot)) {
+                } else if (leader->hasEffectiveFeat(FeatType::ImprovedRapidShot)) {
                     actions.push_back(ContextAction(FeatType::ImprovedRapidShot));
-                } else if (leader->attributes().hasFeat(FeatType::RapidShot)) {
+                } else if (leader->hasEffectiveFeat(FeatType::RapidShot)) {
                     actions.push_back(ContextAction(FeatType::RapidShot));
                 }
             } else {
-                if (leader->attributes().hasFeat(FeatType::MasterPowerAttack)) {
+                if (leader->hasEffectiveFeat(FeatType::MasterPowerAttack)) {
                     actions.push_back(ContextAction(FeatType::MasterPowerAttack));
-                } else if (leader->attributes().hasFeat(FeatType::ImprovedPowerAttack)) {
+                } else if (leader->hasEffectiveFeat(FeatType::ImprovedPowerAttack)) {
                     actions.push_back(ContextAction(FeatType::ImprovedPowerAttack));
-                } else if (leader->attributes().hasFeat(FeatType::PowerAttack)) {
+                } else if (leader->hasEffectiveFeat(FeatType::PowerAttack)) {
                     actions.push_back(ContextAction(FeatType::PowerAttack));
                 }
-                if (leader->attributes().hasFeat(FeatType::MasterCriticalStrike)) {
+                if (leader->hasEffectiveFeat(FeatType::MasterCriticalStrike)) {
                     actions.push_back(ContextAction(FeatType::MasterCriticalStrike));
-                } else if (leader->attributes().hasFeat(FeatType::ImprovedCriticalStrike)) {
+                } else if (leader->hasEffectiveFeat(FeatType::ImprovedCriticalStrike)) {
                     actions.push_back(ContextAction(FeatType::ImprovedCriticalStrike));
-                } else if (leader->attributes().hasFeat(FeatType::CriticalStrike)) {
+                } else if (leader->hasEffectiveFeat(FeatType::CriticalStrike)) {
                     actions.push_back(ContextAction(FeatType::CriticalStrike));
                 }
-                if (leader->attributes().hasFeat(FeatType::WhirlwindAttack)) {
+                if (leader->hasEffectiveFeat(FeatType::WhirlwindAttack)) {
                     actions.push_back(ContextAction(FeatType::WhirlwindAttack));
-                } else if (leader->attributes().hasFeat(FeatType::ImprovedFlurry)) {
+                } else if (leader->hasEffectiveFeat(FeatType::ImprovedFlurry)) {
                     actions.push_back(ContextAction(FeatType::ImprovedFlurry));
-                } else if (leader->attributes().hasFeat(FeatType::Flurry)) {
+                } else if (leader->hasEffectiveFeat(FeatType::Flurry)) {
                     actions.push_back(ContextAction(FeatType::Flurry));
                 }
             }

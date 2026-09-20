@@ -33,6 +33,8 @@
 #include "../d20/attributes.h"
 #include "../d20/itemattributes.h"
 #include "../object.h"
+#include "../menupresentation.h"
+#include "../runtimeref.h"
 #include "../pathfinder.h"
 
 #include "item.h"
@@ -74,16 +76,25 @@ public:
     struct Perception {
         float sightRange {0.0f};
         float hearingRange {0.0f};
-        std::set<uint32_t> seen;
-        std::set<uint32_t> heard;
+        std::map<uint32_t, RuntimeObjectRef<Object>> seen;
+        std::map<uint32_t, RuntimeObjectRef<Object>> heard;
+
+        bool sees(uint32_t id) const {
+            auto found = seen.find(id);
+            return found != seen.end() && found->second.resolve() != nullptr;
+        }
+        bool hears(uint32_t id) const {
+            auto found = heard.find(id);
+            return found != heard.end() && found->second.resolve() != nullptr;
+        }
     };
 
     struct CombatState {
         bool active {false};
         bool shouldDeactivate {false};
         bool debilitated {false};
-        std::shared_ptr<Object> attackTarget;
-        uint32_t attemptedAttackTarget {script::kObjectInvalid};
+        RuntimeObjectRef<Object> attackTarget;
+        RuntimeObjectRef<Object> attemptedAttackTarget;
         ActionType attackAction {ActionType::QueueEmpty};
         FeatType combatFeat {FeatType::Invalid};
         Timer deactivationTimer;
@@ -102,12 +113,25 @@ public:
     void loadFromBlueprint(const std::string &resRef);
     void loadAppearance();
 
-    void deserialize(const resource::Gff &gff);
+    void deserialize(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext);
+
+    /**
+     * Invalidate state that only exists while this retained creature inhabits
+     * one Area. The owning Area supplies its still-live Pathfinder so path
+     * handles are released before that owner is destroyed.
+     */
+    void retireAreaRuntime(
+        Pathfinder &pathfinder,
+        const std::set<const Object *> &retainedObjects);
 
     void update(float dt) override;
 
     void clearAllActions(bool force = false) override;
-    void damage(int amount, uint32_t damager) override;
+    void damage(
+        int amount,
+        const std::shared_ptr<Object> &damager) override;
 
     void giveXP(int amount);
     void setXP(int xp);
@@ -128,6 +152,8 @@ public:
     Gender gender() const { return _gender; }
     ModelType modelType() const { return _modelType; }
     int appearance() const { return _appearance; }
+    CreaturePresentation presentation() const;
+    void setPresentation(const CreaturePresentation &presentation);
     uint16_t portraitId() const { return _portraitId; }
     std::shared_ptr<graphics::Texture> portrait() const { return _portrait; }
     float walkSpeed() const { return _walkSpeed; }
@@ -146,21 +172,33 @@ public:
     NPCAIStyle aiStyle() const { return _aiStyle; }
     int walkmeshMaterial() const { return _walkmeshMaterial; }
     bool isPC() const { return _isPC; }
+    int assignedPuppet() const { return _assignedPuppet; }
+    bool isPuppet() const { return _puppet; }
 
     void setGender(Gender gender) { _gender = gender; }
     void setAppearance(int appearance) { _appearance = appearance; }
     void setMovementType(MovementType type);
     void setFaction(Faction faction) { _faction = faction; }
+    /** Set the serialized base maximum and preserve the existing damage. */
+    void setMaxHitPoints(int baseHitPoints) override;
+    void setCurrentHitPoints(int hitPoints) override;
+
     /**
-     * Complete retail primary-player publication after saved creature data has
-     * been read. Both Odyssey titles refill the authoritative primary player
-     * to the derived maximum here; ordinary creatures and detached PCs never
-     * pass through this operation.
+     * Recalculate permanent vitality after attributes, levels or feats change,
+     * preserving the exact amount of damage already sustained.
      */
-    void restorePrimaryPlayerHitPoints();
+    void recalculatePermanentVitality();
+
+    /** Initialize a newly generated creature at full derived vitality. */
+    void initializeGeneratedVitality();
+
+    /** Current vitality translated back to the serialized base-HP axis. */
+    int serializedCurrentHitPoints() const;
     void setMovementRestricted(bool restricted) { _movementRestricted = restricted; }
     void setImmortal(bool immortal) { _immortal = immortal; }
     void setAIStyle(NPCAIStyle style) { _aiStyle = style; }
+    void setAssignedPuppet(int puppet) { _assignedPuppet = puppet; }
+    void setPuppet(bool puppet) { _puppet = puppet; }
     void setWalkmeshMaterial(int material) { _walkmeshMaterial = material; }
 
     // Animation
@@ -190,8 +228,24 @@ public:
     // Equipment
 
     bool equip(const std::string &resRef);
+    /** Validate an equipment commit without changing ownership. */
+    bool canEquip(int slot, const std::shared_ptr<Item> &item) const;
     bool equip(int slot, const std::shared_ptr<Item> &item);
-    void unequip(const std::shared_ptr<Item> &item);
+    /** Validate an equipment replacement without changing ownership. */
+    bool canReplaceEquipment(
+        int slot,
+        const std::shared_ptr<Item> &item,
+        const Object &displacedReceiver) const;
+    bool replaceEquipment(
+        int slot,
+        const std::shared_ptr<Item> &item,
+        Object &displacedReceiver);
+    /** Remove the equipment ownership edge for immediate transfer or retirement. */
+    std::shared_ptr<Item> takeEquippedItem(const std::shared_ptr<Item> &item);
+    /** Unequip an Item directly into an explicit owning inventory. */
+    bool moveEquippedItemTo(
+        const std::shared_ptr<Item> &item,
+        Object &receiver);
 
     bool isSlotEquipped(int slot) const;
 
@@ -199,6 +253,7 @@ public:
     CreatureWieldType getWieldType() const;
 
     const std::map<int, std::shared_ptr<Item>> &equipment() const { return _equipment; }
+    std::vector<std::shared_ptr<Object>> ownedRuntimeObjects() const override;
 
     // END Equipment
 
@@ -246,6 +301,19 @@ public:
     void setObjectSeen(const std::shared_ptr<Object> &object, bool seen);
     void setObjectHeard(const std::shared_ptr<Object> &object, bool heard);
     void runOnNotice(const Object &object, bool heard, bool seen);
+    void refreshVisibilityPerception();
+
+    static constexpr uint8_t kSeeInvisibleCounter = 0x01;
+    static constexpr uint8_t kUltravisionCounter = 0x02;
+    static constexpr uint8_t kTrueSeeingCounter = 0x04;
+
+    void setVisibilityCounter(uint8_t bit);
+    void restoreVisibilityCounter(
+        EffectType type,
+        uint8_t bit,
+        EffectId removedEffect,
+        bool trueSeeingRemovalQuirk = false);
+    bool hasVisibilityCounter(uint8_t bits) const;
 
     const Perception &perception() const { return _perception; }
 
@@ -259,15 +327,25 @@ public:
     bool isInCombat() const { return _combatState.active; }
     bool isDebilitated() const;
     bool isTemporarilyDead() const;
+    bool isInvisibleTo(const Creature &observer) const;
+    void clearHostileActionsAgainst(const Object &object);
     bool isTwoWeaponFighting() const;
     std::shared_ptr<Item> getOffhandAttackWeapon() const;
 
     int forcePoints() const { return _forcePoints; }
     int currentForce() const { return _currentForce; }
 
-    uint32_t getAttemptedAttackTarget() const { return _combatState.attemptedAttackTarget; }
-    std::shared_ptr<Object> getAttackTarget() const { return _combatState.attackTarget; }
-    uint32_t getLastHostileTarget() const { return _lastHostileTarget; }
+    uint32_t getAttemptedAttackTarget() const {
+        auto target = _combatState.attemptedAttackTarget.resolve();
+        return target ? target->id() : script::kObjectInvalid;
+    }
+    std::shared_ptr<Object> getAttackTarget() const {
+        return _combatState.attackTarget.resolve();
+    }
+    uint32_t getLastHostileTarget() const {
+        auto target = _lastHostileTarget.resolve();
+        return target ? target->id() : script::kObjectInvalid;
+    }
     ActionType getLastAttackAction() const { return _lastAttackAction; }
     FeatType getLastCombatFeat() const { return _lastCombatFeat; }
     AttackResultType getLastAttackResult() const { return _lastAttackResult; }
@@ -278,6 +356,13 @@ public:
         const Item *weapon,
         bool offHand) const;
     int getAttackBonus(bool offHand = false) const;
+    bool hasEffectImmunity(
+        ImmunityType immunityType,
+        const Creature *creator = nullptr) const;
+    int getAbilityEffectModifier(Ability ability) const;
+    int getEffectiveAbilityScore(Ability ability) const;
+    int getEffectiveAbilityModifier(Ability ability) const;
+    bool hasEffectiveFeat(FeatType feat) const;
     int getDefense(const Creature *attacker, int damageFlags) const;
     int getDefense() const;
     int getFortitudeSave(SavingThrowType savingThrowType = SavingThrowType::All) const;
@@ -286,9 +371,6 @@ public:
         SavingThrowType savingThrowType = SavingThrowType::All) const;
     int getPhysicalDamageBonus(const Item *weapon, bool offHand) const;
     int getMassiveCriticalDamage(const Item *weapon, bool criticalHit) const;
-    int getItemDamageImmunity(DamageType type) const;
-    int getItemDamageResistance(DamageType type) const;
-    void getItemDamageReduction(int &amount, DamagePower &power) const;
     int getDamageResistanceFeatBonus() const;
     void addPhysicalDamageModifiers(
         DamagePacket &damage,
@@ -299,9 +381,7 @@ public:
     void getMainHandDamage(int &min, int &max) const;
     void getOffhandDamage(int &min, int &max) const;
 
-    void setAttemptedAttackTarget(uint32_t target) {
-        _combatState.attemptedAttackTarget = target;
-    }
+    void setAttemptedAttackTarget(uint32_t target);
     void beginCombatAttack(std::shared_ptr<Object> target, FeatType feat);
     void finishCombatRound();
     void setLastAttackResult(AttackResultType result) { _lastAttackResult = result; }
@@ -373,11 +453,14 @@ private:
     Gender _gender {Gender::Male};
     uint16_t _portraitId {0};
     bool _isPC {false};
+    int32_t _assignedPuppet {-1};
+    bool _puppet {false};
     Faction _faction {Faction::Invalid};
     bool _disarmable {false};
     bool _noPermDeath {false};
     bool _notReorienting {false};
     uint8_t _bodyVariation {0};
+    std::optional<CreaturePresentation> _presentation;
     uint8_t _textureVar {0};
     bool _partyInteract {false};
     int32_t _walkRate {0};
@@ -449,7 +532,7 @@ private:
 
     bool _movementRestricted {false};
     CombatState _combatState;
-    uint32_t _lastHostileTarget {script::kObjectInvalid};
+    RuntimeObjectRef<Object> _lastHostileTarget;
     ActionType _lastAttackAction {ActionType::QueueEmpty};
     FeatType _lastCombatFeat {FeatType::Invalid};
     AttackResultType _lastAttackResult {AttackResultType::Invalid};
@@ -459,6 +542,8 @@ private:
     std::shared_ptr<resource::SoundSet> _soundSet;
     BodyBag _bodyBag;
     Perception _perception;
+    uint8_t _visibilityCounterBits {0};
+    bool _trueSeeingUltravisionQuirk {false};
     NPCAIStyle _aiStyle {NPCAIStyle::DefaultAttack};
 
     uint32_t _footstepType {0};
@@ -497,12 +582,13 @@ private:
     // disguise item's appearance when one is equipped, and restore the original
     // appearance when none remains. Updates _appearance only; callers rebuild the model.
     void updateDisguise();
+    void updateEquipmentPresentation();
     void updateCombat(float dt);
     void setLightsabersPowered(bool powered, bool animate);
     void updateLightsaberSoundPositions();
 
-    void runDeathScript(uint32_t damagerId);
-    void runDamagedScript(uint32_t damagerId);
+    void runDeathScript();
+    void runDamagedScript();
 
     ModelType parseModelType(const std::string &s) const;
 
@@ -553,14 +639,29 @@ private:
     // END Animation
 
     // Blueprint
-    void deserializeAll(const resource::Gff &gff);
+    void deserializeAll(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext);
     void deserializeName(const resource::Gff &gff);
     void deserializeSoundSet(const resource::Gff &gff);
     void deserializeBodyBag(const resource::Gff &gff);
     void deserializeAttributes(const resource::Gff &gff);
     void deserializeClass(const resource::Gff &gff);
     void deserializePerception(const resource::Gff &gff);
-    void deserializeEquipItems(const resource::Gff &gff);
+    void deserializeOwnedItemsAndEquipment(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext);
+    void appendEquippedItemEffects(
+        std::deque<EffectInstance> &effects,
+        int slot,
+        const std::shared_ptr<Item> &item) const;
+    std::deque<EffectInstance> effectsWithoutEquippedSource(
+        const Item *source) const;
+    std::deque<EffectInstance> rebuildEquippedItemEffects(
+        const std::map<int, std::shared_ptr<Item>> &equipment) const;
+    int derivePermanentMaxHitPoints() const;
+    void restoreSerializedVitality();
+    void updateDeathFromCurrentHitPoints();
     // END Blueprint
 };
 

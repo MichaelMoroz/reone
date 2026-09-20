@@ -117,6 +117,7 @@ public:
 class MockSceneGraphs : public ISceneGraphs, boost::noncopyable {
 public:
     MOCK_METHOD(void, reserve, (std::string name), (override));
+    MOCK_METHOD(void, reset, (std::string name), (override));
     MOCK_METHOD(ISceneGraph &, get, (const std::string &name), (override));
     MOCK_METHOD(std::set<std::string>, sceneNames, (), (const override));
     MOCK_METHOD(void, invalidateRenderPipelines, (), (override));

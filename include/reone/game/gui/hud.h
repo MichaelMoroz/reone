@@ -52,6 +52,7 @@ public:
     void update(float dt) override;
     void render() override;
     void renderOffscreen() override;
+    void renderModal();
 
     BarkBubble &barkBubble() const { return *_barkBubble; }
 

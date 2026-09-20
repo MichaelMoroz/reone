@@ -17,6 +17,7 @@ set(GAME_INCLUDE_DIR ${REONE_INCLUDE_DIR}/reone/game)
 set(GAME_SOURCE_DIR ${CMAKE_SOURCE_DIR}/src/libs/game)
 
 set(GAME_HEADERS
+    ${GAME_INCLUDE_DIR}/menupresentation.h
     ${GAME_INCLUDE_DIR}/action.h
     ${GAME_INCLUDE_DIR}/action/attackobject.h
     ${GAME_INCLUDE_DIR}/action/barkstring.h
@@ -87,6 +88,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/d20/spell.h
     ${GAME_INCLUDE_DIR}/d20/spells.h
     ${GAME_INCLUDE_DIR}/debug.h
+    ${GAME_INCLUDE_DIR}/difficultyoptions.h
     ${GAME_INCLUDE_DIR}/di/module.h
     ${GAME_INCLUDE_DIR}/di/services.h
     ${GAME_INCLUDE_DIR}/effect.h
@@ -103,6 +105,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/effect/blasterdeflectiondecrease.h
     ${GAME_INCLUDE_DIR}/effect/blasterdeflectionincrease.h
     ${GAME_INCLUDE_DIR}/effect/blind.h
+    ${GAME_INCLUDE_DIR}/effect/bonusfeat.h
     ${GAME_INCLUDE_DIR}/effect/bodyfuel.h
     ${GAME_INCLUDE_DIR}/effect/choke.h
     ${GAME_INCLUDE_DIR}/effect/concealment.h
@@ -112,7 +115,6 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/effect/cutsceneparalyze.h
     ${GAME_INCLUDE_DIR}/effect/cutscenestunned.h
     ${GAME_INCLUDE_DIR}/effect/damage.h
-    ${GAME_INCLUDE_DIR}/effect/damageabsorption.h
     ${GAME_INCLUDE_DIR}/effect/damagedecrease.h
     ${GAME_INCLUDE_DIR}/effect/damageforcepoints.h
     ${GAME_INCLUDE_DIR}/effect/damageimmunitydecrease.h
@@ -180,13 +182,17 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/effect/visual.h
     ${GAME_INCLUDE_DIR}/effect/vpregenmodifier.h
     ${GAME_INCLUDE_DIR}/effect/whirlwind.h
+    ${GAME_INCLUDE_DIR}/equipmentoperation.h
     ${GAME_INCLUDE_DIR}/equipmentrules.h
     ${GAME_INCLUDE_DIR}/event.h
+    ${GAME_INCLUDE_DIR}/runtimeref.h
     ${GAME_INCLUDE_DIR}/footstepsounds.h
     ${GAME_INCLUDE_DIR}/floatingtext.h
     ${GAME_INCLUDE_DIR}/galaxymapstate.h
     ${GAME_INCLUDE_DIR}/game.h
+    ${GAME_INCLUDE_DIR}/globalfade.h
     ${GAME_INCLUDE_DIR}/itemdescription.h
+    ${GAME_INCLUDE_DIR}/presentationgui.h
     ${GAME_INCLUDE_DIR}/gui.h
     ${GAME_INCLUDE_DIR}/gui/actionbar.h
     ${GAME_INCLUDE_DIR}/gui/actionslot.h
@@ -206,6 +212,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/gui/chargen/quickorcustom.h
     ${GAME_INCLUDE_DIR}/gui/chargen/skills.h
     ${GAME_INCLUDE_DIR}/gui/computer.h
+    ${GAME_INCLUDE_DIR}/gui/computercam.h
     ${GAME_INCLUDE_DIR}/gui/confirmpopup.h
     ${GAME_INCLUDE_DIR}/gui/container.h
     ${GAME_INCLUDE_DIR}/gui/conversation.h
@@ -277,10 +284,13 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/gui/generated/upgradeitems.h
     ${GAME_INCLUDE_DIR}/gui/generated/upgradesel.h
     ${GAME_INCLUDE_DIR}/gui/hud.h
+    ${GAME_INCLUDE_DIR}/gui/ingamehost.h
     ${GAME_INCLUDE_DIR}/gui/ingame.h
     ${GAME_INCLUDE_DIR}/gui/ingame/abilities.h
     ${GAME_INCLUDE_DIR}/gui/ingame/character.h
     ${GAME_INCLUDE_DIR}/gui/ingame/equip.h
+    ${GAME_INCLUDE_DIR}/gui/ingame/itemview.h
+    ${GAME_INCLUDE_DIR}/gui/ingame/itembacking.h
     ${GAME_INCLUDE_DIR}/gui/ingame/inventory.h
     ${GAME_INCLUDE_DIR}/gui/ingame/journal.h
     ${GAME_INCLUDE_DIR}/gui/ingame/map.h
@@ -323,6 +333,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/object/trigger.h
     ${GAME_INCLUDE_DIR}/object/waypoint.h
     ${GAME_INCLUDE_DIR}/options.h
+    ${GAME_INCLUDE_DIR}/presentationpointer.h
     ${GAME_INCLUDE_DIR}/party.h
     ${GAME_INCLUDE_DIR}/pazaak.h
     ${GAME_INCLUDE_DIR}/pazaaksession.h
@@ -353,6 +364,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/visualeffects.h)
 
 set(GAME_SOURCES
+    ${GAME_SOURCE_DIR}/menupresentation.cpp
     ${GAME_SOURCE_DIR}/action.cpp
     ${GAME_SOURCE_DIR}/action/attackobject.cpp
     ${GAME_SOURCE_DIR}/action/barkstring.cpp
@@ -410,6 +422,7 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/d20/skills.cpp
     ${GAME_SOURCE_DIR}/d20/spells.cpp
     ${GAME_SOURCE_DIR}/debug.cpp
+    ${GAME_SOURCE_DIR}/difficultyoptions.cpp
     ${GAME_SOURCE_DIR}/di/module.cpp
     ${GAME_SOURCE_DIR}/effect/abilitydecrease.cpp
     ${GAME_SOURCE_DIR}/effect/abilityincrease.cpp
@@ -476,11 +489,15 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/effect/vpregenmodifier.cpp
     ${GAME_SOURCE_DIR}/effect/whirlwind.cpp
     ${GAME_SOURCE_DIR}/effect.cpp
+    ${GAME_SOURCE_DIR}/effect/source.cpp
+    ${GAME_SOURCE_DIR}/event.cpp
+    ${GAME_SOURCE_DIR}/equipmentoperation.cpp
     ${GAME_SOURCE_DIR}/equipmentrules.cpp
     ${GAME_SOURCE_DIR}/footstepsounds.cpp
     ${GAME_SOURCE_DIR}/floatingtext.cpp
     ${GAME_SOURCE_DIR}/galaxymapstate.cpp
     ${GAME_SOURCE_DIR}/game.cpp
+    ${GAME_SOURCE_DIR}/globalfade.cpp
     ${GAME_SOURCE_DIR}/itemdescription.cpp
     ${GAME_SOURCE_DIR}/gui/actionbar.cpp
     ${GAME_SOURCE_DIR}/gui/actionslot.cpp
@@ -500,6 +517,7 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/gui/chargen/skills.cpp
     ${GAME_SOURCE_DIR}/gui/chargen.cpp
     ${GAME_SOURCE_DIR}/gui/computer.cpp
+    ${GAME_SOURCE_DIR}/gui/computercam.cpp
     ${GAME_SOURCE_DIR}/gui/confirmpopup.cpp
     ${GAME_SOURCE_DIR}/gui/container.cpp
     ${GAME_SOURCE_DIR}/gui/conversation.cpp
@@ -509,13 +527,16 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/gui/ingame/abilities.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/character.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/equip.cpp
+    ${GAME_SOURCE_DIR}/gui/ingame/itembacking.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/inventory.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/journal.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/map.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/messages.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/options.cpp
+    ${GAME_SOURCE_DIR}/gui/ingamehost.cpp
     ${GAME_SOURCE_DIR}/gui/ingame.cpp
     ${GAME_SOURCE_DIR}/gui/loadscreen.cpp
+    ${GAME_SOURCE_DIR}/presentationgui.cpp
     ${GAME_SOURCE_DIR}/gui.cpp
     ${GAME_SOURCE_DIR}/gui/mainmenu.cpp
     ${GAME_SOURCE_DIR}/gui/map.cpp
@@ -556,6 +577,7 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/party.cpp
     ${GAME_SOURCE_DIR}/pazaak.cpp
     ${GAME_SOURCE_DIR}/pazaaksession.cpp
+    ${GAME_SOURCE_DIR}/presentationpointer.cpp
     ${GAME_SOURCE_DIR}/pathfinder.cpp
     ${GAME_SOURCE_DIR}/player.cpp
     ${GAME_SOURCE_DIR}/portraits.cpp

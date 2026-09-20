@@ -330,12 +330,14 @@ void Engine::init() {
         _scriptQuitRequested = true;
     });
 
+    _pointer = std::make_shared<PresentationPointer>(_services->resource.cursors);
     _game = std::make_unique<Game>(
         gameId,
         _options.game.path,
         *_optionsView,
         *_services,
-        *_console);
+        *_console,
+        _pointer);
     _game->init();
     // A long synchronous load draws a loading screen partway through. The game
     // cannot open a frame itself - the host owns frame boundaries - so it asks.
@@ -386,6 +388,10 @@ void Engine::deinit() {
     // destroys, so a pipeline outliving that shutdown releases a descriptor
     // against a pool that is already gone.
     _game.reset();
+    // With the game rather than ahead of waitIdle, where upstream puts it: it
+    // borrows ICursors from the resource module and renders, so it cannot
+    // outlive either.
+    _pointer.reset();
     _gameModule.reset();
     _guiModule.reset();
     _sceneModule.reset();

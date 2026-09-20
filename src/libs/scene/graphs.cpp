@@ -16,6 +16,8 @@
  */
 
 #include "reone/scene/graphs.h"
+#include "reone/graphics/rhi/renderer.h"
+#include "reone/graphics/di/services.h"
 
 #include <filesystem>
 
@@ -27,6 +29,10 @@ void SceneGraphs::reserve(std::string name) {
     if (_scenes.count(name) > 0) {
         return;
     }
+    reset(std::move(name));
+}
+
+void SceneGraphs::reset(std::string name) {
     auto scene = std::make_unique<SceneGraph>(
         name,
         _renderPipelineFactory,
@@ -37,7 +43,13 @@ void SceneGraphs::reserve(std::string name) {
     scene->gpuScene().traceMaterials().loadTraceClasses(
         _overrideRoot / "materials.ini");
 
-    _scenes.insert(std::make_pair(name, std::move(scene)));
+    if (_scenes.count(name)) {
+        // What dropping the GL framebuffer bindings did here: the outgoing
+        // scene's render targets are about to be destroyed, and a command
+        // buffer already submitted may still sample them.
+        _graphicsSvc.renderer.waitIdle();
+    }
+    _scenes[name] = std::move(scene);
 }
 
 ISceneGraph &SceneGraphs::get(const std::string &name) {

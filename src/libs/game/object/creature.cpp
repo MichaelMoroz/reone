@@ -25,23 +25,38 @@
 #include "reone/audio/mixer.h"
 #include "reone/game/action.h"
 #include "reone/game/action/attackobject.h"
+#include "reone/game/action/usefeat.h"
 #include "reone/game/animationutil.h"
 #include "reone/game/attack.h"
 #include "reone/game/d20/classes.h"
 #include "reone/game/debug.h"
 #include "reone/game/di/services.h"
+#include "reone/game/equipmentrules.h"
 #include "reone/game/effect/acdecrease.h"
 #include "reone/game/effect/acincrease.h"
+#include "reone/game/effect/abilitydecrease.h"
+#include "reone/game/effect/abilityincrease.h"
 #include "reone/game/effect/attackdecrease.h"
 #include "reone/game/effect/attackincrease.h"
+#include "reone/game/effect/bonusfeat.h"
 #include "reone/game/effect/damage.h"
 #include "reone/game/effect/damagedecrease.h"
+#include "reone/game/effect/damageimmunitydecrease.h"
+#include "reone/game/effect/damageimmunityincrease.h"
 #include "reone/game/effect/damageincrease.h"
+#include "reone/game/effect/damagereduction.h"
+#include "reone/game/effect/damageresistance.h"
 #include "reone/game/effect/immunity.h"
+#include "reone/game/effect/invisibility.h"
 #include "reone/game/effect/savingthrowdecrease.h"
 #include "reone/game/effect/savingthrowincrease.h"
+#include "reone/game/effect/source.h"
+#include "reone/game/effect/trueseeing.h"
 #include "reone/game/footstepsounds.h"
 #include "reone/game/game.h"
+#include "reone/game/object/area.h"
+#include "reone/game/object/module.h"
+#include "reone/game/party.h"
 #include "reone/game/portraits.h"
 #include "reone/game/script/runner.h"
 #include "reone/game/surfaces.h"
@@ -66,6 +81,7 @@
 #include "reone/script/types.h"
 #include "reone/system/clock.h"
 #include "reone/system/di/services.h"
+#include "reone/system/exception/validation.h"
 #include "reone/system/logutil.h"
 #include "reone/system/randomutil.h"
 #include "reone/system/timer.h"
@@ -83,6 +99,7 @@ namespace game {
 static constexpr int kStrRefRemains = 38151;
 static constexpr int kMaximumDodgeBonus = 10;
 static constexpr int kMaximumSavingThrowModifier = 20;
+static constexpr int kMaximumDamageEffectModifier = 36;
 static constexpr int kAllSavingThrows = 0;
 static constexpr int kFortitudeSavingThrow = 1;
 static constexpr int kSituationalAttackBonus = 10;
@@ -479,7 +496,7 @@ static bool damagePropertyApplies(
     }
 }
 
-static bool equippedItemAppliesToDefense(int slot) {
+static bool equippedItemPropertiesAreActive(int slot) {
     return slot != InventorySlots::rightWeapon2 &&
            slot != InventorySlots::leftWeapon2;
 }
@@ -531,6 +548,44 @@ Creature::Creature(
     _perception.hearingRange = 20.0f;
 }
 
+void Creature::retireAreaRuntime(
+    Pathfinder &pathfinder,
+    const std::set<const Object *> &retainedObjects) {
+    retireAreaRuntimeState(retainedObjects);
+
+    if (_path) {
+        releasePath(pathfinder, *_path);
+        _path.reset();
+    }
+    _pathVelocity = glm::vec3(0.0f);
+    _previousPosition = _position;
+    _stuckTimer.reset(0.0f);
+    _stuckForce = glm::vec3(0.0f);
+    setMovementType(MovementType::None);
+    _blockingDoorId = script::kObjectInvalid;
+    _blockedEventDoorId = script::kObjectInvalid;
+
+    deactivateCombat(0.0f);
+    _combatState.attackTarget.reset();
+    _combatState.attemptedAttackTarget.reset();
+    _combatState.attackAction = ActionType::QueueEmpty;
+    _combatState.combatFeat = FeatType::Invalid;
+    _combatState.deactivationTimer.reset(0.0f);
+    _lastHostileTarget.reset();
+    _lastAttackAction = ActionType::QueueEmpty;
+    _lastCombatFeat = FeatType::Invalid;
+    _lastAttackResult = AttackResultType::Invalid;
+
+    _perception.seen.clear();
+    _perception.heard.clear();
+    stopTalking();
+    stopStuntMode();
+    if (_audioSourceVoice) _audioSourceVoice->stop();
+    if (_audioSourceFootstep) _audioSourceFootstep->stop();
+    _audioSourceVoice.reset();
+    _audioSourceFootstep.reset();
+}
+
 void Creature::loadFromBlueprint(const std::string &resRef) {
     auto utc = _services.resource.gffs.get(resRef, ResType::Utc);
     if (!utc) {
@@ -539,7 +594,8 @@ void Creature::loadFromBlueprint(const std::string &resRef) {
     // A blueprint is a single source, so deserialize it once. Routing through
     // deserialize() would re-read the self-referential TemplateResRef and
     // deserialize the same data twice, doubling accumulated class levels.
-    deserializeAll(*utc);
+    deserializeAll(*utc, SerializedIdentityContext::templateResource(resRef));
+    restoreSerializedVitality();
     updateTransform();
     loadAppearance();
 }
@@ -636,6 +692,119 @@ bool Creature::isTemporarilyDead() const {
     return _game.party().isMember(*this) && currentHitPoints() <= 0;
 }
 
+bool Creature::isInvisibleTo(const Creature &observer) const {
+    for (const EffectInstance &applied : effects()) {
+        if (!applied.hasLiveRuntimeSource() ||
+            applied.type() != EffectType::Invisibility ||
+            !applied.appliesVersus(&observer)) {
+            continue;
+        }
+
+        auto type = static_cast<InvisibilityType>(
+            applied.integerParameter(0));
+        switch (type) {
+        case InvisibilityType::Normal:
+        case InvisibilityType::Improved:
+            if (observer.hasVisibilityCounter(
+                    kSeeInvisibleCounter | kTrueSeeingCounter)) {
+                continue;
+            }
+            return true;
+        case InvisibilityType::Darkness:
+            if (observer.hasVisibilityCounter(
+                    kUltravisionCounter | kTrueSeeingCounter)) {
+                continue;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+void Creature::setVisibilityCounter(uint8_t bit) {
+    _visibilityCounterBits |= bit;
+}
+
+bool Creature::hasVisibilityCounter(uint8_t bits) const {
+    uint8_t effective = _visibilityCounterBits;
+    if (!hasEffect(EffectType::SeeInvisible)) {
+        effective &= ~kSeeInvisibleCounter;
+    }
+    if (!hasEffect(EffectType::TrueSeeing)) {
+        effective &= ~kTrueSeeingCounter;
+    }
+    if (!hasEffect(EffectType::Ultravision) &&
+        !_trueSeeingUltravisionQuirk) {
+        effective &= ~kUltravisionCounter;
+    }
+    return (effective & bits) != 0;
+}
+
+void Creature::restoreVisibilityCounter(
+    EffectType type,
+    uint8_t bit,
+    EffectId removedEffect,
+    bool trueSeeingRemovalQuirk) {
+
+    _visibilityCounterBits &= ~bit;
+    if (bit == kUltravisionCounter) {
+        _trueSeeingUltravisionQuirk = false;
+    }
+    bool another = std::any_of(
+        effects().begin(),
+        effects().end(),
+        [type, removedEffect](const EffectInstance &applied) {
+            return applied.id != removedEffect &&
+                   applied.hasLiveRuntimeSource() &&
+                   applied.type() == type;
+        });
+    if (another) {
+        if (trueSeeingRemovalQuirk) {
+            _visibilityCounterBits |= kUltravisionCounter;
+            _trueSeeingUltravisionQuirk = true;
+        } else {
+            _visibilityCounterBits |= bit;
+        }
+    }
+}
+
+void Creature::refreshVisibilityPerception() {
+    auto module = _game.module();
+    auto area = module ? module->area() : nullptr;
+    if (area && area->isObjectResident(*this)) {
+        area->refreshPerceptionFor(*this);
+    }
+}
+
+void Creature::clearHostileActionsAgainst(const Object &object) {
+    auto attackTarget = _combatState.attackTarget.resolve();
+    if (attackTarget.get() == &object) {
+        _combatState.attackTarget.reset();
+        _combatState.shouldDeactivate = true;
+    }
+
+    for (auto it = _actions.begin(); it != _actions.end();) {
+        const std::shared_ptr<Action> &action = *it;
+        std::shared_ptr<Object> target;
+        if (action && action->type() == ActionType::AttackObject) {
+            target = static_cast<AttackObjectAction &>(*action).target();
+        } else if (action && action->type() == ActionType::UseFeat) {
+            auto &featAction = static_cast<UseFeatAction &>(*action);
+            if (isPhysicalAttackFeat(featAction.feat())) {
+                target = featAction.target();
+            }
+        }
+
+        if (target.get() != &object) {
+            ++it;
+            continue;
+        }
+        action->cancel(action, *this);
+        action->markCancelled();
+        it = _actions.erase(it);
+    }
+}
+
 bool Creature::canExecuteActions() const {
     return !hasEffect(EffectType::Stunned);
 }
@@ -728,12 +897,105 @@ void Creature::updateModelAnimation() {
     _animDirty = false;
 }
 
-void Creature::restorePrimaryPlayerHitPoints() {
-    _currentHitPoints = maxHitPoints();
-    _dead = false;
+int Creature::derivePermanentMaxHitPoints() const {
+    int result = _attributes.getPermanentMaxHitPoints(_hitPoints);
+    return std::clamp<int>(
+        result,
+        0,
+        std::numeric_limits<int16_t>::max());
 }
 
-void Creature::damage(int amount, uint32_t damager) {
+void Creature::updateDeathFromCurrentHitPoints() {
+    if (_minOneHP && _currentHitPoints < 1) {
+        _currentHitPoints = 1;
+    }
+    _dead = _currentHitPoints <= (_game.isTSL() && _isPC ? -10 : 0);
+}
+
+void Creature::restoreSerializedVitality() {
+    // MaxHitPoints is a retail cache. HitPoints and CurrentHitPoints are both
+    // serialized on the base-vitality axis, so reconstruct the runtime value
+    // only after permanent attributes, levels and feats have been read.
+    if (_hitPoints <= 0 && _maxHitPoints > 0) {
+        // Preserve the long-standing tolerance for malformed/mod records that
+        // omit HitPoints but provide the cached maximum.
+        _hitPoints = _maxHitPoints;
+    }
+
+    const int serializedCurrent = _currentHitPoints;
+    _maxHitPoints = derivePermanentMaxHitPoints();
+    if (serializedCurrent > 0) {
+        const int damage = static_cast<int>(_hitPoints) - serializedCurrent;
+        _currentHitPoints = static_cast<int16_t>(std::clamp(
+            static_cast<int>(_maxHitPoints) - damage,
+            static_cast<int>(std::numeric_limits<int16_t>::min()),
+            static_cast<int>(std::numeric_limits<int16_t>::max())));
+    }
+    updateDeathFromCurrentHitPoints();
+}
+
+int Creature::serializedCurrentHitPoints() const {
+    if (_currentHitPoints <= 0) {
+        return _currentHitPoints;
+    }
+    const int damage = static_cast<int>(_maxHitPoints) - _currentHitPoints;
+    return std::clamp(
+        static_cast<int>(_hitPoints) - damage,
+        static_cast<int>(std::numeric_limits<int16_t>::min()),
+        static_cast<int>(std::numeric_limits<int16_t>::max()));
+}
+
+void Creature::recalculatePermanentVitality() {
+    const int oldMaximum = _maxHitPoints;
+    const int oldCurrent = _currentHitPoints;
+    _maxHitPoints = derivePermanentMaxHitPoints();
+    if (oldCurrent > 0) {
+        _currentHitPoints = static_cast<int16_t>(std::clamp(
+            oldCurrent + static_cast<int>(_maxHitPoints) - oldMaximum,
+            static_cast<int>(std::numeric_limits<int16_t>::min()),
+            static_cast<int>(std::numeric_limits<int16_t>::max())));
+    }
+    updateDeathFromCurrentHitPoints();
+}
+
+void Creature::setMaxHitPoints(int baseHitPoints) {
+    const int oldMaximum = _maxHitPoints;
+    const int oldCurrent = _currentHitPoints;
+    _hitPoints = static_cast<int16_t>(std::clamp(
+        baseHitPoints,
+        0,
+        static_cast<int>(std::numeric_limits<int16_t>::max())));
+    _maxHitPoints = derivePermanentMaxHitPoints();
+    if (oldCurrent > 0) {
+        _currentHitPoints = static_cast<int16_t>(std::clamp(
+            oldCurrent + static_cast<int>(_maxHitPoints) - oldMaximum,
+            static_cast<int>(std::numeric_limits<int16_t>::min()),
+            static_cast<int>(std::numeric_limits<int16_t>::max())));
+    }
+    updateDeathFromCurrentHitPoints();
+}
+
+void Creature::setCurrentHitPoints(int hitPoints) {
+    _currentHitPoints = static_cast<int16_t>(std::clamp(
+        hitPoints,
+        static_cast<int>(std::numeric_limits<int16_t>::min()),
+        static_cast<int>(std::numeric_limits<int16_t>::max())));
+    updateDeathFromCurrentHitPoints();
+}
+
+void Creature::initializeGeneratedVitality() {
+    _hitPoints = static_cast<int16_t>(std::clamp(
+        _attributes.getAggregateHitDie(),
+        0,
+        static_cast<int>(std::numeric_limits<int16_t>::max())));
+    _maxHitPoints = derivePermanentMaxHitPoints();
+    _currentHitPoints = _maxHitPoints;
+    updateDeathFromCurrentHitPoints();
+}
+
+void Creature::damage(
+    int amount,
+    const std::shared_ptr<Object> &damager) {
     if (_dead) {
         return;
     }
@@ -748,17 +1010,19 @@ void Creature::damage(int amount, uint32_t damager) {
 
     bool deathEffect = amount == std::numeric_limits<int>::max();
     int previousHitPoints = _currentHitPoints;
+    setLastDamager(damager);
+    uint32_t damagerId = getLastDamager();
     if (deathEffect) {
         _currentHitPoints = 0; // special case for Death effect
     } else {
         int adjustedAmount = applyDamageToHitPoints(amount, _currentHitPoints);
         if (amount > 0) {
-            _game.floatingText().addDamage(*this, amount, adjustedAmount, damager);
+            _game.floatingText().addDamage(
+                *this, amount, adjustedAmount, damagerId);
         }
     }
 
-    damager = damager ? damager : script::kObjectInvalid;
-    runDamagedScript(damager);
+    runDamagedScript();
 
     if (_immortal || _currentHitPoints > 0) {
         return;
@@ -771,7 +1035,7 @@ void Creature::damage(int amount, uint32_t damager) {
 
     playSound(SoundSetEntry::Dead);
     playAnimation(getDieAnimation());
-    runDeathScript(damager);
+    runDeathScript();
 }
 
 void Creature::updateCombat(float dt) {
@@ -788,10 +1052,10 @@ void Creature::updateCombat(float dt) {
         _combatState.shouldDeactivate = false;
         _combatState.debilitated = false;
         _combatState.attackTarget.reset();
-        _combatState.attemptedAttackTarget = script::kObjectInvalid;
+        _combatState.attemptedAttackTarget.reset();
         _combatState.attackAction = ActionType::QueueEmpty;
         _combatState.combatFeat = FeatType::Invalid;
-        _lastHostileTarget = script::kObjectInvalid;
+        _lastHostileTarget.reset();
         _lastAttackAction = ActionType::QueueEmpty;
         _lastCombatFeat = FeatType::Invalid;
         setLastHostileActor(script::kObjectInvalid);
@@ -910,8 +1174,13 @@ void Creature::playAnimation(CombatAnimation anim, CreatureWieldType wield, int 
 }
 
 bool Creature::equip(const std::string &resRef) {
-    std::shared_ptr<Item> item = _game.newItem();
-    item->loadFromBlueprint(resRef);
+    std::shared_ptr<Item> item;
+    if (isPresentationOnly()) {
+        item = _game.newPresentationItem();
+        item->loadFromBlueprint(resRef);
+    } else {
+        item = _game.newItemFromBlueprint(resRef);
+    }
 
     bool equipped = false;
 
@@ -919,6 +1188,10 @@ bool Creature::equip(const std::string &resRef) {
         equipped = equip(InventorySlots::body, item);
     } else if (item->isEquippable(InventorySlots::rightWeapon)) {
         equipped = equip(InventorySlots::rightWeapon, item);
+    }
+
+    if (!equipped && item->isRuntimeLive()) {
+        _game.destroyRuntimeObjectGraph(item);
     }
 
     return equipped;
@@ -944,20 +1217,141 @@ void Creature::updateDisguise() {
     }
 }
 
-bool Creature::equip(int slot, const std::shared_ptr<Item> &item) {
-    if (!item->isEquippable(getEquipabilitySlot(slot))) {
+bool Creature::canEquip(
+    int slot,
+    const std::shared_ptr<Item> &item) const {
+    if (!item || (!item->isRuntimeLive() && !item->isPresentationOnly()) ||
+        !item->isEquippable(getEquipabilitySlot(slot))) {
         return false;
     }
-
-    auto previous = getEquippedItem(slot);
-    if (previous && previous != item) {
-        previous->powerDown(_position);
-        previous->setEquipped(false);
+    if (std::find(_items.begin(), _items.end(), item) != _items.end()) {
+        // Inventory -> equipment is a transfer. Callers must first remove or
+        // split the candidate so one object never has two ownership edges.
+        return false;
     }
+    for (const auto &[equippedSlot, equipped] : _equipment) {
+        if (equipped == item && equippedSlot != slot) {
+            return false;
+        }
+    }
+    auto previous = getEquippedItem(slot);
+    if (previous != item && item->owner() != 0 &&
+        item->owner() != script::kObjectInvalid) {
+        return false;
+    }
+    if (previous && previous != item) return false;
+    return true;
+}
+
+bool Creature::equip(int slot, const std::shared_ptr<Item> &item) {
+    if (!canEquip(slot, item) || isActiveAreaOwnedItem(_game, item)) {
+        return false;
+    }
+    if (getEquippedItem(slot) == item) {
+        return true;
+    }
+    auto replacementEffects = effectsWithoutEquippedSource(nullptr);
+    appendEquippedItemEffects(replacementEffects, slot, item);
+
     _equipment[slot] = item;
     item->setEquipped(true);
     item->setOwner(_id);
+    replaceEffectState(std::move(replacementEffects));
 
+    updateEquipmentPresentation();
+    if (_sceneNode && _combatState.active &&
+        (slot == InventorySlots::rightWeapon ||
+         slot == InventorySlots::leftWeapon)) {
+        setLightsabersPowered(true, true);
+    }
+
+    return true;
+}
+
+bool Creature::canReplaceEquipment(
+    int slot,
+    const std::shared_ptr<Item> &item,
+    const Object &displacedReceiver) const {
+    auto previous = getEquippedItem(slot);
+    if (!previous || previous == item) return canEquip(slot, item);
+    if (!item || (!item->isRuntimeLive() && !item->isPresentationOnly()) ||
+        !item->isEquippable(getEquipabilitySlot(slot)) ||
+        std::find(_items.begin(), _items.end(), item) != _items.end() ||
+        (item->owner() != 0 && item->owner() != script::kObjectInvalid)) {
+        return false;
+    }
+    for (const auto &[equippedSlot, equipped] : _equipment) {
+        if (equipped == item && equippedSlot != slot) return false;
+    }
+    if ((!previous->isRuntimeLive() && !previous->isPresentationOnly()) ||
+        (!displacedReceiver.isRuntimeLive() &&
+         !displacedReceiver.isPresentationOnly()) ||
+        (isPresentationOnly() != displacedReceiver.isPresentationOnly())) {
+        return false;
+    }
+    return true;
+}
+
+bool Creature::replaceEquipment(
+    int slot,
+    const std::shared_ptr<Item> &item,
+    Object &displacedReceiver) {
+    auto previous = getEquippedItem(slot);
+    if (!previous || previous == item) return equip(slot, item);
+    if (!canReplaceEquipment(slot, item, displacedReceiver) ||
+        isActiveAreaOwnedItem(_game, item)) {
+        return false;
+    }
+    auto replacementEffects = effectsWithoutEquippedSource(previous.get());
+    appendEquippedItemEffects(replacementEffects, slot, item);
+
+    // All ordinary recoverable validation is complete. The remainder is one
+    // synchronous ownership move; only exceptional allocation failure remains.
+    previous->powerDown(_position);
+    previous->setEquipped(false);
+    previous->setOwner(0);
+    _equipment[slot] = item;
+    item->setEquipped(true);
+    item->setOwner(_id);
+    displacedReceiver.addItem(previous);
+    replaceEffectState(std::move(replacementEffects));
+    updateEquipmentPresentation();
+    return true;
+}
+
+std::shared_ptr<Item> Creature::takeEquippedItem(
+    const std::shared_ptr<Item> &item) {
+    auto equipped = std::find_if(
+        _equipment.begin(), _equipment.end(),
+        [&item](const auto &entry) { return entry.second == item; });
+    if (equipped == _equipment.end()) return nullptr;
+
+    auto result = equipped->second;
+    auto replacementEffects = effectsWithoutEquippedSource(result.get());
+    result->powerDown(_position);
+    result->setEquipped(false);
+    result->setOwner(0);
+    _equipment.erase(equipped);
+    replaceEffectState(std::move(replacementEffects));
+    updateEquipmentPresentation();
+    return result;
+}
+
+bool Creature::moveEquippedItemTo(
+    const std::shared_ptr<Item> &item,
+    Object &receiver) {
+    if (!item ||
+        (!receiver.isRuntimeLive() && !receiver.isPresentationOnly()) ||
+        (isPresentationOnly() != receiver.isPresentationOnly())) {
+        return false;
+    }
+    auto taken = takeEquippedItem(item);
+    if (!taken) return false;
+    receiver.addItem(taken);
+    return true;
+}
+
+void Creature::updateEquipmentPresentation() {
     uint32_t prevAppearance = _appearance;
     updateDisguise();
     if (_appearance != prevAppearance) {
@@ -966,37 +1360,7 @@ bool Creature::equip(int slot, const std::shared_ptr<Item> &item) {
         // orphan it from the area scene graph.
         loadAppearanceProperties();
     }
-
-    if (_sceneNode) {
-        updateModel();
-
-        if (_combatState.active &&
-            (slot == InventorySlots::rightWeapon || slot == InventorySlots::leftWeapon)) {
-            setLightsabersPowered(true, true);
-        }
-    }
-
-    return true;
-}
-
-void Creature::unequip(const std::shared_ptr<Item> &item) {
-    for (auto &equipped : _equipment) {
-        if (equipped.second != item) {
-            continue;
-        }
-        item->powerDown(_position);
-        item->setEquipped(false);
-        _equipment.erase(equipped.first);
-        uint32_t prevAppearance = _appearance;
-        updateDisguise();
-        if (_appearance != prevAppearance) {
-            loadAppearanceProperties();
-        }
-        if (_sceneNode) {
-            updateModel();
-        }
-        break;
-    }
+    if (_sceneNode) updateModel();
 }
 
 std::shared_ptr<Item> Creature::getEquippedItem(int slot) const {
@@ -1141,26 +1505,26 @@ void Creature::runAttackedScript(uint32_t attackerId) {
          {script::ArgKind::LastAttacker, Variable::ofObject(attackerId)}});
 }
 
-void Creature::runDamagedScript(uint32_t damagerId) {
+void Creature::runDamagedScript() {
     if (_onDamaged.empty()) {
         return;
     }
     _game.scriptRunner().run(
         _onDamaged,
         {{script::ArgKind::Caller, Variable::ofObject(_id)},
-         {script::ArgKind::LastAttacker, Variable::ofObject(damagerId)},
-         {script::ArgKind::LastDamager, Variable::ofObject(damagerId)}});
+         {script::ArgKind::LastAttacker, Variable::ofObject(getLastDamager())},
+         {script::ArgKind::LastDamager, Variable::ofObject(getLastDamager())}});
 }
 
-void Creature::runDeathScript(uint32_t damagerId) {
+void Creature::runDeathScript() {
     if (_onDeath.empty()) {
         return;
     }
     _game.scriptRunner().run(
         _onDeath,
         {{script::ArgKind::Caller, Variable::ofObject(_id)},
-         {script::ArgKind::LastAttacker, Variable::ofObject(damagerId)},
-         {script::ArgKind::LastDamager, Variable::ofObject(damagerId)}});
+         {script::ArgKind::LastAttacker, Variable::ofObject(getLastDamager())},
+         {script::ArgKind::LastDamager, Variable::ofObject(getLastDamager())}});
 }
 
 CreatureWieldType Creature::getWieldType() const {
@@ -1187,7 +1551,7 @@ CreatureWieldType Creature::getWieldType() const {
         }
     }
 
-    if (attributes().hasFeat(FeatType::ComplexUnarmedAnims)) {
+    if (hasEffectiveFeat(FeatType::ComplexUnarmedAnims)) {
         return CreatureWieldType::HandToHandComplex;
     }
 
@@ -1212,7 +1576,7 @@ void Creature::stopTalking() {
 
 void Creature::setObjectSeen(const std::shared_ptr<Object> &object, bool seen) {
     if (seen) {
-        _perception.seen.insert(object->id());
+        _perception.seen[object->id()] = object;
     } else {
         _perception.seen.erase(object->id());
     }
@@ -1220,7 +1584,7 @@ void Creature::setObjectSeen(const std::shared_ptr<Object> &object, bool seen) {
 
 void Creature::setObjectHeard(const std::shared_ptr<Object> &object, bool heard) {
     if (heard) {
-        _perception.heard.insert(object->id());
+        _perception.heard[object->id()] = object;
     } else {
         _perception.heard.erase(object->id());
     }
@@ -1344,16 +1708,20 @@ std::shared_ptr<Item> Creature::getOffhandAttackWeapon() const {
 }
 
 void Creature::beginCombatAttack(std::shared_ptr<Object> target, FeatType feat) {
-    _combatState.attackTarget = std::move(target);
+    _combatState.attackTarget = target;
     _combatState.attackAction = ActionType::AttackObject;
     _combatState.combatFeat = feat;
 }
 
+void Creature::setAttemptedAttackTarget(uint32_t target) {
+    _combatState.attemptedAttackTarget = _game.getObjectById(target);
+}
+
 void Creature::finishCombatRound() {
-    if (_combatState.attackTarget) {
-        _lastHostileTarget = _combatState.attackTarget->id();
+    if (auto target = _combatState.attackTarget.resolve()) {
+        _lastHostileTarget = target;
     } else {
-        _lastHostileTarget = script::kObjectInvalid;
+        _lastHostileTarget.reset();
     }
     _lastAttackAction = _combatState.attackAction;
     if (_combatState.combatFeat != FeatType::Invalid) {
@@ -1388,6 +1756,227 @@ Alignment Creature::alignment() const {
     return Alignment::Neutral;
 }
 
+bool Creature::hasEffectImmunity(
+    ImmunityType immunityType, const Creature *creator) const {
+    for (const EffectInstance &applied : effects()) {
+        if (!applied.hasLiveRuntimeSource()) {
+            continue;
+        }
+        if (applied.type() == EffectType::Immunity &&
+            applied.integerParameter(0) == static_cast<int>(immunityType) &&
+            applied.appliesVersus(creator)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int Creature::getAbilityEffectModifier(Ability ability) const {
+    static constexpr int kMaximumAbilityEffectModifier = 30;
+    EffectModifierReducer reducer;
+    int subtype = static_cast<int>(ability);
+
+    for (const EffectInstance &applied : effects()) {
+        if (!applied.hasLiveRuntimeSource()) {
+            continue;
+        }
+        if (applied.integerParameter(0, -1) != subtype) {
+            continue;
+        }
+        int amount = applied.integerParameter(1);
+        switch (applied.type()) {
+        case EffectType::AbilityIncrease:
+            reducer.addIncrease(getEffectSourceKey(applied), subtype, amount);
+            break;
+        case EffectType::AbilityDecrease:
+            reducer.addDecrease(getEffectSourceKey(applied), subtype, amount);
+            break;
+        default:
+            break;
+        }
+    }
+    return reducer.totalIncrease(kMaximumAbilityEffectModifier) -
+           reducer.totalDecrease(kMaximumAbilityEffectModifier);
+}
+
+int Creature::getEffectiveAbilityScore(Ability ability) const {
+    return std::max(
+        3,
+        _attributes.getAbilityScore(ability) +
+            getAbilityEffectModifier(ability));
+}
+
+int Creature::getEffectiveAbilityModifier(Ability ability) const {
+    int score = getEffectiveAbilityScore(ability);
+    return score >= 10 ? (score - 10) / 2 : (score - 11) / 2;
+}
+
+bool Creature::hasEffectiveFeat(FeatType feat) const {
+    if (_attributes.hasFeat(feat)) {
+        return true;
+    }
+    return std::any_of(
+        effects().begin(), effects().end(),
+        [feat](const EffectInstance &effect) {
+            return effect.hasLiveRuntimeSource() &&
+                   effect.type() == EffectType::BonusFeat &&
+                   effect.integerParameter(0, static_cast<int>(FeatType::Invalid)) ==
+                       static_cast<int>(feat);
+        });
+}
+
+void Creature::appendEquippedItemEffects(
+    std::deque<EffectInstance> &effects,
+    int slot,
+    const std::shared_ptr<Item> &item) const {
+    if (!item || !equippedItemPropertiesAreActive(slot)) {
+        return;
+    }
+
+    auto append = [&](std::shared_ptr<Effect> effect) {
+        if (!effect) {
+            return;
+        }
+        effect->setSaveFacingCreator(item);
+        EffectInstance instance = effect->saveFacingInstance();
+        instance.effect = std::move(effect);
+        instance.id = _game.allocateEffectId();
+        instance.subType = static_cast<uint16_t>(
+            (instance.subType & ~static_cast<uint16_t>(0x7)) |
+            static_cast<uint16_t>(DurationType::Equipped));
+        instance.creatorId = item->id();
+        instance.exposed = 1;
+        effects.push_back(std::move(instance));
+    };
+
+    for (const Item::PropertyEntry &property : item->properties()) {
+        if (property.upgradeType != 0) {
+            continue;
+        }
+        switch (static_cast<ItemProperty>(property.propertyName)) {
+        case ItemProperty::AbilityBonus: {
+            int amount = getItemPropertyValue(
+                _services, property, "value", 0);
+            if (amount > 0) {
+                append(_game.newEffect<AbilityIncreaseEffect>(
+                    static_cast<Ability>(property.subtype), amount));
+            }
+            break;
+        }
+        case ItemProperty::DecreasedAbilityScore: {
+            int amount = getItemPropertyValue(
+                _services, property, "value", 0);
+            if (amount > 0) {
+                append(_game.newEffect<AbilityDecreaseEffect>(
+                    static_cast<Ability>(property.subtype), amount));
+            }
+            break;
+        }
+        case ItemProperty::BonusFeat:
+            append(_game.newEffect<BonusFeatEffect>(
+                static_cast<FeatType>(property.subtype)));
+            break;
+        case ItemProperty::Immunity:
+            append(_game.newEffect<ImmunityEffect>(
+                static_cast<ImmunityType>(property.subtype)));
+            break;
+        case ItemProperty::ImmunityDamageType: {
+            int amount = getItemPropertyValue(
+                _services, property, "value", 0);
+            if (amount > 0) {
+                append(_game.newEffect<DamageImmunityIncreaseEffect>(
+                    getItemPropertyDamageType(_services, property.subtype),
+                    amount));
+            }
+            break;
+        }
+        case ItemProperty::DamageVulnerability: {
+            if (plotFlag()) {
+                break;
+            }
+            int amount = getCostTableValue(
+                _services,
+                kVulnerabilityCostTable,
+                property.costValue,
+                "value",
+                0);
+            if (amount > 0) {
+                append(_game.newEffect<DamageImmunityDecreaseEffect>(
+                    getItemPropertyDamageType(_services, property.subtype),
+                    amount));
+            }
+            break;
+        }
+        case ItemProperty::DamageResistance: {
+            int amount = getCostTableValue(
+                _services,
+                kResistanceCostTable,
+                property.costValue,
+                "amount",
+                0);
+            if (amount > 0) {
+                append(_game.newEffect<DamageResistanceEffect>(
+                    getItemPropertyDamageType(_services, property.subtype),
+                    amount,
+                    0));
+            }
+            break;
+        }
+        case ItemProperty::DamageReduction: {
+            int amount = getCostTableValue(
+                _services,
+                kReductionCostTable,
+                property.costValue,
+                "amount",
+                0);
+            if (amount > 0) {
+                append(_game.newEffect<DamageReductionEffect>(
+                    amount,
+                    getDamageReductionPower(_services, property.subtype),
+                    0));
+            }
+            break;
+        }
+        case ItemProperty::TrueSeeing:
+            append(_game.newEffect<TrueSeeingEffect>());
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+std::deque<EffectInstance> Creature::effectsWithoutEquippedSource(
+    const Item *source) const {
+    std::deque<EffectInstance> result;
+    for (const EffectInstance &effect : effects()) {
+        auto creator = effect.boundCreator();
+        if (source && effect.durationType() == DurationType::Equipped &&
+            creator.get() == source) {
+            continue;
+        }
+        result.push_back(effect);
+    }
+    return result;
+}
+
+std::deque<EffectInstance> Creature::rebuildEquippedItemEffects(
+    const std::map<int, std::shared_ptr<Item>> &equipment) const {
+    std::deque<EffectInstance> result;
+    for (const EffectInstance &effect : effects()) {
+        if (effect.durationType() != DurationType::Equipped) {
+            result.push_back(effect);
+        }
+    }
+    std::set<const Item *> seen;
+    for (const auto &[slot, item] : equipment) {
+        if (item && seen.insert(item.get()).second) {
+            appendEquippedItemEffects(result, slot, item);
+        }
+    }
+    return result;
+}
+
 AttackBonusBreakdown Creature::getAttackBonusBreakdown(
     const Creature *target,
     const Item *weapon,
@@ -1395,15 +1984,15 @@ AttackBonusBreakdown Creature::getAttackBonusBreakdown(
 
     AttackBonusBreakdown result;
 
-    int strengthModifier = _attributes.getAbilityModifier(Ability::Strength);
-    int dexterityModifier = _attributes.getAbilityModifier(Ability::Dexterity);
+    int strengthModifier = getEffectiveAbilityModifier(Ability::Strength);
+    int dexterityModifier = getEffectiveAbilityModifier(Ability::Dexterity);
 
     if (weapon && weapon->isRanged()) {
         result.dexterityModifier = dexterityModifier;
     } else if (weapon && dexterityModifier > strengthModifier) {
         bool finesse = !_game.isTSL() && weapon->isLightsaber();
         if (weapon->isLightsaber() &&
-            _attributes.hasFeat(FeatType::FinesseLightsabers)) {
+            hasEffectiveFeat(FeatType::FinesseLightsabers)) {
             finesse = true;
         }
         switch (weapon->weaponWield()) {
@@ -1411,7 +2000,7 @@ AttackBonusBreakdown Creature::getAttackBonusBreakdown(
         case WeaponWield::SingleSword:
         case WeaponWield::DoubleBladedSword:
             finesse = finesse ||
-                      _attributes.hasFeat(FeatType::FinesseMeleeWeapons);
+                      hasEffectiveFeat(FeatType::FinesseMeleeWeapons);
             break;
         default:
             break;
@@ -1428,25 +2017,45 @@ AttackBonusBreakdown Creature::getAttackBonusBreakdown(
 
     int modifierBonus = 0;
     int modifierPenalty = 0;
+    EffectModifierReducer miscModifierReducer;
 
     for (const auto &applied : effects()) {
-        if (!applied.effect) {
+        if (!applied.hasLiveRuntimeSource()) {
             continue;
         }
-        switch (applied.effect->type()) {
+        if (!applied.appliesVersus(target)) {
+            continue;
+        }
+        auto modifierType = static_cast<AttackBonus>(
+            applied.integerParameter(1));
+        switch (applied.type()) {
         case EffectType::AttackIncrease: {
-            const auto &effect = static_cast<const AttackIncreaseEffect &>(*applied.effect);
-            if (effect.bonus() > 0 &&
-                attackModifierApplies(effect.modifierType(), weapon, offHand)) {
-                modifierBonus += effect.bonus();
+            int bonus = applied.integerParameter(0);
+            if (bonus > 0 &&
+                attackModifierApplies(modifierType, weapon, offHand)) {
+                if (modifierType == AttackBonus::Misc) {
+                    miscModifierReducer.addIncrease(
+                        getEffectSourceKey(applied),
+                        static_cast<int>(AttackBonus::Misc),
+                        bonus);
+                } else {
+                    modifierBonus += bonus;
+                }
             }
             break;
         }
         case EffectType::AttackDecrease: {
-            const auto &effect = static_cast<const AttackDecreaseEffect &>(*applied.effect);
-            if (effect.penalty() > 0 &&
-                attackModifierApplies(effect.modifierType(), weapon, offHand)) {
-                modifierPenalty += effect.penalty();
+            int penalty = applied.integerParameter(0);
+            if (penalty > 0 &&
+                attackModifierApplies(modifierType, weapon, offHand)) {
+                if (modifierType == AttackBonus::Misc) {
+                    miscModifierReducer.addDecrease(
+                        getEffectSourceKey(applied),
+                        static_cast<int>(AttackBonus::Misc),
+                        penalty);
+                } else {
+                    modifierPenalty += penalty;
+                }
             }
             break;
         }
@@ -1454,6 +2063,9 @@ AttackBonusBreakdown Creature::getAttackBonusBreakdown(
             break;
         }
     }
+
+    modifierBonus += miscModifierReducer.totalIncrease(20);
+    modifierPenalty += miscModifierReducer.totalDecrease(20);
 
     for (const auto &[slot, item] : _equipment) {
         if (!item || !equippedItemAppliesToAttack(slot, *item, weapon, offHand)) {
@@ -1529,7 +2141,7 @@ AttackBonusBreakdown Creature::getAttackBonusBreakdown(
 
     if (weapon &&
         weapon->weaponFocusFeat() != FeatType::Invalid &&
-        _attributes.hasFeat(weapon->weaponFocusFeat())) {
+        hasEffectiveFeat(weapon->weaponFocusFeat())) {
         result.weaponFocusBonus = 1;
     }
 
@@ -1577,7 +2189,7 @@ int Creature::getAttackBonus(bool offHand) const {
 }
 
 int Creature::getDefense(const Creature *attacker, int damageFlags) const {
-    int dexterityModifier = _attributes.getAbilityModifier(Ability::Dexterity);
+    int dexterityModifier = getEffectiveAbilityModifier(Ability::Dexterity);
     auto armor = getEquippedItem(InventorySlots::body);
     int armorDefense = armor ? armor->baseDefense() : 0;
 
@@ -1593,26 +2205,29 @@ int Creature::getDefense(const Creature *attacker, int damageFlags) const {
     std::array<int, kACBonusTypeCount> modifierPenalties {};
 
     for (const auto &applied : effects()) {
-        if (!applied.effect) {
+        if (!applied.hasLiveRuntimeSource()) {
             continue;
         }
-        switch (applied.effect->type()) {
+        if (!applied.appliesVersus(attacker)) {
+            continue;
+        }
+        switch (applied.type()) {
         case EffectType::ACIncrease: {
-            const auto &effect = static_cast<const ACIncreaseEffect &>(*applied.effect);
-            if (damageTypeMatches(effect.damageType(), damageFlags)) {
+            int effectDamageType = applied.integerParameter(5, kAllDamageTypeFlags);
+            if (damageTypeMatches(effectDamageType, damageFlags)) {
                 addDefenseModifier(
-                    effect.bonus(),
-                    effect.modifierType(),
+                    applied.integerParameter(1),
+                    static_cast<ACBonus>(applied.integerParameter(0)),
                     modifierBonuses);
             }
             break;
         }
         case EffectType::ACDecrease: {
-            const auto &effect = static_cast<const ACDecreaseEffect &>(*applied.effect);
-            if (damageTypeMatches(effect.damageType(), damageFlags)) {
+            int effectDamageType = applied.integerParameter(5, kAllDamageTypeFlags);
+            if (damageTypeMatches(effectDamageType, damageFlags)) {
                 addDefenseModifier(
-                    effect.penalty(),
-                    effect.modifierType(),
+                    applied.integerParameter(1),
+                    static_cast<ACBonus>(applied.integerParameter(0)),
                     modifierPenalties);
             }
             break;
@@ -1623,7 +2238,7 @@ int Creature::getDefense(const Creature *attacker, int damageFlags) const {
     }
 
     for (const auto &[slot, item] : _equipment) {
-        if (!item || !equippedItemAppliesToDefense(slot)) {
+        if (!item || !equippedItemPropertiesAreActive(slot)) {
             continue;
         }
 
@@ -1676,12 +2291,31 @@ int Creature::getDefense(const Creature *attacker, int damageFlags) const {
         }
     }
 
+    int defenseModifier = getDefenseModifier(
+        modifierBonuses,
+        modifierPenalties);
+    if (attacker) {
+        int dodgeModifier = std::min(
+            modifierBonuses[static_cast<int>(ACBonus::Dodge)] -
+                modifierPenalties[static_cast<int>(ACBonus::Dodge)],
+            kMaximumDodgeBonus);
+        bool invisible = attacker->isInvisibleTo(*this);
+        bool seen = _perception.sees(attacker->id());
+        if (invisible) {
+            defenseModifier -= dodgeModifier;
+            dexterityModifier = std::min(dexterityModifier, 0);
+        } else if (!seen) {
+            defenseModifier -= dodgeModifier;
+            dexterityModifier = 0;
+        }
+    }
+
     int defense = 10 +
                   _attributes.getAggregateDefenseBonus() +
                   armorDefense +
                   _naturalAC +
                   dexterityModifier +
-                  getDefenseModifier(modifierBonuses, modifierPenalties) +
+                  defenseModifier +
                   getDuelingBonus();
 
     return defense - (isDebilitated() ? 4 : 0);
@@ -1694,31 +2328,27 @@ int Creature::getDefense() const {
 int Creature::getFortitudeSave(SavingThrowType savingThrowType) const {
     int modifier = 0;
     for (const auto &applied : effects()) {
-        if (!applied.effect) {
+        if (!applied.hasLiveRuntimeSource()) {
             continue;
         }
-        switch (applied.effect->type()) {
+        switch (applied.type()) {
         case EffectType::SavingThrowIncrease: {
-            const auto &effect =
-                static_cast<const SavingThrowIncreaseEffect &>(*applied.effect);
             if (savingThrowModifierApplies(
-                    effect.save(),
-                    effect.savingThrowType(),
+                    applied.integerParameter(1),
+                    static_cast<SavingThrowType>(applied.integerParameter(2)),
                     kFortitudeSavingThrow,
                     savingThrowType)) {
-                modifier += effect.value();
+                modifier += applied.integerParameter(0);
             }
             break;
         }
         case EffectType::SavingThrowDecrease: {
-            const auto &effect =
-                static_cast<const SavingThrowDecreaseEffect &>(*applied.effect);
             if (savingThrowModifierApplies(
-                    effect.save(),
-                    effect.savingThrowType(),
+                    applied.integerParameter(1),
+                    static_cast<SavingThrowType>(applied.integerParameter(2)),
                     kFortitudeSavingThrow,
                     savingThrowType)) {
-                modifier -= effect.value();
+                modifier -= applied.integerParameter(0);
             }
             break;
         }
@@ -1728,7 +2358,7 @@ int Creature::getFortitudeSave(SavingThrowType savingThrowType) const {
     }
 
     for (const auto &[slot, item] : _equipment) {
-        if (!item || !equippedItemAppliesToDefense(slot)) {
+        if (!item || !equippedItemPropertiesAreActive(slot)) {
             continue;
         }
 
@@ -1780,16 +2410,16 @@ int Creature::getFortitudeSave(SavingThrowType savingThrowType) const {
     modifier = std::min(modifier, kMaximumSavingThrowModifier);
 
     int conditioningBonus = 0;
-    if (_attributes.hasFeat(FeatType::LightningReflexes)) {
+    if (hasEffectiveFeat(FeatType::LightningReflexes)) {
         conditioningBonus = 3;
-    } else if (_attributes.hasFeat(FeatType::IronWill)) {
+    } else if (hasEffectiveFeat(FeatType::IronWill)) {
         conditioningBonus = 2;
-    } else if (_attributes.hasFeat(FeatType::GreatFortitude)) {
+    } else if (hasEffectiveFeat(FeatType::GreatFortitude)) {
         conditioningBonus = 1;
     }
 
     return _attributes.getAggregateSavingThrows().fortitude +
-           _attributes.getAbilityModifier(Ability::Constitution) +
+           getEffectiveAbilityModifier(Ability::Constitution) +
            _fortBonus +
            conditioningBonus +
            modifier;
@@ -1806,7 +2436,7 @@ int Creature::getPhysicalDamageBonus(
     const Item *weapon,
     bool offHand) const {
 
-    int strengthModifier = _attributes.getAbilityModifier(Ability::Strength);
+    int strengthModifier = getEffectiveAbilityModifier(Ability::Strength);
     int abilityModifier = strengthModifier;
 
     if (weapon && weapon->isRanged()) {
@@ -1836,7 +2466,7 @@ int Creature::getPhysicalDamageBonus(
     int specialization = 0;
     if (weapon &&
         weapon->weaponSpecializationFeat() != FeatType::Invalid &&
-        _attributes.hasFeat(weapon->weaponSpecializationFeat())) {
+        hasEffectiveFeat(weapon->weaponSpecializationFeat())) {
         specialization = 2;
     }
 
@@ -1879,141 +2509,12 @@ int Creature::getMassiveCriticalDamage(
     return 0;
 }
 
-int Creature::getItemDamageImmunity(DamageType type) const {
-    int result = 0;
-    int damageFlags = static_cast<int>(type);
-    bool immuneToDecrease = plotFlag();
-
-    for (const auto &[slot, item] : _equipment) {
-        if (!item || !equippedItemAppliesToDefense(slot)) {
-            continue;
-        }
-
-        for (const auto &property : item->properties()) {
-            if (property.upgradeType != 0) {
-                continue;
-            }
-
-            auto propertyType = static_cast<ItemProperty>(property.propertyName);
-            if (propertyType != ItemProperty::ImmunityDamageType &&
-                propertyType != ItemProperty::DamageVulnerability) {
-                continue;
-            }
-            if (propertyType == ItemProperty::DamageVulnerability &&
-                immuneToDecrease) {
-                continue;
-            }
-
-            DamageType propertyDamageType = getItemPropertyDamageType(
-                _services,
-                property.subtype);
-            if (!damageTypeMatches(
-                    static_cast<int>(propertyDamageType),
-                    damageFlags)) {
-                continue;
-            }
-
-            int value =
-                propertyType == ItemProperty::ImmunityDamageType
-                    ? getItemPropertyValue(
-                          _services,
-                          property,
-                          "value",
-                          0)
-                    : getCostTableValue(
-                          _services,
-                          kVulnerabilityCostTable,
-                          property.costValue,
-                          "value",
-                          0);
-            result = std::clamp(
-                result + (propertyType == ItemProperty::ImmunityDamageType
-                              ? value
-                              : -value),
-                -100,
-                100);
-        }
-    }
-    return result;
-}
-
-int Creature::getItemDamageResistance(DamageType type) const {
-    int result = 0;
-    int damageFlags = static_cast<int>(type);
-
-    for (const auto &[slot, item] : _equipment) {
-        if (!item || !equippedItemAppliesToDefense(slot)) {
-            continue;
-        }
-
-        for (const auto &property : item->properties()) {
-            if (property.upgradeType != 0 ||
-                property.propertyName != static_cast<uint16_t>(ItemProperty::DamageResistance)) {
-                continue;
-            }
-
-            DamageType propertyDamageType = getItemPropertyDamageType(
-                _services,
-                property.subtype);
-            if (!damageTypeMatches(
-                    static_cast<int>(propertyDamageType),
-                    damageFlags)) {
-                continue;
-            }
-
-            int value = getCostTableValue(
-                _services,
-                kResistanceCostTable,
-                property.costValue,
-                "amount",
-                0);
-            result = std::max(result, value);
-        }
-    }
-    return result;
-}
-
-void Creature::getItemDamageReduction(
-    int &amount,
-    DamagePower &power) const {
-
-    amount = 0;
-    power = DamagePower::Normal;
-
-    for (const auto &[slot, item] : _equipment) {
-        if (!item || !equippedItemAppliesToDefense(slot)) {
-            continue;
-        }
-
-        for (const auto &property : item->properties()) {
-            if (property.upgradeType != 0 ||
-                property.propertyName != static_cast<uint16_t>(ItemProperty::DamageReduction)) {
-                continue;
-            }
-
-            DamagePower propertyPower = getDamageReductionPower(
-                _services,
-                property.subtype);
-            int value = getCostTableValue(
-                _services,
-                kReductionCostTable,
-                property.costValue,
-                "amount",
-                0);
-            if (value > amount) {
-                amount = value;
-                power = propertyPower;
-            }
-        }
-    }
-}
-
 int Creature::getDamageResistanceFeatBonus() const {
     int result = 0;
-    if (_attributes.hasFeat(FeatType::ImprovedToughness)) {
+    if (hasEffectiveFeat(FeatType::ImprovedToughness)) {
         result += 2;
     }
-    if (_attributes.hasFeat(FeatType::WookieEndurance)) {
+    if (hasEffectiveFeat(FeatType::WookieEndurance)) {
         result += 2;
     }
     return result;
@@ -2127,28 +2628,36 @@ void Creature::addPhysicalDamageModifiers(
         }
     }
 
-    std::map<int, int> effectBonuses;
-    std::map<int, int> effectPenalties;
+    EffectModifierReducer effectModifierReducer;
     for (const auto &applied : effects()) {
-        if (!applied.effect) {
+        if (!applied.hasLiveRuntimeSource()) {
             continue;
         }
-        switch (applied.effect->type()) {
+        if (!applied.appliesVersus(target)) {
+            continue;
+        }
+        switch (applied.type()) {
         case EffectType::DamageIncrease: {
-            const auto &effect = static_cast<const DamageIncreaseEffect &>(*applied.effect);
-            if (effect.bonus() > 0) {
-                effectBonuses[static_cast<int>(getPrimaryDamageType(
-                    static_cast<int>(effect.damageType())))] +=
-                    criticalMultiplier * effect.bonus();
+            int bonus = applied.integerParameter(0);
+            if (bonus > 0) {
+                int type = static_cast<int>(getPrimaryDamageType(
+                    applied.integerParameter(1)));
+                effectModifierReducer.addIncrease(
+                    getEffectSourceKey(applied),
+                    type,
+                    criticalMultiplier * bonus);
             }
             break;
         }
         case EffectType::DamageDecrease: {
-            const auto &effect = static_cast<const DamageDecreaseEffect &>(*applied.effect);
-            if (effect.penalty() > 0) {
-                effectPenalties[static_cast<int>(getPrimaryDamageType(
-                    static_cast<int>(effect.damageType())))] +=
-                    criticalMultiplier * effect.penalty();
+            int penalty = applied.integerParameter(0);
+            if (penalty > 0) {
+                int type = static_cast<int>(getPrimaryDamageType(
+                    applied.integerParameter(1)));
+                effectModifierReducer.addDecrease(
+                    getEffectSourceKey(applied),
+                    type,
+                    criticalMultiplier * penalty);
             }
             break;
         }
@@ -2157,7 +2666,8 @@ void Creature::addPhysicalDamageModifiers(
         }
     }
 
-    for (const auto &[type, amount] : effectBonuses) {
+    for (const auto &[type, amount] :
+         effectModifierReducer.increasesBySubtype(kMaximumDamageEffectModifier)) {
         damage.add(amount, static_cast<DamageType>(type));
     }
     for (const DamageModifier &modifier : itemBonuses) {
@@ -2165,7 +2675,8 @@ void Creature::addPhysicalDamageModifiers(
             rollDamageModifier(modifier, criticalMultiplier),
             modifier.type);
     }
-    for (const auto &[type, amount] : effectPenalties) {
+    for (const auto &[type, amount] :
+         effectModifierReducer.decreasesBySubtype(kMaximumDamageEffectModifier)) {
         damage.add(-amount, static_cast<DamageType>(type));
     }
     for (const DamageModifier &modifier : itemPenalties) {
@@ -2191,9 +2702,9 @@ void Creature::getWeaponDamage(const Item *weapon, int &min, int &max) const {
 
     int modifier;
     if (weapon && weapon->isRanged()) {
-        modifier = _attributes.getAbilityModifier(Ability::Dexterity);
+        modifier = getEffectiveAbilityModifier(Ability::Dexterity);
     } else {
-        modifier = _attributes.getAbilityModifier(Ability::Strength);
+        modifier = getEffectiveAbilityModifier(Ability::Strength);
     }
     min += modifier;
     max += modifier;
@@ -2643,13 +3154,13 @@ int Creature::getTwoWeaponAttackPenalty(
         if (weapon != offHandWeapon.get()) {
             return 0;
         }
-        if (_attributes.hasFeat(FeatType::AdvancedDoubleWeaponFighting)) {
+        if (hasEffectiveFeat(FeatType::AdvancedDoubleWeaponFighting)) {
             return 2;
         }
-        if (_attributes.hasFeat(FeatType::DoubleWeaponFighting)) {
+        if (hasEffectiveFeat(FeatType::DoubleWeaponFighting)) {
             return 4;
         }
-        if (_attributes.hasFeat(FeatType::Ambidexterity)) {
+        if (hasEffectiveFeat(FeatType::Ambidexterity)) {
             return 6;
         }
         return 10;
@@ -2671,9 +3182,9 @@ int Creature::getTwoWeaponAttackPenalty(
     }
 
     int penalty = balanced ? 4 : 6;
-    if (_attributes.hasFeat(FeatType::AdvancedDoubleWeaponFighting)) {
+    if (hasEffectiveFeat(FeatType::AdvancedDoubleWeaponFighting)) {
         penalty -= 4;
-    } else if (_attributes.hasFeat(FeatType::DoubleWeaponFighting)) {
+    } else if (hasEffectiveFeat(FeatType::DoubleWeaponFighting)) {
         penalty -= 2;
     }
     return penalty;
@@ -2689,13 +3200,13 @@ int Creature::getDuelingBonus() const {
         return 0;
     }
 
-    if (_attributes.hasFeat(FeatType::MasterDueling)) {
+    if (hasEffectiveFeat(FeatType::MasterDueling)) {
         return 3;
     }
-    if (_attributes.hasFeat(FeatType::ImprovedDueling)) {
+    if (hasEffectiveFeat(FeatType::ImprovedDueling)) {
         return 2;
     }
-    return _attributes.hasFeat(FeatType::Dueling) ? 1 : 0;
+    return hasEffectiveFeat(FeatType::Dueling) ? 1 : 0;
 }
 
 std::string Creature::getWalkAnimation() const {
@@ -2869,6 +3380,35 @@ void Creature::finalizeModel(ModelSceneNode &body) {
     }
 }
 
+CreaturePresentation Creature::presentation() const {
+    if (_presentation) return *_presentation;
+    CreaturePresentation result;
+    result.gender = static_cast<int>(_gender);
+    result.appearance = _appearance;
+    auto body = getEquippedItem(InventorySlots::body);
+    if (body && !body->baseBodyVariation().empty()) {
+        auto variation = boost::to_lower_copy(body->baseBodyVariation());
+        result.bodyVariation = variation.front() - 'a';
+        result.textureVariation = body->textureVariation();
+    }
+    return result;
+}
+
+void Creature::setPresentation(const CreaturePresentation &presentation) {
+    if (!isPresentationOnly()) {
+        throw std::logic_error("Visual tuples require a presentation-only creature");
+    }
+    if (presentation.appearance < 0 || presentation.appearance > 65535 ||
+        presentation.gender < 0 || presentation.gender > static_cast<int>(Gender::None) ||
+        presentation.bodyVariation < 0 || presentation.bodyVariation >= 26 ||
+        presentation.textureVariation < 0 || presentation.textureVariation > 255) {
+        throw std::invalid_argument("Invalid creature presentation");
+    }
+    _presentation = presentation;
+    _appearance = presentation.appearance;
+    _gender = static_cast<Gender>(presentation.gender);
+}
+
 std::string Creature::getBodyModelName() const {
     std::string column;
 
@@ -2876,7 +3416,9 @@ std::string Creature::getBodyModelName() const {
         column = "model";
 
         std::shared_ptr<Item> bodyItem(getEquippedItem(InventorySlots::body));
-        if (bodyItem) {
+        if (_presentation) {
+            column += static_cast<char>('a' + _presentation->bodyVariation);
+        } else if (bodyItem) {
             std::string baseBodyVar(bodyItem->baseBodyVariation());
             column += baseBodyVar;
         } else {
@@ -2905,7 +3447,9 @@ std::string Creature::getBodyTextureName() const {
     if (_modelType == Creature::ModelType::Character) {
         column = "tex";
 
-        if (bodyItem) {
+        if (_presentation) {
+            column += static_cast<char>('a' + _presentation->bodyVariation);
+        } else if (bodyItem) {
             std::string baseBodyVar(bodyItem->baseBodyVariation());
             column += baseBodyVar;
         } else {
@@ -2926,8 +3470,9 @@ std::string Creature::getBodyTextureName() const {
 
     if (_modelType == Creature::ModelType::Character) {
         bool texFound = false;
-        if (bodyItem) {
-            std::string tmp(str(boost::format("%s%02d") % texName % bodyItem->textureVariation()));
+        if (_presentation || bodyItem) {
+            auto variation = _presentation ? _presentation->textureVariation : bodyItem->textureVariation();
+            std::string tmp(str(boost::format("%s%02d") % texName % variation));
             std::shared_ptr<Texture> texture(_services.resource.textures.get(tmp, TextureUsage::MainTex));
             if (texture) {
                 texName = std::move(tmp);
@@ -2989,34 +3534,36 @@ std::string Creature::getWeaponModelName(int slot) const {
     return modelName;
 }
 
-void Creature::deserialize(const resource::Gff &gff) {
+void Creature::deserialize(
+    const resource::Gff &gff,
+    const SerializedIdentityContext &identityContext) {
     std::string templateRes;
-    if (!gff.has("ObjectId") && gff.readResRef(templateRes, "TemplateResRef")) {
+    if (!identityContext.isSerializedState() &&
+        gff.readResRef(templateRes, "TemplateResRef")) {
         if (auto utc = _services.resource.gffs.get(templateRes, ResType::Utc)) {
-            deserializeAll(*utc);
+            deserializeAll(
+                *utc,
+                SerializedIdentityContext::templateResource(templateRes));
         }
     }
-    deserializeAll(gff);
+    deserializeAll(gff, identityContext);
+
+    restoreSerializedVitality();
 
     updateTransform();
     loadAppearance();
 }
 
-void Creature::deserializeAll(const resource::Gff &gff) {
-    Object::deserialize(gff);
+void Creature::deserializeAll(
+    const resource::Gff &gff,
+    const SerializedIdentityContext &identityContext) {
+    Object::deserialize(gff, identityContext);
 
     // Retail reads IsPC before post-processing hit points. A player character
     // remains an incapacitated, resumable runtime object through 0..-9 HP and
-    // becomes truly dead only at -10 HP. Preserve the saved HP verbatim; this
-    // distinction is runtime state, not a load-time recovery/clamp.
+    // becomes truly dead only at -10 HP.
     gff.readBool(_isPC, "IsPC");
-    if (gff.has("ObjectId") && gff.has("CurrentHitPoints")) {
-        if (_minOneHP && _currentHitPoints < 1) {
-            _currentHitPoints = 1;
-        }
-        _dead = _currentHitPoints <= (_game.isTSL() && _isPC ? -10 : 0);
-    }
-
+    gff.readInt(_assignedPuppet, "AssignedPup");
 
     // index into racialtypes.2da
     gff.readEnum(_race, "Race");
@@ -3099,7 +3646,7 @@ void Creature::deserializeAll(const resource::Gff &gff) {
     deserializeBodyBag(gff);
     deserializeAttributes(gff);
     deserializePerception(gff);
-    deserializeEquipItems(gff);
+    deserializeOwnedItemsAndEquipment(gff, identityContext);
 }
 
 void Creature::deserializeName(const resource::Gff &gff) {
@@ -3219,40 +3766,207 @@ void Creature::deserializePerception(const resource::Gff &gff) {
     _perception.hearingRange = ranges->getFloat(_perceptionId, "secondaryrange");
 }
 
-void Creature::deserializeEquipItems(const resource::Gff &gff) {
-    if (gff.has("ObjectId")) {
-        _equipment.clear();
-    }
-    for (const auto &itemGff : gff.getList("Equip_ItemList")) {
-        std::shared_ptr<Item> item = _game.newOwnedItem();
-        item->deserialize(*itemGff);
-        if (gff.has("ObjectId")) {
-            item->captureOwnerLocalSaveRecord(
-                *itemGff,
-                {SaveRecordOriginKind::EquippedItem, std::to_string(_id)});
+std::vector<std::shared_ptr<Object>> Creature::ownedRuntimeObjects() const {
+    auto result = Object::ownedRuntimeObjects();
+    std::set<const Object *> seen;
+    for (const auto &object : result) {
+        if (object) {
+            seen.insert(object.get());
         }
-        if (gff.has("ObjectId")) {
-            uint32_t slotMask = itemGff->type();
-            if (slotMask != 0 && (slotMask & (slotMask - 1)) == 0) {
-                int slot = 0;
-                while ((slotMask >>= 1) != 0) {
-                    ++slot;
-                }
-                if (equip(slot, item)) {
-                    continue;
-                }
-                warn(str(boost::format("saved item is not equippable in slot %d: %s") % slot % item->tag()));
+    }
+    for (const auto &[_, item] : _equipment) {
+        if (item && seen.insert(item.get()).second) {
+            result.push_back(item);
+        }
+    }
+    return result;
+}
+
+void Creature::deserializeOwnedItemsAndEquipment(
+    const resource::Gff &gff,
+    const SerializedIdentityContext &identityContext) {
+    const bool replaceItems = gff.has("ItemList");
+    const bool replaceEquipment = gff.has("Equip_ItemList");
+    if (!replaceItems && !replaceEquipment) return;
+
+    if (!identityContext.isSerializedState()) {
+        std::vector<std::shared_ptr<Object>> obsolete;
+        if (replaceItems) {
+            obsolete.insert(obsolete.end(), _items.begin(), _items.end());
+        }
+        if (replaceEquipment) {
+            for (const auto &[_, item] : _equipment) {
+                obsolete.push_back(item);
             }
         }
+        std::vector<std::shared_ptr<Item>> replacementItems =
+            replaceItems ? std::vector<std::shared_ptr<Item>> {} : _items;
+        std::map<int, std::shared_ptr<Item>> replacementEquipment =
+            replaceEquipment
+                ? std::map<int, std::shared_ptr<Item>> {}
+                : _equipment;
+        ItemAttributes replacementAttributes;
+        std::deque<EffectInstance> replacementEffects;
+        _game.replaceRuntimeObjectGraph(
+            obsolete,
+            [&]() {
+                if (replaceItems) {
+                    for (const auto &itemGff : gff.getList("ItemList")) {
+                        auto item = _game.newOwnedItem(*itemGff, identityContext);
+                        item->setOwner(_id);
+                        appendOwnedItemCandidate(
+                            replacementItems, item, true);
+                    }
+                }
+                if (replaceEquipment) {
+                    for (const auto &itemGff : gff.getList("Equip_ItemList")) {
+                        auto item = _game.newOwnedItem(*itemGff, identityContext);
+                        int slot = item->isEquippable(InventorySlots::body)
+                                       ? InventorySlots::body
+                                       : InventorySlots::rightWeapon;
+                        if (!item->isEquippable(getEquipabilitySlot(slot)) ||
+                            replacementEquipment.count(slot) != 0) {
+                            item->setOwner(_id);
+                            appendOwnedItemCandidate(
+                                replacementItems, item, true);
+                            continue;
+                        }
+                        item->setOwner(_id);
+                        item->setEquipped(true);
+                        replacementEquipment.emplace(slot, std::move(item));
+                    }
+                }
+                for (const auto &item : replacementItems) {
+                    replacementAttributes.addItem(item, _services.game);
+                }
+                if (replaceEquipment) {
+                    replacementEffects =
+                        rebuildEquippedItemEffects(replacementEquipment);
+                }
+            },
+            [&]() noexcept {
+                _items = std::move(replacementItems);
+                _equipment = std::move(replacementEquipment);
+                _itemAttributes = std::move(replacementAttributes);
+                if (replaceEquipment) {
+                    replaceEffectState(std::move(replacementEffects));
+                }
+            });
+        return;
+    }
 
-        if (item->isEquippable(InventorySlots::body)) {
-            equip(InventorySlots::body, item);
-        } else if (item->isEquippable(InventorySlots::rightWeapon)) {
-            equip(InventorySlots::rightWeapon, item);
-        } else {
-            addItem(item);
-            warn(str(boost::format("item is not equippable: %s") % item->tag()));
+    std::vector<std::shared_ptr<Object>> obsolete;
+    if (replaceItems) {
+        obsolete.insert(obsolete.end(), _items.begin(), _items.end());
+    }
+    if (replaceEquipment) {
+        for (const auto &[_, item] : _equipment) {
+            obsolete.push_back(item);
         }
+    }
+    std::vector<std::shared_ptr<Item>> replacementItems =
+        replaceItems ? std::vector<std::shared_ptr<Item>> {} : _items;
+    std::map<int, std::shared_ptr<Item>> replacementEquipment =
+        replaceEquipment
+            ? std::map<int, std::shared_ptr<Item>> {}
+            : _equipment;
+    ItemAttributes replacementAttributes;
+    std::deque<EffectInstance> replacementEffects;
+    _game.replaceRuntimeObjectGraph(
+        obsolete,
+        [&]() {
+            if (replaceItems) {
+                for (const auto &itemGff : gff.getList("ItemList")) {
+                    auto item = _game.newOwnedItem(*itemGff, identityContext);
+                    item->captureSaveRecord(
+                        *itemGff,
+                        identityContext,
+                        {SaveRecordOriginKind::ContainedItem, std::to_string(_id)});
+                    item->setOwner(_id);
+                    appendOwnedItemCandidate(
+                        replacementItems, item, true);
+                }
+            }
+
+            if (replaceEquipment) {
+                for (const auto &itemGff : gff.getList("Equip_ItemList")) {
+                    auto item = _game.newOwnedItem(*itemGff, identityContext);
+                    item->captureSaveRecord(
+                        *itemGff,
+                        identityContext,
+                        {SaveRecordOriginKind::EquippedItem, std::to_string(_id)});
+
+                    std::optional<int> slot;
+                    uint32_t slotMask = itemGff->type();
+                    if (slotMask != 0 && (slotMask & (slotMask - 1)) == 0) {
+                        int value = 0;
+                        while ((slotMask >>= 1) != 0) {
+                            ++value;
+                        }
+                        if (item->isEquippable(getEquipabilitySlot(value))) {
+                            slot = value;
+                        }
+                    }
+                    if (!slot && item->isEquippable(InventorySlots::body)) {
+                        slot = InventorySlots::body;
+                    } else if (!slot &&
+                               item->isEquippable(InventorySlots::rightWeapon)) {
+                        slot = InventorySlots::rightWeapon;
+                    }
+
+                    if (!slot) {
+                        item->setOwner(_id);
+                        appendOwnedItemCandidate(
+                            replacementItems, item, true);
+                        warn(str(boost::format("item is not equippable: %s") %
+                                 replacementItems.back()->tag()));
+                        continue;
+                    }
+                    if (replacementEquipment.count(*slot) != 0) {
+                        throw ValidationException(
+                            "Multiple saved items occupy equipment slot " +
+                            std::to_string(*slot));
+                    }
+                    item->setOwner(_id);
+                    item->setEquipped(true);
+                    replacementEquipment.emplace(*slot, std::move(item));
+                }
+            }
+            for (const auto &item : replacementItems) {
+                replacementAttributes.addItem(item, _services.game);
+            }
+            if (replaceEquipment) {
+                replacementEffects =
+                    rebuildEquippedItemEffects(replacementEquipment);
+            }
+        },
+        [&]() noexcept {
+            if (replaceEquipment) {
+                for (auto &[_, item] : _equipment) {
+                    if (item) {
+                        item->setEquipped(false);
+                        item->setOwner(0);
+                    }
+                }
+            }
+            if (replaceItems) {
+                for (auto &item : _items) {
+                    if (item) {
+                        item->setOwner(0);
+                    }
+                }
+            }
+            _items = std::move(replacementItems);
+            _equipment = std::move(replacementEquipment);
+            _itemAttributes = std::move(replacementAttributes);
+            if (replaceEquipment) {
+                replaceEffectState(std::move(replacementEffects));
+            }
+        });
+    uint32_t previousAppearance = _appearance;
+    updateDisguise();
+    if (_appearance != previousAppearance) {
+        loadAppearanceProperties();
     }
 }
 

@@ -49,21 +49,26 @@ namespace reone {
 
 namespace game {
 
-void Door::deserialize(const resource::Gff &gff) {
+void Door::deserialize(
+    const resource::Gff &gff,
+    const SerializedIdentityContext &identityContext) {
     std::string templateRes;
-    if (!gff.has("ObjectId") && gff.readResRef(templateRes, "TemplateResRef")) {
+    if (!identityContext.isSerializedState() &&
+        gff.readResRef(templateRes, "TemplateResRef")) {
         if (auto utd = _services.resource.gffs.get(templateRes, ResType::Utd)) {
-            deserializeAll(*utd);
+            deserializeAll(*utd, SerializedIdentityContext::templateResource(templateRes));
         }
     }
-    deserializeAll(gff);
+    deserializeAll(gff, identityContext);
     loadAppearance();
     applyRestingState();
     updateTransform();
 }
 
-void Door::deserializeAll(const resource::Gff &gff) {
-    deserializeRuntimeState(gff);
+void Door::deserializeAll(
+    const resource::Gff &gff,
+    const SerializedIdentityContext &identityContext) {
+    deserializeRuntimeState(gff, identityContext);
     if (gff.readString(_tag, "Tag")) {
         boost::to_lower(_tag);
     }
@@ -114,7 +119,7 @@ void Door::deserializeAll(const resource::Gff &gff) {
         _maxHitPoints = _hitPoints;
     }
     gff.readShort(_currentHitPoints, "CurrentHP");
-    if (gff.has("ObjectId") && gff.has("CurrentHP")) {
+    if (identityContext.isSerializedState() && gff.has("CurrentHP")) {
         _dead = _currentHitPoints <= 0;
     }
     gff.readBool(_plot, "Plot");
@@ -277,7 +282,9 @@ bool Door::isSelectable() const {
     return !_static && !_open && !isOpening();
 }
 
-void Door::damage(int amount, uint32_t damager) {
+void Door::damage(
+    int amount,
+    const std::shared_ptr<Object> &damager) {
     if (_dead || _plot || _notBlastable) {
         return;
     }
@@ -285,16 +292,18 @@ void Door::damage(int amount, uint32_t damager) {
         return;
     }
 
+    setLastDamager(damager);
+    uint32_t damagerId = getLastDamager();
     int currentHitPoints = _currentHitPoints > 0 ? _currentHitPoints : _hitPoints;
     if (amount == std::numeric_limits<int>::max()) {
         _currentHitPoints = isMinOneHP() ? 1 : 0;
     } else {
         int adjustedAmount = applyDamageToHitPoints(amount, currentHitPoints);
-        _game.floatingText().addDamage(*this, amount, adjustedAmount, damager);
+        _game.floatingText().addDamage(
+            *this, amount, adjustedAmount, damagerId);
     }
 
-    damager = damager ? damager : script::kObjectInvalid;
-    runDamagedScript(damager);
+    runDamagedScript();
 
     if (_currentHitPoints > 0) {
         return;
@@ -303,8 +312,8 @@ void Door::damage(int amount, uint32_t damager) {
     _dead = true;
     _locked = false;
     open();
-    onOpen(damager);
-    runDeathScript(damager);
+    onOpen(damagerId);
+    runDeathScript();
 }
 
 void Door::open() {
@@ -417,26 +426,26 @@ void Door::onFailToOpen(const Object &triggerer) {
          {script::ArgKind::ClickingObject, Variable::ofObject(triggerer.id())}});
 }
 
-void Door::runDamagedScript(uint32_t damagerId) {
+void Door::runDamagedScript() {
     if (_onDamaged.empty()) {
         return;
     }
     _game.scriptRunner().run(
         _onDamaged,
         {{script::ArgKind::Caller, Variable::ofObject(_id)},
-         {script::ArgKind::LastAttacker, Variable::ofObject(damagerId)},
-         {script::ArgKind::LastDamager, Variable::ofObject(damagerId)}});
+         {script::ArgKind::LastAttacker, Variable::ofObject(getLastDamager())},
+         {script::ArgKind::LastDamager, Variable::ofObject(getLastDamager())}});
 }
 
-void Door::runDeathScript(uint32_t damagerId) {
+void Door::runDeathScript() {
     if (_onDeath.empty()) {
         return;
     }
     _game.scriptRunner().run(
         _onDeath,
         {{script::ArgKind::Caller, Variable::ofObject(_id)},
-         {script::ArgKind::LastAttacker, Variable::ofObject(damagerId)},
-         {script::ArgKind::LastDamager, Variable::ofObject(damagerId)}});
+         {script::ArgKind::LastAttacker, Variable::ofObject(getLastDamager())},
+         {script::ArgKind::LastDamager, Variable::ofObject(getLastDamager())}});
 }
 
 void Door::setLocked(bool locked) {

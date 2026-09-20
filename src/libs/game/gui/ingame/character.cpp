@@ -134,22 +134,22 @@ void CharacterMenu::refreshControls() {
         _controls.LBL_LEVEL2->setTextMessage(toStringOrEmptyIfZero(attributes.getLevelByPosition(2)));
     }
 
-    _controls.LBL_VITALITY_STAT->setTextMessage(str(boost::format("%d/%d") % partyLeader->currentHitPoints() % partyLeader->hitPoints()));
+    _controls.LBL_VITALITY_STAT->setTextMessage(str(boost::format("%d/%d") % partyLeader->currentHitPoints() % partyLeader->maxHitPoints()));
     _controls.LBL_DEFENSE_STAT->setTextMessage(std::to_string(partyLeader->getDefense()));
     _controls.LBL_FORCE_STAT->setTextMessage("");
 
-    _controls.LBL_STR->setTextMessage(std::to_string(attributes.strength()));
-    _controls.LBL_STR_MOD->setTextMessage(describeAbilityModifier(attributes.getAbilityModifier(Ability::Strength)));
-    _controls.LBL_DEX->setTextMessage(std::to_string(attributes.dexterity()));
-    _controls.LBL_DEX_MOD->setTextMessage(describeAbilityModifier(attributes.getAbilityModifier(Ability::Dexterity)));
-    _controls.LBL_CON->setTextMessage(std::to_string(attributes.constitution()));
-    _controls.LBL_CON_MOD->setTextMessage(describeAbilityModifier(attributes.getAbilityModifier(Ability::Constitution)));
-    _controls.LBL_INT->setTextMessage(std::to_string(attributes.intelligence()));
-    _controls.LBL_INT_MOD->setTextMessage(describeAbilityModifier(attributes.getAbilityModifier(Ability::Intelligence)));
-    _controls.LBL_WIS->setTextMessage(std::to_string(attributes.wisdom()));
-    _controls.LBL_WIS_MOD->setTextMessage(describeAbilityModifier(attributes.getAbilityModifier(Ability::Wisdom)));
-    _controls.LBL_CHA->setTextMessage(std::to_string(attributes.charisma()));
-    _controls.LBL_CHA_MOD->setTextMessage(describeAbilityModifier(attributes.getAbilityModifier(Ability::Charisma)));
+    _controls.LBL_STR->setTextMessage(std::to_string(partyLeader->getEffectiveAbilityScore(Ability::Strength)));
+    _controls.LBL_STR_MOD->setTextMessage(describeAbilityModifier(partyLeader->getEffectiveAbilityModifier(Ability::Strength)));
+    _controls.LBL_DEX->setTextMessage(std::to_string(partyLeader->getEffectiveAbilityScore(Ability::Dexterity)));
+    _controls.LBL_DEX_MOD->setTextMessage(describeAbilityModifier(partyLeader->getEffectiveAbilityModifier(Ability::Dexterity)));
+    _controls.LBL_CON->setTextMessage(std::to_string(partyLeader->getEffectiveAbilityScore(Ability::Constitution)));
+    _controls.LBL_CON_MOD->setTextMessage(describeAbilityModifier(partyLeader->getEffectiveAbilityModifier(Ability::Constitution)));
+    _controls.LBL_INT->setTextMessage(std::to_string(partyLeader->getEffectiveAbilityScore(Ability::Intelligence)));
+    _controls.LBL_INT_MOD->setTextMessage(describeAbilityModifier(partyLeader->getEffectiveAbilityModifier(Ability::Intelligence)));
+    _controls.LBL_WIS->setTextMessage(std::to_string(partyLeader->getEffectiveAbilityScore(Ability::Wisdom)));
+    _controls.LBL_WIS_MOD->setTextMessage(describeAbilityModifier(partyLeader->getEffectiveAbilityModifier(Ability::Wisdom)));
+    _controls.LBL_CHA->setTextMessage(std::to_string(partyLeader->getEffectiveAbilityScore(Ability::Charisma)));
+    _controls.LBL_CHA_MOD->setTextMessage(describeAbilityModifier(partyLeader->getEffectiveAbilityModifier(Ability::Charisma)));
 
     SavingThrows savingThrows(attributes.getAggregateSavingThrows());
     _controls.LBL_FORTITUDE_STAT->setTextMessage(std::to_string(savingThrows.fortitude));
@@ -203,15 +203,19 @@ void CharacterMenu::refresh3D() {
 std::shared_ptr<ModelSceneNode> CharacterMenu::getSceneModel(ISceneGraph &sceneGraph) const {
     auto partyLeader = _game.party().getLeader();
 
-    std::shared_ptr<Creature> character = _game.newCreature(sceneGraph.name());
+    std::shared_ptr<Creature> character =
+        _game.newPresentationCreature(sceneGraph.name());
     character->setFacing(-glm::half_pi<float>());
     character->setAppearance(partyLeader->appearance());
 
     for (auto &item : partyLeader->equipment()) {
         switch (item.first) {
-        case InventorySlots::body:
-            character->equip(item.first, item.second);
+        case InventorySlots::body: {
+            auto previewItem = _game.newPresentationItem();
+            previewItem->clone(*item.second);
+            character->equip(item.first, previewItem);
             break;
+        }
         default:
             break;
         }

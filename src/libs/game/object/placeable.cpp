@@ -51,23 +51,28 @@ void Placeable::loadFromBlueprint(const std::string &resRef) {
     if (!utp) {
         return;
     }
-    deserialize(*utp);
+    deserialize(*utp, SerializedIdentityContext::templateResource(resRef));
 }
 
-void Placeable::deserialize(const resource::Gff &gff) {
+void Placeable::deserialize(
+    const resource::Gff &gff,
+    const SerializedIdentityContext &identityContext) {
     std::string templateRes;
-    if (!gff.has("ObjectId") && gff.readResRef(templateRes, "TemplateResRef")) {
+    if (!identityContext.isSerializedState() &&
+        gff.readResRef(templateRes, "TemplateResRef")) {
         if (auto utp = _services.resource.gffs.get(templateRes, ResType::Utp)) {
-            deserializeAll(*utp);
+            deserializeAll(*utp, SerializedIdentityContext::templateResource(templateRes));
         }
     }
-    deserializeAll(gff);
+    deserializeAll(gff, identityContext);
     loadAppearance();
     updateTransform();
 }
 
-void Placeable::deserializeAll(const resource::Gff &gff) {
-    deserializeRuntimeState(gff);
+void Placeable::deserializeAll(
+    const resource::Gff &gff,
+    const SerializedIdentityContext &identityContext) {
+    deserializeRuntimeState(gff, identityContext);
     if (gff.readString(_tag, "Tag")) {
         boost::to_lower(_tag);
     }
@@ -97,7 +102,7 @@ void Placeable::deserializeAll(const resource::Gff &gff) {
     }
     gff.readShort(_currentHitPoints, "CurrentHP");
     gff.readByte(_hardness, "Hardness");
-    if (gff.has("ObjectId") && gff.has("CurrentHP")) {
+    if (identityContext.isSerializedState() && gff.has("CurrentHP")) {
         _dead = _currentHitPoints <= 0;
     }
     gff.readByte(_fort, "Fort");
@@ -147,20 +152,11 @@ void Placeable::deserializeAll(const resource::Gff &gff) {
     gff.readBool(_isCorpse, "IsCorpse");
     gff.readBool(_commandable, "Commandable");
 
-    if (gff.has("ObjectId")) {
-        _items.clear();
-    }
-    for (const auto &itemGff : gff.getList("ItemList")) {
-        std::shared_ptr<Item> item = _game.newOwnedItem();
-        item->deserialize(*itemGff);
-        if (gff.has("ObjectId")) {
-            item->captureOwnerLocalSaveRecord(
-                *itemGff,
-                {SaveRecordOriginKind::PlaceableItem, std::to_string(_id)});
-        }
-        item->setDropable(true);
-        addItem(item);
-    }
+    deserializeOwnedItems(
+        gff,
+        identityContext,
+        SaveRecordOriginKind::PlaceableItem,
+        true);
 
     // FIXME: deserialize EffectList, ActionList
 }
@@ -186,7 +182,9 @@ void Placeable::loadAppearance() {
     }
 }
 
-void Placeable::damage(int amount, uint32_t damager) {
+void Placeable::damage(
+    int amount,
+    const std::shared_ptr<Object> &damager) {
     if (_dead || _plot || _notBlastable) {
         return;
     }
@@ -194,16 +192,18 @@ void Placeable::damage(int amount, uint32_t damager) {
         return;
     }
 
+    setLastDamager(damager);
+    uint32_t damagerId = getLastDamager();
     int currentHitPoints = _currentHitPoints > 0 ? _currentHitPoints : _hitPoints;
     if (amount == std::numeric_limits<int>::max()) {
         _currentHitPoints = isMinOneHP() ? 1 : 0;
     } else {
         int adjustedAmount = applyDamageToHitPoints(amount, currentHitPoints);
-        _game.floatingText().addDamage(*this, amount, adjustedAmount, damager);
+        _game.floatingText().addDamage(
+            *this, amount, adjustedAmount, damagerId);
     }
 
-    damager = damager ? damager : script::kObjectInvalid;
-    runDamagedScript(damager);
+    runDamagedScript();
 
     if (_currentHitPoints > 0) {
         return;
@@ -212,8 +212,8 @@ void Placeable::damage(int amount, uint32_t damager) {
     _dead = true;
     _locked = false;
     _open = true;
-    onOpen(damager);
-    runDeathScript(damager);
+    onOpen(damagerId);
+    runDeathScript();
 }
 
 void Placeable::onOpen(uint32_t triggererId) {
@@ -261,26 +261,26 @@ void Placeable::runOnInvDisturbed(uint32_t triggerrer, InventoryDisturbType type
          {script::ArgKind::InventoryDisturbType, Variable::ofInt(static_cast<int>(type))}});
 }
 
-void Placeable::runDamagedScript(uint32_t damagerId) {
+void Placeable::runDamagedScript() {
     if (_onDamaged.empty()) {
         return;
     }
     _game.scriptRunner().run(
         _onDamaged,
         {{script::ArgKind::Caller, Variable::ofObject(_id)},
-         {script::ArgKind::LastAttacker, Variable::ofObject(damagerId)},
-         {script::ArgKind::LastDamager, Variable::ofObject(damagerId)}});
+         {script::ArgKind::LastAttacker, Variable::ofObject(getLastDamager())},
+         {script::ArgKind::LastDamager, Variable::ofObject(getLastDamager())}});
 }
 
-void Placeable::runDeathScript(uint32_t damagerId) {
+void Placeable::runDeathScript() {
     if (_onDeath.empty()) {
         return;
     }
     _game.scriptRunner().run(
         _onDeath,
         {{script::ArgKind::Caller, Variable::ofObject(_id)},
-         {script::ArgKind::LastAttacker, Variable::ofObject(damagerId)},
-         {script::ArgKind::LastDamager, Variable::ofObject(damagerId)}});
+         {script::ArgKind::LastAttacker, Variable::ofObject(getLastDamager())},
+         {script::ArgKind::LastDamager, Variable::ofObject(getLastDamager())}});
 }
 
 void Placeable::updateTransform() {

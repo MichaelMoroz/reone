@@ -63,8 +63,9 @@ protected:
 
         _leader = _game->newCreature();
         _leader->setFaction(kLeaderFaction);
-        _game->party().addMember(0, _leader);
+        _game->party().addMember(kNpcPlayer, _leader);
         _game->party().setPlayer(_leader);
+        _game->party().setActualPlayer(_leader);
 
         _other = _game->newCreature();
         _other->setFaction(kOtherFaction);
@@ -132,7 +133,7 @@ TEST_F(CreatureInteractionTest, dead_creatures_are_never_hostile_regardless_of_d
     EXPECT_CALL(_engine.resourceModule().strings(), getText(_))
         .Times(AnyNumber())
         .WillRepeatedly(Return(""));
-    _other->damage(std::numeric_limits<int>::max(), 0);
+    _other->damage(std::numeric_limits<int>::max(), nullptr);
     ASSERT_TRUE(_other->isDead());
 
     EXPECT_FALSE(_module->isHostileToPartyLeader(*_other));

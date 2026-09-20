@@ -23,10 +23,18 @@
 #include "../fixtures/engine.h"
 
 #include "reone/game/action/closedoor.h"
+#include "reone/game/action/attackobject.h"
 #include "reone/game/action/movetopoint.h"
 #include "reone/game/action/opendoor.h"
+#include "reone/game/action/startconversation.h"
 #include "reone/game/action/unlockobject.h"
 #include "reone/game/equipmentrules.h"
+#include "reone/game/effect/abilityincrease.h"
+#include "reone/game/effect/bonusfeat.h"
+#include "reone/game/effect/invisibility.h"
+#include "reone/game/effect/trueseeing.h"
+#include "reone/game/d20/class.h"
+#include "reone/game/d20/classes.h"
 #include "reone/game/game.h"
 #include "reone/game/gui/areatransition.h"
 #include "reone/game/gui/actionbar.h"
@@ -82,6 +90,14 @@ using namespace reone;
 using namespace reone::game;
 using namespace reone::resource;
 using namespace testing;
+
+static SerializedIdentityContext testModuleIdentity() {
+    return SerializedIdentityContext::moduleGraph("test-module");
+}
+
+static SerializedIdentityContext testDetachedIdentity() {
+    return SerializedIdentityContext::detachedRecord("test-record");
+}
 
 namespace reone::game {
 
@@ -166,7 +182,7 @@ public:
     }
 
     static std::shared_ptr<Creature> participantCreature(DialogGUI &gui, const std::string &tag) {
-        return gui._participantByTag.at(tag).creature;
+        return gui._participantByTag.at(tag).creature.resolve();
     }
 
     static std::shared_ptr<graphics::Model> participantModel(DialogGUI &gui, const std::string &tag) {
@@ -257,6 +273,36 @@ std::pair<std::string, std::string> reone::game::TestGameModule::scheduledTransi
 void reone::game::TestGameModule::setActiveModuleArea(Game &game, std::shared_ptr<Area> area) {
     game._module = game.newModule();
     game._module->_area = std::move(area);
+}
+
+void reone::game::TestGameModule::setPerceptionRanges(
+    Creature &creature,
+    float sight,
+    float hearing) {
+
+    creature._perception.sightRange = sight;
+    creature._perception.hearingRange = hearing;
+}
+
+void reone::game::TestGameModule::setOnNotice(
+    Creature &creature,
+    std::string script) {
+
+    creature._onNotice = std::move(script);
+}
+
+void reone::game::TestGameModule::updatePerception(Area &area) {
+    area.doUpdatePerception();
+}
+
+void reone::game::TestGameModule::prepareFadeArrival(Game &game) {
+    game._fadeArrival = game._globalFade.beginArrival();
+    game._fadeArrivalModule = game._module;
+    game._globalFade.finishLoading(game._fadeArrival);
+}
+
+void reone::game::TestGameModule::setDialogGUI(Game &game, std::unique_ptr<DialogGUI> dialog) {
+    game._dialog = std::move(dialog);
 }
 
 std::pair<glm::vec3, float> reone::game::TestGameModule::resolveModuleEntry(
@@ -422,6 +468,82 @@ std::shared_ptr<TwoDA> makePlotTable() {
     builder.row({"dialog_plot", "1000"});
     builder.row({"explicit_plot", "500"});
     return std::shared_ptr<TwoDA>(builder.build());
+}
+
+struct VitalityTestClass {
+    NiceMock<MockStrings> strings;
+    NiceMock<MockTwoDAs> twoDas;
+    Classes classes {strings, twoDas};
+    std::shared_ptr<CreatureClass> clazz;
+
+    explicit VitalityTestClass(int hitDie) {
+        TwoDA::Builder skills;
+        auto skillsTable = std::shared_ptr<TwoDA>(skills.build());
+        TwoDA::Builder saves;
+        saves.columns({"level", "fortsave", "refsave", "willsave"})
+            .row({"1", "0", "0", "0"});
+        auto savesTable = std::shared_ptr<TwoDA>(saves.build());
+        TwoDA::Builder attacks;
+        attacks.columns({"bab"}).row({"0"});
+        auto attacksTable = std::shared_ptr<TwoDA>(attacks.build());
+
+        ON_CALL(twoDas, get("skills")).WillByDefault(Return(skillsTable));
+        ON_CALL(twoDas, get("save")).WillByDefault(Return(savesTable));
+        ON_CALL(twoDas, get("attack")).WillByDefault(Return(attacksTable));
+
+        TwoDA::Builder classesTable;
+        classesTable.columns({
+            "name", "description", "hitdie", "skillpointbase",
+            "str", "dex", "con", "int", "wis", "cha",
+            "skillstable", "savingthrowtable", "attackbonustable",
+            "featstable", "featgain", "spellgaintable"})
+            .row({
+                "0", "0", std::to_string(hitDie), "0",
+                "10", "10", "10", "10", "10", "10",
+                "unused", "save", "attack", "", "", ""});
+
+        clazz = std::make_shared<CreatureClass>(
+            ClassType::Soldier, classes, strings, twoDas);
+        clazz->load(*classesTable.build(), 0);
+    }
+};
+
+std::shared_ptr<Gff> vitalityCreatureRecord(
+    int baseHitPoints,
+    int serializedCurrentHitPoints,
+    int cachedMaxHitPoints,
+    int constitution,
+    int level,
+    std::vector<FeatType> feats = {},
+    bool isPC = false) {
+    auto classRecord = Gff::Builder()
+                           .field(Gff::Field::newInt(
+                               "Class", static_cast<int>(ClassType::Soldier)))
+                           .field(Gff::Field::newShort("ClassLevel", level))
+                           .build();
+    std::vector<std::shared_ptr<Gff>> featRecords;
+    for (auto feat : feats) {
+        featRecords.push_back(
+            Gff::Builder()
+                .field(Gff::Field::newWord(
+                    "Feat", static_cast<uint16_t>(feat)))
+                .build());
+    }
+    return Gff::Builder()
+        .field(Gff::Field::newDword("ObjectId", 82))
+        .field(Gff::Field::newShort("HitPoints", baseHitPoints))
+        .field(Gff::Field::newShort(
+            "CurrentHitPoints", serializedCurrentHitPoints))
+        .field(Gff::Field::newShort("MaxHitPoints", cachedMaxHitPoints))
+        .field(Gff::Field::newByte("IsPC", isPC))
+        .field(Gff::Field::newByte("Con", constitution))
+        .field(Gff::Field::newList("ClassList", {classRecord}))
+        .field(Gff::Field::newList("FeatList", std::move(featRecords)))
+        .field(Gff::Field::newDword("Appearance_Type", 0))
+        .field(Gff::Field::newWord("SoundSetFile", 0xffff))
+        .field(Gff::Field::newByte("BodyBag", 0xff))
+        .field(Gff::Field::newByte("PerceptionRange", 0xff))
+        .build();
 }
 
 std::shared_ptr<Gff> makeJournalWithPlotXP() {
@@ -609,7 +731,7 @@ std::shared_ptr<Door> makeTransitionDoor(
                    .field(Gff::Field::newCExoLocString("TransitionDestin", -1, "Destination Area"))
                    .build();
     auto door = game.newDoor();
-    door->deserialize(*gff);
+    door->deserialize(*gff, SerializedIdentityContext::templateResource());
     return door;
 }
 
@@ -629,7 +751,7 @@ std::shared_ptr<Waypoint> addEntryWaypoint(
                    .field(Gff::Field::newFloat("YOrientation", glm::cos(facing)))
                    .build();
     auto waypoint = game.newWaypoint();
-    waypoint->deserialize(*gff);
+    waypoint->deserialize(*gff, SerializedIdentityContext::templateResource());
     area->add(waypoint);
     return waypoint;
 }
@@ -668,7 +790,7 @@ std::shared_ptr<Door> makePlainDoor(
                    .field(Gff::Field::newFloat("Z", position.z))
                    .build();
     auto door = game.newDoor();
-    door->deserialize(*gff);
+    door->deserialize(*gff, SerializedIdentityContext::templateResource());
     return door;
 }
 
@@ -693,7 +815,7 @@ std::shared_ptr<Creature> makeMovingCreature(
                    .field(Gff::Field::newResRef("ScriptOnBlocked", std::move(onBlocked)))
                    .build();
     auto creature = game.newCreature();
-    creature->deserialize(*gff);
+    creature->deserialize(*gff, SerializedIdentityContext::templateResource());
     return creature;
 }
 
@@ -773,7 +895,7 @@ std::shared_ptr<Item> makeItem(Game &game, std::string tag, int baseItem, int st
                    .field(Gff::Field::newWord("StackSize", stackSize))
                    .build();
     auto item = game.newItem();
-    item->deserialize(*gff);
+    item->deserialize(*gff, SerializedIdentityContext::templateResource());
     item->setDropable(true);
     return item;
 }
@@ -871,15 +993,16 @@ TEST(Creature, restores_the_creation_script_flag_only_from_a_saved_record) {
     // A blueprint says nothing about creation, so the creature still owes its
     // OnSpawn. A save record is authoritative either way.
     auto blueprint = game.newCreature();
-    blueprint->deserialize(*record(std::nullopt));
+    blueprint->deserialize(
+        *record(std::nullopt), SerializedIdentityContext::templateResource());
     EXPECT_FALSE(blueprint->spawnScriptFired());
 
     auto restoredSpawned = game.newCreature();
-    restoredSpawned->deserialize(*record(1));
+    restoredSpawned->deserialize(*record(1), testModuleIdentity());
     EXPECT_TRUE(restoredSpawned->spawnScriptFired());
 
     auto restoredUnspawned = game.newCreature();
-    restoredUnspawned->deserialize(*record(0));
+    restoredUnspawned->deserialize(*record(0), testModuleIdentity());
     EXPECT_FALSE(restoredUnspawned->spawnScriptFired());
 }
 
@@ -930,8 +1053,7 @@ TEST(EquipmentStack, reequips_a_restored_offhand_lightsaber_after_inventory_merg
     ASSERT_TRUE(actor->equip(InventorySlots::leftWeapon, offHand));
     actor->addItem(inventorySaber);
 
-    actor->unequip(offHand);
-    actor->addItem(offHand);
+    ASSERT_TRUE(actor->moveEquippedItemTo(offHand, *actor));
 
     ASSERT_EQ(1u, actor->items().size());
     ASSERT_EQ(inventorySaber, actor->items().front());
@@ -1352,7 +1474,8 @@ TEST(DialogGUI, should_hold_mixed_stunt_assignment_and_restore_on_drop_or_teardo
         engine.services().audio,
         engine.services().resource);
     auto modelNode = graph.newModel(*stuntModel, scene::ModelUsage::Creature);
-    auto player = std::make_shared<TestCreature>(1, "player", game, engine.services());
+    auto player = game.newObject<TestCreature>(
+        "player", game, engine.services());
     player->setSceneNode(modelNode);
     player->setPosition(glm::vec3(1.0f, 2.0f, 3.0f));
     player->setFacing(0.75f);
@@ -1500,7 +1623,9 @@ struct DialogAnimScene {
         uint32_t id,
         std::string tag,
         const std::shared_ptr<graphics::Model> &model) {
-        auto creature = std::make_shared<TestCreature>(id, std::move(tag), game, engine.services());
+        (void)id;
+        auto creature = game.newObject<TestCreature>(
+            std::move(tag), game, engine.services());
         creature->setSceneNode(graph.newModel(*model, scene::ModelUsage::Creature));
         return creature;
     }
@@ -2061,7 +2186,7 @@ TEST(UnlockObjectAction, should_complete_safely_for_missing_destroyed_or_unsuppo
 
     auto actor = game.newCreature();
     auto destroyed = game.newPlaceable();
-    destroyed->damage(std::numeric_limits<int>::max(), actor->id());
+    destroyed->damage(std::numeric_limits<int>::max(), actor);
     destroyed->setLocked(true);
 
     auto missingAction = game.newAction<UnlockObjectAction>(std::shared_ptr<Object>());
@@ -2455,7 +2580,10 @@ TEST(GUIListScale, should_change_row_density_without_changing_the_list_viewport)
 }
 
 TEST(GUIExternalRendererGeometry, should_scale_action_icons_to_their_button_rect) {
-    TestEngine &engine = testEngine();
+    // The throwing uniform callback captures this test's stack. Do not leave it
+    // on the shared engine for later loading/fade presentation to invoke.
+    TestEngine engine;
+    engine.init();
     StubConsole console;
     Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
     auto gui = std::make_shared<NiceMock<gui::MockGUI>>();
@@ -2549,7 +2677,8 @@ TEST(TransitionPresentationPortals, should_expose_authored_transitions_without_t
         "authored_module",
         "authored_waypoint",
         "",
-        "Authored Destination"));
+        "Authored Destination"),
+        SerializedIdentityContext::templateResource());
     trigger->setPosition(glm::vec3(4.0f, 0.0f, 0.0f));
     area->add(trigger);
     area->add(leader);
@@ -2606,11 +2735,17 @@ TEST(TransitionPresentationPortals, should_ignore_non_transitions_and_expose_emp
     auto area = game.newArea();
 
     auto nonTransition = game.newTrigger();
-    nonTransition->deserialize(*makeTransitionTriggerGff("", "", "", "Not a transition"));
+    nonTransition->deserialize(
+        *makeTransitionTriggerGff("", "", "", "Not a transition"),
+        SerializedIdentityContext::templateResource());
     auto emptyDestination = game.newTrigger();
-    emptyDestination->deserialize(*makeTransitionTriggerGff("empty_module", "empty_waypoint", "", ""));
+    emptyDestination->deserialize(
+        *makeTransitionTriggerGff("empty_module", "empty_waypoint", "", ""),
+        SerializedIdentityContext::templateResource());
     auto missingDestination = game.newTrigger();
-    missingDestination->deserialize(*makeTransitionTriggerGff("missing_module", "missing_waypoint"));
+    missingDestination->deserialize(
+        *makeTransitionTriggerGff("missing_module", "missing_waypoint"),
+        SerializedIdentityContext::templateResource());
     area->add(nonTransition);
     area->add(emptyDestination);
     area->add(missingDestination);
@@ -2685,7 +2820,9 @@ TEST(LinkedDoorTransition, should_destroy_generated_threshold_with_its_source_do
     game.party().setPlayer(leader);
 
     auto authored = game.newTrigger();
-    authored->deserialize(*Gff::Builder().build());
+    authored->deserialize(
+        *Gff::Builder().build(),
+        SerializedIdentityContext::templateResource());
     area->add(authored);
     area->add(door);
     area->add(leader);
@@ -2755,7 +2892,7 @@ TEST(LinkedDoorTransition, should_rearm_after_party_unload_and_exit_reentry) {
 
     // Module transitions cache Area/Trigger instances. Party unload removes
     // the old tenant, and loading the party again models revisiting the module.
-    area->unloadParty();
+    area->retirePartyAreaRuntime();
     EXPECT_FALSE(trigger->isTenant(leader));
     area->loadParty(glm::vec3(0.0f, -1.0f, 0.0f), 0.0f);
     game.scheduleModuleTransition("", "");
@@ -2791,6 +2928,7 @@ TEST(LinkedDoorTransition, should_reject_npcs_and_companions) {
     npc->setPosition(glm::vec3(1.9f, -1.0f, 0.0f));
     game.party().addMember(kNpcPlayer, leader);
     game.party().setPlayer(leader);
+    game.party().addAvailableMember(0, companion);
     game.party().addMember(0, companion);
     area->add(door);
     area->add(leader);
@@ -2827,7 +2965,9 @@ struct ModuleTransitionActivatorFixture : TestWithParam<GameID> {
         testSceneGraph(engine);
         area = game.newArea();
         trigger = game.newTrigger();
-        trigger->deserialize(*makeTransitionTriggerGff("ebo_m12aa", "K_EBN_RAMP_ENTRANCE"));
+        trigger->deserialize(
+            *makeTransitionTriggerGff("ebo_m12aa", "K_EBN_RAMP_ENTRANCE"),
+            SerializedIdentityContext::templateResource());
         trigger->setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
         area->add(trigger);
     }
@@ -2884,6 +3024,7 @@ TEST_P(ModuleTransitionActivatorFixture, controlled_companion_may_transition) {
     auto companion = creatureBelowTrigger();
     game.party().addMember(kNpcPlayer, player);
     game.party().setActualPlayer(player);
+    game.party().addAvailableMember(0, companion);
     game.party().setControlledMember(0, companion);
 
     ASSERT_EQ(game.party().getLeader(), companion);
@@ -2901,6 +3042,7 @@ TEST_P(ModuleTransitionActivatorFixture, player_character_may_transition_while_a
     area->add(companion);
     game.party().addMember(kNpcPlayer, player);
     game.party().setActualPlayer(player);
+    game.party().addAvailableMember(0, companion);
     game.party().setControlledMember(0, companion);
 
     ASSERT_NE(game.party().getLeader(), player);
@@ -2917,6 +3059,7 @@ TEST_P(ModuleTransitionActivatorFixture, following_companion_may_not_transition)
     game.party().addMember(kNpcPlayer, player);
     game.party().setPlayer(player);
     game.party().setActualPlayer(player);
+    game.party().addAvailableMember(0, follower);
     game.party().addMember(0, follower);
 
     ASSERT_TRUE(stepIn(follower));
@@ -2951,6 +3094,7 @@ TEST_P(ModuleTransitionActivatorFixture, follower_does_not_bounce_the_party_back
     game.party().addMember(kNpcPlayer, player);
     game.party().setPlayer(player);
     game.party().setActualPlayer(player);
+    game.party().addAvailableMember(0, follower);
     game.party().addMember(0, follower);
 
     ASSERT_TRUE(stepIn(follower));
@@ -3081,7 +3225,7 @@ TEST(LinkedDoorTransition, should_preserve_reusable_authored_type1_trigger_lifec
         "authored_waypoint",
         "override_transition");
     auto trigger = game.newTrigger();
-    trigger->deserialize(*gff);
+    trigger->deserialize(*gff, SerializedIdentityContext::templateResource());
     auto area = game.newArea();
     // The subject here is the trigger's own enter/exit/re-enter lifecycle, so
     // the mover is the party leader, who may activate a module transition.
@@ -3202,7 +3346,7 @@ std::shared_ptr<Door> makeLifecycleDoor(
                    .field(Gff::Field::newByte("OpenState", static_cast<uint8_t>(openState)))
                    .build();
     auto door = game.newDoor();
-    door->deserialize(*gff);
+    door->deserialize(*gff, SerializedIdentityContext::templateResource());
     return door;
 }
 
@@ -3573,6 +3717,7 @@ TEST(Party, should_award_xp_to_pool_and_sync_current_members) {
     auto companion = game.newCreature();
     game.party().addMember(kNpcPlayer, player);
     game.party().setPlayer(player);
+    game.party().addAvailableMember(0, companion);
     game.party().addMember(0, companion);
 
     game.party().awardXP(100, XPSource::Plot);
@@ -3593,6 +3738,7 @@ TEST(Party, should_set_xp_pool_and_sync_current_members) {
     auto companion = game.newCreature();
     game.party().addMember(kNpcPlayer, player);
     game.party().setPlayer(player);
+    game.party().addAvailableMember(0, companion);
     game.party().addMember(0, companion);
 
     game.party().setXP(250);
@@ -3635,6 +3781,7 @@ TEST(Party, should_restore_saved_pool_after_reset_and_sync_late_member) {
     game.party().setXP(750);
 
     auto lateCompanion = game.newCreature();
+    game.party().addAvailableMember(0, lateCompanion);
     game.party().addMember(0, lateCompanion);
 
     EXPECT_EQ(game.party().xp(), 750);
@@ -3653,6 +3800,7 @@ TEST(Party, should_sync_member_added_after_xp_gain) {
     game.party().awardXP(100, XPSource::Combat);
 
     auto latecomer = game.newCreature();
+    game.party().addAvailableMember(0, latecomer);
     game.party().addMember(0, latecomer);
 
     EXPECT_EQ(latecomer->xp(), 100);
@@ -3686,6 +3834,7 @@ TEST(XPStatusSummary, should_accumulate_each_positive_party_award_once) {
     auto companion = game.newCreature();
     game.party().addMember(kNpcPlayer, player);
     game.party().setPlayer(player);
+    game.party().addAvailableMember(0, companion);
     game.party().addMember(0, companion);
 
     game.party().awardXP(100, XPSource::Plot);
@@ -3724,6 +3873,7 @@ TEST(XPStatusSummary, should_preserve_negative_accounting_without_received_notif
     auto companion = game.newCreature();
     game.party().addMember(kNpcPlayer, player);
     game.party().setPlayer(player);
+    game.party().addAvailableMember(0, companion);
     game.party().addMember(0, companion);
     game.party().setXP(100);
 
@@ -4001,6 +4151,7 @@ TEST(Party, should_route_item_acquired_by_companion_to_shared_player_inventory) 
     auto companion = game.newCreature();
     game.party().addMember(kNpcPlayer, player);
     game.party().setPlayer(player);
+    game.party().addAvailableMember(0, companion);
     game.party().addMember(0, companion);
 
     auto receiver = game.party().sharedInventoryReceiver(companion);
@@ -4081,13 +4232,14 @@ TEST(Object, should_restore_saved_appearance_after_unequipping_loaded_disguise) 
                            .field(Gff::Field::newList("Equip_ItemList", {makeDisguiseItemGff(2)}))
                            .build();
     auto creature = game.newCreature();
-    creature->deserialize(*creatureGff);
+    creature->deserialize(
+        *creatureGff, SerializedIdentityContext::templateResource());
 
     ASSERT_EQ(creature->appearance(), 2);
     auto disguise = creature->getEquippedItem(InventorySlots::body);
     ASSERT_TRUE(disguise);
 
-    creature->unequip(disguise);
+    ASSERT_TRUE(creature->takeEquippedItem(disguise));
 
     EXPECT_EQ(creature->appearance(), 1);
 }
@@ -4193,6 +4345,47 @@ struct BlockedDoorFixtureBase {
     }
 };
 
+struct VisibilityFixture {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game {GameID::KotOR, "", engine.options(), engine.services(), console};
+    std::shared_ptr<Area> area;
+    std::shared_ptr<Creature> observer;
+    std::shared_ptr<Creature> target;
+
+    VisibilityFixture() {
+        game.initLocalServices();
+        testSceneGraph(engine);
+        area = game.newArea();
+        TestGameModule::setActiveModuleArea(game, area);
+        observer = makeMovingCreature(game, engine);
+        target = makeMovingCreature(game, engine);
+        observer->setMaxHitPoints(10);
+        observer->setCurrentHitPoints(10);
+        target->setMaxHitPoints(10);
+        target->setCurrentHitPoints(10);
+        observer->setPosition(glm::vec3(0.0f));
+        target->setPosition(glm::vec3(1.0f, 0.0f, 0.0f));
+        TestGameModule::setPerceptionRanges(*observer, 10.0f, 10.0f);
+        TestGameModule::setPerceptionRanges(*target, 10.0f, 10.0f);
+        TestGameModule::setOnNotice(*observer, "c5_notice");
+        area->add(observer);
+        area->add(target);
+
+        scriptRunCounts()["c5_notice"] = 0;
+        EXPECT_CALL(engine.resourceModule().scripts(), get("c5_notice"))
+            .Times(AnyNumber())
+            .WillRepeatedly(Invoke([](const std::string &key) {
+                ++scriptRunCounts()[key];
+                return std::shared_ptr<script::ScriptProgram>();
+            }));
+    }
+
+    int noticeRuns() const {
+        return scriptRunCounts()["c5_notice"];
+    }
+};
+
 // A door that swaps its collision the instant it is told to open: makePlainDoor
 // gives it no model, so there is no opening animation to wait on.
 struct BlockedDoorFixture : BlockedDoorFixtureBase {
@@ -4234,6 +4427,77 @@ private:
 const glm::vec3 kFarDestination {0.0f, 10.0f, 0.0f};
 
 } // namespace
+
+TEST(CombatVisibility, invisibility_refreshes_sight_and_notices_only_transitions) {
+    VisibilityFixture fixture;
+    TestGameModule::updatePerception(*fixture.area);
+    ASSERT_TRUE(fixture.observer->perception().sees(fixture.target->id()));
+    EXPECT_EQ(1, fixture.noticeRuns());
+
+    auto first = std::make_shared<InvisibilityEffect>(InvisibilityType::Normal);
+    fixture.target->applyEffect(first, DurationType::Permanent);
+    EXPECT_FALSE(fixture.observer->perception().sees(fixture.target->id()));
+    EXPECT_TRUE(fixture.observer->perception().hears(fixture.target->id()));
+    EXPECT_EQ(2, fixture.noticeRuns());
+
+    auto second = std::make_shared<InvisibilityEffect>(InvisibilityType::Normal);
+    fixture.target->applyEffect(second, DurationType::Permanent);
+    EXPECT_EQ(2, fixture.noticeRuns());
+    fixture.target->removeEffect(first);
+    EXPECT_EQ(2, fixture.noticeRuns());
+
+    fixture.target->removeEffect(second);
+    EXPECT_TRUE(fixture.observer->perception().sees(fixture.target->id()));
+    EXPECT_EQ(3, fixture.noticeRuns());
+}
+
+TEST(CombatVisibility, true_seeing_gain_and_loss_refresh_effective_sight) {
+    VisibilityFixture fixture;
+    auto invisibility = std::make_shared<InvisibilityEffect>(
+        InvisibilityType::Improved);
+    fixture.target->applyEffect(invisibility, DurationType::Permanent);
+    TestGameModule::updatePerception(*fixture.area);
+    ASSERT_FALSE(fixture.observer->perception().sees(fixture.target->id()));
+    int before = fixture.noticeRuns();
+
+    auto trueSeeing = std::make_shared<TrueSeeingEffect>();
+    fixture.observer->applyEffect(trueSeeing, DurationType::Permanent);
+    EXPECT_TRUE(fixture.observer->perception().sees(fixture.target->id()));
+    EXPECT_EQ(before + 1, fixture.noticeRuns());
+
+    fixture.observer->removeEffect(trueSeeing);
+    EXPECT_FALSE(fixture.observer->perception().sees(fixture.target->id()));
+    EXPECT_EQ(before + 2, fixture.noticeRuns());
+}
+
+TEST(CombatVisibility, becoming_invisible_cancels_exact_hostile_actions) {
+    VisibilityFixture fixture;
+    TestGameModule::updatePerception(*fixture.area);
+    auto action = fixture.game.newAction<AttackObjectAction>(fixture.target);
+    fixture.observer->addAction(action);
+    ASSERT_EQ(1u, fixture.observer->actions().size());
+
+    fixture.target->applyEffect(
+        std::make_shared<InvisibilityEffect>(InvisibilityType::Normal),
+        DurationType::Permanent);
+
+    EXPECT_TRUE(action->isCancelled());
+    EXPECT_TRUE(action->isCompleted());
+    EXPECT_TRUE(fixture.observer->actions().empty());
+}
+
+TEST(CombatVisibility, retired_subject_does_not_remain_perceived) {
+    VisibilityFixture fixture;
+    TestGameModule::updatePerception(*fixture.area);
+    ASSERT_TRUE(fixture.observer->perception().sees(fixture.target->id()));
+    auto strongStorage = fixture.target;
+
+    fixture.game.destroyRuntimeObjectGraph(fixture.target);
+
+    ASSERT_TRUE(strongStorage);
+    EXPECT_FALSE(strongStorage->isRuntimeLive());
+    EXPECT_FALSE(fixture.observer->perception().sees(strongStorage->id()));
+}
 
 TEST(CreatureBlockedByDoor, should_record_the_door_that_obstructs_navigation) {
     BlockedDoorFixture fixture;
@@ -4362,6 +4626,7 @@ TEST(CreatureBlockedByDoor, should_run_the_script_authored_on_each_creature) {
     BlockedDoorFixture fixture;
     auto npc = fixture.addCreature("k_def_blocked01");
     auto companion = fixture.addCreature("k_hen_blocked01");
+    fixture.game.party().addAvailableMember(0, companion);
     fixture.game.party().addMember(0, companion);
 
     // Each creature runs what its own template names. The engine picks neither
@@ -4709,7 +4974,8 @@ TEST(OpenDoorAction, still_refuses_a_locked_door_and_fires_on_fail_to_open) {
     auto gff = Gff::Builder()
                    .field(Gff::Field::newResRef("OnFailToOpen", "door_on_fail"))
                    .build();
-    fixture.door->deserialize(*gff);
+    fixture.door->deserialize(
+        *gff, SerializedIdentityContext::templateResource());
     fixture.countScriptRuns("door_on_fail");
     npc->setPosition(fixture.door->position());
 
@@ -4778,7 +5044,7 @@ void makeHumanoid(TestCreature &creature, TestEngine &engine) {
                    .field(Gff::Field::newByte("BodyBag", 0xff))
                    .field(Gff::Field::newByte("PerceptionRange", 0xff))
                    .build();
-    creature.deserialize(*gff);
+    creature.deserialize(*gff, SerializedIdentityContext::templateResource());
     ASSERT_EQ(Creature::ModelType::Character, creature.modelType());
 }
 
@@ -4867,17 +5133,18 @@ TEST(OverlayAnimation, should_leave_the_action_queue_alone) {
     Game game(GameID::TSL, "", engine.options(), engine.services(), console);
     OverlayFixture fixture;
     setUpOverlay(fixture, engine);
-    TestCreature creature(1, "test", game, engine.services());
-    creature.setSceneNode(fixture.node);
-    creature.setMovementType(Creature::MovementType::Run);
+    auto creature = game.newObject<TestCreature>(
+        "test", game, engine.services());
+    creature->setSceneNode(fixture.node);
+    creature->setMovementType(Creature::MovementType::Run);
     auto pending = game.newAction<PlayAnimationAction>(AnimationType::LoopingPause, 1.0f, 0.0f);
-    creature.addAction(pending);
-    ASSERT_EQ(1u, creature.actions().size());
+    creature->addAction(pending);
+    ASSERT_EQ(1u, creature->actions().size());
 
-    creature.playOverlayAnimation(AnimationType::FireForgetDiveRoll);
+    creature->playOverlayAnimation(AnimationType::FireForgetDiveRoll);
 
-    EXPECT_EQ(1u, creature.actions().size());
-    EXPECT_EQ(pending, creature.getCurrentAction());
+    EXPECT_EQ(1u, creature->actions().size());
+    EXPECT_EQ(pending, creature->getCurrentAction());
     EXPECT_FALSE(pending->isCompleted());
 }
 
@@ -4983,22 +5250,27 @@ TEST(SavedRuntimeState, restores_explicit_object_identity_and_allocator_cursors)
     engine.init();
     StubConsole console;
     Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems"))
+        .WillRepeatedly(Return(makeBaseItemsTable()));
 
     auto ifo = Gff::Builder()
                    .field(Gff::Field::newDword("Mod_NextObjId0", 700))
                    .field(Gff::Field::newDword64("Mod_Effect_NxtId", 900))
                    .build();
-    game.prepareSavedRuntimeNamespace(*ifo);
+    game.prepareSavedRuntimeNamespace(*ifo, testModuleIdentity());
 
     auto saved = Gff::Builder()
                      .field(Gff::Field::newDword("ObjectId", 650))
                      .build();
-    auto item = game.newItem(*saved);
-    item->deserializeRuntimeState(*saved);
+    auto item = game.newItem(*saved, testModuleIdentity());
+    item->deserializeRuntimeState(
+        *saved,
+        SerializedIdentityContext::moduleGraph("test-module"));
 
-    EXPECT_EQ(650u, item->id());
-    EXPECT_EQ(item, game.getObjectById(650));
-    EXPECT_EQ(700u, game.newItem()->id());
+    EXPECT_EQ(700u, item->id());
+    EXPECT_EQ(item, game.getObjectBySavedId(650));
+    EXPECT_FALSE(game.getObjectById(650));
+    EXPECT_EQ(701u, game.newItem()->id());
     EXPECT_EQ(900u, game.nextEffectId());
 }
 
@@ -5011,13 +5283,13 @@ TEST(SavedRuntimeState, accepts_retail_zero_object_cursor_but_rejects_reserved_n
     auto unavailableCursor = Gff::Builder()
                                  .field(Gff::Field::newDword("Mod_NextObjId0", 0))
                                  .build();
-    EXPECT_NO_THROW(game.prepareSavedRuntimeNamespace(*unavailableCursor));
+    EXPECT_NO_THROW(game.prepareSavedRuntimeNamespace(*unavailableCursor, testModuleIdentity()));
     EXPECT_EQ(2u, game.newItem()->id());
 
     auto reservedCursor = Gff::Builder()
                               .field(Gff::Field::newDword("Mod_NextObjId0", 1))
                               .build();
-    EXPECT_THROW(game.prepareSavedRuntimeNamespace(*reservedCursor), ValidationException);
+    EXPECT_THROW(game.prepareSavedRuntimeNamespace(*reservedCursor, testModuleIdentity()), ValidationException);
 }
 
 TEST(SavedRuntimeState, accepts_retail_low_ids_but_rejects_invalid_and_duplicate_object_ids) {
@@ -5025,6 +5297,8 @@ TEST(SavedRuntimeState, accepts_retail_low_ids_but_rejects_invalid_and_duplicate
     engine.init();
     StubConsole console;
     Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems"))
+        .WillRepeatedly(Return(makeBaseItemsTable()));
 
     auto reserved = Gff::Builder()
                         .field(Gff::Field::newDword("ObjectId", 1))
@@ -5036,26 +5310,93 @@ TEST(SavedRuntimeState, accepts_retail_low_ids_but_rejects_invalid_and_duplicate
                      .field(Gff::Field::newDword("ObjectId", 42))
                      .build();
 
-    EXPECT_NO_THROW(game.newItem(*reserved));
-    EXPECT_THROW(game.newItem(*reserved), ValidationException);
-    EXPECT_THROW(game.newItem(*invalid), ValidationException);
-    EXPECT_NO_THROW(game.newItem(*saved));
-    EXPECT_THROW(game.newItem(*saved), ValidationException);
+    EXPECT_NO_THROW(game.newItem(*reserved, testModuleIdentity()));
+    EXPECT_THROW(game.newItem(*reserved, testModuleIdentity()), ValidationException);
+    EXPECT_THROW(game.newItem(*invalid, testModuleIdentity()), ValidationException);
+    EXPECT_NO_THROW(game.newItem(*saved, testModuleIdentity()));
+    EXPECT_THROW(game.newItem(*saved, testModuleIdentity()), ValidationException);
 }
 
-TEST(SavedRuntimeState, gives_structural_module_a_transient_runtime_identity) {
+TEST(SavedRuntimeState, maps_structural_module_through_contextual_retail_slot_zero) {
     TestEngine engine;
     engine.init();
     StubConsole console;
     Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
 
     auto module = game.newSavedModule();
-    auto area = game.newSavedArea(0);
+    TestGameModule::registerSavedModuleReferenceTarget(
+        game, module, testModuleIdentity());
 
     EXPECT_EQ(2u, module->id());
-    EXPECT_EQ(0u, area->id());
+    EXPECT_EQ(module, game.getObjectBySavedId(kSavedRuntimeModuleObjectId));
     EXPECT_EQ(module, game.getObjectById(module->id()));
-    EXPECT_EQ(2u, engine.gameModule().objectRegistrySize(game));
+    EXPECT_FALSE(module->serializedObjectIdentity());
+    EXPECT_EQ(1u, engine.gameModule().objectRegistrySize(game));
+
+    const size_t registrySize = engine.gameModule().objectRegistrySize(game);
+    const uint32_t nextObjectId = TestGameModule::nextObjectId(game);
+
+    EXPECT_THROW(
+        game.newSavedArea(kSavedRuntimeModuleObjectId, testModuleIdentity()),
+        ValidationException);
+    EXPECT_EQ(registrySize, engine.gameModule().objectRegistrySize(game));
+    EXPECT_EQ(nextObjectId, TestGameModule::nextObjectId(game));
+    EXPECT_EQ(module, game.getObjectBySavedId(kSavedRuntimeModuleObjectId));
+}
+
+TEST(SavedRuntimeState, rejects_an_owned_record_in_the_structural_module_slot) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto area = Gff::Builder()
+                    .field(Gff::Field::newDword(
+                        "ObjectId", kSavedRuntimeModuleObjectId))
+                    .build();
+    auto ifo = Gff::Builder()
+                   .field(Gff::Field::newList("Mod_Area_list", {area}))
+                   .build();
+    game.prepareSavedRuntimeNamespace(*ifo, testModuleIdentity());
+    auto module = game.newSavedModule();
+
+    EXPECT_THROW(
+        TestGameModule::registerSavedModuleReferenceTarget(
+            game, module, testModuleIdentity()),
+        ValidationException);
+    EXPECT_FALSE(game.getObjectBySavedId(kSavedRuntimeModuleObjectId));
+}
+
+TEST(SavedRuntimeState, stages_structural_module_identity_with_runtime_publication) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto occupied = game.newSavedModule();
+    TestGameModule::registerSavedModuleReferenceTarget(
+        game, occupied, testModuleIdentity());
+    const size_t registrySize = engine.gameModule().objectRegistrySize(game);
+    const uint32_t nextObjectId = TestGameModule::nextObjectId(game);
+    std::shared_ptr<Module> candidate;
+    std::vector<std::shared_ptr<Object>> noObsolete;
+
+    EXPECT_THROW(
+        game.replaceRuntimeObjectGraph(
+            noObsolete,
+            [&]() {
+                candidate = game.newSavedModule();
+                TestGameModule::registerSavedModuleReferenceTarget(
+                    game, candidate, testModuleIdentity());
+            },
+            []() noexcept {}),
+        ValidationException);
+
+    ASSERT_TRUE(candidate);
+    EXPECT_FALSE(candidate->isRuntimeLive());
+    EXPECT_EQ(registrySize, engine.gameModule().objectRegistrySize(game));
+    EXPECT_EQ(nextObjectId, TestGameModule::nextObjectId(game));
+    EXPECT_EQ(occupied, game.getObjectBySavedId(kSavedRuntimeModuleObjectId));
 }
 
 TEST(SavedRuntimeState, reserves_the_actual_retail_graph_before_owner_local_allocations) {
@@ -5063,16 +5404,27 @@ TEST(SavedRuntimeState, reserves_the_actual_retail_graph_before_owner_local_allo
     engine.init();
     StubConsole console;
     Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    NiceMock<scene::MockSceneGraph> sceneGraph;
+    ON_CALL(engine.sceneModule().graphs(), get(_))
+        .WillByDefault(ReturnRef(sceneGraph));
+    TwoDA::Builder placeables;
+    placeables.columns({"modelname"});
+    placeables.row({""});
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("placeables"))
+        .WillRepeatedly(Return(std::shared_ptr<TwoDA>(placeables.build())));
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems"))
+        .WillRepeatedly(Return(makeBaseItemsTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
 
     auto area = Gff::Builder()
-                    .field(Gff::Field::newDword("ObjectId", 0))
+                    .field(Gff::Field::newDword("ObjectId", 1))
                     .build();
     auto ifo = Gff::Builder()
                    .field(Gff::Field::newDword("Mod_NextObjId0", 0))
                    .field(Gff::Field::newList("Mod_Area_list", {area}))
                    .build();
     auto trigger = Gff::Builder()
-                       .field(Gff::Field::newDword("ObjectId", 1))
+                       .field(Gff::Field::newDword("ObjectId", 2))
                        .build();
     auto placeable = Gff::Builder()
                          .field(Gff::Field::newDword("ObjectId", 50))
@@ -5082,26 +5434,29 @@ TEST(SavedRuntimeState, reserves_the_actual_retail_graph_before_owner_local_allo
                    .field(Gff::Field::newList("Placeable List", {placeable}))
                    .build();
 
-    game.prepareSavedRuntimeNamespace(*ifo);
-    game.reserveSavedObjectIds(*git);
+    game.prepareSavedRuntimeNamespace(*ifo, testModuleIdentity());
+    game.reserveSavedObjectIds(*git, testModuleIdentity(), SerializedGraphRoot::AreaGit);
 
-    for (uint32_t expected = 2; expected < 50; ++expected) {
+    for (uint32_t expected = 3; expected < 50; ++expected) {
         EXPECT_EQ(expected, game.newItem()->id());
     }
     EXPECT_EQ(51u, game.newItem()->id());
 
     auto module = game.newSavedModule();
-    auto savedArea = game.newSavedArea(0);
-    auto savedTrigger = game.newTrigger(*trigger);
-    auto savedPlaceable = game.newPlaceable(*placeable);
+    auto savedArea = game.newSavedArea(1, testModuleIdentity());
+    auto savedTrigger = game.newTrigger(*trigger, testModuleIdentity());
+    auto savedPlaceable = game.newPlaceable(*placeable, testModuleIdentity());
 
     EXPECT_EQ(52u, module->id());
-    EXPECT_EQ(0u, savedArea->id());
-    EXPECT_EQ(1u, savedTrigger->id());
-    EXPECT_EQ(50u, savedPlaceable->id());
+    EXPECT_EQ(53u, savedArea->id());
+    EXPECT_EQ(54u, savedTrigger->id());
+    EXPECT_EQ(55u, savedPlaceable->id());
+    EXPECT_EQ(savedArea, game.getObjectBySavedId(1));
+    EXPECT_EQ(savedTrigger, game.getObjectBySavedId(2));
+    EXPECT_EQ(savedPlaceable, game.getObjectBySavedId(50));
     EXPECT_EQ(module, game.getObjectById(module->id()));
-    EXPECT_EQ(53u, engine.gameModule().objectRegistrySize(game));
-    EXPECT_THROW(game.newPlaceable(*placeable), ValidationException);
+    EXPECT_EQ(52u, engine.gameModule().objectRegistrySize(game));
+    EXPECT_THROW(game.newPlaceable(*placeable, testModuleIdentity()), ValidationException);
 }
 
 TEST(SavedRuntimeState, restores_swvar_boolean_and_numeric_locals) {
@@ -5131,7 +5486,9 @@ TEST(SavedRuntimeState, restores_swvar_boolean_and_numeric_locals) {
                      .build();
 
     auto item = game.newItem();
-    item->deserializeRuntimeState(*saved);
+    item->deserializeRuntimeState(
+        *saved,
+        SerializedIdentityContext::moduleGraph("test-module"));
 
     EXPECT_TRUE(item->getLocalBoolean(31));
     EXPECT_TRUE(item->getLocalBoolean(34));
@@ -5145,6 +5502,8 @@ TEST(SavedRuntimeState, resolves_references_only_after_saved_graph_construction)
     engine.init();
     StubConsole console;
     Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems"))
+        .WillRepeatedly(Return(makeBaseItemsTable()));
 
     auto sourceGff = Gff::Builder()
                          .field(Gff::Field::newDword("ObjectId", 80))
@@ -5154,12 +5513,16 @@ TEST(SavedRuntimeState, resolves_references_only_after_saved_graph_construction)
     auto targetGff = Gff::Builder()
                          .field(Gff::Field::newDword("ObjectId", 81))
                          .build();
-    auto source = game.newItem(*sourceGff);
-    source->deserializeRuntimeState(*sourceGff);
+    auto source = game.newItem(*sourceGff, testModuleIdentity());
+    source->deserializeRuntimeState(
+        *sourceGff,
+        SerializedIdentityContext::moduleGraph("test-module"));
     EXPECT_FALSE(source->savedReference("CreatorId"));
 
-    auto target = game.newItem(*targetGff);
-    target->deserializeRuntimeState(*targetGff);
+    auto target = game.newItem(*targetGff, testModuleIdentity());
+    target->deserializeRuntimeState(
+        *targetGff,
+        SerializedIdentityContext::moduleGraph("test-module"));
     game.resolveSavedObjectReferences();
 
     EXPECT_EQ(target, source->savedReference("CreatorId"));
@@ -5171,6 +5534,8 @@ TEST(SavedRuntimeState, preserves_and_binds_saved_encounter_runtime_state) {
     engine.init();
     StubConsole console;
     Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems"))
+        .WillRepeatedly(Return(makeBaseItemsTable()));
 
     auto areaObject = Gff::Builder()
                           .field(Gff::Field::newDword("AreaObject", 90))
@@ -5195,12 +5560,11 @@ TEST(SavedRuntimeState, preserves_and_binds_saved_encounter_runtime_state) {
                      .field(Gff::Field::newByte("Started", 1))
                      .build();
 
-    auto encounter = game.newEncounter(*saved);
-    encounter->deserialize(*saved);
+    auto encounter = game.newEncounter(*saved, testModuleIdentity());
     auto targetGff = Gff::Builder()
                          .field(Gff::Field::newDword("ObjectId", 90))
                          .build();
-    auto target = game.newItem(*targetGff);
+    auto target = game.newItem(*targetGff, testModuleIdentity());
     game.resolveSavedObjectReferences();
 
     const auto &state = encounter->savedRuntimeState();
@@ -5223,6 +5587,233 @@ TEST(SavedRuntimeState, preserves_and_binds_saved_encounter_runtime_state) {
     EXPECT_EQ(target, encounter->savedAreaObject(0));
 }
 
+TEST(CreatureVitality, restores_full_health_from_base_axis_with_permanent_bonuses) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    VitalityTestClass soldier(10);
+    EXPECT_CALL(engine.gameModule().classes(), get(ClassType::Soldier))
+        .WillRepeatedly(Return(soldier.clazz));
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(
+        static_cast<MockPortraits &>(engine.services().game.portraits),
+        getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto record = vitalityCreatureRecord(
+        30, 30, 36, 12, 3, {FeatType::Toughness});
+    auto creature = game.newCreature(
+        *record, SerializedIdentityContext::templateResource("end_trask"));
+
+    EXPECT_EQ(30, creature->hitPoints());
+    EXPECT_EQ(36, creature->maxHitPoints());
+    EXPECT_EQ(36, creature->currentHitPoints());
+    EXPECT_EQ(30, creature->serializedCurrentHitPoints());
+}
+
+TEST(CreatureVitality, restores_and_serializes_genuine_damage_on_base_axis) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    VitalityTestClass soldier(10);
+    EXPECT_CALL(engine.gameModule().classes(), get(ClassType::Soldier))
+        .WillRepeatedly(Return(soldier.clazz));
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(
+        static_cast<MockPortraits &>(engine.services().game.portraits),
+        getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto record = vitalityCreatureRecord(
+        30, 26, 36, 12, 3, {FeatType::Toughness});
+    auto creature = game.newCreature(*record, testModuleIdentity());
+
+    EXPECT_EQ(36, creature->maxHitPoints());
+    EXPECT_EQ(32, creature->currentHitPoints());
+    EXPECT_EQ(26, creature->serializedCurrentHitPoints());
+}
+
+TEST(CreatureVitality, restores_k1_and_k2_companion_witnesses_at_full_health) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game k1(GameID::KotOR, "", engine.options(), engine.services(), console);
+    Game k2(GameID::TSL, "", engine.options(), engine.services(), console);
+    VitalityTestClass soldier(10);
+    EXPECT_CALL(engine.gameModule().classes(), get(ClassType::Soldier))
+        .WillRepeatedly(Return(soldier.clazz));
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(
+        static_cast<MockPortraits &>(engine.services().game.portraits),
+        getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto carth = k1.newCreature(
+        *vitalityCreatureRecord(40, 40, 44, 12, 4),
+        SerializedIdentityContext::templateResource("p_carth"));
+    auto mission = k1.newCreature(
+        *vitalityCreatureRecord(18, 18, 21, 12, 3),
+        SerializedIdentityContext::templateResource("p_mission"));
+    auto atton = k2.newCreature(
+        *vitalityCreatureRecord(18, 18, 24, 14, 3),
+        SerializedIdentityContext::templateResource("p_atton"));
+
+    EXPECT_EQ(44, carth->currentHitPoints());
+    EXPECT_EQ(44, carth->maxHitPoints());
+    EXPECT_EQ(21, mission->currentHitPoints());
+    EXPECT_EQ(21, mission->maxHitPoints());
+    EXPECT_EQ(24, atton->currentHitPoints());
+    EXPECT_EQ(24, atton->maxHitPoints());
+}
+
+TEST(CreatureVitality, temporary_combat_stats_do_not_change_permanent_vitality) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game k1(GameID::KotOR, "", engine.options(), engine.services(), console);
+    Game k2(GameID::TSL, "", engine.options(), engine.services(), console);
+    VitalityTestClass soldier(10);
+    EXPECT_CALL(engine.gameModule().classes(), get(ClassType::Soldier))
+        .WillRepeatedly(Return(soldier.clazz));
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(
+        static_cast<MockPortraits &>(engine.services().game.portraits),
+        getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto trask = k1.newCreature(
+        *vitalityCreatureRecord(
+            30, 30, 36, 12, 3, {FeatType::Toughness}),
+        SerializedIdentityContext::templateResource("end_trask"));
+    auto carth = k1.newCreature(
+        *vitalityCreatureRecord(40, 40, 44, 12, 4),
+        SerializedIdentityContext::templateResource("p_carth"));
+    auto atton = k2.newCreature(
+        *vitalityCreatureRecord(18, 18, 24, 14, 3),
+        SerializedIdentityContext::templateResource("p_atton"));
+
+    auto traskCon = std::make_shared<AbilityIncreaseEffect>(
+        Ability::Constitution, 4);
+    auto carthToughness = std::make_shared<BonusFeatEffect>(
+        FeatType::MasterToughness);
+    auto attonCon = std::make_shared<AbilityIncreaseEffect>(
+        Ability::Constitution, 4);
+    trask->applyEffect(traskCon, DurationType::Temporary, 30.0f);
+    carth->applyEffect(carthToughness, DurationType::Temporary, 30.0f);
+    atton->applyEffect(attonCon, DurationType::Temporary, 30.0f);
+
+    EXPECT_EQ(12, trask->attributes().getAbilityScore(Ability::Constitution));
+    EXPECT_EQ(16, trask->getEffectiveAbilityScore(Ability::Constitution));
+    EXPECT_EQ(36, trask->maxHitPoints());
+    EXPECT_EQ(30, trask->serializedCurrentHitPoints());
+    EXPECT_FALSE(carth->attributes().hasFeat(FeatType::MasterToughness));
+    EXPECT_TRUE(carth->hasEffectiveFeat(FeatType::MasterToughness));
+    EXPECT_EQ(44, carth->maxHitPoints());
+    EXPECT_EQ(40, carth->serializedCurrentHitPoints());
+    EXPECT_EQ(14, atton->attributes().getAbilityScore(Ability::Constitution));
+    EXPECT_EQ(18, atton->getEffectiveAbilityScore(Ability::Constitution));
+    EXPECT_EQ(24, atton->maxHitPoints());
+    EXPECT_EQ(18, atton->serializedCurrentHitPoints());
+
+    trask->removeEffect(traskCon);
+    carth->removeEffect(carthToughness);
+    atton->removeEffect(attonCon);
+    EXPECT_EQ(12, trask->getEffectiveAbilityScore(Ability::Constitution));
+    EXPECT_FALSE(carth->hasEffectiveFeat(FeatType::MasterToughness));
+    EXPECT_EQ(14, atton->getEffectiveAbilityScore(Ability::Constitution));
+    EXPECT_EQ(36, trask->maxHitPoints());
+    EXPECT_EQ(44, carth->maxHitPoints());
+    EXPECT_EQ(24, atton->maxHitPoints());
+}
+
+TEST(CreatureVitality, permanent_bonus_changes_preserve_damage) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    VitalityTestClass soldier(10);
+    EXPECT_CALL(engine.gameModule().classes(), get(ClassType::Soldier))
+        .WillRepeatedly(Return(soldier.clazz));
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(
+        static_cast<MockPortraits &>(engine.services().game.portraits),
+        getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto record = vitalityCreatureRecord(
+        30, 26, 36, 12, 3, {FeatType::Toughness});
+    auto creature = game.newCreature(*record, testModuleIdentity());
+    ASSERT_EQ(32, creature->currentHitPoints());
+
+    creature->attributes().setAbilityScore(Ability::Constitution, 14);
+    creature->recalculatePermanentVitality();
+    EXPECT_EQ(39, creature->maxHitPoints());
+    EXPECT_EQ(35, creature->currentHitPoints());
+    EXPECT_EQ(26, creature->serializedCurrentHitPoints());
+
+    creature->attributes().addFeat(FeatType::MasterToughness);
+    creature->recalculatePermanentVitality();
+    EXPECT_EQ(42, creature->maxHitPoints());
+    EXPECT_EQ(38, creature->currentHitPoints());
+    EXPECT_EQ(26, creature->serializedCurrentHitPoints());
+}
+
+TEST(CreatureVitality, generated_character_starts_at_full_derived_vitality) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    VitalityTestClass soldier(10);
+    auto creature = game.newCreature();
+    creature->attributes().addClassLevels(soldier.clazz.get(), 1);
+    creature->attributes().setAbilityScore(Ability::Constitution, 12);
+
+    creature->initializeGeneratedVitality();
+
+    EXPECT_EQ(10, creature->hitPoints());
+    EXPECT_EQ(11, creature->maxHitPoints());
+    EXPECT_EQ(11, creature->currentHitPoints());
+    EXPECT_EQ(10, creature->serializedCurrentHitPoints());
+}
+
+TEST(CreatureVitality, dead_serialized_creature_is_not_healed_by_derivation) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    VitalityTestClass soldier(10);
+    EXPECT_CALL(engine.gameModule().classes(), get(ClassType::Soldier))
+        .WillRepeatedly(Return(soldier.clazz));
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(
+        static_cast<MockPortraits &>(engine.services().game.portraits),
+        getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto record = vitalityCreatureRecord(
+        30, 0, 36, 12, 3, {FeatType::Toughness});
+    auto creature = game.newCreature(*record, testModuleIdentity());
+
+    EXPECT_EQ(36, creature->maxHitPoints());
+    EXPECT_EQ(0, creature->currentHitPoints());
+    EXPECT_EQ(0, creature->serializedCurrentHitPoints());
+    EXPECT_TRUE(creature->isDead());
+}
+
 TEST(SavedRuntimeState, restores_saved_creature_death_from_current_hit_points) {
     TestEngine engine;
     engine.init();
@@ -5242,8 +5833,7 @@ TEST(SavedRuntimeState, restores_saved_creature_death_from_current_hit_points) {
                      .field(Gff::Field::newByte("BodyBag", 0xff))
                      .field(Gff::Field::newByte("PerceptionRange", 0xff))
                      .build();
-    auto creature = game.newCreature(*saved);
-    creature->deserialize(*saved);
+    auto creature = game.newCreature(*saved, testModuleIdentity());
 
     EXPECT_EQ(0, creature->currentHitPoints());
     EXPECT_TRUE(creature->isDead());
@@ -5273,26 +5863,19 @@ TEST(SavedRuntimeState, restores_retail_player_death_threshold_without_clamping_
     };
 
     auto incapacitatedState = makeSavedPlayer(0, 0x7fffffff);
-    auto incapacitated = game.newCreature(*incapacitatedState);
-    incapacitated->deserialize(*incapacitatedState);
+    auto incapacitated = game.newCreature(*incapacitatedState, testModuleIdentity());
     EXPECT_EQ(0, incapacitated->currentHitPoints());
     EXPECT_TRUE(incapacitated->isPC());
     EXPECT_FALSE(incapacitated->isDead());
 
-    incapacitated->setMaxHitPoints(36);
-    incapacitated->restorePrimaryPlayerHitPoints();
-    EXPECT_EQ(36, incapacitated->currentHitPoints());
-    EXPECT_FALSE(incapacitated->isDead());
-
     auto deadState = makeSavedPlayer(-10, 0x7ffffffe);
-    auto dead = game.newCreature(*deadState);
-    dead->deserialize(*deadState);
+    auto dead = game.newCreature(*deadState, testModuleIdentity());
     EXPECT_EQ(-10, dead->currentHitPoints());
     EXPECT_TRUE(dead->isDead());
 }
 
 
-TEST(SavedRuntimeState, k1_zero_hp_pc_is_dead_until_primary_player_publication) {
+TEST(SavedRuntimeState, k1_zero_hp_pc_remains_dead_during_primary_player_publication) {
     TestEngine engine;
     engine.init();
     StubConsole console;
@@ -5313,18 +5896,12 @@ TEST(SavedRuntimeState, k1_zero_hp_pc_is_dead_until_primary_player_publication) 
                      .field(Gff::Field::newByte("BodyBag", 0xff))
                      .field(Gff::Field::newByte("PerceptionRange", 0xff))
                      .build();
-    auto player = game.newCreature(*saved);
-    player->deserialize(*saved);
+    auto player = game.newCreature(*saved, testModuleIdentity());
 
-    // K1 does not share K2's -10 incapacitation threshold. The saved creature
-    // remains exact until the coordinator identifies it as the primary player.
+    // K1 does not share K2's -10 incapacitation threshold. Publication must
+    // preserve the saved state rather than healing the primary player.
     EXPECT_EQ(0, player->currentHitPoints());
     EXPECT_TRUE(player->isDead());
-
-    player->restorePrimaryPlayerHitPoints();
-
-    EXPECT_EQ(12, player->currentHitPoints());
-    EXPECT_FALSE(player->isDead());
 }
 TEST(SavedRuntimeState, keeps_min_one_hp_creature_alive_when_saved_at_zero) {
     TestEngine engine;
@@ -5346,8 +5923,7 @@ TEST(SavedRuntimeState, keeps_min_one_hp_creature_alive_when_saved_at_zero) {
                      .field(Gff::Field::newByte("BodyBag", 0xff))
                      .field(Gff::Field::newByte("PerceptionRange", 0xff))
                      .build();
-    auto creature = game.newCreature(*saved);
-    creature->deserialize(*saved);
+    auto creature = game.newCreature(*saved, testModuleIdentity());
 
     EXPECT_EQ(1, creature->currentHitPoints());
     EXPECT_FALSE(creature->isDead());
@@ -5382,9 +5958,9 @@ TEST(SavedRuntimeState, detached_creatures_keep_nested_item_ids_owner_scoped) {
                                 .build();
 
     auto first = game.newCreature();
-    first->deserialize(*detachedCreature);
+    first->deserialize(*detachedCreature, testDetachedIdentity());
     auto second = game.newCreature();
-    EXPECT_NO_THROW(second->deserialize(*detachedCreature));
+    EXPECT_NO_THROW(second->deserialize(*detachedCreature, testDetachedIdentity()));
 
     auto firstItem = first->getEquippedItem(InventorySlots::body);
     auto secondItem = second->getEquippedItem(InventorySlots::body);
@@ -5427,10 +6003,16 @@ TEST(SavedRuntimeState, primary_health_publication_does_not_recover_unrelated_pc
                    .field(Gff::Field::newList("Mod_PlayerList", {modulePlayer}))
                    .build();
     auto pc = makePlayer(0x7fffffff, 36, true);
+    auto availableNpc = Gff::Builder()
+                            .field(Gff::Field::newByte("PT_NPC_AVAIL", 1))
+                            .field(Gff::Field::newByte("PT_NPC_SELECT", 1))
+                            .build();
     auto partyTable = Gff::Builder()
                           .field(Gff::Field::newInt("PT_CONTROLLED_NP", 0))
                           .field(Gff::Field::newByte("PT_NUM_MEMBERS", 0))
                           .field(Gff::Field::newList("PT_MEMBERS", {}))
+                          .field(Gff::Field::newList(
+                              "PT_AVAIL_NPCS", {availableNpc}))
                           .build();
 
     TestGameModule::publishPartyRuntimeState(game, *ifo, partyTable, pc);
@@ -5441,10 +6023,43 @@ TEST(SavedRuntimeState, primary_health_publication_does_not_recover_unrelated_pc
     ASSERT_TRUE(actual);
     EXPECT_NE(moduleRuntime, actual);
     EXPECT_EQ(0, moduleRuntime->currentHitPoints());
-    EXPECT_EQ(36, actual->currentHitPoints());
+    EXPECT_EQ(0, actual->currentHitPoints());
     EXPECT_FALSE(actual->isDead());
 }
-TEST(SavedRuntimeState, keeps_authoritative_owner_items_local_to_their_owner_namespace) {
+
+TEST(CreatureVitality, primary_player_publication_preserves_saved_damage) {
+    TestEngine engine;
+    engine.init();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    VitalityTestClass soldier(10);
+    EXPECT_CALL(engine.gameModule().classes(), get(ClassType::Soldier))
+        .WillRepeatedly(Return(soldier.clazz));
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .WillRepeatedly(Return(makeAppearanceTable()));
+    EXPECT_CALL(engine.resourceModule().models(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(
+        static_cast<MockPortraits &>(engine.services().game.portraits),
+        getTextureByAppearance(_))
+        .Times(AnyNumber());
+
+    auto savedPlayer = vitalityCreatureRecord(
+        30, 26, 36, 12, 3, {FeatType::Toughness}, true);
+    auto ifo = Gff::Builder()
+                   .field(Gff::Field::newList(
+                       "Mod_PlayerList", {savedPlayer}))
+                   .build();
+
+    TestGameModule::publishPartyRuntimeState(
+        game, *ifo, nullptr, nullptr);
+
+    auto player = game.party().actualPlayer();
+    ASSERT_TRUE(player);
+    EXPECT_EQ(36, player->maxHitPoints());
+    EXPECT_EQ(32, player->currentHitPoints());
+    EXPECT_EQ(26, player->serializedCurrentHitPoints());
+}
+TEST(SavedRuntimeState, keeps_module_owned_items_authoritative_and_detached_inventory_local) {
     TestEngine engine;
     engine.init();
     StubConsole console;
@@ -5486,6 +6101,7 @@ TEST(SavedRuntimeState, keeps_authoritative_owner_items_local_to_their_owner_nam
     ASSERT_TRUE(equipped);
     EXPECT_NE(15u, equipped->id());
     EXPECT_FALSE(game.getObjectById(15));
+    EXPECT_EQ(equipped, game.getObjectBySavedId(15));
 
     auto inventory = Gff::Builder()
                          .field(Gff::Field::newList("ItemList", {savedLongsword}))
@@ -5497,14 +6113,12 @@ TEST(SavedRuntimeState, keeps_authoritative_owner_items_local_to_their_owner_nam
     EXPECT_NE(15u, carried->id());
     EXPECT_NE(equipped->id(), carried->id());
     EXPECT_FALSE(game.getObjectById(15));
+    EXPECT_EQ(equipped, game.getObjectBySavedId(15));
 
     auto savedWorldItem = Gff::Builder()
                               .field(Gff::Field::newDword("ObjectId", 15))
                               .build();
-    auto worldItem = game.newItem(*savedWorldItem);
-    EXPECT_EQ(15u, worldItem->id());
-    EXPECT_EQ(worldItem, game.getObjectById(15));
-    EXPECT_THROW(game.newItem(*savedWorldItem), ValidationException);
+    EXPECT_THROW(game.newItem(*savedWorldItem, testModuleIdentity()), ValidationException);
 }
 
 namespace {
@@ -5624,7 +6238,8 @@ struct HeartbeatFixture {
 
         auto placeable = game.newPlaceable();
         placeable->deserialize(*makeHeartbeatPlaceableGff(
-            std::move(tag), std::move(onHeartbeat), std::move(onUsed)));
+            std::move(tag), std::move(onHeartbeat), std::move(onUsed)),
+            SerializedIdentityContext::templateResource());
         area->add(placeable);
         return placeable;
     }
@@ -5863,9 +6478,10 @@ namespace {
 struct StopMovementFixture {
     TestEngine &engine = testEngine();
     StubConsole console;
-    Game game {GameID::KotOR, "", engine.options(), engine.services(), console};
+    Game game;
 
-    StopMovementFixture() {
+    explicit StopMovementFixture(GameID gameId = GameID::KotOR) :
+        game(gameId, "", engine.options(), engine.services(), console) {
         testSceneGraph(engine);
     }
 
@@ -5876,6 +6492,10 @@ struct StopMovementFixture {
         TestGameModule::loadModulePlayer(*game.module());
 
         auto leader = makeMovingCreature(game, engine);
+        // This navigation-only template omits vitality. Keep this fixture alive
+        // when exercising the real Object::update/action path.
+        leader->setMaxHitPoints(10);
+        leader->setCurrentHitPoints(10);
         game.party().addMember(kNpcPlayer, leader);
         game.party().setPlayer(leader);
         area->add(leader);
@@ -5884,6 +6504,283 @@ struct StopMovementFixture {
 };
 
 } // namespace
+
+TEST(GlobalFadeArrival, module_update_settles_readiness_once_after_initial_occupancy) {
+    StopMovementFixture fixture;
+    fixture.bringUpModule();
+    auto &game = fixture.game;
+    TestGameModule::prepareFadeArrival(game);
+    game.globalFade().request(GlobalFade::Direction::In, 3, 1.5f, {}, GlobalFade::Source::Script);
+    game.openInGame();
+    game.update(.1f);
+    EXPECT_FALSE(game.globalFade().arrivalPending());
+    game.update(.9f);
+    EXPECT_NEAR(.5f, game.globalFade().opacity(), 1e-6f);
+    game.globalFade().request(GlobalFade::Direction::Out);
+    game.update(1);
+    EXPECT_FLOAT_EQ(1, game.globalFade().opacity());
+}
+
+TEST(GlobalFadeArrival, first_occupancy_admits_dialogue_before_default_reveal) {
+    StopMovementFixture fixture;
+    auto leader = fixture.bringUpModule();
+    auto &game = fixture.game;
+    game.initLocalServices();
+    auto trigger = game.newTrigger();
+    trigger->deserialize(*makeTransitionTriggerGff("", "", "fade_occupancy"), SerializedIdentityContext::templateResource());
+    game.module()->area()->add(trigger);
+    auto action = game.newAction<StartConversationAction>(nullptr, "missing");
+    EXPECT_CALL(fixture.engine.resourceModule().scripts(), get("fade_occupancy"))
+        .WillOnce(Invoke([&](const std::string &) {
+            leader->addAction(action);
+            return makeInertScript("fade_occupancy");
+        }));
+    TestGameModule::prepareFadeArrival(game);
+    game.openInGame();
+    game.update(.1f);
+    EXPECT_TRUE(trigger->isTenant(leader));
+    EXPECT_FALSE(game.globalFade().arrivalPending());
+    EXPECT_TRUE(game.globalFade().dialogPending());
+    EXPECT_TRUE(game.globalFade().heldForDialog());
+    EXPECT_FLOAT_EQ(1, game.globalFade().opacity());
+    game.update(.1f); // current failed action consumes H on the next object tick
+    EXPECT_FALSE(game.globalFade().heldForDialog());
+    EXPECT_FLOAT_EQ(.9f, game.globalFade().opacity());
+    game.update(1);
+    EXPECT_FLOAT_EQ(0, game.globalFade().opacity());
+}
+
+TEST(GlobalFadeArrival, replacement_during_occupancy_cannot_settle_the_new_module) {
+    StopMovementFixture fixture;
+    fixture.bringUpModule();
+    auto &game = fixture.game;
+    game.initLocalServices();
+    auto trigger = game.newTrigger();
+    trigger->deserialize(*makeTransitionTriggerGff("", "", "fade_replace"), SerializedIdentityContext::templateResource());
+    game.module()->area()->add(trigger);
+    EXPECT_CALL(fixture.engine.resourceModule().scripts(), get("fade_replace"))
+        .WillOnce(Invoke([&](const std::string &) {
+            fixture.bringUpModule();
+            TestGameModule::prepareFadeArrival(game);
+            return makeInertScript("fade_replace");
+        }));
+    TestGameModule::prepareFadeArrival(game);
+    game.openInGame();
+    game.update(.1f);
+    EXPECT_TRUE(game.globalFade().arrivalPending());
+    EXPECT_FLOAT_EQ(1, game.globalFade().opacity());
+    game.update(.1f);
+    EXPECT_FALSE(game.globalFade().arrivalPending());
+    game.update(1.5f);
+    EXPECT_FLOAT_EQ(0, game.globalFade().opacity());
+}
+
+namespace {
+
+// Keep the real Game -> action -> Conversation entry/reply path. Only GUI
+// controls and camera presentation are replaced, as in the conversation tests.
+class AdmissionDialogGUI : public DialogGUI {
+public:
+    AdmissionDialogGUI(Game &game, ServicesView &services) : DialogGUI(game, services) {
+        _gui = std::make_shared<NiceMock<gui::MockGUI>>();
+    }
+
+    void update(float dt) override { Conversation::update(dt); }
+    void chooseReply() { pickReply(0); }
+    int entries {0};
+
+private:
+    void onStart() override {}
+    void onFinish() override {}
+    void onLoadEntry() override { ++entries; }
+    void onEntryEnded() override {}
+    void setMessage(std::string) override {}
+    void setReplyLines(std::vector<std::string>) override {}
+};
+
+class GlobalFadeAdmission : public TestWithParam<GameID> {
+protected:
+    void SetUp() override {
+        fixture = std::make_unique<StopMovementFixture>(GetParam());
+        leader = fixture->bringUpModule();
+        auto &game = fixture->game;
+        game.initLocalServices();
+        auto gui = std::make_unique<AdmissionDialogGUI>(game, fixture->engine.services());
+        conversation = gui.get();
+        TestGameModule::setDialogGUI(game, std::move(gui));
+        dialog = std::make_shared<resource::Dialog>();
+        dialog->resRef = "fade_admission";
+        Dialog::EntryReplyLink link;
+        link.index = 0;
+        dialog->startEntries.push_back(link);
+        dialog->entries.resize(1);
+        dialog->entries[0].text = "A valid conversation";
+        dialog->entries[0].delay = 100;
+        dialog->entries[0].replies.push_back(link);
+        dialog->replies.resize(1);
+        dialog->replies[0].text = "Finish";
+        EXPECT_CALL(fixture->engine.resourceModule().gffs(), get("fade_admission", ResType::Dlg))
+            .Times(AnyNumber()).WillRepeatedly(Return(Gff::Builder().build()));
+        EXPECT_CALL(static_cast<resource::MockDialogs &>(fixture->engine.services().resource.dialogs), get("fade_admission"))
+            .Times(AnyNumber()).WillRepeatedly(Return(dialog));
+        game.openInGame();
+        game.globalFade().request(GlobalFade::Direction::Out);
+        game.globalFade().holdForDialog();
+        if (game.isTSL()) {
+            game.globalFade().lockUntilScript();
+        }
+    }
+
+    std::shared_ptr<StartConversationAction> queue(const std::shared_ptr<Creature> &actor) {
+        auto action = fixture->game.newAction<StartConversationAction>(
+            leader, "fade_admission", false, ConversationType::Cinematic, true);
+        actor->addAction(action);
+        return action;
+    }
+
+    std::unique_ptr<StopMovementFixture> fixture;
+    std::shared_ptr<Creature> leader;
+    std::shared_ptr<resource::Dialog> dialog;
+    AdmissionDialogGUI *conversation {nullptr};
+};
+
+INSTANTIATE_TEST_SUITE_P(BothGames, GlobalFadeAdmission,
+                        Values(GameID::KotOR, GameID::TSL));
+
+} // namespace
+
+TEST_P(GlobalFadeAdmission, destruction_retires_admission_while_storage_is_retained) {
+    auto &game = fixture->game;
+    auto area = game.module()->area();
+    auto actor = makeMovingCreature(game, fixture->engine);
+    area->add(actor);
+    auto action = queue(actor);
+    ASSERT_TRUE(game.globalFade().dialogPending());
+    ASSERT_TRUE(game.globalFade().heldForDialog());
+    ASSERT_FLOAT_EQ(1, game.globalFade().opacity());
+
+    area->destroyObject(*actor);
+    game.update(.1f); // destruction drains before any actor action executes
+    ASSERT_FALSE(game.getObjectById(actor->id()));
+    EXPECT_FALSE(actor->isRuntimeLive());
+    EXPECT_EQ(area->objects().end(), std::find(area->objects().begin(), area->objects().end(), actor));
+    EXPECT_TRUE(action->isCancelled());
+    // Storage can still retain the cancelled action; lifetime is logical.
+    EXPECT_EQ(action, actor->getCurrentAction());
+    EXPECT_EQ(0, conversation->entries);
+    EXPECT_FALSE(game.globalFade().dialogPending());
+    EXPECT_FALSE(game.globalFade().heldForDialog());
+    EXPECT_EQ(game.isTSL(), game.globalFade().locked());
+    EXPECT_FLOAT_EQ(game.isTSL() ? 1 : .9f, game.globalFade().opacity());
+    game.update(1);
+    EXPECT_FLOAT_EQ(game.isTSL() ? 1 : 0, game.globalFade().opacity());
+
+    auto replacement = queue(leader);
+    game.update(.1f);
+    EXPECT_FALSE(replacement->isCancelled());
+    ASSERT_EQ(1, conversation->entries);
+    EXPECT_TRUE(game.isConversationActive());
+    EXPECT_TRUE(leader->isInConversation());
+    // A rejected locked reveal is not replayed by the subsequent conversation.
+    EXPECT_FLOAT_EQ(game.isTSL() ? 1 : 0, game.globalFade().opacity());
+    game.globalFade().request(GlobalFade::Direction::In, 0, 1, {}, GlobalFade::Source::Script);
+    game.update(1);
+    EXPECT_FALSE(game.globalFade().locked());
+    EXPECT_FLOAT_EQ(0, game.globalFade().opacity());
+    conversation->chooseReply();
+    EXPECT_FALSE(game.isConversationActive());
+    EXPECT_FALSE(game.globalFade().dialogPending());
+}
+
+TEST_P(GlobalFadeAdmission, stale_destruction_and_cancellation_preserve_replacement_hold) {
+    auto &game = fixture->game;
+    auto area = game.module()->area();
+    auto actor = makeMovingCreature(game, fixture->engine);
+    area->add(actor);
+    auto stale = queue(actor);
+    dialog->entries[0].script = "fade_new_hold";
+    EXPECT_CALL(fixture->engine.resourceModule().scripts(), get("fade_new_hold"))
+        .WillOnce(Invoke([&](const std::string &) {
+            game.globalFade().holdForDialog();
+            game.globalFade().request(GlobalFade::Direction::Out);
+            return makeInertScript("fade_new_hold");
+        }));
+    // Same DLG resource, new accepted session; its entry establishes a new H.
+    game.startDialog(leader, "fade_admission");
+    ASSERT_EQ(1, conversation->entries);
+    area->destroyObject(*actor);
+    game.update(.1f);
+    EXPECT_TRUE(stale->isCancelled());
+    stale->cancel(stale, *actor); // a late duplicate callback also cannot consume H
+    EXPECT_TRUE(game.globalFade().heldForDialog());
+    EXPECT_TRUE(game.globalFade().dialogPending());
+    EXPECT_FLOAT_EQ(1, game.globalFade().opacity());
+    EXPECT_EQ(game.isTSL(), game.globalFade().locked());
+    conversation->chooseReply();
+    EXPECT_FALSE(game.globalFade().heldForDialog());
+    EXPECT_FALSE(game.globalFade().dialogPending());
+    EXPECT_FLOAT_EQ(game.isTSL() ? 1 : .9f, game.globalFade().opacity());
+}
+
+TEST_P(GlobalFadeAdmission, same_area_party_reposition_preserves_queued_conversation) {
+    auto &game = fixture->game;
+    auto area = game.module()->area();
+    auto action = queue(leader);
+    area->repositionParty(leader->position(), leader->getFacing());
+    ASSERT_EQ(leader, game.getObjectById(leader->id()));
+    ASSERT_EQ(action, leader->getCurrentAction());
+    EXPECT_FALSE(action->isCancelled());
+    EXPECT_TRUE(game.globalFade().heldForDialog());
+    EXPECT_TRUE(game.globalFade().dialogPending());
+    EXPECT_FLOAT_EQ(1, game.globalFade().opacity());
+    EXPECT_EQ(0, conversation->entries);
+
+    game.update(.1f);
+    EXPECT_FALSE(action->isCancelled());
+    EXPECT_TRUE(action->isCompleted());
+    ASSERT_EQ(1, conversation->entries);
+    EXPECT_TRUE(game.isConversationActive());
+    EXPECT_FALSE(game.globalFade().heldForDialog());
+    EXPECT_EQ(game.isTSL(), game.globalFade().locked());
+    EXPECT_FLOAT_EQ(game.isTSL() ? 1 : .9f, game.globalFade().opacity());
+    conversation->chooseReply();
+    EXPECT_FALSE(game.globalFade().dialogPending());
+}
+
+TEST_P(GlobalFadeAdmission, direct_runtime_retirement_releases_only_the_old_admission) {
+    auto &game = fixture->game;
+    auto actor = makeMovingCreature(game, fixture->engine);
+    auto action = queue(actor);
+    game.destroyRuntimeObjectGraph(actor);
+    ASSERT_FALSE(actor->isRuntimeLive());
+    EXPECT_TRUE(action->isCancelled());
+    EXPECT_FALSE(game.globalFade().dialogPending());
+    EXPECT_FALSE(game.globalFade().heldForDialog());
+    EXPECT_EQ(game.isTSL(), game.globalFade().locked());
+
+    game.globalFade().holdForDialog();
+    auto replacement = queue(leader);
+    game.destroyRuntimeObjectGraph(actor); // repeated stale retirement
+    action->cancel(action, *actor);
+    EXPECT_TRUE(game.globalFade().heldForDialog());
+    EXPECT_TRUE(game.globalFade().dialogPending());
+    EXPECT_FALSE(replacement->isCancelled());
+    game.update(.1f);
+    EXPECT_EQ(1, conversation->entries);
+    EXPECT_FALSE(game.globalFade().heldForDialog());
+}
+
+TEST_P(GlobalFadeAdmission, area_retirement_discards_admission_without_waiting_for_storage) {
+    auto &game = fixture->game;
+    auto action = queue(leader);
+    game.module()->area()->retirePartyMemberAreaRuntime(leader);
+    EXPECT_TRUE(leader->isRuntimeLive());
+    EXPECT_TRUE(action->isCancelled());
+    EXPECT_TRUE(leader->actions().empty());
+    EXPECT_FALSE(game.globalFade().dialogPending());
+    EXPECT_FALSE(game.globalFade().heldForDialog());
+    EXPECT_EQ(game.isTSL(), game.globalFade().locked());
+}
 
 // Between resetting the game and the destination module coming up there is no
 // module to stop anything on. Nothing is halted because nothing is moving, and
