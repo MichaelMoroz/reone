@@ -112,6 +112,15 @@ public:
     virtual std::shared_ptr<Texture> captureFrame() = 0;
 
     /**
+     * Read a texture's backing image back to CPU pixels.
+     *
+     * Unlike captureFrame this names its source, so it reads a render target
+     * the frame has finished with rather than whatever is on the swapchain.
+     * Returns nullptr when the texture has no image registered. Stalls.
+     */
+    virtual std::shared_ptr<Texture> readTexture(const Texture &texture) = 0;
+
+    /**
      * Finish the frame and present it, if this renderer owns presentation. A
      * renderer drawing into a target owned by someone else - the toolkit's
      * canvas, say - ends the frame without presenting.

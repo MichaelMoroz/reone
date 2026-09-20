@@ -70,6 +70,7 @@ public:
     MOCK_METHOD(void, beginFrame, (glm::ivec2), (override));
     MOCK_METHOD(void, drawSceneOutput, (Texture &), (override));
     MOCK_METHOD(std::shared_ptr<Texture>, captureFrame, (), (override));
+    MOCK_METHOD(std::shared_ptr<Texture>, readTexture, (const Texture &), (override));
     MOCK_METHOD(void, endFrame, (), (override));
     MOCK_METHOD(IResources &, resources, (), (override));
     MOCK_METHOD(IDescriptors &, descriptors, (), (override));

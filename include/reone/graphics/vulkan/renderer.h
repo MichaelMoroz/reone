@@ -91,6 +91,7 @@ public:
     void drawSceneOutput(Texture &output) override;
     void presentSceneOutput(Texture &output) override;
     std::shared_ptr<Texture> captureFrame() override;
+    std::shared_ptr<Texture> readTexture(const Texture &texture) override;
     /** Submit completed recording so a synchronous readback can see this frame. */
     void flushFrame() override;
     void endFrame() override;

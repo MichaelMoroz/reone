@@ -504,6 +504,84 @@ std::shared_ptr<Texture> VulkanRenderer::captureFrame() {
     return texture;
 }
 
+std::shared_ptr<Texture> VulkanRenderer::readTexture(const Texture &texture) {
+    // Externally registered only: those are the render targets. Anything else
+    // would send an ordinary texture down the upload path just to read it, and
+    // a miss there returns a fallback image rather than failing.
+    if (!_resources.isExternal(texture)) {
+        return nullptr;
+    }
+    const auto &image = _resources.get(texture);
+    const auto extent = image.extent();
+    if (extent.x <= 0 || extent.y <= 0) {
+        return nullptr;
+    }
+    const auto raw = image.readBack(false);
+    const size_t texels = static_cast<size_t>(extent.x) * extent.y;
+
+    auto pixels = std::make_shared<ByteBuffer>();
+    pixels->resize(texels * 4);
+    // Rows are flipped on the way out: a Vulkan copy yields them top-down and
+    // everything downstream assumes the OpenGL bottom-up order.
+    auto put = [&](size_t index, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+        const size_t x = index % extent.x;
+        const size_t y = index / extent.x;
+        auto dst = &(*pixels)[((extent.y - 1 - y) * extent.x + x) * 4];
+        dst[0] = r;
+        dst[1] = g;
+        dst[2] = b;
+        dst[3] = a;
+    };
+    const auto toByte = [](float v) {
+        return static_cast<uint8_t>(glm::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
+    };
+
+    switch (image.pixelFormat()) {
+    case Format::R16G16B16A16Sfloat: {
+        // The scene target is half-float, already display-referred by the
+        // tonemap, so the range is clamped rather than tonemapped again.
+        if (raw.size() < texels * 8) {
+            return nullptr;
+        }
+        const auto *src = reinterpret_cast<const uint16_t *>(raw.data());
+        for (size_t i = 0; i < texels; ++i) {
+            put(i,
+                toByte(glm::unpackHalf1x16(src[i * 4 + 0])),
+                toByte(glm::unpackHalf1x16(src[i * 4 + 1])),
+                toByte(glm::unpackHalf1x16(src[i * 4 + 2])),
+                255);
+        }
+        break;
+    }
+    case Format::R8G8B8A8Unorm: {
+        if (raw.size() < texels * 4) {
+            return nullptr;
+        }
+        for (size_t i = 0; i < texels; ++i) {
+            put(i, raw[i * 4 + 0], raw[i * 4 + 1], raw[i * 4 + 2], 255);
+        }
+        break;
+    }
+    case Format::B8G8R8A8Unorm:
+    case Format::B8G8R8A8Srgb: {
+        if (raw.size() < texels * 4) {
+            return nullptr;
+        }
+        for (size_t i = 0; i < texels; ++i) {
+            put(i, raw[i * 4 + 2], raw[i * 4 + 1], raw[i * 4 + 0], 255);
+        }
+        break;
+    }
+    default:
+        return nullptr;
+    }
+
+    auto result = std::make_shared<Texture>(texture.name() + "_readback",
+                                            TextureType::TwoDim, Texture::Properties());
+    result->setPixels(extent.x, extent.y, PixelFormat::RGBA8, Texture::Layer {pixels});
+    return result;
+}
+
 void VulkanRenderer::flushFrame() {
     if (!_inFrame) {
         throw std::logic_error("Renderer: no frame begun");

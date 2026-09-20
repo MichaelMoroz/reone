@@ -68,21 +68,24 @@ ByteBuffer encodeSaveScreenshot(
 }
 
 /**
- * The save preview, which this backend cannot yet produce.
+ * The save preview, read from the retained clean scene target.
  *
- * The retained clean scene target is the right source - it is the frame before
- * the save menu was drawn over it - but reading it back was a GL operation:
- * bind the texture, transfer its pixels. Neither the bind nor Texture's CPU
- * mirror survived the move off GL, and the renderer's captureFrame() is not a
- * substitute: it takes the composited swapchain image, which at the moment a
- * save executes is the save menu sitting on top of the scene.
- *
- * A save written without a preview loads correctly; the slot shows no
- * thumbnail. Returning the wrong picture would not be visibly broken, which is
- * the worse failure.
+ * That target rather than the swapchain: a save executes with the save menu
+ * drawn over the scene, so captureFrame() would preserve the menu. A save
+ * written without a preview still loads; the slot just shows no thumbnail.
  */
 std::optional<ByteBuffer> Game::captureSaveScreenshot() {
-    return std::nullopt;
+    if (!_lastRenderedSceneOutput) {
+        return std::nullopt;
+    }
+    auto readback = _services.graphics.renderer.readTexture(*_lastRenderedSceneOutput);
+    if (!readback || readback->layers().empty() || !readback->layers().front().pixels) {
+        return std::nullopt;
+    }
+    return encodeSaveScreenshot(
+        static_cast<uint32_t>(readback->width()),
+        static_cast<uint32_t>(readback->height()),
+        readback->pixelFormat(), *readback->layers().front().pixels);
 }
 
 namespace {
