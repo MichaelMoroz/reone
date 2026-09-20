@@ -142,6 +142,10 @@ public:
         return *_services;
     }
 
+    MockRenderer &renderer() {
+        return *_renderer;
+    }
+
     Mock2DRenderer &renderer2d() {
         return *_renderer2d;
     }

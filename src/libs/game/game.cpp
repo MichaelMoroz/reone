@@ -3419,43 +3419,17 @@ void Game::renderGlobalFade() {
     if (alpha <= 0.0f) {
         return;
     }
-    auto &graphics = _services.graphics;
-    auto &context = graphics.context;
-    GlobalUniforms previousGlobals;
-    LocalUniforms previousLocals;
-    graphics.uniforms.setGlobals([&](auto &globals) {
-        previousGlobals = globals;
-        globals.reset();
-        globals.projection = glm::ortho(0.0f, static_cast<float>(_options.graphics.width),
-                                        static_cast<float>(_options.graphics.height), 0.0f, 0.0f, 100.0f);
-        globals.projectionInv = glm::inverse(globals.projection);
+    // The 2D renderer owns the ortho projection and the quad, so none of the
+    // GL save/restore around them is needed. Its extent rather than the
+    // configured size: headless renders full size whatever winscale says.
+    auto &renderer2d = _services.graphics.renderer2d;
+    const glm::vec2 size(renderer2d.extent());
+    renderer2d.withBlendMode(BlendMode::Normal, [&]() {
+        // Compatibility approximation: the authored colour, then blackfill.
+        for (auto color : {_globalFade.color(), glm::vec3(0.0f)}) {
+            renderer2d.drawRect(glm::vec2(0.0f), size, glm::vec4(color, alpha));
+        }
     });
-    graphics.uniforms.setLocals([&](auto &locals) { previousLocals = locals; });
-    context.withDepthTestMode(DepthTestMode::None, [&]() {
-        context.withDepthMask(false, [&]() {
-            context.withBlendMode(BlendMode::Normal, [&]() {
-                context.withFaceCullMode(FaceCullMode::None, [&]() {
-                    context.withPolygonMode(PolygonMode::Fill, [&]() {
-                        // Inherit the GUI viewport, including window/drawable
-                        // scaling. Logical GUI dimensions need not be pixels.
-                        // Compatibility approximation: color, then blackfill.
-                        for (auto color : {_globalFade.color(), glm::vec3(0.0f)}) {
-                            graphics.uniforms.setLocals([&](auto &locals) {
-                                locals.reset();
-                                locals.model = glm::scale(glm::mat4(1.0f),
-                                                          glm::vec3(_options.graphics.width, _options.graphics.height, 1.0f));
-                                locals.color = glm::vec4(color, alpha);
-                            });
-                            context.useProgram(graphics.shaderRegistry.get(ShaderProgramId::mvpColor));
-                            graphics.meshRegistry.get(MeshName::quad).draw(graphics.statistic);
-                        }
-                    });
-                });
-            });
-        });
-    });
-    graphics.uniforms.setLocals([&](auto &locals) { locals = previousLocals; });
-    graphics.uniforms.setGlobals([&](auto &globals) { globals = previousGlobals; });
 }
 
 void Game::settleFadeArrival() {
@@ -6285,9 +6259,6 @@ void Game::loadTestbed(const std::string &variant) {
     // This is deliberately code-built instead of an IFO/ARE/GIT module: the
     // fixture has no authored game content, and keeping it here makes its
     // floor, light and camera independent of resource load timing.
-    if (_module && _module->area()) {
-        _module->area()->unloadParty();
-    }
     _party.reset();
     _module.reset();
     _loadedModules.clear();
@@ -6509,9 +6480,6 @@ void Game::consoleScene(const ConsoleArgs &args) {
     // This is intentionally a command rather than a resource-backed module.
     // An isolation fixture should need no synthetic IFO/ARE/GIT files, and
     // must not inherit a room, party, sky, scripts, or the previous graph.
-    if (_module && _module->area()) {
-        _module->area()->unloadParty();
-    }
     _party.reset();
     _module.reset();
     _loadedModules.clear();

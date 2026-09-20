@@ -231,7 +231,7 @@ TEST_F(MainMenuTest, cold_entry_keeps_persisted_state_and_k1_keeps_its_original_
     ASSERT_TRUE(graph->camera());
     auto camera = graph->camera()->get().camera();
     ASSERT_TRUE(camera);
-    auto expected = glm::perspective(glm::radians(22.7259998f), 800.0f / 600.0f, 0.1f, 10000.0f);
+    auto expected = glm::perspectiveRH_ZO(glm::radians(22.7259998f), 800.0f / 600.0f, 0.1f, 10000.0f);
     EXPECT_EQ(expected, camera->projection());
     EXPECT_EQ(glm::vec3(0, -5, 1), glm::vec3(graph->camera()->get().absoluteTransform()[3]));
     auto environment = graph->roots.front().lock();
@@ -246,7 +246,7 @@ TEST_F(MainMenuTest, cold_entry_keeps_persisted_state_and_k1_keeps_its_original_
     camera = graph->camera()->get().camera();
     ASSERT_TRUE(camera);
     float aspect = 800.0f / 600.0f;
-    expected = glm::ortho(-aspect * 1.4f, aspect * 1.4f, -1.4f, 1.4f, kDefaultClipPlaneNear, 10.0f);
+    expected = glm::orthoRH_ZO(-aspect * 1.4f, aspect * 1.4f, -1.4f, 1.4f, kDefaultClipPlaneNear, 10.0f);
     EXPECT_EQ(expected, camera->projection());
     menu->refreshScene();
     EXPECT_EQ(malak.lock(), graph->roots.front().lock());
@@ -304,14 +304,16 @@ TEST_F(MainMenuTest, captures_effective_body_visuals_without_copying_equipment) 
 
 TEST_F(MainMenuTest, replacing_one_scene_releases_its_arena_without_touching_gameplay) {
     SceneGraphs scenes(engine.sceneModule().renderPipelineFactory(), engine.options().graphics,
-        engine.graphicsModule().services(), engine.audioModule().services(), engine.resourceModule().services());
+        engine.graphicsModule().services(), engine.audioModule().services(),
+        engine.resourceModule().services(), std::filesystem::path {});
     scenes.reserve(kSceneMain);
     scenes.reserve(kSceneMainMenu);
     auto &main = scenes.get(kSceneMain);
     auto gameplay = main.newModel(*models.front(), ModelUsage::Creature);
     main.addRoot(gameplay);
-    EXPECT_CALL(engine.graphicsModule().context(), resetReadFramebuffer()).Times(5);
-    EXPECT_CALL(engine.graphicsModule().context(), resetDrawFramebuffer()).Times(5);
+    // Vulkan's equivalent of dropping the GL framebuffer bindings: the
+    // outgoing scene's targets may still be referenced by submitted work.
+    EXPECT_CALL(engine.graphicsModule().renderer(), waitIdle()).Times(5);
     std::weak_ptr<ModelSceneNode> previous;
     for (int i = 0; i < 5; ++i) {
         scenes.reset(kSceneMainMenu);
