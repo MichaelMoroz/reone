@@ -39,6 +39,7 @@ public:
     }
 
     void update(float dt) override;
+    void refreshLayout() override;
 
     /** Selects, but does not activate, a reply for a scripted visual capture. */
     void selectReplyForCapture(int index);
@@ -89,6 +90,7 @@ private:
     void addFrame(std::string tag, int top);
     void configureMessage();
     void configureReplies();
+    void repositionReplies();
     void repositionMessage();
 
     void updateCamera();
@@ -124,6 +126,7 @@ private:
     /** The centred 4:3 rectangle within the bottom band that the replies occupy. */
     gui::Control::Extent replySafeArea() const;
     void loadFrames();
+    void configureFrames();
     void loadCurrentSpeaker();
 
     // END Loading

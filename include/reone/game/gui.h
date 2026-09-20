@@ -57,7 +57,7 @@ public:
     }
 
     /** Re-fit the authored layout to the current render extent. */
-    void refreshLayout() {
+    virtual void refreshLayout() {
         if (_gui) {
             _gui->refreshLayout();
         }

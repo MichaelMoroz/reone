@@ -139,6 +139,22 @@ void DialogGUI::selectReplyForCapture(int index) {
     _controls.LB_REPLIES->setSelectedItemIndex(index);
 }
 
+void DialogGUI::refreshLayout() {
+    GameGUI::refreshLayout();
+    if (!_gui || !_controls.LBL_MESSAGE || !_controls.LB_REPLIES) {
+        return;
+    }
+
+    // These controls deliberately leave the authored dialog canvas and occupy
+    // viewport-relative bands. The generic refresh has to run first so fonts
+    // and authored child controls receive the new scale, then these dynamic
+    // extents are rebuilt from the new render size.
+    configureMessage();
+    configureReplies();
+    repositionReplies();
+    configureFrames();
+}
+
 int DialogGUI::bandHeight() const {
     return _game.options().graphics.height / kBandDivisor;
 }
@@ -156,6 +172,15 @@ Control::Extent DialogGUI::replySafeArea() const {
 void DialogGUI::loadFrames() {
     addFrame(kControlTagTopFrame, 0);
     addFrame(kControlTagBottomFrame, _game.options().graphics.height - bandHeight());
+}
+
+void DialogGUI::configureFrames() {
+    if (auto top = _gui->findControl(kControlTagTopFrame)) {
+        top->setExtent(bandExtent(0));
+    }
+    if (auto bottom = _gui->findControl(kControlTagBottomFrame)) {
+        bottom->setExtent(bandExtent(_game.options().graphics.height - bandHeight()));
+    }
 }
 
 void DialogGUI::addFrame(std::string tag, int top) {
@@ -618,6 +643,11 @@ void DialogGUI::setReplyLines(std::vector<std::string> lines) {
         item.text = lines[i];
         _controls.LB_REPLIES->addItem(std::move(item));
     }
+
+    repositionReplies();
+}
+
+void DialogGUI::repositionReplies() {
     // Replies start at the top-left of the centred 4:3 safe area within the
     // bottom band, indented past the scroll-bar column by their authored
     // offset so an overflowing list shows its bar beside the prose, not
