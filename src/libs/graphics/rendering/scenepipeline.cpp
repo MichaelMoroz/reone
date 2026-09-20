@@ -1309,6 +1309,10 @@ void ScenePipeline::pbrChannelsPass(ICommandBuffer &cmd, uint32_t globalsOffset)
     screenEffect.screenResolutionRcp = 1.0f / glm::vec2(_renderSize);
     screenEffect.clipNear = _uniforms.globals().clipNear;
     screenEffect.clipFar = _uniforms.globals().clipFar;
+    screenEffect.ssaoSampleCount = _options.ssaoSamples;
+    screenEffect.ssaoSampleRadius = _options.ssaoRadius;
+    screenEffect.ssaoStrength = _options.ssaoStrength;
+    screenEffect.ssaoBias = _options.ssaoBias;
     std::copy(_ssaoKernel.begin(), _ssaoKernel.end(), screenEffect.ssaoSamples);
     auto screenEffectOffset = _renderer.uniformRing().push(screenEffect);
 
@@ -1531,6 +1535,13 @@ void ScenePipeline::screenSpaceReflectionPass(ICommandBuffer &cmd, uint32_t glob
     screenEffect.screenResolutionRcp = 1.0f / glm::vec2(_renderSize);
     screenEffect.clipNear = _uniforms.globals().clipNear;
     screenEffect.clipFar = _uniforms.globals().clipFar;
+    screenEffect.ssrMaxSteps = static_cast<float>(_options.ssrMaxSteps);
+    screenEffect.ssrPixelStride = _options.ssrPixelStride;
+    screenEffect.ssrMaxDistance = _options.ssrMaxDistance;
+    screenEffect.ssrBias = _options.ssrThickness;
+    screenEffect.ssrEdgeFadeStart = _options.ssrEdgeFadeStart;
+    screenEffect.ssrRoughness = _options.ssrRoughness;
+    screenEffect.ssrAnimatedNoise = _options.ssrAnimatedNoise ? 1 : 0;
     auto screenEffectOffset = _renderer.uniformRing().push(screenEffect);
 
     std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};

@@ -186,9 +186,15 @@ struct ScreenEffectUniforms {
     float clipFar;
     float ssaoSampleRadius;
     float ssaoBias;
+    float ssaoStrength;
+    int ssaoSampleCount;
     float ssrBias;
     float ssrPixelStride;
     float ssrMaxSteps;
+    float ssrMaxDistance;
+    float ssrEdgeFadeStart;
+    float ssrRoughness;
+    int ssrAnimatedNoise;
     float sharpenAmount;
 };
 

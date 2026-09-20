@@ -1080,20 +1080,59 @@ void Editor::graphicsRendererTab() {
 void Editor::graphicsQualityTab() {
     auto &options = _engine._options.graphics;
 
-    // Both belong to the PBR resolve: occlusion is a term inside it and
-    // reflections are a dispatch over the image it produced. Retro is the
-    // original's model, which had neither, so the pair sit disabled there
-    // rather than quietly doing nothing.
-    ImGui::BeginDisabled(options.mode != graphics::RenderMode::PBR);
-    ImGui::Checkbox("SSAO", &options.ssao);
+    // Both belong to PBR: occlusion is a term inside its resolve and
+    // reflections are a dispatch over the image it produced. Keep the two
+    // algorithms separate here because their quality dials have unrelated
+    // costs and units.
+    const bool pbrEffectsAvailable = options.mode == graphics::RenderMode::PBR;
+
+    ImGui::SeparatorText("Screen-space ambient occlusion");
+    ImGui::BeginDisabled(!pbrEffectsAvailable);
+    ImGui::Checkbox("Enabled##ssao", &options.ssao);
     settingHint("Folded into the PBR resolve, where the depth and normals it needs are already "
                 "read. Off, the branch is not taken.",
                 true);
-    ImGui::Checkbox("SSR", &options.ssr);
+    ImGui::BeginDisabled(!options.ssao);
+    ImGui::SliderInt("Samples##ssao", &options.ssaoSamples, 1, graphics::kNumSSAOSamples);
+    settingHint("More hemisphere samples reduce noise and increase the PBR resolve cost.");
+    ImGui::SliderFloat("Radius##ssao", &options.ssaoRadius, 0.01f, 10.0f, "%.2f",
+                       ImGuiSliderFlags_Logarithmic);
+    settingHint("View-space radius sampled around the shaded point.");
+    ImGui::SliderFloat("Strength##ssao", &options.ssaoStrength, 0.0f, 4.0f, "%.2f");
+    settingHint("Scale applied to the measured occlusion before it weights indirect diffuse.");
+    ImGui::SliderFloat("Bias##ssao", &options.ssaoBias, 0.0f, 1.0f, "%.3f");
+    settingHint("Depth separation required before a sample counts as an occluder.");
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+
+    ImGui::SeparatorText("Screen-space reflections");
+    ImGui::BeginDisabled(!pbrEffectsAvailable);
+    ImGui::Checkbox("Enabled##ssr", &options.ssr);
     settingHint("A second dispatch over the resolved image, ahead of anti-aliasing and "
                 "transparency. Off, the pass is not recorded at all.",
                 true);
+    ImGui::BeginDisabled(!options.ssr);
+    ImGui::SliderInt("Maximum steps##ssr", &options.ssrMaxSteps, 1, 256);
+    settingHint("Maximum depth tests along each reflected ray.");
+    ImGui::SliderFloat("Pixel stride##ssr", &options.ssrPixelStride, 0.25f, 32.0f, "%.2f",
+                       ImGuiSliderFlags_Logarithmic);
+    settingHint("Screen pixels advanced by each depth test. Smaller strides find finer hits at higher cost.");
+    ImGui::SliderFloat("Maximum distance##ssr", &options.ssrMaxDistance, 1.0f, 1000.0f, "%.1f",
+                       ImGuiSliderFlags_Logarithmic);
+    settingHint("Farthest view-space distance a reflected ray may travel.");
+    ImGui::SliderFloat("Thickness##ssr", &options.ssrThickness, 0.001f, 10.0f, "%.3f",
+                       ImGuiSliderFlags_Logarithmic);
+    settingHint("Depth thickness within which the march accepts a surface hit.");
+    ImGui::SliderFloat("Edge fade start##ssr", &options.ssrEdgeFadeStart, 0.0f, 0.99f, "%.2f");
+    settingHint("Normalized screen extent where reflections begin fading before the viewport edge.");
+    ImGui::SliderFloat("Roughness##ssr", &options.ssrRoughness, 0.0f, 1.0f, "%.2f");
+    settingHint("0 is a perfect mirror. 1 samples the same visible-normal GGX distribution as the path tracer.");
+    ImGui::Checkbox("Animated noise##ssr", &options.ssrAnimatedNoise);
+    settingHint("Change the GGX sample every frame. Off keeps a stable per-pixel noise pattern.");
     ImGui::EndDisabled();
+    ImGui::EndDisabled();
+
+    ImGui::SeparatorText("Light budgets");
     ImGui::SliderInt("Max lights", &options.maxLights, 1, graphics::kMaxLights);
     settingHint("Lights a frame may carry, out of the slots the uniform block is sized for. Below "
                 "the ceiling on purpose: the raster resolves walk this loop per pixel and the "

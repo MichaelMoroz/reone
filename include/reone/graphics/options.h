@@ -803,7 +803,18 @@ struct GraphicsOptions {
     float skyboxIntensity {1.0f};
     float skyboxGamma {2.2f};
     bool ssao {true};
+    int ssaoSamples {64};
+    float ssaoRadius {0.5f};
+    float ssaoStrength {1.0f};
+    float ssaoBias {0.1f};
     bool ssr {true};
+    int ssrMaxSteps {32};
+    float ssrPixelStride {4.0f};
+    float ssrMaxDistance {100.0f};
+    float ssrThickness {0.5f};
+    float ssrEdgeFadeStart {0.8f};
+    float ssrRoughness {0.0f};
+    bool ssrAnimatedNoise {false};
     /**
      * The debug overlay: wireframe bounding boxes and name labels for scene
      * objects and lights, drawn over the finished image in every render mode.

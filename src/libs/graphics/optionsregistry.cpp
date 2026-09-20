@@ -463,9 +463,42 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(boolOpt("ssao", OptionApply::Live,
                             "screen-space ambient occlusion, inside the PBR resolve",
                             &GraphicsOptions::ssao));
+    descs.push_back(intOpt("ssaosamples", OptionApply::Live,
+                           "screen-space ambient occlusion sample count",
+                           &GraphicsOptions::ssaoSamples, 1, kNumSSAOSamples));
+    descs.push_back(floatOpt("ssaoradius", OptionApply::Live,
+                             "screen-space ambient occlusion sampling radius",
+                             &GraphicsOptions::ssaoRadius, 0.01f, 10.0f));
+    descs.push_back(floatOpt("ssaostrength", OptionApply::Live,
+                             "screen-space ambient occlusion strength",
+                             &GraphicsOptions::ssaoStrength, 0.0f, 4.0f));
+    descs.push_back(floatOpt("ssaobias", OptionApply::Live,
+                             "screen-space ambient occlusion depth bias",
+                             &GraphicsOptions::ssaoBias, 0.0f, 1.0f));
     descs.push_back(boolOpt("ssr", OptionApply::Live,
                             "screen-space reflections over the PBR resolve",
                             &GraphicsOptions::ssr));
+    descs.push_back(intOpt("ssrmaxsteps", OptionApply::Live,
+                           "screen-space reflection march step limit",
+                           &GraphicsOptions::ssrMaxSteps, 1, 256));
+    descs.push_back(floatOpt("ssrpixelstride", OptionApply::Live,
+                             "screen-space reflection march stride in pixels",
+                             &GraphicsOptions::ssrPixelStride, 0.25f, 32.0f));
+    descs.push_back(floatOpt("ssrmaxdistance", OptionApply::Live,
+                             "screen-space reflection maximum view-space distance",
+                             &GraphicsOptions::ssrMaxDistance, 1.0f, 1000.0f));
+    descs.push_back(floatOpt("ssrthickness", OptionApply::Live,
+                             "screen-space reflection hit thickness",
+                             &GraphicsOptions::ssrThickness, 0.001f, 10.0f));
+    descs.push_back(floatOpt("ssredgefade", OptionApply::Live,
+                             "screen-space reflection edge fade start",
+                             &GraphicsOptions::ssrEdgeFadeStart, 0.0f, 0.99f));
+    descs.push_back(floatOpt("ssrroughness", OptionApply::Live,
+                             "screen-space reflection GGX roughness",
+                             &GraphicsOptions::ssrRoughness, 0.0f, 1.0f));
+    descs.push_back(boolOpt("ssranimatednoise", OptionApply::Live,
+                            "animate the screen-space reflection GGX sample",
+                            &GraphicsOptions::ssrAnimatedNoise));
     descs.push_back(boolOpt("paritydirect", OptionApply::Live,
                             "both renderers output only shared unoccluded direct diffuse",
                             &GraphicsOptions::parityDirect));

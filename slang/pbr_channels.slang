@@ -102,8 +102,9 @@ float screenSpaceOcclusion(float2 uv, int2 pixel, float3 pos, float3 normal) {
     float3 bitangent = cross(normal, tangent);
     float3x3 tbn = float3x3(tangent, bitangent, normal);
 
+    int sampleCount = clamp(screenEffectUniforms.ssaoSampleCount, 1, kNumSSAOSamples);
     float occlusion = 0.0;
-    for (int i = 0; i < kNumSSAOSamples; ++i) {
+    for (int i = 0; i < sampleCount; ++i) {
         float3 samplePos = pos + screenEffectUniforms.ssaoSampleRadius *
                                      mul(screenEffectUniforms.ssaoSamples[i].xyz, tbn);
         float4 sampleClip = mul(globalUniforms.projection, float4(samplePos, 1.0));
@@ -115,8 +116,9 @@ float screenSpaceOcclusion(float2 uv, int2 pixel, float3 pos, float3 normal) {
         occlusion += (sceneZ >= samplePos.z + screenEffectUniforms.ssaoBias ? 1.0 : 0.0) *
                      rangeCheck;
     }
-    return 1.0 - (occlusion / float(kNumSSAOSamples)) *
-                     (1.0 - smoothstep(0.0, kSsaoMaxDistance, abs(pos.z)));
+    float amount = (occlusion / float(sampleCount)) *
+                   (1.0 - smoothstep(0.0, kSsaoMaxDistance, abs(pos.z)));
+    return 1.0 - saturate(amount * screenEffectUniforms.ssaoStrength);
 }
 
 /** Everything downstream needs from one PBR direct-light evaluation. Private

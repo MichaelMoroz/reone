@@ -350,8 +350,8 @@ public struct PbrSurface : ISurfaceModel {
         SpecularEnergy energy = specularEnergy(layer, NdotV, shading.roughness);
         float specularProbability = clamp(luminance(energy.albedo), 1e-3, 1.0 - 1e-3);
         if (ptRandom01(rng) < specularProbability) {
-            float3 half = ptGgxVisibleHalfVector(shading.normal, view, shading.roughness,
-                                                 float2(ptRandom01(rng), ptRandom01(rng)));
+            float3 half = ggxVisibleHalfVector(shading.normal, view, shading.roughness,
+                                               float2(ptRandom01(rng), ptRandom01(rng)));
             sample.direction = normalize(reflect(-view, half));
             // Visible-normal sampling leaves F * G2/G1, and with the separable
             // Smith form this codebase uses that ratio is G1 of the outgoing

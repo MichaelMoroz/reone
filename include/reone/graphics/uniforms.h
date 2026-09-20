@@ -297,9 +297,15 @@ struct alignas(16) ScreenEffectUniforms {
     float clipFar {kDefaultClipPlaneFar};
     float ssaoSampleRadius {0.5f};
     float ssaoBias {0.1f};
+    float ssaoStrength {1.0f};
+    int ssaoSampleCount {kNumSSAOSamples};
     float ssrBias {0.5f};
     float ssrPixelStride {4.0f};
     float ssrMaxSteps {32.0f};
+    float ssrMaxDistance {100.0f};
+    float ssrEdgeFadeStart {0.8f};
+    float ssrRoughness {0.0f};
+    int ssrAnimatedNoise {0};
     float sharpenAmount {0.25f};
 };
 

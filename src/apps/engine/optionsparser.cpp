@@ -173,7 +173,18 @@ std::unique_ptr<Options> OptionsParser::parse() {
          "point shadow cube face resolution")                                                                                 //
         ("lightmaps", value<bool>()->default_value(options->graphics.lightmaps), "apply lightmaps (diagnostic toggle)")        //
         ("ssao", value<bool>()->default_value(options->graphics.ssao), "enable screen-space ambient occlusion")                 //
+        ("ssaosamples", value<int>()->default_value(options->graphics.ssaoSamples), "screen-space ambient occlusion sample count") //
+        ("ssaoradius", value<float>()->default_value(options->graphics.ssaoRadius), "screen-space ambient occlusion sampling radius") //
+        ("ssaostrength", value<float>()->default_value(options->graphics.ssaoStrength), "screen-space ambient occlusion strength") //
+        ("ssaobias", value<float>()->default_value(options->graphics.ssaoBias), "screen-space ambient occlusion depth bias") //
         ("ssr", value<bool>()->default_value(options->graphics.ssr), "enable screen-space reflections")                         //
+        ("ssrmaxsteps", value<int>()->default_value(options->graphics.ssrMaxSteps), "screen-space reflection march step limit") //
+        ("ssrpixelstride", value<float>()->default_value(options->graphics.ssrPixelStride), "screen-space reflection march stride in pixels") //
+        ("ssrmaxdistance", value<float>()->default_value(options->graphics.ssrMaxDistance), "screen-space reflection maximum view-space distance") //
+        ("ssrthickness", value<float>()->default_value(options->graphics.ssrThickness), "screen-space reflection hit thickness") //
+        ("ssredgefade", value<float>()->default_value(options->graphics.ssrEdgeFadeStart), "screen-space reflection edge fade start") //
+        ("ssrroughness", value<float>()->default_value(options->graphics.ssrRoughness), "screen-space reflection GGX roughness") //
+        ("ssranimatednoise", value<bool>()->default_value(options->graphics.ssrAnimatedNoise), "animate the screen-space reflection GGX sample") //
         ("debugoverlay", value<bool>()->default_value(options->graphics.debugOverlay), "bounding boxes and names of objects and lights, over the image") //
         ("debugoverlaycategories", value<int>()->default_value(options->graphics.debugOverlayCategories), "with the overlay: category bitmask, a bit per model usage plus bit 8 for lights") //
         ("debugoverlaymeshes", value<bool>()->default_value(options->graphics.debugOverlayMeshes), "with the overlay: a box per mesh a model holds") //
@@ -540,7 +551,18 @@ std::unique_ptr<Options> OptionsParser::parse() {
         std::clamp(vars["pointshadowres"].as<int>(), 128, 2048);
     options->graphics.lightmaps = vars["lightmaps"].as<bool>();
     options->graphics.ssao = vars["ssao"].as<bool>();
+    options->graphics.ssaoSamples = std::clamp(vars["ssaosamples"].as<int>(), 1, kNumSSAOSamples);
+    options->graphics.ssaoRadius = std::clamp(vars["ssaoradius"].as<float>(), 0.01f, 10.0f);
+    options->graphics.ssaoStrength = std::clamp(vars["ssaostrength"].as<float>(), 0.0f, 4.0f);
+    options->graphics.ssaoBias = std::clamp(vars["ssaobias"].as<float>(), 0.0f, 1.0f);
     options->graphics.ssr = vars["ssr"].as<bool>();
+    options->graphics.ssrMaxSteps = std::clamp(vars["ssrmaxsteps"].as<int>(), 1, 256);
+    options->graphics.ssrPixelStride = std::clamp(vars["ssrpixelstride"].as<float>(), 0.25f, 32.0f);
+    options->graphics.ssrMaxDistance = std::clamp(vars["ssrmaxdistance"].as<float>(), 1.0f, 1000.0f);
+    options->graphics.ssrThickness = std::clamp(vars["ssrthickness"].as<float>(), 0.001f, 10.0f);
+    options->graphics.ssrEdgeFadeStart = std::clamp(vars["ssredgefade"].as<float>(), 0.0f, 0.99f);
+    options->graphics.ssrRoughness = std::clamp(vars["ssrroughness"].as<float>(), 0.0f, 1.0f);
+    options->graphics.ssrAnimatedNoise = vars["ssranimatednoise"].as<bool>();
     options->graphics.debugOverlay = vars["debugoverlay"].as<bool>();
     options->graphics.debugOverlayCategories =
         std::max(0, vars["debugoverlaycategories"].as<int>());

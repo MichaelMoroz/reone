@@ -33,6 +33,7 @@
 
 import uniforms;
 import lib.gbuf;
+import lib.brdf;
 
 [[vk::binding(0, 1)]] Sampler2D sSceneColor;
 [[vk::binding(1, 1)]] Sampler2D sGBufDiffuse;
@@ -40,15 +41,25 @@ import lib.gbuf;
 [[vk::binding(5, 1)]] Sampler2D sGBufDepth;
 [[vk::binding(0, 3)]] RWTexture2D<float4> outImage;
 
-static const float kSsrMaxDistance = 100.0;
-static const float kEdgeFadeStart = 0.8;
-
 float3 reconstructViewPos(float2 uv) {
     return gbufViewPosition(uv, sGBufDepth.SampleLevel(uv, 0.0).r, globalUniforms.projectionInv);
 }
 
 float distanceSquared(float2 a, float2 b) { float2 d = a - b; return dot(d, d); }
 void swapIfGreater(inout float a, inout float b) { if (a > b) { float t = a; a = b; b = t; } }
+
+uint ssrHash(uint x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float ssrRandom01(uint state) {
+    return float(ssrHash(state) & 0x00ffffffu) / 16777216.0;
+}
 
 /**
  * The DDA march of Morgan McGuire's efficient screen-space ray trace, in view
@@ -59,9 +70,9 @@ bool traceScreenSpaceRay(float3 rayOrigin, float3 rayDirection, float jitter,
     hitUV = float2(0.0);
     numSteps = 0.0;
     float rayLength =
-        rayOrigin.z + rayDirection.z * kSsrMaxDistance > -screenEffectUniforms.clipNear
+        rayOrigin.z + rayDirection.z * screenEffectUniforms.ssrMaxDistance > -screenEffectUniforms.clipNear
             ? (-screenEffectUniforms.clipNear - rayOrigin.z) / rayDirection.z
-            : kSsrMaxDistance;
+            : screenEffectUniforms.ssrMaxDistance;
     float3 rayEnd = rayOrigin + rayDirection * rayLength;
     float4 h0 = mul(globalUniforms.projection, float4(rayOrigin, 1.0));
     float k0 = 1.0 / h0.w;
@@ -135,7 +146,22 @@ void ssrMain(uint3 dispatchId : SV_DispatchThreadID) {
 
     float3 position = reconstructViewPos(uv);
     float3 eyeNormal = gbufDecodeEyeNormal(sGBufEyeNormal.SampleLevel(uv, 0.0).xyz);
-    float3 reflection = reflect(normalize(position), eyeNormal);
+    float3 view = normalize(-position);
+    float3 reflection = reflect(-view, eyeNormal);
+    if (screenEffectUniforms.ssrRoughness > 0.0) {
+        uint seed = uint(pixel.x) * 0x9e3779b9u ^ uint(pixel.y) * 0x85ebca6bu;
+        if (screenEffectUniforms.ssrAnimatedNoise != 0) {
+            seed ^= uint(globalUniforms.time * 60.0) * 0xc2b2ae35u;
+        }
+        float2 xi = float2(ssrRandom01(seed), ssrRandom01(seed ^ 0x68bc21ebu));
+        float3 half = ggxVisibleHalfVector(eyeNormal, view,
+                                           screenEffectUniforms.ssrRoughness, xi);
+        reflection = normalize(reflect(-view, half));
+        if (dot(reflection, eyeNormal) <= 0.0) {
+            outImage[pixel] = scene;
+            return;
+        }
+    }
     // Half a stride on a checkerboard, so that neighbouring rays do not all
     // test the same depths and step the same misses.
     float jitter = float((pixel.x + pixel.y) & 1) * 0.5;
@@ -154,7 +180,8 @@ void ssrMain(uint3 dispatchId : SV_DispatchThreadID) {
         // the border reflects a surface that leaves the screen next frame.
         strength = 1.0 - clamp(reflection.z, 0.0, 1.0);
         strength *= 1.0 - numSteps / screenEffectUniforms.ssrMaxSteps;
-        strength *= 1.0 - max(0.0, (maxDim - kEdgeFadeStart) / (1.0 - kEdgeFadeStart));
+        float edgeFadeStart = min(screenEffectUniforms.ssrEdgeFadeStart, 0.99);
+        strength *= 1.0 - max(0.0, (maxDim - edgeFadeStart) / (1.0 - edgeFadeStart));
     }
     outImage[pixel] = float4(lerp(scene.rgb, reflectionColor, mirror * strength), scene.a);
 }

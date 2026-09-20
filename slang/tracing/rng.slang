@@ -55,35 +55,6 @@ public float3 ptCosineHemisphere(float3 normal, float2 xi) {
 }
 
 /**
- * Visible-normal GGX (Heitz, JCGT 2018). Takes perceptual roughness and
- * squares alpha internally. The weight is F * G2/G1, bounded by F - the plain
- * NDF's weight diverges at grazing incidence.
- */
-public float3 ptGgxVisibleHalfVector(float3 normal, float3 view, float roughness, float2 xi) {
-    float a = roughness * roughness;
-    float3 reference = abs(normal.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
-    float3 tangent = normalize(cross(reference, normal));
-    float3 bitangent = cross(normal, tangent);
-    float3 viewLocal = float3(dot(view, tangent), dot(view, bitangent), dot(view, normal));
-    float3 viewHemi = normalize(float3(a * viewLocal.x, a * viewLocal.y, max(0.0, viewLocal.z)));
-    // An orthonormal basis around it, degenerate-safe at normal incidence.
-    float lensq = viewHemi.x * viewHemi.x + viewHemi.y * viewHemi.y;
-    float3 t1 = lensq > 0.0 ? float3(-viewHemi.y, viewHemi.x, 0.0) * rsqrt(lensq)
-                            : float3(1.0, 0.0, 0.0);
-    float3 t2 = cross(viewHemi, t1);
-    // A disk sample, squashed to the projected area the viewer sees.
-    float r = sqrt(xi.x);
-    float phi = kPtTwoPi * xi.y;
-    float p1 = r * cos(phi);
-    float p2 = r * sin(phi);
-    float s = 0.5 * (1.0 + viewHemi.z);
-    p2 = lerp(sqrt(max(0.0, 1.0 - p1 * p1)), p2, s);
-    float3 halfHemi = p1 * t1 + p2 * t2 + sqrt(max(0.0, 1.0 - p1 * p1 - p2 * p2)) * viewHemi;
-    float3 halfLocal = normalize(float3(a * halfHemi.x, a * halfHemi.y, max(0.0, halfHemi.z)));
-    return tangent * halfLocal.x + bitangent * halfLocal.y + normal * halfLocal.z;
-}
-
-/**
  * A blue-noise 2D sample for the first shadow ray, decorrelated over time. The
  * counter picks the tile and a hashed toroidal anchor re-places it, so
  * consecutive draws are independent fields rather than a slid one; the tiles
