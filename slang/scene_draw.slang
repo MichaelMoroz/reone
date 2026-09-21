@@ -595,7 +595,16 @@ BlendedOutput sceneDrawBlendedFragment(Varyings input,
             if ((material.featureMask & kMaterialWater) != 0) {
                 diffuse = lerp(float3(1.0), diffuse, 0.2);
             }
-        } else if (!staticObject) {
+        } else if (staticObject) {
+            // A white bake, for the same reason retro_resolve keeps one.
+            // Static geometry is held out of every dynamic light below because
+            // a lightmap is presumed to carry that light; where none was
+            // authored the presumption is false and the arithmetic resolves to
+            // black. Reading the absence as a white bake keeps the authored
+            // texel, which is what an unlightmapped surface looked like in the
+            // original. Dantooine's foliage is exactly this case.
+            diffuse += float3(1.0);
+        } else {
             ambient += material.ambientColor.rgb * globalUniforms.worldAmbientColor.rgb;
         }
 
