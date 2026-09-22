@@ -7,31 +7,32 @@ flags). All renderer/RT work happens on the `path-tracing` branch.
 
 Read before proposing work, in this order:
 
-- `doc/tasks/README.md` — the index. Everything below hangs off it.
-- `doc/tasks/MASTER.md` — every open item with a stable ID, priority and owner.
-  **This is the answer to "what is outstanding".**
-- `doc/tasks/DESIGN.md` — the shape of each unbuilt step, its acceptance
-  criteria, and the decisions already taken with the reasoning that settled
-  them. Read the step you are about to work on before writing code.
-- `doc/tasks/RECORD.md` — postmortems, measurements, and approaches already
-  rejected. **If your idea appears here, it was tried; read why it died
-  before re-proposing it.**
-- `doc/tasks/CONVENTIONS.md` — conventions you would violate by accident, and
-  traps with their symptoms.
-- `doc/tasks/GLOSSARY.md` — the vocabulary, including terms that are now dead
-  and mean nothing despite appearing in commit messages.
-- `doc/tasks/FIDELITY.md` — the retro fidelity audit, 37 rows with evidence.
-- `doc/tasks/DECISIONS.md` — contradictions nobody has settled, and work with
-  no owner.
+- `doc/README.md` — the index. Everything below hangs off it.
+- `doc/TASKS.md` — every open item with a stable ID and priority, plus the
+  decisions nobody has settled. **This is the answer to "what is outstanding".**
+- `doc/DESIGN.md` — the shape of each unbuilt step and its acceptance criteria.
+  Read the step you are about to work on before writing code.
+- `doc/RENDERER.md` — how the renderer is put together today: the assembly
+  contract, the scene boundary, the RHI.
+- `doc/LESSONS.md` — approaches already rejected, with the argument that killed
+  them. **If your idea appears here, it was tried; read why it died before
+  re-proposing it.**
+- `doc/CONVENTIONS.md` — conventions you would violate by accident, traps with
+  their symptoms, and the capture and measurement rules.
+- `doc/GLOSSARY.md` — the vocabulary, including terms that are now dead and mean
+  nothing despite appearing in commit messages.
+- `doc/FIDELITY.md` — where retro still differs from the original, with evidence.
 
 - `.claude/skills/reone-diagnostics/SKILL.md` — the full measurement harness
   and its trap list. The short version is below, but the skill is the
   authority.
 
-Nine older planning documents were consolidated into that folder on 2026-08-05
-and deleted. Do not cite `phase-f.md`, `backlog.md`, `cleanup-plan.md` or the
-`vulkan-*` plans — they no longer exist, and item identifiers like
-`backlog 1.13` survive only as provenance.
+Nine older planning documents were consolidated on 2026-08-05 and deleted; the
+`doc/tasks/` folder that replaced them was flattened into `doc/` on 2026-09-22,
+when everything it recorded as built was removed. Do not cite `phase-f.md`,
+`backlog.md`, `cleanup-plan.md`, the `vulkan-*` plans, `MASTER.md`, `RECORD.md`
+or `DECISIONS.md` — none of them exist. **Completion is not recorded in `doc/`:
+a built item leaves the folder, and git history is where it went.**
 
 ## Design direction
 
@@ -46,7 +47,7 @@ the reference engines settle disputes — read-only checkouts of:
   prior art for PBR over these assets) — https://gitlab.com/nineteenss/kvp
 
 Checkout location varies per machine; the findings survey and where-each-wins
-rules live in `doc/tasks/DESIGN.md`'s reference-engine section. PBR/PT are held to looking right, not to matching 2003.
+rules live in `doc/DESIGN.md`'s reference-engine section. PBR/PT are held to looking right, not to matching 2003.
 Never trade these against each other inside one mode.
 
 **One scene description.** Raster and the tracer consume the same admission,
@@ -100,7 +101,7 @@ rays; grass generates on the GPU from integer hashes; culling buys nothing here
   the allocator is destroyed is the standing teardown-crash class. Silent
   startup crashes around Vulkan libraries are lifetime/symbol bugs until
   proven otherwise (volk's `vk*` data symbols collide silently).
-- Docs: a new item goes in `doc/tasks/MASTER.md` with a state and a
+- Docs: a new item goes in `doc/TASKS.md` with a state and a
   provenance; its design goes in `DESIGN.md`; a measurement or a postmortem
   goes in `RECORD.md`. Steps are sized to one agent context, briefable in a
   page, prove their own work positively, and are committable alone.

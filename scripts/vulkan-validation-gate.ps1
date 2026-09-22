@@ -14,7 +14,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 # Vulkan validation gate: the build must be validation-clean before anything
-# else is measured against it. See doc/tasks/GPU-CONTRACTS.md, phase 5.
+# else is measured against it. See doc/CONVENTIONS.md 1.8-1.9.
 #
 # Runs a short character-generation sequence - the exact shape that exposed
 # the post-merge device loss: two module reloads with GUI scene graphs

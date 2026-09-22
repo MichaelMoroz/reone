@@ -13,7 +13,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-# Captures the GUI proof matrix as PNGs. See doc/gui-capture-proof.md.
+# Captures the GUI proof matrix as PNGs. See doc/gui.md.
 param(
     [Parameter(Mandatory = $true)][string]$Kotor1Dir,
     [Parameter(Mandatory = $true)][string]$Kotor2Dir,
@@ -46,7 +46,7 @@ $ffmpeg = (Get-Command ffmpeg -ErrorAction Stop).Source
 
 # A validation-dirty build fails here in about a minute, not forty minutes into
 # the matrix - and never quietly poisons a capture comparison. The gate is the
-# short chargen repro under --vkvalidation 1; see doc/tasks/GPU-CONTRACTS.md.
+# short chargen repro under --vkvalidation 1; see doc/CONVENTIONS.md.
 if (-not $SkipValidationGate) {
     & (Join-Path $PSScriptRoot "vulkan-validation-gate.ps1") -Kotor1Dir $Kotor1Dir
     if ($LASTEXITCODE -ne 0) {

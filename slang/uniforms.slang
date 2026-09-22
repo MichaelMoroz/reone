@@ -112,7 +112,7 @@ struct LocalUniforms {
     float4 diffuseColor;
     float4 selfIllumColor;
     // Former loose uniforms. Vulkan has no equivalent, so they move into the
-    // block; see doc/tasks/CONVENTIONS.md.
+    // block; see doc/CONVENTIONS.md.
     float4 saberDisplacement;
     int featureMask;
     int bumpMapFrame;
