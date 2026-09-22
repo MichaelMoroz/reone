@@ -31,7 +31,6 @@ enum class SceneNodeType {
     Emitter,
     Particle,
     Grass,
-    GrassCluster,
     Walkmesh,
     Trigger
 };
@@ -55,6 +54,15 @@ struct AnimationFlags {
     static constexpr int overlay = 8; /**< overlay next animation on top of the previous one */
 
     static constexpr int propagate = 0x10; /**< propagate animation to attached models */
+
+    /**
+     * With overlay, layer on top of whatever is already playing instead of
+     * replacing it, so the animations underneath keep running and keep
+     * supplying the nodes this one does not animate.
+     */
+    static constexpr int layer = 0x20;
+
+    static constexpr int retargetRoot = 0x40; /**< map an external animation's proxy root onto the target model root */
 
     static constexpr int loopOverlay = loop | overlay;
     static constexpr int loopBlend = loop | blend;

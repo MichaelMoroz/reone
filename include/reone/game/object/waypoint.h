@@ -44,13 +44,16 @@ public:
     }
 
     void loadFromBlueprint(const std::string &resRef);
-    void deserialize(const resource::Gff &gff);
+    void deserialize(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext);
 
     bool isMapNoteEnabled() const { return _mapNoteEnabled; }
 
     const std::string &mapNote() const { return _mapNote.str(); }
 
 private:
+    friend class ModuleSnapshotBuilder;
     // Serializable
     bool _hasMapNote {false};
     bool _mapNoteEnabled {false};
@@ -58,7 +61,9 @@ private:
     resource::LocString _locName;
     // END Serializable
 
-    void deserializeAll(const resource::Gff &gff);
+    void deserializeAll(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext);
 };
 
 } // namespace game

@@ -17,6 +17,8 @@
 
 #include "reone/system/threadpool.h"
 
+#include "reone/system/threadutil.h"
+
 namespace reone {
 
 void ThreadPool::init() {
@@ -25,7 +27,10 @@ void ThreadPool::init() {
     }
     _running = true;
     for (auto i = 0; i < _numThreads; ++i) {
-        _threads.emplace_back(std::bind(&ThreadPool::workerThreadFunc, this));
+        _threads.emplace_back([this, i]() {
+            setThreadName("worker " + std::to_string(i));
+            workerThreadFunc();
+        });
     }
 }
 

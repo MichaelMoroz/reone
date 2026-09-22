@@ -60,17 +60,20 @@ void Trigger::loadFromBlueprint(const std::string &resRef) {
     if (!utt) {
         return;
     }
-    deserialize(*utt);
+    deserialize(*utt, SerializedIdentityContext::templateResource(resRef));
 }
 
-void Trigger::deserialize(const resource::Gff &gff) {
+void Trigger::deserialize(
+    const resource::Gff &gff,
+    const SerializedIdentityContext &identityContext) {
     std::string templateRes;
-    if (gff.readResRef(templateRes, "TemplateResRef")) {
+    if (!identityContext.isSerializedState() &&
+        gff.readResRef(templateRes, "TemplateResRef")) {
         if (auto utt = _services.resource.gffs.get(templateRes, ResType::Utt)) {
-            deserializeAll(*utt);
+            deserializeAll(*utt, SerializedIdentityContext::templateResource(templateRes));
         }
     }
-    deserializeAll(gff);
+    deserializeAll(gff, identityContext);
     loadAppearance();
     updateTransform();
 }
@@ -91,7 +94,10 @@ void Trigger::configureLinkedDoorTransition(const std::shared_ptr<Door> &door) {
     updateTransform();
 }
 
-void Trigger::deserializeAll(const resource::Gff &gff) {
+void Trigger::deserializeAll(
+    const resource::Gff &gff,
+    const SerializedIdentityContext &identityContext) {
+    deserializeRuntimeState(gff, identityContext);
     gff.readResRef(_onHeartbeat, "ScriptHeartbeat");
     gff.readResRef(_onEnter, "ScriptOnEnter");
     gff.readResRef(_onExit, "ScriptOnExit");
@@ -165,7 +171,6 @@ void Trigger::loadAppearance() {
         return;
     }
     _sceneNode->setLocalTransform(glm::translate(_position));
-    syncDebugVisual();
 }
 
 void Trigger::update(float dt) {
@@ -177,7 +182,6 @@ void Trigger::update(float dt) {
 
     if (!isActive()) {
         _tenants.clear();
-        syncDebugVisual();
         return;
     }
 
@@ -203,12 +207,10 @@ void Trigger::update(float dt) {
              {script::ArgKind::ExitingObject, script::Variable::ofObject(tenant->id())}});
     }
 
-    syncDebugVisual();
 }
 
 void Trigger::addTenant(const std::shared_ptr<Object> &object) {
     _tenants.insert(object);
-    syncDebugVisual();
     if (_onEnter.empty()) {
         return;
     }
@@ -224,7 +226,6 @@ void Trigger::removeTenant(const Object *object) {
     for (auto it = _tenants.begin(); it != _tenants.end();) {
         if (it->get() == object) {
             it = _tenants.erase(it);
-            syncDebugVisual();
         } else {
             ++it;
         }
@@ -245,7 +246,7 @@ bool Trigger::isActive() const {
     if (!_linkedDoorTransition) {
         return true;
     }
-    auto door = _linkedDoor.lock();
+    auto door = _linkedDoor.resolve();
     return door && door->isOpen();
 }
 
@@ -253,14 +254,19 @@ bool Trigger::acceptsTransitionActivator(const std::shared_ptr<Object> &activato
     if (_linkedToModule.empty() || !isActive()) {
         return false;
     }
-    if (_linkedDoorTransition && (!activator || activator != _game.party().getLeader())) {
+    if (!activator) {
         return false;
     }
-    return true;
+    // Only the player character or the current party leader moves the party
+    // between modules; a following companion crossing a transition is ignored.
+    // Taking control of a companion makes it the leader, so it keeps the
+    // ability to transition and stays controlled in the destination.
+    const Party &party = _game.party();
+    return activator == party.actualPlayer() || activator == party.getLeader();
 }
 
 bool Trigger::detachLinkedDoorTransition(const Door &door) {
-    auto linkedDoor = _linkedDoor.lock();
+    auto linkedDoor = _linkedDoor.resolve();
     if (!_linkedDoorTransition || linkedDoor.get() != &door) {
         return false;
     }
@@ -269,7 +275,6 @@ bool Trigger::detachLinkedDoorTransition(const Door &door) {
     _linkedToModule.clear();
     _linkedTo.clear();
     _tenants.clear();
-    syncDebugVisual();
     return true;
 }
 
@@ -290,6 +295,13 @@ glm::vec4 Trigger::debugColor() const {
     return debugColorForState(debugState());
 }
 
+void Trigger::syncDebugVisual() {
+    if (!_sceneNode) {
+        return;
+    }
+    static_cast<scene::TriggerSceneNode *>(_sceneNode.get())->setDebugColor(debugColor());
+}
+
 void Trigger::markDebugTested(bool inside) {
     _debugTestAge = kDebugTestDuration;
     if (inside) {
@@ -301,13 +313,6 @@ void Trigger::markDebugTested(bool inside) {
 void Trigger::markDebugEntered() {
     _debugEnterAge = kDebugEnterDuration;
     syncDebugVisual();
-}
-
-void Trigger::syncDebugVisual() {
-    if (!_sceneNode) {
-        return;
-    }
-    static_cast<TriggerSceneNode *>(_sceneNode.get())->setDebugColor(debugColor());
 }
 
 } // namespace game

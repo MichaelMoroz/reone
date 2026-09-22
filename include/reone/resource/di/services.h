@@ -33,9 +33,9 @@ class IModels;
 class IMovies;
 class IPaths;
 class IResourceDirector;
+class IResourceReplacements;
 class IResources;
 class IScripts;
-class IShaders;
 class ISoundSets;
 class IStrings;
 class ITextures;
@@ -46,6 +46,7 @@ class IWalkmeshes;
 struct ResourceServices {
     IGffs &gffs;
     IResources &resources;
+    IResourceReplacements &replacements;
     IStrings &strings;
     ITwoDAs &twoDas;
     IScripts &scripts;
@@ -63,12 +64,12 @@ struct ResourceServices {
     ISoundSets &soundSets;
     IVisibilities &visibilities;
     ILtrs &ltrs;
-    IShaders &shaders;
     IResourceDirector &director;
 
     ResourceServices(
         IGffs &gffs,
         IResources &resources,
+        IResourceReplacements &replacements,
         IStrings &strings,
         ITwoDAs &twoDas,
         IScripts &scripts,
@@ -86,10 +87,10 @@ struct ResourceServices {
         ISoundSets &soundSets,
         IVisibilities &visibilities,
         ILtrs &ltrs,
-        IShaders &shaders,
         IResourceDirector &director) :
         gffs(gffs),
         resources(resources),
+        replacements(replacements),
         strings(strings),
         twoDas(twoDas),
         scripts(scripts),
@@ -107,7 +108,6 @@ struct ResourceServices {
         soundSets(soundSets),
         visibilities(visibilities),
         ltrs(ltrs),
-        shaders(shaders),
         director(director) {
     }
 };

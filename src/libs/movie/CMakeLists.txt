@@ -29,7 +29,7 @@ set(MOVIE_SOURCES
     ${MOVIE_SOURCE_DIR}/movie.cpp)
 
 add_library(movie STATIC ${MOVIE_HEADERS} ${MOVIE_SOURCES} ${CLANG_FORMAT_PATH})
-set_target_properties(movie PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/lib)
+set_target_properties(movie PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${REONE_LIB_DIR})
 set_target_properties(movie PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(movie PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 

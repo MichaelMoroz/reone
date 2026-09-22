@@ -33,6 +33,7 @@ void StaticCamera::deserialize(const resource::Gff &gff) {
     gff.readInt(_cameraId, "CameraID");
     gff.readFloat(_fieldOfView, "FieldOfView");
     gff.readFloat(_height, "Height");
+    gff.readFloat(_micRange, "MicRange");
     if (gff.readVector(_position, "Position")) {
         _position.z += _height;
     }
@@ -44,9 +45,13 @@ void StaticCamera::deserialize(const resource::Gff &gff) {
 
     auto &scene = _services.scene.graphs.get(_sceneName);
     _sceneNode = scene.newCamera();
-    cameraSceneNode()->setPerspectiveProjection(glm::radians(_fieldOfView), _aspect, kDefaultClipPlaneNear, kDefaultClipPlaneFar);
+    rebuildProjection();
 
     updateTransform();
+}
+
+float StaticCamera::projectionFovy() const {
+    return glm::radians(_fieldOfView);
 }
 
 } // namespace game

@@ -18,120 +18,14 @@
 #include "reone/graphics/mesh.h"
 
 #include "reone/graphics/barycentricutil.h"
-#include "reone/graphics/statistic.h"
 #include "reone/graphics/triangleutil.h"
 #include "reone/system/checkutil.h"
-#include "reone/system/threadutil.h"
 
 namespace reone {
 
 namespace graphics {
 
 void Mesh::init() {
-    if (_inited) {
-        return;
-    }
-    checkMainThread();
-
-    std::vector<uint16_t> indices;
-    indices.reserve(3 * _faces.size());
-    for (auto &face : _faces) {
-        indices.push_back(face.vertices[0]);
-        indices.push_back(face.vertices[1]);
-        indices.push_back(face.vertices[2]);
-    }
-
-    // OpenGL
-
-    glGenBuffers(1, &_vboId);
-    glGenBuffers(1, &_iboId);
-
-    glGenVertexArrays(1, &_vaoId);
-    glBindVertexArray(_vaoId);
-    if (!_vertexData.empty()) {
-        glBindBuffer(GL_ARRAY_BUFFER, _vboId);
-        glBufferData(GL_ARRAY_BUFFER, _vertexData.size() * sizeof(float), &_vertexData[0], GL_STATIC_DRAW);
-    }
-    if (!indices.empty()) {
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, _iboId);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(uint16_t), &indices[0], GL_STATIC_DRAW);
-    }
-
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, _vertexLayout.stride, reinterpret_cast<void *>(0));
-    if (_vertexLayout.offNormals != -1) {
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, _vertexLayout.stride, reinterpret_cast<void *>(static_cast<size_t>(_vertexLayout.offNormals)));
-    }
-    if (_vertexLayout.offUV1 != -1) {
-        glEnableVertexAttribArray(2);
-        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, _vertexLayout.stride, reinterpret_cast<void *>(static_cast<size_t>(_vertexLayout.offUV1)));
-    }
-    if (_vertexLayout.offUV2 != -1) {
-        glEnableVertexAttribArray(3);
-        glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, _vertexLayout.stride, reinterpret_cast<void *>(static_cast<size_t>(_vertexLayout.offUV2)));
-    }
-    if (_vertexLayout.offTanSpace != -1) {
-        // Bitangents
-        glEnableVertexAttribArray(4);
-        glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, _vertexLayout.stride, reinterpret_cast<void *>(static_cast<size_t>(_vertexLayout.offTanSpace)));
-        // Tangents
-        glEnableVertexAttribArray(5);
-        glVertexAttribPointer(5, 3, GL_FLOAT, GL_FALSE, _vertexLayout.stride, reinterpret_cast<void *>(static_cast<size_t>(_vertexLayout.offTanSpace + 3 * sizeof(float))));
-        // Normals
-        glEnableVertexAttribArray(6);
-        glVertexAttribPointer(6, 3, GL_FLOAT, GL_FALSE, _vertexLayout.stride, reinterpret_cast<void *>(static_cast<size_t>(_vertexLayout.offTanSpace + 6 * sizeof(float))));
-    }
-    if (_vertexLayout.offBoneIndices != -1) {
-        glEnableVertexAttribArray(7);
-        glVertexAttribPointer(7, 4, GL_FLOAT, GL_FALSE, _vertexLayout.stride, reinterpret_cast<void *>(static_cast<size_t>(_vertexLayout.offBoneIndices)));
-    }
-    if (_vertexLayout.offBoneWeights != -1) {
-        glEnableVertexAttribArray(8);
-        glVertexAttribPointer(8, 4, GL_FLOAT, GL_FALSE, _vertexLayout.stride, reinterpret_cast<void *>(static_cast<size_t>(_vertexLayout.offBoneWeights)));
-    }
-    if (_vertexLayout.offMaterial != -1) {
-        glEnableVertexAttribArray(9);
-        glVertexAttribPointer(9, 1, GL_FLOAT, GL_FALSE, _vertexLayout.stride, reinterpret_cast<void *>(static_cast<size_t>(_vertexLayout.offMaterial)));
-    }
-
-    glBindVertexArray(0);
-
-    // END OpenGL
-
-    _inited = true;
-}
-
-void Mesh::deinit() {
-    if (!_inited) {
-        return;
-    }
-    checkMainThread();
-    glDeleteVertexArrays(1, &_vaoId);
-    glDeleteBuffers(1, &_iboId);
-    glDeleteBuffers(1, &_vboId);
-    _inited = false;
-}
-
-void Mesh::draw(IStatistic &statistic) {
-    glBindVertexArray(_vaoId);
-    glDrawElements(
-        GL_TRIANGLES,
-        static_cast<GLsizei>(3 * _faces.size()),
-        GL_UNSIGNED_SHORT,
-        nullptr);
-    statistic.incrementDrawCalls();
-}
-
-void Mesh::drawInstanced(int count, IStatistic &statistic) {
-    glBindVertexArray(_vaoId);
-    glDrawElementsInstanced(
-        GL_TRIANGLES,
-        static_cast<GLsizei>(3 * _faces.size()),
-        GL_UNSIGNED_SHORT,
-        nullptr,
-        count);
-    statistic.incrementDrawCalls();
 }
 
 void Mesh::computeVertexDataFromVertices() {

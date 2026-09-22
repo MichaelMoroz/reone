@@ -22,43 +22,35 @@ namespace reone {
 namespace graphics {
 
 void GraphicsModule::init() {
-    _context = std::make_unique<Context>(_options);
     _statistic = std::make_unique<Statistic>();
     _meshRegistry = std::make_unique<MeshRegistry>(*_statistic);
-    _shaderRegistry = std::make_unique<ShaderRegistry>();
     _textureRegistry = std::make_unique<TextureRegistry>();
-    _uniforms = std::make_unique<Uniforms>(*_context);
-    _pbrTextures = std::make_unique<PBRTextures>(
-        *_context,
-        *_meshRegistry,
-        *_shaderRegistry,
-        *_statistic,
-        *_uniforms);
-
+    _uniforms = std::make_unique<Uniforms>();
     _services = std::make_unique<GraphicsServices>(
-        *_context,
         *_meshRegistry,
-        *_pbrTextures,
-        *_shaderRegistry,
+        renderer(),
+        renderer2d(),
         *_statistic,
         *_textureRegistry,
         *_uniforms);
 
-    _context->init();
+    // Vulkan owns device resources. These registries retain the CPU asset data
+    // from which it creates its buffers and images on first use.
     _meshRegistry->init();
     _textureRegistry->init();
-    _uniforms->init();
+    renderer().init();
+    renderer2d().init();
 }
 
 void GraphicsModule::deinit() {
     _services.reset();
 
-    _pbrTextures.reset();
+    _externalRenderer = nullptr;
+    _externalRenderer2d = nullptr;
     _uniforms.reset();
     _meshRegistry.reset();
     _textureRegistry.reset();
     _statistic.reset();
-    _context.reset();
 }
 
 } // namespace graphics

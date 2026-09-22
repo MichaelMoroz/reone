@@ -49,6 +49,6 @@ set(SCRIPT_SOURCES
     ${SCRIPT_SOURCE_DIR}/virtualmachine.cpp)
 
 add_library(script STATIC ${SCRIPT_HEADERS} ${SCRIPT_SOURCES} ${CLANG_FORMAT_PATH})
-set_target_properties(script PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/lib)
+set_target_properties(script PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${REONE_LIB_DIR})
 set_target_properties(script PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(script PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)

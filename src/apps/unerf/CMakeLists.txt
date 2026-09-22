@@ -21,7 +21,7 @@ set(UNERF_SOURCES
     ${UNERF_SOURCE_DIR}/main.cpp)
 
 add_executable(unerf ${UNERF_SOURCES} ${UNERF_HEADERS} ${CLANG_FORMAT_PATH})
-set_target_properties(unerf PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/bin)
+set_target_properties(unerf PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${REONE_BIN_DIR})
 target_precompile_headers(unerf PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(unerf PRIVATE resource system ${Boost_PROGRAM_OPTIONS_LIBRARY})
 

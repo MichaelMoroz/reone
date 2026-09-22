@@ -26,19 +26,14 @@ namespace game {
 class DamageReductionEffect : public Effect {
 public:
     DamageReductionEffect(int amount, DamagePower damagePower, int limit) :
-        Effect(EffectType::DamageReduction),
-        _amount(amount),
-        _damagePower(damagePower),
-        _limit(limit) {
+        Effect(EffectType::DamageReduction) {
+        setSaveFacingInteger(0, amount);
+        setSaveFacingInteger(1, static_cast<int>(damagePower));
+        setSaveFacingInteger(2, limit);
     }
 
-    void applyTo(Object &object) override {
+    void applyTo(Object &) override {
     }
-
-private:
-    int _amount;
-    DamagePower _damagePower;
-    int _limit;
 };
 
 } // namespace game

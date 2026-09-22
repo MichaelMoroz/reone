@@ -18,18 +18,22 @@
 #pragma once
 
 #include "../action.h"
+#include "../object/door.h"
 
 namespace reone {
 
 namespace game {
 
+class Door;
+
 class CloseDoorAction : public Action {
 public:
     CloseDoorAction(Game &game,
                     ServicesView &services,
-                    std::shared_ptr<Object> door) :
+                    std::shared_ptr<Door> door) :
         Action(game, services, ActionType::CloseDoor),
         _door(std::move(door)) {
+        requireRuntimeObject(_door);
     }
 
     static bool classof(Action *from) {
@@ -39,7 +43,7 @@ public:
     void execute(std::shared_ptr<Action> self, Object &actor, float dt) override;
 
 private:
-    std::shared_ptr<Object> _door;
+    std::shared_ptr<Door> _door;
 };
 
 } // namespace game

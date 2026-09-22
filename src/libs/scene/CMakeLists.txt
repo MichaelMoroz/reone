@@ -22,17 +22,18 @@ set(SCENE_HEADERS
     ${SCENE_INCLUDE_DIR}/collision.h
     ${SCENE_INCLUDE_DIR}/di/module.h
     ${SCENE_INCLUDE_DIR}/di/services.h
-    ${SCENE_INCLUDE_DIR}/drawdebug.h
     ${SCENE_INCLUDE_DIR}/fogproperties.h
     ${SCENE_INCLUDE_DIR}/graph.h
+    ${SCENE_INCLUDE_DIR}/drawdebug.h
     ${SCENE_INCLUDE_DIR}/graphs.h
+    ${SCENE_INCLUDE_DIR}/skyrooms.h
     ${SCENE_INCLUDE_DIR}/grassproperties.h
+    ${SCENE_INCLUDE_DIR}/gpuscene.h
     ${SCENE_INCLUDE_DIR}/node.h
     ${SCENE_INCLUDE_DIR}/node/camera.h
     ${SCENE_INCLUDE_DIR}/node/dummy.h
     ${SCENE_INCLUDE_DIR}/node/emitter.h
     ${SCENE_INCLUDE_DIR}/node/grass.h
-    ${SCENE_INCLUDE_DIR}/node/grasscluster.h
     ${SCENE_INCLUDE_DIR}/node/light.h
     ${SCENE_INCLUDE_DIR}/node/mesh.h
     ${SCENE_INCLUDE_DIR}/node/model.h
@@ -41,20 +42,23 @@ set(SCENE_HEADERS
     ${SCENE_INCLUDE_DIR}/node/sound.h
     ${SCENE_INCLUDE_DIR}/node/trigger.h
     ${SCENE_INCLUDE_DIR}/node/walkmesh.h
-    ${SCENE_INCLUDE_DIR}/render/pass.h
-    ${SCENE_INCLUDE_DIR}/render/pass/retro.h
-    ${SCENE_INCLUDE_DIR}/render/pass/pbr.h
+    ${SCENE_INCLUDE_DIR}/particleutil.h
     ${SCENE_INCLUDE_DIR}/render/pipeline.h
-    ${SCENE_INCLUDE_DIR}/render/pipeline/retro.h
-    ${SCENE_INCLUDE_DIR}/render/pipeline/pbr.h
+    ${SCENE_INCLUDE_DIR}/render/admission.h
+    ${SCENE_INCLUDE_DIR}/render/pipeline/renderpipeline.h
+    ${SCENE_INCLUDE_DIR}/render/pipeline/rayquery.h
+    ${SCENE_INCLUDE_DIR}/render/pipeline/tracematerials.h
+    ${SCENE_INCLUDE_DIR}/shadowproperties.h
     ${SCENE_INCLUDE_DIR}/types.h
     ${SCENE_INCLUDE_DIR}/user.h)
 
 set(SCENE_SOURCES
     ${SCENE_SOURCE_DIR}/di/module.cpp
-    ${SCENE_SOURCE_DIR}/drawdebug.cpp
+    ${SCENE_SOURCE_DIR}/drawdebugstore.cpp
     ${SCENE_SOURCE_DIR}/graph.cpp
     ${SCENE_SOURCE_DIR}/graphs.cpp
+    ${SCENE_SOURCE_DIR}/skyrooms.cpp
+    ${SCENE_SOURCE_DIR}/gpuscene.cpp
     ${SCENE_SOURCE_DIR}/node.cpp
     ${SCENE_SOURCE_DIR}/node/camera.cpp
     ${SCENE_SOURCE_DIR}/node/emitter.cpp
@@ -67,13 +71,17 @@ set(SCENE_SOURCES
     ${SCENE_SOURCE_DIR}/node/sound.cpp
     ${SCENE_SOURCE_DIR}/node/trigger.cpp
     ${SCENE_SOURCE_DIR}/node/walkmesh.cpp
-    ${SCENE_SOURCE_DIR}/render/pass/retro.cpp
-    ${SCENE_SOURCE_DIR}/render/pass/pbr.cpp
-    ${SCENE_SOURCE_DIR}/render/pipeline.cpp
-    ${SCENE_SOURCE_DIR}/render/pipeline/retro.cpp
-    ${SCENE_SOURCE_DIR}/render/pipeline/pbr.cpp)
+    ${SCENE_SOURCE_DIR}/particleutil.cpp
+    ${SCENE_SOURCE_DIR}/render/pipeline/tracematerials.cpp
+)
 
 add_library(scene STATIC ${SCENE_HEADERS} ${SCENE_SOURCES} ${CLANG_FORMAT_PATH})
-set_target_properties(scene PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/lib)
+set_target_properties(scene PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${REONE_LIB_DIR})
 set_target_properties(scene PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(scene PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
+
+target_sources(scene PRIVATE
+    ${SCENE_SOURCE_DIR}/render/admission.cpp
+    ${SCENE_SOURCE_DIR}/render/pipeline/renderpipeline.cpp
+    ${SCENE_SOURCE_DIR}/render/pipeline/rayquery.cpp)
+target_link_libraries(scene PUBLIC graphicsvulkan)

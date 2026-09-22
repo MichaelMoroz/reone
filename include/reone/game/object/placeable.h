@@ -46,9 +46,13 @@ public:
     }
 
     void loadFromBlueprint(const std::string &resRef);
-    void deserialize(const resource::Gff &gff);
+    void deserialize(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext);
 
-    void damage(int amount, uint32_t damager) override;
+    void damage(
+        int amount,
+        const std::shared_ptr<Object> &damager) override;
 
     bool hasInventory() const { return _hasInventory; }
     bool isSelectable() const override { return _usable; }
@@ -67,11 +71,12 @@ public:
 
     void onOpen(uint32_t triggererId);
     void runOnUsed(std::shared_ptr<Object> usedBy);
-    void runOnInvDisturbed(std::shared_ptr<Object> triggerrer);
+    void runOnInvDisturbed(uint32_t triggerrer, InventoryDisturbType type, uint32_t item);
 
     // END Scripts
 
 private:
+    friend class ModuleSnapshotBuilder;
     // Serializable
     resource::LocString _locName;
     bool _autoRemoveKey {false};
@@ -99,7 +104,6 @@ private:
     bool _hasInventory {false};
     bool _keyRequired {false};
     uint8_t _closeLockDC {0};
-    bool _open {false};
     bool _partyInteract {false};
     uint16_t _portraitId {0};
     uint8_t _bodyBagId {0xFF};
@@ -136,10 +140,12 @@ private:
 
     // END Scripts
 
-    void runDamagedScript(uint32_t damagerId);
-    void runDeathScript(uint32_t damagerId);
+    void runDamagedScript();
+    void runDeathScript();
 
-    void deserializeAll(const resource::Gff &gff);
+    void deserializeAll(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext);
     void loadAppearance();
 
     void updateTransform() override;

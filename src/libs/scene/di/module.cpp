@@ -17,6 +17,11 @@
 
 #include "reone/scene/di/module.h"
 
+#include "reone/scene/render/pipeline/renderpipeline.h"
+
+#include "reone/graphics/vulkan/renderer.h"
+#include "reone/system/logutil.h"
+
 #include "reone/game/types.h"
 
 using namespace reone::game;
@@ -25,14 +30,35 @@ namespace reone {
 
 namespace scene {
 
+namespace {
+
+/**
+ * Locate the asset override tree. The engine runs from build/bin while the
+ * configs are committed at the repository root, so walk upwards rather than
+ * copying them into the build directory - a copy would mean the editor writes
+ * curated material overrides somewhere a rebuild can clobber. A shipped build
+ * puts `override` beside the executable and matches on the first step.
+ */
+std::filesystem::path findOverrideRoot(resource::GameID gameId) {
+    const char *game = gameId == resource::GameID::TSL ? "k2" : "k1";
+    auto dir = std::filesystem::current_path();
+    for (int depth = 0; depth < 5; ++depth) {
+        auto candidate = dir / "override";
+        if (std::filesystem::is_directory(candidate))
+            return candidate / game;
+        if (!dir.has_parent_path() || dir.parent_path() == dir)
+            break;
+        dir = dir.parent_path();
+    }
+    return std::filesystem::current_path() / "override" / game;
+}
+
+} // namespace
+
 void SceneModule::init() {
     _renderPipelineFactory = std::make_unique<RenderPipelineFactory>(
         _graphicsOpt,
-        _graphics.context(),
         _graphics.meshRegistry(),
-        _graphics.pbrTextures(),
-        _graphics.shaderRegistry(),
-        _graphics.statistic(),
         _graphics.textureRegistry(),
         _graphics.uniforms());
     _graphs = std::make_unique<SceneGraphs>(
@@ -40,7 +66,8 @@ void SceneModule::init() {
         _graphicsOpt,
         _graphics.services(),
         _audio.services(),
-        _resource.services());
+        _resource.services(),
+        findOverrideRoot(_resource.gameId()));
 
     _services = std::make_unique<SceneServices>(*_graphs, *_renderPipelineFactory);
 
@@ -53,6 +80,23 @@ void SceneModule::init() {
     }
     _graphs->reserve(kScenePortraitSelect);
     _graphs->reserve(kSceneCharacter);
+}
+
+std::unique_ptr<IRenderPipeline> RenderPipelineFactory::create(RenderMode mode,
+                                                               glm::ivec2 targetSize,
+                                                               GpuScene &scene) {
+    if (!_renderer) {
+        throw std::logic_error("Renderer was not supplied to the pipeline factory");
+    }
+    if (mode == RenderMode::PathTracing && !_renderer->rayQueryAvailable()) {
+        warn("Path tracing needs ray-query acceleration structures and position fetch, "
+             "which this device does not provide; rendering PBR instead.",
+             LogChannel::Graphics);
+        mode = RenderMode::PBR;
+    }
+    return std::make_unique<RenderPipeline>(
+        std::move(targetSize), _options, *_renderer, _uniforms, _meshRegistry, _textureRegistry,
+        scene, mode == RenderMode::PathTracing);
 }
 
 void SceneModule::deinit() {

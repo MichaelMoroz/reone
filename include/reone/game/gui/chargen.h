@@ -73,6 +73,7 @@ public:
     bool handle(const input::Event &event) override;
     void update(float dt) override;
     void render() override;
+    void renderOffscreen() override;
 
     void startQuick();
     void startCustom();
@@ -85,6 +86,10 @@ public:
     void openNameEntry();
     void openAbilities();
     void openSkills();
+    CharGenSkills &skills() { return *_charGenSkills; }
+    CharGenFeats &feats() { return *_charGenFeats; }
+    CharGenPowers &powers() { return *_charGenPowers; }
+
     void openFeats();
     void openPowers();
     void openPortraitSelection();
@@ -99,6 +104,7 @@ public:
     const Character &character() const { return _character; }
 
     void setCharacter(Character character);
+    void setCharacterName(std::string name);
 
     const std::string &musicResRef() const {
         return _musicResRef;

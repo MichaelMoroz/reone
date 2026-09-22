@@ -17,6 +17,8 @@
 
 #include "reone/resource/provider/textures.h"
 
+
+
 #include "reone/graphics/format/curreader.h"
 #include "reone/graphics/format/tgareader.h"
 #include "reone/graphics/format/tpcreader.h"
@@ -47,14 +49,9 @@ std::shared_ptr<Texture> Textures::get(const std::string &resRef, TextureUsage u
     if (resRef.empty()) {
         return nullptr;
     }
-    auto maybeTexture = _cache.find(resRef);
-    if (maybeTexture != _cache.end()) {
-        return maybeTexture->second;
-    }
-    std::string lcResRef(boost::to_lower_copy(resRef));
-    auto inserted = _cache.insert(std::make_pair(lcResRef, doGet(lcResRef, usage)));
-
-    return inserted.first->second;
+    const auto lcResRef = boost::to_lower_copy(resRef);
+    return _cache.getOrAdd({lcResRef, usage},
+                           [this, &lcResRef, usage]() { return doGet(lcResRef, usage); });
 }
 
 std::shared_ptr<Texture> Textures::doGet(const std::string &resRef, TextureUsage usage) {
@@ -98,10 +95,42 @@ std::shared_ptr<Texture> Textures::doGet(const std::string &resRef, TextureUsage
     }
 
     if (texture) {
+        // The material schema samples grayscale bump maps through a
+        // Sampler2DArray even when there is only one frame. Keep that view
+        // contract true at the resource boundary; otherwise the material id
+        // addresses an unpopulated array-descriptor slot.
+        if (usage == TextureUsage::BumpMap && texture->isGrayscale() &&
+            texture->is2D()) {
+            if (features &&
+                features->procedureType != Texture::ProcedureType::Invalid &&
+                (features->numX > 1 || features->numY > 1)) {
+                convertGridTextureToArray(*texture, features->numX, features->numY);
+            } else {
+                texture->setType(TextureType::TwoDimArray);
+            }
+        }
+        // An animation arrives from the reader as one layer per frame, which
+        // is what the file holds. Only the bumpmap slot can index a layer, so
+        // every other slot gets those frames laid out as a sheet instead, which
+        // the UV transform then windows a frame at a time.
+        //
+        // This used to run the other way round - the reader handed over one
+        // flat image and this sliced it into an array, whatever slot it was
+        // headed for. The image it sliced was frame 0's mip chain and the other
+        // frames read as one picture, so the slices were quarters of that; and
+        // for a diffuse the array then sat in a bindless table its material id
+        // never addressed, which is why the Taris force field drew nothing at
+        // all here and one frozen frame in the OpenGL build.
         if (features &&
             features->procedureType != Texture::ProcedureType::Invalid &&
             (features->numX > 1 || features->numY > 1)) {
-            convertGridTextureToArray(*texture, features->numX, features->numY);
+            if (usage != TextureUsage::BumpMap) {
+                convertArrayTextureToGrid(*texture, features->numX, features->numY);
+            }
+            debug("Texture '" + resRef + "': " + std::to_string(features->numX) + "x" +
+                      std::to_string(features->numY) + " frame grid, " +
+                      (usage == TextureUsage::BumpMap ? "kept as layers" : "laid out as a sheet"),
+                  LogChannel::Graphics);
         }
         float anisotropy = std::max(1.0f, exp2f(_options.anisotropicFiltering));
         texture->setAnisotropy(anisotropy);

@@ -17,12 +17,32 @@
 
 #include "reone/game/effect/damageimmunityincrease.h"
 
+#include "reone/game/effect/damageimmunitydecrease.h"
+#include "reone/game/object.h"
+#include "reone/game/object/creature.h"
+
 namespace reone {
 
 namespace game {
 
-void DamageImmunityIncreaseEffect::applyTo(Object &object) {
-    // TODO: implement
+bool DamageImmunityIncreaseEffect::onApply(
+    Object &, const EffectInstance &) {
+    return _percentImmunity >= 0;
+}
+
+bool DamageImmunityDecreaseEffect::onApply(
+    Object &object, const EffectInstance &instance) {
+    if (_percentImmunity < 0 || object.plotFlag()) {
+        return false;
+    }
+    auto *target = dyn_cast<Creature>(&object);
+    if (!target) {
+        return true;
+    }
+    auto creator = instance.boundCreator();
+    return !target->hasEffectImmunity(
+        ImmunityType::DamageImmunityDecrease,
+        creator ? dyn_cast<Creature>(creator.get()) : nullptr);
 }
 
 } // namespace game

@@ -38,7 +38,12 @@ CastSpellAtObjectAction::CastSpellAtObjectAction(
     _target(std::move(target)),
     _item(std::move(item)),
     _schedule(_spell->conjTime, _spell->castTime),
-    _cheat(cheat) {}
+    _cheat(cheat) {
+    requireRuntimeObject(_target);
+    if (_item) {
+        requireRuntimeObject(*_item);
+    }
+}
 
 static void runScript(Game &game, const Spell &spell, const Object &target) {
     if (spell.impactScript.empty()) {
@@ -77,13 +82,18 @@ void CastSpellAtObjectAction::execute(std::shared_ptr<Action> self, Object &acto
         lock();
 
         bool lastItem = false;
-        if (!_cheat && _item && !caster.removeItem(_item.value(), lastItem)) {
-            // Ran out of items since this action was enqueued. This may happen
-            // in case of shared inventory (not implemented yet).
-            //
-            // Cheats ignore all requirements and do not remove the item.
-            finish(caster);
-            return;
+        if (!_cheat && _item && _item.value()->activateSpellCost()) {
+            if (!caster.removeItem(_item.value(), lastItem)) {
+                // Ran out of items since this action was enqueued. This may happen
+                // in case of shared inventory (not implemented yet).
+                //
+                // Cheats ignore all requirements and do not remove the item.
+                finish(caster);
+                return;
+            }
+            if (lastItem) {
+                _game.destroyRuntimeObjectGraph(_item.value());
+            }
         }
 
         caster.setMovementType(Creature::MovementType::None);

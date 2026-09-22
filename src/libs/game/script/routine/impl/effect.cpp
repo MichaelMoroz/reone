@@ -157,7 +157,8 @@ static Variable EffectDamage(const std::vector<Variable> &args, const RoutineCon
     auto damagePower = static_cast<DamagePower>(nDamagePower);
 
     // Execute
-    auto effect = ctx.game.newEffect<DamageEffect>(nDamageAmount, damageType, damagePower, 0);
+    auto effect = ctx.game.newEffect<DamageEffect>(
+        nDamageAmount, damageType, damagePower);
     return Variable::ofEffect(std::move(effect));
 }
 
@@ -199,14 +200,22 @@ static Variable EffectResurrection(const std::vector<Variable> &args, const Rout
     return Variable::ofEffect(std::move(effect));
 }
 
+static ACBonus getACBonus(int value) {
+    if (value < static_cast<int>(ACBonus::Dodge) ||
+        value > static_cast<int>(ACBonus::Deflection)) {
+        return ACBonus::Dodge;
+    }
+    return static_cast<ACBonus>(value);
+}
+
 static Variable EffectACIncrease(const std::vector<Variable> &args, const RoutineContext &ctx) {
     // Load
     auto nValue = getInt(args, 0);
     auto nModifyType = getIntOrElse(args, 1, 0);
-    auto nDamageType = getIntOrElse(args, 2, 8199);
+    auto nDamageType = getIntOrElse(args, 2, kAllDamageTypeFlags);
 
     // Transform
-    auto modifyType = static_cast<ACBonus>(nModifyType);
+    auto modifyType = getACBonus(nModifyType);
 
     // Execute
     auto effect = ctx.game.newEffect<ACIncreaseEffect>(nValue, modifyType, nDamageType);
@@ -670,10 +679,10 @@ static Variable EffectACDecrease(const std::vector<Variable> &args, const Routin
     // Load
     auto nValue = getInt(args, 0);
     auto nModifyType = getIntOrElse(args, 1, 0);
-    auto nDamageType = getIntOrElse(args, 2, 8199);
+    auto nDamageType = getIntOrElse(args, 2, kAllDamageTypeFlags);
 
     // Transform
-    auto modifyType = static_cast<ACBonus>(nModifyType);
+    auto modifyType = getACBonus(nModifyType);
 
     // Execute
     auto effect = ctx.game.newEffect<ACDecreaseEffect>(nValue, modifyType, nDamageType);

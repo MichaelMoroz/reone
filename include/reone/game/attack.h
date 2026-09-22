@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "reone/game/effect/damage.h"
 #include "reone/game/types.h"
 #include "reone/system/smallvector.h"
 #include "reone/system/timeevents.h"
@@ -34,6 +35,7 @@ class Action;
 class CombatRound;
 class Creature;
 class Game;
+class IAnimations;
 class Item;
 class Object;
 class ProjectileSpec;
@@ -55,15 +57,6 @@ AttackResultType computeWeaponAttack(
     int rollBonus = 0, int threatBonus = 0);
 
 /**
- * Descriptor for a delayed DamageEffect.
- */
-struct Damage {
-    int amount;
-    DamageType type;
-    DamagePower power;
-};
-
-/**
  * Predicate for melee weapon.
  *
  * Stun Baton and Hand-to-Hand is NOT a melee weapon. These require special
@@ -83,33 +76,85 @@ bool isRangedWieldType(CreatureWieldType type);
 bool isAttackSuccessful(AttackResultType result);
 
 /**
+ * Predicate for feats that resolve as a physical weapon or unarmed attack.
+ */
+bool isPhysicalAttackFeat(FeatType feat);
+
+struct AttackBonusBreakdown {
+    int baseAttackBonus {0};
+    int strengthModifier {0};
+    int dexterityModifier {0};
+    int dualWieldPenalty {0};
+    int smallOffhandBonus {0};
+    int featBonus {0};
+    FeatType duelingFeat {FeatType::Invalid};
+    int duelingBonus {0};
+    int closeProximityRangedBonus {0};
+    int meleeOnRangedBonus {0};
+    int weaponFocusBonus {0};
+    int effectBonus {0};
+
+    int total() const {
+        return baseAttackBonus +
+               strengthModifier +
+               dexterityModifier +
+               dualWieldPenalty +
+               smallOffhandBonus +
+               featBonus +
+               duelingBonus +
+               closeProximityRangedBonus +
+               meleeOnRangedBonus +
+               weaponFocusBonus +
+               effectBonus;
+    }
+};
+
+/**
  * Make and collect multiple attacks, but delay damage effects until later.
  */
 class AttackBuffer {
 public:
-    /**
-     * Calculate attack roll and damage effects for a weapon attack. Damage is
-     * added to AttackBuffer, and can be applied later with applyEffects().
-     */
-    void addWeaponAttack(const Creature &attacker, const Object &target, const Item &weapon,
-                         int attackRollBonus = 0,
-                         int attackThreatBonus = 0,
-                         int damageBonus = 0);
+    enum class Source {
+        Main,
+        Offhand,
+    };
 
     /**
-     * Calculate attack roll and damage effects for an unarmed attack. Damage is
-     * added to AttackBuffer, and can be applied later with applyEffects().
+     * Construct an ordered physical attack round from the attacker's equipped
+     * weapons, active effects, and optional combat feat.
      */
-    void addUnarmedAttack(const Creature &attacker, const Object &target,
-                          int attackRollBonus = 0,
-                          int attackThreatBonus = 0,
-                          int damageBonus = 0);
+    void addPhysicalAttacks(const Creature &attacker, const Object &target,
+                            FeatType feat = FeatType::Invalid);
 
     /**
-     * Apply all previously collected damage effects from \p attacker to \p
-     * target.
+     * Apply the once-per-action effects of a melee combat feat.
      */
-    void applyEffects(Creature &attacker, Object &target, Game &game);
+    void resolveMeleeSpecialAttack(
+        FeatType feat,
+        Creature &attacker,
+        Object &target,
+        Game &game);
+
+    void resolve(Creature &attacker, Object &target);
+    void signal(
+        Game &game,
+        ServicesView &services,
+        Creature &attacker,
+        Object &target);
+
+    size_t attackCount() const { return _attacks.size(); }
+    void prepareMeleeSequence(
+        const IAnimations &animations,
+        const std::vector<std::string> &attackAnimations);
+    size_t signalReadyMelee(
+        int elapsedMilliseconds,
+        Game &game,
+        ServicesView &services,
+        Creature &attacker,
+        Object &target);
+    int latestMeleeImpactMilliseconds() const;
+    void discardPendingMelee();
+    bool hasPendingMelee() const;
 
     /**
      * Get the best result for a series of attacks collected in AttackBuffer.
@@ -118,14 +163,66 @@ public:
 
 private:
     struct Attack {
-        explicit Attack(AttackResultType result) :
-            result(result) {}
+        Attack(
+            Source source,
+            bool ranged,
+            AttackResultType result,
+            int roll,
+            AttackBonusBreakdown attackBonusBreakdown,
+            int defense,
+            bool assuredHit) :
+            source(source),
+            ranged(ranged),
+            result(result),
+            roll(roll),
+            attackBonusBreakdown(std::move(attackBonusBreakdown)),
+            defense(defense),
+            assuredHit(assuredHit) {}
 
+        Source source;
+        bool ranged;
         AttackResultType result;
-        SmallVector<Damage, 4> damage;
+        int roll;
+        AttackBonusBreakdown attackBonusBreakdown;
+        int defense;
+        bool assuredHit;
+        bool stunTarget {false};
+        int impactTimeMilliseconds {0};
+        bool meleeSignaled {false};
+        DamagePacket damage;
     };
 
+    void addPhysicalAttack(
+        const Creature &attacker,
+        const Object &target,
+        const Item *weapon,
+        Source source,
+        int attackRollBonus,
+        int attackThreatBonus,
+        int damageBonus);
+    void resolveDamage(Object &target);
+    void signalAttack(
+        Attack &attack,
+        Game &game,
+        ServicesView &services,
+        Creature &attacker,
+        Object &target);
+    void applyEffects(
+        Attack &attack,
+        Creature &attacker,
+        Object &target,
+        Game &game);
+    void addCombatFeedback(
+        Game &game,
+        ServicesView &services,
+        const Creature &attacker,
+        const Object &target,
+        const Attack &attack) const;
+
     SmallVector<Attack, 8> _attacks;
+    FeatType _feat {FeatType::Invalid};
+    size_t _pendingMeleeAttacks {0};
+    bool _meleeSequencePrepared {false};
 };
 
 /**
@@ -218,10 +315,18 @@ public:
     };
 
     State update(const CombatRound &round, Action &action, float dt);
+    void startMelee(int latestImpactMilliseconds);
+
+    bool isMelee() const { return _melee; }
+    int meleeElapsedMilliseconds() const { return _meleeElapsedMilliseconds; }
 
 private:
     State _state {WaitAttack};
     float _time {0.0f};
+    bool _melee {false};
+    int _meleeElapsedMilliseconds {0};
+    int _meleeCompletionMilliseconds {0};
+    float _meleeElapsedRemainderMilliseconds {0.0f};
 };
 
 bool navigateToAttackTarget(Creature &attacker, Object &actor, float dt, bool &reachedOnce);

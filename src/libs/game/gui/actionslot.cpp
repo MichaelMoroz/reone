@@ -25,9 +25,8 @@
 #include "reone/game/di/services.h"
 #include "reone/game/object/item.h"
 #include "reone/game/types.h"
-#include "reone/graphics/context.h"
+#include "reone/graphics/rendering/renderer2d.h"
 #include "reone/graphics/meshregistry.h"
-#include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/resource/provider/textures.h"
@@ -72,14 +71,7 @@ void renderContextActionIcon(const ContextAction &action, glm::mat4 transform, S
     if (!texture)
         return;
 
-    services.graphics.context.bindTexture(*texture);
-
-    services.graphics.uniforms.setLocals([transform](auto &locals) {
-        locals.reset();
-        locals.model = transform;
-    });
-    services.graphics.context.useProgram(services.graphics.shaderRegistry.get(graphics::ShaderProgramId::mvpTexture));
-    services.graphics.meshRegistry.get(graphics::MeshName::quad).draw(services.graphics.statistic);
+    services.graphics.renderer2d.drawIcon(*texture, transform);
 }
 
 } // namespace game

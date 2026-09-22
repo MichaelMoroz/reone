@@ -17,6 +17,8 @@
 
 #include "reone/system/threadutil.h"
 
+#include "reone/system/profiler.h"
+
 namespace reone {
 
 static std::thread::id g_mainThreadId;
@@ -41,6 +43,7 @@ bool isMainThread() {
 }
 
 void setThreadName(std::string name) {
+    R_PROFILE_THREAD_NAME(name.c_str());
     std::lock_guard<std::mutex> lock {g_threadNamesMutex};
     g_threadNames.insert_or_assign(std::this_thread::get_id(), std::move(name));
 }

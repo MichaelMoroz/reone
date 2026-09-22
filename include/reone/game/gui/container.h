@@ -24,6 +24,7 @@
 #include "reone/gui/control/listbox.h"
 
 #include "../object.h"
+#include "../runtimeref.h"
 
 namespace reone {
 
@@ -38,7 +39,7 @@ public:
 
     void open(std::shared_ptr<Object> contanier);
 
-    Object &container() const { return *_container; }
+    Object &container() const;
 
 private:
     struct Controls {
@@ -51,7 +52,16 @@ private:
 
     Controls _controls;
 
-    std::shared_ptr<Object> _container;
+    enum class Mode {
+        ContainerToPlayer,
+        PlayerToContainer,
+    };
+
+    Mode _mode {Mode::ContainerToPlayer};
+    RuntimeObjectRef<Object> _container;
+
+    std::string _giveItemMsg;
+    std::string _getItemsMsg;
 
     void onGUILoaded() override;
 
@@ -64,9 +74,12 @@ private:
     }
 
     void configureItemsListBox();
+    void populateItems(Object &source, bool onlyDropable, bool skipCredits);
+    void switchMode();
     void transferItemsToPlayer();
+    void onItemDoubleClick(const std::string &tag);
+    void close();
 
-    std::shared_ptr<graphics::Texture> getItemFrameTexture(int stackSize) const;
 };
 
 } // namespace game

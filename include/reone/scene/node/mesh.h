@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include "reone/scene/gpuscene.h"
+
 #include "modelnode.h"
 
 namespace reone {
@@ -48,23 +50,29 @@ public:
 
     void update(float dt) override;
 
-    void render(IRenderPass &pass);
-    void renderShadow(IRenderPass &pass);
+    void collectInto(GpuScene &scene);
 
     bool shouldRender() const;
-    bool shouldCastShadows() const;
 
     bool isTransparent() const;
+    bool requiresPerFrameGpuSync() const;
+    bool hasDynamicDeformation() const;
+    void refreshGpuSceneStreams(GpuScene &scene);
+    void updateGpuStreams();
 
     ModelSceneNode &model() { return _model; }
     const ModelSceneNode &model() const { return _model; }
 
     void setMainTexture(graphics::Texture *texture) override;
     void setEnvironmentMap(graphics::Texture *texture) override;
-    void setAlpha(float alpha) { _alpha = alpha; }
-    void setSelfIllumColor(glm::vec3 color) { _selfIllumColor = std::move(color); }
+    void setAlpha(float alpha);
+    void setSelfIllumColor(glm::vec3 color);
+
+    void snapshotPreviousFrame(uint64_t frame) override;
 
 private:
+    void onGpuActivationChanged(bool active) override;
+
     struct NodeTextures {
         graphics::Texture *diffuse {nullptr};
         graphics::Texture *lightmap {nullptr};
@@ -82,6 +90,8 @@ private:
         std::vector<DanglyVertex> vertices;
         glm::vec3 prevWorldPos {0.0f};
     } _dangly;
+    std::vector<glm::vec4> _danglyPositions;
+    std::vector<glm::vec4> _prevDanglyPositions;
 
     struct SaberVertex {
         glm::vec3 position {0.0f};
@@ -96,12 +106,22 @@ private:
     ModelSceneNode &_model;
 
     glm::vec2 _uvOffset {0.0f};
-    float _bumpmapCycleTime {0.0f};
+    /** Shared by every cycled slot on this mesh; each picks its own frame. */
+    float _cycleTime {0.0f};
     int _bumpmapCycleFrame {0};
+    int _diffuseCycleFrame {0};
     float _alpha {1.0f};
     glm::vec3 _selfIllumColor {0.0f};
 
     float _windTime {0.0f};
+
+    /**
+     * Skinning matrices for this frame and the previous one. Held as members
+     * rather than rebuilt per draw so that the previous set survives into the
+     * next frame, and so the per-frame allocation is avoided.
+     */
+    std::vector<glm::mat4> _bones;
+    std::vector<glm::mat4> _prevBones;
 
     void initTextures();
     void initDanglyMesh();
@@ -113,9 +133,15 @@ private:
     // Animation
 
     void updateUVAnimation(float dt, const graphics::ModelNode::TriangleMesh &mesh);
-    void updateBumpmapAnimation(float dt, const graphics::ModelNode::TriangleMesh &mesh);
+    void updateCycleAnimation(float dt);
+    /** Scroll and cycle composed into the transform the shaders apply. */
+    glm::mat3x4 materialUv() const;
+    static int cycleFrame(const graphics::Texture &texture, float time);
     void updateDanglyAnimation(float dt, const graphics::ModelNode::Danglymesh &mesh);
     void updateSaberAnimation(float dt);
+    RegisteredDeformation buildDeformation();
+
+    void onAbsoluteTransformChanged() override;
 
     // END Animation
 };

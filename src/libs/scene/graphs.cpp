@@ -16,6 +16,10 @@
  */
 
 #include "reone/scene/graphs.h"
+#include "reone/graphics/rhi/renderer.h"
+#include "reone/graphics/di/services.h"
+
+#include <filesystem>
 
 namespace reone {
 
@@ -25,6 +29,10 @@ void SceneGraphs::reserve(std::string name) {
     if (_scenes.count(name) > 0) {
         return;
     }
+    reset(std::move(name));
+}
+
+void SceneGraphs::reset(std::string name) {
     auto scene = std::make_unique<SceneGraph>(
         name,
         _renderPipelineFactory,
@@ -32,8 +40,16 @@ void SceneGraphs::reserve(std::string name) {
         _graphicsSvc,
         _audioSvc,
         _resourceSvc);
+    scene->gpuScene().traceMaterials().loadTraceClasses(
+        _overrideRoot / "materials.ini");
 
-    _scenes.insert(std::make_pair(name, std::move(scene)));
+    if (_scenes.count(name)) {
+        // What dropping the GL framebuffer bindings did here: the outgoing
+        // scene's render targets are about to be destroyed, and a command
+        // buffer already submitted may still sample them.
+        _graphicsSvc.renderer.waitIdle();
+    }
+    _scenes[name] = std::move(scene);
 }
 
 ISceneGraph &SceneGraphs::get(const std::string &name) {
@@ -42,6 +58,23 @@ ISceneGraph &SceneGraphs::get(const std::string &name) {
         throw std::logic_error(str(boost::format("Scene not found by name '%s'") % name));
     }
     return *maybeScene->second;
+}
+
+void SceneGraphs::invalidateRenderPipelines() {
+    for (auto &[name, scene] : _scenes) {
+        scene->invalidateRenderPipeline();
+    }
+}
+
+bool SceneGraphs::consumeRenderPipelineRebuild() {
+    // Every scene is asked, not just until one answers: the request is a
+    // one-shot flag and leaving it set on the others would rebuild again next
+    // frame, and the frame after that.
+    bool requested = false;
+    for (auto &[name, scene] : _scenes) {
+        requested |= scene->consumeRenderPipelineRebuild();
+    }
+    return requested;
 }
 
 } // namespace scene

@@ -19,6 +19,8 @@
 
 #include "../control.h"
 
+#include <optional>
+
 namespace reone {
 
 namespace gui {
@@ -38,6 +40,7 @@ public:
         std::string iconText;
         std::shared_ptr<graphics::Texture> iconTexture;
         std::shared_ptr<graphics::Texture> iconFrame;
+        std::optional<glm::vec3> textColor;
         bool invalid {false};
 
         std::vector<std::string> _textLines;
@@ -68,7 +71,7 @@ public:
     bool handleMouseMotion(int x, int y) override;
     bool handleMouseWheel(int x, int y) override;
     bool handleClick(int x, int y, int clicks = 1) override;
-    void render(const glm::ivec2 &screenSize, const glm::ivec2 &offset, scene::IRenderPass &pass) override;
+    void render(const glm::ivec2 &screenSize, const glm::ivec2 &offset, graphics::I2DRenderer &renderer2d) override;
     void stretch(float x, float y, int mask) override;
 
     void changeProtoItemType(ControlType type);
@@ -79,15 +82,57 @@ public:
     void setSelectionMode(SelectionMode mode);
     void setSelectedItemIndex(int index);
     void setItemsInteractive(bool interactive);
+    void setScrollBarEnabled(bool enabled);
     void setProtoMatchContent(bool match);
     void setRenderItemIconsForButtonProto(bool render);
+    void scrollToBottom();
+
+    /**
+     * Draws underneath the list's own frame and rows. Lets a GUI repaint
+     * artwork that its panel bakes in at the authored row pitch, which no
+     * longer registers with the rows once they are laid out at a different
+     * density.
+     */
+    using BackgroundRenderer = std::function<void(const ListBox &, const glm::ivec2 &offset, graphics::I2DRenderer &)>;
+    void setBackgroundRenderer(BackgroundRenderer renderer) { _backgroundRenderer = std::move(renderer); }
+
+    /**
+     * Places a scroll bar inside a framed panel, against the edge it was
+     * authored on. The frame art draws its line inside the extent rather than
+     * on its boundary, so the bar is inset past the line by
+     * kScrollBarEdgeInset authored pixels and held clear of the corner slices
+     * vertically.
+     */
+    static void insetScrollBar(Control &scrollBar,
+                               const Extent &panel,
+                               int borderDimension,
+                               bool leftSide,
+                               float layoutScale);
+
+    /**
+     * Measured at 1024x768 against the 16-pixel TSL panel art: the frame line
+     * occupies the outermost authored pixels of the extent, and this inset
+     * leaves roughly two authored pixels of background between it and the bar.
+     */
+    static constexpr int kScrollBarEdgeInset = 5;
+
+    /** The area the rows occupy, inside the frame. Control-space. */
+    Extent itemsViewport() const;
+    int visibleItemCount() const;
+    /** Control-space rectangle of the n-th currently visible row. */
+    Extent visibleItemExtent(int index) const;
+    /** Row density relative to the authored layout. */
+    float layoutScale() const { return _layoutScale; }
 
     int getItemCount() const;
     const Item &getItemAt(int index) const;
+    int getItemOffset() const { return _itemOffset; }
+    void setItemOffset(int offset);
 
     Control &protoItem() const { return *_protoItem; }
     Control *protoItemOrNull() const { return _protoItem.get(); }
     Control &scrollBar() const { return *_scrollBar; }
+    std::shared_ptr<Control> scrollBarOrNull() const { return _scrollBar; }
     int selectedItemIndex() const { return _selectedItemIndex; }
 
     // Event listeners
@@ -105,10 +150,13 @@ private:
     int _slotCount {0};
     int _itemOffset {0};
     int _selectedItemIndex {-1};
-    int _itemMargin {0};
     bool _itemsInteractive {true};
+    bool _scrollBarEnabled {true};
+    bool _leftScrollBar {false}; /**< authored side for the scroll bar */
     bool _protoMatchContent {false}; /**< proto item height must match its content */
     bool _renderItemIconsForButtonProto {false};
+    float _layoutScale {1.0f};
+    BackgroundRenderer _backgroundRenderer;
 
     // Event listeners
 
@@ -118,7 +166,11 @@ private:
     // END Event listeners
 
     void updateItemSlots();
-
+    void updateItemsLayout();
+    int getInnerHeight() const;
+    float getItemPitch(const Item &item) const;
+    int getItemWidth() const;
+    int getItemHeight(const Item &item) const;
     int getItemTextWidth() const;
     int getItemIndex(int y) const;
     bool shouldRenderItemIconsForButtonProto() const;
@@ -126,7 +178,7 @@ private:
         const glm::ivec2 &screenSize,
         const glm::ivec2 &offset,
         const Item &item,
-        scene::IRenderPass &pass);
+        graphics::I2DRenderer &renderer2d);
 };
 
 } // namespace gui

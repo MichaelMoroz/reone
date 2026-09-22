@@ -45,13 +45,33 @@ private:
         int height {768};
         int winscale {100};
         bool fullscreen {false};
+        /** Borderless window covering the whole display; the resolution choice "Fullscreen". */
+        bool fullscreenWindow {false};
         bool vsync {false};
         bool grass {true};
-        bool pbr {true};
+        /**
+         * "retro", "pbr" or "path-tracing", matching the engine's --mode. The
+         * engine also reads "raster" as retro, so a config written before this
+         * became one option still launches.
+         */
+        std::string mode {"pbr"};
+        int ptspp {8};
         bool ssao {true};
         bool ssr {true};
-        bool fxaa {true};
-        bool sharpen {true};
+        /** "off", "fxaa", "fsr" or "dlssrr", matching the engine's --antialiasing. */
+        std::string antialiasing {"fxaa"};
+        /**
+         * "dlaa", "quality", "balanced", "performance" or "ultraperformance".
+         *
+         * Under DLSS this is what sets the render resolution - the engine reads
+         * a ratio out of it and ignores renderScale entirely - so a launcher
+         * that offered only the FSR slider left DLSS users with no way to
+         * render below native and a dial that did nothing.
+         */
+        std::string dlssMode {"dlaa"};
+        /** Raster and trace resolution as a fraction of display when FSR runs. */
+        float renderScale {1.0f};
+        float sharpness {0.0f};
         int texQuality {0};
         int shadowres {1};
         int anisofilter {2};
@@ -72,14 +92,17 @@ private:
     wxChoice *_choiceTextureQuality;
     wxChoice *_choiceShadowResolution;
     wxChoice *_choiceAnisoFilter;
+    wxChoice *_choicePathTracingSamples;
     wxSlider *_sliderDrawDistance;
+    wxSlider *_sliderRenderScale;
     wxCheckBox *_checkBoxFullscreen;
     wxCheckBox *_checkBoxVSync;
     wxCheckBox *_checkBoxGrass;
     wxCheckBox *_checkBoxSSAO;
     wxCheckBox *_checkBoxSSR;
-    wxCheckBox *_checkBoxFXAA;
-    wxCheckBox *_checkBoxSharpen;
+    wxChoice *_choiceAntiAliasing;
+    wxChoice *_choiceDlssMode;
+    wxSlider *_sliderSharpness;
     wxSlider *_sliderVolumeMusic;
     wxSlider *_sliderVolumeVoice;
     wxSlider *_sliderVolumeSound;
@@ -90,6 +113,9 @@ private:
     void OnLaunch(wxCommandEvent &event);
     void OnSaveConfig(wxCommandEvent &event);
     void OnGameDirLeftDown(wxMouseEvent &event);
+
+    /** Grey out the options unavailable to the chosen renderer. */
+    void UpdateRendererDependentControls();
 
     void LoadConfiguration();
     void SaveConfiguration();

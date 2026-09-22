@@ -21,12 +21,16 @@
 #include "reone/scene/graph.h"
 #include "reone/scene/node.h"
 #include "reone/scene/user.h"
+#include "reone/script/types.h"
 #include "reone/system/cast.h"
 #include "reone/system/timer.h"
 
 #include "action.h"
 #include "action/playanimation.h"
 #include "effect.h"
+#include "runtimeref.h"
+#include "saveprovenance.h"
+#include "savedruntime.h"
 #include "types.h"
 
 namespace reone {
@@ -42,21 +46,33 @@ struct ServicesView;
 class Action;
 class Game;
 class Item;
+class ModuleSnapshotBuilder;
 class Room;
 
 class Object : public scene::IUser, boost::noncopyable {
 public:
+    enum class RuntimeState {
+        Constructing,
+        Live,
+        Retired,
+        Presentation,
+    };
+
     virtual ~Object() = default;
 
     static bool classof(Object *from) {
         return true;
     }
 
-    void deserialize(const resource::Gff &gff);
+    void deserialize(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext);
 
     virtual void update(float dt);
-    virtual void damage(int amount, uint32_t damager);
-    void heal(int amount) { damage(-amount, 0); }
+    virtual void damage(
+        int amount,
+        const std::shared_ptr<Object> &damager);
+    void heal(int amount) { damage(-amount, nullptr); }
 
     void face(const Object &other);
     void face(const glm::vec3 &point);
@@ -83,6 +99,12 @@ public:
     float getFacing() const { return glm::eulerAngles(_orientation).z; }
 
     uint32_t id() const { return _id; }
+    Game &game() const { return _game; }
+    bool isRuntimeLive() const { return _runtimeState == RuntimeState::Live; }
+    bool isPresentationOnly() const {
+        return _runtimeState == RuntimeState::Presentation;
+    }
+    uint64_t runtimeIncarnation() const { return _runtimeIncarnation; }
     const std::string &tag() const { return _tag; }
     ObjectType type() const { return _type; }
     const std::string &blueprintResRef() const { return _blueprintResRef; }
@@ -97,6 +119,8 @@ public:
     std::shared_ptr<scene::SceneNode> sceneNode() const { return _sceneNode; }
 
     void setTag(std::string tag) { _tag = std::move(tag); }
+    void setConversation(std::string conversation) { _conversation = std::move(conversation); }
+    void setName(std::string name) { _name = std::move(name); }
     void setPlotFlag(bool plot) { _plot = plot; }
     void setCommandable(bool commandable) { _commandable = commandable; }
     void setIsInConversation(bool isInConversation) { _isInConversation = isInConversation; }
@@ -120,6 +144,7 @@ public:
     std::shared_ptr<Item> addItem(const std::string &resRef, int stackSize = 1, bool dropable = true);
     void addItem(const std::shared_ptr<Item> &item);
     bool removeItem(const std::shared_ptr<Item> &item, bool &last);
+    bool removeItemStack(const std::shared_ptr<Item> &item);
     void moveDropableItemsTo(Object &other);
 
     std::shared_ptr<Item> getFirstItem();
@@ -128,20 +153,26 @@ public:
 
     const std::vector<std::shared_ptr<Item>> &items() const { return _items; }
 
+    // Runtime children whose semantic lifetime is owned by this object. New
+    // nested game-object types participate in registry finalization by
+    // extending this list; Game does not need to know their concrete type.
+    virtual std::vector<std::shared_ptr<Object>> ownedRuntimeObjects() const;
+
     // END Inventory
 
     // Effects
 
     void clearAllEffects();
+    void removeEffect(const std::shared_ptr<Effect> &effect);
     void applyEffect(const std::shared_ptr<Effect> &effect, DurationType durationType, float duration = 0.0f);
+    bool restoreEffect(EffectInstance effect);
+    size_t removeEffectsById(EffectId id);
 
-    struct AppliedEffect {
-        std::shared_ptr<Effect> effect;
-        DurationType durationType {DurationType::Instant};
-        float duration {0.0f};
-    };
-
-    const std::deque<AppliedEffect> &effects() const { return _effects; }
+    const std::deque<EffectInstance> &effects() const { return _effects; }
+    /** Find the canonical applied record for an exact executable payload. */
+    EffectInstance *findEffectInstance(const Effect &effect);
+    std::vector<EffectInstance> saveEffectSnapshot() const;
+    bool hasEffect(EffectType type) const;
     std::shared_ptr<Effect> getFirstEffect();
     std::shared_ptr<Effect> getNextEffect();
 
@@ -171,12 +202,12 @@ public:
     // Maximum hit points, after considering all bonuses and penalties.
     int maxHitPoints() const { return _maxHitPoints; }
 
-    // Current hit points, not counting any bonuses.
+    // Current runtime hit points.
     int currentHitPoints() const { return _currentHitPoints; }
 
     void setMinOneHP(bool minOneHP) { _minOneHP = minOneHP; }
-    void setMaxHitPoints(int maxHitPoints) { _maxHitPoints = maxHitPoints; }
-    void setCurrentHitPoints(int hitPoints) { _currentHitPoints = hitPoints; }
+    virtual void setMaxHitPoints(int maxHitPoints) { _maxHitPoints = maxHitPoints; }
+    virtual void setCurrentHitPoints(int hitPoints) { _currentHitPoints = hitPoints; }
 
     // END Hit Points
 
@@ -188,13 +219,29 @@ public:
     void addActionOnTop(std::shared_ptr<Action> action);
     void delayAction(std::shared_ptr<Action> action, float seconds);
 
-    bool hasUserActionsPending() const;
+    bool hasUserActionsPending(const Action *excluded = nullptr) const;
 
     std::shared_ptr<Action> getCurrentAction() const;
 
     const std::deque<std::shared_ptr<Action>> &actions() const { return _actions; }
+    std::vector<SavedActionRecord> saveActionSnapshot() const;
+
+    /** Drop live execution and object bindings after their Area was captured. */
+    void retireAreaRuntimeState(
+        const std::set<const Object *> &retainedObjects);
 
     // END Actions
+
+    // Combat
+
+    uint32_t getLastHostileActor() const;
+
+    void setLastHostileActor(uint32_t actor);
+
+    uint32_t getLastDamager() const;
+    void setLastDamager(const std::shared_ptr<Object> &damager);
+
+    // END Combat
 
     // Local variables
 
@@ -203,6 +250,36 @@ public:
 
     const std::map<int, bool> &localBooleans() const { return _localBooleans; }
     const std::map<int, int> &localNumbers() const { return _localNumbers; }
+    void deserializeRuntimeState(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext);
+    void bindSavedRuntimeState();
+    void publishSavedRuntimeState();
+    const std::vector<EffectInstance> &savedEffects() const { return _savedEffects; }
+    const SavedActionQueue &savedActionQueue() const { return _savedActionQueue; }
+    bool hasPublishedSavedRuntimeState() const { return _savedRuntimePublished; }
+
+    void captureSaveRecord(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext,
+        SaveRecordOrigin origin = {});
+    const std::optional<SaveRecordProvenance> &saveRecordProvenance() const {
+        return _saveRecordProvenance;
+    }
+    std::optional<SerializedObjectIdentity> serializedObjectIdentity() const {
+        return _saveRecordProvenance
+                   ? _saveRecordProvenance->identity
+                   : std::nullopt;
+    }
+    void assignSerializedObjectIdentity(
+        const SerializedObjectIdentity &identity);
+
+
+    void resolveSavedReferences(
+        const std::function<std::shared_ptr<Object>(uint32_t)> &resolver);
+    std::shared_ptr<Object> savedReference(std::string_view field) const;
+
+
 
     void setLocalBoolean(int index, bool value);
     void setLocalNumber(int index, int value);
@@ -214,15 +291,38 @@ public:
     const std::string &getOnHeartbeat() const { return _onHeartbeat; }
     const std::string &getOnUserDefined() const { return _onUserDefined; }
 
+    /**
+     * Drop this object's OnHeartbeat script, leaving its other event scripts
+     * alone. Area heartbeat dispatch skips objects without one, so the object
+     * stops receiving heartbeats. Used by the KotOR II RemoveHeartbeat routine
+     * once a heartbeat script has done its one-off work.
+     */
+    void clearOnHeartbeat() { _onHeartbeat.clear(); }
+
     // END Scripts
 
 protected:
+    friend class Game;
+    friend class ModuleSnapshotBuilder;
+    friend class TestGameModule;
+
+    // Add one privately constructed Item to a candidate owned graph using the
+    // same stacking rules as runtime inventory insertion. Authoritative saved
+    // identities can be preserved as distinct records during restoration.
+    std::shared_ptr<Item> appendOwnedItemCandidate(
+        std::vector<std::shared_ptr<Item>> &items,
+        const std::shared_ptr<Item> &item,
+        bool preserveSerializedIdentities);
+    /** Atomically replace canonical effect state and run exact lifecycle hooks. */
+    void replaceEffectState(std::deque<EffectInstance> replacement) noexcept;
     struct DelayedAction {
         std::shared_ptr<Action> action;
         std::unique_ptr<Timer> timer;
     };
 
     uint32_t _id;
+    RuntimeState _runtimeState {RuntimeState::Constructing};
+    uint64_t _runtimeIncarnation {0};
     ObjectType _type;
     std::string _sceneName;
     Game &_game;
@@ -252,7 +352,7 @@ protected:
     glm::mat4 _transform {1.0f};
     bool _visible {true};
     Room *_room {nullptr};
-    std::deque<AppliedEffect> _effects;
+    std::deque<EffectInstance> _effects;
     bool _open {false};
     bool _stunt {false};
     std::string _activeAnimName;
@@ -268,9 +368,31 @@ protected:
     std::vector<DelayedAction> _delayed;
     std::weak_ptr<Action> _executingAction;
 
+    struct LoadedSaveActionSlot {
+        SavedActionRecord original;
+        std::weak_ptr<Action> runtimeAction;
+        bool unsupportedPending {false};
+    };
+    std::vector<LoadedSaveActionSlot> _loadedSaveActionSlots;
+
     // END Actions
 
+    RuntimeObjectRef<Object> _lastHostileActor;
+    RuntimeObjectRef<Object> _lastDamager;
+    std::optional<uint32_t> _savedLastDamagerId;
+
     // Local variables
+    std::map<std::string, uint32_t> _savedReferenceIds;
+    std::map<std::string, RuntimeObjectRef<Object>> _savedReferences;
+    std::vector<EffectInstance> _savedEffects;
+    SavedActionQueue _savedActionQueue;
+    SerializedIdentityContext _savedRuntimeIdentityContext;
+    std::vector<bool> _savedEffectReferencesBound;
+    std::vector<bool> _savedActionReferencesBound;
+    bool _savedRuntimeParsed {false};
+    bool _savedRuntimePublished {false};
+    std::optional<SaveRecordProvenance> _saveRecordProvenance;
+
 
     std::map<int, bool> _localBooleans;
     std::map<int, int> _localNumbers;
@@ -291,6 +413,14 @@ protected:
     }
 
     virtual void updateTransform();
+    virtual bool canExecuteActions() const { return true; }
+
+    void deserializeOwnedItems(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext,
+        SaveRecordOriginKind originKind,
+        bool forceDropable = false,
+        std::string originOwner = {});
 
     // Actions
 
@@ -305,7 +435,9 @@ protected:
     // Effects
 
     void updateEffects(float dt);
-    void applyInstantEffect(Effect &effect);
+    virtual void onEffectsCleared() {}
+
+    int applyDamageToHitPoints(int amount, int currentHitPoints);
 
     // END Effects
 };

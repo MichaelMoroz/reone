@@ -17,11 +17,20 @@
 
 #include "reone/game/object.h"
 
+#include <exception>
+#include <sstream>
+#include <typeinfo>
+
+#include "reone/game/action/startconversation.h"
 #include "reone/game/di/services.h"
+#include "reone/game/equipmentrules.h"
 #include "reone/game/game.h"
 #include "reone/game/object/item.h"
+#include "reone/game/script/savedsituation.h"
+#include "reone/resource/provider/scripts.h"
 #include "reone/game/room.h"
 #include "reone/resource/gff.h"
+#include "reone/system/exception/validation.h"
 #include "reone/system/logutil.h"
 
 using namespace reone::graphics;
@@ -36,7 +45,9 @@ static constexpr float kDefaultMaxObjectDistance = 2.0f;
 static constexpr float kMaxConversationDistance = 4.0f;
 static constexpr float kDistanceWalk = 4.0f;
 
-void Object::deserialize(const resource::Gff &gff) {
+void Object::deserialize(
+    const resource::Gff &gff,
+    const SerializedIdentityContext &identityContext) {
     if (gff.readString(_tag, "Tag")) {
         boost::to_lower(_tag);
     }
@@ -73,17 +84,129 @@ void Object::deserialize(const resource::Gff &gff) {
         }
     }
 
-    for (const auto &itemGff : gff.getList("ItemList")) {
-        std::shared_ptr<Item> item = _game.newItem();
-        item->deserialize(*itemGff);
-        addItem(item);
+    if (_type != ObjectType::Placeable && _type != ObjectType::Store &&
+        _type != ObjectType::Item && dynamic_cast<Creature *>(this) == nullptr) {
+        deserializeOwnedItems(
+            gff, identityContext, SaveRecordOriginKind::ContainedItem);
     }
+    deserializeRuntimeState(gff, identityContext);
+}
+
+std::vector<std::shared_ptr<Object>> Object::ownedRuntimeObjects() const {
+    return {_items.begin(), _items.end()};
+}
+
+std::shared_ptr<Item> Object::appendOwnedItemCandidate(
+    std::vector<std::shared_ptr<Item>> &items,
+    const std::shared_ptr<Item> &item,
+    bool preserveSerializedIdentities) {
+    if (!item) {
+        throw ValidationException("Cannot stage a null owned Item");
+    }
+    for (const auto &existing : items) {
+        if (!existing || existing.get() == item.get()) {
+            continue;
+        }
+        if (preserveSerializedIdentities &&
+            (existing->serializedObjectIdentity() ||
+             item->serializedObjectIdentity())) {
+            continue;
+        }
+        if (!existing->isStackCompatibleWith(*item)) {
+            continue;
+        }
+        if (existing->mergeStackFrom(*item)) {
+            item->setOwner(0);
+            _game.discardStagedRuntimeObjects({item});
+            return existing;
+        }
+    }
+    items.push_back(item);
+    return item;
+}
+
+void Object::deserializeOwnedItems(
+    const resource::Gff &gff,
+    const SerializedIdentityContext &identityContext,
+    SaveRecordOriginKind originKind,
+    bool forceDropable,
+    std::string originOwner) {
+    if (!identityContext.isSerializedState()) {
+        if (!gff.has("ItemList")) return;
+        std::vector<std::shared_ptr<Object>> obsolete(
+            _items.begin(), _items.end());
+        std::vector<std::shared_ptr<Item>> replacement;
+        ItemAttributes replacementAttributes;
+        auto creature = dynamic_cast<Creature *>(this);
+        _game.replaceRuntimeObjectGraph(
+            obsolete,
+            [&]() {
+                for (const auto &itemGff : gff.getList("ItemList")) {
+                    auto item = _game.newOwnedItem(*itemGff, identityContext);
+                    if (forceDropable) item->setDropable(true);
+                    item->setOwner(_id);
+                    appendOwnedItemCandidate(
+                        replacement, item, true);
+                }
+                if (creature) {
+                    for (const auto &item : replacement) {
+                        replacementAttributes.addItem(item, _services.game);
+                    }
+                }
+            },
+            [&]() noexcept {
+                _items = std::move(replacement);
+                if (creature) {
+                    creature->itemAttributes() =
+                        std::move(replacementAttributes);
+                }
+            });
+        return;
+    }
+
+    std::vector<std::shared_ptr<Object>> obsolete(_items.begin(), _items.end());
+    std::vector<std::shared_ptr<Item>> replacement;
+    ItemAttributes replacementAttributes;
+    auto creature = dynamic_cast<Creature *>(this);
+    _game.replaceRuntimeObjectGraph(
+        obsolete,
+        [&]() {
+            for (const auto &itemGff : gff.getList("ItemList")) {
+                auto item = _game.newOwnedItem(*itemGff, identityContext);
+                item->captureSaveRecord(
+                    *itemGff,
+                    identityContext,
+                    {originKind,
+                     originOwner.empty() ? std::to_string(_id) : originOwner});
+                if (forceDropable) {
+                    item->setDropable(true);
+                }
+                item->setOwner(_id);
+                appendOwnedItemCandidate(
+                    replacement, item, true);
+            }
+            if (creature) {
+                for (const auto &item : replacement) {
+                    replacementAttributes.addItem(item, _services.game);
+                }
+            }
+        },
+        [&]() noexcept {
+            _items = std::move(replacement);
+            if (creature) {
+                creature->itemAttributes() =
+                    std::move(replacementAttributes);
+            }
+        });
 }
 
 void Object::update(float dt) {
+    if (!isRuntimeLive()) {
+        return;
+    }
     updateActions(dt);
     updateEffects(dt);
-    if (!_dead) {
+    if (!_dead && canExecuteActions()) {
         executeActions(dt);
     }
     if (_sceneNode && _sceneNode->type() == SceneNodeType::Model) {
@@ -108,8 +231,389 @@ void Object::setLocalBoolean(int index, bool value) {
 void Object::setLocalNumber(int index, int value) {
     _localNumbers[index] = value;
 }
+void Object::deserializeRuntimeState(
+    const resource::Gff &gff,
+    const SerializedIdentityContext &identityContext) {
+
+    _localBooleans.clear();
+    _localNumbers.clear();
+    if (auto variables = gff.findStruct("SWVarTable")) {
+        const auto bits = variables->getList("BitArray");
+        for (size_t word = 0; word < std::min<size_t>(bits.size(), 5); ++word) {
+            uint32_t value = bits[word]->getUint("Variable");
+            for (int bit = 0; bit < 32; ++bit) {
+                if ((value & (1u << bit)) != 0) {
+                    _localBooleans[static_cast<int>(word * 32 + bit)] = true;
+                }
+            }
+        }
+
+        const auto bytes = variables->getList("ByteArray");
+        for (size_t index = 0; index < std::min<size_t>(bytes.size(), 32); ++index) {
+            uint8_t value = 0;
+            if (bytes[index]->readByte(value, "Variable") && value != 0) {
+                _localNumbers[static_cast<int>(index)] = value;
+            }
+        }
+    }
+
+    _savedEffects.clear();
+    _savedActionQueue = SavedActionQueue {};
+    _savedRuntimeIdentityContext = identityContext;
+    _savedEffectReferencesBound.clear();
+    _savedActionReferencesBound.clear();
+    _savedRuntimeParsed = gff.has("EffectList") || gff.has("ActionList");
+    _savedRuntimePublished = false;
+    _loadedSaveActionSlots.clear();
+    if (_savedRuntimeParsed) {
+        for (const auto &effect : gff.getList("EffectList")) {
+            _savedEffects.push_back(EffectInstance::fromGff(
+                *effect, identityContext));
+        }
+        _savedActionQueue = SavedActionQueue::fromGff(
+            gff, identityContext);
+        _effects.clear();
+        _actions.clear();
+        _delayed.clear();
+        _executingAction.reset();
+    }
+
+    _savedReferenceIds.clear();
+    _savedReferences.clear();
+    _lastDamager.reset();
+    _savedLastDamagerId.reset();
+    uint32_t lastDamagerId = 0;
+    if (gff.readDword(lastDamagerId, "LastDamager")) {
+        _savedLastDamagerId = lastDamagerId;
+    }
+    static const std::array<std::string_view, 8> referenceFields {
+        "AreaId",
+        "CreatorId",
+        "LastAttacker",
+        "LastHostileActor",
+        "LastPerceived",
+        "MasterID",
+        "OwnerId",
+        "TargetId",
+    };
+    for (auto field : referenceFields) {
+        uint32_t id = 0;
+        if (gff.readDword(id, field)) {
+            _savedReferenceIds.emplace(std::string(field), id);
+        }
+    }
+
+    size_t perceptionIndex = 0;
+    for (const auto &perception : gff.getList("PerceptionList")) {
+        uint32_t id = 0;
+        if (perception->readDword(id, "ObjectId")) {
+            _savedReferenceIds.emplace(
+                "Perception/" + std::to_string(perceptionIndex), id);
+        }
+        ++perceptionIndex;
+    }
+}
+
+void Object::bindSavedRuntimeState() {
+    if (!_savedRuntimeParsed) {
+        return;
+    }
+    for (auto &effect : _savedEffects) {
+        _savedEffectReferencesBound.push_back(
+            _game.bindEffectCreator(effect));
+    }
+    for (auto &action : _savedActionQueue.actions) {
+        _savedActionReferencesBound.push_back(
+            action.bindObjectReferences(_game));
+    }
+}
+
+void Object::publishSavedRuntimeState() {
+    if (!_savedRuntimeParsed || _savedRuntimePublished) {
+        return;
+    }
+    SavedScriptSituationImporter importer(
+        _game, _services.resource.scripts);
+
+    for (size_t index = 0; index < _savedEffects.size(); ++index) {
+        const auto &savedEffect = _savedEffects[index];
+        if (index >= _savedEffectReferencesBound.size() ||
+            !_savedEffectReferencesBound[index]) {
+            continue;
+        }
+        EffectInstance effect(savedEffect);
+        if (effect.durationType() == DurationType::Temporary) {
+            auto remaining = _game.remainingEffectDuration(effect);
+            if (!remaining || *remaining <= 0.0f) {
+                continue;
+            }
+            effect.remainingDuration = *remaining;
+        }
+        if (effect.hasStableId()) {
+            _game.importEffectId(effect.id);
+        } else {
+            effect.id = _game.allocateEffectId();
+        }
+        restoreEffect(std::move(effect));
+    }
+
+    for (size_t index = 0; index < _savedActionQueue.actions.size(); ++index) {
+        const auto &savedAction = _savedActionQueue.actions[index];
+        if (index >= _savedActionReferencesBound.size() ||
+            !_savedActionReferencesBound[index]) {
+            _loadedSaveActionSlots.push_back(
+                LoadedSaveActionSlot {savedAction, {}, true});
+            continue;
+        }
+        auto action = savedAction.toRuntimeAction(_game, &importer);
+        if (action) {
+            action->attachSavedAction(savedAction);
+            addAction(action);
+            _loadedSaveActionSlots.push_back(
+                LoadedSaveActionSlot {savedAction, action, false});
+        } else if (savedAction.executionSupport() ==
+                   SavedExecutionSupport::RepresentableButUnsupported) {
+            _loadedSaveActionSlots.push_back(
+                LoadedSaveActionSlot {savedAction, {}, true});
+        }
+    }
+    _savedRuntimePublished = true;
+}
+
+void Object::captureSaveRecord(
+    const resource::Gff &gff,
+    const SerializedIdentityContext &identityContext,
+    SaveRecordOrigin origin) {
+    std::optional<SerializedObjectIdentity> identity;
+    uint32_t id = 0;
+    if (identityContext.isSerializedState() &&
+        gff.readDword(id, "ObjectId")) {
+        identity = SerializedObjectIdentity {identityContext, id};
+    }
+    _saveRecordProvenance = SaveRecordProvenance {
+        SaveGffShadow::capture(gff), std::move(origin), std::move(identity)};
+}
+
+void Object::assignSerializedObjectIdentity(
+    const SerializedObjectIdentity &identity) {
+    if (_saveRecordProvenance) {
+        _saveRecordProvenance->identity = identity;
+    } else {
+        _saveRecordProvenance = SaveRecordProvenance {
+            SaveGffShadow {}, SaveRecordOrigin {}, identity};
+    }
+}
+
+std::vector<EffectInstance> Object::saveEffectSnapshot() const {
+    // Later orchestration calls this at a stable synchronous frame boundary.
+    std::vector<EffectInstance> result;
+    for (const EffectInstance &effect : _effects) {
+        // Equipped effects are derived from the authoritative equipment edge.
+        // Persisting them independently would duplicate them on reconstruction.
+        if (effect.durationType() != DurationType::Equipped) {
+            result.push_back(effect);
+        }
+    }
+    return result;
+}
+
+EffectInstance *Object::findEffectInstance(const Effect &effect) {
+    auto it = std::find_if(
+        _effects.begin(),
+        _effects.end(),
+        [&effect](const EffectInstance &instance) {
+            return instance.effect.get() == &effect;
+        });
+    return it != _effects.end() ? &*it : nullptr;
+}
+
+std::vector<SavedActionRecord> Object::saveActionSnapshot() const {
+    // Loaded slots retain original order. Executed/cancelled actions cease to
+    // be live as soon as they leave (or complete within) the runtime queue.
+    std::vector<SavedActionRecord> result;
+    std::set<const Action *> represented;
+    auto unsupportedAction = [this](const Action &action, size_t queueIndex) {
+        std::ostringstream message;
+        message << "live queued action has no save-facing representation"
+                << ": ownerId=" << id()
+                << " ownerType=" << static_cast<int>(type())
+                << " ownerTag=\"" << tag() << '"'
+                << " ownerBlueprint=\"" << blueprintResRef() << '"'
+                << " queueIndex=" << queueIndex
+                << " actionType=" << static_cast<int>(action.type())
+                << " runtimeClass=" << typeid(action).name()
+                << " provenance="
+                << (action.originalSavedAction() ? "loaded" : "runtime-created");
+        if (action.originalSavedAction()) {
+            message << " savedActionId=" << action.originalSavedAction()->actionId
+                    << " groupActionId="
+                    << action.originalSavedAction()->groupActionId;
+        }
+        return ValidationException(message.str());
+    };
+    auto saveAction = [this](const Action &action, size_t queueIndex) {
+        try {
+            return action.saveFacingState();
+        } catch (const std::exception &ex) {
+            std::ostringstream message;
+            message << ex.what()
+                    << "; ownerId=" << id()
+                    << " ownerType=" << static_cast<int>(type())
+                    << " ownerClass=" << typeid(*this).name()
+                    << " ownerTag=\"" << tag() << '\"'
+                    << " ownerBlueprint=\"" << blueprintResRef() << '\"'
+                    << " queueIndex=" << queueIndex
+                    << " actionType=" << static_cast<int>(action.type())
+                    << " runtimeClass=" << typeid(action).name()
+                    << " actionProvenance="
+                    << (action.originalSavedAction() ? "present" : "absent");
+            if (action.originalSavedAction()) {
+                message << " savedActionId=" << action.originalSavedAction()->actionId
+                        << " groupActionId=" << action.originalSavedAction()->groupActionId;
+            }
+            throw ValidationException(message.str());
+        }
+    };
+    for (const auto &slot : _loadedSaveActionSlots) {
+        if (slot.unsupportedPending) {
+            result.push_back(slot.original);
+            continue;
+        }
+        auto action = slot.runtimeAction.lock();
+        bool queued = action &&
+                      std::find(_actions.begin(), _actions.end(), action) != _actions.end();
+        if (!queued || action->isCompleted() || action->isCancelled()) {
+            continue;
+        }
+        represented.insert(action.get());
+        auto position = std::find(_actions.begin(), _actions.end(), action);
+        auto queueIndex = static_cast<size_t>(
+            std::distance(_actions.begin(), position));
+        if (auto saved = saveAction(*action, queueIndex)) {
+            result.push_back(std::move(*saved));
+        } else {
+            throw unsupportedAction(*action, queueIndex);
+        }
+    }
+    for (size_t index = 0; index < _actions.size(); ++index) {
+        const auto &action = _actions[index];
+        if (represented.count(action.get()) != 0 ||
+            action->isCompleted() || action->isCancelled()) {
+            continue;
+        }
+        if (auto saved = saveAction(*action, index)) {
+            result.push_back(std::move(*saved));
+        } else {
+            throw unsupportedAction(*action, index);
+        }
+    }
+    return result;
+}
+
+void Object::retireAreaRuntimeState(
+    const std::set<const Object *> &retainedObjects) {
+    // The authoritative source snapshot was captured before this boundary.
+    // Discard rather than cancel: cancellation callbacks are live gameplay and
+    // must not mutate the already-frozen outgoing world.
+    for (auto &action : _actions) {
+        // Conversation cancellation only retires its presentation admission.
+        // Other actions are discarded without invoking gameplay callbacks.
+        if (auto conversation = dyn_cast<StartConversationAction>(action)) {
+            conversation->cancel(action, *this);
+        }
+        if (action) action->markCancelled();
+    }
+    _actions.clear();
+    _delayed.clear();
+    _executingAction.reset();
+    _loadedSaveActionSlots.clear();
+    _savedActionQueue = SavedActionQueue {};
+
+    for (auto &effect : _effects) {
+        if (effect.effect) {
+            effect.effect->retireAreaRuntime(retainedObjects);
+        }
+        effect.retireAreaRuntimeBindings(retainedObjects);
+    }
+    _savedEffects.clear();
+    _savedRuntimeParsed = false;
+    _savedRuntimePublished = false;
+
+    // Rebase object-local bindings exactly as effects are rebased. Master/owner
+    // relations between retained session objects remain meaningful; every
+    // outgoing Area binding retires. A2 separately owns the saved-graph
+    // namespace, translation, and generation.
+    std::map<std::string, uint32_t> retainedReferenceIds;
+    std::map<std::string, RuntimeObjectRef<Object>> retainedReferences;
+    for (const auto &[field, binding] : _savedReferences) {
+        auto object = binding.resolve();
+        if (!object || retainedObjects.count(object.get()) == 0) continue;
+        retainedReferenceIds.emplace(field, object->id());
+        retainedReferences.emplace(field, object);
+    }
+    _savedReferenceIds = std::move(retainedReferenceIds);
+    _savedReferences = std::move(retainedReferences);
+    _lastHostileActor.reset();
+    auto lastDamager = _lastDamager.resolve();
+    if (!lastDamager || retainedObjects.count(lastDamager.get()) == 0) {
+        _lastDamager.reset();
+        if (_savedLastDamagerId) {
+            _savedLastDamagerId = script::kObjectInvalid;
+        }
+    } else {
+        _savedLastDamagerId = lastDamager->id();
+    }
+}
+
+void Object::resolveSavedReferences(
+    const std::function<std::shared_ptr<Object>(uint32_t)> &resolver) {
+    _savedReferences.clear();
+    for (const auto &[field, id] : _savedReferenceIds) {
+        if (auto object = resolver(id)) {
+            _savedReferences.emplace(field, object);
+        }
+    }
+    _lastDamager.reset();
+    if (_savedLastDamagerId &&
+        *_savedLastDamagerId != script::kObjectInvalid) {
+        _lastDamager = resolver(*_savedLastDamagerId);
+    }
+}
+
+std::shared_ptr<Object> Object::savedReference(std::string_view field) const {
+    auto found = _savedReferences.find(std::string(field));
+    return found == _savedReferences.end() ? nullptr : found->second.resolve();
+}
+
+uint32_t Object::getLastHostileActor() const {
+    auto actor = _lastHostileActor.resolve();
+    return actor ? actor->id() : script::kObjectInvalid;
+}
+
+void Object::setLastHostileActor(uint32_t actor) {
+    if (actor == script::kObjectInvalid) {
+        _lastHostileActor.reset();
+        return;
+    }
+    _lastHostileActor = _game.getObjectById(actor);
+}
+
+uint32_t Object::getLastDamager() const {
+    auto damager = _lastDamager.resolve();
+    return damager ? damager->id() : script::kObjectInvalid;
+}
+
+void Object::setLastDamager(const std::shared_ptr<Object> &damager) {
+    _lastDamager = damager;
+    _savedLastDamagerId = damager
+                              ? damager->id()
+                              : script::kObjectInvalid;
+}
 
 void Object::clearAllActions(bool force) {
+    for (auto &slot : _loadedSaveActionSlots) {
+        slot.unsupportedPending = false;
+    }
     // If the current front action clears the queue while it is executing, keep
     // that action and its queued continuation alive instead of trimming from the
     // back and deleting the follow-up it is about to hand off to.
@@ -122,6 +626,7 @@ void Object::clearAllActions(bool force) {
                     break;
                 }
                 action->cancel(action, *this);
+                action->markCancelled();
                 _actions.pop_front();
             }
             if (!_actions.empty() && _actions.front() == executingAction) {
@@ -136,19 +641,29 @@ void Object::clearAllActions(bool force) {
             break;
         }
         _actions.back()->cancel(action, *this);
+        action->markCancelled();
         _actions.pop_back();
     }
 }
 
 void Object::addAction(std::shared_ptr<Action> action) {
+    if (!isRuntimeLive()) return;
+    if (auto conversation = dyn_cast<StartConversationAction>(action)) {
+        conversation->admit();
+    }
     _actions.push_back(std::move(action));
 }
 
 void Object::addActionOnTop(std::shared_ptr<Action> action) {
+    if (!isRuntimeLive()) return;
+    if (auto conversation = dyn_cast<StartConversationAction>(action)) {
+        conversation->admit();
+    }
     _actions.push_front(std::move(action));
 }
 
 void Object::delayAction(std::shared_ptr<Action> action, float seconds) {
+    if (!isRuntimeLive()) return;
     DelayedAction delayed;
     delayed.action = std::move(action);
     delayed.timer = std::make_unique<Timer>(seconds);
@@ -195,6 +710,14 @@ void Object::executeActions(float dt) {
         return;
     }
     std::shared_ptr<Action> action(_actions.front());
+    if (!action->runtimeDependenciesLive()) {
+        action->cancel(action, *this);
+        action->markCancelled();
+        if (!action->isCompleted()) {
+            action->complete();
+        }
+        return;
+    }
     _executingAction = action;
     try {
         action->execute(action, *this, dt);
@@ -205,11 +728,12 @@ void Object::executeActions(float dt) {
     _executingAction.reset();
 }
 
-bool Object::hasUserActionsPending() const {
+bool Object::hasUserActionsPending(const Action *excluded) const {
     // TODO: must only work during combat
-    for (auto &action : _actions) {
-        if (action->isUserAction())
+    for (const auto &action : _actions) {
+        if (action.get() != excluded && action->isUserAction()) {
             return true;
+        }
     }
     return false;
 }
@@ -220,42 +744,81 @@ std::shared_ptr<Action> Object::getCurrentAction() const {
 
 std::shared_ptr<Item> Object::addItem(const std::string &resRef, int stackSize, bool dropable) {
     std::shared_ptr<Item> result;
-
-    auto maybeItem = std::find_if(_items.begin(), _items.end(), [&resRef](auto &item) {
-        return item->tag() == resRef;
-    });
-    if (maybeItem != _items.end()) {
-        result = *maybeItem;
-        int prevStackSize = result->stackSize();
-        result->setStackSize(prevStackSize + stackSize);
-
-    } else {
-        result = _game.newItem();
-        result->loadFromBlueprint(resRef);
-        result->setStackSize(stackSize);
-        result->setDropable(dropable);
-
-        _items.push_back(result);
-
-        if (Creature *creature = dyn_cast<Creature>(this)) {
-            creature->itemAttributes().addItem(result, _services.game);
-        }
-    }
+    std::vector<std::shared_ptr<Object>> noObsolete;
+    std::vector<std::shared_ptr<Item>> replacement(_items);
+    ItemAttributes replacementAttributes;
+    auto creature = dyn_cast<Creature>(this);
+    if (creature) replacementAttributes = creature->itemAttributes();
+    _game.replaceRuntimeObjectGraph(
+        noObsolete,
+        [&]() {
+            auto candidate = _game.newItemFromBlueprint(resRef);
+            candidate->setStackSize(stackSize);
+            candidate->setDropable(dropable);
+            candidate->setOwner(_id);
+            result = appendOwnedItemCandidate(
+                replacement, candidate, false);
+            if (creature && result.get() == candidate.get()) {
+                replacementAttributes.addItem(candidate, _services.game);
+            }
+        },
+        [&]() noexcept {
+            _items = std::move(replacement);
+            if (creature) {
+                creature->itemAttributes() =
+                    std::move(replacementAttributes);
+            }
+        });
 
     return result;
 }
 
 void Object::addItem(const std::shared_ptr<Item> &item) {
-    auto maybeItem = std::find_if(_items.begin(), _items.end(), [&item](auto &entry) { return entry->tag() == item->tag(); });
-    if (maybeItem != _items.end()) {
-        // Re-adding an owned stack restores one consumed item; transferred stacks merge fully.
-        int stackSize = *maybeItem == item ? 1 : item->stackSize();
-        (*maybeItem)->setStackSize((*maybeItem)->stackSize() + stackSize);
-    } else {
-        _items.push_back(item);
-        if (Creature *creature = dyn_cast<Creature>(this)) {
-            creature->itemAttributes().addItem(item, _services.game);
+    if (!item || (!item->isRuntimeLive() && !item->isPresentationOnly())) {
+        throw ValidationException("Cannot own a non-live runtime item");
+    }
+    if (item->isEquipped()) {
+        throw ValidationException(
+            "Cannot add an Item while it still has an equipment owner edge");
+    }
+    if (isActiveAreaOwnedItem(_game, item)) {
+        throw ValidationException(
+            "Cannot add an Item while it still has an Area ownership edge");
+    }
+    if (item->owner() != 0 && item->owner() != script::kObjectInvalid &&
+        item->owner() != _id) {
+        throw ValidationException("Runtime item already has another owner");
+    }
+    auto alreadyOwned = std::find(_items.begin(), _items.end(), item);
+    if (alreadyOwned != _items.end()) {
+        // Re-adding an owned stack restores one consumed item.
+        if ((*alreadyOwned)->stackSize() < (*alreadyOwned)->maxStackSize()) {
+            (*alreadyOwned)->setStackSize((*alreadyOwned)->stackSize() + 1);
         }
+        return;
+    }
+    for (const auto &existing : _items) {
+        if (!existing->isStackCompatibleWith(*item)) {
+            continue;
+        }
+        if (existing->mergeStackFrom(*item)) {
+            item->setOwner(0);
+            _game.destroyRuntimeObjectGraph(item);
+            return;
+        }
+    }
+    std::vector<std::shared_ptr<Item>> replacement(_items);
+    replacement.push_back(item);
+    auto creature = dyn_cast<Creature>(this);
+    ItemAttributes replacementAttributes;
+    if (creature) {
+        replacementAttributes = creature->itemAttributes();
+        replacementAttributes.addItem(item, _services.game);
+    }
+    _items = std::move(replacement);
+    item->setOwner(_id);
+    if (creature) {
+        creature->itemAttributes() = std::move(replacementAttributes);
     }
 }
 
@@ -272,10 +835,26 @@ bool Object::removeItem(const std::shared_ptr<Item> &item, bool &last) {
     } else {
         last = true;
         _items.erase(maybeItem);
+        item->setOwner(0);
         if (Creature *creature = dyn_cast<Creature>(this)) {
             creature->itemAttributes().removeItem(item);
         }
     }
+
+    return true;
+}
+
+bool Object::removeItemStack(const std::shared_ptr<Item> &item) {
+    auto maybeItem = find(_items.begin(), _items.end(), item);
+    if (maybeItem == _items.end()) {
+        return false;
+    }
+
+    _items.erase(maybeItem);
+    if (Creature *creature = dyn_cast<Creature>(this)) {
+        creature->itemAttributes().removeItem(item);
+    }
+    item->setOwner(0);
 
     return true;
 }
@@ -350,7 +929,10 @@ void Object::moveDropableItemsTo(Object &other) {
             // the inventory; the stack size is the credit amount.
             if (otherInParty && item->isCredits()) {
                 _game.party().giveGold(item->stackSize());
+                item->setOwner(0);
+                _game.destroyRuntimeObjectGraph(item);
             } else {
+                item->setOwner(0);
                 other.addItem(item);
             }
         } else {
@@ -360,31 +942,104 @@ void Object::moveDropableItemsTo(Object &other) {
 }
 
 void Object::applyEffect(const std::shared_ptr<Effect> &effect, DurationType durationType, float duration) {
-    if (durationType == DurationType::Instant) {
-        applyInstantEffect(*effect);
-    } else {
-        AppliedEffect appliedEffect;
-        appliedEffect.effect = effect;
-        appliedEffect.durationType = durationType;
-        appliedEffect.duration = duration;
-        _effects.push_back(std::move(appliedEffect));
-        applyInstantEffect(*_effects.back().effect);
+    if (!isRuntimeLive()) return;
+    if (auto saved = std::dynamic_pointer_cast<SavedEffectValue>(effect)) {
+        EffectInstance instance(saved->instance());
+        if (instance.hasStableId()) {
+            _game.importEffectId(instance.id);
+        } else {
+            instance.id = _game.allocateEffectId();
+        }
+
+        instance.subType = static_cast<uint16_t>(
+            (instance.subType & ~static_cast<uint16_t>(0x7)) |
+            static_cast<uint16_t>(durationType));
+        instance.duration = duration;
+        instance.remainingDuration = durationType == DurationType::Temporary
+                                         ? std::optional<float>(duration)
+                                         : std::nullopt;
+        instance.expiryOrigin = durationType == DurationType::Temporary
+                                    ? EffectExpiryOrigin::RuntimeCountdown
+                                    : EffectExpiryOrigin::None;
+        instance.expiryDay = 0;
+        instance.expiryTime = 0;
+        instance.skipOnLoad = false;
+
+        // The save-facing instance remains authoritative. Supported retail
+        // payloads execute through the canonical EffectInstance, while
+        // unsupported values remain typed and queryable with a null payload.
+        restoreEffect(std::move(instance));
+        return;
     }
+
+    EffectInstance instance = effect->saveFacingInstance();
+    instance.effect = effect;
+    instance.id = _game.allocateEffectId();
+    instance.subType = static_cast<uint16_t>(
+        (instance.subType & ~static_cast<uint16_t>(0x7)) |
+        static_cast<uint16_t>(durationType));
+    instance.duration = duration;
+    if (durationType == DurationType::Temporary) {
+        instance.remainingDuration = duration;
+        instance.expiryOrigin = EffectExpiryOrigin::RuntimeCountdown;
+    }
+    instance.exposed = 1;
+    restoreEffect(std::move(instance));
 }
 
-void Object::applyInstantEffect(Effect &effect) {
-    effect.applyTo(*this);
+bool Object::restoreEffect(EffectInstance effect) {
+    if (!effect.shouldRestoreOnLoad()) {
+        return false;
+    }
+    if (effect.durationType() == DurationType::Instant && effect.effect) {
+        if (effect.effect->onApply(*this, effect)) {
+            effect.effect->onRemove(*this, effect);
+        }
+        return true;
+    }
+    _effects.push_back(std::move(effect));
+    if (_effects.back().effect &&
+        !_effects.back().effect->onApply(*this, _effects.back())) {
+        _effects.pop_back();
+        return false;
+    }
+    return true;
+}
+
+size_t Object::removeEffectsById(EffectId id) {
+    size_t removed = 0;
+    for (auto it = _effects.begin(); it != _effects.end();) {
+        if (it->id == id) {
+            EffectInstance removedEffect = std::move(*it);
+            it = _effects.erase(it);
+            if (removedEffect.effect) {
+                removedEffect.effect->onRemove(*this, removedEffect);
+            }
+            ++removed;
+        } else {
+            ++it;
+        }
+    }
+    return removed;
 }
 
 void Object::updateEffects(float dt) {
     for (auto it = _effects.begin(); it != _effects.end();) {
-        AppliedEffect &effect = *it;
-        bool temporary = effect.durationType == DurationType::Temporary;
+        EffectInstance &effect = *it;
+        const bool retiredEquippedSource =
+            effect.durationType() == DurationType::Equipped &&
+            !effect.hasLiveRuntimeSource();
+        bool temporary = effect.durationType() == DurationType::Temporary && effect.remainingDuration;
         if (temporary) {
-            effect.duration = glm::max(0.0f, effect.duration - dt);
+            *effect.remainingDuration = glm::max(0.0f, *effect.remainingDuration - dt);
         }
-        if (temporary && effect.duration == 0.0f) {
+        if (retiredEquippedSource ||
+            (temporary && *effect.remainingDuration == 0.0f)) {
+            EffectInstance removedEffect = std::move(effect);
             it = _effects.erase(it);
+            if (removedEffect.effect) {
+                removedEffect.effect->onRemove(*this, removedEffect);
+            }
         } else {
             ++it;
         }
@@ -466,10 +1121,77 @@ std::shared_ptr<Item> Object::getItemByTag(const std::string &tag) {
 }
 
 void Object::clearAllEffects() {
+    std::vector<EffectInstance> removed;
+    removed.reserve(_effects.size());
+    for (EffectInstance &effect : _effects) {
+        if (effect.effect) {
+            removed.push_back(std::move(effect));
+        }
+    }
     _effects.clear();
+
+    for (const EffectInstance &effect : removed) {
+        effect.effect->onRemove(*this, effect);
+    }
+    onEffectsCleared();
 }
 
-void Object::damage(int amount, uint32_t damager) {
+void Object::removeEffect(const std::shared_ptr<Effect> &effect) {
+    for (auto it = _effects.begin(); it != _effects.end(); ++it) {
+        if (it->effect == effect) {
+            EffectInstance removed = std::move(*it);
+            _effects.erase(it);
+            removed.effect->onRemove(*this, removed);
+            return;
+        }
+    }
+}
+
+bool Object::hasEffect(EffectType type) const {
+    return std::any_of(
+        _effects.begin(),
+        _effects.end(),
+        [type](const EffectInstance &applied) {
+            return applied.hasLiveRuntimeSource() &&
+                   applied.type() == type;
+        });
+}
+
+void Object::replaceEffectState(
+    std::deque<EffectInstance> replacement) noexcept {
+    auto containsId = [](const auto &effects, EffectId id) {
+        return std::any_of(
+            effects.begin(), effects.end(),
+            [id](const EffectInstance &effect) { return effect.id == id; });
+    };
+
+    for (const EffectInstance &effect : _effects) {
+        if (!containsId(replacement, effect.id) && effect.effect) {
+            effect.effect->onRemove(*this, effect);
+        }
+    }
+    _effects.swap(replacement);
+    for (const EffectInstance &effect : _effects) {
+        if (!containsId(replacement, effect.id) && effect.effect &&
+            !effect.effect->onApply(*this, effect)) {
+            std::terminate();
+        }
+    }
+}
+
+int Object::applyDamageToHitPoints(int amount, int currentHitPoints) {
+    bool minimumOne = isMinOneHP();
+    int minimumHitPoints = minimumOne ? 1 : 0;
+    int adjustedAmount = minimumOne
+                             ? std::min(amount, std::max(0, currentHitPoints - minimumHitPoints))
+                             : amount;
+    _currentHitPoints = std::max(minimumHitPoints, currentHitPoints - amount);
+    return adjustedAmount;
+}
+
+void Object::damage(
+    int amount,
+    const std::shared_ptr<Object> &damager) {
 }
 
 void Object::startStuntMode() {

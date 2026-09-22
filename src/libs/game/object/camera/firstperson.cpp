@@ -36,13 +36,25 @@ static constexpr float kMouseMultiplier = glm::pi<float>() / 4000.0f;
 void FirstPersonCamera::load() {
     auto &scene = _services.scene.graphs.get(_sceneName);
     _sceneNode = scene.newCamera();
-    cameraSceneNode()->setPerspectiveProjection(_fovy, _aspect, kDefaultClipPlaneNear, kDefaultClipPlaneFar);
+    rebuildProjection();
+}
+
+float FirstPersonCamera::projectionFovy() const {
+    return _fovy;
+}
+
+void FirstPersonCamera::setFovy(float fovy) {
+    _fovy = fovy;
+    rebuildProjection();
 }
 
 bool FirstPersonCamera::handle(const input::Event &event) {
     switch (event.type) {
     case input::EventType::MouseMotion:
         return handleMouseMotion(event.motion);
+    case input::EventType::MouseButtonDown:
+    case input::EventType::MouseButtonUp:
+        return handleMouseButton(event.button);
     case input::EventType::KeyDown:
         return handleKeyDown(event.key);
     case input::EventType::KeyUp:
@@ -52,7 +64,21 @@ bool FirstPersonCamera::handle(const input::Event &event) {
     }
 }
 
+bool FirstPersonCamera::handleMouseButton(const input::MouseButtonEvent &event) {
+    if (event.button != input::MouseButton::Left) {
+        return false;
+    }
+    _rotating = event.pressed;
+    return true;
+}
+
 bool FirstPersonCamera::handleMouseMotion(const input::MouseMotionEvent &event) {
+    // Only while dragging. The pointer is not captured, so motion arrives
+    // whenever it crosses the window and an ungated camera would swing as soon
+    // as the mouse moved anywhere.
+    if (!_rotating) {
+        return false;
+    }
     _facing = glm::mod(
         _facing - event.xrel * kMouseMultiplier,
         glm::two_pi<float>());
@@ -161,6 +187,8 @@ bool FirstPersonCamera::handleKeyUp(const input::KeyEvent &event) {
 }
 
 void FirstPersonCamera::update(float dt) {
+    Camera::update(dt);
+
     float facingSin = glm::sin(_facing) * _multiplier * kMovementSpeed * dt;
     float facingCos = glm::cos(_facing) * _multiplier * kMovementSpeed * dt;
     float pitchSin = glm::sin(_pitch) * _multiplier * kMovementSpeed * dt;
@@ -221,6 +249,18 @@ void FirstPersonCamera::setPosition(const glm::vec3 &pos) {
 
 void FirstPersonCamera::setFacing(float facing) {
     _facing = facing;
+    updateSceneNode();
+}
+
+void FirstPersonCamera::setLookAt(const glm::vec3 &target) {
+    glm::vec3 direction = target - _position;
+    float length = glm::length(direction);
+    if (length <= std::numeric_limits<float>::epsilon()) {
+        throw std::invalid_argument("Camera look target must differ from its position");
+    }
+    direction /= length;
+    _facing = glm::atan(-direction.x, direction.y);
+    _pitch = glm::clamp(glm::asin(direction.z), -glm::quarter_pi<float>(), glm::quarter_pi<float>());
     updateSceneNode();
 }
 

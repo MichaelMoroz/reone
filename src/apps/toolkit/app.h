@@ -25,14 +25,39 @@
 
 #include "viewmodel/resource/explorer.h"
 
+#include <wx/timer.h>
+
+#include <filesystem>
+
 namespace reone {
+
+class ResourceExplorerFrame;
 
 class ToolkitApp : public wxApp {
 public:
     bool OnInit() override;
 
 private:
+    struct CaptureOptions {
+        std::filesystem::path gamePath;
+        std::string resource;
+        std::filesystem::path capturePath;
+        int captureFrame {3};
+        bool renderdoc {false};
+
+        bool isCaptureRun() const { return !capturePath.empty(); }
+    };
+
+    ResourceExplorerFrame *m_frame {nullptr};
+
     std::unique_ptr<ResourceExplorerViewModel> m_viewModel;
+    CaptureOptions m_captureOptions;
+    wxTimer m_captureTimer;
+    int m_frameIndex {0};
+    bool m_renderdocTriggered {false};
+
+    void startCapture();
+    void onCaptureTimer(wxTimerEvent &event);
 };
 
 } // namespace reone

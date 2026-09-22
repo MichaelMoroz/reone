@@ -39,15 +39,28 @@ public:
     }
 
     void update(float dt) override;
+    void refreshLayout() override;
+
+    /** Selects, but does not activate, a reply for a scripted visual capture. */
+    void selectReplyForCapture(int index);
 
 private:
     struct Participant {
         std::shared_ptr<graphics::Model> model;
-        std::shared_ptr<Creature> creature;
+        RuntimeObjectRef<Creature> creature;
         bool mixedStuntActive {false};
         glm::vec3 restorePosition {0.0f};
         float restoreFacing {0.0f};
         bool restoreCulling {true};
+    };
+
+    /**
+     * A cutscene clip named directly by a DLG animation ordinal, together with
+     * whether the clip loops rather than playing once.
+     */
+    struct CutAnimation {
+        std::string name;
+        bool looping {false};
     };
 
     struct Controls {
@@ -57,8 +70,14 @@ private:
 
     Controls _controls;
 
-    std::shared_ptr<Object> _currentSpeaker;
+    RuntimeObjectRef<Object> _currentSpeaker;
     std::map<std::string, Participant> _participantByTag;
+
+    /**
+     * Ordinary creatures currently holding an authored cutscene pose. They keep
+     * it until another authored animation replaces it or the dialogue ends.
+     */
+    std::vector<RuntimeObjectRef<Creature>> _heldCutParticipants;
 
     void preload(gui::IGUI &gui) override;
     void onGUILoaded() override;
@@ -68,21 +87,25 @@ private:
         _controls.LB_REPLIES = findControl<gui::ListBox>("LB_REPLIES");
     }
 
-    void addFrame(std::string tag, int top, int height);
+    void addFrame(std::string tag, int top);
     void configureMessage();
     void configureReplies();
+    void repositionReplies();
     void repositionMessage();
 
     void updateCamera();
     void updateParticipantAnimations();
+    void applyCutAnimation(const std::string &participant, const CutAnimation &cut);
+    void applyDialogAnimation(const std::string &participant, int ordinal);
     void restoreInactiveStuntParticipants();
-    bool enterMixedStunt(Participant &participant, const std::shared_ptr<graphics::Animation> &animation);
+    bool enterMixedStunt(Participant &participant, const std::shared_ptr<graphics::Animation> &animation, bool looping);
     void leaveMixedStunt(Participant &participant);
 
     glm::vec3 getTalkPosition(const Object &object) const;
     DialogCamera::Variant getRandomCameraVariant() const;
-    std::string getStuntAnimationName(int ordinal) const;
-    AnimationType getStuntAnimationType(int ordinal) const;
+    static std::optional<CutAnimation> decodeCutAnimation(int ordinal);
+    AnimationType getDialogAnimationType(int ordinal) const;
+    std::shared_ptr<Creature> resolveParticipantCreature(const std::string &participant) const;
     bool hasStuntPresentation() const;
     std::shared_ptr<graphics::Animation> getStuntParticipantAnimation(
         const std::string &participant,
@@ -98,7 +121,12 @@ private:
 
     // Loading
 
+    int bandHeight() const;
+    gui::Control::Extent bandExtent(int top) const;
+    /** The centred 4:3 rectangle within the bottom band that the replies occupy. */
+    gui::Control::Extent replySafeArea() const;
     void loadFrames();
+    void configureFrames();
     void loadCurrentSpeaker();
 
     // END Loading
@@ -107,6 +135,8 @@ private:
 
     void loadStuntParticipants();
     void releaseStuntParticipants();
+    void holdCutParticipant(const std::shared_ptr<Creature> &creature);
+    void releaseHeldCutParticipants();
 
     // END Participants
 };

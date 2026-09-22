@@ -17,6 +17,7 @@ set(GAME_INCLUDE_DIR ${REONE_INCLUDE_DIR}/reone/game)
 set(GAME_SOURCE_DIR ${CMAKE_SOURCE_DIR}/src/libs/game)
 
 set(GAME_HEADERS
+    ${GAME_INCLUDE_DIR}/menupresentation.h
     ${GAME_INCLUDE_DIR}/action.h
     ${GAME_INCLUDE_DIR}/action/attackobject.h
     ${GAME_INCLUDE_DIR}/action/barkstring.h
@@ -87,6 +88,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/d20/spell.h
     ${GAME_INCLUDE_DIR}/d20/spells.h
     ${GAME_INCLUDE_DIR}/debug.h
+    ${GAME_INCLUDE_DIR}/difficultyoptions.h
     ${GAME_INCLUDE_DIR}/di/module.h
     ${GAME_INCLUDE_DIR}/di/services.h
     ${GAME_INCLUDE_DIR}/effect.h
@@ -103,6 +105,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/effect/blasterdeflectiondecrease.h
     ${GAME_INCLUDE_DIR}/effect/blasterdeflectionincrease.h
     ${GAME_INCLUDE_DIR}/effect/blind.h
+    ${GAME_INCLUDE_DIR}/effect/bonusfeat.h
     ${GAME_INCLUDE_DIR}/effect/bodyfuel.h
     ${GAME_INCLUDE_DIR}/effect/choke.h
     ${GAME_INCLUDE_DIR}/effect/concealment.h
@@ -115,7 +118,6 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/effect/damagedecrease.h
     ${GAME_INCLUDE_DIR}/effect/damageforcepoints.h
     ${GAME_INCLUDE_DIR}/effect/damageimmunitydecrease.h
-    ${GAME_INCLUDE_DIR}/effect/damageimmunityincrease.h
     ${GAME_INCLUDE_DIR}/effect/damageimmunityincrease.h
     ${GAME_INCLUDE_DIR}/effect/damageincrease.h
     ${GAME_INCLUDE_DIR}/effect/damagereduction.h
@@ -180,11 +182,17 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/effect/visual.h
     ${GAME_INCLUDE_DIR}/effect/vpregenmodifier.h
     ${GAME_INCLUDE_DIR}/effect/whirlwind.h
+    ${GAME_INCLUDE_DIR}/equipmentoperation.h
     ${GAME_INCLUDE_DIR}/equipmentrules.h
     ${GAME_INCLUDE_DIR}/event.h
+    ${GAME_INCLUDE_DIR}/runtimeref.h
     ${GAME_INCLUDE_DIR}/footstepsounds.h
+    ${GAME_INCLUDE_DIR}/floatingtext.h
+    ${GAME_INCLUDE_DIR}/galaxymapstate.h
     ${GAME_INCLUDE_DIR}/game.h
+    ${GAME_INCLUDE_DIR}/globalfade.h
     ${GAME_INCLUDE_DIR}/itemdescription.h
+    ${GAME_INCLUDE_DIR}/presentationgui.h
     ${GAME_INCLUDE_DIR}/gui.h
     ${GAME_INCLUDE_DIR}/gui/actionbar.h
     ${GAME_INCLUDE_DIR}/gui/actionslot.h
@@ -195,6 +203,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/gui/chargen/classselect.h
     ${GAME_INCLUDE_DIR}/gui/chargen/custom.h
     ${GAME_INCLUDE_DIR}/gui/chargen/feats.h
+    ${GAME_INCLUDE_DIR}/gui/chargen/iconselection.h
     ${GAME_INCLUDE_DIR}/gui/chargen/levelup.h
     ${GAME_INCLUDE_DIR}/gui/chargen/nameentry.h
     ${GAME_INCLUDE_DIR}/gui/chargen/portraitselect.h
@@ -203,10 +212,12 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/gui/chargen/quickorcustom.h
     ${GAME_INCLUDE_DIR}/gui/chargen/skills.h
     ${GAME_INCLUDE_DIR}/gui/computer.h
+    ${GAME_INCLUDE_DIR}/gui/computercam.h
     ${GAME_INCLUDE_DIR}/gui/confirmpopup.h
     ${GAME_INCLUDE_DIR}/gui/container.h
     ${GAME_INCLUDE_DIR}/gui/conversation.h
     ${GAME_INCLUDE_DIR}/gui/dialog.h
+    ${GAME_INCLUDE_DIR}/gui/galaxymap.h
     ${GAME_INCLUDE_DIR}/gui/generated/areatrans.h
     ${GAME_INCLUDE_DIR}/gui/generated/areatransition.h
     ${GAME_INCLUDE_DIR}/gui/generated/chemical.h
@@ -273,10 +284,13 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/gui/generated/upgradeitems.h
     ${GAME_INCLUDE_DIR}/gui/generated/upgradesel.h
     ${GAME_INCLUDE_DIR}/gui/hud.h
+    ${GAME_INCLUDE_DIR}/gui/ingamehost.h
     ${GAME_INCLUDE_DIR}/gui/ingame.h
     ${GAME_INCLUDE_DIR}/gui/ingame/abilities.h
     ${GAME_INCLUDE_DIR}/gui/ingame/character.h
     ${GAME_INCLUDE_DIR}/gui/ingame/equip.h
+    ${GAME_INCLUDE_DIR}/gui/ingame/itemview.h
+    ${GAME_INCLUDE_DIR}/gui/ingame/itembacking.h
     ${GAME_INCLUDE_DIR}/gui/ingame/inventory.h
     ${GAME_INCLUDE_DIR}/gui/ingame/journal.h
     ${GAME_INCLUDE_DIR}/gui/ingame/map.h
@@ -286,6 +300,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/gui/mainmenu.h
     ${GAME_INCLUDE_DIR}/gui/map.h
     ${GAME_INCLUDE_DIR}/gui/partyselect.h
+    ${GAME_INCLUDE_DIR}/gui/pazaak.h
     ${GAME_INCLUDE_DIR}/gui/saveload.h
     ${GAME_INCLUDE_DIR}/gui/selectoverlay.h
     ${GAME_INCLUDE_DIR}/gui/sounds.h
@@ -294,7 +309,11 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/statussummary.h
     ${GAME_INCLUDE_DIR}/location.h
     ${GAME_INCLUDE_DIR}/messagebus.h
+    ${GAME_INCLUDE_DIR}/messagelog.h
     ${GAME_INCLUDE_DIR}/minigame.h
+    ${GAME_INCLUDE_DIR}/modulesnapshot.h
+    ${GAME_INCLUDE_DIR}/saveslotpublisher.h
+    ${GAME_INCLUDE_DIR}/savewidesnapshot.h
     ${GAME_INCLUDE_DIR}/object.h
     ${GAME_INCLUDE_DIR}/object/area.h
     ${GAME_INCLUDE_DIR}/object/camera.h
@@ -314,7 +333,10 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/object/trigger.h
     ${GAME_INCLUDE_DIR}/object/waypoint.h
     ${GAME_INCLUDE_DIR}/options.h
+    ${GAME_INCLUDE_DIR}/presentationpointer.h
     ${GAME_INCLUDE_DIR}/party.h
+    ${GAME_INCLUDE_DIR}/pazaak.h
+    ${GAME_INCLUDE_DIR}/pazaaksession.h
     ${GAME_INCLUDE_DIR}/pathfinder.h
     ${GAME_INCLUDE_DIR}/player.h
     ${GAME_INCLUDE_DIR}/portrait.h
@@ -323,20 +345,26 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/reputes.h
     ${GAME_INCLUDE_DIR}/room.h
     ${GAME_INCLUDE_DIR}/savedgame.h
+    ${GAME_INCLUDE_DIR}/saveprovenance.h
+    ${GAME_INCLUDE_DIR}/savedruntime.h
     ${GAME_INCLUDE_DIR}/script/routine/argutil.h
     ${GAME_INCLUDE_DIR}/script/routine/context.h
     ${GAME_INCLUDE_DIR}/script/routine/objectutil.h
     ${GAME_INCLUDE_DIR}/script/routines.h
     ${GAME_INCLUDE_DIR}/script/runner.h
+    ${GAME_INCLUDE_DIR}/script/savedsituation.h
     ${GAME_INCLUDE_DIR}/surface.h
     ${GAME_INCLUDE_DIR}/surfaces.h
     ${GAME_INCLUDE_DIR}/swooprace.h
     ${GAME_INCLUDE_DIR}/talent.h
     ${GAME_INCLUDE_DIR}/transitioncandidate.h
+    ${GAME_INCLUDE_DIR}/turret.h
+    ${GAME_INCLUDE_DIR}/twodautil.h
     ${GAME_INCLUDE_DIR}/types.h
     ${GAME_INCLUDE_DIR}/visualeffects.h)
 
 set(GAME_SOURCES
+    ${GAME_SOURCE_DIR}/menupresentation.cpp
     ${GAME_SOURCE_DIR}/action.cpp
     ${GAME_SOURCE_DIR}/action/attackobject.cpp
     ${GAME_SOURCE_DIR}/action/barkstring.cpp
@@ -394,6 +422,7 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/d20/skills.cpp
     ${GAME_SOURCE_DIR}/d20/spells.cpp
     ${GAME_SOURCE_DIR}/debug.cpp
+    ${GAME_SOURCE_DIR}/difficultyoptions.cpp
     ${GAME_SOURCE_DIR}/di/module.cpp
     ${GAME_SOURCE_DIR}/effect/abilitydecrease.cpp
     ${GAME_SOURCE_DIR}/effect/abilityincrease.cpp
@@ -460,9 +489,15 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/effect/vpregenmodifier.cpp
     ${GAME_SOURCE_DIR}/effect/whirlwind.cpp
     ${GAME_SOURCE_DIR}/effect.cpp
+    ${GAME_SOURCE_DIR}/effect/source.cpp
+    ${GAME_SOURCE_DIR}/event.cpp
+    ${GAME_SOURCE_DIR}/equipmentoperation.cpp
     ${GAME_SOURCE_DIR}/equipmentrules.cpp
     ${GAME_SOURCE_DIR}/footstepsounds.cpp
+    ${GAME_SOURCE_DIR}/floatingtext.cpp
+    ${GAME_SOURCE_DIR}/galaxymapstate.cpp
     ${GAME_SOURCE_DIR}/game.cpp
+    ${GAME_SOURCE_DIR}/globalfade.cpp
     ${GAME_SOURCE_DIR}/itemdescription.cpp
     ${GAME_SOURCE_DIR}/gui/actionbar.cpp
     ${GAME_SOURCE_DIR}/gui/actionslot.cpp
@@ -472,6 +507,7 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/gui/chargen/classselect.cpp
     ${GAME_SOURCE_DIR}/gui/chargen/custom.cpp
     ${GAME_SOURCE_DIR}/gui/chargen/feats.cpp
+    ${GAME_SOURCE_DIR}/gui/chargen/iconselection.cpp
     ${GAME_SOURCE_DIR}/gui/chargen/levelup.cpp
     ${GAME_SOURCE_DIR}/gui/chargen/nameentry.cpp
     ${GAME_SOURCE_DIR}/gui/chargen/portraitselect.cpp
@@ -481,25 +517,31 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/gui/chargen/skills.cpp
     ${GAME_SOURCE_DIR}/gui/chargen.cpp
     ${GAME_SOURCE_DIR}/gui/computer.cpp
+    ${GAME_SOURCE_DIR}/gui/computercam.cpp
     ${GAME_SOURCE_DIR}/gui/confirmpopup.cpp
     ${GAME_SOURCE_DIR}/gui/container.cpp
     ${GAME_SOURCE_DIR}/gui/conversation.cpp
     ${GAME_SOURCE_DIR}/gui/dialog.cpp
+    ${GAME_SOURCE_DIR}/gui/galaxymap.cpp
     ${GAME_SOURCE_DIR}/gui/hud.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/abilities.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/character.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/equip.cpp
+    ${GAME_SOURCE_DIR}/gui/ingame/itembacking.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/inventory.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/journal.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/map.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/messages.cpp
     ${GAME_SOURCE_DIR}/gui/ingame/options.cpp
+    ${GAME_SOURCE_DIR}/gui/ingamehost.cpp
     ${GAME_SOURCE_DIR}/gui/ingame.cpp
     ${GAME_SOURCE_DIR}/gui/loadscreen.cpp
+    ${GAME_SOURCE_DIR}/presentationgui.cpp
     ${GAME_SOURCE_DIR}/gui.cpp
     ${GAME_SOURCE_DIR}/gui/mainmenu.cpp
     ${GAME_SOURCE_DIR}/gui/map.cpp
     ${GAME_SOURCE_DIR}/gui/partyselect.cpp
+    ${GAME_SOURCE_DIR}/gui/pazaak.cpp
     ${GAME_SOURCE_DIR}/gui/saveload.cpp
     ${GAME_SOURCE_DIR}/gui/selectoverlay.cpp
     ${GAME_SOURCE_DIR}/gui/sounds.cpp
@@ -507,8 +549,16 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/journal.cpp
     ${GAME_SOURCE_DIR}/statussummary.cpp
     ${GAME_SOURCE_DIR}/messagebus.cpp
+    ${GAME_SOURCE_DIR}/messagelog.cpp
+    ${GAME_SOURCE_DIR}/minigame.cpp
+    ${GAME_SOURCE_DIR}/modulesnapshot.cpp
+    ${GAME_SOURCE_DIR}/savegame.cpp
+    ${GAME_SOURCE_DIR}/savedgame.cpp
+    ${GAME_SOURCE_DIR}/saveslotpublisher.cpp
+    ${GAME_SOURCE_DIR}/savewidesnapshot.cpp
     ${GAME_SOURCE_DIR}/object.cpp
     ${GAME_SOURCE_DIR}/object/area.cpp
+    ${GAME_SOURCE_DIR}/object/camera.cpp
     ${GAME_SOURCE_DIR}/object/camera/animated.cpp
     ${GAME_SOURCE_DIR}/object/camera/dialog.cpp
     ${GAME_SOURCE_DIR}/object/camera/firstperson.cpp
@@ -525,11 +575,16 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/object/trigger.cpp
     ${GAME_SOURCE_DIR}/object/waypoint.cpp
     ${GAME_SOURCE_DIR}/party.cpp
+    ${GAME_SOURCE_DIR}/pazaak.cpp
+    ${GAME_SOURCE_DIR}/pazaaksession.cpp
+    ${GAME_SOURCE_DIR}/presentationpointer.cpp
     ${GAME_SOURCE_DIR}/pathfinder.cpp
     ${GAME_SOURCE_DIR}/player.cpp
     ${GAME_SOURCE_DIR}/portraits.cpp
     ${GAME_SOURCE_DIR}/projectiles.cpp
     ${GAME_SOURCE_DIR}/reputes.cpp
+    ${GAME_SOURCE_DIR}/saveprovenance.cpp
+    ${GAME_SOURCE_DIR}/savedruntime.cpp
     ${GAME_SOURCE_DIR}/room.cpp
     ${GAME_SOURCE_DIR}/script/routine/argutil.cpp
     ${GAME_SOURCE_DIR}/script/routine/impl/action.cpp
@@ -538,13 +593,16 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/script/routine/impl/minigame.cpp
     ${GAME_SOURCE_DIR}/script/routines.cpp
     ${GAME_SOURCE_DIR}/script/runner.cpp
+    ${GAME_SOURCE_DIR}/script/savedsituation.cpp
     ${GAME_SOURCE_DIR}/surfaces.cpp
     ${GAME_SOURCE_DIR}/swooprace.cpp
     ${GAME_SOURCE_DIR}/transitioncandidate.cpp
+    ${GAME_SOURCE_DIR}/turret.cpp
+    ${GAME_SOURCE_DIR}/twodautil.cpp
     ${GAME_SOURCE_DIR}/visualeffects.cpp)
 
 add_library(game STATIC ${GAME_HEADERS} ${GAME_SOURCES} ${CLANG_FORMAT_PATH})
-set_target_properties(game PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/lib)
+set_target_properties(game PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${REONE_LIB_DIR})
 set_target_properties(game PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(game PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
-target_link_libraries(game PRIVATE gui scene resource movie graphics audio script system)
+target_link_libraries(game PRIVATE gui scene resource movie graphics audio script system imgui)

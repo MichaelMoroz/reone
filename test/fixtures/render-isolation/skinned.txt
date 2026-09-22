@@ -1,0 +1,6 @@
+warp danm14ab
+scene empty
+spawn c_khounda 0 0 0
+camera free
+campos 0 -3 1.5
+camlook 0 0 0.8

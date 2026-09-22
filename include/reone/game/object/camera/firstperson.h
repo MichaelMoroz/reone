@@ -30,7 +30,6 @@ public:
     FirstPersonCamera(
         uint32_t id,
         float fovy,
-        float aspect,
         std::string sceneName,
         Game &game,
         ServicesView &services) :
@@ -39,8 +38,7 @@ public:
             std::move(sceneName),
             game,
             services),
-        _fovy(fovy),
-        _aspect(aspect) {
+        _fovy(fovy) {
     }
 
     void load();
@@ -51,6 +49,13 @@ public:
 
     void setPosition(const glm::vec3 &position);
     void setFacing(float facing);
+    void setPitch(float pitch);
+    void setLookAt(const glm::vec3 &target);
+    /** Vertical field of view, in radians. */
+    void setFovy(float fovy);
+
+    const glm::vec3 &position() const { return _position; }
+    float pitch() const { return _pitch; }
 
 private:
     enum class MovementDirection {
@@ -64,18 +69,24 @@ private:
     };
 
     float _fovy;
-    float _aspect;
 
     glm::vec3 _position {0.0f};
     float _pitch {0.0f};
     float _multiplier {1.0f};
     MovementDirection _moveDir {MovementDirection::None};
 
+    /** True while the left button is held: the free camera looks by dragging
+        rather than by owning the pointer, so the cursor stays usable for the
+        editor windows the camera exists to check things against. */
+    bool _rotating {false};
+
     bool handleMouseMotion(const input::MouseMotionEvent &event);
+    bool handleMouseButton(const input::MouseButtonEvent &event);
     bool handleKeyDown(const input::KeyEvent &event);
     bool handleKeyUp(const input::KeyEvent &event);
 
     void updateSceneNode();
+    float projectionFovy() const override;
 };
 
 } // namespace game

@@ -1,0 +1,32 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "ninja",
+      "displayName": "Ninja Multi-Config",
+      "description": "Build tree at build/, Release and Debug from one configure. Requires VCPKG_ROOT and a shell that has the host compiler and ninja on PATH.",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release",
+      "configurePreset": "ninja",
+      "configuration": "Release"
+    },
+    {
+      "name": "debug",
+      "configurePreset": "ninja",
+      "configuration": "Debug"
+    }
+  ]
+}

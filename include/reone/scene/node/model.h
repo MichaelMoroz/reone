@@ -103,11 +103,19 @@ public:
 
     void update(float dt) override;
 
-    void renderLeafs(IRenderPass &pass, const std::vector<SceneNode *> &leafs) override;
-    void renderAABB(IRenderPass &pass);
+    void collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) override;
 
     void computeAABB();
     void signalEvent(const std::string &name);
+
+    /**
+     * Prewarm every continuous emitter in this model, so a scene that is shown
+     * rather than entered does not have to build its effects up from nothing
+     * in front of the viewer.
+     *
+     * Opt-in: nothing calls this on an ordinary model.
+     */
+    void prewarmEmitters();
 
     bool isPickable() const { return _pickable; }
 
@@ -118,20 +126,59 @@ public:
     ModelUsage usage() const { return _usage; }
     float drawDistance() const { return _drawDistance; }
 
+    /** Background scenery: a room without a walkmesh, the K1 skybox
+        convention. Grouped as sky by tracing alongside the authored per-mesh
+        background-geometry flag, which K1 area models do not carry. */
+    bool isBackgroundScenery() const { return _backgroundScenery; }
+    void setBackgroundScenery(bool background) { _backgroundScenery = background; }
+
+    /**
+     * Named by the curated sky list, not inferred. Kept apart from
+     * background scenery, which still means the K1 no-walkmesh convention and
+     * still drives material shading: a TSL sky room has a walkmesh and is not
+     * background scenery, and a K1 room can be background scenery without
+     * being the sky.
+     */
+    bool isSkyRoom() const { return _skyRoom; }
+    void setSkyRoom(bool sky) { _skyRoom = sky; }
+
     void setModel(graphics::Model &model);
     void setDrawDistance(float distance) { _drawDistance = distance; }
     void setMainTexture(graphics::Texture *texture);
     void setEnvironmentMap(graphics::Texture *texture);
     void setPickable(bool pickable) { _pickable = pickable; }
+    void setAnimationEventListener(IAnimationEventListener &listener) { _animEventListener = &listener; }
 
     // Animation
 
     void playAnimation(const std::string &name, std::shared_ptr<graphics::LipAnimation> lipAnim = nullptr, AnimationProperties properties = AnimationProperties());
     void playAnimation(graphics::Animation &anim, std::shared_ptr<graphics::LipAnimation> lipAnim = nullptr, AnimationProperties properties = AnimationProperties());
+    bool restartAnimation(const std::string &name);
 
     void pauseAnimation();
     void resumeAnimation();
     void setAnimationTime(float time);
+
+    /**
+     * Stop the channel playing the named animation, leaving every other channel
+     * alone.
+     *
+     * Overlay animations are additive by design: playing one pushes a channel
+     * and nothing ever pops it. That is fine for a fixed set of layers, but a
+     * model whose overlay state changes over time - a HUD that swaps one pose
+     * for another while unrelated layers keep running - would otherwise grow a
+     * channel per change. Removing the outgoing animation by name keeps the set
+     * bounded without disturbing the layers that should persist.
+     *
+     * Safe and idempotent: removing an animation that is not playing is a no-op.
+     *
+     * @return true if a channel was removed
+     */
+    bool removeAnimation(const std::string &name);
+
+    bool isAnimationPlaying(const std::string &name) const;
+
+    size_t animationChannelCount() const { return _animChannels.size(); }
 
     bool isAnimationFinished() const;
 
@@ -154,6 +201,8 @@ public:
 private:
     graphics::Model *_model;
     ModelUsage _usage;
+    bool _backgroundScenery {false};
+    bool _skyRoom {false};
 
     IAnimationEventListener *_animEventListener {nullptr};
     float _drawDistance {std::numeric_limits<float>::max()};
@@ -185,6 +234,7 @@ private:
 
     void updateAnimations(float dt);
     void updateAnimationChannel(AnimationChannel &channel, float dt);
+    void rearmSingleEmitters(const std::string &animationRoot);
     void computeAnimationStates(AnimationChannel &channel, float time, const graphics::ModelNode &modelNode);
     void applyAnimationStates(const graphics::ModelNode &modelNode);
 

@@ -14,7 +14,34 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 find_path(MAD_INCLUDE_DIR mad.h DOC "MAD include directory")
-find_library(MAD_LIBRARY NAMES mad DOC "MAD library")
+
+# Release and Debug are located separately and bound per configuration. A
+# single find_library answers with whichever of vcpkg's two library paths
+# comes first, and on MSVC that has been the debug one - so a Release build
+# linked a debug-CRT library, mixed two heaps in one process, and corrupted
+# the heap intermittently rather than failing outright.
+# The two roots are derived from the include directory so this keeps working
+# with any prefix that uses the lib/ + debug/lib/ split, without naming a
+# package manager here.
+get_filename_component(MAD_PREFIX "${MAD_INCLUDE_DIR}" DIRECTORY)
+find_library(MAD_LIBRARY_RELEASE NAMES mad DOC "MAD library (release)"
+    PATHS ${MAD_PREFIX}/lib NO_DEFAULT_PATH)
+find_library(MAD_LIBRARY_DEBUG NAMES mad DOC "MAD library (debug)"
+    PATHS ${MAD_PREFIX}/debug/lib NO_DEFAULT_PATH)
+if(NOT MAD_LIBRARY_RELEASE AND NOT MAD_LIBRARY_DEBUG)
+    find_library(MAD_LIBRARY_RELEASE NAMES mad DOC "MAD library (release)")
+endif()
+if(NOT MAD_LIBRARY_DEBUG)
+    set(MAD_LIBRARY_DEBUG ${MAD_LIBRARY_RELEASE})
+endif()
+if(NOT MAD_LIBRARY_RELEASE)
+    set(MAD_LIBRARY_RELEASE ${MAD_LIBRARY_DEBUG})
+endif()
+if(MAD_LIBRARY_RELEASE)
+    set(MAD_LIBRARY
+        "$<IF:$<CONFIG:Debug>,${MAD_LIBRARY_DEBUG},${MAD_LIBRARY_RELEASE}>"
+        CACHE STRING "MAD library, selected per configuration" FORCE)
+endif()
 
 if(MAD_INCLUDE_DIR AND MAD_LIBRARY)
     set(MAD_FOUND 1)

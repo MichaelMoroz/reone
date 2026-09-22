@@ -35,6 +35,7 @@ set(SYSTEM_HEADERS
     ${SYSTEM_INCLUDE_DIR}/hexutil.h
     ${SYSTEM_INCLUDE_DIR}/logger.h
     ${SYSTEM_INCLUDE_DIR}/logutil.h
+    ${SYSTEM_INCLUDE_DIR}/profiler.h
     ${SYSTEM_INCLUDE_DIR}/randomutil.h
     ${SYSTEM_INCLUDE_DIR}/smallset.h
     ${SYSTEM_INCLUDE_DIR}/smallvector.h
@@ -79,9 +80,14 @@ set(SYSTEM_SOURCES
     ${SYSTEM_SOURCE_DIR}/unicodeutil.cpp)
 
 add_library(system STATIC ${SYSTEM_HEADERS} ${SYSTEM_SOURCES} ${CLANG_FORMAT_PATH})
-set_target_properties(system PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/lib)
+set_target_properties(system PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${REONE_LIB_DIR})
 set_target_properties(system PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(system PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
+
+if(ENABLE_TRACY)
+    target_compile_definitions(system PUBLIC R_ENABLE_TRACY)
+    target_link_libraries(system PUBLIC Tracy::TracyClient)
+endif()
 
 if(MSVC)
     target_link_libraries(system PRIVATE SDL3::SDL3)
