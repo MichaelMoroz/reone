@@ -52,7 +52,7 @@ set(TOOLS_SOURCES
     ${TOOLS_SOURCE_DIR}/script/format/pcodewriter.cpp)
 
 add_library(tools ${TOOLS_HEADERS} ${TOOLS_SOURCES} ${CLANG_FORMAT_PATH})
-set_target_properties(tools PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}$<$<CONFIG:Debug>:/debug>/lib)
+set_target_properties(tools PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${REONE_LIB_DIR})
 set_target_properties(tools PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(tools PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(tools PRIVATE game)

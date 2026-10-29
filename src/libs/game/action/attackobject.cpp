@@ -27,20 +27,32 @@
 #include "reone/scene/graphs.h"
 #include "reone/system/randomutil.h"
 
+#include "attackanimations.h"
+
 namespace reone {
 
 namespace game {
 
-static std::string getMeleeAttackAnim(CreatureWieldType attackerWield,
-                                      CreatureWieldType targetWield,
-                                      int variant, bool duel) {
+// Attack animation variants are numbered from 1 - a0 is not an authored
+// animation. Cinematic attacks consume the whole 1-5 roll, while non-cinematic
+// attacks keep to the a1/a2 subset this selector has always intended to use.
+// Some K2 families author further variants; selecting those is a separate
+// change.
+static constexpr int kNonCinematicVariants = 2;
+
+static int nonCinematicVariant(int variant) {
+    return 1 + std::max(0, variant - 1) % kNonCinematicVariants;
+}
+
+std::string getMeleeAttackAnim(CreatureWieldType attackerWield,
+                               CreatureWieldType targetWield,
+                               int variant, bool duel) {
     // Cinematic attack variants.
     if (duel && isMeleeWieldType(targetWield)) {
         return str(boost::format("c%da%d") % static_cast<int>(attackerWield) % variant);
     }
 
-    // Only 2 non-cinematic variants.
-    variant = variant % 3;
+    variant = nonCinematicVariant(variant);
 
     if (targetWield != CreatureWieldType::None) {
         return str(boost::format("m%da%d") % static_cast<int>(attackerWield) % variant);
@@ -49,7 +61,7 @@ static std::string getMeleeAttackAnim(CreatureWieldType attackerWield,
     return str(boost::format("g%da%d") % static_cast<int>(attackerWield) % variant);
 }
 
-static std::string getUnarmedAttackAnim(CreatureWieldType attackerWield, CreatureWieldType targetWield, int variant, bool duel) {
+std::string getUnarmedAttackAnim(CreatureWieldType attackerWield, CreatureWieldType targetWield, int variant, bool duel) {
     if (attackerWield == CreatureWieldType::HandToHandComplex) {
         if (duel && targetWield == attackerWield) {
             return str(boost::format("c%da%d") % static_cast<int>(attackerWield) % variant);
@@ -57,27 +69,22 @@ static std::string getUnarmedAttackAnim(CreatureWieldType attackerWield, Creatur
     }
 
     // Fallback to a basic unarmed animation.
-    variant = variant % 3;
+    variant = nonCinematicVariant(variant);
     return str(boost::format("g8a%d") % variant);
 }
 
-static std::string getStunBatonAttackAnim(int variant) {
-    variant = variant % 3;
+std::string getStunBatonAttackAnim(int variant) {
+    variant = nonCinematicVariant(variant);
     return str(boost::format("g1a%d") % variant);
 }
 
-static void attack(const CombatRound &round, Creature &attacker, Object &target,
-                   const IAnimations &anims, AttackBuffer &attacks) {
-
-    if (auto main = attacker.getEquippedItem(InventorySlots::rightWeapon)) {
-        attacks.addWeaponAttack(attacker, target, *main);
-
-        if (auto offhand = attacker.getEquippedItem(InventorySlots::leftWeapon)) {
-            attacks.addWeaponAttack(attacker, target, *offhand);
-        }
-    } else {
-        attacks.addUnarmedAttack(attacker, target);
-    }
+static std::vector<std::string> attack(
+    const CombatRound &round,
+    Creature &attacker,
+    Object &target,
+    const IAnimations &anims,
+    AttackBuffer &attacks) {
+    attacks.addPhysicalAttacks(attacker, target);
 
     scene::AnimationProperties animProp =
         scene::AnimationProperties::fromFlags(scene::AnimationFlags::blend);
@@ -129,6 +136,11 @@ static void attack(const CombatRound &round, Creature &attacker, Object &target,
         std::string resultAnim = anims.getAttackResult(attackAnim, targetWield, attacks.result());
         opponent.playAnimation(resultAnim, animProp);
     }
+
+    size_t animationCount = isRangedWieldType(attackerWield)
+                                ? 1
+                                : attacks.attackCount();
+    return std::vector<std::string>(animationCount, attackAnim);
 }
 
 /**
@@ -148,17 +160,28 @@ void AttackObjectAction::addProjectiles(const Creature &creature) {
 
 void AttackObjectAction::execute(std::shared_ptr<Action> self, Object &actor, float dt) {
     Creature &attacker = cast<Creature>(actor);
+    if (!runtimeDependenciesLive()) {
+        cancel(self, actor);
+        markCancelled();
+        return;
+    }
+    auto target = _target.resolve();
+    if (!target || target->id() == attacker.id()) {
+        finish(attacker);
+        return;
+    }
+    attacker.setAttemptedAttackTarget(target->id());
 
-    if (_target->isDead()) {
+    if (target->isDead() && !_attacks.hasPendingMelee()) {
         finish(attacker);
         return;
     }
 
-    if (!navigateToAttackTarget(attacker, *_target, dt, _reachedTarget)) {
+    if (!navigateToAttackTarget(attacker, *target, dt, _reachedTarget)) {
         return;
     }
 
-    attacker.face(*_target);
+    attacker.face(*target);
 
     const CombatRound &round = _game.combat().addAction(self, actor);
     AttackSchedule::State state = _schedule.update(round, *self, dt);
@@ -170,17 +193,53 @@ void AttackObjectAction::execute(std::shared_ptr<Action> self, Object &actor, fl
         attacker.setMovementType(Creature::MovementType::None);
         attacker.setMovementRestricted(true);
 
-        attack(round, attacker, *_target, _services.game.animations, _attacks);
+        std::vector<std::string> attackAnimations = attack(
+            round,
+            attacker,
+            *target,
+            _services.game.animations,
+            _attacks);
+        _attacks.resolve(attacker, *target);
 
-        if (auto target = dyn_cast<Creature>(_target)) {
-            target->runAttackedScript(attacker.id());
+        if (!isRangedWieldType(attacker.getWieldType())) {
+            _attacks.prepareMeleeSequence(
+                _services.game.animations,
+                attackAnimations);
+            _schedule.startMelee(
+                _attacks.latestMeleeImpactMilliseconds());
+            _attacks.signalReadyMelee(
+                0,
+                _game,
+                _services,
+                attacker,
+                *target);
         }
 
         addProjectiles(attacker);
         return;
     }
+    case AttackSchedule::WaitDamage: {
+        if (_schedule.isMelee()) {
+            _attacks.signalReadyMelee(
+                _schedule.meleeElapsedMilliseconds(),
+                _game,
+                _services,
+                attacker,
+                *target);
+        }
+        break;
+    }
     case AttackSchedule::Damage: {
-        _attacks.applyEffects(attacker, *_target, _game);
+        if (_schedule.isMelee()) {
+            _attacks.signalReadyMelee(
+                _schedule.meleeElapsedMilliseconds(),
+                _game,
+                _services,
+                attacker,
+                *target);
+        } else {
+            _attacks.signal(_game, _services, attacker, *target);
+        }
         break;
     }
     case AttackSchedule::Finish: {
@@ -197,7 +256,7 @@ void AttackObjectAction::execute(std::shared_ptr<Action> self, Object &actor, fl
     case AttackSchedule::WaitDamage:
     case AttackSchedule::WaitFinish: {
         auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
-        _projectiles.update(dt, attacker, *_target, sceneGraph);
+        _projectiles.update(dt, attacker, *target, sceneGraph);
         break;
     }
     default:
@@ -207,7 +266,35 @@ void AttackObjectAction::execute(std::shared_ptr<Action> self, Object &actor, fl
 
 void AttackObjectAction::cancel(std::shared_ptr<Action> self, Object &actor) {
     Creature &attacker = cast<Creature>(actor);
+    _attacks.discardPendingMelee();
     finish(attacker);
+}
+
+std::optional<SavedActionRecord> AttackObjectAction::saveFacingState() const {
+    auto target = _target.resolve();
+    if (!target) {
+        return std::nullopt;
+    }
+
+    // K1 and K2 both save the high-level physical-attack command as retail
+    // ActionId 12. Combat-round resolution, navigation, animations and
+    // projectiles live outside this queue record and restart after load.
+    SavedActionRecord result = originalSavedAction().value_or(SavedActionRecord {});
+    result.actionId = 12;
+    result.declaredParameterCount = 10;
+    result.parameters = {
+        {1, int32_t {0}},
+        {3, SavedObjectReference::fromRuntimeId(target->id())},
+        {1, int32_t {1}},
+        {1, int32_t {10009}},
+        {1, int32_t {1500}},
+        {1, int32_t {1}},
+        {1, int32_t {0}},
+        {1, int32_t {0}},
+        {1, int32_t {4}},
+        {1, int32_t {0}},
+    };
+    return result;
 }
 
 void AttackObjectAction::finish(Creature &attacker) {

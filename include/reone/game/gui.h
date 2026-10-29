@@ -17,63 +17,20 @@
 
 #pragma once
 
-#include "reone/audio/source.h"
 #include "reone/game/di/services.h"
-#include "reone/gui/gui.h"
-#include "reone/input/event.h"
+#include "presentationgui.h"
 
-#include "types.h"
-
-namespace reone {
-
-namespace game {
+namespace reone::game {
 
 class Game;
 
-class GameGUI : public gui::IGUIEventListener, boost::noncopyable {
-public:
-    virtual void init();
-
-    virtual bool handle(const input::Event &event);
-    virtual void update(float dt);
-    virtual void render();
-
-    void clearSelection() {
-        _gui->clearSelection();
-    }
-
+/** Strong gameplay facade for existing screen constructors and subclasses. */
+class GameGUI : public PresentationGUI {
 protected:
     Game &_game;
     ServicesView &_services;
-    std::string _resRef;
-
-    std::shared_ptr<gui::IGUI> _gui;
-    std::shared_ptr<audio::AudioSource> _audioSource;
-
-    glm::vec3 _baseColor {0.0f};
-    glm::vec3 _disabledColor {0.0f};
-    glm::vec3 _hilightColor {0.0f};
 
     GameGUI(Game &game, ServicesView &services);
-
-    virtual void preload(gui::IGUI &gui);
-    virtual void onGUILoaded() {}
-
-    void loadBackground(BackgroundType type);
-
-    virtual void configureControls() {}
-    void onClick(const std::string &control) override;
-    void onSelectionChanged(const std::string &control, bool selected) override;
-
-    std::string guiResRef(const std::string &base) const;
-
-    template <class T>
-    std::shared_ptr<T> findControl(const std::string &tag) const {
-        auto ctrl = _gui->findControl(tag);
-        return std::static_pointer_cast<T>(ctrl);
-    }
 };
 
-} // namespace game
-
-} // namespace reone
+} // namespace reone::game

@@ -70,6 +70,7 @@ public:
         bool dimLockedBackground {false};
         bool drawItemBorderFill {true};
         bool onlyDrawItemBorderWhenBright {false};
+        bool drawItemBorderBeforeIcon {false};
     };
 
     IconChain(
@@ -100,7 +101,7 @@ public:
     bool handleMouseWheel(int x, int y) override;
     bool handleClick(int x, int y, int clicks = 1) override;
     void update(float dt) override;
-    void render(const glm::ivec2 &screenSize, const glm::ivec2 &offset, scene::IRenderPass &pass) override;
+    void render(const glm::ivec2 &screenSize, const glm::ivec2 &offset, graphics::I2DRenderer &renderer2d) override;
     void setSelected(bool selected) override;
 
     void setColumnCount(int count);
@@ -109,6 +110,7 @@ public:
     void setCellOrigin(int x, int y);
     void setCellStep(int x, int y);
     void setRowOffsets(std::vector<int> offsets);
+    void setScrollBar(std::shared_ptr<Control> scrollBar);
     void setCellStyle(CellStyle style);
 
     // Event listeners
@@ -128,6 +130,7 @@ private:
     glm::ivec2 _cellOrigin {-1};
     glm::ivec2 _cellStep {0};
     std::vector<int> _rowOffsets;
+    std::shared_ptr<Control> _scrollBar;
     CellStyle _cellStyle;
     int _rowOffset {0};
     int _focusedItemIndex {-1};
@@ -163,19 +166,19 @@ private:
     void renderLink(
         const Link &link,
         const glm::ivec2 &offset,
-        scene::IRenderPass &pass) const;
+        graphics::I2DRenderer &renderer2d) const;
     void renderItemBorder(
         const Item &item,
         bool focused,
         const Extent &extent,
         const glm::ivec2 &offset,
-        scene::IRenderPass &pass);
+        graphics::I2DRenderer &renderer2d);
     void renderFocusedBorder(
         const Item &item,
         bool focused,
         const Extent &extent,
         const glm::ivec2 &offset,
-        scene::IRenderPass &pass);
+        graphics::I2DRenderer &renderer2d);
 };
 
 } // namespace gui

@@ -75,11 +75,27 @@ static std::vector<script::Argument> makeScriptArgs(uint32_t callerId, const Par
     return args;
 }
 
-void Conversation::start(const std::shared_ptr<Dialog> &dialog, const std::shared_ptr<Object> &owner) {
+bool Conversation::isCurrent(uint64_t generation) const {
+    return generation == _generation && _game.globalFade().isCurrentDialog(_fadeDialog);
+}
+
+void Conversation::start(const std::shared_ptr<Dialog> &dialog, const std::shared_ptr<Object> &owner,
+                          GlobalFade::DialogTicket admission) {
+    if (!admission) {
+        admission = _game.globalFade().admitDialog(/*replace=*/true);
+    }
+    if (!_game.globalFade().isCurrentDialog(admission)) {
+        return;
+    }
+    auto generation = ++_generation;
+    _fadeDialog = std::move(admission);
     if (_dialog) {
         onFinish();
-        if (_owner) {
-            _owner->setIsInConversation(false);
+        if (!isCurrent(generation)) {
+            return;
+        }
+        if (auto oldOwner = _owner.resolve()) {
+            oldOwner->setIsInConversation(false);
         }
     }
     debug("Start " + dialog->resRef, LogChannel::Conversation);
@@ -88,14 +104,16 @@ void Conversation::start(const std::shared_ptr<Dialog> &dialog, const std::share
     _dialog = dialog;
     _owner = owner;
 
-    if (_owner) {
-        _owner->setIsInConversation(true);
+    if (owner) {
+        owner->setIsInConversation(true);
     }
 
     loadConversationBackground();
     loadCameraModel();
     onStart();
-    loadStartEntry();
+    if (isCurrent(generation)) {
+        loadStartEntry();
+    }
 }
 
 static BackgroundType getBackgroundType(ComputerType compType) {
@@ -120,11 +138,20 @@ void Conversation::loadCameraModel() {
     _cameraModel = modelResRef.empty() ? nullptr : _services.resource.models.get(modelResRef);
 }
 
+void Conversation::setBarkText(std::string text, float duration) {
+    _game.setBarkBubbleText(std::move(text), duration);
+}
+
 void Conversation::onStart() {
 }
 
 void Conversation::loadStartEntry() {
-    int entryIdx = indexOfFirstActive(_dialog->startEntries);
+    auto generation = _generation;
+    auto dialog = _dialog;
+    int entryIdx = indexOfFirstActive(dialog->startEntries);
+    if (!isCurrent(generation)) {
+        return;
+    }
     if (entryIdx == -1) {
         debug("Finish (no active start entry)", LogChannel::Conversation);
         finish();
@@ -134,8 +161,13 @@ void Conversation::loadStartEntry() {
 }
 
 int Conversation::indexOfFirstActive(const std::vector<Dialog::EntryReplyLink> &links) {
+    auto generation = _generation;
     for (auto &link : links) {
-        if (isLinkActive(link)) {
+        bool active = isLinkActive(link);
+        if (!isCurrent(generation)) {
+            return -1;
+        }
+        if (active) {
             return link.index;
         }
     }
@@ -143,9 +175,13 @@ int Conversation::indexOfFirstActive(const std::vector<Dialog::EntryReplyLink> &
 }
 
 bool Conversation::isLinkActive(const Dialog::EntryReplyLink &link) {
+    auto generation = _generation;
     std::optional<bool> active;
     if (!link.active.empty()) {
         active = evaluateCondition(link.active, link.params);
+        if (!isCurrent(generation)) {
+            return false;
+        }
         if (link.notActive) {
             active = !active.value();
         }
@@ -153,6 +189,9 @@ bool Conversation::isLinkActive(const Dialog::EntryReplyLink &link) {
     std::optional<bool> active2;
     if (!link.active2.empty()) {
         active2 = evaluateCondition(link.active2, link.params2);
+        if (!isCurrent(generation)) {
+            return false;
+        }
         if (link.notActive2) {
             active2 = !active2.value();
         }
@@ -170,18 +209,27 @@ bool Conversation::isLinkActive(const Dialog::EntryReplyLink &link) {
 }
 
 bool Conversation::evaluateCondition(const std::string &scriptResRef, const Dialog::EntryReplyLink::ConditionParams &params) {
-    return _game.scriptRunner().run(scriptResRef, makeScriptArgs(_owner ? _owner->id() : 0, params)) != 0;
+    auto owner = _owner.resolve();
+    return _game.scriptRunner().run(
+               scriptResRef,
+               makeScriptArgs(owner ? owner->id() : 0, params)) != 0;
 }
 
 void Conversation::runScript(const std::string &scriptResRef, const Dialog::EntryReply::ActionParams &params) {
     if (!scriptResRef.empty()) {
-        _game.scriptRunner().run(scriptResRef, makeScriptArgs(_owner ? _owner->id() : 0, params));
+        auto owner = _owner.resolve();
+        _game.scriptRunner().run(
+            scriptResRef,
+            makeScriptArgs(owner ? owner->id() : 0, params));
     }
 }
 
 void Conversation::runScripts(const Dialog::EntryReply &node) {
+    auto generation = _generation;
     runScript(node.script, node.actionParams);
-    runScript(node.script2, node.actionParams2);
+    if (isCurrent(generation)) {
+        runScript(node.script2, node.actionParams2);
+    }
 }
 
 void Conversation::applyStatusSummaryEntries(const Dialog::EntryReply &node) {
@@ -192,8 +240,17 @@ void Conversation::applyStatusSummaryEntries(const Dialog::EntryReply &node) {
 }
 
 void Conversation::finish() {
+    auto generation = ++_generation;
+    auto dialog = _dialog;
+    auto ownerRef = _owner;
+    _game.globalFade().finishDialog(_fadeDialog);
+    _fadeDialog.reset();
     _paused = false;
+    _entryEnded = true;
     onFinish();
+    if (_generation != generation) {
+        return;
+    }
 
     // A reply script can hand the screen to something else before the
     // conversation ends -- PlayPazaak opens the pazaak board from a dialogue
@@ -203,12 +260,16 @@ void Conversation::finish() {
     }
 
     // Run EndConversation script
-    if (!_dialog->endScript.empty()) {
-        _game.scriptRunner().run(_dialog->endScript, _owner->id());
+    if (auto owner = ownerRef.resolve()) {
+        if (!dialog->endScript.empty()) {
+            _game.scriptRunner().run(dialog->endScript, owner->id());
+        }
     }
 
-    if (_owner) {
-        _owner->setIsInConversation(false);
+    if (_generation == generation) {
+        if (auto owner = ownerRef.resolve()) {
+            owner->setIsInConversation(false);
+        }
     }
 }
 
@@ -216,7 +277,11 @@ void Conversation::onFinish() {
 }
 
 void Conversation::cleanupForModuleTransition() {
+    auto generation = ++_generation;
+    _game.globalFade().finishDialog(_fadeDialog);
+    _fadeDialog.reset();
     _paused = false;
+    _entryEnded = true;
     if (!_dialog) {
         return;
     }
@@ -226,12 +291,16 @@ void Conversation::cleanupForModuleTransition() {
     }
     _lipAnimation.reset();
     onFinish();
-    if (_owner) {
-        _owner->setIsInConversation(false);
+    if (_generation == generation) {
+        if (auto owner = _owner.resolve()) {
+            owner->setIsInConversation(false);
+        }
     }
 }
 
 void Conversation::loadEntry(int index, bool start) {
+    auto generation = _generation;
+    auto dialog = _dialog; // retain nodes across callbacks, including conditions
     debug("Load entry " + std::to_string(index), LogChannel::Conversation);
     _currentEntry = &_dialog->getEntry(index);
 
@@ -240,7 +309,23 @@ void Conversation::loadEntry(int index, bool start) {
     std::string entryText(_game.substituteCustomTokens(_currentEntry->text));
     setMessage(entryText);
     loadReplies();
+    if (!isCurrent(generation)) {
+        return;
+    }
     loadVoiceOver();
+
+    // Entry publication consumes only the current handoff. An entry action
+    // below can immediately replace this automatic reveal with its own fade.
+    _game.globalFade().revealDialog(_fadeDialog);
+
+    // Run entry scripts. An entry action can start another conversation, which
+    // replaces this one outright. Holding the dialogue keeps this entry and its
+    // replies alive for the script to act on, and tells us to stop rather than
+    // carry on driving the new session with the old one's state.
+    runScripts(*_currentEntry);
+    if (!isCurrent(generation)) {
+        return;
+    }
 
     // Conversation is a one-liner if there is exactly one empty reply that has no entries
     bool oneLiner = false;
@@ -249,23 +334,31 @@ void Conversation::loadEntry(int index, bool start) {
         oneLiner = reply.text.empty() && reply.entries.empty();
     }
     if (!oneLiner && isNonPresentationalEntry()) {
-        runScripts(*_currentEntry);
         pickReply(0);
         return;
     }
 
     scheduleEndOfEntry();
     onLoadEntry();
-
-    if (oneLiner) {
-        _game.setBarkBubbleText(std::move(entryText), _entryDuration);
-        debug("Dialog: finish (one-liner)");
-        finish();
+    if (!isCurrent(generation)) {
         return;
     }
 
-    // Run entry scripts
-    runScripts(*_currentEntry);
+    if (oneLiner) {
+        setBarkText(std::move(entryText), _entryDuration);
+        debug("Dialog: finish (one-liner)");
+
+        // Barking the entry instead of opening the conversation GUI is a
+        // presentation choice, not a reason to drop the sole terminal reply's
+        // action. Resolving that reply through pickReply keeps the usual
+        // ordering and lets it terminate the conversation, so nothing here
+        // finishes it a second time. Ending the entry first stops the update
+        // timer from auto-picking the same reply again afterwards, and leaves
+        // a replacement conversation's own entry state untouched.
+        _entryEnded = true;
+        pickReply(0);
+        return;
+    }
 
     if (_autoSkip) {
         if (std::optional<bool> skip = _autoSkip->trySkipEntry()) {
@@ -334,9 +427,15 @@ void Conversation::scheduleEndOfEntry() {
 }
 
 void Conversation::loadReplies() {
+    auto generation = _generation;
+    auto dialog = _dialog;
     _replies.clear();
     for (auto &link : _currentEntry->replies) {
-        if (isLinkActive(link)) {
+        bool active = isLinkActive(link);
+        if (!isCurrent(generation)) {
+            return;
+        }
+        if (active) {
             _replies.push_back(&_dialog->getReply(link.index));
         }
     }
@@ -362,15 +461,26 @@ void Conversation::refreshReplies() {
 }
 
 void Conversation::pickReply(int index) {
+    auto generation = _generation;
     debug("Pick reply " + std::to_string(index), LogChannel::Conversation);
     const Dialog::EntryReply &reply = *_replies[index];
 
     applyStatusSummaryEntries(reply);
 
     // Run reply scripts
+    auto dialog = _dialog;
     runScripts(reply);
 
+    // A reply action can start another conversation, replacing this one. Going
+    // on would advance or finish the new session in place of the old one.
+    if (!isCurrent(generation)) {
+        return;
+    }
+
     int entryIdx = indexOfFirstActive(reply.entries);
+    if (!isCurrent(generation)) {
+        return;
+    }
     if (entryIdx == -1) {
         debug("Finish (no active entries)", LogChannel::Conversation);
         finish();
@@ -421,6 +531,10 @@ bool Conversation::isNonPresentationalEntry() const {
 }
 
 void Conversation::endCurrentEntry() {
+    if (!_currentEntry || _entryEnded || _paused) {
+        return;
+    }
+    auto generation = _generation;
     _entryEnded = true;
 
     // Stop voice over, if any
@@ -430,6 +544,9 @@ void Conversation::endCurrentEntry() {
     }
 
     onEntryEnded();
+    if (!isCurrent(generation)) {
+        return;
+    }
 
     if (_autoPickFirstReply) {
         pickReply(0);
@@ -470,10 +587,24 @@ bool Conversation::handleKeyUp(const input::KeyEvent &event) {
 }
 
 void Conversation::update(float dt) {
+    if (_dialog && !_owner.empty() && !_owner.resolve()) {
+        finish();
+        return;
+    }
     GameGUI::update(dt);
     if (!_entryEnded) {
         _endEntryTimer.update(dt);
-        if (!_paused && (_endEntryTimer.elapsed() || (_currentVoice && !_currentVoice->isPlaying()))) {
+        // The voice check reads the AUDIO DEVICE's playback state, which is
+        // wall clock. A headless capture runs on a fixed game-time step that
+        // does not track real time - a path-traced frame takes several times
+        // a raster frame's wall clock - so consulting playback there ended
+        // the same entry on different game frames in different render modes,
+        // and the dialog camera diverged between two captures of "the same"
+        // moment. The timer is seeded from the clip's own duration in game
+        // time, so headless keeps every entry exactly that long instead.
+        const bool wallClockAudio = !_game.options().graphics.headless;
+        if (!_paused && (_endEntryTimer.elapsed() ||
+                         (wallClockAudio && _currentVoice && !_currentVoice->isPlaying()))) {
             endCurrentEntry();
         }
     }

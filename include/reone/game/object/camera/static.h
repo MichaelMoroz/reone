@@ -23,11 +23,12 @@ namespace reone {
 
 namespace game {
 
+class TestGameModule;
+
 class StaticCamera : public Camera {
 public:
     StaticCamera(
         uint32_t id,
-        float aspect,
         std::string sceneName,
         Game &game,
         ServicesView &services) :
@@ -35,13 +36,19 @@ public:
             id,
             std::move(sceneName),
             game,
-            services),
-        _aspect(aspect) {
+            services) {
     }
 
     void deserialize(const resource::Gff &gff);
 
+    const glm::quat &staticOrientation() const { return _staticOrientation; }
+    float staticPitch() const { return _staticPitch; }
+    float height() const { return _height; }
+    float micRange() const { return _micRange; }
+
 private:
+    friend class TestGameModule;
+
     // Serializable
 
     // Separate orientation and pitch, as opposed to Object::_orientation where
@@ -49,10 +56,11 @@ private:
     glm::quat _staticOrientation;
     float _staticPitch {0.0f};
     float _height {0.0f};
+    float _micRange {0.0f};
 
     // END Serializable
 
-    float _aspect;
+    float projectionFovy() const override;
 };
 
 } // namespace game

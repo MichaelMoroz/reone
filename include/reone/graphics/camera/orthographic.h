@@ -29,8 +29,6 @@ namespace graphics {
 /// boundaries on the Z-axis (zNear and zFar). Ever vertex with Z <
 /// zNear or Z > zFar is clipped out.
 ///
-/// See https://learnopengl.com/Getting-Started/Coordinate-Systems
-/// for more details.
 class OrthographicCamera : public Camera {
 public:
     OrthographicCamera() :
@@ -41,7 +39,7 @@ public:
         _zNear = zNear;
         _zFar = zFar;
 
-        Camera::setProjection(glm::ortho(left, right, bottom, top, zNear, zFar));
+        Camera::setProjection(glm::orthoRH_ZO(left, right, bottom, top, zNear, zFar));
     }
 };
 

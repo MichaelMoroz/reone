@@ -17,14 +17,7 @@
 
 #include "reone/scene/node/walkmesh.h"
 
-#include "reone/graphics/context.h"
-#include "reone/graphics/di/services.h"
-#include "reone/graphics/material.h"
-#include "reone/graphics/shaderregistry.h"
-#include "reone/graphics/statistic.h"
-#include "reone/graphics/uniforms.h"
-#include "reone/scene/graph.h"
-#include "reone/scene/render/pipeline.h"
+#include "reone/graphics/types.h"
 
 using namespace reone::graphics;
 
@@ -32,26 +25,46 @@ namespace reone {
 
 namespace scene {
 
-void WalkmeshSceneNode::init() {
+const Mesh *WalkmeshSceneNode::debugMesh() {
+    if (_debugMeshBuilt) {
+        return _debugMesh.get();
+    }
+    _debugMeshBuilt = true;
+
+    const size_t faceCount = _walkmesh.faces.size();
+    if (faceCount == 0) {
+        return nullptr;
+    }
     std::vector<float> vertices;
     std::vector<Mesh::Face> faces;
+    vertices.reserve(faceCount * 3 * 7);
+    faces.reserve(faceCount);
 
-    for (auto &wface : _walkmesh.faces()) {
-        size_t vertIdxStart = vertices.size() / 7;
-        for (int i = 0; i < 3; ++i) {
-            vertices.push_back(wface.vertices[i].x);
-            vertices.push_back(wface.vertices[i].y);
-            vertices.push_back(wface.vertices[i].z);
+    for (uint32_t i = 0; i < faceCount; ++i) {
+        const auto wface = _walkmesh.getFace(i);
+        const size_t vertIdxStart = vertices.size() / 7;
+        // Normalised, because the shader scales back up by the same constant:
+        // trigger geometry carries a flat 1.0 to reach the last slot, and that
+        // only lines up if every surface id travels the same way.
+        const float material = glm::min(
+            1.0f, static_cast<float>(wface.material) /
+                      static_cast<float>(kMaxWalkmeshMaterials - 1));
+
+        for (const glm::vec3 &v : wface.vertices) {
+            vertices.push_back(v.x);
+            vertices.push_back(v.y);
+            vertices.push_back(v.z);
             vertices.push_back(wface.normal.x);
             vertices.push_back(wface.normal.y);
             vertices.push_back(wface.normal.z);
-            float material = glm::min(1.0f, static_cast<int>(wface.material) / static_cast<float>(kMaxWalkmeshMaterials - 1));
             vertices.push_back(material);
         }
+
         Mesh::Face face;
-        face.vertices[0] = vertIdxStart + 0;
-        face.vertices[1] = vertIdxStart + 1;
-        face.vertices[2] = vertIdxStart + 2;
+        face.vertices[0] = static_cast<uint32_t>(vertIdxStart);
+        face.vertices[1] = static_cast<uint32_t>(vertIdxStart + 1);
+        face.vertices[2] = static_cast<uint32_t>(vertIdxStart + 2);
+        face.normal = wface.normal;
         face.material = wface.material;
         faces.push_back(std::move(face));
     }
@@ -62,18 +75,9 @@ void WalkmeshSceneNode::init() {
     vertexLayout.offNormals = 3 * sizeof(float);
     vertexLayout.offMaterial = 6 * sizeof(float);
 
-    _mesh = std::make_unique<Mesh>(
-        std::move(vertices),
-        std::move(vertexLayout),
-        std::move(faces));
-    _mesh->init();
-}
-
-void WalkmeshSceneNode::render(IRenderPass &pass) {
-    Material material;
-    material.type = MaterialType::Walkmesh;
-    material.faceCulling = FaceCullMode::Back;
-    pass.draw(*_mesh, material, _absTransform, _absTransformInv);
+    _debugMesh = std::make_unique<Mesh>(
+        std::move(vertices), std::move(vertexLayout), std::move(faces));
+    return _debugMesh.get();
 }
 
 } // namespace scene

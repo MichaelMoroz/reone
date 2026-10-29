@@ -17,18 +17,12 @@
 
 #include "reone/gui/control/imagebutton.h"
 
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
-#include "reone/graphics/mesh.h"
-#include "reone/graphics/meshregistry.h"
-#include "reone/graphics/renderbuffer.h"
-#include "reone/graphics/shaderregistry.h"
+#include "reone/graphics/rendering/renderer2d.h"
 #include "reone/graphics/texture.h"
-#include "reone/graphics/uniforms.h"
 #include "reone/gui/gui.h"
 #include "reone/resource/provider/fonts.h"
 #include "reone/resource/provider/textures.h"
-#include "reone/scene/render/pass.h"
 
 using namespace reone::graphics;
 using namespace reone::resource;
@@ -54,7 +48,7 @@ void ImageButton::render(
     const std::string &iconText,
     const std::shared_ptr<Texture> &iconTexture,
     const std::shared_ptr<Texture> &iconFrame,
-    IRenderPass &pass) {
+    I2DRenderer &renderer2d) {
 
     if (!_visible)
         return;
@@ -65,15 +59,15 @@ void ImageButton::render(
     glm::ivec2 size(_extent.width - _extent.height, _extent.height);
 
     if (_selected && _hilight) {
-        renderBorder(*_hilight, borderOffset, size, pass);
+        renderBorder(*_hilight, borderOffset, size, renderer2d);
     } else if (_border) {
-        renderBorder(*_border, borderOffset, size, pass);
+        renderBorder(*_border, borderOffset, size, renderer2d);
     }
 
-    renderIcon(offset, iconText, iconTexture, iconFrame, pass);
+    renderIcon(offset, iconText, iconTexture, iconFrame, renderer2d);
 
     if (!text.empty()) {
-        renderText(text, borderOffset, size, pass);
+        renderText(text, borderOffset, size, renderer2d);
     }
 }
 
@@ -82,7 +76,7 @@ void ImageButton::renderIcon(
     const std::string &iconText,
     const std::shared_ptr<Texture> &iconTexture,
     const std::shared_ptr<Texture> &iconFrame,
-    IRenderPass &pass) {
+    I2DRenderer &renderer2d) {
 
     if (!iconFrame && !iconTexture)
         return;
@@ -95,7 +89,7 @@ void ImageButton::renderIcon(
     }
 
     if (iconFrame) {
-        pass.drawImage(
+        renderer2d.drawImage(
             *iconFrame,
             {offset.x + _extent.left, offset.y + _extent.top},
             {_extent.height, _extent.height},
@@ -103,7 +97,7 @@ void ImageButton::renderIcon(
     }
 
     if (iconTexture) {
-        pass.drawImage(
+        renderer2d.drawIcon(
             *iconTexture,
             {offset.x + _extent.left, offset.y + _extent.top},
             {_extent.height, _extent.height});
@@ -112,8 +106,8 @@ void ImageButton::renderIcon(
     if (!iconText.empty() && _iconFont) {
         glm::vec3 position(0.0f);
         position.x = static_cast<float>(offset.x + _extent.left + _extent.height);
-        position.y = static_cast<float>(offset.y + _extent.top + _extent.height - 0.5f * _iconFont->height());
-        _iconFont->render(iconText, position, color, TextGravity::LeftCenter);
+        position.y = static_cast<float>(offset.y + _extent.top + _extent.height - 0.5f * Font::scaledMetric(_iconFont->height(), _scale));
+        renderer2d.drawText(*_iconFont, iconText, position, glm::vec4(color, 1.0f), TextGravity::LeftCenter, _scale);
     }
 }
 

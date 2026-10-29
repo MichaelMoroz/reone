@@ -29,10 +29,14 @@ public:
         Effect(EffectType::DamageImmunityDecrease),
         _damageType(damageType),
         _percentImmunity(percentImmunity) {
+        setSaveFacingInteger(0, static_cast<int>(damageType));
+        setSaveFacingInteger(1, percentImmunity);
     }
 
-    void applyTo(Object &object) override {
-    }
+    bool onApply(Object &object, const EffectInstance &instance) override;
+
+    DamageType damageType() const { return _damageType; }
+    int percentImmunity() const { return _percentImmunity; }
 
 private:
     DamageType _damageType;

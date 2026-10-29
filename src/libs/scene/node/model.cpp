@@ -17,13 +17,13 @@
 
 #include "reone/scene/node/model.h"
 
+#include "reone/system/profiler.h"
+
 #include "reone/graphics/animation.h"
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/material.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
-#include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/resource/di/services.h"
 #include "reone/resource/provider/models.h"
@@ -31,7 +31,6 @@
 #include "reone/scene/node/emitter.h"
 #include "reone/scene/node/light.h"
 #include "reone/scene/node/mesh.h"
-#include "reone/scene/render/pass.h"
 #include "reone/scene/types.h"
 #include "reone/system/logutil.h"
 
@@ -68,6 +67,8 @@ void ModelSceneNode::buildNodeTree(ModelNode &node, SceneNode &parent) {
     } else {
         sceneNode = _sceneGraph.newDummy(node);
     }
+    sceneNode->setNameIds(
+        {_sceneGraph.internName(_model->name()), _sceneGraph.internName(node.name())});
 
     if (node.isSkinMesh()) {
         // Reparent skin meshes to prevent animation being applied twice
@@ -102,24 +103,29 @@ void ModelSceneNode::update(float dt) {
     if (!_enabled) {
         return;
     }
-    SceneNode::update(dt);
-    updateAnimations(dt);
+    {
+        R_PROFILE_ZONE("Model::SceneNode::update");
+        SceneNode::update(dt);
+    }
+    {
+        R_PROFILE_ZONE("Model::updateAnimations");
+        updateAnimations(dt);
+    }
+    // Parent/model animation is complete now. Refresh node-owned deformation
+    // arenas here so render-time registration only observes stable pointers.
+    {
+        R_PROFILE_ZONE("Model::updateGpuStreams");
+        for (const auto &[number, node] : _nodeByNumber) {
+            if (node->type() == SceneNodeType::Mesh)
+                static_cast<MeshSceneNode *>(node)->updateGpuStreams();
+        }
+    }
 }
 
-void ModelSceneNode::renderLeafs(IRenderPass &pass, const std::vector<SceneNode *> &leafs) {
+void ModelSceneNode::collectLeafs(GpuScene &scene, const std::vector<SceneNode *> &leafs) {
     for (auto &leaf : leafs) {
-        static_cast<MeshSceneNode *>(leaf)->render(pass);
+        static_cast<MeshSceneNode *>(leaf)->collectInto(scene);
     }
-}
-
-void ModelSceneNode::renderAABB(IRenderPass &pass) {
-    auto aabbWorld = _aabb * _absTransform;
-    std::vector<glm::vec4> corners;
-    corners.reserve(8);
-    for (const auto &corner : aabbWorld.corners()) {
-        corners.emplace_back(corner, 1.0f);
-    }
-    pass.drawAABB(corners);
 }
 
 void ModelSceneNode::computeAABB() {
@@ -141,6 +147,25 @@ void ModelSceneNode::signalEvent(const std::string &name) {
         }
     } else if (_animEventListener) {
         _animEventListener->onEventSignalled(name);
+    }
+}
+
+void ModelSceneNode::prewarmEmitters() {
+    // Collect first: prewarming gives an emitter particle children, and the
+    // walk should not be reading a list it has just grown.
+    std::vector<EmitterSceneNode *> emitters;
+    std::function<void(SceneNode &)> collect = [&collect, &emitters](SceneNode &node) {
+        if (node.type() == SceneNodeType::Emitter) {
+            emitters.push_back(static_cast<EmitterSceneNode *>(&node));
+        }
+        for (auto &child : node.children()) {
+            collect(*child);
+        }
+    };
+    collect(*this);
+
+    for (auto *emitter : emitters) {
+        emitter->prewarmContinuousParticles();
     }
 }
 
@@ -190,6 +215,33 @@ void ModelSceneNode::setEnvironmentMap(Texture *texture) {
             static_cast<ModelNodeSceneNode *>(child)->setEnvironmentMap(texture);
         }
     }
+}
+static bool animationIntersectsModel(
+    const Animation &anim,
+    const std::shared_ptr<ModelNode> &node) {
+    if (!node) {
+        return false;
+    }
+    if (anim.getNodeByName(node->name())) {
+        return true;
+    }
+    return std::any_of(node->children().begin(), node->children().end(), [&](const auto &child) {
+        return animationIntersectsModel(anim, child);
+    });
+}
+
+static bool shouldReuseExternalAnimationForAttachment(
+    const Animation &anim,
+    const ModelSceneNode &attachedModel,
+    const AnimationProperties &properties) {
+    if (attachedModel.usage() != ModelUsage::Creature) {
+        return false;
+    }
+    // Upstream drives ordinary body animations into every composite creature
+    // attachment. External stunt clips are different: only matching authored
+    // tracks may replace an attachment's local animation or overlay channels.
+    return !(properties.flags & AnimationFlags::retargetRoot) ||
+           animationIntersectsModel(anim, attachedModel.model().rootNode());
 }
 
 void ModelSceneNode::playAnimation(const std::string &name, std::shared_ptr<LipAnimation> lipAnim, AnimationProperties properties) {
@@ -241,8 +293,12 @@ void ModelSceneNode::playAnimation(Animation &anim, std::shared_ptr<LipAnimation
 
     case AnimationBlendMode::Overlay:
         // In Overlay mode, clear channels only if previous mode is not
-        // Overlay and add animation on top
-        if (_animBlendMode != AnimationBlendMode::Overlay) {
+        // Overlay and add animation on top. A layered animation keeps them
+        // instead: it plays over whatever the model is already doing, so the
+        // channels underneath go on running and go on supplying every node the
+        // layered animation leaves alone.
+        if (_animBlendMode != AnimationBlendMode::Overlay &&
+            !(properties.flags & AnimationFlags::layer)) {
             _animChannels.clear();
         }
         _animChannels.push_front(AnimationChannel(anim, lipAnim, properties));
@@ -257,11 +313,73 @@ void ModelSceneNode::playAnimation(Animation &anim, std::shared_ptr<LipAnimation
     // Optionally propagate animation to attachments
     if (properties.flags & AnimationFlags::propagate) {
         for (auto &attachment : _attachments) {
-            if (attachment.second->type() == SceneNodeType::Model) {
-                static_cast<ModelSceneNode *>(attachment.second)->playAnimation(anim, lipAnim, properties);
+            if (attachment.second->type() != SceneNodeType::Model) {
+                continue;
             }
+            auto &attachedModel = *static_cast<ModelSceneNode *>(attachment.second);
+            if (shouldReuseExternalAnimationForAttachment(
+                    anim, attachedModel, properties)) {
+                // External stunt models include facial tracks for the live
+                // appearance head, but that head has no local stunt clip.
+                // Reuse the proxy animation where node names intersect;
+                // do not map its placement root onto the attachment.
+                auto attachedProperties = properties;
+                attachedProperties.flags &= ~AnimationFlags::retargetRoot;
+                attachedModel.playAnimation(
+                    anim, lipAnim, std::move(attachedProperties));
+                continue;
+            }
+            // Attachments have their own animation sets. Resolve by name so
+            // an unrelated body animation cannot replace a weapon's local
+            // state animation (for example, a lightsaber's "off" pose).
+            attachedModel.playAnimation(anim.name(), lipAnim, properties);
         }
     }
+}
+
+bool ModelSceneNode::removeAnimation(const std::string &name) {
+    std::string lower(boost::to_lower_copy(name));
+    bool removed = false;
+    for (auto it = _animChannels.begin(); it != _animChannels.end();) {
+        if (it->anim && it->anim->name() == lower) {
+            it = _animChannels.erase(it);
+            removed = true;
+            continue;
+        }
+        ++it;
+    }
+    if (removed && _animChannels.empty()) {
+        _animBlendMode = AnimationBlendMode::Single;
+    }
+    return removed;
+}
+
+bool ModelSceneNode::isAnimationPlaying(const std::string &name) const {
+    std::string lower(boost::to_lower_copy(name));
+    for (const auto &channel : _animChannels) {
+        if (channel.anim && channel.anim->name() == lower) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ModelSceneNode::restartAnimation(const std::string &name) {
+    auto anim = _model->getAnimation(name);
+    if (!anim) {
+        return false;
+    }
+    auto channel = std::find_if(_animChannels.begin(), _animChannels.end(), [&](const auto &channel) {
+        return channel.anim == anim.get();
+    });
+    if (channel == _animChannels.end()) {
+        return false;
+    }
+
+    channel->time = 0.0f;
+    channel->stateByNodeNumber.clear();
+    channel->finished = false;
+    return true;
 }
 
 ModelSceneNode::AnimationBlendMode ModelSceneNode::getAnimationBlendMode(int flags) {
@@ -294,17 +412,22 @@ void ModelSceneNode::updateAnimations(float dt) {
         return;
     }
 
-    for (auto &channel : _animChannels) {
-        if (!channel.anim) {
-            continue;
-        }
-        if (!channel.freeze) {
-            updateAnimationChannel(channel, dt);
+    {
+        R_PROFILE_ZONE("Model::animChannels");
+        for (auto &channel : _animChannels) {
+            if (!channel.anim) {
+                continue;
+            }
+            if (!channel.freeze) {
+                updateAnimationChannel(channel, dt);
+            }
         }
     }
 
-    // Apply states and compute bone transforms only when this model is not culled
+    // Animation work can still be suppressed by non-renderer users of the
+    // legacy visibility flag; registry culling never mutates it.
     if (!_culled) {
+        R_PROFILE_ZONE("Model::applyAnimationStates");
         applyAnimationStates(*_model->rootNode());
     }
 }
@@ -329,7 +452,6 @@ void ModelSceneNode::updateAnimationChannel(AnimationChannel &channel, float dt)
         }
     }
 
-    // Compute animation states only when this model is not culled
     if (!_culled) {
         float time = channel.transition ? channel.anim->transitionTime() : channel.time;
         channel.stateByNodeNumber.clear();
@@ -341,6 +463,7 @@ void ModelSceneNode::updateAnimationChannel(AnimationChannel &channel, float dt)
         bool loop = channel.properties.flags & AnimationFlags::loop;
         if (loop) {
             channel.time = 0.0f;
+            rearmSingleEmitters(channel.anim->root());
         } else {
             channel.finished = true;
         }
@@ -361,8 +484,23 @@ static bool doesNodeHaveAncestor(const ModelNode &node, const std::string &name)
     return doesNodeHaveAncestor(*parent, name);
 }
 
+void ModelSceneNode::rearmSingleEmitters(const std::string &animationRoot) {
+    for (auto &[number, node] : _nodeByNumber) {
+        if (node->type() != SceneNodeType::Emitter ||
+            !doesNodeHaveAncestor(node->modelNode(), animationRoot)) {
+            continue;
+        }
+        static_cast<EmitterSceneNode *>(node)->rearmSingle();
+    }
+}
+
 void ModelSceneNode::computeAnimationStates(AnimationChannel &channel, float time, const ModelNode &modelNode) {
     std::shared_ptr<ModelNode> animNode(channel.anim->getNodeByName(modelNode.name()));
+    if (!animNode && !modelNode.parent() && (channel.properties.flags & AnimationFlags::retargetRoot)) {
+        // External stunt animations are authored on proxy models. Retarget
+        // their root placement track to the live creature model's root.
+        animNode = channel.anim->rootNode();
+    }
     if (animNode && modelNode.isAnimated() && doesNodeHaveAncestor(modelNode, channel.anim->root())) {
         AnimationState state;
         state.flags = 0;

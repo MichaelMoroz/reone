@@ -49,20 +49,19 @@ public:
         initGeometry();
     }
 
-    void init();
-    void render(IRenderPass &pass);
-
     bool isIn(const glm::vec2 &pt) const;
 
-    void setDebugColor(glm::vec4 color) {
-        _debugColor = std::move(color);
-    }
+    /** The volume's geometry, for the trigger debug view. */
+    const graphics::Mesh *mesh() const { return _mesh.get(); }
+
+    /** The colour this volume draws in, which tracks the trigger's state. */
+    void setDebugColor(glm::vec4 color) { _debugColor = color; }
+    const glm::vec4 &debugColor() const { return _debugColor; }
 
 private:
     std::vector<glm::vec3> _geometry;
-    glm::vec4 _debugColor {0.48f, 0.74f, 1.0f, 1.0f};
-
     std::unique_ptr<graphics::Mesh> _mesh;
+    glm::vec4 _debugColor {1.0f};
 
     void initGeometry();
 };

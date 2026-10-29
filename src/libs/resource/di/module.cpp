@@ -17,6 +17,10 @@
 
 #include "reone/resource/di/module.h"
 
+#include "reone/resource/extractresources.h"
+#include "reone/resource/replacementresources.h"
+#include "reone/resource/replacements.h"
+
 #include "reone/audio/di/module.h"
 #include "reone/graphics/di/module.h"
 #include "reone/script/di/module.h"
@@ -26,33 +30,35 @@ namespace reone {
 namespace resource {
 
 void ResourceModule::init() {
-    _resources = std::make_unique<Resources>();
+    std::unique_ptr<IResources> backend;
+    std::unique_ptr<IResources> auxBackend;
+    if (_resourcesBackend == ResourcesBackend::Extract) {
+        backend = std::make_unique<ExtractResources>();
+        auxBackend = std::make_unique<ExtractResources>();
+    } else {
+        backend = std::make_unique<Resources>();
+        auxBackend = std::make_unique<Resources>();
+    }
+    _replacements = std::make_unique<ResourceReplacements>();
+    _resources = std::make_unique<ReplacementResources>(std::move(backend), *_replacements);
+    // Auxiliary sources are read through the same replacement store, so a
+    // replacement still sits above them. A second store would silently make
+    // shader and cursor resources unreplaceable. The backend mirrors the
+    // selected one because the two index folders differently, and streamed
+    // audio lives here for an activated game.
+    _auxResources = std::make_unique<ReplacementResources>(std::move(auxBackend), *_replacements);
     _strings = std::make_unique<Strings>();
     _twoDas = std::make_unique<TwoDAs>(*_resources);
     _gffs = std::make_unique<Gffs>(*_resources);
-    _shaders = std::make_unique<Shaders>(_graphicsOpt, _graphics.shaderRegistry(), *_resources);
     _textures = std::make_unique<Textures>(_graphicsOpt, *_resources);
     _models = std::make_unique<Models>(*_textures, *_resources, _graphics.statistic());
     _walkmeshes = std::make_unique<Walkmeshes>(*_resources);
     _lips = std::make_unique<Lips>(*_resources);
-    _fonts = std::make_unique<Fonts>(
-        _graphics.context(),
-        _graphics.meshRegistry(),
-        _graphics.shaderRegistry(),
-        _graphics.statistic(),
-        *_textures,
-        _graphics.uniforms());
-    _cursors = std::make_unique<Cursors>(
-        _graphics.context(),
-        _graphics.meshRegistry(),
-        _graphics.shaderRegistry(),
-        *_textures,
-        _graphics.uniforms(),
-        _graphics.statistic(),
-        *_resources);
-    _audioClips = std::make_unique<AudioClips>(*_resources);
+    _fonts = std::make_unique<Fonts>(_graphics.renderer2d(), *_textures);
+    _cursors = std::make_unique<Cursors>(_graphics.renderer2d(), *_textures, *_auxResources);
+    _audioClips = std::make_unique<AudioClips>(*_resources, *_auxResources);
     _movies = std::make_unique<Movies>(_gamePath, _graphics.services(), _audio.mixer());
-    _scripts = std::make_unique<Scripts>(*_resources);
+    _scripts = std::make_unique<Scripts>(*_resources, *_replacements);
     _dialogs = std::make_unique<Dialogs>(*_gffs, *_strings);
     _layouts = std::make_unique<Layouts>(*_resources);
     _paths = std::make_unique<Paths>(*_gffs);
@@ -70,16 +76,20 @@ void ResourceModule::init() {
         *_lips,
         *_paths,
         *_resources,
-        *_scripts);
+        *_auxResources,
+        *_scripts,
+        *_twoDas,
+        _odysseyRoots);
 
-    _director->init();
     _strings->init(_gamePath);
-    _shaders->init();
+    loadLiveTalkTables(*_strings, _odysseyRoots);
+    _director->init();
     _textures->init();
 
     _services = std::make_unique<ResourceServices>(
         *_gffs,
         *_resources,
+        *_replacements,
         *_strings,
         *_twoDas,
         *_scripts,
@@ -97,7 +107,6 @@ void ResourceModule::init() {
         *_soundSets,
         *_visibilities,
         *_ltrs,
-        *_shaders,
         *_director);
 }
 
@@ -120,11 +129,12 @@ void ResourceModule::deinit() {
     _walkmeshes.reset();
     _models.reset();
     _textures.reset();
-    _shaders.reset();
     _gffs.reset();
     _twoDas.reset();
     _strings.reset();
+    _auxResources.reset();
     _resources.reset();
+    _replacements.reset();
 }
 
 } // namespace resource

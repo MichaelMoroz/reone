@@ -25,6 +25,7 @@
 #include "reone/system/logutil.h"
 #include "reone/system/threadutil.h"
 
+#include "crashreport.h"
 #include "engine.h"
 #include "optionsparser.h"
 
@@ -50,24 +51,35 @@ int main(int argc, char **argv) {
     }
     try {
         Logger::instance.init(options->logging.severity, options->logging.channels, kLogFilename);
+        // As soon as there is somewhere to write to, and before anything that
+        // can fault. A hardware fault does not unwind, so without this the log
+        // simply stops and what crashed has to be guessed.
+        installCrashReporter();
         info(kEngineStartupMessage);
         Logger::instance.flush();
     } catch (const std::exception &ex) {
         std::cerr << "Error initializing logging: " << ex.what() << std::endl;
         return 2;
     }
-    Engine engine {*options};
-    try {
-        engine.init();
-        int exitCode = engine.run();
-        return exitCode;
-    } catch (const std::exception &ex) {
-        auto message = str(boost::format("Engine failure: %1%") % ex.what());
+    int exitCode = 0;
+    {
+        Engine engine {*options};
         try {
-            error(message);
-        } catch (...) {
-            std::cerr << message << std::endl;
+            engine.init();
+            exitCode = engine.run();
+        } catch (const std::exception &ex) {
+            auto message = str(boost::format("Engine failure: %1%") % ex.what());
+            try {
+                error(message);
+            } catch (...) {
+                std::cerr << message << std::endl;
+            }
+            exitCode = 3;
         }
-        return 3;
     }
+    // Init-time diagnostics commonly remain below the logger's per-thread
+    // flush threshold. Engine has now emitted its teardown diagnostics too, so
+    // flush the main thread's complete run before process exit.
+    Logger::instance.flush();
+    return exitCode;
 }

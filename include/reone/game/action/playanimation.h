@@ -20,6 +20,7 @@
 #include "../types.h"
 
 #include "../action.h"
+#include "reone/system/timer.h"
 
 namespace reone {
 
@@ -38,17 +39,38 @@ public:
         _durationSeconds(durationSeconds) {
     }
 
+    PlayAnimationAction(Game &game,
+                        ServicesView &services,
+                        AnimationType animation,
+                        float speed,
+                        float durationSeconds,
+                        bool started,
+                        bool looping) :
+        Action(game, services, ActionType::PlayAnimation),
+        _animation(animation),
+        _speed(speed),
+        _durationSeconds(durationSeconds),
+        _looping(looping),
+        _playing(started) {
+        if (started) {
+            _timer.reset(durationSeconds);
+        }
+    }
+
     static bool classof(Action *from) {
         return from->type() == ActionType::PlayAnimation;
     }
 
     void execute(std::shared_ptr<Action> self, Object &actor, float dt) override;
+    std::optional<SavedActionRecord> saveFacingState() const override;
 
 private:
     AnimationType _animation;
     float _speed;
     float _durationSeconds;
 
+    Timer _timer;
+    std::optional<bool> _looping;
     bool _playing {false};
 };
 

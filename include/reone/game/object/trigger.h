@@ -54,7 +54,9 @@ public:
     }
 
     void loadFromBlueprint(const std::string &resRef);
-    void deserialize(const resource::Gff &gff);
+    void deserialize(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext);
     void configureLinkedDoorTransition(const std::shared_ptr<Door> &door);
 
     void update(float dt) override;
@@ -80,6 +82,7 @@ public:
 
     void markDebugTested(bool inside);
     void markDebugEntered();
+    void syncDebugVisual();
 
     const std::string &getOnEnter() const { return _onEnter; }
     const std::string &getOnExit() const { return _onExit; }
@@ -90,6 +93,8 @@ public:
     const std::string &transitionDestin() const { return _transitionDestin.str(); }
 
 private:
+    friend class ModuleSnapshotBuilder;
+    friend class TestGameModule;
     // Serializable
     std::string _onEnter;
     std::string _onExit;
@@ -116,16 +121,17 @@ private:
     // END Serializable
 
     std::set<std::shared_ptr<Object>> _tenants;
-    std::weak_ptr<Door> _linkedDoor;
+    RuntimeObjectRef<Door> _linkedDoor;
     bool _linkedDoorTransition {false};
     float _debugTestAge {0.0f};
     float _debugInsideAge {0.0f};
     float _debugEnterAge {0.0f};
 
-    void deserializeAll(const resource::Gff &gff);
+    void deserializeAll(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext);
     void loadAppearance();
 
-    void syncDebugVisual();
 };
 
 } // namespace game

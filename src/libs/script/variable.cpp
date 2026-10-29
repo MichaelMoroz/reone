@@ -163,10 +163,18 @@ const char *argKindToString(ArgKind kind) {
         return "EnteringObject";
     case ArgKind::ExitingObject:
         return "ExitingObject";
+    case ArgKind::BlockingDoor:
+        return "BlockingDoor";
     case ArgKind::LastClosedBy:
         return "LastClosedBy";
     case ArgKind::LastOpenedBy:
         return "LastOpenedBy";
+    case ArgKind::LastDisturbed:
+        return "LastDisturbed";
+    case ArgKind::InventoryDisturbType:
+        return "InventoryDisturbType";
+    case ArgKind::InventoryDisturbItem:
+        return "InventoryDisturbItem";
     case ArgKind::LastPerceived:
         return "LastPerceived";
     case ArgKind::LastPerceptionHeard:
@@ -245,11 +253,23 @@ Argument Argument::fromString(std::string str) {
     if (kind == "ExitingObject") {
         return {ArgKind::ExitingObject, Variable::ofObject(std::stoul(value))};
     }
+    if (kind == "BlockingDoor") {
+        return {ArgKind::BlockingDoor, Variable::ofObject(std::stoul(value))};
+    }
     if (kind == "LastClosedBy") {
         return {ArgKind::LastClosedBy, Variable::ofObject(std::stoul(value))};
     }
     if (kind == "LastOpenedBy") {
         return {ArgKind::LastOpenedBy, Variable::ofObject(std::stoul(value))};
+    }
+    if (kind == "LastDisturbed") {
+        return {ArgKind::LastDisturbed, Variable::ofObject(std::stoul(value))};
+    }
+    if (kind == "InventoryDisturbType") {
+        return {ArgKind::InventoryDisturbType, Variable::ofInt(std::stoi(value))};
+    }
+    if (kind == "InventoryDisturbItem") {
+        return {ArgKind::InventoryDisturbItem, Variable::ofObject(std::stoul(value))};
     }
     if (kind == "LastPerceived") {
         return {ArgKind::LastPerceived, Variable::ofObject(std::stoul(value))};
@@ -327,8 +347,11 @@ void Argument::verify() {
     case ArgKind::ClickingObject:
     case ArgKind::EnteringObject:
     case ArgKind::ExitingObject:
+    case ArgKind::BlockingDoor:
     case ArgKind::LastClosedBy:
     case ArgKind::LastOpenedBy:
+    case ArgKind::LastDisturbed:
+    case ArgKind::InventoryDisturbItem:
     case ArgKind::LastPerceived:
     case ArgKind::LastUsedBy:
     case ArgKind::LastSpeaker:
@@ -346,7 +369,8 @@ void Argument::verify() {
     case ArgKind::LastPerceptionSeen:
     case ArgKind::LastPerceptionVanished:
     case ArgKind::ListenPatternNumber:
-    case ArgKind::SpellId: {
+    case ArgKind::SpellId:
+    case ArgKind::InventoryDisturbType: {
         if (var.type != VariableType::Int) {
             throw std::invalid_argument(toString() + ": expected an integer");
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2023 The reone project contributors
+ * Copyright (c) 2020-2026 The reone project contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,21 +17,13 @@
 
 #pragma once
 
+#include "reone/graphics/rendering/gpuscene.h"
 #include "reone/graphics/modelnode.h"
-#include "reone/graphics/types.h"
 
 #include "../grassproperties.h"
 #include "../node.h"
 
-#include "grasscluster.h"
-
 namespace reone {
-
-namespace graphics {
-
-struct GraphicsServices;
-
-}
 
 namespace scene {
 
@@ -55,22 +47,63 @@ public:
     }
 
     void init();
-
     void update(float dt) override;
+    void collectInto(GpuScene &scene);
+    void collectIntoIfDirty(GpuScene &scene) {
+        if (_gpuSceneDirty)
+            collectInto(scene);
+    }
 
-    void renderLeafs(IRenderPass &pass, const std::vector<SceneNode *> &leafs) override;
+    /** Exact, unrounded: the caller carries the remainder between pieces of one face. */
+    float getNumClustersInFace(float area) const;
+    const std::vector<graphics::GrassFace> &faceRecords() const {
+        return _faceRecords;
+    }
 
-    int getNumClustersInFace(float area) const;
-    int getRandomGrassVariant() const;
+protected:
+    void onAbsoluteTransformChanged() override;
 
 private:
     GrassProperties _properties;
     graphics::ModelNode &_aabbNode;
-
     std::vector<int> _grassFaces;
-    std::stack<GrassClusterSceneNode *> _clusterPool;                          /**< pre-allocated pool of clusters */
-    std::map<int, std::vector<GrassClusterSceneNode *>> _materializedClusters; /**< materialized clusters grouped by face */
+    std::vector<graphics::GrassFace> _faceRecords;
+    /**
+     * A piece of an admitted walkmesh face, after it has been divided finely
+     * enough to follow the ground that is actually drawn.
+     *
+     * A walkmesh face is coarse - on Dantooine's estate its median plan area
+     * is 34 world units and a planter bed is four triangles - so lifting only
+     * its corners onto the drawn surface leaves a mound's interior behind.
+     * Dividing until the surface is within tolerance of the corners' own plane
+     * refines only where the two disagree, which is why flat ground keeps its
+     * original face count.
+     */
+    struct SupportFace {
+        int face {0};
+        float areaFraction {1.0f};
+        std::array<glm::vec3, 3> barycentric {};
+    };
+    std::vector<SupportFace> _supportFaces;
+    /**
+     * World positions of the support faces' vertices, lifted onto the drawn
+     * ground. Three per support face, in the order that face lists them.
+     *
+     * Kept because it survives every dial: what the ground is doing does not
+     * depend on blade length or density, so it is recomputed only when the
+     * room moves, not when the settings change.
+     */
+    std::vector<glm::vec3> _supportVertices;
+    uint64_t _grassGeneration {0};
+    uint64_t _faceGeneration {0};
     bool _hasLightmapUV {true};
+    bool _faceRecordsBuilt {false};
+    bool _supportVerticesBuilt {false};
+    bool _gpuSceneDirty {true};
+    bool _wasGrassEnabled {false};
+
+    void rebuildFaceRecords();
+    void rebuildSupportVertices();
 };
 
 } // namespace scene

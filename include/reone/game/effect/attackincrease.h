@@ -29,9 +29,15 @@ public:
         Effect(EffectType::AttackIncrease),
         _bonus(bonus),
         _modifierType(modifierType) {
+        setSaveFacingInteger(0, bonus);
+        setSaveFacingInteger(1, static_cast<int>(modifierType));
+        setSaveFacingInteger(2, static_cast<int>(RacialType::All));
     }
 
     void applyTo(Object &object) override;
+
+    int bonus() const { return _bonus; }
+    AttackBonus modifierType() const { return _modifierType; }
 
 private:
     int _bonus;

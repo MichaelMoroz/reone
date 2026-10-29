@@ -44,9 +44,12 @@ public:
         return from->type() == ObjectType::Store;
     }
 
-    void deserialize(const resource::Gff &gff);
+    void deserialize(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext);
 
 private:
+    friend class ModuleSnapshotBuilder;
     // Serializable
     resource::LocString _locName;
     int32_t _markDown {100};
@@ -55,8 +58,12 @@ private:
     uint8_t _buySellFlag {0};
     // END Serializable
 
-    void deserializeAll(const resource::Gff &gff);
-    void deserializeItems(const resource::Gff &gff);
+    void deserializeAll(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext);
+    void deserializeItems(
+        const resource::Gff &gff,
+        const SerializedIdentityContext &identityContext);
 };
 
 } // namespace game

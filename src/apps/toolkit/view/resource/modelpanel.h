@@ -24,7 +24,6 @@
 #endif
 
 #include <wx/button.h>
-#include <wx/glcanvas.h>
 #include <wx/listbox.h>
 #include <wx/panel.h>
 #include <wx/slider.h>
@@ -49,17 +48,17 @@ class ModelResourcePanel : public wxPanel {
 public:
     ModelResourcePanel(ModelResourceViewModel &viewModel, wxWindow *parent);
 
-    void InitGL();
+    wxPanel &renderCanvas() { return *m_renderCanvas; }
 
-    void RefreshGL() {
-        m_glCanvas->Refresh();
+    void RefreshCanvas() {
+        m_renderCanvas->Refresh();
     }
 
 private:
     ModelResourceViewModel &m_viewModel;
 
     wxSplitterWindow *m_renderSplitter {nullptr};
-    wxGLCanvas *m_glCanvas {nullptr};
+    wxPanel *m_renderCanvas {nullptr};
     wxPanel *m_animationPanel {nullptr};
     wxButton *m_animPauseResumeBtn {nullptr};
     wxSlider *m_animTimeSlider {nullptr};
@@ -68,15 +67,14 @@ private:
     wxButton *m_lipLoadBtn {nullptr};
 
     std::shared_ptr<graphics::LipAnimation> m_lipAnim;
-    bool _glInited {false};
-
     void InitControls();
     void BindEvents();
     void BindViewModel();
 
-    void OnGLCanvasPaint(wxPaintEvent &event);
-    void OnGLCanvasMouseWheel(wxMouseEvent &event);
-    void OnGLCanvasMouseMotion(wxMouseEvent &event);
+    void OnCanvasPaint(wxPaintEvent &event);
+    void OnCanvasSize(wxSizeEvent &event);
+    void OnCanvasMouseWheel(wxMouseEvent &event);
+    void OnCanvasMouseMotion(wxMouseEvent &event);
 
     void OnAnimPauseResumeCommand(wxCommandEvent &event);
     void OnAnimTimeSliderCommand(wxCommandEvent &event);

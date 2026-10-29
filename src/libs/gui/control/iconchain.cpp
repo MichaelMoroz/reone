@@ -17,9 +17,10 @@
 
 #include "reone/gui/control/iconchain.h"
 
-#include "reone/scene/render/pass.h"
+#include "reone/graphics/rendering/renderer2d.h"
+#include "reone/gui/control/scrollbar.h"
 
-using namespace reone::scene;
+using namespace reone::graphics;
 
 namespace reone {
 
@@ -131,12 +132,12 @@ void IconChain::update(float dt) {
 
 void IconChain::render(const glm::ivec2 &screenSize,
                        const glm::ivec2 &offset,
-                       IRenderPass &pass) {
+                       I2DRenderer &renderer2d) {
     if (!_visible) {
         return;
     }
 
-    Control::render(screenSize, offset, pass);
+    Control::render(screenSize, offset, renderer2d);
 
     for (auto &item : _items) {
         if (!hasValidPosition(item)) {
@@ -149,7 +150,7 @@ void IconChain::render(const glm::ivec2 &screenSize,
         }
 
         if (_cellStyle.backgroundTexture) {
-            pass.drawImage(
+            renderer2d.drawImage(
                 *_cellStyle.backgroundTexture,
                 {offset.x + itemExtent.left, offset.y + itemExtent.top},
                 {itemExtent.width, itemExtent.height},
@@ -158,7 +159,7 @@ void IconChain::render(const glm::ivec2 &screenSize,
     }
 
     for (auto &link : _links) {
-        renderLink(link, offset, pass);
+        renderLink(link, offset, renderer2d);
     }
 
     for (size_t i = 0; i < _items.size(); ++i) {
@@ -173,18 +174,42 @@ void IconChain::render(const glm::ivec2 &screenSize,
         }
 
         bool focused = static_cast<int>(i) == _focusedItemIndex;
+        if (_cellStyle.drawItemBorderBeforeIcon) {
+            renderItemBorder(item, focused, itemExtent, offset, renderer2d);
+            renderFocusedBorder(item, focused, itemExtent, offset, renderer2d);
+        }
         if (item.iconTexture) {
             Extent iconExtent(getItemIconExtent(itemExtent));
-            pass.drawImage(
+            renderer2d.drawIcon(
                 *item.iconTexture,
                 {offset.x + iconExtent.left, offset.y + iconExtent.top},
                 {iconExtent.width, iconExtent.height},
                 getItemIconColor(item));
         }
 
-        renderItemBorder(item, focused, itemExtent, offset, pass);
-        renderFocusedBorder(item, focused, itemExtent, offset, pass);
+        if (!_cellStyle.drawItemBorderBeforeIcon) {
+            renderItemBorder(item, focused, itemExtent, offset, renderer2d);
+            renderFocusedBorder(item, focused, itemExtent, offset, renderer2d);
+        }
     }
+
+    if (_scrollBar) {
+        int rowCount = getMaxRow() + 1;
+        int visibleRows = getVisibleRowCount();
+        if (rowCount > visibleRows) {
+            ScrollBar::ScrollState state;
+            state.count = rowCount;
+            state.numVisible = visibleRows;
+            state.offset = _rowOffset;
+            auto &scrollBar = static_cast<ScrollBar &>(*_scrollBar);
+            scrollBar.setScrollState(std::move(state));
+            scrollBar.render(screenSize, offset, renderer2d);
+        }
+    }
+}
+
+void IconChain::setScrollBar(std::shared_ptr<Control> scrollBar) {
+    _scrollBar = std::move(scrollBar);
 }
 
 void IconChain::setSelected(bool selected) {
@@ -374,7 +399,7 @@ float IconChain::getFocusedBorderPulseFactor() const {
 void IconChain::renderLink(
     const Link &link,
     const glm::ivec2 &offset,
-    IRenderPass &pass) const {
+    I2DRenderer &renderer2d) const {
 
     if (!_cellStyle.linkTexture) {
         return;
@@ -408,10 +433,10 @@ void IconChain::renderLink(
     int gapWidth = targetExtent.left - sourceRight;
     int linkLeft = sourceRight + (gapWidth - linkSize.x) / 2;
     int linkTop = sourceExtent.top + (sourceExtent.height - linkSize.y) / 2;
-    pass.drawImage(
+    renderer2d.drawImage(
         *_cellStyle.linkTexture,
         {offset.x + linkLeft, offset.y + linkTop},
-        linkSize);
+        glm::vec2(linkSize));
 }
 
 std::optional<glm::vec3> IconChain::getFocusedBorderColor(const Item &item, bool focused) const {
@@ -467,7 +492,7 @@ void IconChain::renderItemBorder(
     bool focused,
     const Extent &extent,
     const glm::ivec2 &offset,
-    IRenderPass &pass) {
+    I2DRenderer &renderer2d) {
 
     if (_cellStyle.onlyDrawItemBorderWhenBright && !isItemBright(item)) {
         return;
@@ -485,11 +510,11 @@ void IconChain::renderItemBorder(
     setBorderColorOverride(getItemBorderColor(item, focused));
     setUseBorderColorOverride(true);
     if (_cellStyle.drawItemBorderFill || !border->fill) {
-        renderBorder(*border, offset, {extent.width, extent.height}, pass);
+        renderBorder(*border, offset, {extent.width, extent.height}, renderer2d);
     } else {
         Border borderWithoutFill(*border);
         borderWithoutFill.fill.reset();
-        renderBorder(borderWithoutFill, offset, {extent.width, extent.height}, pass);
+        renderBorder(borderWithoutFill, offset, {extent.width, extent.height}, renderer2d);
     }
     setUseBorderColorOverride(false);
     _extent = originalExtent;
@@ -500,7 +525,7 @@ void IconChain::renderFocusedBorder(
     bool focused,
     const Extent &extent,
     const glm::ivec2 &offset,
-    IRenderPass &pass) {
+    I2DRenderer &renderer2d) {
 
     auto maybeColor = getFocusedBorderColor(item, focused);
     if (!maybeColor) {
@@ -517,11 +542,11 @@ void IconChain::renderFocusedBorder(
     setBorderColorOverride(*maybeColor * getFocusedBorderPulseFactor());
     setUseBorderColorOverride(true);
     if (_cellStyle.drawItemBorderFill || !border->fill) {
-        renderBorder(*border, offset, {extent.width, extent.height}, pass);
+        renderBorder(*border, offset, {extent.width, extent.height}, renderer2d);
     } else {
         Border borderWithoutFill(*border);
         borderWithoutFill.fill.reset();
-        renderBorder(borderWithoutFill, offset, {extent.width, extent.height}, pass);
+        renderBorder(borderWithoutFill, offset, {extent.width, extent.height}, renderer2d);
     }
     setUseBorderColorOverride(false);
     _extent = originalExtent;

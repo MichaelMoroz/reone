@@ -17,10 +17,10 @@
 
 #pragma once
 
-#include "../context.h"
 #include "../meshregistry.h"
-#include "../pbrtextures.h"
-#include "../shaderregistry.h"
+#include "../options.h"
+#include "../rhi/renderer.h"
+#include "../rendering/renderer2d.h"
 #include "../statistic.h"
 #include "../textureregistry.h"
 #include "../uniforms.h"
@@ -37,15 +37,20 @@ public:
         _options(options) {
     }
 
+    /** Supply the Vulkan renderers. Must be called before init(). */
+    void setRenderers(IRenderer &renderer, I2DRenderer &renderer2d) {
+        _externalRenderer = &renderer;
+        _externalRenderer2d = &renderer2d;
+    }
+
     ~GraphicsModule() { deinit(); }
 
     void init();
     void deinit();
 
-    Context &context() { return *_context; }
     MeshRegistry &meshRegistry() { return *_meshRegistry; }
-    PBRTextures &pbrTextures() { return *_pbrTextures; }
-    ShaderRegistry &shaderRegistry() { return *_shaderRegistry; }
+    IRenderer &renderer() { return *_externalRenderer; }
+    I2DRenderer &renderer2d() { return *_externalRenderer2d; }
     Statistic &statistic() { return *_statistic; }
     TextureRegistry &textureRegistry() { return *_textureRegistry; }
     Uniforms &uniforms() { return *_uniforms; }
@@ -55,10 +60,9 @@ public:
 private:
     GraphicsOptions &_options;
 
-    std::unique_ptr<Context> _context;
     std::unique_ptr<MeshRegistry> _meshRegistry;
-    std::unique_ptr<PBRTextures> _pbrTextures;
-    std::unique_ptr<ShaderRegistry> _shaderRegistry;
+    IRenderer *_externalRenderer {nullptr};
+    I2DRenderer *_externalRenderer2d {nullptr};
     std::unique_ptr<Statistic> _statistic;
     std::unique_ptr<TextureRegistry> _textureRegistry;
     std::unique_ptr<Uniforms> _uniforms;

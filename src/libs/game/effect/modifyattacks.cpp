@@ -17,12 +17,26 @@
 
 #include "reone/game/effect/modifyattacks.h"
 
+#include "reone/game/object/creature.h"
+
 namespace reone {
 
 namespace game {
 
-void ModifyAttacksEffect::applyTo(Object &object) {
-    // TODO: implement
+bool ModifyAttacksEffect::onApply(Object &object, const EffectInstance &) {
+    auto *creature = dyn_cast<Creature>(&object);
+    if (!creature) {
+        return false;
+    }
+
+    creature->adjustModifiedAttacks(_attacks);
+    return true;
+}
+
+void ModifyAttacksEffect::onRemove(Object &object, const EffectInstance &) {
+    if (auto *creature = dyn_cast<Creature>(&object)) {
+        creature->adjustModifiedAttacks(-_attacks);
+    }
 }
 
 } // namespace game

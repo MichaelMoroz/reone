@@ -53,6 +53,11 @@ public:
     }
 
     void setRelativeMouseMode(bool relative);
+    void resize(int width, int height);
+    void setVsync(bool enabled);
+
+    /** Exposed for the Vulkan renderer and Dear ImGui's SDL backend. */
+    SDL_Window *sdlWindow() { return _window; }
 
 private:
     GraphicsOptions &_options;
@@ -60,7 +65,6 @@ private:
     bool _inited {false};
 
     SDL_Window *_window {nullptr};
-    SDL_GLContext _context {nullptr};
 
     uint32_t _windowID {0};
 

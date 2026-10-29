@@ -31,11 +31,11 @@
 #include "../provider/movies.h"
 #include "../provider/paths.h"
 #include "../provider/scripts.h"
-#include "../provider/shaders.h"
 #include "../provider/soundsets.h"
 #include "../provider/textures.h"
 #include "../provider/visibilities.h"
 #include "../provider/walkmeshes.h"
+#include "../replacements.h"
 #include "../resources.h"
 #include "../strings.h"
 
@@ -65,6 +65,13 @@ class ScriptModule;
 
 namespace resource {
 
+/// Backend that serves resource lookups. Extract reads game data through the
+/// extract layer primitives, with lookup semantics identical to Legacy.
+enum class ResourcesBackend {
+    Legacy,
+    Extract,
+};
+
 class ResourceModule : boost::noncopyable {
 public:
     ResourceModule(GameID gameId,
@@ -73,14 +80,22 @@ public:
                    audio::AudioOptions &audioOpt,
                    graphics::GraphicsModule &graphics,
                    audio::AudioModule &audio,
-                   script::ScriptModule &script) :
+                   script::ScriptModule &script,
+                   ResourcesBackend resourcesBackend = ResourcesBackend::Legacy,
+                   OdysseyResourceRoots odysseyRoots = {}) :
         _gameId(gameId),
         _gamePath(std::move(gamePath)),
         _graphicsOpt(graphicsOpt),
         _audioOpt(audioOpt),
         _graphics(graphics),
         _audio(audio),
-        _script(script) {
+        _script(script),
+        _resourcesBackend(resourcesBackend),
+        _nwmFilesDerived(!odysseyRoots.nwmFiles),
+        _odysseyRoots(std::move(odysseyRoots)) {
+        if (!_odysseyRoots.nwmFiles) {
+            _odysseyRoots.nwmFiles = defaultOdysseyResourceRoots(_gamePath).nwmFiles;
+        }
     }
 
     ~ResourceModule() { deinit(); }
@@ -90,6 +105,7 @@ public:
 
     Gffs &gffs() { return *_gffs; }
     IResources &resources() { return *_resources; }
+    IResourceReplacements &replacements() { return *_replacements; }
     Strings &strings() { return *_strings; }
     TwoDAs &twoDas() { return *_twoDas; }
     Scripts &scripts() { return *_scripts; }
@@ -102,10 +118,12 @@ public:
     Textures &textures() { return *_textures; }
     Walkmeshes &walkmeshes() { return *_walkmeshes; }
     Ltrs &ltrs() { return *_ltrs; }
-    Shaders &shaders() { return *_shaders; }
     ResourceDirector &director() { return *_director; }
 
     ResourceServices &services() { return *_services; }
+    const OdysseyResourceRoots &odysseyRoots() const { return _odysseyRoots; }
+
+    GameID gameId() const { return _gameId; }
 
     void setGameID(GameID id) {
         _gameId = id;
@@ -113,6 +131,9 @@ public:
 
     void setGamePath(std::filesystem::path path) {
         _gamePath = std::move(path);
+        if (_nwmFilesDerived) {
+            _odysseyRoots.nwmFiles = defaultOdysseyResourceRoots(_gamePath).nwmFiles;
+        }
     }
 
 private:
@@ -123,9 +144,16 @@ private:
     graphics::GraphicsModule &_graphics;
     audio::AudioModule &_audio;
     script::ScriptModule &_script;
+    ResourcesBackend _resourcesBackend {ResourcesBackend::Legacy};
 
+    bool _nwmFilesDerived {false};
+    OdysseyResourceRoots _odysseyRoots;
     std::unique_ptr<Gffs> _gffs;
-    std::unique_ptr<Resources> _resources;
+    std::unique_ptr<IResourceReplacements> _replacements;
+    std::unique_ptr<IResources> _resources;
+    /// Sources outside the Odyssey raw lookup model: the executable and
+    /// streamed audio for an activated game.
+    std::unique_ptr<IResources> _auxResources;
     std::unique_ptr<Strings> _strings;
     std::unique_ptr<TwoDAs> _twoDas;
     std::unique_ptr<Scripts> _scripts;
@@ -143,7 +171,6 @@ private:
     std::unique_ptr<SoundSets> _soundSets;
     std::unique_ptr<Visibilities> _visibilities;
     std::unique_ptr<Ltrs> _ltrs;
-    std::unique_ptr<Shaders> _shaders;
     std::unique_ptr<ResourceDirector> _director;
 
     std::unique_ptr<ResourceServices> _services;

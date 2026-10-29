@@ -23,14 +23,9 @@ namespace reone {
 
 namespace graphics {
 
-class IStatistic;
-
 class Cursor;
-class Context;
-class MeshRegistry;
-class ShaderRegistry;
+class I2DRenderer;
 class Texture;
-class Uniforms;
 
 } // namespace graphics
 
@@ -49,19 +44,11 @@ public:
 class Cursors : public ICursors, boost::noncopyable {
 public:
     Cursors(
-        graphics::Context &context,
-        graphics::MeshRegistry &meshRegistry,
-        graphics::ShaderRegistry &shaderRegistry,
+        graphics::I2DRenderer &renderer2d,
         resource::Textures &textures,
-        graphics::Uniforms &uniforms,
-        graphics::IStatistic &statistic,
         IResources &resources) :
-        _context(context),
-        _meshRegistry(meshRegistry),
-        _shaderRegistry(shaderRegistry),
+        _renderer2d(renderer2d),
         _textures(textures),
-        _uniforms(uniforms),
-        _statistic(statistic),
         _resources(resources) {
     }
 
@@ -76,12 +63,8 @@ private:
 
     // Services
 
-    graphics::Context &_context;
-    graphics::MeshRegistry &_meshRegistry;
-    graphics::ShaderRegistry &_shaderRegistry;
+    graphics::I2DRenderer &_renderer2d;
     resource::Textures &_textures;
-    graphics::Uniforms &_uniforms;
-    graphics::IStatistic &_statistic;
     IResources &_resources;
 
     // END Services

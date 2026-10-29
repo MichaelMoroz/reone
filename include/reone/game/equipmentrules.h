@@ -17,12 +17,16 @@
 
 #pragma once
 
+#include <memory>
+
 namespace reone {
 
 namespace game {
 
 class Creature;
+class Game;
 class Item;
+class Object;
 
 enum class EquipmentCandidateAction {
     None,
@@ -85,6 +89,30 @@ EquipmentCandidateDecision evaluateEquipmentCandidate(
 EquipmentSlotActivationDecision evaluateEquipmentSlotActivation(
     const Creature &creature,
     int requestedSlot);
+
+std::shared_ptr<Item> takeEquipmentCandidate(
+    Game &game,
+    Object &inventory,
+    const std::shared_ptr<Item> &item);
+
+/** True only when the exact Item is owned by the active Area graph. */
+bool isActiveAreaOwnedItem(
+    Game &game,
+    const std::shared_ptr<Item> &item);
+
+/** End exact active-Area ownership without retiring the runtime Item. */
+bool releaseAreaOwnedItem(
+    Game &game,
+    const std::shared_ptr<Item> &item);
+
+/**
+ * Move one complete runtime Item from its current nested or Area ownership
+ * edge to receiver. An ownerless nonresident Item is not transferable.
+ */
+bool transferItemTo(
+    Game &game,
+    const std::shared_ptr<Item> &item,
+    Object &receiver);
 
 } // namespace game
 

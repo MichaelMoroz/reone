@@ -17,17 +17,15 @@
 
 #include "reone/gui/control/scrollbar.h"
 
-#include "reone/graphics/context.h"
+#include "reone/graphics/di/services.h"
+#include "reone/graphics/rendering/renderer2d.h"
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/meshregistry.h"
-#include "reone/graphics/renderbuffer.h"
-#include "reone/graphics/shaderregistry.h"
 #include "reone/graphics/texture.h"
 #include "reone/graphics/uniforms.h"
 #include "reone/resource/gff.h"
 #include "reone/resource/provider/textures.h"
 #include "reone/resource/resources.h"
-#include "reone/scene/render/pass.h"
 
 #include "reone/gui/gui.h"
 
@@ -54,37 +52,36 @@ void ScrollBar::load(const resource::generated::GUI_BASECONTROL &gui, bool proto
 
 void ScrollBar::render(const glm::ivec2 &screenSize,
                        const glm::ivec2 &offset,
-                       scene::IRenderPass &pass) {
-    renderThumb(offset, pass);
-    renderArrows(offset, pass);
+                       I2DRenderer &renderer2d) {
+    renderThumb(offset, renderer2d);
+    renderArrows(offset, renderer2d);
 }
 
-void ScrollBar::renderThumb(const glm::ivec2 &offset,
-                            scene::IRenderPass &pass) {
+void ScrollBar::renderThumb(const glm::ivec2 &offset, I2DRenderer &renderer2d) {
     if (!_thumb.image || _state.numVisible >= _state.count) {
         return;
     }
 
     // Top edge
-    pass.drawImage(
+    renderer2d.drawImage(
         *_thumb.image,
         {_extent.left + offset.x, _extent.top + _extent.width + offset.y},
         {_extent.width, 1.0f});
 
     // Left edge
-    pass.drawImage(
+    renderer2d.drawImage(
         *_thumb.image,
         {_extent.left + offset.x, _extent.top + _extent.width + offset.y},
         {1.0f, _extent.height - 2.0f * _extent.width});
 
     // Right edge
-    pass.drawImage(
+    renderer2d.drawImage(
         *_thumb.image,
         {_extent.left + _extent.width - 1.0f + offset.x, _extent.top + _extent.width + offset.y},
         {1.0f, _extent.height - 2.0f * _extent.width});
 
     // Bottom edge
-    pass.drawImage(
+    renderer2d.drawImage(
         *_thumb.image,
         {_extent.left + offset.x, _extent.top + _extent.height - _extent.width - 1.0f + offset.y},
         {_extent.width, 1.0f});
@@ -93,14 +90,18 @@ void ScrollBar::renderThumb(const glm::ivec2 &offset,
     float frameHeight = _extent.height - 2.0f * _extent.width - 4.0f;
     float thumbHeight = frameHeight * _state.numVisible / static_cast<float>(_state.count);
     float y = glm::mix(0.0f, frameHeight - thumbHeight, _state.offset / static_cast<float>(_state.count - _state.numVisible));
-    pass.drawImage(
+    // The reference image API truncates both vectors to ivec2 at this call.
+    glm::ivec2 thumbPosition {
+        _extent.left + 2 + offset.x,
+        static_cast<int>(_extent.top + _extent.width + 2.0f + offset.y + y)};
+    glm::ivec2 thumbSize {_extent.width - 4, static_cast<int>(thumbHeight)};
+    renderer2d.drawImage(
         *_thumb.image,
-        {_extent.left + 2.0f + offset.x, _extent.top + _extent.width + 2.0f + offset.y + y},
-        {_extent.width - 4.0f, thumbHeight});
+        glm::vec2(thumbPosition),
+        glm::vec2(thumbSize));
 }
 
-void ScrollBar::renderArrows(const glm::ivec2 &offset,
-                             scene::IRenderPass &pass) {
+void ScrollBar::renderArrows(const glm::ivec2 &offset, I2DRenderer &renderer2d) {
     if (!_dir.image)
         return;
 
@@ -110,28 +111,26 @@ void ScrollBar::renderArrows(const glm::ivec2 &offset,
         return;
 
     if (canScrollUp) {
-        renderUpArrow(offset, pass);
+        renderUpArrow(offset, renderer2d);
     }
     if (canScrollDown) {
-        renderDownArrow(offset, pass);
+        renderDownArrow(offset, renderer2d);
     }
 }
 
-void ScrollBar::renderUpArrow(const glm::ivec2 &offset,
-                              scene::IRenderPass &pass) {
-    pass.drawImage(
+void ScrollBar::renderUpArrow(const glm::ivec2 &offset, I2DRenderer &renderer2d) {
+    renderer2d.drawImage(
         *_dir.image,
         {_extent.left + offset.x, _extent.top + offset.y},
         {_extent.width, _extent.width});
 }
 
-void ScrollBar::renderDownArrow(const glm::ivec2 &offset,
-                                scene::IRenderPass &pass) {
+void ScrollBar::renderDownArrow(const glm::ivec2 &offset, I2DRenderer &renderer2d) {
     auto uv = glm::mat3x4(
         glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
         glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
         glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
-    pass.drawImage(
+    renderer2d.drawImage(
         *_dir.image,
         {_extent.left + offset.x, _extent.top + _extent.height - _extent.width + offset.y},
         {_extent.width, _extent.width},

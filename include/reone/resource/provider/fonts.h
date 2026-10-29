@@ -23,12 +23,7 @@ namespace reone {
 
 namespace graphics {
 
-class IStatistic;
-
-class Context;
-class MeshRegistry;
-class ShaderRegistry;
-class Uniforms;
+class I2DRenderer;
 
 } // namespace graphics
 
@@ -48,18 +43,10 @@ public:
 class Fonts : public IFonts {
 public:
     Fonts(
-        graphics::Context &context,
-        graphics::MeshRegistry &meshRegistry,
-        graphics::ShaderRegistry &shaderRegistry,
-        graphics::IStatistic &statistic,
-        Textures &textures,
-        graphics::Uniforms &uniforms) :
-        _context(context),
-        _meshRegistry(meshRegistry),
-        _shaderRegistry(shaderRegistry),
-        _statistic(statistic),
-        _textures(textures),
-        _uniforms(uniforms) {
+        graphics::I2DRenderer &renderer2d,
+        Textures &textures) :
+        _renderer2d(renderer2d),
+        _textures(textures) {
     }
 
     void clear() override {
@@ -80,12 +67,8 @@ private:
 
     // Services
 
-    graphics::Context &_context;
-    graphics::MeshRegistry &_meshRegistry;
-    graphics::ShaderRegistry &_shaderRegistry;
-    graphics::IStatistic &_statistic;
+    graphics::I2DRenderer &_renderer2d;
     Textures &_textures;
-    graphics::Uniforms &_uniforms;
 
     // END Services
 

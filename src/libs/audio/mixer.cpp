@@ -15,6 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include "reone/audio/clip.h"
 #include "reone/audio/mixer.h"
 
 namespace reone {
@@ -57,6 +58,10 @@ std::shared_ptr<AudioSource> AudioMixer::play(std::shared_ptr<AudioClip> clip,
                                               float gain,
                                               bool loop,
                                               std::optional<glm::vec3> position) {
+    if (!clip || clip->getFrameCount() == 0) {
+        return nullptr;
+    }
+
     auto source = std::make_shared<AudioSource>(
         std::move(clip),
         gainByType(type, gain),
@@ -69,6 +74,9 @@ std::shared_ptr<AudioSource> AudioMixer::play(std::shared_ptr<AudioClip> clip,
 }
 
 float AudioMixer::gainByType(AudioType type, float gain) const {
+    if (_options.muted) {
+        return 0.0f;
+    }
     int volume;
     switch (type) {
     case AudioType::Music:

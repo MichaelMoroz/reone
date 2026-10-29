@@ -23,69 +23,72 @@ namespace reone {
 
 namespace graphics {
 
-class IStatistic;
-
-class Context;
-class MeshRegistry;
-class ShaderRegistry;
+class I2DRenderer;
 class Texture;
-class Uniforms;
 
+/**
+ * A bitmap font: a glyph atlas and the metrics to lay text out in it.
+ *
+ * Font describes text; it does not draw it. Submitting the glyphs belongs to
+ * I2DRenderer, which knows what a draw is on the current backend.
+ */
 class Font {
 public:
-    Font(
-        Context &context,
-        MeshRegistry &meshRegistry,
-        ShaderRegistry &shaderRegistry,
-        IStatistic &statistic,
-        Uniforms &uniforms) :
-        _context(context),
-        _meshRegistry(meshRegistry),
-        _shaderRegistry(shaderRegistry),
-        _statistic(statistic),
-        _uniforms(uniforms) {
-    }
-
-    void load(std::shared_ptr<Texture> texture);
-
-    void render(
-        std::string_view text,
-        const glm::vec3 &position,
-        const glm::vec3 &color = glm::vec3(1.0f, 1.0f, 1.0f),
-        TextGravity align = TextGravity::CenterCenter);
-
-    float measure(std::string_view text) const;
-
-    void renderLine(std::string_view line,
-                    const glm::vec3 &position,
-                    glm::vec3 &textOffset);
-
-    float height() const { return _height; }
-
-    Texture &texture() { return *_texture; }
-
-private:
     struct Glyph {
         glm::vec2 ul {0.0f};
         glm::vec2 lr {0.0f};
         glm::vec2 size {0.0f};
     };
 
+    Font(I2DRenderer &renderer2d) :
+        _renderer2d(renderer2d) {
+    }
+
+    void load(std::shared_ptr<Texture> texture);
+
+    /** Convenience for the many call sites that hold a font and want it drawn. */
+    void render(
+        std::string_view text,
+        const glm::vec3 &position,
+        const glm::vec3 &color = glm::vec3(1.0f, 1.0f, 1.0f),
+        TextGravity align = TextGravity::CenterCenter,
+        float scale = 1.0f);
+
+    void render(
+        std::string_view text,
+        const glm::vec3 &position,
+        const glm::vec4 &color,
+        TextGravity align = TextGravity::CenterCenter,
+        float scale = 1.0f);
+
+    /** Scales a glyph metric in the same way as the renderer scales a glyph. */
+    static float scaledMetric(float metric, float scale) { return metric * scale; }
+
+    float glyphAdvance(const Glyph &glyph, float scale) const {
+        return (glyph.size.x + _spacingR) * scale;
+    }
+
+    float measure(std::string_view text, float scale = 1.0f) const;
+
+    /**
+     * Where to start drawing so that @p text sits at the anchor the way
+     * @p gravity asks for.
+     */
+    glm::vec2 textOffset(std::string_view text, TextGravity gravity, float scale = 1.0f) const;
+
+    float height() const { return _height; }
+
+    const std::vector<Glyph> &glyphs() const { return _glyphs; }
+
+    Texture &texture() { return *_texture; }
+
+private:
     std::shared_ptr<Texture> _texture;
     float _height {0.0f};
+    float _spacingR {0.0f};
     std::vector<Glyph> _glyphs;
 
-    // Services
-
-    Context &_context;
-    MeshRegistry &_meshRegistry;
-    ShaderRegistry &_shaderRegistry;
-    IStatistic &_statistic;
-    Uniforms &_uniforms;
-
-    // END Services
-
-    glm::vec2 getTextOffset(std::string_view text, TextGravity gravity) const;
+    I2DRenderer &_renderer2d;
 };
 
 } // namespace graphics

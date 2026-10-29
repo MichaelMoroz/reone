@@ -28,9 +28,13 @@ public:
     ImmunityEffect(ImmunityType immunityType) :
         Effect(EffectType::Immunity),
         _immunityType(immunityType) {
+        setSaveFacingInteger(0, static_cast<int>(immunityType));
+        setSaveFacingInteger(1, static_cast<int>(RacialType::All));
     }
 
     void applyTo(Object &object) override;
+
+    ImmunityType immunityType() const { return _immunityType; }
 
 private:
     ImmunityType _immunityType;

@@ -24,6 +24,8 @@ namespace reone {
 namespace resource {
 
 class ITwoDAs;
+class Gff;
+class TwoDA;
 
 }
 
@@ -33,12 +35,34 @@ class Creature;
 
 class IReputes {
 public:
+    struct FactionDefinition {
+        std::string name;
+        uint32_t parentId {std::numeric_limits<uint32_t>::max()};
+        bool global {true};
+    };
+
+    struct State {
+        std::vector<FactionDefinition> factions;
+        std::vector<std::string> labels;
+        std::vector<std::vector<int>> values;
+    };
+
     virtual ~IReputes() = default;
 
-    virtual bool getIsEnemy(const Creature &left, const Creature &right) const = 0;
-    virtual bool getIsEnemy(Faction left, Faction right) const = 0;
-    virtual bool getIsFriend(const Creature &left, const Creature &right) const = 0;
-    virtual bool getIsNeutral(const Creature &left, const Creature &right) const = 0;
+    virtual State baseState() const = 0;
+    virtual State state() const = 0;
+    virtual std::optional<State> parse(const resource::Gff &gff) const = 0;
+    virtual void replace(State state) = 0;
+
+    // Reputation is directed: it is the source faction's disposition toward the
+    // target faction, and the reverse relationship is independent of it.
+    virtual int getReputation(Faction sourceFaction, Faction targetFaction) const = 0;
+    virtual void adjustReputation(Faction sourceFaction, Faction targetFaction, int adjustment) = 0;
+
+    virtual bool getIsEnemy(const Creature &source, const Creature &target) const = 0;
+    virtual bool getIsEnemy(Faction sourceFaction, Faction targetFaction) const = 0;
+    virtual bool getIsFriend(const Creature &source, const Creature &target) const = 0;
+    virtual bool getIsNeutral(const Creature &source, const Creature &target) const = 0;
 };
 
 class Reputes : public IReputes, boost::noncopyable {
@@ -49,17 +73,31 @@ public:
 
     void init();
 
-    bool getIsEnemy(const Creature &left, const Creature &right) const override;
-    bool getIsEnemy(Faction left, Faction right) const override;
-    bool getIsFriend(const Creature &left, const Creature &right) const override;
-    bool getIsNeutral(const Creature &left, const Creature &right) const override;
+    State baseState() const override;
+    State state() const override;
+    std::optional<State> parse(const resource::Gff &gff) const override;
+    void replace(State state) override;
+
+    const std::vector<FactionDefinition> &factions() const { return _factions; }
+
+    int getReputation(Faction sourceFaction, Faction targetFaction) const override;
+    void adjustReputation(Faction sourceFaction, Faction targetFaction, int adjustment) override;
+
+    bool getIsEnemy(const Creature &source, const Creature &target) const override;
+    bool getIsEnemy(Faction sourceFaction, Faction targetFaction) const override;
+    bool getIsFriend(const Creature &source, const Creature &target) const override;
+    bool getIsNeutral(const Creature &source, const Creature &target) const override;
 
 private:
     resource::ITwoDAs &_twoDas;
+    std::vector<FactionDefinition> _factions;
     std::vector<std::string> _factionLabels;
     std::vector<std::vector<int>> _factionValues;
 
-    int getRepute(Faction left, Faction right) const;
+    void loadBase(
+        const resource::TwoDA &repute,
+        size_t factionCount,
+        std::vector<std::vector<int>> &values) const;
 };
 
 } // namespace game

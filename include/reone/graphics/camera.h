@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "aabb.h"
+#include "frustum.h"
 #include "types.h"
 
 namespace reone {
@@ -32,15 +32,13 @@ public:
 
     virtual ~Camera() = default;
 
-    bool isInFrustum(const glm::vec3 &point) const;
-    bool isInFrustum(const AABB &aabb) const;
-
     CameraType type() const { return _type; }
     const glm::mat4 &projection() const { return _projection; }
     const glm::mat4 &projectionInv() const { return _projectionInv; }
     const glm::mat4 &view() const { return _view; }
     const glm::mat4 &viewInv() const { return _viewInv; }
     const glm::vec3 &position() const { return _position; }
+    const Frustum &frustum() const { return _frustum; }
     float zNear() const { return _zNear; }
     float zFar() const { return _zFar; }
 
@@ -73,19 +71,7 @@ protected:
     }
 
 private:
-    struct Plane {
-        glm::vec3 normal {0.0f};
-        float distance {0.0f};
-
-        float distanceTo(const glm::vec3 &point) const {
-            return glm::dot(normal, point) + distance;
-        }
-    };
-
-    struct Frustum {
-        std::array<Plane, 6> planes;
-    } _frustum;
-
+    Frustum _frustum;
     CameraType _type;
 
     void updateFrustum();

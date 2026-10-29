@@ -39,7 +39,9 @@ public:
                        bool passive = false) :
         Action(game, services, ActionType::AttackObject),
         _target(target),
-        _passive(passive), _services(services) {}
+        _passive(passive), _services(services) {
+        requireRuntimeObject(target);
+    }
 
     static bool classof(Action *from) {
         return from->type() == ActionType::AttackObject;
@@ -47,7 +49,8 @@ public:
 
     void execute(std::shared_ptr<Action> self, Object &actor, float dt) override;
     void cancel(std::shared_ptr<Action> self, Object &actor) override;
-    const std::shared_ptr<Object> &target() const { return _target; }
+    std::optional<SavedActionRecord> saveFacingState() const override;
+    std::shared_ptr<Object> target() const { return _target.resolve(); }
 
     AttackResultType result() const { return _attacks.result(); }
 
@@ -56,7 +59,7 @@ private:
 
     void finish(Creature &attacker);
 
-    std::shared_ptr<Object> _target;
+    RuntimeObjectRef<Object> _target;
     bool _passive;
     ServicesView &_services;
 

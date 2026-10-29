@@ -18,12 +18,16 @@
 #include "explorer.h"
 
 #include <wx/stopwatch.h>
+#include <wx/window.h>
+
+#include <SDL3/SDL.h>
 
 #include "reone/audio/format/mp3reader.h"
 #include "reone/graphics/format/lipreader.h"
 #include "reone/graphics/format/lipwriter.h"
 #include "reone/graphics/format/mdlmdxreader.h"
 #include "reone/graphics/lipanimation.h"
+#include "reone/graphics/rhi/renderer.h"
 #include "reone/resource/format/2dareader.h"
 #include "reone/resource/format/2dawriter.h"
 #include "reone/resource/format/gffreader.h"
@@ -97,11 +101,11 @@ private:
 
 ResourceExplorerViewModel::ResourceExplorerViewModel() {
     _graphicsOpt.grass = false;
-    _graphicsOpt.pbr = false;
+    _graphicsOpt.mode = graphics::RenderMode::Retro;
     _graphicsOpt.ssao = false;
     _graphicsOpt.ssr = false;
-    _graphicsOpt.fxaa = false;
-    _graphicsOpt.sharpen = false;
+    _graphicsOpt.antialiasing = graphics::AntiAliasing::None;
+    _graphicsOpt.sharpness = 0.0f;
 
     _clock = std::make_unique<wxClock>();
     _clock->init();
@@ -123,6 +127,10 @@ ResourceExplorerViewModel::ResourceExplorerViewModel() {
         g_lipShapeToName.insert({shape, name});
         g_nameToLipShape.insert({name, shape});
     }
+}
+
+ResourceExplorerViewModel::~ResourceExplorerViewModel() {
+    deinitEngine();
 }
 
 void ResourceExplorerViewModel::openFile(const ResourcesItem &item) {
@@ -427,20 +435,77 @@ void ResourceExplorerViewModel::loadEngine() {
     }
     info("Loading engine");
 
+    if (!_renderPanel || !_renderPanel->GetHandle()) {
+        throw std::runtime_error("Model preview panel has no native window handle");
+    }
+
+    auto props = SDL_CreateProperties();
+    if (!props ||
+        !SDL_SetPointerProperty(props, SDL_PROP_WINDOW_CREATE_WIN32_HWND_POINTER, _renderPanel->GetHandle()) ||
+        !SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true)) {
+        if (props) {
+            SDL_DestroyProperties(props);
+        }
+        throw std::runtime_error("Failed to configure SDL window for Vulkan: " + std::string(SDL_GetError()));
+    }
+    _sdlWindow = SDL_CreateWindowWithProperties(props);
+    SDL_DestroyProperties(props);
+    if (!_sdlWindow) {
+        throw std::runtime_error("Failed to wrap model preview panel with SDL: " + std::string(SDL_GetError()));
+    }
+
+    auto size = _renderPanel->GetClientSize();
+    _renderer = makeRenderer(
+        _sdlWindow,
+        glm::ivec2 {std::max(1, size.x), std::max(1, size.y)},
+        _graphicsOpt.vsync,
+        false);
+    _renderer->init();
+    _graphicsModule->setRenderers(*_renderer, _renderer->renderer2d());
+
     _systemModule->init();
     _graphicsModule->init();
     _audioModule->init();
     _resourceModule->init();
     _sceneModule->init();
+    _sceneModule->renderPipelineFactory().setRenderer(*_renderer);
 
     auto keyPath = findFileIgnoreCase(_resourcesPath, "chitin.key");
     if (!keyPath) {
-        _resourceModule->resources().addFolder(_resourcesPath);
+        // This mounts into the same list the director just filled, so it has to
+        // place the source exactly as the director would. Leaving it unplaced
+        // for a game whose sources are bucketed would be rejected outright.
+        std::optional<ResourceSourceBucket> bucket;
+        if (usesBucketedLookup(_gameId)) {
+            bucket = ResourceSourceBucket::LooseDirectory;
+        }
+        _resourceModule->resources().addFolder(_resourcesPath, ResourceOwner::Global, bucket);
     }
 
     _modelResViewModel->initScene();
 
     _engineLoaded = true;
+}
+
+void ResourceExplorerViewModel::deinitEngine() {
+    if (!_engineLoaded && !_renderer) {
+        return;
+    }
+
+    _renderEnabled = false;
+    _modelResViewModel.reset();
+    _sceneModule.reset();
+    _resourceModule.reset();
+    _scriptModule.reset();
+    _audioModule.reset();
+    _renderer.reset();
+    _graphicsModule.reset();
+    _systemModule.reset();
+    if (_sdlWindow) {
+        SDL_DestroyWindow(_sdlWindow);
+        _sdlWindow = nullptr;
+    }
+    _engineLoaded = false;
 }
 
 void ResourceExplorerViewModel::decompile(ResourcesItemId itemId, bool optimize) {
@@ -718,7 +783,9 @@ void ResourceExplorerViewModel::saveFile(Page &page, const std::filesystem::path
                 columns.emplace_back(column.name);
             }
             for (const auto &row : table.rows) {
-                rows.push_back({row});
+                // The table view does not carry row labels, so rows are
+                // relabelled by ordinal, which is what was written before.
+                rows.push_back(TwoDA::newRow(std::to_string(rows.size()), row));
             }
             TwoDA twoDa {std::move(columns), std::move(rows)};
             TwoDAWriter writer {twoDa};
@@ -788,6 +855,11 @@ void ResourceExplorerViewModel::onViewCreated() {
 
 void ResourceExplorerViewModel::onViewDestroyed() {
     _audioResViewModel->audioStream() = nullptr;
+    deinitEngine();
+}
+
+void ResourceExplorerViewModel::setRenderPanel(wxWindow &panel) {
+    _renderPanel = &panel;
 }
 
 void ResourceExplorerViewModel::onNotebookPageClose(int page) {
@@ -916,6 +988,46 @@ void ResourceExplorerViewModel::onResourcesListBoxDoubleClick(const ResourcesIte
     _expandedItemId = expandingItem.id;
     _resItems = std::move(resItems);
     _goToParentEnabled = true;
+}
+
+void ResourceExplorerViewModel::openModelByResRef(std::string resRef) {
+    boost::to_lower(resRef);
+
+    auto findItem = [this](const std::function<bool(const ResourcesItem &)> &predicate) -> ResourcesItem * {
+        auto item = std::find_if(_allResItems.begin(), _allResItems.end(), [&predicate](const auto &candidate) {
+            return predicate(*candidate);
+        });
+        return item != _allResItems.end() ? item->get() : nullptr;
+    };
+
+    // Keep this traversal in terms of the public double-click command. Apart
+    // from making command-line opening behave exactly like the UI, it keeps
+    // archive stream handling in one place.
+    auto *data = findItem([](const auto &item) {
+        return item.container && boost::iequals(item.id.path.filename().string(), "data");
+    });
+    if (!data) {
+        throw std::runtime_error("Game data directory not found: " + _resourcesPath.string());
+    }
+    onResourcesListBoxDoubleClick(data->id);
+
+    auto *models = findItem([data](const auto &item) {
+        return item.parentId && *item.parentId == data->id && item.container &&
+               boost::iequals(item.id.path.filename().string(), "models.bif");
+    });
+    if (!models) {
+        throw std::runtime_error("Model archive not found: " + (data->id.path / "models.bif").string());
+    }
+    onResourcesListBoxDoubleClick(models->id);
+
+    auto *model = findItem([models, &resRef](const auto &item) {
+        return item.parentId && *item.parentId == models->id && item.id.resId &&
+               item.id.resId->type == ResType::Mdl && item.id.resId->resRef.value() == resRef;
+    });
+    if (!model) {
+        throw std::runtime_error("Model resource not found in data/models.bif: " + resRef);
+    }
+    onResourcesListBoxDoubleClick(model->id);
 }
 
 void ResourceExplorerViewModel::onGoToParentButton() {

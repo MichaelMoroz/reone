@@ -17,14 +17,9 @@
 
 #include "reone/scene/node/trigger.h"
 
-#include "reone/graphics/context.h"
 #include "reone/graphics/di/services.h"
 #include "reone/graphics/material.h"
 #include "reone/graphics/mesh.h"
-#include "reone/graphics/shaderregistry.h"
-#include "reone/graphics/statistic.h"
-#include "reone/graphics/uniforms.h"
-#include "reone/scene/render/pipeline.h"
 
 using namespace reone::graphics;
 
@@ -98,22 +93,6 @@ void TriggerSceneNode::initGeometry() {
     for (auto &point : _geometry) {
         _aabb.expand(point);
     }
-}
-
-void TriggerSceneNode::init() {
-    _mesh->init();
-}
-
-void TriggerSceneNode::render(IRenderPass &pass) {
-    _graphicsSvc.uniforms.setWalkmesh([this](auto &walkmesh) {
-        walkmesh.materials[kMaxWalkmeshMaterials - 1] = _debugColor;
-    });
-
-    Material material;
-    material.type = MaterialType::Walkmesh;
-    material.faceCulling = FaceCullMode::None;
-    material.polygonMode = PolygonMode::Line;
-    pass.draw(*_mesh, material, _absTransform, _absTransformInv);
 }
 
 bool TriggerSceneNode::isIn(const glm::vec2 &pt) const {

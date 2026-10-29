@@ -151,10 +151,24 @@ public:
         std::string textureName;
         glm::ivec2 gridSize {0};
         int renderOrder {0};
+        uint32_t flags {0};
         bool twosided {false};
         bool loop {false};
+        bool frameBlending {false};
         bool p2p {false};
         bool p2pBezier {false};
+        bool affectedByWind {false};
+        bool tinted {false};
+        bool bounce {false};
+        bool random {false};
+        bool inherit {false};
+        bool inheritVelocity {false};
+        bool inheritLocal {false};
+        bool splat {false};
+        bool inheritParticle {false};
+        bool depthTexture {false};
+        bool flag13 {false};
+        std::string depthTextureName;
     };
 
     struct Reference {

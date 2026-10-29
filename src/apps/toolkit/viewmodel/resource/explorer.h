@@ -43,6 +43,9 @@
 #include "image.h"
 #include "model.h"
 
+class wxWindow;
+struct SDL_Window;
+
 namespace reone {
 
 struct ResourcesItemId {
@@ -124,6 +127,7 @@ struct Progress {
 class ResourceExplorerViewModel : public ResourceViewModel {
 public:
     ResourceExplorerViewModel();
+    ~ResourceExplorerViewModel();
 
     resource::GameID gameId() const {
         return _gameId;
@@ -211,12 +215,15 @@ public:
 
     void onViewCreated();
     void onViewDestroyed();
+    void setRenderPanel(wxWindow &panel);
 
     void onNotebookPageClose(int page);
 
     void onResourcesDirectoryChanged(resource::GameID gameId, std::filesystem::path path);
     void onResourcesListBoxDoubleClick(const ResourcesItemId &id);
     void onGoToParentButton();
+    /** Open an MDL by following the same explorer double-click path as the UI. */
+    void openModelByResRef(std::string resRef);
 
 private:
     resource::GameID _gameId {resource::GameID::KotOR};
@@ -266,6 +273,9 @@ private:
     std::unique_ptr<audio::AudioModule> _audioModule;
     std::unique_ptr<scene::SceneModule> _sceneModule;
     std::unique_ptr<script::ScriptModule> _scriptModule;
+    std::unique_ptr<graphics::IRenderer> _renderer;
+    SDL_Window *_sdlWindow {nullptr};
+    wxWindow *_renderPanel {nullptr};
 
     bool _engineLoaded {false};
 
@@ -274,6 +284,7 @@ private:
     void loadResources();
     void loadTools();
     void loadEngine();
+    void deinitEngine();
 
     void openFile(const ResourcesItem &item);
     void openResource(const resource::ResourceId &id, IInputStream &data);

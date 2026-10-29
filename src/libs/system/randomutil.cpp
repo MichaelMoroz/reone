@@ -21,6 +21,14 @@ namespace reone {
 
 static std::default_random_engine g_generator(static_cast<uint32_t>(time(nullptr)));
 
+// Fixed seed, never reseeded. Renderer noise does not need to vary between
+// runs, and holding it apart from the shared stream is the point.
+static std::default_random_engine g_renderGenerator(0x5eed);
+
+void setRandomSeed(uint32_t seed) {
+    g_generator.seed(seed);
+}
+
 int randomInt(int min, int max) {
     std::uniform_int_distribution<int> dist(min, max);
     return dist(g_generator);
@@ -29,6 +37,11 @@ int randomInt(int min, int max) {
 float randomFloat(float min, float max) {
     std::uniform_real_distribution<float> distr(min, max);
     return distr(g_generator);
+}
+
+float renderRandomFloat(float min, float max) {
+    std::uniform_real_distribution<float> distr(min, max);
+    return distr(g_renderGenerator);
 }
 
 } // namespace reone
