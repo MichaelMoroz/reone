@@ -36,9 +36,8 @@ class ICommandBuffer;
  *
  * The vertex layout is not reinterpreted. Mesh already describes itself as a
  * stride and a set of offsets, and the attribute locations are the ones the
- * Slang shaders declare with [[vk::location(n)]], which are in turn the ones
- * the GL path binds. All three have to agree, so there is one description of
- * them, here.
+ * Slang shaders declare with [[vk::location(n)]]. Both have to agree, so there
+ * is one description of them, here.
  */
 class VulkanMesh : boost::noncopyable {
 public:
@@ -67,11 +66,10 @@ public:
      * stride 0 and holds zeros, and every attribute the mesh does not provide
      * points at it.
      *
-     * OpenGL gives an attribute the shader declares but the buffer omits a
-     * default value; Vulkan makes the missing attribute an error. The game's
-     * meshes genuinely vary - plenty have no tangent frame or bone weights, and
-     * are drawn by a shader that declares both - so the difference has to be
-     * made up somewhere. A stride-0 binding does it without an extension and
+     * Vulkan makes an attribute the shader declares but the buffer omits an
+     * error. The game's meshes genuinely vary - plenty have no tangent frame or
+     * bone weights, and are drawn by a shader that declares both - so the gap
+     * has to be filled. A stride-0 binding does it without an extension and
      * without aliasing one attribute onto another's bytes, which would feed
      * positions to a shader asking for normals.
      */

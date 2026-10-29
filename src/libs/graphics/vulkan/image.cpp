@@ -44,6 +44,57 @@ void VulkanImage::nameObject() {
     }
 }
 
+/**
+ * One image barrier. Every upload and readback below needs the same
+ * vkCmdPipelineBarrier2 call and differs only in the subresource it names, so
+ * the range is a parameter rather than a body repeated per call site.
+ */
+static void imageBarrier(VkCommandBuffer cmd, VkImage image,
+                         VkImageLayout from, VkImageLayout to,
+                         VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+                         VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess,
+                         const VkImageSubresourceRange &range) {
+    VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    b.srcStageMask = srcStage;
+    b.srcAccessMask = srcAccess;
+    b.dstStageMask = dstStage;
+    b.dstAccessMask = dstAccess;
+    b.oldLayout = from;
+    b.newLayout = to;
+    b.image = image;
+    b.subresourceRange = range;
+
+    VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dep.imageMemoryBarrierCount = 1;
+    dep.pImageMemoryBarriers = &b;
+    vkCmdPipelineBarrier2(cmd, &dep);
+}
+
+/**
+ * Conservative on both sides: the readback paths run once, outside the frame,
+ * and getting a dump slightly wrong is worse than getting it slowly.
+ */
+static void readbackBarrier(VkCommandBuffer cmd, VkImage image,
+                            VkImageLayout from, VkImageLayout to,
+                            const VkImageSubresourceRange &range) {
+    imageBarrier(cmd, image, from, to,
+                 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
+                 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                 VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT, range);
+}
+
+static VkImageSubresourceRange subresource(VkImageAspectFlags aspect,
+                                           uint32_t layerCount = 1,
+                                           uint32_t baseMip = 0,
+                                           uint32_t levelCount = 1) {
+    VkImageSubresourceRange range {};
+    range.aspectMask = aspect;
+    range.baseMipLevel = baseMip;
+    range.levelCount = levelCount;
+    range.layerCount = layerCount;
+    return range;
+}
+
 static VkDeviceSize texelSize(VkFormat format) {
     switch (format) {
     case VK_FORMAT_R8G8B8A8_UNORM:
@@ -147,9 +198,8 @@ void VulkanImage::transitionTo(VkCommandBuffer cmd,
         barrier.oldLayout = image->_layout;
         barrier.newLayout = layout;
         barrier.image = image->_image;
-        barrier.subresourceRange.aspectMask = aspectForFormat(image->_format);
-        barrier.subresourceRange.levelCount = static_cast<uint32_t>(image->_mipLevels);
-        barrier.subresourceRange.layerCount = image->_layers;
+        barrier.subresourceRange = subresource(aspectForFormat(image->_format), image->_layers, 0,
+                                              static_cast<uint32_t>(image->_mipLevels));
         barriers.push_back(barrier);
         image->_layout = layout;
     }
@@ -222,22 +272,8 @@ void VulkanImage::initSampled2DSized(glm::ivec2 extent,
         auto barrier = [&](VkImageLayout from, VkImageLayout to,
                            VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
                            VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
-            VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask = srcStage;
-            b.srcAccessMask = srcAccess;
-            b.dstStageMask = dstStage;
-            b.dstAccessMask = dstAccess;
-            b.oldLayout = from;
-            b.newLayout = to;
-            b.image = image;
-            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            b.subresourceRange.levelCount = 1;
-            b.subresourceRange.layerCount = 1;
-
-            VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers = &b;
-            vkCmdPipelineBarrier2(cmd, &dep);
+            imageBarrier(cmd, image, from, to, srcStage, srcAccess, dstStage, dstAccess,
+                         subresource(VK_IMAGE_ASPECT_COLOR_BIT));
         };
 
         barrier(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -322,22 +358,8 @@ void VulkanImage::initSampledLayered(glm::ivec2 extent,
         auto barrier = [&](VkImageLayout from, VkImageLayout to,
                            VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
                            VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
-            VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask = srcStage;
-            b.srcAccessMask = srcAccess;
-            b.dstStageMask = dstStage;
-            b.dstAccessMask = dstAccess;
-            b.oldLayout = from;
-            b.newLayout = to;
-            b.image = image;
-            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            b.subresourceRange.levelCount = 1;
-            b.subresourceRange.layerCount = static_cast<uint32_t>(layers);
-
-            VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers = &b;
-            vkCmdPipelineBarrier2(cmd, &dep);
+            imageBarrier(cmd, image, from, to, srcStage, srcAccess, dstStage, dstAccess,
+                         subresource(VK_IMAGE_ASPECT_COLOR_BIT, static_cast<uint32_t>(layers)));
         };
 
         barrier(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -452,22 +474,8 @@ void VulkanImage::initSampledLayers(
         auto barrier = [&](VkImageLayout from, VkImageLayout to,
                            VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
                            VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
-            VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask = srcStage;
-            b.srcAccessMask = srcAccess;
-            b.dstStageMask = dstStage;
-            b.dstAccessMask = dstAccess;
-            b.oldLayout = from;
-            b.newLayout = to;
-            b.image = image;
-            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            b.subresourceRange.levelCount = 1;
-            b.subresourceRange.layerCount = layerCount;
-
-            VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers = &b;
-            vkCmdPipelineBarrier2(cmd, &dep);
+            imageBarrier(cmd, image, from, to, srcStage, srcAccess, dstStage, dstAccess,
+                         subresource(VK_IMAGE_ASPECT_COLOR_BIT, layerCount));
         };
 
         barrier(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -587,23 +595,8 @@ void VulkanImage::initSampledChain(glm::ivec2 extent,
                            VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
                            VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess,
                            uint32_t baseMip, uint32_t levelCount) {
-            VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask = srcStage;
-            b.srcAccessMask = srcAccess;
-            b.dstStageMask = dstStage;
-            b.dstAccessMask = dstAccess;
-            b.oldLayout = from;
-            b.newLayout = to;
-            b.image = image;
-            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            b.subresourceRange.baseMipLevel = baseMip;
-            b.subresourceRange.levelCount = levelCount;
-            b.subresourceRange.layerCount = layerCount;
-
-            VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers = &b;
-            vkCmdPipelineBarrier2(cmd, &dep);
+            imageBarrier(cmd, image, from, to, srcStage, srcAccess, dstStage, dstAccess,
+                         subresource(VK_IMAGE_ASPECT_COLOR_BIT, layerCount, baseMip, levelCount));
         };
 
         barrier(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -773,22 +766,8 @@ void VulkanImage::initSampledCubeArray(glm::ivec2 faceExtent, VkFormat format,
         auto barrier = [&](VkImageLayout from, VkImageLayout to,
                            VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
                            VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
-            VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask = srcStage;
-            b.srcAccessMask = srcAccess;
-            b.dstStageMask = dstStage;
-            b.dstAccessMask = dstAccess;
-            b.oldLayout = from;
-            b.newLayout = to;
-            b.image = image;
-            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            b.subresourceRange.levelCount = 1;
-            b.subresourceRange.layerCount = layers;
-
-            VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers = &b;
-            vkCmdPipelineBarrier2(cmd, &dep);
+            imageBarrier(cmd, image, from, to, srcStage, srcAccess, dstStage, dstAccess,
+                         subresource(VK_IMAGE_ASPECT_COLOR_BIT, layers));
         };
         barrier(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
@@ -1062,24 +1041,7 @@ std::vector<uint8_t> VulkanImage::readBack(bool depth) const {
     auto layout = _layout;
     _device.immediateSubmit([image, dst, extent, aspect, layout](VkCommandBuffer cmd) {
         auto barrier = [&](VkImageLayout from, VkImageLayout to) {
-            VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            // Conservative on both sides: this runs once, outside the frame, and
-            // getting a dump slightly wrong is worse than getting it slowly.
-            b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
-            b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-            b.oldLayout = from;
-            b.newLayout = to;
-            b.image = image;
-            b.subresourceRange.aspectMask = aspect;
-            b.subresourceRange.levelCount = 1;
-            b.subresourceRange.layerCount = 1;
-
-            VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers = &b;
-            vkCmdPipelineBarrier2(cmd, &dep);
+            readbackBarrier(cmd, image, from, to, subresource(aspect));
         };
 
         barrier(layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -1113,23 +1075,8 @@ std::vector<uint8_t> VulkanImage::readBack(uint32_t mip, uint32_t layers) const 
     auto layout = _layout;
     _device.immediateSubmit([image, dst, extent, mip, layers, layout](VkCommandBuffer cmd) {
         auto barrier = [&](VkImageLayout from, VkImageLayout to) {
-            VkImageMemoryBarrier2 b {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
-            b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-            b.oldLayout = from;
-            b.newLayout = to;
-            b.image = image;
-            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            b.subresourceRange.baseMipLevel = mip;
-            b.subresourceRange.levelCount = 1;
-            b.subresourceRange.layerCount = layers;
-
-            VkDependencyInfo dep {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers = &b;
-            vkCmdPipelineBarrier2(cmd, &dep);
+            readbackBarrier(cmd, image, from, to,
+                            subresource(VK_IMAGE_ASPECT_COLOR_BIT, layers, mip));
         };
 
         barrier(layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);

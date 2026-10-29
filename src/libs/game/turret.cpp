@@ -546,7 +546,6 @@ std::shared_ptr<ModelSceneNode> Turret::loadModel(const std::string &resRef) {
     }
     auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
     auto node = sceneGraph.newModel(*model, ModelUsage::Placeable);
-    node->setDrawDistance(_game.options().graphics.drawDistance);
     playIdleAnimation(*node);
     return node;
 }
@@ -566,14 +565,6 @@ std::shared_ptr<ModelSceneNode> Turret::loadTrack(const std::string &resRef,
         node->playAnimation(animations.front(), nullptr,
                             AnimationProperties::fromFlags(AnimationFlags::loop));
     }
-    // The scene graph decides culling per model root and prunes the whole
-    // subtree behind a culled one. A track root sits at its authored origin
-    // while the rail animation carries the hook - and everything riding it,
-    // including the camera - far away, so distance and frustum culling of the
-    // root would blink the actors in and out. This is the case the scene node
-    // culling flag exists for.
-    node->setCullingEnabled(false);
-    node->setDrawDistance(std::numeric_limits<float>::max());
     _services.scene.graphs.get(kSceneMain).addRoot(node);
     return node;
 }
@@ -628,14 +619,10 @@ bool Turret::loadPlayer(const MinigameSpec &spec) {
             _playerTrackNode->attach(kModelHookName, *_bodyRoot);
         }
     } else {
-        // No usable track: the actors become roots of their own. They are still
-        // driven by transform rather than by the camera's own frame, so keep
-        // them out of the culling pass for the same reason as the tracks.
+        // No usable track: the actors become roots of their own.
         auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
-        _turretRoot->setCullingEnabled(false);
         sceneGraph.addRoot(_turretRoot);
         if (_bodyRoot) {
-            _bodyRoot->setCullingEnabled(false);
             sceneGraph.addRoot(_bodyRoot);
         }
     }
@@ -678,7 +665,6 @@ void Turret::loadEnemies(const MinigameSpec &spec) {
         if (enemy.trackNode) {
             enemy.trackNode->attach(kModelHookName, *enemy.modelNode);
         } else {
-            enemy.modelNode->setCullingEnabled(false);
             _services.scene.graphs.get(kSceneMain).addRoot(enemy.modelNode);
         }
         for (const auto &bankSpec : enemySpec.gunBanks) {
@@ -825,9 +811,6 @@ void Turret::detachEnemyFromTrack(Enemy &enemy) {
     glm::mat4 world = enemy.modelNode->absoluteTransform();
     clearHook(enemy.trackNode, kModelHookName);
     enemy.modelNode->setLocalTransform(world);
-    // A wreck sits where it was killed while the rail carries on, so the
-    // culling that assumes actors stay near their track root no longer holds.
-    enemy.modelNode->setCullingEnabled(false);
     _services.scene.graphs.get(kSceneMain).addRoot(enemy.modelNode);
 }
 

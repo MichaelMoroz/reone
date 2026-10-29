@@ -250,17 +250,6 @@ LauncherFrame::LauncherFrame() :
 
     // END Anisotropic Filtering
 
-    // Object Draw Distance
-
-    auto labelDrawDistance = new wxStaticText(this, wxID_ANY, "Object Draw Distance", wxDefaultPosition, wxDefaultSize);
-    _sliderDrawDistance = new wxSlider(this, wxID_ANY, _config.drawdist, 32, 128, wxDefaultPosition, wxDefaultSize);
-
-    auto drawDistanceSizer = new wxBoxSizer(wxVERTICAL);
-    drawDistanceSizer->Add(labelDrawDistance, wxSizerFlags(0).Expand());
-    drawDistanceSizer->Add(_sliderDrawDistance, wxSizerFlags(0).Expand());
-
-    // END Object Draw Distance
-
     _checkBoxFullscreen = new wxCheckBox(this, wxID_ANY, "Enable Fullscreen", wxDefaultPosition, wxDefaultSize);
     _checkBoxFullscreen->SetValue(_config.fullscreen);
 
@@ -369,7 +358,6 @@ LauncherFrame::LauncherFrame() :
     graphicsSizer->Add(textureQualitySizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(shadowResSizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(anisoFilterSizer, wxSizerFlags(0).Expand());
-    graphicsSizer->Add(drawDistanceSizer, wxSizerFlags(0).Expand());
     graphicsSizer->Add(_checkBoxFullscreen, wxSizerFlags(0).Expand());
     graphicsSizer->Add(_checkBoxVSync, wxSizerFlags(0).Expand());
     graphicsSizer->Add(_checkBoxGrass, wxSizerFlags(0).Expand());
@@ -526,7 +514,6 @@ void LauncherFrame::LoadConfiguration() {
         ("texquality", value<int>()->default_value(_config.texQuality))   //
         ("anisofilter", value<int>()->default_value(_config.anisofilter)) //
         ("shadowres", value<int>()->default_value(_config.shadowres))     //
-        ("drawdist", value<float>()->default_value(_config.drawdist))     //
         ("musicvol", value<int>()->default_value(_config.musicvol))       //
         ("voicevol", value<int>()->default_value(_config.voicevol))       //
         ("soundvol", value<int>()->default_value(_config.soundvol))       //
@@ -562,10 +549,6 @@ void LauncherFrame::LoadConfiguration() {
     _config.texQuality = vars["texquality"].as<int>();
     _config.shadowres = vars["shadowres"].as<int>();
     _config.anisofilter = vars["anisofilter"].as<int>();
-    // Float on the engine's side. The slider is whole numbers, so a fractional
-    // value set from the console rounds here rather than refusing to parse -
-    // which is what value<int>() did, throwing before the window ever opened.
-    _config.drawdist = static_cast<int>(std::lround(vars["drawdist"].as<float>()));
     _config.musicvol = vars["musicvol"].as<int>();
     _config.voicevol = vars["voicevol"].as<int>();
     _config.soundvol = vars["soundvol"].as<int>();
@@ -609,6 +592,8 @@ void LauncherFrame::SaveConfiguration() {
         "texquality=",
         "anisofilter=",
         "shadowres=",
+        // Retired. Still recognised so that rewriting the file drops the key
+        // from configs an older launcher wrote.
         "drawdist=",
         "musicvol=",
         "voicevol=",
@@ -698,7 +683,6 @@ void LauncherFrame::SaveConfiguration() {
     _config.texQuality = _choiceTextureQuality->GetSelection();
     _config.shadowres = _choiceShadowResolution->GetSelection();
     _config.anisofilter = _choiceAnisoFilter->GetSelection();
-    _config.drawdist = _sliderDrawDistance->GetValue();
     _config.musicvol = _sliderVolumeMusic->GetValue();
     _config.voicevol = _sliderVolumeVoice->GetValue();
     _config.soundvol = _sliderVolumeSound->GetValue();
@@ -743,7 +727,6 @@ void LauncherFrame::SaveConfiguration() {
     config << "texquality=" << _config.texQuality << std::endl;
     config << "shadowres=" << _config.shadowres << std::endl;
     config << "anisofilter=" << _config.anisofilter << std::endl;
-    config << "drawdist=" << _config.drawdist << std::endl;
     config << "musicvol=" << _config.musicvol << std::endl;
     config << "voicevol=" << _config.voicevol << std::endl;
     config << "soundvol=" << _config.soundvol << std::endl;

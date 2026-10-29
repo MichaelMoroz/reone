@@ -430,8 +430,7 @@ graphics::GrassParams grassParamsFrom(const graphics::GraphicsOptions &options,
 }
 
 /**
- * The fraction of each face's baked budget that survives, as the merge kernel
- * used to ride in cameraPosition.w before selection moved entirely to the CPU.
+ * The fraction of each face's baked budget that survives.
  *
  * Two ceilings share one number. The density dial is the author's, expressed
  * against the cap the budgets were baked at. The triangle budget is the

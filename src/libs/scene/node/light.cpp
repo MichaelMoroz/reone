@@ -51,7 +51,6 @@ void LightSceneNode::init() {
 void LightSceneNode::update(float dt) {
     SceneNode::update(dt);
 
-    // Fading
     bool fading = _modelNode.light()->fading;
     if (_active) {
         if (fading) {

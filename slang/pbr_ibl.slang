@@ -14,26 +14,23 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-// Precomputation for image-based lighting, ported from glsl/f_pbr_brdf,
-// f_pbr_irradiance and f_pbr_prefilter.
+// Precomputation for image-based lighting.
 //
 // These run once per environment map rather than per frame, turning a cube map
 // into the two things the resolve actually samples: an irradiance map for
 // ambient diffuse, and a roughness-mipped prefiltered map for ambient specular.
 // The BRDF integration LUT is generated once for everything.
 //
-// The OpenGL versions draw a cube six times, once per face, with a projection
-// and view matrix per face. Here a fullscreen triangle is drawn once with a
-// six-view mask and the direction is derived from the view index and the screen
-// position, which needs neither a mesh nor those matrices.
+// A fullscreen triangle is drawn once with a six-view mask and the direction
+// is derived from the view index and the screen position, which needs neither
+// a cube mesh nor a projection and view matrix per face.
 
 import uniforms;
 import lib.math;
 import lib.brdf;
 
 // Sample counts, gathered here because they are the expensive part and are
-// worth being able to turn down in one place. These match the OpenGL shaders
-// they were ported from, which is what keeps the two backends comparable.
+// worth being able to turn down in one place.
 //
 // The cost is large but bounded: one environment map is convolved per frame, so
 // this is a spike on the frames where a new one comes into view rather than a
@@ -71,7 +68,7 @@ Varyings iblVertex(uint vertexId: SV_VertexID, uint viewId: SV_ViewID) {
 /**
  * The world direction a cube face texel looks along.
  *
- * Face order is Vulkan's and OpenGL's shared one, +X -X +Y -Y +Z -Z. The signs
+ * Face order is the standard +X -X +Y -Y +Z -Z. The signs
  * follow the cube map convention, which is left-handed and flips v - getting
  * one of them wrong mirrors a face rather than failing.
  */
@@ -98,9 +95,9 @@ float3 sampleEnvironment(float3 direction, float lod) {
     if (isFeatureEnabled(kFeatureEnvMapCube)) {
         return sEnvMapCube.SampleLevel(direction, lod).rgb;
     }
-    // A 2D Odyssey EnvMap is a GL sphere map, not an equirectangular
-    // environment. During convolution, direction is the eye-space reflection
-    // direction whose authored sphere-map texel contributes to this cube.
+    // A 2D Odyssey EnvMap is a sphere map, not an equirectangular environment.
+    // During convolution, direction is the eye-space reflection direction whose
+    // authored sphere-map texel contributes to this cube.
     float3 r = normalize(direction);
     float m = 2.0 * sqrt(r.x * r.x + r.y * r.y +
                          (r.z + 1.0) * (r.z + 1.0));
@@ -109,9 +106,9 @@ float3 sampleEnvironment(float3 direction, float lod) {
 }
 
 /**
- * The irradiance convolution intentionally follows the OpenGL shader's
- * implicit texture lookup. Its source direction varies across the rendered
- * cube face, so the sampler's derivatives select the same source LOD GL uses.
+ * The irradiance convolution uses an implicit texture lookup: its source
+ * direction varies across the rendered cube face, so the sampler's own
+ * derivatives select the source LOD.
  * The prefilter convolution below is different: its sample direction is part
  * of the integration and explicitly chooses a LOD from the sample solid angle.
  */

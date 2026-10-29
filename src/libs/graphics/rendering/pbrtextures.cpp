@@ -28,8 +28,6 @@ namespace reone {
 
 namespace graphics {
 
-// Matching the OpenGL implementation exactly, so the two produce comparable
-// results rather than merely similar ones.
 static constexpr int kBRDFSize = 512;
 static constexpr int kIrradianceSize = 32;
 static constexpr int kPrefilteredSize = 128;

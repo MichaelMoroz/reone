@@ -103,10 +103,9 @@ static std::vector<uint8_t> widenToRGBA(const ByteBuffer &pixels,
 }
 
 /**
- * Texture pixels use floats as their CPU representation for the 16F formats:
- * OpenGL converts those floats while uploading to its RG16F texture. Vulkan's
- * RG16_SFLOAT image instead expects the IEEE half-float bits in the staging
- * buffer, so preserve the signed noise values while narrowing them here.
+ * Texture pixels use floats as their CPU representation for the 16F formats.
+ * An RG16_SFLOAT image expects IEEE half-float bits in the staging buffer, so
+ * preserve the signed noise values while narrowing them here.
  */
 static uint16_t floatToHalf(float value) {
     uint32_t bits;
@@ -232,8 +231,8 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
     if (existing != _textures.end()) {
         return *existing->second.image;
     }
-    // Cube map arrays - the irradiance and prefiltered environment maps the GL
-    // resolve samples - still have no upload path. Everything else does.
+    // Cube map arrays - the irradiance and prefiltered environment maps -
+    // still have no upload path. Everything else does.
     if (texture.type() == TextureType::CubeMapArray) {
         return fallbackFor(texture, "texture type of " + texture.name() +
                                         " is not uploadable yet");
@@ -248,9 +247,8 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
     }
     auto image = std::make_unique<VulkanImage>(_device);
     if (texture.type() != TextureType::TwoDim) {
-        // A cube map is six faces in the order Vulkan and OpenGL agree on, an
-        // array however many frames it has. Either way the layers are already
-        // laid out one per Texture::Layer.
+        // A cube map is six faces in the standard order, an array however many
+        // frames it has. Either way the layers are one per Texture::Layer.
         bool cube = texture.type() == TextureType::CubeMap;
         auto compressed = compressedFormat(texture.pixelFormat());
         std::vector<std::vector<uint8_t>> widened;
@@ -311,7 +309,7 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
             }
             layer = {blank.data(), layerSize};
         }
-        // GL generates a chain only when the first face did not ship one. TPC
+        // A chain is generated only when the first face did not ship one. TPC
         // cubemaps normally carry an identical chain for every face; upload
         // that data verbatim, including the per-face/per-level byte sizes.
         uint32_t authoredMips = 0;
@@ -341,9 +339,9 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
         for (int size = std::max(texture.width(), texture.height()); size > 1; size >>= 1) {
             ++fullMipCount;
         }
-        // Vulkan cannot blit BC images. Those must use the authored levels,
-        // just as the 2D path does; uncompressed cubes/arrays without a chain
-        // take the same generated-mip branch as GL.
+        // Vulkan cannot blit BC images, so those use the authored levels just
+        // as the 2D path does; uncompressed cubes and arrays without a chain
+        // take the generated-mip branch.
         bool generateMips = authoredMips == 0 && !compressed && fullMipCount > 1;
         uint32_t mipCount = authoredMips > 0 ? authoredMips + 1
                                              : (generateMips ? fullMipCount : 1);
@@ -414,11 +412,9 @@ const VulkanImage &VulkanResources::get(const Texture &texture) {
         for (int size = std::max(texture.width(), texture.height()); size > 1; size >>= 1) {
             ++fullMipCount;
         }
-        // This is the 2D counterpart of the cube/layered path above. OpenGL
-        // calls glGenerateMipmap for an uncompressed texture that did not ship
-        // a chain, including ordinary 2D environment maps.
-        // Leaving Vulkan at level zero makes every explicit source LOD in the
-        // IBL prefilter clamp to that sharp base image instead.
+        // The 2D counterpart of the cube/layered path above: an uncompressed
+        // texture that shipped no chain needs one generated, or every explicit
+        // source LOD in the IBL prefilter clamps to the sharp base image.
         //
         // No `!compressed` term here, unlike the cube/layered path: this is the
         // else of `if (compressedFormat(...))` above, so a BC image took the

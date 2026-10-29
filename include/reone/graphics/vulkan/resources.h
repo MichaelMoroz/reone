@@ -118,8 +118,8 @@ public:
      * Whether this Texture is a render target this backend produced, rather
      * than pixels uploaded from an asset.
      *
-     * The distinction matters to anything that samples it: uploaded rows are in
-     * OpenGL's bottom-up order, a render target's are not.
+     * The distinction matters to anything that samples it: uploaded rows are
+     * bottom-up, a render target's are not.
      */
     bool isExternal(const Texture &texture) const override {
         return _external.find(&texture) != _external.end();

@@ -124,7 +124,6 @@ public:
 
     const graphics::Model &model() const { return *_model; }
     ModelUsage usage() const { return _usage; }
-    float drawDistance() const { return _drawDistance; }
 
     /** Background scenery: a room without a walkmesh, the K1 skybox
         convention. Grouped as sky by tracing alongside the authored per-mesh
@@ -143,7 +142,6 @@ public:
     void setSkyRoom(bool sky) { _skyRoom = sky; }
 
     void setModel(graphics::Model &model);
-    void setDrawDistance(float distance) { _drawDistance = distance; }
     void setMainTexture(graphics::Texture *texture);
     void setEnvironmentMap(graphics::Texture *texture);
     void setPickable(bool pickable) { _pickable = pickable; }
@@ -205,7 +203,6 @@ private:
     bool _skyRoom {false};
 
     IAnimationEventListener *_animEventListener {nullptr};
-    float _drawDistance {std::numeric_limits<float>::max()};
 
     // Lookups
 

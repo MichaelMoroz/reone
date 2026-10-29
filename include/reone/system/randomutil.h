@@ -34,12 +34,9 @@ void setRandomSeed(uint32_t seed);
  *
  * SSAO kernels and noise textures are built from random numbers, but they are
  * a property of the renderer rather than of the game. Drawing them from the
- * shared generator advanced it by however many values that backend happened to
- * want - the OpenGL pipeline builds an SSAO kernel and the Vulkan one does
- * not - which left the two backends at different points in the sequence before
- * the first frame. Everything downstream that draws from it, particles and
- * grass among them, then differed for reasons that had nothing to do with
- * rendering. Comparing one backend against the other requires them separate.
+ * shared generator advanced it by however many values the renderer happened to
+ * want, so everything downstream - particles and grass among them - differed
+ * for reasons that had nothing to do with rendering.
  */
 float renderRandomFloat(float min, float max);
 

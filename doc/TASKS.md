@@ -133,7 +133,6 @@ Titles only; **status, evidence and the proof each needs are in
 | FID-009 | Anisotropic filtering on by default |
 | FID-010 | TXI `filter` and `mipmap` flags unparsed |
 | FID-011 | BC textures with no shipped mip chain get none |
-| FID-012 | Object draw distance is dead code and the slider does nothing |
 | FID-013 | Grass distance policy |
 | FID-014 | Destroy fade ignored (`bNoFade`, `fDelayUntilFade`) |
 | FID-015 | Meshes with a null diffuse texture are dropped |
@@ -176,7 +175,7 @@ tracks. All unowned, all P2-P3.
 | TOOL-022 | Add a Dxun exterior to the K2 fixture set before volumetrics | open | P2 |  |
 | TOOL-024 | A startup schema mismatch segfaults instead of naming the field | open | P1 | The message is correct; the engine can fault before printing it |
 | TOOL-025 | NRD shader blobs can be stale/empty and CMake accepts them | open | P0 |  |
-| TOOL-028 | Draw distance has three disagreeing ranges and no consumer | open | P2 | Launcher 32–128, the in-engine dial another, the cull a third |
+| TOOL-028 | Draw distance has three disagreeing ranges and no consumer | done | P2 | Closed with FID-012: the option, its three sliders and the dead culling flag are gone |
 | TOOL-029 | Retro renders three screens visibly unlike the build the GUI came from | open | P1 | |
 | TOOL-030 | Seven capture states outside tolerance at 3440×1440, by 2 to 10 pixels | open | P2 | |
 | TOOL-031 | Tracer-side poison visibility | open | P3 | Secondary-hit sampling bypasses `scene_draw`, so a stale id reached only by secondary rays stays dark instead of fullbright. Extend only if field diagnosis needs it |

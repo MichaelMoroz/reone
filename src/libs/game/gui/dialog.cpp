@@ -349,9 +349,6 @@ bool DialogGUI::enterMixedStunt(Participant &participant, const std::shared_ptr<
     if (!participant.mixedStuntActive) {
         participant.restorePosition = creature->position();
         participant.restoreFacing = creature->getFacing();
-        if (auto node = creature->sceneNode()) {
-            participant.restoreCulling = node->isCullingEnabled();
-        }
         creature->startStuntMode();
         participant.mixedStuntActive = true;
     }
@@ -371,9 +368,6 @@ void DialogGUI::leaveMixedStunt(Participant &participant) {
     creature->setPosition(participant.restorePosition);
     creature->setFacing(participant.restoreFacing);
     creature->stopStuntMode();
-    if (auto node = creature->sceneNode()) {
-        node->setCullingEnabled(participant.restoreCulling);
-    }
     participant.mixedStuntActive = false;
 }
 

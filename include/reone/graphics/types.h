@@ -23,7 +23,6 @@ namespace graphics {
 
 constexpr float kDefaultClipPlaneNear = 0.25f;
 constexpr float kDefaultClipPlaneFar = 2500.0f;
-constexpr float kDefaultObjectDrawDistance = 64.0f;
 
 constexpr int kNumCubeFaces = 6;
 constexpr int kNumShadowCascades = 4;

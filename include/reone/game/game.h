@@ -192,8 +192,7 @@ public:
      *
      * Split from render() because Vulkan cannot begin a render pass inside
      * another: the scene's passes must be recorded before the frame's 2D scope
-     * opens, and only the composite belongs inside it. Harmless to call on the
-     * OpenGL path, where render() would have done both.
+     * opens, and only the composite belongs inside it.
      */
     void renderSceneOffscreen();
 

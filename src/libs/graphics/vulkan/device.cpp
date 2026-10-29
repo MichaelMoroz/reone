@@ -138,14 +138,12 @@ void VulkanDevice::init(SDL_Window *window, bool validation, bool debugLabels) {
     // this window, which on a laptop with switchable graphics is a real case.
     // Slang lowers SV_VertexID and SV_InstanceID to VertexIndex/InstanceIndex
     // adjusted by BaseVertex/BaseInstance, which needs the DrawParameters
-    // capability. The removed OpenGL SPIR-V path could not read these builtins;
-    // here it is simply a feature to ask for.
+    // capability.
     VkPhysicalDeviceVulkan11Features features11 {};
     features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
     features11.shaderDrawParameters = VK_TRUE;
-    // Shadow maps render every cascade, or every cube face, from one draw. The
-    // OpenGL pipeline uses a geometry shader to fan the triangle out across
-    // layers; multiview does the same thing without one.
+    // Shadow maps render every cascade, or every cube face, from one draw.
+    // Multiview fans the triangle across layers without a geometry shader.
     features11.multiview = VK_TRUE;
 
     VkPhysicalDeviceVulkan13Features features13 {};
@@ -176,9 +174,8 @@ void VulkanDevice::init(SDL_Window *window, bool validation, bool debugLabels) {
     VkPhysicalDeviceFeatures features {};
     features.imageCubeArray = VK_TRUE;
     features.geometryShader = VK_TRUE; // fragment SV_PrimitiveID capability
-    // The OpenGL backend filters material textures anisotropically, so
-    // matching it needs this. Required rather than optional: every device
-    // this targets has had it for well over a decade.
+    // Material textures are filtered anisotropically. Required rather than
+    // optional: every device this targets has had it for over a decade.
     features.samplerAnisotropy = VK_TRUE;
     // Storage images written without a format decoration. The traced output and
     // every NRD channel already relied on this - Slang emits Unknown for an

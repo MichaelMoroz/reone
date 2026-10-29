@@ -57,11 +57,9 @@ struct RayReconstructionInfo {
  * Owns the frame: the target everything is drawn into, and how a finished frame
  * reaches the screen.
  *
- * This exists so that callers do not have to know what a frame is made of. In
- * OpenGL it is the default framebuffer and a window buffer swap; in Vulkan it
- * will be an acquired swapchain image, a recorded command buffer and a queue
- * present. Those differ enough that every call site which currently binds a
- * shader and draws a fullscreen quad would otherwise need a second version.
+ * This exists so that callers do not have to know what a frame is made of: in
+ * Vulkan an acquired swapchain image, a recorded command buffer and a queue
+ * present.
  *
  * A frame is strictly beginFrame, drawing, endFrame. Nothing may be drawn
  * outside that span.

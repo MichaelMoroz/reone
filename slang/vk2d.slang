@@ -19,8 +19,8 @@
 //
 // No vertex buffers. Every primitive here is a quad, and a quad is cheaper to
 // synthesise from SV_VertexID than to bind a buffer for. Text goes further and
-// draws one instance per glyph, reading position and atlas coordinates from the
-// text uniform block, which is what the OpenGL path does too.
+// draws one instance per glyph, reading position and atlas coordinates from
+// the text uniform block.
 
 import uniforms;
 import lib.text2d;
@@ -44,7 +44,7 @@ Varyings quadVertex(uint vertexId: SV_VertexID) {
     Varyings output;
     output.position = mul(globalUniforms.projection,
                           mul(localUniforms.model, float4(corner, 0.0f, 1.0f)));
-    // localUniforms.uv is the same 3x4 the GL path uses to flip or sub-rect.
+    // localUniforms.uv is a 3x4 that flips or sub-rects the source.
     output.uv = mul(float3(quadUV(corner), 1.0f), float3x2(localUniforms.uv[0].xy,
                                                            localUniforms.uv[1].xy,
                                                            localUniforms.uv[2].xy));

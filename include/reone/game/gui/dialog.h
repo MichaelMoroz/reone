@@ -51,7 +51,6 @@ private:
         bool mixedStuntActive {false};
         glm::vec3 restorePosition {0.0f};
         float restoreFacing {0.0f};
-        bool restoreCulling {true};
     };
 
     /**

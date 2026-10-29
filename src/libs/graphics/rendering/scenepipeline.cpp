@@ -566,12 +566,9 @@ void ScenePipeline::init() {
                 _channelImages[frame][i] = std::move(image);
             }
         }
-        // The composite, moved here from the tracer, and no longer behind the
-        // NRD guard: the raster provider assembles through this same pass with
-        // no denoiser in the picture, binding its raw channels where the
-        // tracer binds NRD's outputs. Idiom A: a standalone compute pipeline
-        // whose images change identity on resize, resolved by name. The order
-        // matches the fill in compositePass.
+        // Not behind the NRD guard: the raster provider assembles through this
+        // same pass with no denoiser, binding its raw channels where the tracer
+        // binds NRD's outputs. The order matches the fill in compositePass.
         _compositePipeline = _renderer.makeComputePipeline({"composite", "main", 2});
         _compositeBindings = _compositePipeline->resolveBindings(
             {"outputImage", "inNoiseFree", "inDiffFactor", "inSpecFactor",
@@ -1432,40 +1429,11 @@ void ScenePipeline::primaryCoveragePass(ICommandBuffer &cmd, uint32_t globalsOff
     // The tracer writes alpha one for every pixel, including a miss. Correct
     // it before the forward pass: normal transparent draws then accumulate
     // coverage over this base, while additive draws retain their zero alpha.
-    cmd.transitionImage(*_output, ImageLayout::ShaderRead);
     auto &triangleId = _gbuffer->color(GBufferAttachment::TriangleId);
     cmd.transitionImage(triangleId, ImageLayout::ShaderRead);
-    cmd.transitionImage(*_tailColor, ImageLayout::ColorAttachment);
-
-    PipelineKey key;
-    key.module = kPostProcessModule;
-    key.vertexEntry = "postVertex";
-    key.fragmentEntry = "primaryCoverageFragment";
-    key.colorFormats = {_tailColor->pixelFormat()};
-    PipelineBinding pipeline = _renderer.pipelines().get(key);
-
-    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
-    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
-    auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
-        _renderer.uniformRing().frame(),
-        {{TextureUnits::mainTex, _output.get()},
-         {TextureUnits::gBufTriangleId, &triangleId}});
     const CoveragePushConstants push {_skyBinding.baked ? 1u : 0u};
-    {
-        RenderAttachment color {_tailColor->sampleView(), ImageLayout::ColorAttachment,
-                                AttachmentLoad::DontCare, AttachmentStore::Store};
-        cmd.beginRendering(chainSize(), {color}, nullptr, 0, false);
-        cmd.bindPipeline(pipeline.pipeline);
-        auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
-        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
-                              offsets.data(), static_cast<uint32_t>(offsets.size()));
-        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet, nullptr, 0);
-        cmd.pushGraphicsConstants(pipeline.layout, &push, sizeof(push));
-        cmd.draw(3, 1);
-        cmd.endRendering();
-    }
-    cmd.transitionImage(*_tailColor, ImageLayout::ShaderRead);
-    std::swap(_output, _tailColor);
+    tailPass(cmd, "primaryCoverageFragment", globalsOffset, 0, &push, sizeof(push),
+             {{TextureUnits::gBufTriangleId, &triangleId}});
 }
 
 void ScenePipeline::coveragePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
@@ -1478,37 +1446,9 @@ void ScenePipeline::coveragePass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     // after upscalePass swaps the display pair into the tail; without FSR the
     // completed output has carried alpha through every tail pass itself.
     IImage *coverage = _chainAtDisplaySize ? _displayColor.get() : _output.get();
-    cmd.transitionImage(*_output, ImageLayout::ShaderRead);
     cmd.transitionImage(*coverage, ImageLayout::ShaderRead);
-    cmd.transitionImage(*_tailColor, ImageLayout::ColorAttachment);
-
-    PipelineKey key;
-    key.module = kPostProcessModule;
-    key.vertexEntry = "postVertex";
-    key.fragmentEntry = "coverageFragment";
-    key.colorFormats = {_tailColor->pixelFormat()};
-    PipelineBinding pipeline = _renderer.pipelines().get(key);
-
-    std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
-    offsets[UniformBlockBindingPoints::globals] = globalsOffset;
-    auto sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
-        _renderer.uniformRing().frame(),
-        {{TextureUnits::mainTex, _output.get()},
-         {TextureUnits::coverage, coverage}});
-    {
-        RenderAttachment color {_tailColor->sampleView(), ImageLayout::ColorAttachment,
-                                AttachmentLoad::DontCare, AttachmentStore::Store};
-        cmd.beginRendering(chainSize(), {color}, nullptr, 0, false);
-        cmd.bindPipeline(pipeline.pipeline);
-        auto uniformSet = _renderer.descriptors().uniformDescriptorSet(_renderer.uniformRing().frame());
-        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kUniformSet, uniformSet,
-                              offsets.data(), static_cast<uint32_t>(offsets.size()));
-        cmd.bindDescriptorSet(pipeline.layout, IDescriptors::kTextureSet, sourceSet, nullptr, 0);
-        cmd.draw(3, 1);
-        cmd.endRendering();
-    }
-    cmd.transitionImage(*_tailColor, ImageLayout::ShaderRead);
-    std::swap(_output, _tailColor);
+    tailPass(cmd, "coverageFragment", globalsOffset, 0, nullptr, 0,
+             {{TextureUnits::coverage, coverage}});
 }
 
 void ScenePipeline::screenSpaceReflectionPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
@@ -1659,11 +1599,8 @@ void ScenePipeline::bloomPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
 void ScenePipeline::tailPass(ICommandBuffer &cmd, const char *fragmentEntry,
                              uint32_t globalsOffset, uint32_t screenEffectOffset,
                              const void *pushConstants, uint32_t pushConstantSize,
-                             bool bindDepth) {
+                             const std::vector<TextureBinding> &extraBindings) {
     cmd.transitionImage(*_output, ImageLayout::ShaderRead);
-    if (bindDepth) {
-        cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
-    }
     cmd.transitionImage(*_tailColor, ImageLayout::ColorAttachment);
 
     PipelineKey key;
@@ -1676,13 +1613,20 @@ void ScenePipeline::tailPass(ICommandBuffer &cmd, const char *fragmentEntry,
     std::array<uint32_t, IDescriptors::kNumUniformBlocks> offsets {};
     offsets[UniformBlockBindingPoints::globals] = globalsOffset;
     offsets[UniformBlockBindingPoints::screenEffect] = screenEffectOffset;
-    auto sourceSet =
-        bindDepth ? _renderer.descriptors().acquireTextureDescriptorSet(
-                        _renderer.uniformRing().frame(),
-                        {{TextureUnits::mainTex, _output.get()},
-                         {TextureUnits::gBufDepth, &_gbuffer->depth()}})
-                  : _renderer.descriptors().acquireTextureDescriptorSet(
-                        _renderer.uniformRing().frame(), _output.get());
+    DescriptorSet sourceSet;
+    if (extraBindings.empty()) {
+        // The single-image overload keeps its own pointer-keyed cache, which is
+        // cheaper than hashing a one-entry binding list.
+        sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
+            _renderer.uniformRing().frame(), _output.get());
+    } else {
+        std::vector<TextureBinding> bindings;
+        bindings.reserve(extraBindings.size() + 1);
+        bindings.push_back({TextureUnits::mainTex, _output.get()});
+        bindings.insert(bindings.end(), extraBindings.begin(), extraBindings.end());
+        sourceSet = _renderer.descriptors().acquireTextureDescriptorSet(
+            _renderer.uniformRing().frame(), bindings);
+    }
 
     {
         // Every pixel is written, so the previous contents of the target are
@@ -2281,7 +2225,9 @@ void ScenePipeline::fogPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
     // depth buffer, and a blended surface writes none, so it fogs itself in
     // its own shader at its own position instead - see sceneDrawBlendedFragment.
     const FogPushConstants push = fogParameters();
-    tailPass(cmd, "fogFragment", globalsOffset, 0, &push, sizeof(push), true);
+    cmd.transitionImage(_gbuffer->depth(), ImageLayout::DepthRead);
+    tailPass(cmd, "fogFragment", globalsOffset, 0, &push, sizeof(push),
+             {{TextureUnits::gBufDepth, &_gbuffer->depth()}});
 }
 
 void ScenePipeline::sharpenPass(ICommandBuffer &cmd, uint32_t globalsOffset) {
@@ -2510,9 +2456,8 @@ Texture &ScenePipeline::render(const SceneFramePlan &plan,
  * How a target's format comes back on the CPU: channel count and element type.
  *
  * Read back as stored. Half-float targets are widened to float on the way out
- * rather than written as halves, so a dump from either backend has the same
- * dtype and the two can be subtracted without a cast - OpenGL's readback widens
- * them in the driver, and half to float is exact either way.
+ * rather than written as halves, so two dumps share a dtype and can be
+ * subtracted without a cast. Half to float is exact.
  */
 struct DumpFormat {
     int channels;
@@ -2770,8 +2715,7 @@ void ScenePipeline::dumpTargets(const std::filesystem::path &dir,
             for (size_t i = 0; i < count; ++i) {
                 float deviceDepth;
                 std::memcpy(&deviceDepth, raw.data() + i * sizeof(float), sizeof(deviceDepth));
-                // Scene projections are built in Vulkan's [0,1] depth range,
-                // so this is the Vulkan form, not OpenGL's 2*n*f denominator.
+                // Scene projections are built in Vulkan's [0,1] depth range.
                 linearDepth[i] = near * far /
                                  std::max(far - deviceDepth * (far - near), 1e-6f);
             }
@@ -2825,9 +2769,8 @@ void ScenePipeline::dumpTargets(const std::filesystem::path &dir,
             }
             auto raw = image.readBack(mip, layers);
             auto extent = glm::max(glm::ivec2(1), image.extent() >> mip);
-            // Vulkan's image-copy rows are upside down relative to the GL
-            // cube-array readback. Normalize the diagnostic layout here; this
-            // does not affect the texture's sampling convention.
+            // Image-copy rows come back upside down. Normalize the diagnostic
+            // layout here; the texture's sampling convention is unaffected.
             std::vector<uint8_t> flipped(raw.size());
             size_t rowBytes = raw.size() / (static_cast<size_t>(layers) * extent.y);
             size_t faceBytes = rowBytes * extent.y;
@@ -2875,8 +2818,7 @@ void ScenePipeline::dumpTargets(const std::filesystem::path &dir,
             auto format = dumpFormatFor(image.pixelFormat());
             bool compressed = image.pixelFormat() == Format::BC1RGBAUnormBlock ||
                               image.pixelFormat() == Format::BC3UnormBlock;
-            // The OpenGL counterpart explicitly widens every source to RGBA8.
-            // Decode BC sources to that same layout before writing the dump.
+            // The dump is RGBA8, so decode BC sources to that layout first.
             if ((!format || format->channels != 4 || format->type != NpyType::UInt8) && !compressed) {
                 warn("Cannot dump environment source '" + texture.name() +
                          "': unsupported Vulkan format",

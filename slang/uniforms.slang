@@ -20,9 +20,8 @@
 // Slang reflection checks this std140 layout against the C++ mirrors at Vulkan
 // renderer startup. See reone/graphics/vulkan/shadercompiler.h.
 //
-// Struct and member names deliberately match the C++ ones rather than the
-// u-prefixed GLSL ones, so the generated assertions need no name mapping. The
-// Vulkan shaders written in phase 4 will use these blocks directly.
+// Struct and member names deliberately match the C++ ones, so the generated
+// assertions need no name mapping.
 //
 /** Mirrors kMaxLights in include/reone/graphics/types.h - it sizes the block. */
 static const int kMaxLights = 64;
@@ -198,13 +197,9 @@ struct ScreenEffectUniforms {
     float sharpenAmount;
 };
 
-// Binding indices match UniformBlockBindingPoints in reone/graphics/types.h. In
-// GLSL these become uniform block binding points; the host no longer has to look
-// blocks up by name.
-//
-// No descriptor set index is given: Slang emits `set = N` into GLSL, which is not
-// valid GLSL. That means block and texture bindings share one number space when
-// targeting SPIR-V, so the two will need distinct ranges once Vulkan lands.
+// Binding indices match UniformBlockBindingPoints in reone/graphics/types.h,
+// so the host does not have to look blocks up by name. No descriptor set index
+// is given, so block and texture bindings share one number space.
 [[vk::binding(0)]] ConstantBuffer<GlobalUniforms> globalUniforms;
 [[vk::binding(1)]] ConstantBuffer<LocalUniforms> localUniforms;
 [[vk::binding(2)]] ConstantBuffer<BoneUniforms> boneUniforms;

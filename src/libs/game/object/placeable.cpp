@@ -173,7 +173,6 @@ void Placeable::loadAppearance() {
 
     auto sceneNode = sceneGraph.newModel(*model, ModelUsage::Placeable);
     sceneNode->setUser(*this);
-    sceneNode->setDrawDistance(_game.options().graphics.drawDistance);
     _sceneNode = std::move(sceneNode);
 
     auto walkmesh = _services.resource.walkmeshes.get(modelName, ResType::Pwk);

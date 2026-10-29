@@ -573,8 +573,7 @@ std::vector<GraphicsOptionDesc> buildDescs() {
                             &GraphicsOptions::grade));
 
     // Common, not traced-only: the channels are G-buffer quantities and every
-    // mode draws that G-buffer. Sits here with the other frame-wide dials
-    // rather than in the path tracing block it used to belong to.
+    // mode draws that G-buffer.
     descs.push_back(intOpt("debugview", OptionApply::Live,
                            "debug channel view in any render mode, 0 off",
                            &GraphicsOptions::debugView, 0, kMaxDebugView));
@@ -842,13 +841,6 @@ std::vector<GraphicsOptionDesc> buildDescs() {
     descs.push_back(intOpt("anisofilter", OptionApply::Restart,
                            "anisotropic filtering, as a log2 sample count",
                            &GraphicsOptions::anisotropicFiltering, 0, 4));
-
-    // Pushed onto model scene nodes as they are created. Nothing reads it back
-    // today, so a change is inert either way; classified Live because that is
-    // what it would be if a consumer returned.
-    descs.push_back(floatOpt("drawdist", OptionApply::Live,
-                             "draw distance (currently unread)",
-                             &GraphicsOptions::drawDistance, 1.0f, 100000.0f));
 
     for (int i = 0; i < 9; ++i) {
         const auto key = "cat" + std::to_string(i);

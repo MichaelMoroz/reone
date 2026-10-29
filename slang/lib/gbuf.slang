@@ -34,7 +34,6 @@ public float3 gbufViewPosition(float2 uv, float depth, float4x4 projectionInv) {
 }
 
 // Geometry feature bits packed into the alpha of the lightmap target.
-// Ported from glsl/i_gbuf.glsl.
 
 static const int kGeometryFeatureEnvMap = 1 << 0;
 static const int kGeometryFeatureShadows = 1 << 1;

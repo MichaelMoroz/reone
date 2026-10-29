@@ -919,7 +919,6 @@ struct GraphicsOptions {
     TextureQuality textureQuality {TextureQuality::High};
     int shadowResolution {2048};
     int anisotropicFiltering {2};
-    float drawDistance {kDefaultObjectDrawDistance};
     float guiScale {1.0f};
     float guiTextScale {0.5f};
     float guiDialogTextScale {0.6f};

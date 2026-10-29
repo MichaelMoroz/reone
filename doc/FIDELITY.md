@@ -69,7 +69,7 @@ with `alphaTest = 0.5`; map it to the cutout path.
 | **FID-009** anisotropy on by default | unproven | Applied to **every** texture loaded, defaulting to 4x; xoreos sets none anywhere. **That is one reimplementation's choice and does not establish what retail did.** What is certain is we turn it on and nothing records that as a decision | Check the retail ini and KVP's captured sampler state **first**; if retail set none, a preservation default of 1x follows. Either way a grazing-angle floor at 1x and 4x |
 | **FID-010** TXI `filter`/`mipmap` unparsed | omission | The reader parses eight other fields but not these. xoreos honours `filter` — false gives nearest with no mips — and forces it off for cursors. **We cannot express an authored unfiltered texture** | Scan the TXI set to size how many set them |
 | **FID-011** BC textures get no mip chain | unproven | `generateMips` excludes compressed formats, so a BC texture shipping one level never minifies; xoreos generates a chain. **A second upload path computes the same flag without the `!compressed` term, so the two disagree** | Settle which path is live; count the exceptions first, since most TPCs ship chains |
-| **FID-012** draw distance is dead code | omission | Plumbed from CLI, editor, registry and launcher into `setDrawDistance`; the getter has **no caller anywhere**, so the slider does nothing, and **the three ranges disagree** — 32-128, 1-1000, 1-100000 (TOOL-028) | Restore culling or remove the option and its sliders. **Do not leave a control that silently does nothing** |
+| **FID-012** draw distance is dead code | **closed** | Was plumbed from CLI, editor, registry and launcher into `setDrawDistance` with **no caller anywhere**. Removed end to end, along with the orphaned `SceneNode` culling flag, rather than restoring a cull the renderer does not want (TOOL-028) | — |
 | **FID-013** grass distance policy | unproven | The cull is a live option at **25**, from the **camera**; the size ramp still hardcodes **32**, so at the default the ramp is inert (RAS-034). KotOR.js fades **25 to 100** from the **player** and disables the fade during dialogue. **The visible delta is the last one:** a dialogue camera away from the player strips grass around the player | A dialogue camera on a grassy exterior. The camera-versus-player term is the cheap half and is independently testable |
 | **FID-015** null-diffuse meshes dropped | unproven | `shouldRender` requires a non-empty `diffuseMap`; the reader blanks the name when texture1 is `"null"`. **Neither reference makes texture presence a visibility condition**, so a lightmap-only mesh would be drawn by both and is not drawn here | Scan for `render == 1 && texture1 == "null"`. **Do not call this a player-visible regression until that scan finds an instance** |
 | **FID-008** fog distance metric | unproven | Retro's fog is per-pixel **radial**; `GL_LINEAR` and KotOR.js both use view-space depth, i.e. **planar**, per vertex, and radial fog is thicker toward the screen edges. **The rest of the chain matches** | One-line change; a wide-FOV corridor with fog tightened. `MoonFog*` is unused here *and* in KotOR.js — a shared unowned field, not a deviation |
@@ -116,9 +116,9 @@ then RAS-008, RAS-009 and emitter order. **Give the particle-simulation move an 
 set** — FID-003 and RAS-009 must survive it, starting with tint, rotation/size and
 alignment. **Treat FID-004, FID-005, FID-008, FID-009, FID-011, FID-013, FID-015 and
 FID-017 as evidence-gathering, not fixes**, of which FID-008 and FID-009 are one-line
-changes once the capture exists. And **FID-006, FID-010, FID-012 and FID-014 are cheap
-omissions with no owner, worth one sweep** — each currently presents a control or authored
-field that silently does nothing.
+changes once the capture exists. And **FID-006, FID-010 and FID-014 are cheap omissions
+with no owner, worth one sweep** — each currently presents a control or authored field
+that silently does nothing. FID-012 was the fourth and is now closed.
 
 ## Fixtures (FID-020) and content scans (FID-021)
 

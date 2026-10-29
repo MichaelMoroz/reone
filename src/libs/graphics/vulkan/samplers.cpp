@@ -49,7 +49,7 @@ static bool isMipmapped(Texture::Filtering filter) {
     }
 }
 
-/** The within-level filter: what OpenGL calls the first half of the name. */
+/** The filter applied within a single mip level. */
 static VkFilter texelFilter(Texture::Filtering filter) {
     switch (filter) {
     case Texture::Filtering::Nearest:

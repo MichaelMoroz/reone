@@ -86,10 +86,8 @@ float4 retroResolveFragment(Varyings input) : SV_Target0 {
 
     // The triangle-id clear and an uncovered alpha-tested pixel both carry this
     // sentinel, and nothing wrote depth there either - the triangle id and the
-    // depth come from one fragment - so this is exactly the set the sky
-    // composite pass used to paint over. It is now the sky's own branch.
-    // Without a bake the cube is black by construction, so skipping it writes
-    // the same black rather than a different one.
+    // depth come from one fragment - so this set is exactly the sky's. Without
+    // a bake the cube is black, so skipping it writes the same black.
     if (triangleId == kNoTriangle) {
         if ((pushConstants.flags & kResolveFlagSky) == 0) {
             float alpha = (pushConstants.flags & kResolveFlagTransparentOutput) != 0 ? 0.0 : 1.0;

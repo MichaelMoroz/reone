@@ -117,15 +117,12 @@ void Mesh::computeVerticesFromVertexData() {
 void Mesh::computeFaceData() {
     for (auto &face : _faces) {
         std::vector<glm::vec3> verts(faceVertexCoords(face));
-        // Normal
         if (face.normal[0] == 0.0f && face.normal[1] == 0.0f && face.normal[2] == 0.0f) {
             face.normal = calculateTriangleNormal(verts);
         }
-        // Centroid
         if (face.centroid[0] == 0.0f || face.centroid[1] == 0.0f || face.centroid[2] == 0.0f) {
             face.centroid = (verts[0] + verts[1] + verts[2]) / 3.0f;
         }
-        // Area
         if (face.area == 0.0f) {
             face.area = calculateTriangleArea(verts);
         }

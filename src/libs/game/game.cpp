@@ -3419,9 +3419,9 @@ void Game::renderGlobalFade() {
     if (alpha <= 0.0f) {
         return;
     }
-    // The 2D renderer owns the ortho projection and the quad, so none of the
-    // GL save/restore around them is needed. Its extent rather than the
-    // configured size: headless renders full size whatever winscale says.
+    // The 2D renderer owns the ortho projection and the quad. Its extent
+    // rather than the configured size: headless renders full size whatever
+    // winscale says.
     auto &renderer2d = _services.graphics.renderer2d;
     const glm::vec2 size(renderer2d.extent());
     renderer2d.withBlendMode(BlendMode::Normal, [&]() {
@@ -4291,7 +4291,6 @@ void Game::openSwoopRace() {
             continue;
         }
         auto node = sceneGraph.newModel(*model, ModelUsage::Placeable);
-        node->setDrawDistance(_options.graphics.drawDistance);
         if (!bikeRoot) {
             bikeRoot = std::move(node);
         } else {

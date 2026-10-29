@@ -37,8 +37,8 @@ class VulkanRenderer;
 /**
  * Graphics pipelines, built on first use and kept.
  *
- * Vulkan bakes into a pipeline object everything OpenGL kept as mutable state,
- * so the number of pipelines is the number of distinct state combinations the
+ * Vulkan bakes draw state into a pipeline object, so the number of pipelines
+ * is the number of distinct state combinations the
  * renderer actually uses - shader pair, attachment formats, vertex layout,
  * blend, cull, depth. That is a modest set, but it is not knowable up front,
  * and building one mid-frame costs milliseconds.

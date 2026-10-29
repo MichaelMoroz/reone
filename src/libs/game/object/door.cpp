@@ -188,7 +188,6 @@ void Door::loadAppearance() {
 
     auto modelSceneNode = sceneGraph.newModel(*model, ModelUsage::Door);
     modelSceneNode->setUser(*this);
-    // modelSceneNode->setDrawDistance(_game.options().graphics.drawDistance);
     _sceneNode = std::move(modelSceneNode);
 
     if (walkmeshClosed) {

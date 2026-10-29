@@ -125,3 +125,27 @@ TEST(OptionsRegistry, should_classify_every_render_mode_change_as_a_rebuild) {
         }
     }
 }
+
+TEST(OptionsRegistry, should_be_usable_as_a_command_line_declaration) {
+    // optionsparser.cpp declares one Boost option per descriptor, using the
+    // name as the flag, the help as its description and get() as the default
+    // that set() must then accept. A name Boost would read as something other
+    // than a plain long option, or an empty help, breaks that at startup rather
+    // than here, which is far from the descriptor that caused it.
+    GraphicsOptions defaults;
+    for (const auto &desc : graphicsOptionDescs()) {
+        EXPECT_FALSE(desc.name.empty());
+        EXPECT_FALSE(desc.help.empty()) << "option " << desc.name << " has no help text";
+        for (char c : desc.name) {
+            EXPECT_TRUE((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                << "option " << desc.name << " is not a plain lower-case flag name";
+        }
+        // The default reaches the command line as text and comes back through
+        // set(), so a default outside its own clamp would silently shift on
+        // every run that does not pass the flag.
+        GraphicsOptions applied;
+        desc.set(applied, desc.get(defaults));
+        EXPECT_TRUE(desc.equal(defaults, applied))
+            << "option " << desc.name << " does not survive its own default";
+    }
+}

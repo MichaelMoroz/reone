@@ -45,13 +45,7 @@ enum class ImageAlphaMode {
  * deliberately a sprite and text batcher and nothing more. The scope is set by
  * what the game actually draws in 2D - reticles, minimap, action bar, cursor,
  * GUI borders, text, movie frames - and widening it past that would mean
- * writing a general 2D canvas neither backend needs.
- *
- * Callers previously reached for the OpenGL vocabulary directly: pick a shader
- * program, bind a texture, fill a uniform block, draw a quad mesh. None of
- * those four steps mean anything in the RHI, where the program and the blend
- * state are baked into a pipeline object and the uniforms are a slice of a
- * per-frame buffer.
+ * writing a general 2D canvas nothing needs.
  *
  * Positions and sizes are in pixels, y down from the top left. They are
  * floating point because several callers compute them continuously: the
@@ -140,9 +134,9 @@ public:
      * Clip the draws inside the block to @p bounds.
      *
      * XY is the top-left corner, ZW the size, in the same screen coordinates
-     * every other call here uses. OpenGL's scissor box is measured from the
-     * bottom instead, so that backend flips it; callers should not, and one
-     * that did left the minimap clipped entirely off screen.
+     * every other call here uses. A backend whose scissor box is measured from
+     * the bottom flips it; callers should not, and one that did left the
+     * minimap clipped entirely off screen.
      */
     virtual void withScissor(const glm::ivec4 &bounds, const std::function<void()> &block) = 0;
 };
@@ -152,10 +146,8 @@ struct LocalUniforms;
 /**
  * Screen-space drawing.
  *
- * The interface is the one the GL backend already implements, unchanged: this
- * is what the seam built in phase 3 was for. Where the GL version changes state
- * and draws, this one selects a pipeline from the cache, writes a slice of the
- * frame's uniform arena and records a draw.
+ * A draw selects a pipeline from the cache, writes a slice of the frame's
+ * uniform arena and records itself.
  *
  * Blend mode is a scope in the interface and a pipeline property here, so
  * withBlendMode sets what the next draws select rather than changing anything

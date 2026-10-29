@@ -123,9 +123,9 @@ void RenderPipeline::deinit() {
     if (_rayQuery)
         _rayQuery->deinit();
     _rayQuery.reset();
-    // The cube and its six depth targets are VMA allocations, released here at
-    // the point the tracer used to release them - after its consumer is gone
-    // and well before the renderer takes the allocator down.
+    // The cube and its six depth targets are VMA allocations, released after
+    // their consumer is gone and well before the renderer takes the allocator
+    // down.
     if (_sky)
         _sky->deinit();
     _sky.reset();
@@ -300,19 +300,15 @@ graphics::Texture &RenderPipeline::render(const CameraSceneNode *camera,
         antialiased && (_options.antialiasing == graphics::AntiAliasing::Fsr ||
                         _options.antialiasing == graphics::AntiAliasing::DlssRr);
     if (!diagnosticImage) {
-        // Before the resolve, reversing the order this pass used to hold. The
-        // forward pass shares the G-buffer depth attachment, so it has to run
-        // while the colour chain is still at the render extent: once FSR has
-        // handed the display-sized image to the tail, pairing it with that
-        // render-sized depth opens a mismatched dynamic-rendering area and
-        // leaves the rest of the display target untouched. That is what showed
-        // as a menu's embedded scene filling only part of its panel.
+        // Before the resolve: the forward pass shares the G-buffer depth
+        // attachment, so it has to run while the colour chain is still at the
+        // render extent. Pairing a display-sized image with that render-sized
+        // depth opens a mismatched dynamic-rendering area, which showed as a
+        // menu's embedded scene filling only part of its panel.
         //
-        // The order it replaces existed for a reason that has not gone away: a
         // Transparency has no depth and its coverage-weighted motion cannot
-        // identify disoccluded background on its own. FSR's shading-change
-        // detection is the only thing standing in for a reactive mask, so this
-        // still relies on that heuristic at changing transparent edges.
+        // identify disoccluded background on its own, so this still leans on
+        // FSR's shading-change detection at changing transparent edges.
         // Before transparency, after the resolve: the reference adds its
         // blurred hilights when the opaque image is complete and nothing
         // blended has touched it yet.

@@ -29,6 +29,7 @@
 #include "reone/graphics/uniforms.h"
 #include "reone/graphics/rendering/gbuffer.h"
 #include "reone/graphics/rhi/commandbuffer.h"
+#include "reone/graphics/rhi/descriptors.h"
 #include "reone/graphics/rendering/gpuscene.h"
 #include "reone/graphics/rendering/sky.h"
 // GBufferBinding: the rasterized primary the tracer is handed.
@@ -563,10 +564,16 @@ private:
     void bloomPass(ICommandBuffer &cmd, uint32_t globalsOffset);
     /** One tail pass: full-screen triangle from _output onto _tailColor, then
         the swap that makes the result the output. */
+    /**
+     * A fullscreen triangle into the tail target, which then becomes the
+     * output. Extra bindings join mainTex in the source set; the caller
+     * transitions whatever it names, because only it knows the layout each
+     * one wants.
+     */
     void tailPass(ICommandBuffer &cmd, const char *fragmentEntry,
                   uint32_t globalsOffset, uint32_t screenEffectOffset,
                   const void *pushConstants, uint32_t pushConstantSize,
-                  bool bindDepth = false);
+                  const std::vector<TextureBinding> &extraBindings = {});
     std::vector<Target> targetEntries(const ISceneCallbacks &callbacks) const;
 };
 

@@ -14,14 +14,12 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-// Full-screen post-processing, ported from glsl/f_pp_gausblur9, f_pp_gausblur13,
-// f_pp_fxaa and f_pp_sharpen.
+// Full-screen post-processing.
 //
 // Every stage here reads one texture and writes one, over a triangle covering
 // the target, so they share a vertex stage and differ only in the fragment.
-// The OpenGL pipeline runs them as separate framebuffer-to-framebuffer draws
-// and so does this; what changes is that a Vulkan pass names its own
-// attachments rather than binding a framebuffer.
+// Each runs as its own pass, naming its attachments rather than binding a
+// framebuffer.
 //
 // These are deliberately a faithful port rather than an improvement. The whole
 // point of keeping FXAA and sharpen for now is that the two backends can be

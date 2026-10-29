@@ -35,7 +35,7 @@ public float luminance(float3 rgb) {
 }
 
 /**
- * Perceived brightness, ported from glsl/i_luma.glsl.
+ * Perceived brightness.
  *
  * Used to recover coverage from a premultiplied-alpha texture, which carries
  * colour already multiplied by its own alpha and no usable alpha channel.
@@ -45,7 +45,7 @@ public float rgbToLuma(float3 rgb) {
 }
 
 /**
- * Screen-space motion vectors. Ported from glsl/i_motion.glsl.
+ * Screen-space motion vectors.
  *
  * Clip positions must come from the unjittered view-projection matrices so that
  * the sub-pixel jitter does not leak into the result. The vector points from

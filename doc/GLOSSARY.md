@@ -79,7 +79,9 @@ read every "registry" in older text as `GpuScene`, which inherited the behaviour
 beside the executable** · **`--backend` / `--slangshaders`** — died with OpenGL ·
 **`ShadowCaster` / shadow proxies** — shadows draw real merged geometry ·
 **`VisibilityPolicy` / `drawDistanceCamera`** — deleted with frustum and draw-distance
-culling · **`IUniforms` / `glToVulkanClip`** — matrices are born in Vulkan clip space ·
+culling · **`--drawdist` / `setDrawDistance` / `setCullingEnabled`** — the last stumps of
+that removal, taken out once the getters were found to have no callers ·
+**`IUniforms` / `glToVulkanClip`** — matrices are born in Vulkan clip space ·
 **`--taajitter` / `--pttaablend`** — jitter is implied by FSR and nothing else ·
 **`--pbr`** — a value of `--mode`, and passing it as a flag is a hard parse error, so an
 old command line exits before rendering · **`megadraw_geometry`, `shadow_scene_draw`,

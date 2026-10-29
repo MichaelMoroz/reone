@@ -75,7 +75,6 @@ private:
         int texQuality {0};
         int shadowres {1};
         int anisofilter {2};
-        int drawdist {64};
         int musicvol {85};
         int voicevol {85};
         int soundvol {85};
@@ -93,7 +92,6 @@ private:
     wxChoice *_choiceShadowResolution;
     wxChoice *_choiceAnisoFilter;
     wxChoice *_choicePathTracingSamples;
-    wxSlider *_sliderDrawDistance;
     wxSlider *_sliderRenderScale;
     wxCheckBox *_checkBoxFullscreen;
     wxCheckBox *_checkBoxVSync;

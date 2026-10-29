@@ -41,11 +41,10 @@ const VulkanImage &toVulkanImage(const IImage &image);
 /**
  * A device-local image, its allocation and its view, freed together.
  *
- * Unlike a GL texture, an image has a layout: the same memory is arranged
- * differently for being written by a transfer, sampled by a shader, or used as
- * an attachment, and moving between those is an explicit barrier. Upload is
- * therefore three steps rather than one - transition to a transfer target, copy
- * from a staging buffer, transition to something a shader can read.
+ * An image has a layout: the same memory is arranged differently for being
+ * written by a transfer, sampled by a shader, or used as an attachment, and
+ * moving between those is an explicit barrier. Upload is therefore three steps
+ * - transition, copy from a staging buffer, transition to a readable layout.
  */
 class VulkanImage : public IImage, boost::noncopyable {
 public:
@@ -87,10 +86,9 @@ public:
      * Create a sampled image with a full mip chain and fill every level.
      *
      * The general form of initSampled2DSized and initSampledLayers, and the
-     * one the asset path uses. Mip levels cannot be generated here the way
-     * OpenGL generates them with glGenerateMipmap: vkCmdBlitImage does not
-     * accept block-compressed formats, and most of the game's textures are
-     * BC1 or BC3. So the levels arrive already built, read from the TPC.
+     * one the asset path uses. Mip levels cannot be generated here:
+     * vkCmdBlitImage does not accept block-compressed formats, and most of the
+     * game's textures are BC1 or BC3. So the levels arrive built, from the TPC.
      *
      * Level i is max(1, extent >> i); sizes come from the caller because a
      * compressed level's length is a function of its block count, not its
@@ -219,9 +217,9 @@ public:
      * A sampled array or cube image, each layer filled from its own pixels.
      *
      * The layer count comes from the data rather than being asked for
-     * separately: a cube map is six faces in the order Vulkan and OpenGL agree
-     * on, +X -X +Y -Y +Z -Z, and an array is however many frames it has. Sizes
-     * are per layer because block-compressed data has no per-texel size.
+     * separately: a cube map is six faces in the standard order,
+     * +X -X +Y -Y +Z -Z, and an array is however many frames it has. Sizes are
+     * per layer because block-compressed data has no per-texel size.
      */
     void initSampledLayers(glm::ivec2 extent,
                            VkFormat format,
@@ -266,9 +264,9 @@ public:
     /**
      * The sampler this image should be read through, or null for the default.
      *
-     * Filtering belongs to the texture in OpenGL and to the sampler in Vulkan,
-     * so the sampler is chosen where the Texture is still in hand - at upload -
-     * and carried here. Not owned; VulkanSamplers caches and destroys them.
+     * Filtering belongs to the sampler, so it is chosen where the Texture is
+     * still in hand - at upload - and carried here. Not owned; VulkanSamplers
+     * caches and destroys them.
      */
     VkSampler sampler() const { return _sampler; }
     Sampler sampleSampler() const override { return toSampler(_sampler); }

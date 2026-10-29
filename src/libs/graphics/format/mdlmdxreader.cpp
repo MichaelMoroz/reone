@@ -360,8 +360,7 @@ std::shared_ptr<ModelNode::TriangleMesh> MdlMdxReader::readMesh(int flags) {
             *(verticesPtr++) = vertexCoordsPtr[1];
             *(verticesPtr++) = vertexCoordsPtr[2];
 
-            // Normals
-            float *normalsPtr = &normals[3 * vertexIdx];
+                float *normalsPtr = &normals[3 * vertexIdx];
             *(verticesPtr++) = normalsPtr[0];
             *(verticesPtr++) = normalsPtr[1];
             *(verticesPtr++) = normalsPtr[2];
@@ -770,7 +769,6 @@ std::unique_ptr<Animation> MdlMdxReader::readAnimation(uint32_t offset) {
 
     std::shared_ptr<ModelNode> rootNode(readNodes(offRootNode, nullptr, false, true));
 
-    // Events
     std::vector<Animation::Event> events;
     if (eventArrayDef.count > 0) {
         _mdl.seek(kMdlDataOffset + eventArrayDef.offset);

@@ -372,8 +372,8 @@ void VulkanRenderer::beginFrame(glm::ivec2 extent) {
     transitionImage(frame.commandBuffer, image,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
 
-    // Clear here rather than as a render pass load op: there are no attachments
-    // yet, and this keeps beginFrame meaning the same thing it does in GL.
+    // Clear here rather than as a render pass load op: there are no
+    // attachments yet.
     VkClearColorValue clear {{_clearColor.r, _clearColor.g, _clearColor.b, _clearColor.a}};
     VkImageSubresourceRange range {};
     range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -482,8 +482,8 @@ std::shared_ptr<Texture> VulkanRenderer::captureFrame() {
     // The swapchain format is B8G8R8A8; Texture wants RGB8. Rows are also
     // reversed: a Vulkan image copy yields them top-down, while glReadPixels
     // yields bottom-up, and everything downstream - TgaWriter, the comparison
-    // harness - assumes the OpenGL order. Without this the screenshot and the
-    // window disagree, which is worse than either being wrong.
+    // harness - assumes bottom-up. Without this the screenshot and the window
+    // disagree, which is worse than either being wrong.
     auto pixels = std::make_shared<ByteBuffer>();
     pixels->resize(static_cast<size_t>(extent.x) * extent.y * 3);
     auto src = static_cast<const uint8_t *>(allocated.pMappedData);
@@ -522,7 +522,7 @@ std::shared_ptr<Texture> VulkanRenderer::readTexture(const Texture &texture) {
     auto pixels = std::make_shared<ByteBuffer>();
     pixels->resize(texels * 4);
     // Rows are flipped on the way out: a Vulkan copy yields them top-down and
-    // everything downstream assumes the OpenGL bottom-up order.
+    // everything downstream assumes bottom-up.
     auto put = [&](size_t index, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
         const size_t x = index % extent.x;
         const size_t y = index / extent.x;

@@ -1138,12 +1138,15 @@ void Editor::graphicsQualityTab() {
                 "the ceiling on purpose: the raster resolves walk this loop per pixel and the "
                 "tracer walks its selection table per path vertex, so the cost is in how many are "
                 "admitted. The ceiling only costs uniform bytes.");
-    if (ImGui::TreeNode("Shadow budgets (not yet used)")) {
-        ImGui::TextDisabled("Nothing reads these. Recorded ahead of the pass that will.");
+    if (ImGui::TreeNode("Shadow budgets")) {
+        // Both size the shadow atlases at pipeline init, so a change needs the
+        // rebuild its Reapply class already asks for.
         ImGui::SliderInt("Directional shadows", &options.maxDirectionalShadows, 0, 4);
-        settingHint("Cascaded directional maps a frame may hold.");
+        settingHint("Cascaded directional maps a frame may hold. Sizes the directional atlas and "
+                    "caps how many lights the scene selects as directional casters.");
         ImGui::SliderInt("Point shadows", &options.maxPointShadows, 0, 32);
-        settingHint("Cube maps a frame may hold.");
+        settingHint("Cube maps a frame may hold. Sizes the point atlas and caps how many lights "
+                    "the scene selects as point casters.");
         ImGui::TreePop();
     }
     // One section for both grades, because the pair is only legible together.
@@ -1239,15 +1242,13 @@ void Editor::graphicsQualityTab() {
                 "survives with this off is not transparency's, and one that vanishes is.\n\n"
                 "It differs from Particles above, which decides whether emitters reach the scene "
                 "at all; this skips the pass they would have been drawn in.");
-    // Wired straight: density is a GPU gate over budgets baked at the slider
-    // maximum (kGrassDensityCap), so dragging costs a push-constant change.
-    // The old committed-on-release dance existed to avoid re-materialising
-    // every cluster per mouse-move; that rebuild no longer exists.
     ImGui::SliderFloat("Thin transmission", &options.thinTransmission, 0.0f, 1.0f, "%.2f");
     settingHint("Light a surface with no thickness passes to its far side. Leaves, cloth and grass "
                 "are alpha cutouts standing in for exactly that, so they are lit from both sides "
                 "and shadowed from whichever side the light is on. Zero shades them as solids, "
                 "which sends every back-facing leaf black.");
+    // Density is a GPU gate over budgets baked at the slider maximum
+    // (kGrassDensityCap), so dragging costs only a push-constant change.
     ImGui::SliderFloat("Grass density", &options.grassDensity, 0.0f, 64.0f, "%.2fx",
                        ImGuiSliderFlags_Logarithmic);
     settingHint("Multiplies the area's authored density, so areas keep their relative variation. "
@@ -1324,7 +1325,6 @@ void Editor::graphicsQualityTab() {
                     "the cap.");
         ImGui::TreePop();
     }
-    ImGui::SliderFloat("Draw distance", &options.drawDistance, 1.0f, 1000.0f, "%.0f");
 
     graphicsReapplySection();
 
@@ -1984,18 +1984,11 @@ void Editor::renderModeCombo() {
     int modeIndex = static_cast<int>(staged.mode);
     if (ImGui::Combo("Render mode", &modeIndex, kModeNames, IM_ARRAYSIZE(kModeNames))) {
         // Through the same setter the console reaches, rather than deciding
-        // anything here. It parses the written form, asks the registry whether
+        // anything here: it parses the written form, asks the registry whether
         // the change is live or needs a rebuild, and writes the struct that
-        // answer names.
-        //
-        // This widget used to carry its own copy of that rule - retro and PBR
-        // switch live, anything touching path tracing stages - and wrote the
-        // live options itself when it judged a change free. It is not free:
-        // retro allocates neither the tracing channel images nor the composite,
-        // so a live switch into PBR shaded into images that were never
-        // allocated and took the process down. Fixing the registry did nothing
-        // for anyone using this window, because the copy here still had the old
-        // answer. One implementation is the fix; the crash was the duplicate.
+        // answer names. No mode change is free - retro allocates neither the
+        // tracing channel images nor the composite - so a second copy of that
+        // rule here is a crash waiting on the two disagreeing.
         _engine.setGraphicsOption(
             "mode", graphics::renderModeName(static_cast<graphics::RenderMode>(modeIndex)));
     }

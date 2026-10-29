@@ -44,9 +44,8 @@ void SceneGraphs::reset(std::string name) {
         _overrideRoot / "materials.ini");
 
     if (_scenes.count(name)) {
-        // What dropping the GL framebuffer bindings did here: the outgoing
-        // scene's render targets are about to be destroyed, and a command
-        // buffer already submitted may still sample them.
+        // The outgoing scene's render targets are about to be destroyed, and
+        // a command buffer already submitted may still sample them.
         _graphicsSvc.renderer.waitIdle();
     }
     _scenes[name] = std::move(scene);

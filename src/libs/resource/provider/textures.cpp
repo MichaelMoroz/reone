@@ -119,8 +119,7 @@ std::shared_ptr<Texture> Textures::doGet(const std::string &resRef, TextureUsage
         // headed for. The image it sliced was frame 0's mip chain and the other
         // frames read as one picture, so the slices were quarters of that; and
         // for a diffuse the array then sat in a bindless table its material id
-        // never addressed, which is why the Taris force field drew nothing at
-        // all here and one frozen frame in the OpenGL build.
+        // never addressed, which is why the Taris force field drew nothing.
         if (features &&
             features->procedureType != Texture::ProcedureType::Invalid &&
             (features->numX > 1 || features->numY > 1)) {

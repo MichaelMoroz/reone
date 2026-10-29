@@ -3302,7 +3302,6 @@ std::shared_ptr<ModelSceneNode> Creature::buildModel() {
     }
     auto &sceneGraph = _services.scene.graphs.get(_sceneName);
     auto sceneNode = sceneGraph.newModel(*model, ModelUsage::Creature);
-    sceneNode->setDrawDistance(_game.options().graphics.drawDistance);
     sceneNode->setAnimationEventListener(*this);
 
     return sceneNode;

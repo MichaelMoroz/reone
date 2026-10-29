@@ -1479,7 +1479,6 @@ TEST(DialogGUI, should_hold_mixed_stunt_assignment_and_restore_on_drop_or_teardo
     player->setSceneNode(modelNode);
     player->setPosition(glm::vec3(1.0f, 2.0f, 3.0f));
     player->setFacing(0.75f);
-    modelNode->setCullingEnabled(false);
     player->resumeStateDrivenAnimation();
     game.party().addMember(kNpcPlayer, player);
     game.party().setPlayer(player);
@@ -1496,7 +1495,6 @@ TEST(DialogGUI, should_hold_mixed_stunt_assignment_and_restore_on_drop_or_teardo
     EXPECT_TRUE(player->isStuntMode());
     EXPECT_TRUE(modelNode->isEnabled());
     EXPECT_FALSE(modelNode->isCulled());
-    EXPECT_FALSE(modelNode->isCullingEnabled());
     EXPECT_NEAR(modelNode->localTransform()[3].x, 0.0f, 1e-5);
     EXPECT_NEAR(modelNode->localTransform()[3].y, 0.0f, 1e-5);
     EXPECT_NEAR(modelNode->localTransform()[3].z, 0.0f, 1e-5);
@@ -1514,7 +1512,6 @@ TEST(DialogGUI, should_hold_mixed_stunt_assignment_and_restore_on_drop_or_teardo
     EXPECT_TRUE(player->isStuntMode());
     EXPECT_TRUE(modelNode->isEnabled());
     EXPECT_FALSE(modelNode->isCulled());
-    EXPECT_FALSE(modelNode->isCullingEnabled());
     EXPECT_EQ(modelNode->activeAnimationName(), "cut001w");
     EXPECT_TRUE(modelNode->isAnimationFinished());
     EXPECT_FLOAT_EQ(modelNode->animationChannels().front().time, 1.0f);
@@ -1550,7 +1547,6 @@ TEST(DialogGUI, should_hold_mixed_stunt_assignment_and_restore_on_drop_or_teardo
     EXPECT_FALSE(MixedStuntTestAccess::isActive(gui, "PLAYER"));
     EXPECT_EQ(player->position(), glm::vec3(1.0f, 2.0f, 3.0f));
     EXPECT_FLOAT_EQ(player->getFacing(), 0.75f);
-    EXPECT_FALSE(modelNode->isCullingEnabled());
     EXPECT_EQ(modelNode->activeAnimationName(), "cpause1");
     EXPECT_NEAR(modelNode->localTransform()[3].x, 1.0f, 1e-5);
     EXPECT_NEAR(modelNode->localTransform()[3].y, 2.0f, 1e-5);
@@ -1562,7 +1558,6 @@ TEST(DialogGUI, should_hold_mixed_stunt_assignment_and_restore_on_drop_or_teardo
     EXPECT_FALSE(player->isStuntMode());
     EXPECT_EQ(player->position(), glm::vec3(1.0f, 2.0f, 3.0f));
     EXPECT_FLOAT_EQ(player->getFacing(), 0.75f);
-    EXPECT_FALSE(modelNode->isCullingEnabled());
     EXPECT_EQ(modelNode->activeAnimationName(), "cpause1");
     EXPECT_NEAR(modelNode->localTransform()[3].x, 1.0f, 1e-5);
     EXPECT_NEAR(modelNode->localTransform()[3].y, 2.0f, 1e-5);

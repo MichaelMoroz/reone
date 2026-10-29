@@ -393,8 +393,8 @@ void VulkanPipeline::init(const Config &config) {
             // down by one minus coverage, which is what turns the first
             // attachment's alpha into revealage given a clear of 1.0.
             //
-            // The loop puts this on every attachment, as OpenGL's single blend
-            // state does - so the OIT pass needs no independentBlend feature.
+            // One blend state on every attachment, so the OIT pass needs no
+            // independentBlend feature.
             attachment.blendEnable = VK_TRUE;
             attachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
             attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;

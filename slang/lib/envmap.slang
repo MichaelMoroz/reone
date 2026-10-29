@@ -32,7 +32,7 @@ import lib.math;
  * sampled: `0.5 + atan(d.x, d.z) / 2pi` across and `0.5 - asin(d.y) / pi` down,
  * for `d = normalize(-R)`.
  *
- * This tree used the OpenGL fixed-function SPHERE_MAP projection instead -
+ * This tree used the fixed-function SPHERE_MAP projection instead -
  * `r.xy / (2 * sqrt(r.x^2 + r.y^2 + (r.z+1)^2)) + 0.5` - which is a different
  * texel for the same reflection everywhere except dead centre, and folds the
  * whole rear hemisphere into a ring at the edge of the image.

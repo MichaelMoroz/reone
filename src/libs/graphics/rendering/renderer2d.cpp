@@ -45,16 +45,14 @@ void Renderer2D::begin(ICommandBuffer &commandBuffer, glm::ivec2 extent,
     _blend = BlendMode::Normal;
     _drawCount = 0;
 
-    // Pixels, y down from the top left, matching the GL path's ortho and every
-    // caller's assumption about where things go.
+    // Pixels, y down from the top left, matching every caller's assumption
+    // about where things go.
     GlobalUniforms globals;
     globals.reset();
-    // Two departures from the legacy form, both because this backend's clip space
-    // differs. Depth is 0..1, so orthoRH_ZO rather than ortho - the GL form puts
-    // every quad at z_ndc -1, which the depth range clips, and nothing draws at all.
-    // And clip-space y points down, so bottom and top are *not* swapped here:
-    // passing (h, 0) as the GL path does would put screen y=0 at the bottom and
-    // turn the whole frame upside down.
+    // Depth is 0..1, so orthoRH_ZO rather than ortho, which would put every
+    // quad at z_ndc -1 for the depth range to clip. And clip-space y points
+    // down, so bottom and top are *not* swapped: passing (h, 0) would put
+    // screen y=0 at the bottom and turn the whole frame upside down.
     globals.projection = glm::orthoRH_ZO(0.0f, static_cast<float>(extent.x),
                                          0.0f, static_cast<float>(extent.y),
                                          0.0f, 100.0f);
@@ -123,7 +121,7 @@ void Renderer2D::drawImage(Texture &texture,
  * Undo the v flip the 2D vertex shader applies unconditionally.
  *
  * quadUV in vk2d.slang hands the fragment stage (u, 1 - v), because an uploaded
- * texture's rows are in OpenGL's bottom-up order. An image this backend
+ * uploaded texture's rows are bottom-up. An image this backend
  * rendered is already the right way up, so that flip has to be cancelled - and
  * cancelled *before* the caller's own transform, not after, or a caller
  * selecting a sub-rect gets the mirrored part of the texture instead of the
@@ -190,7 +188,7 @@ void Renderer2D::drawText(Font &font,
     glm::vec2 offset = font.textOffset(text, gravity, scale);
 
     // The text block holds a fixed number of glyphs, so a long run becomes
-    // several instanced draws, as in the GL path.
+    // several instanced draws.
     int numBlocks = static_cast<int>(text.size()) / kMaxTextChars;
     if (text.size() % kMaxTextChars > 0) {
         ++numBlocks;

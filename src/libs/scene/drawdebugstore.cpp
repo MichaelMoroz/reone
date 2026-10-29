@@ -16,14 +16,10 @@
  */
 
 /*
- * Deliberately NOT named drawdebug.cpp.
- *
- * Upstream owns that path and fills it with an immediate-mode renderer built
- * on the GL context, shader registry and render-pass types this branch
- * deleted. Keeping our implementation under a name upstream does not use means
- * the two never occupy the same file: upstream's drawdebug.cpp simply stays
- * deleted here, which is a modify/delete conflict that resolves with one
- * `git rm` instead of a content merge every time it changes.
+ * Deliberately NOT named drawdebug.cpp: upstream owns that path and fills it
+ * with types this branch deleted. Under a name upstream does not use, its
+ * drawdebug.cpp stays deleted here - a modify/delete conflict that resolves
+ * with one `git rm` rather than a content merge every time it changes.
  */
 
 #include "reone/scene/drawdebug.h"

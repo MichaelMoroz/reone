@@ -30,9 +30,8 @@ class VulkanDevice;
 /**
  * Samplers, one per distinct set of filtering settings.
  *
- * In OpenGL, filtering and wrapping belong to the texture object, so every
- * texture carries its own. Vulkan splits them out into a sampler, and reone
- * had exactly one - trilinear, repeat, no anisotropy - written into every
+ * Vulkan keeps filtering and wrapping in a sampler rather than on the texture.
+ * reone had exactly one - trilinear, repeat, no anisotropy - written into every
  * descriptor. That is right for material textures and wrong for everything
  * else: render targets and GUI images want no mip filtering and clamping,
  * depth wants nearest and a border, fonts want a border too.

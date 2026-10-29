@@ -92,7 +92,6 @@ public:
 
     bool isEnabled() const { return _enabled; }
     bool isCulled() const { return _culled; }
-    bool isCullingEnabled() const { return _cullingEnabled; }
     bool isPoint() const { return _point; }
 
     glm::vec3 origin() const;
@@ -127,7 +126,6 @@ public:
     void setEnabled(bool enabled);
     void setGpuSubtreeActive(bool active);
     void setCulled(bool culled) { _culled = culled; }
-    void setCullingEnabled(bool enabled) { _cullingEnabled = enabled; }
 
     // END Flags
 
@@ -202,7 +200,6 @@ protected:
      * significantly by animations. For example, a node may be at zero position,
      * which is out of frame, but an animation moves in frame.
      */
-    bool _cullingEnabled {true};
 
     // END Flags
 

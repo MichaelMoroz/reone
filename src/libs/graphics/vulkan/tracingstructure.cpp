@@ -77,6 +77,59 @@ VkAccelerationStructureGeometryKHR cardGeometry(const SceneTracingGeometry &geom
     return result;
 }
 
+/**
+ * The merged BLAS description, in one place because prepare() sizes the
+ * structure from it and build() builds from it: a disagreement between the two
+ * sizes an allocation the build then overruns.
+ */
+struct MergedBlasDescription {
+    std::array<VkAccelerationStructureGeometryKHR, 2> geometries {};
+    std::array<uint32_t, 2> primitiveCounts {};
+
+    VkAccelerationStructureBuildGeometryInfoKHR buildInfo() const {
+        VkAccelerationStructureBuildGeometryInfoKHR build {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+        build.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        build.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+        build.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        build.geometryCount = static_cast<uint32_t>(geometries.size());
+        build.pGeometries = geometries.data();
+        return build;
+    }
+};
+
+MergedBlasDescription mergedBlasDescription(const SceneTracingGeometry &geometry) {
+    VkAccelerationStructureGeometryTrianglesDataKHR triangles {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
+    triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+    triangles.vertexData.deviceAddress =
+        toVulkanBuffer(*geometry.vertices.buffer).deviceAddress() + geometry.vertices.offset;
+    triangles.vertexStride = sizeof(MergedVertex);
+    triangles.maxVertex = geometry.vertexCount - 1;
+    triangles.indexType = VK_INDEX_TYPE_UINT32;
+    triangles.indexData.deviceAddress =
+        toVulkanBuffer(*geometry.indices.buffer).deviceAddress() + geometry.indices.offset;
+
+    MergedBlasDescription desc;
+    for (auto &blasGeometry : desc.geometries) {
+        blasGeometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+        blasGeometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+        blasGeometry.geometry.triangles = triangles;
+    }
+    // Geometry 1 deliberately remains non-opaque: the ray-query candidate loop
+    // evaluates its additive, alpha-tested and sky surfaces itself.
+    desc.geometries[0].flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    desc.geometries[1].flags = 0;
+    // Geometry 1 stops short of the procedural sprites. They are a suffix of
+    // the non-opaque range, so every primitive the structure still holds keeps
+    // the index a candidate resolves through.
+    desc.primitiveCounts = {{
+        geometry.opaqueTriangleCount,
+        geometry.triangleCount - geometry.opaqueTriangleCount - geometry.spriteTriangleCount,
+    }};
+    return desc;
+}
+
 VkDeviceSize grownCapacity(VkDeviceSize current, VkDeviceSize required, VkDeviceSize minimum) {
     if (current != 0 && required <= current)
         return current;
@@ -193,49 +246,12 @@ void VulkanTracingStructure::prepare(const SceneTracingGeometry &geometry) {
     if (geometry.instanceCount != expectedInstanceCount) {
         throw std::invalid_argument("Vulkan: invalid tracing instance region layout");
     }
-    const VkDeviceAddress geometryAddress =
-        toVulkanBuffer(*geometry.vertices.buffer).deviceAddress() + geometry.vertices.offset;
-    std::array<VkAccelerationStructureGeometryTrianglesDataKHR, 2> triangleData {};
-    std::array<VkAccelerationStructureGeometryKHR, 2> blasGeometries {};
-    for (auto &triangles : triangleData) {
-        triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-        triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-        triangles.vertexData.deviceAddress = geometryAddress;
-        triangles.vertexStride = sizeof(MergedVertex);
-        triangles.maxVertex = geometry.vertexCount - 1;
-        triangles.indexType = VK_INDEX_TYPE_UINT32;
-        triangles.indexData.deviceAddress =
-            toVulkanBuffer(*geometry.indices.buffer).deviceAddress() + geometry.indices.offset;
-    }
-    for (uint32_t i = 0; i < blasGeometries.size(); ++i) {
-        auto &blasGeometry = blasGeometries[i];
-        blasGeometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-        blasGeometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-        blasGeometry.geometry.triangles = triangleData[i];
-    }
-    // Geometry 1 deliberately remains non-opaque: the ray-query candidate
-    // loop evaluates its additive, alpha-tested, and sky surfaces itself.
-    blasGeometries[0].flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
-    blasGeometries[1].flags = 0;
-    VkAccelerationStructureBuildGeometryInfoKHR blasBuild {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
-    blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-    blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-    blasBuild.geometryCount = static_cast<uint32_t>(blasGeometries.size());
-    blasBuild.pGeometries = blasGeometries.data();
-    // Geometry 1 stops short of the procedural sprites. They are a suffix of
-    // the non-opaque range, so every primitive the structure still holds keeps
-    // the index a candidate resolves through.
-    const std::array<uint32_t, 2> blasPrimitiveCounts {{
-        geometry.opaqueTriangleCount,
-        geometry.triangleCount - geometry.opaqueTriangleCount -
-            geometry.spriteTriangleCount,
-    }};
+    const MergedBlasDescription blasDesc = mergedBlasDescription(geometry);
+    const VkAccelerationStructureBuildGeometryInfoKHR blasBuild = blasDesc.buildInfo();
     VkAccelerationStructureBuildSizesInfoKHR blasSizes {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
     vkGetAccelerationStructureBuildSizesKHR(_device.handle(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                                            &blasBuild, blasPrimitiveCounts.data(), &blasSizes);
+                                            &blasBuild, blasDesc.primitiveCounts.data(), &blasSizes);
     if (!_blas || blasSizes.accelerationStructureSize > _blasStorageCapacity) {
         if (_blas) {
             vkDestroyAccelerationStructureKHR(_device.handle(), _blas, nullptr);
@@ -397,38 +413,9 @@ void VulkanTracingStructure::build(VkCommandBuffer commandBuffer,
         _instanceCapacity != geometry.instanceCount) {
         throw std::logic_error("Vulkan: tracing structure was not prepared for this scene");
     }
-    const VkDeviceAddress geometryAddress =
-        toVulkanBuffer(*geometry.vertices.buffer).deviceAddress() + geometry.vertices.offset;
-    std::array<VkAccelerationStructureGeometryTrianglesDataKHR, 2> triangleData {};
-    std::array<VkAccelerationStructureGeometryKHR, 2> blasGeometries {};
-    for (auto &triangles : triangleData) {
-        triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-        triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-        triangles.vertexData.deviceAddress = geometryAddress;
-        triangles.vertexStride = sizeof(MergedVertex);
-        triangles.maxVertex = geometry.vertexCount - 1;
-        triangles.indexType = VK_INDEX_TYPE_UINT32;
-        triangles.indexData.deviceAddress =
-            toVulkanBuffer(*geometry.indices.buffer).deviceAddress() + geometry.indices.offset;
-    }
-    for (uint32_t i = 0; i < blasGeometries.size(); ++i) {
-        blasGeometries[i].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-        blasGeometries[i].geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-        blasGeometries[i].geometry.triangles = triangleData[i];
-    }
-    blasGeometries[0].flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
-    blasGeometries[1].flags = 0;
-    const std::array<uint32_t, 2> blasPrimitiveCounts {{
-        geometry.opaqueTriangleCount,
-        geometry.triangleCount - geometry.opaqueTriangleCount -
-            geometry.spriteTriangleCount}};
-    VkAccelerationStructureBuildGeometryInfoKHR mergedBuild {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
-    mergedBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    mergedBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-    mergedBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-    mergedBuild.geometryCount = static_cast<uint32_t>(blasGeometries.size());
-    mergedBuild.pGeometries = blasGeometries.data();
+    const MergedBlasDescription blasDesc = mergedBlasDescription(geometry);
+    const std::array<uint32_t, 2> &blasPrimitiveCounts = blasDesc.primitiveCounts;
+    VkAccelerationStructureBuildGeometryInfoKHR mergedBuild = blasDesc.buildInfo();
     VkAccelerationStructureBuildSizesInfoKHR mergedSizes {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
     vkGetAccelerationStructureBuildSizesKHR(_device.handle(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,

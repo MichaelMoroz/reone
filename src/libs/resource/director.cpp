@@ -356,9 +356,8 @@ std::optional<ResourceSourceBucket> ResourceDirector::bucketOf(ResourceSourceBuc
  * separate insertion-ordered list instead, which also keeps the Odyssey list
  * homogeneous once buckets are in use.
  *
- * The generated GLSL shader pack was mounted here too. This backend compiles
- * its shaders from Slang and does not read them as resources, so there is no
- * pack to mount.
+ * Shaders are compiled from Slang rather than read as resources, so no shader
+ * pack is mounted.
  */
 void ResourceDirector::loadAuxiliaryResources() {
     std::optional<std::filesystem::path> exePath;

@@ -63,24 +63,22 @@ std::vector<VkVertexInputAttributeDescription> VulkanMesh::attributeDescriptions
         attributes.push_back(attribute);
     };
 
-    // Locations match the [[vk::location(n)]] in the Slang shaders, which match
-    // the attribute indices the GL path binds. Changing one means changing all
-    // three.
+    // Locations match the [[vk::location(n)]] in the Slang shaders. Changing
+    // one means changing both.
     add(0, VK_FORMAT_R32G32B32_SFLOAT, layout.offPosition);
     add(1, VK_FORMAT_R32G32B32_SFLOAT, layout.offNormals);
     add(2, VK_FORMAT_R32G32_SFLOAT, layout.offUV1);
     add(3, VK_FORMAT_R32G32_SFLOAT, layout.offUV2);
 
-    // One offset covers three consecutive vec3s, in this order. The naming is
-    // confusing and matches the GL path: bitangent first, then tangent, then
-    // the tangent-space normal.
+    // One offset covers three consecutive vec3s, in this order: bitangent
+    // first, then tangent, then the tangent-space normal.
     constexpr int kVec3 = 3 * sizeof(float);
     bool hasTanSpace = layout.offTanSpace != -1;
     add(4, VK_FORMAT_R32G32B32_SFLOAT, hasTanSpace ? layout.offTanSpace : -1);
     add(5, VK_FORMAT_R32G32B32_SFLOAT, hasTanSpace ? layout.offTanSpace + kVec3 : -1);
     add(6, VK_FORMAT_R32G32B32_SFLOAT, hasTanSpace ? layout.offTanSpace + 2 * kVec3 : -1);
 
-    // Bone indices are floats in the buffer, not integers, as in the GL path.
+    // Bone indices are floats in the buffer, not integers.
     add(7, VK_FORMAT_R32G32B32A32_SFLOAT, layout.offBoneIndices);
     add(8, VK_FORMAT_R32G32B32A32_SFLOAT, layout.offBoneWeights);
     add(9, VK_FORMAT_R32_SFLOAT, layout.offMaterial);
